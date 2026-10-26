@@ -118,7 +118,7 @@ suite.define(() => {
     expect(await link.getAttribute("href")).toBe(mediaUrl);
     await card.hover();
     const [download] = await Promise.all([page.waitForEvent("download"), link.click()]);
-    await download.path();
+    expect(await download.failure()).toBeNull();
 
     expect(download.suggestedFilename()).toBe("测试 report.pdf");
   });
@@ -138,7 +138,7 @@ suite.define(() => {
     const image = page.getByAltText("Tool result preview");
     await image.waitFor({ state: "visible", timeout: 10_000 });
     expect(await image.getAttribute("src")).toBe(`data:image/png;base64,${imageData}`);
-    await gateway.waitForRequest("chat.startup");
+    await gateway.waitForRequest("sessions.messages.subscribe");
     await expect.poll(() => imageWidths(image)).toEqual([1]);
   });
 

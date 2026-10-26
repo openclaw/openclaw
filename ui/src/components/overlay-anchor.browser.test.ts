@@ -177,7 +177,10 @@ it.each([
   const source = spatialSource(surface);
   expect(source.getRootNode()).toBe(surface.getRootNode());
   expect(source.matches(":popover-open")).toBe(true);
-  element.style.left = "240px";
+  element.style.left = "240.375px";
+  element.style.top = "125.25px";
+  element.style.width = "101.625px";
+  element.style.height = "35.5px";
   await frame();
   expectAnchored(surface, element);
   const hidden = after(surface, "hide");
@@ -185,16 +188,24 @@ it.each([
   await hidden;
   expect(source.matches(":popover-open")).toBe(false);
   const left = source.style.left;
-  element.style.left = "340px";
+  element.style.left = "340.625px";
+  element.style.top = "145.5px";
+  element.style.width = "112.25px";
+  element.style.height = "41.75px";
   await frame();
   expect(source.style.left).toBe(left);
+  await open(owner);
+  expectAnchored(surface, element);
+  const hiddenAgain = after(surface, "hide");
+  owner.request(false);
+  await hiddenAgain;
   binding.dispose();
   expect(source.isConnected).toBe(false);
   expect(element.style.getPropertyValue("anchor-name")).toBe("--author-anchor");
   expect(surface.style.getPropertyValue("position-anchor")).toBe("auto");
 });
 
-it("reanchors to cross-root SVG without reopening or blocking clicks", async () => {
+it("reanchors across roots without reopening or blocking clicks", async () => {
   const first = anchor(document.body),
     second = anchor(shadow("closed"), true);
   const { surface, owner, binding } = popup(document.body, first);
@@ -222,6 +233,14 @@ it("reanchors to cross-root SVG without reopening or blocking clicks", async () 
   await userEvent.click(action);
   expect(clicked).toHaveBeenCalledOnce();
   expect(owner.open).toBe(true);
+  document.body.append(second);
+  await frame();
+  expectAnchored(surface, second);
+  second.style.left = "330.375px";
+  await frame();
+  expectAnchored(surface, second);
+  expect(owner).toMatchObject({ open: true, phase: "open" });
+  expect(shown).toHaveBeenCalledOnce();
 });
 
 it("keeps native Tab entry and exit tied to the real cross-root invoker", async () => {
@@ -264,6 +283,8 @@ it("retains geometry during closing and disposes the spatial anchor on teardown"
   animation.pause();
   try {
     expect(owner.request(false)).toBe(true);
+    element.style.left = "210.375px";
+    element.style.top = "140.625px";
     await frame();
     expect(owner).toMatchObject({ open: false, phase: "closing" });
     expect(surface.inert).toBe(true);

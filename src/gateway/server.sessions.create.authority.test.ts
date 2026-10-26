@@ -14,6 +14,7 @@ import {
   setupSessionCreateTestHarness,
   requireNonEmptyString,
 } from "./server.sessions.create.test-support.js";
+import { gatewayProfile } from "./server/client-fixtures.test-support.js";
 import { resolveSessionMutationAuthorizationAsync } from "./session-sharing-authorization-async.js";
 import { SessionMutationAuthorizationChangedError } from "./session-sharing.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
@@ -67,12 +68,7 @@ test("required operator sandbox follows new session ownership across create, pat
     const client = {
       ...(systemActor ? { internal: { operatorRoleActor: { kind: "system" } } } : {}),
       connect: { role: "operator", scopes: ["operator.read", "operator.write"] },
-      authenticatedUserProfile: {
-        profileId: profile.id,
-        displayName: profile.displayName,
-        hasAvatar: false,
-        updatedAt: profile.updatedAt,
-      },
+      authenticatedUserProfile: gatewayProfile(profile.id, profile.displayName, profile.updatedAt),
     } as never;
     const key = `agent:main:dashboard:role-sandbox-${suffix}`;
     const request =
@@ -135,12 +131,7 @@ test("operator role agent allowlists protect creation without blocking existing 
   };
   const client = {
     connect: { role: "operator", scopes: ["operator.read", "operator.write"] },
-    authenticatedUserProfile: {
-      profileId: profile.id,
-      displayName: profile.displayName,
-      hasAvatar: false,
-      updatedAt: profile.updatedAt,
-    },
+    authenticatedUserProfile: gatewayProfile(profile.id, profile.displayName, profile.updatedAt),
   } as never;
   const requestOptions = { client, context: { getRuntimeConfig: () => cfg } };
   const deniedKey = "agent:main:dashboard:role-denied";
@@ -255,12 +246,7 @@ test("sessions.create revalidates parent participation before committing a fork 
   );
   const client = {
     authenticatedUserId: "member@example.com",
-    authenticatedUserProfile: {
-      profileId: "member",
-      displayName: "Member",
-      hasAvatar: false,
-      updatedAt: 1,
-    },
+    authenticatedUserProfile: gatewayProfile("member", "Member"),
     connect: { role: "operator", scopes: ["operator.write"] },
   } as never;
   const requestParams = {

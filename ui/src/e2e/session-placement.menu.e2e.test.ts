@@ -295,7 +295,7 @@ suite.define(() => {
         await details.getByRole("button", { name: /Move failed/ }).click();
         await gateway.deferNext("sessions.move");
         const retryAction = menuItem(page, "Retry move");
-        await page.getByText("Workspace reconciliation failed.", { exact: true }).waitFor();
+        await details.getByText("Workspace reconciliation failed.", { exact: true }).waitFor();
         expect(await retryAction.isDisabled()).toBe(false);
         await retryAction.click();
         await expectMove(gateway, retry);

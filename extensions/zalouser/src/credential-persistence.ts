@@ -57,6 +57,12 @@ export class ZaloCredentialPersistence {
 
   constructor(private readonly isCurrentApi: (profile: string, api: API) => boolean) {}
 
+  dispose(): void {
+    this.credentialSignaturesByProfile.clear();
+    this.credentialRefreshesByProfile.clear();
+    this.credentialRevocationsByProfile.clear();
+  }
+
   pendingRevocation(profile: string): Promise<boolean> | undefined {
     return this.credentialRevocationsByProfile.get(profile);
   }

@@ -21,8 +21,10 @@ async function inspect(pid) {
   assert.match(row.startedAt, /^[A-Z][a-z]{2} [A-Z][a-z]{2} \d{1,2} \d{2}:\d{2}:\d{2} \d{4}$/);
   const census = [...readDarwinProcessCensus(1000)];
   assert.ok(census.some((member) => member.pid === pid && member.pgid === pid));
-  const tree = await readDarwinProcessTree(performance.now() + 1000, [process.pid]);
-  assert.ok(tree.some((member) => member.pid === pid && member.startedAt === row.startedAt));
+  for (const root of [process.pid, process.ppid]) {
+    const tree = await readDarwinProcessTree(performance.now() + 1000, [root]);
+    assert.ok(tree.some((member) => member.pid === pid && member.startedAt === row.startedAt));
+  }
   assert.match(
     await readDarwinProcessCommandLine(pid, performance.now() + 1000),
     /darwin-census-fixture/,

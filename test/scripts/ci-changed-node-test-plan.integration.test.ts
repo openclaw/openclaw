@@ -150,7 +150,6 @@ it.each([
   for (const file of [
     "ui/src/e2e/chat-collapsed-reply-reveal.e2e.test.ts",
     "ui/src/e2e/chat-position-rail.e2e.test.ts",
-    "ui/src/e2e/chat-reply-preview-recovery.e2e.test.ts",
   ]) {
     expect(selection.reasons[file], file).toEqual(
       expect.arrayContaining([expect.stringMatching(/^direct route\/component dependency: /u)]),

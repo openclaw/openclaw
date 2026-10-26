@@ -1,9 +1,15 @@
 // Gateway cron contracts stay separate from the runtime so shared request
 // types do not pull scheduler implementation dependencies into their graph.
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CronJobScratchState, CronJobScratchWriteResult } from "../cron/scratch-contract.js";
 import type { CronServiceContract } from "../cron/service-contract.js";
+import type { CronJob } from "../cron/types.js";
+import type { DeferredHookWake } from "../cron/wake-contract.js";
+import type { CronExitWatchers } from "./cron-exit-watchers.js";
 
 export type GatewayCronServiceContract = CronServiceContract & {
+  /** Selected opaque partition after a list/job read prepares the serving cron owner. */
+  getStoreKey?(): string;
   /** Cancel exact current definitions under the serving scheduler's operation lock. */
   quiesceJobs(
     jobs: readonly { id: string; revision: string }[],
@@ -40,4 +46,22 @@ export type GatewayCronServiceContract = CronServiceContract & {
   prepareWake?(): Promise<void>;
   /** Stop cron and await scheduler-owned child process teardown. */
   stopAndDrain?(): Promise<void>;
+};
+
+export type GatewayCronState = {
+  cron: GatewayCronServiceContract;
+  deferHookWake?: DeferredHookWake;
+  storePath: string;
+  cronEnabled: boolean;
+  readHeartbeatSummary?: (cfg: OpenClawConfig) => Promise<CronJob[]>;
+  prepareExitWatcherHandoff?: () => Promise<GatewayCronExitWatcherHandoff | undefined>;
+  reconcileExitWatchers: () => Promise<void>;
+  reconcileStreamWatchers: () => Promise<void>;
+  stopStreamWatchers: () => Promise<void>;
+};
+
+export type GatewayCronExitWatcherHandoff = {
+  current: () => CronExitWatchers;
+  adopt: (watchers: CronExitWatchers) => Promise<void> | void;
+  stopOwner: () => Promise<void>;
 };

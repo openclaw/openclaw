@@ -2,7 +2,10 @@
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createWebSearchTestProvider } from "../test-utils/web-provider-runtime.test-helpers.js";
-import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
+import {
+  createPluginManifestRecordFixture,
+  createPluginMetadataSnapshotFixture,
+} from "./plugin-metadata.test-support.js";
 import * as publicArtifacts from "./web-provider-public-artifacts.explicit.js";
 
 type RegistryModule = typeof import("./registry.js");
@@ -123,21 +126,17 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
         ["brave", "webSearch.apiKey", "key"],
         ["noise", "unrelated", "nope"],
       ] as const
-    ).map(([id, hint, label]) => ({
-      id,
-      origin: "bundled",
-      rootDir: `/tmp/${id}`,
-      source: `/tmp/${id}/index.js`,
-      manifestPath: `/tmp/${id}/openclaw.plugin.json`,
-      channels: [],
-      providers: [],
-      cliBackends: [],
-      syntheticAuthRefs: [],
-      nonSecretAuthMarkers: [],
-      skills: [],
-      hooks: [],
-      configUiHints: { [hint]: { label } },
-    })),
+    ).map(([id, hint, label]) =>
+      createPluginManifestRecordFixture({
+        id,
+        rootDir: `/tmp/${id}`,
+        source: `/tmp/${id}/index.js`,
+        manifestPath: `/tmp/${id}/openclaw.plugin.json`,
+        syntheticAuthRefs: [],
+        nonSecretAuthMarkers: [],
+        configUiHints: { [hint]: { label } },
+      }),
+    ),
     diagnostics: [],
   };
 }
@@ -146,21 +145,15 @@ function createWebSearchManifestRecord(params: {
   id: string;
   providerId: string;
 }): PluginManifestRegistry["plugins"][number] {
-  return {
+  return createPluginManifestRecordFixture({
     id: params.id,
-    origin: "bundled",
     rootDir: `/tmp/${params.id}`,
     source: `/tmp/${params.id}/index.js`,
     manifestPath: `/tmp/${params.id}/openclaw.plugin.json`,
-    channels: [],
-    providers: [],
-    cliBackends: [],
     syntheticAuthRefs: [],
     nonSecretAuthMarkers: [],
-    skills: [],
-    hooks: [],
     contracts: { webSearchProviders: [params.providerId] },
-  };
+  });
 }
 
 const requireRecord = createRequireRecord("record", "expected-non-array-record");

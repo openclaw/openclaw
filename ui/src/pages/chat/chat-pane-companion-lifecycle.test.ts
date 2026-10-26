@@ -5,14 +5,12 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelCatalogEntry } from "../../api/types.ts";
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { createGatewayRequestMock } from "../../test-helpers/gateway-client.ts";
+import { createGatewayBrowserClientFixture } from "./chat-application-context.test-support.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
-import {
-  createGatewayBrowserClientFixture,
-  createTestChatPane,
-  type TestChatPane,
-} from "./chat-pane.test-support.ts";
+import { createTestChatPane, type TestChatPane } from "./chat-pane.test-support.ts";
 import type { ChatSessionCompanionThreads } from "./chat-session-companion.ts";
 
 const companionThreads = (pane: TestChatPane) =>
@@ -31,12 +29,7 @@ it("preserves threads while a same-client reconnect settles a pending answer", a
   const historyReady = createDeferred();
   onTestFinished(() => historyReady.resolve());
   const replies: Record<string, unknown> = {
-    "agents.list": {
-      defaultId: "main",
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [{ id: "main" }],
-    },
+    "agents.list": makeBootRoster(),
     "sessions.subscribe": { subscribed: true, list: sessionsResult([], 1) },
     "sessions.messages.subscribe": { subscribed: true, key: current },
     "sessions.messages.unsubscribe": { subscribed: false, key: current },

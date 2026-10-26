@@ -7,6 +7,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getCliParentPid } from "../../cli-parent-lifetime.mjs";
 import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import { resolveOpenClawStateDirForDatabasePath } from "../state/openclaw-state-db.paths.js";
+import { readProcessMachineIdentity } from "./current-machine-identity.js";
 import {
   classifyGatewayLockProcessNamespace,
   GatewayLockNamespaceError,
@@ -126,6 +127,7 @@ export function defaultPayload(databasePath: string): LockPayload {
     configPath: path.join(stateDir, "openclaw.json"),
     role: "sqlite-maintenance",
     processNamespace: readGatewayLockProcessNamespace(),
+    machineIdentity: process.platform === "darwin" ? readProcessMachineIdentity() : undefined,
     ...(parentPid === undefined ? {} : { parentPid }),
     ...(parentStartTime === null ? {} : { parentStartTime }),
     ...(startTime === null ? {} : { startTime }),

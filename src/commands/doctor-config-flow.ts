@@ -12,8 +12,8 @@ import {
   retainLegacyDefaultAgentId,
   tryGetLegacyDefaultAgentId,
 } from "../config/legacy.default-agent-owner.js";
-import { findLegacyConfigRuleIssues } from "../config/legacy.js";
 import { resolveLegacyAgentRosterOwner } from "../config/legacy.roster.js";
+import { findLegacyConfigRuleIssues } from "../config/legacy.shared.js";
 import { CONFIG_PATH } from "../config/paths.js";
 import { setAppliedRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -88,6 +88,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       : {}),
     agentDatabaseMigrationDiscovery: params.agentDatabaseMigrationDiscovery,
     beforeWorkspaceStateMigration: createWorkspaceAliasMigrationRepair(params.prompter),
+    cronStoreSelection: { options: params.options, prompter: params.prompter },
     measure: (name, run) =>
       withDoctorProgress(
         name.slice(name.lastIndexOf(".") + 1).replaceAll("-", " "),
@@ -95,7 +96,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
         params.options.json !== true,
       ),
   });
-  const { snapshot, baseConfig: baseCfg } = preflight;
+  const { snapshot, baseConfig: baseCfg, heartbeatMigrationDeferred: deferHeartbeat } = preflight;
   if (!shouldRepair && !params.options.json) {
     const { collectRecoveryDiskUsage, formatRecoveryDiskUsage } =
       await import("./recovery-disk-usage.js");
@@ -607,6 +608,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     doctorFixCommand,
     sourceConfig: snapshot.sourceConfig,
     emitChanges: changesPanelSink.emit,
+    preflight,
   });
 
   const finalized = await finalizeDoctorConfigFlow({
@@ -616,7 +618,8 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     confirm: params.confirm,
     note,
   });
-  const shouldWriteConfig = finalized.shouldWriteConfig && legacyStep.blocksWrite !== true;
+  const shouldWriteConfig =
+    finalized.shouldWriteConfig && !legacyStep.blocksWrite && !deferHeartbeat;
   // An accepted preview copies the system agent's files before its workspace pin joins the write.
   const confirmedWorkspace =
     !shouldRepair && shouldWriteConfig && systemAgentWorkspace.restorePending
@@ -684,10 +687,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   // them as "Doctor changes" only after the atomic write commits. A blocked
   // write drops them — its blocking note already states nothing was changed.
   // The accepted preview already printed; its applied lines print once the write commits.
-  const pendingChangePanels = [
-    ...changesPanelSink.drain(),
-    ...(confirmedWorkspace?.changes.length ? [confirmedWorkspace.changes.join("\n")] : []),
-  ];
+  const pendingChangePanels = changesPanelSink.drain(confirmedWorkspace?.changes);
   const providerRenames = legacyStep.blocksWrite ? [] : plannedProviderRenames;
   await setAppliedRuntimeConfigSnapshot(cfg, cfg);
   // Later Doctor contributions and service finalization consume these callbacks.

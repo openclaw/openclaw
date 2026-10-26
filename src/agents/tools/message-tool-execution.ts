@@ -70,7 +70,6 @@ import {
 } from "./message-tool-scheduled-execution.js";
 import { MessageToolSchema } from "./message-tool-schema.js";
 import {
-  addSourceReplyFinalControl,
   enforceSourceReplyOnlyMessageAction,
   enforceSourceReplyOnlyTextDirectives,
   enforceTrustedTurnExplicitAccount,
@@ -224,7 +223,7 @@ function* createMessageToolSteps(
     name: "message",
     displaySummary: "Send and manage messages across configured channels.",
     description,
-    parameters: addSourceReplyFinalControl(baseSchema),
+    parameters: baseSchema,
     prepareBeforeToolCallParams: explicitTargetGuard?.prepareBeforeToolCallParams,
     finalizeBeforeToolCallParams: explicitTargetGuard?.finalizeBeforeToolCallParams,
     execute: async (toolCallId, args, signal) => {

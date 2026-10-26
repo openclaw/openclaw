@@ -35,6 +35,23 @@ const configuredModel: ModelDefinitionConfig = {
   maxTokens: 4096,
 };
 
+function providerConfig(
+  route: Pick<ModelProviderConfig, "api" | "baseUrl">,
+  models: ModelDefinitionConfig[],
+  providerId = provider,
+): OpenClawConfig {
+  return { models: { providers: { [providerId]: { ...route, models } } } };
+}
+
+function configVariants(source: OpenClawConfig, fixture: ReturnType<typeof createCatalogFixture>) {
+  return [
+    source,
+    materializeRuntimeConfig(source, {
+      manifestRegistry: fixture.metadataSnapshot.manifestRegistry,
+    }),
+  ];
+}
+
 function createCatalogFixture(
   route: { api: NonNullable<ModelProviderConfig["api"]>; baseUrl: string } = catalogRoute,
 ) {
@@ -91,21 +108,112 @@ function createResolutionOptions(
 }
 
 describe("model route compatibility", () => {
-  it("retains prepared OpenRouter reasoning capabilities on the catalog route", async () => {
+  it.each([
+    {
+      name: "prepared catalog capabilities",
+      id: "anthropic/claude-opus-5.5",
+      catalogCompat: {
+        supportsReasoningEffort: true,
+        supportedReasoningEfforts: ["max", "xhigh", "high", "medium", "low"],
+      },
+      configuredCompat: undefined,
+      thinkingLevelMap: { off: null },
+      requestedLevel: "xhigh" as const,
+      expectedScalarSupport: true,
+      expectedEfforts: expect.arrayContaining(["xhigh"]),
+      expectedReasoning: { effort: "xhigh" },
+    },
+    {
+      name: "declared ladder over a binary catalog guess",
+      id: "fixture/reasoning-model",
+      catalogCompat: { supportsReasoningEffort: false },
+      configuredCompat: {
+        supportedReasoningEfforts: ["minimal", "low", "medium", "high", "xhigh", "max"],
+      },
+      thinkingLevelMap: undefined,
+      requestedLevel: "max" as const,
+      expectedScalarSupport: true,
+      expectedEfforts: ["minimal", "low", "medium", "high", "xhigh", "max"],
+      expectedReasoning: { effort: "max" },
+    },
+    {
+      name: "declared disable control over a binary catalog guess",
+      id: "fixture/reasoning-model",
+      catalogCompat: { supportsReasoningEffort: false },
+      configuredCompat: { supportedReasoningEfforts: ["none", "low", "high"] },
+      thinkingLevelMap: undefined,
+      requestedLevel: "off" as const,
+      expectedScalarSupport: true,
+      expectedEfforts: ["none", "low", "high"],
+      expectedReasoning: { effort: "none" },
+    },
+    {
+      name: "declared scalar opt-in over an empty catalog ladder",
+      id: "fixture/reasoning-model",
+      catalogCompat: { supportsReasoningEffort: false, supportedReasoningEfforts: [] },
+      configuredCompat: { supportsReasoningEffort: true },
+      thinkingLevelMap: undefined,
+      requestedLevel: "high" as const,
+      expectedScalarSupport: true,
+      expectedEfforts: undefined,
+      expectedReasoning: { effort: "high" },
+    },
+    {
+      name: "declared scalar opt-in with an accepted catalog ladder",
+      id: "fixture/reasoning-model",
+      catalogCompat: { supportsReasoningEffort: true, supportedReasoningEfforts: ["low", "high"] },
+      configuredCompat: { supportsReasoningEffort: true },
+      thinkingLevelMap: undefined,
+      requestedLevel: "high" as const,
+      expectedScalarSupport: true,
+      expectedEfforts: ["low", "high"],
+      expectedReasoning: { effort: "high" },
+    },
+    {
+      name: "declared map over an empty catalog ladder",
+      id: "fixture/reasoning-model",
+      catalogCompat: { supportsReasoningEffort: false, supportedReasoningEfforts: [] },
+      configuredCompat: { reasoningEffortMap: { high: "medium" } },
+      thinkingLevelMap: undefined,
+      requestedLevel: "high" as const,
+      expectedScalarSupport: true,
+      expectedEfforts: undefined,
+      expectedReasoning: { effort: "medium" },
+    },
+    {
+      name: "explicit scalar opt-out over a declared map",
+      id: "fixture/reasoning-model",
+      catalogCompat: { supportsReasoningEffort: false, supportedReasoningEfforts: [] },
+      configuredCompat: { supportsReasoningEffort: false, reasoningEffortMap: { high: "medium" } },
+      thinkingLevelMap: undefined,
+      requestedLevel: "high" as const,
+      expectedScalarSupport: false,
+      expectedEfforts: [],
+      expectedReasoning: { enabled: true },
+    },
+    {
+      name: "binary catalog without a declared ladder",
+      id: "fixture/reasoning-model",
+      catalogCompat: { supportsReasoningEffort: false },
+      configuredCompat: undefined,
+      thinkingLevelMap: undefined,
+      requestedLevel: "off" as const,
+      expectedScalarSupport: false,
+      expectedEfforts: undefined,
+      expectedReasoning: { enabled: false },
+    },
+  ])("retains OpenRouter $name on the catalog route", async (testCase) => {
     const reasoning = true;
     const providerId = "openrouter";
-    const id = "anthropic/claude-opus-5.5";
+    const id = testCase.id;
     const baseUrl = "https://openrouter.ai/api/v1";
     const route = { api: "openai-completions" as const, baseUrl };
     const catalogModel = {
       ...makeProviderModelFixture({ provider: providerId, id, ...route }),
       reasoning: true,
       contextWindow: 1_000_000,
-      thinkingLevelMap: { off: null },
-      compat: {
-        supportsReasoningEffort: true,
-        supportedReasoningEfforts: ["max", "xhigh", "high", "medium", "low"],
-      },
+      thinkingLevelMap: testCase.thinkingLevelMap,
+      compat: testCase.catalogCompat,
     };
     const configured = {
       ...makeProviderModelFixture({ provider: providerId, id, api: route.api, baseUrl }),
@@ -115,28 +223,24 @@ describe("model route compatibility", () => {
       thinkingLevelMap: undefined,
       compat: {
         supportsDeveloperRole: false,
+        ...testCase.configuredCompat,
       },
     };
-    const config: OpenClawConfig = {
-      models: {
-        providers: {
-          openrouter: {
-            api: route.api,
-            baseUrl,
-            models: [
-              {
-                ...configuredModel,
-                id,
-                name: id,
-                reasoning,
-                contextTokens: 520_000,
-                maxTokens: 128_000,
-              },
-            ],
-          },
+    const config = providerConfig(
+      route,
+      [
+        {
+          ...configuredModel,
+          id,
+          name: id,
+          reasoning,
+          contextTokens: 520_000,
+          maxTokens: 128_000,
+          compat: testCase.configuredCompat,
         },
-      },
-    };
+      ],
+      providerId,
+    );
     const metadataSnapshot = createPluginMetadataSnapshotFixture();
     const { preparedModelRuntime } = createResolutionOptions(
       config,
@@ -159,15 +263,20 @@ describe("model route compatibility", () => {
       contextTokens: 520_000,
       reasoning,
       compat: {
-        supportsReasoningEffort: true,
-        supportedReasoningEfforts: expect.arrayContaining(["xhigh"]),
+        supportsReasoningEffort: testCase.expectedScalarSupport,
       },
     });
-    expect(resolved.model?.thinkingLevelMap).toEqual({ off: null });
-    expect(clampThinkingLevel(resolved.model!, "xhigh")).toBe("xhigh");
+    expect(extractModelCompat(resolved.model)?.supportedReasoningEfforts).toEqual(
+      testCase.expectedEfforts,
+    );
+    expect(resolved.model?.thinkingLevelMap).toEqual(testCase.thinkingLevelMap);
+    expect(clampThinkingLevel(resolved.model!, testCase.requestedLevel)).toBe(
+      testCase.requestedLevel,
+    );
     // Exercise the real outbound request path with a local transport response.
     // Retain only allowlisted request settings; never persist prompt or auth data.
-    const requests: Array<{ model?: string; reasoning?: { effort?: string } }> = [];
+    const requests: Array<{ model?: string; reasoning?: { effort?: string; enabled?: boolean } }> =
+      [];
     const host = getAiTransportHost();
     configureAiTransportHost({
       ...host,
@@ -176,7 +285,7 @@ describe("model route compatibility", () => {
         expect(new URL(request.url).pathname).toBe("/api/v1/chat/completions");
         const payload = (await request.json()) as {
           model?: string;
-          reasoning?: { effort?: string };
+          reasoning?: { effort?: string; enabled?: boolean };
         };
         requests.push({ model: payload.model, reasoning: payload.reasoning });
         const event = {
@@ -192,11 +301,11 @@ describe("model route compatibility", () => {
       const stream = await createOpenAICompletionsTransportStreamFn()(
         resolved.model!,
         { messages: [{ role: "user", content: "Synthetic test", timestamp: 1 }] },
-        { apiKey: "synthetic-key", reasoning: "xhigh", transport: "sse" },
+        { apiKey: "synthetic-key", reasoning: testCase.requestedLevel, transport: "sse" },
       );
       const result = await stream.result();
       expect(result.errorMessage).toBeUndefined();
-      expect(requests).toEqual([{ model: id, reasoning: { effort: "xhigh" } }]);
+      expect(requests).toEqual([{ model: id, reasoning: testCase.expectedReasoning }]);
     } finally {
       configureAiTransportHost(host);
     }
@@ -231,26 +340,11 @@ describe("model route compatibility", () => {
       const fixture = createCatalogFixture(catalog);
       const { catalogModel, metadataSnapshot } = fixture;
       await withPluginRuntimeGenerationScope({ metadataSnapshot }, async () => {
-        const source: OpenClawConfig = {
-          models: {
-            providers: {
-              [provider]: {
-                ...route,
-                models: [
-                  {
-                    ...configuredModel,
-                    ...(authored ? { compat: authored } : {}),
-                  },
-                ],
-              },
-            },
-          },
-        };
-        const materialized = materializeRuntimeConfig(source, {
-          manifestRegistry: metadataSnapshot.manifestRegistry,
-        });
+        const source = providerConfig(route, [
+          { ...configuredModel, ...(authored ? { compat: authored } : {}) },
+        ]);
         // Both config-file loads and callers with already normalized inline rows use this resolver.
-        for (const config of [source, materialized]) {
+        for (const config of configVariants(source, fixture)) {
           const resolved = await resolveModelAsync(provider, catalogModel.id, undefined, config, {
             ...createResolutionOptions(config, fixture),
             skipProviderRuntimeHooks: true,
@@ -274,12 +368,10 @@ describe("model route compatibility", () => {
             forceDirectMessageTool: false,
             isRawModelRun: false,
           });
-          expect
-            .soft(surface.codeModeControlsEnabled, configSource)
-            .toBe(expected?.codeMode === "preferred");
-          expect
-            .soft(surface.toolSearchControlsEnabled, configSource)
-            .toBe(expected?.codeMode !== "preferred");
+          expect.soft(surface, configSource).toMatchObject({
+            codeModeControlsEnabled: expected?.codeMode === "preferred",
+            toolSearchControlsEnabled: expected?.codeMode !== "preferred",
+          });
         }
       });
     },
@@ -290,17 +382,8 @@ describe("model route compatibility", () => {
     const fixture = createCatalogFixture();
     const { catalogModel, metadataSnapshot } = fixture;
     await withPluginRuntimeGenerationScope({ metadataSnapshot }, async () => {
-      const source: OpenClawConfig = {
-        models: {
-          providers: {
-            [provider]: { ...catalogRoute, models: [] },
-          },
-        },
-      };
-      const materialized = materializeRuntimeConfig(source, {
-        manifestRegistry: metadataSnapshot.manifestRegistry,
-      });
-      for (const config of [source, materialized]) {
+      const source = providerConfig(catalogRoute, []);
+      for (const config of configVariants(source, fixture)) {
         const resolved = await resolveModelAsync(provider, catalogModel.id, undefined, config, {
           ...createResolutionOptions(config, fixture),
           authProfileMode: "api_key",

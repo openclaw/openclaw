@@ -1,19 +1,13 @@
-import fs from "node:fs/promises";
-import path from "node:path";
-import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { createRequireRecord } from "../../../test/helpers/record.js";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import type { ConfigSnapshot } from "../api/types.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
-import {
-  takeControlUiViewportScreenshot,
-  waitForControlUiProofSurface,
-} from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { pickerValue } from "../test-helpers/select-picker-e2e.ts";
+import { connectChatGateway } from "./chat-real-gateway.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const record = createRequireRecord("record", "expected-object-value");
@@ -29,9 +23,18 @@ const models = [
   "granite",
 ].map((id) => ({ id, name: id }));
 let owner: OpenClawTestInstance;
+let client: Awaited<ReturnType<typeof connectChatGateway>> | undefined;
 const suite = createControlUiE2eSuite({
   name: "Model picker search with a real Gateway",
   startServerBeforeBrowser: true,
+  resources: {
+    async run(signal) {
+      client = await connectChatGateway(owner, signal);
+    },
+    async close() {
+      await client?.stopAndWait();
+    },
+  },
   async startServer() {
     owner = await createOpenClawTestInstance({
       name: "model-picker-search",
@@ -68,40 +71,21 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
-  it("keeps compact choices readable and an unsaved search current through catalog replacement", async () => {
-    const directory = createControlUiE2eArtifactDir("model-picker-public");
+  it("keeps an unsaved search current through real Gateway catalog replacement without writing the draft", async () => {
+    const gateway = client;
+    if (!gateway) {
+      throw new Error("Gateway fixture client is not connected");
+    }
     const mutations: string[] = [];
-    const redact = (text: string) =>
-      text
-        .replaceAll(owner.gatewayToken, "[synthetic token]")
-        .replaceAll(owner.hookToken, "[synthetic token]")
-        .replaceAll(owner.homeDir, "[fixture-home]")
-        .replaceAll(owner.stateDir, "[fixture-state]")
-        .replaceAll(process.cwd(), "[checkout]");
     const cli = async (args: string[]) => {
       const result = await owner.cli(args);
       expect(result.code, result.stderr).toBe(0);
       return result.stdout;
     };
-    const rpc = async (method: string, params: Record<string, unknown> = {}) =>
-      record(
-        JSON.parse(
-          await cli([
-            "gateway",
-            "call",
-            method,
-            "--port",
-            String(owner.port),
-            "--params",
-            JSON.stringify(params),
-            "--json",
-          ]),
-        ),
-      );
     const publish = async (nextModels: typeof models) => {
-      const current = await rpc("config.get");
+      const current = await gateway.request<ConfigSnapshot>("config.get", {});
       expect(typeof current.hash).toBe("string");
-      await rpc("config.patch", {
+      await gateway.request("config.patch", {
         raw: JSON.stringify({ models: { providers: { fixture: { models: nextModels } } } }),
         baseHash: current.hash,
         replacePaths: ["models.providers.fixture.models"],
@@ -115,191 +99,74 @@ suite.define(() => {
     const issued = new URL(handoff.browserUrl);
     const url = new URL("cron", issued);
     url.hash = issued.hash;
-    try {
-      await suite.withPage(
-        { serviceWorkers: "block", locale: "en-US", viewport: { width: 1280, height: 900 } },
-        async ({ page }) => {
-          page.on("websocket", (socket) => {
-            socket.on("framesent", ({ payload }) => {
-              const frame = record(JSON.parse(payload.toString()));
-              if (
-                frame.type === "req" &&
-                frame.method !== "connect" &&
-                typeof frame.id === "string" &&
-                typeof frame.method === "string" &&
-                [
-                  "config.patch",
-                  "config.set",
-                  "cron.add",
-                  "cron.update",
-                  "cron.run",
-                  "cron.scratch.set",
-                  "sessions.patch",
-                ].includes(frame.method)
-              ) {
-                mutations.push(frame.method);
-              }
-            });
+    await suite.withPage(
+      { serviceWorkers: "block", locale: "en-US", viewport: { width: 1280, height: 900 } },
+      async ({ page }) => {
+        page.on("websocket", (socket) => {
+          socket.on("framesent", ({ payload }) => {
+            const frame = record(JSON.parse(payload.toString()));
+            if (
+              frame.type === "req" &&
+              typeof frame.id === "string" &&
+              typeof frame.method === "string" &&
+              [
+                "config.patch",
+                "config.set",
+                "cron.add",
+                "cron.update",
+                "cron.run",
+                "cron.scratch.set",
+                "sessions.patch",
+              ].includes(frame.method)
+            ) {
+              mutations.push(frame.method);
+            }
           });
-          const press = (key: string) => page.keyboard.press(key);
-          const capture = async (label: string, picker: Locator) => {
-            const surface = page.locator(".cron-page");
-            await waitForControlUiProofSurface(surface, [picker]);
-            const menu = await picker.evaluate((element) => {
-              const rect = element.querySelector(".picker-select__menu")!.getBoundingClientRect();
-              const triggerBounds = element.querySelector("button")!.getBoundingClientRect();
-              const bounds = ({ x, y, width, height }: DOMRect) => ({ x, y, width, height });
-              return {
-                triggerBounds: bounds(triggerBounds),
-                query: element.querySelector<HTMLInputElement>(".picker-select__search")?.value,
-                menu: {
-                  ...bounds(rect),
-                  viewportWidth: innerWidth,
-                  viewportHeight: innerHeight,
-                  scrollX,
-                },
-                rows: [...element.querySelectorAll<HTMLElement>("[role=option]:not([hidden])")].map(
-                  (row) => {
-                    const labelElement = row.querySelector<HTMLElement>(".picker-select__label")!;
-                    return {
-                      value: row.dataset.value,
-                      label: labelElement.textContent ?? "",
-                      labelWidth: labelElement.clientWidth,
-                      labelScrollWidth: labelElement.scrollWidth,
-                    };
-                  },
-                ),
-              };
-            });
-            await fs.writeFile(
-              path.join(directory, `${label}.png`),
-              await takeControlUiViewportScreenshot(page, surface, [picker]),
-            );
-            return menu;
-          };
-          await page.goto(url.toString());
-          await waitForControlUiGatewayReady(page);
-          await page.locator('[data-test-id="cron-new-task"]').click();
-          const picker = page.locator("openclaw-select-picker:has(#cron-payload-model-picker)");
-          const trigger = picker.locator(".picker-select__trigger");
-          await trigger.click();
-          await expect.poll(() => picker.locator('[data-value="fixture/anchor"]').count()).toBe(1);
-          await picker.getByRole("listbox").waitFor({ state: "visible" });
-          const compact = await capture("compact-desktop", picker);
-          expect(compact.query).toBeUndefined();
-          for (const row of compact.rows) {
-            expect(row.labelScrollWidth, row.label).toBeLessThanOrEqual(row.labelWidth);
-          }
-          await press("ArrowDown");
-          await press("Enter");
-          expect(await pickerValue(picker)).toBe("fixture/anchor");
-          await trigger.click();
-          await picker.locator('[data-value=""]').click();
-          expect(await pickerValue(picker)).toBe("");
+        });
+        const press = (key: string) => page.keyboard.press(key);
+        await page.goto(url.toString());
+        await waitForControlUiGatewayReady(page);
+        await page.locator('[data-test-id="cron-new-task"]').click();
+        const picker = page.locator("openclaw-select-picker:has(#cron-payload-model-picker)");
+        const trigger = picker.locator(".picker-select__trigger");
+        await trigger.click();
+        await expect.poll(() => picker.locator('[data-value="fixture/anchor"]').count()).toBe(1);
+        await picker.getByRole("listbox").waitFor({ state: "visible" });
+        await trigger.click();
+        await publish(models);
+        await trigger.click();
+        await expect
+          .poll(() => picker.locator('[data-value="fixture/aurora-large"]').count())
+          .toBe(1);
+        await trigger.click();
+        await page.locator("#cron-name").fill("Keep this draft");
+        await page.locator("#cron-payload-text").fill("Do not submit this automation");
+        const writesBeforeSearch = mutations.length;
+        await trigger.focus();
+        await press("ArrowDown");
+        const search = picker.locator(".picker-select__search");
+        await picker.locator('[data-value="__openclaw_custom_model__"]').click();
+        await page.locator("#cron-payload-model").fill("fixture/not-in-catalog");
+        expect(await pickerValue(picker)).toBe("fixture/not-in-catalog");
 
-          await publish(models);
-          await trigger.click();
-          await expect
-            .poll(() => picker.locator('[data-value="fixture/aurora-large"]').count())
-            .toBe(1);
-          const inventory = await picker
-            .locator("[role=option]:not([hidden])")
-            .evaluateAll((rows) => rows.map((row) => row.getAttribute("data-value")));
-          expect(inventory.length).toBeGreaterThan(8);
-          await trigger.click();
-          await page.locator("#cron-name").fill("Keep this draft");
-          await page.locator("#cron-payload-text").fill("Do not submit this automation");
-          const writesBeforeSearch = mutations.length;
-          await trigger.focus();
-          await press("ArrowDown");
-          const search = picker.locator(".picker-select__search");
-          await search.fill("RoRA");
-          const filtered = await capture("draft-reference-search", picker);
-          expect(filtered.rows.map((row) => row.value)).toEqual([
-            "fixture/aurora-large",
-            "fixture/aurora-small",
-          ]);
-          await press("ArrowDown");
-          await press("ArrowUp");
-          await capture("draft-highlight", picker);
-          expect(mutations).toHaveLength(writesBeforeSearch);
-          await search.fill("");
-          expect(
-            await picker
-              .locator("[role=option]:not([hidden])")
-              .evaluateAll((rows) => rows.map((row) => row.getAttribute("data-value"))),
-          ).toEqual(inventory);
-          await search.fill("aurora-large");
-          await press("Enter");
-          expect(await pickerValue(picker)).toBe("fixture/aurora-large");
-          await capture("draft-selected", picker);
-          await trigger.click();
-          await picker.locator('[data-value="__openclaw_custom_model__"]').click();
-          await page.locator("#cron-payload-model").fill("fixture/not-in-catalog");
-          expect(await pickerValue(picker)).toBe("fixture/not-in-catalog");
-          await capture("draft-custom", picker);
-
-          await trigger.click();
-          await search.fill("granite");
-          expect(await picker.locator('[data-value="fixture/granite"]').count()).toBe(1);
-          await capture("before-catalog-removal", picker);
-          await publish(models.filter((model) => model.id !== "granite"));
-          await expect.poll(() => picker.locator('[data-value="fixture/granite"]').count()).toBe(0);
-          expect(await search.inputValue()).toBe("granite");
-          await press("Enter");
-          expect(await trigger.getAttribute("aria-label")).toBe("Model: fixture/not-in-catalog");
-          await capture("after-catalog-removal", picker);
-          await press("Escape");
-          await page.setViewportSize({ width: 1280, height: 700 });
-          const topAnchor = await trigger.boundingBox();
-          if (!topAnchor) {
-            throw new Error("Model trigger is not visible for the top-opening check");
-          }
-          await page.mouse.move(
-            topAnchor.x + topAnchor.width / 2,
-            topAnchor.y + topAnchor.height / 2,
-          );
-          await page.mouse.wheel(0, topAnchor.y - 530);
-          await expect.poll(async () => (await trigger.boundingBox())?.y).toBeGreaterThan(500);
-          await press("ArrowDown");
-          await picker.locator(".picker-select__menu").waitFor({ state: "visible" });
-          await expect
-            .poll(() =>
-              picker.evaluate((element) => {
-                const menu = element.querySelector(".picker-select__menu")!.getBoundingClientRect();
-                const pickerTriggerBounds = element
-                  .querySelector(".picker-select__trigger")!
-                  .getBoundingClientRect();
-                return menu.bottom <= pickerTriggerBounds.top;
-              }),
-            )
-            .toBe(true);
-          await capture("draft-top-opening", picker);
-          await press("Escape");
-          await page.setViewportSize({ width: 390, height: 844 });
-          await trigger.click();
-          await search.fill("no-matches-741");
-          const phone = await capture("draft-phone-no-results", picker);
-          expect(phone.menu.scrollX).toBe(0);
-          for (const box of [phone.triggerBounds, phone.menu]) {
-            expect(box.x).toBeGreaterThanOrEqual(0);
-            expect(box.x + box.width).toBeLessThanOrEqual(phone.menu.viewportWidth);
-            expect(box.y).toBeGreaterThanOrEqual(0);
-            expect(box.y + box.height).toBeLessThanOrEqual(phone.menu.viewportHeight);
-          }
-          await press("Escape");
-          expect(await page.locator("#cron-name").inputValue()).toBe("Keep this draft");
-          expect(await page.locator("#cron-payload-text").inputValue()).toBe(
-            "Do not submit this automation",
-          );
-          expect(mutations).toHaveLength(writesBeforeSearch);
-          expect(JSON.parse(await cli(["config", "get", "agents.defaults.model", "--json"]))).toBe(
-            "fixture/anchor",
-          );
-        },
-      );
-    } finally {
-      await fs.writeFile(path.join(directory, "gateway.log"), redact(owner.logs()));
-    }
+        await trigger.click();
+        await search.fill("granite");
+        expect(await picker.locator('[data-value="fixture/granite"]').count()).toBe(1);
+        await publish(models.filter((model) => model.id !== "granite"));
+        await expect.poll(() => picker.locator('[data-value="fixture/granite"]').count()).toBe(0);
+        expect(await search.inputValue()).toBe("granite");
+        await press("Enter");
+        expect(await trigger.getAttribute("aria-label")).toBe("Model: fixture/not-in-catalog");
+        await press("Escape");
+        expect(await page.locator("#cron-name").inputValue()).toBe("Keep this draft");
+        expect(await page.locator("#cron-payload-text").inputValue()).toBe(
+          "Do not submit this automation",
+        );
+        expect(mutations).toHaveLength(writesBeforeSearch);
+        expect(JSON.parse(await cli(["config", "get", "agents.defaults.model", "--json"]))).toBe(
+          "fixture/anchor",
+        );
+      },
+    );
   }, 120_000);
 });

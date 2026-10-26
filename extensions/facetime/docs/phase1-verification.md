@@ -30,7 +30,7 @@ remote audibility.
 ## Live proof gap
 
 A consensual inbound and outbound round trip is still required separately for
-FaceTime video and Phone-owned FaceTime Audio. Live proof must confirm remote
+FaceTime video and FaceTime audio in FaceTime.app. Live proof must confirm remote
 input/output, barge-in, agent consultation, direct hangup, physical-speaker
 suppression, and child-process teardown. Automated validation must not place
 calls, change SIP, enable developer tools, install the driver, restart the

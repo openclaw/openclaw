@@ -162,34 +162,6 @@ function shouldPushStreamingUpdate(previousText: string, nextText: string): bool
   );
 }
 
-/** Merges cumulative or overlapping streaming snapshots without duplicating content. */
-export function mergeStreamingText(
-  previousText: string | undefined,
-  nextText: string | undefined,
-): string {
-  const previous = previousText ?? "";
-  const next = nextText ?? "";
-  if (!next) {
-    return previous;
-  }
-  if (!previous || next === previous) {
-    return next;
-  }
-  if (next.includes(previous)) {
-    return next;
-  }
-  if (previous.includes(next)) {
-    return previous;
-  }
-  const maxOverlap = Math.min(previous.length, next.length);
-  for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
-    if (previous.slice(-overlap) === next.slice(0, overlap)) {
-      return `${previous}${next.slice(overlap)}`;
-    }
-  }
-  return `${previous}${next}`;
-}
-
 export class FeishuStreamingSession {
   private client: Client;
   private creds: Credentials;

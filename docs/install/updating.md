@@ -16,6 +16,13 @@ hint without changing the package or stopping the Gateway; background checks
 skip package-registry updates. Missing or invalid markers retain normal install
 behavior, with a warning for an invalid marker.
 
+After a Mac app update, recovery checks the service selected by the connection
+mode: the local Gateway or, with a remote primary, the Mac node service. If a
+custom node launcher cannot be inspected, check its node LaunchAgent before
+retrying. This node inspection failure does not invalidate an already verified
+local Gateway. Recovery keeps the update receipt for retry, verifies the node
+after its launcher is repaired, and leaves the custom launcher unchanged.
+
 For [standalone builds](/install/standalone#update-the-complete-artifact), update
 the owning desktop app or replace the complete executable and runtime directory.
 The standalone CLI refuses package-manager and git updates with a visible next
@@ -33,11 +40,24 @@ backup.
 
 ## Update implementation contract
 
+Candidate Doctor preserves same-conversation automation continuations when adopting
+a stored inference account. It carries forward the original authenticated source
+only when its old executable revision still matches, then binds that source and
+existing standing-grant references to the restricted definition. Stale captures
+stay stale; runtime authorization, conversation identity and revocation checks
+remain required. The candidate must contain this repair.
+
 Background discovery failures are logged and retried at the next scheduled check.
 Gateway shutdown cancellation stays quiet; unexpected scheduled task failures
 are reported by the scheduler without restarting the Gateway.
 
 **Updates always work** (`openclaw update` finishes best effort everywhere). Changes to update, Doctor, service lifecycle, migrations, plugin loading: state their update behavior. Installed updater runs first, can't be patched; candidate fixes key on markers shipped drivers set; existing operator state = input. Recoverable hiccups → recorded warnings; back up before mutating, let rollback restore it; refuse only for named data risk with previous Gateway kept running. Timeouts and budgets: generous, derived from measured state, sized for slow hardware. Proof: published-driver × candidate cell.
+
+Update inspection and snapshot workers bind plugin metadata discovery to the
+selected installation's state directory, including requests from older installed
+updaters. A different profile's database version must not block that inspection.
+The candidate worker must contain this repair; an older updater inspecting with
+its own worker still needs an updated runtime.
 
 Private Doctor and post-core workers validate command fields before entering maintenance.
 The delegated executor admits its grant data separately and still checks live process and
@@ -59,6 +79,19 @@ evidence. This preserves the installed updater's original fingerprint format.
 Changed committed data or write evidence still refuses migration and automatic
 restoration. The candidate must contain this repair.
 
+Within one database-generation observation, update and Doctor workers reuse a
+verified digest while the file's device, inode, size, and nanosecond birth,
+modification, and change times remain identical. Each family observation still
+checks the database, WAL, and rollback journal; private-copy verification and
+WAL commit checks remain in place. Changed or unavailable identities require
+hashing again. Reuse ends with that observation and does not cross Doctor
+invocations. Reuse also requires nanosecond bigint stat fields and modification
+and change times more than two seconds older than the start of hashing. Recent
+writes can share a coarse filesystem timestamp even when nanosecond fields are
+available, so their digests are recomputed. Millisecond-only stats never enable
+reuse. The runtime performing the observation must contain this change;
+a newer candidate cannot change an older installed updater's own reads.
+
 Update snapshots and database backups accept a database whose only integrity
 findings are `malformed inverted index` reports on canonical, schema-validated
 agent FTS tables. A Node upgrade that changes SQLite tokenization (for example,
@@ -78,6 +111,54 @@ On macOS, reinstall and uninstall reconcile the launchd registration by service
 label even if its plist was deleted. Reinstall warns when the previous definition
 is missing; an existing plist and its private environment files remain backed up
 for rollback if activation fails.
+
+Update-time service reconciliation also removes the historical macOS
+`NODE_EXTRA_CA_CERTS=/etc/ssl/cert.pem` setting when the candidate installer retires
+it. This requires the candidate to contain the repair and the installed updater
+to delegate service refresh to that candidate. Custom CA bundles at other paths
+remain preserved, and unknown operator edits still require manual repair.
+
+For existing managed Gateway and node-host services, migration makes a one-time,
+best-effort copy of eligible operator CA additions into
+`<state directory>/service-ca/<service label>-operator-ca.pem` (mode `0600`).
+It reads the installed service's effective CA setting, so its custom trust need
+not be present in the updater shell. A distinct CA bundle already selected by
+the service remains preserved when the installer does not explicitly select a
+different bundle. An explicitly selected distinct bundle takes precedence.
+
+Automatic eligibility is deliberately narrow: the legacy file must retain the
+complete, byte-identical historical OpenBSD `1.22.2.1` stock prefix (333483 bytes,
+SHA256 `9dae8d76e55cb08991f2b672d58999ea15560d910759c16b544f843bdffbb994`),
+as observed in Apple's sealed macOS 27.0.1 template, followed by appended PEM
+certificates. Only appended self-signed CA roots with recognized clean native
+trust results are eligible. Self-signature alone does not establish provenance.
+Stock keys, known compromised keys and any explicit macOS distrust are excluded,
+including alternate certificates with the same public key. Native checks include
+user, administrator and system trust settings and offline Basic X509 evaluation.
+Other stock revisions, replaced or reordered bundles, intermediate-only additions,
+unknown native results and unresolvable distrust require manual review.
+
+Migration never changes `/etc/ssl/cert.pem` or overwrites a conflicting operator
+file. The CLI reports successful, unnecessary, ambiguous or failed migration,
+including partial migration where some additions cannot be established as
+eligible. Ambiguity, unavailable provenance or a write failure does not block
+the update: the obsolete override remains retired, and dependent private HTTPS
+or WSS connections may stop working. Review the guidance before relying on
+automatic recovery. Previously working connections that require compromised
+keys intentionally remain rejected.
+
+After migration, rotate legitimate private CAs in the maintained bundle and
+restart the service. OpenClaw does not synchronize future changes from the
+retired file or continuously rescreen this operator-owned bundle against OS
+trust changes. For manual recovery, create a distinct maintained PEM bundle,
+select its absolute path with `NODE_EXTRA_CA_CERTS`, then run
+`openclaw gateway install --force` or `openclaw node install --force` from that
+environment. Never restore the entire obsolete stock bundle
+or disable certificate verification to recover connectivity.
+
+When reconciliation replaces the service's Node executable, its leading runtime
+directory in `PATH` can move to the selected Node directory. Every other existing
+`PATH` entry must remain in order; this does not discard custom directories.
 
 When an updater stops a macOS LaunchAgent, it waits for both launchd's process
 and the verified serving Gateway child to exit before continuing. An unloaded
@@ -112,6 +193,10 @@ retains its running runtime. Late module imports and background workers keep
 using that generation through finalization, rollback, and CLI cleanup, even when
 the new build has different chunk filenames. The new Gateway starts from the
 activated build.
+
+This retention covers Node and Bun late imports, including CommonJS dependencies
+and JSON. Module state already loaded by the updater stays shared through cleanup;
+imports outside that retained generation continue using the active installation.
 
 Source updates qualify the installed pnpm launcher outside the checkout so even
 its version probe cannot rewrite the checkout's lockfile. If another version is
@@ -191,6 +276,10 @@ updaters. Positive handoff descendants, OpenClaw identities, and retained-runtim
 path holders also block repair. This does not relax Doctor's artifact-custody
 checks or remove retained recovery data.
 
+Authenticated readiness probes recheck the update's live ownership before opening
+their transport and sending RPC frames, including deferred authentication and
+startup retries. Losing ownership stops those probes.
+
 If the retained verifier cannot authenticate to the restarted Gateway, it stops
 retrying that rejection. Local HTTP readiness and runtime version/build identity
 can verify activation instead, with an RPC authentication warning recorded in
@@ -198,7 +287,9 @@ the update result. This does not change Gateway authentication or pairing.
 The retained verifier runs the previous package, so an update that changes the
 Gateway protocol version, in either direction, gets the same HTTP identity check
 with an RPC protocol warning instead of waiting for an RPC handshake that cannot
-succeed.
+succeed. When readiness never settles, the recorded timeout names both the read
+the budget interrupted and the last health probe error, such as an RPC
+rejection.
 
 Channel outages are warnings once the expected Gateway build is running and its
 core readiness is verified. Detailed `/readyz` responses report `coreReady`
@@ -1037,6 +1128,15 @@ can settle `prepared`, `publishing`, `publication-complete`, and superseded oper
 when the journal's inodes still match under a consistent device-number mapping.
 Ordinary update admission stays strict.
 
+This settlement first shipped in 2026.10.5. Earlier releases, including the
+2026.9 extended-stable line, refuse with `Package publication journal does not
+match its installation` and cannot settle the change themselves; starting with
+2026.10.7, the message also names the changed bindings. From an earlier
+release, install 2026.10.5 or newer with the
+[manual npm procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun),
+then run `openclaw update repair --yes` from the new installation. See
+[#170031](https://github.com/openclaw/openclaw/issues/170031).
+
 If the installed updater cannot read the journal, a separately installed OpenClaw
 version containing this fix provides the same settlement-only path:
 
@@ -1049,6 +1149,12 @@ node /path/to/recovery-openclaw/dist/package-update-activation-recovery.mjs \
 Use the original anchor and operation ID with a supported external Node or Bun
 runtime. Keep other updaters and package managers stopped. Ordinary `status` and
 update admission remain strict for unfinished identity-mismatched journals.
+
+The helper can refuse when retained launcher evidence is missing. In one
+report, the 2026.10.5 helper refused a 2026.9.33 `publication-complete` journal
+whose anchor held only `previous`, with `ENOENT` on
+`<anchor>/launchers`. No supported procedure covers that layout yet. Preserve
+the journal, anchor, and retained generation, and report the exact output.
 
 If publication never started and the previous package is still installed, repair
 verifies its full tree fingerprint and unchanged launchers under the same device
@@ -1341,9 +1447,18 @@ progress report remains available through that Gateway's restart.
 
 Ask the agent to update OpenClaw, or send `/update` from Discord or another
 connected chat. Natural-language requests use the existing `gateway` tool's
-`update.run` action. The minimal, coding, and messaging profiles expose that update
-action without granting configuration reads or other Gateway controls. Explicit tool
-restrictions still apply.
+`update.run` action. The same tool exposes `restart` for a runtime-coordinated safe
+restart and `update.cleanup` for explicit recovery cleanup without stopping the
+Gateway. The minimal, coding, and messaging profiles expose these maintenance
+actions without granting configuration reads. Explicit tool restrictions still apply.
+
+On an explicit owner request, the agent performs the supported action itself; it
+does not send the owner to a slash command or terminal. Restart requests can be
+deferred until active work settles; an accepted schedule is not a completed restart.
+Cleanup uses the serving Gateway's owner-bound worker and the existing manual
+verification, eligibility, and dependency checks. It permanently removes eligible
+rollback copies, so it requires a cleanup request. Set `dryRun: true` to preview.
+It does not select unmanifested paths or stop/restart the Gateway.
 
 Operator-created scheduled automations can also call `gateway` → `update.run`
 without a chat owner identity. The Gateway uses the active scheduled run's
@@ -1433,9 +1548,11 @@ External-chat updates through `/update` or the tool require `commands.restart`
 (enabled by default), including managed installations. The slash command also
 follows command-access restrictions; tool calls follow tool policy. Chat updates use the hosting installation's
 configured update channel and install method.
-Agents must never run `npm install -g openclaw` or stop the Gateway service
-from a chat shell; use `/update` or the update action so restart and notification
-stay coordinated.
+Agents use runtime-supervised maintenance rather than an unsupervised shell
+stop/update/start sequence or package swap. The runtime retains restart ownership
+before stopping the Gateway. Non-owner requests remain refused, and chat restarts
+honor `commands.restart` just like chat updates. Cleanup does not depend on that
+flag because it does not restart the Gateway.
 
 ## Inspect FreeBSD service discovery
 
@@ -1529,8 +1646,12 @@ is not required for this ledger defect. See [Update run history](/cli/update#run
 
 ## Retire update recovery data
 
-Once you have verified the update and your conversations, preview retained
-migration originals:
+Once you have verified the update and your conversations, ask the agent to clean
+up update recovery copies. The `gateway` tool's `update.cleanup` action runs under
+the serving Gateway's ownership; no stop is needed. It also accepts `dryRun: true`
+for a preview. The standalone CLI keeps its offline apply requirement below.
+
+To preview retained migration originals from a terminal:
 
 ```bash
 openclaw update cleanup --dry-run
@@ -1573,9 +1694,9 @@ Migrates config, audits DM policies, and checks gateway health. Doctor also comp
 Standalone repair cancels its pre-repair original-state capture after ten minutes.
 If that capture times out, Doctor waits for its workers to settle and reports a
 warning with backup and retry instructions; repair-specific migration backups still apply.
-Doctor restores a managed Gateway it stopped, including after interruption. If
-restoration fails, it prints the failure and the command to start the Gateway
-after resolving it.
+Doctor restores a managed Gateway it stopped, including after SIGINT, SIGTERM,
+or SIGHUP interrupts repair. If restoration fails, it prints the failure and the
+command to start the Gateway after resolving it.
 
 On Linux, `openclaw doctor --fix` can reclaim abandoned updater runtimes even
 after a systemd user-manager re-exec. The manager's `--deserialize` argument and

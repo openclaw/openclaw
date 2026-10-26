@@ -2,6 +2,7 @@ import type { RouteLocation } from "@openclaw/uirouter";
 import { defineSolidPage } from "../../app-route-types.tsx";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { SessionArchivedFilter } from "../../lib/sessions/index.ts";
+import { buildSessionsListQuery } from "./list-query.ts";
 
 export type SessionsRouteData = {
   expandedSessionKey: string | null;
@@ -27,12 +28,24 @@ export const page = defineSolidPage<"sessions", ApplicationContext, SessionsRout
       const options = routeOptions(location);
       return `${options.expandedSessionKey ?? ""}\u0000${options.statusFilter}\u0000${context.agentSelection.state.scopeId ?? "all"}`;
     },
-    loader: (context: ApplicationContext, { location }): SessionsRouteData => {
-      // Config decorates the page; it is not a prerequisite for the session roster.
-      void context.runtimeConfig.ensureLoaded().catch(() => undefined);
-      // The mounted page owns list issuance, including scope/status navigation
-      // during a search. Prefetching here bypasses its single in-flight request.
-      return routeOptions(location);
+    loader: (context: ApplicationContext, { location, cause }): SessionsRouteData => {
+      const options = routeOptions(location);
+      // Intent fills the same managed window the page subscribes to. Ordinary
+      // navigation still leaves issuance to the page's current search/filter intent.
+      if (cause === "preload") {
+        void context.sessions.refreshList(
+          buildSessionsListQuery(
+            context.agentSelection.state.scopeId,
+            {
+              statusFilter: options.statusFilter,
+              includeGlobal: true,
+              includeUnknown: Boolean(options.expandedSessionKey),
+            },
+            options.expandedSessionKey,
+          ),
+        );
+      }
+      return options;
     },
   },
 );

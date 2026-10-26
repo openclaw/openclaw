@@ -347,9 +347,10 @@ export function bindSqliteDatabaseAdmission(database: DatabaseSync, expected?: s
     state.unproven.add(database);
     return;
   }
-  const record = state.registry.records.get(observed);
-  if (record && !isRetired(record)) {
-    retainConnection(database, record);
+  // Restore descriptor-held facts before schema tracking initializes the new handle.
+  const known = state.registry.records.get(observed);
+  if ((known && !isRetired(known)) || state.registry.descriptors.get(observed)?.facts.size) {
+    admission(database);
   }
 }
 
@@ -483,13 +484,20 @@ export function beginSqliteDatabaseWrite(database: DatabaseSync, unscoped = fals
   }
 }
 
-/** Native settlement invalidates row caches, including failed or rolled-back writes. */
-export function finishSqliteDatabaseWrite(database: DatabaseSync): void {
+/** Failed writes invalidate too, unless the prepared native owner certifies no effect. */
+export function finishSqliteDatabaseWrite(database: DatabaseSync, noEffect = false): void {
   if (!state.dataWriters.has(database)) {
     return;
   }
   const record = state.dataWriters.get(database);
   state.dataWriters.delete(database);
+  if (noEffect) {
+    scopedWrites.cancel(database);
+    if (record) {
+      Atomics.sub(new Int32Array(record.references.get(threadId)!), 1, 1);
+    }
+    return;
+  }
   state.localWriteRevisions.set(database, (state.localWriteRevisions.get(database) ?? 0) + 1);
   scopedWrites.finish(database, record);
   if (record) {

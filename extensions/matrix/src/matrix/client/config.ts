@@ -94,34 +94,6 @@ function readMatrixEnvSecretRef(params: {
   return params.env[params.ref.id]?.trim() || undefined;
 }
 
-function readMatrixConfigString(params: {
-  value: unknown;
-  path: string;
-  cfg: Pick<CoreConfig, "secrets">;
-  env: NodeJS.ProcessEnv;
-  allowEnvSecretRef?: boolean;
-  suppressSecretRef?: boolean;
-}): string {
-  const ref = coerceSecretRef(params.value, params.cfg.secrets?.defaults);
-  if (params.suppressSecretRef && ref) {
-    return "";
-  }
-  const value = params.allowEnvSecretRef
-    ? ref?.source === "env"
-      ? (readMatrixEnvSecretRef({ ref, cfg: params.cfg, env: params.env }) ?? params.value)
-      : ref
-        ? ""
-        : params.value
-    : params.value;
-  return (
-    normalizeResolvedSecretInputString({
-      value,
-      path: params.path,
-      defaults: params.cfg.secrets?.defaults,
-    }) ?? ""
-  );
-}
-
 function resolveMatrixBaseConfigFieldPath(field: MatrixConfigStringField): string {
   return `channels.matrix.${field}`;
 }
@@ -233,17 +205,29 @@ function readMatrixConfigStrings(params: {
   suppressPasswordSecretRef: boolean;
 }): Record<MatrixConfigStringField, string> {
   return Object.fromEntries(
-    MATRIX_CONFIG_STRING_FIELDS.map((field) => [
-      field,
-      readMatrixConfigString({
-        value: params.values[field],
-        path: params.path(field),
-        cfg: params.cfg,
-        env: params.env,
-        allowEnvSecretRef: MATRIX_AUTH_SECRET_FIELDS.includes(field as MatrixAuthSecretField),
-        suppressSecretRef: field === "password" && params.suppressPasswordSecretRef,
-      }),
-    ]),
+    MATRIX_CONFIG_STRING_FIELDS.map((field) => {
+      const input = params.values[field];
+      const path = params.path(field);
+      const ref = coerceSecretRef(input, params.cfg.secrets?.defaults);
+      if (field === "password" && params.suppressPasswordSecretRef && ref) {
+        return [field, ""];
+      }
+      const value = MATRIX_AUTH_SECRET_FIELDS.includes(field as MatrixAuthSecretField)
+        ? ref?.source === "env"
+          ? (readMatrixEnvSecretRef({ ref, cfg: params.cfg, env: params.env }) ?? input)
+          : ref
+            ? ""
+            : input
+        : input;
+      return [
+        field,
+        normalizeResolvedSecretInputString({
+          value,
+          path,
+          defaults: params.cfg.secrets?.defaults,
+        }) ?? "",
+      ];
+    }),
   ) as Record<MatrixConfigStringField, string>;
 }
 

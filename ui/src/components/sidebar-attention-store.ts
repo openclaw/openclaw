@@ -266,12 +266,12 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
                 item.agentId,
                 item.sessionKey,
                 item.id,
-                item.unconfirmed,
+                item.held,
                 item.command,
               ]),
             },
             requiresAction: true,
-            severity: item.unconfirmed ? ("warning" as const) : ("error" as const),
+            severity: item.held ? ("warning" as const) : ("error" as const),
           }),
         ) ?? [];
     const overlay = this.sources.overlays.snapshot;

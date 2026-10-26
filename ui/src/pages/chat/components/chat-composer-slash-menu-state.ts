@@ -40,7 +40,7 @@ export function getSlashArgOptionId(paneId: string, commandName: string, arg: st
   );
 }
 
-export function getSlashCommandOptionLabel(cmd: SlashCommandDef | undefined): string {
+function getSlashCommandOptionLabel(cmd: SlashCommandDef | undefined): string {
   if (!cmd) {
     return "";
   }

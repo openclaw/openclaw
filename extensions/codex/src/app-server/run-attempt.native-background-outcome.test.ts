@@ -39,6 +39,7 @@ it.each([
     "synthetic-controlled-command",
     startProcessId,
   );
+  const failedOutput = "Synthetic command failed after yielding";
   const complete = (patch: JsonObject): Promise<void> =>
     harness.notify(itemNotification("item/completed", { ...command, ...patch }));
   const harness = createStartedThreadHarness(async (method, input) => {
@@ -57,7 +58,7 @@ it.each([
         processId: "52627",
         status: "failed",
         exitCode: 7,
-        aggregatedOutput: "Synthetic command failed after yielding",
+        aggregatedOutput: failedOutput,
         durationMs: 1,
       });
     }
@@ -117,14 +118,10 @@ it.each([
       expect(harness.requests).toContainEqual(unsubscribe);
       expect(releaseSource).toHaveBeenCalled();
     } else {
-      expect(tool).toMatchObject({
-        isError: true,
-        ...(scenario === "completion during inventory"
-          ? {
-              content: [{ type: "text", text: "Synthetic command failed after yielding" }],
-            }
-          : {}),
-      });
+      expect(tool).toMatchObject({ isError: true });
+      if (scenario === "completion during inventory") {
+        expect(tool).toMatchObject({ content: [{ type: "text", text: failedOutput }] });
+      }
       expect(JSON.stringify(tool)).not.toContain('"outcome":"unknown"');
     }
   } finally {

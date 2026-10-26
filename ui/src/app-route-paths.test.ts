@@ -18,6 +18,7 @@ import {
   pathForAgentPanel,
   pathForClawCatalogEntry,
   pathForPluginSettings,
+  pathForPluginCatalogEntry,
   pathForWorkboardBoard,
   pathForTerminalSession,
   terminalSessionIdFromPath,
@@ -31,10 +32,12 @@ import {
 import { createApplicationRouter, startApplicationRouter } from "./app-routes.ts";
 import { createAgentSelectionCapability } from "./app/agent-selection.ts";
 import type { ApplicationContext } from "./app/context.ts";
+import { createApplicationGatewaySnapshot } from "./test-helpers/application-context-fixtures.ts";
 import { createApplicationGateway } from "./test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "./test-helpers/gateway-methods.ts";
 
 const DYNAMIC_STARTUP_CASES = [
+  ["plugins", pathForPluginCatalogEntry("calendar"), "?probe=1", "#catalog"],
   ["agents", pathForAgentPanel("team.writer", "tools"), "?probe=1", "#catalog"],
   ["dashboard", "/dashboard/main/01JSESSIONA", "?probe=1", "#dashboard"],
   ["chat", "/beam/0123456789ab", "", "#message"],
@@ -84,17 +87,11 @@ function createTestRouter(routeId: RouteId) {
 }
 
 function createStartupContext(basePath = ""): ApplicationContext {
-  const { gateway } = createApplicationGateway({
-    phase: "stopped",
-    client: null,
-    offlineStable: false,
-    hello: null,
-    canvasPluginSurfaceUrl: null,
-    assistantAgentId: null,
-    sessionKey: "agent:main:main",
-    lastError: null,
-    lastErrorCode: null,
-  });
+  const { gateway } = createApplicationGateway(
+    createApplicationGatewaySnapshot({
+      sessionKey: "agent:main:main",
+    }),
+  );
   return {
     basePath,
     gateway,
@@ -338,6 +335,29 @@ describe("Memory tab route paths", () => {
     expect(routeIdFromPath("/settings/memory/unknown")).toBeNull();
     expect(routeIdFromPath("/settings/memory/dreams/extra")).toBeNull();
   });
+});
+
+describe("Plugin catalog mount inference", () => {
+  it.each(["/ui", "/portable/control"])(
+    "retains %s when starting a catalog detail",
+    async (basePath) => {
+      const pathname = pathForPluginCatalogEntry("calendar", basePath);
+      const inferredBase = inferBasePathFromPathname(pathname);
+      expect(inferredBase).toBe(basePath);
+      const history = createHistory(pathname, "?probe=1", "#catalog");
+      const { router, route } = createTestRouter("plugins");
+      route.loader = vi.fn(async () => null);
+      await startApplicationRouter(
+        router,
+        history,
+        inferredBase,
+        createStartupContext(inferredBase),
+      );
+      expect(router.getState().matches[0]?.routeId).toBe("plugins");
+      expect(history.location()).toEqual({ pathname, search: "?probe=1", hash: "#catalog" });
+      expect(history.replace).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe("Plugin Settings route paths", () => {

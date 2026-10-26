@@ -4,6 +4,7 @@ import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { racePromiseWithAbortSignal } from "./abort-signal.js";
 import { ensureSqliteLibrarySelected } from "./bun-sqlite-library.js";
 import { resolveNodeCompileCacheEnv } from "./node-compile-cache-env.js";
+import { createPostgresPoolEndpoints, postgresPoolTransferList } from "./postgres-sync/pool.js";
 import type { RuntimeWorkerGeneration } from "./runtime-worker-generation.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "./runtime-worker-url.js";
 import {
@@ -195,18 +196,22 @@ export function createSqliteWorkerLifecycle({
     const databaseAdmissionCursor = createSqliteDatabaseAdmissionCursor();
     // The Worker constructor inherits this exact synchronous snapshot.
     captureSqliteDatabaseAdmissions(databaseAdmissionCursor);
+    const postgresPool = createPostgresPoolEndpoints();
     const { worker, exited } = runInDetachedAsyncContext(() => ({
       worker: createCpuTrackedWorker(carrierUrl, {
         // V8's default young generation lets each carrier keep ~60 MiB of idle nursery.
         resourceLimits: { maxOldGenerationSizeMb: 512, maxYoungGenerationSizeMb: 32 },
         env: resolveNodeCompileCacheEnv(),
         execArgv: resolveRuntimeWorkerThreadExecArgv(carrierUrl),
+        workerData: { postgresPool },
+        transferList: postgresPoolTransferList(postgresPool),
       }),
       exited: createDeferredCore(),
     }));
     trackSqliteDatabaseAdmissionWorker(worker);
     const slot: Slot = {
       ...(options.sharedState ? { sharedState: true as const } : {}),
+      postgresPoolSent: postgresPool !== undefined,
       custody: new SqliteWorkerSlotCustody(),
       databaseAdmissionCursor,
       runtimeGeneration: options.runtimeGeneration,

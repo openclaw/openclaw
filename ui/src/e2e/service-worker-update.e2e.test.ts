@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { chromium, webkit, type Browser, type Page } from "playwright";
-import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
+import { beforeEach, afterAll, beforeAll, describe, expect, inject, it } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-contract.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
@@ -22,6 +22,7 @@ import {
   refreshProductionControlUiE2e,
   resolvePlaywrightChromiumExecutablePath,
   startProductionControlUiE2eServer,
+  startCopiedProductionControlUiE2eServer,
   type ControlUiE2eProductionServer,
 } from "../test-helpers/control-ui-e2e.ts";
 
@@ -242,6 +243,47 @@ async function ensureControlledPage(page: Page, pageErrors: string[], expectedBu
   });
 }
 
+async function waitForActiveWorkerBuild(page: Page, expectedBuildId: string): Promise<void> {
+  // Offline storage is optional. Read activation identity through the same native
+  // protocol as foreground recovery, without delivering the missed page events.
+  await page.waitForFunction(async (buildId) => {
+    const registration = await navigator.serviceWorker.getRegistration();
+    const worker = registration?.active;
+    if (
+      !registration ||
+      !worker ||
+      worker.state !== "activated" ||
+      registration.installing ||
+      navigator.serviceWorker.controller !== worker
+    ) {
+      return false;
+    }
+    const channel = new MessageChannel();
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const message = await new Promise<{ type?: string; version?: string } | null>((resolve) => {
+        // Match the runtime probe's unavailable-worker bound and release its ports.
+        timeout = setTimeout(() => resolve(null), 1_000);
+        channel.port1.addEventListener("message", (event) => resolve(event.data), { once: true });
+        channel.port1.start();
+        worker.postMessage({ type: "sw-version-probe" }, [channel.port2]);
+      });
+      return (
+        registration.active === worker &&
+        navigator.serviceWorker.controller === worker &&
+        worker.state === "activated" &&
+        !registration.installing &&
+        message?.type === "sw-updated" &&
+        message.version === buildId
+      );
+    } finally {
+      clearTimeout(timeout);
+      channel.port1.close();
+      channel.port2.close();
+    }
+  }, expectedBuildId);
+}
+
 async function fetchControlledAsset(
   page: Page,
   assetPath: string,
@@ -324,20 +366,20 @@ describe("Control UI service-worker production update E2E", () => {
       throw new Error(`Playwright Chromium is unavailable at ${chromiumExecutablePath}`);
     }
     outDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-service-worker-update-"));
-    server = await startProductionControlUiE2eServer(
-      outDir,
-      buildA,
-      createControlUiMockBootstrapConfig({
-        assistantAgentId: "research",
-        defaultAgentId: "research",
-        serverBuildId: buildA,
-        terminalEnabled: true,
-      }),
-    );
+    const bootstrap = createControlUiMockBootstrapConfig({
+      assistantAgentId: "research",
+      defaultAgentId: "research",
+      serverBuildId: buildA,
+      terminalEnabled: true,
+    });
+    const prebuilt = inject("controlUiE2ePrebuiltAssets");
+    server = prebuilt
+      ? await startCopiedProductionControlUiE2eServer(prebuilt.root, outDir, buildA, bootstrap)
+      : await startProductionControlUiE2eServer(outDir, buildA, bootstrap);
     browser = useWebKit
       ? await webkit.launch()
       : await chromium.launch({ executablePath: chromiumExecutablePath });
-  }, 120_000);
+  }, 180_000);
 
   afterAll(async () => {
     try {
@@ -421,7 +463,7 @@ describe("Control UI service-worker production update E2E", () => {
         );
         await ensureControlledPage(page, pageErrors, buildA);
         if (mode === "chat") {
-          await gateway.waitForRequest("chat.startup");
+          await gateway.waitForRequest("sessions.messages.subscribe");
         } else {
           await page.getByRole("button", { name: "Raw", exact: true }).click();
         }
@@ -435,18 +477,13 @@ describe("Control UI service-worker production update E2E", () => {
           mode === "chat" ? "keep my draft through the missed update" : '{ "count": 2 }';
         await editor.fill(draft);
         await stageBuildB(nextDir);
-        const cacheB = await readBuildCacheName(buildB, nextDir);
         await page.evaluate(() => sessionStorage.setItem("test-missed-activation", "1"));
         await server.replaceBuild(nextDir, previousDir);
         swapped = true;
         await page.evaluate(async () => {
           await (await navigator.serviceWorker.getRegistration())?.update();
         });
-        await expect.poll(() => page.evaluate(() => caches.keys())).toContain(cacheB);
-        await page.waitForFunction(async () => {
-          const registration = await navigator.serviceWorker.getRegistration();
-          return registration?.active?.state === "activated" && !registration.installing;
-        });
+        await waitForActiveWorkerBuild(page, buildB);
         expect((await gateway.getRequests("connect")).at(-1)?.params).toMatchObject({
           client: { buildId: buildA },
         });

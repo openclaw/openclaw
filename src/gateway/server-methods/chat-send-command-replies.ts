@@ -9,15 +9,13 @@ import type { ReplyDispatchOperation } from "../../auto-reply/reply/reply-dispat
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import { collectReplyMediaEntries } from "../../infra/outbound/reply-media-entries.js";
 import { normalizeMediaReferenceForComparison } from "../../media/media-reference-comparison.js";
+import { combineNonStreamingReplyParts } from "../../shared/text/text-projection.js";
 import {
   parseInlineDirectives,
   sanitizeReplyDirectiveId,
   stripInlineDirectiveTagsForDelivery,
 } from "../../utils/directive-tags.js";
-import {
-  combineNonStreamingReplyParts,
-  sanitizeAssistantDisplayText,
-} from "./chat-assistant-content.js";
+import { sanitizeAssistantDisplayText } from "./chat-assistant-content.js";
 
 export type DeliveredChatSendReply = {
   input: ReplyDispatchOperation;

@@ -278,9 +278,12 @@ type GatewayKernelContext = {
     agentId?: string;
     agentDir?: string;
     workspaceDir?: string;
+    /** Display-only consumers can omit the eager session-row invalidation snapshot. */
+    includeSessionRowPolicy?: boolean;
   }) => Promise<PreparedGatewayModelCatalog | undefined>;
   readPreparedGatewayModelCatalogBatch?: (
     agentIds: readonly string[],
+    options?: { includeSessionRowPolicy?: boolean },
   ) => Promise<PreparedGatewayModelCatalogReadResult[]>;
   readChatMetadata: (params: ChatMetadataReadParams) => Promise<ChatMetadataResult>;
   readPreparedModelsList?: (

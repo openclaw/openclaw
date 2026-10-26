@@ -20,7 +20,7 @@ function fixture(offset = 600) {
     scrollHeight: { get: readContent },
   });
   element.scrollTop = offset;
-  const anchor = new TranscriptEndAnchor();
+  const anchor = new TranscriptEndAnchor(() => {});
   anchor.reconcile(element, false, false, vi.fn());
   const commit = (changed: boolean, canFollow: boolean) =>
     anchor.commitComposerResize(element, changed, canFollow, false);

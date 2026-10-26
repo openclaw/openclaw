@@ -8,6 +8,7 @@ import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import * as authProfileStore from "./auth-profiles/store-runtime.js";
 import { createEmptyAgentDiscoveryStores } from "./embedded-agent-runner/model.js";
+import { modelDefinition } from "./model-auth.fixtures.test-support.js";
 import { appendLiveModelCandidates } from "./test-helpers/live-model-dynamic-candidates.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
@@ -101,15 +102,11 @@ describe("explicit live model candidates", () => {
                 baseUrl: "https://deepseek-proxy.example.invalid/v1",
                 headers: { "X-Tenant": "fixture" },
                 models: [
-                  {
-                    id: "deepseek-v4-flash",
+                  modelDefinition("deepseek-v4-flash", {
                     name: "Configured Flash",
-                    reasoning: true,
-                    input: ["text"],
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                     contextWindow: 64_000,
                     maxTokens: 8_000,
-                  },
+                  }),
                 ],
               },
             },

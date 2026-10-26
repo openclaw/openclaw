@@ -18,6 +18,7 @@ import {
   toolCall,
   type ParityFixture,
 } from "./openai-responses-stream-parity.test-helpers.js";
+import { argumentDelta } from "./openai-stream-cases.test-support.js";
 
 const fixtures: ParityFixture[] = [
   parityFixture(
@@ -105,12 +106,7 @@ const fixtures: ParityFixture[] = [
     "finalized tool call drops streaming scratch",
     [
       outputItem("added", tool("scratch", "", "in_progress"), 0),
-      {
-        type: "response.function_call_arguments.delta",
-        output_index: 0,
-        item_id: "fc_scratch",
-        delta: '{"q":"x"}',
-      },
+      argumentDelta("fc_scratch", '{"q":"x"}'),
       outputItem("done", tool("scratch", '{"q":"x"}', "completed"), 0),
       completed("resp"),
     ],

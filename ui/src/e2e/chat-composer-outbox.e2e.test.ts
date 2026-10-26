@@ -25,7 +25,7 @@ suite.define(() => {
         await page.goto(suite.server.baseUrl + "chat");
         const composer = page.locator(".agent-chat__composer-combobox textarea");
         await composer.waitFor();
-        await gateway.waitForRequest("chat.startup");
+        await gateway.waitForRequest("sessions.messages.subscribe");
         await pauseVirtualClock(page);
         await gateway.setMethodResponse("chat.send", {
           __mockError: {
@@ -103,7 +103,7 @@ suite.define(() => {
       const prompt = "Please also review the installation notes.";
       const gateway = await installMockGateway(page, { sessionKey });
       await page.goto(suite.server.baseUrl + "chat");
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       await gateway.setOnline(false);
       await page.locator(".agent-chat__input--offline").waitFor();
       await waitForControlUiGatewayReconnecting(page);
@@ -149,31 +149,30 @@ suite.define(() => {
         messages: [],
         sessionInfo: { key: sessionKey, sessionId, hasActiveRun: false, status: "done" },
       };
-      await gateway.setMethodResponse("chat.history", {
+      const queuedHistory = {
         ...history,
         pendingInputs: { items: [pending], total: 1, queuedCount: 1 },
         inputReceipts: [{ runId, state: "pending", queued: true }],
-      });
+      };
+      await gateway.setMethodResponse("chat.history", queuedHistory);
+      await gateway.setMethodResponse("chat.startup", queuedHistory);
       await gateway.resolveDeferred("chat.send", { runId, status: "queued" });
       await gateway.emitGatewayEvent("sessions.changed", {
         sessionKey,
         agentId: "main",
         reason: "agent.input.settled",
       });
-      // Accepted custody has no persisted entry ID until the input is consumed.
-      await page.waitForFunction(
-        ({ runId: expectedRunId, sessionId: expectedSessionId }) =>
-          document
-            .querySelector<
-              HTMLElement & {
-                state?: { chatQueue: Array<{ sendRunId?: string; sessionId?: string }> };
-              }
-            >("openclaw-chat-pane")
-            ?.state?.chatQueue.some(
-              (item) => item.sendRunId === expectedRunId && item.sessionId === expectedSessionId,
+      // The ACK retires local delivery; the Gateway's pending input owns the queued row.
+      await expect
+        .poll(() =>
+          page
+            .locator("openclaw-chat-pane")
+            .evaluate(
+              (pane) =>
+                (pane as HTMLElement & { state: { chatQueue: unknown[] } }).state.chatQueue.length,
             ),
-        { runId, sessionId },
-      );
+        )
+        .toBe(0);
       await queue.getByText(prompt, { exact: true }).waitFor();
       expect(await page.getByText(prompt, { exact: true }).count()).toBe(1);
       expect(await queue.count()).toBe(1);
@@ -409,7 +408,7 @@ suite.define(() => {
       expect(await gateway.getRequests("chat.send")).toHaveLength(1);
 
       await page.reload();
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       await expectRemoved();
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       await page.screenshot({ path: suite.artifactDir + "/removed-message-after-reload.png" });

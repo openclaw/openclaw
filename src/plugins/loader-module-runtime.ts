@@ -1,5 +1,4 @@
 import { isMainThread } from "node:worker_threads";
-import { assertRuntimeSupportsPluginModule } from "../infra/runtime-profile.js";
 import { toSafeImportPath } from "../shared/import-specifier.js";
 import { VERSION } from "../version.js";
 import { runPluginRegistration } from "./api-lifecycle.js";
@@ -114,6 +113,32 @@ export function runPluginRegisterSyncInRegistry(
   }
 }
 
+export function createDeferredGatewaySubagentRuntime(
+  runtime: PluginRuntime,
+): PluginRuntime["subagent"] {
+  const subagent: PluginRuntime["subagent"] = {
+    get native() {
+      return runtime.subagent.native;
+    },
+    complete: (...args) => runtime.subagent.complete(...args),
+    forkSession: (...args) => runtime.subagent.forkSession(...args),
+    run: (...args) => runtime.subagent.run(...args),
+    waitForRun: (...args) => runtime.subagent.waitForRun(...args),
+    getSessionMessages: (...args) => runtime.subagent.getSessionMessages(...args),
+    deleteSession: (...args) => runtime.subagent.deleteSession(...args),
+  };
+  bindGatewayContextResolver(subagent, getGatewayContextResolver(runtime));
+  return subagent;
+}
+
+export function createDeferredGatewayNodesRuntime(runtime: PluginRuntime): PluginRuntime["nodes"] {
+  return {
+    list: (...args) => runtime.nodes.list(...args),
+    invoke: (...args) => runtime.nodes.invoke(...args),
+    openDuplex: (...args) => runtime.nodes.openDuplex(...args),
+  };
+}
+
 export function createPluginModuleLoader(options: {
   devSourceRoot?: string | null;
   pluginSdkResolution?: PluginSdkResolutionPreference;
@@ -121,7 +146,6 @@ export function createPluginModuleLoader(options: {
   loaderFilename?: string;
   installNativeSdkResolver?: boolean;
   expectedSourceDigests?: Readonly<Record<string, string>>;
-  replacePluginIds?: readonly string[];
 }) {
   const cache = getPluginCache();
   const captured = {
@@ -175,7 +199,6 @@ export function createPluginModuleLoader(options: {
     source: modulePath,
     rootDir: owner.rootDir,
     standalone: owner.standalone,
-    reloadBundledCode: captured.replacePluginIds?.includes(owner.record.id),
     expectedSourceDigest: captured.expectedSourceDigests?.[owner.record.id],
     ...inspection(owner),
     devSourceRoot: captured.devSourceRoot,
@@ -200,7 +223,6 @@ export function createPluginModuleLoader(options: {
     });
   return Object.assign(load, {
     async prepare(modulePath: string, owner: Owner): Promise<void> {
-      assertRuntimeSupportsPluginModule(modulePath);
       // Compute workers already own retained native-ESM source captures. Keep their
       // inline acquisition path so a prepared artifact cannot compete with that owner.
       // An inspection that joins a retained native ESM artifact binds it synchronously;
@@ -216,8 +238,7 @@ export function createPluginModuleLoader(options: {
         });
       if (
         !isMainThread ||
-        (owner.record.origin === "bundled" &&
-          !captured.replacePluginIds?.includes(owner.record.id)) ||
+        owner.record.origin === "bundled" ||
         getPluginInstance(owner.record) ||
         retained()
       ) {
@@ -229,7 +250,6 @@ export function createPluginModuleLoader(options: {
           rootDir: owner.rootDir,
           source: modulePath,
           standalone: owner.standalone,
-          bundledReload: owner.record.origin === "bundled",
         });
         if (cache.retirement || isPluginRegistryRetired(owner.registry)) {
           await preparedArtifact.artifact.disposeAsync();

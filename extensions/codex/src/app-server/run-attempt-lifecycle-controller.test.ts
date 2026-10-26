@@ -38,7 +38,10 @@ const rawCall = (callId: string, name = callId, namespace?: string) => ({
 function createTerminalReleaseHarness() {
   const order: string[] = [];
   const notificationHandlers = new Set<(notification: unknown) => void>();
-  const cancel = vi.fn(() => order.push("cancel"));
+  const cancel = vi.fn(() => {
+    order.push("cancel");
+  });
+  const sealAdmission = vi.fn();
   const request = vi.fn(async (method: string) => {
     order.push(method);
     return {};
@@ -93,7 +96,7 @@ function createTerminalReleaseHarness() {
     noteProgress: vi.fn(),
     activeTurnItemIds,
     pendingOpenClawDynamicToolCompletionIds,
-    steeringQueueRef: { current: { cancel } },
+    steeringQueueRef: { current: { cancel, sealAdmission, drainBeforeCancel: cancel } },
     interruptTurn: (turnId: string) =>
       interruptCodexTurnAndWaitBestEffort(client as never, {
         threadId: "thread-1",
@@ -145,6 +148,7 @@ function createTerminalReleaseHarness() {
     },
     activeTurnItemIds,
     cancel,
+    sealAdmission,
     sourceReplies,
     completeTurn,
     controller,
@@ -270,7 +274,11 @@ describe("Codex terminal dynamic-tool release", () => {
       startupTimeoutMs: 1_000,
     };
     const runtime = createCodexAttemptTurnState(resources as never);
-    runtime.steeringQueueRef.current = { cancel: vi.fn() } as never;
+    runtime.steeringQueueRef.current = {
+      cancel: vi.fn(),
+      sealAdmission: vi.fn(),
+      drainBeforeCancel: vi.fn(),
+    } as never;
     const interrupt = vi.spyOn(runtime, "interruptTurn");
     const controller = createCodexAttemptLifecycleController(resources as never, runtime);
     try {
@@ -360,7 +368,8 @@ describe("Codex terminal dynamic-tool release", () => {
         expect(harness.state.completed).toBe(false);
         // Native activity delays interruption, but the accepted terminal response
         // already fenced steering once its own response and siblings settled.
-        expect(harness.cancel).toHaveBeenCalledTimes(pending === "native-item" ? 1 : 0);
+        expect(harness.sealAdmission).toHaveBeenCalledTimes(pending === "native-item" ? 1 : 0);
+        expect(harness.cancel).not.toHaveBeenCalled();
 
         harness.state.activeAppServerTurnRequests = 0;
         harness.activeTurnItemIds.clear();
@@ -509,11 +518,7 @@ describe("Codex batch release after a tool-authored final reply", () => {
           dynamicToolResult("reply", {
             success: true,
             terminate: true,
-            toolAuthoredSourceReply: {
-              text: "Premature reply.",
-              toolAuthored: true,
-              sourceReplyFinal: true,
-            },
+            toolAuthoredSourceReply: finalReply("Premature reply."),
           }),
         );
       };
@@ -538,11 +543,7 @@ describe("Codex batch release after a tool-authored final reply", () => {
           dynamicToolResult("later", {
             success: true,
             terminate: true,
-            toolAuthoredSourceReply: {
-              text: "Later reply.",
-              toolAuthored: true,
-              sourceReplyFinal: true,
-            },
+            toolAuthoredSourceReply: finalReply("Later reply."),
           }),
         );
         await yieldImmediate();
@@ -602,11 +603,7 @@ describe("Codex batch release after a tool-authored final reply", () => {
         dynamicToolResult("first", {
           success: true,
           terminate: true,
-          toolAuthoredSourceReply: {
-            text: "First reply.",
-            toolAuthored: true,
-            sourceReplyFinal: true,
-          },
+          toolAuthoredSourceReply: finalReply("First reply."),
         }),
       );
       await yieldImmediate();
@@ -617,11 +614,7 @@ describe("Codex batch release after a tool-authored final reply", () => {
         dynamicToolResult("second", {
           success: true,
           terminate: true,
-          toolAuthoredSourceReply: {
-            text: "Second reply.",
-            toolAuthored: true,
-            sourceReplyFinal: true,
-          },
+          toolAuthoredSourceReply: finalReply("Second reply."),
         }),
       );
       await yieldImmediate();

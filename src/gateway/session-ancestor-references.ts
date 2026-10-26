@@ -189,8 +189,7 @@ export class ConnectionSessionRows {
       const retain = bytes - (previous?.bytes ?? 0) - evictionBytes + charge <= MAX_VECTOR_BYTES;
       const next = { version: ++version, fields, bytes: charge };
       const header = { key: row.key, agentId: row.agentId, version: next.version };
-      const full = { ...header, full: row, ...(!retain ? { retain: false as const } : {}) };
-      let result: SessionRowWire = full;
+      let result: SessionRowWire | undefined;
       let encoding: string | undefined;
       if (retain && previous && sameGeneration) {
         const patch = { ...header, base: previous.version, ...diff(previous.fields, fields, row) };
@@ -213,7 +212,7 @@ export class ConnectionSessionRows {
         evictions++;
       }
       update(identity, retain ? next : undefined);
-      return result;
+      return result ?? { ...header, full: row, ...(!retain ? { retain: false as const } : {}) };
     });
     return { wire, encoded, updates, count, bytes, version, generations, evictions };
   }

@@ -2,6 +2,7 @@
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { throwSettledAggregate } from "../infra/error-graph-internal.js";
+import { readOnlyWorkerScope } from "../infra/sqlite-readonly-worker-context.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { enqueueKeyedTask } from "../plugin-sdk/keyed-async-queue.js";
 import { getPreparedSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
@@ -38,6 +39,8 @@ import {
   publishModelRuntimeSnapshot,
   resolveConfiguredOwner,
   readPublishedModelRuntimeSnapshot,
+  resolvePreparedModelRuntimeOwnerBySnapshot,
+  preparedModelRuntimeConfigsMatch,
   type PreparedModelRuntimeOwner,
   type PreparedModelRuntimeInput,
   type PreparedModelRuntimePublicationOptions,
@@ -242,6 +245,15 @@ export function getPreparedModelRuntimeSnapshot(
   return getBlockingReplacement(rawInput)
     ? undefined
     : readPublishedModelRuntimeSnapshot(owners, rawInput);
+}
+
+/** Cleanup borrows the workspace's published inbound registrations without rebuilding a run. */
+export function getPreparedInboundPluginRegistry(input: PreparedModelRuntimeInput) {
+  const snapshot = getPreparedModelRuntimeSnapshot(input);
+  const owner = snapshot && resolvePreparedModelRuntimeOwnerBySnapshot(snapshot);
+  return owner && preparedModelRuntimeConfigsMatch(owner.input.config, input.config)
+    ? owner.pluginGeneration?.inboundPluginRegistry
+    : undefined;
 }
 
 /** Reads the owner-held publication barrier without starting catalog acquisition. */
@@ -652,19 +664,15 @@ async function drainPendingAuthMutations(
 }
 
 function invalidateForAuthMutation(event: PreparedModelRuntimeAuthMutation): void {
-  const normalizedEvent = {
-    ...event,
-    agentDir: normalizeOptionalDir(event.agentDir),
-  };
   const { invalidatedOwners, invalidatedConfiguredAgentIds } =
-    invalidatePreparedModelRuntimeOwnersForAuthMutation(owners, normalizedEvent);
+    invalidatePreparedModelRuntimeOwnersForAuthMutation(owners, event);
   if (invalidatedOwners.length === 0) {
     // A first owner reads the already-published auth snapshot while it builds. Replaying an earlier
     // mutation would immediately stale that initial generation even though no prior owner existed.
     return;
   }
   replyDispatchPublication.remove(invalidatedConfiguredAgentIds);
-  const transaction = authPublication.enqueue(invalidatedOwners, normalizedEvent.profileSetChanged);
+  const transaction = authPublication.enqueue(invalidatedOwners, event.profileSetChanged);
   if (getBlockingReplacement()) {
     // The active config transaction drains this event before its atomic dispatch commit. Retire
     // the superseded build gate; queuing another task would make this commit depend on future work.
@@ -700,9 +708,11 @@ function invalidateForAuthMutation(event: PreparedModelRuntimeAuthMutation): voi
       }
     });
   };
-  // Auth revocation fences its affected owners immediately; publication must wait for the
-  // plugin reservation to settle without occupying the queue needed by replacement recovery.
-  const publication = modelRuntimeDrain.runAfter(publicationQueue, publish);
+  // Wait for plugin replacement without occupying its queue. Publication owns its reads
+  // and must outlive the auth emitter's temporary SQLite reader scope.
+  const publication = readOnlyWorkerScope.exit(() =>
+    modelRuntimeDrain.runAfter(publicationQueue, publish),
+  );
   notifyPreparedModelRuntimePublication({ phase: "invalidated" });
   void publication.catch((error: unknown) => {
     if (!authPublication.isCurrent(transaction)) {

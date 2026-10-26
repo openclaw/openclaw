@@ -10,8 +10,8 @@ import { isInvalidCronSessionTargetIdError } from "../session-target.js";
 import {
   getCronJobsStoreRevision,
   noteCronJobsStoreCommit,
-  loadCronJobsStoreWithConfigJobs,
-  saveCronJobsStoreWithRevision,
+  loadCronJobsStoreWithConfigJobsByKey,
+  saveCronJobsStoreWithRevisionByKey,
   type QuarantinedCronConfigJob,
 } from "../store.js";
 import {
@@ -25,7 +25,6 @@ import type {
   CronJobMutationSnapshot,
 } from "../store/job-mutations.types.js";
 import { publishCronJobNames } from "../store/job-name.js";
-import { cronStoreKey } from "../store/key.js";
 import { CronRunReceiptRevisionError } from "../store/run-receipt-store.js";
 import type { CronRuntimeMutationInputs } from "../store/runtime-worker.types.js";
 import { CronJobsStoreChangedError } from "../store/save-error.js";
@@ -49,7 +48,7 @@ const loadedCronStoreRevisions = new WeakMap<CronServiceState, { revision: numbe
 
 /** Advance a complete resident store after its committed row postimages are installed. */
 export function noteLoadedCronStoreCommit(state: CronServiceState, observedRevision: number): void {
-  const storeKey = cronStoreKey(state.deps.storePath);
+  const storeKey = state.deps.storeKey;
   const current = getCronJobsStoreRevision(storeKey);
   const loaded = loadedCronStoreRevisions.get(state)?.revision;
   noteCronJobsStoreCommit(storeKey);
@@ -104,13 +103,13 @@ export async function ensureLoaded(
     const loadedRevision = loadedCronStoreRevisions.get(state)?.revision;
     if (
       loadedRevision === undefined ||
-      loadedRevision === getCronJobsStoreRevision(state.deps.storePath)
+      loadedRevision === getCronJobsStoreRevision(state.deps.storeKey)
     ) {
       return;
     }
   }
-  const loadedRevision = getCronJobsStoreRevision(state.deps.storePath);
-  const loaded = await loadCronJobsStoreWithConfigJobs(state.deps.storePath);
+  const loadedRevision = getCronJobsStoreRevision(state.deps.storeKey);
+  const loaded = await loadCronJobsStoreWithConfigJobsByKey(state.deps.storeKey);
   const loadNowMs = state.deps.nowMs();
   // Persisted cron rows are validated lazily, so treat them as raw records at the
   // store boundary and only trust the CronJob shape after validation below.
@@ -274,7 +273,7 @@ async function persistQuarantinedJobs(
 ): Promise<boolean> {
   const quarantine = { entries: state.pendingQuarantineConfigJobs, nowMs: state.deps.nowMs() };
   try {
-    const committed = await saveCronJobsStoreWithRevision(state.deps.storePath, store, {
+    const committed = await saveCronJobsStoreWithRevisionByKey(state.deps.storeKey, store, {
       quarantine,
     });
     loadedCronStoreRevisions.set(state, committed);
@@ -329,12 +328,12 @@ export function captureCronServiceMutationSource(
   state: CronServiceState,
   context = captureOpenClawStateWorkerContext(),
 ) {
-  const storeKey = cronStoreKey(state.deps.storePath);
+  const storeKey = state.deps.storeKey;
   const generation = state.lifecycleGeneration;
   const assertStorageCurrent = () => {
     context.admission.assertCurrent();
     if (
-      cronStoreKey(state.deps.storePath) !== storeKey ||
+      state.deps.storeKey !== storeKey ||
       resolveOpenClawStateSqlitePath() !== context.admission.databasePath
     ) {
       throw new Error("Cron mutation source or service changed before commit");

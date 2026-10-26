@@ -77,7 +77,7 @@ async function publicationStageSource(
     size: content.byteLength,
     sha256: sha256(content),
   });
-  const entries = [...inline].map(([pathname, content]) => file(pathname, content));
+  const entries = Array.from(inline, ([pathname, content]) => file(pathname, content));
   const blobs = new Set(
     snapshot.entries.flatMap((entry) => (entry.sha && entry.mode !== "160000" ? [entry.sha] : [])),
   );

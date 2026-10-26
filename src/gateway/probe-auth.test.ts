@@ -1,256 +1,200 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveConfigForRead } from "../config/io.read-helpers.js";
 import { REDACTED_SENTINEL } from "../config/redact-sentinel.js";
-import { setConfigResolutionFacts } from "../config/resolution-facts.js";
 import {
   resolveGatewayProbeAuthSafe,
   resolveGatewayProbeAuthSafeWithSecretInputs,
   resolveGatewayProbeTarget,
 } from "./probe-auth.js";
 
-const EMPTY_PROBE_AUTH = { token: undefined, password: undefined };
-const REMOTE_URL = "wss://gateway.example";
 type Gateway = NonNullable<OpenClawConfig["gateway"]>;
+type Input = Parameters<typeof resolveGatewayProbeAuthSafeWithSecretInputs>[0];
+type Auth = Awaited<ReturnType<typeof resolveGatewayProbeAuthSafeWithSecretInputs>>["auth"];
+type ProbeCase = [string, Input, Auth, string[]?];
+const EMPTY_AUTH = { token: undefined, password: undefined };
+const REMOTE_URL = "wss://gateway.example";
 const AMBIENT_AUTH = {
   OPENCLAW_GATEWAY_TOKEN: "ambient-token",
   OPENCLAW_GATEWAY_PASSWORD: "ambient-password",
 };
+const ref = (id: string) => ({ source: "env" as const, provider: "default", id });
+const config = (gateway: Gateway): OpenClawConfig => ({
+  gateway,
+  secrets: { providers: { default: { source: "env" } } },
+});
+const local = (auth: Gateway["auth"], options: Partial<Omit<Input, "cfg">> = {}): Input => ({
+  cfg: config({ auth }),
+  mode: "local",
+  env: {},
+  ...options,
+});
+const envFirst = (auth: Gateway["auth"]) =>
+  local(auth, {
+    localPrecedence: "env-first",
+    env: { ...AMBIENT_AUTH, PROBE_SECRET: "resolved-secret" },
+  });
+const remote = (credentials: Gateway["remote"]): Input => ({
+  cfg: config({ mode: "remote", remote: { url: REMOTE_URL, ...credentials } }),
+  mode: "remote",
+  env: { ...AMBIENT_AUTH, REMOTE: "remote" },
+});
 
-function envSecretRef(id: string) {
-  return { source: "env", provider: "default", id } as const;
-}
+it.each([
+  ["local", { auth: { token: "token-value" } }, { token: "token-value", password: undefined }],
+  [
+    "local",
+    { remote: { url: REMOTE_URL, token: "remote-token", password: "remote-password" } },
+    EMPTY_AUTH,
+  ],
+  [
+    "remote",
+    { remote: { url: REMOTE_URL }, auth: { mode: "token", token: ref("MISSING") } },
+    EMPTY_AUTH,
+  ],
+] as const)("reads only %s surface credentials from %j", (mode, gateway, auth) => {
+  expect(resolveGatewayProbeAuthSafe({ cfg: config({ mode, ...gateway }), mode, env: {} })).toEqual(
+    { auth },
+  );
+});
 
-function tokenAuthConfig(id: string) {
-  return { mode: "token", token: envSecretRef(id) } as const;
-}
-
-function configWithDefaultEnvProvider(gateway: Gateway) {
-  return {
-    gateway,
-    secrets: { providers: { default: { source: "env" } } },
-  } as OpenClawConfig;
-}
-
-function configFromAuthoredToken(token: string, env: NodeJS.ProcessEnv): OpenClawConfig {
-  const read = resolveConfigForRead({ gateway: { auth: { mode: "token", token } } }, env);
-  const config = read.resolvedConfigRaw as OpenClawConfig;
-  setConfigResolutionFacts(config, read.resolutionFacts);
-  return config;
-}
-
-function resolveSafeProbeAuth(cfg: OpenClawConfig, mode: "local" | "remote" = "local") {
-  return resolveGatewayProbeAuthSafe({ cfg, mode, env: {} });
-}
-
-function expectUnavailable(result: Awaited<ReturnType<typeof resolveSafeProbeAuth>>, path: string) {
+it("keeps an unavailable local ref authoritative over remote plaintext in the synchronous path", () => {
+  const result = resolveGatewayProbeAuthSafe({
+    cfg: config({
+      auth: { mode: "token", token: ref("MISSING") },
+      remote: { token: "remote-token" },
+    }),
+    mode: "local",
+    env: {},
+  });
   expect(result.auth).toStrictEqual({});
-  expect(result.warning).toContain(path);
-}
+  expect(result.warning).toContain("gateway.auth.token");
+  expect(result.warning).toContain("unresolved");
+});
 
-function resolveAsync(
-  cfg: OpenClawConfig,
-  options: Partial<
-    Omit<Parameters<typeof resolveGatewayProbeAuthSafeWithSecretInputs>[0], "cfg">
-  > = {},
-) {
-  return resolveGatewayProbeAuthSafeWithSecretInputs({ mode: "local", env: {}, ...options, cfg });
-}
-
-function resolveLocal(auth: Gateway["auth"], options: Parameters<typeof resolveAsync>[1] = {}) {
-  return resolveAsync(configWithDefaultEnvProvider({ auth }), options);
-}
-
-function resolveRemote(remote: Gateway["remote"], env: NodeJS.ProcessEnv) {
-  const cfg = configWithDefaultEnvProvider({
-    mode: "remote",
-    remote: { url: REMOTE_URL, ...remote },
-  });
-  return resolveAsync(cfg, { mode: "remote", env });
-}
-
-describe("resolveGatewayProbeAuthSafe", () => {
-  it("does not fall through to remote token when local token SecretRef is unresolved", () => {
-    const result = resolveSafeProbeAuth(
-      configWithDefaultEnvProvider({
-        mode: "local",
-        auth: tokenAuthConfig("MISSING_GATEWAY_TOKEN"),
-        remote: { token: "remote-token" },
-      }),
-    );
-    expectUnavailable(result, "gateway.auth.token");
-    expect(result.warning).toContain("unresolved");
-  });
-
-  it.each([
-    ["local", { auth: { token: "token-value" } }, { token: "token-value", password: undefined }],
-    [
-      "local",
-      { remote: { url: REMOTE_URL, token: "remote-token", password: "remote-password" } },
-      EMPTY_PROBE_AUTH,
-    ],
-    [
-      "remote",
-      { remote: { url: REMOTE_URL }, auth: tokenAuthConfig("MISSING_LOCAL_TOKEN") },
-      EMPTY_PROBE_AUTH,
-    ],
-  ] as const)("reads only %s surface credentials from %j", (mode, gateway, auth) => {
-    expect(resolveSafeProbeAuth(configWithDefaultEnvProvider({ mode, ...gateway }), mode)).toEqual({
-      auth,
-    });
+it.each([undefined, REMOTE_URL])("selects the probe surface for remote URL %s", (url) => {
+  expect(resolveGatewayProbeTarget({ gateway: { mode: "remote", remote: { url } } })).toEqual({
+    gatewayMode: "remote",
+    mode: url ? "remote" : "local",
+    remoteUrlMissing: !url,
   });
 });
 
-describe("resolveGatewayProbeTarget", () => {
-  it.each([undefined, REMOTE_URL])("selects the probe surface for remote URL %s", (url) => {
-    expect(resolveGatewayProbeTarget({ gateway: { mode: "remote", remote: { url } } })).toEqual({
-      gatewayMode: "remote",
-      mode: url ? "remote" : "local",
-      remoteUrlMissing: !url,
-    });
-  });
+it.each(["config-first", "env-first"] as const)(
+  "reports redacted refs with identity and recovery under %s precedence",
+  async (localPrecedence) => {
+    const result = await resolveGatewayProbeAuthSafeWithSecretInputs(
+      local(
+        { mode: "token", token: ref("GATEWAY_SECRET") },
+        { localPrecedence, env: { GATEWAY_SECRET: REDACTED_SENTINEL, ...AMBIENT_AUTH } },
+      ),
+    );
+    expect(result.auth).toEqual({});
+    expect(result.warningCode).toBe("SECRET_REF_REDACTED_VALUE");
+    for (const detail of [
+      "env:default:GATEWAY_SECRET",
+      "redaction placeholder",
+      "openclaw doctor --fix",
+    ]) {
+      expect(result.warning).toContain(detail);
+    }
+  },
+);
+
+it.each([
+  ["token", "configured-token", "ambient-token"],
+  ["password", "configured-password", "ambient-password"],
+  ["token", ref("PROBE_SECRET"), "resolved-secret"],
+  ["password", ref("PROBE_SECRET"), "resolved-secret"],
+] as const)("keeps env-first %s precedence for %j", async (mode, value, expected) => {
+  const result = await resolveGatewayProbeAuthSafeWithSecretInputs(
+    envFirst({ mode, [mode]: value }),
+  );
+  expect(result.warning).toBeUndefined();
+  expect(result.auth[mode]).toBe(expected);
 });
 
-describe("resolveGatewayProbeAuthSafeWithSecretInputs", () => {
-  it.each(["config-first", "env-first"] as const)(
-    "reports a redacted SecretRef with its identity and remedy under %s precedence",
-    async (localPrecedence) => {
-      const result = await resolveLocal(tokenAuthConfig("GATEWAY_SECRET"), {
-        localPrecedence,
-        env: { GATEWAY_SECRET: REDACTED_SENTINEL, OPENCLAW_GATEWAY_TOKEN: "ambient-token" },
-      });
-      expect(result.auth).toEqual({});
-      expect(result.warningCode).toBe("SECRET_REF_REDACTED_VALUE");
-      expect(result.warning).toContain("env:default:GATEWAY_SECRET");
-      expect(result.warning).toContain("redaction placeholder");
-      expect(result.warning).toContain("openclaw doctor --fix");
-    },
-  );
-
-  it.each([
-    { mode: "token" as const, value: "configured-token", expected: "ambient-token" },
-    { mode: "password" as const, value: "configured-password", expected: "ambient-password" },
-    { mode: "token" as const, value: envSecretRef("PROBE_SECRET"), expected: "resolved-secret" },
-    { mode: "password" as const, value: envSecretRef("PROBE_SECRET"), expected: "resolved-secret" },
-  ])("keeps env-first $mode precedence unless an explicit SecretRef owns it", async (testCase) => {
-    const result = await resolveLocal(
-      { mode: testCase.mode, [testCase.mode]: testCase.value },
-      {
-        localPrecedence: "env-first",
-        env: {
-          OPENCLAW_GATEWAY_TOKEN: "ambient-token",
-          OPENCLAW_GATEWAY_PASSWORD: "ambient-password",
-          PROBE_SECRET: "resolved-secret",
-        },
-      },
-    );
-    expect(result.warning).toBeUndefined();
-    expect(result.auth[testCase.mode]).toBe(testCase.expected);
-  });
-
-  it.each(["token", "password"] as const)(
-    "does not replace an unavailable active %s SecretRef with env-first auth",
-    async (mode) => {
-      const result = await resolveLocal(
-        { mode, [mode]: envSecretRef("MISSING_PROBE_SECRET") },
-        { localPrecedence: "env-first", env: AMBIENT_AUTH },
-      );
-      expectUnavailable(result, `gateway.auth.${mode}`);
-    },
-  );
-
-  it("does not bypass an implicit password SecretRef with an env-first ambient token", async () => {
-    const result = await resolveLocal(
-      { password: envSecretRef("MISSING_IMPLICIT_PASSWORD") },
+it.each<ProbeCase>([
+  [
+    "unavailable token",
+    envFirst({ mode: "token", token: ref("MISSING") }),
+    {},
+    ["gateway.auth.token"],
+  ],
+  [
+    "unavailable password",
+    envFirst({ mode: "password", password: ref("MISSING") }),
+    {},
+    ["gateway.auth.password"],
+  ],
+  [
+    "implicit password ref",
+    local(
+      { password: ref("MISSING") },
       {
         localPrecedence: "env-first",
         env: { OPENCLAW_GATEWAY_TOKEN: "ambient-token" },
       },
-    );
-    expectUnavailable(result, "gateway.auth.password");
-  });
-
-  it("preserves a substituted template-looking literal for probe auth", async () => {
-    const result = await resolveAsync(configFromAuthoredToken("${SOURCE}", { SOURCE: "${OTHER}" }));
-    expect(result).toEqual({ auth: { token: "${OTHER}", password: undefined } });
-  });
-
-  it("keeps unresolved authored shorthand unavailable", async () => {
-    const result = await resolveAsync(configFromAuthoredToken("${MISSING}", {}));
-    expectUnavailable(result, "gateway.auth.token");
-    expect(result.warning).toContain("unresolved");
-  });
-
-  it("returns warning and empty auth when SecretRef cannot be resolved via async path", async () => {
-    const result = await resolveLocal(tokenAuthConfig("MISSING_TOKEN_XYZ"));
-    expectUnavailable(result, "gateway.auth.token");
-    expect(result.warning).toContain("unresolved");
-  });
-
-  it.each([
-    [
-      "token ref",
-      { token: envSecretRef("REMOTE") },
-      { token: "remote", password: undefined },
-      null,
-    ],
-    ["password", { password: "remote" }, { token: undefined, password: "remote" }, null],
-    ["unavailable token", { token: envSecretRef("MISSING") }, {}, "token"],
-    ["unavailable password", { password: envSecretRef("MISSING") }, {}, "password"],
-    [
-      "unavailable token with configured password",
-      { token: envSecretRef("MISSING"), password: "remote" },
-      { token: undefined, password: "remote" },
-      "token",
-    ],
-  ] as const)(
-    "keeps remote %s authoritative over ambient auth",
-    async (_name, remote, auth, warning) => {
-      const result = await resolveRemote(remote, { ...AMBIENT_AUTH, REMOTE: "remote" });
-      if (warning) {
-        expect(result.auth).toStrictEqual(auth);
-        expect(result.warning).toContain(`gateway.remote.${warning} SecretRef is unresolved`);
-      } else {
-        expect(result).toEqual({ auth });
-      }
-    },
-  );
-
-  it("does not resolve a local password SecretRef for a remote probe", async () => {
-    const result = await resolveAsync(
-      configWithDefaultEnvProvider({
+    ),
+    {},
+    ["gateway.auth.password"],
+  ],
+  [
+    "unresolved async ref",
+    local({ mode: "token", token: ref("MISSING") }),
+    {},
+    ["gateway.auth.token", "unresolved"],
+  ],
+  ["remote token ref", remote({ token: ref("REMOTE") }), { token: "remote", password: undefined }],
+  ["remote password", remote({ password: "remote" }), { token: undefined, password: "remote" }],
+  [
+    "unavailable remote token",
+    remote({ token: ref("MISSING") }),
+    {},
+    ["gateway.remote.token SecretRef is unresolved"],
+  ],
+  [
+    "unavailable remote password",
+    remote({ password: ref("MISSING") }),
+    {},
+    ["gateway.remote.password SecretRef is unresolved"],
+  ],
+  [
+    "remote password survives sibling failure",
+    remote({ token: ref("MISSING"), password: "remote" }),
+    { token: undefined, password: "remote" },
+    ["gateway.remote.token SecretRef is unresolved"],
+  ],
+  [
+    "remote probe ignores local password",
+    {
+      cfg: config({
         mode: "remote",
-        auth: {
-          mode: "password",
-          password: envSecretRef("LOCAL_GATEWAY_PASSWORD"),
-        },
+        auth: { mode: "password", password: ref("LOCAL") },
         remote: { url: REMOTE_URL, token: "remote-token" },
       }),
-      {
-        mode: "remote",
-        env: { LOCAL_GATEWAY_PASSWORD: "local-password" }, // pragma: allowlist secret
-      },
-    );
-    expect(result).toEqual({ auth: { token: "remote-token", password: undefined } });
-  });
-
-  it("does not use ambient credentials for a CLI URL override", async () => {
-    const result = await resolveAsync(
-      {
-        gateway: {
-          mode: "remote",
-          remote: { url: "wss://configured.example" },
-        },
-      },
-      {
-        mode: "remote",
-        env: {
-          OPENCLAW_GATEWAY_PASSWORD: "ambient-password", // pragma: allowlist secret
-        },
-        urlOverride: "wss://override.example",
-        urlOverrideSource: "cli",
-      },
-    );
-    expect(result).toEqual({ auth: {} });
-  });
+      mode: "remote",
+      env: { LOCAL: "local-password" },
+    },
+    { token: "remote-token", password: undefined },
+  ],
+  [
+    "CLI URL override excludes ambient auth",
+    {
+      ...remote({}),
+      urlOverride: "wss://override.example",
+      urlOverrideSource: "cli",
+      env: { OPENCLAW_GATEWAY_PASSWORD: "ambient-password" },
+    },
+    {},
+  ],
+])("%s", async (_name, input, auth, warnings) => {
+  const result = await resolveGatewayProbeAuthSafeWithSecretInputs(input);
+  if (!warnings) {
+    expect(result).toEqual({ auth });
+    return;
+  }
+  expect(result.auth).toStrictEqual(auth);
+  for (const warning of warnings) {
+    expect(result.warning).toContain(warning);
+  }
 });

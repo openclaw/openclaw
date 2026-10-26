@@ -27,8 +27,6 @@ export async function pressAndExpectFocus(
 
 export const expectText = (locator: Locator, text: string) =>
   expect.poll(() => locator.textContent()).toContain(text);
-export const expectExactText = (locator: Locator, text: string) =>
-  expect.poll(() => locator.textContent()).toBe(text);
 export const expectAttribute = (locator: Locator, name: string, value: string) =>
   expect.poll(() => locator.getAttribute(name)).toBe(value);
 export const expectCount = (locator: Locator, count: number) =>

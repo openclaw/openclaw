@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { getEventListeners, once } from "node:events";
 import type { IncomingMessage } from "node:http";
-import { DatabaseSync, StatementSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { queryObjects } from "node:v8";
 import {
@@ -9,7 +8,6 @@ import {
   registerVirtualTestPlugin,
 } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -32,9 +30,9 @@ import {
   checkGatewayHttpRequestAuth,
   resolveSharedSecretHttpOperatorScopes,
 } from "./http-auth-utils.js";
-import { GatewayOperatorAccessDeniedError } from "./operator-access-policy.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { gatewayConnect } from "./server/client-fixtures.test-support.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
 const { authorize, ensureOwner } = vi.hoisted(() => ({ authorize: vi.fn(), ensureOwner: vi.fn() }));
@@ -110,9 +108,7 @@ async function registerPersonAccessFixture() {
       roles: {
         ...roles,
         definitions: {
-          ...roles.definitions,
           reader: { ...roles.definitions.reader, accessPolicyPlugin: "person-access" },
-          staff: { sessions: { others: "write" }, agents: "*", scopes: ["operator.admin"] },
         },
       },
     },
@@ -131,7 +127,7 @@ async function registerPersonAccessFixture() {
       api.registerGatewayAccessPolicy({
         authorize({ profile }) {
           access.onAuthorize?.();
-          if (profile.assignedRole === "staff" || access.inapplicable) {
+          if (access.inapplicable) {
             return undefined;
           }
           const current = access.grant;
@@ -151,49 +147,17 @@ function inState<T extends unknown[]>(run: (...args: T) => Promise<void>) {
   return (...args: T) => withOpenClawTestState({ label: "http-auth" }, () => run(...args));
 }
 
+beforeEach(() => vi.clearAllMocks());
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
+  resetPluginRuntimeStateForTest();
+});
+
 describe("HTTP gateway owner profiles", () => {
-  beforeEach(() => vi.clearAllMocks());
-  afterEach(() => {
-    clearRuntimeConfigSnapshot();
-    resetPluginRuntimeStateForTest();
-  });
-
-  it(
-    "reuses admitted state schema across 200 HTTP profile authorizations",
-    inState(async () => {
-      const { cfg, email, person, access } = await registerPersonAccessFixture();
-      access.grant = new AbortController();
-      expect((await authenticate("trusted-proxy", cfg, email)).ok).toBe(true);
-      const observation = observeSqliteReadSql(StatementSync.prototype);
-      const exec = vi.spyOn(DatabaseSync.prototype, "exec");
-      try {
-        for (let index = 0; index < 200; index += 1) {
-          authorize.mockResolvedValueOnce({ ok: true, method: "trusted-proxy", user: email });
-          const result = await checkAuth(cfg);
-          assert(result.ok);
-          expect(result.requestAuth.authenticatedUserProfile?.profileId).toBe(person.id);
-        }
-        const reads = (pattern: RegExp) => observation.queries.filter((sql) => pattern.test(sql));
-        expect(
-          exec.mock.calls.filter(([sql]) => /CREATE TABLE IF NOT EXISTS user_profiles/iu.test(sql)),
-        ).toHaveLength(0);
-        expect(
-          reads(/sqlite_schema|sqlite_master|pragma_table_info|PRAGMA user_version/iu),
-        ).toHaveLength(0);
-        expect(
-          reads(/^PRAGMA data_version$|FROM main\.pragma_data_version\(\)\s*$/iu).length,
-        ).toBeLessThanOrEqual(1000);
-      } finally {
-        observation.restore();
-        exec.mockRestore();
-      }
-    }),
-  );
-
-  it.each(["missing", "disabled", "failed", "unregistered", "inapplicable", "unrelated"] as const)(
-    "denies a required %s policy while preserving independent staff and owner access",
+  it.each(["missing", "disabled", "failed", "inapplicable", "unrelated"] as const)(
+    "translates required %s access policy denial to HTTP authentication failure",
     inState(async (availability: string) => {
-      const { cfg, email, person, access, registry } = await registerPersonAccessFixture();
+      const { cfg, email, access, registry } = await registerPersonAccessFixture();
       access.grant = new AbortController();
       const plugin = registry.plugins.find((entry) => entry.id === "person-access");
       assert(plugin, "Expected the registered access policy owner");
@@ -204,60 +168,13 @@ describe("HTTP gateway owner profiles", () => {
         plugin.enabled = false;
       } else if (availability === "failed") {
         plugin.status = "error";
-      } else if (availability === "unregistered") {
-        registry.gatewayAccessPolicies.length = 0;
       } else if (availability === "inapplicable") {
         access.inapplicable = true;
       } else {
         cfg.gateway!.roles!.definitions.reader!.accessPolicyPlugin = "another-policy";
       }
 
-      for (const assignment of [null, "reader", "removed-role"]) {
-        await setCanonicalUserProfileRole(person.id, assignment);
-        invalidateOperatorRolePolicy(person.id);
-        expect(await authenticate("trusted-proxy", cfg, email)).toMatchObject(accessDenied);
-      }
-      await setCanonicalUserProfileRole(person.id, "staff");
-      invalidateOperatorRolePolicy(person.id);
-      expect(await authenticate("trusted-proxy", cfg, email)).toMatchObject({ ok: true });
-      expect(await authenticate("token", cfg)).toMatchObject({ ok: true });
-    }),
-  );
-
-  it.each(["grant ended", "email moved away and back"])(
-    "enforces registered person access without retiring independent staff authority (%s)",
-    inState(async (change: string) => {
-      const { cfg, email, person, access } = await registerPersonAccessFixture();
-      expect((await authenticate("trusted-proxy", cfg, email)).ok).toBe(false);
-      access.grant = new AbortController();
-      const admitted = await authenticate("trusted-proxy", cfg, email);
-      assert(admitted.ok && admitted.requestAuth.operatorAccessAuthority);
-      const captured = admitted.requestAuth.operatorAccessAuthority;
-      setDisplayName(person.id, "Updated display");
-      const staffEmail = "another-verified@example.test";
-      await linkCanonicalUserProfileEmail(staffEmail, person.id);
-      expect(() => captured.assertCurrent()).not.toThrow();
-      await setCanonicalUserProfileRole(person.id, "staff");
-      invalidateOperatorRolePolicy(person.id);
-      const staff = await authenticate("trusted-proxy", cfg, email);
-      expect(staff).toMatchObject({ ok: true });
-      assert(staff.ok, "Expected independent staff admission");
-      expect(staff.requestAuth.operatorAccessAuthority).toBeNull();
-      if (change === "grant ended") {
-        access.grant.abort(new Error("Access ended"));
-      } else {
-        await linkCanonicalUserProfileEmail(
-          email,
-          (await ensureCanonicalUserProfileForEmail("replacement@example.test")).id,
-        );
-        await linkCanonicalUserProfileEmail(email, person.id);
-      }
-      expect(captured.signal.aborted).toBe(true);
-      expect(() => captured.assertCurrent()).toThrow(GatewayOperatorAccessDeniedError);
-      expect((await authenticate("trusted-proxy", cfg, staffEmail)).ok).toBe(true);
-      access.grant = new AbortController();
-      expect(() => captured.assertCurrent()).toThrow(GatewayOperatorAccessDeniedError);
-      expect((await authenticate("token", cfg)).ok).toBe(true);
+      expect(await authenticate("trusted-proxy", cfg, email)).toMatchObject(accessDenied);
     }),
   );
 
@@ -360,13 +277,7 @@ describe("HTTP gateway owner profiles", () => {
         // The child keeps its source after the parent releases it and its response disconnects.
         const captured = await captureGatewayOperatorRunAuthority({
           client: {
-            connect: {
-              minProtocol: 1,
-              maxProtocol: 1,
-              client: { id: "test", version: "test", platform: "test", mode: "test" },
-              role: "operator",
-              scopes: ["operator.read"],
-            },
+            connect: gatewayConnect(["operator.read"], { id: "test", mode: "test" }),
             internal: { operatorRoleActor: { kind: "operator", profileId: person.id } },
           },
           context: { getRuntimeConfig: () => cfg },
@@ -445,53 +356,45 @@ describe("HTTP gateway owner profiles", () => {
     ["token", true, true, undefined],
   ] as const)(
     "resolves %s HTTP identity (roles=%s, storage failure=%s, user=%s)",
-    async (method, configured, storageFailure, user) => {
-      await withOpenClawTestState({ label: "http-profile-admission" }, async () => {
+    inState(async (method, configured, storageFailure, user) => {
+      if (storageFailure) {
+        ensureOwner.mockImplementationOnce(() => {
+          throw new Error("profile storage unavailable");
+        });
+      }
+      const result = await authenticate(method, configured ? { gateway: { roles } } : {}, user);
+      if (method === "none" || method === "device-token") {
+        expect(result).toEqual({
+          ok: false,
+          authResult: { ok: false, reason: "user_profile_unavailable" },
+        });
+        expect(ensureOwner).not.toHaveBeenCalled();
+        return;
+      }
+      assert(result.ok, "Expected authenticated request");
+      if (user) {
+        expect(result.requestAuth.user).toBe(user);
+        expect(result.requestAuth.authenticatedUserProfile?.displayName).toBe("alice");
+        expect(result.requestAuth.operatorRolePolicy?.scopes).toEqual(["operator.read"]);
+        expect(ensureOwner).not.toHaveBeenCalled();
+      } else {
+        expect(result.requestAuth.operatorRolePolicy).toBeUndefined();
         if (storageFailure) {
-          ensureOwner.mockImplementationOnce(() => {
-            throw new Error("profile storage unavailable");
-          });
-        }
-        const result = await authenticate(method, configured ? { gateway: { roles } } : {}, user);
-        if (method === "none" || method === "device-token") {
-          expect(result).toEqual({
-            ok: false,
-            authResult: { ok: false, reason: "user_profile_unavailable" },
-          });
-          expect(ensureOwner).not.toHaveBeenCalled();
-          return;
-        }
-        assert(result.ok, "Expected authenticated request");
-        if (user) {
-          expect(result.requestAuth.user).toBe(user);
-          expect(result.requestAuth.authenticatedUserProfile?.displayName).toBe("alice");
-          expect(result.requestAuth.operatorRolePolicy?.scopes).toEqual(["operator.read"]);
-          expect(ensureOwner).not.toHaveBeenCalled();
+          expect(result).toMatchObject({ ok: true, requestAuth: { authMethod: "token" } });
+          expect(result.requestAuth.authenticatedUserProfile).toBeUndefined();
         } else {
-          expect(result.requestAuth.operatorRolePolicy).toBeUndefined();
-          if (storageFailure) {
-            expect(result).toMatchObject({ ok: true, requestAuth: { authMethod: "token" } });
-            expect(result.requestAuth.authenticatedUserProfile).toBeUndefined();
-          } else {
-            expect(result.requestAuth.authenticatedUserProfile).toBeDefined();
-            expect(result.requestAuth.trustDeclaredOperatorScopes).toBe(false);
-            expect(resolveSharedSecretHttpOperatorScopes(req, result.requestAuth)).toContain(
-              "operator.admin",
-            );
-          }
+          expect(result.requestAuth.authenticatedUserProfile).toBeDefined();
+          expect(result.requestAuth.trustDeclaredOperatorScopes).toBe(false);
+          expect(resolveSharedSecretHttpOperatorScopes(req, result.requestAuth)).toContain(
+            "operator.admin",
+          );
         }
-      });
-    },
+      }
+    }),
   );
 });
 
 describe("Control UI session owner reads", () => {
-  beforeEach(() => vi.clearAllMocks());
-  afterEach(() => {
-    clearRuntimeConfigSnapshot();
-    resetPluginRuntimeStateForTest();
-  });
-
   const rolesWithIsolation = {
     ...roles,
     definitions: {

@@ -1,6 +1,6 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { createAgentHarnessAttemptDeadlineController } from "./attempt-deadlines.js";
+import { createAgentHarnessAttemptDeadlineController } from "../../plugin-sdk/agent-harness-attempt-runtime.js";
 
 const SETTLEMENT_TIMEOUT_MS = 2 * 60_000;
 
@@ -117,3 +117,21 @@ it.each(["abort", "dispose", "already aborted"] as const)(
     expect(onDeadlineChanged).toHaveBeenCalledTimes(closure === "already aborted" ? 0 : 2);
   },
 );
+
+it("keeps the admitted budget for callers that omit the monotonic start", () => {
+  vi.advanceTimersByTime(20_000);
+  const onTimeout = vi.fn();
+  // Codex runtime plugins before 2026.10.6 pass only the epoch admission time.
+  const controller = createAgentHarnessAttemptDeadlineController({
+    startedAtMs: 0,
+    timeoutMs: 60_000,
+    settlementTimeoutMs: SETTLEMENT_TIMEOUT_MS,
+    signal: new AbortController().signal,
+    onTimeout,
+  });
+  expect(controller.ownsExecutionWait()).toBe(true);
+  vi.advanceTimersByTime(39_999);
+  expect(onTimeout).not.toHaveBeenCalled();
+  vi.advanceTimersByTime(1);
+  expectTimeout(onTimeout, "execution");
+});

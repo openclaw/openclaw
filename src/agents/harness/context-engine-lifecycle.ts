@@ -90,6 +90,8 @@ function runWithHarnessSourceFence<T>(
 
 function buildHarnessContextEngineRuntimeSettings(
   params: HarnessRuntimeSettingsParams,
+  tokenBudget = params.tokenBudget,
+  maxOutputTokens = params.maxOutputTokens,
 ): ContextEngineRuntimeSettings {
   if (params.runtimeSettings !== undefined && params.runtimeSettings !== null) {
     return params.runtimeSettings;
@@ -107,8 +109,8 @@ function buildHarnessContextEngineRuntimeSettings(
     selectedContextEngineId: selectedId,
     contextEngineSelectionSource:
       selectedId === "legacy" ? "default" : selectedId ? "configured" : "unknown",
-    promptTokenBudget: params.tokenBudget,
-    maxOutputTokens: params.maxOutputTokens,
+    promptTokenBudget: tokenBudget,
+    maxOutputTokens,
     fallbackReason: params.fallbackReason,
     degradedReason: params.degradedReason,
   });
@@ -249,6 +251,7 @@ function resolveAssemblyHistoryTokenBudget(params: HarnessContextEngineAssemblyP
 async function assembleHarnessContextEngineWithinSourceScope(
   params: HarnessContextEngineAssemblyParams,
   contextEngine: ContextEngine,
+  inputMessages = params.messages,
 ) {
   const tokenBudget = resolveAssemblyHistoryTokenBudget(params);
   const maxOutputTokens = params.promptBudget
@@ -258,14 +261,14 @@ async function assembleHarnessContextEngineWithinSourceScope(
   // dropping one here would change the prefix bound to later thinking signatures.
   const messages = (
     params.appendOnlyRuntimeContext
-      ? params.messages
-      : stripRuntimeContextCustomMessages(params.messages)
+      ? inputMessages
+      : stripRuntimeContextCustomMessages(inputMessages)
   ).slice();
-  const runtimeSettings = buildHarnessContextEngineRuntimeSettings({
-    ...params,
-    maxOutputTokens,
+  const runtimeSettings = buildHarnessContextEngineRuntimeSettings(
+    params,
     tokenBudget,
-  });
+    maxOutputTokens,
+  );
   const snapshot: ContextEngineAssemblySnapshot = {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
@@ -360,8 +363,9 @@ export async function prepareHarnessContextEnginePrompt(
     let bounded: AssembleResult;
     try {
       const assembled = await assembleHarnessContextEngineWithinSourceScope(
-        { ...params, messages: pipelineMessages },
+        params,
         contextEngine,
+        pipelineMessages,
       );
       bounded = prepareAssembly(assembled.result);
       snapshot = assembled.snapshot;
@@ -434,6 +438,7 @@ export async function finalizeHarnessContextEngineTurn(
     config?: OpenClawConfig;
     warn: (message: string) => void;
     modelContextWindow?: number;
+    abortSignal?: AbortSignal;
     turnCandidate?: {
       admission?: UserTurnTranscriptAdmissionReceipt;
       terminalEntryId?: string | null;
@@ -449,10 +454,21 @@ export async function finalizeHarnessContextEngineTurn(
     const { admission, terminalEntryId, record } = params.turnCandidate;
     if (admission && terminalEntryId) {
       const committed = params.turnCandidate[completedTurnMessageAnchor];
+      if (!committed) {
+        // Recovery can rewrite away the append receipt before its projection is ready.
+        const { waitForSessionTranscriptProjection } =
+          await import("../../config/sessions/session-transcript-reconcile.js");
+        await waitForSessionTranscriptProjection(admission, params.abortSignal);
+        params.abortSignal?.throwIfAborted();
+      }
       // Reconstructed managers need one anchor snapshot, not a version that a later append can stale.
       const terminal = committed
         ? committed.anchor
-        : await readActiveTranscriptEntryAnchorAsync({ ...admission, entryId: terminalEntryId });
+        : await readActiveTranscriptEntryAnchorAsync(
+            { ...admission, entryId: terminalEntryId },
+            params.abortSignal,
+          );
+      params.abortSignal?.throwIfAborted();
       committed?.assertCurrent();
       if (terminal) {
         record({

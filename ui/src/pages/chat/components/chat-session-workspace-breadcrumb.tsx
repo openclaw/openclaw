@@ -8,17 +8,15 @@ import { splitWorkspaceFilename } from "./chat-session-workspace-catalog.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 
-export type WorkspaceBreadcrumbProps = {
+/** Folder actions belong to the current tab; this component never opens or renames a tab. */
+export function WorkspaceBreadcrumb(props: {
   /** Canonical workspace-relative path. External/artifact identity uses sourceLabel instead. */
   path: string;
   rootLabel: string;
   sourceLabel?: string;
   name?: string;
   onBrowsePath: (path: string) => void;
-};
-
-/** Folder actions belong to the current tab; this component never opens or renames a tab. */
-export function WorkspaceBreadcrumb(props: WorkspaceBreadcrumbProps) {
+}) {
   let container: HTMLElement | undefined;
   let current: HTMLSpanElement | undefined;
   let source: HTMLSpanElement | undefined;

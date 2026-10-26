@@ -3,20 +3,21 @@ import {
   createOpenAIResponsesTransportStreamFn,
   requestPreparedOpenAIResponsesCompaction,
 } from "@openclaw/ai/transports";
-import type { Context, Model } from "openclaw/plugin-sdk/llm";
+import type { Context, Model, ModelRequestHeaders } from "openclaw/plugin-sdk/llm";
+import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-headers";
 import { makeAgentAssistantMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, expect, it, vi } from "vitest";
 import { wrapXaiProviderStream } from "./stream.js";
 import { xaiModel } from "./test-helpers.js";
 
-const sdkState = vi.hoisted(() => ({
-  clients: [] as Array<Record<string, unknown>>,
-  post: vi.fn(),
-}));
+const sdkState = vi.hoisted(() => {
+  const clients: Array<{ defaultHeaders?: ModelRequestHeaders }> = [];
+  return { clients, post: vi.fn() };
+});
 
 vi.mock("openai", () => {
   class MockOpenAI {
-    constructor(options: Record<string, unknown>) {
+    constructor(options: { defaultHeaders?: ModelRequestHeaders }) {
       sdkState.clients.push(options);
     }
 
@@ -136,7 +137,7 @@ it("uses the same OAuth proxy headers as a normal turn", async () => {
   const normalHeaders = sdkState.clients[1]?.defaultHeaders;
 
   expect(compactHeaders).toEqual(normalHeaders);
-  expect(compactHeaders).toMatchObject({
+  expect(Object.fromEntries(new Headers(omitNullRequestHeaders(compactHeaders)))).toMatchObject({
     "x-existing": "kept",
     "x-grok-client-version": "2026.7.2",
     "x-grok-model-override": "grok-4.5",

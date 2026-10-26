@@ -1,6 +1,5 @@
 import {
   ErrorCodes,
-  errorShape,
   formatValidationErrors,
   validateSessionDiscussionInfoParams,
   validateSessionDiscussionInfoResult,
@@ -129,13 +128,10 @@ function sessionDiscussionHandler(operation: "info" | "open"): GatewayRequestHan
           provider[operation]({ sessionKey, agentId: requestedAgent.agentId }),
         );
         if (!validateResult(result)) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.UNAVAILABLE,
-              `invalid ${method} result: ${formatValidationErrors(validateResult.errors)}`,
-            ),
+          respondError(
+            respond,
+            ErrorCodes.UNAVAILABLE,
+            `invalid ${method} result: ${formatValidationErrors(validateResult.errors)}`,
           );
           return;
         }

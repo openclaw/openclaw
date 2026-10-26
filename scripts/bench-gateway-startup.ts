@@ -1,7 +1,13 @@
-import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+// teamBoot includes a matching config backup so early environment selection exercises
+// config-health recovery reads. Seed with --case teamBoot --fixture-root <path> --seed-only;
+// measure a fresh copy per boot with --runs 1 --warmup 0 and --output <json>.
+// Compare >=5 boots per revision; --heap-prof-dir collects allocations in a separate pass.
+import assert from "node:assert/strict";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { createCipheriv } from "node:crypto";
 import { once } from "node:events";
 import {
+  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -13,12 +19,13 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { PROTOCOL_VERSION } from "../packages/gateway-protocol/src/version.ts";
 import { isRecord } from "../packages/normalization-core/src/record-coerce.ts";
 import type { SubagentRunRecord } from "../src/agents/subagents/registry/subagent-registry.types.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { validateConfigObjectRaw } from "../src/config/validation-core.js";
+import { isMainModule } from "../src/infra/is-main.js";
 import { writeBenchmarkJson } from "./lib/benchmark-harness.mts";
 import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
 import { delay, stopChild } from "./lib/gateway-bench-child.ts";
@@ -101,6 +108,7 @@ type GatewaySample = {
   gatewayReadyLogLine: string | null;
   gatewayReadyLogMs: number | null;
   healthz: InitialProbeResult;
+  heapProfilePath?: string;
   httpListenLogLine: string | null;
   httpListenLogMs: number | null;
   maxRssMb: number | null;
@@ -215,7 +223,7 @@ function preparedRuntimeConfig(): Record<string, unknown> {
 const GATEWAY_CASES: readonly GatewayBenchCase[] = [
   {
     id: "teamBoot",
-    name: "gateway, 44 startup plugins, eight agents and 5000 sessions",
+    name: "gateway, 44 startup plugins, eight agents and 10000 sessions",
     agentTopology: "incident-scale",
     pluginActivationOnStartup: true,
     pluginCount: 44,
@@ -257,6 +265,14 @@ const GATEWAY_CASES: readonly GatewayBenchCase[] = [
   {
     id: "default",
     name: "gateway default",
+    config: BASE_CONFIG,
+  },
+  {
+    id: "pluginMetadataMaintenance",
+    name: "gateway through post-ready plugin metadata refresh",
+    runByDefault: false,
+    completionTracePhase: "startup.maintenance.plugin-registry",
+    env: { OPENCLAW_SKIP_CHANNELS: "1" },
     config: BASE_CONFIG,
   },
   {
@@ -536,7 +552,7 @@ Options:
   --warmup <n>         Warmup runs per case (default: ${DEFAULT_WARMUP})
   --timeout-ms <ms>    Per-run timeout (default: ${DEFAULT_TIMEOUT_MS})
   --cpu-prof-dir <dir> Write one V8 CPU profile per run
-  --heap-prof-dir <dir> Write one V8 heap profile per run
+  --heap-prof-dir <dir> Sample main-thread allocations through /readyz, including collected objects
   --installed-cohort <path> Measure one fresh installed startup and eight retained-state restarts
   --installed-cpu-diagnostic Profile one established startup after an unprofiled fresh prime; requires --installed-cohort
   --output <path>      Write machine-readable JSON to a file
@@ -1422,7 +1438,7 @@ async function seedTeamBootFixture(root: string, benchCase: GatewayBenchCase): P
         const database = agentDb.openOpenClawAgentDatabase({ agentId, env });
         agentDb.runOpenClawAgentWriteTransaction(
           (writable) => {
-            for (let index = 0; index < 625; index++) {
+            for (let index = 0; index < 1250; index++) {
               writeSessionEntry(writable, `agent:${agentId}:bench-${index}`, {
                 sessionId: `team-boot-${agentId}-${index}`,
                 updatedAt: now - index,
@@ -1473,7 +1489,7 @@ async function seedTeamBootFixture(root: string, benchCase: GatewayBenchCase): P
         publicationGitDelayMs: benchCase.publicationGitDelayMs,
         externalPluginCount: 44 - (benchCase.bundledPluginFixture?.plugins?.allow?.length ?? 0),
         agentCount: agents.length,
-        sessionCount: agents.length * 625,
+        sessionCount: agents.length * 1250,
         stateDatabaseBytes: statSync(statePath).size,
         agentDatabaseBytes: databasePaths.map((databasePath) => statSync(databasePath).size),
         workerEnvironments: "default local startup; no provisioned remote workers",
@@ -1739,6 +1755,50 @@ async function waitForFirstSessionRpc(params: {
   return { ms: null, attempts, lastError };
 }
 
+async function captureStartupHeapProfile(
+  child: ChildProcess,
+  directory: string,
+  timeoutMs: number,
+): Promise<string> {
+  const outputPath = path.resolve(directory, `gateway-startup-${child.pid}.heapprofile`);
+  return await new Promise<string>((resolve, reject) => {
+    const cleanup = () => {
+      clearTimeout(timer);
+      child.off("message", onMessage);
+      child.off("exit", onExit);
+      child.off("error", onError);
+    };
+    const onError = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
+    const onExit = () => onError(new Error("Gateway exited before startup heap capture completed"));
+    const onMessage = (message: unknown) => {
+      if (!isRecord(message) || message.type !== "openclaw-startup-heap:captured") {
+        return;
+      }
+      if (typeof message.error === "string") {
+        onError(new Error(message.error));
+      } else if (message.outputPath === outputPath) {
+        cleanup();
+        resolve(outputPath);
+      }
+    };
+    const timer = setTimeout(
+      () => onError(new Error("Gateway startup heap capture timed out")),
+      timeoutMs,
+    );
+    child.on("message", onMessage);
+    child.once("exit", onExit);
+    child.once("error", onError);
+    child.send({ type: "openclaw-startup-heap:capture", outputPath }, (error) => {
+      if (error) {
+        onError(error);
+      }
+    });
+  });
+}
+
 async function runGatewaySample(
   options: GatewayBenchRuntimeOptions & {
     benchCase: GatewayBenchCase;
@@ -1772,6 +1832,9 @@ async function runGatewaySample(
       );
     }
     const configPath = writeConfig(root, options.benchCase);
+    if (options.benchCase.id === "teamBoot") {
+      copyFileSync(configPath, `${configPath}.bak`);
+    }
     const env = createGatewayBenchEnv(root, configPath, { caseEnv: options.benchCase.env });
     const publicationMarker =
       options.benchCase.publicationGitDelayMs !== undefined
@@ -1819,14 +1882,20 @@ async function runGatewaySample(
     let httpListenLogLine: string | null = null;
     let httpListenLogMs: number | null = null;
     let childExited = false;
-    let child: ChildProcessWithoutNullStreams | undefined;
+    let heapProfilePath: string | undefined;
+    let child: ChildProcess | undefined;
     let rssSampler: ReturnType<typeof startGatewayRssSampling> | undefined;
 
     try {
       const nodeOptions = [
+        ...(options.heapProfDir
+          ? [
+              "--import",
+              fileURLToPath(new URL("./lib/gateway-startup-heap-profile.mjs", import.meta.url)),
+            ]
+          : []),
         ...(preload ? ["--import", preload] : []),
         ...gatewayBenchCpuProfileArgs(options.cpuProfDir),
-        ...(options.heapProfDir ? ["--heap-prof", "--heap-prof-dir", options.heapProfDir] : []),
       ];
       const childArgs = buildGatewayBenchChildArgs(
         options.entry,
@@ -1839,7 +1908,7 @@ async function runGatewaySample(
         cwd: process.cwd(),
         detached: process.platform !== "win32",
         env,
-        stdio: ["pipe", "pipe", "pipe"],
+        stdio: ["pipe", "pipe", "pipe", ...(options.heapProfDir ? ["ipc" as const] : [])],
       });
       try {
         await once(child, "spawn");
@@ -1848,6 +1917,8 @@ async function runGatewaySample(
         throw error;
       }
       const startedChild = child;
+      // Node's IPC spawn overload does not retain the three configured pipe types.
+      assert(startedChild.stdout && startedChild.stderr, "Gateway output pipes are required");
       const cpuStartMs = readProcessTreeCpuMs(startedChild.pid);
       rssSampler = startGatewayRssSampling(startedChild);
       startedChild.once("exit", () => {
@@ -1914,7 +1985,16 @@ async function runGatewaySample(
       const healthzProbe = probe("/healthz");
       const [healthz, readyz, firstSessionRpc] = await Promise.all([
         healthzProbe,
-        probe("/readyz"),
+        probe("/readyz").then(async (readiness) => {
+          if (readiness.status === 200 && options.heapProfDir) {
+            heapProfilePath = await captureStartupHeapProfile(
+              startedChild,
+              options.heapProfDir,
+              Math.max(1, deadlineAt - performance.now()),
+            );
+          }
+          return readiness;
+        }),
         healthzProbe.then((health) =>
           health.status === 200
             ? waitForFirstSessionRpc({
@@ -2019,6 +2099,7 @@ async function runGatewaySample(
         gatewayReadyLogLine,
         gatewayReadyLogMs,
         healthz,
+        ...(heapProfilePath ? { heapProfilePath } : {}),
         httpListenLogLine,
         httpListenLogMs,
         maxRssMb,
@@ -2250,7 +2331,7 @@ export const testing = {
   writeConfig,
 };
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+if (isMainModule({ currentFile: fileURLToPath(import.meta.url) })) {
   main().catch((err: unknown) => {
     if (err instanceof CliArgumentError) {
       console.error(err.message);

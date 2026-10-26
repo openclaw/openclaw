@@ -179,7 +179,7 @@ function CostColumns(props: {
   days: NonNullable<ReturnType<typeof windowDailyCosts>>;
   label: string;
 }) {
-  const max = () => Math.max(0, ...props.days.map((day) => day.cost));
+  const max = createMemo(() => Math.max(0, ...props.days.map((day) => day.cost)));
   const [hover, setHover] = createSignal<number | null>(null);
   const active = () => {
     const index = hover();

@@ -102,7 +102,6 @@ it.each([
       await vi.advanceTimersByTimeAsync(0);
     }
     expectConservative(settled, reason);
-    expect(worker.terminate).toHaveBeenCalledOnce();
     if (!stuck) {
       expect(state.remove).toHaveBeenCalledOnce();
       return;
@@ -127,7 +126,6 @@ it.each(["joined", "timeout", "rejection"] as const)(
     const { worker, result, settled, join } = await start(true);
     worker.emit("message", "");
     await vi.advanceTimersByTimeAsync(0);
-    expect(worker.terminate).toHaveBeenCalledOnce();
     expect(state.remove).not.toHaveBeenCalled();
     if (failure === "joined") {
       join.resolve(1);

@@ -250,7 +250,8 @@ export async function executeWorkerTurn(
     model,
     placement,
     turn,
-    assertCurrent: assertContextCurrent,
+    // Retained skill tools run in RPC callbacks outside this turn's async context.
+    assertCurrent: assertSourceCurrent,
     computerAvailable: Boolean(computer),
   });
   const {
@@ -683,13 +684,13 @@ export async function executeWorkerTurn(
       await releaseClaimIfOwned(params.placements, params.turnClaim);
       return blockedResult;
     }
-    assertInputAdmitted();
     return await finalizeWorkerTurnResult({
       ...params,
       turn,
       transcriptTarget,
       tunnel,
       processResult,
+      assertInputAdmitted,
       modelRef,
       baseLeafId,
       promptContext,

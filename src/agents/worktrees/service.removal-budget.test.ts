@@ -27,6 +27,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
 });
 const initializeRepository = useManagedWorktreeTestRepository();
 const hour = 60 * 60_000;
+const git = (cwd: string, ...args: string[]) => requireGit(cwd, args);
 const read = (directory: string, name = "README.md") =>
   fs.readFile(path.join(directory, name), "utf8");
 const makeService = (env: NodeJS.ProcessEnv) =>
@@ -64,18 +65,12 @@ async function fixture(mode: "full" | "partial" = "full") {
 
 async function partialRepository(root: string, source: string) {
   await fs.writeFile(path.join(source, "missing.txt"), "omitted blob\n");
-  await requireGit(source, ["add", "missing.txt"]);
-  await requireGit(source, ["commit", "-m", "add omitted blob"]);
-  await requireGit(source, ["config", "uploadpack.allowFilter", "true"]);
+  await git(source, "add", "missing.txt");
+  await git(source, "commit", "-m", "add omitted blob");
+  await git(source, "config", "uploadpack.allowFilter", "true");
   const repo = path.join(root, "partial");
-  await requireGit(root, [
-    "clone",
-    "--filter=blob:none",
-    "--no-checkout",
-    pathToFileURL(source).href,
-    repo,
-  ]);
-  await requireGit(repo, ["sparse-checkout", "set", "--no-cone", "/README.md"]);
+  await git(root, "clone", "--filter=blob:none", "--no-checkout", pathToFileURL(source).href, repo);
+  await git(repo, "sparse-checkout", "set", "--no-cone", "/README.md");
   return repo;
 }
 
@@ -117,11 +112,11 @@ it.each([
 
 it("backs off shared-repository snapshots after a missing-object failure", async () => {
   const { root, source, repo, env, materialize } = await fixture("partial");
-  await requireGit(repo, ["checkout", "main"]);
+  await git(repo, "checkout", "main");
   const records = await materialize(["broken-a", "broken-b"], {
     repoFingerprint: (await resolveRepository(repo)).fingerprint,
   });
-  await requireGit(repo, ["remote", "set-url", "origin", path.join(root, "unavailable")]);
+  await git(repo, "remote", "set-url", "origin", path.join(root, "unavailable"));
   await editRecords(records);
   const gc = (retryDeferred = false) => makeService(env).gc({ retryDeferred });
   const firstStarted = Date.now();
@@ -153,7 +148,7 @@ it("backs off shared-repository snapshots after a missing-object failure", async
   expect(retryState(env, failed.id)?.retryAt).toBeLessThanOrEqual(Date.now() + 4 * hour);
   const [healthy] = await materialize(["healthy"], { repoRoot: source });
   expect((await gc()).removed).toEqual([healthy!.id]);
-  await requireGit(repo, ["remote", "set-url", "origin", source]);
+  await git(repo, "remote", "set-url", "origin", source);
   expect((await gc(true)).removed.toSorted()).toEqual(
     records.map((record) => record.id).toSorted(),
   );
@@ -175,8 +170,8 @@ it.each([
   async (damage) => {
     const { root, source, repo, env, materialize } = await fixture("partial");
     // Fixture materialization is an explicit checkout, not a Gateway inspection.
-    await requireGit(repo, ["config", "gc.auto", "0"]);
-    await requireGit(repo, ["config", "maintenance.auto", "false"]);
+    await git(repo, "config", "gc.auto", "0");
+    await git(repo, "config", "maintenance.auto", "false");
     const records = await materialize(["partial-a", "partial-b"], { stateDir: root });
     await editRecords(records);
     if (damage === "promised-retry") {
@@ -197,7 +192,7 @@ it.each([
       payloadPacks.push(path.join(directory, `pack-${hash}.pack`));
       await fs.writeFile(path.join(directory, `pack-${hash}.promisor`), "");
     }
-    await requireGit(repo, ["prune-packed"]);
+    await git(repo, "prune-packed");
     if (damage === "checksum") {
       const pack = payloadPacks[0]!;
       const bytes = await fs.readFile(pack);
@@ -207,15 +202,15 @@ it.each([
     } else if (damage === "unpromised") {
       // A local commit is not a promise, even with a promisor remote configured.
       const record = records[0]!;
-      await requireGit(record.path, ["config", "user.name", "OpenClaw Test"]);
-      await requireGit(record.path, ["config", "user.email", "openclaw-test@example.invalid"]);
+      await git(record.path, "config", "user.name", "OpenClaw Test");
+      await git(record.path, "config", "user.email", "openclaw-test@example.invalid");
       await fs.writeFile(path.join(record.path, "README.md"), "local-only blob\n");
-      await requireGit(record.path, ["add", "README.md"]);
-      await requireGit(record.path, ["commit", "-m", "local change"]);
-      const blob = await requireGit(record.path, ["rev-parse", "HEAD:README.md"]);
+      await git(record.path, "add", "README.md");
+      await git(record.path, "commit", "-m", "local change");
+      const blob = await git(record.path, "rev-parse", "HEAD:README.md");
       await fs.unlink(path.join(repo, ".git", "objects", blob.slice(0, 2), blob.slice(2)));
       await requireGit(source, ["hash-object", "-w", "--stdin"], { input: "local-only blob\n" });
-      await requireGit(source, ["config", "uploadpack.allowAnySHA1InWant", "true"]);
+      await git(source, "config", "uploadpack.allowAnySHA1InWant", "true");
     }
     const before = (await fs.readdir(directory)).filter((name) => name.endsWith(".pack"));
     if (damage === "byte-limited" || damage === "index-limited") {
@@ -240,9 +235,9 @@ it.each([
         : damage === "index-limited"
           ? before.length - 3
           : 1;
-    const missing = await requireGit(repo, ["rev-list", "--objects", "--all", "--missing=print"]);
+    const missing = await git(repo, "rev-list", "--objects", "--all", "--missing=print");
     expect(missing).toContain("?");
-    await requireGit(repo, ["remote", "set-url", "origin", path.join(root, "unavailable.git")]);
+    await git(repo, "remote", "set-url", "origin", path.join(root, "unavailable.git"));
     const trace = path.join(root, "partial-trace.jsonl");
     vi.stubEnv("GIT_TRACE2_EVENT", trace);
     const service = makeService(env);
@@ -266,15 +261,13 @@ it.each([
       expect(getRegistryWorktree(env, record.id)?.removedAt).toBeUndefined();
     }
     if (damage !== "checksum") {
-      expect(await requireGit(repo, ["rev-list", "--objects", "--all", "--missing=print"])).toBe(
-        missing,
-      );
+      expect(await git(repo, "rev-list", "--objects", "--all", "--missing=print")).toBe(missing);
       expect(
         await requireGit(repo, ["cat-file", "--batch-check"], {
           input: `${objects.join("\n")}\n`,
         }),
       ).not.toContain("missing");
-      await requireGit(repo, ["multi-pack-index", "verify"]);
+      await git(repo, "multi-pack-index", "verify");
     }
     const traceOutput = await fs.readFile(trace, "utf8");
     expect(traceOutput).not.toContain('"fsck"');
@@ -282,7 +275,7 @@ it.each([
       expect(traceOutput).not.toContain("upload-pack");
     }
     if (damage === "unpromised") {
-      await requireGit(repo, ["remote", "set-url", "origin", source]);
+      await git(repo, "remote", "set-url", "origin", source);
       const repaired = await service.gc({ retryDeferred: true });
       expect(repaired.removed.toSorted()).toEqual(records.map((record) => record.id).toSorted());
       expect(await fs.readFile(trace, "utf8")).toContain("upload-pack");

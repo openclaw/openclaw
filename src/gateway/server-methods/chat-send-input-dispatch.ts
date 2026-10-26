@@ -312,7 +312,7 @@ export async function handleChatSendWithStorage(
     });
     phase?.mark("persist");
     let approvedInput: PersistedUserTurnMessage | undefined;
-    let stageInput =
+    const stageInput =
       admission.workerGoalAdmission ||
       Boolean(
         entry?.sessionId &&
@@ -322,25 +322,10 @@ export async function handleChatSendWithStorage(
           options?.stageCreatedInput === true) &&
         !isInternalTextSlashCommandTurn &&
         !request.goalOperation &&
+        (!restartSafeAdmission || request.restartResume) &&
         !restartSafeAdmission?.retryExpectedState &&
         !commitInitialInput,
       );
-    if (stageInput && restartSafeAdmission && !request.restartResume) {
-      inputAdmissionAttempted = true;
-      const input = await admission.acquireInputActor();
-      if (input) {
-        const authority = {
-          assertCurrent: assertCustodyLifetimeCurrent,
-          authorize: assertCustodyLifetimeCurrent,
-        };
-        const state = input.actor.snapshot(authority) ?? (await input.actor.read(authority));
-        // Older Gateways can leave custody behind before committing the recovery
-        // claim. Recover that input; fresh idle sends commit transcript custody directly.
-        stageInput = state.pendingInputs.some(
-          (pending) => pending.idempotency_key === userTurn.baseInput.idempotencyKey,
-        );
-      }
-    }
     if (stageInput) {
       // ACK transfers input custody. Persist approved source bytes before
       // dispatch; a validated durable retry already owns its transcript input.

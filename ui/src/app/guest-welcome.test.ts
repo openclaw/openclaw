@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { GUEST_WELCOME_ENSURE_METHOD, type GuestWelcomeOptions } from "./guest-welcome-handle.ts";
-import { GUEST_WELCOME_PENDING_LIMIT_MS, GuestWelcome } from "./guest-welcome.ts";
+import { GuestWelcome } from "./guest-welcome.ts";
 
 const GUEST_AUTH = { role: "operator", scopes: ["operator.sessions.write"], sessionCap: "view" };
 const READY = { status: "ready", sessionKey: "agent:main:welcome-sam", agentId: "main" };
@@ -66,6 +66,13 @@ function harness(options: {
   return { owner, connect, disconnect, openSession, isHomeLanding, responses, stop };
 }
 
+async function ready(created: boolean, home = true) {
+  const fixture = harness({ responses: [{ ...READY, created }], home });
+  const client = fixture.connect();
+  await vi.runAllTimersAsync();
+  return { ...fixture, client };
+}
+
 let storage: Storage;
 
 beforeEach(() => {
@@ -81,65 +88,43 @@ afterEach(() => {
 
 describe("GuestWelcome", () => {
   it("asks once after a guest connects and lands Home on the created session once per browser", async () => {
-    const first = harness({ responses: [{ ...READY, created: true }] });
-    const client = first.connect();
-    await vi.runAllTimersAsync();
-    expect(client.request).toHaveBeenCalledOnce();
-    expect(client.request).toHaveBeenCalledWith(GUEST_WELCOME_ENSURE_METHOD, {});
+    const first = await ready(true);
+    expect(first.client.request).toHaveBeenCalledExactlyOnceWith(GUEST_WELCOME_ENSURE_METHOD, {});
     expect(first.openSession).toHaveBeenCalledWith(READY.sessionKey, READY.agentId);
     expect(first.owner.presentation).toEqual({ kind: "hidden" });
     first.stop();
 
     // A reload, another tab, or a later sign-in on this browser keeps Home reachable.
-    const again = harness({ responses: [{ ...READY, created: false }] });
-    again.connect();
-    await vi.runAllTimersAsync();
+    const again = await ready(false);
     expect(again.openSession).not.toHaveBeenCalled();
     expect(again.isHomeLanding).not.toHaveBeenCalled();
   });
 
   it("never redirects away from a deep link, and still lands later from Home", async () => {
-    const deepLink = harness({ responses: [{ ...READY, created: true }], home: false });
-    deepLink.connect();
-    await vi.runAllTimersAsync();
-    expect(deepLink.isHomeLanding).toHaveBeenCalledOnce();
+    const deepLink = await ready(true, false);
     expect(deepLink.openSession).not.toHaveBeenCalled();
     deepLink.stop();
 
-    const home = harness({ responses: [{ ...READY, created: false }] });
-    home.connect();
-    await vi.runAllTimersAsync();
+    const home = await ready(false);
     expect(home.openSession).toHaveBeenCalledOnce();
   });
 
-  it("lands only the creating call when the browser cannot remember visits", async () => {
-    vi.stubGlobal("localStorage", undefined);
-    const existing = harness({ responses: [{ ...READY, created: false }] });
-    existing.connect();
-    await vi.runAllTimersAsync();
-    expect(existing.openSession).not.toHaveBeenCalled();
-    const created = harness({ responses: [{ ...READY, created: true }] });
-    created.connect();
-    await vi.runAllTimersAsync();
-    expect(created.openSession).toHaveBeenCalledOnce();
-  });
-
-  it("lands only the creating call when storage reads but cannot write", async () => {
-    const full = createStorageMock();
-    full.setItem = () => {
-      throw new DOMException("quota", "QuotaExceededError");
-    };
-    vi.stubGlobal("localStorage", full);
-    const existing = harness({ responses: [{ ...READY, created: false }] });
-    existing.connect();
-    await vi.runAllTimersAsync();
-    expect(existing.isHomeLanding).toHaveBeenCalledOnce();
-    expect(existing.openSession).not.toHaveBeenCalled();
-    const created = harness({ responses: [{ ...READY, created: true }] });
-    created.connect();
-    await vi.runAllTimersAsync();
-    expect(created.openSession).toHaveBeenCalledOnce();
-  });
+  it.each(["unavailable", "full"])(
+    "lands only the creating call when storage is %s",
+    async (mode) => {
+      if (mode === "unavailable") {
+        vi.stubGlobal("localStorage", undefined);
+      } else {
+        storage.setItem = () => {
+          throw new DOMException("quota", "QuotaExceededError");
+        };
+      }
+      const existing = await ready(false);
+      expect(existing.openSession).not.toHaveBeenCalled();
+      const created = await ready(true);
+      expect(created.openSession).toHaveBeenCalledOnce();
+    },
+  );
 
   it.each([
     ["the method is not advertised", { methods: [] }],
@@ -193,13 +178,15 @@ describe("GuestWelcome", () => {
     expect(openSession).toHaveBeenCalledOnce();
   });
 
-  it("turns setup that stays pending into a retryable failure", async () => {
+  it("turns setup that stays pending for three minutes into a retryable failure", async () => {
     const pending = { status: "pending", retryAfterMs: 5_000 };
     const { connect, owner, responses } = harness({
       responses: Array.from({ length: 40 }, () => pending),
     });
     const client = connect();
-    await vi.advanceTimersByTimeAsync(GUEST_WELCOME_PENDING_LIMIT_MS);
+    await vi.advanceTimersByTimeAsync(3 * 60_000 - 1);
+    expect(owner.presentation).toEqual({ kind: "pending" });
+    await vi.advanceTimersByTimeAsync(1);
     expect(owner.presentation).toEqual({ kind: "failed", message: null });
     const calls = client.request.mock.calls.length;
     await vi.advanceTimersByTimeAsync(60_000);

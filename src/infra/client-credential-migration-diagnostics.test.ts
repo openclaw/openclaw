@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { redactPublicSupportDiagnosticLine } from "../logging/diagnostic-support-redaction.js";
@@ -56,7 +57,14 @@ it("preserves an invalid socket cause through migration, candidate capture, and 
     entry,
     `console.error(${JSON.stringify(`[openclaw] Reason: ${result.warnings[0]}`)}); process.exitCode = 1;`,
   );
-  const running = launchCanary({ entry, args: [], root, env, stateDir, capture() {} });
+  const running = launchCanary({
+    target: { kind: "worker", url: pathToFileURL(entry) },
+    args: [],
+    root,
+    env,
+    stateDir,
+    capture() {},
+  });
   await running.closed;
   const failureFacts = createUpdateCanaryFailureFacts({
     phase: "doctor",

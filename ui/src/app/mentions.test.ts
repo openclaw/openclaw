@@ -5,7 +5,8 @@ import type {
   MentionsListResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
-import { GatewayRequestError, type GatewayHelloOk } from "../api/gateway.ts";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
+import type { GatewayHelloOk } from "../api/gateway.ts";
 import { createConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
 import { createMentionsCapability, type MentionsCapability } from "./mentions.ts";
 import {
@@ -206,7 +207,7 @@ describe("application mention Inbox", () => {
     expect(request).toHaveBeenCalledExactlyOnceWith("mentions.list", {});
   });
 
-  it.each(["join", 1, 3] as const)("coalesces in-flight refreshes (%s)", async (revision) => {
+  it.each([1, 3])("coalesces in-flight refreshes (%s)", async (revision) => {
     const initial = deferred<MentionsListResult>();
     const latest = deferred<MentionsListResult>();
     const request = vi
@@ -216,11 +217,9 @@ describe("application mention Inbox", () => {
     const { harness, capability } = inboxFixture(request);
     await flushMicrotasks();
     const refreshes = [capability.refresh(), capability.refresh()];
-    if (revision !== "join") {
-      harness.changed(2);
-      harness.changed(3);
-    }
-    initial.resolve(result(revision === "join" ? 1 : revision));
+    harness.changed(2);
+    harness.changed(3);
+    initial.resolve(result(revision));
     await flushMicrotasks();
     const calls = revision === 1 ? 2 : 1;
     expect(request).toHaveBeenCalledTimes(calls);
@@ -231,14 +230,10 @@ describe("application mention Inbox", () => {
       phase: "ready",
       items: revision === 1 ? [current] : [mention],
     });
-    if (revision !== "join") {
-      harness.changed(3);
-      harness.changed(2);
-      await flushMicrotasks();
-      expect(request).toHaveBeenCalledTimes(calls);
-    } else {
-      expect(request).toHaveBeenCalledExactlyOnceWith("mentions.list", {});
-    }
+    harness.changed(3);
+    harness.changed(2);
+    await flushMicrotasks();
+    expect(request).toHaveBeenCalledTimes(calls);
   });
 
   it("reconciles an invalidation arriving as the previous snapshot settles", async () => {

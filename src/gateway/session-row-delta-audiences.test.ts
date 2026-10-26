@@ -7,6 +7,7 @@ import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import * as modelPresentation from "./operator-model-presentation.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
 import {
   initializeSessionReadContext,
@@ -175,7 +176,12 @@ it("shares recipient encodings only for matching authority and delivered baselin
     const publish = (ids: string[]) =>
       connection.broadcastToConnIds(
         "sessions.changed",
-        { sessionKey: key, agentId: "main", reason: "rename" },
+        {
+          sessionKey: key,
+          agentId: "main",
+          reason: "rename",
+          ["__proto__"]: { fixture: "own-data-property" },
+        },
         new Set(ids),
       );
     const decodeLast = (peer: (typeof peers)[number]) => {
@@ -214,11 +220,32 @@ it("shares recipient encodings only for matching authority and delivered baselin
         expect(JSON.parse(peer.send.mock.lastCall![0]).payload.session.version).toBe(1);
       }
       const previousSends = peers.map((peer) => peer.send.mock.calls.length);
+      const fieldEnumerations = new Map<object, number>();
+      let envelopeEnumerations = 0;
+      const entries = Object.entries;
+      const enumerating = vi.spyOn(Object, "entries").mockImplementation((value) => {
+        if (isRecord(value) && value.sessionKey === key && isRecord(value.session)) {
+          envelopeEnumerations++;
+        }
+        if (isRecord(value) && value.key === key && typeof value.sharingRole === "string") {
+          fieldEnumerations.set(value, (fieldEnumerations.get(value) ?? 0) + 1);
+        }
+        return entries(value);
+      });
       const stringify = JSON.stringify;
       let rowEncodings = 0;
       let envelopeEncodings = 0;
+      let sharingKeyEncodings = 0;
       const encoding = vi.spyOn(JSON, "stringify").mockImplementation((...args) => {
         const value: unknown = args[0];
+        if (
+          Array.isArray(value) &&
+          value.length === 10 &&
+          isRecord(value[0]) &&
+          value[0].kind === "operator"
+        ) {
+          sharingKeyEncodings++;
+        }
         if (isRecord(value) && value.key === key && typeof value.version === "number") {
           rowEncodings++;
         }
@@ -231,6 +258,7 @@ it("shares recipient encodings only for matching authority and delivered baselin
         publish(peers.map((peer) => peer.client.connId));
       } finally {
         encoding.mockRestore();
+        enumerating.mockRestore();
       }
       const decodedPayloads: unknown[] = [];
       for (const [index, peer] of peers.entries()) {
@@ -249,6 +277,9 @@ it("shares recipient encodings only for matching authority and delivered baselin
           },
         });
         const payload = JSON.parse(peer.send.mock.lastCall![0]).payload;
+        expect(Object.getOwnPropertyDescriptor(payload, "__proto__")?.value).toEqual({
+          fixture: "own-data-property",
+        });
         if (peer.capability === "refs") {
           expect(payload.sessionFieldRefs).toEqual(expect.any(Array));
           expect(payload).not.toHaveProperty("label");
@@ -281,10 +312,101 @@ it("shares recipient encodings only for matching authority and delivered baselin
           });
         }
       }
+      // The full row's field ordering is shared even when delivery baselines differ.
+      expect([...fieldEnumerations.values()]).toEqual([1, 1]);
+      // Referenced fields must not allocate entry tuples just to discard them.
+      expect(envelopeEnumerations).toBe(0);
+      // Eight current delta recipients were primed at this revision; sixteen were not.
+      expect(sharingKeyEncodings).toBe(16);
       // Four authority/baseline groups share row planning across both delta capabilities.
       expect(rowEncodings).toBeLessThanOrEqual(16);
       // Two wire capabilities per group, plus one legacy envelope per authority.
       expect(envelopeEncodings).toBeLessThanOrEqual(10);
+    } finally {
+      detach();
+      await connection.mentionInbox.dispose();
+      projection.dispose();
+    }
+  });
+});
+
+it("prepares model presentation once per audience at growing fanout", async () => {
+  using _ = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+    const cfg = rolePolicyConfig();
+    cfg.agents = { entries: { main: {} } };
+    cfg.gateway!.roles!.definitions.view!.modelPolicy = { allow: ["fixture/visible"] };
+    const profile = ensureProfileForEmail("fanout@example.test");
+    setUserProfileRole(profile.id, "view");
+    const key = "agent:main:fanout";
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: key },
+      {
+        sessionId: "fanout",
+        updatedAt: 1,
+        visibility: "shared",
+        modelProvider: "fixture",
+        model: "hidden",
+        fastMode: "ultrafast",
+      },
+    );
+    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    const connection = createGatewayConnectionState({
+      scheduler: createTestGatewayScheduler(),
+      bootId: "fanout",
+      cfg,
+    });
+    const detach = connection.attachSessionRowProjection(projection);
+    using modelPreparations = vi.spyOn(modelPresentation, "prepareOperatorModelPresentation");
+    try {
+      for (const count of [1, 4, 16, 65]) {
+        const peers = Array.from({ length: count }, (_entry, i) => {
+          const peer = createSessionRowEventPeer(profile, `fanout-${count}-${i}`, 1);
+          peer.client.connect.caps = i % 2 ? ["ultrafast"] : [];
+          connection.clients.add(peer.client);
+          connection.sessionEventSubscribers.subscribe(peer.client.connId);
+          return peer;
+        });
+        modelPreparations.mockClear();
+        const stringify = JSON.stringify;
+        let nestedKeyEncodings = 0;
+        const encoding = vi.spyOn(JSON, "stringify").mockImplementation((...args) => {
+          const value: unknown = args[0];
+          if (
+            Array.isArray(value) &&
+            value.length === 3 &&
+            typeof value[0] === "string" &&
+            (value[1] === true || value[1] === "ultrafast")
+          ) {
+            nestedKeyEncodings++;
+          }
+          return stringify(...args);
+        });
+        try {
+          connection.broadcastToConnIds(
+            "sessions.changed",
+            { sessionKey: key, agentId: "main" },
+            new Set(peers.map((peer) => peer.client.connId)),
+          );
+        } finally {
+          encoding.mockRestore();
+        }
+        expect.soft(modelPreparations).toHaveBeenCalledTimes(Math.min(count, 2));
+        expect.soft(nestedKeyEncodings).toBe(0);
+        for (const [i, peer] of peers.entries()) {
+          expect(peer.send).toHaveBeenCalledOnce();
+          const frame = peer.send.mock.lastCall![0];
+          expect(frame).toBe(peers[i % 2]!.send.mock.lastCall![0]);
+          const row = JSON.parse(frame).payload.session;
+          expect(row).toMatchObject({
+            key,
+            sharingRole: "viewer",
+            fastMode: i % 2 ? "ultrafast" : true,
+          });
+          expect(row).not.toHaveProperty("model");
+          expect(row).not.toHaveProperty("modelProvider");
+        }
+      }
     } finally {
       detach();
       await connection.mentionInbox.dispose();

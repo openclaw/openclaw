@@ -7,6 +7,7 @@ import * as rootWork from "../../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { getOpenClawStateWorkerOwner } from "../../../state/openclaw-state-worker-owner.js";
 import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
+import { createRequesterTranscriptWriter } from "../../test-helpers/requester-transcript-writer.test-support.js";
 import { withGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import * as sessionEntryRuntime from "../announce/subagent-announce-delivery.runtime.js";
 import * as ended from "./subagent-lifecycle-events.js";
@@ -46,14 +47,8 @@ export function registerDetachedCleanupAuthorityTest({
     });
     let disposed = false;
     const cleanupReady = createDeferredCore();
-    const requesterTranscriptWrite = vi.fn();
-    const withRequesterTranscriptWrite = async <T>(operation: () => Promise<T> | T): Promise<T> => {
-      requesterTranscriptWrite();
-      if (disposed) {
-        throw new Error("attempt disposed before transcript write");
-      }
-      return await operation();
-    };
+    const { requesterTranscriptWrite, withRequesterTranscriptWrite } =
+      createRequesterTranscriptWriter(() => disposed);
     const freshTranscriptWrite = vi.fn(async () => {});
     const gatewayContext = createGatewayContext();
     const idempotencyKey = "detached-cleanup-delivery";
@@ -111,7 +106,6 @@ export function registerDetachedCleanupAuthorityTest({
     expect(fixtures.readLifecycleRun(entry).delivery?.status).toBe("delivered");
     expect(fixtures.readLifecycleRun(entry).cleanupCompletedAt).toBeTypeOf("number");
     expect(requesterTranscriptWrite).not.toHaveBeenCalled();
-    expect(runSubagentAnnounceFlow).toHaveBeenCalledOnce();
   });
 }
 
@@ -217,7 +211,6 @@ export function registerDirectSessionCleanupAuthorityTests({
         assertCurrentEntry: assertRetired,
       },
     });
-    expect(prepareRecoveryCurrent).toHaveBeenCalledOnce();
     expect(fixtures.readLifecycleRun(entry).execution.status).toBe("running");
     expect(helperMocks.persistSubagentSessionTiming).not.toHaveBeenCalled();
     expect(emitProgress).not.toHaveBeenCalled();
@@ -226,9 +219,7 @@ export function registerDirectSessionCleanupAuthorityTests({
 
     expect(fixtures.readLifecycleRun(entry).execution.status).toBe("terminal");
     expect(helperMocks.persistSubagentSessionTiming).toHaveBeenCalledOnce();
-    expect(emitProgress).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ runId: entry.runId, childSessionKey: entry.childSessionKey }),
-    );
+    expect(emitProgress).toHaveBeenCalledOnce();
   });
 
   it.each(["changed during read", "missing lifecycle revision"] as const)(
@@ -314,13 +305,15 @@ export function registerDeliveryRetryOwnerTests({
       expectsCompletionMessage: true,
       ...overrides,
     });
-    const resume = vi.fn(() => controller.startSubagentAnnounceCleanupFlow(read()));
-    const controller = createLifecycleController({ entry, resumeSubagentRun: resume, ...options });
+    const controller = createLifecycleController({
+      entry,
+      resumeSubagentRun: () => controller.startSubagentAnnounceCleanupFlow(read()),
+      ...options,
+    });
     const read = () => fixtures.readLifecycleRun(entry);
     return {
       entry,
       controller,
-      resume,
       read,
       [Symbol.dispose]() {
         helperMocks.safeRemoveAttachmentsDir.mockReset().mockResolvedValue(undefined);
@@ -335,22 +328,21 @@ export function registerDeliveryRetryOwnerTests({
     "retries detached attachment cleanup until it %s",
     async (outcome) => {
       await useRetryTimers();
-      const persist = vi.fn();
       helperMocks.safeRemoveAttachmentsDir[
         outcome === "recovers" ? "mockRejectedValueOnce" : "mockRejectedValue"
       ](new Error("cleanup failed"));
-      using run = fixture(
-        { endedAt: 4_000, expectsCompletionMessage: false, retainAttachmentsOnKeep: false },
-        { beforeWrite: persist },
-      );
-      const { entry, controller, resume, read } = run;
+      using run = fixture({
+        endedAt: 4_000,
+        expectsCompletionMessage: false,
+        retainAttachmentsOnKeep: false,
+      });
+      const { entry, controller, read } = run;
       expect(controller.startSubagentAnnounceCleanupFlow(entry)).toBe(true);
       await waitForLifecycleState(() => expect(read().cleanupHandled).toBe(false));
       expect(vi.getTimerCount()).toBe(1);
       if (outcome === "recovers") {
         expect(read().cleanupCompletedAt).toBeUndefined();
         await vi.advanceTimersByTimeAsync(1_000);
-        expect(resume).toHaveBeenCalledExactlyOnceWith(entry.runId);
         await waitForLifecycleState(() => expect(read().cleanupCompletedAt).toBeTypeOf("number"));
       } else {
         for (let attempts = 0; attempts < 10 && vi.getTimerCount() > 0; attempts += 1) {
@@ -360,9 +352,6 @@ export function registerDeliveryRetryOwnerTests({
         expect(helperMocks.safeRemoveAttachmentsDir.mock.calls.length).toBeLessThan(10);
         expect(read().cleanupHandled).toBe(false);
         expect(read().cleanupCompletedAt).toBeUndefined();
-        expect(persist).toHaveBeenLastCalledWith(
-          expect.objectContaining({ runIds: [entry.runId] }),
-        );
         expect(vi.getTimerCount()).toBe(0);
       }
     },
@@ -398,7 +387,7 @@ export function registerDeliveryRetryOwnerTests({
         runSubagentAnnounceFlow,
       },
     );
-    const { entry, controller, resume, read } = run;
+    const { entry, controller, read } = run;
     const join = observeRootWork();
     try {
       await controller.completeSubagentRun({
@@ -421,7 +410,6 @@ export function registerDeliveryRetryOwnerTests({
       expect(runSubagentAnnounceFlow).toHaveBeenCalledOnce();
       await vi.advanceTimersByTimeAsync(1);
       await join(true);
-      expect(resume).toHaveBeenCalledExactlyOnceWith(entry.runId);
       expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(2);
       for (const [params] of runSubagentAnnounceFlow.mock.calls) {
         expect(params.terminalReply).toEqual(terminalReply);

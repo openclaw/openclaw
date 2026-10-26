@@ -2,17 +2,19 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SkillStatusReport } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { configSnapshot } from "../../lib/config/config-snapshot.test-support.ts";
 import {
   createRuntimeConfigCapability,
   type RuntimeConfigCapability,
 } from "../../lib/config/runtime-config-capability.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createSkill } from "../skills/view.test-support.ts";
 import { createAgentConfigActions } from "./agent-config-actions.ts";
 import { createAgentsPageLifetime } from "./agents-page-lifetime.ts";
 import { createAgentSkillsReset, type AgentSkillsState } from "./skills.ts";
 
 describe("createAgentSkillActions", () => {
-  it("snapshots reported skills without learned Workshop skills on the first toggle", () => {
+  it("snapshots reported skills without learned Workshop skills on the first toggle", async () => {
     const report: SkillStatusReport = {
       workspaceDir: "/tmp/workspace",
       managedSkillsDir: "/tmp/skills",
@@ -22,12 +24,14 @@ describe("createAgentSkillActions", () => {
         createSkill({ name: "actual-budget-operations", source: "openclaw-workshop" }),
       ],
     };
+    const client = createTestGatewayClient(async () => configSnapshot({}));
     const runtimeConfig = createRuntimeConfigCapability({
-      snapshot: { client: null, phase: "offline", sessionKey: "main" },
+      snapshot: { client, phase: "connected", sessionKey: "main" },
       subscribe: () => () => undefined,
     });
 
     try {
+      await runtimeConfig.ensureLoaded();
       const actions = createAgentConfigActions({
         getRuntimeConfig: () => runtimeConfig,
         getReport: () => report,

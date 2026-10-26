@@ -1,13 +1,11 @@
 import { asOptionalObjectRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import type { AgentActivityDelegation } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import {
   groupToolCalls,
   type ToolCallGroup,
   type ToolCallIdentity,
 } from "../chat/tool-call-grouping.js";
 import { isAgentPlanProgressToolName } from "../session-cards/progress-card-input.js";
-import { projectAgentActivityDelegation } from "./agent-activity-delegation.js";
 
 /**
  * A successfully completed wrapper is replaced only by a recorded call beneath it
@@ -65,16 +63,11 @@ export function projectAgentActivityItem<
 >(
   item: Item,
   facts: { args?: unknown; result?: unknown; nativeOperation?: "wait" | "process.poll" } = {},
-): Item & { hideFromChannelProgress?: boolean; delegation?: AgentActivityDelegation[] } {
+): Item & { hideFromChannelProgress?: boolean } {
   if (item.kind === "analysis") {
     return { ...item, hideFromChannelProgress: true };
   }
   const name = normalizeLowercaseStringOrEmpty(item.name);
-  const delegation =
-    item.phase === "end" && item.status !== "failed" && item.status !== "blocked"
-      ? projectAgentActivityDelegation(name, facts.result)
-      : undefined;
-  const prepared = delegation ? { ...item, delegation } : item;
   const details = asRecord(asRecord(facts.result)?.details);
   // Tool completion is not command success. Preserve the execution contract and
   // expose a normal nonzero exit only in the prepared activity outcome.
@@ -88,7 +81,7 @@ export function projectAgentActivityItem<
     Number.isFinite(details.exitCode) &&
     details.exitCode !== 0
   ) {
-    return { ...prepared, status: "failed" };
+    return { ...item, status: "failed" };
   }
   const routine =
     facts.nativeOperation === "wait" ||
@@ -98,8 +91,8 @@ export function projectAgentActivityItem<
     (name === "process" && asRecord(facts.args)?.action === "poll") ||
     (name === "message" && asRecord(facts.args)?.action === "react");
   return routine && (item.status === "running" || item.status === "completed")
-    ? { ...prepared, hideFromChannelProgress: true }
-    : prepared;
+    ? { ...item, hideFromChannelProgress: true }
+    : item;
 }
 
 export function isCompleteAgentPreamble(item: { phase?: string; progressText?: string }): boolean {

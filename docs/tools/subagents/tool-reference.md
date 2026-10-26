@@ -70,7 +70,7 @@ apply the inherited spawn limit.
 - **Fast mode:** with swarm enabled, native sub-agents inherit the requester's setting only when the resolved child provider and model match the requester's active model. A different child model uses its own defaults. Explicit `sessions_spawn.fastMode` values (`true`, `false`, or `"auto"`) take precedence; aliases resolving to the same model preserve inheritance.
 - **Run timeout:** pass `runTimeoutSeconds` to set a timeout for a specific native, ACP, or visible sub-agent run. When omitted, OpenClaw uses `agents.defaults.subagents.runTimeoutSeconds` if configured; otherwise it falls back to `0` (no timeout). An explicit `0` disables the timeout for that run.
 - **Process lifetime:** a detached OpenClaw sub-agent has its own run lifecycle. A background task created inside an external CLI backend is different: it shares the parent CLI subprocess and stops if that parent reaches `agents.defaults.timeoutSeconds`.
-- **Task delivery:** hidden and visible native sub-agents receive their delegated task in a user message appended after any forked history. Model-only runtime context identifies the current assignment; the Control UI displays only the task text. Hidden sub-agents receive exact child and requester session identities, their label, and requester channel alongside the assignment. Their system prompt carries shared runtime rules, keeping its prefix reusable across equivalent child spawns. Inherited conversation remains background context.
+- **Task delivery:** hidden and visible native sub-agents receive their delegated task in a user message appended after any forked history. Model-only runtime context identifies the current assignment; the Control UI displays only the task text. Hidden sub-agents receive exact child and requester session identities (omitted for `blind` children), their label, and requester channel alongside the assignment. Their system prompt carries shared runtime rules, keeping its prefix reusable across equivalent child spawns. Inherited conversation remains background context.
 
 Guests with `operator.sessions.write` can launch hidden native children for their
 own sandboxed work and receive private parent completions. The child keeps the
@@ -240,6 +240,9 @@ In either mode, internal QA, research, coding, review, and test lanes use ordina
   `fork` branches the requester's current transcript into the child session, including the in-progress user turn and completed tool results. The requester can keep running while its visible or hidden child starts. Native sub-agents only. Non-thread spawns default to `isolated`; thread-bound spawns follow `threadBindings.defaultSpawnContext`, which defaults to `fork`. Pass `isolated` explicitly to guarantee clean context. All native forks, hidden or visible, must target the same agent as the requester.
   Codex-backed forked children receive completed tool output without secret masking and historical tool inputs summarized. Context size limits still apply.
 </ParamField>
+<ParamField path="blind" type="boolean" default="false">
+  Blind trial: the child's prompt omits its model identity, the default model, its agent and session identities, and the agent workspace path, which appears as `<workspace>`. Model selection, tools, working directory, and receipts are unchanged, and the requester still sees the real model. Hidden `runtime: "subagent"` children with `context: "isolated"` only; later turns and hidden native descendants stay blind. See [Blind native children](/plugins/sdk-runtime/background-work#blind-native-children).
+</ParamField>
 <ParamField path="visible" type="boolean" default="false">
   Create a persistent dashboard session only when the user requests a separate session or needs to return to and steer the work independently. Omit this flag or use `false` for internal QA, research, coding, review, and test workers supporting the parent task. Visible spawns support only `runtime: "subagent"` and always keep the created session.
 </ParamField>
@@ -340,6 +343,11 @@ registered task, not the session key format. Root sessions, collectors, stopped
 tasks, and superseded generations cannot claim a child message wait. Separate
 admitted follow-ups in the same child session remain independent tasks. A quiet
 native child can pause without acquiring an announced completion or pause notice.
+A turn that owns pending child or runtime completions is not waiting for a
+message: those completions resume the session. There, `waitFor: "message"` is
+not applied. The yield is an ordinary child wait, the requester gets no pause
+notice, and the `yielded` result carries a `note` saying so. Omit `waitFor`
+when yielding for your own children.
 Without a real pending child/runtime completion or this explicit message intent,
 yield is rejected. Return completed work as the normal final response:
 `sessions_yield` is not a final-result submission. An accepted yield pauses

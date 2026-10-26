@@ -20,7 +20,6 @@ import { isCronExecutionIdle } from "../cron/execution-idle.js";
 import { resolveCronJobBoundSessionKeys } from "../cron/job-session-bindings.js";
 import { cronScriptFailureMetadata } from "../cron/script-failure.js";
 import { CronService, type CronEvent } from "../cron/service.js";
-import type { DeferredHookWake } from "../cron/service/wake.js";
 import { resolveCronSessionTargetSessionKey } from "../cron/session-target.js";
 import { createCronScriptRuntime } from "../cron/trigger-script.js";
 import type { CronJob } from "../cron/types.js";
@@ -29,7 +28,6 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { emitLegacyHeartbeatCronOutcome } from "../infra/heartbeat-events.js";
-import { readHeartbeatSummarySnapshot } from "../infra/heartbeat-summary-snapshot.js";
 import { mergeSsrFPolicies } from "../infra/net/ssrf.js";
 import { listConfiguredMessageChannels } from "../infra/outbound/channel-selection.js";
 import { getChildLogger, getResolvedLoggerSettings, toPinoLikeLogger } from "../logging.js";
@@ -62,7 +60,7 @@ import {
 } from "./scheduled-run-gateway-context.js";
 import { createGatewayCronAgentDeps } from "./server-cron-agent-run.js";
 import { finalizeCronCompletionAnnouncement, pickDefined } from "./server-cron-completion.js";
-import type { GatewayCronServiceContract } from "./server-cron-contract.js";
+import type { GatewayCronState } from "./server-cron-contract.js";
 import {
   bindCronStreamRemoval,
   bindCronStreamUpdate,
@@ -78,6 +76,7 @@ import {
   resolveGatewayCronOriginDeliveryContext,
   runGatewayCronSessionEvent,
 } from "./server-cron-event-dispatch.js";
+import { createGatewayCronHeartbeatSummary } from "./server-cron-heartbeat-summary.js";
 import { describeCronInferenceMigration } from "./server-cron-inference.js";
 import {
   dispatchGatewayCronFinishedNotifications,
@@ -94,23 +93,6 @@ import {
   unregisterSessionAutomationSource,
 } from "./session-automation-index.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
-
-export type GatewayCronState = {
-  cron: GatewayCronServiceContract;
-  deferHookWake?: DeferredHookWake;
-  storePath: string;
-  cronEnabled: boolean;
-  prepareExitWatcherHandoff?: () => Promise<GatewayCronExitWatcherHandoff | undefined>;
-  reconcileExitWatchers: () => Promise<void>;
-  reconcileStreamWatchers: () => Promise<void>;
-  stopStreamWatchers: () => Promise<void>;
-};
-
-export type GatewayCronExitWatcherHandoff = {
-  current: () => CronExitWatchers;
-  adopt: (watchers: CronExitWatchers) => Promise<void> | void;
-  stopOwner: () => Promise<void>;
-};
 
 export function buildGatewayCronService(params: {
   scheduler: GatewayScheduler;
@@ -215,6 +197,7 @@ export function buildGatewayCronService(params: {
         createCronStreamSandboxExecutor({
           scheduler: params.scheduler,
           storePath,
+          storeKey: cron.getStoreKey(),
           getRuntimeConfig,
           getJob: (id) => cron.getJob(id),
           assertCurrent: () => {
@@ -347,6 +330,12 @@ export function buildGatewayCronService(params: {
     }
   };
 
+  const heartbeatSummary = createGatewayCronHeartbeatSummary({
+    storePath,
+    prepareStoreKey: () => cron.prepareStoreKey(),
+    isStopped: () => stopped,
+  });
+  const readHeartbeatSummary = (cfg: OpenClawConfig) => heartbeatSummary.read(cfg);
   const legacyMonitorJobs = new Map<string, CronJob>();
   let legacyProjectionClosed = false;
   let legacyProjectionRevision = 0;
@@ -354,7 +343,7 @@ export function buildGatewayCronService(params: {
     const revision = ++legacyProjectionRevision;
     const cfg = getRuntimeConfig();
     try {
-      const jobs = await readHeartbeatSummarySnapshot(cfg, storePath);
+      const jobs = await readHeartbeatSummary(cfg);
       if (
         legacyProjectionClosed ||
         revision !== legacyProjectionRevision ||
@@ -617,8 +606,8 @@ export function buildGatewayCronService(params: {
         jobSnapshot?.sessionKey ??
         evt.sessionKey;
       const scopedAgentId = jobSnapshot?.owner?.agentId ?? jobSnapshot?.agentId;
-      // Views fetch definitions and run details on demand; the sidebar only needs
-      // attention state. Keep the full event for hooks and notifications below.
+      // Views fetch definitions and run details on demand; the sidebar needs
+      // bounded status and freshness. Keep the full event for hooks and notifications below.
       const {
         job: eventJob,
         summary: _summary,
@@ -635,6 +624,9 @@ export function buildGatewayCronService(params: {
                 state: pickDefined(eventJob.state, [
                   "nextRunAtMs",
                   "lastRunAtMs",
+                  "lastDurationMs",
+                  "lastTriggerEvalAtMs",
+                  "lastMeaningfulResult",
                   "lastRunStatus",
                   "lastStatus",
                   "runningAtMs",
@@ -924,6 +916,7 @@ export function buildGatewayCronService(params: {
   let schedulingResume: Deferred | undefined;
   const stopCronLifecycle = (preserveExitWatchers = false) => {
     stopped = true;
+    heartbeatSummary.clear();
     started = false;
     legacyProjectionClosed = true;
     legacyProjectionRevision += 1;
@@ -1066,6 +1059,7 @@ export function buildGatewayCronService(params: {
 
   return {
     cron,
+    readHeartbeatSummary,
     deferHookWake: (opts) => cron.deferHookWake(opts),
     storePath,
     cronEnabled,

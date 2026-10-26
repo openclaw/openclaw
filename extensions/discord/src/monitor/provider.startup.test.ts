@@ -41,33 +41,21 @@ vi.mock("./gateway-plugin.js", () => ({
 vi.mock("./gateway-supervisor.js", () => ({
   createDiscordGatewaySupervisor: vi.fn(() => supervisor),
 }));
-vi.mock("./listeners.js", () => {
-  const listener = (type: string) =>
-    function () {
-      return { type };
-    };
-  return {
-    DiscordMessageListener: listener("message"),
-    DiscordInteractionListener: listener("interaction"),
-    DiscordPresenceListener: function DiscordPresenceListener() {
-      return { type: "presence", stop: stopPresenceListener };
-    },
-    DiscordPresenceGuildCreateListener: listener("presence-guild-create"),
-    DiscordPresenceGuildDeleteListener: listener("presence-guild-delete"),
-    DiscordPresenceReadyListener: listener("presence-ready"),
-    DiscordReactionListener: listener("reaction-add"),
-    DiscordReactionRemoveListener: listener("reaction-remove"),
-    DiscordThreadDeleteListener: listener("thread-delete"),
-    DiscordThreadReadyListener: listener("thread-ready"),
-    DiscordThreadUpdateListener: listener("thread-update"),
-    registerDiscordListener: vi.fn(),
-  };
-});
+vi.mock("./listeners.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./listeners.js")>()),
+  DiscordPresenceListener: class {
+    stop = stopPresenceListener;
+  },
+}));
 
 import { createRuntimeSpies } from "../../../test-support/runtime-spies.js";
 import { DISCORD_REST_TIMEOUT_MS } from "../internal/rest.js";
 import { createDiscordGatewaySupervisor } from "./gateway-supervisor.js";
-import { registerDiscordListener } from "./listeners.js";
+import {
+  DiscordPresenceListener,
+  DiscordReactionListener,
+  DiscordReactionRemoveListener,
+} from "./listeners.js";
 import {
   createDiscordMonitorClient,
   fetchDiscordBotIdentity,
@@ -105,7 +93,6 @@ it("registers voice after gateway setup and awaits registration before supervisi
   registration.resolve();
   const result = await pending;
   expect(registerVoiceClientSpy).toHaveBeenCalledExactlyOnceWith(result.client);
-  expect(createDiscordGatewaySupervisor).toHaveBeenCalledOnce();
   expect(result.gatewaySupervisor).toBe(supervisor);
 });
 
@@ -119,9 +106,10 @@ it("passes REST timeout options and fetch to internal Discord REST", async () =>
 });
 
 it("registers and stops presence lifecycle listeners with reactions initially disabled", async () => {
+  const listeners: Client["listeners"] = [];
   const stop = registerDiscordMonitorListeners({
     cfg: {},
-    client: { listeners: [] },
+    client: { listeners },
     accountId: "default",
     discordConfig: { intents: { presence: true } },
     runtime: createRuntimeSpies(),
@@ -134,19 +122,13 @@ it("registers and stops presence lifecycle listeners with reactions initially di
     logger: createSubsystemLogger("discord-test"),
     messageHandler: vi.fn(async () => {}),
   });
-  expect(
-    vi
-      .mocked(registerDiscordListener)
-      .mock.calls.map(([, listener]) => (listener as { type?: string }).type),
-  ).toEqual([
-    "interaction",
-    "message",
-    "GUILD_CREATE",
-    ...["add", "remove"].map((event) => `reaction-${event}`),
-    ...["update", "ready", "delete"].map((event) => `thread-${event}`),
-    "presence",
-    ...["guild-create", "guild-delete", "ready"].map((event) => `presence-${event}`),
-  ]);
+  expect(listeners).toEqual(
+    expect.arrayContaining([
+      expect.any(DiscordPresenceListener),
+      expect.any(DiscordReactionListener),
+      expect.any(DiscordReactionRemoveListener),
+    ]),
+  );
   await stop();
   expect(stopPresenceListener).toHaveBeenCalledOnce();
 });

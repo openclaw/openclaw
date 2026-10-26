@@ -20,7 +20,7 @@ import {
   sessionPlacementRecoveryExactStorageKeys,
 } from "./session-placement-recovery-storage-key.ts";
 
-export type SessionPlacementStartMode = "dispatch" | "recover" | "retry";
+export type SessionPlacementStartMode = "dispatch" | "recover" | "retry" | "resend";
 
 export type SessionPlacementTarget =
   | { kind: "profile"; profileId: string; os?: string; machineClass?: string; required?: true }
@@ -49,6 +49,7 @@ export type SessionPlacementCreateParams = Omit<SessionCreateParams, "execNode">
 
 type SessionPlacementSubmission = {
   sessionKey: string;
+  sessionId?: string;
   messageId: string;
   message: string;
   mentions?: readonly HumanMention[];
@@ -65,7 +66,7 @@ export type SessionPlacementPendingRecovery = SessionPlacementSubmission & {
 };
 export type SessionPlacementPausedRecovery = SessionPlacementSubmission & {
   phase: "paused";
-  reason: "not-sent" | "rejected" | "unconfirmed";
+  reason: "not-sent" | "rejected";
   error: string;
 };
 export type SessionPlacementRecovery =
@@ -103,6 +104,7 @@ const PLACEMENT_CREATE_FIELDS = new Set<string>([
   "permissionMode",
   "fastMode",
   "toolOverrides",
+  "displayNameGenerated",
   ...PLACEMENT_CREATE_STRING_FIELDS,
 ]);
 
@@ -153,6 +155,8 @@ export function parseSessionPlacementCreateParams(
     (record.permissionMode !== undefined && !isSessionPermissionMode(record.permissionMode)) ||
     (record.toolOverrides !== undefined && !isSessionToolOverrides(record.toolOverrides)) ||
     (record.titleSource !== undefined && !isSessionTitleSource(record.titleSource)) ||
+    (record.displayNameGenerated !== undefined &&
+      typeof record.displayNameGenerated !== "boolean") ||
     (record.projectId !== undefined && record.cwd !== undefined) ||
     PLACEMENT_CREATE_STRING_FIELDS.some(
       (key) => record[key] !== undefined && !isNonEmptyString(record[key]),
@@ -223,6 +227,7 @@ function validateSessionPlacementRecovery(
   if (
     value.createParams?.incognito === true ||
     !isNonEmptyString(value.sessionKey) ||
+    (value.sessionId !== undefined && !isNonEmptyString(value.sessionId)) ||
     (expectedSessionKey !== undefined && value.sessionKey !== expectedSessionKey) ||
     !isNonEmptyString(value.messageId) ||
     typeof value.message !== "string" ||
@@ -240,9 +245,7 @@ function validateSessionPlacementRecovery(
       value.phase !== "sending" &&
       value.phase !== "paused") ||
     (value.phase === "paused" &&
-      ((value.reason !== "not-sent" &&
-        value.reason !== "rejected" &&
-        value.reason !== "unconfirmed") ||
+      (!isNonEmptyString(value.reason) ||
         !isNonEmptyString(value.error) ||
         value.error.length > SESSION_PLACEMENT_ERROR_MAX_LENGTH)) ||
     (value.phase === "creating" &&
@@ -261,6 +264,9 @@ function validateSessionPlacementRecovery(
   return {
     ...recovery,
     target,
+    ...(value.phase === "paused"
+      ? { reason: value.reason === "rejected" ? "rejected" : "not-sent" }
+      : {}),
     ...(mentions ? { mentions } : {}),
   } as SessionPlacementRecovery; // SAFETY: every recovery field and target were validated.
 }
@@ -577,16 +583,13 @@ export function clearSessionPlacementRecovery(
   });
 }
 
-/** Paused records cannot be executed by older readers, which reject unknown phases. */
 export function pauseSessionPlacementRecovery(
   recovery: SessionPlacementRecovery,
   error: string,
   persistent: boolean,
   reason: SessionPlacementPausedRecovery["reason"] = recovery.phase === "paused"
     ? recovery.reason
-    : recovery.phase === "sending"
-      ? "unconfirmed"
-      : "not-sent",
+    : "not-sent",
 ): { recovery: SessionPlacementPausedRecovery; persisted: boolean } {
   const paused: SessionPlacementPausedRecovery = {
     ...recovery,

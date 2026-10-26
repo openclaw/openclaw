@@ -50,31 +50,28 @@ async function fetchDocsSearch(query: string): Promise<DocResult[]> {
     } catch (cause) {
       throw new Error("Docs search response is malformed JSON", { cause });
     }
-    return parseDocsSearchResults(payload.results);
+    const raw = payload.results;
+    if (!Array.isArray(raw)) {
+      throw new Error("Docs search response is malformed: expected results array");
+    }
+    const results: DocResult[] = [];
+    for (const item of raw) {
+      const entry = asNonArrayRecord(item);
+      if (typeof entry.title !== "string" || typeof entry.link !== "string") {
+        continue;
+      }
+      results.push({
+        title: entry.title,
+        link: entry.link,
+        snippet:
+          typeof entry.snippet === "string" && entry.snippet.trim() ? entry.snippet : undefined,
+      });
+    }
+    return results;
   } finally {
     clearTimeout(timeout);
     controller.abort();
   }
-}
-
-function parseDocsSearchResults(raw: unknown): DocResult[] {
-  if (!Array.isArray(raw)) {
-    throw new Error("Docs search response is malformed: expected results array");
-  }
-  const results: DocResult[] = [];
-  for (const item of raw) {
-    const entry = asNonArrayRecord(item);
-    if (typeof entry.title !== "string" || typeof entry.link !== "string") {
-      continue;
-    }
-    results.push({
-      title: entry.title,
-      link: entry.link,
-      snippet:
-        typeof entry.snippet === "string" && entry.snippet.trim() ? entry.snippet : undefined,
-    });
-  }
-  return results;
 }
 
 export function registerDocsCli(program: Command) {

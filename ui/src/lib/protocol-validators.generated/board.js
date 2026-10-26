@@ -37,18 +37,15 @@ function CodePointCount(value) {
 }
 var isBoardSnapshot = (() => {
   let External = [
-      new RegExp("^[a-z0-9-]{1,40}$", "u"),
-      new RegExp(
-        "(^name$|^tabId$|^title$|^contentKind$|^contentOwner$|^registeredContentKind$|^pluginKind$|^props$|^presentation$|^heightMode$|^sizeW$|^sizeH$|^position$|^grantState$|^revision$|^instanceId$|^declaredSummary$|^declared$|^frameUrl$|^viewTicket$|^viewTicketTtlMs$|^viewGeneration$|^sandboxUrl$|^sandboxPort$|^sandboxOrigin$|^kindLabel$)",
-        "u",
-      ),
-      new RegExp("^[a-z0-9][a-z0-9._-]{0,63}$", "u"),
-      new RegExp("^[a-z0-9-]{1,40}$", "u"),
-      new RegExp("^[a-z][a-z0-9-]{0,31}$", "u"),
-      new RegExp("^[a-z0-9][a-z0-9-]{0,63}:[a-z0-9][a-z0-9._-]{0,63}$", "u"),
-      new RegExp("^.*$", "u"),
-      new RegExp("(^netOrigins$|^tools$)", "u"),
-      new RegExp("^[a-f0-9]{32}$", "u"),
+      /^[a-z0-9-]{1,40}$/u,
+      /(^name$|^tabId$|^title$|^contentKind$|^contentOwner$|^registeredContentKind$|^pluginKind$|^props$|^presentation$|^heightMode$|^sizeW$|^sizeH$|^position$|^grantState$|^revision$|^instanceId$|^declaredSummary$|^declared$|^frameUrl$|^viewTicket$|^viewTicketTtlMs$|^viewGeneration$|^sandboxUrl$|^sandboxPort$|^sandboxOrigin$|^kindLabel$)/u,
+      /^[a-z0-9][a-z0-9._-]{0,63}$/u,
+      /^[a-z0-9-]{1,40}$/u,
+      /^[a-z][a-z0-9-]{0,31}$/u,
+      /^[a-z0-9][a-z0-9-]{0,63}:[a-z0-9][a-z0-9._-]{0,63}$/u,
+      /^.*$/u,
+      /(^netOrigins$|^tools$)/u,
+      /^[a-f0-9]{32}$/u,
     ],
     check_0 = (value) =>
       typeof value == "object" &&

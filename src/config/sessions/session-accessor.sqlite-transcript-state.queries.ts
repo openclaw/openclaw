@@ -5,7 +5,10 @@ import {
 } from "../../infra/kysely-sync.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
+import {
+  getSessionKysely,
+  type ResolvedTranscriptScope,
+} from "./session-accessor.sqlite-scope-helpers.js";
 import { selectSessionTranscriptProjectionState } from "./session-transcript-index.js";
 import { foldedSessionKeyAliasCandidates, normalizeStoreSessionKey } from "./store-entry.js";
 

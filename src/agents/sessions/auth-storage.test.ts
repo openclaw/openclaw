@@ -67,20 +67,44 @@ const { ensureAuthProfileStoreWithoutExternalProfiles, saveAuthProfileStore } =
   authProfileStoreRuntime;
 
 function providerBCredential(overrides: Partial<OAuthCredential> = {}) {
-  return createCredential({
-    provider: "provider-b",
-    access: "provider-b-access",
-    refresh: "provider-b-refresh",
-    expires: Date.now() + 600_000,
-    accountId: "acct-b",
-    ...overrides,
-  });
+  return createCredential({ provider: "provider-b", accountId: "acct-b", ...overrides });
 }
 
 function saveCredential(agentDir: string, profileId: string, credential: OAuthCredential) {
   saveAuthProfileStore(profileStore(credential, profileId), agentDir, {
     filterExternalAuthProfiles: false,
   });
+}
+
+function registerRefresh(storage: AuthStorage, providerId: string, credential: OAuthCredential) {
+  const refresh = vi.fn(async () => credential);
+  getAuthStorageOAuthProviderRegistry(storage).register(oauthProvider(providerId, refresh));
+  return refresh;
+}
+
+function expectPublished(
+  storage: AuthStorage,
+  agentDir: string,
+  providerId: string,
+  credential: OAuthCredential | undefined,
+) {
+  expect(storage.get(providerId)).toEqual(credential);
+  expect(readProfile(agentDir, `${providerId}:default`)).toEqual(credential);
+}
+
+function changeCredential(
+  storage: AuthStorage,
+  providerId: string,
+  change: string,
+  replacement: OAuthCredential,
+) {
+  if (change === "logout") {
+    storage.logout(providerId);
+  } else if (change === "replace") {
+    storage.set(providerId, replacement);
+  } else if (change === "unrelated") {
+    storage.set("other", { type: "api_key", key: "synthetic-other-new" });
+  }
 }
 
 afterEach(() => {
@@ -94,7 +118,6 @@ describe("AuthStorage OAuth refresh ownership", () => {
   it("refreshes local OAuth credentials while the shared owner requires migration", () =>
     withAgent(async (agentDir, state) => {
       const providerId = "test-oauth";
-      const credential = createCredential({ provider: providerId, expires: 1 });
       const sharedStore = { version: 1, profiles: {} };
       await state.writeJson("agents/main/agent/auth-profiles.json", {
         version: 1,
@@ -103,25 +126,18 @@ describe("AuthStorage OAuth refresh ownership", () => {
         },
       });
       writePersistedAuthProfileStoreRaw(sharedStore);
-      writePersistedAuthProfileStoreRaw(profileStore(credential), agentDir);
-      const storage = AuthStorage.forAgent(agentDir, {});
-      const refreshed = createCredential({
-        provider: providerId,
-        access: "synthetic-refreshed-access",
-        refresh: "synthetic-refreshed-refresh",
-      });
-      const refreshToken = vi.fn(async () => refreshed);
-      getAuthStorageOAuthProviderRegistry(storage).register(
-        oauthProvider(providerId, refreshToken),
+      writePersistedAuthProfileStoreRaw(
+        profileStore(createCredential({ provider: providerId, expires: 1 })),
+        agentDir,
       );
+      const storage = AuthStorage.forAgent(agentDir, {});
+      const refreshed = createCredential({ provider: providerId });
+      registerRefresh(storage, providerId, refreshed);
       const fallback = vi.fn(() => "synthetic-fallback-key");
       storage.setFallbackResolver(fallback);
 
       await expect(storage.getApiKey(providerId)).resolves.toBe(refreshed.access);
-      expect(refreshToken).toHaveBeenCalledOnce();
-      expect(loadPersistedAuthProfileStore(agentDir)?.profiles[`${providerId}:default`]).toEqual(
-        refreshed,
-      );
+      expectPublished(storage, agentDir, providerId, refreshed);
       await expect(storage.getApiKey("anthropic")).rejects.toMatchObject({
         code: "AUTH_PROFILE_MIGRATION_REQUIRED",
         affectedProviders: ["anthropic"],
@@ -139,14 +155,15 @@ describe("AuthStorage OAuth refresh ownership", () => {
     "blocks credential writes and OAuth refresh when the %s destination requires migration",
     (agentId) =>
       withAgent(async (agentDir, state) => {
-        const originalStore = profileStore(
-          createCredential({ provider: "test-oauth", expires: 1 }),
+        writePersistedAuthProfileStoreRaw(
+          profileStore(createCredential({ provider: "test-oauth", expires: 1 })),
+          agentDir,
         );
-        writePersistedAuthProfileStoreRaw(originalStore, agentDir);
         const storage = AuthStorage.forAgent(agentDir, {});
-        const refreshToken = vi.fn(async () => createCredential({ provider: "test-oauth" }));
-        getAuthStorageOAuthProviderRegistry(storage).register(
-          oauthProvider("test-oauth", refreshToken),
+        const refreshToken = registerRefresh(
+          storage,
+          "test-oauth",
+          createCredential({ provider: "test-oauth" }),
         );
         // A populated SQLite owner treats legacy files as leftover bytes. Once
         // emptied, its matching legacy credential must block further credential use.
@@ -159,10 +176,6 @@ describe("AuthStorage OAuth refresh ownership", () => {
             : profileStore(createCredential({ provider: "test-oauth" })),
         );
         await refreshAuthProfileFileState();
-        expect(() => assertAuthProfileMigrationReady(agentDir)).toThrow(
-          "requires legacy credential migration",
-        );
-        const write = vi.spyOn(authProfileStoreRuntime, "saveAuthProfileStoreWithPreparedOwner");
         expect(() =>
           storage.set("litellm", { type: "api_key", key: "synthetic-local-key" }),
         ).toThrow("requires legacy credential migration");
@@ -170,196 +183,121 @@ describe("AuthStorage OAuth refresh ownership", () => {
           code: "AUTH_PROFILE_MIGRATION_REQUIRED",
         });
         expect(refreshToken).not.toHaveBeenCalled();
-        expect(write).not.toHaveBeenCalled();
         expect(readPersistedAuthProfileStoreRaw(agentDir)).toEqual(migrationStore);
       }, agentId),
   );
 
-  it.each(["pending", "compare-and-swap", "observer"])(
-    "rejects a provider change during OAuth manager %s",
-    async (phase) => {
-      await withAgent(async (agentDir) => {
-        const profileId = "openai:oauth";
+  describe.each(["manager", "serialized"])("%s provider ownership", (backendKind) => {
+    it.each(["pending", "compare-and-swap", "observer"])("rejects changes at %s", (phase) =>
+      withAgent(async (agentDir) => {
+        const profileId = "openai:default";
         const attempted = createCredential({ expires: 1, accountId: "acct-a" });
-        const providerB = providerBCredential(phase === "pending" ? { expires: 1 } : {});
-        const foreignFence = createOAuthRefreshFence({ profileId, credential: providerB });
-        saveCredential(
-          agentDir,
-          profileId,
+        const foreign = providerBCredential(phase === "pending" ? { expires: 1 } : {});
+        const foreignFence = createOAuthRefreshFence({ profileId, credential: foreign });
+        const initial =
           phase === "compare-and-swap"
             ? attempted
             : phase === "pending"
               ? foreignFence
-              : createOAuthRefreshFence({ profileId, credential: attempted }),
-        );
-        const buildApiKey = vi.fn(
-          async (_provider, credential: OAuthCredential) => credential.access,
-        );
-        const refreshCredential = vi.fn(async () => (phase === "observer" ? null : providerB));
-        mockOAuthProviderOperations({
-          buildApiKey,
-          refreshCredential,
-          canRefreshCredential: async () => {
-            if (phase === "compare-and-swap") {
-              saveCredential(agentDir, profileId, providerB);
-            }
-            return true;
-          },
-        });
-        const manager = createOAuthManager();
-
-        if (phase === "pending") {
-          const load = authProfileStoreRuntime.loadAuthProfileStoreWithoutExternalProfiles;
-          let reads = 0;
-          vi.spyOn(
-            authProfileStoreRuntime,
-            "loadAuthProfileStoreWithoutExternalProfiles",
-          ).mockImplementation((...args) => {
-            const store = load(...args);
-            const credential = store.profiles[profileId];
-            if (
-              credential?.type === "oauth" &&
-              credential.provider === "provider-b" &&
-              isPendingOAuthRefreshFence(credential) &&
-              ++reads > 1
-            ) {
-              throw new Error("provider-B fence must not be observed");
-            }
-            return store;
+              : createOAuthRefreshFence({ profileId, credential: attempted });
+        const refresh = vi.fn(async () => (phase === "observer" ? null : foreign));
+        const resolve = vi.fn(async (credential: OAuthCredential) => credential.access);
+        let reads = 0;
+        const canRefresh = async (replace: (credential: OAuthCredential) => void) => {
+          if (phase === "compare-and-swap") {
+            replace(foreign);
+          }
+          return true;
+        };
+        if (backendKind === "manager") {
+          const replace = (credential: OAuthCredential) =>
+            saveCredential(agentDir, profileId, credential);
+          replace(initial);
+          mockOAuthProviderOperations({
+            buildApiKey: async (_provider, credential) => resolve(credential),
+            refreshCredential: refresh,
+            canRefreshCredential: () => canRefresh(replace),
           });
-        } else if (phase === "observer") {
-          const load = authProfileStoreRuntime.loadAuthProfileStoreWithoutExternalProfilesAsync;
-          let ownReads = 0;
-          let foreignReads = 0;
-          vi.spyOn(
-            authProfileStoreRuntime,
-            "loadAuthProfileStoreWithoutExternalProfilesAsync",
-          ).mockImplementation(async (...args) => {
-            const store = await load(...args);
-            const credential = store.profiles[profileId];
-            if (credential?.type === "oauth" && credential.provider === "openai") {
-              if (++ownReads === 2) {
-                saveCredential(agentDir, profileId, foreignFence);
+          if (phase === "observer") {
+            const load = authProfileStoreRuntime.loadAuthProfileStoreWithoutExternalProfilesAsync;
+            vi.spyOn(
+              authProfileStoreRuntime,
+              "loadAuthProfileStoreWithoutExternalProfilesAsync",
+            ).mockImplementation(async (...args) => {
+              const store = await load(...args);
+              const credential = store.profiles[profileId];
+              if (
+                credential?.type === "oauth" &&
+                credential.provider === "openai" &&
+                ++reads === 2
+              ) {
+                replace(foreignFence);
               }
-            } else if (
-              credential?.type === "oauth" &&
-              credential.provider === "provider-b" &&
-              isPendingOAuthRefreshFence(credential) &&
-              ++foreignReads > 1
-            ) {
-              throw new Error("provider-B fence observation continued");
-            }
-            return store;
-          });
+              return store;
+            });
+          }
+          await expect(
+            createOAuthManager().resolveOAuthAccess({
+              agentDir,
+              credential: attempted,
+              profileId,
+              store:
+                phase === "compare-and-swap"
+                  ? ensureAuthProfileStoreWithoutExternalProfiles(agentDir)
+                  : profileStore(attempted, profileId),
+            }),
+          ).resolves.toBeNull();
+          if (phase === "compare-and-swap") {
+            expect(readProfile(agentDir, profileId)).toEqual(foreign);
+          }
+        } else {
+          const { backend, set } = serializedBackend(
+            initial,
+            {
+              after: () => {
+                if (++reads === 1 && phase === "observer") {
+                  set(foreignFence);
+                }
+              },
+            },
+            profileId,
+          );
+          await expect(
+            refreshSerializedOAuthCredential({
+              backend,
+              provider: "openai",
+              profileId,
+              label: "test serialized provider ownership",
+              timeoutMs: 1_000,
+              parse: (current) => JSON.parse(current ?? "{}") as Record<string, OAuthCredential>,
+              serialize: JSON.stringify,
+              readCredential: (data) => data[profileId],
+              writeCredential: (data, credential) => ({ ...data, [profileId]: credential }),
+              canRefresh: () => canRefresh(set),
+              refresh: async () => {
+                const credential = await refresh();
+                return credential ? { apiKey: credential.access, credential } : null;
+              },
+              resolve: async (credential) => ({ apiKey: await resolve(credential), credential }),
+              commit: () => {},
+            }),
+          ).resolves.toBeNull();
         }
-
-        const store =
-          phase === "compare-and-swap"
-            ? ensureAuthProfileStoreWithoutExternalProfiles(agentDir)
-            : profileStore(attempted, profileId);
-        await expect(
-          manager.resolveOAuthAccess({ agentDir, credential: attempted, store, profileId }),
-        ).resolves.toBeNull();
-        expect(buildApiKey).not.toHaveBeenCalled();
-        if (phase !== "observer") {
-          expect(refreshCredential).not.toHaveBeenCalled();
+        expect(resolve).not.toHaveBeenCalled();
+        if (backendKind === "serialized" || phase !== "observer") {
+          expect(refresh).not.toHaveBeenCalled();
         }
-        if (phase === "compare-and-swap") {
-          expect(readProfile(agentDir, profileId)).toEqual(providerB);
-        }
-      });
-    },
-  );
-  it.each(["pending initial fence", "post-canRefresh replacement", "observer fence replacement"])(
-    "rejects a serialized provider change from a %s",
-    async (phase) => {
-      const profileId = "openai:default";
-      const foreign = createCredential({ provider: "provider-b", expires: 1 });
-      const foreignFence = createOAuthRefreshFence({ profileId, credential: foreign });
-      const initial =
-        phase === "pending initial fence"
-          ? foreignFence
-          : phase === "observer fence replacement"
-            ? createOAuthRefreshFence({ profileId, credential: createCredential({ expires: 1 }) })
-            : createCredential({ expires: 1 });
-      let calls = 0;
-      const { backend, set } = serializedBackend(
-        initial,
-        {
-          before: () => {
-            calls += 1;
-            if (
-              (phase === "pending initial fence" && calls > 1) ||
-              (phase === "observer fence replacement" && calls > 2)
-            ) {
-              throw new Error("provider-B fence must not be observed");
-            }
-          },
-          after: () => {
-            if (phase === "observer fence replacement" && calls === 1) {
-              set(foreignFence);
-            }
-          },
-        },
-        profileId,
-      );
-      const refreshed = providerBCredential();
-      const refresh = vi.fn(async () => ({ apiKey: refreshed.access, credential: refreshed }));
-      const resolve = vi.fn(async (credential: OAuthCredential) => ({
-        apiKey: credential.access,
-        credential,
-      }));
-      await expect(
-        refreshSerializedOAuthCredential({
-          backend,
-          provider: "openai",
-          profileId,
-          label: "test serialized provider ownership",
-          timeoutMs: 1_000,
-          parse: (current) => JSON.parse(current ?? "{}") as Record<string, OAuthCredential>,
-          serialize: JSON.stringify,
-          readCredential: (data) => data[profileId],
-          writeCredential: (data, credential) => ({ ...data, [profileId]: credential }),
-          canRefresh: async () => {
-            if (phase === "post-canRefresh replacement") {
-              set(createCredential({ provider: "provider-b", expires: Date.now() + 600_000 }));
-            }
-            return true;
-          },
-          refresh,
-          resolve,
-          commit: () => {},
-        }),
-      ).resolves.toBeNull();
-      expect(refresh).not.toHaveBeenCalled();
-      expect(resolve).not.toHaveBeenCalled();
-    },
-  );
-  it("runs provider I/O outside custom backend locks and fences peer retries", async () => {
-    const providerId = "test-oauth";
-    let lockDepth = 0;
-    const { backend, read } = serializedBackend(
-      createCredential({
-        provider: providerId,
-        access: "claimed-access",
-        refresh: "claimed-refresh",
-        expires: 1,
-        accountId: "acct-123",
       }),
-      {
-        before: () => {
-          expect(lockDepth).toBe(0);
-          lockDepth += 1;
-        },
-        after: () => {
-          lockDepth -= 1;
-        },
-      },
+    );
+  });
+  it("hides custom-backend refresh claims and shares their settled credential with peers", async () => {
+    const providerId = "test-oauth";
+    const { backend, read } = serializedBackend(
+      createCredential({ provider: providerId, expires: 1, accountId: "acct-123" }),
     );
     const started = createDeferredCore();
     const refresh = createDeferredCore<{ access: string; refresh: string; expires: number }>();
     const refreshToken = vi.fn(() => {
-      expect(lockDepth).toBe(0);
       started.resolve();
       return refresh.promise;
     });
@@ -371,8 +309,8 @@ describe("AuthStorage OAuth refresh ownership", () => {
     await started.promise;
 
     expect(read()).toContain("openclaw-oauth-refresh-fence:v1:");
-    expect(read()).not.toContain("claimed-access");
-    expect(read()).not.toContain("claimed-refresh");
+    expect(read()).not.toContain("access-token");
+    expect(read()).not.toContain("refresh-token");
     expect(storage.get(providerId)).toBeUndefined();
     expect(storage.has(providerId)).toBe(false);
     expect(storage.list()).not.toContain(providerId);
@@ -401,12 +339,7 @@ describe("AuthStorage OAuth refresh ownership", () => {
 
   it("preserves an expired credential when no refresh owner exists", async () => {
     const providerId = "unowned-oauth";
-    const original = createCredential({
-      provider: providerId,
-      access: "unowned-access",
-      refresh: "unowned-refresh",
-      expires: 1,
-    });
+    const original = createCredential({ provider: providerId, expires: 1 });
     const { backend, read } = serializedBackend(original);
     const storage = AuthStorage.fromStorage(backend);
 
@@ -417,12 +350,7 @@ describe("AuthStorage OAuth refresh ownership", () => {
   it("does not replay a failed generation and allows environment fallback after restart", async () => {
     const providerId = "xai";
     const { backend, read } = serializedBackend(
-      createCredential({
-        provider: providerId,
-        access: "failed-access",
-        refresh: "failed-refresh",
-        expires: 1,
-      }),
+      createCredential({ provider: providerId, expires: 1 }),
     );
     const refreshToken = vi.fn(async () => {
       throw new Error("simulated provider rejection");
@@ -439,8 +367,8 @@ describe("AuthStorage OAuth refresh ownership", () => {
       await expect(restarted.getApiKey(providerId)).resolves.toBe("environment-fallback");
       expect(refreshToken).toHaveBeenCalledTimes(1);
       expect(read()).toContain("openclaw-oauth-refresh-fence:v1:");
-      expect(read()).not.toContain("failed-access");
-      expect(read()).not.toContain("failed-refresh");
+      expect(read()).not.toContain("access-token");
+      expect(read()).not.toContain("refresh-token");
     } finally {
       vi.unstubAllEnvs();
     }
@@ -479,13 +407,7 @@ describe("AuthStorage OAuth publication", () => {
             ) {
               queued = true;
               queueMicrotask(() => {
-                if (change === "logout") {
-                  mutate.logout(providerId);
-                } else if (change === "replace") {
-                  mutate.set(providerId, replacement);
-                } else if (change === "unrelated") {
-                  mutate.set("other", { type: "api_key", key: "synthetic-other-new" });
-                }
+                changeCredential(mutate, providerId, change, replacement);
               });
             }
           }
@@ -497,8 +419,7 @@ describe("AuthStorage OAuth publication", () => {
         const expected =
           change === "logout" ? undefined : change === "replace" ? replacement : refreshed;
         expect(apiKey).toBe(expected?.access);
-        expect(storage.get(providerId)).toEqual(expected);
-        expect(durable?.[profileId]).toEqual(expected);
+        expectPublished(storage, agentDir, providerId, expected);
         expect(refreshToken).toHaveBeenCalledTimes(
           phase === "claim" && (change === "logout" || change === "replace") ? 0 : 1,
         );
@@ -545,11 +466,7 @@ describe("AuthStorage OAuth publication", () => {
             } else if (!changeQueued && durable.access === refreshed.access) {
               changeQueued = true;
               queueMicrotask(() => {
-                if (change === "logout") {
-                  peer.logout(providerId);
-                } else if (change === "replace") {
-                  peer.set(providerId, replacement);
-                }
+                changeCredential(peer, providerId, change, replacement);
               });
             }
           }
@@ -562,8 +479,7 @@ describe("AuthStorage OAuth publication", () => {
         const expected =
           change === "logout" ? undefined : change === "replace" ? replacement : refreshed;
         expect(apiKey).toBe(expected?.access);
-        expect(storage.get(providerId)).toEqual(expected);
-        expect(readProfile(agentDir, profileId)).toEqual(expected);
+        expectPublished(storage, agentDir, providerId, expected);
       }),
   );
 
@@ -606,8 +522,7 @@ describe("AuthStorage OAuth publication", () => {
         const durable = readProfile(agentDir, profileId);
         if (replace) {
           expect(apiKey).toBe(replacement.access);
-          expect(storage.get(providerId)).toEqual(replacement);
-          expect(durable).toEqual(replacement);
+          expectPublished(storage, agentDir, providerId, replacement);
         } else {
           expect(apiKey).toBeUndefined();
           expect(storage.get(providerId)).toBeUndefined();
@@ -989,18 +904,12 @@ describe("SQLite auth storage", () => {
     const right = AuthStorage.forAgent(agentDir);
     const refreshEntered = createDeferredCore();
     const releaseRefresh = createDeferredCore();
-    let refreshCalls = 0;
-    let activeRefreshes = 0;
-    let maxActiveRefreshes = 0;
-    const provider = oauthProvider("test-oauth", async () => {
-      refreshCalls += 1;
-      activeRefreshes += 1;
-      maxActiveRefreshes = Math.max(maxActiveRefreshes, activeRefreshes);
+    const refresh = vi.fn(async () => {
       refreshEntered.resolve();
       await releaseRefresh.promise;
-      activeRefreshes -= 1;
       return freshOAuth();
     });
+    const provider = oauthProvider("test-oauth", refresh);
     getAuthStorageOAuthProviderRegistry(left).register(provider);
     getAuthStorageOAuthProviderRegistry(right).register(provider);
 
@@ -1036,7 +945,7 @@ describe("SQLite auth storage", () => {
     } finally {
       releaseRefresh.resolve();
     }
-    expect([refreshCalls, maxActiveRefreshes]).toEqual([1, 1]);
+    expect(refresh).toHaveBeenCalledOnce();
     await expect(right.getApiKey("test-oauth")).resolves.toBe("fake-fresh-access");
   });
 

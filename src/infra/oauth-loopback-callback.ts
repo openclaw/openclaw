@@ -176,9 +176,7 @@ export async function startOAuthLoopbackCallbackServer(params: {
   const close = () =>
     binding ? Promise.resolve() : (closePromise ??= closeHttpServers(servers, { force: true }));
   const cleanup = () => {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
+    clearTimeout(timeout);
     params.signal?.removeEventListener("abort", onAbort);
   };
   const settleError = (error: unknown) => {

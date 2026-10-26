@@ -31,30 +31,6 @@ function normalizeArceeBaseUrl<T extends { baseUrl?: string }>(value: T) {
   return baseUrl && baseUrl !== value.baseUrl ? { ...value, baseUrl } : undefined;
 }
 
-async function resolveArceeCatalog(ctx: ProviderCatalogContext) {
-  const configuredBaseUrl = resolveMergedModelProviderConfig(ctx.config, PROVIDER_ID)?.baseUrl;
-  if (!normalizeArceeOpenRouterBaseUrl(configuredBaseUrl)) {
-    const directAuth = ctx.resolveProviderApiKey(PROVIDER_ID);
-    if (directAuth.apiKey) {
-      return await buildOpenAICompatibleLiveProviderCatalog({
-        discoveryMode: "strict",
-        providerId: PROVIDER_ID,
-        providerConfig: buildArceeProvider(),
-        apiKey: directAuth.apiKey,
-        discoveryApiKey: directAuth.discoveryApiKey,
-        profileId: directAuth.profileId,
-      });
-    }
-    if (configuredBaseUrl) {
-      return null;
-    }
-  }
-  const openRouterKey = ctx.resolveProviderApiKey("openrouter").apiKey;
-  return openRouterKey
-    ? { provider: { ...buildArceeOpenRouterProvider(), apiKey: openRouterKey } }
-    : null;
-}
-
 export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
   name: "Arcee AI Provider",
@@ -102,7 +78,32 @@ export default defineSingleProviderPluginEntry({
       },
     ],
     catalog: {
-      run: resolveArceeCatalog,
+      async run(ctx: ProviderCatalogContext) {
+        const configuredBaseUrl = resolveMergedModelProviderConfig(
+          ctx.config,
+          PROVIDER_ID,
+        )?.baseUrl;
+        if (!normalizeArceeOpenRouterBaseUrl(configuredBaseUrl)) {
+          const directAuth = ctx.resolveProviderApiKey(PROVIDER_ID);
+          if (directAuth.apiKey) {
+            return await buildOpenAICompatibleLiveProviderCatalog({
+              discoveryMode: "strict",
+              providerId: PROVIDER_ID,
+              providerConfig: buildArceeProvider(),
+              apiKey: directAuth.apiKey,
+              discoveryApiKey: directAuth.discoveryApiKey,
+              profileId: directAuth.profileId,
+            });
+          }
+          if (configuredBaseUrl) {
+            return null;
+          }
+        }
+        const openRouterKey = ctx.resolveProviderApiKey("openrouter").apiKey;
+        return openRouterKey
+          ? { provider: { ...buildArceeOpenRouterProvider(), apiKey: openRouterKey } }
+          : null;
+      },
       staticRun: async () => ({ provider: buildArceeProvider() }),
     },
     augmentModelCatalog: ({ config }) =>

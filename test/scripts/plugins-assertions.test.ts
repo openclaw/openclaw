@@ -919,9 +919,17 @@ fs.renameSync = (source, destination) => {
     expect(legacy.status).toBe(0);
   });
 
-  it.each(["managed root", "peer host", "optional dependency"])(
-    "rejects ClawHub paths outside the expected %s",
-    (boundary) => {
+  it.each([
+    { boundary: "managed root", standaloneHost: false },
+    { boundary: "peer host", standaloneHost: false },
+    { boundary: "peer host", standaloneHost: true },
+    { boundary: "peer symlink", standaloneHost: true },
+    { boundary: "optional dependency", standaloneHost: true },
+    { boundary: "valid peer", standaloneHost: false },
+    { boundary: "valid peer", standaloneHost: true },
+  ])(
+    "checks ClawHub $boundary (standalone host=$standaloneHost)",
+    ({ boundary, standaloneHost }) => {
       const escaped = boundary === "managed root";
       const wrongPeerTarget = boundary === "peer host";
       const { root, state, scratch, env } = pluginHome("openclaw-plugins-clawhub-path-");
@@ -931,6 +939,10 @@ fs.renameSync = (source, destination) => {
         : path.join(extensionsRoot, CLAWHUB_ID);
       mkdirSync(extensionsRoot, { recursive: true });
       mkdirSync(installPath, { recursive: true });
+      const expectedHostRoot = standaloneHost
+        ? path.join(root, "standalone", "runtime")
+        : process.cwd();
+      mkdirSync(expectedHostRoot, { recursive: true });
       const record = {
         artifactFormat: "zip",
         artifactKind: "legacy-zip",
@@ -943,15 +955,16 @@ fs.renameSync = (source, destination) => {
       };
       if (record.artifactKind === "npm-pack") {
         mkdirSync(path.join(installPath, "node_modules"), { recursive: true });
-        const peerTarget = wrongPeerTarget ? path.join(root, "other-host") : process.cwd();
+        const peerTarget = wrongPeerTarget ? path.join(root, "other-host") : expectedHostRoot;
         if (wrongPeerTarget) {
           mkdirSync(peerTarget);
         }
-        symlinkSync(
-          peerTarget,
-          path.join(installPath, "node_modules", "openclaw"),
-          process.platform === "win32" ? "junction" : "dir",
-        );
+        const peerPath = path.join(installPath, "node_modules", "openclaw");
+        if (boundary === "peer symlink") {
+          mkdirSync(peerPath);
+        } else {
+          symlinkSync(peerTarget, peerPath, process.platform === "win32" ? "junction" : "dir");
+        }
         if (boundary === "optional dependency") {
           const dependencyPath = path.join(installPath, "node_modules", "is-number");
           const dependencyTarget = path.join(root, "other-dependency");
@@ -976,15 +989,23 @@ fs.renameSync = (source, destination) => {
         ...env,
         CLAWHUB_PLUGIN_ID: CLAWHUB_ID,
         CLAWHUB_PLUGIN_SPEC: CLAWHUB_SPEC,
+        OPENCLAW_E2E_HOST_ROOT: standaloneHost ? expectedHostRoot : "",
       });
 
+      if (boundary === "valid peer") {
+        expect(result.status, result.stderr).toBe(0);
+        return;
+      }
       expect(result.status).toBe(1);
       if (escaped) {
         expect(result.stderr).toContain("ClawHub install path resolved outside");
       } else {
-        const expectedError = wrongPeerTarget
-          ? `expected ClawHub openclaw peer ${realpathSync(path.join(root, "other-host"))} to target ${realpathSync(process.cwd())}`
-          : `ClawHub isolated dependency resolved outside ${installPath}: ${realpathSync(path.join(root, "other-dependency", "package.json"))}`;
+        const expectedError =
+          boundary === "peer symlink"
+            ? `ClawHub openclaw peer is not a symlink: ${path.join(installPath, "node_modules", "openclaw")}`
+            : wrongPeerTarget
+              ? `expected ClawHub openclaw peer ${realpathSync(path.join(root, "other-host"))} to target ${realpathSync(expectedHostRoot)}`
+              : `ClawHub isolated dependency resolved outside ${installPath}: ${realpathSync(path.join(root, "other-dependency", "package.json"))}`;
         expect(result.stderr.match(/^(?:Error|error): (.*)$/m)?.[1]).toBe(expectedError);
       }
     },

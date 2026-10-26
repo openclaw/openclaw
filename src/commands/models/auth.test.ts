@@ -2,6 +2,7 @@ import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coerc
 import { afterEach, beforeEach, expect, it, vi, type Mock } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ConfigWriteOptions } from "../../config/io.js";
+import { createEmptyPluginSetupRegistry } from "../../plugins/setup-registry.test-support.js";
 import type {
   ProviderAuthProfile,
   ProviderAuthResult,
@@ -9,6 +10,7 @@ import type {
 } from "../../plugins/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { ProviderAuthConfigApplyError } from "../../shared/provider-auth-result.js";
+import { expectNoCalls } from "../../test-utils/mock-call-assertions.js";
 import { registerModelsAuthAuthorityTests } from "./auth-authority.test-support.js";
 
 type AuthRunCall = { signal?: AbortSignal };
@@ -218,12 +220,6 @@ function useProvider(id: string, label: string, auth?: ProviderPlugin["auth"]) {
   mocks.resolvePluginProvidersCore.mockReturnValue([createProvider(id, label, auth)]);
 }
 
-function expectNoCalls(...callbacks: unknown[]) {
-  for (const callback of callbacks) {
-    expect(callback).not.toHaveBeenCalled();
-  }
-}
-
 function createOpenAISetupProvider(
   runOauthAuth: ProviderPlugin["auth"][number]["run"],
   runApiKeyAuth: ProviderPlugin["auth"][number]["run"],
@@ -315,13 +311,7 @@ beforeEach(() => {
   mocks.isRemoteEnvironment.mockReturnValue(false);
   mocks.isCliProvider.mockReturnValue(false);
   mocks.resolvePluginSetupProviderCore.mockReturnValue(undefined);
-  mocks.resolvePluginSetupRegistry.mockReturnValue({
-    providers: [],
-    cliBackends: [],
-    configMigrations: [],
-    autoEnableProbes: [],
-    diagnostics: [],
-  });
+  mocks.resolvePluginSetupRegistry.mockReturnValue(createEmptyPluginSetupRegistry());
   mocks.loadValidConfigSnapshotOrThrow.mockImplementation(async () => ({
     sourceConfig: structuredClone(currentConfig),
     runtimeConfig: structuredClone(currentConfig),

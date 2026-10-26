@@ -14,6 +14,7 @@ import {
 } from "./auth-profiles/credential-fixtures.test-support.js";
 import { prepareSharedAuthStoreOwnershipForNative } from "./auth-profiles/path-resolve.native.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
+import { configFor } from "./model-auth.fixtures.test-support.js";
 
 const discovery = vi.hoisted(() => ({ providers: new Array<ProviderPlugin>() }));
 vi.mock("../plugins/provider-discovery.runtime.js", () => ({
@@ -449,22 +450,19 @@ describe("models-config provider auth provenance", () => {
         refresh: "must-not-refresh",
         expires: 1,
       };
-      const resolveProfile = vi.spyOn(
+      using resolveProfile = vi.spyOn(
         await import("./auth-profiles/oauth.js"),
         "resolveApiKeyForProfile",
       );
-      try {
-        await fixture.discover();
-        await fixture.plan(configWithKey(configRef));
-        expect(fixture.authorization).toEqual(["Bearer ambient-key", "Bearer ambient-key"]);
-        expect(resolveProfile.mock.calls.map(([params]) => params.profileId)).not.toContain(
-          "unrelated:oauth",
-        );
-        expect(fixture.errors).toEqual([]);
-        expect(fixture.outcomes).toEqual([]);
-      } finally {
-        resolveProfile.mockRestore();
-      }
+
+      await fixture.discover();
+      await fixture.plan(configWithKey(configRef));
+      expect(fixture.authorization).toEqual(["Bearer ambient-key", "Bearer ambient-key"]);
+      expect(resolveProfile.mock.calls.map(([params]) => params.profileId)).not.toContain(
+        "unrelated:oauth",
+      );
+      expect(fixture.errors).toEqual([]);
+      expect(fixture.outcomes).toEqual([]);
     });
   });
 
@@ -538,11 +536,7 @@ describe("models-config provider auth provenance", () => {
   const configRef = { source: "store", provider: "default", id: "CONFIG_KEY" } as const;
   const configWithKey = (
     apiKey: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>[string]["apiKey"],
-  ): OpenClawConfig => ({
-    models: {
-      providers: { openai: { baseUrl: "https://catalog.example.test/v1", apiKey, models: [] } },
-    },
-  });
+  ): OpenClawConfig => configFor("openai", "https://catalog.example.test/v1", { apiKey });
 
   describe.each(["resolveProviderApiKey", "resolveProviderAuth"] as const)(
     "%s configured profile references",
@@ -921,19 +915,11 @@ describe("models-config catalog runtime headers", () => {
 
   it("keeps unresolved catalog headers fail-closed", async () => {
     const { normalizeResolvedSecretInputString } = await import("../config/types.secrets.js");
-    const config = {
-      models: {
-        providers: {
-          "catalog-fixture": {
-            baseUrl: "https://catalog.example/v1",
-            headers: {
-              "X-Catalog-Token": ref("CATALOG_TOP_TOKEN"),
-            },
-            models: [],
-          },
-        },
+    const config = configFor("catalog-fixture", "https://catalog.example/v1", {
+      headers: {
+        "X-Catalog-Token": ref("CATALOG_TOP_TOKEN"),
       },
-    } satisfies OpenClawConfig;
+    });
     discovery.providers = [
       {
         id: "catalog-fixture",

@@ -1,7 +1,7 @@
-import { once } from "node:events";
 import { createServer } from "node:http";
 import type { Socket } from "node:net";
 import { expect, it, onTestFinished, vi } from "vitest";
+import { listenOnLoopback } from "../../../test-support/hanging-loopback-server.js";
 import { fetchCdpChecked, fetchJson, fetchOk } from "./cdp.helpers.js";
 
 const credentials = "openclaw:browser-cdp-transport-test";
@@ -30,12 +30,7 @@ async function startServer(status = 200, streaming = true) {
     socket.once("close", () => sockets.delete(socket));
   });
 
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("expected the browser CDP fixture to bind a loopback TCP port");
-  }
+  const port = await listenOnLoopback(server);
 
   onTestFinished(
     () =>
@@ -45,7 +40,7 @@ async function startServer(status = 200, streaming = true) {
       }),
   );
   return {
-    url: `http://${credentials}@127.0.0.1:${address.port}/json/version`,
+    url: `http://${credentials}@127.0.0.1:${port}/json/version`,
     sockets,
     authorizations,
   };

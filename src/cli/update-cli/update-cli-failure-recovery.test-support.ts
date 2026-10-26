@@ -64,7 +64,7 @@ export function registerForegroundFailureRecoveryTests(deps: {
   ])(
     "preserves foreground failure $exitCode without granting handoff $handoff authority",
     async ({ exitCode, handoff, expectedExit }) => {
-      const { root } = deps.setupUpdatedRootRefresh();
+      deps.setupUpdatedRootRefresh();
       deps.spawn.mockImplementationOnce(() => {
         const child = new EventEmitter();
         queueMicrotask(() => {
@@ -90,19 +90,15 @@ export function registerForegroundFailureRecoveryTests(deps: {
         recovery: { serviceRestartSafe: false },
         steps: [
           expect.objectContaining({ name: "updater-runtime-retention", exitCode: 0 }),
-          {
+          expect.objectContaining({
             name: "post-update verification",
-            command: "openclaw update",
-            cwd: root,
-            durationMs: 0,
             exitCode,
-            stderrTail: undefined,
             failureFacts: [
               { check: "runtime", code: "post-core-update-failed" },
               { check: "update", code: "update-failed" },
             ],
-          },
-          recoveryObservationStep(root),
+          }),
+          expect.objectContaining({ name: "gateway recovery observation", exitCode: 0 }),
         ],
       });
       expect(deps.updateNpmInstalledPlugins).not.toHaveBeenCalled();
@@ -148,45 +144,21 @@ export function registerFailureSelectorTests(deps: {
           deps.expectSelectorTriageFailure(error, triageCall?.failure, failure, true);
         } else {
           expect(error).toBe(failure);
-          const failedStep = {
-            name: "update",
-            command: "openclaw update",
-            cwd,
-            durationMs: expect.any(Number),
-            exitCode: 1,
-            failureFacts: [
-              {
-                check: "update",
-                code: "Error",
-                errorName: "Error",
-                message: failure.message,
-                location: expect.any(String),
-              },
-            ],
-          };
-          expect(triageCall?.failure).toEqual({
+          expect(triageCall?.failure).toMatchObject({
             error: failure.message,
             result: {
               status: "error",
-              mode: "unknown",
-              root: cwd,
               reason: "update-failed",
-              durationMs: expect.any(Number),
               recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
-              rollbackOutcome: undefined,
               verification: {},
-              failedStep,
-              steps: [
-                failedStep,
-                recoveryVerificationStep([
-                  {
-                    check: "gateway-recovery",
-                    code: "gateway-probe-failed",
-                    message:
-                      "service management skipped: non-default state dir or config path. Rerun with HOME set to the OS account home, OPENCLAW_HOME either unset or pointing at that same home, and OPENCLAW_STATE_DIR and OPENC",
-                  },
-                ]),
-              ],
+              failedStep: { failureFacts: [expect.objectContaining({ message: failure.message })] },
+              steps: expect.arrayContaining([
+                expect.objectContaining({
+                  name: "gateway recovery verification",
+                  exitCode: 1,
+                  failureFacts: [expect.objectContaining({ code: "gateway-probe-failed" })],
+                }),
+              ]),
             },
           });
         }

@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { expect, it, vi } from "vitest";
+import { CronStoreSelectionRequiredError } from "../cron/store/selection-error.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -80,5 +81,24 @@ export function registerGatewayCronStartupTests(
     expect(getActiveGatewayRootWorkCount()).toBe(1);
     hook.resolve();
     await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+  });
+
+  it("leaves unresolved cron paused during reload without scheduling Gateway recovery", async () => {
+    const message = "Cron is paused. Run openclaw doctor --fix to select its partition.";
+    const cron = makeCron(async () => {
+      throw new CronStoreSelectionRequiredError({
+        status: "unresolved",
+        storePath: "/state/cron/jobs.json",
+        partitions: [],
+        message,
+      });
+    });
+    const onStartError = vi.fn();
+    cron.start({ reason: "reload", onStartError });
+    await waitForFast(() => expect(cron.logCron.error).toHaveBeenCalledOnce());
+    expect(cron.logCron.error).toHaveBeenCalledWith(expect.stringContaining(message));
+    expect(onStartError).not.toHaveBeenCalled();
+    expect(cron.cronReconciliation.complete).not.toHaveBeenCalled();
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
   });
 }

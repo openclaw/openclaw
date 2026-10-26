@@ -1,4 +1,8 @@
-// Benchmark host only: node --import ./scripts/tsx.mjs scripts/perf/hook-isolation-measure.ts --expect-shared-history
+// node --import ./scripts/tsx.mjs scripts/perf/hook-isolation-measure.ts --expect-shared-history
+// Compare the same --calls/--samples with --prompt-chars 16 and 262144 on both revisions.
+// Add --unowned-history to cover callers without transcript-owner sealing.
+// Add --no-result to measure hooks that observe inputs without returning modifications.
+// Counts, unprofiled CPU, and sampled allocations are separate passes; use built Gateway stress too.
 import assert from "node:assert/strict";
 import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
@@ -13,12 +17,18 @@ import { createEmptyPluginRegistry } from "../../src/plugins/registry-empty.js";
 const { values } = parseArgs({
   options: {
     calls: { type: "string", default: "40" },
+    "prompt-chars": { type: "string", default: "16" },
+    "unowned-history": { type: "boolean", default: false },
+    "no-result": { type: "boolean", default: false },
     samples: { type: "string", default: "5" },
     "start-at": { type: "string", default: "0" },
     "expect-shared-history": { type: "boolean", default: false },
     "preflight-only": { type: "boolean", default: false },
   },
 });
+const promptChars = Number(values["prompt-chars"]);
+assert.ok(Number.isSafeInteger(promptChars) && promptChars >= 0);
+const expectSharedHistory = values["expect-shared-history"] && !values["unowned-history"];
 const calls = Number(values.calls);
 const samples = Number(values.samples);
 assert.ok(Number.isSafeInteger(calls) && calls > 0, "calls must be a positive integer");
@@ -87,14 +97,15 @@ function fixture(size: number) {
   );
 }
 
-const cells = [200, 1_000].flatMap((size) => {
-  const messages = fixture(size);
+const cells = [64, 200, 1_000].flatMap((size) => {
+  const source = fixture(size);
+  const messages = values["unowned-history"] ? structuredClone(source) : source;
   for (const message of messages) {
-    assert.ok(isOwnedTranscriptPayload(message));
-    assert.ok(Object.isFrozen(message.content));
+    assert.equal(isOwnedTranscriptPayload(message), !values["unowned-history"]);
+    assert.equal(Object.isFrozen(message.content), !values["unowned-history"]);
     assert.ok(!isOwnedTranscriptPayload(message.content));
   }
-  return [1, 2].map((handlers) => {
+  return [0, 1, 2].map((handlers) => {
     const registry = createEmptyPluginRegistry();
     let handlerCalls = 0;
     let verifyHistory = false;
@@ -112,16 +123,16 @@ const cells = [200, 1_000].flatMap((size) => {
               const original = messages[index]!;
               assert.ok(received && typeof received === "object" && "content" in received);
               assert.notEqual(received, original);
-              assert.equal(received.content === original.content, values["expect-shared-history"]);
-              assert.equal(Object.isFrozen(received.content), values["expect-shared-history"]);
+              assert.equal(received.content === original.content, expectSharedHistory);
+              assert.equal(Object.isFrozen(received.content), expectSharedHistory);
             }
           }
-          return { prependContext: "synthetic context" };
+          return values["no-result"] ? undefined : { prependContext: "synthetic context" };
         },
       });
     }
     const runner = createHookRunner(registry, { catchErrors: false });
-    const event = { prompt: "synthetic prompt", messages };
+    const event = { prompt: "p".repeat(promptChars), messages };
     return {
       messages: size,
       handlers,
@@ -207,7 +218,8 @@ if (values["preflight-only"]) {
   console.log(
     JSON.stringify({
       node: process.version,
-      expectedSharedHistory: values["expect-shared-history"],
+      expectedSharedHistory: expectSharedHistory,
+      unownedHistory: values["unowned-history"],
       counts,
     }),
   );
@@ -281,9 +293,11 @@ console.log(
     node: process.version,
     calls,
     samples,
+    promptChars,
     samplingInterval: 8_192,
     includeCollectedObjects: true,
-    expectedSharedHistory: values["expect-shared-history"],
+    expectedSharedHistory: expectSharedHistory,
+    unownedHistory: values["unowned-history"],
     counts,
     fixtures: cells.map(({ messages, handlers, fixtureBytes }) => ({
       messages,

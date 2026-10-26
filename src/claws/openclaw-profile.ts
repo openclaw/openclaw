@@ -1,6 +1,7 @@
 import { asOptionalRecord as record } from "@openclaw/normalization-core/record-coerce";
 import type { ToolProfileId } from "../agents/tool-policy-shared.js";
 import { FsSafeError, root as fsSafeRoot } from "../infra/fs-safe.js";
+import { decodeUtf8Input } from "../infra/utf8-input.js";
 import { isSafeClawRelativePath } from "./schema-portability.js";
 import { parseClawOpenClawProfile, parseLegacyLocalUpdateClawOpenClawProfile } from "./schema.js";
 import {
@@ -157,14 +158,15 @@ export async function readClawOpenClawProfile(params: {
   }
 
   let raw: Buffer;
+  let text: string;
   try {
-    const profileFiles = await fsSafeRoot(params.packageRoot);
-    const read = await profileFiles.read(declaredPath, {
+    const read = await packageFiles.read(declaredPath, {
       hardlinks: "reject",
       maxBytes: MAX_PROFILE_BYTES,
       symlinks: "reject",
     });
     raw = read.buffer;
+    text = decodeUtf8Input(raw, declaredPath);
   } catch (error) {
     const unsafe =
       error instanceof FsSafeError &&
@@ -190,7 +192,6 @@ export async function readClawOpenClawProfile(params: {
     };
   }
 
-  const text = raw.toString("utf8");
   const yaml = parseClawYaml(
     text.startsWith("\uFEFF") ? text.slice(1) : text,
     declaredPath,

@@ -98,6 +98,7 @@ type GatewayRestartWaitOptions = {
   requireRunningService?: boolean;
   requirePluginHealth?: boolean;
   requireChannelHealth?: boolean;
+  allowUnattributedDiagnosticProbe?: boolean;
   /** Diagnostics can report absence immediately; start/restart callers wait for installation. */
   waitForMissingService?: boolean;
   supervisorKeepsAlive?: boolean;
@@ -107,6 +108,7 @@ type GatewayRestartWaitOptions = {
   onProgress?: (phase: string) => void;
   onObservation?: (snapshot: GatewayRestartSnapshot) => void;
   signal?: AbortSignal;
+  assertCurrent?: () => void;
 };
 
 export async function waitForGatewayHealthyRestart(
@@ -249,6 +251,7 @@ export async function waitForGatewayHealthyRestart(
 
     for (let attempt = 0; ; attempt += 1) {
       snapshot = await inspectGatewayRestart({
+        assertCurrent: params.assertCurrent,
         service,
         port: params.port,
         env: params.env,
@@ -256,6 +259,7 @@ export async function waitForGatewayHealthyRestart(
         expectedBuildId: params.expectedBuildId,
         requirePluginHealth: params.requirePluginHealth,
         requireChannelHealth: params.requireChannelHealth,
+        allowUnattributedDiagnosticProbe: params.allowUnattributedDiagnosticProbe,
         probeContext,
         configuredProbe,
         probeHosts,

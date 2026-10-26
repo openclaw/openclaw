@@ -76,6 +76,13 @@ Before opening databases, OpenClaw selects a library in this order:
 
 Candidates must meet the WAL safety floor and support extension loading before selection. The memory KNN child uses the same selected library.
 
+Standalone builds try their bundled SQLite library before host discovery, including
+when their executable runs a portable worker. Each candidate is checked in a
+bounded child process using the same runtime's built-in SQLite API. Validation
+does not require Bun's FFI or JIT, and only an accepted candidate is selected in
+the parent process. The child uses an isolated working directory and empty Bun
+configuration, so project preloads and `.env` files cannot affect validation.
+
 If automatic discovery finds no qualifying library, OpenClaw refuses to open databases instead of using Bun's runtime library. That library is Apple's patched system SQLite, which deviates from upstream SQLite where OpenClaw's read-only connections depend on it. It cannot open a WAL database read-only before its `-wal` and `-shm` files exist (`unable to open database file`). In rollback-journal mode, it also fails to begin a write transaction while a read-only connection in the same process holds a read lock (`disk I/O error`). The refusal lists any present candidate that could not load:
 
 ```text

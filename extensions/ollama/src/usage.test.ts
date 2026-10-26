@@ -72,8 +72,6 @@ describe("Ollama balance usage", () => {
         window("Week", 7.64, "2026-10-12T00:00:00Z"),
       ],
       billing: [balance("Purchased", 4.25)],
-      options: baseParams,
-      headers: { Accept: "application/json" },
     },
     {
       name: "current plan",
@@ -85,25 +83,20 @@ describe("Ollama balance usage", () => {
       purchased: 25,
       windows: [window("Included", 27.5, "2026-10-15T09:30:00Z")],
       billing: [balance("Included", 72.5), balance("Purchased", 25)],
-      options: { baseUrl: "https://ollama.example", token: "remote-key" },
-      headers: { Accept: "application/json", Authorization: "Bearer remote-key" },
     },
-  ])(
-    "maps $name to resettable usage",
-    async ({ included, purchased, windows, billing, options, headers }) => {
-      const fetchFn = mockUsage({ included, purchased: { balance_usd: purchased } });
-      expect(await fetchOllamaUsage({ ...baseParams, ...options, fetchFn })).toEqual({
-        provider: "ollama",
-        displayName: "Ollama",
-        windows,
-        billing,
-      });
-      expect(fetchFn).toHaveBeenCalledWith(
-        `${options.baseUrl}/api/balance`,
-        expect.objectContaining({ headers }),
-      );
-    },
-  );
+  ])("maps $name to resettable usage", async ({ included, purchased, windows, billing }) => {
+    const fetchFn = mockUsage({ included, purchased: { balance_usd: purchased } });
+    expect(await fetchOllamaUsage({ ...baseParams, fetchFn })).toEqual({
+      provider: "ollama",
+      displayName: "Ollama",
+      windows,
+      billing,
+    });
+    expect(fetchFn).toHaveBeenCalledWith(
+      `${baseParams.baseUrl}/api/balance`,
+      expect.objectContaining({ headers: { Accept: "application/json" } }),
+    );
+  });
 
   it.each([
     [403, httpError(403), "HTTP 403: Check the configured Ollama server's access permissions"],

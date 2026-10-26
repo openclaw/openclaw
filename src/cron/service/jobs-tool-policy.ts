@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRuntimeToolAllowed } from "../../agents/tool-policy-match.js";
+import { tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { cloneCronRuntimeAuthority, type CronRuntimeAuthority } from "../runtime-authority.js";
 import {
@@ -8,6 +9,7 @@ import {
   resolveCronScheduledToolPolicy,
   type CronScheduledToolPolicy,
 } from "../scheduled-tool-policy.js";
+import { isCronOperatorSourceParent } from "../session-target.js";
 import {
   normalizeCronToolsAllowProvenance,
   resolveCronAuthenticatedCallerOrigin,
@@ -110,6 +112,8 @@ export function reconcileCronOperatorSource(params: {
   previousJob?: CronStoredJob;
   captured?: NonNullable<CronStoredJob["operatorSource"]>["source"];
   capturedExecutionRevision?: string;
+  /** Agent-less jobs run as the configured default agent, so they match on that agent. */
+  defaultAgentId?: string;
 }): void {
   const { job, previousJob } = params;
   if (!params.captured && !previousJob?.operatorSource) {
@@ -128,8 +132,8 @@ export function reconcileCronOperatorSource(params: {
     job.scheduledToolPolicy?.mode === "account" &&
     job.owner?.sessionKey === source.sessionKey &&
     job.scheduledToolPolicy.ownerSessionKey === source.sessionKey &&
-    job.agentId === source.agentId &&
-    job.sessionTarget === `session:${source.sessionKey}`
+    tryResolveCronJobEffectiveAgentId(job, params.defaultAgentId) === source.agentId &&
+    isCronOperatorSourceParent(job, source.sessionKey)
   ) {
     job.operatorSource = { source, executionRevision };
   } else {

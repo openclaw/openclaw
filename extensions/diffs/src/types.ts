@@ -40,22 +40,20 @@ export type DiffToolDefaults = DiffPresentationDefaults &
     ttlSeconds: number;
   };
 
-type BeforeAfterDiffInput = {
-  kind: "before_after";
-  before: string;
-  after: string;
-  path?: string;
-  lang?: string;
-  title?: string;
-};
-
-type PatchDiffInput = {
-  kind: "patch";
-  patch: string;
-  title?: string;
-};
-
-export type DiffInput = BeforeAfterDiffInput | PatchDiffInput;
+export type DiffInput =
+  | {
+      kind: "before_after";
+      before: string;
+      after: string;
+      path?: string;
+      lang?: string;
+      title?: string;
+    }
+  | {
+      kind: "patch";
+      patch: string;
+      title?: string;
+    };
 
 export type DiffRenderOptions = {
   presentation: DiffPresentationDefaults;
@@ -92,14 +90,6 @@ export type DiffViewerPayload = {
   oldFile?: FileContents;
   newFile?: FileContents;
   fileDiff?: FileDiffMetadata;
-};
-
-export type RenderedDiffDocument = {
-  html?: string;
-  imageHtml?: string;
-  title: string;
-  fileCount: number;
-  inputKind: DiffInput["kind"];
 };
 
 export type DiffArtifactContext = {

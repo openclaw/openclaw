@@ -1,4 +1,4 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, assert, expect, it, vi } from "vitest";
 import type {
   SessionActorPendingFinalDelivery,
   SessionActorStorage,
@@ -41,13 +41,9 @@ const authority = { assertCurrent() {}, authorize() {} };
 const lifetime = { assertCurrent() {}, assertReadable() {} };
 
 async function mutate(command: Parameters<SessionActorStorage["mutate"]>[0], create = false) {
-  const acquired = await withSessionActorStorage(
-    scope,
-    { lifetime, authority, create },
-    async ({ actor }) =>
-      readSessionActorStorageResult(await actor.storage.mutate(command, authority)),
+  await withSessionActorStorage(scope, { lifetime, authority, create }, async ({ actor }) =>
+    readSessionActorStorageResult(await actor.storage.mutate(command, authority)),
   );
-  expect(acquired).toBeDefined();
 }
 
 afterEach(() => {
@@ -86,9 +82,7 @@ it("settles unbound memory usage and final custody without losing an intervening
   const result = await withAgentTurnCompletion(
     { ...scope, entry, operation, publish: (committed) => published.push(committed) },
     async (completion) => {
-      if (!completion) {
-        throw new Error("Unbound incognito turn omitted completion accounting");
-      }
+      assert(completion, "Unbound incognito turn omitted completion accounting");
       completion.patch({
         kind: "usage",
         updatedAt: 100,

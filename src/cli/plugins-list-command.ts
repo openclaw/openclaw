@@ -1,6 +1,5 @@
 // `openclaw plugins list`: builds registry reports and defers terminal-only formatting modules.
 import { captureRuntimeConfigAsyncReader } from "../config/config.js";
-import type { PluginRecord } from "../plugins/registry.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
 import { quietPluginJsonLogger } from "./plugins-json-logger.js";
 
@@ -9,13 +8,6 @@ export type PluginsListOptions = {
   enabled?: boolean;
   verbose?: boolean;
 };
-
-function toPluginListJsonRecord(plugin: PluginRecord): Omit<PluginRecord, "agentHarnessIds"> {
-  // Snapshot listing never imports plugin runtimes, so it cannot observe harness registrations.
-  // Omit the field instead of serializing the registry-compatible empty placeholder.
-  const { agentHarnessIds: _agentHarnessIds, ...record } = plugin;
-  return record;
-}
 
 export async function runPluginsListCommand(
   opts: PluginsListOptions,
@@ -38,7 +30,12 @@ export async function runPluginsListCommand(
         source: report.registrySource,
         diagnostics: report.registryDiagnostics,
       },
-      plugins: list.map(toPluginListJsonRecord),
+      plugins: list.map((plugin) => {
+        // Snapshot listing never imports plugin runtimes, so it cannot observe harness registrations.
+        // Omit the field instead of serializing the registry-compatible empty placeholder.
+        const { agentHarnessIds: _agentHarnessIds, ...record } = plugin;
+        return record;
+      }),
       diagnostics: report.diagnostics,
     };
     writeRuntimeJson(runtime, payload);
@@ -50,7 +47,7 @@ export async function runPluginsListCommand(
     { getTerminalTableWidth, renderTable },
     { theme },
     { formatCliCommand },
-    { formatPluginLine, formatPluginStatus },
+    { formatPluginLine, formatPluginStatus, formatPluginTrustLabel },
   ] = await Promise.all([
     import("../plugins/source-display.js"),
     import("../../packages/terminal-core/src/table.js"),
@@ -88,6 +85,7 @@ export async function runPluginsListCommand(
 
   const enabled = list.reduce((count, plugin) => count + (plugin.enabled ? 1 : 0), 0);
   runtime.log(`${theme.heading("Plugins")} ${theme.muted(`(${enabled}/${list.length} enabled)`)}`);
+  runtime.log(theme.muted("Trust is provenance, not a code-safety guarantee."));
 
   if (!opts.verbose) {
     const tableWidth = getTerminalTableWidth();
@@ -109,6 +107,7 @@ export async function runPluginsListCommand(
         Status: formatPluginStatus(plugin),
         Source: desc ? `${formattedSource.value}\n${desc}` : formattedSource.value,
         Version: plugin.version ?? "",
+        Trust: formatPluginTrustLabel(plugin),
       };
     });
 
@@ -137,6 +136,7 @@ export async function runPluginsListCommand(
           { key: "Status", header: "Status", minWidth: 10 },
           { key: "Source", header: "Source", minWidth: 26, flex: true },
           { key: "Version", header: "Version", minWidth: 8 },
+          { key: "Trust", header: "Trust", minWidth: 12, flex: true },
         ],
         rows,
       }).trimEnd(),

@@ -69,6 +69,7 @@ export type ToolTranscriptCallInput = {
   id: string;
   name: string;
   arguments?: unknown;
+  hideFromChannelProgress?: boolean;
 };
 
 export type ToolTranscriptResultInput = {
@@ -400,12 +401,12 @@ export class CodexToolProgressProjection {
   }
 
   recordTranscriptCall(params: ToolTranscriptCallInput): void {
-    if (!shouldEmitTranscriptToolProgress(params.name)) {
+    if (params.hideFromChannelProgress || !shouldEmitTranscriptToolProgress(params.name)) {
       this.transcriptProgressSuppressedIds.add(params.id);
     } else {
       this.transcriptProgressSuppressedIds.delete(params.id);
+      this.emitTranscriptToolCallProgress(params);
     }
-    this.emitTranscriptToolCallProgress(params);
   }
 
   matchesEcho(text: string): boolean {
@@ -495,7 +496,7 @@ export class CodexToolProgressProjection {
 
   private emitTranscriptToolCallProgress(params: ToolTranscriptCallInput): void {
     // Successful cards use the typed plan stream after the write completes.
-    if (params.name === "progress_card" || !shouldEmitTranscriptToolProgress(params.name)) {
+    if (params.name === "progress_card") {
       return;
     }
     this.transcriptProgressCallIds.add(params.id);

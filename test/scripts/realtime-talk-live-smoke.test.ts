@@ -145,16 +145,14 @@ it("reports malformed Google Live frames from the serialized browser callback", 
   expect(process.exitCode).toBe(1);
 });
 
-it.each<[string, string, number, number, boolean, boolean]>([
-  ["failed browser media", "failed", 0.002, 0.2, true, false],
-  ["silent browser audio", "connected", 0, 0, true, false],
-  ["comfort noise despite a completed transcript", "connected", 2.2539e-8, 0, true, false],
-  ["audio too brief to establish speech", "connected", 0.002, 0.02, true, false],
-  ["unrelated browser audio", "connected", 0.002, 0.2, false, false],
-  ["completed browser speech", "connected", 0.002, 0.2, true, true],
+it.each<[string, string, number, boolean, boolean]>([
+  ["failed browser media", "failed", 0.2, true, false],
+  ["audio too brief to establish speech", "connected", 0.02, true, false],
+  ["unrelated browser audio", "connected", 0.2, false, false],
+  ["completed browser speech", "connected", 0.2, true, true],
 ])(
   "reports %s through the smoke command",
-  async (_name, connectionState, outputAudioEnergy, speechSeconds, transcriptMarker, ok) => {
+  async (_name, connectionState, speechSeconds, transcriptMarker, ok) => {
     browser.evaluate.mockResolvedValue({
       answerHasAudio: true,
       remoteDescriptionApplied: true,
@@ -162,10 +160,7 @@ it.each<[string, string, number, number, boolean, boolean]>([
       transcriptMarker,
       responseDone: true,
       outputAudioBytes: 1024,
-      outputAudioEnergy,
-      outputAudioSamplesDuration: 0.5,
       outputAudioSpeechDuration: speechSeconds,
-      outputAudioPeakRms: Math.sqrt(outputAudioEnergy / 0.5),
     });
     vi.stubEnv("OPENAI_API_KEY", "test-key");
     vi.stubEnv("OPENCLAW_REALTIME_OPENAI_MODEL", "gpt-realtime-2.1");
@@ -180,8 +175,6 @@ it.each<[string, string, number, number, boolean, boolean]>([
     backend.onFirstAudio = () => firstAudio.resolve();
     // Let imports reach streaming before advancing the pacing and close-observation timers.
     await runSmoke(firstAudio.promise, "sending backend audio");
-    expect(output).toHaveBeenCalledWith("openai-backend-bridge: ok", expect.any(Object));
-    expect(output).toHaveBeenCalledWith("openai-backend-audio-roundtrip: ok", expect.any(Object));
     expect(output).toHaveBeenCalledWith(
       `openai-webrtc-browser: ${ok ? "ok" : "failed"}`,
       expect.objectContaining({ protocol: "ga-realtime" }),

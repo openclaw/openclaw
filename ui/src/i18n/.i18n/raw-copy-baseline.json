@@ -486,8 +486,8 @@
     },
     {
       "count": 1,
-      "kind": "html-text",
-      "name": "text",
+      "kind": "object-property",
+      "name": "label",
       "path": "ui/src/pages/skills/library-view.tsx",
       "text": "SKILL.md"
     },

@@ -5,6 +5,7 @@ import type { ExecResult } from "./exec-file.js";
 const exec = vi.hoisted(() => vi.fn<typeof import("./exec-file.js").execFileUtf8>());
 vi.mock("./exec-file.js", () => ({ execFileUtf8: exec }));
 import { readSystemdDefinitionMutationCapability } from "./systemd-definition-mutation.js";
+import { nativeExit } from "./systemd-exec.test-support.js";
 import {
   admitUserUnitActivationPastUnverifiableOwnership,
   isSystemdServiceAbsent,
@@ -16,12 +17,8 @@ const owner = ":1.4";
 const home = "/openclaw-systemd-cleanup-proof";
 const env = { HOME: home, OPENCLAW_SYSTEMD_UNIT: unit };
 const notFound = () => Object.assign(new Error("missing"), { code: "ENOENT" });
-const commandResult = (stdout = "", stderr = "", code = 0): ExecResult => ({
-  code,
-  termination: "exit",
-  stdout,
-  stderr,
-});
+const commandResult = (stdout = "", stderr = "", code = 0): ExecResult =>
+  nativeExit(stdout, stderr, code);
 const success = (type: string, data: unknown) => commandResult(JSON.stringify({ type, data }));
 const missing = () => commandResult("", `Call failed: Unit ${unit} not loaded.`, 1);
 function reply(args: readonly string[]): ExecResult {

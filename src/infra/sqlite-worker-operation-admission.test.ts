@@ -91,6 +91,22 @@ function captureInline(facts: unknown) {
   return captured;
 }
 
+it("finishes settled admissions without traversing empty pending decisions", () => {
+  const admission = admissionFixture();
+  admission.port.postMessage({ kind: "native-settlement", settlement: { kind: "completed" } }, []);
+  const iterate = vi.spyOn(Set.prototype, Symbol.iterator);
+  try {
+    admission.finish();
+    admission.finish();
+    expect(iterate).not.toHaveBeenCalled();
+  } finally {
+    iterate.mockRestore();
+  }
+  expect(admission.settlement).toEqual({ kind: "completed" });
+  expect(admission.failure).toBeUndefined();
+  expect(() => admission.observeRequests(() => {})).toThrow("closed");
+});
+
 it("preserves nested finish order and error precedence on repeated calls", () => {
   const admission = createAdmission((_request, grant) => grant());
   const finish = admission.finish.bind(admission);
@@ -562,7 +578,7 @@ it.each(
       payloadBytes: (before?.payloadBytes ?? 0) + payloadBytes,
       unmeasuredMessages: before?.unmeasuredMessages ?? 0,
     });
-    expect(readSqliteWorkerRequestCustody(custody.descriptor)).toBe(false);
+    expect(readSqliteWorkerRequestCustody(job.custody.descriptor)).toBe(false);
     expect(events).toEqual(["publish", publicationFails ? "reject" : "reply"]);
     expect(publish).toHaveBeenCalledOnce();
     expect(rows()).toEqual([{ value: 1 }]);

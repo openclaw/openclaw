@@ -65,12 +65,11 @@ export function expectPresent(...files: string[]) {
   expect(files.map((file) => fs.existsSync(file))).toEqual(files.map(() => true));
 }
 
-export function expectIssue(report: DoctorSessionSqliteReport, shape: Record<string, unknown>) {
+export const expectIssue = (report: DoctorSessionSqliteReport, shape: Record<string, unknown>) =>
   containsObjects(
     report.targets.flatMap((target) => target.issues),
     shape,
   );
-}
 
 export function messageEvent(
   id: string,
@@ -81,17 +80,14 @@ export function messageEvent(
   return { type: "message", id, parentId, message: { role, content } };
 }
 
-export function writePrivateFile(file: string, contents: string | Uint8Array) {
+export const writePrivateFile = (file: string, contents: string | Uint8Array) =>
   fs.writeFileSync(file, contents, { mode: 0o600 });
-}
 
-export function writeJson(file: string, value: unknown, space?: number) {
+export const writeJson = (file: string, value: unknown, space?: number) =>
   writePrivateFile(file, JSON.stringify(value, null, space));
-}
 
-export function jsonl(...events: unknown[]) {
-  return events.map((event) => JSON.stringify(event)).join("\n") + "\n";
-}
+export const jsonl = (...events: unknown[]) =>
+  events.map((event) => JSON.stringify(event)).join("\n") + "\n";
 
 export function sessionScope(store: TestStore, agentId = "main") {
   return {
@@ -103,9 +99,8 @@ export function sessionScope(store: TestStore, agentId = "main") {
   };
 }
 
-export function runStoreDoctor(store: TestStore, mode: DoctorSessionSqliteMode) {
-  return runDoctorSessionSqlite({ env: store.env, store: store.storePath, mode });
-}
+export const runStoreDoctor = (store: TestStore, mode: DoctorSessionSqliteMode) =>
+  runDoctorSessionSqlite({ env: store.env, store: store.storePath, mode });
 
 export function retireRecovery(
   store: Pick<TestStore, "env">,

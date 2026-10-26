@@ -1,10 +1,5 @@
 import { metrics } from "@opentelemetry/api";
-import {
-  AggregationTemporality,
-  InMemoryMetricExporter,
-  MeterProvider,
-  PeriodicExportingMetricReader,
-} from "@opentelemetry/sdk-metrics";
+import type { PeriodicExportingMetricReader } from "@opentelemetry/sdk-metrics";
 import {
   emitDiagnosticEvent,
   emitTrustedDiagnosticEventWithPrivateData,
@@ -13,6 +8,7 @@ import {
 import { expect, test } from "vitest";
 import {
   collectTestMetrics,
+  createTestMeter,
   installRealOtelSdkTestHarness,
   installTestMeter,
 } from "./service.real-sdk.test-support.js";
@@ -36,6 +32,14 @@ test("preserves cumulative session-row totals across restarts, isolated by provi
         sessionRowSelections: {
           selections: [{ kind: "parent", task: "control-ui-pr", calls, rows: calls * 3 }],
           resets,
+          materialization: {
+            created: 0,
+            reused: 0,
+            rebuilt: 0,
+            skipped: 0,
+            deepComparisons: 0,
+            sampledFirstDifferences: {},
+          },
         },
       },
     });
@@ -89,10 +93,7 @@ test("preserves cumulative session-row totals across restarts, isolated by provi
 });
 
 test("exports trusted session list retirements and base misses as bounded counters", async () => {
-  const reader = new PeriodicExportingMetricReader({
-    exporter: new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE),
-  });
-  const meterProvider = new MeterProvider({ readers: [reader] });
+  const { reader, meterProvider } = createTestMeter();
   metrics.disable();
   metrics.setGlobalMeterProvider(meterProvider);
   try {

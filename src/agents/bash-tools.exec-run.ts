@@ -537,6 +537,11 @@ export function createExecTool(defaults?: ExecToolDefaults) {
         }
 
         const usePty = params.pty === true && !sandbox;
+        if (params.pty === true && sandbox) {
+          warnings.push(
+            "Warning: PTY is unavailable in sandbox mode; running without a PTY. Use a noninteractive command.",
+          );
+        }
 
         // Preflight: check Python shell-syntax mistakes and ambiguous interpreter commands
         // before execution. JavaScript source diagnostics belong to Node.
