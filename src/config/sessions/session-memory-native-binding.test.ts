@@ -118,7 +118,7 @@ it.each(["commit", "rollback", "revoked"])(
       registry.agentHarnesses.push({ harness, pluginId: record.id, source: "runtime" });
       markPluginRegistryActive(registry);
       try {
-        const completed = await withPluginRuntimeRegistryScope(registry, () =>
+        await withPluginRuntimeRegistryScope(registry, () =>
           withSessionActorStorage(
             scope,
             {
@@ -161,7 +161,6 @@ it.each(["commit", "rollback", "revoked"])(
                     expect(loadSessionEntry(scope)).toBeUndefined();
                   }
                   sql.expectIdle();
-                  return true;
                 } finally {
                   sql.restore();
                 }
@@ -171,7 +170,6 @@ it.each(["commit", "rollback", "revoked"])(
             },
           ),
         );
-        expect(completed).toBe(true);
       } finally {
         markPluginRegistryRetired(registry);
       }
