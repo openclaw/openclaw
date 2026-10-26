@@ -27,11 +27,7 @@ const config = {
   dts:
     process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD === "1"
       ? false
-      : {
-          tsconfig: "tsconfig.packages.json",
-          // The AI package's Node 22 floor includes Promise.withResolvers.
-          compilerOptions: { lib: ["DOM", "DOM.Iterable", "ES2024"] },
-        },
+      : { tsconfig: "tsconfig.packages.json" },
   hooks: createDeclarationBoundaryHooks(),
   entry: {
     index: "packages/ai/src/index.ts",
