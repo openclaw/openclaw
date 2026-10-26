@@ -100,7 +100,7 @@ import { recordAdmittedModelRoutingDecision } from "../model-routing-decision.js
 import { resolveRuntimeChannelPromptContext } from "../runtime-capabilities.js";
 import { createUnrecordedScheduledAccountRefusal } from "../scheduled-unrecorded-account.js";
 import { waitForSessionMaintenance } from "../session-maintenance/coordinator.js";
-import { createStableSkillAuthoring } from "../stable-skill-authoring.js";
+import { resolveStableCliSkillAuthoring } from "../stable-skill-authoring.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { normalizeToolPolicyName } from "../tool-policy.js";
 import { assertNativeCronCreatorCapabilities } from "../tools/cron-tool-creator-cap.js";
@@ -179,7 +179,6 @@ import {
   type RunCliAgentParams,
 } from "./types.js";
 
-const resolveStableCliSkillAuthoring = createStableSkillAuthoring();
 const CALLER_SURFACE_TOOL_NAMES = new Set([
   "screen",
   "show_widget",

@@ -45,10 +45,10 @@ import { projectEmbeddedMessageContext } from "./shared-run-context.js";
 import { MAX_BEFORE_AGENT_FINALIZE_REVISIONS } from "./terminal-retry-state.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
-/** Prepares the selected runtime and dispatches an attempt under its admitted lifecycle. */
 // Internal turns publish the session's last human skill authoring shape with an expired grant.
 const resolveStableEmbeddedSkillAuthoring = createStableSkillAuthoring();
 
+/** Prepares the selected runtime and dispatches an attempt under its admitted lifecycle. */
 export async function prepareAndDispatchEmbeddedRunAttempt(
   input: PreparedEmbeddedAttemptDispatchInput,
   onSettledTurn?: EmbeddedRunAttemptParams["onSettledTurn"],

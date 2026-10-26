@@ -94,11 +94,7 @@ import {
 import { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js";
 import { buildDeclaredToolAllowlistContext } from "./tool-policy-declared-context.js";
 import type { ToolPolicyFilterEvent } from "./tool-policy-pipeline.js";
-import {
-  expandToolGroups,
-  normalizeToolPolicyName,
-  toolPolicyRestrictsTools,
-} from "./tool-policy.js";
+import { expandToolGroups, normalizeToolPolicyName } from "./tool-policy.js";
 import {
   createToolSearchTools,
   resolveToolSearchConfig,
@@ -676,13 +672,6 @@ function* assembleOpenClawCodingTools(
             ? ["web_search"]
             : []),
         ],
-        // A conversation-scoped list is this session's own policy, which its follow-ups re-derive.
-        // Group, per-DM and sender policy come from the inbound request, so they keep the cap.
-        ...(options?.toolPolicyScope === "conversation" &&
-        !toolPolicyRestrictsTools(capabilityProfile.policy.groupPolicy) &&
-        !toolPolicyRestrictsTools(capabilityProfile.policy.senderPolicy)
-          ? { toolsAllowSessionScoped: true as const }
-          : {}),
       },
     }),
   );

@@ -127,10 +127,7 @@ export type SessionEventOptions = {
 };
 
 export type SessionEventSourcePolicy = Readonly<
-  Pick<SessionEventTarget, "toolsAllow" | "settings"> & {
-    /** The allowlist only restates the producer session's own policy; it still caps other sessions. */
-    toolsAllowSessionScoped?: true;
-  }
+  Pick<SessionEventTarget, "toolsAllow" | "settings">
 >;
 
 /** Cron-owned snapshot and live occurrence fence shared with ordinary reply admission. */
