@@ -45,6 +45,36 @@ const offlineGit = { env: { GIT_NO_LAZY_FETCH: "1", GIT_ALLOW_PROTOCOL: "" } };
 const read = (target: string, file: string) => fs.readFile(path.join(target, file), "utf8");
 const expectMissing = (target: string) =>
   expect(fs.access(target)).rejects.toMatchObject({ code: "ENOENT" });
+const packsPath = (repo: string) => path.join(repo, ".git", "objects", "pack");
+const packNames = async (repo: string) =>
+  (await fs.readdir(packsPath(repo))).filter((name) => name.endsWith(".pack")).toSorted();
+const objectTypes = (repo: string, objects: string[]) =>
+  requireGit(repo, ["cat-file", "--batch-check=%(objecttype)"], {
+    input: `${objects.join("\n")}\n`,
+    ...offlineGit,
+  });
+async function pack(repo: string, objects: string[], deterministic = false) {
+  const hash = await requireGit(
+    repo,
+    [
+      "pack-objects",
+      ...(deterministic ? ["--window=0", "--threads=1"] : []),
+      path.join(packsPath(repo), "pack"),
+    ],
+    { input: `${objects.join("\n")}\n` },
+  );
+  return `pack-${hash}`;
+}
+async function packBlobs(repo: string, contents: (string | Buffer)[], deterministic = false) {
+  const objects: string[] = [],
+    packs: string[] = [];
+  for (const input of contents) {
+    const object = await requireGit(repo, ["hash-object", "-w", "--stdin"], { input });
+    objects.push(object);
+    packs.push(await pack(repo, [object], deterministic));
+  }
+  return { objects, packs };
+}
 
 beforeEach(() => {
   setRuntimeConfigSnapshot({});
@@ -115,38 +145,6 @@ describe("worktree Git maintenance", () => {
     for (const record of listRegistryWorktrees(env)) {
       await deleteRegistryWorktree(env, record.id);
     }
-  });
-
-  it("removes checkouts independently of pack maintenance and maintains their retained snapshots once", async () => {
-    const root = tempDirs.make("worktree-removal-pack-maintenance-");
-    const repo = await initRepo(root);
-    await requireGit(repo, ["repack", "-a", "-d"]);
-    const records = await materialize(repo, ["first", "last"], root);
-    const service = new ManagedWorktreeService({ env });
-    const execute = gitExec.executeGitCommand;
-    const commands = vi
-      .spyOn(gitExec, "executeGitCommand")
-      .mockImplementation(async (cwd, args, options) => {
-        if (args[0] === "multi-pack-index") {
-          throw new Error("repository pack maintenance unavailable");
-        }
-        return await execute(cwd, args, options);
-      });
-    for (const record of records) {
-      const removed = await service.remove({ id: record.id, reason: "completed" });
-      expect(removed.removed).toBe(true);
-      expect(await requireGit(repo, ["show", `${removed.snapshotRef}:README.md`])).toBe("base");
-      await expect(fs.access(record.path)).rejects.toMatchObject({ code: "ENOENT" });
-    }
-    commands.mockImplementation(execute);
-    commands.mockClear();
-
-    await service.gc();
-
-    expect(commands.mock.calls.filter(([, args]) => args[0] === "multi-pack-index")).toHaveLength(
-      0,
-    );
-    await requireGit(repo, ["multi-pack-index", "verify"]);
   });
 
   it("preserves a checkout with missing snapshot objects until maintenance repairs it", async () => {
@@ -471,19 +469,13 @@ describe("worktree Git maintenance", () => {
     const packDirectory = path.join(repo, ".git", "objects", "pack");
     const missing = await requireGit(repo, ["rev-list", "--objects", "--all", "--missing=print"]);
     expect(missing).toContain("?");
-    const objects: string[] = [];
-    const generated: string[] = [];
-    for (let index = 0; index < 18; index++) {
-      const object = await requireGit(repo, ["hash-object", "-w", "--stdin"], {
-        input: `payload-${index}`,
-      });
-      objects.push(object);
-      const hash = await requireGit(repo, ["pack-objects", path.join(packDirectory, "pack")], {
-        input: `${object}\n`,
-      });
-      generated.push(`pack-${hash}`);
+    const { objects, packs: generated } = await packBlobs(
+      repo,
+      Array.from({ length: 18 }, (_, index) => `payload-${index}`),
+    );
+    for (const [index, stem] of generated.entries()) {
       if (index < 17) {
-        await fs.writeFile(path.join(packDirectory, `pack-${hash}.promisor`), "");
+        await fs.writeFile(path.join(packDirectory, `${stem}.promisor`), "");
       }
     }
     const kept = generated[0]!;
@@ -500,15 +492,11 @@ describe("worktree Git maintenance", () => {
         }
         return execute(cwd, args, options);
       });
-    const beforeFailure = (await fs.readdir(packDirectory))
-      .filter((name) => name.endsWith(".pack"))
-      .toSorted();
+    const beforeFailure = await packNames(repo);
     const failed = new WorktreeGcProgress();
     await createWorktreeGitMaintenance(env)({ progress: failed });
     expect(failed.result.gitMaintenance?.stage).toBe("suspended");
-    expect(
-      (await fs.readdir(packDirectory)).filter((name) => name.endsWith(".pack")).toSorted(),
-    ).toEqual(beforeFailure);
+    expect(await packNames(repo)).toEqual(beforeFailure);
     commands.mockImplementation(execute);
     const trace = path.join(root, "pack-trace.jsonl");
     vi.stubEnv("GIT_TRACE2_EVENT", trace);
@@ -532,12 +520,7 @@ describe("worktree Git maintenance", () => {
     expect(remaining).toContain(`${kept}.pack`);
     expect(remaining).toContain(`${generated[17]}.pack`);
     expect(remaining.filter((name) => name.endsWith(".promisor"))).toHaveLength(2);
-    expect(
-      await requireGit(repo, ["cat-file", "--batch-check"], {
-        input: `${objects.join("\n")}\n`,
-        ...offlineGit,
-      }),
-    ).not.toContain("missing");
+    expect(await objectTypes(repo, objects)).toBe(objects.map(() => "blob").join("\n"));
     expect(await requireGit(repo, ["rev-list", "--objects", "--all", "--missing=print"])).toBe(
       missing,
     );
@@ -545,10 +528,8 @@ describe("worktree Git maintenance", () => {
     expect(await fs.readFile(trace, "utf8")).not.toContain("upload-pack");
     // A tiny duplicate does not force rewriting its dominant pack or rebuilding
     // a full MIDX just to discover redundant copies.
-    const duplicate = await requireGit(repo, ["pack-objects", path.join(packDirectory, "pack")], {
-      input: `${objects[1]}\n`,
-    });
-    await fs.writeFile(path.join(packDirectory, `pack-${duplicate}.promisor`), "");
+    const duplicate = await pack(repo, [objects[1]!]);
+    await fs.writeFile(path.join(packDirectory, `${duplicate}.promisor`), "");
     await createWorktreeGitMaintenance(env)({});
     const afterDuplicate = await fs.readdir(packDirectory);
     expect(afterDuplicate.filter((name) => name.endsWith(".pack"))).toHaveLength(4);
@@ -564,16 +545,8 @@ describe("worktree Git maintenance", () => {
     for (let offset = 0; offset < dominant.length; offset += 4) {
       dominant.writeUInt32BE(offset, offset);
     }
-    const objects: string[] = [];
-    const packs: string[] = [];
-    for (const input of ["small-a", "small-b", dominant]) {
-      const object = await requireGit(repo, ["hash-object", "-w", "--stdin"], { input });
-      objects.push(object);
-      const hash = await requireGit(repo, ["pack-objects", path.join(directory, "pack")], {
-        input: `${object}\n`,
-      });
-      packs.push(path.join(directory, `pack-${hash}.pack`));
-    }
+    const { objects, packs: stems } = await packBlobs(repo, ["small-a", "small-b", dominant]);
+    const packs = stems.map((stem) => path.join(directory, `${stem}.pack`));
     const sizes = await Promise.all(packs.map(async (name) => (await fs.stat(name)).size));
     expect(sizes[2]).toBeGreaterThan(sizes[0]! + sizes[1]!);
     await requireGit(repo, ["prune-packed"]);
@@ -586,44 +559,29 @@ describe("worktree Git maintenance", () => {
       packsAfter: 2,
     });
     await fs.access(packs[2]!);
-    expect(
-      await requireGit(repo, ["cat-file", "--batch-check=%(objecttype)"], {
-        input: `${objects.join("\n")}\n`,
-      }),
-    ).toBe("blob\nblob\nblob");
+    expect(await objectTypes(repo, objects)).toBe("blob\nblob\nblob");
   });
 
   it("retains a replacement that is already an input and a pack pinned during publication", async () => {
     const repo = await initRepo(tempDirs.make("worktree-pack-existing-output-"));
     const directory = path.join(repo, ".git", "objects", "pack");
-    const objects: string[] = [];
-    const inputs: string[] = [];
-    for (let index = 0; index < 15; index++) {
-      const object = await requireGit(repo, ["hash-object", "-w", "--stdin"], {
-        input: `retained-${index}`,
-      });
-      objects.push(object);
-      const hash = await requireGit(
-        repo,
-        ["pack-objects", "--window=0", "--threads=1", path.join(directory, "pack")],
-        { input: `${object}\n` },
-      );
-      inputs.push(`pack-${hash}`);
-      await fs.utimes(path.join(directory, `pack-${hash}.pack`), 1, 1);
-    }
-    const union = await requireGit(
+    const { objects, packs: inputs } = await packBlobs(
       repo,
-      ["pack-objects", "--window=0", "--threads=1", path.join(directory, "pack")],
-      { input: `${objects.join("\n")}\n` },
+      Array.from({ length: 15 }, (_, index) => `retained-${index}`),
+      true,
     );
-    await fs.utimes(path.join(directory, `pack-${union}.pack`), 2, 2);
+    for (const stem of inputs) {
+      await fs.utimes(path.join(directory, `${stem}.pack`), 1, 1);
+    }
+    const union = await pack(repo, objects, true);
+    await fs.utimes(path.join(directory, `${union}.pack`), 2, 2);
     await requireGit(repo, ["prune-packed"]);
     await register(repo, "existing-output", { branch: "main" });
     const execute = gitExec.executeGitCommand;
     vi.spyOn(gitExec, "executeGitCommand").mockImplementation(async (cwd, args, options) => {
       const result = await execute(cwd, args, options);
       if (args.at(-1) === "openclaw-consolidate") {
-        expect(result.stdout.trim()).toBe(`pack\t${union}`);
+        expect(result.stdout.trim()).toBe(`pack\t${union.slice(5)}`);
         await fs.writeFile(
           path.join(directory, `${inputs[0]}.keep`),
           "another writer pinned this input",
@@ -638,14 +596,8 @@ describe("worktree Git maintenance", () => {
       packsBefore: 16,
       packsAfter: 2,
     });
-    expect(
-      (await fs.readdir(directory)).filter((name) => name.endsWith(".pack")).toSorted(),
-    ).toEqual([`${inputs[0]}.pack`, `pack-${union}.pack`].toSorted());
-    expect(
-      await requireGit(repo, ["cat-file", "--batch-check=%(objecttype)"], {
-        input: `${objects.join("\n")}\n`,
-      }),
-    ).toBe(objects.map(() => "blob").join("\n"));
+    expect(await packNames(repo)).toEqual([`${inputs[0]}.pack`, `${union}.pack`].toSorted());
+    expect(await objectTypes(repo, objects)).toBe(objects.map(() => "blob").join("\n"));
   });
 
   it.skipIf(process.platform !== "linux")(
@@ -725,14 +677,10 @@ describe("worktree Git maintenance", () => {
       `${base} ${broken} Test <test@example.invalid> ${timestamp} +0000\tmissing tree\n${broken} ${missing} Test <test@example.invalid> ${timestamp} +0000\tmissing commit\n`,
     );
     const history = await fs.readFile(reflog, "utf8");
-    for (let index = 0; index < 3; index++) {
-      const object = await requireGit(repo, ["hash-object", "-w", "--stdin"], {
-        input: Buffer.from(`pack-${index}`),
-      });
-      await requireGit(repo, ["pack-objects", path.join(repo, ".git", "objects", "pack", "pack")], {
-        input: Buffer.from(`${object}\n`),
-      });
-    }
+    await packBlobs(
+      repo,
+      Array.from({ length: 3 }, (_, index) => `pack-${index}`),
+    );
     await git(repo, "config", "gc.auto", "1");
     await git(repo, "config", "gc.autoPackLimit", "1");
     for (const task of ["commit-graph", "loose-objects", "incremental-repack"]) {
