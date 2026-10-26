@@ -68,7 +68,12 @@ describe("Slack permanent rejections over real Web API transport", () => {
         void readBodyText(request).then((body) => {
           const text = new URLSearchParams(body).get("text") ?? "";
           const code = CLASSIFIED_CODES.find((candidate) => text.includes(candidate));
-          requests.push({ code, method: request.method, text, url: request.url ?? "" });
+          requests.push({
+            ...(code ? { code } : {}),
+            method: request.method,
+            text,
+            url: request.url ?? "",
+          });
           response.writeHead(200, { "content-type": "application/json" });
           response.end(JSON.stringify({ ok: false, error: code ?? "unexpected_test_request" }));
         });

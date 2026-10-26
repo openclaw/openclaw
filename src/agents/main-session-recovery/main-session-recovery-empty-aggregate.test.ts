@@ -8,7 +8,6 @@ import { transitionMainSessionRecovery } from "./main-session-recovery-state.js"
 import {
   recoveryEntry as entry,
   recoveryState,
-  recoveryRun,
 } from "./main-session-recovery-state.test-support.js";
 
 const sessionKey = "agent:main:main";
@@ -17,8 +16,9 @@ function claimForeground(
   options: { sessionId?: string; sessionKey?: string; runId?: string } = {},
 ) {
   return transitionMainSessionRecovery(session, {
-    ...recoveryRun,
     kind: "claim_foreground",
+    cycleId: "unused",
+    lifecycleGeneration: "generation-1",
     sessionId: options.sessionId ?? "session-1",
     sessionKey: options.sessionKey ?? sessionKey,
     claimId: "foreground-1",
@@ -162,11 +162,23 @@ describe("empty main session recovery aggregate", () => {
   });
 
   it("preserves interrupted recovery custody for foreground admission", () => {
-    const session = entry({ status: "interrupted", abortedLastRun: true });
+    const session = entry({
+      status: "interrupted",
+      abortedLastRun: true,
+      restartRecoveryRuns: undefined,
+    });
+
     expect(claimForeground(session)).toMatchObject({ kind: "foreground_claimed" });
     expect(session).toMatchObject({
       abortedLastRun: true,
-      mainRestartRecovery: { cycleId: "cycle-1", chargedAttempts: 0, foregroundClaims },
+      mainRestartRecovery: {
+        cycleId: "cycle-1",
+        chargedAttempts: 0,
+        foregroundClaims: {
+          lifecycleGeneration: "generation-1",
+          tokens: ["foreground-1"],
+        },
+      },
     });
     expect(session.restartRecoveryRuns).toBeUndefined();
   });

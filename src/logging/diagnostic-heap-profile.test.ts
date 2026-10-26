@@ -3,9 +3,9 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DiagnosticsHeapProfileParams } from "../../packages/gateway-protocol/src/schema/diagnostics.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import recordedProfile from "./diagnostic-heap-profile.fixture.json" with { type: "json" };
-import { runNativeProfile } from "./diagnostic-native-profile.test-support.js";
 import { diagnosticProfileEntrypoints } from "./diagnostic-profile-runtime.test-support.js";
 
 const native = vi.hoisted(() => ({
@@ -46,11 +46,7 @@ function frame(functionName = "allocateRows") {
     columnNumber: 2,
   };
 }
-function profile(
-  allocationFrame = frame(),
-  privateUrl = "eval://private-source",
-  sanitized = false,
-) {
+function profile(allocationFrame = frame(), privateUrl = "eval://private-source") {
   return {
     head: {
       id: 1,
@@ -61,7 +57,7 @@ function profile(
         {
           id: 3,
           selfSize: 4096,
-          callFrame: { ...frame(sanitized ? "[redacted]" : "private payload"), url: privateUrl },
+          callFrame: { ...frame("private payload"), url: privateUrl },
           children: [],
         },
       ],
@@ -78,15 +74,6 @@ async function capture(
 ) {
   const { captureDiagnosticHeapProfile } = await import("./diagnostic-heap-profile.js");
   return captureDiagnosticHeapProfile({ ...params, signal, hasAuthority: () => true });
-}
-async function complete(params: DiagnosticsHeapProfileParams = {}) {
-  const outcome = await capture(params);
-  if (outcome.status !== "complete") {
-    throw new Error(JSON.stringify(outcome));
-  }
-  expect(JSON.stringify(outcome)).not.toMatch(/fixture|private/);
-  expect(Buffer.byteLength(JSON.stringify(outcome.result))).toBeLessThanOrEqual(1024 * 1024);
-  return outcome.result;
 }
 beforeEach(() => {
   vi.resetModules();
@@ -128,47 +115,73 @@ describe("diagnostic heap profile owner", () => {
     expect(JSON.stringify(result)).toBe(JSON.stringify(recordedProfile.sanitized));
   });
 
-  it("preserves samples and memory readings with unattributed V8 samples", async () => {
-    const before = [
-      {
-        space_name: "old_space",
-        space_used_size: 100,
-        space_size: 200,
-        space_available_size: 50,
-        physical_space_size: 180,
-      },
-    ];
-    const after = [{ ...before[0], space_used_size: 150 }];
-    native.heapSpaces.mockReturnValueOnce(before).mockReturnValueOnce(after);
-    const value = profile();
-    value.samples.push({ nodeId: 999, size: 4096, ordinal: 3 });
-    native.post.mockImplementation(async (method) =>
-      method === "HeapProfiler.stopSampling" ? { profile: value } : {},
-    );
-    const result = await complete();
-    expect(result).toMatchObject({
-      durationMs: expect.any(Number),
-      samplingIntervalBytes: 32768,
-      includeObjectsCollectedByMajorGC: false,
-      includeObjectsCollectedByMinorGC: false,
-      heapUsedBefore: expect.any(Number),
-      heapUsedAfter: expect.any(Number),
-      heapSpacesBefore: before,
-      heapSpacesAfter: after,
-      rssBefore: expect.any(Number),
-      rssAfter: expect.any(Number),
-      truncated: true,
-      redactedNodeCount: 1,
-      unattributedSampleCount: 1,
-      unattributedSampleBytes: 4096,
-    });
-    expect(result).toHaveProperty(
-      "profile",
-      profile({ ...frame(), url: "openclaw:src/rows.js" }, "", true),
-    );
-    expect(native.disconnect).toHaveBeenCalledOnce();
-    expect(native.wait.mock.calls[0]?.[0]).toBe(5000);
-  });
+  it.each([true])(
+    "preserves samples and memory readings with unattributed V8 samples=%s",
+    async (unattributed) => {
+      const before = [
+        {
+          space_name: "old_space",
+          space_used_size: 100,
+          space_size: 200,
+          space_available_size: 50,
+          physical_space_size: 180,
+        },
+      ];
+      const after = [{ ...before[0], space_used_size: 150 }];
+      native.heapSpaces.mockReturnValueOnce(before).mockReturnValueOnce(after);
+      const value = profile();
+      if (unattributed) {
+        value.samples.push({ nodeId: 999, size: 4096, ordinal: 3 });
+      }
+      native.post.mockImplementation(async (method) =>
+        method === "HeapProfiler.stopSampling" ? { profile: value } : {},
+      );
+      const outcome = await capture();
+      expect(outcome).toMatchObject({
+        status: "complete",
+        result: {
+          durationMs: expect.any(Number),
+          samplingIntervalBytes: 32768,
+          includeObjectsCollectedByMajorGC: false,
+          includeObjectsCollectedByMinorGC: false,
+          heapUsedBefore: expect.any(Number),
+          heapUsedAfter: expect.any(Number),
+          heapSpacesBefore: before,
+          heapSpacesAfter: after,
+          rssBefore: expect.any(Number),
+          rssAfter: expect.any(Number),
+          truncated: unattributed,
+          redactedNodeCount: 1,
+          unattributedSampleCount: unattributed ? 1 : 0,
+          unattributedSampleBytes: unattributed ? 4096 : 0,
+          profile: {
+            samples: profile().samples,
+            head: {
+              children: expect.arrayContaining([
+                expect.objectContaining({ id: 2, selfSize: 8192 }),
+              ]),
+            },
+          },
+        },
+      });
+      expect(JSON.stringify(outcome)).not.toMatch(/fixture|private/);
+      expect(native.disconnect).toHaveBeenCalledOnce();
+      expect(native.post.mock.calls.map(([method]) => method)).toEqual([
+        "HeapProfiler.enable",
+        "HeapProfiler.startSampling",
+        "HeapProfiler.stopSampling",
+        "HeapProfiler.disable",
+      ]);
+      expect(native.wait).toHaveBeenCalledWith(5000, undefined, {
+        signal: expect.any(AbortSignal),
+      });
+      expect(native.post).toHaveBeenCalledWith("HeapProfiler.startSampling", {
+        samplingInterval: 32768,
+        includeObjectsCollectedByMajorGC: false,
+        includeObjectsCollectedByMinorGC: false,
+      });
+    },
+  );
 
   it("attributes dependency and native frames without exposing private paths or symbols", async () => {
     const dependencies: [string, string][] = [
@@ -185,7 +198,22 @@ describe("diagnostic heap profile owner", () => {
     ];
     const locations: [Partial<ReturnType<typeof frame>>, string][] = [
       [{ scriptId: "0", url: "", lineNumber: -1 }, "[native]"],
-      [{ functionName: "(GC)", scriptId: "0", url: "", lineNumber: -1 }, "(GC)"],
+      ...[
+        "(V8 API)",
+        "(GC)",
+        "(PARSER)",
+        "(COMPILER)",
+        "(BYTECODE_COMPILER)",
+        "(EXTERNAL)",
+        "(LOGGING)",
+        "(IDLE_EXTERNAL)",
+        "(IDLE)",
+        "(JS)",
+        "(deopt)",
+      ].map((functionName): [Partial<ReturnType<typeof frame>>, string] => [
+        { functionName, scriptId: "0", url: "", lineNumber: -1 },
+        functionName,
+      ]),
       [{ scriptId: "0", url: "", lineNumber: 0 }, "[redacted]"],
       [{ scriptId: "2", url: "", lineNumber: -1 }, "[redacted]"],
       [{ scriptId: "0", url: "/private/user/secret.js", lineNumber: -1 }, "[redacted]"],
@@ -217,16 +245,24 @@ describe("diagnostic heap profile owner", () => {
     for (const { source, expected } of frames) {
       const value = profile(source);
       native.post.mockResolvedValue({ profile: value });
-      const result = await complete();
-      expect(result.redactedNodeCount, JSON.stringify(source)).toBe(
-        expected.functionName === "[redacted]" ? 2 : 1,
-      );
-      expect(result).toHaveProperty("profile", profile(expected, "", true));
-      expect(JSON.stringify(result)).not.toMatch(
+      const outcome = await capture();
+      expect(outcome, JSON.stringify(source)).toMatchObject({
+        status: "complete",
+        result: {
+          redactedNodeCount: expected.functionName === "[redacted]" ? 2 : 1,
+          profile: {
+            samples: value.samples,
+            head: {
+              children: [{ id: 2, selfSize: 8192, callFrame: expected, children: [] }, { id: 3 }],
+            },
+          },
+        },
+      });
+      expect(JSON.stringify(outcome)).not.toMatch(
         /fixture|private|secret|\.pnpm|8\.18\.0|1\.2\.3|buffer-util/,
       );
       if (!expected.url) {
-        expect(JSON.stringify(result)).not.toContain("node_modules");
+        expect(JSON.stringify(outcome)).not.toContain("node_modules");
       }
     }
   });
@@ -238,10 +274,19 @@ describe("diagnostic heap profile owner", () => {
     native.resolveRoot.mockResolvedValue(root);
     const value = profile({ ...frame(), url: `${root}/dist/rows.js` }, `${root}/private/secret.js`);
     native.post.mockResolvedValue({ profile: value });
-    expect(await complete()).toHaveProperty(
-      "profile",
-      profile({ ...frame(), url: "openclaw:dist/rows.js" }, "", true),
-    );
+    expect(await capture()).toMatchObject({
+      status: "complete",
+      result: {
+        profile: {
+          head: {
+            children: [
+              { callFrame: { ...frame(), url: "openclaw:dist/rows.js" } },
+              { id: 3, callFrame: { functionName: "[redacted]", url: "" } },
+            ],
+          },
+        },
+      },
+    });
   });
 
   it.each<
@@ -278,17 +323,23 @@ describe("diagnostic heap profile owner", () => {
         includeObjectsCollectedByMajorGC: params.includeObjectsCollectedByMajorGC ?? false,
         includeObjectsCollectedByMinorGC: params.includeObjectsCollectedByMinorGC ?? false,
       };
-      const result = await complete(params);
-      expect(result).toMatchObject({
-        ...collectionOptions,
-        requestedDurationMs: params.durationMs,
-        effectiveDurationMs: duration,
-        samplingIntervalBytes: interval,
-        actualDurationMs: expect.any(Number),
-        durationLimitReason: limitReason,
+      const outcome = await capture(params);
+      expect(outcome).toMatchObject({
+        status: "complete",
+        result: {
+          ...collectionOptions,
+          requestedDurationMs: params.durationMs,
+          effectiveDurationMs: duration,
+          actualDurationMs: expect.any(Number),
+          durationLimitReason: limitReason,
+        },
       });
-      expect(result.actualDurationMs).toBe(result.durationMs);
-      expect(native.wait.mock.calls[0]?.[0]).toBe(duration);
+      if (outcome.status === "complete") {
+        expect(outcome.result.actualDurationMs).toBe(outcome.result.durationMs);
+      }
+      expect(native.wait).toHaveBeenCalledWith(duration, undefined, {
+        signal: expect.any(AbortSignal),
+      });
       expect(native.post).toHaveBeenCalledWith("HeapProfiler.startSampling", {
         samplingInterval: interval,
         ...collectionOptions,
@@ -303,10 +354,15 @@ describe("diagnostic heap profile owner", () => {
   ] as const)(
     "supports collected-allocation shorthand %j",
     async (params, major, minor, duration) => {
-      expect(await complete({ ...params, durationMs: 900_000 })).toMatchObject({
-        includeObjectsCollectedByMajorGC: major,
-        includeObjectsCollectedByMinorGC: minor,
-        effectiveDurationMs: duration,
+      expect(await capture({ ...params, durationMs: 900_000 })).toMatchObject({
+        status: "complete",
+        result: {
+          includeObjectsCollectedByMajorGC: major,
+          includeObjectsCollectedByMinorGC: minor,
+        },
+      });
+      expect(native.wait).toHaveBeenCalledWith(duration, undefined, {
+        signal: expect.any(AbortSignal),
       });
     },
   );
@@ -322,6 +378,7 @@ describe("diagnostic heap profile owner", () => {
     });
     const active = capture({ durationMs: 900_000 }, controller.signal);
     await waiting.promise;
+    expect(native.wait).toHaveBeenCalledWith(900_000, undefined, { signal: controller.signal });
     expect(await capture()).toMatchObject({ status: "unavailable", reason: "busy" });
     const { captureDiagnosticCpuProfile } = await import("./diagnostic-cpu-profile.js");
     expect(
@@ -356,22 +413,29 @@ describe("diagnostic heap profile owner", () => {
     }));
     native.post.mockResolvedValue({ profile: value });
     expect(Buffer.byteLength(JSON.stringify(value))).toBeGreaterThan(1024 * 1024);
-    const result = await complete();
-    expect(result).toMatchObject({
-      truncated: true,
-      redactedNodeCount: 0,
-      summary: expect.arrayContaining([
-        {
-          stack: [
-            { ...frame("[dep:ws]"), url: "node_modules/ws" },
-            { ...frame("(root)"), url: "" },
-          ],
-          selfBytes: 9000 * 8192,
-          totalBytes: 9000 * 8192,
-          count: 9000,
-        },
-      ]),
+    const outcome = await capture();
+    expect(outcome).toMatchObject({
+      status: "complete",
+      result: {
+        truncated: true,
+        redactedNodeCount: 0,
+        summary: expect.arrayContaining([
+          {
+            stack: [
+              { ...frame("[dep:ws]"), url: "node_modules/ws" },
+              { ...frame("(root)"), url: "" },
+            ],
+            selfBytes: 9000 * 8192,
+            totalBytes: 9000 * 8192,
+            count: 9000,
+          },
+        ]),
+      },
     });
+    if (outcome.status !== "complete") {
+      throw new Error("capture failed");
+    }
+    expect(Buffer.byteLength(JSON.stringify(outcome.result))).toBeLessThanOrEqual(1024 * 1024);
   });
 
   it("yields during sanitization while retaining capture ownership and checking revocation", async () => {
@@ -420,17 +484,27 @@ describe("diagnostic heap profile owner", () => {
     }));
     value.samples = [];
     native.post.mockResolvedValue({ profile: value });
-    const result = await complete();
-    if (!("summary" in result)) {
+    const outcome = await capture();
+    if (outcome.status !== "complete" || !("summary" in outcome.result)) {
       throw new Error("expected summary");
     }
-    expect(result.summary.length).toBeLessThan(9000);
-    expect(result.summary.some((row) => row.stack[0].functionName === "allocate8999")).toBe(true);
+    expect(outcome.result.summary.length).toBeLessThan(9000);
+    expect(outcome.result.summary.some((row) => row.stack[0].functionName === "allocate8999")).toBe(
+      true,
+    );
+    expect(Buffer.byteLength(JSON.stringify(outcome.result))).toBeLessThanOrEqual(1024 * 1024);
+    expect(JSON.stringify(outcome)).not.toContain("/fixture");
   });
 
   it("attributes retained allocations and opt-in collected allocations within the byte cap", async ({
     signal,
   }) => {
+    const env: NodeJS.ProcessEnv = {};
+    for (const key of ["PATH", "HOME", "OPENCLAW_STATE_DIR", "TMPDIR", "TMP", "TEMP"]) {
+      if (process.env[key]) {
+        env[key] = process.env[key];
+      }
+    }
     const root = fileURLToPath(new URL("../../", import.meta.url));
     const ownerUrl = resolveRuntimeWorkerUrl(diagnosticProfileEntrypoints.heap);
     const workloadUrl = new URL("./diagnostic-heap-profile.test-helpers.ts", import.meta.url).href;
@@ -526,7 +600,24 @@ try {
   inspector.disconnect();
 }
 `;
-    const result = await runNativeProfile(ownerUrl, source, signal, true);
+    const result = await runNodeScript(
+      (workerArgv) => [
+        ...workerArgv(ownerUrl).slice(0, -1),
+        "--expose-gc",
+        "--input-type=module",
+        "--eval",
+        source,
+      ],
+      env,
+      20000,
+      {
+        cwd: root,
+        signal,
+        maxBuffer: 32768,
+        requireProcessTreeExit: true,
+        executable: process.execPath,
+      },
+    );
     expect(result.error).toBeUndefined();
     expect(result.status, [result.stderr, result.stdout].join("\n")).toBe(0);
     console.log("HEAP_PROFILE_NATIVE", result.stdout.trim());

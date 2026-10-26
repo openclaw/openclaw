@@ -1585,15 +1585,14 @@ it("flushes approval attention immediately while ordinary progress is batched", 
 });
 
 it("keeps intermediate command failures out of quiet native streams", async () => {
-  await dispatchNativeProgressScenario({
-    finalPayload: { text: FINAL_REPLY_TEXT },
-    progress: { style: "card", toolProgress: false, nativeTaskCards: true },
-    events: [
+  await dispatchNativeProgressScenario(
+    [
       planEvent("Run checks", "Checking the workspace"),
       { kind: "command_output", phase: "end", name: "Bash", title: "run checks", exitCode: 1 },
       { kind: "command_output", phase: "end", name: "Bash", title: "retry checks", exitCode: 8 },
     ],
-  });
+    { progress: { style: "card", toolProgress: false, nativeTaskCards: true } },
+  );
 
   const outgoing = JSON.stringify([
     ...startSlackStreamMock.mock.calls,
@@ -1662,7 +1661,7 @@ it.each<{
   name: string;
   events: SlackReplyOptionEvent[];
   updates: unknown[];
-  progress?: Parameters<typeof dispatchNativeProgressScenario>[0]["progress"];
+  progress?: NonNullable<Parameters<typeof dispatchNativeProgressScenario>[1]>["progress"];
 }>([
   {
     name: "deduplicated preamble and prepared note",
