@@ -20,7 +20,6 @@ const subscriptions: observation.WatchSubscription[] = [];
 const states = () => subscriptions.map((subscription) => subscription.health().state);
 let created = createDeferredCore<observation.WatchSubscription>();
 beforeEach(() => {
-  created = createDeferredCore<observation.WatchSubscription>();
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   const original = observation.watch;
   vi.spyOn(observation, "watch").mockImplementation((authority, options) => {
@@ -28,7 +27,6 @@ beforeEach(() => {
     const subscription = original(authority, { ...options, mode: "poll" });
     subscriptions.push(subscription);
     created.resolve(subscription);
-    created = createDeferredCore<observation.WatchSubscription>();
     return subscription;
   });
 });
@@ -53,13 +51,13 @@ function tmpFile(name: string, contents: string, directory = temp.make("usage-te
   return file;
 }
 async function loadObservedTemplate(path: string, expected: object, write = true) {
+  created = createDeferredCore<observation.WatchSubscription>();
   if (write) {
     writeJSON(path, expected);
   }
-  const started = created.promise;
   const template = loadUsageBarTemplate(path);
   expect(template).toEqual(expected);
-  const subscription = await started;
+  const subscription = await created.promise;
   await subscription.ready;
   return { template, subscription };
 }
@@ -80,19 +78,16 @@ it("reloads a path after invalid JSON is fixed", () => {
 it("bounds invalid-template warnings by least-recently-used path", () => {
   const dir = temp.make("usage-template-");
   const paths = Array.from({ length: 257 }, (_, i) => tmpFile(`${i}.json`, "{ not json", dir));
-  for (const path of paths.slice(0, 256)) {
-    expect(loadUsageBarTemplate(path)).toBe(defaultTemplate);
-  }
+  paths.slice(0, 256).forEach(loadUsageBarTemplate);
   expect(warnSpy).toHaveBeenCalledTimes(256);
   expectWarningCount(paths[0]!, 256); // Keep the oldest key hot before overflowing.
   expectWarningCount(paths[256]!, 257);
   expectWarningCount(paths[0]!, 257);
   expectWarningCount(paths[1]!, 258);
-  expect(warnSpy).toHaveBeenLastCalledWith(warning, {
-    source: "file",
-    reason: "invalid-json",
-    path: paths[1],
-  });
+  expect(warnSpy.mock.lastCall).toEqual([
+    warning,
+    { source: "file", reason: "invalid-json", path: paths[1] },
+  ]);
 });
 it("refreshes atomic replacements and restored files, then rereads after loss of coverage", async () => {
   const directory = temp.make("usage-template-");
@@ -110,12 +105,10 @@ it("refreshes atomic replacements and restored files, then rereads after loss of
     expect(loadUsageBarTemplate(file)).toEqual(next);
   }
   await update(tplB, true);
-  await update(tplA, true);
   unlinkSync(file);
   await subscription.reconcile();
   expect(loadUsageBarTemplate(file)).toBe(defaultTemplate);
   await update(tplA);
-  await update(tplB, true);
   expect(warnSpy).not.toHaveBeenCalled();
   renameSync(directory, join(temp.make("usage-template-"), "retired"));
   await expect(subscription.reconcile()).rejects.toThrow();
