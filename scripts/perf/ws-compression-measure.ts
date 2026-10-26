@@ -55,7 +55,11 @@ const { values } = parseArgs({
 const installCodec: typeof installGatewayDeflateCodec = values.codec
   ? (await import(pathToFileURL(values.codec).href)).installGatewayDeflateCodec
   : installGatewayDeflateCodec;
-function integer(label: keyof typeof values, fallback: number, min: number) {
+function integer(
+  label: Exclude<keyof typeof values, "allocations">,
+  fallback: number,
+  min: number,
+) {
   return parseStrictIntegerOption({ raw: values[label], fallback, label, min });
 }
 const batches = integer("batches", 3000, 1);
