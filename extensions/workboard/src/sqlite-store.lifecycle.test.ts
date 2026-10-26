@@ -17,7 +17,9 @@ import { WorkboardStore } from "./store.js";
 
 const workerModuleUrl = new URL("./sqlite-store.worker.ts", import.meta.url);
 const storeOptions = { dbPath: "/unused-workboard-lifecycle.sqlite", workerModuleUrl };
-beforeEach(() => openEngineWorkerStore.mockReset());
+beforeEach(() => {
+  openEngineWorkerStore.mockReset();
+});
 
 function workerFixture() {
   const execute = vi.fn<() => Promise<WorkboardSqliteResult<unknown>>>();

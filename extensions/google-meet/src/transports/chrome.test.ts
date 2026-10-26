@@ -137,9 +137,13 @@ it("caps browser gateway timeout padding", async () => {
     "/tabs/open": meetTab("meet-tab"),
     "/act": { result: JSON.stringify({ manualAction }) },
   });
+  const baseConfig = resolveGoogleMeetConfig({});
   await launchChromeMeet({
     runtime: browserRuntime(gatewayRequest),
-    config: resolveGoogleMeetConfig({ chrome: { joinTimeoutMs, reuseExistingTab: false } }),
+    config: {
+      ...baseConfig,
+      chrome: { ...baseConfig.chrome, joinTimeoutMs, reuseExistingTab: false },
+    },
     fullConfig: {},
     meetingSessionId: "session-1",
     mode: "transcribe",
