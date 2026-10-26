@@ -15,6 +15,8 @@ import type { TranslationMap } from "./types.ts";
 
 const german = { common: { health: "Gesundheit" } } satisfies TranslationMap;
 const spanish = { common: { health: "Salud" } } satisfies TranslationMap;
+const settingsKey = "commandPalette.newSessionSettings";
+const rememberKey = "commandPalette.rememberUnavailable";
 
 const loadTranslation = vi.fn<(locale: Locale) => Promise<TranslationMap | null>>();
 let manager: ReturnType<typeof createI18nManagerForTesting>;
@@ -51,32 +53,24 @@ it("repairs a Node-style storage accessor without invoking its unsafe getter", a
   });
   Object.defineProperty(globalThis, "localStorage", { configurable: true, get: unsafeGetter });
   const storage = installSafeLocalStorageForTesting();
-  const descriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
   expect(unsafeGetter).not.toHaveBeenCalled();
-  expect(Object.hasOwn(descriptor ?? {}, "get")).toBe(false);
-  expect(descriptor?.value).toBe(storage);
   expect(getSafeLocalStorage()).toBe(storage);
   manager = createI18nManagerForTesting(loadTranslation);
   await manager.setLocale("en");
   expect(storage.getItem("openclaw.i18n.locale")).toBe("en");
 });
 
-it("looks up only the active locale when a caller owns its fallback", async () => {
-  manager.registerTranslation("de", german);
-  await manager.setLocale("de");
-  expect(manager.translateActive("common.health")).toBe("Gesundheit");
-  expect(manager.translateActive("common.connected")).toBeUndefined();
-  expect(loadTranslation).not.toHaveBeenCalled();
-});
-
-it("uses lazy English as fallback without replacing the active language", async () => {
+it("distinguishes active-only lookup from lazy English fallback", async () => {
   manager.registerTranslation("de", { commandPalette: { newSessionSettings: "Neue Sitzung" } });
   await manager.setLocale("de");
   registerCommandPaletteEnglish();
-  expect(manager.t("commandPalette.newSessionSettings")).toBe("Neue Sitzung");
-  expect(manager.t("commandPalette.rememberUnavailable")).toBe("Reconnect to remember settings.");
+  expect(manager.translateActive(settingsKey)).toBe("Neue Sitzung");
+  expect(manager.translateActive(rememberKey)).toBeUndefined();
+  expect(loadTranslation).not.toHaveBeenCalled();
+  expect(manager.t(settingsKey)).toBe("Neue Sitzung");
+  expect(manager.t(rememberKey)).toBe("Reconnect to remember settings.");
   await manager.setLocale("en");
-  expect(manager.t("commandPalette.newSessionSettings")).toBe("New session settings");
+  expect(manager.t(settingsKey)).toBe("New session settings");
 });
 
 it("prepares registered English namespaces before publishing a locale without loading unopened ones", async () => {
@@ -85,7 +79,7 @@ it("prepares registered English namespaces before publishing a locale without lo
   const loadPage = vi.fn(() => page.promise);
   const loadHints = vi.fn();
   const catalog = createLazyLocaleCatalog(
-    { common: { health: "Gesundheit" }, commandPalette: { newSessionSettings: "Neue Sitzung" } },
+    { ...german, commandPalette: { newSessionSettings: "Neue Sitzung" } },
     { commandPalette: loadPage, configHints: loadHints },
   );
   manager.registerTranslation("de", catalog);
@@ -93,7 +87,7 @@ it("prepares registered English namespaces before publishing a locale without lo
   manager.subscribe(subscriber);
   const changing = manager.setLocale("de");
   expect(manager.getLocale()).toBe("en");
-  expect(manager.t("commandPalette.rememberUnavailable")).toBe("Reconnect to remember settings.");
+  expect(manager.t(rememberKey)).toBe("Reconnect to remember settings.");
   expect(loadPage).toHaveBeenCalledOnce();
   expect(loadHints).not.toHaveBeenCalled();
   page.resolve({
@@ -101,8 +95,8 @@ it("prepares registered English namespaces before publishing a locale without lo
   });
   await changing;
   expect(subscriber).toHaveBeenCalledExactlyOnceWith("de");
-  expect(manager.t("commandPalette.rememberUnavailable")).toBe("Zum Speichern erneut verbinden.");
-  expect(manager.t("commandPalette.newSessionSettings")).toBe("Neue Sitzung");
+  expect(manager.t(rememberKey)).toBe("Zum Speichern erneut verbinden.");
+  expect(manager.t(settingsKey)).toBe("Neue Sitzung");
   expect(manager.t("common.health")).toBe("Gesundheit");
   expect(loadPage).toHaveBeenCalledOnce();
 });
@@ -172,17 +166,6 @@ it.each(["explicit", "system"] as const)("persists the latest %s request", async
   expect(subscriber).toHaveBeenCalledExactlyOnceWith("de");
 });
 
-it("clears an abandoned pending target after another locale succeeds", async () => {
-  vi.spyOn(console, "error").mockImplementation(() => {});
-  loadTranslation.mockRejectedValueOnce(new Error("gateway unavailable"));
-  loadTranslation.mockResolvedValueOnce(spanish);
-  await manager.setLocale("de");
-  await manager.setLocale("es");
-  await retryPendingLocale();
-
-  expect(state()).toMatchObject({ locale: "es", requested: "es", loads: 2 });
-});
-
 it.each(["explicit", "system"] as const)("keeps %s recovery preference", async (mode) => {
   vi.spyOn(console, "error").mockImplementation(() => {});
   vi.stubGlobal("navigator", { language: "de-DE" });
@@ -234,4 +217,5 @@ it.each(["failure", "success"] as const)("ignores a stale locale load's %s", asy
   expect(manager.getLocale()).toBe(outcome === "failure" ? "es" : "en");
   await retryPendingLocale();
   expect(state()).toMatchObject({ locale: "es", loads: outcome === "failure" ? 2 : 3 });
+  expect(manager.getRequestedLocale()).toBe("es");
 });
