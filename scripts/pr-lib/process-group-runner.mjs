@@ -25,6 +25,9 @@ const KILL_DRAIN_MS = 5000;
 const POLL_MS = 25;
 const MAX_NOTIFICATION_LINE_BYTES = 4096;
 const FORWARDED_SIGNALS = ["SIGHUP", "SIGINT", "SIGQUIT", "SIGTERM"];
+// Sourced helpers bypass scripts/pr's re-exec guard. Use system Bash on macOS
+// so PATH cannot reintroduce Bash 5.3's heredoc/here-string deadlock.
+const bash = process.platform === "darwin" ? "/bin/bash" : "bash";
 
 const [repoRootArg, script, ...args] = process.argv.slice(2);
 if (!repoRootArg || !script) {
@@ -90,7 +93,7 @@ const darwinIdentityScript = fileURLToPath(
 );
 if (process.platform === "darwin") {
   const identity = spawnSync(
-    "bash",
+    bash,
     [
       "-c",
       'source "$1"; pr_operation_lock_process_birth "$2"',
@@ -610,7 +613,7 @@ function releaseLock({ lockRef, ownerOid }) {
   const env = { ...process.env };
   delete env.OPENCLAW_PR_LOCK_NOTIFY_FD;
   const result = spawnSync(
-    "bash",
+    bash,
     [
       "-c",
       [
