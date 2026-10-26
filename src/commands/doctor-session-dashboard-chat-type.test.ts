@@ -44,6 +44,22 @@ const discordDelivery: SessionEntry["delivery"] = {
   origin: { provider: "discord", accountId: "default", to: "channel:1", chatType: "channel" },
 };
 
+function expectNote(verb: string) {
+  expect(note).toHaveBeenCalledWith(
+    expect.stringContaining(`${verb} 1 dashboard chat(s)`),
+    "Session chat type",
+  );
+  note.mockClear();
+}
+
+function readEntries(fixture: ReturnType<typeof createCanonicalRepairFixture>) {
+  const entries: Record<string, SessionEntry> = {};
+  scanDoctorSessionEntriesTolerant(fixture.scope(), ({ entry, sessionKey }) => {
+    entries[sessionKey] = entry;
+  });
+  return entries;
+}
+
 describe("doctor dashboard chat type backfill", () => {
   let state: OpenClawTestState | undefined;
 
@@ -92,13 +108,7 @@ describe("doctor dashboard chat type backfill", () => {
       await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
     };
-    const read = () => {
-      const entries: Record<string, SessionEntry> = {};
-      scanDoctorSessionEntriesTolerant(fixture.scope(), ({ entry, sessionKey }) => {
-        entries[sessionKey] = entry;
-      });
-      return entries;
-    };
+    const read = () => readEntries(fixture);
     const write = (entries: Record<string, SessionEntry>) => {
       for (const [sessionKey, entry] of Object.entries(entries)) {
         fixture.insert(sessionKey, entry);
@@ -113,11 +123,7 @@ describe("doctor dashboard chat type backfill", () => {
       await settle();
       expect(preview).toMatchObject({ found: 1, repaired: 0 });
       expect(read()).toEqual(before);
-      expect(note).toHaveBeenCalledWith(
-        expect.stringContaining(`Would record 1 dashboard chat(s)`),
-        "Session chat type",
-      );
-      note.mockClear();
+      expectNote("Would record");
 
       const fixed = repairLegacyDashboardChatTypes({ apply: true, cfg, env });
       await settle();
@@ -132,12 +138,7 @@ describe("doctor dashboard chat type backfill", () => {
       };
       // The stamp is the only change: every other durable field stays current.
       expect(read()).toEqual(after);
-      expect(note).toHaveBeenCalledWith(
-        expect.stringContaining(`Recorded 1 dashboard chat(s)`),
-        "Session chat type",
-      );
-
-      note.mockClear();
+      expectNote("Recorded");
       const repeated = repairLegacyDashboardChatTypes({ apply: true, cfg, env });
       await settle();
       expect(repeated).toMatchObject({ found: 0, repaired: 0 });
@@ -175,15 +176,7 @@ describe("doctor dashboard chat type backfill", () => {
     const doctorKey = dashboardRootKey(16);
     const doctorEntry = legacyRoot({ sessionId: "doctor-wiring" });
     doctorFixture.insert(doctorKey, doctorEntry);
-    const readDoctorEntry = () => {
-      let result: SessionEntry | undefined;
-      scanDoctorSessionEntriesTolerant(doctorFixture.scope(), ({ entry, sessionKey }) => {
-        if (sessionKey === doctorKey) {
-          result = entry;
-        }
-      });
-      return result;
-    };
+    const readDoctorEntry = () => readEntries(doctorFixture)[doctorKey];
     const runDoctor = async (shouldRepair: boolean) => {
       await noteSessionTranscriptHealth({
         cfg: doctorConfig,
@@ -196,22 +189,14 @@ describe("doctor dashboard chat type backfill", () => {
 
     await runDoctor(false);
     expect(readDoctorEntry()).toEqual(doctorEntry);
-    expect(note).toHaveBeenCalledWith(
-      expect.stringContaining(`Would record 1 dashboard chat(s)`),
-      "Session chat type",
-    );
-    note.mockClear();
+    expectNote("Would record");
 
     await runDoctor(true);
     expect(readDoctorEntry()).toMatchObject({
       ...doctorEntry,
       chatType: "direct",
     });
-    expect(note).toHaveBeenCalledWith(
-      expect.stringContaining(`Recorded 1 dashboard chat(s)`),
-      "Session chat type",
-    );
-    note.mockClear();
+    expectNote("Recorded");
 
     await runDoctor(true);
     expect(note).not.toHaveBeenCalledWith(expect.anything(), "Session chat type");

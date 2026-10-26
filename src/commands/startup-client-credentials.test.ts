@@ -109,32 +109,52 @@ describe("automatic client credential preparation", () => {
       local: resolveClientCredentialStorePath(fixture.env),
     };
   }
-  function changeRecordedDevice(env: NodeJS.ProcessEnv) {
-    using owner = openClientCredentialCustody(env, { migration: true });
-    expect(owner).toBeDefined();
-    const stored = readClientCredentialReceipt(owner!.database)!;
-    stored.receipt.sharedFile!.dev = String(BigInt(stored.receipt.sharedFile!.dev) + 1000n);
-    owner!.transaction(() =>
-      writeClientCredentialReceipt(owner!.database, stored.receipt, stored.phase),
-    );
+  type Fixture = Awaited<ReturnType<typeof bootstrap>>;
+  function expectCredentials(fixture: Fixture) {
+    expect(loadDeviceIdentityIfPresent({ env: fixture.env })).toEqual(fixture.identity);
+    expect(
+      readDeviceAuthTokenForTest({
+        env: fixture.env,
+        deviceId: fixture.identity.deviceId,
+        role: "node",
+      }),
+    ).toEqual(fixture.token);
   }
-  function restoreLegacyBootstrapReceipt(env: NodeJS.ProcessEnv) {
+  function editReceipt(
+    env: NodeJS.ProcessEnv,
+    edit: (receipt: NonNullable<ReturnType<typeof readClientCredentialReceipt>>["receipt"]) => void,
+    phase?: NonNullable<ReturnType<typeof readClientCredentialReceipt>>["phase"],
+  ) {
     using owner = openClientCredentialCustody(env, { migration: true })!;
     const stored = readClientCredentialReceipt(owner.database)!;
-    stored.receipt.source = null;
+    edit(stored.receipt);
     owner.transaction(() =>
-      writeClientCredentialReceipt(owner.database, stored.receipt, "complete"),
+      writeClientCredentialReceipt(owner.database, stored.receipt, phase ?? stored.phase),
+    );
+  }
+  function changeRecordedDevice(env: NodeJS.ProcessEnv) {
+    editReceipt(env, (receipt) => {
+      receipt.sharedFile!.dev = String(BigInt(receipt.sharedFile!.dev) + 1000n);
+    });
+  }
+  function restoreLegacyBootstrapReceipt(env: NodeJS.ProcessEnv) {
+    editReceipt(
+      env,
+      (receipt) => {
+        receipt.source = null;
+      },
+      "complete",
     );
   }
   function snapshotFiles(root: string) {
     return Object.fromEntries(
-      listDirectoryTreeStrictSync(root)
-        .map((walkEntry) => walkEntry.relativePath)
-        .map((entry) => {
-          const relative = entry;
-          const pathname = path.join(root, relative);
-          return [relative, fs.statSync(pathname).isDirectory() ? null : fs.readFileSync(pathname)];
-        }),
+      listDirectoryTreeStrictSync(root).map(({ relativePath }) => {
+        const pathname = path.join(root, relativePath);
+        return [
+          relativePath,
+          fs.statSync(pathname).isDirectory() ? null : fs.readFileSync(pathname),
+        ];
+      }),
     );
   }
 
@@ -146,11 +166,12 @@ describe("automatic client credential preparation", () => {
     async ({ filename, claim, kind }) => {
       const fixture = await bootstrap();
       if (claim) {
-        using owner = openClientCredentialCustody(fixture.env, { migration: true })!;
-        const stored = readClientCredentialReceipt(owner.database)!;
-        delete stored.receipt.legacyImports[claim];
-        owner.transaction(() =>
-          writeClientCredentialReceipt(owner.database, stored.receipt, "complete"),
+        editReceipt(
+          fixture.env,
+          (receipt) => {
+            delete receipt.legacyImports[claim];
+          },
+          "complete",
         );
       }
       const sourcePath = path.join(fixture.root, filename);
@@ -170,15 +191,14 @@ describe("automatic client credential preparation", () => {
 
   it("ignores obsolete canonical and consumed JSON while importing required sibling auth", async () => {
     const fixture = await bootstrap();
-    {
-      using owner = openClientCredentialCustody(fixture.env, { migration: true })!;
-      const stored = readClientCredentialReceipt(owner.database)!;
-      delete stored.receipt.legacyImports["identity:primary"];
-      delete stored.receipt.legacyImports["auth:node"];
-      owner.transaction(() =>
-        writeClientCredentialReceipt(owner.database, stored.receipt, "complete"),
-      );
-    }
+    editReceipt(
+      fixture.env,
+      (receipt) => {
+        delete receipt.legacyImports["identity:primary"];
+        delete receipt.legacyImports["auth:node"];
+      },
+      "complete",
+    );
     const directory = path.join(fixture.root, "identity");
     fs.mkdirSync(directory, { recursive: true });
     const identityPath = path.join(directory, "device.json");
@@ -200,7 +220,7 @@ describe("automatic client credential preparation", () => {
     });
     fs.writeFileSync(sourcePath, source);
     await prepareStartupClientCredentials({ env: fixture.env, runtime, config: {} });
-    expect(loadDeviceIdentityIfPresent({ env: fixture.env })).toEqual(fixture.identity);
+    expectCredentials(fixture);
     expect(
       readDeviceAuthTokenForTest({
         env: fixture.env,
@@ -212,13 +232,6 @@ describe("automatic client credential preparation", () => {
       scopes: ["operator.read"],
       updatedAtMs: 456,
     });
-    expect(
-      readDeviceAuthTokenForTest({
-        env: fixture.env,
-        deviceId: fixture.identity.deviceId,
-        role: "node",
-      }),
-    ).toEqual(fixture.token);
     expect(fs.readFileSync(identityPath, "utf8")).toBe(obsolete);
     expect(fs.readFileSync(consumedAuthPath, "utf8")).toBe(obsolete);
     expect(fs.readFileSync(sourcePath, "utf8")).toBe(source);
@@ -276,14 +289,7 @@ describe("automatic client credential preparation", () => {
     vi.stubEnv("OPENCLAW_CONFIG_PATH", other.env.OPENCLAW_CONFIG_PATH);
     changeRecordedDevice(fixture.env);
     await prepareStartupClientCredentials({ env: fixture.env, runtime });
-    expect(loadDeviceIdentityIfPresent({ env: fixture.env })).toEqual(fixture.identity);
-    expect(
-      readDeviceAuthTokenForTest({
-        env: fixture.env,
-        deviceId: fixture.identity.deviceId,
-        role: "node",
-      }),
-    ).toEqual(fixture.token);
+    expectCredentials(fixture);
     expect(fs.readdirSync(other.root)).toEqual([]);
     expect(process.env.OPENCLAW_STATE_DIR).toBe(other.root);
     const bytes = fs.readFileSync(fixture.local);
@@ -313,14 +319,7 @@ describe("automatic client credential preparation", () => {
     await prepareStartupClientCredentials({ env: fixture.env, runtime });
     changeRecordedDevice(fixture.env);
     await prepareStartupClientCredentials({ env: fixture.env, runtime });
-    expect(loadDeviceIdentityIfPresent({ env: fixture.env })).toEqual(fixture.identity);
-    expect(
-      readDeviceAuthTokenForTest({
-        env: fixture.env,
-        deviceId: fixture.identity.deviceId,
-        role: "node",
-      }),
-    ).toEqual(fixture.token);
+    expectCredentials(fixture);
   });
 
   it("keeps healthy legacy credentials readable while a Gateway owns shared state", async () => {
@@ -341,14 +340,7 @@ describe("automatic client credential preparation", () => {
     try {
       await prepareStartupClientCredentials({ env: fixture.env, runtime });
       expect(fs.readFileSync(fixture.local)).toEqual(before);
-      expect(loadDeviceIdentityIfPresent({ env: fixture.env })).toEqual(fixture.identity);
-      expect(
-        readDeviceAuthTokenForTest({
-          env: fixture.env,
-          deviceId: fixture.identity.deviceId,
-          role: "node",
-        }),
-      ).toEqual(fixture.token);
+      expectCredentials(fixture);
     } finally {
       serving.release();
     }
@@ -398,14 +390,7 @@ describe("automatic client credential preparation", () => {
             expect(error).toHaveBeenCalledWith(
               "Client credential metadata upgrade deferred; existing credentials remain available. Startup will retry automatically.",
             );
-            expect(loadDeviceIdentityIfPresent({ env: fixture.env })).toEqual(fixture.identity);
-            expect(
-              readDeviceAuthTokenForTest({
-                env: fixture.env,
-                deviceId: fixture.identity.deviceId,
-                role: "node",
-              }),
-            ).toEqual(fixture.token);
+            expectCredentials(fixture);
           }
           expect(fs.readFileSync(fixture.local)).toEqual(before);
           expect(fs.readFileSync(fixture.env.OPENCLAW_CONFIG_PATH)).toEqual(originalConfig);
@@ -451,14 +436,7 @@ describe("automatic client credential preparation", () => {
       } else {
         await expect(preparation).rejects.toBe(failure);
       }
-      expect(loadDeviceIdentityIfPresent({ env: fixture.env })).toEqual(fixture.identity);
-      expect(
-        readDeviceAuthTokenForTest({
-          env: fixture.env,
-          deviceId: fixture.identity.deviceId,
-          role: "node",
-        }),
-      ).toEqual(fixture.token);
+      expectCredentials(fixture);
     },
   );
 
