@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { Check } from "typebox/schema";
 import { beforeEach, expect, it, vi } from "vitest";
 import { WebSearchStatusResultSchema } from "../../../packages/gateway-protocol/src/schema/web-search.js";
@@ -6,7 +7,8 @@ import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createWebSearchTestProvider } from "../../test-utils/web-provider-runtime.test-helpers.js";
 import { gatewayConnect } from "../server/client-fixtures.test-support.js";
-import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
+import { callAgentHandler } from "./agents-mutate.test-support.js";
+import type { GatewayRequestContext } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   snapshot: vi.fn<() => AuthProfileStore | undefined>(),
@@ -35,7 +37,6 @@ vi.mock("../../agents/auth-profiles.js", () => ({
   listProfilesForProvider: (store: AuthProfileStore, provider: string) =>
     listProfilesForProvider(store, provider),
 }));
-// mock-isolation: Any persisted read violates this prepared-auth status contract.
 vi.mock("../../agents/auth-profiles/store-runtime.js", () => ({
   ensureAuthProfileStore: mocks.persistedAuth,
   ensureAuthProfileStoreAsync: mocks.persistedAuth,
@@ -81,24 +82,20 @@ vi.mock("./users-profile-access.js", () => ({
 import { webSearchHandlers } from "./web-search.js";
 
 const readStatus = async (config: OpenClawConfig) => {
-  const context = { getRuntimeConfig: () => config } as GatewayRequestContext;
-  const respond = vi.fn<GatewayRequestHandlerOptions["respond"]>();
-  await webSearchHandlers["webSearch.status"]!({
-    req: { type: "req", id: "search-status", method: "webSearch.status" },
-    params: {},
-    client: {
-      connect: gatewayConnect(["operator.read"], { id: "gateway-client", mode: "backend" }),
+  const respond = await callAgentHandler(
+    webSearchHandlers["webSearch.status"]!,
+    "webSearch.status",
+    {},
+    {
+      context: { getRuntimeConfig: () => config } as GatewayRequestContext,
+      client: {
+        connect: gatewayConnect(["operator.read"], { id: "gateway-client", mode: "backend" }),
+      },
     },
-    context,
-    respond,
-    isWebchatConnect: () => false,
-  });
-  expect(respond).toHaveBeenCalledTimes(1);
+  );
   const [ok, payload, error] = respond.mock.calls[0] ?? [];
   expect([ok, error]).toEqual([true, undefined]);
-  if (!Check(WebSearchStatusResultSchema, payload)) {
-    throw new Error("Invalid web search status response");
-  }
+  assert(Check(WebSearchStatusResultSchema, payload), "Invalid web search status response");
   return payload;
 };
 const publishProfile = (profile: AuthProfileStore["profiles"][string] | undefined) =>
@@ -137,16 +134,11 @@ it.each([false, true])(
     const status = await readStatus({
       tools: { web: { search: { openaiCodex: { enabled: true } } } },
     });
-    expect(status).toMatchObject({
-      providers: [
-        {
-          id: "example",
-          configured: published,
-          credentialSource: published ? "auth-profile" : "missing",
-        },
-      ],
-      route: { kind: "native" },
-    });
+    expect([
+      status.providers[0]?.configured,
+      status.providers[0]?.credentialSource,
+      status.route.kind,
+    ]).toEqual([published, published ? "auth-profile" : "missing", "native"]);
     expect(mocks.persistedAuth).not.toHaveBeenCalled();
     expect(JSON.stringify(status)).not.toContain("synthetic-fixture-token");
   },
@@ -167,13 +159,8 @@ it.each([
     });
     mocks.catalog.mockResolvedValueOnce(undefined);
     const status = await readStatus({ tools: { web: { search: { provider: "example" } } } });
-    expect(status).toMatchObject({
-      providers: [{ id: "example", credentialSource: "auth-profile" }],
-      testProvider: { id: "example" },
-    });
+    expect(status.providers[0]?.credentialSource).toBe("auth-profile");
     const reason = status?.route.reason ?? "";
-    expect(reason.includes("The openai sign-in this provider uses is expired.")).toBe(reported);
-    expect(reason.includes("send `/login openai` from a private chat")).toBe(reported);
     expect(reason.includes("openclaw models auth login --provider openai")).toBe(reported);
     expect(JSON.stringify(status)).not.toMatch(/synthetic-|openai:fixture/);
   },

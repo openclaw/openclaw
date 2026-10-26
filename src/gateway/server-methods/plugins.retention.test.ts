@@ -43,11 +43,9 @@ function retainedPlugin(registry = createEmptyPluginRegistry(), id = inspection.
     instance.retainWork("prepared-generation-lease"),
   );
   onTestFinished(release);
-  const run = vi.spyOn(instance, "run");
-  return { registry, instance, release, run };
+  return { registry, release, run: vi.spyOn(instance, "run") };
 }
 
-// Exercise validation, async inventory, scope selection, and response composition together.
 async function inspect(
   registry: PluginRegistry,
   overrides: Partial<GatewayRequestHandlerOptions> = {},

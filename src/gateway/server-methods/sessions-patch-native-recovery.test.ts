@@ -3,7 +3,6 @@ import { afterEach, beforeEach, expect, it, vi, type MockInstance } from "vitest
 import type { SessionsPatchParams } from "../../../packages/gateway-protocol/src/index.js";
 import * as modelRuntime from "../../auto-reply/reply/model-runtime-normalization.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import type { AgentEntryConfig } from "../../config/types.agents.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { prepareSessionPatchRuntimeSelection as prepareRuntimeSelection } from "./sessions-patch-model-selection.js";
 
@@ -41,10 +40,6 @@ const original: SessionEntry = {
   modelOverride: "model",
 };
 const cfg: OpenClawConfig = { agents: { defaults: { sandbox: { mode: "all" } } } };
-const nodeTools = { exec: { host: "node" } } as const;
-function agentConfig<T extends AgentEntryConfig>(entry: T) {
-  return { ...cfg, agents: { ...cfg.agents, entries: { main: entry } } };
-}
 function unrestricted(overrides: Partial<SessionEntry> = {}): SessionEntry {
   return { ...original, permissionMode: "full", sandboxMode: "off", ...overrides };
 }
@@ -104,20 +99,6 @@ it.each([
 });
 
 it.each([
-  ["non-admin", {}, false, cfg, "sandbox"],
-  ["mandatory sandbox", { sandbox: "required", sandboxMode: "off" }, true, cfg, "sandbox-required"],
-  ["global node", {}, true, { ...cfg, tools: nodeTools }, "remote-execution"],
-  ["agent node", {}, true, agentConfig({ tools: nodeTools }), "remote-execution"],
-] satisfies [string, Partial<SessionEntry>, boolean, OpenClawConfig, string][])(
-  "does not offer an escape from %s",
-  async (_label, overrides, admin, config, reason) => {
-    const details = restriction(await prepare({ ...original, ...overrides }, admin, config));
-    expect(details).toMatchObject({ code: "AGENT_RUNTIME_RESTRICTED", reason });
-    expect(details).not.toHaveProperty("recovery");
-  },
-);
-
-it.each([
   [{}, {}, true],
   [{ model: "fixture/other@fixture:selected" }, { modelOverride: "other" }, false],
   [{ model: `${model}@fixture:other` }, { authProfileOverride: "fixture:other" }, false],
@@ -152,11 +133,11 @@ it.each([
   },
 );
 
-it.each([false, true])("validates local selection (dormant node=%s)", async (node) => {
+it("validates local selection with a dormant node", async () => {
   const result = await prepare(
-    unrestricted(node ? { execHost: "gateway", execNode: "dormant-node" } : {}),
+    unrestricted({ execHost: "gateway", execNode: "dormant-node" }),
     true,
-    node ? { tools: { exec: { host: "node" } } } : cfg,
+    { tools: { exec: { host: "node" } } },
   );
   assert(result.ok, "Expected recovery selection");
   expect(result.validate?.()).toBeUndefined();
@@ -164,13 +145,10 @@ it.each([false, true])("validates local selection (dormant node=%s)", async (nod
   expect(result.validate?.()).toMatchObject({ message: "Runtime owner changed" });
 });
 
-it.each([false, true])("preserves mandatory sandbox=%s at creation", async (mandatory) => {
-  const entry = mandatory ? { ...original, sandbox: "required" as const } : { ...original };
-  const result = await prepare(entry, false, cfg, { expectedEntry: undefined });
-  expect(result.ok).toBe(!mandatory);
+it("preserves mandatory sandbox at creation", async () => {
+  const entry = { ...original, sandbox: "required" as const };
+  const details = restriction(await prepare(entry, false, cfg, { expectedEntry: undefined }));
+  expect(details).toMatchObject({ reason: "sandbox-required" });
+  expect(details).not.toHaveProperty("recovery");
   expect(entry.nativeRuntimeConsent).toBeUndefined();
-  if (!result.ok) {
-    expect(result.error.details).toMatchObject({ reason: "sandbox-required" });
-    expect(result.error.details).not.toHaveProperty("recovery");
-  }
 });

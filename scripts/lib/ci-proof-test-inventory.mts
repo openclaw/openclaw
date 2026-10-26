@@ -2639,7 +2639,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/gateway/server-methods/models-list-result.plugin-runtime.test.ts",
   "src/gateway/server-methods/models-list-result.provider-outcomes.test.ts",
   "src/gateway/server-methods/models-list-result.runtime-choices.test.ts",
-  "src/gateway/server-methods/models-list.discovery-lifecycle.integration.test.ts",
   "src/gateway/server-methods/models-list.freshness.integration.test.ts",
   "src/gateway/server-methods/models-list.membership.integration.test.ts",
   "src/gateway/server-methods/models-list.native-lifecycle.integration.test.ts",

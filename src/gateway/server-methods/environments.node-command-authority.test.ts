@@ -118,10 +118,7 @@ it.each([
     const payload: EnvironmentsListResult = result;
     const listed = payload.environments.find((environment) => environment.id === "node:node-exec");
     expect(listed?.invocableCommands ?? []).toEqual(expected);
-    expect(listed?.requiredNodeCommand).toMatchObject({
-      command,
-      state,
-    });
+    expect(listed?.requiredNodeCommand).toMatchObject({ command, state });
     const message = listed?.requiredNodeCommand?.message;
     if (state === "invocable") {
       expect(listed?.requiredNodeCommand).not.toHaveProperty("message");

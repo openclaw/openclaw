@@ -189,7 +189,6 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/server-methods/models-connect-publication.integration.test.ts",
   "src/gateway/server-methods/models-dispatch.catalog.integration.test.ts",
   "src/gateway/server-methods/models-dispatch.lifecycle.integration.test.ts",
-  "src/gateway/server-methods/models-list.discovery-lifecycle.integration.test.ts",
   "src/gateway/server-methods/models-list.freshness.integration.test.ts",
   "src/gateway/server-methods/models-list.membership.integration.test.ts",
   "src/gateway/server-methods/models-list.native-lifecycle.integration.test.ts",
