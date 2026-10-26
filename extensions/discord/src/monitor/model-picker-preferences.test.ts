@@ -48,17 +48,10 @@ afterEach(async () => {
 
 describe("discord model picker preferences", () => {
   it("records recent models in recency order without duplicates", async () => {
-    const userScope = { userId: "123" };
-
-    await recordDiscordModelPickerRecentModel({ scope: userScope, modelRef: "openai/gpt-4o" });
-    await recordDiscordModelPickerRecentModel({
-      scope: userScope,
-      modelRef: "openai/gpt-4.1",
-    });
-    await recordDiscordModelPickerRecentModel({ scope: userScope, modelRef: "openai/gpt-4o" });
-
-    const recent = await readDiscordModelPickerRecentModels({ scope: userScope });
-    expect(recent).toEqual(["openai/gpt-4o", "openai/gpt-4.1"]);
+    await record("openai/gpt-4o");
+    await record("openai/gpt-4.1");
+    await record("openai/gpt-4o");
+    expect(await read()).toEqual(["openai/gpt-4o", "openai/gpt-4.1"]);
   });
 
   it("filters recent models using an allowlist", async () => {
@@ -69,31 +62,18 @@ describe("discord model picker preferences", () => {
   });
 
   it("prunes older stored models beyond the recent limit", async () => {
-    const userScope = { userId: "limited-user" };
-    for (const modelRef of [
-      "openai/a",
-      "openai/b",
-      "openai/c",
-      "openai/d",
-      "openai/e",
-      "openai/f",
-    ]) {
-      await recordDiscordModelPickerRecentModel({ scope: userScope, modelRef });
+    for (const suffix of ["a", "b", "c", "d", "e", "f"]) {
+      await record(`openai/${suffix}`);
     }
 
-    await expect(readDiscordModelPickerRecentModels({ scope: userScope })).resolves.toEqual([
+    await expect(read()).resolves.toEqual([
       "openai/f",
       "openai/e",
       "openai/d",
       "openai/c",
       "openai/b",
     ]);
-    const store = createPluginStateKeyedStoreForTests<unknown>("discord", {
-      namespace: "model-picker-preferences",
-      maxEntries: 2_000,
-      env,
-    });
-    expect(await store.entries()).toHaveLength(5);
+    expect(await openStore().entries()).toHaveLength(5);
   });
 
   it("falls back to empty recents when stored state is malformed", async () => {

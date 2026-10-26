@@ -1,4 +1,3 @@
-// Discord question component feedback tests.
 import { InteractionResponseType, MessageFlags } from "discord-api-types/v10";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -29,23 +28,32 @@ vi.mock("openclaw/plugin-sdk/question-gateway-runtime", async (importOriginal) =
   };
 });
 
-type InteractionHarness = {
-  interaction: BaseComponentInteraction;
-  acknowledge: ReturnType<typeof vi.fn>;
-  followUp: ReturnType<typeof vi.fn>;
-};
-
-function createInteraction(): InteractionHarness {
-  const acknowledge = vi.fn();
-  const followUp = vi.fn();
-  const interaction = {
-    userId: "user-1",
-    reply: vi.fn(),
-    acknowledge,
-    followUp,
-  } as unknown as BaseComponentInteraction;
-  return { interaction, acknowledge, followUp };
+function createInteraction() {
+  const client = createInternalTestClient();
+  const { post } = attachRestMock(client, {});
+  const interaction = createDiscordInteraction(
+    client,
+    createInternalComponentInteractionPayload({
+      id: "interaction-1",
+      token: "interaction-token",
+      user: {
+        id: "user-1",
+        username: "Alice",
+        discriminator: "0",
+        avatar: null,
+        global_name: null,
+      },
+    }),
+  ) as BaseComponentInteraction;
+  return { interaction, post };
 }
+
+const runButton = (interaction: BaseComponentInteraction) =>
+  createDiscordQuestionButton({ cfg: {}, accountId: "default" }).run(interaction, {
+    id: "ask_0123456789abcdef0123456789abcdef",
+    i: "1",
+  });
+const answered = { status: "answered" as const, questionId: "target", optionValue: "Production" };
 
 describe("Discord question button", () => {
   beforeEach(() => {
@@ -53,42 +61,22 @@ describe("Discord question button", () => {
     dependencies.resolve.mockReset();
   });
   it("does not resolve unauthorized clicks", async () => {
-    const { interaction, acknowledge } = createInteraction();
+    const { interaction, post } = createInteraction();
     const resolveQuestion = dependencies.resolve;
     dependencies.authorize.mockResolvedValue(false);
-    const button = createDiscordQuestionButton({
-      cfg: {} as never,
-      accountId: "default",
-    });
-
-    await button.run(interaction, {
-      id: "ask_0123456789abcdef0123456789abcdef",
-      i: "1",
-    });
+    await runButton(interaction);
 
     expect(resolveQuestion).not.toHaveBeenCalled();
-    expect(acknowledge).not.toHaveBeenCalled();
+    expect(post).not.toHaveBeenCalled();
   });
 
   it("does not turn a committed answer into an error when feedback fails", async () => {
-    const { interaction, followUp } = createInteraction();
-    followUp.mockRejectedValue(new Error("receipt failed"));
-    dependencies.resolve.mockResolvedValue({
-      status: "answered",
-      questionId: "target",
-      optionValue: "Production",
-    });
-    const button = createDiscordQuestionButton({
-      cfg: {} as never,
-      accountId: "default",
-    });
-
-    await expect(
-      button.run(interaction, {
-        id: "ask_0123456789abcdef0123456789abcdef",
-        i: "1",
-      }),
-    ).resolves.toBeUndefined();
+    const { interaction } = createInteraction();
+    const followUp = vi
+      .spyOn(interaction, "followUp")
+      .mockRejectedValue(new Error("receipt failed"));
+    dependencies.resolve.mockResolvedValue(answered);
+    await expect(runButton(interaction)).resolves.toBeUndefined();
     expect(followUp).toHaveBeenCalledOnce();
     expect(followUp).toHaveBeenCalledWith({
       content: "Answer submitted.",
@@ -100,11 +88,7 @@ describe("Discord question button", () => {
     {
       name: "submitted answer",
       acknowledged: false,
-      result: {
-        status: "answered" as const,
-        questionId: "target",
-        optionValue: "Production",
-      },
+      result: answered,
       expectedText: "Answer submitted.",
     },
     {
@@ -120,41 +104,17 @@ describe("Discord question button", () => {
       expectedText: "Could not submit this answer.",
     },
   ])("delivers $name feedback when acknowledgement is $acknowledged", async (testCase) => {
-    const client = createInternalTestClient();
-    const post = vi.fn(async () => undefined);
+    const { interaction, post } = createInteraction();
     if (!testCase.acknowledged) {
       post.mockRejectedValueOnce(new Error("temporary connection reset"));
     }
-    attachRestMock(client, { post });
-    const interaction = createDiscordInteraction(
-      client,
-      createInternalComponentInteractionPayload({
-        id: "interaction-1",
-        token: "interaction-token",
-        user: {
-          id: "user-1",
-          username: "Alice",
-          discriminator: "0",
-          avatar: null,
-          global_name: null,
-        },
-      }),
-    ) as BaseComponentInteraction;
     const resolveQuestion = dependencies.resolve.mockImplementation(async () => {
       if (testCase.error) {
         throw testCase.error;
       }
       return testCase.result;
     });
-    const button = createDiscordQuestionButton({
-      cfg: {} as never,
-      accountId: "default",
-    });
-
-    await button.run(interaction, {
-      id: "ask_0123456789abcdef0123456789abcdef",
-      i: "1",
-    });
+    await runButton(interaction);
 
     expect(resolveQuestion).toHaveBeenCalledOnce();
     expect(post).toHaveBeenNthCalledWith(

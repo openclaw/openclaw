@@ -1,10 +1,10 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelType } from "../internal/discord.js";
 import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
-type MaybeCreateDiscordAutoThreadFn = typeof import("./threading.js").maybeCreateDiscordAutoThread;
-type AutoThreadParams = Parameters<MaybeCreateDiscordAutoThreadFn>[0];
+import { maybeCreateDiscordAutoThread } from "./threading.js";
+type AutoThreadParams = Parameters<typeof maybeCreateDiscordAutoThread>[0];
 
 const { generateThreadTitleMock } = vi.hoisted(() => ({
   generateThreadTitleMock: vi.fn(),
@@ -13,8 +13,6 @@ const { generateThreadTitleMock } = vi.hoisted(() => ({
 vi.mock("./thread-title.js", () => ({
   generateThreadTitle: generateThreadTitleMock,
 }));
-
-let maybeCreateDiscordAutoThread: MaybeCreateDiscordAutoThreadFn;
 
 const postMock = vi.fn();
 const getMock = vi.fn();
@@ -68,10 +66,6 @@ function generatedParams(overrides: Partial<AutoThreadParams> = {}) {
     ...overrides,
   });
 }
-
-beforeAll(async () => {
-  ({ maybeCreateDiscordAutoThread } = await import("./threading.js"));
-});
 
 beforeEach(() => {
   postMock.mockReset();

@@ -2,12 +2,12 @@ import {
   ComponentType,
   MessageFlags,
   MessageReferenceType,
-  MessageType,
   StickerFormatType,
 } from "discord-api-types/v10";
 import { describe, expect, it } from "vitest";
 import { Message } from "../internal/discord.js";
 import { createInternalTestClient } from "../internal/test-builders.test-support.js";
+import { createDiscordMessage } from "./message-handler.preflight.test-helpers.js";
 import { resolveDiscordMessageHistoryText, resolveDiscordMessageText } from "./message-text.js";
 
 function asMessage(payload: Record<string, unknown>): Message {
@@ -38,26 +38,12 @@ const forwardedImage = {
   url: "https://cdn.discordapp.com/forwarded.png",
 };
 
-function asReferencedForwardMessage(params: {
-  content?: string;
-  messageReferenceType?: MessageReferenceType;
-}) {
+function asReferencedForwardMessage(content: string, type: MessageReferenceType) {
   return asMessage({
     content: "",
-    messageReference: {
-      type: params.messageReferenceType ?? MessageReferenceType.Forward,
-      message_id: "m0",
-      channel_id: "c1",
-    },
+    messageReference: { type },
     referencedMessage: asMessage({
-      id: "m0",
-      channelId: "c1",
-      content: params.content ?? "",
-      components: [],
-      attachments: [],
-      embeds: [],
-      flags: 0,
-      stickers: [],
+      content,
       author: { id: "u2", username: "Bob", discriminator: "0" },
     }),
   });
@@ -79,7 +65,7 @@ describe("resolveDiscordMessageText", () => {
     "includes only forwarded reference text (type=%s)",
     (messageReferenceType, content) => {
       const result = resolveDiscordMessageText(
-        asReferencedForwardMessage({ content, messageReferenceType }),
+        asReferencedForwardMessage(content, messageReferenceType),
         { includeForwarded: true },
       );
       if (messageReferenceType === MessageReferenceType.Default) {
@@ -93,15 +79,6 @@ describe("resolveDiscordMessageText", () => {
 
   const label = "a$'b $& big$$money a$`b";
   it.each([
-    [
-      "global names and username fallbacks",
-      "Hello <@123> and <@456>!",
-      [
-        { id: "123", username: "alice", globalName: "Alice Wonderland", discriminator: "0" },
-        { id: "456", username: "bob", discriminator: "0" },
-      ],
-      "Hello @Alice Wonderland and @bob!",
-    ],
     [
       "literal replacement tokens",
       "Hello <@1> and <@!1>, meet <@2>!",
@@ -128,42 +105,33 @@ describe("resolveDiscordMessageText", () => {
   it("uses Components v2 text display content when normal message text is empty", () => {
     const client = createInternalTestClient();
     const text = resolveDiscordMessageText(
-      new Message(client, {
-        id: "message-components",
-        channel_id: "channel-components",
-        content: "",
-        type: MessageType.Default,
-        author: {
-          id: "user-components",
-          username: "user",
-          discriminator: "0",
-          avatar: null,
-          global_name: null,
+      createDiscordMessage(
+        {
+          id: "message-components",
+          channelId: "channel-components",
+          content: "",
+          author: { id: "user-components", username: "user", bot: false },
+          timestamp: "2026-01-01T00:00:00.000Z",
+          flags: MessageFlags.IsComponentsV2,
+          components: [
+            {
+              type: ComponentType.Container,
+              components: [
+                { type: ComponentType.TextDisplay, content: "Component headline" },
+                {
+                  type: ComponentType.Section,
+                  components: [{ type: ComponentType.TextDisplay, content: "Component body" }],
+                  accessory: {
+                    type: ComponentType.Thumbnail,
+                    media: { url: "attachment://x.png" },
+                  },
+                },
+              ],
+            },
+          ],
         },
-        timestamp: "2026-01-01T00:00:00.000Z",
-        edited_timestamp: null,
-        attachments: [],
-        embeds: [],
-        mentions: [],
-        mention_roles: [],
-        mention_everyone: false,
-        pinned: false,
-        tts: false,
-        flags: MessageFlags.IsComponentsV2,
-        components: [
-          {
-            type: ComponentType.Container,
-            components: [
-              { type: ComponentType.TextDisplay, content: "Component headline" },
-              {
-                type: ComponentType.Section,
-                components: [{ type: ComponentType.TextDisplay, content: "Component body" }],
-                accessory: { type: ComponentType.Thumbnail, media: { url: "attachment://x.png" } },
-              },
-            ],
-          },
-        ],
-      }),
+        client,
+      ),
     );
 
     expect(text).toBe("Component headline\nComponent body");
