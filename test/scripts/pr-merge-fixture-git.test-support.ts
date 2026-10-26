@@ -180,6 +180,7 @@ export function createMergeGitFixtureFactory(directory: string, gitEnv: NodeJS.P
       ]);
     }
     git(["worktree", "add", "-q", "-b", "pr-123-prep", paths.worktree, head]);
+    mkdirSync(join(paths.repo, ".git/info"), { recursive: true });
     writeFileSync(join(paths.repo, ".git/info/exclude"), ".local/\n");
     return { ...owner, ...paths, base, head, sourceCommits };
   }

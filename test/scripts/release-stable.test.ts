@@ -37,7 +37,10 @@ const directories = useAutoCleanupTempDirTracker(afterEach);
 const fixture = (state?: ReturnType<typeof phaseState>) => {
   const scratch = join(REPO_ROOT, ".tmp");
   mkdirSync(scratch, { recursive: true });
-  const release = releaseFixture(directories.make(".release-stable-test-", scratch));
+  const release = releaseFixture(
+    directories.make(".release-stable-test-", scratch),
+    directories.make("release-stable-bin-"),
+  );
   if (state) {
     release.seed(state);
   }

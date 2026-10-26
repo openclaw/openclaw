@@ -23,6 +23,11 @@ const expectedWork = Object.fromEntries(
   workKeys.map((key) => [key, key === "pluginStateWorkerOperations" ? 1 : 0]),
 );
 
+vi.mock("../../infra/shell-env.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/shell-env.js")>()),
+  prepareShellPathFromLoginShell: async () => null,
+}));
+
 function measureHostCpuReference(): number {
   const bytes = Uint8Array.from({ length: 65_536 }, (_, index) => index & 255);
   const durations = Array.from({ length: 26 }, () => {

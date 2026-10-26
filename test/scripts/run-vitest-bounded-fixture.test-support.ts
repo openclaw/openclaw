@@ -40,7 +40,13 @@ export function createPreparedVitestCliFixture(
       entries.push("test/vitest/vitest.reporters.ts", "test/vitest/redacting-reporter.ts");
       const closure = collectRuntimeImportClosure(
         repoRoot,
-        [...entries, "scripts/run-vitest.mjs", "scripts/tsx.mjs"],
+        [
+          ...entries,
+          "scripts/run-vitest.mjs",
+          "scripts/tsx.mjs",
+          "test/helpers/github-network-preload.cjs",
+          "test/fixtures/forbid-github/transport.mjs",
+        ],
         { includeDynamicImports: true },
       );
       for (const file of new Set([

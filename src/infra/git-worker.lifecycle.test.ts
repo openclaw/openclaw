@@ -1,6 +1,5 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
-import { createServer, type Socket } from "node:net";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
@@ -20,6 +19,7 @@ import { isPidAlive } from "../shared/pid-alive.js";
 import { killPidIfAlive } from "../test-utils/process-tree.js";
 import * as gitExec from "./git-exec.js";
 import { installUnknownDirentFixture } from "./git-worker-dir.test-support.js";
+import { createHeldGitTransport } from "./git-worker-transport.test-support.js";
 import { runGitWorkerOperation, type GitWorkerOperationOptions } from "./git-worker.js";
 
 const execFileAsync = promisify(execFile);
@@ -590,25 +590,8 @@ describe("Git operation host lifecycle", () => {
     async ({ ending, transport }) => {
       const root = tempDirs.make("openclaw-git-worker-child-");
       const { clone, commit } = await partialClone(root);
-      const connected = createDeferredCore();
-      const sockets = new Set<Socket>();
-      let receivedBytes = 0;
-      const server = createServer((socket) => {
-        sockets.add(socket);
-        socket.on("error", () => {});
-        socket.once("data", (data) => {
-          receivedBytes += data.length;
-          connected.resolve();
-        });
-      });
-      await new Promise<void>((resolve) => {
-        server.listen(0, "127.0.0.1", resolve);
-      });
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("Missing fixture listener address");
-      }
-      await git(clone, "remote", "set-url", "origin", `git://127.0.0.1:${address.port}/held.git`);
+      const held = await createHeldGitTransport(root);
+      await git(clone, "config", "remote.origin.uploadpack", held.uploadPack);
       const trace = path.join(root, "git-trace.jsonl");
       vi.stubEnv("GIT_TRACE2_EVENT", trace);
       const abort = new AbortController();
@@ -630,11 +613,11 @@ describe("Git operation host lifecycle", () => {
       let gitPid: number | undefined;
       try {
         await waitForLifecyclePoint(
-          connected.promise,
+          held.connected,
           pending,
           "Git operation ended before reaching the held transport",
         );
-        expect(receivedBytes).toBeGreaterThan(0);
+        expect(held.receivedBytes).toBeGreaterThan(0);
         const starts = await traceStarts(trace, "fetch");
         expect(starts.length).toBe(1);
         const sid = starts[0]?.sid;
@@ -656,14 +639,14 @@ describe("Git operation host lifecycle", () => {
         expect(next.branches.length).toBeGreaterThan(0);
       } finally {
         abort.abort();
-        for (const socket of sockets) {
+        for (const socket of held.sockets) {
           socket.destroy();
         }
         killPidIfAlive(gitPid);
         await pending;
         await drainGlobalSingletonLifecycleState();
         await new Promise<void>((resolve, reject) => {
-          server.close((error) => (error ? reject(error) : resolve()));
+          held.server.close((error) => (error ? reject(error) : resolve()));
         });
       }
     },

@@ -7,6 +7,7 @@ import type { Plugin } from "vite";
 import { defineConfig, defineProject, type ViteUserConfig } from "vitest/config";
 import type { Vitest } from "vitest/node";
 import { mermaidClassicBundlePlugin } from "../packages/mermaid-renderer/vite-plugin.ts";
+import { installGitHubChromiumGuard } from "../test/helpers/github-browser-guard.mjs";
 import {
   filterFilesByPatterns,
   intersectIncludePatterns,
@@ -33,6 +34,8 @@ import { controlUiSolidPlugin } from "./config/control-ui-solid.ts";
 import { resolvePlaywrightChromiumExecutablePath } from "./src/test-helpers/playwright-chromium.ts";
 import { overlayEmulateMedia } from "./test/overlay-browser-commands.ts";
 import { UiRuntimePartitionSequencer } from "./test/vitest-runtime-sequencer.ts";
+
+installGitHubChromiumGuard(chromium);
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
@@ -72,7 +75,10 @@ const sharedUiTestConfig = {
   testTimeout: 60_000,
   hookTimeout: 60_000,
 } as const;
-const nodeSetupFiles = ["./src/test-helpers/dom.setup.ts"];
+const nodeSetupFiles = [
+  "./src/test-helpers/dom.setup.ts",
+  "./src/test-helpers/github-network.setup.ts",
+];
 const nodeDrivenBrowserLayoutTests = relativizeScopedPatterns(uiNodeDrivenBrowserTestFiles, "ui");
 const timingTests = relativizeScopedPatterns(uiTimingTestFiles, "ui");
 const mockRegistryUnitTests = uiIsolatedTestFiles.map((testFile) => testFile.slice("ui/".length));

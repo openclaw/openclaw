@@ -153,6 +153,7 @@ export async function main(argv = process.argv.slice(2), baseEnv = process.env) 
   try {
     const { child, completion } = spawnOwnedVitestProcess({
       ...testCommand,
+      githubNetwork: "live",
       options: {
         detached: shouldUseDetachedVitestProcessGroup(),
         env: { ...env, ...testCommand.envOverrides },

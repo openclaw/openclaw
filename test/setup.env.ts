@@ -1,11 +1,18 @@
+import { installGitHubNetworkGuard } from "./helpers/github-network-guard.mjs";
+import { installTestEnv } from "./test-env.js";
+
+// Native Bun preloads this environment setup without a Vitest test context.
+if (process.env.VITEST_WORKER_ID !== undefined) {
+  await import("./setup.github-network.js");
+} else {
+  installGitHubNetworkGuard();
+}
 // Env-only isolation for fast shards that intentionally skip the full shared
 // setup (no module mocks, no custom runner). unit-fast runs isolate:false with
 // auto-curated membership, so without this any test that reads config/state
 // sees the developer's real ~/.openclaw (e.g. an openclaw.json key the branch
 // schema rejects deterministically fails schema-reading tests locally while CI
 // stays green).
-import { installTestEnv } from "./test-env.js";
-
 process.env.VITEST = "true";
 
 const ENV_ISOLATION_SETUP = Symbol.for("openclaw.envIsolationTestSetup");

@@ -1,5 +1,7 @@
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { afterEach, expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import {
   getActiveBackgroundExecSessionCount,
   listFinishedSessions,
@@ -9,9 +11,23 @@ import { resetProcessRegistryForTests } from "./bash-process-registry.test-suppo
 import { createExecTool } from "./bash-tools.exec-run.js";
 import { createProcessTool } from "./bash-tools.process.js";
 
-afterEach(resetProcessRegistryForTests);
+vi.mock("../infra/shell-env.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/shell-env.js")>()),
+  getShellPathFromLoginShell: () => null,
+  resolveShellEnvFallbackTimeoutMs: () => 0,
+}));
+
+afterEach(() => {
+  resetProcessRegistryForTests();
+  vi.unstubAllEnvs();
+});
 
 test("real completed background commands retain only the newest fully readable process logs", async () => {
+  vi.stubEnv("OPENCLAW_EXEC_SHELL_SNAPSHOT", "0");
+  vi.stubEnv(
+    "PATH",
+    [path.dirname(resolveTestNodeExecPath()), process.env.PATH].join(path.delimiter),
+  );
   const scopeKey = "agent:main:retention-proof";
   const exec = createExecTool({
     host: "gateway",
