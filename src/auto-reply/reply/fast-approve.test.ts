@@ -3,6 +3,7 @@ import { buildTestCtx } from "./test-ctx.js";
 
 const submit = vi.hoisted(() => vi.fn());
 
+// mock-isolation: Test the approval handoff without loading Gateway approval execution.
 vi.mock("./commands-approve.js", () => ({
   handleApproveCommandFromContext: submit,
 }));

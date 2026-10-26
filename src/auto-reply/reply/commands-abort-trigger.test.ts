@@ -18,6 +18,7 @@ vi.mock("./abort-operation.js", async (importOriginal) => ({
   stopSubagentsForRequester: vi.fn(async () => ({ stopped: 0, failed: 0 })),
 }));
 
+// mock-isolation: Observe abort writes without loading session persistence into this command test.
 vi.mock("./commands-session-store.js", () => ({
   persistAbortTargetEntry: persistAbortTargetEntryMock,
   resolveCommandSessionEntryForKey: vi.fn(() => ({ entry: undefined, key: "agent:main:main" })),
