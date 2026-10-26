@@ -9,6 +9,9 @@ import type {
   GatewayClientHostDeps,
   GatewayClientOptions,
 } from "./client.js";
+import { GatewayProtocolRequestTimeoutError } from "./protocol-request.js";
+import { GatewayClientRequestTimeoutError } from "./request-error.js";
+import { MAX_SAFE_TIMEOUT_DELAY_MS } from "./timeouts.js";
 
 class MockWebSocket extends EventEmitter {
   static readonly OPEN = 1;
@@ -133,15 +136,22 @@ afterEach(async () => {
   for (const client of clients.splice(0)) {
     await client.stopAndWait();
   }
-  vi.useRealTimers();
+  // Restore timer spies before uninstalling the fake clock.
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 function connect(
   hostDeps: GatewayClientHostDeps,
   options: Pick<
     GatewayClientOptions,
-    "preferBootstrapToken" | "bootstrapToken" | "token" | "password" | "assertConnectionCurrent"
+    | "preferBootstrapToken"
+    | "bootstrapToken"
+    | "token"
+    | "password"
+    | "assertConnectionCurrent"
+    | "tickWatchMinIntervalMs"
+    | "tickWatchTimeoutMs"
   > = {},
   reportError?: ((error: Error) => void) | false,
 ) {
@@ -495,4 +505,84 @@ describe("GatewayClient host token storage", () => {
       expect(replacement.send).toHaveBeenCalledOnce();
     }
   });
+});
+
+async function watchedClient(tickIntervalMs = 5) {
+  const fixture = connect({}, { tickWatchMinIntervalMs: 5, tickWatchTimeoutMs: 10 });
+  fixture.socket.respond({ ...hello, policy: { tickIntervalMs } });
+  await vi.advanceTimersByTimeAsync(0);
+  return fixture;
+}
+
+it("lets finite pending requests own their timeout when ticks are missing", async () => {
+  const { client, onClose } = await watchedClient();
+  const request = client.request("status", undefined, { timeoutMs: 100 });
+  const outcome = request.catch((error: unknown) => error);
+  await vi.advanceTimersByTimeAsync(20);
+
+  expect(onClose).not.toHaveBeenCalled();
+
+  await vi.advanceTimersByTimeAsync(80);
+  const error = await outcome;
+  expect(error).toBeInstanceOf(GatewayClientRequestTimeoutError);
+  expect(error).toBeInstanceOf(GatewayProtocolRequestTimeoutError);
+  expect(error).toMatchObject({
+    message: "gateway request timeout for status",
+    code: "CLIENT_TIMEOUT",
+    method: "status",
+    timeoutMs: 100,
+    requestSent: true,
+  });
+  await vi.advanceTimersByTimeAsync(5);
+
+  expect(onClose).toHaveBeenCalledWith(4000, "tick timeout", expect.anything());
+  await client.stopAndWait();
+});
+
+it("keeps an unbounded request alive while inbound ticks continue", async () => {
+  const { client, socket, onClose } = await watchedClient();
+  const request = client.request<{ status: string }>("chat.send", undefined, {
+    expectFinal: true,
+  });
+  const requestFrame = JSON.parse(String(socket.send.mock.calls[1]?.[0])) as { id: string };
+
+  for (let seq = 1; seq <= 4; seq += 1) {
+    await vi.advanceTimersByTimeAsync(5);
+    socket.receive({ type: "event", event: "tick", seq, payload: {} });
+  }
+
+  expect(onClose).not.toHaveBeenCalled();
+  socket.receive({
+    type: "res",
+    id: requestFrame.id,
+    ok: true,
+    payload: { status: "ok" },
+  });
+  await expect(request).resolves.toEqual({ status: "ok" });
+  await client.stopAndWait();
+});
+
+it("clamps oversized tick watchdog intervals before scheduling", async () => {
+  const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+  const { client } = await watchedClient(Number.MAX_SAFE_INTEGER);
+
+  expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), MAX_SAFE_TIMEOUT_DELAY_MS);
+  client.stop();
+});
+
+it("clamps oversized stopAndWait timeouts before scheduling", async () => {
+  const client = new GatewayClient({});
+  const ws = { readyState: MockWebSocket.OPEN, close: vi.fn(), terminate: vi.fn() };
+  (client as unknown as { ws: unknown }).ws = ws;
+  const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+  const stopPromise = client.stopAndWait({ timeoutMs: Number.MAX_SAFE_INTEGER });
+
+  await vi.advanceTimersByTimeAsync(1);
+  expect(ws.terminate).not.toHaveBeenCalled();
+  expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_SAFE_TIMEOUT_DELAY_MS);
+
+  await vi.advanceTimersByTimeAsync(249);
+  await expect(stopPromise).resolves.toBeUndefined();
+  expect(ws.terminate).toHaveBeenCalledTimes(1);
 });
