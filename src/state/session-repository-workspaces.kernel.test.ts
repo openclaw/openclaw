@@ -4,6 +4,7 @@ import { getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { admitSqliteSchema, runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
+import type { DB } from "./openclaw-state-db.generated.js";
 import { findSessionRepositoryWorkspaceInDatabase } from "./session-repository-workspaces.kernel.js";
 
 it("compiles owner lookups once per connection while bindings and stored rows change", () => {
@@ -34,7 +35,9 @@ it("compiles owner lookups once per connection while bindings and stored rows ch
   }
   const find = (db: typeof first, input: typeof owner) =>
     runSqliteReadOperationSync(db, () => findSessionRepositoryWorkspaceInDatabase(db, input));
-  const selections = [first, second].map((db) => vi.spyOn(getNodeSqliteKysely(db), "selectFrom"));
+  const selections = [first, second].map((db) =>
+    vi.spyOn(getNodeSqliteKysely<Pick<DB, "session_repository_workspaces">>(db), "selectFrom"),
+  );
   try {
     for (const db of [first, second, first, second]) {
       expect(find(db, owner)).toMatchObject({
