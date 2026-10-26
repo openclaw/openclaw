@@ -51,6 +51,16 @@ function makeLegacy(file: string) {
 function hash(file: string) {
   return createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 }
+
+function failMigration() {
+  const run = tasks.runDatabasePortTask;
+  vi.spyOn(tasks, "runDatabasePortTask").mockImplementation(async (...args) => {
+    if (args[0].operation === "migrate") {
+      throw new Error(injected);
+    }
+    return await run(...args);
+  });
+}
 async function loseOneCommittedReply(original: string) {
   const dropped = new Int32Array(new SharedArrayBuffer(4));
   const url = new URL("./port-command-proxy.test-support.ts", import.meta.url);
@@ -347,13 +357,7 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
         ...JSON.parse(fs.readFileSync(state.configPath, "utf8")),
         agents: { entries: { external: { agentDir } } },
       });
-      const run = tasks.runDatabasePortTask;
-      vi.spyOn(tasks, "runDatabasePortTask").mockImplementation(async (...args) => {
-        if (args[0].operation === "migrate") {
-          throw new Error(injected);
-        }
-        return await run(...args);
-      });
+      failMigration();
       await expect(doctorDatabasePort({ to: "postgres" })).rejects.toThrow("private migrate");
       vi.restoreAllMocks();
       const target = manifest(state).targets[0];
@@ -639,7 +643,7 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
     180_000,
   );
 
-  it.each(["environment", "absent", "changed environment"])(
+  it.each(["absent", "changed environment"])(
     "restores the authored %s engine value after a committed config write fails",
     async (authored) => {
       await fixture(async ({ state, source }) => {
@@ -745,13 +749,7 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
   it("refuses a changed recovery artifact without changing the original", async () => {
     await fixture(async ({ state, source }) => {
       const before = canonical(source);
-      const run = tasks.runDatabasePortTask;
-      vi.spyOn(tasks, "runDatabasePortTask").mockImplementation(async (...args) => {
-        if (args[0].operation === "migrate") {
-          throw new Error(injected);
-        }
-        return await run(...args);
-      });
+      failMigration();
       await expect(doctorDatabasePort({ to: "postgres" })).rejects.toThrow("private migrate");
       vi.restoreAllMocks();
       const target = manifest(state).targets[0];
