@@ -22,20 +22,17 @@ const classCatalog = {
     { class: "small", target: "linux", architecture: "amd64", primary: { vcpu: 4 } },
   ],
 };
-const catalog = [{ provider: "aws", targets: ["linux", "windows"], classCatalog }];
 function directConfig(state: string) {
-  const aws = {
-    configuration: { state },
-    authentication: { status: "unchecked" },
-    readiness: "unchecked",
-  };
+  const aws = { configuration: { state } };
   return { provider: "aws", providerSelected: true, providerStatus: { providers: { aws } } };
 }
 
-function fixture(config: unknown = coordinatorConfig, providers: unknown = catalog) {
+function fixture(config: unknown = coordinatorConfig, targets = ["linux", "windows"]) {
   const runCommand = vi.fn<CrabboxCommandRunner>(async (argv) =>
     commandResult({
-      stdout: JSON.stringify(argv[1] === "config" ? config : providers),
+      stdout: JSON.stringify(
+        argv[1] === "config" ? config : [{ provider: "aws", targets, classCatalog }],
+      ),
     }),
   );
   const warn = vi.fn();
@@ -49,48 +46,35 @@ function fixture(config: unknown = coordinatorConfig, providers: unknown = catal
   };
 }
 
-it("offers the smallest advertised Linux class with stable, valid saved settings", async () => {
-  const { discover, dependencies } = fixture();
-  const suggestion = await discover({});
-  const machine = { provider: "aws", class: "small", target: "linux" };
-  expect(suggestion).toEqual({
-    id: "cloud",
-    providerDisplayId: "aws",
-    profile: {
-      provider: "crabbox",
-      install: "bundle",
-      suspendAfter: "45m",
-      settings: {
-        ...machine,
-        ttl: "4h",
-        idleTimeout: "45m",
-        warmImage: true,
+it.each([coordinatorConfig, directConfig("explicit")])(
+  "suggests the smallest Linux class with valid, stable settings: %j",
+  async (config) => {
+    const { discover, dependencies } = fixture(config);
+    const suggestion = await discover({});
+    const machine = { provider: "aws", class: "small", target: "linux" };
+    expect(suggestion).toEqual({
+      id: "cloud",
+      providerDisplayId: "aws",
+      profile: {
+        provider: "crabbox",
+        install: "bundle",
+        suspendAfter: "45m",
+        settings: { ...machine, ttl: "4h", idleTimeout: "45m", warmImage: true },
       },
-    },
-  });
-  expect(parseCrabboxProfile(suggestion!.profile.settings!)).toMatchObject(machine);
-  expect(await createCrabboxProfileSuggestionDiscovery(dependencies)({})).toEqual(suggestion);
-});
+    });
+    expect(parseCrabboxProfile(suggestion!.profile.settings!)).toMatchObject(machine);
+    expect(await createCrabboxProfileSuggestionDiscovery(dependencies)({})).toEqual(suggestion);
+  },
+);
 
 it.each([
-  [directConfig("explicit"), { id: "cloud", providerDisplayId: "aws" }],
-  [{}, undefined],
-  [{ ...coordinatorConfig, providerSelected: false }, undefined],
-  [{ ...coordinatorConfig, brokerAuth: "missing" }, undefined],
-  [directConfig("defaults_only"), undefined],
-])("offers only explicitly configured providers: %j", async (config, expected) => {
-  const { discover } = fixture(config);
-  if (expected) {
-    expect(await discover({})).toMatchObject(expected);
-  } else {
-    expect(await discover({})).toBeUndefined();
-  }
-});
-
-it("requires an advertised Linux class", async () => {
-  const { discover } = fixture(coordinatorConfig, [
-    { provider: "aws", targets: ["windows"], classCatalog },
-  ]);
+  [{}, ["linux"]],
+  [{ ...coordinatorConfig, providerSelected: false }, ["linux"]],
+  [{ ...coordinatorConfig, brokerAuth: "missing" }, ["linux"]],
+  [directConfig("defaults_only"), ["linux"]],
+  [coordinatorConfig, ["windows"]],
+])("rejects unusable configuration/catalog: %j %j", async (config, targets) => {
+  const { discover } = fixture(config, targets);
   expect(await discover({})).toBeUndefined();
 });
 
