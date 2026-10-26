@@ -95,7 +95,7 @@ try {
         for (let participant = 0; participant < count; participant++) {
           recordSessionParticipantFromWorker(
             database,
-            { agentId: "main", sessionKey, sessionId: id, path: database.path },
+            { agentId: "main", sessionKey, storePath: database.path },
             {
               identity: { type: "agent", id: `synthetic-peer-${participant}` },
               promptedAt: participant + 1,
