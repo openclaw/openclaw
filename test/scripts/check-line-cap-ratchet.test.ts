@@ -188,14 +188,14 @@ it("uses qualified oxlint instead of a stale canonical bin in a code-only worktr
   expect(fs.existsSync(path.join(checkout, "node_modules"))).toBe(false);
 });
 
-function cliFixture(source: string) {
+function cliFixture(cliSource: string) {
   const donor = createToolingDependencyFixture(tempDirs.make("openclaw-line-cap-admission-"));
   const { env } = installLineCapToolingFixture(donor.checkout);
   const root = fixture(2, "warn", [], donor.checkout);
   const manifest = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
   donor.writePackage("tsx", "export {};", manifest.devDependencies.tsx);
   donor.writePackage("json5", "export default JSON;", manifest.dependencies.json5);
-  const pkg = donor.writePackage("oxlint", source, manifest.devDependencies.oxlint);
+  const pkg = donor.writePackage("oxlint", cliSource, manifest.devDependencies.oxlint);
   const binManifest = {
     name: "oxlint",
     version: manifest.devDependencies.oxlint,
@@ -210,7 +210,7 @@ function cliFixture(source: string) {
     root,
     pkg,
     binManifest,
-    run() {
+    run: () => {
       fs.writeFileSync(path.join(pkg, "package.json"), JSON.stringify(binManifest));
       return spawnSync(
         process.execPath,
