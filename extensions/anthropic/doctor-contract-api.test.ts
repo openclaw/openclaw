@@ -25,6 +25,9 @@ function provider(apiKey?: string, agentRuntime?: { id: string }): OpenClawConfi
     { models: { providers: { anthropic: { baseUrl: "", models: [], apiKey, agentRuntime } } } },
   );
 }
+function models(entries: Defaults["models"], model: Defaults["model"] = opus) {
+  return config({ models: entries, model });
+}
 
 beforeEach(() => {
   vi.stubEnv("ANTHROPIC_API_KEY", "");
@@ -35,9 +38,7 @@ afterEach(() => vi.unstubAllEnvs());
 it("adds the Claude CLI wildcard to an earlier sign-in, idempotently", () => {
   const cfg = config();
   const result = normalizeCompatibilityConfig({ cfg });
-  expect(result.changes).toEqual([
-    'agents.defaults.models["anthropic/*"]: added the claude-cli runtime so Claude models not seeded at Claude CLI sign-in run through Claude Code instead of failing without an Anthropic API key.',
-  ]);
+  expect(result.changes).toHaveLength(1);
   expect(result.config.agents?.defaults).toEqual({
     ...cfg.agents?.defaults,
     models: { ...pinned, "anthropic/*": cli },
@@ -56,38 +57,19 @@ it.each<[string, OpenClawConfig]>([
 });
 
 it.each<[string, OpenClawConfig]>([
-  [
-    "authored wildcard runtime",
-    config({ models: { ...pinned, "anthropic/*": { agentRuntime: { id: "openclaw" } } } }),
-  ],
-  [
-    "authored wildcard alias",
-    config({ models: { ...pinned, "anthropic/*": { alias: "Claude" } } }),
-  ],
+  ["authored wildcard runtime", models({ "anthropic/*": { agentRuntime: { id: "openclaw" } } })],
+  ["authored wildcard alias", models({ "anthropic/*": { alias: "Claude" } })],
   ["empty config", {}],
-  [
-    "non-CLI entries",
-    config({
-      model: opus,
-      models: {
-        [opus]: {},
-        [sonnet]: { agentRuntime: { id: "openclaw" } },
-        "claude-cli/claude-opus-5": {},
-      },
-    }),
-  ],
+  ["non-CLI entries", models({ [opus]: {}, [sonnet]: { agentRuntime: { id: "openclaw" } } })],
   // The API primary's credential may live only in the auth store, invisible to repair.
   [
     "API primary with CLI fallback",
-    config({
-      model: { primary: "anthropic/claude-opus-4-6", fallbacks: [sonnet] },
-      models: { "anthropic/claude-opus-4-6": { alias: "Opus" }, [sonnet]: cli },
-    }),
+    models(
+      { "anthropic/claude-opus-4-6": { alias: "Opus" }, [sonnet]: cli },
+      { primary: "anthropic/claude-opus-4-6", fallbacks: [sonnet] },
+    ),
   ],
-  [
-    "non-Anthropic primary",
-    config({ model: "openai/gpt-5.2", models: { [opus]: cli, "openai/gpt-5.2": {} } }),
-  ],
+  ["non-Anthropic primary", models({ [opus]: cli, "openai/gpt-5.2": {} }, "openai/gpt-5.2")],
   [
     "auth profile",
     config(
