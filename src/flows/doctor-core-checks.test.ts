@@ -242,7 +242,7 @@ describe("CORE_HEALTH_CHECKS", () => {
   });
 
   it("converts workspace suggestions into info findings", async () => {
-    const messages = ["Back up the workspace.", "Memory system not found in workspace."];
+    const messages = ["Back up the workspace.", "Memory system not found in workspace."] as const;
     mocks.collectWorkspaceSuggestionNotes.mockReturnValue([`- ${messages[0]}`, messages[1]]);
     const check = getCheck(createCoreHealthChecks(), "core/doctor/workspace-suggestions");
     const findings = await check.detect(

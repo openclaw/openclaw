@@ -404,6 +404,10 @@ it("backs up original rows and migrates pending delivery state before canonical 
   expect(cleared.read()).not.toHaveProperty("pendingFinalDelivery");
   expect(nullLegacyField.read()).not.toHaveProperty("memoryFlushAt");
   expect(unchanged.readRaw()).toBe(unchanged.raw);
+  expect(current.read().pendingFinalDelivery).toEqual({
+    ...canonicalPending,
+    artifactHint: "preserve opaque state metadata",
+  });
   expect(legacy.readRaw()).not.toContain("pendingFinalDeliveryText");
   expect(legacy.read().pluginExtensions).toEqual({
     example: { draft: { text: "Saved operator draft", revisions: [2, 3] } },
@@ -437,10 +441,7 @@ it("backs up original rows and migrates pending delivery state before canonical 
     transportOnly,
   );
   const currentEntry = loadExactSessionEntryReadOnly(current.scope)?.entry;
-  expect(currentEntry?.pendingFinalDelivery).toEqual({
-    ...canonicalPending,
-    artifactHint: "preserve opaque state metadata",
-  });
+  expect(currentEntry?.pendingFinalDelivery).toEqual(canonicalPending);
   expect(currentEntry).toMatchObject({
     fallbackNotice: { kind: "active", selectedModel: "current-a", activeModel: "current-b" },
     memoryFlush: { kind: "succeeded", compactionCount: 7 },

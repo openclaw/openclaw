@@ -230,7 +230,10 @@ it("emits Brotli and gzip variants only for bundled compressible assets", async 
   );
   // No timestamp, filename, or host OS field may make the pinned gzip bytes host-dependent.
   expect(variants[1]!.source.subarray(0, 10).toString("hex")).toBe("1f8b08000000000002ff");
-  const repeated = await createControlUiPrecompressedAssetVariants(file, Buffer.from(source));
+  const repeated = await createControlUiPrecompressedAssetVariants(
+    "assets/app-AbCd1234.js",
+    Buffer.from(source),
+  );
   expect(repeated).toEqual(variants);
   for (const excluded of ["index.html", "assets/logo.png", "assets/app.js.map"]) {
     await expectEncodings(excluded, source);

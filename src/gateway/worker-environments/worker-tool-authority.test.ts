@@ -109,7 +109,10 @@ afterEach(() => {
 describe("resolveWorkerToolAuthority", () => {
   it.each<[string, TurnOverrides]>([
     ["default", {}],
-    ["configured review", execTurn({ host: "gateway", mode: "auto", strictInlineEval: true })],
+    [
+      "configured review",
+      { config: { tools: { exec: { host: "gateway", mode: "auto", strictInlineEval: true } } } },
+    ],
   ])("preserves launch fingerprint bytes across JSON for %s policy", async (_name, overrides) => {
     const { exec } = await resolvedAuthority(overrides);
     // The node supervisor fingerprints the projection before and after JSON transport.
@@ -120,11 +123,11 @@ describe("resolveWorkerToolAuthority", () => {
   it.each(["auto", "ask"] as const)(
     "preserves %s exec mode without withholding worker shell tools",
     async (mode) => {
-      const overrides = execTurn({ host: "gateway", mode });
+      const overrides: TurnOverrides = { config: { tools: { exec: { host: "gateway", mode } } } };
       const result = await resolvedAuthority(overrides);
       expect(result.exec).toMatchObject({ mode });
       expect(result.execUnavailable).toBe(false);
-      expect(await authority(overrides)).toEqual(expect.arrayContaining(execTools));
+      expect(await authority(overrides)).toEqual(expect.arrayContaining(["exec", "process"]));
     },
   );
   it("refuses an existing delegated session before exporting worker tool authority", async () => {

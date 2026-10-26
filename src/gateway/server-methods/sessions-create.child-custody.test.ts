@@ -85,6 +85,15 @@ async function createHostedChildFixture({
   sandboxRequired = false,
   mergedParentCreator = false,
   channelParent = false,
+}: {
+  system?: boolean;
+  toolInvocation?: boolean;
+  existingChild?: boolean;
+  mismatchedParentOwner?: boolean;
+  humanParent?: boolean;
+  sandboxRequired?: boolean;
+  mergedParentCreator?: boolean;
+  channelParent?: boolean;
 } = {}) {
   const storePath = path.join(temporaryDirs.make("openclaw-child-custody-"), "sessions.json");
   testState.sessionStorePath = storePath;

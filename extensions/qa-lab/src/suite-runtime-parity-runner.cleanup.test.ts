@@ -45,7 +45,9 @@ const createTransport = vi.hoisted(
       accountId: "sut",
       requiredPluginIds: [],
       supportedActions: [],
-      sendInbound: vi.fn(async () => {}),
+      sendInbound: vi.fn(async () => {
+        throw new Error("Unexpected inbound message in parity cleanup fixture");
+      }),
       createGatewayConfig: () => ({}),
       waitReady: vi.fn(async () => {}),
       buildAgentDelivery: ({ target }) => ({

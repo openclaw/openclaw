@@ -95,7 +95,11 @@ export function registerSettledFinalizationTests(_fixtures: SettledFinalizationF
     const result = await run;
     const selectedProfile = "openai:ordered";
     expect(onStart).toHaveBeenCalledWith(selectedProfile, expect.anything(), expect.anything());
-    expect(readAttemptTerminal(result).promptError).toBe(failure.message);
+    expect(readAttemptTerminal(result).promptError).toMatchObject({
+      message: failure.message,
+      status: 503,
+      code: "OVERLOADED",
+    });
     expect(result.currentAttemptAssistant).toBeDefined();
     expect(result).toMatchObject({
       replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
