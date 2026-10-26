@@ -82,9 +82,7 @@ vi.mock("../infra/net/proxy-env.js", () => ({
 }));
 
 vi.mock("./provider-local-service.js", () => ({
-  attachLocalServiceDiagnostics: (error: unknown) => error,
   ensureModelProviderLocalService: ensureModelProviderLocalServiceMock,
-  getLocalServiceDiagnosticTail: () => "",
 }));
 
 vi.mock("./provider-request-config.js", () => ({

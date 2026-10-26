@@ -52,10 +52,6 @@ import { resolveConfiguredProviderLocalServiceTarget } from "./provider-local-se
 import { setManagedProviderLocalServicesStop } from "./provider-runtime-lifecycle.js";
 import { unwrapHeadersInitSentinelsForProviderEgress } from "./provider-secret-egress.js";
 
-export {
-  attachLocalServiceDiagnostics,
-  getLocalServiceDiagnosticTail,
-} from "./provider-local-service-diagnostics.js";
 const log = createSubsystemLogger("provider-local-service");
 const DEFAULT_READY_TIMEOUT_MS = 120_000;
 const DEFAULT_PROBE_TIMEOUT_MS = 2_000;

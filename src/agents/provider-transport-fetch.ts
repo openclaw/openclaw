@@ -23,13 +23,13 @@ import {
   readResponseTextLimited,
   summarizeProviderTransportError,
 } from "./provider-http-errors.js";
-import { withLocalServiceResponseDiagnostics } from "./provider-local-service-response.js";
-import type { ProviderLocalServiceLease } from "./provider-local-service-target.js";
 import {
   attachLocalServiceDiagnostics,
-  ensureModelProviderLocalService,
   getLocalServiceDiagnosticTail,
-} from "./provider-local-service.js";
+} from "./provider-local-service-diagnostics.js";
+import { withLocalServiceResponseDiagnostics } from "./provider-local-service-response.js";
+import type { ProviderLocalServiceLease } from "./provider-local-service-target.js";
+import { ensureModelProviderLocalService } from "./provider-local-service.js";
 import {
   resolveProviderTransportSsrFPolicy,
   withModelProviderNetworkRemediation,
