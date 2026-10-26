@@ -68,6 +68,7 @@ const repositoryScriptEntries = [
   "scripts/perf/operator-role-source-policy-measure.mjs!",
   // Its header documents the full transcript-pairing repair benchmark.
   "scripts/perf/tool-result-pairing-measure.ts!",
+  "scripts/perf/assistant-thinking-measure.ts!",
   // db:postgres:gen/check invoke this generator through the source loader.
   "scripts/generate-postgres-schema.mts!",
   // CI preflight executes the manifest from its trusted harness checkout.

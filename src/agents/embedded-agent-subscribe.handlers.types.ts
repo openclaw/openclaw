@@ -4,7 +4,7 @@
  * state shape while keeping their implementation files decoupled.
  */
 import type { ReplyDirectiveParseResult } from "../auto-reply/reply/reply-directives.js";
-import type { ThinkingContent } from "../llm/types.js";
+import type { AssistantMessage } from "../llm/types.js";
 import type { HookRunner } from "../plugins/hooks.js";
 import type { AssistantPhase } from "../shared/chat-message-content.js";
 import type { BlockChunkMetadata, EmbeddedBlockChunker } from "./embedded-agent-block-chunker.js";
@@ -76,7 +76,7 @@ export type EmbeddedAgentSubscribeContext = {
     final?: boolean;
     finalReply?: ReplyDirectiveParseResult;
   }) => void | Promise<void>;
-  emitReasoningStream: (text: string | ThinkingContent, fallback?: string) => void;
+  emitReasoningStream: (text: string | AssistantMessage["content"], fallback?: string) => void;
   consumePartialReplyDirectives: (
     text: string,
     options?: { final?: boolean },
