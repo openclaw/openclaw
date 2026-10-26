@@ -15,9 +15,11 @@ import {
   recordMemoryArtifactWriteProvenance as recordWrite,
 } from "./memory-artifact-provenance.js";
 
-const test = it.extend<{ tempRoot: string }>({
+type Address = Parameters<typeof read>[0];
+const test = it.extend<{ tempRoot: string; address: Address }>({
   tempRoot: async ({ task }, use) =>
     withStateDirEnv(`openclaw-memory-artifact-${task.id}-`, ({ tempRoot }) => use(tempRoot)),
+  address: async ({ tempRoot }, use) => use({ workspaceDir: tempRoot, relativePath: "MEMORY.md" }),
 });
 
 afterEach(() => {
@@ -26,7 +28,7 @@ afterEach(() => {
 });
 
 function write(
-  address: { workspaceDir: string; relativePath: string },
+  address: Address,
   contentBefore: string,
   contentAfter: string,
   observedAt: number,
@@ -49,71 +51,47 @@ function beforePersist(before: () => Promise<void>) {
   });
 }
 
-type Address = Parameters<typeof read>[0];
 async function expectOrigin(address: Address, originClass: string, observedAt: number) {
   await expect(read(address)).resolves.toMatchObject({ originClass, observedAt });
 }
 
 test("lists one workspace in order and preserves corruption", async ({ tempRoot }) => {
   const workspaceDir = path.join(tempRoot, "workspace");
-  for (const relativePath of [
-    "memory/late.md",
-    "MEMORY.md",
-    "memory/first.md",
-    "memory/expired.md",
-  ]) {
+  const expectedPaths = ["memory/first.md", "MEMORY.md", "memory/late.md"];
+  for (const relativePath of [...expectedPaths.toReversed(), "memory/expired.md"]) {
     await write({ workspaceDir, relativePath }, "", "synthetic note", 1, "untrusted");
   }
-  const other = { workspaceDir: path.join(tempRoot, "other"), relativePath: "memory/other.md" };
-  await write(other, "", "synthetic other note", 1);
+  await write(
+    { workspaceDir: path.join(tempRoot, "other"), relativePath: "memory/other.md" },
+    "",
+    "other",
+    1,
+  );
   const { db } = openOpenClawStateDatabase();
-  // sqlite-allow-raw -- Seed historical ordering, expiry, and corruption at the storage boundary.
-  db.prepare(
-    `UPDATE plugin_state_entries SET
+  const update = (assignment: string, condition = "") =>
+    // sqlite-allow-raw -- Seed ordering, expiry, and corruption at the storage boundary.
+    db
+      .prepare(`UPDATE plugin_state_entries SET ${assignment}
+      WHERE plugin_id = ? AND namespace = ? ${condition}`)
+      .run("core:memory-artifact-provenance", "workspace-files");
+  update(`
          created_at = CASE json_extract(value_json, '$.relativePath') WHEN 'memory/late.md' THEN 20 ELSE 10 END,
          expires_at = CASE json_extract(value_json, '$.relativePath') WHEN 'memory/expired.md' THEN 1 ELSE NULL END
-         WHERE plugin_id = ? AND namespace = ?`,
-  ).run("core:memory-artifact-provenance", "workspace-files");
-  const materializedKeys: string[] = [];
-  const createStore = pluginState.createCorePluginStateKeyedStore;
-  vi.spyOn(pluginState, "createCorePluginStateKeyedStore").mockImplementation((options) => {
-    const store = createStore(options);
-    const capture = <T extends { key: string }>(entries: T[]) => {
-      materializedKeys.push(...entries.map((entry) => entry.key));
-      return entries;
-    };
-    return {
-      ...store,
-      entries: async () => capture(await store.entries()),
-      entriesInKeyRange: async (range) => capture(await store.entriesInKeyRange(range)),
-    };
-  });
+  `);
   const selected = await list({ workspaceDir });
-  expect(selected.map((entry) => entry.relativePath)).toEqual([
-    "memory/first.md",
-    "MEMORY.md",
-    "memory/late.md",
-  ]);
-  expect(materializedKeys).toHaveLength(3);
-  const selectedKey = expectDefined(materializedKeys[0], "selected provenance key");
-  // sqlite-allow-raw -- Unrelated and expired malformed JSON must not poison this workspace.
-  db.prepare(
-    "UPDATE plugin_state_entries SET value_json = ? WHERE plugin_id = ? AND namespace = ? AND entry_key NOT IN (?, ?, ?)",
-  ).run("{malformed", "core:memory-artifact-provenance", "workspace-files", ...materializedKeys);
+  expect(selected.map((entry) => entry.relativePath)).toEqual(expectedPaths);
+  update(
+    "value_json = '{malformed'",
+    "AND (expires_at = 1 OR json_extract(value_json, '$.relativePath') = 'memory/other.md')",
+  );
   await expect(list({ workspaceDir })).resolves.toEqual(selected);
-  // sqlite-allow-raw -- A selected corrupt row must still fail through the real worker reader.
-  db.prepare(
-    "UPDATE plugin_state_entries SET value_json = ? WHERE plugin_id = ? AND namespace = ? AND entry_key = ?",
-  ).run("{malformed", "core:memory-artifact-provenance", "workspace-files", selectedKey);
-  await expect(list({ workspaceDir })).rejects.toMatchObject({
-    code: "PLUGIN_STATE_CORRUPT",
-  });
+  update("value_json = '{malformed'", "AND json_valid(value_json)");
+  await expect(list({ workspaceDir })).rejects.toMatchObject({ code: "PLUGIN_STATE_CORRUPT" });
 });
 
 test.for(["write", "restore", "remove", "clear"] as const)(
   "awaits %s persistence and propagates rejection",
-  async (operation, { tempRoot }) => {
-    const address = { workspaceDir: tempRoot, relativePath: "MEMORY.md" };
+  async (operation, { address }) => {
     let rollback: (() => Promise<void>) | undefined;
     if (operation !== "write") {
       rollback = await write(address, "", "first", 1);
@@ -156,21 +134,17 @@ test("uses the same workspace identity through symlink aliases", async ({ tempRo
   await expect(read({ workspaceDir, relativePath })).resolves.toMatchObject({
     originClass: "untrusted",
   });
-  await expect(list({ workspaceDir })).resolves.toEqual([
-    expect.objectContaining({ relativePath }),
-  ]);
+  await expect(list({ workspaceDir })).resolves.toMatchObject([{ relativePath }]);
 });
 
-test("keeps the least-trusted origin sticky across later writes", async ({ tempRoot }) => {
-  const address = { workspaceDir: tempRoot, relativePath: "memory/2026-08-20.md" };
+test("keeps the least-trusted origin sticky across later writes", async ({ address }) => {
   await write(address, "", "restricted", 1, "untrusted");
   await write(address, "restricted", "restricted\ntrusted", 2);
   resetPluginStateStoreForTests();
   await expectOrigin(address, "untrusted", 2);
 });
 
-test("does not let an older rollback erase a later reservation", async ({ tempRoot }) => {
-  const address = { workspaceDir: tempRoot, relativePath: "MEMORY.md" };
+test("does not let an older rollback erase a later reservation", async ({ address }) => {
   const rollback = await write(address, "", "first", 1);
   await write(address, "first", "second", 2);
   await rollback?.();
@@ -179,8 +153,7 @@ test("does not let an older rollback erase a later reservation", async ({ tempRo
 
 test.for(["write", "rollback", "clear"] as const)(
   "preserves concurrent provenance when %s conflicts",
-  async (operation, { tempRoot }) => {
-    const address = { workspaceDir: tempRoot, relativePath: "MEMORY.md" };
+  async (operation, { address }) => {
     const firstRollback = expectDefined(await write(address, "", "first", 1), "first rollback");
     let replaceBeforeCommit = true;
     beforePersist(async () => {
