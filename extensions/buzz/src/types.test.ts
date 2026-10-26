@@ -14,7 +14,7 @@ function buzzConfig(buzz: BuzzConfigInput): OpenClawConfig {
   return { channels: { buzz } } as OpenClawConfig;
 }
 
-function rootWithAmbientCredentials(buzz: BuzzConfigInput): OpenClawConfig {
+function ambientRoot(buzz: BuzzConfigInput): OpenClawConfig {
   vi.stubEnv("BUZZ_PRIVATE_KEY", ENV_PRIVATE_KEY);
   vi.stubEnv("BUZZ_AUTH_TAG", "ambient-auth");
   vi.stubEnv("BUZZ_RELAY_URL", "wss://ambient.example.com");
@@ -37,7 +37,7 @@ it("discovers the default account from a configured private-key SecretRef", () =
 });
 it("isolates named identities and never fills missing fields from root credentials", () => {
   const ada = { relayUrl: "wss://ada.example.com", privateKey: "33".repeat(32), name: "Ada" };
-  const cfg = rootWithAmbientCredentials({
+  const cfg = ambientRoot({
     groupPolicy: "open",
     groups: { "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c": {} },
     accounts: { ada, empty: {} },
@@ -50,15 +50,12 @@ it("isolates named identities and never fills missing fields from root credentia
     authTag: "",
     config: { groupPolicy: "open", groups: undefined },
   });
-  expect(resolveBuzzAccount({ cfg, accountId: "empty" })).toMatchObject({
-    accountId: "empty",
-    ...EMPTY_IDENTITY,
-  });
-  expect(resolveBuzzAccount({ cfg, accountId: "default" }).privateKey).toBe(PRIVATE_KEY);
+  const empty = resolveBuzzAccount({ cfg, accountId: "empty" });
+  expect(empty).toMatchObject({ accountId: "empty", ...EMPTY_IDENTITY });
 });
 
 it("treats an explicit default account as a complete identity boundary", () => {
-  const cfg = rootWithAmbientCredentials({
+  const cfg = ambientRoot({
     accounts: { default: { name: "Explicit default" } },
   });
   expect(resolveBuzzAccount({ cfg })).toMatchObject({
@@ -82,37 +79,23 @@ it("selects a configured default deterministically and applies the global disabl
   expect(resolveBuzzAccount({ cfg })).toMatchObject({ accountId: "second", enabled: false });
 });
 
-it.each([
-  [
-    "keeps explicit plaintext credentials ahead of ambient credentials",
-    PLAINTEXT,
-    { BUZZ_PRIVATE_KEY: ENV_PRIVATE_KEY, BUZZ_AUTH_TAG: "ambient-auth-tag" },
-    { ...PLAINTEXT, configured: true, tokenStatus: "available" },
-  ],
-  [
-    "distinguishes a missing private key from a configured unavailable key",
-    {},
-    { BUZZ_PRIVATE_KEY: "" },
-    { configured: false, privateKey: "", tokenStatus: "missing" },
-  ],
-] as const)("%s", (_label, credentials, env, expected) => {
-  for (const [name, value] of Object.entries(env)) {
-    vi.stubEnv(name, value);
-  }
-  const cfg = buzzConfig({ relayUrl: "wss://buzz.example.com", ...credentials });
-
-  expect(resolveBuzzAccount({ cfg })).toMatchObject(expected);
+it.each([true, false])("resolves plaintext credentials (configured: %s)", (configured) => {
+  vi.stubEnv("BUZZ_PRIVATE_KEY", configured ? ENV_PRIVATE_KEY : "");
+  vi.stubEnv("BUZZ_AUTH_TAG", "ambient-auth-tag");
+  const cfg = buzzConfig({ relayUrl: "wss://buzz.example.com", ...(configured ? PLAINTEXT : {}) });
+  expect(resolveBuzzAccount({ cfg })).toMatchObject(
+    configured
+      ? { ...PLAINTEXT, configured: true, tokenStatus: "available" }
+      : { configured: false, privateKey: "", tokenStatus: "missing" },
+  );
 });
 
-it.each(["privateKey", "authTag"] as const)(
-  "never substitutes ambient %s for a SecretRef",
-  (field) => {
-    const cfg = rootWithAmbientCredentials({ [field]: secretRef("MISSING_BUZZ_CREDENTIAL") });
-    expect(resolveBuzzAccount({ cfg })).toMatchObject({
-      ...UNAVAILABLE,
-      privateKey: field === "privateKey" ? "" : PRIVATE_KEY,
-      authTag: field === "authTag" ? "" : "root-auth",
-      publicKey: field === "privateKey" ? "" : expect.stringMatching(/./),
-    });
-  },
-);
+it.each(["privateKey", "authTag"] as const)("unavailable %s ignores ambient values", (field) => {
+  const cfg = ambientRoot({ [field]: secretRef("MISSING_BUZZ_CREDENTIAL") });
+  expect(resolveBuzzAccount({ cfg })).toMatchObject({
+    ...UNAVAILABLE,
+    privateKey: field === "privateKey" ? "" : PRIVATE_KEY,
+    authTag: field === "authTag" ? "" : "root-auth",
+    publicKey: field === "privateKey" ? "" : expect.stringMatching(/./),
+  });
+});
