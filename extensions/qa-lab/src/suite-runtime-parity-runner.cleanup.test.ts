@@ -17,6 +17,7 @@ import {
 } from "./qa-transport-registry.js";
 import type { RuntimeParityScenarioExecution } from "./runtime-parity.js";
 import * as scenarioCatalog from "./scenario-catalog.js";
+import type { writeQaSuiteArtifacts } from "./suite-artifacts.js";
 import * as suiteRunStandard from "./suite-run-standard.js";
 import { runQaFlowSuiteFromRuntime } from "./suite-run.runtime.js";
 import {
@@ -72,21 +73,11 @@ const mocks = vi.hoisted(() => ({
     baseUrl: "http://127.0.0.1:18789",
     token: "qa-test-token",
     cfg: {},
-    getProcessCpuMs: () => null,
-    getProcessRssBytes: () => null,
-    stop: vi.fn(async () => {}),
   })),
-  writeQaSuiteArtifacts: vi.fn(
-    async (_params: {
-      channel?: string | null;
-      channelDriver?: string | null;
-      transportArtifacts?: unknown;
-      recordedEvidence: QaEvidenceSummaryV3Json;
-    }) => ({
-      evidence: _params.recordedEvidence,
-      ...artifactPaths,
-    }),
-  ),
+  writeQaSuiteArtifacts: vi.fn<typeof writeQaSuiteArtifacts>(async (params) => ({
+    evidence: params.recordedEvidence,
+    ...artifactPaths,
+  })),
 }));
 
 vi.mock("openclaw/plugin-sdk/agent-harness", () => ({
