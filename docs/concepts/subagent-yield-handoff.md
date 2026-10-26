@@ -260,6 +260,9 @@ owner, so callbacks from the closed Gateway cannot settle the recovered wake.
   outbound durable delivery queue keeps its own transport retry policy.
   Delivery bookkeeping for executions that ended before the current batch's
   earliest child was created cannot block its continuation.
+  After a restart, saved interrupted results finish their own cleanup even if
+  the child session has since run a newer task. That cleanup releases the older
+  mailbox reservation without changing the newer task's session or execution.
   A private handoff's observation timeout does not cancel the underlying Gateway
   turn. When the Gateway reports that turn as
   in flight, settlement observes the same request without spending failure
