@@ -81,6 +81,9 @@ export function findDirectiveCodePrefix(
 /** Prose appends cannot open directive syntax or change Markdown code ownership. */
 const APPEND_SAFE_DELTA = /^[^[`~]*$/u;
 
+/** Removing an audio directive can change Markdown ownership before reply tags are parsed. */
+const AUDIO_DIRECTIVE = /\[\[\s*audio_as_voice\s*\]\]/iu;
+
 function hasUnsettledDirectiveMarker(source: string): boolean {
   const marker = source.lastIndexOf("[[");
   return marker !== -1 && source.lastIndexOf("]]") < marker;
@@ -99,6 +102,7 @@ export const inlineDirectiveDisplayTextFilter: TextFilter = {
     // A settled reply only re-parses when a delta can still change directive syntax.
     let settledMarker = true;
     let visibleMarker = false;
+    let audioDirective = false;
     let ownership: ReturnType<typeof findCodeOwnership> | undefined;
     const projector: TextProjector = (input) => {
       const appended = input.delta;
@@ -109,6 +113,7 @@ export const inlineDirectiveDisplayTextFilter: TextFilter = {
         hasMarker = source.includes("[[");
         settledMarker = !hasUnsettledDirectiveMarker(source);
         visibleMarker = hasUnsettledDirectiveMarker(visible);
+        audioDirective = AUDIO_DIRECTIVE.test(source);
         identity = visible === source;
         ownership = undefined;
         previousChar = source.slice(-1);
@@ -123,6 +128,7 @@ export const inlineDirectiveDisplayTextFilter: TextFilter = {
         (prefix !== undefined || (settledMarker && !visibleMarker)) &&
         source.length + appended.length === input.text.length &&
         APPEND_SAFE_DELTA.test(appended) &&
+        !audioDirective &&
         (!hasMarker ||
           canReuseMarkdownOwnershipForAppend(
             source,
@@ -154,6 +160,7 @@ export const inlineDirectiveDisplayTextFilter: TextFilter = {
       }
       settledMarker = !hasUnsettledDirectiveMarker(source);
       visibleMarker = hasUnsettledDirectiveMarker(visible);
+      audioDirective = AUDIO_DIRECTIVE.test(source);
       identity = visible === source;
       ownership = undefined;
       if (identity) {

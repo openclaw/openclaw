@@ -106,6 +106,24 @@ describe("inline directive display stream", () => {
     expect(text).toBe(expected);
   });
 
+  test("retains parsing when audio removal changes the image description", () => {
+    const chunks = ["![[audio_as_voice]][`[[reply_to_current]]` example", "](/image.png)"];
+    const source = chunks.join("");
+    const expected = stripInlineDirectiveTagsForDisplay(source).text;
+    expect(expected).not.toBe(source);
+    for (const chunkSize of [1, 2, 4, source.length]) {
+      const projection = createLiveAssistantTextProjection({});
+      let text = "";
+      for (let index = 0; index < source.length; index += chunkSize) {
+        text = projection.append(source.slice(index, index + chunkSize)).text;
+      }
+      expect(text).toBe(expected);
+    }
+    const projection = createTextProjection([inlineDirectiveDisplayTextFilter]);
+    projection.append(chunks[0]!);
+    expect(projection.append(chunks[1]!).text).toBe(expected);
+  });
+
   test("keeps deltas correct when a later chunk first strips a directive", () => {
     const projection = createTextProjection([inlineDirectiveDisplayTextFilter]);
     projection.append("Hello");
