@@ -69,6 +69,85 @@ it("reuses the scoped protocol callback across overlapping stream operations", a
   }
 });
 
+it.each(["return-first", "next-first"] as const)(
+  "keeps overlapping return/next settlement separate (%s)",
+  async (order) => {
+    const instance = owner();
+    const next = createDeferredCore<IteratorResult<string>>();
+    const returned = createDeferredCore<IteratorResult<string>>();
+    const stream = instance.wrap(
+      iterable({
+        next: () => next.promise,
+        return: () => returned.promise,
+      }),
+    );
+    const iterator = stream[Symbol.asyncIterator]();
+    const pendingReturn = iterator.return();
+    const pendingNext = iterator.next();
+    const nextResult = { done: false, value: "next" };
+    const returnResult = { done: false, value: "finally" };
+    if (order === "return-first") {
+      returned.resolve(returnResult);
+      await pendingReturn;
+      next.resolve(nextResult);
+    } else {
+      next.resolve(nextResult);
+      await pendingNext;
+      returned.resolve(returnResult);
+    }
+    expect(await pendingReturn).toBe(returnResult);
+    expect(await pendingNext).toBe(nextResult);
+    expect(instance.ordinaryCallCount).toBe(0);
+  },
+);
+
+it("settles a synchronous protocol throw before returning its rejection", async () => {
+  const instance = owner();
+  const failure = Symbol("plugin failure");
+  const stream = instance.wrap(
+    iterable({
+      next(): Promise<IteratorResult<never>> {
+        // oxlint-disable-next-line typescript/only-throw-error -- Plugin rejection values must pass through unchanged.
+        throw failure;
+      },
+    }),
+  );
+  const pending = stream[Symbol.asyncIterator]().next();
+  expect(instance.ordinaryCallCount).toBe(0);
+  await expect(pending).rejects.toBe(failure);
+});
+
+it.each(["fulfilled", "rejected"] as const)(
+  "lets a release failure override a %s next result without releasing twice",
+  async (outcome) => {
+    const instance = new PluginInstance("iterator-release-failure");
+    const result = createDeferredCore<IteratorResult<string>>();
+    const sourceFailure = new Error("source failed");
+    const releaseFailure = new Error("host cleanup failed");
+    const stream = instance.wrap(iterable({ next: () => result.promise }));
+    const iterator = stream[Symbol.asyncIterator]();
+    try {
+      const pending = iterator.next();
+      const disposal = instance.dispose(() => {
+        throw releaseFailure;
+      });
+      if (outcome === "fulfilled") {
+        result.resolve({ done: true, value: "finished" });
+      } else {
+        result.reject(sourceFailure);
+      }
+      await Promise.all([
+        expect(pending).rejects.toBe(releaseFailure),
+        expect(disposal).rejects.toBe(releaseFailure),
+      ]);
+      expect(instance.ordinaryCallCount).toBe(0);
+    } finally {
+      result.resolve({ done: true, value: "finished" });
+      await instance.dispose().catch(() => {});
+    }
+  },
+);
+
 it.each(["next", "return"] as const)(
   "shares admission when an iterable returns its own already-bound iterator (%s)",
   async (terminal) => {
