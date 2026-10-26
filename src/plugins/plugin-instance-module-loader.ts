@@ -260,6 +260,7 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
         source: params.source,
         devSourceRoot: params.devSourceRoot,
         pluginSdkResolution: params.pluginSdkResolution,
+        preparedArtifact: params.preparedArtifact?.artifact,
       }),
     });
     return;
