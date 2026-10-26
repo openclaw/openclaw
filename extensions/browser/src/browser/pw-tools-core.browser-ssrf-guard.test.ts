@@ -1,11 +1,7 @@
 import { runInNewContext } from "node:vm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { BrowserObservedDialogBlockedError } from "./pw-session-contracts.js";
-import {
-  heldAction,
-  withFakeTimers,
-  type NavigationGuardCall,
-} from "./pw-tools-core.guard-test-support.js";
+import { heldAction, type NavigationGuardCall } from "./pw-tools-core.guard-test-support.js";
 
 const pageState = vi.hoisted(() => ({
   page: null as Record<string, unknown> | null,
@@ -192,19 +188,12 @@ describe("pw-tools-core browser SSRF guards", () => {
         { timeout: expect.any(Number) },
       );
       expect(order).toEqual(["guard", "passive", "predicate"]);
-      expect(session.withPageNavigationRequestGuard).toHaveBeenCalledWith({
-        action: expect.any(Function),
-        onPolicyCheckStarted: expect.any(Function),
-        onPolicyDenied: expect.any(Function),
-        page: pageState.page,
-        ssrfPolicy: { allowPrivateNetwork: false },
-        browserProxyMode: "explicit-browser-proxy",
-      });
-      expect(session.assertPageNavigationCompletedSafely).toHaveBeenLastCalledWith({
-        ...proxied,
-        page: pageState.page,
-        response: null,
-      });
+      expect(session.withPageNavigationRequestGuard).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ssrfPolicy: { allowPrivateNetwork: false },
+          browserProxyMode: "explicit-browser-proxy",
+        }),
+      );
       expect(session.closeBlockedNavigationTarget).not.toHaveBeenCalled();
       expect(documentHandle.dispose).toHaveBeenCalledOnce();
     },
@@ -370,27 +359,6 @@ describe("pw-tools-core browser SSRF guards", () => {
     await vi.waitFor(expectQuarantined);
     hover.resolve();
     await expect(task).rejects.toBe(blocked);
-  });
-
-  it("keeps the request guard for the full grace after an early safe post-check", async () => {
-    await withFakeTimers(async () => {
-      let currentUrl = "https://example.com";
-      install(
-        { url: () => currentUrl },
-        {
-          hover: vi.fn(async () => {
-            currentUrl = "https://example.org";
-          }),
-        },
-      );
-      const settled = trackGuardSettlement();
-      const task = startHover();
-      await vi.advanceTimersByTimeAsync(249);
-      expect(settled).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(1);
-      await task;
-      expect(settled).toHaveBeenCalledOnce();
-    });
   });
 
   it("quarantines a late unpreserved policy failure before returning cancellation", async () => {

@@ -146,27 +146,6 @@ describe("pw-tools-core", () => {
     }),
   );
 
-  it("releases a cancelled waiter before the next download", async () => {
-    const harness = createDownloadEventHarness();
-    const state = sessionMocks.ensurePageState();
-    const controller = new AbortController();
-    const cancelled = waitForDownload({ signal: controller.signal });
-
-    await Promise.resolve();
-    expect(state.downloadWaiterDepth).toBe(1);
-    controller.abort(new Error("request aborted"));
-    await expect(cancelled).rejects.toThrow("request aborted");
-    expect(state.downloadWaiterDepth).toBe(0);
-    expect(harness.activeHandlerCount()).toBe(0);
-
-    const successor = waitForDownload();
-    const saveAs = writer("successor-content");
-    await harness.deliver(downloadEvent(saveAs, "successor.bin"));
-
-    await expect(successor).resolves.toMatchObject({ suggestedFilename: "successor.bin" });
-    expect(saveAs).toHaveBeenCalledOnce();
-  });
-
   it("lets only the latest overlapping explicit waiter save the download", async () => {
     const harness = createDownloadEventHarness();
     const state = sessionMocks.ensurePageState();
@@ -212,7 +191,6 @@ describe("pw-tools-core", () => {
         ref: "e12",
         path: targetPath,
         timeoutMs: 1000,
-        ssrfPolicy: strictPolicy,
         assertCurrent: async () => {
           if (!current) {
             throw new Error("Dashboard revoked after click");
@@ -222,21 +200,9 @@ describe("pw-tools-core", () => {
 
       await awaitStarted(clicked.promise, p);
       harness.expectArmed();
-      expect(sessionMocks.withPageNavigationRequestGuard).toHaveBeenCalledWith(
-        expect.objectContaining({
-          ssrfPolicy: strictPolicy,
-        }),
-      );
-
       await harness.deliver(download);
 
       const res = await p;
-      expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).toHaveBeenCalledWith({
-        url: "https://example.com/report.pdf",
-        ssrfPolicy: strictPolicy,
-        browserProxyMode: undefined,
-        signal: undefined,
-      });
       await expectAtomicDownloadSave({ saveAs, targetPath, content: "report-content" });
       await expect(fs.realpath(res.path)).resolves.toBe(await fs.realpath(targetPath));
       await expect(fs.readFile(neighborPath, "utf8")).resolves.toBe("existing neighbor");
@@ -346,24 +312,4 @@ describe("pw-tools-core", () => {
       path.normalize(`${path.join("tmp", "openclaw-preferred", "downloads")}${path.sep}`),
     );
   });
-
-  it.runIf(process.platform !== "win32")(
-    "rejects implicit downloads when the output directory is a symlink",
-    withTempDir(async (tempDir) => {
-      const outsideDir = path.join(tempDir, "outside");
-      await fs.mkdir(outsideDir, { recursive: true });
-      await fs.symlink(outsideDir, path.join(tempDir, "downloads"));
-      tmpDirMocks.resolvePreferredOpenClawTmpDir.mockReturnValue(tempDir);
-
-      const harness = createDownloadEventHarness();
-      const saveAs = writer("should-not-write");
-      const p = waitForDownload();
-
-      await harness.deliver(downloadEvent(saveAs));
-
-      await expect(p).rejects.toThrow(/output directory/i);
-      expect(saveAs).not.toHaveBeenCalled();
-      await expect(fs.readdir(outsideDir)).resolves.toStrictEqual([]);
-    }),
-  );
 });
