@@ -17,7 +17,7 @@ export function sseResponse(events: object[]): Response {
 
 export function makeStallingStream(
   initialChunks: Uint8Array[],
-  onCancel: UnderlyingSource<Uint8Array>["cancel"],
+  onCancel: import("node:stream/web").UnderlyingSource<Uint8Array>["cancel"],
 ) {
   return new ReadableStream<Uint8Array>({
     start(controller) {
