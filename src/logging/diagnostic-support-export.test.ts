@@ -43,6 +43,11 @@ function writeJson(file: string, value: unknown) {
 describe("diagnostic support export", () => {
   let tempDir: string;
 
+  async function exportEntries(options: Parameters<typeof writeDiagnosticSupportExport>[0] = {}) {
+    const result = await writeDiagnosticSupportExport(options);
+    return readZipTextEntries(result.path);
+  }
+
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-support-export-"));
     vi.stubEnv("HOME", tempDir);
@@ -77,16 +82,13 @@ describe("diagnostic support export", () => {
       plugins: { embedded: ["synthetic-private@example.invalid"], omitted: [] },
     });
     try {
-      const outputPath = path.join(tempDir, "capabilities.zip");
-      await writeDiagnosticSupportExport({
-        outputPath,
+      const entries = await exportEntries({
         readGatewayCapabilities: async () => ({
           process: { kind: "bun", flavor: "jit" },
           source: "synthetic-private@example.invalid",
           token: "synthetic-secret-value",
         }),
       });
-      const entries = await readZipTextEntries(outputPath);
       expect(readJsonEntry(entries, "runtime/capabilities.json")).toHaveProperty(
         "data.process.flavor",
         "aot",
@@ -102,13 +104,11 @@ describe("diagnostic support export", () => {
       expect(Object.values(entries).join("\n")).not.toMatch(
         /synthetic-private@example.invalid|synthetic-secret-value/,
       );
-      await writeDiagnosticSupportExport({
-        outputPath: path.join(tempDir, "offline.zip"),
+      const offline = await exportEntries({
         readGatewayCapabilities: async () => {
           throw new Error("synthetic-private@example.invalid is offline");
         },
       });
-      const offline = await readZipTextEntries(path.join(tempDir, "offline.zip"));
       expect(readJsonEntry(offline, "runtime/gateway-capabilities.json")).toHaveProperty(
         "status",
         "failed",
@@ -151,7 +151,6 @@ describe("diagnostic support export", () => {
       const privatePath = path.join(capture, "private.json");
       const marker = "synthetic-retained-record-not-for-support";
       fs.writeFileSync(privatePath, JSON.stringify({ agents: { entries: { [marker]: {} } } }));
-      const outputPath = path.join(tempDir, "support.zip");
       vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
       vi.stubEnv("OPENCLAW_CONFIG_PATH", privatePath);
       vi.mocked(logTailModule.readConfiguredLogTail).mockResolvedValue({
@@ -162,11 +161,7 @@ describe("diagnostic support export", () => {
         truncated: false,
         reset: false,
       });
-      await writeDiagnosticSupportExport({
-        outputPath,
-        stabilityBundle: privatePath,
-      });
-      const files = await readZipTextEntries(outputPath);
+      const files = await exportEntries({ stabilityBundle: privatePath });
       expect(Object.values(files).join("\n")).not.toContain(marker);
       expect(Object.values(files).join("\n")).toContain("Private update captures are excluded");
       expect(fs.readFileSync(privatePath, "utf8")).toContain(marker);
@@ -192,14 +187,11 @@ describe("diagnostic support export", () => {
       channels: { slack: { dms: { U1: { historyLimit: 5 }, U2: { historyLimit: 10 } } } },
       plugins: { entries: { "voice-call": { config: { numbers } } } },
     });
-    const outputPath = path.join(tempDir, "identifier-keys.zip");
-    await writeDiagnosticSupportExport({
-      outputPath,
+    const entries = await exportEntries({
       readStatusSnapshot: async () => ({ routes: [{ destinations: numbers }] }),
       readHealthSnapshot: async () => ({ connected: true, destinations: numbers }),
     });
 
-    const entries = await readZipTextEntries(outputPath);
     const combined = Object.values(entries).join("\n");
     for (const identifier of identifiers.slice(0, -1)) {
       expect(combined).not.toContain(identifier);
@@ -607,8 +599,7 @@ describe("diagnostic support export", () => {
     async ({ agents, expected }) => {
       const configPath = path.join(tempDir, "openclaw.json");
       fs.writeFileSync(configPath, JSON.stringify({ agents }));
-      const result = await writeDiagnosticSupportExport({});
-      const entries = await readZipTextEntries(result.path);
+      const entries = await exportEntries();
       expect(JSON.parse(entries["config/shape.json"] ?? "{}").agents).toEqual(expected);
       expect(JSON.parse(entries["diagnostics.json"] ?? "{}").config.agents).toEqual(expected);
     },
@@ -616,7 +607,6 @@ describe("diagnostic support export", () => {
 
   it("sanitizes imported stability bundles before adding them to support exports", async () => {
     const bundlePath = path.join(tempDir, "imported-stability.json");
-    const outputPath = path.join(tempDir, "support-imported-stability.zip");
     const importedBundle = {
       version: 1,
       generatedAt: "2026-04-22T12:00:00.000Z",
@@ -650,12 +640,7 @@ describe("diagnostic support export", () => {
     };
     writeJson(bundlePath, importedBundle);
 
-    await writeDiagnosticSupportExport({
-      outputPath,
-      stabilityBundle: bundlePath,
-    });
-
-    const entries = await readZipTextEntries(outputPath);
+    const entries = await exportEntries({ stabilityBundle: bundlePath });
     const stability = readJsonEntry(entries, "stability/latest.json");
     expect(stability).toHaveProperty("reason", "unknown");
     expect(stability).toHaveProperty("host", { hostname: "<redacted-hostname>" });
@@ -692,7 +677,6 @@ describe("diagnostic support export", () => {
     "includes mDNS config state and recent Bonjour log summary (%s)",
     async (value, expected) => {
       const configPath = path.join(tempDir, "openclaw.json");
-      const outputPath = path.join(tempDir, "support-bonjour.zip");
       writeJson(configPath, { discovery: { mdns: { mode: "minimal" } } });
       vi.mocked(logTailModule.readConfiguredLogTail).mockResolvedValue({
         file: path.join(tempDir, "logs", "openclaw.log"),
@@ -715,9 +699,7 @@ describe("diagnostic support export", () => {
         ],
       });
       vi.stubEnv("OPENCLAW_DISABLE_BONJOUR", value);
-      await writeDiagnosticSupportExport({ outputPath });
-
-      const entries = await readZipTextEntries(outputPath);
+      const entries = await exportEntries();
       const configShape = readJsonEntry(entries, "config/shape.json");
       expect(configShape).toHaveProperty("discovery", {
         mdnsMode: "minimal",
@@ -744,11 +726,9 @@ describe("diagnostic support export", () => {
 
   it("keeps writing when status and health snapshots fail", async () => {
     const fakeToken = "sk-test-support-export-secret-token-1234567890";
-    const outputPath = path.join(tempDir, "support-failed-snapshots.zip");
     vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(tempDir, "missing-config.json"));
 
-    await writeDiagnosticSupportExport({
-      outputPath,
+    const entries = await exportEntries({
       readStatusSnapshot: async () => {
         throw new Error(`status failed with token ${fakeToken}`);
       },
@@ -757,7 +737,6 @@ describe("diagnostic support export", () => {
       },
     });
 
-    const entries = await readZipTextEntries(outputPath);
     expect(entries["summary.md"]).toContain("config file not found");
     expect(Object.keys(entries).toSorted()).toContain("status/gateway-status.json");
     expect(Object.keys(entries).toSorted()).toContain("health/gateway-health.json");
@@ -772,13 +751,10 @@ describe("diagnostic support export", () => {
 
   it("keeps writing when log tail collection fails", async () => {
     const fakeToken = "sk-test-log-tail-secret-token-1234567890";
-    const outputPath = path.join(tempDir, "support-failed-log-tail.zip");
     vi.mocked(logTailModule.readConfiguredLogTail).mockRejectedValue(
       new Error(`log tail failed at ${tempDir}/openclaw.log with token ${fakeToken}`),
     );
-    await writeDiagnosticSupportExport({ outputPath });
-
-    const entries = await readZipTextEntries(outputPath);
+    const entries = await exportEntries();
     expect(Object.keys(entries).toSorted()).toContain("logs/openclaw-sanitized.jsonl");
 
     const combined = Object.values(entries).join("\n");
@@ -791,7 +767,6 @@ describe("diagnostic support export", () => {
   it("keeps writing when config stat fails", async () => {
     const fakeToken = "sk-test-config-stat-secret-token-1234567890";
     const configPath = path.join(tempDir, "openclaw.json");
-    const outputPath = path.join(tempDir, "support-failed-config-stat.zip");
     fs.writeFileSync(configPath, "{}\n", "utf8");
 
     const originalStatSync = fs.statSync.bind(fs);
@@ -802,13 +777,13 @@ describe("diagnostic support export", () => {
       return originalStatSync(target, options as never);
     });
 
+    let entries: Record<string, string>;
     try {
-      await writeDiagnosticSupportExport({ outputPath });
+      entries = await exportEntries();
     } finally {
       statSpy.mockRestore();
     }
 
-    const entries = await readZipTextEntries(outputPath);
     const combined = Object.values(entries).join("\n");
     expect(Object.keys(entries).toSorted()).toContain("config/shape.json");
     expect(combined).not.toContain(fakeToken);
@@ -821,12 +796,9 @@ describe("diagnostic support export", () => {
 
   it("finishes the support export when the config exceeds its read limit", async () => {
     const configPath = path.join(tempDir, "openclaw.json");
-    const outputPath = path.join(tempDir, "support-oversized-config.zip");
     fs.writeFileSync(configPath, Buffer.alloc(8 * 1024 * 1024 + 1, "{"));
     vi.setSystemTime(new Date("2026-07-18T12:00:01.000Z"));
-    await writeDiagnosticSupportExport({ outputPath });
-
-    const entries = await readZipTextEntries(outputPath);
+    const entries = await exportEntries();
     const configShape = readJsonEntry(entries, "config/shape.json");
     expect(configShape).toHaveProperty("parseOk", false);
     expect(configShape).toHaveProperty(
