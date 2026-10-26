@@ -11,6 +11,7 @@ import { constants as fsConstants, promises as fs } from "node:fs";
 import { resolve as resolvePath } from "node:path";
 import type { Command } from "commander";
 import { FILE_HEADERS_ONLY, formatPatch, structuredPatch } from "diff";
+import { sanitizeTerminalText } from "openclaw/plugin-sdk/terminal-safe-text";
 import { inferKind } from "./oc-path/dispatch.js";
 import { OcPathEditError } from "./oc-path/edit-error.js";
 import { findOcPaths } from "./oc-path/find.js";
@@ -170,9 +171,11 @@ function resolveFsPath(path: OcPath, options: PathCommandOptions): string {
   return resolvePath(options.cwd ?? process.cwd(), path.file);
 }
 
+// Inspection summaries are terminal text; emit and dry-run preserve source bytes.
 function formatMatchHuman(match: OcMatch): string {
   if (match.kind === "leaf") {
-    return `leaf @ L${match.line}: ${JSON.stringify(match.valueText)} (${match.leafType})`;
+    const value = sanitizeTerminalText(JSON.stringify(match.valueText));
+    return `leaf @ L${match.line}: ${value} (${match.leafType})`;
   }
   if (match.kind === "node") {
     return `node @ L${match.line} [${match.descriptor}]`;
@@ -314,7 +317,8 @@ export function registerPathCli(program: Command): void {
         const plural = matches.length === 1 ? "" : "es";
         const lines = [`${matches.length} match${plural} for ${patternStr}:`];
         for (const m of matches) {
-          lines.push(`  ${formatOcPath(m.path)}  →  ${formatMatchHuman(m.match)}`);
+          const displayPath = sanitizeTerminalText(formatOcPath(m.path));
+          lines.push(`  ${displayPath}  →  ${formatMatchHuman(m.match)}`);
         }
         return lines.join("\n");
       },
