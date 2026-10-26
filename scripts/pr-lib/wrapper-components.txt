@@ -427,6 +427,7 @@ src/infra/database-engine/vector-contract.ts
 src/infra/postgres-sync/bridge-prestart.ts
 src/infra/postgres-sync/connection.ts
 src/infra/postgres-sync/idle-bridges.ts
+src/infra/postgres-sync/pool-state.ts
 src/infra/postgres-sync/pool.ts
 src/infra/postgres-sync/protocol.ts
 src/infra/postgres-sync/transaction.ts
