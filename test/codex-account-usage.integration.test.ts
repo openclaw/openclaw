@@ -2,6 +2,7 @@ import "../src/test-utils/prepare-compiled-subprocesses.js";
 import { afterEach, expect, it, vi } from "vitest";
 import { loadCodexAccountUsageTestFixture } from "../extensions/codex/test-api.js";
 import type { OAuthCredential } from "../src/agents/auth-profiles/types.js";
+import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import type { GatewayRequestHandlerOptions } from "../src/gateway/server-methods/types.js";
 import { connectUserModelAccountAsync } from "../src/state/user-model-account-operations.js";
 import { connectUserModelAccount } from "../src/state/user-model-accounts.js";
@@ -19,7 +20,10 @@ it.each([false, true])(
     withOpenClawTestState({ scenario: "minimal" }, async () => {
       const { handleCodexAccountUsage, readCodexAppServerUsage } =
         createCodexAccountUsageTestFixture();
-      const config = { agents: { entries: { main: {} } }, plugins: { enabled: false } };
+      const config: OpenClawConfig = {
+        agents: { entries: { main: {} } },
+        plugins: { enabled: false },
+      };
       const credential: OAuthCredential = {
         type: "oauth",
         provider: "openai",

@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveLobsterCwd } from "./lobster-runner.js";
@@ -110,7 +111,9 @@ describe("createEmbeddedLobsterRunner", () => {
       ({ ctx: context }) =>
         new Promise((_resolve, reject) => {
           context?.signal?.addEventListener("abort", () => {
-            reject(context.signal?.reason);
+            reject(
+              toErrorObject(context.signal?.reason ?? new Error("aborted"), "Non-Error rejection"),
+            );
           });
         }),
     );

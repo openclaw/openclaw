@@ -46,17 +46,22 @@ async function preflight(fetchImpl: typeof fetch = fetch, timeoutMs?: number) {
 it("preserves native HTTP and socket implementations for later shared-worker consumers", () => {
   const http = process.getBuiltinModule("node:http");
   const { Socket } = process.getBuiltinModule("node:net");
-  for (const implementation of [
-    ...Object.values(http),
-    Socket,
-    http.IncomingMessage.prototype.read,
-    http.OutgoingMessage.prototype.write,
-    http.OutgoingMessage.prototype.end,
-    http.globalAgent.createConnection,
-    Socket.prototype.write,
-  ]) {
-    expect(implementation !== undefined && !vi.isMockFunction(implementation)).toBe(true);
-  }
+  const nativeMethod = expect.toSatisfy((implementation) => !vi.isMockFunction(implementation));
+  expect(http).toMatchObject({
+    Server: nativeMethod,
+    Agent: nativeMethod,
+    IncomingMessage: nativeMethod,
+    OutgoingMessage: nativeMethod,
+    ServerResponse: nativeMethod,
+    ClientRequest: nativeMethod,
+    createServer: nativeMethod,
+  });
+  expect(Socket).toEqual(nativeMethod);
+  expect(http.IncomingMessage.prototype).toHaveProperty("read", nativeMethod);
+  expect(http.OutgoingMessage.prototype).toHaveProperty("write", nativeMethod);
+  expect(http.OutgoingMessage.prototype).toHaveProperty("end", nativeMethod);
+  expect(http.globalAgent).toHaveProperty("createConnection", nativeMethod);
+  expect(Socket.prototype).toHaveProperty("write", nativeMethod);
 });
 
 it("proves the owned HTTP response and releases its listener", () => preflight());

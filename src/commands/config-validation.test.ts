@@ -51,7 +51,7 @@ it.each([
   const issues = write
     ? { issues: [{ path: "mode", message: "Invalid" }] }
     : fixture.createPluginPackagingConfigIssues();
-  const snapshot = { ...fixture.baseConfigSnapshot, valid: false, ...issues };
+  const snapshot = { ...fixture.baseConfigSnapshot, sourceConfig: {}, valid: false, ...issues };
   const read = write ? reads.readConfigFileSnapshotForWrite : reads.readConfigFileSnapshot;
   read.mockResolvedValue(write ? { ...writeSnapshot, snapshot } : snapshot);
   expect(await (write ? requireValidConfigForWrite : requireValidConfig)(runtime)).toBeNull();
