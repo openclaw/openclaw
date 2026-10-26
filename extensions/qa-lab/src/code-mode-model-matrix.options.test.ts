@@ -6,6 +6,7 @@ import {
 
 const parse = (args: string, cwd?: string) =>
   parseCodeModeMatrixOptions(args ? args.split(" ") : [], cwd);
+const rejects = (args: string, error?: string) => expect(() => parse(args)).toThrow(error);
 
 describe("Code Mode model matrix options", () => {
   it("defaults to the complete bounded matrix", () => {
@@ -28,13 +29,13 @@ describe("Code Mode model matrix options", () => {
       ["unknown", "--task must be one of"],
       ["dependent-chain --task dependent-chain", "Duplicate --task"],
     ]) {
-      expect(() => parse(`--model fixture/model --task ${tasks}`)).toThrow(error);
+      rejects(`--model fixture/model --task ${tasks}`, error);
     }
   });
 
   it("keeps Gateway interviews opt-in and resolves comparison inputs independently of output storage", () => {
     const selection = "--model openai/gpt-5.6-luna --task inventory-join";
-    expect(() => parse(selection, "/harness")).toThrow("--mode code");
+    rejects(selection, "--mode code");
     const args = `${selection} --mode code --executor quickjs --runtime-dir ../baseline --baseline-results artifacts/previous/results.jsonl --repetitions 1`;
     expect(parse(args, "/harness")).toMatchObject({
       repoRoot: "/harness",
@@ -45,7 +46,8 @@ describe("Code Mode model matrix options", () => {
       modes: ["code"],
       repetitions: 1,
     });
-    expect(() => parse("--model fixture/model --mode code --task partial-failure")).toThrow(
+    rejects(
+      "--model fixture/model --mode code --task partial-failure",
       "OpenAI, Anthropic, or Google",
     );
   });
@@ -55,15 +57,11 @@ describe("Code Mode model matrix options", () => {
     ["--executor node --executor quickjs", "provided more than once"],
     ["--executor quickjs --task read", "only Gateway-backed tasks"],
   ])("rejects invalid or ambiguous executor selection: %s", (args, error) => {
-    expect(() =>
-      parse(`--model openai/fixture --mode code --task javascript-contracts ${args}`),
-    ).toThrow(error);
+    rejects(`--model openai/fixture --mode code --task javascript-contracts ${args}`, error);
   });
 
   it("rejects a Gateway executor selector for embedded tasks", () => {
-    expect(() =>
-      parseCodeModeMatrixOptions(["--model", "openai/fixture", "--executor", "node"]),
-    ).toThrow("only Gateway-backed tasks");
+    rejects("--model openai/fixture --executor node", "only Gateway-backed tasks");
   });
 
   it("admits neutral direct/code pairs for all supported providers with bounded root concurrency", () => {
@@ -76,24 +74,23 @@ describe("Code Mode model matrix options", () => {
       schedulePath: "/harness/waves.json",
     });
     for (const limit of ["--concurrency 4", "--max-tokens 0", "--max-known-cost-usd NaN"]) {
-      expect(() => parse(`--model openai/fixture ${limit}`)).toThrow();
+      rejects(`--model openai/fixture ${limit}`);
     }
     for (const mode of ["auto", "direct", "code"]) {
-      expect(() =>
-        parse(`--model openai/fixture --task invoice-reconciliation --mode ${mode}`),
-      ).toThrow("both explicit direct/code");
+      rejects(
+        `--model openai/fixture --task invoice-reconciliation --mode ${mode}`,
+        "both explicit direct/code",
+      );
     }
   });
 
   it("rejects ambiguous selectors and output paths", () => {
-    expect(() => parse("")).toThrow("At least one --model");
-    expect(() => parse("--model qwen3.5:9b")).toThrow("provider/model");
+    rejects("", "At least one --model");
+    rejects("--model qwen3.5:9b", "provider/model");
     for (const arg of ["--skip-build", "constructor", "toString", "__proto__"]) {
-      expect(() => parse(`--model ollama/qwen3.5:9b ${arg} 1`)).toThrow(`Unknown argument: ${arg}`);
+      rejects(`--model ollama/qwen3.5:9b ${arg} 1`, `Unknown argument: ${arg}`);
     }
-    expect(() => parse("--model fixture/model --mode code --mode code")).toThrow(
-      "Duplicate --mode",
-    );
+    rejects("--model fixture/model --mode code --mode code", "Duplicate --mode");
     for (const [output, error] of [
       ["../outside", "within the repository"],
       ["/tmp/out", "repo-relative"],

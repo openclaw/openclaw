@@ -30,11 +30,9 @@ describe("QA Lab static-SSH worker provider", () => {
       hostKey: ` ${HOST_KEY} `,
     };
 
-    const first = await provider.provision(profile, "operation-123", authority);
-    const replay = await provider.provision(profile, "operation-123", authority);
-
-    expect(provider.id).toBe("static-ssh");
-    expect(provider.supportedExecutionModes).toEqual(["remote-exec"]);
+    const provision = () => provider.provision(profile, "operation-123", authority);
+    const first = await provision();
+    expect(provider).toMatchObject({ id: "static-ssh", supportedExecutionModes: ["remote-exec"] });
     expect(first).toStrictEqual({
       leaseId: "static-ssh:operation-123",
       sharedHost: true,
@@ -46,8 +44,7 @@ describe("QA Lab static-SSH worker provider", () => {
         keyRef: KEY_REF,
       },
     });
-    expect(replay).toStrictEqual(first);
-    // Cleanup needs only the logical operation identity, even without usable SSH settings.
+    expect(await provision()).toStrictEqual(first);
     const allocation = await provider.resolveAllocation({}, "operation-123");
     expect(allocation).toEqual({ leaseId: first.leaseId, sharedHost: true });
     await expect(
@@ -68,18 +65,12 @@ describe("QA Lab static-SSH worker provider", () => {
     invalid("port", { port: 1.5 }),
     invalid("port", { port: 65_536 }),
     invalid("keyRef", { keyRef: "plaintext-key" }),
-    {
-      label: "keyRef",
-      profile: { host: PROFILE.host, user: PROFILE.user, hostKey: PROFILE.hostKey },
-    },
+    invalid("keyRef", { keyRef: undefined }),
     invalid("keyRef", { keyRef: { source: "file", provider: "", id: "/private-key" } }),
     invalid("keyRef", { keyRef: { source: "file", provider: "default", id: "private-key" } }),
     invalid("keyRef", { keyRef: { source: "env", provider: "default", id: "lowercase" } }),
     invalid("keyRef", { keyRef: { source: "exec", provider: "vault", id: "../private-key" } }),
-    {
-      label: "hostKey",
-      profile: { host: PROFILE.host, user: PROFILE.user, keyRef: PROFILE.keyRef },
-    },
+    invalid("hostKey", { hostKey: undefined }),
     invalid("hostKey", { hostKey: " " }),
     invalid("hostKey", { hostKey: 42 }),
     invalid("hostKey", { hostKey: [HOST_KEY, HOST_KEY].join("\n") }),
