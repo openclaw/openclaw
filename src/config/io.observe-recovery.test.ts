@@ -222,6 +222,51 @@ describe("config observe recovery", () => {
     };
   }
 
+  function observeSuspicious(observe: Record<string, unknown> | undefined): string[] {
+    const suspicious = observe?.suspicious;
+    expect(Array.isArray(suspicious)).toBe(true);
+    return suspicious as string[];
+  }
+
+  function expectSuspiciousIncludes(
+    observe: Record<string, unknown> | undefined,
+    expected: string,
+  ) {
+    expect(observeSuspicious(observe)).toContain(expected);
+  }
+
+  function expectSuspiciousMatching(observe: Record<string, unknown> | undefined, pattern: RegExp) {
+    expect(observeSuspicious(observe).some((entry) => pattern.test(entry))).toBe(true);
+  }
+
+  async function recoverClobberedUpdateChannel(params: {
+    deps: ObserveRecoveryDeps;
+    configPath: string;
+  }) {
+    return await maybeRecoverSuspiciousConfigRead({
+      deps: params.deps,
+      configPath: params.configPath,
+      raw: clobberedUpdateChannelRaw,
+      parsed: clobberedUpdateChannelConfig,
+      prepareBackup: approveRecoveryCandidate,
+    });
+  }
+
+  async function recoverSuspiciousConfigRead(params: {
+    deps: ObserveRecoveryDeps;
+    configPath: string;
+    raw: string;
+    parsed: unknown;
+  }) {
+    return await maybeRecoverSuspiciousConfigRead({
+      deps: params.deps,
+      configPath: params.configPath,
+      raw: params.raw,
+      parsed: params.parsed,
+      prepareBackup: approveRecoveryCandidate,
+    });
+  }
+
   it.each(["async", "sync"] as const)(
     "warns when %s backup restore cannot tighten config permissions",
     async (mode) => {
@@ -269,6 +314,95 @@ describe("config observe recovery", () => {
       expectWarnContaining(warn, `Config auto-restored from backup: ${configPath}`);
     },
   );
+
+  it("auto-restores suspicious update-channel-only roots from backup", async () => {
+    const { deps, configPath, auditPath, warn } = makeDeps(home);
+    await seedConfigBackup(configPath, {
+      meta: { lastTouchedVersion: "2026.4.22" },
+      update: { channel: "beta" },
+      browser: { enabled: true },
+      gateway: { mode: "local", auth: { mode: "token", token: "secret-token" } },
+      channels: { discord: { enabled: true, dmPolicy: "pairing" } },
+    });
+    await writeClobberedUpdateChannel(configPath);
+
+    const recovered = await recoverClobberedUpdateChannel({ deps, configPath });
+
+    expect((recovered.parsed as { gateway?: { mode?: string } }).gateway?.mode).toBe("local");
+    await expect(fsp.readFile(configPath, "utf-8")).resolves.not.toBe(clobberedUpdateChannelRaw);
+    expectWarnContaining(warn, "Config auto-restored from backup:");
+
+    const observe = await readLastObserveEvent(auditPath);
+    expect(observe?.restoredFromBackup).toBe(true);
+    expectSuspiciousIncludes(observe, "gateway-mode-missing-vs-last-good");
+    expectSuspiciousIncludes(observe, "update-channel-only-root");
+  });
+
+  it("auto-restores when gateway mode disappears from the last-good shape", async () => {
+    const { deps, configPath, auditPath } = makeDeps(home);
+    await seedConfigBackup(configPath, recoverableTelegramConfig);
+    const clobbered = await writeConfigRaw(configPath, {
+      meta: { lastTouchedVersion: "2026.4.22" },
+      update: { channel: "beta" },
+      channels: { telegram: { enabled: true, dmPolicy: "pairing", groupPolicy: "allowlist" } },
+    });
+
+    const recovered = await recoverSuspiciousConfigRead({ deps, configPath, ...clobbered });
+
+    expect((recovered.parsed as { gateway?: { mode?: string } }).gateway?.mode).toBe("local");
+    const observe = await readLastObserveEvent(auditPath);
+    expect(observe?.restoredFromBackup).toBe(true);
+    expectSuspiciousIncludes(observe, "gateway-mode-missing-vs-last-good");
+  });
+
+  it("auto-restores after a large size drop against last-good config", async () => {
+    const { deps, configPath, auditPath } = makeDeps(home);
+    await seedConfigBackup(configPath, {
+      ...recoverableTelegramConfig,
+      channels: {
+        telegram: {
+          enabled: true,
+          dmPolicy: "pairing",
+          groupPolicy: "allowlist",
+          allowFrom: Array.from({ length: 60 }, (_, index) => `telegram-user-${index}`),
+        },
+      },
+    });
+    const clobbered = await writeConfigRaw(configPath, {
+      meta: { lastTouchedVersion: "2026.4.22" },
+      gateway: { mode: "local" },
+    });
+
+    const recovered = await recoverSuspiciousConfigRead({ deps, configPath, ...clobbered });
+
+    expect(
+      (recovered.parsed as { channels?: { telegram?: { allowFrom?: string[] } } }).channels
+        ?.telegram?.allowFrom,
+    ).toHaveLength(60);
+    const observe = await readLastObserveEvent(auditPath);
+    expect(observe?.restoredFromBackup).toBe(true);
+    expectSuspiciousMatching(observe, /^size-drop-vs-last-good:/);
+  });
+
+  it("does not auto-restore when only metadata is missing from a valid config (#126806)", async () => {
+    const { deps, configPath, auditPath } = makeDeps(home);
+    await seedConfigBackup(configPath, recoverableTelegramConfig);
+    const clobbered = await writeConfigRaw(configPath, {
+      update: { channel: "beta" },
+      gateway: { mode: "local" },
+      channels: { telegram: { enabled: true, dmPolicy: "pairing", groupPolicy: "allowlist" } },
+    });
+
+    const recovered = await recoverSuspiciousConfigRead({ deps, configPath, ...clobbered });
+
+    // `missing-meta-vs-last-good` alone is not a restore signal: a valid config
+    // without `meta` was hand-authored, so restoring would silently revert it
+    // on a read-only command. Detection stays (observe path), restore does not.
+    expect((recovered.parsed as { meta?: unknown }).meta).toBeUndefined();
+    expect(recovered.raw).toBe(clobbered.raw);
+    expect(await listClobberFiles(configPath)).toEqual([]);
+    expect(await readObserveEvents(auditPath)).toEqual([]);
+  });
 
   it("rereads a committed backup after its audit closes health admission", async () => {
     const { io, configPath, warn } = createTestConfigIO(home);
