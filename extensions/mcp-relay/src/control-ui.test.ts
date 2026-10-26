@@ -12,6 +12,19 @@ const caller = {
   canPair: true,
 };
 const grants = { grants: [], caller, relayUrl: "https://relay.example" };
+const grant = {
+  grantId: "grant-owned",
+  clientName: "Personal app",
+  principal: caller.principal,
+  ceiling: ["operator.read"],
+  createdAt: 1_800_000_000_000,
+};
+const ownedGrants = { ...grants, grants: [grant] };
+const pairing = {
+  code: "ABCDE-FGHIJ",
+  expiresAt: 1_800_000_000_000,
+  mcpUrl: "https://relay.example/mcp",
+};
 const consent = {
   kind: "oauth",
   redirectHost: "app.example",
@@ -74,14 +87,7 @@ function fixture(responses: unknown[], props: Record<string, string> = {}) {
 }
 
 it("retains focused grant controls on unrelated host updates and applies permission changes", async () => {
-  const grant = {
-    grantId: "grant-owned",
-    clientName: "Personal app",
-    principal: caller.principal,
-    ceiling: ["operator.read"],
-    createdAt: 1_800_000_000_000,
-  };
-  const { connection, publish, request } = fixture([{ ...grants, grants: [grant] }]);
+  const { connection, publish, request } = fixture([ownedGrants]);
   await shows("Personal app");
   const row = document.querySelector(".mcp-connected-apps__grant");
   const revoke = button("Revoke")!;
@@ -112,10 +118,7 @@ function click(label: string) {
 }
 
 it("pairs within the caller's ceiling without a browser-supplied principal", async () => {
-  const { request } = fixture([
-    grants,
-    { code: "ABCDE-FGHIJ", expiresAt: 1_800_000_000_000, mcpUrl: "https://relay.example/mcp" },
-  ]);
+  const { request } = fixture([grants, pairing]);
   await shows("Pair with code");
   click("Pair with code");
   expect(body()).not.toContain("Full role access");
@@ -129,14 +132,7 @@ it("pairs within the caller's ceiling without a browser-supplied principal", asy
 
 it("empties retained view roots and ignores detached controls and pending replies after disposal", async () => {
   const pending = Promise.withResolvers<unknown>();
-  const grant = {
-    grantId: "grant-owned",
-    clientName: "Personal app",
-    principal: caller.principal,
-    ceiling: ["operator.read"],
-    createdAt: 1_800_000_000_000,
-  };
-  const { request, dispose, publish } = fixture([{ ...grants, grants: [grant] }, pending.promise]);
+  const { request, dispose, publish } = fixture([ownedGrants, pending.promise]);
   await shows("Personal app");
   const page = document.querySelector(".mcp-connected-apps")!;
   const overlay = page.nextElementSibling!;
@@ -149,21 +145,15 @@ it("empties retained view roots and ignores detached controls and pending replie
   const pairingReply = request.mock.results[1]?.value;
 
   dispose();
-  expect(page.childNodes).toHaveLength(0);
-  expect(overlay.childNodes).toHaveLength(0);
+  expect([page.childNodes.length, overlay.childNodes.length]).toEqual([0, 0]);
   expect(document.body.contains(page)).toBe(false);
   pair.click();
   revoke.click();
   publish();
   expect(request).toHaveBeenCalledTimes(2);
-  expect(page.childNodes).toHaveLength(0);
-  expect(overlay.childNodes).toHaveLength(0);
+  expect([page.childNodes.length, overlay.childNodes.length]).toEqual([0, 0]);
 
-  pending.resolve({
-    code: "ABCDE-FGHIJ",
-    expiresAt: 1_800_000_000_000,
-    mcpUrl: "https://relay.example/mcp",
-  });
+  pending.resolve(pairing);
   await pairingReply;
   expect(dialog.textContent).not.toContain("ABCDE-FGHIJ");
   expect(overlay.childNodes).toHaveLength(0);
@@ -172,14 +162,7 @@ it("empties retained view roots and ignores detached controls and pending replie
 
 it("retains rows while refreshing and renders the authoritative reply on settlement", async () => {
   const pending = Promise.withResolvers<unknown>();
-  const grant = {
-    grantId: "grant-owned",
-    clientName: "Personal app",
-    principal: caller.principal,
-    ceiling: ["operator.read"],
-    createdAt: 1_800_000_000_000,
-  };
-  const { request } = fixture([{ ...grants, grants: [grant] }, pending.promise, grants]);
+  const { request } = fixture([ownedGrants, pending.promise, grants]);
   await shows("Personal app");
   const row = document.querySelector(".mcp-connected-apps__grant");
   click("Refresh");
@@ -240,15 +223,14 @@ it("ignores stale consent responses after navigation", async () => {
 });
 
 it("revokes another person's grant as admin and shows the authoritative result", async () => {
-  const grant = {
+  const otherGrant = {
+    ...grant,
     grantId: "grant-other",
     clientName: "Team app",
     principal: { kind: "person", profileId: "person-other" },
     principalLabel: "Jordan Example",
-    ceiling: ["operator.read"],
-    createdAt: 1_800_000_000_000,
   };
-  const snapshot = { ...grants, grants: [grant], caller: { ...caller, canAdmin: true } };
+  const snapshot = { ...grants, grants: [otherGrant], caller: { ...caller, canAdmin: true } };
   const { request } = fixture([snapshot, { revoked: true }, { ...snapshot, grants: [] }]);
   await shows("Team app");
   expect(body()).toContain("Jordan Example");
