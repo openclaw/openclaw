@@ -199,7 +199,8 @@ export async function resolveEmbeddedModelSelection(params: {
       entry,
       defaultProvider,
       defaultModel,
-      isKnownRoute: (ref) => Boolean(findModelInCatalog(modelCatalog, ref.provider, ref.model)),
+      isKnownRoute: (ref) =>
+        Boolean(findModelInCatalog(visibilityPolicy.catalog, ref.provider, ref.model)),
     });
     entryUpdated ||= repaired.updated;
     const directOverride = resolveDirectStoredModelOverride({

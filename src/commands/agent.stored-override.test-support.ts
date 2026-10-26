@@ -2,6 +2,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { runEmbeddedAgent } from "../agents/embedded-agent.js";
+import { modelDefinition, providerEntry } from "../agents/model-auth.fixtures.test-support.js";
 import type { loadManifestModelCatalog } from "../agents/model-catalog.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -220,6 +221,42 @@ export function registerAgentStoredOverrideTests({
       } else if (cleanup) {
         expectLastRunProviderModel("openai", "gpt-4.1-mini");
       }
+    });
+  });
+
+  it("keeps a configured direct pick next to a wrapped default in models replace mode", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const sessionKey = "agent:main:subagent:replace-mode-override";
+      const userPick = {
+        providerOverride: "anthropic",
+        modelOverride: "claude-opus-5-5",
+        modelOverrideSource: "user" as const,
+        modelOverrideRouteResolution: "resolved" as const,
+      };
+      await writeSessionStoreSeed(store, {
+        [sessionKey]: { sessionId: "replace-mode-override", ...userPick },
+      });
+      // Replace mode supplies no plugin catalog; both routes exist only as configured models.
+      const cfg = mockConfig(home, store, {
+        model: { primary: "clawrouter/anthropic/claude-opus-5-5" },
+      });
+      cfg.models = {
+        mode: "replace",
+        providers: {
+          anthropic: providerEntry("http://127.0.0.1:1", {
+            models: [modelDefinition("claude-opus-5-5")],
+          }),
+          clawrouter: providerEntry("http://127.0.0.1:1", {
+            models: [modelDefinition("anthropic/claude-opus-5-5")],
+          }),
+        },
+      };
+
+      await runCommand({ sessionKey });
+
+      expectLastRunProviderModel("anthropic", "claude-opus-5-5");
+      expect(readSessionStore<SessionEntry>(store)[sessionKey]).toMatchObject(userPick);
     });
   });
 
