@@ -106,6 +106,17 @@ function sharedFactReads(reads: {
   return reads.mock.calls.filter(([, command]) => command.type === "sessionRows.sharedFacts");
 }
 
+function acpMetadata(backend: string, runtimeSessionName: string): SessionAcpMeta {
+  return {
+    backend,
+    agent: "main",
+    runtimeSessionName,
+    mode: "persistent",
+    state: "idle",
+    lastActivityAt: 1,
+  };
+}
+
 it("keeps Board and shared facts while transcript receipts advance summary freshness", async () => {
   await withSessionRowProjectionState(async (create) => {
     const cfg = {
@@ -128,14 +139,7 @@ it("keeps Board and shared facts while transcript receipts advance summary fresh
     replaceSessionEntrySync(scope, entry);
     // Cold transcript initialization may acquire row facts before warmed receipt reuse begins.
     await writeTranscript(scope, "user", "Initial transcript", { touchSessionEntry: false });
-    const acp: SessionAcpMeta = {
-      backend: "receipt-backend",
-      agent: "main",
-      runtimeSessionName: "receipt-session",
-      mode: "persistent",
-      state: "idle",
-      lastActivityAt: 1,
-    };
+    const acp = acpMetadata("receipt-backend", "receipt-session");
     seedCanonicalAcpSessionMeta({
       ...scope,
       lifecycleRevision: entry.lifecycleRevision,
@@ -265,14 +269,7 @@ it.each([
   "observer adapter",
   "transcript publication",
 ] as const)("carries complete accepted ACP facts across a yield: %s", async (change) => {
-  const initial: SessionAcpMeta = {
-    backend: "accepted-acp-backend",
-    agent: "main",
-    runtimeSessionName: "accepted-1",
-    mode: "persistent",
-    state: "idle",
-    lastActivityAt: 1,
-  };
+  const initial = acpMetadata("accepted-acp-backend", "accepted-1");
   await withAcceptedSuffix(
     async ({ projection, suffix, scope, query, entry, reads, resume }) => {
       const sharing =
