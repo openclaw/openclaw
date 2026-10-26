@@ -1,7 +1,6 @@
 // Approval-intent tests: closed-list fast path plus model-judged classification.
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import * as simpleCompletion from "../agents/simple-completion-runtime.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { classifySystemAgentApprovalIntent as classifySystemAgentApprovalIntentImpl } from "./approval-intent.js";
 import { classifySystemAgentApprovalText } from "./operator-approval.js";
 import {
@@ -15,8 +14,8 @@ import * as verifiedInference from "./verified-inference.js";
 const DEFAULT_MODEL = "openai/gpt-5.5@openai:p2";
 const CLI_MODEL = "claude-cli/claude-opus-4-8";
 
-function verifiedInferenceConfig(model: string): OpenClawConfig {
-  return {
+async function createVerifiedInference(model = DEFAULT_MODEL) {
+  const config = {
     agents: {
       defaults: {
         model,
@@ -25,18 +24,7 @@ function verifiedInferenceConfig(model: string): OpenClawConfig {
           : {}),
       },
     },
-    auth: {
-      order: { openai: ["openai:p1", "openai:p2"] },
-      profiles: {
-        "openai:p1": { provider: "openai", mode: "api_key" },
-        "openai:p2": { provider: "openai", mode: "api_key" },
-      },
-    },
   };
-}
-
-async function createVerifiedInference(model = DEFAULT_MODEL) {
-  const config = verifiedInferenceConfig(model);
   return createSystemAgentPluginMetadataTestSnapshot(config).run(
     async () => (await createSystemAgentVerifiedInferenceTestFixture(config)).binding,
     config,

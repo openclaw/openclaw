@@ -5,18 +5,18 @@ import type { SetupMemoryImportOutcome } from "../wizard/setup.memory-import.js"
 import * as audit from "./audit.js";
 import {
   createChatEngine,
+  configSnapshot,
   sharedVerifiedInferenceConfig,
   mocks,
   useTempStateDir,
   createAmbientVerifiedBinding,
-  SystemAgentChatEngine,
   type MemoryImportStepParams,
   type OpenClawConfig,
 } from "./chat-engine.test-support.js";
 import * as hostedSetup from "./hosted-setup.runtime.js";
 import { createInferenceConfigFixture } from "./inference-config.test-support.js";
 
-function createEngine(options: ConstructorParameters<typeof SystemAgentChatEngine>[0] = {}) {
+function createEngine(options: Parameters<typeof createChatEngine>[0] = {}) {
   return createChatEngine({ runAgentTurn: async () => null, ...options });
 }
 
@@ -25,13 +25,7 @@ function prepareMemoryConfig(workspace: string): OpenClawConfig {
     ...sharedVerifiedInferenceConfig,
     agents: { ...sharedVerifiedInferenceConfig.agents, defaults: { workspace } },
   };
-  mocks.readSetupConfigFileSnapshot.mockResolvedValue({
-    exists: true,
-    valid: true,
-    hash: "memory-base-hash",
-    config,
-    sourceConfig: config,
-  });
+  mocks.readSetupConfigFileSnapshot.mockResolvedValue(configSnapshot(config));
   return config;
 }
 
@@ -46,8 +40,7 @@ it("refuses memory import before provider discovery when the default workspace i
 });
 
 it("rechecks inference authority immediately before a hosted memory copy", async () => {
-  const baseConfig = prepareMemoryConfig(useTempStateDir());
-  const configFixture = await createInferenceConfigFixture(baseConfig);
+  const configFixture = await createInferenceConfigFixture(prepareMemoryConfig(useTempStateDir()));
   const snapshot = configFixture.snapshot;
   const verifiedInference = await createAmbientVerifiedBinding(
     snapshot.runtimeConfig ?? snapshot.config,

@@ -16,14 +16,12 @@ function overview() {
         id: "main",
         name: "Main",
         isDefault: true,
-        model: "openai/gpt-5.5",
         workspace: "/tmp/main",
       },
     ],
     defaultModel: "openai/gpt-5.5",
     tools: {
       ...base.tools,
-      codex: { command: "codex", found: true },
       apiKeys: { openai: true, anthropic: false },
     },
     references: {
