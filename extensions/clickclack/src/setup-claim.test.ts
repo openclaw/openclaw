@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { claimClickClackSetupCode } from "./setup-claim.js";
 
@@ -61,15 +61,13 @@ describe("ClickClack setup-code claim", () => {
     });
     expect(fetchMock).toHaveBeenCalledExactlyOnceWith(
       claimUrl,
-      expect.objectContaining({ method: "POST", redirect: "manual" }),
+      expect.objectContaining({
+        method: "POST",
+        redirect: "manual",
+        body: JSON.stringify({ code: "ABCD-EFGH-JKMP" }),
+      }),
     );
-    const init = fetchMock.mock.calls[0]?.[1];
-    const body = init?.body;
-    if (typeof body !== "string") {
-      throw new Error("expected string request body");
-    }
-    expect(JSON.parse(body)).toEqual({ code: "ABCD-EFGH-JKMP" });
-    const headers = new Headers(init?.headers);
+    const headers = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
     expect(headers.get("Authorization")).toBeNull();
     expect(headers.get("Content-Type")).toBe("application/json");
   });
@@ -96,23 +94,20 @@ describe("ClickClack setup-code claim", () => {
       response.end(JSON.stringify(claimResponse({ defaults: {} })));
     });
     const port = await listenOnLoopback(server);
+    onTestFinished(() => server[Symbol.asyncDispose]());
     const lookupFn = createLookupFn("127.0.0.1", "93.184.216.34");
 
-    try {
-      await expect(
-        claim({
-          claimUrl: `http://localhost:${port}/api/bot-setup-codes/claim`,
-          fetch: undefined,
-          lookupFn,
-        }),
-      ).resolves.toMatchObject({
-        token: "test-token",
-        workspace: { id: "wsp_1" },
-      });
-      expect(lookupFn).toHaveBeenCalledTimes(2);
-    } finally {
-      await server[Symbol.asyncDispose]();
-    }
+    await expect(
+      claim({
+        claimUrl: `http://localhost:${port}/api/bot-setup-codes/claim`,
+        fetch: undefined,
+        lookupFn,
+      }),
+    ).resolves.toMatchObject({
+      token: "test-token",
+      workspace: { id: "wsp_1" },
+    });
+    expect(lookupFn).toHaveBeenCalledTimes(2);
   });
 
   it("rejects non-loopback HTTP claims before sending a request", async () => {
@@ -130,34 +125,29 @@ describe("ClickClack setup-code claim", () => {
 
   it("bounds private-host DNS resolution with the claim timeout", async () => {
     vi.useFakeTimers();
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     const lookupFn = vi.fn(() => new Promise<never>(() => {})) as unknown as LookupFn;
 
-    try {
-      const pending = expect(
-        claim({
-          claimUrl: "http://clickclack.internal/api/bot-setup-codes/claim",
-          lookupFn,
-        }),
-      ).rejects.toThrow("ClickClack setup code claim timed out after 30000ms");
+    const pending = expect(
+      claim({
+        claimUrl: "http://clickclack.internal/api/bot-setup-codes/claim",
+        lookupFn,
+      }),
+    ).rejects.toThrow("ClickClack setup code claim timed out after 30000ms");
 
-      await vi.advanceTimersByTimeAsync(30_000);
-      await pending;
-      expect(fetchMock).not.toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-    }
+    await vi.advanceTimersByTimeAsync(30_000);
+    await pending;
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("rejects malformed claim responses", async () => {
-    const malformed = claimResponse({
-      workspace: { id: "wsp_1", route_id: "clickclack", slug: "default" },
-    });
-    fetchMock.mockResolvedValue(Response.json(malformed));
-
-    await expect(
-      claim({
-        claimUrl: "https://clickclack.example/api/bot-setup-codes/claim",
-      }),
-    ).rejects.toThrow("invalid workspace.name");
+    fetchMock.mockResolvedValue(
+      Response.json(
+        claimResponse({ workspace: { id: "wsp_1", route_id: "clickclack", slug: "default" } }),
+      ),
+    );
+    await expect(claim()).rejects.toThrow("invalid workspace.name");
   });
 });
