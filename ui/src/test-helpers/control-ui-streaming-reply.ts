@@ -75,20 +75,22 @@ function installStreamingReplyProbe() {
     timeouts: 0,
     timeoutCancellations: 0,
   };
-  const setTimer = window.setTimeout;
-  const clearTimer = window.clearTimeout;
-  window.setTimeout = (...args) => {
-    if (active) {
-      pipeline.timeouts++;
-    }
-    return Reflect.apply(setTimer, window, args);
-  };
-  window.clearTimeout = (timer) => {
-    if (active) {
-      pipeline.timeoutCancellations++;
-    }
-    clearTimer.call(window, timer);
-  };
+  window.setTimeout = new Proxy(window.setTimeout, {
+    apply(target, receiver, args) {
+      if (active) {
+        pipeline.timeouts++;
+      }
+      return Reflect.apply(target, receiver, args);
+    },
+  });
+  window.clearTimeout = new Proxy(window.clearTimeout, {
+    apply(target, receiver, args) {
+      if (active) {
+        pipeline.timeoutCancellations++;
+      }
+      return Reflect.apply(target, receiver, args);
+    },
+  });
   // Observe existing owners from their registration, without a production probe seam.
   const OriginalWeakMap = window.WeakMap;
   class ProbeWeakMap<K extends WeakKey, V> extends OriginalWeakMap<K, V> {

@@ -2005,6 +2005,8 @@ try {
       firstLoad ||
       values["critical-path"] ||
       bootRoute !== "chat" ||
+      // Typing in the second pane changes the URL; restore the fixture's primary route.
+      streamingPanes > 1 ||
       comparisonBundleDirs.length
     ) {
       await page.goto(runUrl, { waitUntil: "domcontentloaded" });
