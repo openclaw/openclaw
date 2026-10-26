@@ -5,7 +5,7 @@ type TurnArgs = Parameters<typeof startTurn>;
 
 const recovery = vi.hoisted(() => ({
   kind: "compact" as "compact" | "overflow" | "image",
-  forbidden() {
+  forbidden: () => {
     throw new Error("A reviewed turn must not enter recovery");
   },
 }));

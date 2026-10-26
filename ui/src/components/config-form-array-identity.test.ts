@@ -31,6 +31,7 @@ function arrayFixture(
     click: (label: string) =>
       expectDefined(
         container.querySelector<HTMLButtonElement>(`button[aria-label='${label}']`),
+        label,
       ).click(),
   };
 }

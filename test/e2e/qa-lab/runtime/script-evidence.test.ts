@@ -44,7 +44,7 @@ function makeWriter(
 afterEach(() => vi.unstubAllEnvs());
 
 it("writes evidence with normalized artifact paths", async () => {
-  const { artifactBase, writer } = await makeWriter();
+  const { artifactBase, writer } = makeWriter();
   const summaryPath = path.join(artifactBase, "nested", "summary.json");
   writer.appendLog("producer output\n");
 
@@ -73,7 +73,7 @@ it("rejects uncataloged targets unless coverage binding is disabled", () => {
 });
 
 it("keeps UTF-8 logs and failure details within byte limits", async () => {
-  const { writer, write, log } = await makeWriter({ maxDetailsBytes: 9, maxLogBytes: 9 });
+  const { writer, write, log } = makeWriter({ maxDetailsBytes: 9, maxLogBytes: 9 });
   const diagnostic = `${"🙂".repeat(32)}done`;
   writer.appendLog(diagnostic);
 
@@ -86,7 +86,7 @@ it("keeps UTF-8 logs and failure details within byte limits", async () => {
 });
 
 it("applies built-in and configured redaction before bounding logs and details", async () => {
-  const { repoRoot, writer, write, log } = await makeWriter({
+  const { repoRoot, writer, write, log } = makeWriter({
     maxDetailsBytes: 4096,
     maxLogBytes: 4096,
   });
@@ -108,7 +108,7 @@ it("applies built-in and configured redaction before bounding logs and details",
 });
 
 it("omits oversized raw logs instead of truncating before redaction", async () => {
-  const { writer, write, log } = await makeWriter({ maxLogBytes: 128 });
+  const { writer, write, log } = makeWriter({ maxLogBytes: 128 });
   writer.appendLog(`password=${"x".repeat(40 * 1024)}private-secret-tail-1234567890`);
 
   await write();
@@ -118,7 +118,7 @@ it("omits oversized raw logs instead of truncating before redaction", async () =
 it.each(["..", "../outside.log"])(
   "rejects artifact path %s outside the producer output directory",
   async (filePath) => {
-    const { writer } = await makeWriter();
+    const { writer } = makeWriter();
 
     expect(() =>
       writer.build({ artifacts: [{ kind: "log", filePath }], durationMs: 1, status: "fail" }),

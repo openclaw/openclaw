@@ -2,9 +2,16 @@ import { createRoot } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ApplicationContext } from "../../app/context.ts";
+import { createChannelCapability } from "../../lib/channels/index.ts";
+import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
+import { createApplicationGateway } from "../../test-helpers/application-context.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createChannelSetup } from "./wizard-setup.ts";
 
-afterEach(() => vi.useRealTimers());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
 
 it.each([
   ["current", "reload"],
@@ -17,6 +24,7 @@ it.each([
   vi.useFakeTimers();
   const operationStarted = createDeferred();
   const operation = createDeferred();
+  const { gateway } = createApplicationGateway();
   let starts = 0;
   const request = async (method: string) => {
     if (method === "wizard.cancel") {
@@ -38,19 +46,21 @@ it.each([
           step: { id: "token", type: "text" },
         };
   };
-  const refresh = vi.fn().mockResolvedValue(undefined);
-  const discardDraft = vi.fn().mockResolvedValue(undefined);
-  const startWhatsApp = vi.fn().mockResolvedValue(undefined);
-  const context = {
-    gateway: { snapshot: { client: { request }, phase: "connected" } },
-    channels: { state: { channelsSnapshot: null }, refresh },
-    runtimeConfig: { state: { configFormDirty: false }, discardDraft },
-  } as ApplicationContext;
+  Object.assign(gateway.snapshot, {
+    client: createTestGatewayClient(request),
+    phase: "connected",
+  });
+  const channels = createChannelCapability(gateway);
+  const runtimeConfig = createRuntimeConfigCapability(gateway);
+  const context = { gateway, channels, runtimeConfig } as ApplicationContext;
   let currentContext = context;
+  const discardDraft = vi.spyOn(runtimeConfig, "discardDraft").mockResolvedValue();
+  const refresh = vi.spyOn(channels, "refresh").mockResolvedValue();
   (boundary === "reload" ? discardDraft : refresh).mockImplementation(async () => {
     operationStarted.resolve();
     await operation.promise;
   });
+  const startWhatsApp = vi.spyOn(channels, "startWhatsApp").mockResolvedValue();
   let dispose!: () => void;
   const host = createRoot((stop) => {
     dispose = stop;
@@ -59,7 +69,7 @@ it.each([
       clearSelection: () => {},
       presentWizard: async (pending) => await pending,
       retire: () => {},
-      startWhatsApp,
+      startWhatsApp: (force, accountId) => channels.startWhatsApp(force, accountId),
     });
   });
   try {
@@ -86,5 +96,7 @@ it.each([
     operation.resolve();
     dispose();
     await vi.runAllTimersAsync();
+    channels.dispose();
+    runtimeConfig.dispose();
   }
 });
