@@ -30,7 +30,7 @@ it("normalizes and copies each bounded worker preview only once", () => {
   const slices = vi.spyOn(Array.prototype, "slice");
   const decoded = decodeCodexCatalogFrame({ bytes, route: { id, kind: "list" } });
   const copiedPages = slices.mock.contexts.filter(
-    (rows) => rows.length === 16 && rows[0]?.id === "thread-0",
+    (rows) => Array.isArray(rows) && rows.length === 16 && rows[0]?.id === "thread-0",
   ).length;
   slices.mockRestore();
   expect(decoded.message).toEqual({
