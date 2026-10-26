@@ -791,7 +791,7 @@ describe("first chat startup snapshot ordering", () => {
       });
       connectSessionOwner(h);
       h.state.connected = !beforeHello;
-      const replyReady = createDeferred<void>();
+      const replyReady = createDeferred();
       let rowsAtDispatch: unknown[] | undefined;
       let snapshotAtDispatch: ChatSessionSnapshot | null | undefined;
       h.request.mockImplementationOnce(async () => {
