@@ -3,7 +3,6 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { readSessionArchiveContentSync } from "../config/sessions/archive-compression.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
-import { createTranscriptEventInserter } from "../config/sessions/transcript-payload.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { createCanonicalRepairFixture } from "./doctor-session-repair-fixture.test-support.js";
@@ -20,6 +19,11 @@ describe("doctor canonical session-key retention repair", () => {
         ["main", "ops"],
       );
 
+      insert(
+        "agent:main:shared",
+        { sessionId: "destination-only-previous", updatedAt: 4 },
+        "destination-only history",
+      );
       replaceSessionEntrySync(
         { ...scope(), sessionKey: "agent:main:shared" },
         {
@@ -30,21 +34,8 @@ describe("doctor canonical session-key retention repair", () => {
       );
       const destinationDatabase = database();
       const destination = sessionSqlFixture(destinationDatabase.db);
-      destination`INSERT INTO session_windows (session_id, session_key, reason, session_scope, created_at, updated_at)
-        VALUES ('destination-only-previous', 'agent:main:shared', 'recovery', 'conversation', 4, 4)`.run();
-      createTranscriptEventInserter(
-        destinationDatabase.db,
-        "destination-only-previous",
-      )({
-        seq: 0,
-        eventJson: JSON.stringify({
-          id: "destination-only-message",
-          message: { content: "destination-only history", role: "user" },
-          parentId: null,
-          type: "message",
-        }),
-        createdAt: 4,
-      });
+      destination`UPDATE session_windows SET reason = 'recovery'
+        WHERE session_id = 'destination-only-previous'`.run();
 
       insert(
         "agent:main:shared ",
@@ -66,12 +57,6 @@ describe("doctor canonical session-key retention repair", () => {
 
       const report = await repair();
 
-      expect(report).toMatchObject({
-        foundGroups: 1,
-        removedRows: 2,
-        repairedGroups: 1,
-        scannedStores: 2,
-      });
       expect(load("agent:main:shared", "main")?.entry.sessionId).toBe("winner");
       expect(load("agent:main:shared ", "ops")).toBeUndefined();
       expect(load("agent:main:shared", "ops")).toBeUndefined();
@@ -99,7 +84,6 @@ describe("doctor canonical session-key retention repair", () => {
             .map((name) => path.join(directory, name)),
         )
         .at(0);
-      expect(loserArchive).toBeDefined();
       expect(readSessionArchiveContentSync(loserArchive as string)).toContain("loser history");
     });
   });

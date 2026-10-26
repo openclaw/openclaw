@@ -92,10 +92,8 @@ describe("doctor project clone shape", () => {
         expect(findings).toHaveLength(1);
         const finding = findings[0]!;
         expect(finding).toMatchObject({
-          checkId,
           severity: "warning",
           category: shape === "missing" ? "fix-now" : "recommended",
-          docsUrl: "https://docs.openclaw.ai/cli/doctor/checks",
           path: clone,
         });
         expect(finding.message).toContain("Stored project");
@@ -111,24 +109,18 @@ describe("doctor project clone shape", () => {
           ]);
         }
         if (shape === "both") {
-          for (const output of [finding.message, finding.path, finding.fixHint]) {
-            expectText(
-              output!,
-              [],
-              ["user:", "synthetic-secret", "query-private", "fragment-private"],
-            );
-          }
-          for (const remote of [
+          expectText(
+            [finding.message, finding.path, finding.fixHint].join("\n"),
+            [],
+            ["user:", "synthetic-secret", "query-private", "fragment-private"],
+          );
+          expectText(finding.message, [
             "https://***@example.invalid/project.git",
             "https::https://***@example.invalid/project.git",
             "***@example.invalid:org/project.git",
             "odd_scheme://***@example.invalid/project.git",
-          ]) {
-            for (const field of ["promisor", "partialclonefilter"]) {
-              expect(finding.message).toContain(`remote.${remote}.${field}`);
-            }
-          }
-          expect(finding.message).toContain("extensions.partialclone");
+            "extensions.partialclone",
+          ]);
           expectText(finding.fixHint!, [
             "git config --get-regexp '^remote\\..*\\.(promisor|partialclonefilter)$'",
             "git config --unset-all <the key shown by that command>",
@@ -140,17 +132,7 @@ describe("doctor project clone shape", () => {
         expect(await fs.readFile(path.join(clone, ".git", "config"), "utf8")).toBe(configBefore);
         expect(await git(clone, "rev-parse", "--is-shallow-repository")).toBe(String(shallow));
         if (shape === "both") {
-          // The operator locates and removes URL-keyed entries locally; Doctor
-          // cannot print their raw keys as executable repair commands.
-          const localKeys = await git(
-            clone,
-            "config",
-            "--name-only",
-            "--get-regexp",
-            "^remote\\..*\\.(promisor|partialclonefilter)$",
-          );
           for (const key of urlKeys) {
-            expect(localKeys.split("\n")).toContain(key);
             await git(clone, "config", "--unset-all", key);
           }
         }

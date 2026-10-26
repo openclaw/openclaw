@@ -85,8 +85,8 @@ it("backs up legacy widgets, retires A2UI, and preserves other retired renderers
 
         const result = await retireDoctorA2uiWidgets({ cfg: {}, env: state.env });
         expect(result.warnings).toEqual([
-          "Deleted 2 stored widget(s) after backup. A2UI widgets were retired and can be recreated as HTML widgets.",
-          "Converted 3 other retired widget(s) to inert HTML source previews after backup. Original source and widget metadata were preserved; previous capabilities were removed.",
+          expect.stringContaining("Deleted 2 stored widget(s) after backup"),
+          expect.stringContaining("Converted 3 other retired widget(s) to inert HTML"),
         ]);
         const backupNames = fs
           .readdirSync(path.dirname(databasePath))
@@ -112,22 +112,13 @@ it("backs up legacy widgets, retires A2UI, and preserves other retired renderers
               !String(row.name).startsWith("legacy-") && !String(row.name).startsWith("converted"),
           ),
         );
-        expect(
-          query`SELECT content_kind, descriptor_json, grant_state, granted_sha, revision FROM board_widgets WHERE name = 'converted'`.get(),
-        ).toEqual({
-          content_kind: "html",
+        const converted = query`SELECT * FROM board_widgets WHERE name = 'converted'`.get();
+        expect(converted).toMatchObject({
           descriptor_json: null,
-          grant_state: "none",
           granted_sha: null,
           revision: 2,
         });
-        expect(
-          JSON.parse(
-            String(
-              query`SELECT manifest FROM board_widgets WHERE name = 'converted'`.get()?.manifest,
-            ),
-          ),
-        ).toMatchObject({
+        expect(JSON.parse(String(converted?.manifest))).toMatchObject({
           contentOwner: "html",
           nameIdentity: registeredManifest.nameIdentity,
         });

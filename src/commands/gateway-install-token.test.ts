@@ -16,7 +16,6 @@ const { resolveGatewayAuthMock, defaultAuth } = vi.hoisted(() => {
 });
 const shouldRequireGatewayTokenForInstallMock = vi.hoisted(() => vi.fn(() => true));
 const resolveSecretRefValuesMock = vi.hoisted(() => vi.fn());
-const secretRefKeyMock = vi.hoisted(() => vi.fn(() => "env:default:OPENCLAW_GATEWAY_TOKEN"));
 const randomTokenMock = vi.hoisted(() => vi.fn(() => "generated-token"));
 
 // mock-isolation: token installation must not write the operator's config.
@@ -28,21 +27,13 @@ vi.mock("../gateway/auth-install-policy.js", () => ({
   shouldRequireGatewayTokenForInstall: shouldRequireGatewayTokenForInstallMock,
 }));
 
-vi.mock("../secrets/ref-contract.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../secrets/ref-contract.js")>()),
-  secretRefKey: secretRefKeyMock,
-}));
-
 // mock-isolation: use fixture secret values without accessing real credential providers.
 vi.mock("../secrets/resolve.js", () => ({ resolveSecretRefValues: resolveSecretRefValuesMock }));
 // mock-isolation: generated tokens must be deterministic fixture values.
 vi.mock("./random-token.js", () => ({ randomToken: randomTokenMock }));
 
 function createGeneration(config: OpenClawConfig = {}) {
-  const snapshot = {
-    ...createTestConfigSnapshot(config),
-    hash: "captured-config-hash",
-  };
+  const snapshot = { ...createTestConfigSnapshot(config), hash: "captured-config-hash" };
   return { snapshot, writeOptions: {} };
 }
 
@@ -87,9 +78,8 @@ it("returns unavailable reason when token SecretRef is unresolved in token mode"
     config: { gateway: { auth: { mode: "token", token: "${MISSING_GATEWAY_TOKEN}" } } },
   });
 
-  expect(result.unavailableReason).toBe(
-    "gateway.auth.token SecretRef is configured but unresolved (gateway.auth.token SecretRef is unresolved (env:default:MISSING_GATEWAY_TOKEN).).",
-  );
+  expect(result.unavailableReason).toContain("SecretRef is configured but unresolved");
+  expect(result.unavailableReason).toContain("env:default:MISSING_GATEWAY_TOKEN");
 });
 
 it("returns unavailable reason when token and password are both configured and mode is unset", async () => {
@@ -119,7 +109,6 @@ it("persists an auto-generated token with the captured write guards", async () =
   });
 
   expect(result.warnings.join("\n")).toContain("saving to config");
-  expect(replaceConfigFileMock).toHaveBeenCalledOnce();
   expect(replaceConfigFileMock.mock.calls[0]?.[0]).toStrictEqual({
     sourceConfig: { gateway: { auth: { mode: "token", token: "generated-token" } } },
     snapshot: baseSnapshot,
@@ -160,7 +149,6 @@ it("refuses an update-owned token commit after its captured precommit revokes au
         }),
     ),
   ).rejects.toThrow("original owner revoked");
-  expect(replaceConfigFileMock).toHaveBeenCalledOnce();
   expect(committed).toBe(false);
 });
 

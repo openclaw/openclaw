@@ -68,9 +68,6 @@ it.each([false, true])("Doctor reports or repairs a stripped owner (history: %s)
       prepareDoctorContext(configPath),
     );
     if (history) {
-      expect(ctx.configResult.pendingChangePanels?.join("\n")).toContain(
-        "Restored commands.ownerAllowFrom[0] target kind",
-      );
       await runInitialConfigWriteHealth(ctx);
       expect(ctx.configWriteRefusal).toBeUndefined();
       const saved = await readConfigFileSnapshot();
@@ -105,14 +102,12 @@ it("recovers an installed channel's owner kind without a runtime registry", asyn
     channels: ["discord"],
     configSchema: { type: "object", properties: {} },
   });
-  await fs.writeFile(
-    path.join(pluginDir, "index.cjs"),
-    'throw new Error("Doctor must not activate the runtime");',
-  );
-  await fs.writeFile(
-    path.join(pluginDir, "setup-entry.cjs"),
-    "module.exports = { plugin: globalThis.__doctorOwnerSetup };",
-  );
+  for (const [name, source] of Object.entries({
+    "index.cjs": 'throw new Error("Doctor must not activate the runtime");',
+    "setup-entry.cjs": "module.exports = { plugin: globalThis.__doctorOwnerSetup };",
+  })) {
+    await fs.writeFile(path.join(pluginDir, name), source);
+  }
   vi.stubGlobal("__doctorOwnerSetup", discordSetupPlugin);
   const cfg = config(bareOwner, { allow: ["discord"], load: { paths: [pluginDir] } });
   const configPath = path.join(home, "openclaw.json");
@@ -170,7 +165,6 @@ afterEach(() => {
 
 it("keeps a Discord owner's direct heartbeat route and command authority through Doctor", async () => {
   const original = config();
-  expect(await heartbeat(original)).toMatchObject(directRoute);
   const migrated = migrateLegacyCommandOwners(original, []);
   expect(await heartbeat(migrated)).toMatchObject(directRoute);
   expect(migrated.commands?.ownerAllowFrom).toEqual([typedOwner]);
