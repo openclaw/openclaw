@@ -76,8 +76,8 @@ explicitly; the runner does not read port environment variables:
 
 Read [the verification map](features/README.md), then only the recipe for the
 behavior under test. Prefer a DM; use groups for group policy, mentions,
-commands, topics, or reactions. For a topic proof without a prepared forum,
-`--create-forum` gives the scenario a run-owned forum topic that cleanup deletes.
+commands, group topics, or reactions. For a group-topic proof without a prepared
+forum, `--create-forum` gives the scenario a run-owned topic that cleanup deletes.
 A generic success turn does not prove formatting, media, timing, or lifecycle
 behavior.
 
@@ -133,7 +133,7 @@ request when the path should reach the model; native commands may produce none.
 
 Report the sanitized command, sent action, relevant timeline rows, provider
 request count, and the claim those facts prove. Inspect `test-group.json` or the
-summary's `testForum` when setup ran; fixture evidence is not message proof.
+summary's `testForum`/`testDmTopic` when setup ran; fixture evidence is not message proof.
 Keep credentials, identities, and private paths out of shared logs, screenshots,
 and reports.
 

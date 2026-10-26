@@ -3,7 +3,6 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { deriveDeliveryQueueRetentionColumns } from "../infra/delivery-queue-retention-columns.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { createLocalSqliteSnapshotProvider } from "../snapshot/local-repository.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -18,6 +17,7 @@ import {
   backupSqliteRestoreCommand,
   backupSqliteVerifyCommand,
 } from "./backup-sqlite.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const configMocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(),
@@ -25,15 +25,14 @@ const configMocks = vi.hoisted(() => ({
 
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
+  const { createTestConfigReadMocks } = await import("./test-runtime-config-helpers.js");
   return {
     ...actual,
     getRuntimeConfig: configMocks.getRuntimeConfig,
     loadConfig: configMocks.getRuntimeConfig,
     readConfigFileSnapshot: async () => ({ config: configMocks.getRuntimeConfig() }),
-    captureRuntimeConfigAsyncReader:
-      (...args: Parameters<typeof configMocks.getRuntimeConfig>) =>
-      async () =>
-        configMocks.getRuntimeConfig(...args),
+    captureRuntimeConfigAsyncReader: createTestConfigReadMocks(configMocks, "getRuntimeConfig")
+      .captureRuntimeConfigAsyncReader,
   };
 });
 
@@ -108,7 +107,7 @@ describe("SQLite backup commands", () => {
       await fs.mkdir(scratchPath, { mode: 0o700 });
       await fs.chmod(scratchPath, 0o700);
       createGlobalDatabase(databasePath);
-      const runtime = createRuntimeCapture();
+      const runtime = createRuntime();
 
       const created = await backupSqliteCreateCommand(runtime, {
         global: true,
@@ -120,7 +119,7 @@ describe("SQLite backup commands", () => {
         basename: "openclaw.sqlite",
         userVersion: OPENCLAW_STATE_SCHEMA_VERSION,
       });
-      expect(JSON.parse(runtime.logs.shift() ?? "{}")).toEqual(created);
+      expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toEqual(created);
 
       const listed = await backupSqliteListCommand(runtime, {
         repository: repositoryPath,
@@ -154,7 +153,7 @@ describe("SQLite backup commands", () => {
         snapshotPath: created.snapshotPath,
         targetPath: restorePath,
       });
-      expect(runtime.errors).toEqual([]);
+      expect(runtime.error).not.toHaveBeenCalled();
 
       const sqlite = requireNodeSqlite();
       const restoredDatabase = new sqlite.DatabaseSync(restorePath, { readOnly: true });
@@ -175,7 +174,7 @@ describe("SQLite backup commands", () => {
     const repositoryPath = state.path("snapshots");
     const snapshotPath = path.join(repositoryPath, "missing-snapshot");
     const restorePath = state.path("restored.sqlite");
-    const runtime = createRuntimeCapture();
+    const runtime = createRuntime();
     const missingRepositoryMessage = `SQLite snapshot repository does not exist: ${repositoryPath}. Check the snapshot path or create a snapshot with \`openclaw backup sqlite create\`.`;
 
     await expect(backupSqliteVerifyCommand(runtime, snapshotPath, {})).rejects.toThrow(
@@ -207,7 +206,7 @@ describe("SQLite backup commands", () => {
         await fs.writeFile(gitPath, "gitdir: ../git-admin\n");
       }
 
-      const runtime = createRuntimeCapture();
+      const runtime = createRuntime();
       await expect(
         backupSqliteListCommand(runtime, { repository: repositoryPath, json: true }),
       ).rejects.toThrow(
@@ -217,7 +216,7 @@ describe("SQLite backup commands", () => {
   );
 
   it("requires exactly one named OpenClaw database source", async () => {
-    const runtime = createRuntimeCapture();
+    const runtime = createRuntime();
 
     await expect(
       backupSqliteCreateCommand(runtime, { repository: "/tmp/snapshots" }),
@@ -240,7 +239,7 @@ describe("SQLite backup commands", () => {
     ["whitespace-only", "   ", "--agent must not be blank"],
   ])("rejects an %s SQLite snapshot agent", async (_label, agent, message) => {
     await expect(
-      backupSqliteCreateCommand(createRuntimeCapture(), {
+      backupSqliteCreateCommand(createRuntime(), {
         agent,
         repository: "/tmp/snapshots",
       }),
@@ -252,20 +251,20 @@ describe("SQLite backup commands", () => {
     const databasePath = resolveOpenClawStateSqlitePath();
     await fs.mkdir(path.dirname(databasePath), { recursive: true });
     await fs.writeFile(databasePath, Buffer.alloc(32));
-    const runtime = createRuntimeCapture();
+    const runtime = createRuntime();
 
     await expect(
       backupSqliteCreateCommand(runtime, { global: true, repository: repositoryPath }),
     ).rejects.toThrow(/cannot be snapshotted safely/u);
 
-    expect(runtime.errors).toEqual([
+    expect(runtime.error).toHaveBeenCalledExactlyOnceWith(
       `Warning: the backup outcome could not be recorded: Cannot admit backup.recordOutcome for backup outcome ledger in state root ${path.dirname(path.dirname(databasePath))}: failed to acquire gateway state ownership | file is not a database | ERR_SQLITE_ERROR. No local mutation was attempted. Inspect openclaw gateway status. Update the Gateway or fix authentication and retry. To run offline, stop the Gateway through its service owner, wait for ownership to release, then rerun this exact command. | ERR_SQLITE_ERROR`,
-    ]);
+    );
     await expect(fs.readdir(repositoryPath)).resolves.toEqual([]);
   });
 
   it("requires repository, snapshot, and restore target paths", async () => {
-    const runtime = createRuntimeCapture();
+    const runtime = createRuntime();
 
     await expect(backupSqliteCreateCommand(runtime, { global: true })).rejects.toThrow(
       "Missing required --repository value",
@@ -293,7 +292,7 @@ describe("SQLite backup commands", () => {
       path: databasePath,
       identity: { role: "generic", id: "generic-test" },
     });
-    const runtime = createRuntimeCapture();
+    const runtime = createRuntime();
 
     await expect(backupSqliteListCommand(runtime, { repository: repositoryPath })).rejects.toThrow(
       /database role generic is not allowed/u,
@@ -308,23 +307,10 @@ describe("SQLite backup commands", () => {
   });
 });
 
-function createRuntimeCapture(): RuntimeEnv & {
-  logs: string[];
-  errors: string[];
-} {
-  const logs: string[] = [];
-  const errors: string[] = [];
-  return {
-    logs,
-    errors,
-    log(value) {
-      logs.push(String(value));
-    },
-    error(value) {
-      errors.push(String(value));
-    },
-    exit(code) {
-      throw new Error(`exit ${code}`);
-    },
-  };
+function createRuntime() {
+  const runtime = createTestRuntime();
+  runtime.exit.mockImplementation((code) => {
+    throw new Error(`exit ${code}`);
+  });
+  return runtime;
 }

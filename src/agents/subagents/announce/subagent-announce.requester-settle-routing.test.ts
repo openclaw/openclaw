@@ -7,19 +7,16 @@ import {
 import { authorizeGatewayMethod } from "../../../gateway/server-methods/method-authorization.js";
 import { resolveInProcessGatewayDispatch } from "../../../gateway/server-plugin-in-process-authority.js";
 import { withOperatorToolGatewayAuthority } from "../../../gateway/server-plugin-in-process-dispatch.js";
-import { createSyntheticPluginRuntimeClient } from "../../../gateway/server-plugin-runtime-client.js";
-import { withPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
-import { captureSessionTarget } from "../../../sessions/session-controller.target.js";
 import * as deliveryRuntime from "./subagent-announce-delivery.runtime.js";
-import { sendSubagentAnnounceDirectly } from "./subagent-announce-direct-delivery.js";
-import { setSubagentAnnounceDeliveryDepsForTest } from "./subagent-announce-overrides.test-support.js";
 import {
-  deliver,
   registryRead,
   startTurn,
   loadRequester,
   settledChild,
-  publishWakeTransition,
+  requesterSnapshot,
+  useDirectDelivery,
+  withGateway,
+  wakeParams,
   useRequesterSettleDispatchFixture,
   createRequesterSettleContext as createContext,
 } from "./subagent-announce.requester-settle-dispatch.test-support.js";
@@ -96,12 +93,9 @@ describe("requester settle routing and session authority", () => {
       });
     }
     registryRead.listSubagentRunsForRequester.mockReturnValue(cohort);
-    const requester: Awaited<ReturnType<typeof deliveryRuntime.loadRequesterSessionEntry>> = {
-      cfg: {},
-      canonicalKey: requesterSessionKey,
-      agentId: "main",
-      storePath: "/synthetic/requester-settle.sqlite",
-      entry: {
+    const requester = requesterSnapshot(
+      {},
+      {
         ...requesterIdentity,
         updatedAt: 1,
         delivery: {
@@ -111,23 +105,10 @@ describe("requester settle routing and session authority", () => {
           origin: { provider: "webchat", to: requesterSessionKey, surface: "webchat" },
         },
       },
-    };
+      { sessionKey: requesterSessionKey, storePath: "/synthetic/requester-settle.sqlite" },
+    );
     loadRequester.mockResolvedValue(requester);
-    setSubagentAnnounceDeliveryDepsForTest({
-      getRuntimeConfig: () => ({}),
-      loadRequesterSessionEntry: () => requester,
-      getRequesterSessionActivity: () => ({
-        sessionId: requesterIdentity.sessionId,
-        target: captureSessionTarget({
-          storeScope: "/synthetic/requester-settle.sqlite",
-          sessionKey: requesterSessionKey,
-          agentId: requester.agentId,
-          incarnation: requesterIdentity.sessionId,
-        }),
-        isActive: false,
-      }),
-    });
-    deliver.mockImplementation(sendSubagentAnnounceDirectly);
+    useDirectDelivery(requester);
     startTurn.mockImplementation(async ({ preflight, io }) => {
       io.emitAcceptance([true, { runId: preflight.request.idempotencyKey, status: "accepted" }]);
       io.emitFinal([
@@ -145,17 +126,8 @@ describe("requester settle routing and session authority", () => {
     });
     const context = createContext();
     const completeBatch = vi.fn();
-    const delivered = await withPluginRuntimeGatewayRequestScope(
-      { context, client: createSyntheticPluginRuntimeClient(), isWebchatConnect: () => false },
-      () =>
-        maybeWakeRequesterAfterAllChildrenSettled({
-          requesterSessionKey,
-          requesterOrigin: child.requesterOrigin,
-          isSourceCurrent: () => true,
-          settledEntry: child,
-          transitionBatch: publishWakeTransition,
-          completeBatch,
-        }),
+    const delivered = await withGateway(context, () =>
+      maybeWakeRequesterAfterAllChildrenSettled(wakeParams(child, completeBatch)),
     );
     expect(startTurn).toHaveBeenCalledOnce();
     expect(startTurn.mock.calls[0]![0].preflight.request).toMatchObject({

@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { MEMORY_PATH_POSTGRES_INDEXES } from "../../../packages/memory-host-sdk/src/host/memory-path-postgres.js";
 import {
   memoryStandingIntentSearchSchema,
   memoryTextSearchSchema,
@@ -7,7 +8,13 @@ import {
 } from "../../../packages/memory-host-sdk/src/host/memory-search-schema.js";
 import { readTranscriptPayload } from "../../config/sessions/transcript-payload.js";
 import { deriveTranscriptPredicateFields } from "../../config/sessions/transcript-predicate-fields.js";
-import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
+import { FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS } from "../../state/openclaw-agent-db-additive-columns.js";
+import {
+  AGENT_MEMORY_REVISION_SCHEMA_VERSION,
+  AGENT_VECTOR_DECODER_SCHEMA_VERSION,
+  AGENT_VECTOR_SEARCH_SCHEMA_VERSION,
+  OPENCLAW_AGENT_SCHEMA_VERSION,
+} from "../../state/openclaw-agent-db-contract.js";
 import { agentEngineSchema, openAgentEngineStore } from "../../state/openclaw-agent-db-engine.js";
 import { runWithAgentDatabaseMaintenanceAuthority } from "../../state/openclaw-agent-db-lease.js";
 import { AGENT_SCHEMA_COMPATIBILITY } from "../../state/openclaw-agent-db-schema-compatibility.js";
@@ -22,6 +29,7 @@ import {
 import { ensureOpenClawAgentDatabaseSchema } from "../../state/openclaw-agent-db-schema.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import { withLegacyAgentPostgresIndexes } from "../../state/openclaw-agent-index-retirement-migration.js";
+import { withLegacyAgentPostgresMemoryPaths } from "../../state/openclaw-agent-memory-path-migration.js";
 import {
   LEGACY_MEMORY_REVISION_SQLITE_TRIGGERS,
   withLegacyAgentPostgresMemoryRevisionTriggers,
@@ -30,6 +38,7 @@ import { OPENCLAW_AGENT_SCHEMA_SQL } from "../../state/openclaw-agent-schema.js"
 import { agentTranscriptSearchSchema } from "../../state/openclaw-agent-search-schema.js";
 import { withLegacyAgentPostgresTrajectoryStorage } from "../../state/openclaw-agent-trajectory-storage-migration.js";
 import { withLegacyAgentPostgresWriteLayout } from "../../state/openclaw-agent-write-layout-migration.js";
+import { ensureColumn } from "../../state/openclaw-state-db-schema-helpers.js";
 import metadata from "../../state/postgres-schema.generated/agent-port.json" with { type: "json" };
 import { agentPostgresRuntime } from "../../state/postgres-schema.generated/agent-runtime.js";
 import { agentSearchPostgresRuntime } from "../../state/postgres-schema.generated/agent-search-runtime.js";
@@ -51,7 +60,13 @@ import {
 } from "./agent-port-projections.js";
 import { withDatabaseEngineSelection } from "./context.js";
 import type { SearchSchema } from "./contract.js";
-import { DatabasePortDataError, type PortDescriptor, type PortTable } from "./port-descriptor.js";
+import {
+  DatabasePortDataError,
+  pendingSqliteColumns,
+  type PortDescriptor,
+  type PortTable,
+} from "./port-descriptor.js";
+import { withLegacyPostgresIndexOrdering } from "./postgres-index-ordering.js";
 import { pgSearchName, postgresSearchSql } from "./postgres-search-schema.js";
 import { resolveDatabaseFamilyEngines } from "./registry.js";
 
@@ -59,7 +74,7 @@ const agentSourceSearchPostData: NonNullable<PortDescriptor["postgresSourcePostD
   source,
 ) => {
   const row = (
-    await source.db.query<{ metadata: { search_extensions?: string | null } }>(
+    await source.db.query<{ metadata: { version: number; search_extensions?: string | null } }>(
       `SELECT to_jsonb(meta) AS metadata
        FROM ${pgSearchName(source.namespace)}.openclaw_schema_meta AS meta WHERE store = 'agent'`,
     )
@@ -110,7 +125,13 @@ const agentSourceSearchPostData: NonNullable<PortDescriptor["postgresSourcePostD
     const shared = { text: true, vector: false };
     return schemas
       .map((schema) => {
-        const sql = postgresSearchSql(schema, namespace, shared);
+        const sql = postgresSearchSql(
+          schema,
+          namespace,
+          shared,
+          row!.metadata.version >= AGENT_VECTOR_DECODER_SCHEMA_VERSION ? 2 : 1,
+          row!.metadata.version >= AGENT_VECTOR_SEARCH_SCHEMA_VERSION ? 2 : 1,
+        );
         shared.vector ||= Object.keys(schema.vector ?? {}).length > 0;
         return sql;
       })
@@ -128,12 +149,12 @@ export async function loadAgentPortDescriptor(
     if (backup?.version === sourceVersion && backup.id === "agent") {
       return backup;
     }
-    // Schema 30 appends trajectory columns; schema 31 removes revision triggers.
+    // Schema 30 appends columns; 31–36 change only PostgreSQL search, triggers, or indexes.
     // Pin the remaining shared layout so future DDL gets its own descriptor.
     if (
       backup ||
-      OPENCLAW_AGENT_SCHEMA_VERSION !== 31 ||
-      ![27, 28, 29, 30].includes(sourceVersion)
+      OPENCLAW_AGENT_SCHEMA_VERSION !== 36 ||
+      ![27, 28, 29, 30, 31, 32, 33, 34, 35].includes(sourceVersion)
     ) {
       throw new DatabasePortDataError(
         `Missing agent PostgreSQL backup descriptor for version ${sourceVersion}`,
@@ -305,7 +326,7 @@ export async function loadAgentPortDescriptor(
           needsIndexRepair ||
           Boolean(hasRetiredUsagePartitions) ||
           hasPendingCurrentVersionAgentDatabaseMigration(db),
-        pendingColumns: {},
+        pendingColumns: pendingSqliteColumns(db, FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS),
       };
     },
     async migrateSqliteSource(file, _version, assertCurrent) {
@@ -320,6 +341,7 @@ export async function loadAgentPortDescriptor(
           runWithAgentDatabaseMaintenanceAuthority(
             {
               signal: new AbortController().signal,
+              assertCurrent,
               assertOwned: assertCurrent,
               assertOwnedInTransaction: assertCurrent,
               renew: assertCurrent,
@@ -327,6 +349,13 @@ export async function loadAgentPortDescriptor(
             file,
             async () => {
               ensureOpenClawAgentDatabaseSchema(db, { agentId, register: false });
+              for (const {
+                tableName,
+                columnName,
+                dataType,
+              } of FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS) {
+                ensureColumn(db, tableName, `${columnName} ${dataType}`);
+              }
               // Retired partitions are rebuilt from retained transcripts; their NUL keys cannot port.
               executeSqliteQuerySync(
                 db,
@@ -368,7 +397,18 @@ export async function loadAgentPortDescriptor(
   if (!historical) {
     return descriptor;
   }
-  let postData = withLegacyAgentPostgresMemoryRevisionTriggers(descriptor.postData);
+  const legacyRevision = sourceVersion < AGENT_MEMORY_REVISION_SCHEMA_VERSION;
+  let postData = legacyRevision
+    ? withLegacyAgentPostgresMemoryRevisionTriggers(descriptor.postData)
+    : descriptor.postData;
+  postData = withLegacyAgentPostgresMemoryPaths(postData);
+  if (sourceVersion < 35) {
+    postData = withLegacyPostgresIndexOrdering(
+      postData,
+      sourceVersion === 34 ? "schema-nullability" : "sqlite",
+      descriptor.preData,
+    );
+  }
   if (legacyTrajectory) {
     postData = withLegacyAgentPostgresTrajectoryStorage(postData);
   }
@@ -387,26 +427,34 @@ export async function loadAgentPortDescriptor(
     ),
     triggers: [
       ...(descriptor.triggers ?? []),
-      ...LEGACY_MEMORY_REVISION_SQLITE_TRIGGERS.map((trigger) => ({
-        name: trigger.name,
-        table: trigger.table,
-        sql: trigger.sql.replace("IF NOT EXISTS ", "").replace(/;$/, ""),
-      })),
+      ...(legacyRevision
+        ? LEGACY_MEMORY_REVISION_SQLITE_TRIGGERS.map((trigger) => ({
+            name: trigger.name,
+            table: trigger.table,
+            sql: trigger.sql.replace("IF NOT EXISTS ", "").replace(/;$/, ""),
+          }))
+        : []),
     ],
     preData: legacyTrajectory
       ? withLegacyAgentPostgresTrajectoryStorage(descriptor.preData)
       : descriptor.preData,
     postData,
     expectedCatalog: catalog.map((fact) =>
-      sourceVersion < 29 &&
-      fact.kind === "indexes" &&
-      (fact.table === "session_nodes" || fact.table === "session_reactions")
-        ? { table: fact.table, kind: fact.kind, value: Number(fact.value) + 1 }
-        : sourceVersion < 28 &&
-            fact.table === "transcript_event_identities" &&
-            fact.kind === "indexes"
-          ? { table: fact.table, kind: fact.kind, value: 5 }
-          : fact,
+      fact.kind === "indexes" && fact.table === "memory_index_sources"
+        ? {
+            table: fact.table,
+            kind: fact.kind,
+            value: Number(fact.value) - MEMORY_PATH_POSTGRES_INDEXES.length,
+          }
+        : sourceVersion < 29 &&
+            fact.kind === "indexes" &&
+            (fact.table === "session_nodes" || fact.table === "session_reactions")
+          ? { table: fact.table, kind: fact.kind, value: Number(fact.value) + 1 }
+          : sourceVersion < 28 &&
+              fact.table === "transcript_event_identities" &&
+              fact.kind === "indexes"
+            ? { table: fact.table, kind: fact.kind, value: 5 }
+            : fact,
     ),
     inspectSqliteSource: undefined,
     migrateSqliteSource: undefined,

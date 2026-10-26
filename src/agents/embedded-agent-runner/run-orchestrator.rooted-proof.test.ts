@@ -20,6 +20,7 @@ import { resetPreparedModelRuntimeSnapshotsForTest } from "../prepared-model-run
 import * as runtimePlugins from "../runtime-plugins.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { runEmbeddedAgent } from "./run-orchestrator.js";
+import { withTestAdmission } from "./run-orchestrator.test-support.js";
 
 type SessionRuntimeInput = Parameters<
   typeof import("./run/attempt-session-runtime-prepare.js").prepareEmbeddedAttemptSessionRuntime
@@ -125,32 +126,27 @@ it("reuses configured plugins for runs outside the canonical workspace", async (
     });
   });
   const name = "task-workspace-proof";
-  const admission = prepareSystemAgentRunAdmission(config, name, "main", name);
-  try {
-    await expect(
-      runEmbeddedAgent({
-        workspaceDir: taskWorkspace,
-        config,
-        agentId: "main",
-        agentDir: state.agentDir(),
-        sessionId: name,
-        sessionKey: `agent:main:${name}`,
-        sessionPersistence: "detached",
-        sessionManager: SessionManager.inMemory(taskWorkspace),
-        prompt: "Review synthetic workshop files.",
-        provider: "proof",
-        model: "model",
-        agentHarnessId: "openclaw",
-        allowGatewaySubagentBinding: true,
-        toolsAllow,
-        timeoutMs: 30000,
-        runId: name,
-        preparedRunAdmission: admission,
-      }),
-    ).rejects.toThrow("rooted preparation complete");
-  } finally {
-    admission.close();
-  }
+  const run = withTestAdmission(runEmbeddedAgent, prepareSystemAgentRunAdmission, name);
+  await expect(
+    run({
+      workspaceDir: taskWorkspace,
+      config,
+      agentId: "main",
+      agentDir: state.agentDir(),
+      sessionId: name,
+      sessionKey: `agent:main:${name}`,
+      sessionPersistence: "detached",
+      sessionManager: SessionManager.inMemory(taskWorkspace),
+      prompt: "Review synthetic workshop files.",
+      provider: "proof",
+      model: "model",
+      agentHarnessId: "openclaw",
+      allowGatewaySubagentBinding: true,
+      toolsAllow,
+      timeoutMs: 30000,
+      runId: name,
+    }),
+  ).rejects.toThrow("rooted preparation complete");
   expect(preparation).toHaveBeenCalledTimes(1);
   for (const reload of reloads) {
     expect(reload).not.toHaveBeenCalled();

@@ -367,6 +367,15 @@ const ToolLoopDetectionSchema = z
   })
   .optional();
 
+const ToolSearchSelectorSchema = z
+  .strictObject({
+    source: z.enum(["openclaw", "mcp", "client"]).optional(),
+    name: z.string().trim().min(1).optional(),
+  })
+  .refine((selector) => selector.source !== undefined || selector.name !== undefined, {
+    message: "Tool Search selectors must specify source, name, or both.",
+  });
+
 const ToolSearchSchema = z
   .union([
     z.boolean(),
@@ -375,6 +384,10 @@ const ToolSearchSchema = z
       enabled: z.boolean().optional(),
       /** Exposed model surface. "tools" exposes structured search/describe/call tools; "directory" keeps a bounded directory plus selected schemas visible while deferring the rest behind search/describe/call. */
       mode: z.enum(["tools", "directory"]).optional(),
+      /** Presentation only: omitted includes all eligible tools; [] includes none. */
+      include: z.array(ToolSearchSelectorSchema).optional(),
+      /** Matching tools remain directly visible. Exclusion wins over inclusion. */
+      exclude: z.array(ToolSearchSelectorSchema).optional(),
       /** Default search result count when the model omits a limit. Runtime clamps to maxSearchLimit. */
       searchDefaultLimit: z.number().int().positive().optional(),
       /** Maximum search result count. Runtime clamps to 1..50. */
@@ -597,6 +610,14 @@ const GatewayToolPolicySchema = z.strictObject({
   allow: z.array(GatewayToolPolicyNameSchema),
   /** Action-bearing tools require an explicit list, including tools with a default action. */
   actions: z.record(GatewayToolPolicyNameSchema, z.array(GatewayToolPolicyNameSchema)).optional(),
+  automations: z
+    .strictObject({
+      /** Model calls keep ordinary caller scope, even in administrator-started turns. */
+      scope: z.literal("caller").optional(),
+      /** Restricts model calls; direct human automation administration is unchanged. */
+      allowCommandJobs: z.boolean().optional(),
+    })
+    .optional(),
 });
 
 export const ToolsSchema = z

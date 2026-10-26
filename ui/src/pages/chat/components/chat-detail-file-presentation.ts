@@ -445,7 +445,6 @@ export function renderFilePanelPresentation(context: {
           ? {
               content: context.actions.currentFileText(),
               options: {
-                ...context.props.githubContext,
                 codeBlockInteraction: "interactive",
                 fileLinks: true,
                 sessionLinks: true,
@@ -475,7 +474,9 @@ export function renderFilePanelPresentation(context: {
       matches,
       query: presentation.fileSearchQuery,
       saveNotice: state.fileSaveNotice,
-      saving: state.fileSaving,
+      get saving() {
+        return state.fileSaving;
+      },
       searchOpen: presentation.fileSearchOpen,
       wrap: presentation.fileWrap,
       onCopy: (action) => {
@@ -503,7 +504,6 @@ export function renderFilePanelPresentation(context: {
     canvasPluginSurfaceUrl: context.props.canvasPluginSurfaceUrl,
     embedSandboxMode: context.props.embedSandboxMode,
     allowExternalEmbedUrls: context.props.allowExternalEmbedUrls,
-    ...context.props.githubContext,
     embedded: context.props.embedded,
     filePresentation: context.props.filePresentation ?? "desktop",
     fileBack: context.props.fileBack ?? undefined,
@@ -536,7 +536,6 @@ export const chatDetailPanelProperties = {
   canvasPluginSurfaceUrl: { default: null },
   embedSandboxMode: { default: "scripts" },
   allowExternalEmbedUrls: { default: false },
-  githubContext: { default: {}, attribute: false },
   embedded: { default: false },
   onOpenWorkspaceFile: { default: null, attribute: false },
   onOpenSessionLink: { default: null, attribute: false },

@@ -18,6 +18,13 @@ Codex plugins into synthetic `codex_plugin_*` OpenClaw dynamic tools.
 Use this page after the base [Codex harness](/plugins/codex-harness) is
 working.
 
+OpenClaw disables Codex's plugin recommendation catalog and installation-suggestion
+tools in managed threads (`features.tool_suggest` and `features.recommended_plugins`).
+This keeps recommendations for uninstalled plugins out of the model context. Installed
+plugins and connected apps remain available under the configured policy; owners can
+still browse and install plugins with `/codex plugins available` and
+`/codex plugins install <plugin>@<marketplace>`.
+
 ## Requirements
 
 - The agent runtime must be the native Codex harness.
@@ -234,12 +241,15 @@ ordered.
 
 Jobs created before app authority capture may keep their ordinary OpenClaw
 tool cap and continue non-app work, but cannot recover Codex app access
-automatically. Recreate or reauthorize only a job that needs app access, from a
-fresh authenticated owner turn. See
+automatically. Runs whose tool cap excludes Codex app tools receive no app
+reauthorization note; configured MCP servers and other allowed tools remain
+available. Recreate or reauthorize only a job that needs app access, from a fresh
+authenticated owner turn. See
 [Automations](/automation/cron-jobs#codex-apps-in-scheduled-automations).
 Ordinary edits preserve captured app authority. If a `toolsAllow` replacement is
 accepted without a fresh authenticated Codex authority capture, it clears that
-authority; the next run reports that app access requires reauthorization.
+authority; the next run reports that app access requires reauthorization if its
+tool cap still includes Codex apps.
 An update from a fresh authenticated owner turn can instead capture and store a
 new app ceiling for the updated job. The caller must match the job's original
 owner session and account, and explicitly replace `toolsAllow`. An owner update
@@ -697,6 +707,15 @@ per-app/tool settings above.
 
 Destructive plugin elicitations are allowed by default for configured Codex
 plugins, while unsafe schemas and ambiguous ownership are rejected:
+
+Set `read_only: true` on a configured plugin entry to limit its connected apps
+to tools explicitly marked read-only by `app/read`. Missing tool metadata and
+disabled tools fail closed. OpenClaw projects this restriction into native Codex
+tool permissions, including on thread recovery and side questions; an old saved
+tool grant cannot enable a write. All eligible read tools are available. This
+does not restrict individual actions within a tool or configure unrelated
+`mcp_servers` entries. If multiple enabled plugins own the same app, a read-only
+restriction from any owner remains in force. The default is `false`.
 
 - Global `allow_destructive_actions` defaults to `true`.
 - Per-plugin `allow_destructive_actions` overrides the global policy for

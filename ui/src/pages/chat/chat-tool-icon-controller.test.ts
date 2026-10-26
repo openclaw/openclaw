@@ -5,6 +5,7 @@ import { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ToolsEffectiveResult } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import type { PluginListResult } from "../../lib/plugins/index.ts";
+import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
 import * as iconLoader from "../plugins/icon-loader.ts";
 import { createChatToolIcons } from "./chat-tool-icon-controller.ts";
 
@@ -58,17 +59,12 @@ function setup() {
     }
     throw new Error(`Unexpected request: ${method}`);
   });
-  const snapshot: ApplicationGatewaySnapshot = {
+  const snapshot: ApplicationGatewaySnapshot = createApplicationGatewaySnapshot({
     client,
     phase: "connected",
-    offlineStable: false,
-    hello: null,
-    canvasPluginSurfaceUrl: null,
     assistantAgentId: "main",
     sessionKey: "agent:main:main",
-    lastError: null,
-    lastErrorCode: null,
-  };
+  });
   const context = {
     resourceBasePath: "",
     gateway: {

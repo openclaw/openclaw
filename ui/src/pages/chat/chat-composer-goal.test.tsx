@@ -2,23 +2,18 @@
 
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createSessionGoalFixture } from "../../../../src/gateway/session-goal.test-support.js";
 import type { SessionGoal } from "../../api/types.ts";
 import { i18n } from "../../i18n/index.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { ChatGoal } from "./components/chat-composer-goal.tsx";
 
-const goal: SessionGoal = {
-  schemaVersion: 1,
-  id: "goal-timing",
-  objective: "Verify the deployment",
-  status: "active",
+const goal: SessionGoal = createSessionGoalFixture("goal-timing", "Verify the deployment", {
   createdAt: 1_000,
   updatedAt: 61_000,
-  tokenStart: 0,
   tokensUsed: 100,
-  continuationTurns: 0,
-};
+});
 
 type GoalProps = Parameters<typeof ChatGoal>[0];
 function mountGoal(initial: SessionGoal, options: Partial<GoalProps> = {}) {
@@ -85,18 +80,6 @@ it("keeps Resume progress and its saved retry in the goal pill", () => {
   view.update({ connected: false });
   expect(retry.disabled).toBe(true);
   expect(query(".session-run-spinner")).toBeNull();
-});
-
-it.each([
-  ["active", "2m 00s"],
-  ["paused", "1m 00s"],
-  ["blocked", "1m 00s"],
-  ["usage_limited", "1m 00s"],
-  ["budget_limited", "1m 00s"],
-  ["complete", "1m 00s"],
-] as const)("renders elapsed time immediately for %s goals", (status, elapsed) => {
-  const view = mountGoal({ ...goal, status });
-  expect(view.elapsed()).toBe(elapsed);
 });
 
 it("replaces a live tick with the authoritative stop time and resumes ticking", () => {

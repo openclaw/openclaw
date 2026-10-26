@@ -148,6 +148,44 @@ export async function dispatchCronDelivery(
         adoptChild(child.reply);
       }
     }
+    // Persistent executions keep their raw transcript audit-only. A disabled
+    // notification does not discard the settled reply in that same conversation.
+    if (
+      params.job.sessionTarget.startsWith("session:") &&
+      params.undeliveredRunStatus === "ok" &&
+      !params.skipDelivery &&
+      !sentByTool &&
+      !params.isAborted()
+    ) {
+      const normalized = normalizeDirectCronDeliveryPayloads({
+        deliveryPayloads,
+        outputText,
+        summary,
+        synthesizedText,
+      });
+      if (normalized.kind === "deliver") {
+        const committed = await (
+          await conversationResult.load()
+        ).commitCronConversationResult({
+          config: params.cfgWithAgentDefaults,
+          agentId: params.agentId,
+          jobId: params.job.id,
+          runStartedAt: params.runStartedAt,
+          conversation: {
+            sessionKey: params.agentSessionKey,
+            sessionId: params.sessionId,
+            lifecycleRevision: params.lifecycleRevision,
+          },
+          payloads: normalized.payload,
+          signal: params.abortSignal,
+          deliveryAttemptFence: params.deliveryAttemptFence,
+        });
+        if (!committed.ok) {
+          return finish({ kind: "error", error: committed.reason });
+        }
+        diagnostics = mergeCronRunDiagnostics(diagnostics, committed.diagnostics);
+      }
+    }
     return finish();
   }
   if (params.skipDelivery && !sentByTool) {
@@ -382,6 +420,7 @@ export async function dispatchCronDelivery(
     }
   }
   const executionOwnsResult =
+    (params.undeliveredRunStatus === "error" || sentByTool) &&
     params.job.sessionTarget.startsWith("session:") &&
     conversation &&
     toAgentStoreSessionKey({
@@ -394,7 +433,8 @@ export async function dispatchCronDelivery(
         requestKey: params.agentSessionKey,
         mainKey: params.cfgWithAgentDefaults.session?.mainKey,
       });
-  // A persistent execution in this destination already owns its transcript entry.
+  // Errors and explicit message sends are already visible. Other execution
+  // transcript entries stay audit-only until this settled result is published.
   if (conversation && !executionOwnsResult && deliveryPayloads.length > 0) {
     deliveryAttempted = true;
     try {

@@ -45,7 +45,12 @@ it.for(["start", "start-drain-release", "refusal", "after-start"] as const)(
           }
           return { drained: drained.promise, hasWork: () => true, start, release };
         },
-        captureSessionCancellation: () => ({ runIds: [], cancel: async () => [] }),
+        captureSessionCancellation: () => ({
+          runIds: [],
+          settled: Promise.resolve(),
+          executing: false,
+          cancel: async () => [],
+        }),
         resolveSessionTargetForRunId: () => undefined,
       });
       const sessionKey = `agent:main:lifecycle-custody-${failureMode}`;

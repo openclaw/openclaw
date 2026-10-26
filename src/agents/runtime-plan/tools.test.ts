@@ -6,7 +6,7 @@ import {
   normalizedParameterFreeSchema,
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { Type } from "typebox";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createPluginRecord } from "../../plugins/loader-records.js";
 import { getPluginInstance } from "../../plugins/plugin-instance-scope.js";
@@ -40,6 +40,7 @@ const mocks = vi.hoisted(() => ({
   logProviderToolSchemaDiagnostics: vi.fn(),
   normalizeProviderToolSchemas: vi.fn(),
 }));
+const instances: NonNullable<ReturnType<typeof getPluginInstance>>[] = [];
 
 vi.mock("../embedded-agent-runner/tool-schema-runtime.js", () => ({
   logProviderToolSchemaDiagnostics: mocks.logProviderToolSchemaDiagnostics,
@@ -62,7 +63,13 @@ function createNormalizer(
   const api = builder.createApi(record, { config: {} });
   api.registerProvider({ id, label: id, auth: [], normalizeToolSchemas });
   const provider = expectDefined(builder.registry.providers[0], "registered provider").provider;
-  return { instance: getPluginInstance(record)!, provider };
+  const instance = getPluginInstance(record)!;
+  instances.push(instance);
+  return { instance, provider };
+}
+
+function runtimePlan(normalize: ReturnType<typeof useNormalizer> = vi.fn()) {
+  return { tools: { normalize, logDiagnostics: vi.fn() } } as unknown as AgentRuntimePlan;
 }
 
 function useNormalizer(provider: ProviderPlugin, persistent = false) {
@@ -114,6 +121,11 @@ describe("AgentRuntimePlan tool policy helpers", () => {
     mocks.logProviderToolSchemaDiagnostics.mockReset();
     mocks.normalizeProviderToolSchemas.mockReset();
   });
+  afterEach(async () => {
+    for (const instance of instances.splice(0)) {
+      await instance.dispose();
+    }
+  });
 
   it.each(["plan", "provider"] as const)(
     "quarantines bad schemas before %s normalization",
@@ -137,13 +149,9 @@ describe("AgentRuntimePlan tool policy helpers", () => {
       if (route === "provider") {
         mocks.normalizeProviderToolSchemas.mockImplementationOnce(({ tools: entries }) => entries);
       }
-      const runtimePlan =
-        route === "plan"
-          ? ({ tools: { normalize, logDiagnostics: vi.fn() } } as unknown as AgentRuntimePlan)
-          : undefined;
       expect(
         normalizeTools([invalid, healthy], {
-          runtimePlan,
+          runtimePlan: route === "plan" ? runtimePlan(normalize) : undefined,
           onPreNormalizationSchemaDiagnostics: (entries) => diagnostics.push([...entries]),
         }),
       ).toEqual([healthy]);
@@ -209,14 +217,11 @@ describe("AgentRuntimePlan tool policy helpers", () => {
             execute: vi.fn(async () => output),
           }),
         );
-        const metadata = noteMetadata;
-        setPluginToolMeta(tool, metadata);
+        setPluginToolMeta(tool, noteMetadata);
         const normalize = useNormalizer(provider);
-        const runtimePlan =
-          route === "plan"
-            ? ({ tools: { normalize, logDiagnostics: vi.fn() } } as unknown as AgentRuntimePlan)
-            : undefined;
-        const normalized = normalizeTools([tool], { runtimePlan });
+        const normalized = normalizeTools([tool], {
+          runtimePlan: route === "plan" ? runtimePlan(normalize) : undefined,
+        });
         expect(metadataWrites).toEqual([]);
         const normalizedTool = expectDefined(normalized[0], "normalized tool");
         expect(normalizedTool.parameters).toBe(tool.parameters);
@@ -226,11 +231,11 @@ describe("AgentRuntimePlan tool policy helpers", () => {
           .map((entry) => wrapToolWithAbortSignal(entry, new AbortController().signal));
         const wrappedTool = expectDefined(wrapped[0], "wrapped tool");
 
-        expect(getPluginToolMeta(normalizedTool)).toBe(metadata);
-        expect(getPluginToolMeta(wrappedTool)).toBe(metadata);
+        expect(getPluginToolMeta(normalizedTool)).toBe(noteMetadata);
+        expect(getPluginToolMeta(wrappedTool)).toBe(noteMetadata);
         registerHeadlessToolSearchCatalog({ catalogRef, tools: wrapped });
         expect(catalogRef.current?.entries).toMatchObject([
-          { name: tool.name, source: "mcp", sourceName: "fixture", mcp: metadata.mcp },
+          { name: tool.name, source: "mcp", sourceName: "fixture", mcp: noteMetadata.mcp },
         ]);
         await expect(normalizedTool.execute("current-call", {})).resolves.toBe(output);
         await expect(wrappedTool.execute("wrapped-call", {})).resolves.toBe(output);
@@ -243,7 +248,6 @@ describe("AgentRuntimePlan tool policy helpers", () => {
         );
       } finally {
         clearToolSearchCatalog({ catalogRef });
-        await instance.dispose();
       }
     },
   );
@@ -296,14 +300,12 @@ describe("AgentRuntimePlan tool policy helpers", () => {
     try {
       const first = normalize("first");
       const second = normalize("second");
-      expect(first.parameters).toBe(parameters);
-      expect(second.parameters).toBe(parameters);
-      expect(first.outputSchema).toBe(parameters);
-      expect(second.outputSchema).toBe(parameters);
       for (const [tool, runId, timeout] of [
         [first, "first", 100],
         [second, "second", 200],
       ] as const) {
+        expect(tool.parameters).toBe(parameters);
+        expect(tool.outputSchema).toBe(parameters);
         const {
           prepareArguments,
           prepareBeforeToolCallParams,
@@ -340,7 +342,6 @@ describe("AgentRuntimePlan tool policy helpers", () => {
       expect(executions).toEqual(["first", "second"]);
     } finally {
       completed.resolve();
-      await instance.dispose();
     }
   });
 
@@ -389,7 +390,6 @@ describe("AgentRuntimePlan tool policy helpers", () => {
       } finally {
         first.release();
         second.release();
-        await instance.dispose();
       }
     },
   );
@@ -418,40 +418,33 @@ describe("AgentRuntimePlan tool policy helpers", () => {
         }),
       );
       useNormalizer(provider);
-      try {
-        const normalized = normalizeTools(
-          ["healthy", "unreadable"].map((name) => {
-            return Object.assign(createParameterFreeTool(name), {
-              label: name,
-              execute: underlyingExecute,
-            });
-          }),
-          { provider: provider.id },
-        );
-        expect(normalized).toHaveLength(2);
-        const projected = filterRuntimeCompatibleTools(normalized);
-        expect(projected.tools.map((tool) => tool.name)).toEqual(["healthy"]);
-        expect(projected.diagnostics).toEqual([
-          {
-            toolName: "unreadable",
-            toolIndex: 1,
-            violations: ["unreadable.parameters is unreadable"],
-          },
-        ]);
-        const { execute } = expectDefined(projected.tools[0], "healthy normalized tool");
-        await expect(execute("proxy-call", {})).resolves.toMatchObject({
-          details: { source: "proxy" },
-        });
-        expect(underlyingExecute).not.toHaveBeenCalled();
-        expect(overrideExecute).toHaveBeenCalledOnce();
-        expect(trapAdmissions.length).toBeGreaterThan(0);
-        expect(trapAdmissions.every(Boolean)).toBe(true);
-        await instance.dispose();
-        expect(() => execute("retired-proxy-call", {})).toThrow("reloaded or disabled");
-        expect(overrideExecute).toHaveBeenCalledOnce();
-      } finally {
-        await instance.dispose();
-      }
+      const normalized = normalizeTools(
+        ["healthy", "unreadable"].map((name) =>
+          Object.assign(createParameterFreeTool(name), { label: name, execute: underlyingExecute }),
+        ),
+        { provider: provider.id },
+      );
+      expect(normalized).toHaveLength(2);
+      const projected = filterRuntimeCompatibleTools(normalized);
+      expect(projected.tools.map((tool) => tool.name)).toEqual(["healthy"]);
+      expect(projected.diagnostics).toEqual([
+        {
+          toolName: "unreadable",
+          toolIndex: 1,
+          violations: ["unreadable.parameters is unreadable"],
+        },
+      ]);
+      const { execute } = expectDefined(projected.tools[0], "healthy normalized tool");
+      await expect(execute("proxy-call", {})).resolves.toMatchObject({
+        details: { source: "proxy" },
+      });
+      expect(underlyingExecute).not.toHaveBeenCalled();
+      expect(overrideExecute).toHaveBeenCalledOnce();
+      expect(trapAdmissions.length).toBeGreaterThan(0);
+      expect(trapAdmissions.every(Boolean)).toBe(true);
+      await instance.dispose();
+      expect(() => execute("retired-proxy-call", {})).toThrow("reloaded or disabled");
+      expect(overrideExecute).toHaveBeenCalledOnce();
     },
   );
 
@@ -494,10 +487,10 @@ describe("AgentRuntimePlan tool policy helpers", () => {
 
       const result = normalizeTools([source]);
 
-      expect(result[0]).toBe(normalized);
-      expect(result[0]?.outputSchema).toBe(outputSchema);
-      expect(result[0]?.hideFromChannelProgress).toBe(hideFromChannelProgress ? true : undefined);
       const resultTool = expectDefined(result[0], "normalized tool");
+      expect(resultTool).toBe(normalized);
+      expect(resultTool.outputSchema).toBe(outputSchema);
+      expect(resultTool.hideFromChannelProgress).toBe(hideFromChannelProgress ? true : undefined);
       expect((resultTool as AnyAgentTool).catalogMode).toBe("direct-only");
       expect(isToolWrappedWithBeforeToolCallHook(resultTool)).toBe(true);
       expect(getToolTerminalPresentation(resultTool)).toBe(formatter);
@@ -505,9 +498,7 @@ describe("AgentRuntimePlan tool policy helpers", () => {
   );
 
   it("does not reread quarantined tools while preserving normalized metadata", () => {
-    const unreadableName = {
-      ...createParameterFreeTool("fuzzplugin_unreadable_name"),
-    } as AgentTool;
+    const unreadableName = createParameterFreeTool("fuzzplugin_unreadable_name") as AgentTool;
     Object.defineProperty(unreadableName, "name", {
       enumerable: true,
       get() {
@@ -528,13 +519,9 @@ describe("AgentRuntimePlan tool policy helpers", () => {
     });
 
     expect(result).toEqual([normalized]);
-    expect(getPluginToolMeta(expectDefined(result[0], "result[0] test invariant"))).toMatchObject({
-      pluginId: "bundle-mcp",
-      mcp: {
-        serverName: "fixture",
-        toolName: "lookup_note",
-      },
-    });
+    expect(getPluginToolMeta(expectDefined(result[0], "result[0] test invariant"))).toBe(
+      noteMetadata,
+    );
     expectQuarantine(diagnostics, "tool[0]", "tool[0].name is unreadable");
   });
 
@@ -542,27 +529,22 @@ describe("AgentRuntimePlan tool policy helpers", () => {
     const tools = [createParameterFreeTool()] as AgentTool[];
     const model = createNativeOpenAIResponsesModel() as never;
     const logDiagnostics = vi.fn();
-    const runtimePlan = {
-      tools: {
-        normalize: vi.fn(),
-        logDiagnostics,
-      },
-    } as unknown as AgentRuntimePlan;
+    const plan = runtimePlan();
+    plan.tools.logDiagnostics = logDiagnostics;
+    const context = {
+      workspaceDir: "/tmp/openclaw-runtime-plan-tools",
+      modelApi: "openai-responses",
+      model,
+    };
 
     logAgentRuntimeToolDiagnostics({
-      runtimePlan,
+      runtimePlan: plan,
       tools,
       provider: "openai",
       modelId: "gpt-5.4",
-      modelApi: "openai-responses",
-      workspaceDir: "/tmp/openclaw-runtime-plan-tools",
-      model,
+      ...context,
     });
 
-    expect(logDiagnostics).toHaveBeenCalledWith(tools, {
-      workspaceDir: "/tmp/openclaw-runtime-plan-tools",
-      modelApi: "openai-responses",
-      model,
-    });
+    expect(logDiagnostics).toHaveBeenCalledWith(tools, context);
   });
 });

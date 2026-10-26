@@ -1,11 +1,10 @@
 /* @vitest-environment jsdom */
 
-import { createComponent, createSignal, getOwner, merge } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { i18n, t } from "../../i18n/index.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
+import { createFrameQueue } from "../../test-helpers/animation-frame-queue.ts";
+import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { renderChatQueueSolid } from "./components/chat-composer-queue.tsx";
 
 type QueueProps = Parameters<typeof renderChatQueueSolid>[0];
@@ -33,17 +32,17 @@ afterEach(async () => {
 });
 
 describe("chat composer steering queue", () => {
-  it("keeps attempted unconfirmed messages inline while local commands retain retry and discard", () => {
+  it("keeps held messages inline while failed local commands retain retry and discard", () => {
     const onQueueRetry = vi.fn();
     const onQueueRemove = vi.fn();
     const container = renderQueue({
       queue: [
-        waiting("message", 1, { sendState: "unconfirmed", sendAttempts: 1 }),
+        waiting("message", 1, { sendState: "held", sendAttempts: 1 }),
         waiting("reset", 2, {
           text: "/reset",
           localCommandName: "reset",
-          sendState: "unconfirmed",
-          sendError: "Check the conversation before retrying the command.",
+          sendState: "failed",
+          sendError: "The command was rejected.",
           sendAttempts: 1,
         }),
       ],
@@ -54,10 +53,10 @@ describe("chat composer steering queue", () => {
     const rows = all(container, "item");
     expect(rows).toHaveLength(1);
     expect(text(container, "global-state")).toBe(
-      "Queue paused. Retry or discard the earlier unconfirmed message in the conversation.",
+      "Queue paused. Review or discard the earlier held message in the conversation.",
     );
     expect(rows[0]?.getAttribute("data-chat-queue-item")).toBe("reset");
-    expect(text(rows[0], "badge")).toBe(t("chat.queue.states.needsReview"));
+    expect(text(rows[0], "badge")).toBe(t("common.failed"));
     find(rows[0], "retry")?.click();
     find(rows[0], "remove")?.click();
     expect(onQueueRetry).toHaveBeenCalledWith("reset");
@@ -85,11 +84,11 @@ describe("chat composer steering queue", () => {
     expect(icon?.querySelector("circle")).toBeNull();
   });
 
-  it("keeps the queue identifier on failed and unconfirmed rows", () => {
+  it("keeps the queue identifier on failed and held rows", () => {
     const container = renderQueue({
       queue: [
         waiting("failed", 1, { queueMode: "steer", sendState: "failed", sendError: "rejected" }),
-        waiting("unconfirmed", 2, { sendState: "unconfirmed" }),
+        waiting("held", 2, { sendState: "held" }),
       ],
     });
 
@@ -114,18 +113,12 @@ function renderQueue(
   if (update) {
     update(props);
   } else {
-    const [current, setCurrent] = createSignal(props, { ownedWrite: true });
-    const view = mountSolid(() => createComponent(renderChatQueueSolid, merge(current)), {
-      container,
-    });
-    queues.set(container, setCurrent);
+    const view = mountSolid(renderChatQueueSolid, props, container);
+    queues.set(container, (nextProps) => view.update(nextProps));
     onTestFinished(() => {
       queues.delete(container);
-      view.unmount();
+      view.dispose();
     });
-  }
-  if (!getOwner()) {
-    flush();
   }
   return container;
 }
@@ -179,11 +172,8 @@ describe("chat composer queue reordering", () => {
   });
 
   it("auto-scrolls a long queue while a drag stays near its edge", () => {
-    const frames: FrameRequestCallback[] = [];
-    const requestFrame = vi.fn((callback: FrameRequestCallback) => {
-      frames.push(callback);
-      return frames.length;
-    });
+    const { frames, request } = createFrameQueue();
+    const requestFrame = vi.fn(request);
     const cancelFrame = vi.fn();
     vi.stubGlobal("requestAnimationFrame", requestFrame);
     vi.stubGlobal("cancelAnimationFrame", cancelFrame);
@@ -253,7 +243,8 @@ describe("chat composer queue reordering", () => {
     expect(onQueueRemove).toHaveBeenCalledWith("c");
   });
 
-  it("routes inline draft changes, submit, cancel, and keyboard shortcuts", () => {
+  it.each([false, true])("routes queue editing on mobile=%s", (mobile) => {
+    vi.spyOn(navigator, "userAgent", "get").mockReturnValue(mobile ? "Android" : "Windows");
     const { props, container, editor, change, submit, cancel } = editFixture("a draft");
     expect(editor.value).toBe("a draft");
     editor.dispatchEvent(new FocusEvent("focus"));
@@ -274,8 +265,14 @@ describe("chat composer queue reordering", () => {
     expect(cancel).toHaveBeenCalledOnce();
     editor.dispatchEvent(keydown("Enter", { shiftKey: true }));
     expect(submit).not.toHaveBeenCalled();
-    editor.dispatchEvent(keydown("Enter"));
-    expect(submit).toHaveBeenCalledOnce();
+    const enter = keydown("Enter", { cancelable: true });
+    editor.dispatchEvent(enter);
+    expect(enter.defaultPrevented).toBe(!mobile);
+    expect(submit).toHaveBeenCalledTimes(mobile ? 0 : 1);
+    if (mobile) {
+      container.querySelector<HTMLButtonElement>(".chat-queue__edit-submit")!.click();
+      expect(submit).toHaveBeenCalledOnce();
+    }
   });
 
   it("leaves queue editor shortcuts to IME confirmation until keyup", () => {
@@ -341,20 +338,6 @@ describe("chat composer queue reordering", () => {
     expect(editingMentions).toEqual([]);
     expect(editor.value).toBe("@Alex");
     expect(container.textContent).not.toContain("Will notify:");
-  });
-
-  it("projects one offline state on each row without a queue header", () => {
-    const container = renderQueue({
-      offline: true,
-      queue: [waiting("a", 1, { queueMode: "steer", sendState: "waiting-idle" })],
-    });
-
-    const row = find(container, "item");
-    expect(row?.classList.contains("chat-queue__item--reconnect")).toBe(true);
-    expect(all(row!, "badge")).toHaveLength(1);
-    expect(text(row, "badge--reconnect")).toBe(t("chat.queue.states.waitingForReconnect"));
-    expect(find(row, "state")).toBeNull();
-    expect(all(container, "global-state")).toHaveLength(0);
   });
 
   it("projects applying settings once and preserves the steer affordance", () => {

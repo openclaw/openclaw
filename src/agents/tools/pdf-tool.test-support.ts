@@ -1,5 +1,6 @@
-import { type Mock, vi } from "vitest";
+import { expect, type Mock, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import * as pdfExtract from "../../media/pdf-extract.js";
 import * as webMedia from "../../media/web-media.js";
 import { createEmptyPluginMetadataSnapshot } from "../../plugins/plugin-metadata-empty.test-support.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
@@ -11,6 +12,16 @@ import {
   getModelRegistryRuntime,
   initializeModelRegistryRuntime,
 } from "../sessions/model-registry-runtime.js";
+import { createPdfTool } from "./pdf-tool.js";
+
+export function requirePdfTool(options: Parameters<typeof createPdfTool>[0]) {
+  return createPdfTool(options) ?? expect.fail("expected PDF tool");
+}
+
+export function stubPdfInput(text = "PDF") {
+  vi.spyOn(webMedia, "loadWebMediaRaw").mockResolvedValue(FAKE_PDF_MEDIA);
+  vi.spyOn(pdfExtract, "extractPdfContent").mockResolvedValue({ text, images: [] });
+}
 
 type StubPreparedRuntimeSnapshot = {
   agentDir: string;

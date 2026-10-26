@@ -9,9 +9,11 @@ import { serializeGatewayFrame } from "../../serialized-json.js";
 import type { GatewayRequestHandler } from "../../server-methods/types.js";
 import { captureSessionRowGeneration } from "../../session-row-identity.js";
 import { shareSidebarSessionRows } from "../../session-row-presentation.js";
+import { dispatchProfile } from "../client-fixtures.test-support.js";
 import {
   createDispatchTestHarness,
   createOperatorWsClient,
+  requestFrame,
 } from "./authenticated-request-dispatch.test-support.js";
 
 beforeEach(() => resetDiagnosticEventsForTest());
@@ -58,15 +60,13 @@ async function dispatch(
     clientInfo: { id: "openclaw-control-ui", mode: "webchat" },
   });
   if (delivery === "shared") {
-    client.authenticatedUserProfile = {
-      profileId: "private-profile",
+    client.authenticatedUserProfile = dispatchProfile("private-profile", {
       displayName: "Test operator",
-      hasAvatar: false,
       avatarRevision: "0",
       updatedAt: 0,
-    };
+    });
   }
-  const request = { type: "req", id: "private-request", method, params };
+  const request = requestFrame("private-request", method, params);
   const internalSend = delivery === "internal" ? harness.send : undefined;
   await dispatchRequest(request, client, undefined, internalSend);
   if (delivery === "shared") {

@@ -2,15 +2,15 @@
 import { createSignal } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createRepositoryFixture } from "./draft-place-state.test-support.ts";
+import { placementControls } from "./placement.test-support.ts";
 import { resolveProjectChip } from "./project-chip.ts";
 import { ProjectChip } from "./project-chip.tsx";
-import type { NewSessionPlaceControlsOptions } from "./target-controls.ts";
 import { pickerParams } from "./where-chip.test-support.ts";
 import { WhereChip } from "./where-chip.tsx";
 
-it("retains environment heading and device artwork through unrelated refreshes", () => {
+it("retains environment heading and device artwork through unrelated refreshes", async () => {
   const params = pickerParams(
     true,
     undefined,
@@ -19,6 +19,10 @@ it("retains environment heading and device artwork through unrelated refreshes",
   );
   const [current, setCurrent] = createSignal(params);
   const view = mountSolid(() => <WhereChip {...current()} />);
+  await vi.dynamicImportSettled();
+  await waitForSolid(() =>
+    expect(view.container.querySelector(".new-session-page__environment-list")).not.toBeNull(),
+  );
   const list = view.container.querySelector(".new-session-page__environment-list")!;
   const row = list.querySelector('[data-value="device:runner"]')!;
   const heading = list.querySelector(".new-session-page__environment-heading");
@@ -48,7 +52,7 @@ it("retains environment heading and device artwork through unrelated refreshes",
   expect(row.querySelector('[data-form="laptop"]')).not.toBeNull();
 });
 
-it("retains project artwork while current labels and selection remain live", () => {
+it("retains project artwork while current labels and selection remain live", async () => {
   const projects = [
     {
       id: "sample",
@@ -66,6 +70,7 @@ it("retains project artwork while current labels and selection remain live", () 
   vi.spyOn(place, "canWrite").mockReturnValue(true);
   vi.spyOn(place, "deviceFolderAvailable", "get").mockReturnValue(false);
   vi.spyOn(browser, "projects", "get").mockReturnValue(projects);
+  vi.spyOn(browser, "projectsReady", "get").mockReturnValue(true);
   vi.spyOn(browser, "projectQuery", "get").mockReturnValue("Sample");
   vi.spyOn(browser, "projectId", "get").mockImplementation(() => projectId);
   vi.spyOn(browser, "popoverOpen").mockReturnValue(true);
@@ -75,18 +80,7 @@ it("retains project artwork while current labels and selection remain live", () 
     onPopoverHide: vi.fn(),
     onPopoverAfterHide: vi.fn(),
   });
-  const options: NewSessionPlaceControlsOptions = {
-    place,
-    gateway,
-    context: undefined,
-    data: undefined,
-    submitting: false,
-    pendingPlacement: false,
-    onConnectMachine: vi.fn(),
-    onNavigate: vi.fn(),
-    onFocusComposer: vi.fn(),
-    onChange: vi.fn(),
-  };
+  const options = placementControls({ place, gateway, context: undefined });
   const params = {
     params: options,
     state: resolveProjectChip({
@@ -102,6 +96,9 @@ it("retains project artwork while current labels and selection remain live", () 
   };
   const [current, setCurrent] = createSignal(params);
   const view = mountSolid(() => <ProjectChip {...current()} />);
+  await waitForSolid(() =>
+    expect(view.container.querySelector('[data-value="project:sample"]')).not.toBeNull(),
+  );
   const row = view.container.querySelector('[data-value="project:sample"]')!;
   const icon = row.querySelector(".session-menu__icon svg");
   const observer = new MutationObserver(() => {});

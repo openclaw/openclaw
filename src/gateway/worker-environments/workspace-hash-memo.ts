@@ -109,14 +109,13 @@ export async function withoutWorkspaceHashContext<T>(operation: () => Promise<T>
 // crosses the shared byte cap so one placement cannot hold unbounded hash state.
 export function pruneWorkspaceHashMemo(memo: WorkspaceHashMemo): void {
   let bytes = 0;
-  for (const [identity, sha256] of memo) {
+  memo.forEach((sha256, identity) => {
     // Identities and digests are ASCII, so string length equals byte length.
     bytes += identity.length + sha256.length;
     if (bytes > MAX_WORKSPACE_HASH_MEMO_BYTES) {
       memo.clear();
-      return;
     }
-  }
+  });
 }
 
 /** Returns the placement-owned memo for a key, pruning it before each reuse. */

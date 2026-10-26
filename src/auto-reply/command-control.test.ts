@@ -6,6 +6,7 @@ import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { resolveCommandAuthorization, resolveCommandAuthorizationAsync } from "./command-auth.js";
 import {
+  hasCommandSyntax,
   hasControlCommand,
   hasInlineCommandTokens,
   shouldComputeCommandAuthorized,
@@ -13,7 +14,6 @@ import {
 import { parseActivationCommand } from "./group-activation.js";
 import { markInboundContextLabel } from "./reply/inbound-context-marker.js";
 import { resolveAuthorizedSessionResetCommand } from "./reply/session-reset-command.js";
-import { parseSendPolicyCommand } from "./send-policy.js";
 import type { MsgContext } from "./templating.js";
 import { installDiscordRegistryHooks } from "./test-helpers/command-auth-registry-fixture.js";
 
@@ -643,17 +643,6 @@ describe("control command parsing", () => {
     cases.forEach(([value, expected]) => expect(parse(value)).toEqual(expected));
   }
 
-  it("requires slash for send policy", () => {
-    expectCases(parseSendPolicyCommand, [
-      ["/send on", { hasCommand: true, mode: "allow" }],
-      ["/send: on", { hasCommand: true, mode: "allow" }],
-      ["/send", { hasCommand: true }],
-      ["/send:", { hasCommand: true }],
-      ["send on", { hasCommand: false }],
-      ["send", { hasCommand: false }],
-    ]);
-  });
-
   it("requires slash for activation", () => {
     expectCases(parseActivationCommand, [
       ["/activation mention", { hasCommand: true, mode: "mention" }],
@@ -678,6 +667,24 @@ describe("control command parsing", () => {
     expect(hasInlineCommandTokens("plain text")).toBe(false);
     expect(hasInlineCommandTokens("http://example.com/path")).toBe(false);
     expect(hasInlineCommandTokens("stop")).toBe(false);
+  });
+
+  it.each(["!", "! poll", "!(echo fixture)", "@bot ! poll", "@bot !(echo fixture)"])(
+    "requests authorization for bash input without granting mention bypass: %s",
+    (body) => {
+      expect(shouldComputeCommandAuthorized(body)).toBe(true);
+      expect(hasControlCommand(body)).toBe(false);
+    },
+  );
+
+  it.each([
+    "![diagram](https://example.com/diagram.png)",
+    "![nested [diagram]][figure]",
+    "@bot ![diagram](https://example.com/diagram.png)",
+  ])("keeps Markdown images out of command classification: %s", (body) => {
+    expect(hasCommandSyntax(body)).toBe(false);
+    expect(shouldComputeCommandAuthorized(body)).toBe(false);
+    expect(hasControlCommand(body)).toBe(false);
   });
 
   it("detects spaced syntax only for active registered plugin commands", () => {

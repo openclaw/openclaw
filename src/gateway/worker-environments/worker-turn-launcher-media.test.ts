@@ -13,6 +13,7 @@ import {
   releaseAgentRunDelegatedAuthority,
   rotateAgentRunRegistryLifecycleGeneration,
 } from "../../infra/agent-run-registry.js";
+import { listDirectoryTreeStrict } from "../../infra/directory-walk.js";
 import * as rootLogger from "../../logger.js";
 import * as localMediaAccess from "../../media/local-media-access.js";
 import { readPersistedMediaFacts } from "../../media/media-facts.js";
@@ -118,7 +119,9 @@ async function harness(assistantText = "image received", workspace?: string) {
     }),
     stageAttachments: vi.fn(async (request) => {
       expect(request.isAuthorized()).toBe(true);
-      for (const file of await fs.readdir(request.localPath, { recursive: true })) {
+      for (const file of (await listDirectoryTreeStrict(request.localPath)).map(
+        (walkEntry) => walkEntry.relativePath,
+      )) {
         const source = path.join(request.localPath, file);
         if ((await fs.stat(source)).isFile() && !remoteFiles.has(file)) {
           remoteFiles.set(file, await fs.readFile(source));

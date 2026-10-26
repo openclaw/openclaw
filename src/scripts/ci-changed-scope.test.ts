@@ -4,6 +4,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { writeFixtureFiles as writeFiles } from "../../test/scripts/z0632-fixtures.test-support.js";
 
 const {
   detectChangedScope,
@@ -13,33 +14,9 @@ const {
   listChangedPaths,
   parseArgs,
   shouldRunIosScreenshots,
-  writeGitHubOutput,
 } = await import("../../scripts/ci-changed-scope.mjs");
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-it.each(["pull_request", "push", "schedule", "workflow_dispatch"])(
-  "keeps Android capture scope outside ordinary PRs (%s)",
-  (workflowEventName) => {
-    const changedPaths = ["apps/android/app/src/main/java/ai/openclaw/app/MainActivity.kt"];
-    const output = path.join(tempDirs.make("openclaw-ci-capture-scope-"), "scope.out");
-    writeGitHubOutput(
-      detectChangedScope(changedPaths),
-      output,
-      undefined,
-      undefined,
-      true,
-      changedPaths,
-      workflowEventName,
-    );
-    const scope = parseGitHubOutput(fs.readFileSync(output, "utf8"));
-    expect(scope).toMatchObject({
-      run_android: "true",
-      run_native_i18n: "true",
-      run_android_screenshots: String(workflowEventName !== "pull_request"),
-    });
-  },
-);
 
 function parseGitHubOutput(output: string): Record<string, string> {
   return Object.fromEntries(
@@ -51,18 +28,12 @@ function git(repoDir: string, args: string[]): string {
   return execFileSync("git", args, { cwd: repoDir, encoding: "utf8" }).trim();
 }
 
-function writeRepoFile(repoDir: string, filePath: string, contents: string): void {
-  const absolutePath = path.join(repoDir, filePath);
-  fs.mkdirSync(path.dirname(absolutePath), { recursive: true });
-  fs.writeFileSync(absolutePath, contents, "utf8");
-}
-
 function createRepo(file = "README.md", contents = "base\n") {
   const repoDir = tempDirs.make("openclaw-ci-scope-");
   git(repoDir, ["init", "-b", "main"]);
   git(repoDir, ["config", "user.email", "ci@example.invalid"]);
   git(repoDir, ["config", "user.name", "CI"]);
-  writeRepoFile(repoDir, file, contents);
+  writeFiles(repoDir, { [file]: contents });
   commitRepo(repoDir, "base");
   return repoDir;
 }
@@ -75,8 +46,6 @@ function commitRepo(repoDir: string, message: string, files = ["."]) {
 it("rejects missing CI diff refs", () => {
   expect(() => parseArgs(["--base", "--head", "HEAD"])).toThrow("--base requires a value");
   expect(() => parseArgs(["--head"])).toThrow("--head requires a value");
-  expect(() => parseArgs([])).toThrow("--base is required");
-  expect(() => parseArgs(["--base", "HEAD", "--mystery"])).toThrow("Unknown argument: --mystery");
 });
 
 function expectedScope(enabled = "") {
@@ -93,7 +62,7 @@ it("fails safe when no paths are provided", () => {
   );
 });
 
-it.each<[string | string[], string]>([
+it.each<[string | string[], string, boolean?]>([
   [["docs/ci.md", "docs/docs.json", "README.md"], ""],
   [["src/config/defaults.ts", "docs/docs.json"], "Node"],
   [".crabbox.yaml", "Node"],
@@ -123,10 +92,14 @@ it.each<[string | string[], string]>([
     "Node ChangedSmoke Macos MacosNode IosBuild Android",
   ],
   ["src/plugins/loader.test.ts", "Node"],
-])("selects only the owning lanes for %j", (paths, lanes) => {
-  expect(detectChangedScope(typeof paths === "string" ? [paths] : paths)).toEqual(
-    expectedScope(lanes),
-  );
+  ["scripts/install-simslim.sh", "Node IosBuild", true],
+  ["scripts/install-simslim.sh.bak", "Node", false],
+])("selects only the owning lanes for %j", (paths, lanes, screenshots) => {
+  const changedPaths = typeof paths === "string" ? [paths] : paths;
+  expect(detectChangedScope(changedPaths)).toEqual(expectedScope(lanes));
+  if (screenshots !== undefined) {
+    expect(shouldRunIosScreenshots(changedPaths)).toBe(screenshots);
+  }
 });
 
 it.each([
@@ -138,14 +111,6 @@ it.each([
   ["src/wizard/i18n/locales/helpers/format.ts", false],
 ] as const)("classifies data-only inputs: %s", (file, dataOnly) => {
   expect(isNodeTestDataOnlyPath(file)).toBe(dataOnly);
-});
-
-it.each([
-  ["scripts/install-simslim.sh", true],
-  ["scripts/install-simslim.sh.bak", false],
-])("routes only exact iOS build helper paths: %s", (file, enabled) => {
-  expect(detectChangedScope([file])).toEqual(expectedScope(enabled ? "Node IosBuild" : "Node"));
-  expect(shouldRunIosScreenshots([file])).toBe(enabled);
 });
 
 it.each<[string[], boolean, boolean]>([
@@ -189,17 +154,12 @@ it("uses the merge commit first parent instead of a stale PR payload base", () =
   const repoDir = createRepo();
   const staleBase = git(repoDir, ["rev-parse", "HEAD"]);
   git(repoDir, ["switch", "-c", "feature"]);
-  writeRepoFile(repoDir, "src/pr.ts", "export const pr = true;\n");
+  writeFiles(repoDir, { "src/pr.ts": "export const pr = true;\n" });
   commitRepo(repoDir, "feature");
   git(repoDir, ["switch", "main"]);
-  writeRepoFile(repoDir, "src/main-only.ts", "export const mainOnly = true;\n");
+  writeFiles(repoDir, { "src/main-only.ts": "export const mainOnly = true;\n" });
   commitRepo(repoDir, "main only");
   git(repoDir, ["merge", "--no-ff", "feature", "-m", "synthetic merge"]);
-  expect(git(repoDir, ["diff", "--name-only", staleBase, "HEAD"]).split("\n").toSorted()).toEqual([
-    "src/main-only.ts",
-    "src/pr.ts",
-  ]);
-
   expect(listChangedPaths(staleBase, "HEAD", repoDir, true)).toEqual(["src/pr.ts"]);
 });
 
@@ -217,7 +177,7 @@ it.each(["rename", "raw paths"])("preserves %s in Git diff filename tokens", (ch
     fs.renameSync(path.join(repoDir, "src/old.ts"), path.join(repoDir, "src/new.ts"));
   } else {
     for (const changedPath of changedPaths) {
-      writeRepoFile(repoDir, changedPath, "export {};\n");
+      writeFiles(repoDir, { [changedPath]: "export {};\n" });
     }
   }
   commitRepo(repoDir, change);
@@ -225,7 +185,13 @@ it.each(["rename", "raw paths"])("preserves %s in Git diff filename tokens", (ch
   expect(change === "rename" ? actual : actual.toSorted()).toEqual(changedPaths.toSorted());
 });
 
-it.each<[string, string, string, string | null, string[]?]>([
+const androidSource = "apps/android/app/src/main/java/ai/openclaw/app/MainActivity.kt";
+const manifests = {
+  valid: fs.readFileSync("package.json", "utf8"),
+  invalid: "{",
+  empty: JSON.stringify({ scripts: { "test:windows:ci:1": "" } }),
+};
+it.each<[string, string, keyof typeof manifests | "missing", string | null, string[]?, string?]>([
   ["missing base", "", "missing", null, ["--head", "HEAD"]],
   ["unknown option", "", "missing", null, ["--base", "HEAD", "--head", "HEAD", "--mystery"]],
   ["empty diff without a manifest", "", "missing", ""],
@@ -237,13 +203,15 @@ it.each<[string, string, string, string | null, string[]?]>([
     "valid",
     "node android macos macos_node",
   ],
+  ["Android PR", androidSource, "valid", "android native_i18n", undefined, "pull_request"],
+  ["Android push", androidSource, "valid", "android android_screenshots native_i18n"],
   ["unrelated process test", "src/process/exec.test.ts", "valid", "node"],
   ["missing manifest", "src/process/exec.test.ts", "missing", null],
   ["invalid manifest", "src/process/exec.test.ts", "invalid", null],
   ["empty native inventory", "src/process/exec.test.ts", "empty", null],
 ])(
   "runs zero-install scope detection for %s",
-  (_label, changedPath, manifest, selectedLanes, cliArgs) => {
+  (_label, changedPath, manifest, selectedLanes, cliArgs, event = "push") => {
     const failSafe = selectedLanes === null;
     const repoDir = fs.realpathSync(createRepo());
     const outputPath = path.join(repoDir, "github-output.txt");
@@ -253,20 +221,14 @@ it.each<[string, string, string, string | null, string[]?]>([
       "ci-changed-scope.mjs native-protocol-inputs.json lib/arg-utils.runtime.mjs lib/changed-path-facts.mjs lib/ci-native-generated-scope.mjs lib/direct-run.mjs lib/merge-head-diff-base.mjs";
     for (const file of scriptFiles.split(" ")) {
       const sourcePath = `scripts/${file}`;
-      writeRepoFile(repoDir, sourcePath, fs.readFileSync(path.resolve(sourcePath), "utf8"));
+      writeFiles(repoDir, { [sourcePath]: fs.readFileSync(sourcePath, "utf8") });
     }
 
     if (manifest !== "missing") {
-      const contents =
-        manifest === "valid"
-          ? fs.readFileSync("package.json", "utf8")
-          : manifest === "invalid"
-            ? "{"
-            : JSON.stringify({ scripts: { "test:windows:ci:1": "" } });
-      writeRepoFile(repoDir, "package.json", contents);
+      writeFiles(repoDir, { "package.json": manifests[manifest] });
     }
     if (changedPath) {
-      writeRepoFile(repoDir, changedPath, "export {};\n");
+      writeFiles(repoDir, { [changedPath]: "export {};\n" });
       commitRepo(repoDir, "changed test", [changedPath]);
     }
     const base = changedPath ? "HEAD^" : "HEAD";
@@ -276,7 +238,7 @@ it.each<[string, string, string, string | null, string[]?]>([
       [scriptPath, ...(cliArgs ?? ["--base", base, "--head", "HEAD"])],
       {
         cwd: repoDir,
-        env: { ...process.env, GITHUB_EVENT_NAME: "push", GITHUB_OUTPUT: outputPath },
+        env: { ...process.env, GITHUB_EVENT_NAME: event, GITHUB_OUTPUT: outputPath },
       },
     );
 
@@ -285,11 +247,11 @@ it.each<[string, string, string, string | null, string[]?]>([
       "run_android run_android_screenshots run_changed_smoke run_control_ui_i18n run_fast_install_smoke run_full_install_smoke run_ios_build run_ios_screenshots run_macos run_macos_node run_native_i18n run_node run_node_fast_ci_routing run_node_fast_only run_node_fast_plugin_contracts run_skills_python run_ui_tests run_windows strict_control_ui_i18n strict_native_i18n".split(
         " ",
       );
-    const selected = new Set(selectedLanes?.split(" ").map((lane) => `run_${lane}`));
-    const isEnabled = (key: string) =>
-      failSafe ? !key.startsWith("run_node_fast") : selected.has(key);
+    const enabled = failSafe
+      ? flags.filter((key) => !key.startsWith("run_node_fast"))
+      : selectedLanes.split(" ").map((lane) => `run_${lane}`);
     expect(output).toEqual({
-      ...Object.fromEntries(flags.map((key) => [key, String(isEnabled(key))])),
+      ...Object.fromEntries(flags.map((key) => [key, String(enabled.includes(key))])),
       changed_paths_file: expect.any(String),
       changed_paths_json: failSafe ? "null" : JSON.stringify(changedPath ? [changedPath] : []),
       node_test_data_only: "false",

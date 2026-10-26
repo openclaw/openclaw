@@ -3,6 +3,21 @@ import type { DiagnosticEventMetadata, DiagnosticEventPayload } from "../api.js"
 import { seconds } from "./prometheus-format.js";
 import type { PrometheusMetricStore } from "./prometheus-metric-store.js";
 
+const GC_DURATION_NAME = "openclaw_gc_duration_seconds";
+const GC_DURATION_HELP =
+  "Elapsed garbage collection duration in seconds by collection kind, callback flags, and isolate role.";
+
+export function reserveMainGcHistograms(store: PrometheusMetricStore): void {
+  // The first native batch can arrive after startup traffic fills the shared series cap.
+  for (const kind of ["scavenge", "mark_sweep_compact", "incremental", "weak_processing"]) {
+    store.reserveHistogram(GC_DURATION_NAME, GC_DURATION_HELP, {
+      kind,
+      reason: "other",
+      thread: "main",
+    });
+  }
+}
+
 // Preserve existing le series while narrowing RPC quantile interpolation through 30 seconds.
 const RPC_DURATION_BUCKETS_SECONDS = [
   0.005, 0.01, 0.0125, 0.015, 0.02, 0.025, 0.03, 0.04, 0.05, 0.06, 0.08, 0.1, 0.125, 0.15, 0.2,
@@ -28,6 +43,8 @@ const CATALOG_LIST_PHASES = new Set([
   "projection_final",
   "delivery",
 ]);
+const CHAT_STARTUP_PHASE =
+  /^chat\.startup\.(session_entry|pending_inputs|history_page|startup_projection|projection_final|session_info)$/;
 const DIFF_CACHE_MISS_REASONS = new Set([
   "cold",
   "evicted",
@@ -116,8 +133,8 @@ export function recordOperationTimingEvent(
       return;
     case "diagnostic.gc":
       store.histogram(
-        "openclaw_gc_duration_seconds",
-        "Elapsed garbage collection duration in seconds by collection kind, callback flags, and isolate role.",
+        GC_DURATION_NAME,
+        GC_DURATION_HELP,
         {
           kind: evt.kind ?? "unknown",
           reason: evt.reason ?? "other",
@@ -209,7 +226,36 @@ export function recordOperationTimingEvent(
         return;
       }
       if (evt.name === "worktree.preparation") {
-        recordWorktreePreparation(store, evt);
+        const { kind, template, outcome } = evt.details ?? {};
+        if (
+          (kind !== "managed" && kind !== "sandbox") ||
+          !["warm", "cold", "unavailable", "reused"].includes(String(template)) ||
+          (outcome !== "returned" && outcome !== "threw")
+        ) {
+          return;
+        }
+        for (const preparationPhase of [
+          "total",
+          "allocate",
+          "checkout",
+          "setup",
+          "templatePrepare",
+          "templateApply",
+          "snapshot",
+          "synchronizeCanonical",
+          "synchronizeProjection",
+          "containerStart",
+          "workspaceLayout",
+        ]) {
+          const elapsed =
+            preparationPhase === "total" ? evt.durationMs : evt.details?.[preparationPhase];
+          store.histogram(
+            "openclaw_worktree_preparation_seconds",
+            "Elapsed managed worktree preparation time; nested phases are inclusive.",
+            { kind, template: String(template), outcome, phase: preparationPhase },
+            typeof elapsed === "number" ? seconds(elapsed) : undefined,
+          );
+        }
         return;
       }
       const sendPhase = CHAT_SEND_PHASE.exec(evt.name)?.[1];
@@ -223,6 +269,16 @@ export function recordOperationTimingEvent(
             seconds(evt.durationMs),
           );
         }
+        return;
+      }
+      const startupPhase = CHAT_STARTUP_PHASE.exec(evt.name)?.[1];
+      if (startupPhase) {
+        store.histogram(
+          "openclaw_gateway_rpc_stage_seconds",
+          "Elapsed time for completed Gateway RPC owner stages.",
+          { method: "chat.startup", phase: startupPhase },
+          seconds(evt.durationMs),
+        );
         return;
       }
       if (!evt.name.startsWith(CATALOG_LIST_PHASE_PREFIX)) {
@@ -426,40 +482,5 @@ export function recordOperationTimingEvent(
         );
       }
     }
-  }
-}
-
-function recordWorktreePreparation(
-  store: PrometheusMetricStore,
-  evt: Extract<DiagnosticEventPayload, { type: "diagnostic.phase.completed" }>,
-) {
-  const { kind, template, outcome } = evt.details ?? {};
-  if (
-    (kind !== "managed" && kind !== "sandbox") ||
-    !["warm", "cold", "unavailable", "reused"].includes(String(template)) ||
-    (outcome !== "returned" && outcome !== "threw")
-  ) {
-    return;
-  }
-  for (const phase of [
-    "total",
-    "allocate",
-    "checkout",
-    "setup",
-    "templatePrepare",
-    "templateApply",
-    "snapshot",
-    "synchronizeCanonical",
-    "synchronizeProjection",
-    "containerStart",
-    "workspaceLayout",
-  ]) {
-    const elapsed = phase === "total" ? evt.durationMs : evt.details?.[phase];
-    store.histogram(
-      "openclaw_worktree_preparation_seconds",
-      "Elapsed managed worktree preparation time; nested phases are inclusive.",
-      { kind, template: String(template), outcome, phase },
-      typeof elapsed === "number" ? seconds(elapsed) : undefined,
-    );
   }
 }

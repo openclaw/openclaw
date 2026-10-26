@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_UPLOAD_DIR } from "../paths.js";
+import { registerBrowserAgentActRoutes } from "./agent.act.js";
 import { chromiumTempDirs as tempDirs, withChromiumPage } from "./chromium.test-support.js";
 import { registerBrowserRoutes } from "./index.js";
 
@@ -13,6 +14,67 @@ const withContentPage = (run: Parameters<typeof withChromiumPage>[1]) =>
     run,
     registerBrowserRoutes,
   );
+
+function selectInput(element: Element) {
+  const input = element as HTMLInputElement;
+  input.focus();
+  input.setSelectionRange(7, 10);
+}
+
+describe.runIf(process.env.OPENCLAW_BROWSER_PASTE_E2E === "1")("Chromium focused paste", () => {
+  it("inserts at the selection in password, multiline, editable, and cross-origin fields", async () => {
+    await withChromiumPage(
+      {
+        "http://127.0.0.1:11111/form": `<input id="password" type="password" value="before-old-after">
+            <textarea id="multiline">before-old-after</textarea>
+            <div id="editable" contenteditable>before-old-after</div>
+            <iframe src="http://127.0.0.1:22222/field"></iframe>
+            <script>document.addEventListener("input", () => document.body.dataset.input = "yes")</script>`,
+        "http://127.0.0.1:22222/field":
+          '<input id="frame" type="password" value="before-old-after">',
+      },
+      async ({ page, call, targetId }) => {
+        const paste = async (text: string) => {
+          const response = await call("post", "/act", { kind: "insertText", text });
+          expect(response.statusCode, JSON.stringify(response.body)).toBe(200);
+          expect(response.body).toMatchObject({ ok: true, targetId });
+          expect(JSON.stringify(response.body)).not.toContain(text);
+        };
+
+        for (const [selector, text] of [
+          ["#password", "  p🦞ss  "],
+          ["#multiline", "  first 🦞\nsecond  "],
+        ] as const) {
+          const field = page.locator(selector);
+          await field.evaluate(selectInput);
+          await paste(text);
+          expect(await field.inputValue()).toBe(`before-${text}-after`);
+        }
+        expect(await page.locator("body").getAttribute("data-input")).toBe("yes");
+
+        const editable = page.locator("#editable");
+        await editable.evaluate((element) => {
+          (element as HTMLElement).focus();
+          const range = document.createRange();
+          range.setStart(element.firstChild!, 7);
+          range.setEnd(element.firstChild!, 10);
+          const selection = window.getSelection()!;
+          selection.removeAllRanges();
+          selection.addRange(range);
+        });
+        await paste("editable 🦞");
+        expect(await editable.textContent()).toBe("before-editable 🦞-after");
+
+        const frameField = page.frameLocator("iframe").locator("#frame");
+        await frameField.evaluate(selectInput);
+        await paste("iframe 🦞");
+        expect(await frameField.inputValue()).toBe("before-iframe 🦞-after");
+        expect(await page.locator("#password").inputValue()).toBe("before-  p🦞ss  -after");
+      },
+      registerBrowserAgentActRoutes,
+    );
+  }, 30_000);
+});
 
 describe.runIf(process.env.OPENCLAW_BROWSER_CONTENT_E2E === "1")(
   "Chromium browser content routes",
@@ -65,6 +127,13 @@ describe.runIf(process.env.OPENCLAW_BROWSER_CONTENT_E2E === "1")(
         await fs.mkdir(DEFAULT_UPLOAD_DIR, { recursive: true });
         const file = path.join(tempDirs.make("content-upload-", DEFAULT_UPLOAD_DIR), "fixture.txt");
         await fs.writeFile(file, "synthetic upload");
+        const upload = () =>
+          call("post", "/hooks/file-chooser", {
+            element: "#upload",
+            paths: [file],
+            timeoutMs: 500,
+          });
+        const uploadInput = page.locator("#upload");
         const warm = await call("get", "/text");
         expect(warm.body).toMatchObject({ ok: true, text: "Article text" });
         await page.evaluate(() => {
@@ -75,27 +144,15 @@ describe.runIf(process.env.OPENCLAW_BROWSER_CONTENT_E2E === "1")(
             document.body.append(input);
           }, 1_500);
         });
-        const response = await call("post", "/hooks/file-chooser", {
-          element: "#upload",
-          paths: [file],
-          timeoutMs: 500,
-        });
+        const response = await upload();
         expect(response.statusCode, JSON.stringify(response.body)).toBeGreaterThanOrEqual(400);
-        await page.locator("#upload").waitFor({ state: "attached" });
-        expect(
-          await page.locator("#upload").evaluate((input: HTMLInputElement) => input.files?.length),
-        ).toBe(0);
-        const retry = await call("post", "/hooks/file-chooser", {
-          element: "#upload",
-          paths: [file],
-          timeoutMs: 500,
-        });
+        await uploadInput.waitFor({ state: "attached" });
+        expect(await uploadInput.evaluate((el: HTMLInputElement) => el.files?.length)).toBe(0);
+        const retry = await upload();
         expect(retry.statusCode, JSON.stringify(retry.body)).toBe(200);
-        expect(
-          await page
-            .locator("#upload")
-            .evaluate((input: HTMLInputElement) => input.files?.[0]?.name),
-        ).toBe("fixture.txt");
+        expect(await uploadInput.evaluate((el: HTMLInputElement) => el.files?.[0]?.name)).toBe(
+          "fixture.txt",
+        );
       });
     }, 30_000);
 

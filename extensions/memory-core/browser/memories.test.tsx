@@ -82,7 +82,7 @@ const result = {
 function searchResponse(
   results: MemorySearchResponse["results"],
   overrides: Partial<MemorySearchResponse> = {},
-) {
+): MemorySearchResponse {
   return { agentId: "main", provider: "local", searchMode: "hybrid", results, ...overrides };
 }
 
@@ -110,6 +110,23 @@ const waitMatch = (element: HTMLElement, text: string) =>
   waitForSolid(() => expect(match(element)).toBe(text));
 
 describe("Memory Core indexed-search presentation", () => {
+  it("loads changed locales without replacing the search input or its draft", async () => {
+    const request = vi.fn<Request>().mockResolvedValue(searchResponse([]));
+    const element = createElement(request);
+    const input = element.querySelector<HTMLInputElement>("#memory-search-input")!;
+    typeQuery(element, "Ada");
+    element.update({ locale: "fr" });
+    await waitForSolid(() =>
+      expect(input.placeholder).toBe("Rechercher dans les souvenirs de cet agent"),
+    );
+    expect(element.querySelector("#memory-search-input")).toBe(input);
+    expect(input.value).toBe("Ada");
+    expect(request).not.toHaveBeenCalled();
+    element.update({ locale: "en" });
+    expect(input.placeholder).toBe("Search this agent's memories");
+    expect(input.value).toBe("Ada");
+  });
+
   it.each(["search", "detail"])("ignores retired %s errors before formatting", async (stage) => {
     const pending = deferred<unknown>();
     const request = vi.fn<Request>((method) =>
@@ -151,11 +168,14 @@ describe("Memory Core indexed-search presentation", () => {
   });
 
   it.each([true, false])("retries failed searches only when connected=%s", async (connected) => {
+    const retried = deferred<MemorySearchResponse>();
     const request = vi
       .fn<Request>()
       .mockRejectedValueOnce(new Error("index unavailable"))
-      .mockResolvedValueOnce(searchResponse([], { provider: "none", searchMode: "fts-only" }));
+      .mockReturnValueOnce(retried.promise);
     const element = searchElement(request, "missing");
+    const input = element.querySelector("input");
+    const submitButton = element.querySelector<HTMLButtonElement>('button[type="submit"]');
     await waitText(element, "index unavailable");
     if (!connected) {
       element.update({ connected: false, connectionEpoch: 2 });
@@ -163,8 +183,15 @@ describe("Memory Core indexed-search presentation", () => {
     expect(retry(element)?.disabled).toBe(!connected);
     retry(element)?.click();
     if (connected) {
+      await waitText(element, "Searching");
+      expect(element.textContent).not.toContain("index unavailable");
+      expect(element.querySelector("input")).toBe(input);
+      expect(element.querySelector('button[type="submit"]')).toBe(submitButton);
+      expect(submitButton?.disabled).toBe(true);
+      retried.resolve(searchResponse([], { provider: "none", searchMode: "fts-only" }));
       await waitText(element, "No memories matched");
       expect(element.textContent).toContain("keyword search");
+      expect(submitButton?.disabled).toBe(false);
     }
     expect(request).toHaveBeenCalledTimes(connected ? 2 : 1);
   });

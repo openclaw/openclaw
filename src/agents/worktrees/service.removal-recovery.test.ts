@@ -7,6 +7,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import * as commandExec from "../../process/exec.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { git } from "./git-fixture.test-support.js";
 import { deleteRegistryWorktree, updateRegistryWorktree } from "./registry.js";
 import { getRegistryWorktree } from "./registry.test-support.js";
 import { resolveRepository } from "./repository-paths.js";
@@ -20,8 +21,6 @@ import {
 import type { ManagedWorktreeRecord } from "./types.js";
 
 const execFileAsync = promisify(execFile);
-const git = async (cwd: string, ...args: string[]) =>
-  (await execFileAsync("git", ["-C", cwd, ...args])).stdout.trim();
 
 describe("interrupted ordinary worktree removal recovery", () => {
   let env: NodeJS.ProcessEnv;

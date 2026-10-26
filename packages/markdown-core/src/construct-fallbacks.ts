@@ -22,58 +22,6 @@ const STYLE_CONSTRUCTS: Partial<Record<MarkdownStyle, FormatConstruct>> = {
   blockquote: "blockquote",
 };
 
-function projectStyles(
-  styles: MarkdownStyleSpan[],
-  profile: FormatCapabilityProfile,
-): MarkdownStyleSpan[] {
-  const projected: MarkdownStyleSpan[] = [];
-  let synthesizedHeading = false;
-  for (const span of styles) {
-    if (span.style.startsWith("heading_")) {
-      if (profile.constructs.heading === "native") {
-        projected.push(span);
-      } else if (
-        profile.constructs.heading === "fallback" &&
-        profile.constructs.bold === "native"
-      ) {
-        projected.push(createStyleSpan({ ...span, style: "bold" }));
-        synthesizedHeading = true;
-      }
-      continue;
-    }
-    const construct = STYLE_CONSTRUCTS[span.style];
-    if (construct && profile.constructs[construct] !== "native") {
-      continue;
-    }
-    if (span.style === "code_block" && profile.constructs.codeLanguage !== "native") {
-      projected.push(createStyleSpan({ start: span.start, end: span.end, style: span.style }));
-    } else {
-      projected.push(span);
-    }
-  }
-  return synthesizedHeading ? mergeStyleSpans(projected) : projected;
-}
-
-function collectListFallbacks(ir: MarkdownIR, profile: FormatCapabilityProfile): TextEdit[] {
-  const edits: TextEdit[] = [];
-  for (const item of ir.listItems ?? []) {
-    if (item.task) {
-      if (profile.constructs.taskList === "fallback" && item.listMarker) {
-        edits.push({ ...item.listMarker, text: "" });
-      } else if (profile.constructs.taskList === "strip" && item.taskMarker) {
-        edits.push({ ...item.taskMarker, text: "" });
-      }
-    }
-    if (item.listMarker && item.kind === "bullet" && profile.constructs.bulletList === "strip") {
-      edits.push({ ...item.listMarker, text: "" });
-    }
-    if (item.listMarker && item.kind === "ordered" && profile.constructs.orderedList === "strip") {
-      edits.push({ ...item.listMarker, text: "" });
-    }
-  }
-  return edits;
-}
-
 function applyTextEdits(ir: MarkdownIR, edits: TextEdit[]): MarkdownIR {
   if (edits.length === 0) {
     return ir;
@@ -117,11 +65,52 @@ export function applyConstructFallbacks(
 ): MarkdownIR {
   // Tables stay in convertMarkdownTables; images and mentions are already plain
   // text in this flat IR, so those constructs have no shared fallback work here.
+  const projected: MarkdownStyleSpan[] = [];
+  let synthesizedHeading = false;
+  for (const span of ir.styles) {
+    if (span.style.startsWith("heading_")) {
+      if (profile.constructs.heading === "native") {
+        projected.push(span);
+      } else if (
+        profile.constructs.heading === "fallback" &&
+        profile.constructs.bold === "native"
+      ) {
+        projected.push(createStyleSpan({ ...span, style: "bold" }));
+        synthesizedHeading = true;
+      }
+      continue;
+    }
+    const construct = STYLE_CONSTRUCTS[span.style];
+    if (construct && profile.constructs[construct] !== "native") {
+      continue;
+    }
+    if (span.style === "code_block" && profile.constructs.codeLanguage !== "native") {
+      projected.push(createStyleSpan({ start: span.start, end: span.end, style: span.style }));
+    } else {
+      projected.push(span);
+    }
+  }
   const styled: MarkdownIR = copyHtmlTags(ir, {
     ...ir,
-    styles: projectStyles(ir.styles, profile),
+    styles: synthesizedHeading ? mergeStyleSpans(projected) : projected,
   });
-  const listProjected = applyTextEdits(styled, collectListFallbacks(styled, profile));
+  const listEdits: TextEdit[] = [];
+  for (const item of styled.listItems ?? []) {
+    if (item.task) {
+      if (profile.constructs.taskList === "fallback" && item.listMarker) {
+        listEdits.push({ ...item.listMarker, text: "" });
+      } else if (profile.constructs.taskList === "strip" && item.taskMarker) {
+        listEdits.push({ ...item.taskMarker, text: "" });
+      }
+    }
+    if (item.listMarker && item.kind === "bullet" && profile.constructs.bulletList === "strip") {
+      listEdits.push({ ...item.listMarker, text: "" });
+    }
+    if (item.listMarker && item.kind === "ordered" && profile.constructs.orderedList === "strip") {
+      listEdits.push({ ...item.listMarker, text: "" });
+    }
+  }
+  const listProjected = applyTextEdits(styled, listEdits);
   const linkSupport = profile.constructs.linkLabel;
   const links = linkSupport === "native" ? listProjected.links : [];
   const linkEdits =

@@ -6,6 +6,7 @@ import type {
   ControlUiSessionPullRequestSnapshot,
   ControlUiSessionPullRequests,
 } from "./control-ui-contract.js";
+import { recordSessionPrDiagnostic } from "./control-ui-session-pr-diagnostics.js";
 import {
   prepareControlUiSessionPrServiceTarget,
   type ControlUiSessionPrTarget,
@@ -26,6 +27,7 @@ export async function loadSessionPullRequests(
   read: ControlUiSessionPrReadContext,
 ): Promise<ControlUiSessionPullRequests> {
   read.assertCurrent();
+  recordSessionPrDiagnostic("loader-import-started", read.target);
   const { loadControlUiSessionPullRequests } = await import("./control-ui-session-prs.js");
   return loadControlUiSessionPullRequests(params, { cacheSignal, read });
 }
@@ -54,6 +56,13 @@ export type PreparedSessionPrState = {
   branchSnapshot?: ControlUiSessionPullRequestSnapshot;
   prepared?: boolean;
   assertReadAuthority?: () => void;
+};
+
+export type WatchedKeyState = PreparedSessionPrState & {
+  sessionKeysByConnId: Map<string, Set<string>>;
+  refreshedAt?: number;
+  cancelRefresh?: () => void;
+  delivery?: Promise<void>;
 };
 
 /** Index each connection's requested keys on the cell that retains its snapshot. */
@@ -130,6 +139,7 @@ export function createControlUiSessionPrPreparedRead<State extends PreparedSessi
   const preparedTargets = new Map<string, string>();
   const writeSnapshot = (state: State, snapshot: ControlUiSessionPullRequestSnapshot) => {
     const changed = JSON.stringify(state.snapshot) !== JSON.stringify(snapshot);
+    recordSessionPrDiagnostic("snapshot-published", state.target);
     state.snapshot = snapshot;
     if (changed && state.prepared) {
       sessionChanges.emit({

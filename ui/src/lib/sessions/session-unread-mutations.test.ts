@@ -3,21 +3,18 @@ import { describe, expect, it } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import { sessionRequest as sessionRpc } from "./hydration-family.test-support.ts";
 import {
   createGatewayHarness,
   createTestSessionCapability,
   sessionsResult,
 } from "./session-capability.test-support.ts";
-import { sessionRpc, sessionRpcHarness } from "./session-rpc.test-support.ts";
+import { sessionRpcHarness, patchReceipt } from "./session-rpc.test-support.ts";
 
 const key = "agent:main:unread-contract";
 const sessionId = `${key}:session`;
-const receipt = (entry: Partial<GatewaySessionRow> = { updatedAt: 3, lastReadAt: 3 }) => ({
-  ok: true,
-  key,
-  path: "",
-  entry: { sessionId, ...entry },
-});
+const receipt = (entry: Partial<GatewaySessionRow> = { updatedAt: 3, lastReadAt: 3 }) =>
+  patchReceipt(key, { sessionId, ...entry }, "");
 function rowUnread(result: SessionsListResult | null): boolean {
   return result?.sessions.find((row) => row.key === key)?.unread === true;
 }

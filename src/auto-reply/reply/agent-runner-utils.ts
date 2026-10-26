@@ -25,12 +25,7 @@ import {
   getScopedChannelsCommandSecretTargets,
 } from "../../cli/command-secret-targets.js";
 import { resolveMessageSecretScope } from "../../cli/message-secret-scope.js";
-import {
-  getRuntimeConfigSnapshot,
-  getRuntimeConfigSourceSnapshot,
-  selectApplicableRuntimeConfig,
-  type OpenClawConfig,
-} from "../../config/config.js";
+import { selectLiveRuntimeConfig, type OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   isTrustedMessageActionTurnIngress,
@@ -71,16 +66,6 @@ type EmbeddedReplyRoute = Pick<
   | "originatingReplyToMode"
 >;
 
-export function resolveQueuedReplyRuntimeConfig(config: OpenClawConfig): OpenClawConfig {
-  return (
-    selectApplicableRuntimeConfig({
-      inputConfig: config,
-      runtimeConfig: getRuntimeConfigSnapshot(),
-      runtimeSourceConfig: getRuntimeConfigSourceSnapshot(),
-    }) ?? config
-  );
-}
-
 export async function resolveQueuedReplyExecutionConfig(
   config: OpenClawConfig,
   params?: {
@@ -90,7 +75,7 @@ export async function resolveQueuedReplyExecutionConfig(
     agentAccountId?: string;
   },
 ): Promise<OpenClawConfig> {
-  const runtimeConfig = resolveQueuedReplyRuntimeConfig(config);
+  const runtimeConfig = selectLiveRuntimeConfig(config);
   const { resolvedConfig } = await resolveCommandSecretRefsViaGateway({
     config: runtimeConfig,
     commandName: "reply",
@@ -344,10 +329,7 @@ export function buildModelResolveContext(
 
 /** Bind either runtime to the same trusted source turn and requester. */
 export function mintReplyMessageActionTurnCapability(
-  turn: Pick<
-    AgentTurnParams,
-    "followupRun" | "sessionCtx" | "opts" | "isHeartbeat" | "runtimePolicySessionKey"
-  >,
+  turn: Pick<AgentTurnParams, "followupRun" | "sessionCtx" | "opts" | "runtimePolicySessionKey">,
   runId: string,
 ): string | undefined {
   // An event's captured delivery route is not a new trusted channel turn.
@@ -356,7 +338,7 @@ export function mintReplyMessageActionTurnCapability(
   }
   const channelIngress = isTrustedMessageActionTurnIngress(turn.sessionCtx.Provider);
   const dashboardAdmission = turn.opts?.dashboardReadAdmission;
-  if (turn.isHeartbeat || (!channelIngress && turn.sessionCtx.Provider !== "webchat")) {
+  if (!channelIngress && turn.sessionCtx.Provider !== "webchat") {
     return undefined;
   }
   const context = buildEmbeddedContextFromTemplate({
@@ -526,6 +508,7 @@ export async function buildEmbeddedRunExecutionParams(params: {
     ...authProfile,
     thinkLevel: params.run.thinkLevel,
     thinkingExplicit: params.run.thinkingExplicit,
+    cyberAccessProgram: params.run.cyberAccessProgram,
     fastMode: params.run.fastMode,
     fastModeAutoOnSeconds: params.run.fastModeAutoOnSeconds,
     verboseLevel: params.run.verboseLevel,

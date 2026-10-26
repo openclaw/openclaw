@@ -400,5 +400,7 @@ backfill. Diagnostics disable/shutdown disconnects immediately. See
 - `openclaw.payload.large_bytes` (histogram, attrs: same as `openclaw.payload.large`)
 - `openclaw.memory.rss_bytes` / `openclaw.memory.heap_used_bytes` / `openclaw.memory.heap_total_bytes` / `openclaw.memory.external_bytes` / `openclaw.memory.array_buffers_bytes` (histograms, no attrs; process memory samples)
 - `openclaw.memory.pressure` (counter, attrs: `openclaw.memory.level`, `openclaw.memory.reason`)
+- `openclaw.session.row.selections` / `openclaw.session.row.selection.rows` (counters, attrs: `kind`, `task`; successful resident selections and returned rows before federation and visibility filtering). `kind` is `broad`, `agent`, `store`, `exact`, `session-id`, `parent`, or `running-candidate`. `task` is a bounded enclosing-task bucket, or `other` when unavailable. Periodic memory samples carry cumulative owner totals; repeated samples do not recount selections.
+- `openclaw.session.row.selection.resets` (counter, no attrs; broad selection invalidations, including topology replacement and disposal).
 - `openclaw.diagnostic.async_queue.dropped` (counter, attrs: `openclaw.diagnostic.async_queue.drop_class`; internal diagnostic-queue backpressure drops)
 - `openclaw.telemetry.exporter.events` (counter, attrs: `openclaw.exporter`, `openclaw.signal`, `openclaw.status`, optional `openclaw.reason`, optional `openclaw.errorCategory`; exporter lifecycle/failure self-telemetry)

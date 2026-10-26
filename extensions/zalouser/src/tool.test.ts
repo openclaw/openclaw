@@ -52,16 +52,14 @@ beforeEach(() => {
 });
 
 it.each([
-  { name: "ambient target", params: textMessage, target: "g-ambient", isGroup: true },
-  {
-    name: "explicit target",
-    params: { ...textMessage, threadId: "u-explicit", isGroup: false },
-    target: "u-explicit",
-    isGroup: false,
-  },
-])("sends to the $name", async ({ params, target, isGroup }) => {
+  ["ambient", {}, "g-ambient", true],
+  ["explicit", { threadId: "u-explicit", isGroup: false }, "u-explicit", false],
+] as const)("sends to the %s target", async (_name, overrides, target, isGroup) => {
   send.mockResolvedValueOnce(sent("m-1"));
-  expect(await execute(params, ambient)).toEqual({ success: true, messageId: "m-1" });
+  expect(await execute({ ...textMessage, ...overrides }, ambient)).toEqual({
+    success: true,
+    messageId: "m-1",
+  });
   expect(send).toHaveBeenCalledWith(target, "hello", { profile: undefined, isGroup });
 });
 
@@ -98,40 +96,21 @@ it("reports accepted receipts when a later send chunk fails", async () => {
 });
 
 it.each([
-  {
-    action: "image",
-    mock: image,
-    threadId: "g-1",
-    url: "https://example.com/image.jpg",
-    message: "caption",
-    isGroup: true,
-    options: { mediaMaxBytes: undefined },
-  },
-  {
-    action: "link",
-    mock: link,
-    threadId: "t-2",
-    url: "https://openclaw.ai",
-    message: "read this",
-    isGroup: undefined,
-    options: {},
-  },
-])(
-  "routes $action to its sender",
-  async ({ action, mock, threadId, url, message, isGroup, options }) => {
-    mock.mockResolvedValueOnce(sent("media-1"));
-    expect(await execute({ action, threadId, url, message, isGroup })).toEqual({
-      success: true,
-      messageId: "media-1",
-    });
-    expect(mock).toHaveBeenCalledWith(threadId, url, {
-      profile: undefined,
-      caption: message,
-      isGroup,
-      ...options,
-    });
-  },
-);
+  ["image", image, "g-1", "https://example.com/image.jpg", true],
+  ["link", link, "t-2", "https://openclaw.ai", undefined],
+] as const)("routes %s to its sender", async (action, mock, threadId, url, isGroup) => {
+  mock.mockResolvedValueOnce(sent("media-1"));
+  expect(await execute({ action, threadId, url, message: "caption", isGroup })).toEqual({
+    success: true,
+    messageId: "media-1",
+  });
+  expect(mock).toHaveBeenCalledWith(threadId, url, {
+    profile: undefined,
+    caption: "caption",
+    isGroup,
+    ...(action === "image" ? { mediaMaxBytes: undefined } : {}),
+  });
+});
 
 it.each([
   ["matching credential profile with different case", " WORK ", 2048],
@@ -160,41 +139,27 @@ it.each([
   );
 });
 
+const friendRows = [{ userId: "1", displayName: "Alice" }];
+const groupRows = [{ groupId: "2", name: "Work" }];
 it.each([
-  {
-    action: "friends",
-    query: "ali",
-    mock: friends,
-    expected: [{ userId: "1", displayName: "Alice" }],
-    setup: () => friends.mockResolvedValueOnce([{ userId: "1", displayName: "Alice" }]),
-  },
-  {
-    action: "groups",
-    query: "wrk",
-    mock: groups,
-    expected: [{ groupId: "2", name: "Work" }],
-    setup: () => groups.mockResolvedValueOnce([{ groupId: "2", name: "Work" }]),
-  },
-])("returns matching $action", async ({ action, query, mock, expected, setup }) => {
+  ["friends", "ali", friends, friendRows, () => friends.mockResolvedValueOnce(friendRows)],
+  ["groups", "wrk", groups, groupRows, () => groups.mockResolvedValueOnce(groupRows)],
+] as const)("returns matching %s", async (action, query, mock, expected, setup) => {
   setup();
   expect(await execute({ action, profile: "work", query })).toEqual(expected);
   expect(mock).toHaveBeenCalledWith("work", query);
 });
 
+const userInfo = { userId: "7", displayName: "Me" };
 it.each([
-  {
-    action: "me",
-    mock: me,
-    expected: { userId: "7", displayName: "Me" },
-    setup: () => me.mockResolvedValueOnce({ userId: "7", displayName: "Me" }),
-  },
-  {
-    action: "status",
-    mock: auth,
-    expected: { authenticated: true, output: "authenticated" },
-    setup: () => auth.mockResolvedValueOnce(true),
-  },
-])("reports $action", async ({ action, mock, expected, setup }) => {
+  ["me", me, userInfo, () => me.mockResolvedValueOnce(userInfo)],
+  [
+    "status",
+    auth,
+    { authenticated: true, output: "authenticated" },
+    () => auth.mockResolvedValueOnce(true),
+  ],
+] as const)("reports %s", async (action, mock, expected, setup) => {
   setup();
   expect(await execute({ action, profile: "work" })).toEqual(expected);
   expect(mock).toHaveBeenCalledWith("work");

@@ -1,3 +1,4 @@
+import { createAsyncLock } from "@openclaw/fs-safe/advanced";
 import {
   createSqliteLifecycleAggregateError,
   throwSqliteLifecycleErrors,
@@ -15,15 +16,7 @@ export function createSqliteSnapshotStagingRuntime(
   createSession: (launch: SqliteNativeSessionLaunch) => SqliteNativeStagingSession,
 ) {
   const sessions = new Set<StagingSession>();
-  let pending = Promise.resolve();
-  function run<T>(operation: () => Promise<T>): Promise<T> {
-    const result = pending.then(operation);
-    pending = result.then(
-      () => undefined,
-      () => undefined,
-    );
-    return result;
-  }
+  const run = createAsyncLock();
   async function closeSession(current: StagingSession) {
     await current.worker.close();
     sessions.delete(current);

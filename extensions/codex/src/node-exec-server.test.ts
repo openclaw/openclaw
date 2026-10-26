@@ -19,7 +19,43 @@ import {
 } from "./node-exec-server.js";
 
 type JsonRpcRecord = Record<string, unknown>;
+type NodeCommandContext = NonNullable<Parameters<OpenClawPluginNodeHostCommand["handle"]>[2]>;
 const CODEX_NODE_EXEC_SERVER_COMMAND = "codex.exec-server.stdio.v1";
+
+function policyContext(
+  params: unknown,
+  overrides: Partial<OpenClawPluginNodeInvokePolicyContext> = {},
+): OpenClawPluginNodeInvokePolicyContext {
+  return {
+    nodeId: "paired-node",
+    command: CODEX_NODE_EXEC_SERVER_COMMAND,
+    params,
+    config: {},
+    risk: { level: "high", family: "codex.exec-server" },
+    invokeNode: vi.fn(),
+    ...overrides,
+  };
+}
+
+function processParams(cwd: string, processId: string, script: string, pipeStdin = false) {
+  return {
+    processId,
+    argv: [process.execPath, "-e", script],
+    cwd: pathToFileURL(cwd).href,
+    env: {},
+    tty: false,
+    pipeStdin,
+    arg0: null,
+  };
+}
+
+const inheritEnvironment = {
+  inherit: "all",
+  ignoreDefaultExcludes: true,
+  exclude: [],
+  set: {},
+  includeOnly: [],
+};
 
 function createManagedWorkspaceInvocation(cwd: string, homeDir?: string) {
   const placement = {
@@ -30,32 +66,26 @@ function createManagedWorkspaceInvocation(cwd: string, homeDir?: string) {
     sessionKey: "agent:main:paired-session",
   };
   const release = vi.fn();
-  const acquireManagedWorkspaceAsync = vi.fn(
-    async (request: {
-      workspaceDir: string;
-      environmentId: string;
-      sessionId: string;
-      ownerEpoch: number;
-      sessionKey: string;
-    }) => {
-      if (
-        request.workspaceDir !== cwd ||
-        request.environmentId !== placement.environmentId ||
-        request.sessionId !== placement.sessionId ||
-        request.ownerEpoch !== placement.ownerEpoch ||
-        request.sessionKey !== placement.sessionKey
-      ) {
-        throw new Error("node placement does not own the requested workspace");
-      }
-      return { workspaceDir: cwd, ...(homeDir ? { homeDir } : {}), release };
-    },
-  );
+  const acquireManagedWorkspaceAsync = vi.fn<
+    NonNullable<NodeCommandContext["acquireManagedWorkspaceAsync"]>
+  >(async (request) => {
+    if (
+      request.workspaceDir !== cwd ||
+      request.environmentId !== placement.environmentId ||
+      request.sessionId !== placement.sessionId ||
+      request.ownerEpoch !== placement.ownerEpoch ||
+      request.sessionKey !== placement.sessionKey
+    ) {
+      throw new Error("node placement does not own the requested workspace");
+    }
+    return { workspaceDir: cwd, ...(homeDir ? { homeDir } : {}), release };
+  });
   const context = {
     sessionKey: placement.sessionKey,
     sendNodeEvent: async () => undefined,
     acquireManagedWorkspaceAsync,
     prepareExecAuthorization: () => () => {},
-  } satisfies NonNullable<Parameters<OpenClawPluginNodeHostCommand["handle"]>[2]>;
+  } satisfies NodeCommandContext;
   return { placement, context, acquireManagedWorkspaceAsync, release };
 }
 
@@ -64,10 +94,7 @@ function createNodeFrames(testSignal?: AbortSignal) {
   const signal = testSignal ? AbortSignal.any([controller.signal, testSignal]) : controller.signal;
   const messages = new EventEmitter();
   let receive: ((message: Uint8Array) => void | Promise<void>) | undefined;
-  let signalReady = () => {};
-  const ready = new Promise<void>((resolve) => {
-    signalReady = resolve;
-  });
+  const { promise: ready, resolve: signalReady } = Promise.withResolvers<void>();
   const outbound: JsonRpcRecord[] = [];
   const io: OpenClawPluginNodeHostCommandIo = {
     signal,
@@ -134,6 +161,45 @@ async function readNodeResponse(
   return response.result as JsonRpcRecord;
 }
 
+async function initializeNode(
+  frames: ReturnType<typeof createNodeFrames>,
+  invocation: Promise<string>,
+) {
+  await Promise.race([frames.ready, invocation]);
+  expect(await requestNode(frames, 1, "initialize", { clientName: "openclaw-node" })).toMatchObject(
+    {
+      sessionId: expect.any(String),
+    },
+  );
+  await frames.send({ method: "initialized", params: {} });
+}
+
+async function requestNode(
+  frames: ReturnType<typeof createNodeFrames>,
+  id: number,
+  method: string,
+  params: JsonRpcRecord,
+) {
+  await frames.send({ id, method, params });
+  return readNodeResponse(frames, id);
+}
+
+function startNode(cwd: string, signal: AbortSignal, homeDir?: string) {
+  const frames = createNodeFrames(signal);
+  const command = createCodexNodeExecServerCommand();
+  const workspace = createManagedWorkspaceInvocation(cwd, homeDir);
+  const invocation = command.handle(
+    JSON.stringify({ placement: workspace.placement, authorization: "human-approved" }),
+    frames.io,
+    workspace.context,
+  );
+  void invocation.then(
+    () => frames.controller.abort(new Error("Codex exec-server invocation ended")),
+    (error: unknown) => frames.controller.abort(error),
+  );
+  return { frames, command, workspace, invocation };
+}
+
 async function readNodeProcessNotifications(
   frames: ReturnType<typeof createNodeFrames>,
   processId: string,
@@ -185,16 +251,13 @@ describe("Codex node exec-server", () => {
     const invokeNode = vi.fn();
     const invokeNodeWithSessionFull = vi.fn(async () => ({ ok: true as const }));
     await expect(
-      createCodexNodeExecServerInvokePolicy().handle({
-        nodeId: "paired-node",
-        command: CODEX_NODE_EXEC_SERVER_COMMAND,
-        params: placement,
-        config: {},
-        risk: { level: "high", family: "codex.exec-server" },
-        approvals: { request },
-        invokeNode,
-        invokeNodeWithSessionFull,
-      }),
+      createCodexNodeExecServerInvokePolicy().handle(
+        policyContext(placement, {
+          approvals: { request },
+          invokeNode,
+          invokeNodeWithSessionFull,
+        }),
+      ),
     ).resolves.toEqual({ ok: true });
     expect(request).not.toHaveBeenCalled();
     expect(invokeNode).not.toHaveBeenCalled();
@@ -235,16 +298,13 @@ describe("Codex node exec-server", () => {
       { placement, authorization: "session-full" },
     ]) {
       await expect(
-        createCodexNodeExecServerInvokePolicy().handle({
-          nodeId: "paired-node",
-          command: CODEX_NODE_EXEC_SERVER_COMMAND,
-          params,
-          config: {},
-          risk: { level: "high", family: "codex.exec-server" },
-          approvals: { request },
-          invokeNode,
-          invokeNodeWithSessionFull,
-        }),
+        createCodexNodeExecServerInvokePolicy().handle(
+          policyContext(params, {
+            approvals: { request },
+            invokeNode,
+            invokeNodeWithSessionFull,
+          }),
+        ),
       ).resolves.toMatchObject({ ok: false, code: "CODEX_NODE_EXEC_WORKSPACE_INVALID" });
     }
     expect(request).not.toHaveBeenCalled();
@@ -302,15 +362,11 @@ describe("Codex node exec-server", () => {
     const { placement } = createManagedWorkspaceInvocation(
       path.join(process.cwd(), "long-session-workspace-".repeat(20)),
     );
-    const context = {
+    const context = policyContext(placement, {
       nodeId,
-      command: CODEX_NODE_EXEC_SERVER_COMMAND,
-      params: placement,
-      config: {},
-      risk: { level: "high", family: "codex.exec-server" },
       approvals: { request },
       invokeNode,
-    } satisfies OpenClawPluginNodeInvokePolicyContext;
+    });
 
     for (const { decision, result } of [
       {
@@ -464,49 +520,17 @@ describe("Codex node exec-server", () => {
         const homeDir = path.join(cwd, "prepared-home");
         await mkdir(homeDir);
         await writeFile(path.join(homeDir, "prepared-cache"), "retained build state");
-        const frames = createNodeFrames(signal);
-        const command = createCodexNodeExecServerCommand();
-        const workspace = createManagedWorkspaceInvocation(cwd, homeDir);
-        const invocation = command.handle(
-          JSON.stringify({ placement: workspace.placement, authorization: "human-approved" }),
-          frames.io,
-          workspace.context,
-        );
-        void invocation.catch((error: unknown) => frames.controller.abort(error));
+        const { frames, command, workspace, invocation } = startNode(cwd, signal, homeDir);
         let isolatedCodexHome: string | undefined;
         try {
-          await Promise.race([frames.ready, invocation]);
-          await frames.send({
-            id: 1,
-            method: "initialize",
-            params: { clientName: "openclaw-node" },
-          });
-          await readNodeResponse(frames, 1);
-          await frames.send({ method: "initialized", params: {} });
+          await initializeNode(frames, invocation);
           const script = `const fs = require('node:fs'); const path = require('node:path');
 process.stdout.write(JSON.stringify({home: process.env.HOME, codexHome: process.env.CODEX_HOME,
   cached: fs.existsSync(path.join(process.env.HOME ?? '.', 'prepared-cache'))}) + '\\n');`;
-          await frames.send({
-            id: 2,
-            method: "process/start",
-            params: {
-              processId: "prepared-home",
-              argv: [process.execPath, "-e", script],
-              cwd: pathToFileURL(cwd).href,
-              env: {},
-              envPolicy: {
-                inherit: "all",
-                ignoreDefaultExcludes: true,
-                exclude: [],
-                set: {},
-                includeOnly: [],
-              },
-              tty: false,
-              pipeStdin: false,
-              arg0: null,
-            },
+          await requestNode(frames, 2, "process/start", {
+            ...processParams(cwd, "prepared-home", script),
+            envPolicy: inheritEnvironment,
           });
-          await readNodeResponse(frames, 2);
           const notifications = await readNodeProcessNotifications(frames, "prepared-home", 3);
           const output = notifications.find(
             (message) => message.method === "process/output",
@@ -554,19 +578,7 @@ process.stdout.write(JSON.stringify({home: process.env.HOME, codexHome: process.
       { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "codex-node-exec-contract-" },
       async ({ dir }) => {
         const cwd = await realpath(dir);
-        const workspaceUri = pathToFileURL(cwd).href;
-        const frames = createNodeFrames(signal);
-        const command = createCodexNodeExecServerCommand();
-        const workspace = createManagedWorkspaceInvocation(cwd);
-        const invocation = command.handle(
-          JSON.stringify({ placement: workspace.placement, authorization: "human-approved" }),
-          frames.io,
-          workspace.context,
-        );
-        void invocation.then(
-          () => frames.controller.abort(new Error("Codex exec-server invocation ended")),
-          (error: unknown) => frames.controller.abort(error),
-        );
+        const { frames, command, workspace, invocation } = startNode(cwd, signal);
         let isolatedHome: string | undefined;
         const outputGate = createServer((_request, response) => {
           void frames
@@ -593,17 +605,8 @@ process.stdout.write(JSON.stringify({home: process.env.HOME, codexHome: process.
               response.resume();
               response.once('end', () => process.stdout.write(process.argv[1] + '\\n'));
             });`;
-          await Promise.race([frames.ready, invocation]);
           // Codex deliberately omits jsonrpc:"2.0" from every wire envelope.
-          await frames.send({
-            id: 1,
-            method: "initialize",
-            params: { clientName: "openclaw-node" },
-          });
-          expect(await readNodeResponse(frames, 1)).toMatchObject({
-            sessionId: expect.any(String),
-          });
-          await frames.send({ method: "initialized", params: {} });
+          await initializeNode(frames, invocation);
 
           const script = [
             "process.stdin.once('data', input => {",
@@ -625,37 +628,18 @@ process.stdout.write(JSON.stringify({home: process.env.HOME, codexHome: process.
             "{ stdio: ['ignore', 'inherit', 'inherit'] }).once('spawn', () => process.exit(0))",
             "})",
           ].join("\n");
-          await frames.send({
-            id: 8,
-            method: "process/start",
-            params: {
-              processId: "node-proof",
-              argv: [process.execPath, "-e", script],
-              cwd: workspaceUri,
+          expect(
+            await requestNode(frames, 8, "process/start", {
+              ...processParams(cwd, "node-proof", script, true),
               env: { NODE_EXEC_ORDINARY: "visible" },
-              envPolicy: {
-                inherit: "all",
-                ignoreDefaultExcludes: true,
-                exclude: [],
-                set: {},
-                includeOnly: [],
-              },
-              tty: false,
-              pipeStdin: true,
-              arg0: null,
-            },
+              envPolicy: inheritEnvironment,
+            }),
+          ).toMatchObject({ processId: "node-proof" });
+          await requestNode(frames, 9, "process/write", {
+            processId: "node-proof",
+            chunk: Buffer.from("node carrier\n").toString("base64"),
+            writeId: "node-proof-write",
           });
-          expect(await readNodeResponse(frames, 8)).toMatchObject({ processId: "node-proof" });
-          await frames.send({
-            id: 9,
-            method: "process/write",
-            params: {
-              processId: "node-proof",
-              chunk: Buffer.from("node carrier\n").toString("base64"),
-              writeId: "node-proof-write",
-            },
-          });
-          await readNodeResponse(frames, 9);
           const notifications = await readNodeProcessNotifications(frames, "node-proof", 3);
           // Codex drains output independently of exit; only closed is terminal in seq order.
           expect(
@@ -670,19 +654,9 @@ process.stdout.write(JSON.stringify({home: process.env.HOME, codexHome: process.
           });
           const output = notifications.find((message) => message.method === "process/output")
             ?.params as { chunk: string };
-          const observed = JSON.parse(Buffer.from(output.chunk, "base64").toString("utf8")) as {
-            input: string;
-            ordinary: string;
-            home: string;
-            codexHome: string;
-            userProfile: string | null;
-            provider: string | null;
-            cloud: string | null;
-            cloudFile: string | null;
-            forge: string | null;
-            ssh: string | null;
-            injection: string | null;
-          };
+          const observed: unknown = JSON.parse(
+            Buffer.from(output.chunk, "base64").toString("utf8"),
+          );
           expect(observed).toMatchObject({
             input: "node carrier",
             ordinary: "visible",
@@ -693,6 +667,9 @@ process.stdout.write(JSON.stringify({home: process.env.HOME, codexHome: process.
             ssh: null,
             injection: null,
           });
+          if (!isRecord(observed) || typeof observed.home !== "string") {
+            throw new Error("Pinned exec-server omitted its private home");
+          }
           expect(observed.codexHome).toBe(path.join(observed.home, ".codex"));
           expect(observed.home).not.toBe(process.env.HOME);
           if (process.platform === "win32") {
@@ -703,18 +680,19 @@ process.stdout.write(JSON.stringify({home: process.env.HOME, codexHome: process.
           // A response spanning many pipe chunks must arrive as one intact frame.
           const chunkedUri = pathToFileURL(path.join(cwd, "chunked.txt")).href;
           const chunkedDataBase64 = Buffer.alloc(256 * 1024, 0x61).toString("base64");
-          await frames.send({
-            id: 10,
-            method: "fs/writeFile",
-            params: { path: chunkedUri, dataBase64: chunkedDataBase64, sandbox: null },
-          });
-          expect(await readNodeResponse(frames, 10)).toEqual({});
-          await frames.send({
-            id: 11,
-            method: "fs/readFile",
-            params: { path: chunkedUri, sandbox: null },
-          });
-          expect(await readNodeResponse(frames, 11)).toEqual({ dataBase64: chunkedDataBase64 });
+          expect(
+            await requestNode(frames, 10, "fs/writeFile", {
+              path: chunkedUri,
+              dataBase64: chunkedDataBase64,
+              sandbox: null,
+            }),
+          ).toEqual({});
+          expect(
+            await requestNode(frames, 11, "fs/readFile", {
+              path: chunkedUri,
+              sandbox: null,
+            }),
+          ).toEqual({ dataBase64: chunkedDataBase64 });
 
           const policyScript = [
             "const net = require('node:net')",
@@ -727,17 +705,9 @@ process.stdout.write(JSON.stringify({home: process.env.HOME, codexHome: process.
             "process.stdout.write(line + '\\n', () => { socket.end(); process.exit(0) })",
             "})",
           ].join("\n");
-          await frames.send({
-            id: 20,
-            method: "process/start",
-            params: {
-              processId: "node-policy",
-              argv: [process.execPath, "-e", policyScript],
-              cwd: workspaceUri,
-              env: {},
-              tty: false,
-              pipeStdin: false,
-              arg0: null,
+          expect(
+            await requestNode(frames, 20, "process/start", {
+              ...processParams(cwd, "node-policy", policyScript),
               networkProxy: {
                 proxy: {
                   enabled: true,
@@ -754,9 +724,8 @@ process.stdout.write(JSON.stringify({home: process.env.HOME, codexHome: process.
                 executionId: "node-policy-execution",
                 policyDecisionTimeoutMs: 3_000,
               },
-            },
-          });
-          expect(await readNodeResponse(frames, 20)).toMatchObject({ processId: "node-policy" });
+            }),
+          ).toMatchObject({ processId: "node-policy" });
           const policyRequest = await frames.waitForMessage(
             (message) => message.method === "network/policyRequest",
           );

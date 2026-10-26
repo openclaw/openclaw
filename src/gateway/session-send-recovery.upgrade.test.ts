@@ -86,7 +86,7 @@ it("keeps latest-stable pending rows visible without replaying missing operator 
     const runtime = createMockGatewayRecoveryRuntime();
     context.recoveryRuntime = runtime;
 
-    await recoverSessionSendDeliveries(context, new AbortController().signal);
+    await recoverSessionSendDeliveries(context, new AbortController().signal).settled;
 
     // Read raw rows before any history access: startup itself must reconcile SIGKILL.
     const stored = database.db

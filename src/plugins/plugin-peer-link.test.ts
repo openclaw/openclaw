@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
+  auditDeclaredOpenClawHostDependency,
   auditOpenClawPeerDependenciesInManagedNpmRoot,
   auditOpenClawPeerDependencyLinkSync,
   linkOpenClawPeerDependencies,
@@ -85,18 +86,6 @@ function oneShotAuthority() {
 function expectHostLink(linkPath: string, hostRoot = process.cwd()) {
   expect(fs.lstatSync(linkPath).isSymbolicLink()).toBe(true);
   expect(fs.realpathSync(linkPath)).toBe(fs.realpathSync(hostRoot));
-}
-
-function unreadablePackageFixture() {
-  const { root: npmRoot, packageDir: peerDir } = peerFixture();
-  const unreadableDir = path.join(npmRoot, "node_modules", "bad-plugin");
-  fs.mkdirSync(unreadableDir, { recursive: true });
-  fs.writeFileSync(path.join(unreadableDir, "package.json"), "{", "utf8");
-  const failures: Array<{ error: unknown; packageDir: string }> = [];
-  const onPackageReadError = (error: unknown, packageDir: string) => {
-    failures.push({ error, packageDir });
-  };
-  return { npmRoot, unreadableDir, peerDir, failures, onPackageReadError };
 }
 
 afterEach(() => {
@@ -301,71 +290,61 @@ describe("plugin peer links", () => {
     expect(fs.existsSync(linkPath)).toBe(false);
   });
 
-  it.each(["dependencies", "optionalDependencies"] as const)(
-    "relinks openclaw %s in the managed npm root",
-    async (declaration) => {
-      const npmRoot = makeTempDir();
-      const packageDir = path.join(npmRoot, "node_modules", "runtime-plugin");
-      writePackage(packageDir, { name: "runtime-plugin", [declaration]: { openclaw: "2026.7.1" } });
-      const result = await relinkOpenClawPeerDependenciesInManagedNpmRoot({ npmRoot, logger: {} });
-
-      const linkPath = path.join(packageDir, "node_modules", "openclaw");
-      expect(result).toEqual({ repaired: 1 });
+  it.each(["managed", "registered"] as const)(
+    "ignores packages without a host declaration during %s audit and repair",
+    async (entry) => {
+      const { root, packageDir, linkPath } = peerFixture("missing-modules", entry === "registered");
+      const unrelatedDir = path.join(path.dirname(packageDir), "aaa-unrelated-plugin");
+      const manifest = { name: "aaa-unrelated-plugin", dependencies: { other: "*" } };
+      writePackage(unrelatedDir, manifest);
+      const onPackageReadError = vi.fn();
+      expect(await auditDeclaredOpenClawHostDependency({ packageDir: unrelatedDir })).toBeNull();
+      const options = registeredRepair(packageDir, unrelatedDir);
+      const audit =
+        entry === "registered"
+          ? await reconcileRegisteredOpenClawHostLinks({
+              ...options,
+              mode: "audit",
+              onPackageReadError,
+            })
+          : await auditOpenClawPeerDependenciesInManagedNpmRoot({
+              npmRoot: root,
+              onPackageReadError,
+            });
+      expect(audit.issues.map((issue) => issue.packageName)).toEqual(["peer-plugin"]);
+      const repaired =
+        entry === "registered"
+          ? await reconcileRegisteredOpenClawHostLinks({ ...options, onPackageReadError })
+          : await relinkOpenClawPeerDependenciesInManagedNpmRoot({
+              npmRoot: root,
+              logger: {},
+              onPackageReadError,
+            });
+      expect(repaired.repaired).toBe(1);
       expectHostLink(linkPath);
+      expect(fs.existsSync(path.join(unrelatedDir, "node_modules"))).toBe(false);
+      expect(fs.readFileSync(path.join(unrelatedDir, "package.json"), "utf8")).toBe(
+        JSON.stringify(manifest),
+      );
+      expect(onPackageReadError).not.toHaveBeenCalled();
     },
   );
 
-  it.each(["repair", "audit"] as const)(
-    "reports one unreadable package and continues to %s its sibling",
-    async (mode) => {
-      const { npmRoot, unreadableDir, peerDir, failures, onPackageReadError } =
-        unreadablePackageFixture();
-
-      const options = { npmRoot, onPackageReadError };
-      const linkPath = path.join(peerDir, "node_modules", "openclaw");
-      if (mode === "repair") {
-        expect(
-          await relinkOpenClawPeerDependenciesInManagedNpmRoot({ ...options, logger: {} }),
-        ).toEqual({ repaired: 1 });
-        expect(failures[0]?.error).toBeInstanceOf(SyntaxError);
-        expect(fs.lstatSync(linkPath).isSymbolicLink()).toBe(true);
-      } else {
-        const result = await auditOpenClawPeerDependenciesInManagedNpmRoot(options);
-        expect(result.issues).toHaveLength(1);
-        expect(result.issues[0]?.packageName).toBe("peer-plugin");
-        expect(fs.existsSync(linkPath)).toBe(false);
-      }
-      expect(failures).toHaveLength(1);
-      expect(failures[0]?.packageDir).toBe(unreadableDir);
-    },
-  );
-
-  it.each(["openclaw", "not-openclaw"])(
-    "replaces an existing package only when its name is openclaw: %s",
-    async (name) => {
-      const { packageDir, linkPath } = peerFixture("package-copy");
-      writePackage(linkPath, { name });
-      const messages: string[] = [];
-      const warnings: string[] = [];
-      const result = await linkOpenClawPeerDependencies({
-        ...peerInstall(packageDir),
-        peerDependencies: { openclaw: ">=2026.0.0" },
-        logger: {
-          info: (message) => messages.push(message),
-          warn: (message) => warnings.push(message),
-        },
-      });
-      if (name === "openclaw") {
-        expect(result).toEqual({ repaired: 1, skipped: 0 });
-        expectHostLink(linkPath);
-        expect(messages.join("\n")).toContain('Linked peerDependency "openclaw"');
-      } else {
-        expect(result).toEqual({ repaired: 0, skipped: 1 });
-        expect(fs.existsSync(path.join(linkPath, "package.json"))).toBe(true);
-        expect(warnings.join("\n")).toContain("already exists and is not a symlink");
-      }
-    },
-  );
+  it("does not replace a foreign package occupying the host link", async () => {
+    const { packageDir, linkPath } = peerFixture("package-copy");
+    writePackage(linkPath, { name: "not-openclaw" });
+    const warnings: string[] = [];
+    const result = await linkOpenClawPeerDependencies({
+      ...peerInstall(packageDir),
+      peerDependencies: { openclaw: ">=2026.0.0" },
+      logger: {
+        warn: (message) => warnings.push(message),
+      },
+    });
+    expect(result).toEqual({ repaired: 0, skipped: 1 });
+    expect(fs.existsSync(path.join(linkPath, "package.json"))).toBe(true);
+    expect(warnings.join("\n")).toContain("already exists and is not a symlink");
+  });
 
   it.runIf(process.platform !== "win32").each(["manifest", "node_modules"])(
     "does not follow a registered plugin %s symlink outside its package root",

@@ -340,111 +340,6 @@ function readEnvBackedOllamaApiKey(value: unknown, env: NodeJS.ProcessEnv): stri
   return undefined;
 }
 
-function readUsableOllamaShowApiKey(params: {
-  env: NodeJS.ProcessEnv;
-  allowAmbientEnvFallback: boolean;
-  explicitApiKey?: unknown;
-  resolved?: { apiKey?: unknown; discoveryApiKey?: unknown };
-}): string | undefined {
-  const explicitEnvApiKey = readEnvBackedOllamaApiKey(params.explicitApiKey, params.env);
-  if (explicitEnvApiKey) {
-    return explicitEnvApiKey;
-  }
-  const explicitApiKey = readConcreteOllamaApiKey(params.explicitApiKey);
-  if (explicitApiKey) {
-    return explicitApiKey;
-  }
-  const resolvedApiKey = readOllamaStringValue(params.resolved?.apiKey);
-  const canUseResolvedDiscovery =
-    params.allowAmbientEnvFallback || !isOllamaApiKeyMarker(resolvedApiKey);
-  const discoveryApiKey = readConcreteOllamaApiKey(params.resolved?.discoveryApiKey);
-  if (discoveryApiKey && canUseResolvedDiscovery) {
-    return discoveryApiKey;
-  }
-  const resolvedEnvApiKey = readEnvBackedOllamaApiKey(params.resolved?.apiKey, params.env);
-  if (resolvedEnvApiKey && canUseResolvedDiscovery) {
-    return resolvedEnvApiKey;
-  }
-  const apiKey = readConcreteOllamaApiKey(params.resolved?.apiKey);
-  if (apiKey) {
-    return apiKey;
-  }
-  return params.allowAmbientEnvFallback
-    ? readConcreteOllamaApiKey(params.env.OLLAMA_API_KEY)
-    : undefined;
-}
-
-function collectConfiguredOllamaModelIds(params: {
-  config?: OpenClawConfig;
-  provider: string;
-  entries?: ProviderAugmentModelCatalogContext["entries"];
-}): Array<{
-  id: string;
-  api?: ProviderAugmentModelCatalogContext["entries"][number]["api"];
-  name?: string;
-}> {
-  const providerPrefix = `${params.provider.toLowerCase()}/`;
-  const models = new Map<
-    string,
-    {
-      id: string;
-      api?: ProviderAugmentModelCatalogContext["entries"][number]["api"];
-      name?: string;
-    }
-  >();
-  const addModelId = (
-    modelId: string,
-    api?: ProviderAugmentModelCatalogContext["entries"][number]["api"],
-    name?: string,
-  ) => {
-    const trimmed = modelId.trim();
-    if (!trimmed || trimmed === "*") {
-      return;
-    }
-    const trimmedName = name?.trim();
-    const existing = models.get(trimmed);
-    if (existing) {
-      if (!existing.api && api) {
-        existing.api = api;
-      }
-      if (!existing.name && trimmedName) {
-        existing.name = trimmedName;
-      }
-      return;
-    }
-    models.set(trimmed, {
-      id: trimmed,
-      ...(api ? { api } : {}),
-      ...(trimmedName ? { name: trimmedName } : {}),
-    });
-  };
-  const addRef = (raw: unknown) => {
-    if (typeof raw !== "string") {
-      return;
-    }
-    const trimmed = splitTrailingAuthProfile(raw).model;
-    if (!trimmed.toLowerCase().startsWith(providerPrefix)) {
-      return;
-    }
-    const modelId = trimmed.slice(providerPrefix.length).trim();
-    addModelId(modelId);
-  };
-
-  for (const ref of collectConfiguredModelRefValues(params.config)) {
-    addRef(ref);
-  }
-  for (const entry of params.entries ?? []) {
-    if (
-      entry.provider.toLowerCase() === params.provider.toLowerCase() &&
-      entry.id.trim() &&
-      needsOllamaCatalogMetadata(entry)
-    ) {
-      addModelId(entry.id.trim(), entry.api, entry.name);
-    }
-  }
-  return [...models.values()];
-}
-
 function buildStaticOllamaCloudProvider(): ModelProviderConfig {
   return {
     baseUrl: OLLAMA_CLOUD_BASE_URL,
@@ -532,11 +427,62 @@ async function augmentConfiguredOllamaCatalogModels(params: {
   resolveProviderApiKey: ProviderAugmentModelCatalogContext["resolveProviderApiKey"];
   capContextTokens?: boolean;
 }): Promise<ProviderAugmentModelCatalogContext["entries"]> {
-  const models = collectConfiguredOllamaModelIds({
-    config: params.config,
-    provider: params.provider,
-    entries: params.entries,
-  });
+  const providerPrefix = `${params.provider.toLowerCase()}/`;
+  const modelsById = new Map<
+    string,
+    {
+      id: string;
+      api?: ProviderAugmentModelCatalogContext["entries"][number]["api"];
+      name?: string;
+    }
+  >();
+  const addModelId = (
+    modelId: string,
+    api?: ProviderAugmentModelCatalogContext["entries"][number]["api"],
+    name?: string,
+  ) => {
+    const trimmed = modelId.trim();
+    if (!trimmed || trimmed === "*") {
+      return;
+    }
+    const trimmedName = name?.trim();
+    const existing = modelsById.get(trimmed);
+    if (existing) {
+      if (!existing.api && api) {
+        existing.api = api;
+      }
+      if (!existing.name && trimmedName) {
+        existing.name = trimmedName;
+      }
+      return;
+    }
+    modelsById.set(trimmed, {
+      id: trimmed,
+      ...(api ? { api } : {}),
+      ...(trimmedName ? { name: trimmedName } : {}),
+    });
+  };
+  for (const ref of collectConfiguredModelRefValues(params.config)) {
+    if (typeof ref !== "string") {
+      continue;
+    }
+    const trimmed = splitTrailingAuthProfile(ref).model;
+    if (!trimmed.toLowerCase().startsWith(providerPrefix)) {
+      continue;
+    }
+    const modelId = trimmed.slice(providerPrefix.length).trim();
+    addModelId(modelId);
+  }
+  for (const entry of params.entries ?? []) {
+    if (
+      entry.provider.toLowerCase() === params.provider.toLowerCase() &&
+      entry.id.trim() &&
+      needsOllamaCatalogMetadata(entry)
+    ) {
+      addModelId(entry.id.trim(), entry.api, entry.name);
+    }
+  }
+  const models = [...modelsById.values()];
   if (models.length === 0) {
     return [];
   }
@@ -546,12 +492,36 @@ async function augmentConfiguredOllamaCatalogModels(params: {
   });
   const baseUrl = readProviderBaseUrl(configuredProvider) ?? params.defaultBaseUrl;
   const isLocalBaseUrl = isLocalOllamaBaseUrl(baseUrl);
-  const showApiKey = readUsableOllamaShowApiKey({
-    env: params.env,
-    allowAmbientEnvFallback: !isLocalBaseUrl,
-    explicitApiKey: configuredProvider?.apiKey,
-    resolved: params.resolveProviderApiKey?.(params.provider),
-  });
+  const env = params.env;
+  const allowAmbientEnvFallback = !isLocalBaseUrl;
+  const configuredApiKey = configuredProvider?.apiKey;
+  const resolved = params.resolveProviderApiKey?.(params.provider);
+  const showApiKey = (() => {
+    const explicitEnvApiKey = readEnvBackedOllamaApiKey(configuredApiKey, env);
+    if (explicitEnvApiKey) {
+      return explicitEnvApiKey;
+    }
+    const explicitApiKey = readConcreteOllamaApiKey(configuredApiKey);
+    if (explicitApiKey) {
+      return explicitApiKey;
+    }
+    const resolvedApiKey = readOllamaStringValue(resolved?.apiKey);
+    const canUseResolvedDiscovery =
+      allowAmbientEnvFallback || !isOllamaApiKeyMarker(resolvedApiKey);
+    const discoveryApiKey = readConcreteOllamaApiKey(resolved?.discoveryApiKey);
+    if (discoveryApiKey && canUseResolvedDiscovery) {
+      return discoveryApiKey;
+    }
+    const resolvedEnvApiKey = readEnvBackedOllamaApiKey(resolved?.apiKey, env);
+    if (resolvedEnvApiKey && canUseResolvedDiscovery) {
+      return resolvedEnvApiKey;
+    }
+    const apiKey = readConcreteOllamaApiKey(resolved?.apiKey);
+    if (apiKey) {
+      return apiKey;
+    }
+    return allowAmbientEnvFallback ? readConcreteOllamaApiKey(env.OLLAMA_API_KEY) : undefined;
+  })();
   if (!isLocalBaseUrl && !showApiKey) {
     return [];
   }
@@ -811,7 +781,6 @@ export default definePluginEntry({
                 customModelId: ctx.opts.customModelId as string | undefined,
               },
               runtime: ctx.runtime,
-              agentDir: ctx.agentDir,
             });
           },
         },

@@ -3,7 +3,7 @@ import {
   registerVirtualTestPlugin,
 } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { Value } from "typebox/value";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { PluginsUiDescriptorsResultSchema } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import type { PluginControlUiDescriptor } from "../plugins/host-hooks.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -14,7 +14,10 @@ import {
 } from "./control-ui-plugin-tabs.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 
-function descriptor(id: string, fields: Partial<PluginControlUiDescriptor>) {
+function descriptor(
+  id: string,
+  fields: Partial<PluginControlUiDescriptor & { surface: "link-reader" | "tab" }>,
+) {
   return { id, label: id, surface: "link-reader" as const, ...fields };
 }
 
@@ -65,6 +68,29 @@ function setup() {
 
 describe("plugin link-reader discovery", () => {
   afterEach(() => resetPluginRuntimeStateForTest());
+  it("does not index methods when no link readers are visible", () => {
+    const { register, methods } = setup();
+    register("panel", {
+      declarations: [descriptor("panel", { surface: "tab", path: "/panel" })],
+    });
+    register("private", {
+      declarations: [
+        descriptor("document", {
+          requiredScopes: ["operator.admin"],
+          linkReader: {
+            hosts: ["private.example"],
+            pathPattern: "^/items/[0-9]+$",
+            detailMethod: "private.read",
+          },
+        }),
+      ],
+    });
+    const registry = methods();
+    using descriptors = vi.spyOn(registry, "descriptors");
+
+    expect(listControlUiLinkReaders(["operator.read"], registry)).toEqual([]);
+    expect(descriptors).not.toHaveBeenCalled();
+  });
   it.each([
     "valid",
     "foreign or stronger detail method",
@@ -130,7 +156,7 @@ describe("plugin link-reader discovery", () => {
       pathPattern: "^/items/[0-9]+$",
       detailMethod: "forge.read",
     };
-    const invalid: Array<Partial<PluginControlUiDescriptor>> = [
+    const invalid: Parameters<typeof descriptor>[1][] = [
       { linkReader: { ...metadata, hosts: ["*.example"] } },
       { linkReader: { ...metadata, hosts: ["https://forge.example"] } },
       { linkReader: { ...metadata, pathPattern: "/items/" } },

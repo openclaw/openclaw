@@ -5,6 +5,7 @@ import * as ts from "typescript/ast";
 import { afterEach, expect, it, vi } from "vitest";
 import * as nativeTypeScript from "../../scripts/lib/native-typescript.mts";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { writeArtifacts as writeFiles } from "../plugins/public-surface.test-support.js";
 import { createDeclarationClosureRenderer } from "./api-baseline-declaration-closure.js";
 import { formatPluginSdkApiTypeAlias as formatTypeAlias } from "./api-baseline-declaration-print.js";
 import {
@@ -27,17 +28,12 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const fixtureSource = { path: "src/plugin-sdk/fixture.ts" };
 const tsOptions = { module: "NodeNext", moduleResolution: "NodeNext", target: "ESNext" };
 
-function writeFiles(root: string, files: Readonly<Record<string, string>>) {
-  for (const [name, contents] of Object.entries(files)) {
-    const file = path.join(root, name);
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, contents);
-  }
-}
-
 function expectItems(actual: unknown, ...expected: Record<string, unknown>[]) {
   expect(actual).toEqual(expected.map((item) => expect.objectContaining(item)));
 }
+
+const containingItems = (...items: Record<string, unknown>[]) =>
+  expect.arrayContaining(items.map((item) => expect.objectContaining(item)));
 
 async function renderSourceFixture(
   source: string | Readonly<Record<string, string>>,
@@ -105,23 +101,19 @@ async function renderPrivateDeclarationFixture(params?: {
   optionalResult?: boolean;
 }) {
   return renderSourceFixture({
-    "fixture.ts": [
-      'import type { FixtureOptionLeaf } from "./fixture-option.js";',
-      'import type { FixtureResultLeaf } from "./fixture-result.js";',
-      `${params?.comments ? "/** Options docs */ " : ""}type FixtureOptions = { nested: FixtureOptionLeaf };`,
-      "type FixtureResult = { nested: FixtureResultLeaf };",
-      "export declare function createFixture(options: FixtureOptions): FixtureResult;",
-      `${params?.comments ? "/** Error docs */ " : ""}export class FixtureError extends Error {`,
-      "  readonly status: number;",
-      '  constructor(status: number) { super("fixture"); this.status = status; }',
-      "  getStatus() { return this.status; }",
-      "}",
-    ].join("\n"),
-    "fixture-option.ts": [
-      'import type { FixtureResultLeaf } from "./fixture-result.js";',
-      'import type { FixtureExternal } from "fixture-external";',
-      `export type FixtureOptionLeaf = { required${params?.optionalOption ? "?" : ""}: string; result?: FixtureResultLeaf; external?: FixtureExternal };`,
-    ].join("\n"),
+    "fixture.ts": `import type { FixtureOptionLeaf } from "./fixture-option.js";
+import type { FixtureResultLeaf } from "./fixture-result.js";
+${params?.comments ? "/** Options docs */ " : ""}type FixtureOptions = { nested: FixtureOptionLeaf };
+type FixtureResult = { nested: FixtureResultLeaf };
+export declare function createFixture(options: FixtureOptions): FixtureResult;
+${params?.comments ? "/** Error docs */ " : ""}export class FixtureError extends Error {
+  readonly status: number;
+  constructor(status: number) { super("fixture"); this.status = status; }
+  getStatus() { return this.status; }
+}`,
+    "fixture-option.ts": `import type { FixtureResultLeaf } from "./fixture-result.js";
+import type { FixtureExternal } from "fixture-external";
+export type FixtureOptionLeaf = { required${params?.optionalOption ? "?" : ""}: string; result?: FixtureResultLeaf; external?: FixtureExternal };`,
     "fixture-result.ts": 'export type { FixtureResultLeaf } from "./fixture-result-shape.js";\n',
     "fixture-result-shape.ts": importedType(
       "FixtureOptionLeaf",
@@ -143,38 +135,6 @@ async function renderDependencyDeclarationFixture(dependencyDeclaration: string)
       '{"name":"fixture-dependency","type":"module","types":"index.d.ts"}\n',
     "../../node_modules/fixture-dependency/index.d.ts": dependencyDeclaration,
   });
-}
-
-function createTupleAliasFixture(tuple: string, warmup: string, prewarm: boolean) {
-  const cwd = tempDirs.make("openclaw-plugin-sdk-tuple-");
-  const fileName = path.join(cwd, "fixture.ts");
-  const source = [
-    "interface Array<T> { [index: number]: T; readonly length: number }",
-    "interface ReadonlyArray<T> { readonly [index: number]: T; readonly length: number }",
-    `type Warmup = ${warmup};`,
-    `const VALUES = ${tuple};`,
-    "type Value = (typeof VALUES)[number];",
-  ].join("\n");
-  const native = nativeProject(
-    cwd,
-    [fileName],
-    { noLib: true, target: "esnext", types: [] },
-    {
-      [fileName]: source,
-    },
-  );
-  const { checker } = native.project;
-  const [warmupAlias, declaration] =
-    native.project.program.getSourceFile(fileName)?.statements.filter(ts.isTypeAliasDeclaration) ??
-    [];
-  if (!warmupAlias || !declaration) {
-    native.close();
-    throw new Error("Missing tuple fixture type aliases");
-  }
-  if (prewarm) {
-    checker.getTypeAtLocation(warmupAlias);
-  }
-  return { checker, declaration, [Symbol.dispose]: native.close };
 }
 
 it("normalizes declaration import paths to repo-relative paths", () => {
@@ -205,11 +165,31 @@ it("normalizes source paths under pnpm node_modules", () => {
   );
 });
 
-it("keeps tuple-derived unions stable across unrelated type discovery", () => {
-  using baseline = createTupleAliasFixture("[3, 1, 2] as const", "1", false);
-  using prewarmed = createTupleAliasFixture("[3, 1, 2] as const", "1", true);
-  expect(formatTypeAlias(baseline.checker, baseline.declaration)).toBe("3 | 1 | 2");
-  expect(formatTypeAlias(prewarmed.checker, prewarmed.declaration)).toBe("3 | 1 | 2");
+it.each([false, true])("keeps tuple unions stable with prior discovery: %s", (prewarm) => {
+  const cwd = tempDirs.make("openclaw-plugin-sdk-tuple-");
+  const fileName = path.join(cwd, "fixture.ts");
+  using native = nativeProject(
+    cwd,
+    [fileName],
+    { noLib: true, target: "esnext", types: [] },
+    {
+      [fileName]: `interface Array<T> { [index: number]: T; readonly length: number }
+interface ReadonlyArray<T> { readonly [index: number]: T; readonly length: number }
+type Warmup = 1;
+const VALUES = [3, 1, 2] as const;
+type Value = (typeof VALUES)[number];`,
+    },
+  );
+  const { checker, program } = native.project;
+  const [warmup, alias] =
+    program.getSourceFile(fileName)?.statements.filter(ts.isTypeAliasDeclaration) ?? [];
+  if (!warmup || !alias) {
+    throw new Error("Missing tuple fixture type aliases");
+  }
+  if (prewarm) {
+    checker.getTypeAtLocation(warmup);
+  }
+  expect(formatTypeAlias(checker, alias)).toBe("3 | 1 | 2");
 });
 
 it("preserves empty tuple defaults in public function signatures", async () => {
@@ -261,17 +241,13 @@ it("reads added and removed entrypoints from each revision's own inventory", asy
   ]);
   expectItems(addedDiff.exports, {
     change: "added",
-    declarationChanges: expect.arrayContaining([
-      expect.objectContaining({ after: expect.stringContaining("value: number") }),
-    ]),
+    declarationChanges: containingItems({ after: expect.stringContaining("value: number") }),
     entrypoint: "added",
     exportName: "createAdded",
   });
   expect(removedDiff.exports[0]).toMatchObject({
     change: "removed",
-    declarationChanges: expect.arrayContaining([
-      expect.objectContaining({ before: expect.stringContaining("value: number") }),
-    ]),
+    declarationChanges: containingItems({ before: expect.stringContaining("value: number") }),
   });
   expect(addedDiff.digest).not.toBe(diffApi(before, sameNamesDifferentContents).digest);
   expect(report(addedDiff)).toContain("value: number");
@@ -308,33 +284,23 @@ it("stores shared declaration detail once while retaining every affected export"
   const baseline = await render("text");
   const changed = await render("accountId");
 
-  for (const [surface, field] of [
-    [baseline, "text"],
-    [changed, "accountId"],
-  ] as const) {
-    expect(surface.declarationSections.map(({ name, text }) => [name, text])).toEqual([
-      ["PoolOptions", expect.stringContaining("value: number;")],
-      ["PoolOptions", expect.stringContaining("value: string;")],
-      ["SharedOptions", expect.stringContaining(`${field}: string;`)],
-      ["fixed", expect.stringContaining("function fixed(options: PoolOptions): void;")],
-      ["preview", expect.stringContaining("function preview(options: SharedOptions): void;")],
-      ["send", expect.stringContaining("function send(options: SharedOptions): void;")],
-    ]);
-    const references = surface.modules.flatMap(({ entrypoint, exports }) =>
-      exports.map(({ exportName, closureSectionIds }) => [
-        entrypoint,
-        exportName,
-        closureSectionIds,
-      ]),
-    );
-    expect(references).toEqual([
-      ["fixture", "preview", [2, 4]],
-      ["fixture", "send", [2, 5]],
-      ["pool-a", "fixed", [1, 3]],
-      ["pool-b", "fixed", [0, 3]],
-    ]);
-  }
-
+  expect(changed.declarationSections.map(({ name, text }) => [name, text])).toEqual([
+    ["PoolOptions", expect.stringContaining("value: number;")],
+    ["PoolOptions", expect.stringContaining("value: string;")],
+    ["SharedOptions", expect.stringContaining("accountId: string;")],
+    ["fixed", expect.stringContaining("function fixed(options: PoolOptions): void;")],
+    ["preview", expect.stringContaining("function preview(options: SharedOptions): void;")],
+    ["send", expect.stringContaining("function send(options: SharedOptions): void;")],
+  ]);
+  const references = changed.modules.flatMap(({ entrypoint, exports }) =>
+    exports.map(({ exportName, closureSectionIds }) => [entrypoint, exportName, closureSectionIds]),
+  );
+  expect(references).toEqual([
+    ["fixture", "preview", [2, 4]],
+    ["fixture", "send", [2, 5]],
+    ["pool-a", "fixed", [1, 3]],
+    ["pool-b", "fixed", [0, 3]],
+  ]);
   const diff = diffApi(baseline, changed);
   expect(diff.exports.map(({ change, exportName }) => ({ change, exportName }))).toEqual([
     { change: "reachable", exportName: "preview" },
@@ -418,29 +384,14 @@ it.skipIf(process.platform === "win32")(
       .mockImplementation((options) => {
         if (Object.keys(options.files ?? {}).some((file) => file.endsWith("fixture.ts"))) {
           observedOverlay = true;
-          const executables = ps("-axo", "pid=,comm=");
-          expect(executables.status).toBe(0);
-          const compilerName = path.basename(
-            nativeTypeScript.resolveInstalledNativeTypeScriptCompiler().executable,
-          );
-          const compilerPids = executables.stdout.split("\n").flatMap((line) => {
-            const match = /^\s*(\d+)\s+(.+)$/.exec(line);
-            return match && path.basename(match[2]!) === compilerName ? [match[1]!] : [];
-          });
-          if (compilerPids.length > 0) {
-            const processes = ps("-ww", "-p", compilerPids.join(","), "-o", "args=");
-            expect(processes.error).toBeUndefined();
-            expect(processes.stderr).toBe("");
-            expect([0, 1]).toContain(processes.status);
-            if (processes.status === 1) {
-              expect(processes.stdout).toBe("");
-            }
-            expect(
-              processes.stdout
-                .split("\n")
-                .filter((line) => line.includes("--api --async") && line.includes(options.cwd)),
-            ).toEqual([]);
-          }
+          const processes = ps("-ww", "-axo", "args=");
+          expect(processes.error).toBeUndefined();
+          expect([processes.status, processes.stderr]).toEqual([0, ""]);
+          expect(
+            processes.stdout
+              .split("\n")
+              .filter((line) => line.includes("--api --async") && line.includes(options.cwd)),
+          ).toEqual([]);
         }
         return createProject(options);
       });
@@ -462,17 +413,15 @@ it("renders a checkout reached through a symlinked alias", async () => {
     { symlinked: true },
   );
 
-  expect(baseline.modules).toEqual([
-    expect.objectContaining({
-      source: fixtureSource,
-      exports: [
-        expect.objectContaining({
-          exportName: "measure",
-          declaration: expect.stringContaining("export function measure(value: string): number;"),
-        }),
-      ],
-    }),
-  ]);
+  expectItems(baseline.modules, {
+    source: fixtureSource,
+    exports: [
+      expect.objectContaining({
+        exportName: "measure",
+        declaration: expect.stringContaining("export function measure(value: string): number;"),
+      }),
+    ],
+  });
 });
 
 it("fails when a declaration dependency cannot be resolved", async () => {
@@ -522,16 +471,12 @@ it("keeps hashes stable when unqualified declarations move", async () => {
 it("includes globals from side-effect imports in closure hashes", async () => {
   const render = (optionalValue: boolean) =>
     renderSourceFixture({
-      "fixture.ts": [
-        'import "./ambient.js";',
-        "export declare function createFixture(value: OpenClawBaselineFixtureGlobal): void;",
-      ].join("\n"),
-      "ambient.ts": [
-        "declare global {",
-        `  interface OpenClawBaselineFixtureGlobal { value${optionalValue ? "?" : ""}: string }`,
-        "}",
-        "export {};",
-      ].join("\n"),
+      "fixture.ts":
+        'import "./ambient.js";\nexport declare function createFixture(value: OpenClawBaselineFixtureGlobal): void;',
+      "ambient.ts": `declare global {
+  interface OpenClawBaselineFixtureGlobal { value${optionalValue ? "?" : ""}: string }
+}
+export {};`,
     });
   const baseline = await render(false);
   const changed = await render(true);
@@ -629,31 +574,19 @@ it("captures private shape changes while ignoring documentation and implementati
   const resultChanged = await renderPrivateDeclarationFixture({ optionalResult: true });
   const declaration = baseline.modules[0]?.exports[0];
 
-  expect(declaration).toEqual(
-    expect.objectContaining({
-      exportName: "createFixture",
-      kind: "function",
-      source: fixtureSource,
-    }),
-  );
+  expect(declaration).toMatchObject({
+    exportName: "createFixture",
+    kind: "function",
+    source: fixtureSource,
+    declaration: "export function createFixture(options: FixtureOptions): FixtureResult;",
+  });
   expect(declaration?.closureHash).toMatch(/^[a-f0-9]{64}$/u);
   expect(declaration?.closureSectionIds?.map((id) => baseline.declarationSections[id])).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({
-        name: "FixtureOptionLeaf",
-        text: expect.stringContaining("required: string"),
-      }),
-      expect.objectContaining({
-        name: "FixtureResult",
-        text: expect.stringContaining("FixtureResultLeaf"),
-      }),
-    ]),
+    containingItems(
+      { name: "FixtureOptionLeaf", text: expect.stringContaining("required: string") },
+      { name: "FixtureResult", text: expect.stringContaining("FixtureResultLeaf") },
+    ),
   );
-  expect(declaration?.declaration).toContain("FixtureOptions");
-  expect(declaration?.declaration).toContain("FixtureResult");
-  expect(declaration?.declaration).not.toContain("required: string;");
-  expect(declaration?.declaration).not.toContain("value: string;");
-  expect(declaration?.declaration).not.toContain("externalOnly: string;");
 
   for (const changed of [optionChanged, resultChanged]) {
     expect(changed.modules[0]?.exports[0]?.declaration).toBe(declaration?.declaration);

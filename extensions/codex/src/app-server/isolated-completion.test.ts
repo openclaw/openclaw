@@ -26,7 +26,13 @@ const authProfileStore: AuthProfileStore = {
   },
 };
 
-const createParams = () => isolatedParams(authProfileStore, "openai:test");
+const outputSchema = {
+  type: "object",
+  properties: { title: { type: "string" } },
+  required: ["title"],
+  additionalProperties: false,
+};
+const createParams = () => ({ ...isolatedParams(authProfileStore, "openai:test"), outputSchema });
 const authHandoff = { authProfileId: "openai:test", nativeAuthProfile: true };
 const expectCall = (mock: ReturnType<typeof vi.fn>, params: Record<string, unknown>) =>
   expect(mock).toHaveBeenCalledWith(expect.objectContaining(params));
@@ -46,6 +52,7 @@ function turn(items: unknown[], managedHooksEnabled?: boolean) {
   mocks.runBoundedTurn.mockResolvedValue({
     text: "Garden Planning",
     model: "gpt-5.4",
+    submittedInput: [{ type: "text", text: createParams().prompt, text_elements: [] }],
     usage: { input: 7, output: 3, cacheRead: 2, total: 10 },
     items,
     managedHooksEnabled,
@@ -89,6 +96,7 @@ describe("runCodexIsolatedCompletion", () => {
       requireNoExternalCapabilities: true,
       developerInstructions: "Name the conversation.",
       input: [{ type: "text", text: "Help me plan a garden.", text_elements: [] }],
+      outputSchema,
     });
     expect(mocks.runBoundedTurn.mock.calls[0]?.[0]).not.toHaveProperty("modelProvider");
   });
@@ -158,17 +166,13 @@ describe("runCodexIsolatedCompletion", () => {
     });
   });
 
-  it("rejects hook continuations without active managed attestation", async () => {
-    turn([hook("hook-1")]);
-
-    await expect(run()).rejects.toThrow("unexpected native item: hookPrompt");
-  });
-
-  it("rejects native tools even when managed hooks were attested", async () => {
-    turn([{ id: "tool", type: "commandExecution" }], true);
-
+  it.each([
+    ["hookPrompt", undefined],
+    ["commandExecution", true],
+  ] as const)("rejects native %s with managed attestation %s", async (type, attested) => {
+    turn([type === "hookPrompt" ? hook("hook-1") : { id: "tool", type }], attested);
     await expect(run()).rejects.toThrow(
-      "Codex isolated completion returned unexpected native item: commandExecution",
+      `Codex isolated completion returned unexpected native item: ${type}`,
     );
   });
 

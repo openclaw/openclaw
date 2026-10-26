@@ -55,6 +55,8 @@ export type ActiveInference = {
   seq: number;
   streamedBytes: number;
   launched: boolean;
+  /** Raw executor lifetime survives its earlier cancellation/terminal acknowledgment. */
+  execution?: Promise<void>;
   settled: boolean;
   abortReason?: WorkerInferenceErrorReason;
   begun?: Promise<Awaited<ReturnType<WorkerInferenceStore["begin"]>> | undefined>;

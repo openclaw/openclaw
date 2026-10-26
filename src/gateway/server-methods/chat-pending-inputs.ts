@@ -15,12 +15,12 @@ import {
   createCurrentUserProfileMessageProjector,
   projectChatDisplayMessage,
 } from "../chat-display-projection.js";
+import { replaceOversizedChatHistoryMessages } from "../chat-history-budget.js";
 import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
 import {
   captureRpcSourceScopeMatcher,
   type SessionRuntimeScope,
 } from "../session-runtime-scope.js";
-import { replaceOversizedChatHistoryMessages } from "./chat-history-budget.js";
 
 const PENDING_INPUT_DISPLAY_MAX_BYTES = 128 * 1024;
 // Correlation is useful for browser UUIDs, but arbitrary external run IDs must

@@ -14,10 +14,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { textResult } from "openclaw/plugin-sdk/tool-results";
 import type { BrowserProxyRequest } from "./browser-node-proxy.js";
-import {
-  type createBrowserToolSessionTabs,
-  stripBrowserOpenInternalMetadata,
-} from "./browser-tool-session-tabs.js";
+import type { createBrowserToolSessionTabs } from "./browser-tool-session-tabs.js";
 import type { BrowserToolCapabilities } from "./browser-tool.schema.js";
 import {
   executeScreenshotAction,
@@ -533,9 +530,10 @@ export async function executeBrowserTabAction(context: {
         readStringValue(opened.targetId),
         readStringValue(opened.resolvedProfile),
       );
+      const { ownership: _ownership, resolvedProfile: _resolvedProfile, ...agentVisible } = opened;
       return formatBrowserExternalToolResult({
         kind: "tabs",
-        payload: stripBrowserOpenInternalMetadata(opened),
+        payload: agentVisible,
       });
     }
     case "focus": {

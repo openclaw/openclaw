@@ -122,6 +122,7 @@ it("shows a failed configuration read and retries only when requested", async ()
   Object.assign(context, { runtimeConfig });
   const page = await mount(context);
   const initialLoad = runtimeConfig.ensureLoaded();
+  await waitForSolid(() => expect(configRead).toHaveBeenCalledOnce());
   firstRead.reject(new Error("Configuration temporarily unavailable"));
   await initialLoad;
   flush();
@@ -270,5 +271,78 @@ it("switches the learning mode through the config key", async () => {
   expect(runtimeConfig.patch).toHaveBeenCalledExactlyOnceWith({
     raw: { skills: { workshop: { autonomous: { mode: "off" } } } },
     note: "Disable Skill Workshop learning",
+  });
+});
+
+it("shows loading while retrying a failed library read", async () => {
+  const retry = createDeferredCore<SkillsWorkshopListResult>();
+  const read = vi
+    .fn()
+    .mockRejectedValueOnce(new Error("Library unavailable"))
+    .mockReturnValue(retry.promise);
+  const request = workshopGateway({
+    "skills.workshop.list": read,
+    "skills.workshop.read": skillRead,
+  });
+  const page = await mount(request);
+  await waitForSolid(() => expect(page.textContent).toContain("Library unavailable"));
+  button(page, "Retry")!.click();
+  await waitForSolid(() => {
+    expect(page.textContent).not.toContain("Library unavailable");
+    expect(page.querySelector(".settings-loading-skeleton")).not.toBeNull();
+  });
+  expect(button(page, "Learn from history")).toBeDefined();
+  retry.resolve(list);
+  await waitForSolid(() => expect(page.textContent).toContain("Synthetic procedure"));
+  expect(read).toHaveBeenCalledTimes(2);
+});
+
+it("retires a failed file read when another skill is selected", async () => {
+  const previous = createDeferredCore<typeof skillRead>();
+  const request = workshopGateway({
+    "skills.workshop.list": { ...list, skills: [skill, { ...skill, name: "release-notes" }] },
+    "skills.workshop.read": (params) =>
+      "name" in params && params.name === SKILL
+        ? previous.promise
+        : { ...skillRead, content: "Release notes procedure" },
+  });
+  const page = await mount(request);
+  await waitForSolid(() =>
+    expect(page.querySelector(".sw-detail__title")?.textContent).toBe(SKILL),
+  );
+  const next = Array.from(page.querySelectorAll<HTMLButtonElement>(".sw-row__main")).find((entry) =>
+    entry.textContent?.includes("release-notes"),
+  )!;
+  next.click();
+  await waitForSolid(() => expect(page.textContent).toContain("Release notes procedure"));
+  previous.reject(new Error("Retired file unavailable"));
+  await previous.promise.catch(() => undefined);
+  flush();
+  expect(page.textContent).not.toContain("Retired file unavailable");
+  expect(page.querySelector(".sw-detail__title")?.textContent).toBe("release-notes");
+});
+
+it("optimistically selects a learning mode and restores the owner value after rejection", async () => {
+  const patch = createDeferredCore<boolean>();
+  const runtimeConfig = createRuntimeConfigStub({
+    sourceConfig: { skills: { workshop: { autonomous: { mode: "auto" } } } },
+    patch: vi.fn(() => patch.promise),
+  });
+  runtimeConfig.state.lastError = "Mode update refused";
+  const page = await mount(workshopGateway({ "skills.workshop.read": skillRead }), {
+    methods: ["config.patch"],
+    runtimeConfig,
+  });
+  button(page, "Off")!.click();
+  await waitForSolid(() => {
+    expect(button(page, "Off")?.getAttribute("aria-pressed")).toBe("true");
+    expect(button(page, "Off")?.getAttribute("aria-disabled")).toBe("true");
+  });
+  expect(runtimeConfig.patch).toHaveBeenCalledOnce();
+  patch.resolve(false);
+  await waitForSolid(() => {
+    expect(button(page, "Auto")?.getAttribute("aria-pressed")).toBe("true");
+    expect(button(page, "Auto")?.getAttribute("aria-disabled")).toBeNull();
+    expect(page.textContent).toContain("Mode update refused");
   });
 });

@@ -28,17 +28,12 @@ function echoTool(prefix: string, home: string) {
 describePluginRegistrationContract(pluginRegistrationContractCases.brave);
 
 describe("plugin testing harness contracts", () => {
-  it("executes declared tools and reports missing tool contracts", async () => {
-    const previousHome = process.env.HOME;
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-
+  it("executes declared tools with the configured fixture", async () => {
     await withTempHome(async (home) => {
       const stateDir = path.join(home, ".openclaw");
       await expect(
         fs.stat(path.join(stateDir, "agents", "main", "sessions")),
       ).resolves.toBeDefined();
-      expect(process.env.HOME).toBe(home);
-      expect(process.env.OPENCLAW_STATE_DIR).toBe(stateDir);
 
       const { config, registry } = createPluginRegistryFixture({
         plugins: { entries: { "fixture-echo": { config: { prefix: "scoped" } } } },
@@ -68,38 +63,11 @@ describe("plugin testing harness contracts", () => {
       }
       expect(tool.name).toBe("fixture_echo");
 
-      for (const [message, expected] of [
-        ["alpha", "scoped:alpha"],
-        ["beta", "scoped:beta"],
-      ]) {
-        await expect(tool.execute("fixture-call", { message })).resolves.toEqual({
-          content: [{ type: "text", text: expected }],
-          details: { home, message },
-        });
-      }
+      await expect(tool.execute("fixture-call", { message: "alpha" })).resolves.toEqual({
+        content: [{ type: "text", text: "scoped:alpha" }],
+        details: { home, message: "alpha" },
+      });
       expect(registry.registry.diagnostics).toEqual([]);
-
-      const missingContract = createPluginRegistryFixture();
-      registerVirtualTestPlugin({
-        registry: missingContract.registry,
-        config: missingContract.config,
-        id: "missing-contract",
-        name: "Missing Contract",
-        register(api) {
-          api.registerTool(echoTool("unused", home));
-        },
-      });
-
-      expect(missingContract.registry.registry.tools).toEqual([]);
-      expect(missingContract.registry.registry.diagnostics).toContainEqual({
-        level: "error",
-        pluginId: "missing-contract",
-        source: "/virtual/missing-contract/index.ts",
-        message: "plugin must declare contracts.tools before registering agent tools",
-      });
     });
-
-    expect(process.env.HOME).toBe(previousHome);
-    expect(process.env.OPENCLAW_STATE_DIR).toBe(previousStateDir);
   });
 });

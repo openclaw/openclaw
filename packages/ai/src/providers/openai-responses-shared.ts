@@ -3,7 +3,7 @@ import type {
   ResponseCreateParamsStreaming,
   ResponseStreamEvent,
 } from "openai/resources/responses/responses.js";
-import type { BaseOpenAIStreamOptions } from "../provider-options.js";
+import { codeModeToolSurfaceObserver, type BaseOpenAIStreamOptions } from "../provider-options.js";
 import { prepareModelRequestBody } from "../transports/model-request-body.js";
 import {
   buildOpenAIResponsesReasoningReplayMetadata,
@@ -20,6 +20,11 @@ import { createResponsesStreamWithRecovery } from "../transports/openai-response
 import { hasOnlyResponsesFunctionTools } from "../transports/openai-responses-stream-errors.js";
 import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
 import type { ResponsesStreamOptions } from "../transports/openai-responses-stream-types-internal.js";
+import {
+  assertCodeModeResponsesToolSurface,
+  enforceCodeModeResponsesToolSurface,
+  resolveCodeModeResponsesVisibleToolNames,
+} from "../transports/openai-transport-params.js";
 import { createOpenAIProviderAcceptanceHook } from "../transports/openai-transport-shared.js";
 import {
   failTransportStream,
@@ -45,50 +50,12 @@ import { resolveOpenAIResponsesTextFormat } from "./openai-response-format.js";
 import { convertResponsesToolPayload } from "./openai-responses-tools.js";
 import { clampMaxTokensToModel } from "./simple-options.js";
 
-type OpenAIResponsesStreamOptions = Pick<
-  ResponsesStreamOptions,
-  "serviceTier" | "applyServiceTierPricing"
->;
-
 export { convertResponsesToolPayload };
 
 type ResponsesRequestOptions = {
   signal?: AbortSignal;
   timeout?: number;
   maxRetries?: number;
-};
-
-type ResponsesStreamRequest = {
-  withResponse(): Promise<{
-    data: AsyncIterable<ResponseStreamEvent>;
-    response: Response;
-  }>;
-};
-
-type ResponsesStreamClient = {
-  responses: {
-    create(
-      params: ResponseCreateParamsStreaming,
-      options: ResponsesRequestOptions,
-    ): ResponsesStreamRequest;
-  };
-};
-
-type ResponsesLifecycleStreamOptions = Pick<
-  StreamOptions,
-  "signal" | "timeoutMs" | "onPayload" | "onResponse" | "sessionId"
-> &
-  Pick<BaseOpenAIStreamOptions, "authProfileId" | "onCompactionRejected"> &
-  FirstStreamEventInternalOptions;
-
-type ResponsesReasoningSummary = "auto" | "detailed" | "concise" | null;
-
-type ResponsesCommonParamsOptions = Pick<
-  StreamOptions,
-  "maxTokens" | "temperature" | "responseFormat"
-> & {
-  reasoningEffort?: OpenAIRequestReasoningEffort;
-  reasoningSummary?: ResponsesReasoningSummary;
 };
 
 export {
@@ -124,7 +91,10 @@ export function applyCommonResponsesParams<TApi extends Api>(
     Pick<OpenAIResponsesRequestParams, "prompt_cache_options">,
   model: Model<TApi>,
   context: Context,
-  options?: ResponsesCommonParamsOptions,
+  options?: Pick<StreamOptions, "maxTokens" | "temperature" | "responseFormat" | "onPayload"> & {
+    reasoningEffort?: OpenAIRequestReasoningEffort;
+    reasoningSummary?: "auto" | "detailed" | "concise" | null;
+  },
   config?: { setDefaultReasoningOff?: boolean },
 ): void {
   if (options?.maxTokens) {
@@ -143,7 +113,10 @@ export function applyCommonResponsesParams<TApi extends Api>(
   }
 
   if (context.tools) {
-    const tools = convertResponsesToolPayload(context.tools, { model });
+    const tools = convertResponsesToolPayload(context.tools, {
+      model,
+      mutableParameters: Boolean(options?.onPayload),
+    });
     if (tools.length > 0) {
       params.tools = tools;
     }
@@ -180,14 +153,35 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
   stream: AssistantMessageEventStream;
   model: Model<TApi>;
   output: AssistantMessage;
-  options?: ResponsesLifecycleStreamOptions;
+  context?: Pick<Context, "tools">;
+  options?: Pick<StreamOptions, "signal" | "timeoutMs" | "onPayload" | "onResponse" | "sessionId"> &
+    Pick<
+      BaseOpenAIStreamOptions,
+      | "authProfileId"
+      | "onCompactionRejected"
+      | "openclawCodeModeToolSurface"
+      | "openclawCodeModeAllowedHostedToolTypes"
+    > &
+    FirstStreamEventInternalOptions;
   resolveRequestModel?: (model: Model<TApi>) => Model<TApi>;
-  createClient: (model: Model<TApi>) => ResponsesStreamClient;
+  createClient: (model: Model<TApi>) => {
+    responses: {
+      create(
+        params: ResponseCreateParamsStreaming,
+        options: ResponsesRequestOptions,
+      ): {
+        withResponse(): Promise<{
+          data: AsyncIterable<ResponseStreamEvent>;
+          response: Response;
+        }>;
+      };
+    };
+  };
   buildParams: (
     model: Model<TApi>,
     replayMode: OpenAIResponsesReplayMode,
   ) => OpenAIResponsesRequestParams;
-  processStreamOptions?: OpenAIResponsesStreamOptions;
+  processStreamOptions?: Pick<ResponsesStreamOptions, "serviceTier" | "applyServiceTierPricing">;
 }): Promise<void> {
   const { stream, output, options } = params;
 
@@ -201,6 +195,17 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
       const nextRequest = await options?.onPayload?.(request, model);
       if (nextRequest !== undefined) {
         request = nextRequest as OpenAIResponsesRequestParams;
+      }
+      if (options?.openclawCodeModeToolSurface === true) {
+        const visibleToolNames = resolveCodeModeResponsesVisibleToolNames(params.context ?? {});
+        const allowedHostedToolTypes = options.openclawCodeModeAllowedHostedToolTypes;
+        enforceCodeModeResponsesToolSurface(
+          request,
+          visibleToolNames,
+          allowedHostedToolTypes,
+          codeModeToolSurfaceObserver.get(options),
+        );
+        assertCodeModeResponsesToolSurface(request, visibleToolNames, allowedHostedToolTypes);
       }
       return request;
     };

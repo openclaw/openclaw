@@ -1,4 +1,7 @@
 import type { ChannelIngressQueueRecord } from "openclaw/plugin-sdk/channel-outbound";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type { TelegramSpooledReplayDeferredParticipant } from "./bot-processing-outcome.js";
+import { commitTelegramMessageDispatchReplay } from "./message-dispatch-dedupe.js";
 import { getTelegramSequentialKey } from "./sequential-key.js";
 import {
   openTelegramIngressQueue,
@@ -11,6 +14,67 @@ import {
 } from "./telegram-ingress-spool.payload.js";
 
 type QueueScope = { stateDir: string; accountId?: string };
+
+export function createHeldTelegramReplay(operation: "commit" | "rollback" | "introduction") {
+  const operationStarted = createDeferred<void>();
+  const releaseOperation = createDeferred<void>();
+  const recorded = new Set<string>();
+  const wait = async () => {
+    operationStarted.resolve();
+    await releaseOperation.promise;
+  };
+  return {
+    operationStarted,
+    releaseOperation,
+    recorded,
+    async settle(participant: TelegramSpooledReplayDeferredParticipant) {
+      const hold = participant.beginSettlementHold();
+      if (!hold) {
+        throw new Error("Expected accepted replay settlement ownership");
+      }
+      try {
+        if (operation === "introduction") {
+          await wait();
+          recorded.add("introduction");
+        } else {
+          await commitTelegramMessageDispatchReplay({
+            requirePersistent: true,
+            guard: {
+              claim: async () => ({ kind: "invalid" }),
+              warmup: async () => 0,
+              forget: async (event) => {
+                await wait();
+                for (const key of "keys" in event ? (event.keys ?? []) : []) {
+                  recorded.delete(key);
+                }
+                return true;
+              },
+            },
+            claims: ["first", "second"].map((key) => ({
+              keys: [key],
+              commit: async (options) => {
+                if (operation === "commit" && key === "first") {
+                  await wait();
+                }
+                recorded.add(key);
+                if (operation === "rollback" && key === "second") {
+                  options?.onDiskError?.(new Error("synthetic commit failure"));
+                }
+                return true;
+              },
+              release: () => undefined,
+            })),
+          });
+        }
+        hold.release("discard-pending");
+        participant.settle({ kind: "completed" });
+      } catch (error) {
+        hold.release("replay-pending");
+        participant.settle({ kind: "failed-retryable", error });
+      }
+    },
+  };
+}
 
 export function telegramSpooledUpdateLaneKey(update: unknown): string {
   return getTelegramSequentialKey({

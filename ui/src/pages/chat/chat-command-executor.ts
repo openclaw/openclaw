@@ -58,8 +58,6 @@ type SlashCommandResult = {
   action?: "refresh";
   /** When set, the caller should track this as the active run (enables Abort, blocks concurrent sends). */
   trackRunId?: string;
-  /** When set, the caller should surface a visible pending item tied to the current run. */
-  pendingCurrentRun?: boolean;
   /** The command did not complete and a durable queued invocation may be retried. */
   failed?: boolean;
 };
@@ -617,12 +615,8 @@ async function executeRunCommand(
       };
     }
     const result: SlashCommandResult = { content: t(`chat.commandResults.${command}.succeeded`) };
-    if (ackStatus === "started" || ackStatus === "in_flight") {
-      if (command === "steer") {
-        result.pendingCurrentRun = true;
-      } else {
-        result.trackRunId = typeof response?.runId === "string" ? response.runId : undefined;
-      }
+    if (command === "redirect" && (ackStatus === "started" || ackStatus === "in_flight")) {
+      result.trackRunId = typeof response?.runId === "string" ? response.runId : undefined;
     }
     return result;
   } catch (err) {

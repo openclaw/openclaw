@@ -1,9 +1,6 @@
 // Handles device/node-originated events and routes them to sessions/channels.
 import { randomUUID } from "node:crypto";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Value } from "typebox/value";
 import {
   validateNodeHostStatsPayload,
@@ -11,21 +8,22 @@ import {
 } from "../../packages/gateway-protocol/src/index.js";
 import { DesktopAvailabilitySchema } from "../../packages/gateway-protocol/src/schema/environments.js";
 import { resolveSessionAgentId } from "../agents/agent-scope.js";
+import { captureSessionEventTargetForHost } from "../auto-reply/reply/session-event-handoff.js";
 import { sendDurableMessageBatchCore } from "../channels/message/runtime.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
 import { getRuntimeConfig } from "../config/io.js";
-import { resolveSystemMainSessionTarget } from "../config/sessions/main-session.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { updatePairedDevicePresence } from "../infra/device-pairing.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { requestHeartbeat } from "../infra/heartbeat-wake.js";
+import {
+  resolveEventSessionKeyForPolicy,
+  resolveEventSessionRoutingPolicy,
+} from "../infra/event-session-routing.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { resolveOutboundTarget } from "../infra/outbound/targets.js";
-import { withSystemEventOwner } from "../infra/system-event-ownership.js";
-import { enqueueSystemEvent } from "../infra/system-events.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import { deleteMediaBuffer } from "../media/store.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../process/gateway-work-admission.js";
@@ -39,7 +37,6 @@ import {
   NODE_PRESENCE_ACTIVITY_EVENT,
   normalizeNodePresenceAliveReason,
 } from "../shared/node-presence.js";
-import { truncateUtf16WithEllipsis } from "../shared/text-truncate.js";
 import { deliveryContextFromSession } from "../utils/delivery-context.read.js";
 import { resolveChatAttachmentMaxBytes } from "./chat-attachment-policy.js";
 import {
@@ -49,6 +46,8 @@ import {
 } from "./chat-attachments.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./server-methods/attachment-normalize.js";
 import {
+  captureNodeEventConfig,
+  compactNodeEventText,
   withNodeEventSessionSource,
   isNodeEventConnectionCurrent,
   pairingChangedResult,
@@ -57,6 +56,7 @@ import {
 } from "./server-node-event-source.js";
 import { registerNodeApnsEvent } from "./server-node-events-apns.js";
 import { enqueueNodeExecNotice } from "./server-node-events-exec-notice.js";
+import { handleNodeNotificationEvent } from "./server-node-events-notifications.js";
 import type {
   NodeEvent,
   NodeEventContext,
@@ -69,7 +69,6 @@ import { resolveGatewayModelSupportsImages, resolveSessionModelRef } from "./ses
 import { formatForLog } from "./ws-log.js";
 
 const MAX_EXEC_EVENT_OUTPUT_CHARS = 180;
-const MAX_NOTIFICATION_EVENT_TEXT_CHARS = 120;
 const VOICE_TRANSCRIPT_DEDUPE_WINDOW_MS = 1500;
 const MAX_RECENT_VOICE_TRANSCRIPTS = 200;
 const EXEC_FINISHED_RUN_DEDUPE_WINDOW_MS = 10 * 60 * 1000;
@@ -97,27 +96,6 @@ type NodeAgentCommandInput = Parameters<typeof agentCommandFromIngress>[0];
 
 function normalizeFiniteInteger(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? Math.trunc(value) : null;
-}
-
-function dispatchNodeAgentCommand(
-  ctx: NodeEventContext,
-  nodeId: string,
-  input: NodeAgentCommandInput,
-  isConnectionCurrent?: () => boolean | Promise<boolean>,
-  onAdmissionRejected?: () => void | Promise<void>,
-): Promise<void> {
-  // The node RPC can finish before the agent starts its own session admission.
-  // Reserve a root now so suspension cannot acknowledge and then strand the turn,
-  // but recheck the admitted connection before agent work actually starts.
-  return runWithGatewayIndependentRootWorkContinuation(async () => {
-    if (isConnectionCurrent && !(await isConnectionCurrent())) {
-      await onAdmissionRejected?.();
-      return;
-    }
-    await agentCommandFromIngress(input, defaultRuntime, ctx.deps);
-  }, "node-events:agent-turn").catch((err: unknown) => {
-    ctx.logGateway.warn(`agent failed node=${nodeId}: ${formatForLog(err)}`);
-  });
 }
 
 function resolveVoiceTranscriptFingerprint(obj: Record<string, unknown>, text: string): string {
@@ -227,10 +205,6 @@ function pruneBoundedTimestampMap(
     }
   }
   pruneMapToMaxSize(map, params.maxEntries);
-}
-
-function compactNodeEventText(raw: string, maxChars: number) {
-  return truncateUtf16WithEllipsis(raw.replace(/\s+/g, " ").trim(), maxChars);
 }
 
 type LoadedSessionEntry = Awaited<ReturnType<typeof loadGatewaySessionEntryReadOnlyInWorker>>;
@@ -706,115 +680,46 @@ async function handlePreparedNodeEvent(
       }
 
       source?.assertCurrent();
-      const agentWork = dispatchNodeAgentCommand(
-        ctx,
-        nodeId,
-        {
-          runId: sessionId,
-          message,
-          images,
-          imageOrder,
-          ...(transcriptMedia.length > 0 ||
-          persistedTranscriptMedia.omission === "inline-image-save-failed"
-            ? { transcriptMessage, ...(transcriptMedia.length > 0 ? { transcriptMedia } : {}) }
-            : {}),
-          sessionId,
-          sessionKey: canonicalKey,
-          thinking: link?.thinking ?? undefined,
-          deliver,
-          to: deliveryTo,
-          channel: deliveryChannel,
-          timeout:
-            typeof link?.timeoutSeconds === "number" ? link.timeoutSeconds.toString() : undefined,
-          messageChannel: "node",
-          allowModelOverride: false,
-        },
-        opts?.isConnectionCurrent,
-        () => cleanupNodeEventMedia(persistedTranscriptMedia.entries, ctx),
-      );
+      const nodeAgentInput: NodeAgentCommandInput = {
+        runId: sessionId,
+        message,
+        images,
+        imageOrder,
+        ...(transcriptMedia.length > 0 ||
+        persistedTranscriptMedia.omission === "inline-image-save-failed"
+          ? { transcriptMessage, ...(transcriptMedia.length > 0 ? { transcriptMedia } : {}) }
+          : {}),
+        sessionId,
+        sessionKey: canonicalKey,
+        thinking: link?.thinking ?? undefined,
+        deliver,
+        to: deliveryTo,
+        channel: deliveryChannel,
+        timeout:
+          typeof link?.timeoutSeconds === "number" ? link.timeoutSeconds.toString() : undefined,
+        messageChannel: "node",
+        allowModelOverride: false,
+      };
+      const nodeAdmissionConnectionCurrent = opts?.isConnectionCurrent;
+      const onNodeAdmissionRejected = () =>
+        cleanupNodeEventMedia(persistedTranscriptMedia.entries, ctx);
+      // The node RPC can finish before the agent starts its own session admission.
+      // Reserve a root now so suspension cannot acknowledge and then strand the turn,
+      // but recheck the admitted connection before agent work actually starts.
+      const agentWork = runWithGatewayIndependentRootWorkContinuation(async () => {
+        if (nodeAdmissionConnectionCurrent && !(await nodeAdmissionConnectionCurrent())) {
+          await onNodeAdmissionRejected();
+          return;
+        }
+        await agentCommandFromIngress(nodeAgentInput, defaultRuntime, ctx.deps);
+      }, "node-events:agent-turn").catch((err: unknown) => {
+        ctx.logGateway.warn(`agent failed node=${nodeId}: ${formatForLog(err)}`);
+      });
       source?.pending.push(agentWork);
       return undefined;
     }
-    case "notifications.changed": {
-      const obj = parseNodeEventPayload(evt.payloadJSON);
-      if (!obj) {
-        return undefined;
-      }
-      const change = normalizeLowercaseStringOrEmpty(obj.change);
-      if (change !== "posted" && change !== "removed") {
-        return undefined;
-      }
-      const key = normalizeOptionalString(obj.key);
-      if (!key) {
-        return undefined;
-      }
-      const requestedSessionKey = normalizeOptionalString(obj.sessionKey);
-      let target: { sessionKey: string; agentId?: string };
-      try {
-        target = requestedSessionKey
-          ? { sessionKey: requestedSessionKey }
-          : resolveSystemMainSessionTarget(getRuntimeConfig());
-      } catch (error) {
-        ctx.logGateway.warn(
-          `notification event not delivered node=${nodeId}: ${formatErrorMessage(error)}`,
-        );
-        return undefined;
-      }
-      const {
-        canonicalKey: sessionKey,
-        entry,
-        agentId,
-      } = source?.loaded ??
-      (await loadGatewaySessionEntryReadOnlyInWorker({
-        cfg: getRuntimeConfig(),
-        key: target.sessionKey,
-        agentId: target.agentId,
-        excludeInternalEffects: true,
-      }));
-      if (resolveAgentHarnessSessionContextError(sessionKey, entry)) {
-        return undefined;
-      }
-      const packageName = normalizeOptionalString(obj.packageName);
-      const title = compactNodeEventText(
-        normalizeOptionalString(obj.title) ?? "",
-        MAX_NOTIFICATION_EVENT_TEXT_CHARS,
-      );
-      const text = compactNodeEventText(
-        normalizeOptionalString(obj.text) ?? "",
-        MAX_NOTIFICATION_EVENT_TEXT_CHARS,
-      );
-
-      let summary = `Notification ${change} (node=${nodeId} key=${key}`;
-      if (packageName) {
-        summary += ` package=${packageName}`;
-      }
-      summary += ")";
-      if (change === "posted") {
-        const messageParts = [title, text].filter(Boolean);
-        if (messageParts.length > 0) {
-          summary += `: ${messageParts.join(" - ")}`;
-        }
-      }
-
-      if (!(await isNodeEventConnectionCurrent(opts))) {
-        return pairingChangedResult(evt.event);
-      }
-      source?.assertCurrent();
-      const queued = enqueueSystemEvent(
-        summary,
-        withSystemEventOwner({ sessionKey, contextKey: `notification:${key}` }, agentId),
-      );
-      if (queued) {
-        requestHeartbeat({
-          source: "notifications-event",
-          intent: "event",
-          reason: "notifications-event",
-          agentId,
-          sessionKey,
-        });
-      }
-      return undefined;
-    }
+    case "notifications.changed":
+      return handleNodeNotificationEvent(ctx, nodeId, evt, opts, source);
     case "chat.subscribe":
     case "chat.unsubscribe": {
       const sessionKey = normalizeOptionalString(
@@ -840,12 +745,20 @@ async function handlePreparedNodeEvent(
         return undefined;
       }
       const sessionKeyRaw = normalizeOptionalString(obj.sessionKey) ?? `node-${nodeId}`;
-      const cfg = getRuntimeConfig();
+      const config = captureNodeEventConfig();
+      const { cfg } = config;
       const { canonicalKey: sessionKey, agentId } = resolveSessionStoreIdentity({
         cfg,
         sessionKey: sessionKeyRaw,
       });
       const runId = normalizeOptionalString(obj.runId) ?? "";
+      const policy = resolveEventSessionRoutingPolicy({ cfg, sessionKey });
+      const eventSessionKey = resolveEventSessionKeyForPolicy(sessionKey, policy);
+      const assertAcceptanceCurrent = () => {
+        config.assertCurrent();
+        opts?.assertSessionEventCurrent?.();
+      };
+      assertAcceptanceCurrent();
       const auth = ctx.authorizeNodeSystemRunEvent({
         nodeId,
         connId: opts?.connId,
@@ -888,29 +801,61 @@ async function handlePreparedNodeEvent(
         if (!shouldNotify) {
           return undefined;
         }
-        if (
-          runId &&
-          shouldDropDuplicateExecFinished({
-            sessionKey,
-            runId,
-            now: Date.now(),
-          })
-        ) {
-          return undefined;
-        }
         text = `Exec finished (node=${nodeId}${runId ? ` id=${runId}` : ""}, ${exitLabel})`;
         if (compactOutput) {
           text += `\n${compactOutput}`;
         }
       }
 
-      const notify = () =>
-        enqueueNodeExecNotice({ cfg, sessionKey, agentId, authorization: auth, runId, text });
+      const notify = async () => {
+        const expectedTarget = await captureSessionEventTargetForHost(agentId, eventSessionKey, {
+          assertCaptureCurrent: assertAcceptanceCurrent,
+        });
+        if (!(await isNodeEventConnectionCurrent(opts))) {
+          return pairingChangedResult(evt.event);
+        }
+        assertAcceptanceCurrent();
+        if (
+          evt.event === "exec.finished" &&
+          runId &&
+          shouldDropDuplicateExecFinished({ sessionKey, runId, now: Date.now() })
+        ) {
+          return undefined;
+        }
+        const receipt = enqueueNodeExecNotice({
+          sessionKey: eventSessionKey,
+          agentId,
+          authorization: auth,
+          runId,
+          text,
+          expectedTarget,
+          // The registry accepted this notice before the node connection could depart.
+          assertAcceptanceCurrent: config.assertCurrent,
+        });
+        if (receipt) {
+          const accepted = await receipt.accepted;
+          if (!accepted.ok) {
+            throw new Error(accepted.error);
+          }
+          void receipt.settled.then((outcome) => {
+            if (outcome.status !== "completed") {
+              ctx.logGateway.warn(`exec event not delivered node=${nodeId}: ${outcome.status}`);
+            }
+          });
+        }
+        return undefined;
+      };
       // A caller still waiting on this run gets its output inline; notify only if that fails.
       if (typeof auth === "object" && auth.holdNotice) {
-        auth.holdNotice(notify);
+        auth.holdNotice(() => {
+          void notify().catch((error: unknown) => {
+            ctx.logGateway.warn(
+              `exec event not delivered node=${nodeId}: ${formatErrorMessage(error)}`,
+            );
+          });
+        });
       } else {
-        notify();
+        return await notify();
       }
       return undefined;
     }

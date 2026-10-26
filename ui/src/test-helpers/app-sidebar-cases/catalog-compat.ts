@@ -58,7 +58,7 @@ describe("AppSidebar session catalog pagination", () => {
   });
 
   it.each(["empty", "catalog error", "host error", "native start"] as const)(
-    "hides empty catalogs (%s)",
+    "shows failures for empty catalogs while hiding healthy empty catalogs (%s)",
     async (state) => {
       const codex = catalogPage([]);
       const claude = catalogPage([], undefined, "claude");
@@ -80,8 +80,25 @@ describe("AppSidebar session catalog pagination", () => {
       const dom = domProbe(sidebar);
       await sidebar.updateComplete;
 
-      expect(dom.query('[data-session-section="catalog:codex"]')).toBeNull();
-      expect(dom.query('[data-session-section="catalog:claude"]')).toBeNull();
+      for (const id of ["codex", "claude"]) {
+        const section = dom.query(`[data-session-section="catalog:${id}"]`);
+        if (state === "catalog error" || state === "host error") {
+          expect(section).not.toBeNull();
+          expect(section?.querySelector(`[data-session-catalog-error="${id}"]`)).not.toBeNull();
+          expect(section?.querySelector(".sidebar-recent-sessions__list")?.childElementCount).toBe(
+            0,
+          );
+          expect(
+            section?.querySelector(".sidebar-session-group-toggle")?.getAttribute("aria-label"),
+          ).toContain(
+            state === "catalog error"
+              ? "[UNAVAILABLE] Catalog unavailable"
+              : "[NODE_INVOKE_FAILED] Node unavailable",
+          );
+        } else {
+          expect(section).toBeNull();
+        }
+      }
     },
   );
 

@@ -2,11 +2,10 @@ import { validateJsonSchemaValue } from "openclaw/plugin-sdk/json-schema-runtime
 import { describe, expect, it } from "vitest";
 import { resolveUpgradeSurvivorConfigStepsForBaseline } from "../../../scripts/e2e/lib/upgrade-survivor/config-recipe.mts";
 import { DiscordChannelConfigSchema } from "../channel-config-api.js";
-import { DiscordConfigSchema } from "../config-api.js";
+import { DiscordConfigSchema as schema } from "../config-api.js";
 
-function expectInvalidDiscordConfig(config: unknown) {
-  const res = DiscordConfigSchema.safeParse(config);
-  expect(res.success).toBe(false);
+function invalid(config: unknown) {
+  const res = schema.safeParse(config);
   if (res.success) {
     throw new Error("expected Discord config to be invalid");
   }
@@ -29,11 +28,11 @@ describe("discord config schema", () => {
         ? payload.find((entry: { path: string }) => entry.path === "channels.discord")?.value
         : payload;
     expect(discord).toBeDefined();
-    expect(discord.dm).toEqual(
-      legacy ? { policy: "allowlist", allowFrom: ["111111111111111111"] } : undefined,
+    expect([discord.dm, discord.dmPolicy, discord.allowFrom]).toEqual(
+      legacy
+        ? [{ policy: "allowlist", allowFrom: ["111111111111111111"] }, undefined, undefined]
+        : [undefined, "allowlist", ["111111111111111111"]],
     );
-    expect(discord.dmPolicy).toBe(legacy ? undefined : "allowlist");
-    expect(discord.allowFrom).toEqual(legacy ? undefined : ["111111111111111111"]);
     // The public schema is the config-set boundary; runtime Zod preprocessing
     // would silently normalize the legacy specimen and miss a bad baseline cutoff.
     expect(
@@ -46,20 +45,19 @@ describe("discord config schema", () => {
   });
 
   it('rejects dmPolicy="open" without allowFrom "*"', () => {
-    const issues = expectInvalidDiscordConfig({ dmPolicy: "open", allowFrom: ["123"] });
-
+    const issues = invalid({ dmPolicy: "open", allowFrom: ["123"] });
     expect(issues[0]?.path.join(".")).toBe("allowFrom");
   });
 
   it('rejects dmPolicy="allowlist" without allowFrom', () => {
-    const issues = expectInvalidDiscordConfig({ dmPolicy: "allowlist" });
+    const issues = invalid({ dmPolicy: "allowlist" });
     expect(issues.some((issue) => issue.path.includes("allowFrom"))).toBe(true);
   });
 
   it("normalizes shipped nested DM access keys at root and account scope", () => {
     const rootAccess = { dmPolicy: "pairing", allowFrom: ["canonical-root"] };
     const workAccess = { dmPolicy: "allowlist", allowFrom: ["canonical-account"] };
-    const cfg = DiscordConfigSchema.parse({
+    const cfg = schema.parse({
       ...rootAccess,
       dm: { enabled: false, policy: "open", allowFrom: ["legacy-root"] },
       accounts: {
@@ -73,22 +71,23 @@ describe("discord config schema", () => {
       },
     });
 
-    expect(cfg).toMatchObject({ ...rootAccess, dm: { enabled: false } });
-    expect(cfg.accounts?.work).toMatchObject({ ...workAccess, dm: { groupEnabled: true } });
-    expect(cfg.accounts?.personal).toMatchObject({
-      dmPolicy: "open",
-      allowFrom: ["*"],
-      dm: { enabled: true },
+    expect(cfg).toMatchObject({
+      ...rootAccess,
+      dm: { enabled: false },
+      accounts: {
+        work: { ...workAccess, dm: { groupEnabled: true } },
+        personal: { dmPolicy: "open", allowFrom: ["*"], dm: { enabled: true } },
+      },
     });
-    expectInvalidDiscordConfig({ dm: { enabled: false, unexpected: true } });
+    invalid({ dm: { enabled: false, unexpected: true } });
   });
 
   it("defaults groupPolicy to allowlist", () => {
-    expect(DiscordConfigSchema.parse({}).groupPolicy).toBe("allowlist");
+    expect(schema.parse({}).groupPolicy).toBe("allowlist");
   });
 
   it("accepts Discord application IDs at top-level and account scope", () => {
-    const cfg = DiscordConfigSchema.parse({
+    const cfg = schema.parse({
       applicationId: "123456789012345678",
       accounts: { work: { applicationId: 234567890123456 } },
     });
@@ -115,17 +114,16 @@ describe("discord config schema", () => {
       { agentSession: { mode: "target" } },
       { followUsers: [""] },
     ]) {
-      expectInvalidDiscordConfig({ voice });
+      invalid({ voice });
     }
   });
 
   it("rejects numeric IDs that are not valid non-negative safe integers", () => {
     for (const id of [106232522769186816, -1, 123.45]) {
-      const issues = expectInvalidDiscordConfig({ allowFrom: [id] });
-
-      expect(
-        issues.some((issue) => issue.message.includes("not a valid non-negative safe integer")),
-      ).toBe(true);
+      const issues = invalid({ allowFrom: [id] });
+      expect(issues.map(({ message }) => message)).toContainEqual(
+        expect.stringContaining("not a valid non-negative safe integer"),
+      );
     }
   });
 
@@ -134,6 +132,6 @@ describe("discord config schema", () => {
     ["URL without streaming", { activity: "Live", activityUrl: "https://twitch.tv/openclaw" }],
     ["inverted intervals", { autoPresence: { intervalMs: 5000, minUpdateIntervalMs: 6000 } }],
   ] as const)("rejects %s", (_name, config) => {
-    expect(DiscordConfigSchema.safeParse(config).success).toBe(false);
+    expect(schema.safeParse(config).success).toBe(false);
   });
 });

@@ -6,7 +6,10 @@ import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js"
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import { buildDefaultTestCliBackend } from "../../agents/cli-runner.test-helpers.js";
 import { FailoverError } from "../../agents/failover-error.js";
+import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ScheduledOccurrence } from "../scheduled-occurrence.js";
+import { TEST_SCHEDULED_OCCURRENCE } from "../scheduled-occurrence.test-support.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import * as harness from "./run.test-harness.js";
 
@@ -47,6 +50,7 @@ describe("cron isolated-agent sandbox placement admission", () => {
     model?: string,
     sessionKey = "existing-cron-session",
     agentModel?: string,
+    child?: { occurrence: ScheduledOccurrence },
   ) {
     const cfg: OpenClawConfig = {
       session: { store: path.join(tempDir, "sessions.json") },
@@ -63,9 +67,10 @@ describe("cron isolated-agent sandbox placement admission", () => {
         agentId: "main",
         sessionKey,
         message: "summarize",
+        ...(child ? { occurrence: child.occurrence } : {}),
         job: makeIsolatedAgentJobFixture({
           agentId: "main",
-          sessionTarget: `session:${sessionKey}`,
+          sessionTarget: child ? "isolated" : `session:${sessionKey}`,
           payload: { kind: "agentTurn", message: "summarize", ...(model ? { model } : {}) },
         }),
       }),
@@ -207,6 +212,43 @@ describe("cron isolated-agent sandbox placement admission", () => {
       expect(harness.runEmbeddedAgentMock).toHaveBeenCalledTimes(fallback ? 1 : 0);
     },
   );
+
+  // The root row predates the parent's requirement; only the occurrence carries it.
+  function useExistingUnstampedRoot() {
+    // A persisted root keeps its row: creation metadata applies only to new rows.
+    replaceSessionEntrySync(
+      { sessionKey: "agent:main:cron:test-job", storePath: path.join(tempDir, "sessions.json") },
+      { sessionId, updatedAt: Date.now() },
+    );
+    harness.resolveCronSessionMock.mockReturnValue(
+      harness.makeCronSession({
+        storePath: path.join(tempDir, "sessions.json"),
+        sessionEntry: harness.makeCronSessionEntry({ sessionId }),
+        isNewSession: false,
+      }),
+    );
+  }
+  const childOf = (sandbox?: "required"): { occurrence: ScheduledOccurrence } => ({
+    occurrence: {
+      ...TEST_SCHEDULED_OCCURRENCE,
+      childParent: { ...(sandbox ? { sandbox } : {}), assertCurrent: () => {} },
+    },
+  });
+  const cliDefaults: AgentDefaults = { subagents: { model: "test-cli/claude-x" } };
+
+  it("fails closed before CLI launch for an existing unstamped root whose parent requires a sandbox", async () => {
+    useExistingUnstampedRoot();
+    expectSandboxRejection(
+      await run(cliDefaults, undefined, undefined, undefined, childOf("required")),
+    );
+  });
+
+  it("launches the CLI for an existing root whose parent does not require a sandbox", async () => {
+    useExistingUnstampedRoot();
+    const result = await run(cliDefaults, undefined, undefined, undefined, childOf());
+    expect([result.status, result.error]).toEqual(["ok", undefined]);
+    expect(fs.existsSync(markerPath)).toBe(true);
+  });
 
   it("admits a sandboxed session when per-agent subagents.model overrides the global CLI default", async () => {
     const result = await run(

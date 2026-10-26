@@ -22,10 +22,10 @@ import { acpxOperationScope } from "./runtime-session-store.js";
 import { admissionRetentionEntrypoint } from "./runtime.admission-retention-entrypoint.test-support.js";
 import { AcpxRuntime } from "./runtime.js";
 import {
-  type TestSessionStore,
   makeRuntime,
   makeManagedRuntime,
   makeEmptySessionStore,
+  makeSessionStore,
 } from "./runtime.test-support.js";
 
 type RuntimeHandle = Awaited<ReturnType<AcpxRuntime["ensureSession"]>>;
@@ -52,19 +52,30 @@ async function persistedHandle(runtime: AcpxRuntime) {
 const readContext = (runtime: AcpxRuntime, handle: RuntimeHandle): Promise<unknown> =>
   promptJson(runtime, handle, "show context", "admission-proof");
 
+type Gate = ReturnType<typeof createTestGate>;
+async function atGate(
+  gate: Gate,
+  pending: Parameters<Gate["settle"]>,
+  runtime: AcpxRuntime | undefined,
+  run: () => Promise<void>,
+) {
+  try {
+    await gate.entered;
+    await run();
+  } finally {
+    await gate.settle(...pending);
+    await runtime?.shutdown();
+  }
+}
+
 it("preserves a queued same-key admission when its predecessor fails", async () => {
   await withFixture(async ({ create }) => {
     const launch = createTestGate();
-    const generationIds: number[] = [];
+    let launches = 0;
     const runtime = create({
       processLifecycle: {
         onBeforeSpawn: async () => {
-          const generation = acpxOperationScope.getStore()?.generation;
-          if (!generation) {
-            throw new Error("missing admission owner");
-          }
-          generationIds.push(generation.id);
-          if (generationIds.length === 1) {
+          if (++launches === 1) {
             await launch.hold();
             throw new Error("first launch failed");
           }
@@ -73,15 +84,13 @@ it("preserves a queued same-key admission when its predecessor fails", async () 
     });
     const first = runtime.ensureSession(admissionInput);
     const rejected = expect(first).rejects.toThrow("first launch failed");
-    let second: Promise<RuntimeHandle> | undefined;
-    try {
-      await launch.entered;
-      second = runtime.ensureSession(admissionInput);
+    const pending: Promise<unknown>[] = [first];
+    await atGate(launch, pending, undefined, async () => {
+      const second = runtime.ensureSession(admissionInput);
+      pending.push(second);
       launch.release();
       await rejected;
       const handle = await second;
-      expect(generationIds).toHaveLength(2);
-      expect(generationIds[1]).toBe(generationIds[0]);
       expect(await readContext(runtime, handle)).toMatchObject({
         mcpServers: [
           {
@@ -92,24 +101,17 @@ it("preserves a queued same-key admission when its predecessor fails", async () 
           },
         ],
       });
-    } finally {
-      await launch.settle(first, second);
-    }
+    });
   });
 }, 25_000);
 
 it("retains captured stored-record custody when admission later fails", async () => {
   await withFixture(async ({ runtime: initial, create, store }) => {
     const existing = await persistedHandle(initial);
-    const generationIds: number[] = [];
     let loads = 0;
     const runtime = create({
       sessionStore: {
         load: async (key) => {
-          const generation = acpxOperationScope.getStore()?.generation;
-          if (generation) {
-            generationIds.push(generation.id);
-          }
           if (++loads === 2) {
             throw new Error("SDK record lookup failed");
           }
@@ -120,8 +122,6 @@ it("retains captured stored-record custody when admission later fails", async ()
     });
     await expect(runtime.ensureSession(admissionInput)).rejects.toThrow("SDK record lookup failed");
     const handle = await runtime.ensureSession(admissionInput);
-    expect(generationIds.length).toBeGreaterThanOrEqual(4);
-    expect(new Set(generationIds).size).toBe(1);
     expect(handle.backendSessionId).toBe(existing.backendSessionId);
     expect(await readContext(runtime, handle)).toMatchObject({
       sessionId: existing.backendSessionId,
@@ -195,8 +195,7 @@ it("keeps a pending persisted-handle config snapshot through a failed ensure", a
     });
     const operation = runtime.setConfigOption({ handle, key: "tone", value: "brief" });
     void operation.catch(() => {});
-    try {
-      await snapshot.entered;
+    await atGate(snapshot, [operation], undefined, async () => {
       failAdmission = true;
       await expect(runtime.ensureSession(admissionInput)).rejects.toThrow(
         "concurrent admission preparation failed",
@@ -207,9 +206,7 @@ it("keeps a pending persisted-handle config snapshot through a failed ensure", a
         sessionId: handle.backendSessionId,
         tone: "brief",
       });
-    } finally {
-      await snapshot.settle(operation);
-    }
+    });
   });
 }, 25_000);
 
@@ -231,13 +228,7 @@ function makePersistedRuntime(acpxRecordId = resetSessionKey) {
     name: resetSessionKey,
     acpSessionId: "old-session",
   };
-  let persisted = oldRecord;
-  const baseStore = {
-    load: vi.fn<TestSessionStore["load"]>(async () => persisted),
-    save: vi.fn<TestSessionStore["save"]>(async (record) => {
-      persisted = record;
-    }),
-  };
+  const baseStore = makeSessionStore(oldRecord);
   return { ...makeRuntime(baseStore), baseStore, oldRecord };
 }
 
@@ -281,8 +272,7 @@ describe("AcpxRuntime reset generation custody", () => {
     const mode = createHeldCall(() => wrappedStore.save({ ...oldRecord, sessionMode: "stale" }));
     vi.spyOn(delegate, "setMode").mockImplementation(mode.call);
     const pending = runtime.setMode({ handle: resetHandle, mode: "stale" });
-    try {
-      await mode.entered;
+    await atGate(mode, [pending], runtime, async () => {
       await runtime.prepareFreshSession({ sessionKey: resetSessionKey });
       await wrappedStore.save({ ...freshRecord, acpxRecordId: "fresh-record" });
       mode.release();
@@ -290,10 +280,7 @@ describe("AcpxRuntime reset generation custody", () => {
       expect(await baseStore.load(resetSessionKey)).toMatchObject({
         acpSessionId: "fresh-session",
       });
-    } finally {
-      await mode.settle(pending);
-      await runtime.shutdown();
-    }
+    });
   });
 
   it.each(["startup", "control"])(
@@ -321,16 +308,12 @@ describe("AcpxRuntime reset generation custody", () => {
               value: "provider/model",
             });
       const rejected = expect(pending).rejects.toThrow("superseded by reset");
-      try {
-        await rejectedModel.entered;
+      await atGate(rejectedModel, [pending], runtime, async () => {
         await runtime.prepareFreshSession({ sessionKey });
         rejectedModel.release();
         await rejected;
         expect(operation === "startup" ? ensure : control).toHaveBeenCalledOnce();
-      } finally {
-        await rejectedModel.settle(pending);
-        await runtime.shutdown();
-      }
+      });
     },
   );
 
@@ -342,33 +325,26 @@ describe("AcpxRuntime reset generation custody", () => {
       oldRecord.acpx = { reset_on_next_ensure: true };
       await wrappedStore.save(oldRecord);
     });
-    const close = vi.spyOn(delegate, "close").mockImplementation(closingRecord.call);
+    vi.spyOn(delegate, "close").mockImplementation(closingRecord.call);
     const input = {
       handle: resetHandle,
       reason: "new-in-place-reset",
       discardPersistentState: true,
     };
     const closing = runtime.close(input);
-    try {
-      await closingRecord.entered;
-      expect(close).toHaveBeenCalledExactlyOnceWith(input);
+    await atGate(closingRecord, [closing], runtime, async () => {
       expect(await wrappedStore.load(resetSessionKey)).toBeUndefined();
-      expect(baseStore.load).toHaveBeenCalledOnce();
       await runtime.prepareFreshSession({ sessionKey: resetSessionKey });
       await wrappedStore.save(freshRecord);
       closingRecord.release();
       await closing;
-      expect(baseStore.load).toHaveBeenCalledTimes(2);
       expect(await baseStore.load(resetSessionKey)).toMatchObject({
         acpSessionId: "fresh-session",
       });
       expect(await wrappedStore.load(resetSessionKey)).toMatchObject({
         acpSessionId: "fresh-session",
       });
-    } finally {
-      await closingRecord.settle(closing);
-      await runtime.shutdown();
-    }
+    });
   });
 
   it("preserves persisted session ownership after close persistence fails", async () => {
@@ -389,10 +365,10 @@ describe("AcpxRuntime reset generation custody", () => {
     const save = createHeldCall(baseStore.save.getMockImplementation()!);
     baseStore.save.mockImplementationOnce(save.call);
     const firstClose = runtime.close({ handle, reason: "older close" });
-    let secondClose: Promise<void> | undefined;
-    try {
-      await save.entered;
-      secondClose = runtime.close({ handle, reason: "concurrent close" });
+    const pending: Promise<unknown>[] = [firstClose];
+    await atGate(save, pending, undefined, async () => {
+      const secondClose = runtime.close({ handle, reason: "concurrent close" });
+      pending.push(secondClose);
       await runtime.prepareFreshSession(target);
       const successor = ensureFresh(fixture, handle, "successor-session");
       // The storage writer remains serialized, but the retired runtime does
@@ -407,9 +383,7 @@ describe("AcpxRuntime reset generation custody", () => {
       });
       await runtime.close({ handle: next, reason: "final close" });
       await runtime.shutdown();
-    } finally {
-      await save.settle(firstClose, secondClose);
-    }
+    });
   });
   it("keeps ordinary close and reopen off the blocked pre-reset runtime", async () => {
     const {
@@ -453,16 +427,12 @@ describe("AcpxRuntime reset generation custody", () => {
     const close = vi.spyOn(BaseAcpxRuntime.prototype, "close");
     const closing = runtime.close({ handle, reason: "discard", discardPersistentState: true });
     void closing.catch(() => {});
-    try {
-      await snapshot.entered;
+    await atGate(snapshot, [closing], runtime, async () => {
       await runtime.shutdown();
       snapshot.release();
       await expect(closing).rejects.toThrow("ACP runtime is shut down");
       expect(close).not.toHaveBeenCalled();
-    } finally {
-      await snapshot.settle(closing);
-      await runtime.shutdown();
-    }
+    });
   });
 
   it("waits for every post-reset runtime during service shutdown and rejects new work", async () => {

@@ -1,5 +1,3 @@
-import crypto from "node:crypto";
-import { syncBuiltinESMExports } from "node:module";
 import { expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
@@ -23,6 +21,7 @@ type PatchParams = Parameters<typeof buildAgentSessionPatch>[0];
 const now = 120_001;
 const expiredEntry: SessionEntry = {
   sessionId: "original",
+  lifecycleRevision: "original-revision",
   updatedAt: 1,
   sessionStartedAt: 1,
   lastInteractionAt: 1,
@@ -157,15 +156,13 @@ it("backfills the current candidate header while new windows start at the curren
 
 it.each<[Partial<PatchParams>, string, boolean, boolean?]>([
   [{}, "replacement", true],
+  [{ freshEntry: undefined, initialEntry: undefined }, "replacement", true],
   [{ freshEntry }, "original", false],
   [{ expectedExistingSessionId: "original" }, "original", false],
   [{ hasRestoredCronContinuation: true }, "original", false],
-  [{ freshEntry: { ...expiredEntry, modelSelectionLocked: true } }, "original", false],
   [{ freshEntry: failedEntry }, "original", false],
   [{ freshEntry: failedEntry, visibleRequest: false }, "replacement", true],
   [{ freshEntry: { ...freshEntry, status: "failed" } }, "replacement", true, true],
-  [requested, "replacement", true],
-  [{ ...requested, freshEntry }, "requested", true],
   [{ ...requested, freshEntry: undefined, initialEntry: undefined }, "requested", true],
 ])(
   "reuses %j as %s (new=%s, transcript missing=%s)",
@@ -177,56 +174,27 @@ it.each<[Partial<PatchParams>, string, boolean, boolean?]>([
     try {
       const result = await buildReusePatch(input);
       expect(result).toMatchObject({ patch: { sessionId }, isNewSession: isNew });
+      const candidateEntry = "freshEntry" in input ? input.freshEntry : expiredEntry;
+      const merged = mergeSessionEntry(candidateEntry, result.patch);
+      if (isNew) {
+        expect(merged.lifecycleRevision).toEqual(expect.stringMatching(/\S/));
+        expect(merged.lifecycleRevision).not.toBe("original-revision");
+      } else {
+        expect(merged.lifecycleRevision).toBe("original-revision");
+      }
     } finally {
       read.mockRestore();
     }
   },
 );
 
-it.each([
-  { name: "existing identity", input: { freshEntry }, sessionId: "original", allocations: 0 },
-  {
-    name: "requested missing identity",
-    input: { freshEntry: undefined, initialEntry: undefined, requestedSessionId: "requested" },
-    sessionId: "requested",
-    allocations: 0,
-  },
-  {
-    name: "requested fresh identity",
-    input: { freshEntry, requestedSessionId: "requested" },
-    sessionId: "requested",
-    allocations: 0,
-  },
-  {
-    name: "new identity",
-    input: {},
-    sessionId: "00000000-0000-4000-8000-000000000001",
-    allocations: 1,
-  },
-  {
-    name: "stable writer fallback",
-    input: { fallbackSessionId: "selected" },
-    sessionId: "selected",
-    allocations: 0,
-  },
-] satisfies Array<{
-  name: string;
-  input: Partial<PatchParams>;
-  sessionId: string;
-  allocations: number;
-}>)("allocates a UUID only when needed for $name", async (scenario) => {
-  const randomUUID = vi
-    .spyOn(crypto, "randomUUID")
-    .mockReturnValue("00000000-0000-4000-8000-000000000001");
-  try {
-    syncBuiltinESMExports();
-    const result = await buildReusePatch({ fallbackSessionId: undefined, ...scenario.input });
-    expect(result.patch.sessionId).toBe(scenario.sessionId);
-    expect(randomUUID).toHaveBeenCalledTimes(scenario.allocations);
-  } finally {
-    randomUUID.mockRestore();
-    syncBuiltinESMExports();
-  }
+it("preserves a legacy session's missing revision when reusing it", async () => {
+  const legacyEntry = { ...freshEntry, lifecycleRevision: undefined };
+  const { patch } = await buildReusePatch({ freshEntry: legacyEntry });
+  expect(mergeSessionEntry(legacyEntry, patch)).toMatchObject({
+    sessionId: "original",
+    lifecycleRevision: undefined,
+  });
 });
 
 it("keeps a concurrent replacement after preparing a rotation from the stored row", async () => {
@@ -243,13 +211,10 @@ it("keeps a concurrent replacement after preparing a rotation from the stored ro
       throw new Error("Session preparation did not return a candidate");
     }
     const initialPatch = await buildReusePatch({
+      ...prepared,
       freshEntry: prepared.entry,
       initialEntry: prepared.entry,
-      cfg: prepared.cfg,
       canonicalSessionKey: prepared.canonicalKey,
-      storePath: prepared.storePath,
-      resetPolicy: prepared.resetPolicy,
-      now: prepared.now,
       fallbackSessionId: undefined,
     });
     expect(initialPatch.isNewSession).toBe(true);
@@ -257,6 +222,7 @@ it("keeps a concurrent replacement after preparing a rotation from the stored ro
     const concurrent: SessionEntry = {
       ...freshEntry,
       sessionId: "concurrent",
+      lifecycleRevision: "concurrent-revision",
       sessionStartedAt: prepared.now,
       lastInteractionAt: prepared.now,
       status: "done",
@@ -275,6 +241,7 @@ it("keeps a concurrent replacement after preparing a rotation from the stored ro
     });
     expect(mergeSessionEntry(latest, updated.patch)).toMatchObject({
       sessionId: "concurrent",
+      lifecycleRevision: "concurrent-revision",
       sessionStartedAt: prepared.now,
       status: "done",
       lifecycleRunId: "concurrent-run",

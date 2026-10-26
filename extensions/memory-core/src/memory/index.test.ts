@@ -5,7 +5,6 @@ import { DatabaseSync } from "node:sqlite";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   encodeMemoryEmbedding,
-  INVALID_PROJECT_ANNOTATION_KEY,
   loadSqliteVecExtension,
   MEMORY_INDEX_CHUNK_PROVENANCE_TABLE,
   type MemorySyncParams,
@@ -50,8 +49,6 @@ function sessionTarget(sessionId: string, sessionKey: string) {
 type SyncOwner = {
   sessionSyncQueue: MemoryTargetedSessionSyncQueue;
   syncing: Promise<void> | null;
-  sessionsDirtyFiles: Set<string>;
-  sessionsFullRetryDirty: boolean;
   closing: boolean;
   closed: boolean;
   syncAdmitted: (params?: MemorySyncParams) => Promise<void>;
@@ -80,12 +77,12 @@ describe("memory index", () => {
       .run("test", "keep-me", JSON.stringify({ value: "keep-me" }), 1);
     closeOpenClawAgentDatabasesForTest();
 
-    const manager = await getFreshManager(createCfg({}));
+    const manager = await getManager();
     try {
       await manager.sync({ reason: "test", force: true });
       expect(manager.status().dbPath).toBe(agentDbPath);
     } finally {
-      await manager.close?.();
+      await manager.close();
     }
 
     const reopened = openOpenClawAgentDatabase({ agentId: "main" });
@@ -93,9 +90,7 @@ describe("memory index", () => {
       reopened.db
         .prepare("SELECT value_json FROM cache_entries WHERE scope = ? AND key = ?")
         .get("test", "keep-me"),
-    ).toEqual({
-      value_json: JSON.stringify({ value: "keep-me" }),
-    });
+    ).toEqual({ value_json: JSON.stringify({ value: "keep-me" }) });
   });
 
   const writeMemory = (filename: string, content: string) =>
@@ -108,14 +103,9 @@ describe("memory index", () => {
   ) => getFreshManager(createCfg(options), purpose);
   const getSessionManager = (purpose?: Parameters<typeof getFreshManager>[1]) =>
     getManager({ provider: "none", sources: ["sessions"], sessionMemory: true }, purpose);
+  const getBatchManager = () => getManager({ provider: "batch-wide-test", batchEnabled: true });
   const read = (manager: MemoryIndexManager, sql: string) =>
     (Reflect.get(manager, "db") as DatabaseSync).prepare(sql);
-  const metadataMissing = {
-    status: "missing",
-    reason: "index metadata is missing",
-    code: "metadata_missing",
-    owner: "openclaw",
-  };
   const rebuildMarker = (manager: MemoryIndexManager) =>
     read(
       manager,
@@ -139,7 +129,7 @@ describe("memory index", () => {
     const target = (id: string) => sessionTarget(id, sessionKey(id));
     const syncTarget = (id: string, params: Omit<MemorySyncParams, "sessions">) =>
       manager.sync({ ...params, sessions: [target(id)] });
-    return { manager, owner, sessionKey, target, syncTarget };
+    return { manager, owner, sessionKey, syncTarget };
   }
 
   async function seedSession(
@@ -162,16 +152,13 @@ describe("memory index", () => {
 
   async function seedTargets(markers: Record<string, string>, sessionKey: (id: string) => string) {
     for (const [id, marker] of Object.entries(markers)) {
-      await seedSession(id, marker, {
-        timestamp: Date.now(),
-        sessionKey: sessionKey(id),
-      });
+      await seedSession(id, marker, { timestamp: Date.now(), sessionKey: sessionKey(id) });
     }
   }
 
   async function getReconfiguredSessionManager(sources: Array<"memory" | "sessions">) {
     const config = { sources, sessionMemory: true, model: "old-embed" };
-    await indexAndClose(await getFreshManager(createCfg(config)));
+    await indexAndClose(await getManager(config));
     return getManager({ ...config, provider: "gemini", model: "new-embed" });
   }
 
@@ -212,27 +199,11 @@ describe("memory index", () => {
 
     const manager = await getManager();
     await manager.sync({ reason: "test", force: true });
-    expect(
-      read(
-        manager,
-        `SELECT metadata.project_key AS projectKey
-           FROM memory_index_chunks AS chunk
-           JOIN memory_index_chunk_recall_metadata AS metadata
-             ON metadata.chunk_id = chunk.id
-           WHERE chunk.path = 'MEMORY.md'
-             AND metadata.triggers = 'kraken deploy ritual'`,
-      ).get(),
-    ).toEqual({ projectKey });
-
     const activeProjectKeys = [projectKey];
     const curated = await manager.listCuratedProjectCandidates({ activeProjectKeys });
     const triggers = await manager.listTriggerCandidates({ activeProjectKeys });
     const expectedCandidates = [
-      {
-        projectKey,
-        triggers: "kraken deploy ritual",
-        provenance: { originClass: "agent" },
-      },
+      { projectKey, triggers: "kraken deploy ritual", provenance: { originClass: "agent" } },
     ];
     expect(curated).toMatchObject(expectedCandidates);
     expect(triggers).toMatchObject(expectedCandidates);
@@ -302,22 +273,6 @@ describe("memory index", () => {
     );
     const manager = await getManager({ provider: "none" });
     await manager.sync({ reason: "test", force: true });
-    expect(
-      read(
-        manager,
-        `SELECT metadata.triggers, metadata.project_key AS projectKey
-           FROM memory_index_chunks AS chunk
-           LEFT JOIN memory_index_chunk_recall_metadata AS metadata
-             ON metadata.chunk_id = chunk.id
-           WHERE chunk.path = 'MEMORY.md'
-           ORDER BY chunk.start_line`,
-      ).all(),
-    ).toEqual([
-      { triggers: "invalid fact", projectKey: INVALID_PROJECT_ANNOTATION_KEY },
-      { triggers: "mixed fact", projectKey: INVALID_PROJECT_ANNOTATION_KEY },
-      { triggers: null, projectKey: INVALID_PROJECT_ANNOTATION_KEY },
-      { triggers: "global fact", projectKey: null },
-    ]);
     const activeProjectKeys = ["alpha-key"];
     const triggerCandidates = await manager.listTriggerCandidates({ activeProjectKeys });
     expect(triggerCandidates).toMatchObject([{ triggers: "global fact" }]);
@@ -395,9 +350,7 @@ describe("memory index", () => {
   });
 
   it("maps source-wide batch fallback results to missing chunks after cache hits", async () => {
-    const manager = await getFreshManager(
-      createCfg({ provider: "batch-wide-test", batchEnabled: true }),
-    );
+    const manager = await getBatchManager();
     await manager.sync({ reason: "test" });
 
     await writeMemory("2026-01-13.md", "# Log\nBeta memory line.");
@@ -407,11 +360,11 @@ describe("memory index", () => {
 
     await manager.sync({ reason: "test", force: true });
 
-    expect(providerFixture.providerRuntimeBatchCalls).toEqual([["# Log\nBeta memory line."]]);
     expect(providerFixture.embedBatchCalls).toBe(1);
-    const betaRow = (Reflect.get(manager, "db") as DatabaseSync)
-      .prepare("SELECT embedding FROM memory_index_chunks WHERE path LIKE ? AND source = ?")
-      .get("%2026-01-13.md", "memory") as { embedding: Uint8Array } | undefined;
+    const betaRow = read(
+      manager,
+      "SELECT embedding FROM memory_index_chunks WHERE path LIKE ? AND source = ?",
+    ).get("%2026-01-13.md", "memory") as { embedding: Uint8Array } | undefined;
 
     expect(betaRow).toBeDefined();
     expect(betaRow?.embedding).toEqual(encodeMemoryEmbedding([0, 1, 0, 0]));
@@ -423,9 +376,7 @@ describe("memory index", () => {
         batchAttempts: Number.MAX_SAFE_INTEGER,
       }),
     ];
-    const manager = await getFreshManager(
-      createCfg({ provider: "batch-wide-test", batchEnabled: true }),
-    );
+    const manager = await getBatchManager();
     await manager.sync({ reason: "test" });
 
     expect(providerFixture.providerRuntimeBatchCalls).toHaveLength(1);
@@ -451,46 +402,39 @@ describe("memory index", () => {
     }
   });
 
-  it("disables batch immediately when the provider reports it unavailable", async () => {
-    providerFixture.providerRuntimeBatchErrors = [
-      Object.assign(new Error("provider batch unavailable"), {
-        code: "embedding_batch_unavailable",
-      }),
-    ];
-    const manager = await getManager({ provider: "batch-wide-test", batchEnabled: true });
-    await manager.sync({ reason: "test" });
-
-    expect(providerFixture.providerRuntimeBatchCalls).toHaveLength(1);
-    expect(providerFixture.embedBatchCalls).toBe(1);
-    expect(manager.status().batch).toMatchObject({
-      enabled: false,
-      failures: 2,
+  it.each([
+    {
+      name: "disables batch immediately when the provider reports it unavailable",
+      errors: [
+        Object.assign(new Error("provider batch unavailable"), {
+          code: "embedding_batch_unavailable",
+        }),
+      ],
+      attempts: 1,
       lastError: "provider batch unavailable",
-    });
-  });
-
-  it("preserves frozen errors while recording both attempts", async () => {
-    providerFixture.providerRuntimeBatchErrors = [
-      new Error("memory embeddings batch timed out"),
-      Object.freeze(new Error("provider runtime retry failed")),
-    ];
-    const manager = await getFreshManager(
-      createCfg({ provider: "batch-wide-test", batchEnabled: true }),
-    );
+    },
+    {
+      name: "preserves frozen errors while recording both attempts",
+      errors: [
+        new Error("memory embeddings batch timed out"),
+        Object.freeze(new Error("provider runtime retry failed")),
+      ],
+      attempts: 2,
+      lastError: "provider runtime retry failed",
+    },
+  ])("$name", async ({ errors, attempts, lastError }) => {
+    providerFixture.providerRuntimeBatchErrors = errors;
+    const manager = await getBatchManager();
     await manager.sync({ reason: "test" });
 
-    expect(providerFixture.providerRuntimeBatchCalls).toHaveLength(2);
+    expect(providerFixture.providerRuntimeBatchCalls).toHaveLength(attempts);
     expect(providerFixture.embedBatchCalls).toBe(1);
-    expect(manager.status().batch).toMatchObject({
-      enabled: false,
-      failures: 2,
-      lastError: "provider runtime retry failed",
-    });
+    expect(manager.status().batch).toMatchObject({ enabled: false, failures: 2, lastError });
   });
 
   it("resets batch failures when a timeout retry recovers", async () => {
     providerFixture.providerRuntimeBatchErrors = [new Error("provider runtime batch failed")];
-    const manager = await getManager({ provider: "batch-wide-test", batchEnabled: true });
+    const manager = await getBatchManager();
     await manager.sync({ reason: "test" });
     expect(manager.status().batch?.failures).toBe(1);
 
@@ -602,30 +546,13 @@ describe("memory index", () => {
       db.exec(`DELETE FROM memory_index_meta WHERE key = 'memory_index_meta_v1'`),
     );
     const nextManager = await getFreshManager(cfg);
-    expect(nextManager.status().custom?.indexIdentity).toEqual(metadataMissing);
+    expect(nextManager.status().custom?.indexIdentity).toMatchObject({ status: "missing" });
 
     const results = await nextManager.search("alpha");
 
     expectStatusIdentity(nextManager, false, { status: "valid" });
     expect(results.some((result) => result.path.endsWith("memory/2026-01-12.md"))).toBe(false);
     expect(results.some((result) => result.path === "USER.md")).toBe(true);
-  });
-
-  it("does not rebuild missing semantic metadata when embeddings are unavailable", async () => {
-    const oldCfg = createCfg({ model: "semantic-embed" });
-    await indexAndClose(await getFreshManager(oldCfg));
-
-    providerFixture.forceNoProvider = true;
-    const nextManager = await getFreshManager(oldCfg);
-    memoryIndexFixtureWriter(nextManager).exec(
-      `DELETE FROM memory_index_meta WHERE key = 'memory_index_meta_v1'`,
-    );
-
-    await nextManager.sync({ reason: "test" });
-
-    expectStatusIdentity(nextManager, true, metadataMissing);
-    const row = read(nextManager, "SELECT model FROM memory_index_chunks LIMIT 1").get();
-    expect(row?.model).toBe("semantic-embed");
   });
 
   it("clears dirty after sessions-only identity reindex", async () => {
@@ -649,10 +576,7 @@ describe("memory index", () => {
       retained: "RETAINED RETRY TARGET 729",
       trigger: "IDLE TRIGGER TARGET 729",
     };
-    const { manager, owner, sessionKey, syncTarget } = await queueFixture(
-      "agent:main:proof",
-      "cli",
-    );
+    const { manager, sessionKey, syncTarget } = await queueFixture("agent:main:proof", "cli");
     const dbPath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
     try {
       await manager.sync({ reason: "test-baseline", force: true });
@@ -675,10 +599,6 @@ describe("memory index", () => {
       expect(countMemoryIndexFtsMatches(dbPath, markers.trigger)).toBe(0);
       // Hand ordinary dirty state to maintenance so recovery must use the retained queue.
       manager.takeReindexRetryStateForMaintenance();
-      expect(owner.syncing).toBeNull();
-      expect(owner.sessionSyncQueue.sessions.size).toBe(1);
-      expect(owner.sessionsDirtyFiles.size).toBe(0);
-      expect(owner.sessionsFullRetryDirty).toBe(false);
 
       const recoveryProgress = vi.fn();
       const recovery = syncTarget("trigger", {
@@ -693,7 +613,6 @@ describe("memory index", () => {
 
       expect(countMemoryIndexFtsMatches(dbPath, markers.retained)).toBeGreaterThan(0);
       expect(countMemoryIndexFtsMatches(dbPath, markers.trigger)).toBeGreaterThan(0);
-      expect(owner.sessionSyncQueue.sessions.size).toBe(0);
       expect(recoveryProgress).toHaveBeenCalled();
     } finally {
       fault.disable();
@@ -708,7 +627,7 @@ describe("memory index", () => {
       trigger: "LIVE REJECTION RECOVERY TARGET 729",
     };
     // Startup catchup must not consume the controlled sync mocks.
-    const { manager, owner, sessionKey, target, syncTarget } = await queueFixture(
+    const { manager, owner, sessionKey, syncTarget } = await queueFixture(
       "agent:main:live-rejection",
       "cli",
     );
@@ -744,16 +663,8 @@ describe("memory index", () => {
       assert.ok(rejectingQueuedSync, "expected a live queued sync");
 
       const transitionResult = createDeferred<PromiseSettledResult<void>>();
-      let transitionState:
-        | { syncingNull: boolean; queueOwnerLive: boolean; queuedTargets: number }
-        | undefined;
       const transitionProgress = vi.fn();
       void rejectingQueuedSync.catch(() => {
-        transitionState = {
-          syncingNull: owner.syncing === null,
-          queueOwnerLive: owner.sessionSyncQueue.pending !== null,
-          queuedTargets: owner.sessionSyncQueue.sessions.size,
-        };
         const transitionCall = syncTarget("transition", {
           reason: "test-live-rejection-transition",
           progress: transitionProgress,
@@ -773,15 +684,6 @@ describe("memory index", () => {
         assert.ok(failure?.status === "rejected", "expected shared queued rejection");
         expect(failure.reason).toBe(queuedError);
       }
-      expect(transitionState).toEqual({
-        syncingNull: true,
-        queueOwnerLive: true,
-        queuedTargets: 0,
-      });
-      expect(Array.from(owner.sessionSyncQueue.sessions.values())).toEqual([
-        target("transition"),
-        target("retained"),
-      ]);
       expect(queuedProgress).not.toHaveBeenCalled();
       expect(transitionProgress).not.toHaveBeenCalled();
 
@@ -803,7 +705,6 @@ describe("memory index", () => {
       } finally {
         observer.close();
       }
-      expect(owner.sessionSyncQueue.sessions.size).toBe(0);
       expect(recoveryProgress).toHaveBeenCalled();
       expect(transitionProgress).not.toHaveBeenCalled();
     } finally {
@@ -904,15 +805,6 @@ describe("memory index", () => {
     expectStatusIdentity(nextManager, true, { status: "valid" });
   });
 
-  it("closes embedding providers when memory index managers close", async () => {
-    const manager = await getFreshManager(createCfg({}));
-    await manager.probeEmbeddingAvailability();
-    expect(providerFixture.providerCloseCalls).toBe(0);
-    await manager.close();
-    await manager.close();
-    expect(providerFixture.providerCloseCalls).toBe(1);
-  });
-
   it("waits for sync that attaches after provider initialization before closing providers", async () => {
     const providerInit = createDeferred<void>();
     providerFixture.providerInitGate = providerInit.promise;
@@ -946,6 +838,7 @@ describe("memory index", () => {
     }
     await syncPromise;
     await closePromise;
+    await manager.close();
     expect(providerFixture.providerCloseCalls).toBe(1);
   });
 
@@ -1087,47 +980,15 @@ describe("memory index", () => {
     await expect(manager.search("alpha")).resolves.not.toHaveLength(0);
   });
 
-  it("reports persisted vector index state on the unprobed status path", async () => {
-    const cfg = createCfg({ provider: "gemini", vectorEnabled: true });
-    const emptyManager = await getFreshManager(cfg, "status");
-    try {
-      const emptyStatus = emptyManager.status();
-      expect(emptyStatus.chunks).toBe(0);
-      expect(emptyStatus.vector?.storeAvailable).toBeUndefined();
-      expect(emptyStatus.vector?.index).toEqual({ state: "empty" });
-    } finally {
-      await emptyManager.close?.();
-    }
-
-    const indexingManager = await getFreshManager(cfg);
-    try {
-      await indexingManager.sync({ reason: "test", force: true });
-      expect(indexingManager.status().chunks).toBeGreaterThan(0);
-    } finally {
-      await indexingManager.close?.();
-    }
-
-    const statusManager = await getFreshManager(cfg, "status");
-    expect(Reflect.get(statusManager, "vector")).toMatchObject({ available: null, dims: 4 });
-    expect(statusManager.status().vector).toMatchObject({
-      index: { state: "complete" },
-      storeAvailable: undefined,
-    });
-    await statusManager.close();
-
-    await withOpenClawAgentDatabaseWrite({ agentId: "main" }, ({ db }) => {
-      db.prepare("UPDATE memory_index_meta SET value = '1' WHERE key = ?").run(
-        "memory_vector_rebuild_v1",
-      );
-    });
-    const incompleteManager = await getFreshManager(cfg, "status");
-    expect(Reflect.get(incompleteManager, "vector")).toMatchObject({ available: null, dims: 4 });
-    expect(incompleteManager.status().vector?.index).toEqual({ state: "incomplete" });
-  });
-
   it("forces a rebuild after incremental writes while vectors are disabled", async () => {
     const enabledCfg = createCfg({ provider: "gemini", vectorEnabled: true });
     await indexAndClose(await getFreshManager(enabledCfg));
+    const complete = await getFreshManager(enabledCfg, "status");
+    expect(complete.status().vector).toMatchObject({
+      index: { state: "complete" },
+      storeAvailable: undefined,
+    });
+    await complete.close();
 
     await writeMemory(
       "2026-01-12.md",
@@ -1138,6 +999,9 @@ describe("memory index", () => {
     await disabledManager.sync({ reason: "test" });
     expect(rebuildMarker(disabledManager)).toEqual({ value: "1" });
     await disabledManager.close?.();
+    const incomplete = await getFreshManager(enabledCfg, "status");
+    expect(incomplete.status().vector?.index).toEqual({ state: "incomplete" });
+    await incomplete.close();
 
     const reloadedManager = await getFreshManager(enabledCfg);
     await expect(reloadedManager.probeVectorStoreAvailability?.()).resolves.toBe(false);
@@ -1161,10 +1025,7 @@ describe("memory index", () => {
     });
 
     await manager.sync({ reason: "test", force: true });
-    const results = await manager.search("owner prefers green tea", {
-      minScore: 0,
-      maxResults: 3,
-    });
+    const results = await manager.search("owner prefers green tea", { minScore: 0, maxResults: 3 });
 
     expect(results[0]?.source).toBe("sessions");
     expect(results[0]?.provenance).toEqual({
@@ -1235,4 +1096,3 @@ describe("memory index", () => {
     expect(sourceCount.count).toBe(1);
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -3,6 +3,7 @@ import { expect, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { BoardSnapshot, BoardWidget } from "../../lib/board/types.ts";
 import type { BoardViewCallbacks } from "../../lib/board/view-types.ts";
+import { createBoardWidget } from "../../lib/board/widget.test-support.ts";
 import {
   createApplicationContextProvider,
   createApplicationGateway,
@@ -16,6 +17,16 @@ import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 
 type OpenClawBoardView = HTMLElementTagNameMap["openclaw-board-view"];
 
+export const testId = (root: ParentNode, id: string) =>
+  root.querySelector<HTMLElement>(`[data-test-id="${id}"]`);
+export function expectText(element: Element | null | undefined, ...contents: string[]) {
+  for (const content of contents) {
+    expect(element?.textContent).toContain(content);
+  }
+}
+export const widgetSnapshot = (widget: Partial<BoardWidget> = {}) =>
+  snapshot({ widgets: [boardWidget(widget)] });
+
 export async function openBoardMenu(
   root: ParentNode,
   selector = ".board-widget__menu-trigger",
@@ -25,18 +36,11 @@ export async function openBoardMenu(
   await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
 }
 
-export const boardWidget = (overrides: Partial<BoardWidget> = {}): BoardWidget => ({
-  name: "alpha",
-  tabId: "main",
-  title: "Alpha status",
-  contentKind: "html",
-  sizeW: 6,
-  sizeH: 4,
-  position: 0,
-  grantState: "none",
-  revision: 1,
-  ...overrides,
-});
+export const boardWidget = (overrides: Partial<BoardWidget> = {}): BoardWidget =>
+  createBoardWidget({
+    title: "Alpha status",
+    ...overrides,
+  });
 
 export const snapshot = (overrides: Partial<BoardSnapshot> = {}): BoardSnapshot => ({
   sessionKey: "agent:main:test",
@@ -101,3 +105,6 @@ export async function mount(
   await settleCells(view);
   return view;
 }
+
+export const mountWidget = (widget: Partial<BoardWidget> = {}) =>
+  mount({ snapshot: widgetSnapshot(widget) });

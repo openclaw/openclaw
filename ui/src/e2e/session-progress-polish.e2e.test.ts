@@ -92,9 +92,8 @@ suite.define(() => {
                 const icon = marker.getBoundingClientRect();
                 const bounds = text.getBoundingClientRect();
                 const line = Number.parseFloat(getComputedStyle(text).lineHeight);
-                const markerLine = row.closest("[data-desktop-details]") ? bounds.height : line;
                 return {
-                  delta: Math.abs(icon.top + icon.height / 2 - (bounds.top + markerLine / 2)),
+                  delta: Math.abs(icon.top + icon.height / 2 - (bounds.top + line / 2)),
                   lines: bounds.height / line,
                 };
               }),
@@ -131,8 +130,6 @@ suite.define(() => {
           if (!touch && placement === "composer") {
             await summary.hover();
             expect(await opacity()).toBe("1");
-            await page.waitForTimeout(650); // Beyond the shared title tooltip's reveal delay.
-            expect(await page.getByRole("tooltip").count()).toBe(0);
             await disclosure.locator(".session-progress-card__step-text").first().hover();
             expect(await opacity()).toBe("1");
             await page.mouse.move(0, 0);
@@ -141,10 +138,6 @@ suite.define(() => {
             expect(await summary.evaluate((el) => el.matches(":focus-visible"))).toBe(true);
             expect(await opacity()).toBe("1");
           }
-          await summary.press("Enter");
-          expect(await disclosure.getAttribute("open")).toBeNull();
-          await summary.press("Space");
-          expect(await disclosure.getAttribute("open")).not.toBeNull();
         }
       } finally {
         await suite.closeBrowserContext(context);

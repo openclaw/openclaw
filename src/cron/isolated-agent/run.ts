@@ -38,6 +38,7 @@ import { getCurrentSessionControllerOwner } from "../../sessions/session-control
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { isCronWithinActiveHours } from "../active-hours.js";
 import { isCronExecutionIdle } from "../execution-idle.js";
+import { CronOperatorSourceError } from "../operator-source-error.js";
 import { CronSessionLifecycleClaimError } from "../run-authority.js";
 import { removeCronRunContinuationSessionIfIdle } from "../run-continuation-cleanup.js";
 import { createCronRunDiagnosticsFromError, mergeCronRunDiagnostics } from "../run-diagnostics.js";
@@ -48,7 +49,6 @@ import {
 } from "../service/execution-errors.js";
 import { isCronOneShotContinuationJob } from "../service/one-shot-schedule.js";
 import type { CronAgentExecutionPhaseUpdate } from "../types.js";
-import { persistCronAutomationResult } from "./run-automation-context.js";
 import { resolveCronActiveRuntimeConfig } from "./run-config.js";
 import type { CronRunExecutionParams } from "./run-execution.types.js";
 import { finalizeCronRun } from "./run-finalize.js";
@@ -390,6 +390,7 @@ async function runCronIsolatedAgentTurnInTrace(
               const executionParams: Parameters<typeof executeCronRun>[0] = {
                 ...prepared.context,
                 operatorAuthority: operator?.authority,
+                occurrence: params.occurrence,
                 runId,
                 cfg: params.cfg,
                 job: params.job,
@@ -443,18 +444,6 @@ async function runCronIsolatedAgentTurnInTrace(
               if (automationRun) {
                 automationRun.closed = true;
               }
-              await persistCronAutomationResult({
-                cfg: prepared.context.cfgWithAgentDefaults,
-                job: params.job,
-                runId,
-                result: automationResult,
-                resultTarget: prepared.context.resultTarget,
-                agentId: prepared.context.agentId,
-                runSessionKey: prepared.context.runSessionKey,
-                runSessionId: prepared.context.currentRunSessionId(),
-                storePath: prepared.context.cronSession.storePath,
-                assertCurrent: assertInvocationCurrent,
-              });
               const finalized = await finalizeCronRun({
                 automationResult,
                 prepared: prepared.context,
@@ -525,9 +514,11 @@ async function runCronIsolatedAgentTurnInTrace(
                 interruptedByRestart,
                 errorClassification: interruptedByRestart
                   ? { kind: "aborted" }
-                  : errorReason
-                    ? { kind: "reason", reason: errorReason }
-                    : undefined,
+                  : err instanceof CronOperatorSourceError
+                    ? { kind: "permanent" }
+                    : errorReason
+                      ? { kind: "reason", reason: errorReason }
+                      : undefined,
                 executionStarted,
                 usage,
                 ...(admissionDisposition ? { admissionDisposition } : {}),

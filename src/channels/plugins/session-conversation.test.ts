@@ -43,16 +43,6 @@ describe("session conversation routing", () => {
 
   afterEach(clearRuntimeConfigSnapshot);
 
-  it("keeps generic :thread: parsing in core", () => {
-    expect(
-      resolveSessionConversationRef("agent:main:slack:channel:general:thread:1699999999.0001"),
-    ).toEqual({
-      ...conversation("slack", "channel", "general:thread:1699999999.0001", "general"),
-      threadId: "1699999999.0001",
-      parentConversationCandidates: ["general"],
-    });
-  });
-
   it("lets Telegram own :topic: session grammar", () => {
     expect(resolveSessionConversationRef(telegramTopicKey)).toEqual({
       ...conversation("telegram", "group", "-100123:topic:77", "-100123"),

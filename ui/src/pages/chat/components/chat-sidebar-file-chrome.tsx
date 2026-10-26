@@ -3,6 +3,7 @@ import { localEditorFilePath } from "../../../app/native-editor-locality.runtime
 import { McpAppCatalog } from "../../../components/mcp-app-catalog.tsx";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import { Menu, type MenuEntry, type MenuHandle } from "../../../components/solid/menu.tsx";
+import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
 import "../../../components/tooltip.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerCodeBlocksEnglish } from "../../../i18n/locales/en-code-blocks.ts";
@@ -10,7 +11,6 @@ import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-previe
 import { EDITOR_IDS, EDITOR_LABELS } from "../../../lib/editor-links.ts";
 import "../../../styles/session-panel-rail.css";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import type { FileCopyAction } from "./chat-file-copy.ts";
 import { FileDownloadButton } from "./chat-file-download-button.tsx";
 import type { FileReaderChromeProps, FileViewControls } from "./chat-file-reader-controls.ts";
 import { WorkspaceBreadcrumb } from "./chat-session-workspace-breadcrumb.tsx";
@@ -39,7 +39,11 @@ export function DesktopFileNavigation(props: {
     <Show
       when={props.workspace}
       fallback={
-        <span class="sidebar-file-view__path" title={props.path}>
+        <span
+          ref={createTextOverflow(() => props.path)}
+          class="sidebar-file-view__path"
+          title={props.path}
+        >
           {props.path || props.name}
         </span>
       }
@@ -362,6 +366,7 @@ export function DesktopFileChrome(props: FileReaderChromeProps) {
                 scopeKey={[
                   props.content.sessionFileSource?.sessionKey ?? props.runtime?.sessionKey,
                   props.content.artifactId ?? props.content.path,
+                  props.content.sessionFileSource?.messageEntryId,
                   props.runtime?.connectionEpoch,
                 ].join("\0")}
                 download={(signal) => download()(signal)}
@@ -441,8 +446,8 @@ export function FileAction(props: {
   );
 }
 
-export function FileCopyButton(props: { action: FileCopyAction; controls?: FileViewControls }) {
-  const feedback = () => props.controls?.copyFeedback[props.action];
+export function FileCopyButton(props: { controls?: FileViewControls }) {
+  const feedback = () => props.controls?.copyFeedback.contents;
   return (
     <FileAction
       label={t(
@@ -450,12 +455,10 @@ export function FileCopyButton(props: { action: FileCopyAction; controls?: FileV
           ? "common.copyFailed"
           : feedback() === "copied"
             ? "common.copied"
-            : props.action === "path"
-              ? "chat.detailPanel.copyPath"
-              : "chat.detailPanel.copyContents",
+            : "chat.detailPanel.copyContents",
       )}
       icon={feedback() === "copied" ? "check" : "copy"}
-      onClick={() => props.controls?.onCopy(props.action)}
+      onClick={() => props.controls?.onCopy("contents")}
       class={feedback() === "copied" ? "copied" : ""}
     />
   );

@@ -1,9 +1,9 @@
 /* @vitest-environment jsdom */
 import { createComponent, createSignal } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
+import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../../api/types.ts";
-import type { ApplicationGateway } from "../../../app/gateway.ts";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import type { SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { createApplicationGateway } from "../../../test-helpers/application-context-fixtures.ts";
@@ -12,10 +12,15 @@ import {
   createTestGatewayClient,
 } from "../../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { restorePropertyDescriptor } from "../../../test-helpers/property-descriptor.ts";
+import { createActiveSessionPlacement } from "../../../test-helpers/session-placement.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { ChatContextPanel } from "./chat-context-panel.tsx";
 import { ChatDetailsEnvironmentMobile } from "./chat-details-environment-mobile.tsx";
+import { ChatDetailsEnvironment } from "./chat-details-environment.tsx";
 import { ChatDetailsSession } from "./chat-details-session.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
+import { publication, sessionBranch, pullRequest } from "./chat-pull-requests.test-support.ts";
 import type { SubagentActivityProps } from "./chat-subagent-activity.tsx";
 
 type ChatSubagentActivityLive = SolidBridgeElement<SubagentActivityProps>;
@@ -77,15 +82,9 @@ it("omits empty linked-work disclosures and opens arriving pull requests", async
   const openChanges = vi.fn();
   element.props = { ...element.props!, onOpenSessionDiff: openChanges };
   await element.updateComplete;
-  const changes = element.querySelector('[data-details-group="pull-requests"]')!;
-  expect(changes.querySelector("summary")?.textContent).toContain("Changes");
-  const allChanges = changes.parentElement!.querySelector<HTMLButtonElement>(
-    ".chat-details__all-changes",
-  )!;
-  expect(allChanges.closest("summary")).toBeNull();
-  expect(allChanges.textContent).toContain("All changes");
-  allChanges.click();
-  expect(openChanges).toHaveBeenCalledOnce();
+  expect(element.querySelector('[data-details-group="pull-requests"]')).toBeNull();
+  expect(element.querySelector('[data-details-group="environment"]')).toBeNull();
+  expect(openChanges).not.toHaveBeenCalled();
   element.props = { ...element.props!, onOpenSessionDiff: undefined };
   await element.updateComplete;
   expect(
@@ -102,19 +101,46 @@ it("omits empty linked-work disclosures and opens arriving pull requests", async
 it("keeps compaction busy until the owning request settles and uses the current callback", async () => {
   const pending = createDeferred();
   const compact = vi.fn(() => pending.promise);
-  const element = await mount({
-    selectedSession: {
-      key: "agent:main:details",
-      kind: "direct",
-      totalTokens: 50000,
-      contextTokens: 100000,
-    },
-    onCompact: compact,
-  });
-  const disclosure = element.querySelector<HTMLDetailsElement>(".chat-details__context")!;
-  disclosure.open = true;
-  disclosure.dispatchEvent(new Event("toggle"));
-  flush();
+  const { gateway, publish } = createApplicationGateway();
+  const request = createGatewayRequestMock(() => ({
+    sessions: [
+      {
+        key: "agent:main:details",
+        contextWeight: {
+          source: "run",
+          generatedAt: 1,
+          systemPrompt: { chars: 4000, projectContextChars: 0, nonProjectContextChars: 4000 },
+          injectedWorkspaceFiles: [],
+          skills: { promptChars: 0, entries: [] },
+          tools: { listChars: 0, schemaChars: 0, entries: [] },
+        },
+      },
+    ],
+  }));
+  publish({ ...gateway.snapshot, phase: "connected", client: createTestGatewayClient(request) });
+  const view = mountSolid(() =>
+    createComponent(ChatContextPanel, {
+      presented: true,
+      details: {
+        currentAgentId: "main",
+        pullRequestsGateway: gateway,
+        selectedSession: {
+          key: "agent:main:details",
+          kind: "direct",
+          totalTokens: 50000,
+          contextTokens: 100000,
+        },
+        onCompact: compact,
+      },
+    }),
+  );
+  const element = view.container.querySelector("openclaw-chat-context-panel")!;
+  await element.updateComplete;
+  await waitForSolid(() =>
+    expect(element.querySelector<HTMLButtonElement>(".chat-context__compact")?.disabled).toBe(
+      false,
+    ),
+  );
   const button = element.querySelector<HTMLButtonElement>(".chat-context__compact")!;
   try {
     button.click();
@@ -130,7 +156,7 @@ it("keeps compaction busy until the owning request settles and uses the current 
   }
   await waitForSolid(() => expect(button.disabled).toBe(false));
   const replacement = vi.fn(async () => {});
-  element.props = { ...element.props!, onCompact: replacement };
+  element.details = { ...element.details!, onCompact: replacement };
   await element.updateComplete;
   button.click();
   await waitForSolid(() => expect(replacement).toHaveBeenCalledOnce());
@@ -162,6 +188,48 @@ it("keeps immutable creator, mutable owner and participants distinct without cla
   expect(element.querySelector<HTMLDetailsElement>(".chat-details__participants")?.open).toBe(
     false,
   );
+  const replaceOwner = async (actor: NonNullable<GatewaySessionRow["owner"]>["actor"]) => {
+    element.props = {
+      ...element.props!,
+      selectedSession: { ...element.props!.selectedSession!, owner: { actor } },
+    };
+    await element.updateComplete;
+  };
+  for (const desktop of [false, true]) {
+    element.desktop = desktop;
+    element.props = {
+      ...element.props!,
+      desktopPresentation: desktop
+        ? { peopleLabel: "People", outputsLabel: "Outputs", subagentsWorkingLabel: "Working" }
+        : undefined,
+      desktopDisclosures: { expanded: { people: true }, onExpandedChange() {} },
+    };
+    await element.updateComplete;
+    const owners: NonNullable<GatewaySessionRow["owner"]>["actor"][] = [
+      { type: "human", id: "replacement", label: "Replacement owner" },
+      { type: "agent", id: "fallback-id" },
+      { type: "system" },
+    ];
+    for (const actor of owners) {
+      await replaceOwner(actor);
+      expect(element.querySelector(".chat-details__person")?.textContent).toBe(
+        `Owner${actor.label || actor.id || actor.type}`,
+      );
+      expect(element.querySelector(".chat-details__creator")?.textContent).toContain(
+        "Original creator",
+      );
+    }
+  }
+  await replaceOwner({
+    type: "human",
+    id: "projected",
+    label: "Projected owner",
+    identity: { type: "profile", id: "projected" },
+  });
+  await waitForSolid(() =>
+    expect(element.querySelector(".chat-details-people")?.textContent).toContain("Projected owner"),
+  );
+  expect(element.querySelector(".chat-details__person")).toBeNull();
 });
 it("shows participant controls only while the session has participants", async () => {
   const element = await mount();
@@ -258,7 +326,6 @@ it("projects direct active children through the live observer with stable rounde
   const live = element.querySelector<ChatSubagentActivityLive>("openclaw-chat-subagent-activity")!;
   await live.updateComplete;
   expect(live.rows[0]?.session).toBe(child);
-  expect(live.compact).toBe(true);
   expect(live.querySelector(".chat-details__agent-avatar")?.getAttribute("style")).toContain(
     String(fnv1aUtf16(child.key) % 360),
   );
@@ -266,157 +333,6 @@ it("projects direct active children through the live observer with stable rounde
   element.presented = false;
   await element.updateComplete;
   expect(element.querySelector("openclaw-chat-subagent-activity")).toBeNull();
-});
-
-it("renders unknown without invented zero counts and keeps the All changes action usable", async () => {
-  const open = vi.fn();
-  const element = await mount({ onOpenSessionDiff: open });
-  const button = element.querySelector<HTMLButtonElement>(".chat-details__all-changes")!;
-  expect(button.textContent).toContain("—");
-  expect(button.textContent).not.toContain("0 files");
-  button.click();
-  expect(open).toHaveBeenCalledOnce();
-});
-
-it("admits only the latest visible native summary inputs and retires detached work", async () => {
-  vi.useFakeTimers();
-  const result = { files: [{ path: "accepted.ts" }], additions: 3, deletions: 1 };
-  const first = createDeferred<typeof result>();
-  const retired = createDeferred<typeof result>();
-  let requestedAt = 0;
-  const diff = vi.fn<(params: unknown) => Promise<typeof result>>().mockImplementation(() => {
-    requestedAt = Date.now();
-    return Promise.resolve(result);
-  });
-  diff.mockReturnValueOnce(first.promise);
-  const request = createGatewayRequestMock((method, params) =>
-    method === "sessions.diff"
-      ? diff(params)
-      : { jobs: [], total: 0, hasMore: false, nextOffset: null, snapshotRevision: "1" },
-  );
-  const { gateway, publish } = createApplicationGateway();
-  publish({ ...gateway.snapshot, phase: "connected", client: createTestGatewayClient(request) });
-  const element = document.createElement("openclaw-chat-details-session");
-  onTestFinished(async () => {
-    element.remove();
-    await Promise.resolve();
-    vi.useRealTimers();
-  });
-  const select = (id: string) => {
-    element.props = {
-      sessionKey: `agent:main:${id}`,
-      currentAgentId: "main",
-      selectedSession: { key: `agent:main:${id}`, kind: "direct", sessionId: id },
-      messages: [],
-      pullRequestsGateway: gateway,
-      onOpenSessionDiff: () => {},
-    };
-  };
-  select("hidden");
-  document.body.append(element);
-  await element.updateComplete;
-  await vi.advanceTimersByTimeAsync(0);
-  expect(diff).not.toHaveBeenCalled();
-
-  element.presented = true;
-  select("intermediate");
-  select("first");
-  await element.updateComplete;
-  await vi.advanceTimersByTimeAsync(0);
-  expect(diff).toHaveBeenCalledExactlyOnceWith({
-    sessionKey: "agent:main:first",
-    agentId: "main",
-    scope: "all",
-    summaryOnly: true,
-    poll: true,
-  });
-  select("accepted");
-  first.resolve({ ...result, additions: 999 });
-  await vi.advanceTimersByTimeAsync(0);
-  await waitForSolid(() =>
-    expect(element.querySelector(".chat-details__change-lines--add")?.textContent).toBe("+3"),
-  );
-  expect(diff).toHaveBeenCalledTimes(2);
-  expect(diff).toHaveBeenLastCalledWith({
-    sessionKey: "agent:main:accepted",
-    agentId: "main",
-    scope: "all",
-    summaryOnly: true,
-    poll: true,
-  });
-
-  const button = element.querySelector(".chat-details__all-changes");
-  element.remove();
-  document.body.append(element);
-  await element.updateComplete;
-  await vi.advanceTimersByTimeAsync(0);
-  expect(element.querySelector(".chat-details__all-changes")).toBe(button);
-  expect(diff).toHaveBeenCalledTimes(2);
-
-  element.props = { ...element.props!, runActive: true };
-  await vi.advanceTimersByTimeAsync(requestedAt + 4_999 - Date.now());
-  expect(diff).toHaveBeenCalledTimes(2);
-  await vi.advanceTimersByTimeAsync(1);
-  expect(diff).toHaveBeenCalledTimes(3);
-  element.presented = false;
-  await vi.advanceTimersByTimeAsync(60_000);
-  expect(diff).toHaveBeenCalledTimes(3);
-
-  diff.mockReturnValueOnce(retired.promise);
-  element.presented = true;
-  await vi.advanceTimersByTimeAsync(0);
-  expect(diff).toHaveBeenCalledTimes(4);
-  element.remove();
-  await Promise.resolve();
-  retired.resolve({ ...result, additions: 999 });
-  await vi.advanceTimersByTimeAsync(60_000);
-  expect(diff).toHaveBeenCalledTimes(4);
-});
-
-it("shows abbreviated colored deltas with exact accessible totals, partial and stale states", async () => {
-  vi.useFakeTimers();
-  const request = vi
-    .fn<(method: string) => Promise<unknown>>()
-    .mockImplementation(async (method: string) =>
-      method === "sessions.diff"
-        ? { files: [{ path: "app.ts" }], additions: 12_480, deletions: 61, truncated: true }
-        : { jobs: [], total: 0, hasMore: false, nextOffset: null, snapshotRevision: "1" },
-    );
-  // SAFETY: These components only read the supplied connection and subscription surface.
-  const gateway = {
-    snapshot: { client: { request }, phase: "connected", hello: null },
-    connectionRevision: 1,
-    subscribe: () => () => {},
-    subscribeEvents: () => () => {},
-  } as unknown as ApplicationGateway;
-  try {
-    const element = await mount({ onOpenSessionDiff: vi.fn(), pullRequestsGateway: gateway });
-    await vi.advanceTimersByTimeAsync(0);
-    await waitForSolid(() =>
-      expect(element.querySelector(".chat-details__change-files")?.textContent).toContain("1 file"),
-    );
-    const button = element.querySelector<HTMLButtonElement>(".chat-details__all-changes")!;
-    expect(element.querySelector(".chat-details__change-lines--add")?.textContent).toBe("+12.5K");
-    expect(element.querySelector(".chat-details__change-lines--del")?.textContent).toBe("−61");
-    expect(button.getAttribute("aria-description")).toContain("+12480 lines, −61 lines");
-    expect(button.textContent).toContain("partial");
-    request.mockRejectedValue(new Error("offline"));
-    await vi.advanceTimersByTimeAsync(30_000);
-    await waitForSolid(() => expect(button.textContent).toContain("stale"));
-    expect(button.textContent).toContain("+12.5K");
-    expect(button.getAttribute("aria-description")).toContain("Last-known changes");
-    request.mockResolvedValue({ files: [], additions: 0, deletions: 0 });
-    await vi.advanceTimersByTimeAsync(30_000);
-    await waitForSolid(() => expect(button.textContent).toContain("0 files"));
-    expect(button.textContent).toContain("+0");
-    expect(button.textContent).toContain("−0");
-    expect(
-      element.querySelector(".chat-details__change-lines--add, .chat-details__change-lines--del"),
-    ).toBeNull();
-    element.remove();
-  } finally {
-    vi.useRealTimers();
-  }
 });
 
 it("groups every direct subagent with counts, live activity first, and a bounded preview", async () => {
@@ -529,7 +445,7 @@ it("shows finished subagents after the parent stops waiting and omits the group 
   expect(element.querySelector('[data-details-group="subagents"]')).toBeNull();
 });
 
-it("shows live environment and context facts while preserving disclosure intent", async () => {
+it("shows live environment facts without duplicating composer context", async () => {
   const element = await mount({
     detailsWorkspace: { label: "project", root: "/workspace/project", branch: "feature/details" },
     selectedSession: {
@@ -545,24 +461,11 @@ it("shows live environment and context facts while preserving disclosure intent"
     },
   });
   const environment = element.querySelector('[data-details-group="environment"]')!;
-  expect(environment.textContent).toContain("feature/details");
+  await waitForSolid(() => expect(environment.textContent).toContain("feature/details"));
   expect(environment.textContent).not.toContain("Design workstation");
   expect(environment.textContent).not.toContain("/workspace/project");
   expect(environment.querySelector('[aria-label="Copy path"]')).toBeNull();
-  const context = element.querySelector<HTMLDetailsElement>(".chat-details__context")!;
-  expect(context.querySelector("summary")?.textContent).toContain("50%");
-  context.open = true;
-  element.props = {
-    ...element.props!,
-    selectedSession: {
-      ...element.props!.selectedSession!,
-      totalTokens: 32000,
-      totalTokensFresh: false,
-    },
-  };
-  await element.updateComplete;
-  expect(context.open).toBe(true);
-  expect(context.querySelector("summary")?.textContent).toContain("~25%");
+  expect(element.querySelector(".chat-details__context")).toBeNull();
 });
 
 it.each([
@@ -573,7 +476,7 @@ it.each([
     detailsWorkspace: { root, label: null, branch: "feature/details" },
   });
   const environment = element.querySelector('[data-details-group="environment"]')!;
-  expect(environment.textContent).toContain("feature/details");
+  await waitForSolid(() => expect(environment.textContent).toContain("feature/details"));
   expect(environment.textContent).not.toContain(root);
   expect(environment.textContent).not.toContain("private-user");
   const openProject = vi.fn();
@@ -639,19 +542,14 @@ it("demands mobile changes only while presented and retires native navigation ca
   setSession({
     key: "agent:main:details",
     kind: "direct",
-    placement: {
-      state: "active",
-      generation: 1,
+    placement: createActiveSessionPlacement({
       createdAtMs: 100_000,
       updatedAtMs: 300_000,
       stateChangedAtMs: 300_000,
-      environmentId: "worker:device",
-      activeOwnerEpoch: 1,
-      workerBundleHash: "a".repeat(64),
       workspaceBaseManifestRef: "base-manifest",
       remoteWorkspaceDir: "/worker/repo",
       runner: { kind: "device", status: "available" },
-    },
+    }),
   });
   flush();
   const buttons = Array.from(view.container.querySelectorAll<HTMLButtonElement>("button"));
@@ -673,4 +571,270 @@ it("demands mobile changes only while presented and retires native navigation ca
   setPresented(true);
   flush();
   expect(request).toHaveBeenCalledTimes(2);
+});
+
+it.each([false, true])(
+  "keeps branch publication on the existing Environment row (desktop=%s)",
+  async (desktop) => {
+    const branch = sessionBranch({
+      branch: "feature/environment-publication",
+      additions: 7,
+      deletions: 2,
+    });
+    const onPublish = vi.fn();
+    const onOpenSessionDiff = vi.fn();
+    const element = await mount({
+      detailsWorkspace: { root: "/synthetic/project", label: "project", branch: branch.branch },
+      pullRequestsBranch: branch,
+      githubPublication: publication({ onPublish }),
+      onOpenSessionDiff,
+    });
+    element.desktop = desktop;
+    await element.updateComplete;
+    const environment = element.querySelector('[data-details-group="environment"]')!;
+    await waitForSolid(() =>
+      expect(environment.querySelector("button.chat-pr__create")?.textContent).toBe("Create PR"),
+    );
+    const create = environment.querySelector<HTMLButtonElement>("button.chat-pr__create");
+    expect(environment.textContent).toContain("+7");
+    expect(environment.textContent).toContain("−2");
+    expect(
+      element.querySelector('[data-details-group="pull-requests"] .chat-pr--unpublished'),
+    ).toBeNull();
+    create!.click();
+    expect(onPublish).toHaveBeenCalledOnce();
+    environment.querySelector<HTMLButtonElement>(".chat-pr__diff")!.click();
+    expect(onOpenSessionDiff).toHaveBeenCalledOnce();
+    element.props = {
+      ...element.props!,
+      pullRequestsBranch: { ...branch, additions: undefined, deletions: undefined },
+    };
+    await element.updateComplete;
+    expect(environment.querySelector(".chat-pr__diff")).toBeNull();
+    expect(environment.querySelector("button.chat-pr__create")?.textContent).toBe("Create PR");
+    expect(onOpenSessionDiff).toHaveBeenCalledOnce();
+    element.props = {
+      ...element.props!,
+      pullRequestsBranch: undefined,
+      githubPublication: undefined,
+      pullRequests: [pullRequest()],
+    };
+    await element.updateComplete;
+    await waitForSolid(() =>
+      expect(
+        element.querySelector('[data-details-group="pull-requests"] .chat-pr__link'),
+      ).not.toBeNull(),
+    );
+    expect(environment.querySelector(".chat-pr__publication-actions")).toBeNull();
+  },
+);
+
+it("keeps local Changes after publication and accepts a confirmed clean working tree", async () => {
+  const branch = sessionBranch({ branch: "feature/published", additions: 7, deletions: 2 });
+  const element = await mount({
+    detailsWorkspace: { root: "/synthetic/project", label: "project", branch: branch.branch },
+    pullRequestsBranch: branch,
+    onOpenSessionDiff: vi.fn(),
+    environment: {
+      uncommitted: {
+        sessionKey: "agent:main:details",
+        files: [{ path: "app.ts", status: "modified", additions: 7, deletions: 2 }],
+        additions: 7,
+        deletions: 2,
+      },
+    },
+    githubPublication: publication({
+      result: {
+        requestId: "published",
+        status: "published",
+        publisher: { source: "system-configured", accountId: 1, login: "system-bot" },
+        repository: "openclaw/openclaw",
+        branch: branch.branch,
+        headCommit: "a".repeat(40),
+        url: "https://github.com/openclaw/openclaw/pull/44",
+      },
+    }),
+  });
+  const environment = element.querySelector('[data-details-group="environment"]')!;
+  await waitForSolid(() =>
+    expect(environment.querySelector(".chat-pr__diff")?.textContent).toContain("+7"),
+  );
+  expect(environment.textContent).toContain(branch.branch);
+  expect(environment.querySelector(".chat-pr__publication-actions")).toBeNull();
+  expect(environment.querySelector(".chat-pr__diff")?.textContent).toContain("+7");
+  expect(environment.querySelector(".chat-pr__diff")?.textContent).toContain("−2");
+  element.props = {
+    ...element.props!,
+    environment: {
+      uncommitted: { sessionKey: "agent:main:details", files: [], additions: 0, deletions: 0 },
+    },
+  };
+  await element.updateComplete;
+  expect(environment.querySelector(".chat-pr__diff")).toBeNull();
+  expect(environment.textContent).toContain(branch.branch);
+  await waitForSolid(() =>
+    expect(
+      element.querySelector('[data-details-group="pull-requests"] a[href$="/pull/44"]'),
+    ).not.toBeNull(),
+  );
+});
+
+it("keeps unresolved publication recovery and a different unpublished branch available", async () => {
+  const failed = publication({
+    result: {
+      requestId: "failed",
+      status: "failed",
+      code: "unavailable",
+      message: "Publication failed.",
+      nextAction: "Check publication.",
+    },
+  });
+  const element = await mount({
+    detailsWorkspace: { root: "/synthetic/project", label: "project", branch: "feature/current" },
+    pullRequests: [pullRequest({ branch: "feature/current" })],
+    githubPublication: failed,
+  });
+  const environment = element.querySelector('[data-details-group="environment"]')!;
+  expect(environment.querySelector(".chat-pr__publication-actions")).toBeNull();
+  element.props = {
+    ...element.props!,
+    githubPublication: publication({
+      locked: true,
+    }),
+  };
+  await element.updateComplete;
+  await waitForSolid(() =>
+    expect(environment.querySelector(".chat-pr__create")?.textContent).toBe("Check publication"),
+  );
+  element.props = {
+    ...element.props!,
+    githubPublication: failed,
+    pullRequestsBranch: sessionBranch({ branch: "feature/next", additions: 3 }),
+  };
+  await element.updateComplete;
+  await waitForSolid(() =>
+    expect(environment.querySelector(".chat-pr__create")?.textContent).toBe("Retry"),
+  );
+  expect(environment.querySelector(".chat-pr__diff")?.textContent).toContain("+3");
+});
+
+it.each([false, true])(
+  "shows only textual Changes facts without binary metadata (mobile=%s)",
+  async (mobile) => {
+    // jsdom has no Web Animations API; arrival motion has separate browser proof.
+    const animate = Object.getOwnPropertyDescriptor(Element.prototype, "animate");
+    Object.defineProperty(Element.prototype, "animate", {
+      configurable: true,
+      value: () => ({ cancel() {} }),
+    });
+    const [uncommitted, setUncommitted] = createSignal<SessionsDiffResult>();
+    const open = vi.fn();
+    const details: ChatDetailsProps = {
+      sessionKey: "agent:main:details",
+      currentAgentId: "main",
+      messages: [],
+      selectedSession: undefined,
+    };
+    const view = mountSolid(() =>
+      createComponent(mobile ? ChatDetailsEnvironmentMobile : ChatDetailsEnvironment, {
+        details,
+        presented: true,
+        get uncommitted() {
+          return uncommitted();
+        },
+        onOpenUncommitted: open,
+      }),
+    );
+    onTestFinished(() => {
+      view.unmount();
+      restorePropertyDescriptor(Element.prototype, "animate", animate);
+    });
+    const row = () =>
+      [...view.container.querySelectorAll<HTMLButtonElement>("button")].find((button) =>
+        button.textContent?.includes("Changes"),
+      );
+    const result: SessionsDiffResult = {
+      sessionKey: details.sessionKey,
+      additions: 0,
+      deletions: 0,
+      files: [],
+    };
+    const binary = {
+      path: "image.png",
+      status: "modified" as const,
+      additions: 0,
+      deletions: 0,
+      binary: true,
+    };
+    const text = { path: "app.ts", status: "modified" as const, additions: 3, deletions: 1 };
+    expect(row()).toBeUndefined();
+    for (const data of [
+      result,
+      { ...result, files: [binary] },
+      { ...result, files: [binary], truncated: true },
+    ]) {
+      setUncommitted(data);
+      flush();
+      expect(row()).toBeUndefined();
+      expect(
+        view.container.querySelector("[data-details-group=environment], .chat-environment-mobile"),
+      ).toBeNull();
+    }
+    for (const data of [
+      { ...result, additions: 3, files: [{ ...text, deletions: 0 }] },
+      { ...result, deletions: 1, files: [{ ...text, additions: 0 }] },
+      { ...result, additions: 3, deletions: 1, files: [text, binary], truncated: true },
+    ]) {
+      setUncommitted(data);
+      flush();
+      await waitForSolid(() => expect(row()).toBeDefined());
+      expect(row()?.querySelector('[aria-label="Binary file"]')).toBeNull();
+      expect(row()?.textContent).not.toContain("…");
+      row()!.click();
+    }
+    expect(open).toHaveBeenCalledTimes(3);
+    setUncommitted({
+      ...result,
+      additions: 3,
+      files: [text],
+      unavailableReason: "unknown_session",
+    });
+    flush();
+    expect(row()).toBeUndefined();
+  },
+);
+
+it("reloads missing branchless facts even when Environment was collapsed", async () => {
+  const result: SessionsDiffResult = {
+    sessionKey: "agent:main:details",
+    additions: 1,
+    deletions: 0,
+    files: [],
+  };
+  const [uncommitted, setUncommitted] = createSignal<SessionsDiffResult | undefined>(result);
+  const stop = vi.fn();
+  const retain = vi.fn(() => stop);
+  const view = mountSolid(() =>
+    createComponent(ChatDetailsEnvironment, {
+      details: {
+        sessionKey: result.sessionKey,
+        currentAgentId: "main",
+        messages: [],
+        selectedSession: undefined,
+      },
+      presented: true,
+      expanded: false,
+      get uncommitted() {
+        return uncommitted();
+      },
+      onRequestUncommitted: retain,
+    }),
+  );
+  expect(retain).not.toHaveBeenCalled();
+  setUncommitted(undefined);
+  await waitForSolid(() => expect(retain).toHaveBeenCalledOnce());
+  expect(view.container.querySelector('[data-details-group="environment"]')).toBeNull();
+  setUncommitted(result);
+  await waitForSolid(() => expect(stop).toHaveBeenCalledOnce());
+  expect(view.container.querySelector('[data-details-group="environment"]')).not.toBeNull();
 });

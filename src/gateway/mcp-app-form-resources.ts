@@ -23,13 +23,13 @@ import {
 } from "../agents/mcp-ui-resource.js";
 import { captureSessionEntryMetadataRead } from "../config/sessions/session-entry-source-authority.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { readArtifactBase64Payload } from "./artifacts-base64.js";
 import { resolveMcpAppRequesterId, callMcpAppToolWithElicitation } from "./mcp-app-operations.js";
 import { canSelectQuestion } from "./question-access.js";
 import {
   prepareQuestionAuthorization,
   withPreparedQuestionSessions,
 } from "./question-session-access.js";
-import { readArtifactBase64Payload } from "./server-methods/artifacts-base64.js";
 import { readGatewayRequestMutationAuthority } from "./server-methods/session-mutation-guards.js";
 import { retainSessionScopedRead } from "./server-methods/session-scoped-read.js";
 import { withSessionFileRoot } from "./server-methods/sessions-files.js";

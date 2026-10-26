@@ -1,4 +1,3 @@
-// Covers Windows filesystem security audit behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -75,44 +74,30 @@ describe("security audit filesystem Windows findings", () => {
     );
   }
 
-  it("evaluates Windows ACL-derived filesystem findings", async () => {
-    await Promise.all([
-      (async () => {
-        const findings = await auditAcl("win");
-        const forbidden = [
-          "fs.state_dir.perms_world_writable",
-          "fs.state_dir.perms_group_writable",
-          "fs.state_dir.perms_readable",
-          "fs.config.perms_writable",
-          "fs.config.perms_world_readable",
-          "fs.config.perms_group_readable",
-        ];
-        const checkIds = findings.map((finding) => finding.checkId);
-        for (const id of forbidden) {
-          expect(checkIds, id).not.toContain(id);
-        }
-      })(),
-      (async () => {
-        const findings = await auditAcl("win-open", { sid: "S-1-5-32-545", mask: 0x0012_00a9 });
-        expect(findings).toContainEqual(
-          expect.objectContaining({
-            checkId: "fs.state_dir.perms_readable",
-            severity: "warn",
-          }),
-        );
-      })(),
-      (async () => {
-        const findings = await auditAcl("win-anon-world", { sid: "S-1-5-7", mask: 0x001f_01ff });
-        expect(findings).toContainEqual(
-          expect.objectContaining({
-            checkId: "fs.state_dir.perms_world_writable",
-            severity: "critical",
-          }),
-        );
-        expect(
-          findings.some((finding) => finding.checkId === "fs.state_dir.perms_group_writable"),
-        ).toBe(false);
-      })(),
-    ]);
+  it("accepts owner-only Windows ACLs", async () => {
+    const checkIds = (await auditAcl("win")).map((finding) => finding.checkId);
+    for (const id of [
+      "fs.state_dir.perms_world_writable",
+      "fs.state_dir.perms_group_writable",
+      "fs.state_dir.perms_readable",
+      "fs.config.perms_writable",
+      "fs.config.perms_world_readable",
+      "fs.config.perms_group_readable",
+    ]) {
+      expect(checkIds, id).not.toContain(id);
+    }
+  });
+
+  it.each([
+    ["win-open", "S-1-5-32-545", 0x0012_00a9, "perms_readable", "warn"],
+    ["win-anon-world", "S-1-5-7", 0x001f_01ff, "perms_world_writable", "critical"],
+  ] as const)("reports unsafe ACLs: %s", async (label, sid, mask, suffix, severity) => {
+    const findings = await auditAcl(label, { sid, mask });
+    expect(findings).toContainEqual(
+      expect.objectContaining({ checkId: `fs.state_dir.${suffix}`, severity }),
+    );
+    if (label === "win-anon-world") {
+      expect(findings.some((f) => f.checkId === "fs.state_dir.perms_group_writable")).toBe(false);
+    }
   });
 });

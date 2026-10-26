@@ -1,10 +1,13 @@
-import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { flush } from "solid-js";
+import { afterEach, assert, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { AgentIdentityResult } from "../api/types.ts";
 import {
   createGatewayEvent,
   createGatewayStoreTestStore,
   GATEWAY_STORE_TEST_HELLO,
 } from "../app/gateway-store.test-support.ts";
+import { t } from "../i18n/index.ts";
 import { createAgentIdentityCapability } from "../lib/agents/identity.ts";
 import type { ChatHistoryResponse } from "../pages/chat/chat-history-snapshot.ts";
 import "./control-ui-session-summary.tsx";
@@ -16,7 +19,10 @@ afterEach(async () => {
   vi.useRealTimers();
 });
 
-function setup(identity?: () => AgentIdentityResult) {
+function setup(
+  identity?: () => AgentIdentityResult,
+  progressRead: () => Promise<unknown> = async () => ({ card: null }),
+) {
   const { gateway, current } = createGatewayStoreTestStore();
   onTestFinished(() => gateway.stop());
   gateway.start();
@@ -39,7 +45,7 @@ function setup(identity?: () => AgentIdentityResult) {
       return Promise.resolve(identity());
     }
     if (method === "progressCard.get") {
-      return Promise.resolve({ card: null });
+      return progressRead();
     }
     return Promise.reject(new Error(`Unexpected method: ${method}`));
   });
@@ -80,6 +86,31 @@ function useClock() {
 }
 const messages = (element: Element) => element.querySelectorAll(".plugin-session-summary__message");
 
+it("keeps history available while progress loads, fails, and retries", async () => {
+  const pending = createDeferred<{ card: null }>();
+  const retry = createDeferred<{ card: null }>();
+  const read = vi.fn().mockReturnValueOnce(pending.promise).mockReturnValueOnce(retry.promise);
+  const { element, reply } = setup(undefined, read);
+  await reply(0, "Independent history");
+  expect(element.textContent).toContain(t("sessionProgressCard.widgetLoading"));
+  pending.reject(new Error("Progress unavailable"));
+  await vi.waitFor(() =>
+    expect(element.querySelector(".plugin-session-summary__progress [role=alert]")).not.toBeNull(),
+  );
+  expect(element.textContent).toContain("Independent history");
+
+  element.querySelector<HTMLButtonElement>(".plugin-session-summary > button")!.click();
+  await vi.waitFor(() =>
+    expect(element.textContent).toContain(t("sessionProgressCard.widgetLoading")),
+  );
+  expect(element.textContent).toContain("Independent history");
+  retry.resolve({ card: null });
+  await vi.waitFor(() =>
+    expect(element.querySelector(".plugin-session-summary__progress")).toBeNull(),
+  );
+  expect(element.textContent).toContain("Independent history");
+});
+
 it("refreshes visible message avatars from identity and stops hydrating while hidden", async () => {
   let avatar = "data:image/png;base64,aWRlbnRpdHk=";
   const { element, reply, calls } = setup(() => ({ agentId: "main", name: "Main", avatar }));
@@ -102,7 +133,6 @@ it("refreshes visible message avatars from identity and stops hydrating while hi
 
   const replacement = createAgentIdentityCapability(element.gateway!);
   element.agentIdentity = replacement;
-  await vi.waitFor(() => expect(replacement.get("main")?.avatar).toBe(avatar));
   await avatarLoaded();
 
   element.presented = false;
@@ -210,7 +240,20 @@ it("retains its successful history and cursor when retrying a failed refresh", a
 it("paces durable events and retains one catch-up during a pending load", async () => {
   useClock();
   const { element, requests, emit, reply, settled } = setup();
+  const gateway = element.gateway;
+  assert(gateway);
+  const subscribe = gateway.subscribe.bind(gateway);
+  let subscriptions = 0;
+  vi.spyOn(gateway, "subscribe").mockImplementation((listener) => {
+    subscriptions += 1;
+    const stop = subscribe(listener);
+    return () => {
+      subscriptions -= 1;
+      stop();
+    };
+  });
   await reply(0, "Initial reply");
+  expect(subscriptions).toBeGreaterThan(0);
 
   emit("session.message", "agent:other:one", "other");
   emit("chat");
@@ -233,7 +276,10 @@ it("paces durable events and retains one catch-up during a pending load", async 
   expect(element.textContent).not.toContain("Initial reply");
 
   element.presented = false;
-  await element.updateComplete;
+  await settled(3);
+  await Promise.resolve();
+  flush();
+  expect(subscriptions).toBe(0);
   emit("session.message");
   await vi.advanceTimersByTimeAsync(10_000);
   await element.updateComplete;
@@ -241,6 +287,7 @@ it("paces durable events and retains one catch-up during a pending load", async 
   expect(element.textContent).toBe("");
   element.presented = true;
   await reply(3, "Reply received while hidden");
+  expect(subscriptions).toBeGreaterThan(0);
 });
 
 it("catches up with cursors, retains a bounded tail, and replaces it after a reset", async () => {

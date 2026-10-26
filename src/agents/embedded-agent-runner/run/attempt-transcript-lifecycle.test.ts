@@ -16,7 +16,7 @@ describe("createEmbeddedAttemptTranscriptLifecycle", () => {
     vi.useRealTimers();
   });
   it("shares one context carrier across independent attempts", async () => {
-    const entries = vi.spyOn(AsyncLocalStorage.prototype, "run");
+    const entries = vi.spyOn(AsyncLocalStorage.prototype, "enterWith");
     await Promise.all(
       Array.from({ length: 48 }, async () => {
         const lifecycle = createEmbeddedAttemptTranscriptLifecycle({});

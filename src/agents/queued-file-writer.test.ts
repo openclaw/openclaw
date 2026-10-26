@@ -20,14 +20,13 @@ beforeEach(() => {
 });
 
 describe("getQueuedFileWriter", () => {
-  it("flushes queued lines in order with restrictive permissions", async () => {
+  it("writes queued lines in order with restrictive permissions", async () => {
     const tmpDir = tempDirs.make("openclaw-queued-writer-");
     const filePath = path.join(tmpDir, "trace.jsonl");
     const writer = getQueuedFileWriter(new Map(), filePath);
 
     writer.write("line\n");
-    writer.write("next\n");
-    await writer.flush();
+    await writer.write("next\n");
 
     expect(fs.readFileSync(filePath, "utf8")).toBe("line\nnext\n");
     expect(fs.statSync(filePath).mode & 0o777).toBe(0o600);
@@ -43,8 +42,7 @@ describe("getQueuedFileWriter", () => {
     const writer = getQueuedFileWriter(new Map(), filePath);
 
     writer.write("after\n");
-    writer.write("still blocked\n");
-    await writer.flush();
+    await writer.write("still blocked\n");
 
     expect(fs.readFileSync(targetPath, "utf8")).toBe("before\n");
     expect(warn).toHaveBeenCalledExactlyOnceWith(
@@ -63,22 +61,20 @@ describe("getQueuedFileWriter", () => {
     const writer = getQueuedFileWriter(new Map(), path.join(linkDir, "trace.jsonl"));
 
     writer.write("after\n");
-    writer.write("still blocked\n");
-    await writer.flush();
+    await writer.write("still blocked\n");
 
     expect(fs.existsSync(path.join(targetDir, "trace.jsonl"))).toBe(false);
     expect(warn).toHaveBeenCalledOnce();
   });
 
-  it("reports failed directory preparation once without rejecting diagnostic flush", async () => {
+  it("reports failed directory preparation once without rejecting diagnostic writes", async () => {
     const tmpDir = tempDirs.make("openclaw-queued-writer-");
     const blockedDir = path.join(tmpDir, "not-a-directory");
     fs.writeFileSync(blockedDir, "unchanged", "utf8");
     const filePath = path.join(blockedDir, "trace.jsonl");
     const writer = getQueuedFileWriter(new Map(), filePath);
     writer.write("line\n");
-    writer.write("next\n");
-    await expect(writer.flush()).resolves.toBeUndefined();
+    await expect(writer.write("next\n")).resolves.toBeUndefined();
     expect(fs.readFileSync(blockedDir, "utf8")).toBe("unchanged");
     expect(warn).toHaveBeenCalledExactlyOnceWith(
       "Diagnostic log write failed; check the configured log path",

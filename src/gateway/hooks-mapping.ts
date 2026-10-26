@@ -169,10 +169,7 @@ type HookTransformFn = (
 ) => HookTransformResult | Promise<HookTransformResult>;
 
 /** Resolve configured hook mappings plus preset mappings into normalized matcher entries. */
-export function resolveHookMappings(
-  hooks?: HooksConfig,
-  opts?: { configDir?: string },
-): HookMappingResolved[] {
+export function resolveHookMappings(hooks?: HooksConfig): HookMappingResolved[] {
   const presets = hooks?.presets ?? [];
   const gmailAllowUnsafe = hooks?.gmail?.allowUnsafeExternalContent;
   const mappings: HookMappingConfig[] = [];
@@ -199,7 +196,7 @@ export function resolveHookMappings(
     return [];
   }
 
-  const configDir = path.resolve(opts?.configDir ?? path.dirname(resolveConfigPathCandidate()));
+  const configDir = path.resolve(path.dirname(resolveConfigPathCandidate()));
   const transformsRootDir = path.join(configDir, "hooks", "transforms");
   const transformsDir = resolveOptionalContainedPath(
     transformsRootDir,

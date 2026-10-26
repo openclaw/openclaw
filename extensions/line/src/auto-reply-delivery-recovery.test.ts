@@ -89,9 +89,7 @@ describe("deliverLineAutoReply HTTP recovery", () => {
     },
   ])("$label", async ({ used, expected }) => {
     const rejection = createHttpError(429);
-    const pushMessagesLine = vi.fn(async () => {
-      throw rejection;
-    });
+    const pushMessagesLine = vi.fn().mockRejectedValue(rejection);
     createDeps({
       pushMessagesLine: pushMessagesLine as LineAutoReplyDeps["pushMessagesLine"],
     });
@@ -126,9 +124,7 @@ describe("deliverLineAutoReply HTTP recovery", () => {
     },
   ])("does not replay a possibly accepted reply after $label", async ({ error }) => {
     const onReplyError = vi.fn();
-    const replyMessageLine = vi.fn(async () => {
-      throw error;
-    });
+    const replyMessageLine = vi.fn().mockRejectedValue(error);
     const { pushMessagesLine } = createDeps({
       replyMessageLine: replyMessageLine as LineAutoReplyDeps["replyMessageLine"],
     });
@@ -155,9 +151,7 @@ describe("deliverLineAutoReply HTTP recovery", () => {
     },
   ])("keeps the push fallback after $label", async ({ error }) => {
     const onReplyError = vi.fn();
-    const replyMessageLine = vi.fn(async () => {
-      throw error;
-    });
+    const replyMessageLine = vi.fn().mockRejectedValue(error);
     const { pushMessagesLine } = createDeps({
       replyMessageLine: replyMessageLine as LineAutoReplyDeps["replyMessageLine"],
     });
@@ -188,9 +182,7 @@ describe("deliverLineAutoReply HTTP recovery", () => {
       new Error("activity store unavailable"),
       { messageIds: ["line-reply-final"], visibleReplySent: true },
     );
-    const replyMessageLine = vi.fn(async () => {
-      throw acceptedError;
-    });
+    const replyMessageLine = vi.fn().mockRejectedValue(acceptedError);
     const onReplyError = vi.fn();
     const { pushMessagesLine } = createDeps({
       replyMessageLine: replyMessageLine as LineAutoReplyDeps["replyMessageLine"],
@@ -220,9 +212,7 @@ describe("deliverLineAutoReply HTTP recovery", () => {
       { messageIds: [], visibleReplySent: true },
     );
     const onReplyError = vi.fn();
-    const replyMessageLine = vi.fn(async () => {
-      throw acceptedError;
-    });
+    const replyMessageLine = vi.fn().mockRejectedValue(acceptedError);
     const { pushMessagesLine } = createDeps({
       replyMessageLine: replyMessageLine as LineAutoReplyDeps["replyMessageLine"],
     });
@@ -250,9 +240,7 @@ describe("deliverLineAutoReply HTTP recovery", () => {
       new Error("activity store unavailable"),
       { messageIds: ["line-push-final"], visibleReplySent: true },
     );
-    const pushMessagesLine = vi.fn(async () => {
-      throw acceptedError;
-    });
+    const pushMessagesLine = vi.fn().mockRejectedValue(acceptedError);
     const { replyMessageLine } = createDeps({
       pushMessagesLine: pushMessagesLine as LineAutoReplyDeps["pushMessagesLine"],
     });
@@ -285,9 +273,7 @@ describe("deliverLineAutoReply HTTP recovery", () => {
       headers: new Headers(),
       body: "quota exceeded",
     });
-    const pushMessagesLine = vi.fn(async () => {
-      throw quotaError;
-    });
+    const pushMessagesLine = vi.fn().mockRejectedValue(quotaError);
     createDeps({
       pushMessagesLine: pushMessagesLine as LineAutoReplyDeps["pushMessagesLine"],
     });

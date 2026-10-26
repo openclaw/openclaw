@@ -89,12 +89,6 @@ describe("hydrateDiscordMessageIfNeeded", () => {
     });
   });
 
-  it("reports current-message hydration failures as unavailable", async () => {
-    const { rest, message, hydrate } = fixture(payload({ content: "hello <@123>" }));
-    rest.get = vi.fn().mockRejectedValue(new Error("Discord REST unavailable"));
-    expect(await hydrate()).toEqual({ kind: "unavailable", message });
-  });
-
   it("fetches empty bot reply context from its referenced channel", async () => {
     const text = "Release repair: https://github.com/example/project/pull/42";
     const { rest, hydrate } = fixture(

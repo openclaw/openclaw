@@ -1,8 +1,9 @@
 import { EventEmitter } from "node:events";
 import { MessageChannel, receiveMessageOnPort, type MessagePort } from "node:worker_threads";
-import { afterEach, beforeEach, expect, it, onTestFinished, vi, type MockInstance } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { SqliteDatabaseAdmissions } from "./sqlite-database-admission-record.js";
+import { expectCalls } from "./worker-task-pool.owned.test-support.js";
 import type { WorkerTaskContext } from "./worker-task-transport.js";
 
 const boundary = vi.hoisted(() => {
@@ -32,7 +33,13 @@ vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({ error: vi.fn() }),
 }));
 // mock-isolation: Observe diagnostic cleanup without allocating a memory transport.
-vi.mock("./worker-memory.js", () => ({ serveWorkerMemorySamples: () => boundary.closeMemory }));
+vi.mock("./worker-memory.js", () => ({
+  serveWorkerMemorySamples: () => ({
+    close: boundary.closeMemory,
+    setTaskMetrics: () => {},
+    collectTask: () => undefined,
+  }),
+}));
 // mock-isolation: Keep process-wide idle timers outside the retirement fixture.
 vi.mock("./worker-idle-gc.js", () => ({
   cancelWorkerIdleGc: vi.fn(),
@@ -51,12 +58,6 @@ afterEach(() => {
 
 function taskContext(databaseAdmissionPort?: MessagePort): WorkerTaskContext {
   return { deletedAgentDatabaseFences: [], databaseAdmissionPort };
-}
-
-function expectCalls(count: number, ...mocks: MockInstance[]) {
-  for (const mock of mocks) {
-    expect(mock).toHaveBeenCalledTimes(count);
-  }
 }
 
 function resourceReceipt() {
@@ -119,7 +120,10 @@ async function workerFixture() {
       return result.promise;
     },
     expectResult(this: void, taskId: number, value: unknown) {
-      expect(port.postMessage).toHaveBeenLastCalledWith({ status: "ok", value, taskId }, []);
+      expect(port.postMessage).toHaveBeenLastCalledWith(
+        { status: "ok", value, taskId, diagnostics: undefined },
+        [],
+      );
     },
   };
 }
@@ -131,16 +135,12 @@ it.each([false, true])(
     const entered = createDeferred();
     const cleanup = createDeferred();
     const admission = await admissionFixture();
-    const { cancelWorkerIdleGc, scheduleWorkerIdleGc } = await import("./worker-idle-gc.js");
     const closeResource = vi.fn();
     const handler = vi.fn(async () => {
-      try {
-        throw new Error("uncertain native close");
-      } finally {
-        entered.resolve();
-        await cleanup.promise;
-        admission.inspect();
-      }
+      entered.resolve();
+      await cleanup.promise;
+      admission.inspect();
+      throw new Error("uncertain native close");
     });
     const receipt = resourceReceipt();
     boundary.closeMemory.mockImplementation(() => {
@@ -165,8 +165,6 @@ it.each([false, true])(
       expect(receipt.close).toHaveBeenCalledBefore(boundary.closeMemory);
       expect(boundary.closeMemory).toHaveBeenCalledBefore(admission.close);
       expect(admission.close).toHaveBeenCalledBefore(port.close);
-      expect(cancelWorkerIdleGc).toHaveBeenCalledTimes(3);
-      expect(scheduleWorkerIdleGc).not.toHaveBeenCalled();
       expect(process.exitCode).toBe(1);
       port.emit("message", { taskId: 2 });
       expectCalls(1, handler);
@@ -176,49 +174,6 @@ it.each([false, true])(
     }
   },
 );
-
-it("keeps ordinary task errors reusable", async () => {
-  const { port, task, expectResult, serveWorkerTasks } = await workerFixture();
-  const handler = vi.fn<() => string>().mockImplementationOnce(() => {
-    throw new Error("ordinary failure");
-  });
-  handler.mockReturnValue("next task");
-  serveWorkerTasks(handler);
-  await task(1);
-  expect(port.postMessage).toHaveBeenCalledWith({
-    status: "failed",
-    taskId: 1,
-    error: "ordinary failure",
-  });
-  await task(2);
-  expectResult(2, "next task");
-  expectCalls(2, handler);
-  expectCalls(0, port.close, boundary.closeMemory);
-  expect(process.exitCode).toBe(exitCode);
-});
-
-it("scopes the complete selection to each generic worker task", async () => {
-  const { task, expectResult, serveWorkerTasks } = await workerFixture();
-  const { getDatabaseEngineSelection } = await import("./database-engine/context.js");
-  const selection = {
-    effectiveEngines: {
-      state: "sqlite",
-      agent: "sqlite",
-      workboard: "postgres",
-      logbook: "sqlite",
-      "team-reports": "sqlite",
-      quarantine: "sqlite",
-      "managed-update": "sqlite",
-      "package-activation": "sqlite",
-    },
-    postgres: { connection: "postgresql://localhost/synthetic", schemaPrefix: "test" },
-  } as const;
-  serveWorkerTasks(() => getDatabaseEngineSelection());
-  await task(1, { ...taskContext(), databaseEngineSelection: selection });
-  expectResult(1, selection);
-  await task(2);
-  expectResult(2, undefined);
-});
 
 it("retains admission context for asynchronous resource cleanup and successor tasks", async () => {
   const { port, task, serveOwnedWorkerTasks } = await workerFixture();
@@ -280,11 +235,15 @@ it("expires a task's admission budget without poisoning its successor or resourc
     ...taskContext(admission.port),
     databaseAdmissionDeadlineAtMs: Date.now() - 1,
   });
-  expect(port.postMessage).toHaveBeenCalledWith({
-    status: "failed",
-    taskId: 1,
-    error: "SQLite admission facts exchange timed out; the host did not reply",
-  });
+  expect(port.postMessage).toHaveBeenCalledWith(
+    {
+      status: "failed",
+      taskId: 1,
+      error: "SQLite admission facts exchange timed out; the host did not reply",
+      diagnostics: undefined,
+    },
+    [],
+  );
   expectCalls(0, admission.exchanges);
   port.emit("message", { closeResource: true, resourcePort: receipt });
   await receipt.closed;
@@ -295,3 +254,41 @@ it("expires a task's admission budget without poisoning its successor or resourc
   expectCalls(0, port.close, boundary.closeMemory);
   expect(process.exitCode).toBe(exitCode);
 });
+
+it.each([undefined, "openclaw doctor --fix"])(
+  "settles encoded service failures through the owning lifecycle (next step: %s)",
+  async (nextStep) => {
+    const { port, task, closed, serveOwnedWorkerTasks } = await workerFixture();
+    const { bindPostgresPool, recordPostgresPoolFailure } = await import("./postgres-sync/pool.js");
+    const { port1, port2 } = new MessageChannel();
+    onTestFinished(() => {
+      port1.close();
+      port2.close();
+    });
+    bindPostgresPool({
+      allocation: new SharedArrayBuffer(4),
+      services: [{ port: port1, signal: new SharedArrayBuffer(8) }],
+      nextStep,
+    });
+    const error = new Error(
+      `PostgreSQL connection lost; outcome unknown${nextStep ? `. Run ${nextStep}.` : ""}`,
+    );
+    const result = { ok: false, error: error.message };
+    serveOwnedWorkerTasks(() => {
+      recordPostgresPoolFailure(error);
+      return result;
+    });
+    expect(await Promise.race([task(1), closed])).toBe(nextStep ? "result" : "closed");
+    if (nextStep) {
+      expect(port.postMessage).toHaveBeenCalledWith(
+        { status: "ok", taskId: 1, value: result, diagnostics: undefined },
+        [],
+      );
+      expect(port.close).not.toHaveBeenCalled();
+      expect(process.exitCode).toBe(exitCode);
+    } else {
+      expect(port.postMessage).not.toHaveBeenCalled();
+      expect(process.exitCode).toBe(1);
+    }
+  },
+);

@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AgentSelectElement } from "../../components/agent-select.ts";
+import type { AgentSelectElement } from "../../components/agent-select.tsx";
 import type { ExecApprovalsSnapshot, ExecSecurity } from "../../lib/nodes/page-operations.ts";
 import {
   renderDevicesContainer,

@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginCandidate } from "../plugins/discovery.js";
 import {
   loadPluginManifestRegistryCore,
@@ -86,6 +86,7 @@ function pluginIntegrationProviderConfig(pluginId: string, integrationId: string
 }
 
 afterEach(() => {
+  vi.unstubAllGlobals();
   Object.defineProperty(process, "versions", originalVersions);
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -574,14 +575,18 @@ describe("secret provider integration presets", () => {
     },
   );
 
-  it.skipIf(process.platform === "win32")(
-    "skips node presets whose entrypoint parent directory is writable by others",
-    () => {
+  it.skipIf(process.platform === "win32").each([
+    { writable: "world", dirMode: 0o777, fileMode: 0o644, presets: 0 },
+    { writable: "group", dirMode: 0o775, fileMode: 0o664, presets: 1 },
+  ])(
+    "lists $presets preset(s) when the node entrypoint path is $writable-writable",
+    ({ dirMode, fileMode, presets }) => {
       const rootDir = makeTempDir();
       const binDir = path.join(rootDir, "bin");
       fs.mkdirSync(binDir);
       fs.writeFileSync(path.join(binDir, "resolve.mjs"), "process.stdin.resume();\n");
-      fs.chmodSync(binDir, 0o777);
+      fs.chmodSync(path.join(binDir, "resolve.mjs"), fileMode);
+      fs.chmodSync(binDir, dirMode);
       try {
         writePluginManifest(rootDir, {
           id: "writable-parent-secrets",
@@ -597,10 +602,47 @@ describe("secret provider integration presets", () => {
 
         const registry = loadTestRegistry(rootDir, "writable-parent-secrets");
 
-        expect(listSecretProviderIntegrationPresets({ manifestRegistry: registry })).toEqual([]);
+        expect(listSecretProviderIntegrationPresets({ manifestRegistry: registry })).toHaveLength(
+          presets,
+        );
       } finally {
         fs.chmodSync(binDir, 0o700);
       }
     },
   );
 });
+
+it.each([true, false])(
+  "admits only the exact embedded plugin resolver when its disk file is pruned: %s",
+  (embedded) => {
+    const rootDir = makeTempDir();
+    const target = path.join(rootDir, "resolve.js");
+    writePluginManifest(rootDir, {
+      id: "embedded-secrets",
+      secretProviderIntegrations: {
+        vault: {
+          providerAlias: "vault",
+          source: "exec",
+          command: "${node}",
+          args: ["./resolve.js", "--profile", "test"],
+        },
+      },
+    });
+    vi.stubGlobal(
+      "__openclawStandaloneIsEmbeddedModule",
+      (filename: string) => filename === (embedded ? target : path.join(rootDir, "different.js")),
+    );
+    const result = resolveSecretProviderIntegrationConfig({
+      manifestRegistry: loadTestRegistry(rootDir, "embedded-secrets"),
+      providerAlias: "vault",
+      providerConfig: pluginIntegrationProviderConfig("embedded-secrets", "vault"),
+    });
+    expect(fs.existsSync(target)).toBe(false);
+    expect(result.ok).toBe(embedded);
+    if (result.ok) {
+      expect(result.providerConfig.args).toEqual(
+        expect.arrayContaining([target, "--profile", "test"]),
+      );
+    }
+  },
+);

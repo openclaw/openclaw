@@ -11,6 +11,10 @@ import {
   normalizePluginDiscoveryResult,
   runProviderCatalog,
 } from "../plugins/provider-discovery.js";
+import {
+  clearLiveCatalogCacheForTests,
+  getCachedLiveCatalogValue,
+} from "../plugins/provider-live-catalog-cache.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import { registerResolvedAgentDir, unregisterResolvedAgentDir } from "./agent-dir-registry.js";
 import {
@@ -117,6 +121,62 @@ it("revalidates selected-account authority before consuming an awaited discovery
   }
 });
 
+it("bypasses a selected account's HTTP cache on explicit refresh", async () => {
+  clearLiveCatalogCacheForTests();
+  const agentDir = tempDirs.make("selected-catalog-refresh-");
+  let cyber: Array<"daybreak_blue" | "daybreak_red"> = ["daybreak_blue"];
+  const load = vi.fn(async () => cyber);
+  const provider = catalogProvider(
+    "fixture",
+    "Fixture",
+    async () => ({
+      provider: { baseUrl: "https://fixture.example.test/v1", models: [] },
+      outcomes: [
+        {
+          provider: "fixture",
+          profileId: "fixture:selected",
+          status: "ready",
+          modelAccessPrograms: [
+            {
+              modelId: "same-model",
+              runtimeId: "openclaw",
+              cyber: await getCachedLiveCatalogValue({
+                keyParts: ["selected-account-refresh", agentDir],
+                load,
+                ttlMs: 60_000,
+              }),
+            },
+          ],
+        },
+      ],
+    }),
+    [],
+  );
+  const read = (refresh: boolean) =>
+    loadSelectedProviderAccountCatalog({
+      provider,
+      providerId: "fixture",
+      profileId: "fixture:selected",
+      authStore: createAuthProfileStoreFixture({
+        "fixture:selected": createApiKeyCredential("fixture", "synthetic-key"),
+      }),
+      config: {},
+      agentDir,
+      workspaceDir: agentDir,
+      refresh,
+      isCurrent: () => true,
+      assertCurrent: () => {},
+    });
+  try {
+    expect((await read(false))[0]?.modelAccessPrograms?.[0]?.cyber).toEqual(["daybreak_blue"]);
+    cyber = [];
+    expect((await read(true))[0]?.modelAccessPrograms?.[0]?.cyber).toEqual([]);
+    expect(load).toHaveBeenCalledTimes(2);
+  } finally {
+    clearLiveCatalogCacheForTests();
+  }
+});
+
 it("passes refreshed OAuth grant metadata to the catalog", async () => {
   const agentDir = tempDirs.make("catalog-oauth-grant-");
   const profileId = "openai:sharing";
@@ -139,9 +199,9 @@ it("passes refreshed OAuth grant metadata to the catalog", async () => {
     credential: refreshed,
     readCurrentCredential: null,
   });
-  const observedAuth: Array<ReturnType<ProviderAuthResolver>> = [];
+  let observedAuth: ReturnType<ProviderAuthResolver> | undefined;
   const provider = catalogProvider("openai", "OpenAI", async (ctx) => {
-    observedAuth.push(ctx.resolveProviderAuth(undefined, { oauthMarker: "oauth-marker" }));
+    observedAuth = ctx.resolveProviderAuth(undefined, { oauthMarker: "oauth-marker" });
     return null;
   });
   const prepared = await prepare({
@@ -159,17 +219,14 @@ it("passes refreshed OAuth grant metadata to the catalog", async () => {
     resolveProviderApiKey: () => ({ apiKey: undefined }),
   });
   await runProviderCatalog(prepared);
-
-  expect(observedAuth).toEqual([
-    {
-      apiKey: "oauth-marker",
-      discoveryApiKey: refreshed.access,
-      authFlow: undefined,
-      profileId,
-      mode: "oauth",
-      source: "profile",
-    },
-  ]);
+  expect(observedAuth).toEqual({
+    apiKey: "oauth-marker",
+    discoveryApiKey: refreshed.access,
+    authFlow: undefined,
+    profileId,
+    mode: "oauth",
+    source: "profile",
+  });
 });
 
 it.each([true, false])(

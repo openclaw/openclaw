@@ -12,7 +12,7 @@ type Submission = {
   /** Logical client, not the hello object that rotates on reconnect. */
   owner: object;
 } & (
-  | { kind: "initial"; sessionId?: string; consumedByEventId?: string }
+  | { kind: "initial"; sessionId?: string }
   | { kind: "delivered"; deliveryKey: string; agentId?: string; sessionId?: string }
 );
 type RetainedInitialSubmission = Omit<Extract<Submission, { kind: "initial" }>, "message"> &
@@ -32,6 +32,8 @@ type PendingChatCreate = Readonly<{
   canDisplay: () => boolean;
   composer?: CreationComposer;
   displayName?: string;
+  /** Custom group requested by the create; its admitted row lands in that section. */
+  category?: string;
 }>;
 
 export type ApplicationChatSubmissions = ReturnType<typeof createChatSubmissions>;
@@ -75,7 +77,6 @@ export function createChatSubmissions() {
       previous.pendingRunId === submission.pendingRunId
     ) {
       // Replayed completion cannot revive a consumed/reset turn or discard its physical binding.
-      previous.consumedByEventId ??= submission.consumedByEventId;
       return previous;
     }
     if (!isInitial) {

@@ -74,29 +74,21 @@ const ciEnv = () => ({
 });
 
 it.for([
-  { name: "retry without evidence", ci: "true", evidence: "0", expected: 4 },
-  { name: "CI evidence", ci: "true", evidence: "1", expected: 4 },
-  { name: "local fail-fast", ci: "", evidence: "0", expected: 1 },
-])(
-  "reports all root partition failures on $name",
-  async ({ ci, evidence, expected }, { signal }) => {
-    const f = fixture();
-    const result = await f.run(["--ci-graphs-json", '["test-root"]'], signal, {
-      ...ciEnv(),
-      CI: ci,
-      GITHUB_ACTIONS: "",
-      GITHUB_RUN_ATTEMPT: "2",
-      OPENCLAW_CI_STATIC_EVIDENCE: evidence,
-    });
-    expect(result, result.stderr).toMatchObject({ error: undefined, status: 2 });
-    expect(f.events()).toEqual(
-      TSGO_ROOT_TEST_SHARDS.slice(0, expected).map((shard) => shard.config),
-    );
-    expect(result.stdout.includes('"planned":4,"completed":4')).toBe(
-      ci === "true" && evidence === "1" && process.platform !== "win32",
-    );
-  },
-);
+  { name: "retry without evidence", ci: "true", expected: 4 },
+  { name: "local fail-fast", ci: "", expected: 1 },
+])("reports all root partition failures on $name", async ({ ci, expected }, { signal }) => {
+  const f = fixture();
+  const result = await f.run(["--ci-graphs-json", '["test-root"]'], signal, {
+    ...ciEnv(),
+    CI: ci,
+    GITHUB_ACTIONS: "",
+    GITHUB_RUN_ATTEMPT: "2",
+    OPENCLAW_CI_STATIC_EVIDENCE: "0",
+  });
+  expect(result, result.stderr).toMatchObject({ error: undefined, status: 2 });
+  expect(f.events()).toEqual(TSGO_ROOT_TEST_SHARDS.slice(0, expected).map((shard) => shard.config));
+  expect(result.stdout).not.toContain("[ci-static:tsgo:completion]");
+});
 
 it.for([
   {

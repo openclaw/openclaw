@@ -90,6 +90,7 @@ describe("configureProgramHelp", () => {
     expect(rootHelp.stdout).toContain("Examples:");
     expect(rootHelp.stdout).toContain("openclaw setup --baseline");
     expect(rootHelp.stdout).toContain("https://docs.openclaw.ai/cli");
+    expect(rootHelp.stdout).toContain("Support: https://community.openclaw.ai/");
     expect(shortHelp.stdout).toBe(rootHelp.stdout);
     expect(groupHelp.stdout).toContain("Usage: openclaw plugins [options] [command]");
     expect(subcommandHelp.stdout).toContain("Usage: openclaw plugins list [options]");

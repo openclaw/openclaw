@@ -94,7 +94,6 @@ export function ClawsPage(props: { routeData: ClawsRouteData | undefined }) {
               {(selectedPackage) => (
                 <ClawsCatalogDialog
                   initialPackageName={selectedPackage}
-                  pageMode
                   onClose={() =>
                     context.navigate("claws", {
                       pathname: pathForRoute("claws", context.basePath),

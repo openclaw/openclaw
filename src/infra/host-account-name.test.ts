@@ -47,7 +47,7 @@ describe("resolveHostAccountName", () => {
   it.each(["RealName: Ada Lovelace\n", "RealName:\n Ada Lovelace\n"])(
     "reads a macOS directory full name after id fails: %s",
     async (directoryOutput) => {
-      vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+      platform("darwin");
       runExecMock
         .mockRejectedValueOnce(new Error("id failed"))
         .mockResolvedValueOnce({ stdout: directoryOutput, stderr: "" });
@@ -98,7 +98,7 @@ describe("resolveHostAccountName", () => {
   });
 
   it("does not replace a missing full name with the macOS login", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    platform("darwin");
     runExecMock
       .mockResolvedValueOnce({ stdout: "ada\n", stderr: "" })
       .mockResolvedValueOnce({ stdout: "RealName:\n", stderr: "" });
@@ -114,7 +114,7 @@ describe("resolveHostAccountName", () => {
   });
 
   it.each(["win32", "freebsd"] as const)("returns no name on %s", async (hostPlatform) => {
-    vi.spyOn(process, "platform", "get").mockReturnValue(hostPlatform);
+    platform(hostPlatform);
 
     await expect(resolveHostAccountName()).resolves.toBeNull();
     expect(runExecMock).not.toHaveBeenCalled();

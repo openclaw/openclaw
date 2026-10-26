@@ -3,8 +3,9 @@ import * as sqliteRuntime from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, expect, it, vi } from "vitest";
 import { describePeriod } from "./periods.js";
+import { reportDocument, reportMember } from "./reports-data.test-support.js";
 import { buildRoster } from "./roster.js";
-import { createSqliteWorkerBackend } from "./store.worker.js";
+import { createSqliteWorkerBackend, openTeamReportsDatabase } from "./store.worker.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const schemaPattern =
@@ -103,4 +104,41 @@ it("aggregates across payload pages without paging metadata already retained for
   );
   expect(payloadSizes.length).toBeGreaterThan(0);
   expect(Math.max(...payloadSizes)).toBeLessThanOrEqual(100);
+});
+
+it("sees committed days in rollups without an explicit read transaction", async () => {
+  const database = openTeamReportsDatabase(
+    path.join(tempDirs.make("team-reports-rollup-"), "reports.sqlite"),
+  );
+  try {
+    // OpenClaw admits the native runtime before importing its constructor for observation.
+    const { DatabaseSync } = await import("node:sqlite");
+    const period = describePeriod("week", "2026-W34");
+    for (const [index, date] of ["2026-08-19", "2026-08-20"].entries()) {
+      database.upsertPeriod({
+        report: reportDocument([reportMember("alice")], {
+          period: describePeriod("day", date),
+        }),
+        markdown: "Synthetic daily report",
+      });
+      const exec = vi.spyOn(DatabaseSync.prototype, "exec");
+      try {
+        const rollup = database.aggregatePeriod({
+          period,
+          nowMs: period.untilMs,
+          orgs: ["example"],
+          roster: buildRoster([{ github: ["alice"] }]),
+        });
+        expect(rollup.totals.github).toMatchObject({ total: index + 1, commits: index + 1 });
+        expect(rollup.members.map((member) => [member.login, member.github.commits])).toEqual([
+          ["alice", index + 1],
+        ]);
+        expect(exec.mock.calls.map(([sql]) => sql)).toEqual([]);
+      } finally {
+        exec.mockRestore();
+      }
+    }
+  } finally {
+    database.close();
+  }
 });

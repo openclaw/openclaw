@@ -1,6 +1,11 @@
 import { expectExplicitMusicGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildComfyConfig, fetchGuardJson, registerComfyProviders } from "./test-helpers.js";
+import {
+  buildComfyConfig,
+  fetchGuardJson,
+  fetchGuardResponse,
+  registerComfyProviders,
+} from "./test-helpers.js";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
@@ -47,13 +52,7 @@ describe("comfy music-generation provider", () => {
           },
         }),
       )
-      .mockResolvedValueOnce({
-        response: new Response(Buffer.from("music-bytes"), {
-          status: 200,
-          headers: { "content-type": "audio/mpeg" },
-        }),
-        release: vi.fn(async () => {}),
-      });
+      .mockResolvedValueOnce(fetchGuardResponse(Buffer.from("music-bytes"), "audio/mpeg"));
 
     const result = await comfyProviders.music.generateMusic(request);
 

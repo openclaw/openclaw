@@ -9,6 +9,7 @@ import type {
   ToolCall,
 } from "../types.js";
 import { streamGoogleInteractions, streamSimpleGoogleInteractions } from "./google-interactions.js";
+import { makeProviderModel } from "./provider-model.test-support.js";
 
 const completedSse = (params?: {
   status?: string;
@@ -31,18 +32,11 @@ const completedSse = (params?: {
   })}\n\n`;
 
 function makeInteractionsModel(provider = "google"): Model<"google-interactions"> {
-  return {
-    id: "gemini-3-flash-preview",
+  return makeProviderModel("google-interactions", provider, "gemini-3-flash-preview", {
     name: "Gemini 3 Flash",
-    api: "google-interactions",
-    provider,
     baseUrl: "https://generativelanguage.googleapis.com/v1beta",
     reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 128_000,
-    maxTokens: 8_192,
-  };
+  });
 }
 
 function sseResponse(body: BodyInit): Response {

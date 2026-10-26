@@ -540,10 +540,9 @@ async function openSessionRailFixture(width: number, height: number) {
                     <section class="chat-session-rail chat-session-rail--expanded chat-session-rail--embedded" role="region" aria-label="Side chat">
                       <div class="chat-session-rail__thread">
                         <article class="chat-session-rail__exchange">
-                          <div class="chat-group user chat-session-rail__message"><div class="chat-bubble chat-session-rail__question">What should I check next?</div></div>
-                          <div class="chat-group assistant chat-session-rail__message"><div class="chat-bubble chat-session-rail__answer">${LONG_SESSION_RAIL_BODY}</div></div>
+                          <div class="chat-group user chat-group--with-footer"><div class="chat-group-messages"><div class="chat-bubble">What should I check next?</div></div></div>
+                          <div class="chat-group assistant chat-group--with-footer"><div class="chat-group-messages"><div class="chat-bubble">${LONG_SESSION_RAIL_BODY}</div></div></div>
                           <span class="chat-session-rail__pr-checks">2 passed</span>
-                          <time class="chat-session-rail__timestamp">as of 4:12 PM</time>
                           <div class="chat-session-rail__hint">Side chat is already answering a question.</div>
                         </article>
                       </div>
@@ -977,7 +976,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
 
   it("keeps custom avatar sizing and the user edge neutral", async () => {
     await withBrowserPage(openBrowserPage(430, 720), async (page) => {
-      await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+      await page.setContent(`<!doctype html><html><head><style>${readUiCss()}${readStyleSheet("ui/src/styles/identity-avatar.css")}</style></head><body>
         <img class="chat-avatar assistant" src="/avatar/main" alt="Custom" />
         <img class="chat-avatar user" src="/avatar/user" alt="User" />
       </body></html>`);
@@ -1004,7 +1003,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           boxSizing: "border-box",
           objectFit: "cover",
           padding: "0px",
-          borderWidth: "1px",
+          borderWidth: "0px",
         },
         {
           width: 36,
@@ -1012,7 +1011,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           boxSizing: "border-box",
           objectFit: "cover",
           padding: "0px",
-          borderWidth: "1px",
+          borderWidth: "0px",
         },
       ]);
 
@@ -1020,32 +1019,26 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         const edge = await page.evaluate((mode) => {
           document.documentElement.dataset.themeMode = mode;
           const probe = document.createElement("span");
-          probe.style.border = "1px solid var(--border)";
+          probe.style.outline = "1px solid color-mix(in srgb, var(--text) 8%, transparent)";
           document.body.append(probe);
-          const neutralColor = getComputedStyle(probe).borderTopColor;
-          probe.style.borderColor = "color-mix(in srgb, var(--accent) 20%, transparent)";
-          const accentColor = getComputedStyle(probe).borderTopColor;
+          const neutralOutline = getComputedStyle(probe).outline;
           const avatar = document.querySelector("img.chat-avatar.user");
           if (!avatar) {
             throw new Error("Expected user avatar fixture");
           }
           const avatarStyle = getComputedStyle(avatar);
           const result = {
-            accentColor,
-            borderColor: avatarStyle.borderTopColor,
-            borderStyle: avatarStyle.borderTopStyle,
             borderWidth: avatarStyle.borderTopWidth,
-            neutralColor,
-            outlineStyle: avatarStyle.outlineStyle,
+            neutralOutline,
+            outline: avatarStyle.outline,
+            outlineOffset: avatarStyle.outlineOffset,
           };
           probe.remove();
           return result;
         }, theme);
-        expect(edge.borderColor).toBe(edge.neutralColor);
-        expect(edge.borderColor).not.toBe(edge.accentColor);
-        expect(edge.borderStyle).toBe("solid");
-        expect(edge.borderWidth).toBe("1px");
-        expect(edge.outlineStyle).toBe("none");
+        expect(edge.outline).toBe(edge.neutralOutline);
+        expect(edge.borderWidth).toBe("0px");
+        expect(edge.outlineOffset).toBe("-1px");
       }
     });
   });
@@ -2340,9 +2333,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           };
         });
         expect(composerFontSizes).toEqual({
-          labels: [14, 14],
-          placeholder: 16,
-          textarea: 16,
+          labels: [13, 13],
+          placeholder: 14,
+          textarea: 14,
         });
         if (width === 320) {
           expect(attach.width).toBeGreaterThanOrEqual(36);
@@ -3129,7 +3122,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         <section class="chat-session-rail chat-session-rail--expanded chat-session-rail--embedded">
           <div class="chat-session-rail__thread">
             <article class="chat-session-rail__exchange">
-              <div class="chat-session-rail__answer">
+              <div class="chat-bubble">
                 <span data-selection-target>Copy this side chat answer.</span>
               </div>
             </article>
@@ -3233,17 +3226,16 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           return {
             thread: read(".chat-session-rail__thread"),
             prChecks: read(".chat-session-rail__pr-checks"),
-            timestamp: read(".chat-session-rail__timestamp"),
             hint: read(".chat-session-rail__hint"),
           };
         });
 
-        // PR checks, timestamps and hints are metadata inside an exchange. Sharing the
+        // PR checks and hints are metadata inside an exchange. Sharing the
         // thread's rule would give each one a 96px scrolling bordered box; the
         // selector list has silently merged before.
         expect(styles.thread.minHeight).toBe("96px");
         expect(styles.thread.overflowY).toBe("auto");
-        for (const metadata of [styles.prChecks, styles.timestamp, styles.hint]) {
+        for (const metadata of [styles.prChecks, styles.hint]) {
           // Relational, not a literal: the point is that these nodes do not share
           // the thread's rule, whatever the thread's own numbers become.
           expect(metadata.minHeight).not.toBe(styles.thread.minHeight);

@@ -6,6 +6,7 @@ import {
   createInlineCodeState,
 } from "../../packages/markdown-core/src/code-spans.js";
 import type { FenceScanState } from "../../packages/markdown-core/src/fences.js";
+import { parseReasoningTagAt } from "../../packages/markdown-core/src/reasoning-tag-parser.js";
 import {
   addReplyPayloadMediaFailures,
   appendReplyMediaFailures,
@@ -41,24 +42,9 @@ import type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subsc
 import {
   createAssistantStreamBlockState,
   createThinkingTagStreamState,
-  THINKING_TAG_SCAN_RE,
 } from "./embedded-agent-utils.js";
 
-const STREAM_STRIPPED_BLOCK_TAG_NAMES = [
-  "final",
-  "think",
-  "thinking",
-  "thought",
-  "antthinking",
-  "antml:think",
-  "antml:thinking",
-  "antml:thought",
-  "mm:think",
-  "mm:thinking",
-  "mm:thought",
-] as const;
-
-function isPotentialTrailingBlockTagFragment(fragment: string): boolean {
+function isPotentialTrailingFinalTagFragment(fragment: string): boolean {
   if (!fragment.startsWith("<") || fragment.includes(">")) {
     return false;
   }
@@ -70,19 +56,36 @@ function isPotentialTrailingBlockTagFragment(fragment: string): boolean {
   if (!namePart) {
     return true;
   }
-  return STREAM_STRIPPED_BLOCK_TAG_NAMES.some((name) => name.startsWith(namePart));
+  return "final".startsWith(namePart);
 }
 
 function splitTrailingBlockTagFragment(
   text: string,
   isInsideCodeSpan: (index: number) => boolean,
 ): { text: string; pendingTagFragment?: string } {
+  for (let cursor = 0; cursor < text.length;) {
+    const start = text.indexOf("<", cursor);
+    if (start === -1) {
+      break;
+    }
+    cursor = start + 1;
+    if (isInsideCodeSpan(start)) {
+      continue;
+    }
+    const parsed = parseReasoningTagAt(text, start, false);
+    if (parsed.kind === "pending") {
+      return { text: text.slice(0, start), pendingTagFragment: text.slice(start) };
+    }
+    if (parsed.kind === "tag") {
+      cursor = start + parsed.tag.text.length;
+    }
+  }
   const fragmentStart = text.lastIndexOf("<");
   if (fragmentStart === -1 || isInsideCodeSpan(fragmentStart)) {
     return { text };
   }
   const fragment = text.slice(fragmentStart);
-  if (!isPotentialTrailingBlockTagFragment(fragment)) {
+  if (!isPotentialTrailingFinalTagFragment(fragment)) {
     return { text };
   }
   return {
@@ -176,10 +179,9 @@ export function createStreamRendering({
         : buildCodeSpanIndex(scanText, inlineStateStart, fenceStateStart);
 
     let processed = "";
-    THINKING_TAG_SCAN_RE.lastIndex = 0;
     let lastIndex = 0;
     let lastCodeIndex = 0;
-    let inThinking = stateLocal.thinking;
+    let reasoningDepth = stateLocal.reasoningDepth;
     // Hidden reasoning has its own code state: malformed hidden fences must not
     // mark later visible text as code, but literal close tags there stay hidden.
     let hiddenInlineState: InlineCodeState = stateLocal.reasoningInlineCode
@@ -213,24 +215,41 @@ export function createStreamRendering({
       hiddenInlineState = next.inlineState;
       hiddenFenceState = next.fenceState;
     };
-    for (const match of scanText.matchAll(THINKING_TAG_SCAN_RE)) {
-      const idx = match.index ?? 0;
-      const isClose = match[1] === "/";
-      if (inThinking) {
+    for (let cursor = 0; cursor < scanText.length;) {
+      const idx = scanText.indexOf("<", cursor);
+      if (idx === -1) {
+        break;
+      }
+      cursor = idx + 1;
+      if (reasoningDepth > 0) {
         advanceHiddenCodeState(scanText.slice(lastCodeIndex, idx));
       }
       const isInsideHiddenCode =
-        inThinking && (hiddenInlineState.open || Boolean(hiddenFenceState?.open));
-      lastCodeIndex = idx + match[0].length;
-      if ((!inThinking && codeSpans.isInside(idx)) || isInsideHiddenCode) {
-        if (inThinking) {
-          advanceHiddenCodeState(match[0]);
-        }
+        reasoningDepth > 0 && (hiddenInlineState.open || Boolean(hiddenFenceState?.open));
+      lastCodeIndex = idx;
+      if ((reasoningDepth === 0 && codeSpans.isInside(idx)) || isInsideHiddenCode) {
         continue;
       }
-      if (!inThinking) {
+      // Code ownership comes first: quotes inside literal tags must not consume
+      // later real tags when the canonical parser scans their attributes.
+      const parsed = parseReasoningTagAt(scanText, idx, true);
+      if (parsed.kind !== "tag") {
+        continue;
+      }
+      const match = parsed.tag;
+      const isClose = match.isClose;
+      cursor = idx + match.text.length;
+      lastCodeIndex = cursor;
+      if (match.isSelfClosing) {
+        if (reasoningDepth === 0) {
+          processed += scanText.slice(lastIndex, idx);
+        }
+        lastIndex = cursor;
+        continue;
+      }
+      if (reasoningDepth === 0) {
         if (isClose) {
-          const afterIndex = idx + match[0].length;
+          const afterIndex = cursor;
           const before = scanText.slice(lastIndex, idx);
           const after = scanText.slice(afterIndex);
           if (hasOrphanReasoningCloseBoundary({ before, after })) {
@@ -243,24 +262,26 @@ export function createStreamRendering({
         }
         processed += scanText.slice(lastIndex, idx);
       }
-      if (!inThinking || isClose) {
+      // Like the canonical reducer, only the outer close releases hidden text.
+      reasoningDepth += isClose ? -1 : 1;
+      if (reasoningDepth === 1 && !isClose) {
         hiddenInlineState = createInlineCodeState();
         hiddenFenceState = undefined;
         hiddenPendingFenceFragment = undefined;
       }
-      inThinking = !isClose;
-      lastIndex = idx + match[0].length;
+      lastIndex = cursor;
     }
-    if (inThinking) {
+    if (reasoningDepth > 0) {
       advanceHiddenCodeState(scanText.slice(lastCodeIndex));
     }
-    if (!inThinking) {
+    if (reasoningDepth === 0) {
       processed += scanText.slice(lastIndex);
     }
-    stateLocal.thinking = inThinking;
-    stateLocal.reasoningInlineCode = inThinking ? hiddenInlineState : undefined;
-    stateLocal.reasoningFence = inThinking ? hiddenFenceState : undefined;
-    stateLocal.reasoningPendingFenceFragment = inThinking ? hiddenPendingFenceFragment : undefined;
+    stateLocal.reasoningDepth = reasoningDepth;
+    stateLocal.reasoningInlineCode = reasoningDepth > 0 ? hiddenInlineState : undefined;
+    stateLocal.reasoningFence = reasoningDepth > 0 ? hiddenFenceState : undefined;
+    stateLocal.reasoningPendingFenceFragment =
+      reasoningDepth > 0 ? hiddenPendingFenceFragment : undefined;
 
     // Even without enforcement, strip provider-emitted tags from visible text.
     const finalCodeSpans =

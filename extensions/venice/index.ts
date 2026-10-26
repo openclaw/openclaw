@@ -19,15 +19,6 @@ const PROVIDER_ID = "venice";
 const VENICE_BALANCE_URL = "https://api.venice.ai/api/v1/billing/balance";
 const VENICE_USAGE_RESPONSE_MAX_BYTES = 1024 * 1024;
 
-type VeniceBalanceResponse = {
-  canConsume?: unknown;
-  consumptionCurrency?: unknown;
-  balances?: {
-    diem?: unknown;
-    usd?: unknown;
-  };
-  diemEpochAllocation?: unknown;
-};
 const XAI_UNSUPPORTED_SCHEMA_KEYWORDS = [
   "minLength",
   "maxLength",
@@ -98,7 +89,15 @@ export default defineSingleProviderPluginEntry({
         await response.body?.cancel().catch(() => undefined);
         return buildUsageHttpErrorSnapshot({ provider: "venice", status: response.status });
       }
-      let data: VeniceBalanceResponse;
+      let data: {
+        canConsume?: unknown;
+        consumptionCurrency?: unknown;
+        balances?: {
+          diem?: unknown;
+          usd?: unknown;
+        };
+        diemEpochAllocation?: unknown;
+      };
       try {
         data = await readProviderJsonObjectResponse(response, "Venice usage", {
           maxBytes: VENICE_USAGE_RESPONSE_MAX_BYTES,

@@ -144,19 +144,6 @@ function buildProxyRequestAbort(callerSignal: AbortSignal | undefined, timeoutMs
   };
 }
 
-async function readProxyErrorData(
-  response: Response,
-  readIdleTimeoutMs: number,
-): Promise<{ error?: string } | undefined> {
-  const bytes = await readResponseWithLimit(response, PROXY_ERROR_BODY_MAX_BYTES, {
-    onOverflow: ({ maxBytes }) => new Error(`Proxy error body exceeded ${maxBytes} bytes`),
-    chunkTimeoutMs: readIdleTimeoutMs,
-    onIdleTimeout: ({ chunkTimeoutMs }) =>
-      new Error(`Proxy error body stalled: no data received for ${chunkTimeoutMs}ms`),
-  });
-  return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as { error?: string };
-}
-
 function assertProxySsePendingBufferWithinLimit(buffer: string): void {
   const size = new TextEncoder().encode(buffer).byteLength;
   if (size <= PROXY_SSE_PENDING_BUFFER_MAX_BYTES) {
@@ -234,7 +221,15 @@ export function streamProxy(
       if (!response.ok) {
         let errorMessage = `Proxy error: ${response.status} ${response.statusText}`;
         try {
-          const errorData = await readProxyErrorData(response, readIdleTimeoutMs);
+          const bytes = await readResponseWithLimit(response, PROXY_ERROR_BODY_MAX_BYTES, {
+            onOverflow: ({ maxBytes }) => new Error(`Proxy error body exceeded ${maxBytes} bytes`),
+            chunkTimeoutMs: readIdleTimeoutMs,
+            onIdleTimeout: ({ chunkTimeoutMs }) =>
+              new Error(`Proxy error body stalled: no data received for ${chunkTimeoutMs}ms`),
+          });
+          const errorData = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as {
+            error?: string;
+          };
           if (errorData?.error) {
             errorMessage = `Proxy error: ${errorData.error}`;
           }

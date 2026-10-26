@@ -1,10 +1,14 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { main } from "../../scripts/check-line-cap-ratchet.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import {
+  createToolingDependencyFixture,
+  installLineCapToolingFixture,
+} from "./tooling-dependencies.test-support.mts";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const errors = vi.fn<typeof console.error>();
@@ -44,8 +48,12 @@ const expectGrowth = (file = "src/file.ts", from = 5, to = 6) =>
     expect.stringContaining(`${file}: ${from} -> ${to} counted lines (cap 3)`),
   );
 
-function fixture(lines = 5, severity = "warn", ignorePatterns: string[] = []) {
-  const root = tempDirs.make("openclaw-line-cap-test-");
+function fixture(
+  lines = 5,
+  severity = "warn",
+  ignorePatterns: string[] = [],
+  root = tempDirs.make("openclaw-line-cap-test-"),
+) {
   fs.mkdirSync(path.join(root, "src"));
   const rules = { "max-lines": [severity, { max: 3, skipBlankLines: true, skipComments: true }] };
   const override = { files: ["**/*.ts"], excludeFiles: ["**/generated/**"], rules };
@@ -148,3 +156,82 @@ it("counts oxlint-suppressed debt without changing the source", () => {
   expectGrowth();
   expect(fs.readFileSync(path.join(root, "src/file.ts"), "utf8")).toBe(growing);
 });
+
+it("uses qualified oxlint instead of a stale canonical bin in a code-only worktree", () => {
+  const owner = fixture(2);
+  const checkout = path.join(owner, "task");
+  git(owner, "worktree", "add", "--detach", checkout, "HEAD");
+  const { env } = installLineCapToolingFixture(checkout);
+  const bin = path.join(owner, "node_modules/.bin");
+  fs.mkdirSync(bin, { recursive: true });
+  fs.writeFileSync(
+    path.join(bin, "oxlint"),
+    '#!/usr/bin/env node\nconsole.error("STALE CANONICAL OXLINT EXECUTED"); process.exit(87);\n',
+    { mode: 0o755 },
+  );
+  // Isolate binary selection from the package entry's loader admission.
+  fs.writeFileSync(
+    path.join(checkout, "scripts/probe.mjs"),
+    'import { runTsxCliShim } from "./lib/tsx-cli-shim.mjs"; await runTsxCliShim(import.meta.url, { implementation: "./check-line-cap-ratchet.mts", toolingDependencies: "line-cap-ratchet" });',
+  );
+  write(checkout, 3);
+  git(checkout, "add", "src/file.ts");
+  const result = spawnSync(process.execPath, ["scripts/probe.mjs", "--staged", "--base", "HEAD"], {
+    cwd: checkout,
+    env,
+    encoding: "utf8",
+    timeout: 20_000,
+  });
+  expect(result, result.stderr).toMatchObject({ status: 0 });
+  expect(result.stdout).toContain("Line-cap ratchet OK: 1 changed source files");
+  expect(result.stderr).not.toContain("STALE CANONICAL OXLINT EXECUTED");
+  expect(fs.existsSync(path.join(checkout, "node_modules"))).toBe(false);
+});
+
+it.each(["bin traversal", "bin symlink"])(
+  "rejects %s before executing the oxlint CLI",
+  (invalid) => {
+    const donor = createToolingDependencyFixture(tempDirs.make("openclaw-line-cap-admission-"));
+    const { env } = installLineCapToolingFixture(donor.checkout);
+    const root = fixture(2, "warn", [], donor.checkout);
+    const manifest = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+    donor.writePackage("tsx", "export {};", manifest.devDependencies.tsx);
+    donor.writePackage("json5", "export default JSON;", manifest.dependencies.json5);
+    const marker = 'console.error("UNQUALIFIED OXLINT EXECUTED"); process.exit(87);';
+    const pkg = donor.writePackage("oxlint", marker, manifest.devDependencies.oxlint);
+    const binManifest = {
+      name: "oxlint",
+      version: manifest.devDependencies.oxlint,
+      type: "module",
+      exports: { "./package.json": "./package.json" },
+      bin: { oxlint: "index.mjs" },
+    };
+    const outside = path.join(donor.tooling, "outside-cli.mjs");
+    fs.writeFileSync(outside, marker);
+    if (invalid === "bin traversal") {
+      binManifest.bin.oxlint = "../../outside-cli.mjs";
+    } else {
+      fs.symlinkSync(outside, path.join(pkg, "cli.mjs"), "file");
+      binManifest.bin.oxlint = "cli.mjs";
+    }
+    fs.writeFileSync(path.join(pkg, "package.json"), JSON.stringify(binManifest));
+    write(root, 3);
+    git(root, "add", "src/file.ts");
+    const result = spawnSync(
+      process.execPath,
+      ["scripts/check-line-cap-ratchet.mjs", "--staged", "--base", "HEAD"],
+      {
+        cwd: root,
+        env: { ...env, OPENCLAW_PR_TOOLING_ROOT: donor.tooling },
+        encoding: "utf8",
+        timeout: 20_000,
+      },
+    );
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain(
+      "The oxlint CLI bin must be a file inside its admitted package.",
+    );
+    expect(result.stdout + result.stderr).not.toContain("UNQUALIFIED OXLINT EXECUTED");
+    expect(fs.existsSync(path.join(root, "node_modules"))).toBe(false);
+  },
+);

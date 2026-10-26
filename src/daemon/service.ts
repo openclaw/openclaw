@@ -22,19 +22,19 @@ import {
   withDaemonRuntimePinMigration,
   readDaemonRuntimePinForInstall,
 } from "./runtime-pin-state.js";
-import { stopStalledGatewayStartup } from "./schtasks-process.js";
+import { restartScheduledTask, startScheduledTask, stopScheduledTask } from "./schtasks-control.js";
 import {
   installScheduledTask,
+  stageScheduledTask,
+  uninstallScheduledTask,
+} from "./schtasks-install.js";
+import { readScheduledTaskCommand } from "./schtasks-layout.js";
+import { stopStalledGatewayStartup } from "./schtasks-process.js";
+import {
   isScheduledTaskEnabled,
   isScheduledTaskInstalled,
-  readScheduledTaskCommand,
   readScheduledTaskRuntime,
-  restartScheduledTask,
-  startScheduledTask,
-  stageScheduledTask,
-  stopScheduledTask,
-  uninstallScheduledTask,
-} from "./schtasks.js";
+} from "./schtasks-runtime.js";
 import { assertServiceInspectionFallbackAllowed } from "./service-inspection-error.js";
 import { withGatewayServiceOperationLock } from "./service-operation-lock.js";
 import { captureGatewayServiceRebind } from "./service-rebind.js";

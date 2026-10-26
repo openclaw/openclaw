@@ -1,10 +1,46 @@
 import fs from "node:fs/promises";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
+import { listDirectoryTreeStrict } from "../infra/directory-walk.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { doctorDatabasePort, type DatabasePortOptions } from "./doctor-database-port.js";
 
-describe("database port engine-selection admission", () => {
+describe("native Windows database port", () => {
+  it.each([
+    { to: "postgres" },
+    { to: "sqlite" },
+    { to: "postgres", dryRun: true },
+    { resume: "missing-manifest.json" },
+    { rollback: "missing-manifest.json" },
+  ] satisfies DatabasePortOptions[])(
+    "refuses with supported alternatives before touching files (%j)",
+    async (options) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        await state.writeConfig({ database: { engine: "sqlite" } });
+        const database = await state.writeText("state/openclaw.sqlite", "retained state bytes");
+        const configBefore = await fs.readFile(state.configPath);
+        const filesBefore = (await listDirectoryTreeStrict(state.stateDir)).map(
+          (entry) => entry.relativePath,
+        );
+        const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+        try {
+          await expect(doctorDatabasePort(options)).rejects.toThrow(
+            /Native Windows does not support SQLite.*PostgreSQL database port yet.*Existing data and engine selection stay unchanged.*fresh PostgreSQL setup on Windows.*Linux or macOS/s,
+          );
+        } finally {
+          platform.mockRestore();
+        }
+        expect(await fs.readFile(database, "utf8")).toBe("retained state bytes");
+        expect(await fs.readFile(state.configPath)).toEqual(configBefore);
+        expect(
+          (await listDirectoryTreeStrict(state.stateDir)).map((entry) => entry.relativePath),
+        ).toEqual(filesBefore);
+      });
+    },
+  );
+});
+
+describe.skipIf(process.platform === "win32")("database port engine-selection admission", () => {
   it.each([{ to: "postgres" }, { to: "sqlite", dryRun: true }] satisfies DatabasePortOptions[])(
     "requires a family for mixed installs before touching stores (%j)",
     async (options) => {

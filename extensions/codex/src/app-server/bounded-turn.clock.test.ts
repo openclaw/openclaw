@@ -4,6 +4,7 @@ import { codexModel } from "./bounded-turn.test-harness.js";
 import { createWebSocketPeer } from "./client-websocket.test-support.js";
 import { CodexAppServerClient } from "./client.js";
 import { threadStartResult, turnStartResult } from "./codex-app-server.test-fixtures.js";
+import * as sharedClients from "./shared-client.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 it.each([60_000, -60_000])(
@@ -54,23 +55,22 @@ it.each([60_000, -60_000])(
           client?.close();
         }
       }, 4_000);
+      vi.spyOn(sharedClients, "createIsolatedCodexAppServerClient").mockImplementation(async () => {
+        client = await CodexAppServerClient.start({
+          transport: "websocket",
+          url: peer.url,
+        });
+        await client.initialize();
+        initialized = true;
+        // Apply one process-local offset after startup, never an OS clock change.
+        wallClock.mockImplementation(() => realDateNow() + clockStepMs);
+        return client;
+      });
       run = runBoundedCodexAppServerTurn({
         model: { mode: "required", id: thread.model },
         timeoutMs: 1_000,
         signal: caller.signal,
-        options: {
-          clientFactory: async () => {
-            client = await CodexAppServerClient.start({
-              transport: "websocket",
-              url: peer.url,
-            });
-            await client.initialize();
-            initialized = true;
-            // Apply one process-local offset after startup, never an OS clock change.
-            wallClock.mockImplementation(() => realDateNow() + clockStepMs);
-            return client;
-          },
-        },
+        options: {},
         taskLabel: "clock proof",
         developerInstructions: "Wait for cancellation.",
         input: [{ type: "text", text: "Clock proof.", text_elements: [] }],
@@ -96,7 +96,7 @@ it.each([60_000, -60_000])(
       expect(elapsedMs).toBeLessThan(4_000);
     } finally {
       clearTimeout(watchdog);
-      wallClock.mockRestore();
+      vi.restoreAllMocks();
       caller.abort();
       await run;
       await client?.closeAndWait();

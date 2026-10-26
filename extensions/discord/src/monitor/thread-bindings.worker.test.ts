@@ -2,9 +2,9 @@ import { DatabaseSync, StatementSync } from "node:sqlite";
 import { isMainThread } from "node:worker_threads";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
-  createPluginStateKeyedStoreForTests,
-  createPluginStateKeyedStoreV2ForTests,
-  createPluginStateSyncKeyedStoreForTests,
+  createPluginStateKeyedStoreForTests as openAsyncStore,
+  createPluginStateKeyedStoreV2ForTests as openAsyncStoreV2,
+  createPluginStateSyncKeyedStoreForTests as openSyncStore,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
@@ -18,14 +18,14 @@ import { createThreadBindingManager } from "./thread-bindings.manager.js";
 import { resetThreadBindingsForTests } from "./thread-bindings.test-support.js";
 import type { ThreadBindingRecord } from "./thread-bindings.types.js";
 
+const storeOptions = { namespace: "thread-bindings", maxEntries: 10_000 };
 vi.mock("../runtime.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../runtime.js")>();
   const runtime = {
     state: {
       openKeyedStoreV2: (options: OpenKeyedStoreOptions) =>
-        createPluginStateKeyedStoreV2ForTests("discord", options, { assertCurrent() {} }),
-      openSyncKeyedStore: (options: OpenKeyedStoreOptions) =>
-        createPluginStateSyncKeyedStoreForTests("discord", options),
+        openAsyncStoreV2("discord", options, { assertCurrent() {} }),
+      openSyncKeyedStore: (options: OpenKeyedStoreOptions) => openSyncStore("discord", options),
     },
   };
   return { ...actual, getDiscordRuntime: () => runtime, getOptionalDiscordRuntime: () => runtime };
@@ -46,10 +46,7 @@ it("keeps binding restoration, mutation, and shutdown SQL off the process main t
       boundAt: 100,
       lastActivityAt: 100,
     };
-    const native = createPluginStateSyncKeyedStoreForTests<ThreadBindingRecord>("discord", {
-      namespace: "thread-bindings",
-      maxEntries: 10_000,
-    });
+    const native = openSyncStore<ThreadBindingRecord>("discord", storeOptions);
     native.register("work:thread-1", saved);
     const calibration = observeHostDataSql();
     try {
@@ -79,17 +76,11 @@ it("keeps binding restoration, mutation, and shutdown SQL off the process main t
       await expect(manager.touchThread({ threadId: "thread-1", at: 200 })).resolves.toMatchObject({
         lastActivityAt: 200,
       });
-      const reader = createPluginStateKeyedStoreForTests<ThreadBindingRecord>("discord", {
-        namespace: "thread-bindings",
-        maxEntries: 10_000,
-      });
+      const reader = openAsyncStore<ThreadBindingRecord>("discord", storeOptions);
       await expect(reader.lookup("work:thread-1")).resolves.toMatchObject({ lastActivityAt: 200 });
       await expect(
         manager.unbindThread({ threadId: "thread-1", sendFarewell: false }),
-      ).resolves.toMatchObject({
-        threadId: "thread-1",
-        lastActivityAt: 200,
-      });
+      ).resolves.toMatchObject({ threadId: "thread-1", lastActivityAt: 200 });
       await manager.stop();
       expect(observation.queries).toEqual([]);
       for (const call of [...observation.calls, ...raw]) {

@@ -46,6 +46,47 @@ describe("Gateway deferred intents", () => {
     vi.unstubAllGlobals();
   });
 
+  it("preserves a lifecycle slot while replacing its value and discarding related intents", async () => {
+    const calls: string[] = [];
+    const discarded = vi.fn();
+    disconnect();
+    store.gateway.defer({
+      key: "lifecycle",
+      group: "session",
+      run: async () => {
+        calls.push("archive");
+      },
+    });
+    store.gateway.defer({
+      key: "other",
+      run: async () => {
+        calls.push("other");
+      },
+    });
+    store.gateway.defer({
+      key: "metadata",
+      group: "session",
+      run: async () => {
+        calls.push("metadata");
+      },
+      discard: discarded,
+    });
+    store.gateway.defer({
+      key: "lifecycle",
+      group: "session",
+      preservePosition: true,
+      discardGroup: true,
+      run: async () => {
+        calls.push("delete");
+      },
+    });
+    expect(store.gateway.snapshot.deferredIntentCount).toBe(2);
+    expect(discarded).toHaveBeenCalledOnce();
+    hello();
+    await settle();
+    expect(calls).toEqual(["delete", "other"]);
+  });
+
   it("moves coalesced desired state to the tail and publishes reload custody until dispatch", async () => {
     const calls: string[] = [];
     const oldDiscard = vi.fn();

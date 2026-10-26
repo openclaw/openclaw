@@ -52,7 +52,24 @@ function entity(offset: number, length: number, type = "textEntityTypeCode") {
   return { offset, length, type: { "@type": type } };
 }
 
+function message(overrides: Partial<TelegramUserbotUpdate> = {}): TelegramUserbotUpdate {
+  return {
+    kind: "message",
+    chatId: -1001,
+    messageId: 11,
+    senderId: 100,
+    timestamp: 1000,
+    text: "😀 a   b x",
+    entities: [],
+    ...overrides,
+  };
+}
+
+const pythonJson = (name: string, value: unknown) =>
+  `${name} = json.loads(${JSON.stringify(JSON.stringify(value))})`;
+
 afterEach(async () => {
+  vi.unstubAllEnvs();
   await Promise.all(drivers.splice(0).map((driver) => driver.close())).finally(() => {
     tempRoots.splice(0).forEach((root) => fs.rmSync(root, { recursive: true, force: true }));
   });
@@ -74,24 +91,27 @@ it("keeps one process for commands and streamed formatting edits", async () => {
     is_rtl: false,
     blocks: [{ "@type": "pageBlockParagraph", text: link }],
   };
+  const initial = message({ messageId: 12, senderId: 200, contentType: "messagePhoto", entities });
+  const edit = { ...initial, kind: "edit" as const, contentType: "messageVideo" };
+  const richEdit = { ...edit, contentType: "messageRichMessage", text: "x", entities: [] };
+  const expected = [
+    initial,
+    { ...edit, entities: editedEntities },
+    { ...edit, entities: [] },
+    { ...richEdit, richMessage },
+    { ...richEdit, richMessage: { ...richMessage, is_full: false } },
+    { ...richEdit, contentType: "messageText" },
+  ];
+  const result = message({ entities, contentType: "messageText", forumTopicId: 42 });
   const scriptPath = writeDriver(
-    [
-      `entities = json.loads(${JSON.stringify(JSON.stringify(entities))})`,
-      `edited_entities = json.loads(${JSON.stringify(JSON.stringify(editedEntities))})`,
-      `rich_message = json.loads(${JSON.stringify(JSON.stringify(richMessage))})`,
-    ],
+    [pythonJson("updates", expected), pythonJson("result", result), "result.pop('kind')"],
     [
       "    assert request['chatId'] == '-2002' and request['forumTopicId'] == 42",
-      "    message_id = 10 + int(request['id'])",
-      "    update = {'kind':'message','chatId':-1001,'messageId':message_id + 1,'senderId':200,'timestamp':1000,'text':request['text'],'entities':entities,'contentType':'messagePhoto'}",
-      "    print(json.dumps({'type':'update','update':update}), flush=True)",
-      "    for replacement in [edited_entities, []]:",
-      "        update = {**update, 'kind':'edit', 'entities':replacement, 'contentType':'messageVideo'}",
+      "    assert request['text'] == result['text']",
+      "    for update in updates:",
+      "        if update['contentType'] == 'messageText':",
+      "            update = {**update, 'richMessage':None}",
       "        print(json.dumps({'type':'update','update':update}), flush=True)",
-      "    for rich in [rich_message, {**rich_message, 'is_full':False}, None]:",
-      "        update = {**update, 'richMessage':rich, 'text':'x', 'entities':[], 'contentType':'messageRichMessage' if rich else 'messageText'}",
-      "        print(json.dumps({'type':'update','update':update}), flush=True)",
-      "    result = {'chatId':-1001,'messageId':message_id,'senderId':100,'timestamp':1000,'text':request['text'],'entities':entities,'contentType':'messageText','forumTopicId':request['forumTopicId']}",
       "    print(json.dumps({'type':'response','id':request['id'],'result':result}), flush=True)",
     ],
   );
@@ -102,32 +122,9 @@ it("keeps one process for commands and streamed formatting edits", async () => {
       updates.push(update);
     },
   });
-  await expect(driver.send({ text, chatId: "-2002", forumTopicId: 42 })).resolves.toMatchObject({
-    forumTopicId: 42,
-    messageId: 11,
-    senderId: 100,
-    contentType: "messageText",
-    text,
-    entities,
-  });
+  await expect(driver.send({ text, chatId: "-2002", forumTopicId: 42 })).resolves.toEqual(result);
   await vi.waitFor(() => expect(updates).toHaveLength(6));
-  const edit = { kind: "edit", messageId: 12, contentType: "messageVideo", text };
-  const richEdit = { kind: "edit", messageId: 12, contentType: "messageRichMessage" };
-  expect(updates).toMatchObject([
-    {
-      kind: "message",
-      messageId: 12,
-      senderId: 200,
-      contentType: "messagePhoto",
-      text,
-      entities,
-    },
-    { ...edit, entities: editedEntities },
-    { ...edit, entities: [] },
-    { ...richEdit, richMessage },
-    { ...richEdit, richMessage: { ...richMessage, is_full: false } },
-    { kind: "edit", messageId: 12, contentType: "messageText", text: "x", entities: [] },
-  ]);
+  expect(updates).toEqual(expected);
   expect(updates[5]).not.toHaveProperty("richMessage");
   expect(() => driver.assertHealthy()).not.toThrow();
 });
@@ -144,16 +141,9 @@ it.each<[string, unknown, boolean?]>([
   ["end inside a surrogate pair", [entity(0, 1)]],
   ["missing entity type", [{ offset: 3, length: 1, type: {} }], true],
 ])("rejects %s at the child protocol boundary", async (_name, entities, streamed = false) => {
-  const message = {
-    chatId: -1001,
-    messageId: 11,
-    senderId: 100,
-    timestamp: 1000,
-    text: "😀 a   b x",
-    entities,
-  };
+  const invalid = { ...message(), entities };
   const scriptPath = writeDriver(
-    [`result = json.loads(${JSON.stringify(JSON.stringify(message))})`],
+    [pythonJson("result", invalid), "result.pop('kind')"],
     [
       `    if ${streamed ? "True" : "False"}:`,
       "        print(json.dumps({'type':'update','update':{**result, 'kind':'message'}}), flush=True)",
@@ -163,7 +153,7 @@ it.each<[string, unknown, boolean?]>([
   );
   const onUpdate = vi.fn();
   const driver = await startDriver(scriptPath, { onUpdate });
-  await expect(driver.send({ text: message.text })).rejects.toThrow(/invalid entit/u);
+  await expect(driver.send({ text: invalid.text })).rejects.toThrow(/invalid entit/u);
   expect(onUpdate).not.toHaveBeenCalled();
 });
 
@@ -196,7 +186,8 @@ it("loads the selected repository skill from a different working directory", asy
     fs.mkdirSync(path.dirname(destination), { recursive: true });
     fs.cpSync(path.join(process.cwd(), relative), destination, { recursive: true });
   }
-  const runtime = await loadTelegramUserbotSkillRuntime({ repoRoot, env: {} });
+  vi.stubEnv("TELEGRAM_E2E_SKILL_DIR", undefined);
+  const runtime = await loadTelegramUserbotSkillRuntime({ repoRoot });
 
   expect(runtime.userDriverPath).toBe(path.join(repoRoot, skillPath, "scripts/user-driver.py"));
   expect(() => runtime.parseCredential({})).toThrow("unsupported schema or environment");

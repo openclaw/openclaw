@@ -48,142 +48,86 @@ describe("resolveChannelDefaultAccountId", () => {
 
 type PolicyInput = Parameters<typeof buildAccountScopedDmSecurityPolicy>[0];
 
-function policyInput(
-  channelKey: string,
-  overrides: Omit<PolicyInput, "cfg" | "channelKey">,
-  section: Record<string, unknown> = {},
-): PolicyInput {
-  return {
-    channelKey,
-    cfg: { channels: { [channelKey]: section } } as OpenClawConfig,
-    fallbackAccountId: "default",
-    policyPathSuffix: "dmPolicy",
-    ...overrides,
-  };
-}
-
-function expectedPolicy(policy: string, allowFrom: string[], base: string, channel: string) {
+function expectedPolicy(policy: string, allowFrom: string[], scope = "", suffix = "") {
+  const base = `channels.demo.${scope}`;
   return {
     policy,
     allowFrom,
-    policyPath: `${base}dmPolicy`,
-    allowFromPath: base,
-    approveHint: formatPairingApproveHint(channel),
+    policyPath: suffix ? undefined : `${base}dmPolicy`,
+    allowFromPath: `${base}${suffix}`,
+    approveHint: formatPairingApproveHint("demo"),
     normalizeEntry: undefined,
   };
 }
 
 describe("buildAccountScopedDmSecurityPolicy", () => {
   it.each([
-    {
-      name: "builds top-level dm policy paths when no account config exists",
-      input: policyInput("demo-root", {
+    [
+      "top-level paths",
+      { policy: "pairing", allowFrom: ["123"] },
+      {},
+      expectedPolicy("pairing", ["123"]),
+    ],
+    [
+      "account paths",
+      { accountId: "work", policy: "allowlist", allowFrom: ["+12125551212"] },
+      { accounts: { work: {} } },
+      expectedPolicy("allowlist", ["+12125551212"], "accounts.work."),
+    ],
+    [
+      "nested paths without a policy path",
+      {
+        accountId: "work",
         policy: "pairing",
-        allowFrom: ["123"],
-      }),
-      expected: expectedPolicy("pairing", ["123"], "channels.demo-root.", "demo-root"),
-    },
-    {
-      name: "uses account-scoped paths when account config exists",
-      input: policyInput(
-        "demo-account",
-        {
-          accountId: "work",
-          policy: "allowlist",
-          allowFrom: ["+12125551212"],
-        },
-        { accounts: { work: {} } },
-      ),
-      expected: expectedPolicy(
-        "allowlist",
-        ["+12125551212"],
-        "channels.demo-account.accounts.work.",
-        "demo-account",
-      ),
-    },
-    {
-      name: "supports nested dm paths without explicit policyPath",
-      input: policyInput(
-        "demo-nested",
-        {
-          accountId: "work",
-          policy: "pairing",
-          allowFrom: [],
-          allowFromPathSuffix: "dm.",
-          policyPathSuffix: undefined,
-        },
-        { accounts: { work: {} } },
-      ),
-      expected: {
-        ...expectedPolicy("pairing", [], "channels.demo-nested.accounts.work.", "demo-nested"),
-        policyPath: undefined,
-        allowFromPath: "channels.demo-nested.accounts.work.dm.",
+        allowFrom: [],
+        allowFromPathSuffix: "dm.",
+        policyPathSuffix: undefined,
       },
-    },
-    {
-      name: "uses accounts.default paths when shared defaults are inherited",
-      input: policyInput(
-        "demo-default-account",
-        {
-          accountId: "work",
-          policy: "allowlist",
-          allowFrom: ["+15550001111"],
-          inheritSharedDefaultsFromDefaultAccount: true,
-        },
-        {
-          accounts: {
-            default: {
-              dmPolicy: "allowlist",
-              allowFrom: ["+15550001111"],
-            },
-            work: {},
-          },
-        },
-      ),
-      expected: expectedPolicy(
-        "allowlist",
-        ["+15550001111"],
-        "channels.demo-default-account.accounts.default.",
-        "demo-default-account",
-      ),
-    },
-    {
-      name: "ignores accounts.default paths unless the channel opts into shared default-account inheritance",
-      input: policyInput(
-        "demo-root",
-        {
-          accountId: "work",
-          policy: "pairing",
-          allowFrom: ["*"],
-        },
-        {
-          dmPolicy: "pairing",
-          allowFrom: ["*"],
-          accounts: {
-            default: {
-              dmPolicy: "allowlist",
-              allowFrom: ["+15550001111"],
-            },
-            work: {},
-          },
-        },
-      ),
-      expected: expectedPolicy("pairing", ["*"], "channels.demo-root.", "demo-root"),
-    },
-    {
-      name: "supports custom defaults and approve hints",
-      input: policyInput("demo-default", {
-        allowFrom: ["user-1"],
-        defaultPolicy: "allowlist",
-        approveHint: "openclaw pairing approve demo-default <code>",
-      }),
-      expected: {
-        ...expectedPolicy("allowlist", ["user-1"], "channels.demo-default.", "demo-default"),
-        approveHint: "openclaw pairing approve demo-default <code>",
+      { accounts: { work: {} } },
+      expectedPolicy("pairing", [], "accounts.work.", "dm."),
+    ],
+    [
+      "inherited default-account paths",
+      {
+        accountId: "work",
+        policy: "allowlist",
+        allowFrom: ["+15550001111"],
+        inheritSharedDefaultsFromDefaultAccount: true,
       },
-    },
-  ])("$name", ({ input, expected }) => {
-    expect(buildAccountScopedDmSecurityPolicy(input)).toEqual(expected);
+      { accounts: { default: { dmPolicy: "allowlist", allowFrom: ["+15550001111"] }, work: {} } },
+      expectedPolicy("allowlist", ["+15550001111"], "accounts.default."),
+    ],
+    [
+      "root paths without inheritance opt-in",
+      { accountId: "work", policy: "pairing", allowFrom: ["*"] },
+      {
+        dmPolicy: "pairing",
+        allowFrom: ["*"],
+        accounts: { default: { dmPolicy: "allowlist", allowFrom: ["+15550001111"] }, work: {} },
+      },
+      expectedPolicy("pairing", ["*"]),
+    ],
+    [
+      "custom defaults and approve hints",
+      { allowFrom: ["user-1"], defaultPolicy: "allowlist", approveHint: "custom approval" },
+      {},
+      { ...expectedPolicy("allowlist", ["user-1"]), approveHint: "custom approval" },
+    ],
+  ] satisfies [
+    string,
+    Omit<PolicyInput, "cfg" | "channelKey">,
+    Record<string, unknown>,
+    ReturnType<typeof expectedPolicy>,
+  ][])("supports %s", (_name, overrides, section, expected) => {
+    expect(
+      buildAccountScopedDmSecurityPolicy({
+        channelKey: "demo",
+        cfg: { channels: { demo: section } },
+        fallbackAccountId: "default",
+        policyPathSuffix: "dmPolicy",
+        ...overrides,
+      }),
+    ).toEqual(expected);
   });
 });
 

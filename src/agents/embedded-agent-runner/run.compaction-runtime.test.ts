@@ -1,10 +1,15 @@
 import { randomUUID } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { refreshSessionEntryFromStore } from "../../auto-reply/reply/agent-runner-core.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { ContextEngineRuntimeContext } from "../../context-engine/types.js";
+import { onAgentEvent, type AgentEventPayload } from "../../infra/agent-events.js";
 import { getReplyOperationSessionReader } from "../../sessions/session-controller.session-reader.js";
 import { resolveCompactionTimeoutMs } from "./compaction-safety-timeout.js";
 import {
@@ -113,6 +118,107 @@ describe("embedded compaction recovery authority", () => {
           }
         },
       );
+    },
+  );
+
+  it.for(["success", "failure", "abort", "hook notices"] as const)(
+    "publishes %s compaction without waiting for optional progress callbacks",
+    async (outcome, { signal }) => {
+      await withRecoveryFixture({ oversized: false }, async (fixture) => {
+        const entered = createDeferred(),
+          release = createDeferred();
+        const callbackRelease = createDeferred(),
+          callbackEnd = createDeferred();
+        const originalCompact = realCompactor(fixture);
+        const published: AgentEventPayload[] = [];
+        const unsubscribe = onAgentEvent((event) => {
+          if (event.runId === fixture.runId && event.stream === "compaction") {
+            published.push(event);
+          }
+        });
+        fixture.onAgentEvent.mockImplementation((event) => {
+          if (event.stream === "compaction" && event.data.phase === "end") {
+            callbackEnd.resolve();
+          }
+          return callbackRelease.promise;
+        });
+        fixture.compact.mockImplementationOnce(async (params) => {
+          const notify = params.runtimeContext?.onCompactionHookMessages;
+          if (outcome === "hook notices" && typeof notify === "function") {
+            await notify({ phase: "before", messages: ["Preparing fixture context"] });
+          }
+          entered.resolve();
+          await release.promise;
+          params.abortSignal?.throwIfAborted();
+          if (outcome === "failure") {
+            throw new Error("Fixture compactor failed");
+          }
+          const result = await originalCompact(params);
+          if (outcome === "hook notices" && typeof notify === "function") {
+            await notify({ phase: "after", messages: ["Fixture context prepared"] });
+          }
+          return result;
+        });
+        const callbackEvents = () => fixture.onAgentEvent.mock.calls.map(([event]) => event);
+        const phases = (events: readonly { data: { phase?: unknown } }[]) =>
+          events.map((event) => event.data.phase);
+        const pending = fixture.recover("overflow");
+        const settled = pending.then(
+          (value) => ({ value }),
+          (error: unknown) => ({ error }),
+        );
+        try {
+          await awaitGateBeforeSettlement(entered.promise, pending, "Compactor was not held");
+          expect(phases(callbackEvents())).toEqual(["start"]);
+          expect(phases(published)).toEqual(["start"]);
+          if (outcome === "abort") {
+            fixture.stop();
+          }
+          release.resolve();
+          const result = await withinTest(settled, signal);
+          if (outcome === "abort") {
+            expect(result).toEqual({ error: fixture.callerError });
+          } else if (outcome === "failure") {
+            expect(result).toMatchObject({ value: { action: "surface" } });
+          } else {
+            expect(result).toEqual({ value: { action: "retry" } });
+          }
+          expect(phases(callbackEvents())).toEqual(["start"]);
+          callbackRelease.resolve();
+          await callbackEnd.promise;
+          const events = callbackEvents();
+          expect(phases(events)).toEqual([
+            "start",
+            ...(outcome === "hook notices" ? ["notice", "notice"] : []),
+            "end",
+          ]);
+          const lifecycle = events.filter((event) => event.data.phase !== "notice");
+          expect(phases(published)).toEqual(["start", "end"]);
+          expect(
+            [...lifecycle, ...published].every(
+              (event) => event.sessionKey === fixture.target.sessionKey,
+            ),
+          ).toBe(true);
+          expect(lifecycle[0]?.data.itemId).toEqual(expect.any(String));
+          expect(lifecycle[1]?.data).toMatchObject({
+            itemId: lifecycle[0]?.data.itemId,
+            completed: outcome === "success" || outcome === "hook notices",
+          });
+          if (outcome === "hook notices") {
+            expect(
+              events
+                .filter((event) => event.data.phase === "notice")
+                .flatMap((event) => event.data.messages ?? []),
+            ).toEqual(["Preparing fixture context", "Fixture context prepared"]);
+          }
+        } finally {
+          fixture.stop();
+          release.resolve();
+          callbackRelease.resolve();
+          await settled;
+          unsubscribe();
+        }
+      });
     },
   );
 

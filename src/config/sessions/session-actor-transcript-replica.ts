@@ -10,6 +10,7 @@ import type { SessionTranscriptAuthority } from "./session-transcript-authority.
 import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
 import { transcriptEventContextEligibility } from "./session-transcript-projection-append.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
+import { cloneTranscriptView } from "./transcript-snapshot.js";
 import { isCanonicalSessionTranscriptEntry } from "./transcript-tree.js";
 
 type Bounded = Extract<PreparedSessionTranscriptHydration, { kind: "bounded" }>;
@@ -347,7 +348,7 @@ export function seedSessionActorTranscriptContext(
     return { ...current, anchors };
   }
   // Own one detached window; row views share it, and worker/cohort facts stay with the read.
-  const snapshot = structuredClone(prepared.snapshot);
+  const snapshot = cloneTranscriptView(prepared.snapshot);
   const rows = prepared.residentRows?.map((row, index) => ({
     ...row,
     event: snapshot.events[index],
@@ -497,7 +498,7 @@ export function readSessionActorTranscriptContext(
     if (JSON.stringify(context.admission) !== JSON.stringify(admission)) {
       return undefined;
     }
-    return structuredClone(context.exact);
+    return cloneTranscriptView(context.exact);
   }
   const events = admission
     ? context.rows.filter((row) => row.rawSeq < admission.rawSeq)

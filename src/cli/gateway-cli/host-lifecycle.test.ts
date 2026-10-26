@@ -1,7 +1,6 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareHostedGatewayStop, type HostedGatewayStop } from "../../daemon/hosted-stop.js";
-import { getGatewayProcessInstanceId } from "../../gateway/process-instance.js";
 import {
   armGatewaySuspendHandoff,
   consumeGatewaySuspendHandoff,
@@ -24,6 +23,11 @@ describe("Gateway host lifecycle authority", () => {
   const acceptStop = vi.fn();
   const execute = vi.fn<HostedGatewayStop["execute"]>();
   const dispose = vi.fn<HostedGatewayStop["dispose"]>();
+  function pendingStop() {
+    const pending = createDeferredCore<HostedGatewayStop>();
+    vi.mocked(prepareHostedGatewayStop).mockReturnValueOnce(pending.promise);
+    return { reject: pending.reject, resolve: () => pending.resolve({ execute, dispose }) };
+  }
   const owners: ReturnType<typeof createGatewayHostLifecycle>[] = [];
   const owner = (commitExternalStop?: () => void) => {
     const host = createGatewayHostLifecycle({
@@ -51,19 +55,6 @@ describe("Gateway host lifecycle authority", () => {
     for (const host of owners.splice(0)) {
       await host.retire();
     }
-  });
-
-  it("reports an already-running start and a local scheduled restart without native discovery", async () => {
-    const host = owner();
-    const guard = vi.fn();
-    await expectOutcome(host.capability.request("start", guard), "already-running");
-    await expectOutcome(host.capability.request("restart", guard), "scheduled");
-    expect(prepareHostedGatewayStop).not.toHaveBeenCalled();
-    expect(scheduleSafeGatewayRestart).toHaveBeenCalledExactlyOnceWith({
-      reason: "gateway.restart.safe",
-      delayMs: 0,
-    });
-    expect(guard).toHaveBeenCalledTimes(2);
   });
 
   it("exposes committed external stop only when its live process host supplies it", () => {
@@ -97,8 +88,7 @@ describe("Gateway host lifecycle authority", () => {
     "rejects after awaited preparation when %s",
     async (change) => {
       const host = owner();
-      const preparation = createDeferredCore<HostedGatewayStop>();
-      vi.mocked(prepareHostedGatewayStop).mockReturnValue(preparation.promise);
+      const preparation = pendingStop();
       const request = host.capability.request("stop", () => {});
       const retirement = change === "retired" ? host.retire() : undefined;
       if (change === "replaced") {
@@ -107,7 +97,7 @@ describe("Gateway host lifecycle authority", () => {
       if (change === "closed") {
         serving = false;
       }
-      preparation.resolve({ execute, dispose });
+      preparation.resolve();
       await expect(request).resolves.toMatchObject({ ok: false });
       await retirement;
       expect(acceptStop).not.toHaveBeenCalled();
@@ -118,20 +108,25 @@ describe("Gateway host lifecycle authority", () => {
 
   it("keeps serving on preparation failure and preserves a concurrent preparation owner", async () => {
     const host = owner();
-    const preparation = createDeferredCore<HostedGatewayStop>();
-    vi.mocked(prepareHostedGatewayStop).mockReturnValueOnce(preparation.promise);
+    const preparation = pendingStop();
     const first = host.capability.request("stop", () => {});
     await expect(host.capability.request("stop", () => {})).resolves.toMatchObject({ ok: false });
     expect(prepareHostedGatewayStop).toHaveBeenCalledOnce();
     preparation.reject(new Error("native permission denied"));
     await expect(first).resolves.toEqual({ ok: false, error: "native permission denied" });
     expect(acceptStop).not.toHaveBeenCalled();
-    await expect(host.capability.request("start", () => {})).resolves.toMatchObject({ ok: true });
+    const guard = vi.fn();
+    await expectOutcome(host.capability.request("start", guard), "already-running");
+    await expectOutcome(host.capability.request("restart", guard), "scheduled");
+    expect(prepareHostedGatewayStop).toHaveBeenCalledOnce();
+    expect(scheduleSafeGatewayRestart).toHaveBeenCalledExactlyOnceWith({
+      reason: "gateway.restart.safe",
+    });
+    expect(guard).toHaveBeenCalledTimes(2);
   });
 
   it("does not carry an armed lease into another host iteration in the same process", async () => {
     const first = owner();
-    const processInstanceId = getGatewayProcessInstanceId();
     const lease = prepareGatewaySuspend({
       requestId: "host-iteration-handoff",
       drain: true,
@@ -151,7 +146,6 @@ describe("Gateway host lifecycle authority", () => {
       ).toBe(true);
       await first.retire();
       const next = owner();
-      expect(getGatewayProcessInstanceId()).toBe(processInstanceId);
       expect(first.capability.externalRestart.isCurrent()).toBe(false);
       expect(next.capability.externalRestart?.isCurrent()).toBe(true);
       expect(consumeGatewaySuspendHandoff(first.capability.externalRestart)).toEqual({
@@ -173,19 +167,14 @@ describe("Gateway host lifecycle authority", () => {
       const host = owner();
       const closing = createDeferredCore();
       dispose.mockReturnValue(closing.promise);
-      const preparation = createDeferredCore<HostedGatewayStop>();
-      if (phase === "preparing") {
-        vi.mocked(prepareHostedGatewayStop).mockReturnValueOnce(preparation.promise);
-      }
+      const preparation = phase === "preparing" ? pendingStop() : undefined;
       const request = host.capability.request("stop", () => {});
       if (phase === "accepted") {
         await expectOutcome(request, "scheduled");
       }
       const retired = vi.fn();
       const retirement = host.retire().then(retired);
-      if (phase === "preparing") {
-        preparation.resolve({ execute, dispose });
-      }
+      preparation?.resolve();
       await expect(host.capability.request("restart", () => {})).resolves.toMatchObject({
         ok: false,
       });

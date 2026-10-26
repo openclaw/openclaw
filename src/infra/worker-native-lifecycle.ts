@@ -16,6 +16,7 @@ import { runWithMainThreadTask } from "./main-thread-stall.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
 import {
   captureRuntimeWorkerSource,
+  resolveRuntimeWorkerGenerationUrl,
   type RuntimeWorkerGeneration,
 } from "./runtime-worker-generation.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "./runtime-worker-url.js";
@@ -275,9 +276,7 @@ export function captureRetainedNativeWorkerSource(options?: {
     options === undefined
       ? captureRuntimeWorkerSource(supervisor)
       : {
-          moduleUrl: options.runtimeGeneration
-            ? options.runtimeGeneration.resolve(supervisor)
-            : supervisor,
+          moduleUrl: resolveRuntimeWorkerGenerationUrl(supervisor, options.runtimeGeneration),
           runtimeGeneration: options.runtimeGeneration,
         };
   const existing = captured.runtimeGeneration
@@ -288,9 +287,10 @@ export function captureRetainedNativeWorkerSource(options?: {
   }
   const source: NativeSource = {
     ...captured,
-    brokerModuleUrl: captured.runtimeGeneration
-      ? captured.runtimeGeneration.resolve(resolveRuntimeProcessEntrypointUrl("spawnBroker"))
-      : resolveRuntimeProcessEntrypointUrl("spawnBroker"),
+    brokerModuleUrl: resolveRuntimeWorkerGenerationUrl(
+      resolveRuntimeProcessEntrypointUrl("spawnBroker"),
+      captured.runtimeGeneration,
+    ),
     closing: false,
     get hasActiveWorkers() {
       return Boolean(source.runtime?.handles.size);
@@ -339,7 +339,7 @@ export function captureRetainedNativeWorkerSource(options?: {
     captureResource(moduleUrl, workerDataKey, input, connect) {
       const inContext = AsyncLocalStorage.snapshot();
       return Object.freeze({
-        moduleUrl: String(captured.runtimeGeneration?.resolve(moduleUrl) ?? moduleUrl),
+        moduleUrl: String(resolveRuntimeWorkerGenerationUrl(moduleUrl, captured.runtimeGeneration)),
         workerDataKey,
         input: input === undefined ? undefined : structuredClone(input),
         connect: connect

@@ -33,20 +33,6 @@ function runAttempt(
   return runSharedAttempt(params, options);
 }
 
-function createParams(sessionFile: string, workspaceDir: string): EmbeddedRunAttemptParams {
-  const params = createSharedParams(sessionFile, workspaceDir, {
-    prompt: contract.workspacePrompt,
-    sessionId: contract.sessionId,
-    sessionKey: contract.sessionKey,
-    runId: contract.runId,
-    provider: contract.codexHarnessProvider,
-  });
-  delete params.contextTokenBudget;
-  delete params.contextWindowInfo;
-  delete params.observeToolTerminal;
-  return params;
-}
-
 function oauthProfile(access: string, lifetime = 60 * 60_000, refresh = "refresh-token") {
   return {
     type: "oauth" as const,
@@ -183,7 +169,16 @@ let params: EmbeddedRunAttemptParams;
 
 beforeEach(() => {
   sessionFile = path.join(tempDir, "session.jsonl");
-  params = createParams(sessionFile, tempDir);
+  params = createSharedParams(sessionFile, tempDir, {
+    prompt: contract.workspacePrompt,
+    sessionId: contract.sessionId,
+    sessionKey: contract.sessionKey,
+    runId: contract.runId,
+    provider: contract.codexHarnessProvider,
+  });
+  delete params.contextTokenBudget;
+  delete params.contextWindowInfo;
+  delete params.observeToolTerminal;
 });
 
 it("rejects a missing bound auth profile before app-server startup", async () => {
@@ -298,7 +293,6 @@ it("fails before profile selection when a prepared Platform route has no key", a
   const harness = createAuthHarness();
   params.authProfileStore = subscriptionStore(60_000);
   setPreparedOpenAIRoute(params, "api-key");
-
   await expect(runAttempt(params)).rejects.toThrow(
     "Prepared Codex API-key route is missing its resolved API key.",
   );
@@ -314,7 +308,6 @@ it("rejects ambient auth before a remote-exec attempt starts", async () => {
     ...createSandboxContext({}),
     placementExecutionMode: "remote-exec",
   } as NonNullable<typeof params.sandbox> & { placementExecutionMode: "remote-exec" };
-
   await expect(runAttempt(params)).rejects.toThrow(
     "Codex remote-exec cloud placement requires prepared OpenAI auth",
   );
@@ -328,16 +321,11 @@ it("rejects a subscription route with an API-key profile", async () => {
   params.authProfileStore = {
     version: 1,
     profiles: {
-      "openai:platform": {
-        type: "api_key",
-        provider: "openai",
-        key: "platform-profile-key",
-      },
+      "openai:platform": { type: "api_key", provider: "openai", key: "platform-profile-key" },
       "openai:decoy": oauthProfile("decoy-subscription-token", 60_000, "decoy-refresh-token"),
     },
   };
   setPreparedOpenAIRoute(params, "subscription", "openai:platform");
-
   await expect(runAttempt(params)).rejects.toThrow(
     "Prepared Codex subscription route requires a forwarded OpenAI OAuth or token profile.",
   );

@@ -1,7 +1,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { assert, expect, onTestFinished, vi, type TestContext } from "vitest";
+import { assert, expect, it, onTestFinished, vi, type TestContext } from "vitest";
 import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { createTestConfigSnapshot } from "../commands/test-runtime-config-helpers.js";
 import type {
   ConfigFileSnapshot,
   ConfigWriteNotification,
@@ -16,6 +17,7 @@ import {
 } from "../test-utils/gateway-scheduler-clock.js";
 import {
   startGatewayConfigReloader as startGatewayConfigReloaderImpl,
+  type GatewayConfigReloadTransactionOwnership,
   type GatewayReloadPlan,
 } from "./config-reload.js";
 import { installWatcherMock } from "./config-reload.watcher.test-support.js";
@@ -227,19 +229,11 @@ export function makeSnapshot(partial: Partial<ConfigFileSnapshot> = {}): ConfigF
   const runtimeConfig = partial.runtimeConfig ?? partial.config ?? {};
   const parsed = partial.parsed ?? sourceConfig;
   return {
-    path: "/tmp/openclaw.json",
+    ...createTestConfigSnapshot(sourceConfig, runtimeConfig),
     includedPaths: [],
-    exists: true,
     raw: partial.exists === false ? null : JSON.stringify(parsed),
     parsed,
-    sourceConfig,
-    resolved: sourceConfig,
-    valid: true,
-    runtimeConfig,
     config,
-    issues: [],
-    warnings: [],
-    legacyIssues: [],
     ...partial,
   };
 }
@@ -388,4 +382,66 @@ export function createWriteReloaderHarness(
 
 export function getOnlyHotReloadCall(harness: ReloaderHarness) {
   return onlyReloadCall(harness.onHotReload);
+}
+
+export function registerReverseHotReloadTest() {
+  it("plans the reverse hot reload when config A commits before config B supersedes its tail", async () => {
+    const initialConfig = {
+      gateway: { reload: {} },
+      hooks: { enabled: true, token: "test-token", path: "/old" },
+    } satisfies OpenClawConfig;
+    const configA = {
+      ...initialConfig,
+      hooks: { ...initialConfig.hooks, path: "/a" },
+    } satisfies OpenClawConfig;
+    const readSnapshot = vi
+      .fn<() => Promise<ConfigFileSnapshot>>()
+      .mockResolvedValueOnce(makeSnapshot({ config: configA, hash: "post-commit-a" }))
+      .mockResolvedValue(makeSnapshot({ config: initialConfig, hash: "reverse-b" }));
+    const { promise: committed, resolve: recordCommitted } = createDeferred();
+    const { promise: tailGate, resolve: releaseTail } = createDeferred();
+    const onHotReload = vi.fn(
+      async (
+        plan: GatewayReloadPlan,
+        nextConfig: OpenClawConfig,
+        ownership: GatewayConfigReloadTransactionOwnership,
+      ) => {
+        ownership.markRuntimeCommitted(nextConfig, plan);
+        if (nextConfig === configA) {
+          recordCommitted?.();
+          await tailGate;
+        }
+        return "applied" as const;
+      },
+    );
+    const promoteSnapshot = vi.fn(async (_snapshot: ConfigFileSnapshot, _reason: string) => true);
+    const harness = createReloaderHarness(readSnapshot, {
+      initialConfig,
+      onHotReload,
+      promoteSnapshot,
+    });
+    await harness.reloader.ready;
+
+    harness.watcher.emit("change");
+    await vi.advanceTimersByTimeAsync(0);
+    await committed;
+
+    harness.watcher.emit("change");
+    releaseTail();
+    await waitForReloadState(() => onHotReload.mock.calls.length === 2);
+    await flushReload(harness.reloader);
+
+    expect(onHotReload.mock.calls.map(([, config]) => config)).toEqual([configA, initialConfig]);
+    expect(onHotReload.mock.calls[1]?.[0].hotReasons).toContain("hooks.path");
+    for (const configs of [
+      harness.onConfigAccepted.mock.calls.map(([config]) => config),
+      harness.onConfigApplied.mock.calls.map(([, config]) => config),
+    ]) {
+      expect(configs).toEqual([configA, initialConfig]);
+    }
+    expect(promoteSnapshot.mock.calls.map(([snapshot]) => snapshot.hash)).toEqual([
+      "post-commit-a",
+      "reverse-b",
+    ]);
+  });
 }

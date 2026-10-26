@@ -25,7 +25,6 @@ type ChannelMediaContractApi = {
     accountId?: string;
   }) => readonly string[] | undefined;
 };
-type ChannelMediaRootResolver = keyof ChannelMediaContractApi;
 
 function resolveInstalledChannelMediaContractOwners(params: {
   channelId: string;
@@ -61,7 +60,7 @@ function resolveInstalledChannelMediaContractOwners(params: {
 function findChannelMediaContractApi(params: {
   channelId: string | null | undefined;
   cfg: OpenClawConfig;
-  resolver: ChannelMediaRootResolver;
+  resolver: keyof ChannelMediaContractApi;
 }): ChannelMediaContractApi | undefined {
   const channelId = normalizeOptionalLowercaseString(params.channelId);
   if (!channelId) {

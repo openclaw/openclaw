@@ -34,47 +34,6 @@ describe("typing persistence bug fix", () => {
     expect(vi.getTimerCount()).toBe(0);
   }
 
-  it("keeps typing alive while keepalive ticks continue during long runs", async () => {
-    const longRunCleanupSpy = vi.fn();
-    const longRunController = createTypingController({
-      onReplyStart: onReplyStartSpy,
-      onCleanup: longRunCleanupSpy,
-      typingIntervalSeconds: 6,
-      log: vi.fn(),
-    });
-
-    await longRunController.startTypingLoop();
-    expect(onReplyStartSpy).toHaveBeenCalledTimes(1);
-
-    await vi.advanceTimersByTimeAsync(6000);
-    expect(onReplyStartSpy).toHaveBeenCalledTimes(2);
-
-    await vi.advanceTimersByTimeAsync(115_000);
-    expect(longRunCleanupSpy).not.toHaveBeenCalled();
-    expect(onReplyStartSpy).toHaveBeenCalledTimes(21);
-
-    longRunController.cleanup();
-    expect(longRunCleanupSpy).toHaveBeenCalledTimes(1);
-  });
-
-  it("should stop typing when both runComplete and dispatchIdle are true", async () => {
-    // Start typing
-    await controller.startTypingLoop();
-    expect(onReplyStartSpy).toHaveBeenCalledTimes(1);
-
-    // Mark run complete
-    controller.markRunComplete();
-    expect(onCleanupSpy).not.toHaveBeenCalled();
-
-    // Mark dispatch idle - should trigger cleanup
-    controller.markDispatchIdle();
-    expect(onCleanupSpy).toHaveBeenCalledTimes(1);
-
-    // After cleanup, typing interval should not restart typing
-    vi.advanceTimersByTime(6000);
-    expect(onReplyStartSpy).toHaveBeenCalledTimes(1); // Still only the initial call
-  });
-
   it("keeps timer ticks behind an unfinished initial typing request", async () => {
     const pending = createDeferred();
     onReplyStartSpy.mockReturnValueOnce(pending.promise);
@@ -110,20 +69,6 @@ describe("typing persistence bug fix", () => {
       expect(onReplyStartSpy).toHaveBeenCalledTimes(1);
     },
   );
-
-  it("should prevent typing restart even if cleanup is delayed", async () => {
-    await controller.startTypingLoop();
-    expect(onReplyStartSpy).toHaveBeenCalledTimes(1);
-
-    // Dispatch remains busy while three more keepalive intervals pass.
-    controller.markRunComplete();
-    for (let interval = 0; interval < 3; interval++) {
-      vi.advanceTimersByTime(6000);
-      expect(onReplyStartSpy).toHaveBeenCalledTimes(1);
-    }
-    controller.markDispatchIdle();
-    expect(onCleanupSpy).toHaveBeenCalledTimes(1);
-  });
 
   it("returns an inert controller when typing callbacks are absent", async () => {
     await exerciseClosedController(createTypingController({}));

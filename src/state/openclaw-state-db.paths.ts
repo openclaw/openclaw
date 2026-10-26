@@ -28,7 +28,7 @@ export function existingPathOrUndefined(pathname: string): string | undefined {
   }
 }
 
-export function resolveOpenClawStateSqliteDir(env: NodeJS.ProcessEnv = process.env): string {
+function resolveOpenClawStateSqliteDir(env: NodeJS.ProcessEnv = process.env): string {
   return path.dirname(resolveOpenClawStateSqlitePath(env));
 }
 

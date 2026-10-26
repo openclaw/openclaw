@@ -12,7 +12,6 @@ import {
   setMemoryWikiDashboardState,
 } from "./compiled-cache.js";
 import {
-  resolveMemoryWikiAgentConfig,
   WIKI_SEARCH_BACKENDS,
   WIKI_SEARCH_CORPORA,
   type ResolvedMemoryWikiConfig,
@@ -100,12 +99,11 @@ function respondError(respond: GatewayRespond, error: unknown) {
 
 export function registerMemoryWikiGatewayMethods(params: {
   api: OpenClawPluginApi;
-  config: ResolvedMemoryWikiConfig;
-  getAppConfig?: () => OpenClawConfig | undefined;
-  resolveConfig?: (agentId?: string, appConfig?: OpenClawConfig) => ResolvedMemoryWikiConfig;
+  getAppConfig: () => OpenClawConfig | undefined;
+  resolveConfig: (agentId?: string, appConfig?: OpenClawConfig) => ResolvedMemoryWikiConfig;
   resolveSourceSyncSignal?: () => AbortSignal | undefined;
 }) {
-  const { api, config: baseConfig } = params;
+  const { api } = params;
   const registerResultMethod = (
     method: string,
     scope: typeof READ_SCOPE | typeof WRITE_SCOPE | typeof ADMIN_SCOPE,
@@ -164,12 +162,6 @@ export function registerMemoryWikiGatewayMethods(params: {
     });
   };
 
-  const getAppConfig = () => {
-    if (params.getAppConfig) {
-      return params.getAppConfig();
-    }
-    return api.runtime.config.current() as OpenClawConfig;
-  };
   const resolveSourceSyncSignal = () => {
     const signal = params.resolveSourceSyncSignal?.();
     if (params.resolveSourceSyncSignal && !signal) {
@@ -179,15 +171,9 @@ export function registerMemoryWikiGatewayMethods(params: {
   };
   const resolveRequestContext = (requestParams: Record<string, unknown>) => {
     const signal = resolveSourceSyncSignal();
-    const appConfig = getAppConfig();
+    const appConfig = params.getAppConfig();
     const requestedAgentId = readStringParam(requestParams, "agentId");
-    const config = params.resolveConfig
-      ? params.resolveConfig(requestedAgentId, appConfig)
-      : resolveMemoryWikiAgentConfig({
-          config: baseConfig,
-          appConfig,
-          ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
-        });
+    const config = params.resolveConfig(requestedAgentId, appConfig);
     const agentId =
       config.agentId ??
       requestedAgentId ??

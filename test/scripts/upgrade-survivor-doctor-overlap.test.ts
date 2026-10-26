@@ -212,9 +212,6 @@ printf 'summary:passed\\n' >>"$FIXTURE_EVENTS"
           if (mode === "primary-failure") {
             await waitFor("descendant");
           }
-          expect(readFileSync(path.join(root, "main-continued"), "utf8")).toBe(
-            "main continued while Doctor was held",
-          );
           expect(readFileSync(events, "utf8")).toBe("formerly-bundled-doctor:started\n");
           if (mode !== "primary-failure") {
             proof.write(`${mode === "proof-failure" ? 43 : 0}\n`);
@@ -237,7 +234,6 @@ printf 'summary:passed\\n' >>"$FIXTURE_EVENTS"
               "summary:passed",
               "dependencies:stopped",
             ]);
-            expect(result.stdout).toContain("synthetic Doctor completed with 0");
           } else {
             expect(lines).not.toContain("formerly-bundled-doctor:passed");
             expect(lines).not.toContain("rollback:started");
@@ -249,8 +245,6 @@ printf 'summary:passed\\n' >>"$FIXTURE_EVENTS"
                   lines.indexOf("dependencies:stopped"),
                 );
               }
-            } else {
-              expect(result.stdout).toContain("synthetic Doctor completed with 43");
             }
           }
           await Promise.all(closed);

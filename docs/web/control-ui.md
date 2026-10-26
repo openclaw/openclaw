@@ -8,7 +8,7 @@ title: "Control UI"
 sidebarTitle: "Control UI"
 ---
 
-The Control UI is a small **Vite + Lit** single-page app served by the Gateway:
+The Control UI is a small **Vite + Solid** single-page app served by the Gateway:
 
 - default: `http://<host>:18789/`
 - optional prefix: set `gateway.controlUi.basePath` (e.g. `/openclaw`)
@@ -22,6 +22,38 @@ For unmatched HTTP paths, the app-shell fallback respects the request's `Accept`
 
 It speaks **directly to the Gateway WebSocket** on the same port.
 
+Optional surfaces follow the permissions granted to the current connection.
+Session-only roles do not load the plugin UI catalog, Side Chat history, observer
+visibility, or remote session-link titles. Side Chat is hidden, and session links
+keep their locally available labels. MCP Apps discovery requires general write
+access. The Gateway continues to authorize every request.
+
+## Command palette file attachments
+
+Open the command palette with **Cmd+K** on macOS or **Ctrl+K** elsewhere. Drop
+images or files onto the palette, or paste images into its input, to prepare a
+new background session without changing your current conversation or composer.
+
+The first attachment switches the palette from navigation to **New session**.
+Add optional instructions, adjust the session settings, then choose **New session**
+or press **Cmd/Ctrl+Enter**. Dropping a file does not start the session by itself.
+Files remain visible while preparing. If a file is rejected, an error toast
+explains the failure and only that file is removed. You can manually start a
+session with the remaining text and files; a rejected file cancels a pending
+automatic start. File admission and size limits match the chat composer.
+
+Closing the palette keeps its attachment draft in memory for the same Gateway
+and account. Removing the final attachment keeps new-session mode while
+instructions remain; clearing both files and instructions restores navigation.
+Reloading or leaving the app does not preserve this in-memory draft.
+
+## Automatic session names
+
+New Dashboard conversations receive a title from their opening task. After six more
+user messages, the Gateway makes one attempt to refine that title using recent
+conversation context. A failed attempt keeps the existing title. Manually named
+sessions and conversations created before this feature keep their names.
+
 ## Temporary disconnections
 
 When the connection drops, the Control UI keeps loaded catalogs, automation
@@ -29,6 +61,9 @@ editors, Memory Import selections, Activity history, Dreaming results, approval
 queues, and open board and portal documents in memory. A transport interruption
 does not reset those page-local drafts. The connection indicator at the bottom
 left shows the connection state; retained data may be out of date until reconnect.
+While automatic reconnection is running, the indicator shows **Reconnecting…**
+with the sidebar's standard spinner and without a Retry button. **Retry** remains available when automatic recovery stops.
+A required page refresh keeps its separate refresh action.
 
 If a chat side panel fails to load, its Close control remains available independently of the failed panel. Closing it keeps the conversation and its draft in place without reloading the page. Retry still respects unsaved work that blocks document reloads.
 
@@ -65,9 +100,13 @@ If the New Session page fails during its initial render, the UI attempts one aut
 
 Reloading a previously visited chat restores the last settled sidebar while the Gateway reconnects. Pinned sessions, plugin rows, roster order, filters, and your display identity keep their places until live data is ready. The footer still reports the current connection status. This browser cache is scoped to the Gateway and profile, expires after 30 days, and excludes incognito sessions. The same snapshot provides the saved session rows and routing defaults for the first chat header. Cached rows never authorize session changes. Sidebar snapshot capture coalesces live updates during idle time and flushes pending changes when the page is hidden or left.
 
-A short transcript loads at most one older page automatically when you open or reload a chat. It stops once the visible area is filled, without filling the backscroll buffer. Scroll up or choose **Show earlier** to continue loading older messages, even if the transcript still fits on screen.
+Message reactions share the message footer. Desktop Chat Details lists automations after session information and task progress so arriving automation results keep those sections in place. The mobile composer reserves one activity row so arriving task and subagent status does not move the transcript.
 
-The cached transcript also preserves its conversation title when the conversation is outside the saved sidebar page. Live session metadata replaces that display projection when it arrives.
+A short transcript loads at most one older page automatically when you open or reload a chat. It stops once the visible area is filled, without filling the backscroll buffer. Scroll up or choose **Show earlier** to continue loading older messages, even if the transcript still fits on screen. While older messages load, **Show earlier** keeps keyboard focus and ignores repeated activation.
+
+GitHub item URLs and repository-qualified references such as `owner/repo#126` render as compact links. Use `PR owner/repo#126` for a pull request or `issue owner/repo#126` for an issue. References identified by keywords, such as `PR #126`, remain plain text without a repository qualifier. Project display names, the checkout, the project catalog, and other messages do not supply a destination. A standalone hash token that is also a valid hexadecimal color, such as `#126`, retains its color preview without a GitHub link.
+
+The cached transcript also preserves its conversation title and selected model label when the conversation is outside the saved sidebar page. You can type in the restored draft while the Gateway reconnects. The saved model control shows “Refreshing models…” and stays disabled until live catalog data arrives. Live session metadata replaces that display projection when it arrives. Reloading a full-UUID chat link can show that scoped cache while the Gateway confirms the route. Sending and restored queued messages wait for confirmation; a deleted or moved conversation replaces the cached view with the Gateway's result.
 
 An authenticated same-origin reload includes shared display settings and your profile’s appearance and sidebar preferences in the document. Chat uses this display projection while connecting, without loading the full editable configuration. Preference changes from other tabs refresh through the Gateway’s existing notifications; settings pages and configuration writes still load the full snapshot.
 
@@ -95,11 +134,23 @@ While the initial connection or a route loads, shimmer placeholders reserve the 
 
 The selected chat loads before automatic sidebar session lists refresh. Live events remain subscribed during startup, and explicit sidebar actions remain available. Background lists resume after the transcript loads or reports an error. Accepted new sessions refresh the visible sidebar immediately, including **Involving me** and owner filters, without waiting for the chat to finish loading or the agent to finish working.
 
+After the current page and transcript are ready, the browser can prepare code for
+Pages, New Session, and common dialogs during idle time. Hovering or focusing a
+navigation link, the Settings menu item, the command-palette button, or the model picker prepares
+that destination sooner.
+Navigation preparation pauses while a page loads, the tab is hidden, or the
+connection is offline, and respects the browser's Save-Data setting. Page data
+still loads through its normal navigation flow. Hashed assets remain cached for
+repeat visits without revalidation; an update uses new asset URLs.
+The service worker owns [offline asset storage](/web/control-ui/offline-and-reconnect);
+navigation hints also prepare modules for the open page. These hints take priority
+over the worker's bulk download, which resumes after page requests settle.
+
 If the selected session changes while its message subscription is being admitted, chat retries that read with fresh access checks for up to one minute. Saved replies load after the subscription succeeds, without resending your message. Switching chats or losing access stops recovery; a persistent failure leaves **Retry** available.
 
 Use **Snooze → Choose another time** in a session menu to pick a future date and time in your browser’s local time zone. After a successful snooze, **Custom** shows that exact date and time in other session menus for one hour. Choosing another custom time replaces it; presets and Undo leave the remembered choice unchanged. The browser stores this choice separately for each Gateway and signed-in account, and removes it when it expires or the wake time passes. If browser storage is unavailable, the choice remains reusable only in the current page.
 
-The chat header’s **Details** panel groups session information into collapsible sections separated by subtle dividers. **Environment** shows the workspace name, branch, worktree, execution device, and model. Absolute workspace paths stay out of the panel text and tooltips; use **Copy path** when you need the full path, copy the branch, or open **Show session files** to browse the workspace. **Context** shows the current context usage and latest input/output token counts when available. Approximate usage keeps its `~` marker. **Changes** keeps pull requests, change totals, checks, and available publication actions together. Background tasks, automations, participants, and task progress retain their existing session-scoped actions. On wide conversations, Details docks beside the transcript; narrower conversations use a dismissible popover below the header. On desktop, use the **Details** toggle to open or close the panel; mobile keeps a close button inside the panel.
+The chat header’s **Details** panel groups session information into collapsible sections separated by subtle dividers. **Environment** shows the workspace name, branch, worktree, execution device, and model. Absolute workspace paths stay out of the panel text and tooltips; use **Copy path** when you need the full path, copy the branch, or open **Show session files** to browse the workspace. The composer's context ring shows a compact usage breakdown, latest-run tokens, and provider plan limits. **View context** opens the complete report, Refresh, and compaction action in one side panel. Approximate usage keeps its `~` marker. **Changes** keeps pull requests, change totals, checks, and available publication actions together. Background tasks, automations, participants, and task progress retain their existing session-scoped actions. On wide conversations, Details docks beside the transcript; narrower conversations use a dismissible popover below the header. On desktop, use the **Details** toggle to open or close the panel; mobile keeps a close button inside the panel.
 
 Session details share concurrent reads across the sidebar, chat, and resource panels. Returning to a session reuses its details on the same connection, including updates received through complete session snapshots. Incomplete updates, explicit refreshes, and reconnects fetch current details; failed reads remain retryable.
 
@@ -154,7 +205,16 @@ frame and its local state.
 
 Hidden retained chats defer command and model metadata refreshes until you return to them. Returning to a recently opened chat reuses its completed metadata on the same connection until a Gateway change invalidates it. Concurrent readers share the same request. Session events with an unchanged model-selection revision retain the model catalog, and session-only changes retain agent commands. Native sessions without a model-selection revision wait for a 2.5-second quiet period after ordinary patches before refreshing the catalog and session facts. Explicit model, account, and runtime selections refresh promptly. Configuration and command changes refresh commands; catalog and session lifecycle changes refresh affected model choices. Agent-specific catalog changes retain other agents’ cached choices and pending catalog requests. Repeated changes during a request share one trailing refresh instead of issuing overlapping requests.
 
+Deleting a session refreshes the roster and invalidates that session's model choices without reloading metadata for unrelated chats. Session action menus build their contents when opened.
+
+Provider speed observations are tracked separately for each requested tier. Repeated identical responses retain the matching Fast or Ultrafast hint without refreshing every open chat's model choices. Recovery or expiry clears only the affected hint.
+
 Metadata refreshes wait for an in-progress model-runtime replacement to publish. An agent whose model runtime is unavailable does not interrupt commands or model choices for healthy agents; its metadata becomes available when its owner publishes.
+
+The model picker searches across the full catalog, including models under collapsed
+providers and **All models**. Use the Up and Down arrow keys in the search field to
+move through results and Enter to select one. Large catalogs keep the same search
+and keyboard behavior while rendering only the visible portion of the list.
 
 New Session keeps previously fetched model choices selectable while their catalog
 refreshes in the background. Before the first catalog arrives, it does not turn a
@@ -165,7 +225,7 @@ Provider authentication status is shared across views and refreshes after accoun
 
 The sidebar loads automation status once per connection and refreshes after automation or configuration changes. Failed reads retry once per minute while the tab is visible and stop retrying after success. Sidebar health and Automations page refreshes pause during announced restarts or suspension and catch up when the Gateway is available again. Overdue warnings advance on a local deadline without polling the Gateway. Hidden tabs catch up when visible; returning to an unchanged tab does not poll automations. Command palette searches reuse their automation inventory on the same connection until one of those changes or a reconnect.
 
-In a session’s menu, open **View → Speech bubbles** to switch that conversation—including the main session—to two-sided bubbles. Your messages stay on the right and agent replies stream into bubbles on the left. The choice is saved per session in this browser; other sessions keep their own mode. Turn it off to restore the flat reply layout. In bubble mode, activity appears as a compact **…** preview. Click it to see the full tool or status details. Agent reactions appear beneath the prompt they acknowledge, independently of the selected layout.
+In a session’s menu, open **View → Speech bubbles** to switch that conversation—including the main session—to two-sided bubbles. Your messages stay on the right and agent replies stream into bubbles on the left. The choice is saved per session in this browser; other sessions keep their own mode. Turn it off to restore the flat reply layout. In bubble mode, ordinary waiting appears only as **…**, without a status phrase or timer. Active work uses one compact bubble with its recorded purpose; parallel tasks share one bubble that expands into their current activity and session links. Click a work bubble to inspect its tool details. Approval and retry states remain visible, and finished work leaves an expandable receipt instead of animated dots. Agent reactions appear beneath the prompt they acknowledge, independently of the selected layout.
 
 Automation inputs appear as compact, collapsed activity rows instead of message bubbles. Expand a row to read the full prompt and access its message actions. Each automation input stays separate, even when several jobs run in the same conversation. The expanded **From** link opens that automation's History tab and highlights the originating run; open the run's transcript from History when needed.
 
@@ -174,7 +234,9 @@ Thinking, speed, and context-window changes stay synchronized across panes showi
 While an agent works, completed commentary or preambles appear inline in the
 conversation when the model and runtime provide them. Narration keeps its
 formatting and position alongside tool activity; the working indicator remains
-a separate status for execution, startup, or approval. **Keep commentary** in
+a separate status for execution, startup, or approval. After a session is idle,
+a new run starts its own Working timer, including when it starts outside the
+Dashboard; earlier tool activity remains in the conversation. **Keep commentary** in
 the chat view menu controls whether commentary stays visible after the run,
 not whether the active run’s narration survives a history refresh. Completed
 dashboard turns collapse their narration and tool activity under **Worked for …**
@@ -248,7 +310,8 @@ with the call count. When only part of a long history is loaded, the count is a
 lower bound such as **40+ calls**. Avatar-free child transcripts do not reserve
 empty avatar columns, and narrow panes use compact horizontal insets while wide
 transcripts retain the reading-width limit. It does not add rows to the left
-sidebar. The parallel-tasks view also shows aggregate swarm progress. A directly
+sidebar. Follow delegated work in the **Subagents** panel rather than a separate
+inline task tracker. A directly
 opened child page offers **Open parent session**. The `/subagents list`,
 `/subagents info <id|#>`, and `/subagents log <id|#>` commands remain available.
 
@@ -303,6 +366,15 @@ existing settings without switching the selected agent. Reopening the menu
 brings the selected agent into view.
 
 ## Download files
+
+Chat filename links first try the named path. If a bare filename is missing there,
+the preview opens a nested file only when a complete workspace search finds exactly
+one matching filename. Ambiguous or incomplete searches keep the missing-file error;
+use an explicit path to select the intended file.
+
+Opening a file collapses the file tree to make room for its preview. Use **Toggle
+file tree** to browse another file, or **Show in Files** to reveal the current file
+in its folder with the **All** filter.
 
 If the **Files** panel shows a listing error, select **Retry** to load the current
 folder or search again. This keeps the session and query in place; access checks

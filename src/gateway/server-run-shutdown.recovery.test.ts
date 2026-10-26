@@ -163,7 +163,7 @@ it.each([
   "other physical store",
   "newer run",
   "reset",
-  "non-main",
+  "child lineage",
   "completed",
 ] as const)("revalidates collected shutdown recovery custody after %s", async (releaseAt) => {
   const sessionKey = `agent:main:dashboard:released-${releaseAt}`;
@@ -189,7 +189,8 @@ it.each([
   const shouldMark =
     releaseAt === "before planning" ||
     releaseAt === "before commit" ||
-    releaseAt === "other physical store";
+    releaseAt === "other physical store" ||
+    releaseAt === "child lineage";
   if (releaseAt !== "user abort") {
     registration.controller.abort(createAgentRunRestartAbortError());
   }
@@ -246,13 +247,13 @@ it.each([
               : {}),
           });
         }
-        if (releaseAt === "newer run" || releaseAt === "reset" || releaseAt === "non-main") {
+        if (releaseAt === "newer run" || releaseAt === "reset" || releaseAt === "child lineage") {
           await replaceSessionEntry(target, {
             sessionId: releaseAt === "reset" ? "reset-session" : sessionId,
             lifecycleRunId: releaseAt === "newer run" ? "newer-run" : runId,
             restartRecoveryDeliveryRunId: runId,
             updatedAt: Date.now(),
-            ...(releaseAt === "non-main" ? { spawnDepth: 1 } : {}),
+            ...(releaseAt === "child lineage" ? { spawnDepth: 1 } : {}),
           });
         }
         await markRestartAbortedMainSessions({ ...params, cfg, stateDir: state.stateDir });
@@ -908,7 +909,10 @@ it("persists recovery when restart cancellation precedes shutdown marking", asyn
       lastRunError: expect.stringContaining("restart"),
     });
     expect(child.lifecycleRunId).toBeUndefined();
-    expect(child.restartRecoveryRuns).toBeUndefined();
+    expect(child.restartRecoveryRuns).toEqual([
+      { runId: `${childKey}:run`, lifecycleGeneration: getAgentEventLifecycleGeneration() },
+    ]);
+    expect(child.mainRestartRecovery?.cycleId).toEqual(expect.any(String));
     const row = buildGatewaySessionRow({
       cfg,
       agentId: "main",

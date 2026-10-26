@@ -30,6 +30,7 @@ import type {
 import type * as placementSessionRuntimePreparation from "./worker-environments/placement-session-runtime-preparation.js";
 import type * as placementSessionRuntime from "./worker-environments/placement-session-runtime.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
+import { WorkerPlacementWorkspaceUnavailableError } from "./worker-environments/placement-workspace-unavailable.js";
 import type { WorkerSessionWorkspace } from "./worker-environments/session-workspace.js";
 import { prepareWorkerTurnTranscriptSource } from "./worker-environments/worker-turn-transcript-target.js";
 import { createWorkerWorkspaceConflictTranscriptHandlers } from "./worker-workspace-conflict-transcript.js";
@@ -288,17 +289,14 @@ export async function resolveWorkerPlacementSessionTarget(params: {
   const assertRoutingCurrent = captureSessionMutationRouting(params.config, targetChangedError, [
     { ...params, preserveQualifiedAddress: true },
   ]);
-  let active = true;
+  const lifetime = new DisposableStack();
   let retained: ReturnType<typeof retainPreparedSessionEntryPredicate> | undefined;
   let unregister = () => {};
-  const release = () => {
-    if (!active) {
-      return;
-    }
-    active = false;
+  lifetime.defer(() => {
     retained?.release();
     unregister();
-  };
+  });
+  const release = () => lifetime.dispose();
   const retainTarget = (
     target: Awaited<ReturnType<typeof resolveGatewaySessionStoreTargetInWorker>>,
   ) => {
@@ -343,13 +341,23 @@ export async function resolveWorkerPlacementSessionTarget(params: {
           initialTarget.storeKeys,
         );
     const expected = params.expectedTarget ?? initialTarget;
+    const source = initialTarget.readSource ?? memory;
+    const unavailable = (worktreeId?: string) =>
+      params.expectedTarget || !source
+        ? targetChangedError()
+        : new WorkerPlacementWorkspaceUnavailableError(params.errorMessage, {
+            sessionKey: initialTarget.canonicalKey,
+            agentId: source.agentId,
+            storePath: source.path,
+            worktreeId,
+          });
+    assertRoutingCurrent(params.config);
     if (
       initialTarget.storePath !== expected.storePath ||
       initialTarget.canonicalKey !== expected.canonicalKey ||
       initialTarget.agentId !== expected.agentId ||
-      !initialEntry ||
-      initialEntry.sessionId !== params.sessionId ||
       (params.expectedEntry !== undefined &&
+        initialEntry !== undefined &&
         (initialEntry.lifecycleRevision !== params.expectedEntry.lifecycleRevision ||
           initialEntry.worktree?.id !== params.expectedEntry.worktree?.id ||
           initialEntry.repositoryWorkspaceId !== params.expectedEntry.repositoryWorkspaceId ||
@@ -357,6 +365,9 @@ export async function resolveWorkerPlacementSessionTarget(params: {
           initialEntry.deviceFolder?.path !== params.expectedEntry.deviceFolder?.path))
     ) {
       throw targetChangedError();
+    }
+    if (!initialEntry || initialEntry.sessionId !== params.sessionId) {
+      throw unavailable();
     }
     if (!memory && !params.readTarget && !retained) {
       throw targetChangedError();
@@ -380,7 +391,9 @@ export async function resolveWorkerPlacementSessionTarget(params: {
         : undefined,
     );
     const worktree =
-      initialIdentity.repositoryWorkspaceId || initialIdentity.deviceFolder
+      initialIdentity.repositoryWorkspaceId ||
+      initialIdentity.deviceFolder ||
+      !initialIdentity.worktreeId
         ? undefined
         : await params.sessionRuntime.managedWorktrees.findLiveByOwner(
             "session",
@@ -394,7 +407,7 @@ export async function resolveWorkerPlacementSessionTarget(params: {
       : undefined;
     const resolveBinding = (config = params.config) => {
       assertRoutingCurrent(config);
-      if (!active || retained?.isCurrent() === false) {
+      if (lifetime.disposed || retained?.isCurrent() === false) {
         throw targetChangedError();
       }
       const target = memory ? initialTarget : (params.readTarget?.(config) ?? initialTarget);
@@ -461,7 +474,7 @@ export async function resolveWorkerPlacementSessionTarget(params: {
         worktree.id !== entry.worktree.id ||
         worktree.ownerId !== target.canonicalKey
       ) {
-        throw targetChangedError();
+        throw unavailable(entry.worktree?.id);
       }
       return {
         config,

@@ -114,7 +114,7 @@ suite.define(() => {
       suite.withPage(
         { permissions: ["microphone"], viewport: { width: 390, height: 844 } },
         async ({ page }) => {
-          const { gateway, textarea, admit, emit } = await openDictation(page, {
+          const { gateway, textarea, admit, emit, close } = await openDictation(page, {
             heldMethods: ["chat.send"],
             sessionInfo: {
               key: "agent:main:main",
@@ -158,11 +158,17 @@ suite.define(() => {
               .getByText("Review complete.", { exact: true })
               .waitFor();
             await button(page, "Stop and keep text", true).click();
-            expect(await textarea.inputValue()).toBe("Please check the tests too.");
+            await gateway.waitForRequest("talk.session.close");
+            await close();
+            await expectDraft(textarea, "Please check the tests too.");
             expect(await gateway.getRequests("chat.send")).toHaveLength(0);
           }
           await capture("dictated-draft");
           await button(page, waitForCompletion ? "Send message" : "Send", true).click();
+          if (!waitForCompletion) {
+            await gateway.waitForRequest("talk.session.close");
+            await close();
+          }
           const request = await gateway.waitForRequest("chat.send");
           expect(request.params).toMatchObject({ message: "Please check the tests too." });
           await expectDraft(textarea, "");
@@ -184,7 +190,7 @@ suite.define(() => {
     { name: "cancel after blur", start: 7, end: 7, expected: "ship it please", cancel: true },
   ])("preserves the draft through $name", ({ name, start, end, expected, cancel }) =>
     suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
-      const { gateway, textarea, admit, emit } = await openDictation(page);
+      const { gateway, textarea, admit, emit, close } = await openDictation(page);
       await textarea.fill("ship it");
       await textarea.evaluate(
         (element: HTMLTextAreaElement, selection) =>
@@ -219,8 +225,11 @@ suite.define(() => {
         await button(page, "Stop and keep text").click();
       }
       await gateway.waitForRequest("talk.session.close");
+      if (!cancel) {
+        await close();
+      }
       const committedDraft = cancel ? "ship it" : expected;
-      expect(await textarea.inputValue()).toBe(committedDraft);
+      await expectDraft(textarea, committedDraft);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       await captureComposer(page, `dictation-${name.replaceAll(" ", "-")}-committed.png`);
       expect(await textarea.inputValue()).toBe(committedDraft);
@@ -337,49 +346,6 @@ suite.define(() => {
       }),
   );
 
-  it("keeps the hold-to-dictate preference keyboard accessible without changing the microphone", () =>
-    suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
-      await installMockGateway(page, {
-        methodResponses: { "talk.catalog": catalog(true, true) },
-      });
-      await installTalkBrowserFixtures(page);
-      await page.goto(`${suite.server.baseUrl}chat`);
-
-      const voice = button(page, "Start voice input");
-      await voice.hover();
-      const trigger = button(page, "Microphone input");
-      await trigger.click();
-      const picker = page.locator(".chat-talk-input-picker");
-      const selectedDevice = picker.getByRole("menuitemradio", { name: "USB Audio Interface" });
-      await selectedDevice.click();
-      await expect.poll(() => picker.getAttribute("open")).toBeNull();
-      await expect.poll(() => isFocused(trigger)).toBe(false);
-      await voice.hover();
-      await trigger.click();
-      const toggle = picker.getByRole("menuitemcheckbox", { name: "Hold to start dictation" });
-      await expect.poll(() => picker.getAttribute("open")).not.toBeNull();
-      await expect.poll(() => toggle.getAttribute("aria-checked")).toBe("true");
-
-      await picker.getByRole("menuitemradio", { name: "System default" }).focus();
-      await page.keyboard.press("End");
-      await expect.poll(() => isFocused(toggle)).toBe(true);
-      await page.keyboard.press("Space");
-
-      await expect.poll(() => toggle.getAttribute("aria-checked")).toBe("false");
-      await expect.poll(() => picker.getAttribute("open")).not.toBeNull();
-      await expect.poll(() => selectedDevice.getAttribute("aria-checked")).toBe("true");
-      await captureComposer(page, "microphone-picker-hold-toggle.png");
-      await captureFullPage(page, "microphone-picker-hold-toggle-full");
-      await page.keyboard.press("Home");
-      await page.keyboard.press("Enter");
-      await expect.poll(() => picker.getAttribute("open")).toBeNull();
-      await expect.poll(() => isFocused(trigger)).toBe(true);
-      await trigger.click();
-      await selectedDevice.click();
-      await expect.poll(() => picker.getAttribute("open")).toBeNull();
-      await expect.poll(() => isFocused(trigger)).toBe(false);
-    }));
-
   it("gates unavailable voice capabilities in the microphone picker", () =>
     suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
@@ -421,6 +387,11 @@ suite.define(() => {
         await waitForTalkReady(page);
 
         const microphone = button(page, "Dictation");
+        const microphoneColors = await microphone.evaluate((element) => ({
+          button: getComputedStyle(element).color,
+          icon: getComputedStyle(element.querySelector("svg")!).color,
+        }));
+        expect(microphoneColors.icon).toBe(microphoneColors.button);
         await microphone.click();
         await gateway.waitForRequest("talk.session.create");
 

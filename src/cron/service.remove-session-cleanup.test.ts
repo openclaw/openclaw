@@ -15,8 +15,8 @@ import {
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { listOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.test-support.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { clearCronJobActive, markCronJobActive } from "./active-jobs.js";
+import { cronTestDeps, cronTestInput } from "./service.fixture-builders.test-support.js";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
 import * as cronCleanup from "./service/locked.js";
@@ -77,15 +77,10 @@ async function setup(initialSession?: string, options: JobOptions = {}) {
   const target = { agentId: "main", storePath: sessionStorePath };
   const createCron = () =>
     new CronService({
-      scheduler: createTestGatewayScheduler(),
-      storePath,
-      cronEnabled: true,
+      ...cronTestDeps({ storePath, nowMs: undefined }),
       defaultAgentId: "main",
       resolveSessionStorePath: () => sessionStorePath,
       log: logger,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
   const read = (sessionKey: string) => loadExactSessionEntry({ ...target, sessionKey });
   const write = (sessionKey: string, sessionId: string) => {
@@ -104,16 +99,14 @@ async function setup(initialSession?: string, options: JobOptions = {}) {
 }
 
 function addJob(cron: CronService, id: string, overrides: JobOptions = {}) {
-  return cron.add({
-    id,
-    name: id,
-    enabled: true,
-    schedule: { kind: "every", everyMs: 60_000 },
-    sessionTarget: "isolated",
-    wakeMode: "next-heartbeat",
-    payload: { kind: "agentTurn", message: "work" },
-    ...overrides,
-  });
+  return cron.add(
+    cronTestInput({
+      id,
+      name: id,
+      payload: { kind: "agentTurn", message: "work" },
+      ...overrides,
+    }),
+  );
 }
 
 describe("CronService.remove session cleanup", () => {
@@ -141,25 +134,12 @@ describe("CronService.remove session cleanup", () => {
     ).toBe(false);
   });
 
-  it("removes only the deleted isolated job's base session", async () => {
-    const { cron, job, sessionKey, read, write } = await setup("base-session");
+  it("removes only the base session without holding the cron lock on the lifecycle writer", async () => {
+    const { cron, job, sessionKey, read, write, scope } = await setup("contended-session");
     const runSessionKey = `${sessionKey}:run:retained-run`;
     const otherSessionKey = "agent:main:cron:other-job";
     await write(runSessionKey, "run-session");
     await write(otherSessionKey, "other-session");
-
-    await expect(cron.remove(job.id)).resolves.toEqual({ ok: true, removed: true });
-
-    expect([read(sessionKey), read(runSessionKey), read(otherSessionKey)]).toMatchObject([
-      undefined,
-      { entry: { sessionId: "run-session" } },
-      { entry: { sessionId: "other-session" } },
-    ]);
-  });
-
-  it("releases the cron lock before waiting for the session lifecycle writer", async () => {
-    const { cron, job, sessionKey, read, scope } = await setup("contended-session");
-
     const writerEntered = createDeferred();
     const releaseWriter = createDeferred();
     const heldWriter = runExclusiveSqliteSessionWrite(
@@ -180,10 +160,16 @@ describe("CronService.remove session cleanup", () => {
     } finally {
       releaseWriter.resolve();
       await heldWriter;
-      await Promise.all([removal, unrelatedAdd]);
+      await Promise.all([
+        expect(removal).resolves.toEqual({ ok: true, removed: true }),
+        unrelatedAdd,
+      ]);
     }
-
-    expect(read(sessionKey)).toBeUndefined();
+    expect([read(sessionKey), read(runSessionKey), read(otherSessionKey)]).toMatchObject([
+      undefined,
+      { entry: { sessionId: "run-session" } },
+      { entry: { sessionId: "other-session" } },
+    ]);
   });
 
   it("reports failed session cleanup after removal and preserves the session for retry", async () => {

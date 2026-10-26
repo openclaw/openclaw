@@ -34,7 +34,7 @@ type BackgroundSessionResultProvenance = {
   runId: string;
 };
 
-/** Serializes a background assistant result behind active work on its target conversation. */
+/** Appends a background result without waiting for the target conversation's active turn. */
 export async function commitBackgroundResultToSession(params: {
   agentId: string;
   sessionKey: string;
@@ -81,7 +81,8 @@ export async function commitBackgroundResultToSession(params: {
       agentId: params.agentId,
     }),
     signal: params.signal,
-    policy: "wait",
+    // The transcript writer orders appends; only destructive mutations need turn settlement.
+    policy: "allow-live",
     run: async () => {
       params.assertCurrent?.();
       return withSessionEntryReadOnlyInWorker<BackgroundSessionResultCommit>(

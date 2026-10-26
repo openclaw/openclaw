@@ -76,7 +76,10 @@ it("applies deployment action limits when publication and operator actions are a
   }
   const preparation = { ...inspection, action: "prepare_pr" };
   expect(Value.Check(expectDefined(tool, "restricted tool").parameters, preparation)).toBe(false);
-  for (const definition of [githubPublishToolDefinition, createGitHubPublishTool()]) {
+  for (const definition of [
+    githubPublishToolDefinition,
+    createGitHubPublishTool({ sandbox: publicationSandbox() }),
+  ]) {
     const [allowed] = applyGatewayToolPolicy([definition], {
       tools: {
         gatewayPolicy: {
@@ -122,39 +125,70 @@ function publicationSandbox(overrides: Partial<SandboxContext> = {}) {
 it.each<{
   name: string;
   sandbox: Partial<SandboxContext> | null;
+  prepare: boolean;
   refresh: boolean;
   evidence: boolean;
 }>([
-  { name: "direct session", sandbox: null, refresh: false, evidence: false },
-  { name: "writable managed sandbox", sandbox: {}, refresh: true, evidence: true },
+  { name: "direct session", sandbox: null, prepare: false, refresh: false, evidence: false },
+  { name: "writable managed sandbox", sandbox: {}, prepare: true, refresh: true, evidence: true },
   {
     name: "read-only managed sandbox",
     sandbox: { workspaceAccess: "ro" },
+    prepare: false,
     refresh: false,
     evidence: true,
   },
   {
-    name: "unmanaged sandbox",
+    // An ordinary local Docker or Podman conversation adopts a managed workspace.
+    name: "unmanaged local sandbox",
     sandbox: { workspaceSource: undefined },
+    prepare: true,
     refresh: false,
     evidence: true,
   },
-  { name: "missing backend", sandbox: { backend: undefined }, refresh: false, evidence: true },
-  { name: "missing file bridge", sandbox: { fsBridge: undefined }, refresh: true, evidence: false },
   {
-    name: "missing source-aware read",
-    sandbox: { fsBridge: createHostSandboxFsBridge("/tmp/github-publish") },
+    name: "unmanaged remote sandbox",
+    sandbox: { workspaceSource: undefined, backendId: "ssh" },
+    prepare: false,
+    refresh: false,
+    evidence: true,
+  },
+  {
+    name: "missing backend",
+    sandbox: { backend: undefined },
+    prepare: false,
+    refresh: false,
+    evidence: true,
+  },
+  {
+    name: "missing file bridge",
+    sandbox: { fsBridge: undefined },
+    prepare: true,
     refresh: true,
     evidence: false,
   },
-  { name: "disabled sandbox", sandbox: { enabled: false }, refresh: false, evidence: false },
-])("offers only supported sandbox actions for $name", ({ sandbox, refresh, evidence }) => {
+  {
+    name: "missing source-aware read",
+    sandbox: { fsBridge: createHostSandboxFsBridge("/tmp/github-publish") },
+    prepare: true,
+    refresh: true,
+    evidence: false,
+  },
+  {
+    name: "disabled sandbox",
+    sandbox: { enabled: false },
+    prepare: false,
+    refresh: false,
+    evidence: false,
+  },
+])("offers only supported sandbox actions for $name", ({ sandbox, prepare, refresh, evidence }) => {
   for (const actionsAvailable of [false, true]) {
     const tool = createGitHubPublishTool({
       sandbox: sandbox === null ? null : publicationSandbox(sandbox),
       actionsAvailable,
     });
     for (const [action, offered, properties] of [
+      ["prepare_pr", prepare, []],
       ["refresh_base", refresh, ["conflictsResolved", "baseCommit"]],
       ["upload_evidence", evidence, ["evidence"]],
     ] as const) {
@@ -179,10 +213,9 @@ it.each<{
         pullRequestUrl: "https://github.com/example/repository/pull/1",
       }),
     ).toBe(true);
-    for (const action of ["publish", "prepare_pr", "edit", "ready", "request_review"]) {
+    for (const action of ["publish", "edit", "ready", "request_review"]) {
       expect(Value.Check(tool.parameters, { action }), action).toBe(true);
     }
-    expect(tool.description).toContain("prepare_pr");
     for (const action of ["inspect", "merge", "close"]) {
       expect(Value.Check(tool.parameters, { action }), action).toBe(actionsAvailable);
     }
@@ -211,9 +244,15 @@ it.each([
   expect(callGateway).not.toHaveBeenCalled();
 });
 
-it.each(["managed-worktree", undefined] as const)(
-  "dispatches preparation with its current %s sandbox before owner qualification",
-  async (workspaceSource) => {
+// Unbound sandboxed conversations yield first; github-publish-tool.handoff.test.ts owns that path.
+it.each([
+  {},
+  { conflictsResolved: false },
+  { conflictsResolved: true, expectedHeadCommit: "a".repeat(40) },
+])(
+  "dispatches preparation with its current sandbox and acknowledgement %j before owner qualification",
+  async (acknowledgement) => {
+    const workspaceSource = "managed-worktree";
     const sandbox = publicationSandbox({ workspaceSource });
     const callGateway = vi
       .mocked(callInProcessGatewayTool)
@@ -226,8 +265,9 @@ it.each(["managed-worktree", undefined] as const)(
     const input = {
       action: "prepare_pr",
       pullRequestUrl: "https://github.com/example/repository/pull/1",
+      ...acknowledgement,
     };
-    expect(Value.Check(tool.parameters, input)).toBe(true);
+    expect(Value.Check(tool.parameters, input)).toBe(workspaceSource === "managed-worktree");
     await withGatewayToolCallerIdentity(caller, () => tool.execute("prepare", input));
     expect(callGateway).toHaveBeenCalledExactlyOnceWith(
       "sessions.github.action",
@@ -271,7 +311,11 @@ it("offers current-PR preparation without privileged actions", () => {
   for (const action of ["ready", "edit"]) {
     check({ action, publishingSessionKey: "another" }, false);
   }
+  expect(tool.description).toContain("omit action to append accepted changes to the original PR");
+  expect(tool.description).not.toContain("Imported source publication is not available");
   expect(tool.description).toContain("used only when creating a PR");
+  expect(tool.description).toContain("retain requestId, finish the turn and await its result here");
+  expect(tool.description).toContain("do not submit another publication to recover it");
   expect(tool.description).toContain("Edit never synchronizes, stages, commits or pushes");
   const actionOnly = createGitHubPublishTool({
     publicationAvailable: false,

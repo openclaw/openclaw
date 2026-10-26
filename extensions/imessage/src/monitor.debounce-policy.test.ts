@@ -11,9 +11,9 @@ import {
 import type { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { expect, it, vi } from "vitest";
 import { IMessageRpcClient, createIMessageRpcClient } from "./client.js";
-import { monitorIMessageProvider } from "./monitor.js";
 import { resolveIMessageInboundDecision } from "./monitor/inbound-processing.js";
 import { createIMessageDurableIngress } from "./monitor/ingress.js";
+import { monitorIMessageProvider } from "./monitor/monitor-provider.js";
 import { getIMessageRuntime } from "./runtime.js";
 import { installIMessageStateRuntimeForTest } from "./test-support/runtime.js";
 

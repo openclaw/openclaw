@@ -66,7 +66,10 @@ export function observeSessionMaintenancePlanningWorker(hooks: {
             if (command.type === "session.maintenance.prepare") {
               await hooks.afterPrepare?.({ store: target });
             }
-            if (planning) {
+            if (
+              planning ||
+              (command.type === "session.maintenance.prepare" && result !== undefined)
+            ) {
               if (
                 !isRecord(result) ||
                 typeof result.workerThreadId !== "number" ||
@@ -109,32 +112,55 @@ export function observeSessionMaintenancePlanningWorker(hooks: {
   return vi.spyOn(workerStore, "runSqliteWorkerStoreOperation").mockImplementation(observe);
 }
 
-export function maintenancePreparationFixture(state: OpenClawTestState) {
+export function maintenancePolicy(
+  pruneAfter = "1s",
+  overrides: Parameters<typeof resolveMaintenanceConfigFromInput>[0] = {},
+) {
+  return resolveMaintenanceConfigFromInput({
+    mode: "enforce",
+    maxEntries: 100,
+    pruneAfter,
+    ...overrides,
+  });
+}
+
+export function maintenanceFixture(state: OpenClawTestState) {
   const storePath = path.join(state.sessionsDir(), "sessions.json");
-  const active = { sessionKey: "agent:main:preparation-active", storePath };
-  const stale = { sessionKey: "agent:main:preparation-stale", storePath };
-  replaceSessionEntrySync(active, { sessionId: "active", updatedAt: Date.now() });
-  replaceSessionEntrySync(stale, { sessionId: "stale", updatedAt: 1 });
+  const scope = (sessionKey: string) => ({ sessionKey, storePath });
+  const seed = (
+    sessionKey: string,
+    sessionId: string,
+    updatedAt = Date.now(),
+    fields: Partial<Parameters<typeof replaceSessionEntrySync>[1]> = {},
+  ) => {
+    const target = scope(sessionKey);
+    replaceSessionEntrySync(target, { sessionId, updatedAt, ...fields });
+    return target;
+  };
   const databaseOptions = { agentId: "main", env: state.env };
-  const database = openOpenClawAgentDatabase(databaseOptions);
-  const plan = {
-    kind: "maintenance-plan",
-    databaseOptions: resolveSessionReclamationDatabaseOptions(databaseOptions),
-    materializedPlans: [],
-    input: {
-      activeSessionKey: active.sessionKey,
-      archiveDirectory: state.sessionsDir(),
-      maintenance: resolveMaintenanceConfigFromInput({
-        mode: "enforce",
-        maxEntries: 100,
-        pruneAfter: "1d",
-      }),
-      preservation: { providerKeys: [], workIdentities: [], lifecycleIdentities: [] },
-      storePath,
-    },
-  } satisfies SqliteSessionReclamationPlan;
+  const plan = (activeSessionKey: string, maintenance = maintenancePolicy("1d")) =>
+    ({
+      kind: "maintenance-plan",
+      databaseOptions: resolveSessionReclamationDatabaseOptions(databaseOptions),
+      materializedPlans: [],
+      input: {
+        activeSessionKey,
+        archiveDirectory: state.sessionsDir(),
+        maintenance,
+        preservation: { providerKeys: [], workIdentities: [], lifecycleIdentities: [] },
+        storePath,
+      },
+    }) satisfies SqliteSessionReclamationPlan;
+  return { state, storePath, scope, seed, databaseOptions, plan };
+}
+
+export function maintenancePreparationFixture(state: OpenClawTestState) {
+  const fixture = maintenanceFixture(state);
+  const active = fixture.seed("agent:main:preparation-active", "active");
+  const stale = fixture.seed("agent:main:preparation-stale", "stale", 1);
+  const database = openOpenClawAgentDatabase(fixture.databaseOptions);
   const archivedEntries = [{ sessionKey: stale.sessionKey, sessionId: "stale" }];
-  return { active, stale, database, plan, archivedEntries };
+  return { active, stale, database, plan: fixture.plan(active.sessionKey), archivedEntries };
 }
 
 /** Observe committed maintenance rows without imposing a worker-startup deadline. */

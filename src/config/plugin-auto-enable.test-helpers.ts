@@ -1,7 +1,9 @@
 import path from "node:path";
+import { makePluginMetadataIndex } from "../plugins/current-plugin-metadata.test-support.js";
 import type { PluginCandidate } from "../plugins/discovery.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { createEmptyPluginMetadataSnapshot } from "../plugins/plugin-metadata-empty.test-support.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { buildPluginMetadataProviderFacts } from "../plugins/plugin-metadata-provider-facts.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
@@ -96,48 +98,30 @@ export function createPluginMetadataSnapshot({
 }): PluginMetadataSnapshot {
   const policyHash = resolveInstalledPluginIndexPolicyHash(config);
   const { plugins, diagnostics } = manifestRegistry;
+  const empty = createEmptyPluginMetadataSnapshot();
   const index: PluginMetadataSnapshot["index"] = {
-    version: 1,
-    hostContractVersion: "test",
-    compatRegistryVersion: "test",
-    migrationVersion: 1,
+    ...makePluginMetadataIndex(),
     policyHash,
-    generatedAtMs: 1,
-    installRecords: {},
     plugins: [],
-    diagnostics: [],
   };
   return {
+    ...empty,
     policyHash,
     ...(workspaceDir ? { workspaceDir } : {}),
     index,
     registryIndex: index,
-    registryDiagnostics: [],
     manifestRegistry,
     plugins,
     diagnostics,
     byPluginId: new Map(plugins.map((plugin) => [plugin.id, plugin])),
-    normalizePluginId: (pluginId) => pluginId,
     declaredProviderOwners: buildDeclaredProviderOwnerIndex(plugins),
     owners: {
-      channels: new Map(),
-      channelConfigs: new Map(),
-      providers: new Map(),
-      modelCatalogProviders: new Map(),
-      cliBackends: new Map(),
-      setupProviders: new Map(),
-      commandAliases: new Map(),
-      contracts: new Map(),
+      ...empty.owners,
       providerAuthContributions:
         buildPluginMetadataProviderFacts(plugins).providerAuthContributions,
-      modelIdNormalizationPolicies: new Map(),
     },
     metrics: {
-      registrySnapshotMs: 0,
-      manifestRegistryMs: 0,
-      ownerMapsMs: 0,
-      totalMs: 0,
-      indexPluginCount: 0,
+      ...empty.metrics,
       manifestPluginCount: plugins.length,
     },
   };

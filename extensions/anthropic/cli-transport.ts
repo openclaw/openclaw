@@ -18,7 +18,6 @@ export type ClaudeCliTransport = {
   waitForExit(): Promise<void>;
   send(message: Record<string, unknown>): Promise<void>;
   initialize(): Promise<Record<string, unknown>>;
-  interrupt(): Promise<void>;
 };
 
 /** One Claude Code subprocess and its bidirectional stream-json control channel. */
@@ -49,7 +48,6 @@ export async function createClaudeCliTransport(params: {
     throw error;
   }
   const requests = new Map<string, AbortController>();
-  const interrupts = new Map<string, ReturnType<typeof createDeferred<void>>>();
   const initializeId = randomUUID();
   const {
     promise: ready,
@@ -113,10 +111,6 @@ export async function createClaudeCliTransport(params: {
     }
     closed = true;
     rejectReady(new Error("Claude CLI closed before initialization completed."));
-    for (const interrupt of interrupts.values()) {
-      interrupt.reject(new Error("Claude CLI closed before acknowledging interruption."));
-    }
-    interrupts.clear();
     abortRequests();
     owner[Symbol.dispose]();
     beginShutdown();
@@ -260,13 +254,6 @@ export async function createClaudeCliTransport(params: {
         } else {
           throw new Error("Claude CLI initialization failed.");
         }
-      } else if (isRecord(response) && typeof response.request_id === "string") {
-        const interrupt = interrupts.get(response.request_id);
-        if (response.subtype === "success") {
-          interrupt?.resolve();
-        } else {
-          interrupt?.reject(new Error("Claude CLI rejected turn interruption."));
-        }
       }
     } else if (message.type === "control_request") {
       if (typeof message.request_id !== "string" || !isRecord(message.request)) {
@@ -325,18 +312,6 @@ export async function createClaudeCliTransport(params: {
       child.dispose();
     },
     send,
-    async interrupt() {
-      const id = randomUUID();
-      const completion = createDeferred<void>();
-      interrupts.set(id, completion);
-      void completion.promise.catch(() => {});
-      try {
-        await send({ type: "control_request", request_id: id, request: { subtype: "interrupt" } });
-        await completion.promise;
-      } finally {
-        interrupts.delete(id);
-      }
-    },
     async initialize() {
       await send({
         type: "control_request",

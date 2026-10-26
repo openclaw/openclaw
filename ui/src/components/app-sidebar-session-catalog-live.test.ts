@@ -1,9 +1,7 @@
 // @vitest-environment node
-import { beforeEach, expect, it, vi } from "vitest";
+import { beforeEach, expect, it } from "vitest";
 import type { SessionCatalog } from "../../../packages/gateway-protocol/src/index.ts";
-import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { SessionCatalogLiveState } from "./app-sidebar-session-catalog-live.ts";
-import { refetchExpandedSessionCatalogPages } from "./app-sidebar-session-catalog-state.ts";
 import { sessionCatalogHostKey } from "./app-sidebar-session-types.ts";
 
 const idleSession = { status: "idle", archived: false, canContinue: true, canArchive: true };
@@ -28,79 +26,51 @@ beforeEach(() => {
   live = new SessionCatalogLiveState();
   progressId = live.beginRequest(1).progressId;
 });
-function apply(
-  incoming: SessionCatalog,
-  catalogs: SessionCatalog[],
-  pages = new Map<string, number>(),
-) {
+function apply(incoming: SessionCatalog, catalogs: SessionCatalog[], depth = 0) {
   return live.applyHost({
     payload: { progressId, agentId: "main", catalog: incoming },
     agentId: "main",
     catalogs,
-    pageDepths: pages,
+    pageDepths: new Map([[sessionCatalogHostKey(incoming.id, incoming.hosts[0]!.hostId), depth]]),
   });
 }
 
-it.each(["final", "incremental"] as const)(
-  "retains rows and cursors for a pending host in %s publications",
-  async (publication) => {
-    const current = catalog("codex", 2);
-    current.hosts[0]!.nextCursor = "next-page";
-    const pending = { ...current.hosts[0]!, pending: true, sessions: [], nextCursor: undefined };
-    const incoming = { ...current, hosts: [pending] };
-    const catalogs =
-      publication === "final"
-        ? live.mergeFinal([incoming], [current])
-        : apply(incoming, [current])!.catalogs;
-    expect(catalogs[0]?.hosts[0]).toMatchObject({
+it("retains pending rows, cursors, errors and siblings until recovery", () => {
+  const current = catalog("codex", 2);
+  current.hosts[0]!.error = { code: "NODE_INVOKE_FAILED", message: "Fixture node failed" };
+  current.hosts[0]!.nextCursor = "next-page";
+  current.error = { code: "catalog_stale", message: "Last enumeration failed" };
+  const pending = apply(
+    {
+      ...current,
+      error: undefined,
       pending: true,
-      sessions: current.hosts[0]!.sessions,
-      nextCursor: "next-page",
-    });
-    // A final response still removes genuinely absent hosts.
-    expect(catalogs[0]?.hosts).toHaveLength(publication === "final" ? 1 : 2);
-    const request = vi.fn();
-    expect(
-      await refetchExpandedSessionCatalogPages({
-        catalogs,
-        previousCatalogs: [current],
-        client: { request } as unknown as GatewayBrowserClient,
-        agentId: "main",
-        pageDepths: new Map([[sessionCatalogHostKey("codex", pending.hostId), 1]]),
-        isCurrent: () => true,
-        canRequestPage: () => true,
-      }),
-    ).toEqual(catalogs);
-    expect(request).not.toHaveBeenCalled();
-  },
-);
-
-it("does not replace a settled progressive host with its pending final response", () => {
-  const current = catalog("codex", 1);
-  const pending = { ...current.hosts[0]!, pending: true, sessions: [] };
-  const published = apply(current, [{ ...current, hosts: [pending] }])!;
-  expect(live.mergeFinal([{ ...current, hosts: [pending] }], published.catalogs)).toEqual([
-    current,
-  ]);
+      hosts: [{ ...catalog("codex", 1).hosts[0]!, pending: true, sessions: [] }],
+    },
+    [current],
+  );
+  expect(pending?.catalogs[0]?.pending).toBe(true);
+  expect(pending?.catalogs[0]?.error).toEqual(current.error);
+  expect(pending?.catalogs[0]?.hosts[0]).toMatchObject({
+    pending: true,
+    error: { code: "NODE_INVOKE_FAILED" },
+    sessions: current.hosts[0]!.sessions,
+    nextCursor: "next-page",
+  });
+  expect(pending?.catalogs[0]?.hosts[1]).toEqual(current.hosts[1]);
+  expect(apply(catalog("codex", 1), pending!.catalogs)?.catalogs).toEqual([catalog("codex", 2)]);
 });
 
-it("clears unavailable native readiness without losing another host or expanded rows", () => {
+it("retains failed host rows and sibling hosts while updating capabilities", () => {
   const current = catalog("codex", 2);
-  current.capabilities.startTerminal = true;
-  current.hosts.forEach((host) => {
-    host.canStartTerminal = true;
-  });
+  current.hosts[1]!.canStartTerminal = true;
   const changed = {
     ...current.hosts[0]!,
     canStartTerminal: false,
     sessions: [],
     error: { code: "offline", message: "Offline" },
   };
-  const result = apply(
-    { ...current, hosts: [changed] },
-    [current],
-    new Map([[sessionCatalogHostKey("codex", changed.hostId), 1]]),
-  );
+  const result = apply({ ...current, hosts: [changed] }, [current]);
   expect(result?.catalogs[0]?.hosts.map((host) => host.canStartTerminal)).toEqual([false, true]);
   expect(result?.catalogs[0]?.hosts[1]).toEqual(current.hosts[1]);
   expect(result?.catalogs[0]?.hosts[0]?.sessions).toEqual(current.hosts[0]?.sessions);
@@ -116,3 +86,24 @@ it("compares a host event only with the catalog and host it can replace", () => 
 
   expect(apply(changed, [changed, unrelated])).toBeNull();
 });
+
+it.each([
+  { ids: [], truncated: false },
+  { ids: ["replacement"], truncated: false },
+  { ids: ["frontier"], truncated: true },
+])(
+  "applies an exhausted progressive host snapshot: $ids (truncated=$truncated)",
+  ({ ids, truncated }) => {
+    const current = catalog("codex", 1);
+    current.hosts[0]!.nextCursor = "expanded-next";
+    const fresh = catalog("codex", 1);
+    fresh.hosts[0]!.sessions = ids.map((threadId) => ({ ...idleSession, threadId }));
+    if (truncated) {
+      fresh.hosts[0]!.error = { code: "DISCOVERY_TRUNCATED", message: "Search by exact ID" };
+    }
+    const update = apply(fresh, [current], 2);
+    expect(update?.catalogs).toEqual([fresh]);
+    const pendingFinal = { ...fresh, hosts: [{ ...fresh.hosts[0]!, pending: true, sessions: [] }] };
+    expect(live.mergeFinal([pendingFinal], update!.catalogs)).toEqual([fresh]);
+  },
+);

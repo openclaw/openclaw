@@ -21,11 +21,6 @@ const MAX_IMAGE_REASONING_FALLBACK_BLOCKS = 50;
 const MAX_IMAGE_REASONING_SIGNATURE_PARSE_CHARS = 2_048;
 const MAX_IMAGE_REASONING_SIGNATURE_SCAN_CHARS = 65_536;
 
-function hasResponsesReasoningSignatureMarkers(value: string): boolean {
-  const scanned = value.slice(0, MAX_IMAGE_REASONING_SIGNATURE_SCAN_CHARS);
-  return /"id"\s*:\s*"rs_/.test(scanned) && /"type"\s*:\s*"reasoning(?:[."])/.test(scanned);
-}
-
 function isImageReasoningFallbackSignature(value: unknown): boolean {
   if (!value) {
     return false;
@@ -39,7 +34,8 @@ function isImageReasoningFallbackSignature(value: unknown): boolean {
       return false;
     }
     if (trimmed.length > MAX_IMAGE_REASONING_SIGNATURE_PARSE_CHARS) {
-      return hasResponsesReasoningSignatureMarkers(trimmed);
+      const scanned = trimmed.slice(0, MAX_IMAGE_REASONING_SIGNATURE_SCAN_CHARS);
+      return /"id"\s*:\s*"rs_/.test(scanned) && /"type"\s*:\s*"reasoning(?:[."])/.test(scanned);
     }
     try {
       return isImageReasoningFallbackSignature(JSON.parse(trimmed));
@@ -113,33 +109,17 @@ export function coerceImageModelConfig(cfg?: OpenClawConfig): ImageModelConfig {
   return coerceToolModelConfig(cfg?.agents?.defaults?.imageModel);
 }
 
-function formatConfiguredImageModelRef(provider: string, modelId: string): string {
-  const slash = modelId.indexOf("/");
-  if (slash > 0 && normalizeProviderId(modelId.slice(0, slash)) === provider) {
-    return modelId;
-  }
-  return `${provider}/${modelId}`;
-}
-
-function modelIdMatchesProviderlessRef(params: {
-  provider: string;
-  modelId: string;
+function resolveProviderlessConfiguredImageModelRef(params: {
+  cfg?: OpenClawConfig;
   ref: string;
-}): boolean {
-  const candidates = [params.modelId];
-  const slash = params.modelId.indexOf("/");
-  if (slash > 0 && normalizeProviderId(params.modelId.slice(0, slash)) === params.provider) {
-    candidates.push(params.modelId.slice(slash + 1));
+}): string {
+  const ref = params.ref.trim();
+  if (!ref || ref.includes("/")) {
+    return ref;
   }
-  const normalizedRef = normalizeLowercaseStringOrEmpty(params.ref);
-  return candidates.some(
-    (candidate) => normalizeLowercaseStringOrEmpty(candidate) === normalizedRef,
-  );
-}
 
-function findConfiguredImageModelMatches(params: { cfg?: OpenClawConfig; ref: string }): string[] {
   const providers = params.cfg?.models?.providers;
-  const matches = new Set<string>();
+  const matchedRefs = new Set<string>();
   for (const [providerKey, providerConfig] of Object.entries(providers ?? {})) {
     const provider = normalizeProviderId(providerKey);
     if (!provider || !Array.isArray(providerConfig?.models)) {
@@ -150,25 +130,27 @@ function findConfiguredImageModelMatches(params: { cfg?: OpenClawConfig; ref: st
       if (!modelId || !Array.isArray(entry?.input) || !entry.input.includes("image")) {
         continue;
       }
-      if (!modelIdMatchesProviderlessRef({ provider, modelId, ref: params.ref })) {
+      const candidates = [modelId];
+      const slash = modelId.indexOf("/");
+      if (slash > 0 && normalizeProviderId(modelId.slice(0, slash)) === provider) {
+        candidates.push(modelId.slice(slash + 1));
+      }
+      const normalizedRef = normalizeLowercaseStringOrEmpty(ref);
+      if (
+        !candidates.some(
+          (candidate) => normalizeLowercaseStringOrEmpty(candidate) === normalizedRef,
+        )
+      ) {
         continue;
       }
-      matches.add(formatConfiguredImageModelRef(provider, modelId));
+      matchedRefs.add(
+        slash > 0 && normalizeProviderId(modelId.slice(0, slash)) === provider
+          ? modelId
+          : `${provider}/${modelId}`,
+      );
     }
   }
-  return [...matches];
-}
-
-function resolveProviderlessConfiguredImageModelRef(params: {
-  cfg?: OpenClawConfig;
-  ref: string;
-}): string {
-  const ref = params.ref.trim();
-  if (!ref || ref.includes("/")) {
-    return ref;
-  }
-
-  const matches = findConfiguredImageModelMatches({ cfg: params.cfg, ref });
+  const matches = [...matchedRefs];
   if (matches.length <= 1) {
     return matches.at(0) ?? ref;
   }

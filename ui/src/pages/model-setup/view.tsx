@@ -1,4 +1,5 @@
-import { createMemo, For, Match, Show, Switch } from "solid-js";
+import { createDeferred } from "@solidjs/signals";
+import { createMemo, Errored, For, isPending, Loading, Match, Show, Switch } from "solid-js";
 import type { SystemAgentSetupDetectResult } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
@@ -6,9 +7,10 @@ import { Icon } from "../../components/solid/icon.tsx";
 import { LearnMoreLink } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
+import { registerRouteSubtitlesEnglish } from "../../i18n/locales/en-route-subtitles.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import type { JSX } from "../../types/solid-elements.js";
 import "../../styles/model-setup.css";
+import type { JSX } from "../../types/solid-elements.js";
 import {
   renderMutationMessage,
   ModelProviderConnectAction,
@@ -21,12 +23,15 @@ import {
 } from "./configured-model.tsx";
 import { renderModelSetupLoading } from "./loading-view.tsx";
 import { renderProviderIcon } from "./model-setup-icon-loader.tsx";
+import { formatModelSetupError } from "./model-setup-task-result.ts";
 import { NativeModelSetupView } from "./native-model-setup.tsx";
 import { listModelSetupPrepareOptions, type ModelSetupPrepareOption } from "./prepare-options.ts";
 import { manualProviderName, ManualProviderPicker } from "./provider-picker.tsx";
 import { ModelSetupSuccessDialog } from "./success-dialog.tsx";
 import type { ModelSetupViewProps } from "./view-types.ts";
 import { ModelSetupWizard } from "./wizard-view-solid.tsx";
+
+registerRouteSubtitlesEnglish();
 
 registerModelSetupEnglish();
 
@@ -341,9 +346,8 @@ function Ready(props: ModelSetupViewProps & { result: SystemAgentSetupDetectResu
   );
 }
 
-function ModelSetupBody(props: ModelSetupViewProps) {
+function ModelSetupBody(props: ModelSetupViewProps & { detection: () => null }) {
   const ready = () => (props.page.phase === "ready" ? props.page.result : undefined);
-  const error = () => (props.page.phase === "detect-error" ? props.page.message : undefined);
   return (
     <Switch>
       <Match when={ready()}>
@@ -358,37 +362,71 @@ function ModelSetupBody(props: ModelSetupViewProps) {
       <Match when={!props.canAdmin || props.gatewayTooOld}>
         {renderSetupAccessWarning(props.canAdmin)}
       </Match>
-      <Match when={props.page.phase === "loading"}>
-        {props.embedded ? (
-          <div class="model-setup__loading" role="status">
-            {t("modelSetup.loading")}
-          </div>
-        ) : (
-          renderModelSetupLoading(props.modelConfigured === true)
-        )}
-      </Match>
-      <Match when={error()}>
-        {(message) => (
-          <>
-            <div class="callout danger" role="alert">
-              {message()}
-            </div>
-            <button
-              type="button"
-              class="btn"
-              disabled={props.detecting}
-              onClick={() => props.onDetect()}
-            >
-              {t("modelSetup.retry")}
-            </button>
-          </>
-        )}
+      <Match when={props.page.phase !== "ready"}>
+        <Show keyed when={props.detectionIdentity()} fallback={<SetupLoading {...props} />}>
+          <Errored
+            fallback={(error) => (
+              <>
+                <div class="callout danger" role="alert">
+                  {formatModelSetupError(error())}
+                </div>
+                <button
+                  type="button"
+                  class="btn"
+                  disabled={props.detecting}
+                  onClick={() => props.onDetect()}
+                >
+                  {t("modelSetup.retry")}
+                </button>
+              </>
+            )}
+          >
+            <Loading on={props.detectionIdentity()} fallback={<SetupLoading {...props} />}>
+              <Show when={!isPending(props.detection)} fallback={<SetupLoading {...props} />}>
+                {props.detection()}
+                <SetupLoading {...props} />
+              </Show>
+            </Loading>
+          </Errored>
+        </Show>
       </Match>
     </Switch>
   );
 }
 
+function SetupLoading(props: ModelSetupViewProps) {
+  return (
+    <>
+      {props.embedded ? (
+        <div class="model-setup__loading" role="status">
+          {t("modelSetup.loading")}
+        </div>
+      ) : (
+        renderModelSetupLoading(props.modelConfigured === true)
+      )}
+    </>
+  );
+}
+
+function DetectionProgress() {
+  return (
+    <div class="muted" role="status">
+      {t("modelSetup.loading")}
+    </div>
+  );
+}
+
 export function ModelSetupView(props: ModelSetupViewProps): JSX.Element {
+  // Retain accepted forms without holding synchronous owner and busy publications.
+  const detection: () => null = createDeferred(
+    () =>
+      props.detectionIdentity()?.completion.then((outcome) => {
+        if (outcome && "error" in outcome) {
+          throw outcome.error;
+        }
+        return null;
+      }) ?? null,
+  );
   const content = (
     <div
       class="model-setup"
@@ -473,17 +511,24 @@ export function ModelSetupView(props: ModelSetupViewProps): JSX.Element {
         </div>
       </Show>
       {renderMutationMessage(props.connection?.loginMessage)}
-      {props.detectionError ? (
-        <div class="callout warning" role="alert">
-          {props.detectionError}
-        </div>
-      ) : undefined}
-      {props.detecting && props.page.phase === "ready" ? (
-        <div class="muted" role="status">
-          {t("modelSetup.loading")}
-        </div>
-      ) : undefined}
-      <ModelSetupBody {...props} />
+      <Show when={props.page.phase === "ready"}>
+        <Show keyed when={props.detectionIdentity()}>
+          <Errored
+            fallback={(error) => (
+              <div class="callout warning" role="alert">
+                {formatModelSetupError(error())}
+              </div>
+            )}
+          >
+            <Loading on={props.detectionIdentity()} fallback={<DetectionProgress />}>
+              <Show when={isPending(detection)} fallback={detection()}>
+                <DetectionProgress />
+              </Show>
+            </Loading>
+          </Errored>
+        </Show>
+      </Show>
+      <ModelSetupBody {...props} detection={detection} />
     </div>
   );
   const dialogs = (
@@ -494,6 +539,7 @@ export function ModelSetupView(props: ModelSetupViewProps): JSX.Element {
           onDialogRef={props.onWizardDialog}
           mode={props.wizardMode}
           state={props.wizard}
+          busy={props.wizardBusy}
           refreshWarning={props.refreshWarning}
           cancellationNotice={props.cancellationNotice}
           value={props.wizardValue}
@@ -503,8 +549,8 @@ export function ModelSetupView(props: ModelSetupViewProps): JSX.Element {
           onClose={props.onWizardClose}
         />
       </div>
-      <Show when={props.activation.phase === "success" ? props.activation : undefined}>
-        {(activation) => <ModelSetupSuccessDialog {...props} activation={activation()} />}
+      <Show when={props.activation.phase === "success" ? props.activation : undefined} keyed>
+        {(activation) => <ModelSetupSuccessDialog {...props} activation={activation} />}
       </Show>
     </>
   );

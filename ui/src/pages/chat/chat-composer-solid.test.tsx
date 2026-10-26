@@ -1,4 +1,3 @@
-import { createSignal, merge } from "solid-js";
 /* @vitest-environment jsdom */
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -7,6 +6,7 @@ import { i18n } from "../../i18n/lib/translate.ts";
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { mountSolid as mountComponent } from "../../test-helpers/solid-render.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
@@ -24,18 +24,15 @@ import { ComposerDictationSendAction } from "./components/chat-composer-controls
 import type { ChatComposerProps } from "./components/chat-composer-types.ts";
 import { reviewPrivateComposerDraft } from "./components/private-composer-recovery-dialog.tsx";
 import { ComposerDictationOwner } from "./composer-dictation.ts";
-import {
-  admitStoredChatComposerQueueItem,
-  persistChatComposerState,
-} from "./composer-persistence.ts";
+import { persistChatComposerState } from "./composer-draft-storage.ts";
+import { admitStoredChatComposerQueueItemResult } from "./composer-queue-persistence.ts";
 
 afterEach(() => resetComposerFixture());
 
 function mountComposer(initial: Partial<ChatComposerProps>) {
   const container = document.body.appendChild(createComposerContainer());
   let props = createComposerProps(initial);
-  const paint = () => renderComposerInto(container, props);
-  paint();
+  renderComposerInto(container, props);
   const query = container.querySelector.bind(container);
   return {
     container,
@@ -44,7 +41,7 @@ function mountComposer(initial: Partial<ChatComposerProps>) {
     goal: () => query(".agent-chat__goal-mode"),
     update: (next: Partial<ChatComposerProps> = {}) => {
       props = { ...props, ...next };
-      paint();
+      renderComposerInto(container, props);
     },
   };
 }
@@ -107,6 +104,7 @@ it("updates edits and history from the draft owner without remounting the input"
   state.chatLocalInputHistoryBySession[state.sessionKey] = [{ text: "Earlier input", ts: 1 }];
   state.handleChatInputHistoryKey({
     key: "ArrowUp",
+    keyCode: 38,
     selectionStart: 0,
     selectionEnd: 0,
     altKey: false,
@@ -114,7 +112,6 @@ it("updates edits and history from the draft owner without remounting the input"
     metaKey: false,
     shiftKey: false,
     isComposing: false,
-    keyCode: 38,
   });
   flush();
   expect(textarea.value).toBe("Earlier input");
@@ -144,14 +141,12 @@ it("publishes attachment read progress through the composer owner without a draf
     [new File(["progress"], "progress.txt", { type: "text/plain" })],
     props,
   );
-  await waitForSolid(() =>
-    expect(view.container.querySelector(".chat-attachment-loading > span")).not.toBeNull(),
-  );
+  await waitForSolid(() => expect(view.query(".chat-attachment-loading > span")).not.toBeNull());
   reportProgress?.();
   flush();
-  expect(
-    view.container.querySelector<HTMLElement>(".chat-attachment-loading > span")?.style.transform,
-  ).toBe("scaleX(0.5)");
+  expect(view.query<HTMLElement>(".chat-attachment-loading > span")?.style.transform).toBe(
+    "scaleX(0.5)",
+  );
   expect(view.textarea().value).toBe("");
 });
 
@@ -186,13 +181,17 @@ it("publishes a restored persisted draft and queue after adopting their revision
   state.connected = true;
   expect(persistChatComposerState(state, state.sessionKey, { draft: "Saved draft" })).toBe(true);
   expect(
-    admitStoredChatComposerQueueItem(state, captureChatOutboxAdmission(state, state.sessionKey), {
-      id: "saved-input",
-      text: "Saved queued input",
-      createdAt: 1,
-      sendState: "held",
-    }),
-  ).toBe(true);
+    admitStoredChatComposerQueueItemResult(
+      state,
+      captureChatOutboxAdmission(state, state.sessionKey),
+      {
+        id: "saved-input",
+        text: "Saved queued input",
+        createdAt: 1,
+        sendState: "held",
+      },
+    ),
+  ).toBe("admitted");
   state.chatQueue = [];
   const queue = mountSolid(() => (
     <output>{state.chatQueue.map((item) => item.text).join(";")}</output>
@@ -211,14 +210,14 @@ it("publishes a restored persisted draft and queue after adopting their revision
   expect(view.textarea()).toBe(textarea);
 });
 
-it("restores the conversation draft when a restored goal edit is cancelled", () => {
+it("restores the conversation draft when a restored goal edit is cancelled", async () => {
   const { state, view } = mountOwnedComposer({
     draft: "Edit this objective",
     goalDraftMode: { action: "edit", goalId: "goal-one", previousDraft: "Conversation draft" },
     onGoalSubmit: vi.fn(async () => false),
   });
+  await waitForSolid(() => expect(view.goal()?.querySelector("button")).toBeTruthy());
   const cancel = view.goal()!.querySelector<HTMLButtonElement>("button")!;
-  expect(cancel).not.toBeNull();
   cancel.click();
   flush();
   expect(state.chatGoalDraftMode).toBeNull();
@@ -234,7 +233,7 @@ it("starts a goal and admits only one same-turn submit", async () => {
   input("/goal start ");
   flush();
   expect(state.chatGoalDraftMode).toEqual({ action: "start" });
-  expect(view.goal()).not.toBeNull();
+  await waitForSolid(() => expect(view.goal()).not.toBeNull());
   expect(view.textarea().value).toBe("");
   input("Keep every literal space  ");
   flush();
@@ -484,13 +483,13 @@ it("keeps a pending dictation send bound to the action that started it", async (
   vi.spyOn(controller, "finishActive").mockReturnValue(finish.promise);
   const firstSend = vi.fn();
   const laterSend = vi.fn();
-  const [props, setProps] = createSignal({ readDictation: () => controller, onSend: firstSend });
-  const actionProps = merge(props);
-  const view = mountSolid(() => <ComposerDictationSendAction {...actionProps} />);
+  const view = mountComponent(ComposerDictationSendAction, {
+    readDictation: () => controller,
+    onSend: firstSend,
+  });
   onTestFinished(() => controller.dispose());
   view.container.querySelector<HTMLButtonElement>("button")!.click();
-  setProps({ readDictation: () => controller, onSend: laterSend });
-  flush();
+  view.update({ readDictation: () => controller, onSend: laterSend });
   finish.resolve(true);
   await Promise.resolve();
   expect(firstSend).toHaveBeenCalledOnce();

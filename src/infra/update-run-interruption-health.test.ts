@@ -66,6 +66,17 @@ function after<T>(ms: number, value: T): Promise<T> {
   });
 }
 
+async function expireObservation() {
+  let completed = false;
+  const result = observe().then((value) => {
+    completed = true;
+    return value;
+  });
+  await vi.advanceTimersByTimeAsync(INTERRUPTED_UPDATE_SETTLE_TIMEOUT_MS);
+  expect(completed).toBe(true);
+  return result;
+}
+
 // The reporter's measured total was 25,431 ms; the phase distribution here is synthetic.
 it("settles a managed candidate taking 25,431 ms across setup and reconciliation", async () => {
   const elapsedMs = 25_431;
@@ -93,14 +104,7 @@ it.each([
 ] as const)("bounds a stalled %s read and records %s", async (probe, phase) => {
   const pending = createDeferredCore<never>();
   probes[probe].mockReturnValueOnce(pending.promise);
-  let completed = false;
-  const result = observe().then((value) => {
-    completed = true;
-    return value;
-  });
-  await vi.advanceTimersByTimeAsync(INTERRUPTED_UPDATE_SETTLE_TIMEOUT_MS);
-  expect(completed).toBe(true);
-  expect(await result).toMatchObject({
+  expect(await expireObservation()).toMatchObject({
     outcome: "timed-out",
     elapsedMs: INTERRUPTED_UPDATE_SETTLE_TIMEOUT_MS,
     phase,
@@ -117,14 +121,7 @@ it("keeps HTTP readiness in the original budget after a slow healthy settle", as
     after(INTERRUPTED_UPDATE_SETTLE_TIMEOUT_MS - 2_500, healthy),
   );
   probes.http.mockImplementation(() => after(4_000, { healthz: 200, readyz: 200 }));
-  let completed = false;
-  const result = observe().then((value) => {
-    completed = true;
-    return value;
-  });
-  await vi.advanceTimersByTimeAsync(INTERRUPTED_UPDATE_SETTLE_TIMEOUT_MS);
-  expect(completed).toBe(true);
-  expect(await result).toMatchObject({
+  expect(await expireObservation()).toMatchObject({
     outcome: "timed-out",
     elapsedMs: INTERRUPTED_UPDATE_SETTLE_TIMEOUT_MS,
     phase: "reconciliation:http",

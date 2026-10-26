@@ -105,6 +105,43 @@ it("retires an initializing request synchronously before coalescing reconnect in
   response.resolve({});
 });
 
+it("keeps an initializing view until its binding changes or it is retired", async () => {
+  const response = deferred<unknown>();
+  const request = createGatewayRequestMock(() => response.promise);
+  const { gateway, publish } = createApplicationGateway();
+  publish({
+    ...gateway.snapshot,
+    client: createTestGatewayClient(request),
+    phase: "connected",
+    hello: gatewayHelloForMethods(["mcp.app.view"]),
+  });
+  const { view, unmount } = mountView(
+    { sessionKey: "agent:main:main", viewId: "view-pending" },
+    { gateway },
+  );
+  await waitForSolid(() => expect(request).toHaveBeenCalledOnce());
+  const signal = request.mock.calls[0]?.[2]?.signal;
+  view.restartAfterTeardown();
+  publish(gateway.snapshot);
+  await view.updateComplete;
+  expect(signal?.aborted).toBe(false);
+  expect(request).toHaveBeenCalledOnce();
+
+  await view.teardown();
+  expect(signal?.aborted).toBe(true);
+  view.restartAfterTeardown();
+  await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
+  const restartedSignal = request.mock.calls[1]?.[2]?.signal;
+  Object.assign(view, replacement);
+  await waitForSolid(() => {
+    expect(restartedSignal?.aborted).toBe(true);
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(request.mock.calls[2]?.[1]).toEqual(replacement);
+  });
+  unmount();
+  response.resolve({});
+});
+
 it("updates the default localized title without resetting negotiated frame height", async () => {
   const { view, frame, bridge, request } = await mountBridge("view-localized-title");
   view.title = "";

@@ -1,6 +1,7 @@
 import type { AddressInfo } from "node:net";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createRealtimeTranscriptionWebSocketSession } from "openclaw/plugin-sdk/realtime-transcription-session";
+import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RawData, WebSocket } from "ws";
 import { WebSocketServer } from "ws";
@@ -53,12 +54,7 @@ function sendResult(
 }
 
 function parseClientMessage(data: RawData): Record<string, unknown> {
-  const bytes = Array.isArray(data)
-    ? Buffer.concat(data)
-    : Buffer.isBuffer(data)
-      ? data
-      : Buffer.from(data);
-  return JSON.parse(bytes.toString("utf8")) as Record<string, unknown>;
+  return JSON.parse(rawDataToString(data, "utf8")) as Record<string, unknown>;
 }
 
 async function createScenario(onConnection: (ws: WebSocket) => void, endpointingMs = 1000) {

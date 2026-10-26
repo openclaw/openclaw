@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, merge, onCleanup, Show } from "solid-js";
+import { createMemo, lazy, merge, onCleanup, Show } from "solid-js";
 import type { ControlUiNavigationItem } from "../../../src/plugin-sdk/control-ui.js";
 import {
   navigationIconForRoute,
@@ -8,9 +8,7 @@ import {
 } from "../app-navigation.ts";
 import { isSessionRouteId, pathForRoute } from "../app-route-paths.ts";
 import { createIdentityAvatars } from "../lib/identity-avatar-loader.ts";
-import { createIdleImport } from "../lib/idle-import.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
-import { cancelRoutePreload, scheduleRoutePreload } from "../lib/route-preload.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { PendingSessionCreate } from "../pages/chat/pending-session-create-lazy.ts";
 import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts";
@@ -27,6 +25,7 @@ import type {
 import type { SessionMenuWork } from "./session-menu-solid.tsx";
 import { SESSION_MENU_OPEN_EVENT } from "./session-progress-hovercard-target.ts";
 import type { SidebarMenusOwner, SidebarRouteView } from "./sidebar-menus-types.ts";
+import { createSidebarRendererLoader } from "./sidebar-renderer-loader.tsx";
 import { Icon } from "./solid/icon.tsx";
 import type { MenuHandle } from "./solid/menu.tsx";
 
@@ -80,7 +79,6 @@ type SidebarMenusState = {
     width: number;
     placement?: "right-end";
   } | null;
-  menuRenderer: SidebarMenusRenderer | null;
 };
 
 export type SidebarMenus = ReturnType<typeof createSidebarMenus>;
@@ -110,14 +108,12 @@ export function createSidebarMenus(deps: {
     agentMenuMode: "click",
     agentCreateDialogOpen: false,
     identityMenuPosition: null,
-    menuRenderer: null,
   };
   const listeners = new Set<() => void>();
   const triggers = new Map<MenuTrigger, HTMLElement | null>();
   const menuHandles = new Map<"catalogView" | "agent", MenuHandle>();
   let focusAgentRoster: (() => void) | undefined;
   const agentMenuAvatars = createIdentityAvatars();
-  const routePreloadTimers = new Map<EventTarget, ReturnType<typeof globalThis.setTimeout>>();
   let sessionMenuWork: ReturnType<SidebarMenusRenderer["createSessionMenuWork"]> | undefined;
   let agentMenuHoverOpenTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   let agentMenuHoverCloseTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
@@ -125,23 +121,32 @@ export function createSidebarMenus(deps: {
   let pluginActionLifetime = new AbortController();
   let disposed = false;
   let catalogMenuView: CatalogMenuView | undefined;
-  const menuRendererImport = createIdleImport(
-    // A visible Create action can enter its pending chat synchronously.
-    () =>
-      Promise.all([import("./sidebar-menus-render.tsx"), PendingSessionCreate.preload()]).then(
-        ([renderer]) => renderer,
-      ),
-    (renderer) => {
-      if (!disposed) {
-        sessionMenuWork = renderer.createSessionMenuWork(host, (work) =>
-          setField("sessionMenuWork", work),
-        );
-        if (!pluginActionLifetime.signal.aborted && state.sessionMenu) {
-          sessionMenuWork.load(state.sessionMenu.session);
-        }
-        setField("menuRenderer", renderer);
-      }
+  const MenuRenderer = lazy(
+    async () => {
+      // A visible Create action can enter its pending chat synchronously.
+      const [{ SidebarMenusRenderer, CatalogSessionMenu, createSessionMenuWork }] =
+        await Promise.all([import("./sidebar-menus-render.tsx"), PendingSessionCreate.preload()]);
+      return { SidebarMenusRenderer, CatalogSessionMenu, createSessionMenuWork };
     },
+    { export: "SidebarMenusRenderer" },
+  );
+  const LazyCatalogMenu = lazy(MenuRenderer.preload, { export: "CatalogSessionMenu" });
+  const menuRendererImport = createSidebarRendererLoader(async () => {
+    const renderer = await MenuRenderer.preload();
+    if (!disposed) {
+      sessionMenuWork = renderer.createSessionMenuWork(host, (work) =>
+        setField("sessionMenuWork", work),
+      );
+      if (!pluginActionLifetime.signal.aborted && state.sessionMenu) {
+        sessionMenuWork.load(state.sessionMenu.session);
+      }
+    }
+  });
+  const Boundary = menuRendererImport.Boundary;
+  const CatalogMenu = (props: Parameters<typeof LazyCatalogMenu>[0]) => (
+    <Boundary>
+      <LazyCatalogMenu {...props} />
+    </Boundary>
   );
 
   function setField<Key extends keyof SidebarMenusState>(
@@ -296,13 +301,11 @@ export function createSidebarMenus(deps: {
       menuRendererImport.dispose();
       sessionMenuWork?.release();
       clearAgentMenuHoverTimers();
-      for (const timer of routePreloadTimers.values()) {
-        globalThis.clearTimeout(timer);
-      }
-      routePreloadTimers.clear();
     },
 
-    preloadMenuRenderer: menuRendererImport.load,
+    async preloadMenuRenderer() {
+      await Promise.all([menuRendererImport.load(), LazyCatalogMenu.preload()]);
+    },
 
     closePositionedMenu(menu: PositionedMenu, options: { restoreFocus?: boolean } = {}) {
       setField(`${menu}MenuPosition`, null);
@@ -339,17 +342,6 @@ export function createSidebarMenus(deps: {
       menus.closeSessionGroupMenu();
       menus.closeAgentMenu();
       return hadTransientMenu;
-    },
-
-    preloadRoute(routeId: NavigationRouteId, event: Event, immediate = false) {
-      scheduleRoutePreload(
-        routePreloadTimers,
-        routeId,
-        event,
-        (nextRouteId) => host.onPreloadRoute?.(nextRouteId),
-        routeId === host.activeRouteId || !menus.isRouteEnabled(routeId),
-        immediate,
-      );
     },
 
     isRouteEnabled(routeId: NavigationRouteId): boolean {
@@ -603,13 +595,32 @@ export function createSidebarMenus(deps: {
 
     render(view: SidebarMenusOwner): JSX.Element {
       const projection = projectOwner(menus, (owner) => owner);
-      return (
-        <Show when={projection.read().menuRenderer} keyed>
-          {(renderer) =>
-            renderer.renderSidebarMenus(menus, view, agentMenuAvatars, projection.revision)
+      return [
+        <Show
+          when={
+            projection.read().railPinMenuPosition ||
+            projection.read().pluginNavigationMenuPosition ||
+            projection.read().agentMenuPosition ||
+            projection.read().agentCreateDialogOpen ||
+            projection.read().identityMenuPosition ||
+            projection.read().sessionMenu ||
+            projection.read().sessionGroupMenu ||
+            projection.read().sessionSortMenuPosition ||
+            projection.read().peopleFilterMenuPosition ||
+            projection.read().catalogViewMenuPosition
           }
-        </Show>
-      );
+        >
+          <Boundary>
+            <MenuRenderer
+              menus={menus}
+              host={view}
+              avatars={agentMenuAvatars}
+              revision={projection.revision}
+            />
+          </Boundary>
+        </Show>,
+        menus.catalogMenuView.render(CatalogMenu),
+      ];
     },
 
     renderRoute(
@@ -633,13 +644,10 @@ export function createSidebarMenus(deps: {
           href={sessionTarget()?.href ?? pathForRoute(routeId, view.basePath)}
           active={isSidebarRouteActive(view.activeRouteId, routeId)}
           onNavigate={() => view.onNavigate?.(routeId, sessionTarget()?.options)}
-          onPreload={(event, immediate) => menus.preloadRoute(routeId, event, immediate)}
-          onCancelPreload={menus.cancelPreload}
         />
       );
       return <Show when={view.enabledRouteIds?.includes(routeId) ?? true}>{link}</Show>;
     },
-    cancelPreload: (event: Event) => cancelRoutePreload(routePreloadTimers, event),
   });
   return menus;
 }

@@ -135,6 +135,36 @@ afterEach(() => {
 });
 
 describe("curated meeting capture", () => {
+  it("retains source controls and health rows through refresh snapshots", async () => {
+    const { page, request } = await mount();
+    const sourceEdit = page.querySelector<HTMLButtonElement>('button[aria-label="Edit source 1"]')!;
+    const sourceRow = sourceEdit.closest(".settings-row");
+    const healthRow = [...page.querySelectorAll(".settings-row")].find((row) =>
+      row.querySelector(".settings-status")?.textContent?.includes("Not active"),
+    )!;
+    expect(healthRow).toBeDefined();
+    const pending = createDeferred<TranscriptsStatusResult>();
+    request.mockImplementationOnce(() => pending.promise);
+    const refresh = click(page, "Refresh");
+    await waitForSolid(() => expect(refresh.disabled).toBe(true));
+    expect(page.contains(sourceRow)).toBe(true);
+    expect(page.contains(healthRow)).toBe(true);
+    expect(page.querySelector('button[aria-label="Edit source 1"]')).toBe(sourceEdit);
+
+    pending.resolve(structuredClone(meetingStatus));
+    await waitForSolid(() => expect(refresh.disabled).toBe(false));
+    expect(page.contains(healthRow)).toBe(true);
+    expect(page.querySelector('button[aria-label="Edit source 1"]')).toBe(sourceEdit);
+
+    const updated = structuredClone<TranscriptsStatusResult>(meetingStatus);
+    updated.configuredSources[0]!.state = "armed";
+    request.mockResolvedValueOnce(updated);
+    click(page, "Refresh");
+    await waitForSolid(() => expect(healthRow.textContent).toContain("Armed"));
+    expect(page.contains(healthRow)).toBe(true);
+    expect(page.querySelector('button[aria-label="Edit source 1"]')).toBe(sourceEdit);
+  });
+
   it.each([false, true])(
     "shows unknown health after disconnect (failed read=%s)",
     async (failStatus) => {
@@ -312,6 +342,7 @@ describe("curated meeting capture", () => {
   );
 
   it("retains requirements learned after opening an editor without metadata", async () => {
+    const warnings = vi.spyOn(console, "warn");
     const { page, runtimeConfig, request, original } = await mount({
       source: { providerId: "test-voice", title: "Original", providerOptions: { keep: true } },
       providers: [],
@@ -359,6 +390,11 @@ describe("curated meeting capture", () => {
     click(page, "Edit source 1");
     flush();
     expect([...page.querySelectorAll("input")].some((item) => item.required)).toBe(false);
+    expect(
+      warnings.mock.calls.filter(([message]) =>
+        String(message).includes("UNTRACKED_READ_AFTER_AWAIT"),
+      ),
+    ).toEqual([]);
   });
 
   it.each([
@@ -899,7 +935,7 @@ describe("curated meeting capture", () => {
         ),
       ].every((button) => button.disabled),
     ).toBe(true);
-    expect(page.querySelector<HTMLInputElement>('input[role="switch"]')?.disabled).toBe(true);
+    expect(page.querySelector('input[role="switch"]')?.hasAttribute("disabled")).toBe(true);
     expect(runtimeConfig.state.configFormDirty).toBe(false);
   });
 
@@ -919,7 +955,7 @@ describe("curated meeting capture", () => {
       await pending;
       return meetingStatus;
     });
-    click(page, "Refresh");
+    const refresh = click(page, "Refresh");
     await waitForSolid(() => expect(page.textContent).toContain("Loading"));
     expect(page.querySelector<HTMLInputElement>('input[name="accountId"]')?.value).toBe(
       "new-account",
@@ -927,7 +963,7 @@ describe("curated meeting capture", () => {
     page.querySelector("form")!.dispatchEvent(new Event("submit", { cancelable: true }));
     expect(runtimeConfig.state.configFormDirty).toBe(false);
     finish();
-    await waitForSolid(() => expect(page.textContent).toContain("Not active"));
+    await waitForSolid(() => expect(refresh.disabled).toBe(false));
     expect(page.querySelector<HTMLInputElement>('input[name="accountId"]')?.value).toBe(
       "new-account",
     );

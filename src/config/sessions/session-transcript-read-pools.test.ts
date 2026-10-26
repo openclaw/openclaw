@@ -82,9 +82,7 @@ it.each(["exact", "family", "alias", "history-reuse", "history-first"] as const)
               await maintenance.run(() => read(storePath));
             }
             await maintenance.close();
-            await expect(
-              owner.prewarm({ env: state.env, history: false }),
-            ).resolves.toBeUndefined();
+            await expect(owner.prewarm({ env: state.env })).resolves.toBeUndefined();
           },
         );
       if (selection === "history-first") {

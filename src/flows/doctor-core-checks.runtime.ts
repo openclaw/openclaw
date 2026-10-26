@@ -120,9 +120,7 @@ export async function collectGatewayDaemonFindings(
   if (nodePath && isNodeRuntime(nodePath)) {
     const runtime = await resolveNodeRuntimeInfo(nodePath, state.env);
     const message =
-      runtime.status === "probe-failed"
-        ? runtime.error.message
-        : (runtime.capabilityError ?? runtime.note);
+      runtime.status === "probe-failed" ? runtime.error.message : runtime.capabilityError;
     if (message) {
       findings.push({
         checkId: "core/doctor/gateway-daemon",

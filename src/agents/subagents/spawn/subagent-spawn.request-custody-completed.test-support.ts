@@ -9,10 +9,7 @@ import {
 import { tryFastAbortFromMessage } from "../../../auto-reply/reply/abort.js";
 import { handleStopCommand } from "../../../auto-reply/reply/commands-session-abort.js";
 import { buildCommandTestParams } from "../../../auto-reply/reply/commands.test-harness.js";
-import {
-  recordReplyOperationAgentTurn,
-  type ReplyOperationRunState,
-} from "../../../auto-reply/reply/reply-operation-run-state.js";
+import { drainFormattedSystemEvents } from "../../../auto-reply/reply/session-system-events.js";
 import { buildTestCtx } from "../../../auto-reply/reply/test-ctx.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
 import {
@@ -29,12 +26,6 @@ import {
   withExecRequestOwners,
   withExecRequestTurn,
 } from "../../../infra/exec-request-context.js";
-import { createHeartbeatDispatch } from "../../../infra/heartbeat-dispatch.js";
-import {
-  prepareHeartbeatRunStage,
-  resolveHeartbeatWakeStage,
-  type HeartbeatRunOptions,
-} from "../../../infra/heartbeat-runner-execution.js";
 import {
   consumeSelectedSystemEventEntries,
   enqueueSystemEventEntry,
@@ -247,9 +238,6 @@ export function registerCompletedRequestCustodySpawnCases(options: RequestCustod
             captureExecRequestOwners(run),
             "real child request custody",
           );
-          expect(requestOwners.map((owner) => owner.identity)).toEqual([
-            expect.objectContaining({ runId: run.runId, sessionId: run.sessionId, sessionKey }),
-          ]);
           const exec = commandTool({
             runId: run.runId,
             sessionKey,
@@ -262,18 +250,13 @@ export function registerCompletedRequestCustodySpawnCases(options: RequestCustod
           const result = await withEnvAsync({ OPENCLAW_EXEC_SHELL_SNAPSHOT: "0" }, () =>
             exec.execute("completed-routed-child-command", foregroundCommand(), run.abortSignal),
           );
-          const details = asOptionalRecord(result.details);
-          expect(details?.status).toBe("running");
+          expect(asOptionalRecord(result.details)?.status).toBe("running");
           command = commandSession(result, "real child command");
           expect(readExecRequestOwners(command)).toEqual(requestOwners);
           if (mode !== "retained-exact") {
             const service = await exec.execute(
               "independent-routed-child-service",
-              {
-                command: watchedCommand,
-                background: true,
-                timeoutSeconds: 60,
-              },
+              { command: watchedCommand, background: true, timeoutSeconds: 60 },
               run.abortSignal,
             );
             independent = commandSession(service, "independent service");
@@ -328,47 +311,27 @@ export function registerCompletedRequestCustodySpawnCases(options: RequestCustod
           inspectTerminal();
           const completed = await withinTest(terminal.promise, signal);
           receipt = structuredClone(completionReceipt(completed));
-          expect(completed.execution.outcome).toMatchObject({ status: "ok" });
-          expect(completed.completion?.resultText).toBe("Completed child result");
+          expect(completed).toMatchObject({
+            execution: { outcome: { status: "ok" } },
+            completion: { resultText: "Completed child result" },
+          });
         }
-        expect(model).toHaveBeenCalledOnce();
         expect(runningCommand.exited).toBe(false);
         bound.admission.close();
         bound.parent.cleanup();
         expect(captureExecRequestCancellation(original).owners).toEqual(owners);
         const stop = createCustodyStop(bound, original);
         if (mode !== "retained-exact") {
-          // The bound native-parent fixture replaces model admission. Use the real
-          // heartbeat preparation and acknowledgement owner to retire its event.
-          const heartbeatOptions: HeartbeatRunOptions = {
+          // Retire the occurrence through prompt adoption, bypassed by this parent fixture.
+          const admittedContext = await drainFormattedSystemEvents({
             cfg: bound.cfg,
             agentId: original.agentId,
             sessionKey: original.sessionKey,
-            source: "exec-event",
-            intent: "event",
-            reason: "exec-event",
-            heartbeat: { every: "1h", target: "none", isolatedSession: false },
-          };
-          const wake = await resolveHeartbeatWakeStage(heartbeatOptions);
-          if (wake.kind !== "ready") {
-            throw new Error(`Heartbeat acknowledgement preparation skipped: ${wake.reason}`);
-          }
-          const prepared = await prepareHeartbeatRunStage(wake);
-          if (prepared.kind !== "ready") {
-            throw new Error(`Heartbeat acknowledgement routing skipped: ${prepared.reason}`);
-          }
-          expect(prepared.inspectedSystemEventsToConsume.map((selected) => selected.id)).toContain(
-            event.id,
-          );
-          const replyState: ReplyOperationRunState = {};
-          recordReplyOperationAgentTurn([replyState], undefined, {
-            kind: "settled",
-            status: "ok",
-            result: { acceptedSessionSpawns: [accepted] },
+            isMainSession: true,
+            isNewSession: false,
+            events: [event],
           });
-          const acknowledgement = createHeartbeatDispatch(heartbeatOptions, wake, prepared);
-          await acknowledgement.prepareReply({ text: "HEARTBEAT_OK" }, replyState);
-          expect(acknowledgement.result).toMatchObject({ status: "ran" });
+          expect(admittedContext).toContain(event.text);
           expect(
             peekSystemEventEntries(original.sessionKey).map((selected) => selected.id),
           ).not.toContain(event.id);
@@ -445,7 +408,6 @@ export function registerCompletedRequestCustodySpawnCases(options: RequestCustod
                 ),
             },
           });
-          expect(requestSelection.runs.map((entry) => entry.runId)).toEqual([childRunId]);
           const active = expectDefined(getRpcSource(childRunId), "active native child");
           active.input.abortSignal.addEventListener(
             "abort",

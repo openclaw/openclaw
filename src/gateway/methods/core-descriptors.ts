@@ -7,7 +7,14 @@ const SIDECAR_CONTROL_PLANE_WRITE = { startup: true, controlPlaneWrite: true } a
 const UNADVERTISED = { advertise: false } as const;
 const PROFILE_DEPENDENT = { profileAccess: "required" } as const;
 const PROFILE_STARTUP = { startup: true, ...PROFILE_DEPENDENT } as const;
+const SESSION_METADATA_READ = {
+  startup: true,
+  shareKey: operatorReadShareKey,
+  shareMaxAgeMs: 1_000,
+  shareInvalidationEvents: ["sessions.changed", "chat.metadata.changed"],
+} as const;
 const OBSERVATION = { lifetime: "observation" } as const;
+const UNADVERTISED_OBSERVATION = { ...UNADVERTISED, ...OBSERVATION } as const;
 const SESSION_WRITE = { sessionAccess: { mode: "write" } } as const;
 const OWN_SESSION_WRITE = { sessionAccess: { mode: "write", allowOwnSessionScope: true } } as const;
 const PORTAL_SESSION_WRITE = {
@@ -141,8 +148,8 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   // Resolve identity before the router captures the caller's profile guard.
   ["users.self", "users", "operator.read", "<=2026.7", PROFILE_DEPENDENT],
   ["users.linkEmail", "users", "operator.admin", "<=2026.7", PROFILE_DEPENDENT],
-  ["users.setDisplayName", "users", "operator.write", "<=2026.7", PROFILE_DEPENDENT],
-  ["users.setAvatar", "users", "operator.write", "<=2026.7", PROFILE_DEPENDENT],
+  ["users.setDisplayName", "users", "operator.read", "<=2026.7", PROFILE_DEPENDENT],
+  ["users.setAvatar", "users", "operator.read", "<=2026.7", PROFILE_DEPENDENT],
   ["users.setRole", "users", "operator.admin", "2026.8", PROFILE_DEPENDENT],
   ["users.listAuthLinks", "users", "operator.read", "2026.8", PROFILE_DEPENDENT],
   ["users.listModelAccounts", "users", "operator.read", "2026.8", PROFILE_DEPENDENT],
@@ -227,18 +234,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["secrets.reload", null, "operator.admin", "<=2026.7"],
   ["secrets.resolve", null, "operator.admin", "<=2026.7"],
   ["voicewake.routing.get", "voicewake-routing", "operator.read", "<=2026.7"],
-  [
-    "sessions.list",
-    "sessions-read",
-    "operator.read",
-    "<=2026.7",
-    {
-      startup: true,
-      shareKey: operatorReadShareKey,
-      shareMaxAgeMs: 1_000,
-      shareInvalidationEvents: ["sessions.changed", "chat.metadata.changed"],
-    },
-  ],
+  ["sessions.list", "sessions-read", "operator.read", "<=2026.7", SESSION_METADATA_READ],
   ["sessions.subscribe", "sessions-subscriptions", "operator.read", "<=2026.7", { startup: true }],
   ["sessions.messages.subscribe", "sessions-subscriptions", "operator.read", "<=2026.7"],
   ["sessions.messages.unsubscribe", "sessions-subscriptions", "operator.read", "<=2026.7"],
@@ -361,18 +357,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["agent.wait", "agent", "operator.write", "<=2026.7", { ...PROFILE_STARTUP, ...OBSERVATION }],
   ["chat.history", "chat", "operator.read", "<=2026.7", { startup: true }],
   ["chat.startup", "chat", "operator.read", "<=2026.7", { startup: true }],
-  [
-    "chat.metadata",
-    "chat",
-    "operator.read",
-    "<=2026.7",
-    {
-      startup: true,
-      shareKey: operatorReadShareKey,
-      shareMaxAgeMs: 1_000,
-      shareInvalidationEvents: ["chat.metadata.changed", "sessions.changed"],
-    },
-  ],
+  ["chat.metadata", "chat", "operator.read", "<=2026.7", SESSION_METADATA_READ],
   ["chat.message.get", "chat", "operator.read", "<=2026.7", { startup: true }],
   ["chat.abort", "chat-abort", "operator.write", "<=2026.7"],
   ["chat.send", "chat-send", "operator.write", "<=2026.7", { startup: true }],
@@ -388,13 +373,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["channels.pairing.approve", "channel-pairing", "dynamic", "2026.7"],
   ["channels.pairing.dismiss", "channel-pairing", "operator.pairing", "2026.7"],
   ["assistant.media.get", null, "operator.read", "<=2026.7", UNADVERTISED],
-  [
-    "sessions.get",
-    "sessions-read",
-    "operator.read",
-    "<=2026.7",
-    { advertise: false, lifetime: "observation" },
-  ],
+  ["sessions.get", "sessions-read", "operator.read", "<=2026.7", UNADVERTISED_OBSERVATION],
   ["sessions.resolve", "sessions-read", "operator.read", "<=2026.7", UNADVERTISED],
   ["sessions.usage", "usage", "operator.read", "<=2026.7", UNADVERTISED],
   ["sessions.usage.timeseries", "usage", "operator.read", "<=2026.7", UNADVERTISED],
@@ -719,6 +698,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["claws.drafts.publish", "claws-drafts", "operator.admin", "2026.10", CONTROL_PLANE_WRITE],
   ["claws.add.plan", "claws-add", "operator.read", "2026.10"],
   ["claws.add.apply", "claws-add", "operator.admin", "2026.10", CONTROL_PLANE_WRITE],
+  ["worktrees.recoverFile", "worktrees", "operator.admin", "2026.10", CONTROL_PLANE_WRITE],
   ["worktrees.recoverRemoval", "worktrees", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
   ["worktrees.retireSnapshot", "worktrees", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
   ["sessions.processes.list", "session-processes", "operator.read", "2026.9", OBSERVATION],
@@ -758,4 +738,8 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["skills.files.get", "skills", "operator.read", "2026.10"],
   ["agents.avatar.generate", "agents", "operator.admin", "2026.10", CONTROL_PLANE_WRITE],
   ["exec.approvals.native.commit", "exec-approvals", "operator.admin", "2026.10"],
+  ["chat.pendingInputs.dismiss", "chat", "operator.write", "2026.10", OWN_SESSION_WRITE],
+  ["update.recovery.cleanup", "update", "operator.admin", "2026.10", CONTROL_PLANE_WRITE],
+  ["diagnostics.capabilities", "diagnostics", "operator.read", "2026.10"],
+  ["cron.bind", "cron", "operator.admin", "2026.10", CONTROL_PLANE_WRITE],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

@@ -1,10 +1,12 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { saveLegacySessionStore as saveSessionStore } from "../../infra/state-migrations.legacy-session-store.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { enforceSessionDiskBudget } from "./disk-budget.js";
 import { applyFileBackedSessionStoreMaintenance } from "./store-maintenance-operations.js";
 import { registerSessionMaintenancePreserveKeysProvider } from "./store-maintenance-preserve.js";
@@ -25,20 +27,23 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const MiB = 1024 * 1024;
 const disabledBudget = { maxDiskBytes: null, highWaterBytes: null };
 
-function makeEntry(updatedAt: number): SessionEntry {
-  return { sessionId: crypto.randomUUID(), updatedAt };
+function makeEntry(
+  updatedAt: number,
+  sessionId: string = crypto.randomUUID(),
+  extra: Partial<SessionEntry> = {},
+): SessionEntry {
+  return { sessionId, updatedAt, ...extra };
 }
 
 function makeStore(entries: Array<[string, SessionEntry]>): Record<string, SessionEntry> {
   return Object.fromEntries(entries);
 }
 
-function createMaintenanceArtifacts() {
-  return {
-    archiveRemovedSessionTranscripts: async () => new Set<string>(),
-    cleanupArchivedSessionTranscripts: async () => {},
-  };
-}
+const archived = (sessionId: string) => ({
+  sessionId,
+  archivedAt: expect.any(Number),
+  archiveReason: "age-retention",
+});
 
 describe("pruneStaleEntries", () => {
   it.each([
@@ -61,17 +66,13 @@ describe("pruneStaleEntries", () => {
     expect(store.protected).toEqual(original);
     delete store.protected.pinnedAt;
     expect(pruneStaleEntries(store, 30 * DAY_MS)).toBe(0);
-    expect(store.protected).toMatchObject({
-      sessionId: original.sessionId,
-      archivedAt: expect.any(Number),
-      archiveReason: "age-retention",
-    });
+    expect(store.protected).toMatchObject(archived(original.sessionId));
   });
 });
 
 it.each([
-  ["suspended", "quota_exhausted", 30_000, 1, false],
-  ["active", "circuit_open", 61_000, 31_000, true],
+  ["suspended", "quota_exhausted", 30 * 60 * 1000, 1, false],
+  ["active", "circuit_open", 61 * 60 * 1000, 31 * 60 * 1000, true],
 ] as const)("transitions a %s quota suspension (%s)", (state, reason, age, resumeAge, cleared) => {
   const now = Date.now();
   const quotaSuspension = {
@@ -83,21 +84,18 @@ it.each([
     failedProvider: "anthropic",
     failedModel: "claude-opus-4-6",
   };
-  const expected = {
-    patch: { quotaSuspension: cleared ? undefined : { ...quotaSuspension, state: "resuming" } },
-    cleared,
-  };
   expect(
     resolveQuotaSuspensionEntryMaintenance({
-      entry: { ...makeEntry(now), quotaSuspension },
+      entry: makeEntry(now, undefined, { quotaSuspension }),
       now,
-      ttlMs: 30_000,
     }),
-  ).toEqual(expected);
+  ).toEqual({ quotaSuspension: cleared ? undefined : { ...quotaSuspension, state: "resuming" } });
 });
 
 describe("applyFileBackedSessionStoreMaintenance", () => {
-  const baseMaintenance = {
+  const baseMaintenance: NonNullable<
+    Parameters<typeof applyFileBackedSessionStoreMaintenance>[0]["maintenanceConfig"]
+  > = {
     mode: "enforce" as const,
     pruneAfterMs: 30 * DAY_MS,
     maxEntries: 500,
@@ -111,41 +109,44 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
     store: Record<string, SessionEntry>,
     storePath: string,
     overrides: Partial<typeof baseMaintenance> = { maxEntries: 1 },
+    operation: Partial<Parameters<typeof applyFileBackedSessionStoreMaintenance>[0]> = {},
   ) {
     return applyFileBackedSessionStoreMaintenance({
       store,
       storePath,
       maintenanceConfig: { ...baseMaintenance, ...overrides },
       log: { warn: () => {}, info: () => {} },
-      artifacts: createMaintenanceArtifacts(),
+      artifacts: {
+        archiveRemovedSessionTranscripts: async () => new Set<string>(),
+        cleanupArchivedSessionTranscripts: async () => {},
+      },
+      ...operation,
     });
   }
 
   it("reports archive retention failure without aborting file-backed maintenance", async () => {
     const now = Date.now();
     const store = makeStore([
-      ["agent:main:hook:stale", { sessionId: "stale-session", updatedAt: now - 30 * DAY_MS }],
-      ["fresh", { sessionId: "fresh-session", updatedAt: now }],
+      ["agent:main:hook:stale", makeEntry(now - 30 * DAY_MS, "stale-session")],
+      ["fresh", makeEntry(now, "fresh-session")],
     ]);
     const cleanupError = new Error("archive cleanup denied");
     const warn = vi.fn();
 
-    await applyFileBackedSessionStoreMaintenance({
-      storePath: "/tmp/openclaw-sessions/sessions.json",
+    await maintain(
       store,
-      maintenanceConfig: {
-        ...baseMaintenance,
-        pruneAfterMs: 7 * DAY_MS,
-        resetArchiveRetentionMs: 0,
-      },
-      log: { warn, info: () => {} },
-      artifacts: {
-        archiveRemovedSessionTranscripts: async () => new Set(),
-        cleanupArchivedSessionTranscripts: async () => {
-          throw cleanupError;
+      "/tmp/openclaw-sessions/sessions.json",
+      { pruneAfterMs: 7 * DAY_MS, resetArchiveRetentionMs: 0 },
+      {
+        log: { warn, info: () => {} },
+        artifacts: {
+          archiveRemovedSessionTranscripts: async () => new Set(),
+          cleanupArchivedSessionTranscripts: async () => {
+            throw cleanupError;
+          },
         },
       },
-    });
+    );
 
     expect(store["agent:main:hook:stale"]).toBeUndefined();
     expect(store).toHaveProperty("fresh");
@@ -188,9 +189,9 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
     const storePath = "/tmp/openclaw-sessions/active-cloud-placement.json";
     const key = "agent:main:explicit:cloud-owned";
     const store = makeStore([
-      [key, { sessionId: "cloud-placement-session", updatedAt: now - 2 }],
-      ["removable-old", { sessionId: "removable-old-session", updatedAt: now - 2 }],
-      ["removable-recent", { sessionId: "removable-recent-session", updatedAt: now - 1 }],
+      [key, makeEntry(now - 2, "cloud-placement-session")],
+      ["removable-old", makeEntry(now - 2, "removable-old-session")],
+      ["removable-recent", makeEntry(now - 1, "removable-recent-session")],
     ]);
     const admission = await beginSessionEffect({
       scope: storePath,
@@ -220,8 +221,8 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
     const activeSessionId = "shared-session-id";
     const makeActiveStore = () =>
       makeStore([
-        ["old", { sessionId: activeSessionId, updatedAt: now - 31 * DAY_MS }],
-        ["new", { sessionId: "new-session", updatedAt: now - 1 }],
+        ["old", makeEntry(now - 31 * DAY_MS, activeSessionId)],
+        ["new", makeEntry(now - 1, "new-session")],
       ]);
     const admission = await beginSessionEffect({
       scope: activeStorePath,
@@ -232,11 +233,7 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
     try {
       const otherStore = makeActiveStore();
       await maintain(otherStore, maintainedStorePath);
-      expect(otherStore.old).toMatchObject({
-        sessionId: activeSessionId,
-        archivedAt: expect.any(Number),
-        archiveReason: "age-retention",
-      });
+      expect(otherStore.old).toMatchObject(archived(activeSessionId));
 
       const activeStore = makeActiveStore();
       await maintain(activeStore, activeStorePath);
@@ -245,11 +242,7 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
 
       admission.release();
       await maintain(activeStore, activeStorePath);
-      expect(activeStore.old).toMatchObject({
-        sessionId: activeSessionId,
-        archivedAt: expect.any(Number),
-        archiveReason: "age-retention",
-      });
+      expect(activeStore.old).toMatchObject(archived(activeSessionId));
     } finally {
       admission.release();
     }
@@ -296,8 +289,7 @@ describe("capEntryCount", () => {
   it("never evicts the agent primary main session even when protected entries fill the cap (#112637)", () => {
     const now = Date.now();
     const mainKey = "agent:main:main";
-    // `main` is the oldest entry, so pre-fix it was the first unprotected eviction target once
-    // protected thread entries (>= maxEntries) left zero removable budget.
+    // Oldest main remains protected even when threads leave zero removable budget.
     const store = makeStore([
       [mainKey, makeEntry(now - 10 * DAY_MS)],
       ["agent:main:slack:channel:C1:thread:1", makeEntry(now - 3 * DAY_MS)],
@@ -349,16 +341,12 @@ describe("resolveMaintenanceConfigFromInput", () => {
       const transcriptPath = path.join(dir, "old-session.jsonl");
       await fs.writeFile(transcriptPath, JSON.stringify({ role: "user", content: "hello" }));
       const store: Record<string, SessionEntry> = {
-        "agent:main:subagent:old-worker": {
-          sessionId: "old-session",
-          updatedAt: 1,
-          transcriptPath,
-        },
+        "agent:main:subagent:old-worker": makeEntry(1, "old-session", { transcriptPath }),
       };
       await saveSessionStore(storePath, store, { skipMaintenance: true });
 
       const maintenance = resolveMaintenanceConfigFromInput({ maxDiskBytes: 0 });
-      const result = await enforceSessionDiskBudget({
+      await enforceSessionDiskBudget({
         store,
         storePath,
         maintenance,
@@ -366,7 +354,6 @@ describe("resolveMaintenanceConfigFromInput", () => {
       });
 
       expect(maintenance).toMatchObject(disabledBudget);
-      expect(result).toBeNull();
       await fs.access(transcriptPath);
     });
   });
@@ -389,5 +376,110 @@ describe("resolveMaintenanceConfigFromInput", () => {
       shouldRunModelRunPrune({ maintenance, entryCount: 60, force: true }),
       shouldRunModelRunPrune({ maintenance, entryCount: 50, force: true }),
     ]).toEqual([false, true, false]);
+  });
+});
+
+describe("recent session preservation", () => {
+  const recentKey = "agent:main:dashboard:recent";
+  const staleKey = "agent:main:dashboard:stale";
+  const preserveRecentMs = 7 * DAY_MS;
+
+  afterEach(() => resetPluginRuntimeStateForTest());
+
+  function installThrowingConversationResolver() {
+    const resolveSessionConversation = vi.fn(() => {
+      throw new Error("channel resolver must not run during session maintenance");
+    });
+    const plugin = { id: "broken", messaging: { resolveSessionConversation } };
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "broken", source: "test", plugin }]));
+    return resolveSessionConversation;
+  }
+
+  it.each(["pruning", "capping"] as const)(
+    "preserves external conversations during %s without invoking channel plugins",
+    (boundary) => {
+      const resolveSessionConversation = installThrowingConversationResolver();
+      const updatedAt = Date.now() - 31 * DAY_MS;
+      const protectedKeys = [
+        "agent:main:broken:group:room:thread:reply",
+        "agent:main:broken:channel:room:with:colon",
+        "agent:main:telegram:direct:user:topic:77",
+        "agent:main:telegram:dm:user:topic:77",
+        "agent:main:opaque:thread:reply",
+        "agent:main:broken:direct:peer",
+        "agent:main:broken:account:direct:peer",
+        "agent:main:direct:peer",
+      ];
+      const removableKeys = [
+        "agent:main:old",
+        "agent:main:subagent:worker:thread:reply",
+        "agent:main:opaque:topic:unrelated",
+      ];
+      const store: Record<string, SessionEntry> = Object.fromEntries(
+        [...protectedKeys, ...removableKeys].map((key) => [key, makeEntry(updatedAt, key)]),
+      );
+      if (boundary === "pruning") {
+        expect(pruneStaleEntries(store, 30 * DAY_MS, { log: false })).toBe(1);
+      } else {
+        expect(capEntryCount(store, protectedKeys.length, { log: false })).toBe(3);
+      }
+      for (const key of protectedKeys) {
+        expect(store[key]).toEqual({ sessionId: key, updatedAt });
+      }
+      expect(resolveSessionConversation).not.toHaveBeenCalled();
+    },
+  );
+
+  it("is opt-in and keeps recent interactive sessions through prune and cap pressure", () => {
+    const now = Date.now();
+    const syntheticKey = "agent:main:subagent:recent-worker";
+    const store: Record<string, SessionEntry> = {
+      [recentKey]: makeEntry(now - DAY_MS, "recent"),
+      [staleKey]: makeEntry(now - 8 * DAY_MS, "stale"),
+      [syntheticKey]: makeEntry(now - DAY_MS, "synthetic"),
+    };
+
+    expect(
+      ([undefined, { preserveRecent: false }, { preserveRecent: "7d" }] as const).map(
+        (config) => resolveMaintenanceConfigFromInput(config).preserveRecentMs,
+      ),
+    ).toEqual([null, null, preserveRecentMs]);
+    expect(pruneStaleEntries(store, 12 * 60 * 60 * 1000, { preserveRecentMs })).toBe(1);
+    expect(store).toHaveProperty(recentKey);
+    expect(store[staleKey]?.archivedAt).toEqual(expect.any(Number));
+    expect(store).not.toHaveProperty(syntheticKey);
+
+    store[staleKey] = makeEntry(now - 8 * DAY_MS, "stale-2");
+    expect(capEntryCount(store, 1, { preserveRecentMs })).toBe(1);
+    expect(store).toHaveProperty(recentKey);
+    expect(store[staleKey]?.archivedAt).toEqual(expect.any(Number));
+  });
+
+  it("keeps recent and external sessions under disk pressure without invoking plugins", async () => {
+    const resolveSessionConversation = installThrowingConversationResolver();
+    await withTestDir({ prefix: "openclaw-preserve-recent-budget-" }, async (dir) => {
+      const now = Date.now();
+      const externalKey = "agent:main:broken:group:room:thread:reply";
+      const store: Record<string, SessionEntry> = {
+        [recentKey]: makeEntry(now, "recent"),
+        [staleKey]: makeEntry(now - 8 * DAY_MS, "stale", {
+          archivedAt: now - 8 * DAY_MS,
+          archiveReason: "active-session-cap",
+        }),
+        [externalKey]: makeEntry(now - 9 * DAY_MS, "external"),
+      };
+
+      await enforceSessionDiskBudget({
+        store,
+        storePath: path.join(dir, "sessions.json"),
+        maintenance: { highWaterBytes: 1, maxDiskBytes: 1, preserveRecentMs },
+        warnOnly: false,
+      });
+
+      expect(store).toHaveProperty(recentKey);
+      expect(store).toHaveProperty(externalKey);
+      expect(store).not.toHaveProperty(staleKey);
+      expect(resolveSessionConversation).not.toHaveBeenCalled();
+    });
   });
 });

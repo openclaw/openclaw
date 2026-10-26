@@ -9,6 +9,7 @@ import {
   WebSocketServer,
 } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, beforeEach, expect, vi } from "vitest";
+import { listenOnLoopback } from "../../../test-support/hanging-loopback-server.js";
 import { createCodexInferenceProxy, type CodexInferenceProxy } from "./inference-proxy.js";
 
 const transport = vi.hoisted(() => {
@@ -135,14 +136,7 @@ beforeEach(async () => {
   server = createServer();
   wss = new WebSocketServer({ server });
   wss.on("connection", (socket) => upstreams.push(socket));
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("fixture did not listen");
-  }
-  transport.upstream = "ws://127.0.0.1:" + address.port;
+  transport.upstream = "ws://127.0.0.1:" + (await listenOnLoopback(server));
   proxy = await createCodexInferenceProxy({
     upstream: new URL("https://api.openai.com/v1"),
     assertCurrent: () => {},

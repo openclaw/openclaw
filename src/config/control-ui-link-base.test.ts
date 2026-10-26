@@ -10,34 +10,16 @@ const linkBase = (controlUi: { enabled?: boolean; basePath?: string }) =>
   resolveControlUiSessionLinkBase({ gateway: { publicOrigin: origin, controlUi } });
 
 describe("resolveControlUiSessionLinkBase", () => {
+  it.each([
+    ["disabled", { enabled: false }, undefined],
+    ["normalized", { basePath: " /control/// " }, `${origin}/control`],
+    ["under the cap", { basePath: `/${"a".repeat(176)}` }, `${origin}/${"a".repeat(176)}`],
+    ["over the cap", { basePath: `/${"a".repeat(178)}` }, undefined],
+  ] as const)("handles %s Control UI bases", (_name, config, expected) => {
+    expect(linkBase(config)).toBe(expected);
+  });
   it("omits session links without a public Gateway origin", () => {
     expect(resolveControlUiSessionLinkBase({ gateway: {} })).toBeUndefined();
-  });
-
-  it("omits session links when the Control UI is disabled", () => {
-    expect(linkBase({ enabled: false })).toBeUndefined();
-  });
-
-  it("joins a valid public origin with the normalized Control UI base path", () => {
-    expect(
-      resolveControlUiSessionLinkBase({
-        gateway: {
-          publicOrigin: "http://127.0.0.1:18789",
-          controlUi: { basePath: " /control/// " },
-        },
-      }),
-    ).toBe("http://127.0.0.1:18789/control");
-  });
-
-  it("preserves a session link base just under the hard cap", () => {
-    const basePath = `/${"a".repeat(176)}`;
-    const expected = `${origin}${basePath}`;
-    expect(expected).toHaveLength(199);
-    expect(linkBase({ basePath })).toBe(expected);
-  });
-
-  it("omits a session link base with an oversized Control UI base path", () => {
-    expect(linkBase({ basePath: `/${"a".repeat(178)}` })).toBeUndefined();
   });
 });
 
@@ -51,17 +33,10 @@ describe("resolveControlUiAutomationRunUrl", () => {
   it("joins the normalized Control UI base path and encodes job and run identifiers", () => {
     expect(
       resolveControlUiAutomationRunUrl(
-        {
-          gateway: {
-            publicOrigin: "https://gateway.example.com",
-            controlUi: { basePath: " /control/// " },
-          },
-        },
+        { gateway: { publicOrigin: origin, controlUi: { basePath: " /control/// " } } },
         { jobId: "job /?&", runId: "cron:job /?&:123" },
       ),
-    ).toBe(
-      "https://gateway.example.com/control/automations?job=job+%2F%3F%26&run=cron%3Ajob+%2F%3F%26%3A123",
-    );
+    ).toBe(`${origin}/control/automations?job=job+%2F%3F%26&run=cron%3Ajob+%2F%3F%26%3A123`);
   });
 
   it("omits the run query parameter when no run identifier is available", () => {

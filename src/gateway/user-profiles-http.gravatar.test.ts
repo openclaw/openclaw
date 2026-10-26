@@ -3,12 +3,19 @@ import { createServer, request, type ClientRequest, type ServerResponse } from "
 import { setImmediate } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  listenLoopback,
+  closeHttpServer,
+} from "../../test/helpers/gateway-integration-fixtures.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { bindHttpResponseAuthority } from "./http-request-authority.js";
 import { handleUserProfileAvatarHttpRequest } from "./user-profiles-http.js";
 
 const profileFixture = vi.hoisted(() => vi.fn());
 const authorizeControlUiReadRequestOrReply = vi.hoisted(() => vi.fn());
+const readAuthority = (res: ServerResponse) =>
+  bindHttpResponseAuthority({ operatorScopes: ["operator.read"] }, res, () => true);
 vi.mock("../config/io.js", () => ({ getRuntimeConfig: () => ({}) }));
 vi.mock("../infra/host-account-avatar.js", () => ({ resolveHostAccountAvatar: async () => null }));
 vi.mock("./http-auth-utils.js", () => ({
@@ -30,12 +37,19 @@ vi.mock("../state/user-profiles-avatar.js", () => ({
 
 describe("Gravatar HTTP waiter lifetimes", () => {
   const imageBytes = new Uint8Array([7, 8, 9]);
+  const imageResponse = () =>
+    new Response(imageBytes, { headers: { "content-type": "image/png" } });
   const clients: ClientRequest[] = [];
   const handled = new Map<string, { response: ServerResponse; promise: Promise<boolean> }>();
   const producers: Array<ReturnType<typeof createDeferred<Response>>> = [];
   const fetchImpl = vi.fn<typeof fetch>();
+  let nativeUpstream: ((res: ServerResponse) => void) | undefined;
   const server = createServer((req, res) => {
     const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+    if (pathname === "/native-gravatar" && nativeUpstream) {
+      nativeUpstream(res);
+      return;
+    }
     const promise = handleUserProfileAvatarHttpRequest(req, res, pathname, {
       auth: { mode: "none", allowTailscale: false },
     });
@@ -47,35 +61,26 @@ describe("Gravatar HTTP waiter lifetimes", () => {
   let origin: string;
 
   beforeAll(async () => {
-    server.listen(0, "127.0.0.1");
-    await once(server, "listening");
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected loopback HTTP listener");
-    }
-    origin = `http://127.0.0.1:${address.port}`;
+    origin = await listenLoopback(server);
   });
 
-  afterAll(async () => {
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
-  });
+  afterAll(() => closeHttpServer(server));
 
   beforeEach(() => {
     fetchImpl.mockReset();
     vi.stubGlobal("fetch", fetchImpl);
-    profileFixture.mockReset();
+    profileFixture.mockReset().mockImplementation((id: string) => ({
+      id,
+      emails: [`${id}@example.test`],
+    }));
     authorizeControlUiReadRequestOrReply
       .mockReset()
-      .mockImplementation(({ res }: { res: ServerResponse }) =>
-        bindHttpResponseAuthority({}, res, () => true),
-      );
+      .mockImplementation(({ res }: { res: ServerResponse }) => readAuthority(res));
   });
 
   afterEach(async () => {
     for (const producer of producers) {
-      producer.resolve(new Response(imageBytes, { headers: { "content-type": "image/png" } }));
+      producer.resolve(imageResponse());
     }
     await Promise.allSettled([...handled.values()].map(({ promise }) => promise));
     for (const client of clients) {
@@ -84,6 +89,7 @@ describe("Gravatar HTTP waiter lifetimes", () => {
     clients.length = 0;
     producers.length = 0;
     handled.clear();
+    nativeUpstream = undefined;
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
@@ -105,27 +111,29 @@ describe("Gravatar HTTP waiter lifetimes", () => {
     return { client, pathname, result: result.promise };
   }
 
-  function deferredFetch() {
-    const deferred = createDeferred<Response>();
-    producers.push(deferred);
-    return {
-      resolve: () =>
-        deferred.resolve(new Response(imageBytes, { headers: { "content-type": "image/png" } })),
-      fetch: (signal: AbortSignal | null | undefined) =>
-        new Promise<Response>((resolve, reject) => {
-          const abort = () => reject(new Error("upstream request aborted"));
-          if (signal?.aborted) {
-            abort();
-            return;
-          }
-          signal?.addEventListener("abort", abort, { once: true });
-          void deferred.promise.then((response) => {
-            signal?.removeEventListener("abort", abort);
-            resolve(response);
-          }, reject);
-        }),
+  it("cancels an oversized native Gravatar response without retaining its connection", async ({
+    signal,
+  }) => {
+    const closed = createDeferred();
+    nativeUpstream = (res) => {
+      res.once("close", () => closed.resolve());
+      res.writeHead(200, { "content-type": "image/png" });
+      res.write(Buffer.alloc(600_000));
+      res.write(Buffer.alloc(600_000));
     };
-  }
+    // Only the fixed upstream URL is redirected; fetch, body cancellation and socket are native.
+    vi.unstubAllGlobals();
+    const nativeFetch = fetch;
+    fetchImpl.mockImplementation((_input, init) => nativeFetch(`${origin}/native-gravatar`, init));
+    vi.stubGlobal("fetch", fetchImpl);
+
+    const result = await withinTest(startRequest("native-overflow").result, signal);
+    expect(result.statusCode).toBe(502);
+    expect(result.body?.toString()).toBe(
+      JSON.stringify({ ok: false, error: { type: "avatar_upstream_unavailable" } }),
+    );
+    await withinTest(closed.promise, signal);
+  });
 
   it.each(["deadline", "disconnect"] as const)(
     "keeps a fresh HTTP waiter alive after the older waiter's %s",
@@ -149,11 +157,14 @@ describe("Gravatar HTTP waiter lifetimes", () => {
             ? ["deadline-primary@example.test", "deadline-shared@example.test"]
             : [`${cause}-shared@example.test`],
       }));
-      const shared = deferredFetch();
+      const shared = createDeferred<Response>();
+      producers.push(shared);
       if (cause === "deadline") {
         fetchImpl.mockResolvedValueOnce(new Response(null, { status: 404 }));
       }
-      fetchImpl.mockImplementation((_input, init) => shared.fetch(init?.signal));
+      fetchImpl.mockImplementation((_input, init) =>
+        racePromiseWithAbortSignal(shared.promise, init?.signal ?? undefined),
+      );
       const expectedFetches = cause === "deadline" ? 2 : 1;
       const older = startRequest(`${cause}-older`);
       await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(expectedFetches));
@@ -176,10 +187,9 @@ describe("Gravatar HTTP waiter lifetimes", () => {
         await closed;
         await setImmediate();
         expect(settled).toBe(true);
-        expect(writeHead).not.toHaveBeenCalled();
-        expect(end).not.toHaveBeenCalled();
+        expect([writeHead.mock.calls, end.mock.calls]).toEqual([[], []]);
       }
-      shared.resolve();
+      shared.resolve(imageResponse());
       expect(await fresh.result).toEqual({ statusCode: 200, body: Buffer.from(imageBytes) });
       expect(fetchImpl).toHaveBeenCalledTimes(expectedFetches);
     },
@@ -188,13 +198,7 @@ describe("Gravatar HTTP waiter lifetimes", () => {
   it("does not start a Gravatar fetch for a client already disconnected during authorization", async () => {
     const authorized = createDeferred<ReturnType<typeof bindHttpResponseAuthority> | null>();
     authorizeControlUiReadRequestOrReply.mockReturnValue(authorized.promise);
-    profileFixture.mockReturnValue({
-      id: "disconnected-before-lookup",
-      emails: ["disconnected-before-lookup@example.test"],
-    });
-    fetchImpl.mockResolvedValue(
-      new Response(imageBytes, { headers: { "content-type": "image/png" } }),
-    );
+    fetchImpl.mockResolvedValue(imageResponse());
     const disconnected = startRequest("disconnected-before-lookup");
     try {
       await vi.waitFor(() => expect(handled.has(disconnected.pathname)).toBe(true));
@@ -204,12 +208,11 @@ describe("Gravatar HTTP waiter lifetimes", () => {
       const closed = once(first.response, "close");
       disconnected.client.destroy();
       await closed;
-      authorized.resolve(bindHttpResponseAuthority({}, first.response, () => true));
+      authorized.resolve(readAuthority(first.response));
       await expect(first.promise).rejects.toThrow("HTTP request authority expired");
 
       expect(fetchImpl).not.toHaveBeenCalled();
-      expect(writeHead).not.toHaveBeenCalled();
-      expect(end).not.toHaveBeenCalled();
+      expect([writeHead.mock.calls, end.mock.calls]).toEqual([[], []]);
     } finally {
       authorized.resolve(null);
     }

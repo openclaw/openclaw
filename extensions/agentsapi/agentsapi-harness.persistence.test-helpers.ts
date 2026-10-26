@@ -19,6 +19,7 @@ import {
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { assert, vi } from "vitest";
 import { createAttemptParams } from "./agentsapi-attempt.test-helpers.js";
+import type { StoredBinding } from "./agentsapi-binding-record.js";
 import type { AgentsApiBinding } from "./agentsapi-bindings.js";
 import { AgentsApiClient } from "./agentsapi-client.js";
 import { createHostedSession } from "./agentsapi.test-support.js";
@@ -31,19 +32,22 @@ export function registerHarness(
   return requireAgentsApiHarness(createBindingRuntime(env, readConfig));
 }
 
+export function createBindingStore<T = StoredBinding>(env: NodeJS.ProcessEnv) {
+  return createPluginStateKeyedStoreForTests<T>("agentsapi", {
+    namespace: "agentsapi-sessions",
+    maxEntries: 100_000,
+    overflowPolicy: "reject-new",
+    env,
+  });
+}
+
 export async function externalSessionFixture(state: { stateDir: string; env: NodeJS.ProcessEnv }) {
   const params = await createAttempt(state.stateDir);
   const config = { environment: "self_hosted" };
   const runtime = createBindingRuntime(state.env, () => ({
     plugins: { entries: { agentsapi: { config } } },
   }));
-  const openStore = <T = AgentsApiBinding>() =>
-    createPluginStateKeyedStoreForTests<T>("agentsapi", {
-      namespace: "agentsapi-sessions",
-      maxEntries: 100_000,
-      overflowPolicy: "reject-new",
-      env: state.env,
-    });
+  const openStore = <T = AgentsApiBinding>() => createBindingStore<T>(state.env);
   const events: string[] = [];
   const nativeSession: Awaited<ReturnType<AgentsApiClient["session"]>> = {
     ...createHostedSession("idle"),

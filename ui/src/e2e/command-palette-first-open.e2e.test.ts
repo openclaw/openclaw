@@ -11,18 +11,23 @@ const suite = createControlUiE2eSuite({ name: "command palette first open" });
 const sessionKey = "agent:main:dashboard:cold";
 
 type HeldModule = Awaited<ReturnType<typeof holdModuleResponse>>;
-type ColdCase = (page: Page, palette: HeldModule, chat?: HeldModule) => Promise<void>;
+type ColdCase = (
+  page: Page,
+  palette: HeldModule,
+  chat: HeldModule | undefined,
+  gateway: Awaited<ReturnType<typeof installMockGateway>>,
+) => Promise<void>;
 function withColdPalette(run: ColdCase, holdChat = false) {
   const viewport = holdChat ? { height: 844, width: 390 } : { width: 1280, height: 900 };
   return suite.withPage({ viewport }, async ({ page }) => {
-    await installMockGateway(page, { sessionKey, awaitInitialRoster: !holdChat });
+    const gateway = await installMockGateway(page, { sessionKey, awaitInitialRoster: !holdChat });
     const hold = (source: string) =>
       holdModuleResponse(page, controlUiE2eBuiltModuleRequest(source));
     const paletteModule = await hold("ui/src/components/command-palette.tsx");
     const chatModule = holdChat ? await hold("ui/src/pages/chat/route-entry.ts") : undefined;
     try {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-      await run(page, paletteModule, chatModule);
+      await run(page, paletteModule, chatModule, gateway);
     } finally {
       paletteModule.release();
       chatModule?.release();
@@ -62,7 +67,102 @@ async function expectBackdrop(page: Page) {
   expect(backdrop.alpha).toBeLessThanOrEqual(0.2);
 }
 
+function paletteInputPresentation(input: HTMLTextAreaElement) {
+  const card = input.closest(".cmd-palette")!;
+  const cardStyle = getComputedStyle(card);
+  const inputStyle = getComputedStyle(input);
+  const cardRect = card.getBoundingClientRect();
+  const inputRect = input.getBoundingClientRect();
+  return {
+    background: cardStyle.backgroundColor,
+    border: cardStyle.border,
+    radius: cardStyle.borderRadius,
+    shadow: cardStyle.boxShadow,
+    input: {
+      left: inputRect.left - cardRect.left,
+      top: inputRect.top - cardRect.top,
+      width: inputRect.width,
+      height: inputRect.height,
+      fontFamily: inputStyle.fontFamily,
+      fontSize: inputStyle.fontSize,
+      lineHeight: inputStyle.lineHeight,
+    },
+  };
+}
+
 suite.define(() => {
+  it("retains files accepted before the cold palette is dismissed and cancels queued submission", async () => {
+    await withColdPalette(async (page, paletteModule, _chat, gateway) => {
+      const composer = page.locator(".agent-chat__composer-combobox textarea:visible");
+      await composer.fill("Keep foreground text");
+      await page.keyboard.press("ControlOrMeta+K");
+      const input = page.locator(".cmd-palette__input");
+      await input.waitFor({ state: "visible" });
+      await paletteModule.request;
+      await input.fill("Keep the cold attachment draft");
+      await input.evaluate((element) => {
+        const dataTransfer = new DataTransfer();
+        dataTransfer.items.add(new File(["brief"], "cold-brief.pdf", { type: "application/pdf" }));
+        element.dispatchEvent(
+          new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer }),
+        );
+      });
+      await input.press("ControlOrMeta+Enter");
+      await page.keyboard.press("ControlOrMeta+K");
+      await input.waitFor({ state: "hidden" });
+      await expectFocused(composer);
+      paletteModule.release();
+      await page.waitForFunction(() => customElements.get("openclaw-command-palette"));
+      await page.keyboard.press("ControlOrMeta+K");
+      const loaded = page.locator("openclaw-command-palette .cmd-palette__input");
+      await loaded.waitFor({ state: "visible" });
+      expect(await loaded.inputValue()).toBe("Keep the cold attachment draft");
+      await expect
+        .poll(() => page.locator(".chat-attachment-file__name").allTextContents())
+        .toEqual(["cold-brief.pdf"]);
+      expect(await loaded.isEditable()).toBe(true);
+      expect(await gateway.getRequests("sessions.create")).toEqual([]);
+      expect(await composer.inputValue()).toBe("Keep foreground text");
+      expect(page.url()).toBe(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+    });
+  });
+
+  it("preserves native text drops across the cold module handoff", async () => {
+    await withColdPalette(async (page, paletteModule) => {
+      const composer = page.locator(".agent-chat__composer-combobox textarea:visible");
+      await composer.fill("Keep foreground text");
+      await page.keyboard.press("ControlOrMeta+K");
+      const input = page.locator(".cmd-palette__input:not([disabled])");
+      await input.waitFor({ state: "visible" });
+      await paletteModule.request;
+      const bounds = await input.boundingBox();
+      assert(bounds, "Cold input must have a drop target");
+      const cdp = await page.context().newCDPSession(page);
+      const data = {
+        items: [{ mimeType: "text/plain", data: "Native dropped instructions" }],
+        dragOperationsMask: 1,
+      };
+      for (const type of ["dragEnter", "dragOver", "drop"] as const) {
+        await cdp.send("Input.dispatchDragEvent", {
+          type,
+          x: bounds.x + bounds.width / 2,
+          y: bounds.y + bounds.height / 2,
+          data,
+        });
+      }
+      await expect.poll(() => input.inputValue()).toBe("Native dropped instructions");
+      paletteModule.release();
+      const loaded = page.locator("openclaw-command-palette .cmd-palette__input");
+      await loaded.waitFor({ state: "visible" });
+      expect(await loaded.inputValue()).toBe("Native dropped instructions");
+      await expectFocused(loaded);
+      await loaded.press("Escape");
+      expect(await composer.inputValue()).toBe("Keep foreground text");
+      expect(page.url()).toBe(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      await cdp.detach();
+    });
+  });
+
   it("loads only on shortcut and preserves continuous typing and the foreground draft at 8x CPU", async () => {
     await withColdPalette(async (page, paletteModule) => {
       const composer = page.locator(".agent-chat__composer-combobox textarea:visible");
@@ -197,39 +297,51 @@ suite.define(() => {
     },
   );
 
-  it("shows the mobile palette shell while its module loads", async () => {
+  it("keeps the mobile palette shell styled while its stylesheet loads", async () => {
     await withColdPalette(async (page, paletteModule, chatModule) => {
       assert(chatModule, "Expected a held chat route");
-      // Navigation can finish before the shell installs its shortcut handler.
-      await page.locator(".shell").waitFor({ state: "visible" });
-      await page.keyboard.press("ControlOrMeta+K");
-
-      const shell = page.locator(".cmd-palette");
-      await shell.waitFor({ state: "visible" });
-      await paletteModule.request;
-      expect(await shell.getAttribute("aria-busy")).toBe("true");
-      const input = shell.locator(".cmd-palette__input");
-      expect(await input.isEditable()).toBe(true);
-      await expectFocused(input);
-      await page.keyboard.type("early query");
-      await page.keyboard.press("Enter");
-      expect(await input.inputValue()).toBe("early query");
-      await input.evaluate((element: HTMLTextAreaElement) =>
-        element.setSelectionRange(2, 7, "backward"),
+      const paletteStyles = await holdModuleResponse(
+        page,
+        /\/assets\/command-palette-[^/]+\.css(?:\?.*)?$/u,
       );
-      await expectBackdrop(page);
-      await page
-        .locator("openclaw-router-outlet .lazy-view-state--loading")
-        .waitFor({ state: "attached" });
-      expect(await shell.locator(".lazy-view-state--loading").count()).toBe(0);
+      try {
+        // Navigation can finish before the shell installs its shortcut handler.
+        await page.locator(".shell").waitFor({ state: "visible" });
+        await page.keyboard.press("ControlOrMeta+K");
 
-      chatModule.release();
-      paletteModule.release();
-      const loaded = page.locator("openclaw-command-palette .cmd-palette__input");
-      await loaded.waitFor({ state: "visible" });
-      expect(await loaded.inputValue()).toBe("early query");
-      await expectSelection(loaded, { focused: true, start: 2, end: 7, direction: "backward" });
-      await expectBackdrop(page);
+        const shell = page.locator(".cmd-palette");
+        await shell.waitFor({ state: "visible" });
+        await paletteStyles.request;
+        paletteModule.release();
+        expect(await shell.getAttribute("aria-busy")).toBe("true");
+        const input = shell.locator(".cmd-palette__input");
+        expect(await input.isEditable()).toBe(true);
+        await expectFocused(input);
+        await page.keyboard.type("early query");
+        await page.keyboard.press("Enter");
+        expect(await input.inputValue()).toBe("early query");
+        await input.evaluate((element: HTMLTextAreaElement) =>
+          element.setSelectionRange(2, 7, "backward"),
+        );
+        await expectBackdrop(page);
+        await page
+          .locator("openclaw-router-outlet .lazy-view-state--loading")
+          .waitFor({ state: "attached" });
+        expect(await shell.locator(".lazy-view-state--loading").count()).toBe(0);
+        const loadingPresentation = await input.evaluate(paletteInputPresentation);
+        await page.screenshot({ path: `${suite.artifactDir}/palette-styles-pending.png` });
+
+        chatModule.release();
+        paletteStyles.release();
+        const loaded = page.locator("openclaw-command-palette .cmd-palette__input");
+        await loaded.waitFor({ state: "visible" });
+        expect(await loaded.inputValue()).toBe("early query");
+        await expectSelection(loaded, { focused: true, start: 2, end: 7, direction: "backward" });
+        await expectBackdrop(page);
+        expect(await loaded.evaluate(paletteInputPresentation)).toEqual(loadingPresentation);
+      } finally {
+        paletteStyles.release();
+      }
     }, true);
   });
 });

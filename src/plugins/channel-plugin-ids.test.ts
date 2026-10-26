@@ -6,6 +6,7 @@ import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { createInstalledPluginIndexFixture } from "./gateway-startup.test-helpers.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
 
 const listPotentialConfiguredChannelIds = vi.hoisted(() => vi.fn());
 const listExplicitlyDisabledChannelIdsForConfig = vi.hoisted(() =>
@@ -89,18 +90,12 @@ import {
 function withManifestLoadPaths(
   plugin: Pick<PluginManifestRecord, "id"> & Partial<PluginManifestRecord>,
 ): PluginManifestRecord {
-  return {
-    channels: [],
-    origin: "bundled",
-    providers: [],
-    cliBackends: [],
+  return createPluginManifestRecordFixture({
     rootDir: `/tmp/plugins/${plugin.id}`,
     source: `/tmp/plugins/${plugin.id}/index.ts`,
     manifestPath: `/tmp/plugins/${plugin.id}/openclaw.plugin.json`,
-    skills: [],
-    hooks: [],
     ...plugin,
-  };
+  });
 }
 
 function createManifestRegistryFixture(): PluginManifestRegistry {
@@ -1803,7 +1798,6 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
           },
           plugins: { entries: { "demo-channel": { enabled: true } } },
         } as OpenClawConfig,
-        workspaceDir: "/tmp",
         env: { DEMO_FAKE_TEST_TRIGGER: "ambient" } as NodeJS.ProcessEnv,
       }),
     ).toStrictEqual([]);
@@ -1821,7 +1815,6 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
           channels: { "demo-other-channel": { token: "configured" } },
           plugins: { allow: ["demo-other-channel"] },
         } as OpenClawConfig,
-        workspaceDir: "/tmp",
         env: { DEMO_FAKE_TEST_TRIGGER: "ambient" } as NodeJS.ProcessEnv,
       }),
     ).toEqual(["demo-other-channel"]);
@@ -1831,7 +1824,6 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
     expect(
       listConfiguredAnnounceChannelIdsForConfig({
         config: { channels: { clickclack: { token: "configured" } } } as OpenClawConfig,
-        workspaceDir: "/tmp",
         env: {},
       }),
     ).toStrictEqual(["clickclack"]);
@@ -1852,7 +1844,6 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
         expect(
           listConfiguredAnnounceChannelIdsForConfig({
             config: { channels: { [channelId]: { token: "configured" } }, plugins },
-            workspaceDir: "/tmp",
             env: {},
           }),
         ).toStrictEqual([]);
@@ -1861,6 +1852,12 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
   );
 
   it("keeps announce channels with another effective owner", () => {
+    useManifestRegistryFixture({
+      plugins: ["shared-good", "shared-disabled"].map((id) =>
+        withManifestLoadPaths({ id, channels: ["shared"], origin: "config" }),
+      ),
+      diagnostics: [],
+    });
     expect(
       listConfiguredAnnounceChannelIdsForConfig({
         config: {
@@ -1872,11 +1869,7 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
             },
           },
         } as OpenClawConfig,
-        workspaceDir: "/tmp",
         env: {},
-        manifestRecords: ["shared-good", "shared-disabled"].map((id) =>
-          withManifestLoadPaths({ id, channels: ["shared"], origin: "config" }),
-        ),
       }),
     ).toStrictEqual(["shared"]);
   });

@@ -315,6 +315,62 @@ describe("plugin service reload", () => {
     expect(broadcastPluginEvent).toHaveBeenCalledOnce();
   });
 
+  it("bounds config-only restart startup without releasing its physical cleanup", async () => {
+    vi.useFakeTimers();
+    const resource = lateResource("plugin-config-reload-late-start");
+    const held = service("held", {
+      async start() {
+        if (held.contexts.length === 2) {
+          await resource.wait();
+          resource.attach();
+        }
+      },
+      stop: resource.stop,
+    });
+    const registry = createEmptyPluginRegistry();
+    const record = createPluginRecord({ id: "reload-owner" });
+    registry.plugins.push(record);
+    const instance = new PluginInstance(record.id, { record, registry });
+    const sibling = service("sibling");
+    registry.services.push(
+      ...registryFor(record.id, instance.wrap(held)).services,
+      ...registryFor(sibling.id, sibling).services,
+    );
+    const handle = await starter({ registry, broadcastPluginEvent: vi.fn() }).start();
+    try {
+      let reloaded = false;
+      const reloading = track(handle.reload({}, new Set([held.id]))).then(() => {
+        reloaded = true;
+      });
+      await resource.entered.promise;
+      await vi.advanceTimersByTimeAsync(PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS);
+      expect(reloaded).toBe(true);
+      await reloading;
+      expect(held.contexts[1]!.scheduler!.signal.aborted).toBe(true);
+      expect(() => emit(held.contexts[1], "late")).toThrow("no longer active");
+      expect(listPluginServiceHealthFailures(registry)).toMatchObject([
+        { serviceId: held.id, error: expect.stringContaining("plugin service startup timed out") },
+      ]);
+      expect(resource.stop).toHaveBeenCalledOnce();
+      await handle.reload({}, new Set([sibling.id]));
+      expect(sibling.start).toHaveBeenCalledTimes(2);
+      let stopped = false;
+      const stopping = track(handle.stop()).then(() => {
+        stopped = true;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(stopped).toBe(false);
+      resource.release.resolve();
+      await stopping;
+      expect(resource.stop).toHaveBeenCalledTimes(2);
+      resource.expectClean();
+    } finally {
+      resource.release.resolve();
+      await stopHandles();
+      await instance.dispose();
+    }
+  });
+
   it.each([false, true])("owns late startup cleanup (managed=%s)", async (managed) => {
     vi.useFakeTimers();
     const resource = lateResource(`plugin-${managed ? "managed" : "candidate"}-late-start`);

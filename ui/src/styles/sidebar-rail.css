@@ -9,7 +9,29 @@
   --sidebar-pad-x: 8px;
 }
 
+/* Preserve title space beside the rail, row insets, and the 44px menu target. */
+.shell--mobile-nav .sidebar--rail .sidebar-shell {
+  --sidebar-pad-x: 6px;
+}
+
 .sidebar-rail {
+  --sidebar-rail-background: var(--sidebar-rail-surface, var(--sidebar-bg));
+  /* Badge cutouts need the opaque result, not a second translucent layer. */
+  --sidebar-rail-hover-surface: color-mix(
+    in srgb,
+    var(--text) var(--surface-hover-amount),
+    var(--sidebar-rail-background)
+  );
+  --sidebar-rail-selected-surface: color-mix(
+    in srgb,
+    var(--text) var(--surface-selected-amount),
+    var(--sidebar-rail-background)
+  );
+  --sidebar-rail-selected-hover-surface: color-mix(
+    in srgb,
+    var(--text) var(--surface-selected-hover-amount),
+    var(--sidebar-rail-background)
+  );
   --sidebar-rail-control-size: 36px;
   --sidebar-rail-action-size: 30px;
   --sidebar-rail-glyph-size: 19px;
@@ -21,7 +43,8 @@
   min-height: 0;
   padding: 8px 4px;
   gap: 8px;
-  border-inline-end: 1px solid var(--border);
+  border-inline-end: var(--shell-divider-size) solid var(--resize-handle-rest-color);
+  background: var(--sidebar-rail-surface, transparent);
 }
 
 .sidebar-rail__views,
@@ -75,7 +98,7 @@
     .sidebar-workspace-header__main,
     .sidebar-identity-card
   ) {
-  --sidebar-rail-control-surface: var(--sidebar-bg);
+  --sidebar-rail-control-surface: var(--sidebar-rail-background);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -98,15 +121,27 @@
 
   &:not(.sidebar-new-session, :disabled, [aria-disabled="true"]) {
     &[aria-expanded="true"] {
-      --sidebar-rail-control-surface: color-mix(in srgb, var(--bg-hover) 60%, var(--sidebar-bg));
+      --sidebar-rail-control-surface: color-mix(
+        in srgb,
+        var(--sidebar-rail-hover-surface) 60%,
+        var(--sidebar-rail-background)
+      );
       background: var(--sidebar-rail-control-surface);
       color: var(--text-strong);
     }
 
     &:is(:hover, [aria-current="page"], [aria-pressed="true"], .nav-item--active) {
-      --sidebar-rail-control-surface: var(--bg-hover);
+      --sidebar-rail-control-surface: var(--sidebar-rail-hover-surface);
       background: var(--sidebar-rail-control-surface);
       color: var(--text-strong);
+    }
+
+    &:is([aria-current="page"], [aria-pressed="true"], .nav-item--active) {
+      --sidebar-rail-control-surface: var(--sidebar-rail-selected-surface);
+    }
+
+    &:is([aria-current="page"], [aria-pressed="true"], .nav-item--active):hover {
+      --sidebar-rail-control-surface: var(--sidebar-rail-selected-hover-surface);
     }
 
     &:active {
@@ -208,6 +243,10 @@
   stroke-width: 2px;
 }
 
+.sidebar-rail__create .sidebar-new-session > svg {
+  stroke-width: var(--sidebar-rail-action-stroke-width, 2px);
+}
+
 .sidebar-rail .nav-item__text,
 .sidebar-rail .sidebar-identity-card__text {
   position: absolute;
@@ -260,8 +299,9 @@
 }
 
 .sidebar-rail .sidebar-issues-button__count {
-  background: var(--accent);
-  color: var(--accent-foreground);
+  /* Bound lightness and chroma for white counts, preserving the accent hue. */
+  background: oklch(from var(--accent) min(l, 0.5) min(c, 0.22) h / 1);
+  color: var(--inbox-attention-foreground);
 }
 
 .sidebar-rail .session-glyph__badge--unread {
@@ -331,6 +371,12 @@
   transition:
     background var(--duration-fast) ease,
     box-shadow var(--duration-fast) ease;
+}
+
+/* Match the session lists' 2px rhythm so adjacent hover/current fills read as
+   separate rows instead of merging into one block. */
+.sidebar-pages__entry + .sidebar-pages__entry {
+  margin-block-start: 2px;
 }
 
 .sidebar-pages__entry:hover {
@@ -481,24 +527,44 @@ html.openclaw-native-web-chrome body .shell:not(.shell--mobile-nav) .sidebar-she
   }
 }
 
-.shell--navigation-rail.shell--nav-collapsed:not(.shell--mobile-nav) {
-  --shell-controls-width: var(--shell-chrome-control-size);
-  --shell-nav-width: var(--shell-nav-rail-width);
-  grid-template-columns: var(--shell-nav-width) minmax(0, 1fr);
+/* Resize the content once; reveal the fixed-width navigation on the compositor. */
+.shell--navigation-rail:not(.shell--mobile-nav) {
+  transition-property: grid-template-rows;
+
+  .shell-nav {
+    width: var(--shell-nav-expanded-width);
+    clip-path: inset(0);
+  }
+
+  &.shell--nav-collapsed {
+    --shell-controls-width: var(--shell-chrome-control-size);
+    --shell-nav-width: var(--shell-nav-rail-width);
+    grid-template-columns: var(--shell-nav-width) minmax(0, 1fr);
+
+    .shell-nav {
+      clip-path: inset(0 calc(100% - var(--shell-nav-rail-width)) 0 0);
+
+      &:dir(rtl) {
+        clip-path: inset(0 0 0 calc(100% - var(--shell-nav-rail-width)));
+      }
+    }
+
+    .sidebar-shell {
+      display: none;
+    }
+  }
+
+  /* Connection controls may extend past the rail while it is collapsed. */
+  .shell-nav:has(.sidebar-connection-flag[data-open]) {
+    width: auto;
+    clip-path: none;
+  }
 }
 
 /* Legacy Mac hosts retain the expand + search cluster. */
 html.openclaw-native-macos:not(.openclaw-native-web-chrome)
   .shell--navigation-rail.shell--nav-collapsed:not(.shell--mobile-nav) {
   --shell-controls-width: 68px;
-}
-
-.shell--navigation-rail.shell--nav-collapsed:not(.shell--mobile-nav) .shell-nav {
-  display: flex;
-}
-
-.shell--navigation-rail.shell--nav-collapsed:not(.shell--mobile-nav) .sidebar-shell {
-  display: none;
 }
 
 /* Keep identity and command access in the persistent rail. */

@@ -110,6 +110,18 @@ async function expectAccessibleEditor(editor: HTMLElement, readonly: boolean) {
   expect(editor.getAttribute("aria-readonly")).toBe(readonly ? "true" : null);
 }
 
+async function desktopViewport() {
+  const { page } = await import("vitest/browser");
+  const { innerWidth, innerHeight } = window;
+  onTestFinished(() => page.viewport(innerWidth, innerHeight));
+  await page.viewport(1200, 800);
+}
+
+const shortcut = (key: string) =>
+  userEvent.keyboard(
+    navigator.platform === "MacIntel" ? `{Meta>}${key}{/Meta}` : `{Control>}${key}{/Control}`,
+  );
+
 afterEach(() => {
   for (const panel of mounted.splice(0)) {
     panel.remove();
@@ -121,10 +133,7 @@ afterEach(() => {
 
 describe.runIf(browserMode)("chat file editor", () => {
   it("toggles desktop highlighting without replacing the document, selection or undo history", async () => {
-    const { page } = await import("vitest/browser");
-    const viewport = { width: window.innerWidth, height: window.innerHeight };
-    onTestFinished(() => page.viewport(viewport.width, viewport.height));
-    await page.viewport(1200, 800);
+    await desktopViewport();
     const panel = await mountFile(
       editableFile("const answer = 42;", {}, { name: "answer.ts", path: "answer.ts" }),
       720,
@@ -133,9 +142,7 @@ describe.runIf(browserMode)("chat file editor", () => {
     const editor = editorOf(panel);
     await expect.poll(() => editor.querySelector(".tok-keyword")).not.toBeNull();
     await userEvent.click(editor);
-    await userEvent.keyboard(
-      navigator.platform === "MacIntel" ? "{Meta>}a{/Meta}" : "{Control>}a{/Control}",
-    );
+    await shortcut("a");
     const view = EditorView.findFromDOM(editor)!;
     const selection = view.state.selection;
     await click(panel, "Syntax highlighting");
@@ -148,18 +155,13 @@ describe.runIf(browserMode)("chat file editor", () => {
     await expect.poll(() => editor.querySelector(".tok-keyword")).not.toBeNull();
     expect(editorOf(panel)).toBe(editor);
     await beginEdit(panel, "changed");
-    await userEvent.keyboard(
-      navigator.platform === "MacIntel" ? "{Meta>}z{/Meta}" : "{Control>}z{/Control}",
-    );
+    await shortcut("z");
     await expect.poll(() => editor.textContent).toBe("const answer = 42;");
     expect(readFileDraft(panel.content)).toBeUndefined();
   });
 
   it("keeps desktop wrap local to each document", async () => {
-    const { page } = await import("vitest/browser");
-    const viewport = { width: window.innerWidth, height: window.innerHeight };
-    onTestFinished(() => page.viewport(viewport.width, viewport.height));
-    await page.viewport(1200, 800);
+    await desktopViewport();
     localStorage.setItem("openclaw.control.fileView.wrap.v1", "true");
     onTestFinished(() => localStorage.removeItem("openclaw.control.fileView.wrap.v1"));
     const panel = await mountFile(file("first"), 720, "desktop");
@@ -271,9 +273,7 @@ describe.runIf(browserMode)("chat file editor", () => {
     await userEvent.type(editor, "x");
     expect(readFileDraft(panel.content)?.content).toBe("xfirst\nsecond\nthird\nlast");
     expect(canReloadControlUiDocument()).toBe(false);
-    await userEvent.keyboard(
-      navigator.platform === "MacIntel" ? "{Meta>}z{/Meta}" : "{Control>}z{/Control}",
-    );
+    await shortcut("z");
     await expect.poll(() => button(panel, "Save").disabled).toBe(true);
     expect(readFileDraft(panel.content)).toBeUndefined();
     panel.remove();
@@ -368,9 +368,7 @@ describe.runIf(browserMode)("chat file editor", () => {
       await saveFile(panel, save, 1);
       expect(save.mock.calls[0]?.[0]).toMatchObject({ content: `xalpha${separator}beta` });
       await userEvent.click(editor);
-      await userEvent.keyboard(
-        navigator.platform === "MacIntel" ? "{Meta>}a{/Meta}" : "{Control>}a{/Control}",
-      );
+      await shortcut("a");
       const clipboardData = new DataTransfer();
       clipboardData.setData("text/plain", "first\r\nsecond\nthird\rfourth 🦞\n");
       editor.dispatchEvent(
@@ -422,6 +420,28 @@ describe.runIf(browserMode)("chat file editor", () => {
     expect(await retired.save()).toBe(false);
   });
 
+  it("releases save progress when content changes before an admitted save settles", async () => {
+    const saving = createDeferred<{ ok: true; hash: string }>();
+    const save = vi.fn(() => saving.promise);
+    const panel = await mountFile(editableFile("before", { save }));
+    await beginEdit(panel, "submitted");
+    await saveFile(panel, save, 1);
+    await expect.poll(() => button(panel, "Saving…").disabled).toBe(true);
+
+    const replacement = editableFile("replacement");
+    files.push(replacement);
+    panel.content = replacement;
+    await panel.updateComplete;
+    await expect.poll(() => editorOf(panel).textContent).toContain("replacement");
+    await beginEdit(panel, "replacement draft");
+    expect(button(panel, "Save").disabled).toBe(false);
+
+    saving.resolve({ ok: true, hash: "hash-2" });
+    await expect.poll(() => editorOf(panel).textContent).toContain("replacement draft");
+    expect(save).toHaveBeenCalledOnce();
+    expect(button(panel, "Save").disabled).toBe(false);
+  });
+
   it("restores an unsaved draft after the detail panel is closed", async () => {
     const draftKey = "session-a\u0000notes.txt";
     const first = await mountFile(editableFile("before", {}, { draftKey }));
@@ -436,8 +456,7 @@ describe.runIf(browserMode)("chat file editor", () => {
     expect(button(reopened, "Save").disabled).toBe(false);
     await click(reopened, "Discard");
     await beginEdit(reopened, "new edit");
-    await click(reopened, "Save");
-    await expect.poll(() => save.mock.calls.length).toBe(1);
+    await saveFile(reopened, save, 1);
     expect(save).toHaveBeenCalledWith({ content: "new edit", expectedHash: "hash-2" });
   });
 

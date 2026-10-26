@@ -2,7 +2,6 @@ import { readLatestAssistantReply, waitForAgentRunsToDrain } from "../../agents/
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
 import { isRetainedUnendedSubagentRun } from "../../agents/subagents/registry/subagent-run-liveness.js";
 import { bindAgentToolGatewayRequest } from "../../agents/tools/in-process-gateway.js";
-import { HEARTBEAT_TOKEN } from "../../auto-reply/tokens.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
 import { hasUnsettledCronDescendants } from "./delivery-subagent-registry.runtime.js";
@@ -182,7 +181,7 @@ export async function waitForDescendantSubagentSummary(params: {
 
     const resolveUsableLatestReply = async () => {
       const latest = await readLatestAssistantReply({ sessionKey: params.sessionKey, callGateway });
-      if (latest?.trim() && latest.trim() !== HEARTBEAT_TOKEN && latest !== initialParentReply) {
+      if (latest?.trim() && latest !== initialParentReply) {
         return latest;
       }
       return undefined;

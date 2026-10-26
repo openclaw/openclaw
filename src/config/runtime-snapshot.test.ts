@@ -35,6 +35,7 @@ import {
   resolveRuntimeConfigCacheKey,
   resolveRuntimeModelConfigCacheKey as modelCacheKey,
   selectApplicableRuntimeConfig,
+  selectLiveRuntimeConfig,
   setRuntimeConfigSnapshot as setSnapshot,
   setRuntimeConfigSourceSnapshotIfCurrent as setSourceIfCurrent,
   setRuntimeConfigSnapshotRefreshHandler,
@@ -206,6 +207,25 @@ it("selects and retains only matching runtime sources", () => {
   expect(readScoped()).toBe(scopedResolvedConfig);
   expect(readForeign()).toBe(foreignConfig);
   expect(readUnbound()).toBe(scopedResolvedConfig);
+});
+
+it("selects the live runtime pair on each call and honors snapshot reset", () => {
+  const source = createProviderConfigFixture();
+  expect(selectLiveRuntimeConfig(source)).toBe(source);
+  expect(selectLiveRuntimeConfig()).toBeUndefined();
+
+  const runtime = createProviderConfigFixture("synthetic-first-key");
+  setSnapshot(runtime, source);
+  expect(selectLiveRuntimeConfig(cloneConfigWithResolutionFacts(source))).toBe(runtime);
+
+  const next = createProviderConfigFixture("synthetic-next-key");
+  setSnapshot(next, source);
+  expect(selectLiveRuntimeConfig(source)).toBe(next);
+  expect(selectLiveRuntimeConfig()).toBe(next);
+
+  clearRuntimeConfigSnapshot();
+  expect(selectLiveRuntimeConfig(source)).toBe(source);
+  expect(selectLiveRuntimeConfig()).toBeUndefined();
 });
 
 it("does not replace explicit config with a pinned snapshot without a source contract", () => {

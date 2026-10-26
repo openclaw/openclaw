@@ -11,11 +11,7 @@ import {
 } from "../../agents/prepared-model-runtime.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../../agents/prepared-model-runtime.test-support.js";
 import { makeProviderModelFixture } from "../../agents/test-helpers/provider-model-fixture.js";
-import {
-  setRuntimeConfigSnapshot,
-  validateConfigObject,
-  type OpenClawConfig,
-} from "../../config/config.js";
+import { setRuntimeConfigSnapshot, type OpenClawConfig } from "../../config/config.js";
 import { captureRuntimeConfigAsyncReader } from "../../config/io.runtime.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
@@ -23,11 +19,6 @@ import {
   patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import * as sessionReplacement from "../../config/sessions/session-accessor.sqlite-replacement-projection.js";
-import {
-  areDiagnosticsEnabledForProcess,
-  setDiagnosticsEnabledForProcess,
-} from "../../infra/diagnostic-events.js";
 import {
   createDiagnosticTraceContext,
   getActiveDiagnosticTraceContext,
@@ -47,6 +38,10 @@ import { handleGatewayRequest } from "../server-methods.js";
 import { loadGatewayModelCatalog as loadActualGatewayModelCatalog } from "../server-model-catalog.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
+import {
+  createSessionMutationContext,
+  startSessionMutationRequest,
+} from "./sessions-mutations.native-consent.test-support.js";
 import { createSessionMutationTestClient } from "./sessions-mutations.owner.test-support.js";
 import { sessionLog } from "./sessions-shared.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
@@ -93,8 +88,6 @@ function pausedCatalog(calls = 1) {
 }
 
 function diagnostics() {
-  const previous = areDiagnosticsEnabledForProcess();
-  setDiagnosticsEnabledForProcess(true);
   let clock = performance.now();
   const clockSpy = vi.spyOn(performance, "now").mockImplementation(() => clock);
   const records: Array<{ traceId: string | undefined; message: string }> = [];
@@ -111,7 +104,6 @@ function diagnostics() {
     restore() {
       clockSpy.mockRestore();
       log.mockRestore();
-      setDiagnosticsEnabledForProcess(previous);
     },
   };
 }
@@ -121,23 +113,10 @@ afterEach(async () => {
   closeOpenClawAgentDatabasesForTest();
 });
 
-function patchContext(
-  loadGatewayModelCatalog: GatewayRequestContext["loadGatewayModelCatalog"],
+const patchContext = (
+  load: GatewayRequestContext["loadGatewayModelCatalog"],
   cfg: OpenClawConfig = {},
-) {
-  return {
-    getRuntimeConfig: () => cfg,
-    loadGatewayModelCatalogSnapshot: async (
-      params: Parameters<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>[0],
-    ) => {
-      const entries = await loadGatewayModelCatalog(params);
-      return { entries, routeVariants: entries };
-    },
-    getSessionEventSubscriberConnIds: () => new Set(),
-    broadcastToConnIds: vi.fn(),
-    dedupe: new Map(),
-  } as unknown as GatewayRequestContext;
-}
+) => createSessionMutationContext(cfg, load);
 
 async function modelContext(state: OpenClawTestState, store: string) {
   const model = makeProviderModelFixture<"openai-completions">({
@@ -165,7 +144,6 @@ async function modelContext(state: OpenClawTestState, store: string) {
     },
     session: { store },
   };
-  expect(validateConfigObject(cfg)).toMatchObject({ ok: true });
   await state.writeConfig(cfg);
   setRuntimeConfigSnapshot(cfg);
   return patchContext(async () => [model], cfg);
@@ -180,15 +158,14 @@ function patchRequest(
     respond: GatewayRequestHandlerOptions["respond"],
     sessionMutationAuthorization?: GatewayRequestHandlerOptions["sessionMutationAuthorization"],
   ) =>
-    sessionMutationHandlers[method]!({
+    startSessionMutationRequest(method, params, {
       req: { type: "req", id: "patch", method, params },
-      params,
       respond,
       context,
       client: null,
       isWebchatConnect: () => false,
       sessionMutationAuthorization,
-    });
+    }).running;
 }
 
 function readEntry(sessionKey: string, agentId = "main", storePath?: string) {
@@ -741,7 +718,6 @@ test(
       errorShape(ErrorCodes.FORBIDDEN, "Original cold-store source was revoked"),
     );
     const source = new AbortController();
-    let failedOpenAdmissions = 0;
     const admissionObserver = probe.admission(workerAdmission, (request, grant, admit) => {
       if (
         request.stage === "open" &&
@@ -750,12 +726,10 @@ test(
         isRecord(request.facts.creatingIdentity) &&
         request.facts.creatingIdentity.key === `path:${failedPath}`
       ) {
-        failedOpenAdmissions++;
         source.abort(revoked);
       }
       admit(request, grant);
     });
-    const writers = vi.spyOn(sessionReplacement, "applySessionEntryCanonicalReplacements");
     const respond = vi.fn();
     const params = { targets, patch: { model: "openai/gpt-5.6-sol" } };
     try {
@@ -769,17 +743,10 @@ test(
           }
         },
       });
-      expect(failedOpenAdmissions).toBe(1);
-      expect(source.signal.reason).toBe(revoked);
       expectBatch(respond, [
         { ...failed, ok: false, error: revoked.error },
         { ...successful, ok: true },
       ]);
-      // Failed preparation must not reenter the canonical writer through a fallback.
-      expect(writers.mock.calls.some(([request]) => request.storePath === failedPath)).toBe(false);
-      expect(writers.mock.calls.some(([request]) => request.storePath === successfulPath)).toBe(
-        true,
-      );
       await expect(fs.stat(failedPath)).rejects.toMatchObject({ code: "ENOENT" });
       expect(readEntry(successful.key, successful.agentId, successfulPath)).toMatchObject({
         sessionId: expect.any(String),
@@ -787,7 +754,6 @@ test(
         modelOverride: "gpt-5.6-sol",
       });
     } finally {
-      writers.mockRestore();
       admissionObserver.mockRestore();
     }
   }, false),

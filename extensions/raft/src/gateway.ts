@@ -52,8 +52,6 @@ const WAKE_EVENT_ID_FIELDS = [
   "id",
 ] as const;
 
-type RaftWakeReplayEvent = { accountId: string; key: string };
-
 class WakeRequestError extends Error {
   constructor(
     readonly statusCode: number,
@@ -63,37 +61,6 @@ class WakeRequestError extends Error {
   ) {
     super(message);
   }
-}
-
-function spawnRaftBridge(params: {
-  profile: string;
-  endpoint: string;
-  token: string;
-}): ChildProcess {
-  // Raft owns the fixed bridge command. OpenClaw passes profile/loopback
-  // endpoint/token as separate argv/env fields; wake payloads never reach argv.
-  return spawn(
-    "raft",
-    [
-      "--profile",
-      params.profile,
-      "agent",
-      "bridge",
-      "--wake-adapter",
-      "wake-channel",
-      "--wake-channel-endpoint",
-      params.endpoint,
-    ],
-    {
-      env: {
-        ...process.env,
-        RAFT_CHANNEL_TOKEN: params.token,
-      },
-      detached: process.platform !== "win32",
-      stdio: "ignore",
-      windowsHide: true,
-    },
-  );
 }
 
 function hasMatchingToken(request: IncomingMessage, expected: string): boolean {
@@ -203,7 +170,7 @@ export async function startRaftGatewayAccount(
   }
 
   const wakeQueue = new KeyedAsyncQueue();
-  const wakeDedupe = createChannelReplayGuard<RaftWakeReplayEvent>({
+  const wakeDedupe = createChannelReplayGuard<{ accountId: string; key: string }>({
     dedupe: {
       ttlMs: WAKE_DEDUPE_TTL_MS,
       memoryMaxSize: WAKE_DEDUPE_MEMORY_MAX_SIZE,
@@ -334,7 +301,30 @@ export async function startRaftGatewayAccount(
   try {
     const port = await listenLoopback(server);
     const endpoint = `http://${BRIDGE_HOST}:${port}${WAKE_PATH}`;
-    bridge = spawnRaftBridge({ profile, endpoint, token });
+    // Raft owns the fixed bridge command. OpenClaw passes profile/loopback
+    // endpoint/token as separate argv/env fields; wake payloads never reach argv.
+    bridge = spawn(
+      "raft",
+      [
+        "--profile",
+        profile,
+        "agent",
+        "bridge",
+        "--wake-adapter",
+        "wake-channel",
+        "--wake-channel-endpoint",
+        endpoint,
+      ],
+      {
+        env: {
+          ...process.env,
+          RAFT_CHANNEL_TOKEN: token,
+        },
+        detached: process.platform !== "win32",
+        stdio: "ignore",
+        windowsHide: true,
+      },
+    );
     bridge.once("error", (error) => {
       if (!stopped) {
         bridgeExited = new Error(`Raft bridge failed to start: ${String(error)}`);

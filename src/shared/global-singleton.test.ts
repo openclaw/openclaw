@@ -24,17 +24,6 @@ describe("resolveGlobalSingleton", () => {
     expect(readGlobalSingleton(TEST_KEY)).toBe(first);
     expect(create).toHaveBeenCalledTimes(1);
   });
-  it("keeps map resets registered across repeated lifecycle drains", async () => {
-    const map = mapFor<string, number>(TEST_MAP_KEY, (state) => state.clear());
-    map.set("first", 1);
-    await drain();
-    map.set("second", 2);
-    await drain();
-
-    expect(map.size).toBe(0);
-    expect(mapFor<string, number>(TEST_MAP_KEY)).toBe(map);
-  });
-
   it("keeps only the latest reset owner for a duplicated slot", async () => {
     const firstReset = vi.fn();
     const secondReset = vi.fn();

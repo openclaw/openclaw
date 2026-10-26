@@ -27,6 +27,7 @@ import {
   openChatSidePanelType,
   restoreChatAsMain,
 } from "./chat-side-panel.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 async function captureProof(page: Page, fileName: string): Promise<void> {
   if (!captureUiProofEnabled) {
@@ -220,15 +221,15 @@ suite.define(() => {
     ];
 
     await suite.withPage(
-      {
-        colorScheme: "dark",
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
-      },
+      { colorScheme: "dark", ...createControlUiE2eContextOptions() },
       async ({ page }) => {
         const gateway = await installMockGateway(page, {
-          featureMethods: ["chat.metadata", "chat.startup", "progressCard.get"],
+          featureMethods: [
+            "chat.metadata",
+            "chat.startup",
+            "progressCard.get",
+            "sessions.companion.state",
+          ],
           historyMessages: [
             {
               id: "progress-receipt",
@@ -691,7 +692,10 @@ suite.define(() => {
           }
           await captureProof(page, "hide-" + name + "-collapsed-before.png");
           await card.getByRole("button", { name: "Task progress options" }).press("Enter");
-          await card.getByRole("menuitem", { name: "Hide this card", exact: true }).press("Enter");
+          const hideCard = card.getByRole("menuitem", { name: "Hide this card", exact: true });
+          await hideCard.press("Enter");
+          // Keyboard selection may wait for the lazy menu runtime; let it finish before resizing.
+          await hideCard.waitFor({ state: "hidden" });
           expect(await card.count()).toBe(1);
           await page.setViewportSize({ width, height: 900 });
           await page.locator(".agent-chat__header--mobile").waitFor({ state: "visible" });

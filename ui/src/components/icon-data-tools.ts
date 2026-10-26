@@ -1,4 +1,5 @@
 import { neutralMarkData } from "./icon-data-neutral.ts";
+import { statusIconPaths } from "./icon-data-status.ts";
 import { strokeIconData, strokePathData, type IconData, type IconNode } from "./icon-data-types.ts";
 
 export const keyboardIconData = {
@@ -30,13 +31,6 @@ export function hasKeyboardIcon(symbol: string): symbol is KeyboardIconSymbol {
 }
 
 export const toolIconData = {
-  agentsConnected: strokeIconData([
-    ["path", { d: "M12 8v4M5 16v-4h14v4" }],
-    ["rect", { x: "8", y: "2", width: "8", height: "6", rx: "1.5" }],
-    ["rect", { x: "1", y: "16", width: "8", height: "6", rx: "1.5" }],
-    ["rect", { x: "15", y: "16", width: "8", height: "6", rx: "1.5" }],
-    ["path", { d: "M10.5 5h.01M13.5 5h.01M3.5 19h.01M6.5 19h.01M17.5 19h.01M20.5 19h.01" }],
-  ]),
   codeXml: strokePathData("m18 16 4-4-4-4", "m6 8-4 4 4 4", "m14.5 4-5 16"),
   bookOpenText: strokePathData(
     "M12 5v16M16 13h2M16 9h2",
@@ -340,7 +334,7 @@ export const toolIconData = {
     "M3.85 8.62a4 4 0 0 1 4.78-4.77 4 4 0 0 1 6.74 0 4 4 0 0 1 4.78 4.78 4 4 0 0 1 0 6.74 4 4 0 0 1-4.77 4.78 4 4 0 0 1-6.75 0 4 4 0 0 1-4.78-4.77 4 4 0 0 1 0-6.76Z",
     "m9 12 2 2 4-4",
   ),
-  refresh: strokePathData("M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8M21 3v5h-5"),
+  refresh: strokePathData(...statusIconPaths.refresh),
   history: strokePathData(
     "M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8",
     "M3 3v5h5",

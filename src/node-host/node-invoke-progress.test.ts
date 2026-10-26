@@ -58,6 +58,21 @@ it.each([
   writer.stop();
   await writer.flush();
 });
+it.each([-30_000, 30_000])(
+  "heartbeat stays on interval after wall clock skew %i ms",
+  async (skewMs) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const request = vi.fn(async () => ({}));
+    const writer = progressWriter({ request } as NodeHostClient, { idleTimeoutMs: 30_000 });
+    vi.setSystemTime(skewMs);
+    writer.startHeartbeats();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(request).toHaveBeenCalledTimes(1);
+    writer.stop();
+    await writer.flush();
+  },
+);
 it("releases a cancelled progress wait and queued chunks without cancelling another request", async () => {
   vi.useFakeTimers();
   const send = vi.fn();

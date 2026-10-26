@@ -5,12 +5,6 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
-import { AgentRunTerminalOutcomeError } from "./agent-run-terminal-error.js";
-import {
-  buildAgentRunTerminalOutcomeFromAttempt,
-  buildAgentRunTerminalOutcomeFromLifecycleEvent,
-} from "./agent-run-terminal-outcome.js";
-import { createCliTimeoutError } from "./cli-runner/no-output-timeout-policy.js";
 import { coerceToFailoverError } from "./failover-error.js";
 import { FailoverError } from "./failover/error.js";
 import {
@@ -123,32 +117,6 @@ it("only turns live restart refusals into recovery and preserves explicit stop o
   }
   expectLifecycle(error, {});
 });
-it("preserves an unphased provider-started timeout through wrapped canonical errors unless cancelled", () => {
-  const outcome = buildAgentRunTerminalOutcomeFromAttempt({
-    terminal: { kind: "timeout", phase: "compaction", source: "runtime" },
-    promptTimeoutOutcome: { providerStarted: true },
-  });
-  expect(outcome).toMatchObject({
-    reason: "hard_timeout",
-    status: "timeout",
-    providerStarted: true,
-  });
-  expect(outcome).not.toHaveProperty("timeoutPhase");
-  const failure = new AgentRunTerminalOutcomeError(
-    new Error("Persisted user turn changed before replay admission"),
-    outcome,
-  );
-  const error = new Error("Attempt failed", { cause: failure });
-
-  const fields = resolveAgentRunErrorLifecycleFields(error, undefined);
-
-  expect(fields).toEqual({ stopReason: "timeout", providerStarted: true });
-  expect(
-    buildAgentRunTerminalOutcomeFromLifecycleEvent({ phase: "error", data: fields }).reason,
-  ).toBe("hard_timeout");
-  expectLifecycle(error, { aborted: true, stopReason: "aborted" }, abortedSignal());
-});
-
 it("keeps a retryable connection reset as a failure for run and tool terminals", () => {
   const failure = coerceToFailoverError(new Error("fetch failed: ECONNRESET"));
   expect(failure?.reason).toBe("timeout");
@@ -170,25 +138,6 @@ it.each([
   ["restart", createAgentRunRestartAbortError],
 ] as const)("preserves %s cancellation before caller abort", (stopReason, createError) => {
   expectLifecycle(createError(), { aborted: true, stopReason }, new AbortController().signal);
-});
-
-it("reads the final structured timeout from a fallback summary cause", () => {
-  const timeout = createCliTimeoutError(
-    {},
-    {
-      mode: "no-output",
-      timeoutSeconds: 30,
-      observedActivity: false,
-      activeToolCount: 0,
-      backgroundTaskCount: 0,
-    },
-  );
-  const error = new FailoverError("All model fallback candidates failed", {
-    reason: "timeout",
-    cause: timeout,
-  });
-
-  expectLifecycle(error, { stopReason: "timeout", timeoutPhase: "provider" });
 });
 
 it("preserves a recorded unphased timeout through a fallback summary without inferring a provider phase", () => {

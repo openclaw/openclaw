@@ -64,6 +64,9 @@ const RETAINED_STEP_NAMES = [
   "reconcile:superseded",
   "reconcile:acknowledged",
   "reconcile:settle",
+  "recovery-artifact-cleanup",
+  "warning:recovery-artifact-cleanup",
+  "diagnostic:recovery-artifact-cleanup",
 ];
 export type UpdateRunLedgerOptions = OpenClawStateDatabaseOptions & {
   busyTimeoutMs?: number;

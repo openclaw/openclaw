@@ -67,49 +67,73 @@ it.each(["session", "profile"] as const)(
     );
     await avatar.updateComplete;
     expect(avatar.querySelector(".viewer-avatar")?.getAttribute("aria-label")).toBe(
-      variant === "profile" ? "Saved owner name" : "Shared owner",
+      variant === "profile" ? "Saved owner name" : "Saved owner name · Shared owner",
     );
   },
 );
 
-it("uses the same user initials and identity hue in the roster and attributed chat", async () => {
-  const user: PresenceViewer = {
-    id: "profile-riley",
-    name: "Riley",
-    email: "riley@example.test",
-    watchedSessions: [],
-  };
-  const viewerAvatar = mountAvatar(user);
+it.each([false, true])(
+  "keeps identity colors consistent through avatar updates (photo: %s)",
+  async (photo) => {
+    const user: PresenceViewer = {
+      id: "profile-riley",
+      name: "Riley",
+      email: "riley@example.test",
+      ...(photo ? { avatarUrl: "/api/users/profile-riley/avatar?v=1" } : {}),
+      watchedSessions: [],
+    };
+    const viewerAvatar = mountAvatar(user);
 
-  const chat = document.createElement("div");
-  document.body.append(chat);
-  mountSolid(
-    () =>
-      createComponent(ChatAuthorAvatar, {
-        sender: { id: user.id, name: user.name, username: user.email },
-      }),
-    { container: chat },
-  );
-
-  const expected = resolveAvatarInitials({
-    id: user.id,
-    name: user.name,
-    username: user.email,
-  });
-  await waitForSolid(async () => {
-    await viewerAvatar.updateComplete;
-    const rosterInitials = viewerAvatar.querySelector<HTMLElement>(".viewer-avatar > span");
-    const chatInitials = chat.querySelector(".chat-author-avatar__initials");
-    expect(rosterInitials?.textContent?.trim()).toBe(expected.initials);
-    expect(chatInitials?.textContent?.trim()).toBe(expected.initials);
-    const expectedStyle = document.createElement("span").style;
-    expectedStyle.background = `hsl(${expected.colorSeed % 360} 48% 42%)`;
-    expect(rosterInitials?.style.background).toBe(expectedStyle.background);
-    expect(chatInitials?.getAttribute("style")).toContain(
-      `--chat-author-avatar-hue: ${expected.colorSeed % 360}`,
+    const chat = document.createElement("div");
+    document.body.append(chat);
+    mountSolid(
+      () =>
+        createComponent(ChatAuthorAvatar, {
+          sender: { id: user.id, name: user.name, username: user.email },
+        }),
+      { container: chat },
     );
-  });
-});
+
+    const expected = resolveAvatarInitials({
+      id: user.id,
+      name: user.name,
+      username: user.email,
+    });
+    await waitForSolid(async () => {
+      await viewerAvatar.updateComplete;
+      const rosterInitials = viewerAvatar.querySelector<HTMLElement>(".viewer-avatar > span");
+      const chatInitials = chat.querySelector(".chat-author-avatar__initials");
+      expect(rosterInitials?.textContent?.trim()).toBe(expected.initials);
+      expect(chatInitials?.textContent?.trim()).toBe(expected.initials);
+      const expectedStyle = document.createElement("span").style;
+      expectedStyle.background = `hsl(${expected.colorSeed % 360} 48% 42%)`;
+      expect(rosterInitials?.style.background).toBe(expectedStyle.background);
+      expect(
+        viewerAvatar
+          .querySelector<HTMLElement>(".viewer-avatar")
+          ?.style.getPropertyValue("--viewer-avatar-color"),
+      ).toBe(`hsl(${expected.colorSeed % 360} 48% 42%)`);
+      expect(chatInitials?.getAttribute("style")).toContain(
+        `--chat-author-avatar-hue: ${expected.colorSeed % 360}`,
+      );
+    });
+    const nextUser = {
+      ...user,
+      id: "profile-jordan",
+      name: "Jordan",
+      ...(photo ? { avatarUrl: "/api/users/profile-jordan/avatar?v=1" } : {}),
+    };
+    viewerAvatar.user = nextUser;
+    await viewerAvatar.updateComplete;
+    const nextColor = `hsl(${resolveAvatarInitials(nextUser).colorSeed % 360} 48% 42%)`;
+    expect(nextColor).not.toBe(`hsl(${expected.colorSeed % 360} 48% 42%)`);
+    expect(
+      viewerAvatar
+        .querySelector<HTMLElement>(".viewer-avatar")
+        ?.style.getPropertyValue("--viewer-avatar-color"),
+    ).toBe(nextColor);
+  },
+);
 
 it("uses the shared resolver and rejects cross-origin presence avatar metadata", async () => {
   const avatar = mountAvatar({
@@ -200,11 +224,13 @@ it("shares the current self avatar with typed owner faces missing a revision", a
   const avatars = [...view.container.querySelectorAll("openclaw-viewer-avatar")];
 
   await settle(avatars);
-  expect(fetchAvatar).toHaveBeenCalledOnce();
-  expect(fetchAvatar).toHaveBeenCalledWith(
-    "https://gateway.example.test/api/users/profile-ada/avatar?v=7",
-    expect.objectContaining({ headers: { Authorization: "Bearer viewer-token" } }),
-  );
+  await waitForSolid(() => {
+    expect(fetchAvatar).toHaveBeenCalledOnce();
+    expect(fetchAvatar).toHaveBeenCalledWith(
+      "https://gateway.example.test/api/users/profile-ada/avatar?v=7",
+      expect.objectContaining({ headers: { Authorization: "Bearer viewer-token" } }),
+    );
+  });
   await resolveAvatarImageUrl(user.avatarUrl);
   await settle(avatars);
   expect(avatars.map((avatar) => avatar.querySelector("img")?.getAttribute("src"))).toEqual([
@@ -221,10 +247,12 @@ it("shares the current self avatar with typed owner faces missing a revision", a
     selfUser: { ...user, avatarUrl: "/api/users/profile-ada/avatar?v=8" },
   });
   await settle(avatars);
-  expect(fetchAvatar.mock.calls.map(([url]) => url)).toEqual([
-    "https://gateway.example.test/api/users/profile-ada/avatar?v=7",
-    "https://gateway.example.test/api/users/profile-ada/avatar?v=8",
-  ]);
+  await waitForSolid(() =>
+    expect(fetchAvatar.mock.calls.map(([url]) => url)).toEqual([
+      "https://gateway.example.test/api/users/profile-ada/avatar?v=7",
+      "https://gateway.example.test/api/users/profile-ada/avatar?v=8",
+    ]),
+  );
   await resolveAvatarImageUrl("/api/users/profile-ada/avatar?v=8");
   await settle(avatars);
   expect(avatars.map((avatar) => avatar.querySelector("img")?.getAttribute("src"))).toEqual([
@@ -479,8 +507,10 @@ it("keeps a newly advertised teammate avatar ahead of cached directory availabil
   await profileDirectory(gateway).load();
   avatar.user = { ...user, avatarUrl: "/api/users/teammate/avatar?v=8" };
   await avatar.updateComplete;
-  expect(fetchAvatar.mock.calls.at(-1)?.[0]).toBe(
-    "https://gateway.example.test/api/users/teammate/avatar?v=8",
+  await waitForSolid(() =>
+    expect(fetchAvatar.mock.calls.at(-1)?.[0]).toBe(
+      "https://gateway.example.test/api/users/teammate/avatar?v=8",
+    ),
   );
 });
 

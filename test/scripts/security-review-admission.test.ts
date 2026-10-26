@@ -137,6 +137,15 @@ type Mode = "enforced" | "inactive" | "grandfathered";
 type Projection = [Mode, string, string, boolean];
 type StatusPatch = Partial<ReturnType<typeof fixture>["combined"]>;
 
+it.each([
+  `/refresh-security-review ${head}`,
+  `/refresh-security-review ${head}\n/allow-dependencies-change\n/allow-security-sensitive-change`,
+])("never treats refresh comment %j as approval", async (body) => {
+  const f = fixture(true);
+  f.approval.body = body;
+  await expect(f.run()).rejects.toThrow("approval is no longer current");
+});
+
 it.each<Projection>([
   ...ciProjections.flatMap<Projection>(([state, description]) => [
     ["enforced", state, description, false],

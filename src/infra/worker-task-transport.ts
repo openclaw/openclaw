@@ -5,8 +5,10 @@ import type { DatabaseEngineSelection } from "./database-engine/context.js";
 export const WORKER_TASK_PORT_MESSAGE = "openclaw.worker-task-port";
 
 export type WorkerTaskContext = {
+  collectWorkerMetrics?: boolean;
   databaseEngineSelection?: DatabaseEngineSelection;
   deletedAgentDatabaseFences: [string, string][];
   databaseAdmissionPort?: MessagePort;
+  postgresPool?: import("./postgres-sync/pool.js").PostgresPoolEndpoints;
   databaseAdmissionDeadlineAtMs?: number;
 };

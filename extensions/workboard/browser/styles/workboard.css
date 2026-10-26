@@ -2324,27 +2324,13 @@
 }
 
 .workboard-card__action-menu {
-  opacity: 0;
-  pointer-events: none;
   position: relative;
   z-index: 3;
 }
 
-.workboard-card:hover .workboard-card__action-menu,
-.workboard-card:focus-within .workboard-card__action-menu,
-.workboard-card__action-menu:has(:popover-open) {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-@media (hover: none) {
-  .workboard-card__action-menu {
-    opacity: 1;
-    pointer-events: auto;
-  }
-}
-
 .workboard-card__menu-trigger {
+  opacity: 0;
+  pointer-events: none;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -2355,6 +2341,20 @@
   padding: 0;
   border: 0;
   background: transparent;
+}
+
+.workboard-card:hover .workboard-card__menu-trigger,
+.workboard-card:focus-within .workboard-card__menu-trigger,
+.workboard-card__menu-trigger[aria-expanded="true"] {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+@media (hover: none) {
+  .workboard-card__menu-trigger {
+    opacity: 1;
+    pointer-events: auto;
+  }
 }
 
 .workboard-card__menu-trigger:hover,
@@ -4415,6 +4415,7 @@ workboard-inline-text {
 }
 .workboard-list-row__actions {
   grid-column: 5;
+  justify-content: center;
 }
 
 .workboard-list-row__title,
@@ -4424,10 +4425,6 @@ workboard-inline-text {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-}
-
-.workboard-list-row__actions {
-  justify-content: center;
 }
 
 .workboard-list-row__title h3 {

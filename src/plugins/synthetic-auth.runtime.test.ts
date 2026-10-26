@@ -42,18 +42,24 @@ function authProvider(id: string) {
   };
 }
 
-function setSnapshot(source: SyntheticAuthRegistrySnapshotResult["source"]) {
+function setSnapshot(
+  source: SyntheticAuthRegistrySnapshotResult["source"],
+  plugins = [
+    { syntheticAuthRefs: [" local-provider ", "local-provider", "local-cli"] },
+    { syntheticAuthRefs: ["remote-provider"] },
+    { syntheticAuthRefs: [] },
+  ],
+) {
   loadSnapshot.mockReturnValue({
     source,
-    snapshot: {
-      plugins: [
-        { syntheticAuthRefs: [" local-provider ", "local-provider", "local-cli"] },
-        { syntheticAuthRefs: ["remote-provider"] },
-        { syntheticAuthRefs: [] },
-      ],
-    },
+    snapshot: { plugins },
     diagnostics: [],
   });
+}
+
+function expectRuntimeRefs(refs: string[], complete = true) {
+  expect(resolveRuntimeSyntheticAuthProviderRefs()).toStrictEqual(refs);
+  expect(resolveRuntimeSyntheticAuthProviderRefState()).toStrictEqual({ refs, complete });
 }
 
 describe("synthetic auth runtime refs", () => {
@@ -74,50 +80,29 @@ describe("synthetic auth runtime refs", () => {
 
   beforeEach(() => {
     getPluginRegistryState.mockReset();
-    loadSnapshot.mockReset().mockReturnValue({
-      source: "persisted",
-      snapshot: { plugins: [] },
-      diagnostics: [],
-    });
+    loadSnapshot.mockReset();
+    setSnapshot("persisted", []);
   });
 
   it("uses persisted registry synthetic auth refs before the runtime registry exists", () => {
     setSnapshot("persisted");
 
-    expect(resolveRuntimeSyntheticAuthProviderRefs()).toEqual([
-      "local-provider",
-      "local-cli",
-      "remote-provider",
-    ]);
+    expectRuntimeRefs(["local-provider", "local-cli", "remote-provider"]);
     expect(loadSnapshot).toHaveBeenCalledWith({});
   });
 
   it("loads manifest synthetic auth refs with the current runtime scope", () => {
-    const config = { plugins: { allow: ["external-local"] } };
-    const env = { OPENCLAW_HOME: "/tmp/openclaw-home" };
-    loadSnapshot.mockReturnValue({
-      source: "persisted",
-      snapshot: {
-        plugins: [{ syntheticAuthRefs: ["external-local"] }],
-      },
-      diagnostics: [],
-    });
-
-    expect(
-      resolveRuntimeSyntheticAuthProviderRefState({
-        config: config as never,
-        workspaceDir: "/tmp/workspace",
-        env,
-      }),
-    ).toEqual({
+    setSnapshot("persisted", [{ syntheticAuthRefs: ["external-local"] }]);
+    const params = {
+      config: { plugins: { allow: ["external-local"] } },
+      workspaceDir: "/tmp/workspace",
+      env: { OPENCLAW_HOME: "/tmp/openclaw-home" },
+    };
+    expect(resolveRuntimeSyntheticAuthProviderRefState(params)).toEqual({
       refs: ["external-local"],
       complete: true,
     });
-    expect(loadSnapshot).toHaveBeenCalledWith({
-      config,
-      workspaceDir: "/tmp/workspace",
-      env,
-    });
+    expect(loadSnapshot).toHaveBeenCalledWith(params);
   });
 
   it("does not derive the registry just to resolve synthetic auth refs", () => {
@@ -131,13 +116,9 @@ describe("synthetic auth runtime refs", () => {
   });
 
   it("does not treat a provided index with registry diagnostics as validated synthetic auth", () => {
-    const index = {
-      plugins: [{ syntheticAuthRefs: ["local-provider"] }],
-    };
-
     expect(
       resolveRuntimeSyntheticAuthProviderRefs({
-        index: index as unknown as NonNullable<
+        index: { plugins: [{ syntheticAuthRefs: ["local-provider"] }] } as unknown as NonNullable<
           Parameters<typeof resolveRuntimeSyntheticAuthProviderRefs>[0]
         >["index"],
         registryDiagnostics: [{ code: "persisted-registry-missing" }],
@@ -154,26 +135,11 @@ describe("synthetic auth runtime refs", () => {
           { provider: { id: "plain-provider" } },
         ],
         cliBackends: [{ backend: { id: "runtime-cli", resolveSyntheticAuth: () => undefined } }],
-        plugins: [
-          {
-            syntheticAuthRefs: ["manifest-provider"],
-            contracts: {
-              externalAuthProviders: ["manifest-provider"],
-            },
-          },
-        ],
+        plugins: [{ syntheticAuthRefs: ["manifest-provider"] }],
       },
     });
 
-    expect(resolveRuntimeSyntheticAuthProviderRefs()).toEqual([
-      "manifest-provider",
-      "runtime-provider",
-      "runtime-cli",
-    ]);
-    expect(resolveRuntimeSyntheticAuthProviderRefState()).toEqual({
-      refs: ["manifest-provider", "runtime-provider", "runtime-cli"],
-      complete: true,
-    });
+    expectRuntimeRefs(["manifest-provider", "runtime-provider", "runtime-cli"]);
     expect(loadSnapshot).not.toHaveBeenCalled();
   });
 });

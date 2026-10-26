@@ -1,10 +1,17 @@
-import { describe, expect, it } from "vitest";
-import {
-  CODE_MODE_SHELL_SOURCE_ERROR,
-  isShellLikeCodeModeSource,
-} from "./code-mode-shell-source.js";
+import { describe, expect, it, vi } from "vitest";
+import { prepareSource } from "./code-mode-source.js";
 
-describe("isShellLikeCodeModeSource", () => {
+vi.mock("node:vm", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:vm")>();
+  return {
+    ...actual,
+    Script: function Script() {
+      throw new EvalError("Host string compilation is disabled");
+    },
+  };
+});
+
+describe("Code Mode source preparation", () => {
   it.each([
     "ls",
     "ls -1",
@@ -62,7 +69,9 @@ describe("isShellLikeCodeModeSource", () => {
     "/opt/homebrew/bin/tool --version",
     "~/bin/task",
   ])("rejects the shell command %j", (source) => {
-    expect(isShellLikeCodeModeSource(source)).toBe(true);
+    expect(() => prepareSource(source)).toThrow(
+      "code-mode exec runs JavaScript, not shell commands.",
+    );
   });
 
   it.each([
@@ -78,7 +87,6 @@ describe("isShellLikeCodeModeSource", () => {
     "while (false) { return 7; }",
     "for (let i = 0; i < 3; i++) { if (i === 2) { return i; } }",
     "function task() { return 7; } return task();",
-    "const value = ;",
     "value || fallback",
     "value | mask",
     "value > limit",
@@ -103,37 +111,48 @@ describe("isShellLikeCodeModeSource", () => {
     "node -version; function/**/node() {}; var version = 1;",
     "ls > limit; function ls() {} var limit = 1;",
     "test instanceof Function; function test() {}",
+    'const result = await exec({ command: "ls" }); return result;',
+    "console.log(await read({ path: '/workspace' }));",
+    "// shell documentation: ls /workspace\nreturn 7;",
+  ])("preserves JavaScript without misclassifying it as shell %j", (source) => {
+    expect(prepareSource(source)).toBe(source);
+  });
+
+  it.each([
+    "const value = ;",
     "export const answer = 7;",
     "export abstract class Example {}",
     "export = Example;",
     "export async function read() {}",
     "export { answer };",
     "export * from './types';",
-    'const result = await exec({ command: "ls" }); return result;',
-    "console.log(await read({ path: '/workspace' }));",
-    "// shell documentation: ls /workspace\nreturn 7;",
     "/* typed module */ export interface Result { value: number }",
-  ])("does not misclassify source as a shell command %j", (source) => {
-    expect(isShellLikeCodeModeSource(source)).toBe(false);
+  ])("rejects invalid guest syntax without misclassifying it as shell %j", (source) => {
+    expect(() => prepareSource(source)).toThrow("SyntaxError at openclaw-code-mode:user.js:");
   });
 
   it.each([
     ["repeated quotes", `A=${'""'.repeat(22)}`, false],
     ["escaped quotes", `A="${'\\"'.repeat(32_000)}`, false],
     ["long assignment chain", `${"A=x ".repeat(32_000)}ls -1`, true],
-  ] as const)("classifies %s without pathological rescanning", (_name, source, expected) => {
-    // Classification is synchronous; exclude time spent waiting for the shared host CPU.
+  ] as const)("rejects %s without pathological rescanning", (_name, source, shell) => {
+    // Source preparation is synchronous; exclude time spent waiting for the shared host CPU.
     const started = process.threadCpuUsage();
-    expect(isShellLikeCodeModeSource(source)).toBe(expected);
+    expect(() => prepareSource(source)).toThrow(
+      shell
+        ? "code-mode exec runs JavaScript, not shell commands."
+        : "SyntaxError at openclaw-code-mode:user.js:",
+    );
     const cpu = process.threadCpuUsage(started);
     expect((cpu.user + cpu.system) / 1_000).toBeLessThan(1_000);
   });
 
   it("explains how to execute a real catalog tool without retrying shell source", () => {
-    expect(CODE_MODE_SHELL_SOURCE_ERROR).toContain("JavaScript");
-    expect(CODE_MODE_SHELL_SOURCE_ERROR).toContain("not shell");
-    expect(CODE_MODE_SHELL_SOURCE_ERROR).toContain("enabled async tool global");
-    expect(CODE_MODE_SHELL_SOURCE_ERROR).toContain("catalog.search(query)");
-    expect(CODE_MODE_SHELL_SOURCE_ERROR).toContain("Do not retry");
+    const rejectShell = () => prepareSource("ls");
+    expect(rejectShell).toThrow("JavaScript");
+    expect(rejectShell).toThrow("not shell");
+    expect(rejectShell).toThrow("enabled async tool global");
+    expect(rejectShell).toThrow("catalog.search(query)");
+    expect(rejectShell).toThrow("Do not retry");
   });
 });

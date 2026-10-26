@@ -5,6 +5,13 @@ import { getDiscordActivitiesRuntime, setDiscordActivitiesRuntime } from "./runt
 import { DiscordActivityStore, openDiscordActivityStores } from "./store.js";
 import { createActivityTestConfig, createMemoryKeyedStore } from "./test-helpers.test-support.js";
 
+const sendRuntime = vi.hoisted(() => ({ imports: 0 }));
+// mock-isolation: Registration must not initialize the optional outbound transport.
+vi.mock("../send.components.js", () => {
+  sendRuntime.imports += 1;
+  return { sendDiscordComponentMessage: vi.fn() };
+});
+
 afterEach(() => {
   setDiscordActivitiesRuntime(undefined);
 });
@@ -96,6 +103,7 @@ it.each([true, false])("registers static routes; configured=%s", (configured) =>
 
   registerDiscordActivities(test.api);
 
+  expect(sendRuntime.imports).toBe(0);
   expect(test.routes).toEqual([
     expect.objectContaining({ path: "/discord/activity", auth: "plugin", match: "prefix" }),
   ]);

@@ -5,6 +5,7 @@ const TRAITS = [
   ["settingsPage", "content--settings-page"],
   ["settingsWide", "content--settings-wide"],
   ["settingsWorkspace", "content--settings-workspace"],
+  ["cronEditor", "content--cron-editor"],
   ["memoryPage", "content--memory-page"],
   ["logsPage", "content--logs-page"],
   ["activityPage", "content--activity-page"],

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
-import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import { withinTest } from "../../../test/helpers/promise.js";
 import {
   admitReplyTurn,
   runWithReplyOperationLifecycleAdmission,
@@ -31,6 +31,7 @@ import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayContextResolver,
 } from "../../plugins/runtime/gateway-request-scope.js";
+import { controllerGate, controllerSource } from "../../sessions/controller-core.test-support.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import { createReplyOperation } from "../../sessions/session-controller.js";
 import {
@@ -40,7 +41,6 @@ import {
   captureSessionTarget,
   type SessionEffectRef,
 } from "../../sessions/session-controller.lifecycle.js";
-import { reserveSessionControllerSource } from "../../sessions/session-controller.mailbox.js";
 import {
   captureSessionControllerStop,
   stopSession,
@@ -67,40 +67,54 @@ import {
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-restart-owner-");
 afterEach(() => vi.restoreAllMocks());
+type Entry = Parameters<typeof replaceSessionEntry>[1];
 
 function createStore(directory = "") {
   const stateDir = sessionDirs.make();
   const storePath = path.join(stateDir, directory, "sessions.json");
   const resolveGatewayContext = () => undefined;
+  const admissions: SessionEffectRef[] = [];
   return {
     stateDir,
     storePath,
     resolveGatewayContext,
-    read: (sessionKey: string) => loadSessionEntry({ storePath, sessionKey }),
-    write: (
-      sessionKey: string,
-      entry: Omit<Parameters<typeof replaceSessionEntry>[1], "updatedAt"> & { updatedAt?: number },
-    ) => replaceSessionEntry({ storePath, sessionKey }, { updatedAt: 1, ...entry }),
-    run: (sessionKey: string, sessionId: string, runId: string) => ({
-      storePath,
-      agentId: "main",
-      sessionKey,
-      sessionId,
-      runId,
-      lifecycleGeneration: getAgentEventLifecycleGeneration(),
-    }),
-    admit: (
-      sessionKey: string,
-      sessionId: string,
-      overrides: Partial<Parameters<typeof beginSessionEffect>[0]> = {},
-    ) =>
-      beginSessionEffect({
-        scope: storePath,
-        identities: [sessionKey, sessionId],
-        resolveGatewayContext,
-        assertAllowed: () => {},
-        ...overrides,
-      }),
+    async session(name: string, entry: Partial<Entry> = {}, sourceStore = storePath) {
+      const sessionKey = `agent:main:${name}`;
+      const sessionId = `${name}-session`;
+      const runId = `${name}-run`;
+      const location = { agentId: "main", storePath: sourceStore, sessionKey };
+      const run = {
+        ...location,
+        sessionId,
+        runId,
+        lifecycleGeneration: getAgentEventLifecycleGeneration(),
+      };
+      await replaceSessionEntry(location, { sessionId, updatedAt: 1, ...entry });
+      return {
+        ...run,
+        read: () => loadSessionEntry(location),
+        run,
+        target: captureSessionTarget({
+          storeScope: sourceStore,
+          sessionKey,
+          incarnation: sessionId,
+        }),
+        async admit(this: void, overrides: Partial<Parameters<typeof beginSessionEffect>[0]> = {}) {
+          const admission = await beginSessionEffect({
+            scope: sourceStore,
+            identities: [sessionKey, sessionId],
+            resolveGatewayContext,
+            assertAllowed() {},
+            ...overrides,
+          });
+          admissions.push(admission);
+          return admission;
+        },
+      };
+    },
+    [Symbol.dispose]() {
+      admissions.forEach((admission) => admission.release());
+    },
     mark: (overrides: Partial<Parameters<typeof markRestartAbortedMainSessions>[0]> = {}) =>
       markRestartAbortedMainSessions({
         cfg: { session: { store: storePath } },
@@ -108,6 +122,11 @@ function createStore(directory = "") {
         activeRuns: [],
         resolveGatewayContext,
         ...overrides,
+      }),
+    markStartup: () =>
+      markStartupOrphanedMainSessionsForRecovery({
+        cfg: { session: { store: storePath } },
+        stateDir,
       }),
   };
 }
@@ -168,35 +187,22 @@ function startupMarker(stateDir: string, cfg?: OpenClawConfig) {
 it.for(["before capture", "after capture"] as const)(
   "keeps a cancelled claimed turn terminal during managed restart (%s)",
   async (timing, { signal }) => {
-    const { storePath, resolveGatewayContext, read, write, mark } = createStore();
-    const sessionKey = "agent:main:cancelled-owner";
-    const sessionId = "cancelled-owner";
-    const runId = "cancelled-run";
-    const target = captureSessionTarget({
-      storeScope: storePath,
-      sessionKey,
-      incarnation: sessionId,
+    using store = createStore();
+    const { storePath, resolveGatewayContext, mark } = store;
+    const { sessionKey, sessionId, runId, target, read } = await store.session("cancelled-owner", {
+      lifecycleRunId: "cancelled-owner-run",
     });
     setRuntimeConfigSnapshot({ session: { store: storePath } });
-    await write(sessionKey, { sessionId, lifecycleRunId: runId });
-    const started = createDeferred();
-    const finish = createDeferred();
+    const turn = controllerGate();
     const input = withPluginRuntimeGatewayContextResolver(resolveGatewayContext, () =>
-      reserveSessionControllerSource(sessionKey, {
-        target,
-        protocolRunId: runId,
-        policy: { mode: "followup" },
-      }),
+      controllerSource(target, { protocolRunId: runId }),
     );
     const execution = withPluginRuntimeGatewayContextResolver(resolveGatewayContext, () =>
-      withSessionTurn({ sessionKey, sessionId, target, controllerInput: input }, async () => {
-        started.resolve();
-        await finish.promise;
-      }),
+      withSessionTurn({ sessionKey, sessionId, target, controllerInput: input }, turn.run),
     );
     void execution.catch(() => {});
     try {
-      await withinTest(started.promise, signal);
+      await withinTest(turn.entered, signal);
       const captured =
         timing === "after capture"
           ? captureGatewaySessionControllerWork(resolveGatewayContext)
@@ -215,26 +221,56 @@ it.for(["before capture", "after capture"] as const)(
           data: { phase: "error", endedAt: 2, aborted: true, stopReason: "aborted" },
         },
       });
-      expect(read(sessionKey)?.status).toBe("killed");
+      expect(read()?.status).toBe("killed");
       await mark({ activeAdmissions: captured });
-      const persisted = read(sessionKey);
-      expect(persisted).toMatchObject({
-        status: "killed",
-        abortedLastRun: true,
-      });
+      const persisted = read();
+      expect(persisted).toMatchObject({ status: "killed", abortedLastRun: true });
       expect(persisted?.mainRestartRecovery).toBeUndefined();
     } finally {
-      finish.resolve();
+      turn.release();
       await execution.catch(() => {});
       await input.settlement.promise;
     }
   },
 );
 
+it("records an independent interrupted turn in a child of a cross-agent group parent", async () => {
+  using store = createStore();
+  const child = await store.session("dashboard:historical-child", {
+    spawnDepth: 1,
+    spawnedBy: "agent:requester:discord:group:synthetic",
+    parentSessionKey: "agent:requester:discord:group:synthetic",
+    lifecycleRunId: "dashboard:historical-child-run",
+  });
+  expect(await store.mark({ activeRuns: [child.run] })).toEqual({ marked: 1, skipped: 0 });
+  expect(child.read()).toMatchObject({
+    abortedLastRun: true,
+    mainRestartRecovery: { chargedAttempts: 0 },
+  });
+});
+
+it("leaves a completed replacement child and its copied old recovery claim untouched", async () => {
+  using store = createStore();
+  const child = await store.session("subagent:replaced-child", {
+    spawnDepth: 1,
+    spawnedBy: "agent:main:main",
+    lifecycleRevision: "replacement-child-revision",
+    lifecycleRunId: "replacement-child-run",
+    status: "done",
+    abortedLastRun: false,
+    endedAt: 10,
+    restartRecoveryRuns: [{ runId: "original-child-run", lifecycleGeneration: "old-gateway" }],
+    restartRecoveryDeliverySourceRunId: "original-child-run",
+  });
+  const before = child.read();
+  expect(await store.markStartup()).toEqual({ marked: 0, skipped: 0 });
+  expect(child.read()).toEqual(before);
+});
+
 it("loads only orphan candidates for main-session startup recovery", async () => {
-  const { stateDir, storePath, read, write } = createStore();
-  const sessionKey = "agent:main:main";
-  await write(sessionKey, { sessionId: "main-session", abortedLastRun: true });
+  using store = createStore();
+  const { storePath } = store;
+  const { sessionKey, read } = await store.session("main", { abortedLastRun: true });
   for (let index = 0; index < 16; index++) {
     sessionAccessor.replaceSessionEntrySync(
       { storePath, sessionKey: `agent:main:subagent:retained-${index}` },
@@ -247,13 +283,8 @@ it("loads only orphan candidates for main-session startup recovery", async () =>
   }
   const reader = vi.spyOn(sessionEntryReader, "readSessionEntrySummariesInWorker");
   vi.spyOn(mainSessionRecoveryLog, "warn").mockImplementation(() => {});
-  expect(
-    await markStartupOrphanedMainSessionsForRecovery({
-      cfg: { session: { store: storePath } },
-      stateDir,
-    }),
-  ).toEqual({ marked: 1, skipped: 0 });
-  expect(read(sessionKey)).toMatchObject({
+  expect(await store.markStartup()).toEqual({ marked: 1, skipped: 0 });
+  expect(read()).toMatchObject({
     abortedLastRun: true,
     mainRestartRecovery: { chargedAttempts: 0 },
   });
@@ -264,21 +295,21 @@ it("loads only orphan candidates for main-session startup recovery", async () =>
 it.each([false, true])(
   "reports skipped shutdown sessions when another is marked: %s",
   async (markOther) => {
-    const { read, write, run, mark } = createStore();
-    const sessionKey = "agent:main:main";
-    await write(sessionKey, { sessionId: "main-session", lifecycleRunId: "main-run" });
-    const otherKey = "agent:main:other";
-    if (markOther) {
-      await write(otherKey, { sessionId: "other-session", lifecycleRunId: "other-run" });
-    }
+    using store = createStore();
+    const main = await store.session("main", { lifecycleRunId: "main-run" });
+    const missing = {
+      ...main.run,
+      sessionKey: "agent:main:missing",
+      sessionId: "missing-session",
+      runId: "missing-run",
+    };
+    const other = markOther
+      ? await store.session("other", { lifecycleRunId: "other-run" })
+      : undefined;
     const warn = vi.spyOn(mainSessionRecoveryLog, "warn");
     expect(
-      await mark({
-        activeRuns: [
-          run(sessionKey, "main-session", "main-run"),
-          run("agent:main:missing", "missing-session", "missing-run"),
-          ...(markOther ? [run(otherKey, "other-session", "other-run")] : []),
-        ],
+      await store.mark({
+        activeRuns: [main.run, missing, ...(other ? [other.run] : [])],
         isActiveRun: (activeRun) => activeRun.runId !== "main-run",
       }),
     ).toEqual({ marked: markOther ? 1 : 0, skipped: 0 });
@@ -288,42 +319,36 @@ it.each([false, true])(
     expect(warn).toHaveBeenCalledWith(
       'skipped restart recovery session: {"sessionKey":"agent:main:missing","reason":"no_matching_session"}',
     );
-    expect(read(sessionKey)?.mainRestartRecovery).toBeUndefined();
+    expect(main.read()?.mainRestartRecovery).toBeUndefined();
   },
 );
 
 it.each(["store", "agent"] as const)(
   "keeps a matching session outside the captured recovery %s untouched",
   async (different) => {
-    const { stateDir, storePath, read, run, mark } = createStore("configured");
+    using store = createStore("configured");
+    const { stateDir, storePath } = store;
     const sourceStore =
       different === "store" ? path.join(stateDir, "retained", "sessions.json") : storePath;
-    const sessionKey = "agent:main:main";
-    const sessionId = "same-session";
-    const runId = "same-run";
-    for (const currentStore of new Set([storePath, sourceStore])) {
-      await replaceSessionEntry(
-        { agentId: "main", storePath: currentStore, sessionKey },
-        { sessionId, lifecycleRunId: runId, updatedAt: 1 },
-      );
-    }
+    const configured = await store.session("same", { lifecycleRunId: "same-run" });
+    const source =
+      sourceStore === storePath
+        ? configured
+        : await store.session("same", { lifecycleRunId: "same-run" }, sourceStore);
 
     await expect(
-      mark({
+      store.mark({
         activeRuns: [
           {
-            ...run(sessionKey, sessionId, runId),
-            storePath: sourceStore,
+            ...source.run,
             agentId: different === "agent" ? "other" : "main",
           },
         ],
       }),
     ).resolves.toEqual({ marked: different === "store" ? 1 : 0, skipped: 0 });
-    expect(read(sessionKey)?.abortedLastRun).not.toBe(true);
+    expect(configured.read()?.abortedLastRun).not.toBe(true);
     if (different === "store") {
-      expect(
-        loadSessionEntry({ agentId: "main", storePath: sourceStore, sessionKey })?.abortedLastRun,
-      ).toBe(true);
+      expect(source.read()?.abortedLastRun).toBe(true);
     }
   },
 );
@@ -510,9 +535,9 @@ it("marks healthy startup orphans while leaving a refused secondary database unt
 });
 
 it("marks only the closing Gateway's exact durable admissions and leaves host incognito volatile", async () => {
-  const { stateDir, resolveGatewayContext, read, write, admit, mark } = createStore();
+  using store = createStore();
+  const { stateDir, resolveGatewayContext, mark } = store;
   const otherGatewayContext = () => undefined;
-  const admissions: SessionEffectRef[] = [];
   const env = { OPENCLAW_STATE_DIR: stateDir };
   const incognitoTarget = {
     agentId: "main",
@@ -522,38 +547,32 @@ it("marks only the closing Gateway's exact durable admissions and leaves host in
   };
   const memoryLocation = { agentId: incognitoTarget.agentId, path: incognitoTarget.storePath };
   try {
-    for (const [name, resolver] of [
-      ["closing", resolveGatewayContext],
-      ["other", otherGatewayContext],
-    ] as const) {
-      const sessionKey = `agent:main:${name}`;
-      await write(sessionKey, { sessionId: name, updatedAt: Date.now() });
-      admissions.push(await admit(sessionKey, name, { resolveGatewayContext: resolver }));
-    }
+    const closing = await store.session("closing", { updatedAt: Date.now() });
+    const other = await store.session("other", { updatedAt: Date.now() });
+    await closing.admit();
+    await other.admit({ resolveGatewayContext: otherGatewayContext });
     await replaceSessionEntry(incognitoTarget, {
       sessionId: "volatile",
       updatedAt: Date.now(),
       incognito: true,
     });
-    admissions.push(
-      await admit(incognitoTarget.sessionKey, "volatile", {
-        scope: incognitoTarget.storePath,
-      }),
-    );
+    const volatile = await beginSessionEffect({
+      scope: incognitoTarget.storePath,
+      identities: [incognitoTarget.sessionKey, "volatile"],
+      resolveGatewayContext,
+      assertAllowed() {},
+    });
+    using _ = { [Symbol.dispose]: () => volatile.release() };
     await mark();
-    expect(read("agent:main:closing")?.abortedLastRun).toBe(true);
-    expect(read("agent:main:other")?.abortedLastRun).toBeUndefined();
+    expect(closing.read()?.abortedLastRun).toBe(true);
+    expect(other.read()?.abortedLastRun).toBeUndefined();
     const incognito = memorySessionActorOwners
       .read(memoryLocation)
       ?.readSession(incognitoTarget.sessionKey, { assertCurrent() {}, authorize() {} });
-    expect(incognito?.entry).toMatchObject({
-      sessionId: "volatile",
-      incognito: true,
-    });
+    expect(incognito?.entry).toMatchObject({ sessionId: "volatile", incognito: true });
     expect(incognito?.entry?.abortedLastRun).toBeUndefined();
     expect(getOpenClawAgentDatabaseIfOpen(memoryLocation)).toBeUndefined();
   } finally {
-    admissions.forEach((admission) => admission.release());
     memorySessionActorOwners.closeDatabase(memoryLocation);
   }
 });
@@ -566,56 +585,49 @@ it.each([
 ] as const)(
   "does not commit a restart mark when %s invalidates its owner after planning",
   async (change, terminalStatus) => {
-    const { storePath, read, write, admit, mark } = createStore();
-    const sessionKey = "agent:main:closing";
-    const sessionId = "closing";
-    let admission: SessionEffectRef | undefined;
+    using store = createStore();
+    const { storePath, sessionKey, sessionId, read, admit } = await store.session("closing", {
+      updatedAt: Date.now(),
+    });
     let cancelled = false;
     const cancellation = createAgentRunDirectAbortError();
-    try {
-      await write(sessionKey, { sessionId, updatedAt: Date.now() });
-      admission = await admit(sessionKey, sessionId, {
-        isSettling: () => cancelled,
-        getAbortReason: () => (cancelled ? cancellation : undefined),
-      });
-      afterPlanning(() => {
-        if (change === "rotation") {
-          rotateAgentEventLifecycleGeneration();
-        } else if (change === "cancelled") {
-          cancelled = true;
-        } else {
-          admission?.release();
-        }
-        if (terminalStatus) {
-          sessionAccessor.replaceSessionEntrySync(
-            { storePath, sessionKey },
-            { sessionId, status: terminalStatus, updatedAt: Date.now(), endedAt: 123 },
-          );
-        }
-      });
-      const marking = mark();
-      if (change !== "rotation") {
-        await expect(marking).resolves.toEqual({ marked: 0, skipped: 1 });
+    const admission = await admit({
+      isSettling: () => cancelled,
+      getAbortReason: () => (cancelled ? cancellation : undefined),
+    });
+    afterPlanning(() => {
+      if (change === "rotation") {
+        rotateAgentEventLifecycleGeneration();
+      } else if (change === "cancelled") {
+        cancelled = true;
       } else {
-        await expect(marking).rejects.toMatchObject({ code: "ERR_STALE_GATEWAY_LIFECYCLE" });
+        admission.release();
       }
-      expect(read(sessionKey)?.abortedLastRun).toBeUndefined();
       if (terminalStatus) {
-        expect(read(sessionKey)).toMatchObject({
-          status: terminalStatus,
-          endedAt: 123,
-        });
+        sessionAccessor.replaceSessionEntrySync(
+          { storePath, sessionKey },
+          { sessionId, status: terminalStatus, updatedAt: Date.now(), endedAt: 123 },
+        );
       }
-    } finally {
-      admission?.release();
+    });
+    const marking = store.mark();
+    if (change !== "rotation") {
+      await expect(marking).resolves.toEqual({ marked: 0, skipped: 1 });
+    } else {
+      await expect(marking).rejects.toMatchObject({ code: "ERR_STALE_GATEWAY_LIFECYCLE" });
+    }
+    expect(read()?.abortedLastRun).toBeUndefined();
+    if (terminalStatus) {
+      expect(read()).toMatchObject({ status: terminalStatus, endedAt: 123 });
     }
   },
 );
 
 it("does not adopt an ambient Gateway when moving an unbound reply owner", async () => {
-  const { storePath, write } = createStore();
-  const sessionKey = "agent:main:adopted";
-  const sessionId = "adopted";
+  using store = createStore();
+  const { storePath, sessionKey, sessionId } = await store.session("adopted", {
+    updatedAt: Date.now(),
+  });
   const otherGatewayContext = () => undefined;
   const operation = createReplyOperation({
     sessionKey: "agent:main:command",
@@ -623,7 +635,6 @@ it("does not adopt an ambient Gateway when moving an unbound reply owner", async
     resetTriggered: false,
   });
   try {
-    await write(sessionKey, { sessionId, updatedAt: Date.now() });
     await withPluginRuntimeGatewayContextResolver(otherGatewayContext, async () => {
       const admission = await admitReplyTurn({
         sessionKey,
@@ -658,22 +669,13 @@ it("does not adopt an ambient Gateway when moving an unbound reply owner", async
 });
 
 it("keeps another active session recoverable when one owner releases after batch planning", async () => {
-  const { read, write, admit, mark } = createStore();
-  const admissions: SessionEffectRef[] = [];
-  try {
-    for (const name of ["finishing", "still-active"]) {
-      const sessionKey = `agent:main:${name}`;
-      await write(sessionKey, { sessionId: name, status: "done", updatedAt: Date.now() });
-      admissions.push(await admit(sessionKey, name));
-    }
-    afterPlanning(() => admissions[0]!.release());
-    await expect(mark()).resolves.toEqual({ marked: 1, skipped: 1 });
-    expect(admissions[1]!.isActive()).toBe(true);
-    expect(read("agent:main:still-active")).toMatchObject({
-      status: "interrupted",
-      abortedLastRun: true,
-    });
-  } finally {
-    admissions.forEach((admission) => admission.release());
-  }
+  using store = createStore();
+  const finishing = await store.session("finishing", { status: "done", updatedAt: Date.now() });
+  const active = await store.session("still-active", { status: "done", updatedAt: Date.now() });
+  const finishingAdmission = await finishing.admit();
+  const activeAdmission = await active.admit();
+  afterPlanning(() => finishingAdmission.release());
+  await expect(store.mark()).resolves.toEqual({ marked: 1, skipped: 1 });
+  expect(activeAdmission.isActive()).toBe(true);
+  expect(active.read()).toMatchObject({ status: "interrupted", abortedLastRun: true });
 });

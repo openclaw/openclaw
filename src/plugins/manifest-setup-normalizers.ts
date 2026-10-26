@@ -1,3 +1,4 @@
+import { omitUndefinedFields } from "../../packages/normalization-core/src/record-coerce.js";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import {
   normalizeOptionalTrimmedStringList,
@@ -18,7 +19,6 @@ import {
   normalizeManifestObjectList,
   normalizeNamedMetadataRecord,
   normalizeProviderAssistantVisibility,
-  omitUndefinedManifestFields,
   optionalManifestFields,
 } from "./manifest-capability-normalizers.js";
 import { normalizeManifestPlatforms } from "./manifest-platforms.js";
@@ -132,7 +132,7 @@ function normalizeManifestSetupProviders(
     if (!id) {
       return undefined;
     }
-    return omitUndefinedManifestFields({
+    return omitUndefinedFields({
       id,
       authMethods: normalizeOptionalTrimmedStringList(entry.authMethods),
       envVars: normalizeOptionalTrimmedStringList(entry.envVars),
@@ -157,7 +157,7 @@ function normalizeManifestSetupProviderAuthEvidence(
     if (!fileEnvVar && !fallbackPaths) {
       return undefined;
     }
-    return omitUndefinedManifestFields<PluginManifestSetupProviderAuthEvidence>({
+    return omitUndefinedFields<PluginManifestSetupProviderAuthEvidence>({
       type: "local-file-with-env",
       fileEnvVar,
       fallbackPaths,
@@ -174,7 +174,7 @@ export function normalizeManifestSetup(value: unknown): PluginManifestSetup | un
     return undefined;
   }
   const nativeSessionCatalog = isRecord(value.nativeSessionCatalog)
-    ? omitUndefinedManifestFields({
+    ? omitUndefinedFields({
         label: normalizeOptionalString(value.nativeSessionCatalog.label) ?? "",
         legacyDefaultEnabled:
           value.nativeSessionCatalog.legacyDefaultEnabled === true ? true : undefined,
@@ -197,7 +197,7 @@ export function normalizeManifestQaRunners(value: unknown): PluginManifestQaRunn
     if (!commandName) {
       return undefined;
     }
-    return omitUndefinedManifestFields({
+    return omitUndefinedFields({
       commandName,
       description: normalizeOptionalString(entry.description),
     });
@@ -306,7 +306,7 @@ export function normalizeProviderAuthChoices(
     const onboardingScopes = normalizeTrimmedStringList(entry.onboardingScopes).filter(
       isPluginManifestOnboardingScope,
     );
-    return omitUndefinedManifestFields<PluginManifestProviderAuthChoice>({
+    return omitUndefinedFields<PluginManifestProviderAuthChoice>({
       provider,
       method,
       choiceId,
@@ -378,7 +378,7 @@ export function normalizeChannelConfigs(
     if (!schema) {
       return undefined;
     }
-    return omitUndefinedManifestFields({
+    return omitUndefinedFields({
       schema,
       uiHints: normalizeConfigUiHints(rawEntry.uiHints),
       runtime:

@@ -1,4 +1,7 @@
 import type { toolIconData } from "../../components/icon-data-tools.ts";
+import { registerChatMessageMetadataEnglish } from "../../i18n/locales/en-chat-message-metadata.ts";
+
+registerChatMessageMetadataEnglish();
 
 export type PendingInputStatus =
   | "queued"
@@ -35,6 +38,12 @@ const systemNoticeKinds: Readonly<Record<string, SystemNoticeKind>> = {
       interrupted: "chat.systemNotice.restartRecovery.interrupted",
       cancelled: "chat.systemNotice.restartRecovery.cancelled",
     },
+  },
+  // Older scheduled conversation turns lack the run metadata for an activity row.
+  cron: {
+    icon: "cpu",
+    labelKey: "chat.messages.forwardedAutomation",
+    collapsedBody: true,
   },
   cron_failure_repair: {
     icon: "cpu",

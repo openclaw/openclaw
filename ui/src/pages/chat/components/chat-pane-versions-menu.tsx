@@ -65,8 +65,8 @@ export function ChatPaneVersionsMenu(props: { menu: ChatPaneVersionsMenuProps })
     }),
   );
   return (
-    <openclaw-chat-pane-versions-menu>
-      <Show when={!props.menu.catalog && props.menu.branches.length > 1}>
+    <Show when={!props.menu.catalog && props.menu.branches.length > 1}>
+      <openclaw-chat-pane-versions-menu>
         <Menu
           controls={controls}
           lazy
@@ -119,7 +119,7 @@ export function ChatPaneVersionsMenu(props: { menu: ChatPaneVersionsMenuProps })
             </Show>
           </div>
         </Menu>
-      </Show>
-    </openclaw-chat-pane-versions-menu>
+      </openclaw-chat-pane-versions-menu>
+    </Show>
   );
 }

@@ -4,9 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it as baseIt, vi } from "vitest";
 import type { RunEmbeddedAgentInternalParams as AgentRequest } from "../agents/embedded-agent-runner/run/internal-params.js";
-import * as modelThinkingDefault from "../agents/model-thinking-default.js";
 import { SessionManager } from "../agents/sessions/index.js";
-import * as thinking from "../auto-reply/thinking.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
@@ -25,6 +23,7 @@ import {
 import { setupRunCronIsolatedAgentTurnSuite } from "./isolated-agent/run.suite-helpers.js";
 import * as h from "./isolated-agent/run.test-harness.js";
 import { normalizeCronJobCreate } from "./normalize.js";
+import { TEST_SCHEDULED_OCCURRENCE } from "./scheduled-occurrence.test-support.js";
 import type { CronJob, CronStoredJob } from "./types.js";
 
 setupRunCronIsolatedAgentTurnSuite();
@@ -76,6 +75,7 @@ function runSessionTurn(
 ) {
   setRuntimeConfigSnapshot(cfg);
   return runCronIsolatedAgentTurn({
+    occurrence: TEST_SCHEDULED_OCCURRENCE,
     deliveryAttemptFence: null,
     cfg,
     deps: makeDeps(),
@@ -89,9 +89,6 @@ function runSessionTurn(
 
 describe("runCronIsolatedAgentTurn session identity", () => {
   beforeEach(() => {
-    vi.spyOn(modelThinkingDefault, "resolveThinkingDefault").mockReturnValue("off");
-    vi.spyOn(thinking, "isThinkingLevelSupported").mockReturnValue(true);
-    h.runEmbeddedAgentMock.mockClear();
     h.mockRunCronFallbackPassthrough();
   });
 
@@ -131,13 +128,11 @@ describe("runCronIsolatedAgentTurn session identity", () => {
     async (source, { home }) => {
       await useRealCronSessionState();
       await prepareProfiles();
-      const storePath = await f.writeSessionStore(home, {
-        delivery: { kind: "internal" },
-      });
+      const storePath = await f.writeSessionStore(home, {});
       const profile = ensureProfileForEmail("cron-creator@example.test");
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const createdActor = { type: "human" as const, source, id: profile.id };
-      const job = sessionJob({ createdActor }, "persist this turn");
+      const job = sessionJob({ createdActor });
       const guest = {
         sessions: { others: "none" as const },
         agents: "*" as const,
@@ -226,16 +221,8 @@ describe("runCronIsolatedAgentTurn session identity", () => {
   it("starts a fresh session id for each cron run", async ({ home }) => {
     await useRealCronSessionState();
     const storePath = await f.writeSessionStore(home, { delivery: { kind: "internal" } });
-    const deps = makeDeps();
-    const runPingTurn = () =>
-      runCronTurn(home, {
-        deps,
-        jobPayload: { kind: "agentTurn", message: "ping" },
-        storePath,
-      });
-
-    const first = (await runPingTurn()).res;
-    const second = (await runPingTurn()).res;
+    const first = (await runCronTurn(home, { storePath })).res;
+    const second = (await runCronTurn(home, { storePath })).res;
 
     expect([typeof first.sessionId, typeof second.sessionId]).toEqual(["string", "string"]);
     expect(second.sessionId).not.toBe(first.sessionId);

@@ -1,5 +1,6 @@
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createCliTtyMock } from "../cli/test-runtime-capture.js";
 import { createNonExitingRuntime } from "../runtime.js";
 import { createDoctorPrompter } from "./doctor-prompter.js";
 
@@ -32,29 +33,13 @@ function makePrompter(
   return createDoctorPrompter({ runtime: runtime(), options });
 }
 
-function createRepairPrompter(params?: { force?: boolean }) {
-  return makePrompter(
-    { repair: true, nonInteractive: true, ...(params?.force ? { force: true } : {}) },
-    false,
-  );
-}
-
 describe("createDoctorPrompter", () => {
-  const originalStdinIsTTY = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
-  const originalUpdateInProgress = process.env.OPENCLAW_UPDATE_IN_PROGRESS;
+  const ttyMock = createCliTtyMock([process.stdin]);
 
   afterEach(() => {
     vi.resetAllMocks();
-    if (originalStdinIsTTY) {
-      Object.defineProperty(process.stdin, "isTTY", originalStdinIsTTY);
-    } else {
-      Reflect.deleteProperty(process.stdin, "isTTY");
-    }
-    if (originalUpdateInProgress === undefined) {
-      delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
-    } else {
-      process.env.OPENCLAW_UPDATE_IN_PROGRESS = originalUpdateInProgress;
-    }
+    ttyMock.restore();
+    vi.unstubAllEnvs();
   });
 
   it.each([false, true])(
@@ -94,23 +79,28 @@ describe("createDoctorPrompter", () => {
     },
   );
 
-  it("auto-accepts repairs in non-interactive fix mode", async () => {
-    const prompter = createRepairPrompter();
-
-    await expect(prompter.confirm(repairPrompt)).resolves.toBe(true);
-    await expect(prompter.confirmAutoFix(repairPrompt)).resolves.toBe(true);
-    await expect(prompter.confirmRuntimeRepair(repairPrompt)).resolves.toBe(true);
-    expect(confirmMock).not.toHaveBeenCalled();
-  });
-
-  it("requires --force for aggressive repairs in non-interactive fix mode", async () => {
-    const prompter = createRepairPrompter();
-
-    await expect(
-      prompter.confirmAggressiveAutoFix({ ...repairPrompt, initialValue: true }),
-    ).resolves.toBe(false);
-    expect(confirmMock).not.toHaveBeenCalled();
-  });
+  it.each([
+    [false, false, true, false],
+    [true, false, true, true],
+    [false, true, false, false],
+  ])(
+    "applies non-interactive repair policy (force=%s, update=%s)",
+    async (force, update, runtimeRepair, aggressive) => {
+      if (update) {
+        vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
+      }
+      const prompter = makePrompter({ repair: true, nonInteractive: true, force }, false);
+      await expect(prompter.confirm(repairPrompt)).resolves.toBe(true);
+      await expect(prompter.confirmAutoFix(repairPrompt)).resolves.toBe(true);
+      await expect(
+        prompter.confirmRuntimeRepair({ ...repairPrompt, initialValue: update }),
+      ).resolves.toBe(runtimeRepair);
+      await expect(
+        prompter.confirmAggressiveAutoFix({ ...repairPrompt, initialValue: !force }),
+      ).resolves.toBe(aggressive);
+      expect(confirmMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("refuses interactive-only repairs without a terminal even with --yes", async () => {
     const repair = makePrompter({ yes: true }, false);
@@ -125,23 +115,5 @@ describe("createDoctorPrompter", () => {
     expect(repair.shouldForce).toBe(true);
     await expect(repair.confirmRuntimeRepair(interactivePrompt)).resolves.toBe(approved);
     expect(confirmMock).toHaveBeenCalledOnce();
-  });
-
-  it("keeps skip-in-non-interactive prompts disabled during update-mode repairs", async () => {
-    process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
-    const prompter = createRepairPrompter();
-
-    await expect(prompter.confirmAutoFix(repairPrompt)).resolves.toBe(true);
-    await expect(
-      prompter.confirmRuntimeRepair({ ...repairPrompt, initialValue: true }),
-    ).resolves.toBe(false);
-    expect(confirmMock).not.toHaveBeenCalled();
-  });
-
-  it("auto-accepts aggressive repairs only with --force in non-interactive fix mode", async () => {
-    const prompter = createRepairPrompter({ force: true });
-
-    await expect(prompter.confirmAggressiveAutoFix(repairPrompt)).resolves.toBe(true);
-    expect(confirmMock).not.toHaveBeenCalled();
   });
 });
