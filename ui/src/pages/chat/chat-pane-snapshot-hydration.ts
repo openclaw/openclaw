@@ -58,6 +58,40 @@ export abstract class ChatPaneSnapshotHydration extends ChatPaneReplyNavigation 
         readySnapshot = snapshot;
       },
     );
+    const adoptSnapshot = (afterPaint: boolean) => {
+      if (readySnapshot === undefined) {
+        return Promise.resolve();
+      }
+      const storedSnapshot = readySnapshot;
+      return (adoption ??= (async () => {
+        if (storedSnapshot && afterPaint) {
+          // Receipt and post-hello adoption yield; pre-hello cache owns first paint.
+          await new Promise<void>((resolve) => {
+            requestAnimationFrame(() => window.setTimeout(resolve, 0));
+          });
+        }
+        delete hydration.adoptReadySnapshot;
+        delete hydration.readReadyHistory;
+        if (!isCurrent()) {
+          return;
+        }
+        const snapshot = mergeStoredChatSessionSnapshot(cache, state, target, storedSnapshot);
+        if (requests.acceptedHistory || !snapshot) {
+          return;
+        }
+        // A sibling may already own a newer base in the shared cache.
+        applyChatCacheSnapshot(state, snapshot);
+        const mergedSnapshot = { ...snapshot, messages: state.chatMessages };
+        cacheChatSessionSnapshot(cache, state, target, mergedSnapshot);
+        this.syncSessionReactions();
+        if (snapshot.progressCard !== undefined) {
+          const progressTarget = this.resolveChatReadTarget();
+          if (progressTarget) {
+            this.progressCards.hydrate(progressTarget, snapshot.progressCard);
+          }
+        }
+      })());
+    };
     const hydration: InitialChatSnapshotHydration = {
       titlePending: true,
       sessionKey,
@@ -66,40 +100,7 @@ export abstract class ChatPaneSnapshotHydration extends ChatPaneReplyNavigation 
         isCurrent() && !requests.acceptedHistory && readySnapshot?.deltaCursor
           ? { deltaCursor: readySnapshot.deltaCursor, historyState: readySnapshot.historyState }
           : undefined,
-      adoptReadySnapshot: () => {
-        if (readySnapshot === undefined) {
-          return Promise.resolve();
-        }
-        const storedSnapshot = readySnapshot;
-        return (adoption ??= (async () => {
-          if (storedSnapshot) {
-            // Keep cached transcript work out of the mount frame, including post-hello mounts.
-            await new Promise<void>((resolve) => {
-              requestAnimationFrame(() => window.setTimeout(resolve, 0));
-            });
-          }
-          delete hydration.adoptReadySnapshot;
-          delete hydration.readReadyHistory;
-          if (!isCurrent()) {
-            return;
-          }
-          const snapshot = mergeStoredChatSessionSnapshot(cache, state, target, storedSnapshot);
-          if (requests.acceptedHistory || !snapshot) {
-            return;
-          }
-          // A sibling may already own a newer base in the shared cache.
-          applyChatCacheSnapshot(state, snapshot);
-          const mergedSnapshot = { ...snapshot, messages: state.chatMessages };
-          cacheChatSessionSnapshot(cache, state, target, mergedSnapshot);
-          this.syncSessionReactions();
-          if (snapshot.progressCard !== undefined) {
-            const progressTarget = this.resolveChatReadTarget();
-            if (progressTarget) {
-              this.progressCards.hydrate(progressTarget, snapshot.progressCard);
-            }
-          }
-        })());
-      },
+      adoptReadySnapshot: () => adoptSnapshot(true),
       promise: reading
         .then(async (storedSnapshot) => {
           readySnapshot = storedSnapshot;
@@ -115,7 +116,7 @@ export abstract class ChatPaneSnapshotHydration extends ChatPaneReplyNavigation 
           if (!isCurrent()) {
             return;
           }
-          await hydration.adoptReadySnapshot?.();
+          await adoptSnapshot(this.context.gateway.snapshot.phase === "connected");
           return restoreBoard(storedSnapshot?.board);
         })
         .catch(() => undefined)

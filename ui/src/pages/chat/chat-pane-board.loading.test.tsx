@@ -140,9 +140,6 @@ it.each([false, true])(
     const hydration = chatHistoryRequests(pane.state).initialSnapshotHydration!;
     await expectDefined(reading.mock.results[0], "snapshot read").value;
     await vi.advanceTimersByTimeAsync(0);
-    expect(pane.state.chatMessages).toEqual([]);
-    vi.advanceTimersToNextFrame();
-    await vi.advanceTimersByTimeAsync(1);
     expect(pane.state.chatMessages).toEqual(transcript.messages);
     expect(provider.hasLoadedSnapshot).toBe(false);
     dispatch.resolve();

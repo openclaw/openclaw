@@ -166,6 +166,48 @@ describe("stored chat snapshot hydration", () => {
     }
   });
 
+  it.each(["connecting", "connected"] as const)(
+    "preserves cached first paint before hello and fences post-hello adoption (%s)",
+    async (phase) => {
+      vi.useFakeTimers();
+      const connect = createDeferred<boolean>();
+      const client = createGatewayBrowserClientFixture();
+      Object.defineProperty(client, "connectSent", { get: () => connect.promise });
+      const pane = createMountedPane("agent:main:first-paint", new Map(), client);
+      pane.context.gateway.snapshot.phase = phase;
+      const snapshot = {
+        messages: [nativeHistoryMessage(1, "cached first paint")],
+        sessionId: "saved-session",
+        pagination: { hasMore: false as const },
+      };
+      const store = new SessionSnapshotStore();
+      vi.spyOn(store, "read").mockResolvedValue(snapshot);
+      pane.sessionSnapshotStore = store;
+      try {
+        const state = startPane(pane);
+        const hydration = expectDefined(
+          chatHistoryRequests(state).initialSnapshotHydration,
+          "pending snapshot hydration",
+        );
+        await vi.advanceTimersByTimeAsync(0);
+        expect(state.chatMessages).toEqual([]);
+        connect.resolve(true);
+        await vi.advanceTimersByTimeAsync(0);
+        if (phase === "connected") {
+          expect(state.chatMessages).toEqual([]);
+          vi.advanceTimersToNextFrame();
+          await vi.advanceTimersByTimeAsync(1);
+        }
+        expect(state.chatMessages).toEqual(snapshot.messages);
+        await hydration.promise;
+      } finally {
+        pane.disconnectedCallback();
+        store.disconnect();
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it.each(
     ["memory", "stored"].flatMap((cacheMode) =>
       ["Gateway Author", undefined].map((senderName) => ({ cacheMode, senderName })),
