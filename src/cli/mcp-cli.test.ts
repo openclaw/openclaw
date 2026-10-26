@@ -269,7 +269,8 @@ it("redacts MCP registry inspection without changing saved credentials", async (
   expect(JSON.parse(await fs.readFile(configPath, "utf8")).mcp.servers).toEqual(servers);
 });
 
-it.each(["node", " node "])("preserves literal stdio paths from add flags: %j", async (name) => {
+it("preserves literal stdio paths from add flags", async () => {
+  const name = " node ";
   const command = path.join(workspaceDir, name);
   const cwd = path.join(workspaceDir, `${name}-workspace `);
   await addServer("literal", {
@@ -318,19 +319,28 @@ it.each([
   expect(await readServer()).toEqual({ command: "node", args: [script] });
 });
 
-it("configures approval and exclusions without replacing sibling metadata", async () => {
-  await setServer({
-    command: process.execPath,
-    codex: { agents: ["docs-agent"], defaultToolsApprovalMode: "auto" },
-    toolFilter: { include: ["old_*"], exclude: ["admin_*"] },
-  });
-  await mcp("configure", "docs", "--approval", "approve", "--exclude", "write_*");
-  expect(await readServer()).toEqual({
-    command: process.execPath,
-    codex: { agents: ["docs-agent"], defaultToolsApprovalMode: "approve" },
-    toolFilter: { include: ["old_*"], exclude: ["write_*"] },
-  });
-});
+const filteredServer = {
+  command: process.execPath,
+  codex: { agents: ["docs-agent"], defaultToolsApprovalMode: "auto" },
+  toolFilter: { include: ["old_*"], exclude: ["admin_*"] },
+};
+it.each`
+  args                                                              | expected
+  ${["configure", "--approval", "approve", "--exclude", "write_*"]} | ${{ ...filteredServer, codex: { ...filteredServer.codex, defaultToolsApprovalMode: "approve" }, toolFilter: { include: ["old_*"], exclude: ["write_*"] } }}
+  ${["tools", "--clear"]}                                           | ${{ command: process.execPath, codex: filteredServer.codex }}
+  ${["configure", "--clear-tools"]}                                 | ${{ command: process.execPath, codex: filteredServer.codex }}
+`(
+  "updates MCP controls with $args without replacing sibling metadata",
+  async ({ args, expected }: { args: [string, ...string[]]; expected: object }) => {
+    await setServer(filteredServer);
+    const [command, ...options] = args;
+    if (options.some((option) => option.startsWith("--clear"))) {
+      await mcp("tools", "docs", "--include", "search");
+    }
+    await mcp(command, "docs", ...options);
+    expect(await readServer()).toEqual(expected);
+  },
+);
 
 it("rejects hexadecimal MCP timeout options before writing configuration", async () => {
   await expect(
@@ -419,17 +429,6 @@ it("explains only disabled servers and overrides while preserving JSON output", 
 it("requires an explicit MCP tool filter operation", async () => {
   await setServer();
   await expectFailure("Specify --include, --exclude, or --clear.", "tools", "docs");
-});
-
-it.each([
-  ["tools", "--clear"],
-  ["configure", "--clear-tools"],
-])("clears per-server MCP tool filters with %s %s", async (command, clearFlag) => {
-  await setServer();
-  await mcp("tools", "docs", "--include", "search");
-  await mcp(command, "docs", clearFlag);
-
-  expect(await readServer()).not.toHaveProperty("toolFilter");
 });
 
 it("redacts stdio argv credentials from MCP status output", async () => {
@@ -578,14 +577,9 @@ it("bounds concurrent MCP doctor server checks", async () => {
   }
 
   expect(readMcpOAuthCredentialsStatus).toHaveBeenCalledTimes(6);
-  expect(JSON.parse(lastLogLine()).servers.map((server: { name: string }) => server.name)).toEqual([
-    "server-0",
-    "server-1",
-    "server-2",
-    "server-3",
-    "server-4",
-    "server-5",
-  ]);
+  expect(JSON.parse(lastLogLine()).servers.map((server: { name: string }) => server.name)).toEqual(
+    Array.from({ length: 6 }, (_, index) => `server-${index}`),
+  );
 });
 
 it("surfaces unexpected MCP doctor check errors", async () => {
