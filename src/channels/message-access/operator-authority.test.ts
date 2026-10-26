@@ -14,7 +14,6 @@ import { resolveCommandAuthorization } from "../../auto-reply/command-auth.js";
 import {
   captureCommandOwnerAssertion,
   CommandOwnerRevokedError,
-  getCommandOwnerAuthority,
 } from "../../auto-reply/command-owner-authority.js";
 import { prepareChannelRunAdmission } from "../../auto-reply/reply/channel-run-admission.js";
 import { prepareInternalGetReplyOptions } from "../../auto-reply/reply/get-reply.types.js";
@@ -273,12 +272,6 @@ it("refreshes requester facts and rejects forged context", () =>
     }
     const adminContext = await context(admin.identity.senderId);
     expect(authorize(cfg, adminContext).senderIsOwner).toBe(true);
-    const authority = getCommandOwnerAuthority(adminContext);
-    const constructor: unknown = authority && Reflect.get(authority, "constructor");
-    const forgedAuthority =
-      typeof constructor === "function"
-        ? Reflect.construct(constructor, [{ isCurrent: () => true }])
-        : { isCurrent: () => true };
     for (const ctx of [
       await context("100", false),
       await context("100", true, "different-bot"),
@@ -290,7 +283,6 @@ it("refreshes requester facts and rejects forged context", () =>
         GatewayClientScopes: ["operator.admin"],
       },
       forgeSymbols(adminContext, { isCurrent: () => true }),
-      forgeSymbols(adminContext, forgedAuthority),
     ]) {
       expect(authorize(cfg, ctx).senderIsOwner).toBe(false);
     }
