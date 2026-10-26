@@ -35,13 +35,13 @@ vi.mock("@modelcontextprotocol/client", async (importOriginal) => ({
 }));
 
 const saveAccessToken = (identity: McpOAuthIdentity, accessToken: string) =>
-  withMcpOAuthProviderForTest({ identity }, (provider) =>
-    provider.saveTokens({
+  withMcpOAuthProviderForTest({ identity }, async (provider) => {
+    await provider.saveTokens({
       access_token: accessToken,
       token_type: "Bearer",
       expires_in: 3600,
-    }),
-  );
+    });
+  });
 
 requesterTest("fails closed when canonical SQLite JSON is malformed", async () => {
   const { serverName, serverUrl } = REMOTE_IDENTITY;

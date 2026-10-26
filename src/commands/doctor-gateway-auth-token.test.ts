@@ -24,7 +24,6 @@ it.each([false, true])(
               execmain: {
                 source: "exec",
                 command,
-                allowInsecurePath: true,
                 args: [
                   "-e",
                   `const fs = require('node:fs');fs.writeFileSync(${JSON.stringify(markerPath)}, 'executed');process.stdout.write(JSON.stringify({ protocolVersion: 1, values: { 'gateway/token': 'exec-token' } }));`,

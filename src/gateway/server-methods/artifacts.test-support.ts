@@ -111,5 +111,6 @@ export function requireNonEmptyString(value: unknown, message: string): string {
   return value;
 }
 
-export const expectFields = (value: unknown, expected: Record<string, unknown>): void =>
+export const expectFields = (value: unknown, expected: Record<string, unknown>): void => {
   expectRecordFields(value, "fields", expected);
+};

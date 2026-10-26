@@ -3,10 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
 import { resetFileLockStateForTest } from "openclaw/plugin-sdk/file-lock";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { registerMatrixDoctorCommands } from "../cli-doctor.js";
 import { getMatrixRuntime } from "../runtime.js";
-import { installMatrixTestRuntime, resetMatrixTestStores } from "../test-runtime.js";
+import { installMatrixTestRuntime } from "../test-runtime.js";
 import {
   MATRIX_IDB_SNAPSHOT_FILENAME,
   openMatrixIdbSnapshotStoreOptions,
@@ -24,6 +26,10 @@ let snapshotPath: string;
 let markerPath: string;
 
 const database = { name: "crypto", version: 1, stores: [] };
+const keyStore = { name: "keys", keyPath: null, autoIncrement: false, indexes: [] };
+const keysSnapshot = (records: unknown[], indexes: unknown[] = []) => [
+  { ...database, stores: [{ ...keyStore, records, indexes }] },
+];
 const recover = (acceptSnapshotRollback = true) =>
   recoverMatrixCryptoUnsafeState({ storageRootDir, acceptSnapshotRollback });
 const inspect = () => listMatrixCryptoUnsafeState(stateDir);
@@ -67,7 +73,8 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await resetMatrixTestStores();
+  await closeOpenClawStateDatabaseAsync();
+  resetPluginStateStoreForTests();
   resetFileLockStateForTest();
   await fs.rm(stateDir, { recursive: true, force: true });
   vi.restoreAllMocks();
@@ -108,20 +115,28 @@ it("inspects refusal without clearing it and requires explicit rollback acceptan
   expect(await inspect()).toEqual([storageRootDir]);
 });
 
-it("ignores live owners during inspection and refuses recovery until they release", async () => {
+it("does not report an armed marker while its crypto owner is live", async () => {
   const owner = await acquireMatrixCryptoStoreOwnership(snapshotPath);
   try {
     await owner.armUnsafeState();
-    await writeSnapshot();
     expect(await inspect()).toEqual([]);
-    await expect(recover()).rejects.toThrow();
   } finally {
     await owner.release();
   }
   expect(await inspect()).toEqual([storageRootDir]);
-  await expect(acquireMatrixCryptoStoreOwnership(snapshotPath)).rejects.toThrow(
-    "unsafe final state",
-  );
+});
+
+it("refuses recovery while a live owner holds the crypto store", async () => {
+  await fs.writeFile(markerPath, "unsafe\n");
+  const owner = await acquireMatrixCryptoStoreOwnership(snapshotPath).catch(() => null);
+  // The normal owner correctly refuses an existing marker; use the Doctor lock itself.
+  expect(owner).toBeNull();
+  await writeSnapshot();
+  const { withMatrixCryptoStoreRecoveryLock } = await import("./sdk/crypto-store-ownership.js");
+  await withMatrixCryptoStoreRecoveryLock(snapshotPath, async () => {
+    await expect(recover()).rejects.toThrow();
+    expect(await inspect()).toEqual([]);
+  });
 });
 
 it("clears refusal only after validating the canonical SQLite snapshot", async () => {
@@ -140,15 +155,33 @@ it("clears refusal only after validating the canonical SQLite snapshot", async (
   await store.register("current:meta", meta);
   await recover();
   expect(await inspect()).toEqual([]);
+  const owner = await acquireMatrixCryptoStoreOwnership(snapshotPath);
+  await owner.release();
 });
 
-it("refuses an unreplayable snapshot without changing durable state", async () => {
-  await fs.writeFile(markerPath, "unsafe\n");
-  await writeSnapshot(storageRootDir, [database, database]);
-  const store = snapshotStore();
-  const rows = await store.entries();
-  await expect(recover()).rejects.toThrow("cannot be replayed");
-  expect(await fs.readFile(markerPath, "utf8")).toBe("unsafe\n");
-  expect(await store.entries()).toEqual(rows);
-  expect(await inspect()).toEqual([storageRootDir]);
-});
+it.each([
+  ["duplicate database names", [database, database]],
+  ["invalid record keys", keysSnapshot([{ key: {}, value: "synthetic" }])],
+  [
+    "unique index conflicts",
+    keysSnapshot(
+      [
+        { key: "first", value: { name: "same" } },
+        { key: "second", value: { name: "same" } },
+      ],
+      [{ name: "unique", keyPath: "name", unique: true, multiEntry: false }],
+    ),
+  ],
+] satisfies [string, unknown[]][])(
+  "refuses recovery for %s without changing durable state",
+  async (_label, databases) => {
+    await fs.writeFile(markerPath, "unsafe\n");
+    await writeSnapshot(storageRootDir, databases);
+    const store = snapshotStore();
+    const rows = await store.entries();
+    await expect(recover()).rejects.toThrow("cannot be replayed");
+    expect(await fs.readFile(markerPath, "utf8")).toBe("unsafe\n");
+    expect(await store.entries()).toEqual(rows);
+    expect(await inspect()).toEqual([storageRootDir]);
+  },
+);

@@ -87,7 +87,7 @@ it("does not select messages before the persisted session start when the reset c
   for (const msg of [topicMessage(1, 700), stale, topicMessage(3, 3_000)]) {
     await record(msg);
   }
-  const current = { ...topicMessage(4, 10_200), reply_to_message: stale };
+  const current = message(4, { chat, message_thread_id: 9, date: 10_200, reply_to_message: stale });
   await record(current);
   const replyChainNodes = await buildTelegramReplyChain({
     cache,
