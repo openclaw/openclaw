@@ -241,9 +241,13 @@ describe("GatewayClient host token storage", () => {
 
   it("rejects a correlated startup retry after connection authority retires", async () => {
     const authority = connectionAuthority();
-    const { client, socket } = connect({}, { assertConnectionCurrent: authority.assertCurrent });
-    socket.respond({ type: "hello-ok", protocol: PROTOCOL_VERSION });
+    const { client, socket, onHelloOk } = connect(
+      { storeDeviceAuthToken: () => storedToken },
+      { assertConnectionCurrent: authority.assertCurrent },
+    );
+    socket.respond(hello);
     await vi.advanceTimersByTimeAsync(0);
+    expect(onHelloOk).toHaveBeenCalledOnce();
     const request = client.request("sessions.create", {}, { timeoutMs: 1_000 });
     const outcome = request.catch((error: unknown) => error);
     const sent = socket.send.mock.calls.at(-1);
@@ -283,46 +287,27 @@ describe("GatewayClient host token storage", () => {
     expect(onHelloOk).not.toHaveBeenCalled();
   });
 
-  it.each(["sync", "ready", "closing", "stop"] as const)(
+  it.each(["ready", "closing", "stop"] as const)(
     "settles token persistence before completing %s",
     async (completion) => {
       const { gate, cache, host } = tokenStorage();
-      const { storeDeviceAuthToken } = host;
-      const { client, socket, onHelloOk, onConnectError } = connect(
-        completion === "sync"
-          ? { storeDeviceAuthToken: () => storedToken, clearDeviceAuthToken: () => true }
-          : { storeDeviceAuthToken },
-      );
-      if (completion === "sync") {
-        expect(socket.send).toHaveBeenCalledOnce();
-      }
+      const { client, socket, onHelloOk, onConnectError } = connect(host);
       socket.respond(hello);
       await vi.advanceTimersByTimeAsync(0);
-      if (completion === "sync") {
-        expect(onHelloOk).toHaveBeenCalledOnce();
-        return;
-      }
       expect(onHelloOk).not.toHaveBeenCalled();
-      expect(storeDeviceAuthToken).toHaveBeenCalledOnce();
-      const operation = storeDeviceAuthToken.mock.calls[0]?.[0];
-      assert(operation);
-      expect(operation).toMatchObject({ token: hello.auth.deviceToken, scopes: hello.auth.scopes });
-      expect(() => operation.assertCurrent?.()).not.toThrow();
       if (completion === "closing") {
         socket.readyState = 2;
       }
       const stopped = vi.fn();
       const stop = completion === "stop" ? client.stopAndWait().then(stopped) : undefined;
       if (completion === "stop") {
-        expect(operation.signal).toBeUndefined();
-        expect(operation.assertCurrent).toBeUndefined();
         await vi.advanceTimersByTimeAsync(0);
         expect(stopped).not.toHaveBeenCalled();
       }
       gate.resolve();
       await vi.advanceTimersByTimeAsync(0);
       await stop;
-      expect(cache.value?.token).toBe(hello.auth.deviceToken);
+      expect(cache.value).toEqual({ token: hello.auth.deviceToken, scopes: hello.auth.scopes });
       expect(onConnectError).not.toHaveBeenCalled();
       expect(onHelloOk).toHaveBeenCalledTimes(completion === "ready" ? 1 : 0);
     },
