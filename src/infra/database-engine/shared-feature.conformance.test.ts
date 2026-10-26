@@ -13,7 +13,10 @@ import {
 } from "../../config/io.health-state.kernel.js";
 import { isMissingPluginStateTableError } from "../../plugin-state/plugin-state-store.database.js";
 import { DebugProxyCaptureKernel } from "../../proxy-capture/store.kernel.js";
-import { recordSessionStateEventsInDatabase } from "../../sessions/session-state-events.kernel.js";
+import {
+  pruneSessionStateEventsInDatabase,
+  recordSessionStateEventsInDatabase,
+} from "../../sessions/session-state-events.kernel.js";
 import {
   readAgentProvenanceBatchInDatabase,
   recordAgentProvenanceInDatabase,
@@ -258,6 +261,21 @@ it.skipIf(!connection)(
           { agent_id: "main", last_sequence: batch.rows[2]!.sequence, updated_at: 500 },
           { agent_id: "other", last_sequence: batch.rows[1]!.sequence, updated_at: 400 },
         ]);
+        // Expire events recorded before 450; the watermarks must compare as bigint, not text.
+        runSqliteImmediateTransactionSync(db, () =>
+          pruneSessionStateEventsInDatabase(db, 450 + 30 * 24 * 60 * 60_000),
+        );
+        expect(
+          remote.query(
+            "SELECT agent_id, pruned_max_sequence FROM session_state_heads ORDER BY agent_id",
+          ).rows,
+        ).toEqual([
+          { agent_id: "main", pruned_max_sequence: batch.rows[0]!.sequence },
+          { agent_id: "other", pruned_max_sequence: batch.rows[1]!.sequence },
+        ]);
+        expect(
+          remote.query("SELECT sequence FROM session_state_events ORDER BY sequence").rows,
+        ).toEqual([{ sequence: batch.rows[2]!.sequence }]);
 
         for (const agentId of ["alpha", "beta"]) {
           recordAgentProvenanceInDatabase(db, {
