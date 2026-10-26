@@ -308,7 +308,7 @@ suite.define(() => {
             },
           },
         });
-        await page.locator(".settings-save-indicator--saved").waitFor();
+        await page.getByRole("button", { name: "Apply changes", exact: true }).waitFor();
         await page.reload();
         await gateway.waitForRequest("config.get");
         await expect.poll(() => apiKey.inputValue()).toBe("synthetic-credential");

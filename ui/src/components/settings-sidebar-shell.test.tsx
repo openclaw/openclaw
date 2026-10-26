@@ -84,7 +84,7 @@ async function setup() {
   view.getByText("Save").click();
   await waitForSolid(() => {
     expect(request).toHaveBeenCalledWith("config.set", expect.anything());
-    expect(view.queryByText("Saving…")).not.toBeNull();
+    expect(view.queryByText("Saving…")).toBeNull();
   });
   return {
     view,

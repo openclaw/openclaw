@@ -17,14 +17,10 @@ import { registerSettingsEnglish } from "../i18n/locales/en-settings.ts";
 import type { ConfigAutoSaveStatus } from "../lib/config/config-state-model.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { createTimeout } from "../lib/reactive/timers.ts";
 import { ConfigError } from "./config-error.tsx";
 import { Icon } from "./solid/icon.tsx";
-import { ThemeBrandingIcon } from "./theme-brand-icon.tsx";
 
 registerSettingsEnglish();
-
-const SAVED_VISIBLE_MS = 2_000;
 
 export type SettingsSaveIndicatorProps = {
   status: ConfigAutoSaveStatus | "recovery";
@@ -50,23 +46,6 @@ function IndicatorAction(props: { label: string; busy: boolean; onClick: () => v
     >
       {props.label}
     </button>
-  );
-}
-
-function Claw(props: { saved?: boolean }) {
-  return (
-    <span
-      class={[
-        "settings-save-indicator__claw",
-        {
-          "settings-save-indicator__claw--saved": props.saved,
-          "settings-save-indicator__claw--saving": !props.saved,
-        },
-      ]}
-      aria-hidden="true"
-    >
-      <ThemeBrandingIcon claw={<Icon name="claw" />} />
-    </span>
   );
 }
 
@@ -141,31 +120,18 @@ export function SettingsSaveIndicator(props: SettingsSaveIndicatorProps) {
   const saving = () => presentation().saving();
   const busy = () => saving() || isPending(outcome);
   const status = createMemo(() => (props.saving ? "saving" : props.status));
-  // Only a saving → saved transition starts a fresh display window.
-  type SaveState = SettingsSaveIndicatorProps["status"] | "saved-visible";
-  const [saved, setSaved] = createSignal<SaveState>((previous) =>
-    previous === "saving" && status() === "saved" ? "saved-visible" : status(),
-  );
-  createTimeout(
-    () => setSaved("saved"),
-    () => (saved() === "saved-visible" ? SAVED_VISIBLE_MS : undefined),
-  );
   const state = createMemo(() => {
     const command = presentation().command();
     if ((saving() && command === "apply") || props.applying) {
       return "applying";
     }
-    if (saving() && (command === "save" || command === "retry")) {
-      return "saving";
+    if (saving() || status() === "saving") {
+      return undefined;
     }
-    if (["saving", "recovery", "rejected", "error", "paused", "conflict"].includes(status())) {
+    if (["recovery", "rejected", "error", "paused", "conflict"].includes(status())) {
       return status();
     }
-    return saved() === "saved-visible"
-      ? "saved"
-      : latest(presentation().needsApply)
-        ? "apply"
-        : undefined;
+    return latest(presentation().needsApply) ? "apply" : undefined;
   });
   function Feedback(feedback: { error?: string }) {
     return (
@@ -178,7 +144,6 @@ export function SettingsSaveIndicator(props: SettingsSaveIndicatorProps) {
             ),
             "settings-save-indicator--recovery": state() === "recovery",
             "settings-save-indicator--rejected": state() === "rejected",
-            "settings-save-indicator--saved": state() === "saved",
           },
         ]}
         role="status"
@@ -195,10 +160,6 @@ export function SettingsSaveIndicator(props: SettingsSaveIndicatorProps) {
               <Icon name="loader" />
             </span>
             <span>{t("configView.applying")}</span>
-          </Match>
-          <Match when={state() === "saving"}>
-            <Claw />
-            <span>{t("configView.autoSaveSaving")}</span>
           </Match>
           <Match when={state() === "recovery"}>
             <span>{props.lastError}</span>
@@ -251,13 +212,6 @@ export function SettingsSaveIndicator(props: SettingsSaveIndicatorProps) {
               busy={busy()}
               onClick={() => submit("reload")}
             />
-          </Match>
-          <Match when={state() === "saved"}>
-            <Claw saved />
-            <span class="settings-save-indicator__check" aria-hidden="true">
-              <Icon name="check" />
-            </span>
-            <span>{t("configView.autoSaveSaved")}</span>
           </Match>
           <Match when={state() === "apply"}>
             <button
