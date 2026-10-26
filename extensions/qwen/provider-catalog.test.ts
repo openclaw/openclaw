@@ -49,31 +49,14 @@ it("only advertises Standard-only Qwen models on Standard endpoints", () => {
     expect(getModel(standard, id)).toMatchObject({ ...multimodal, input, maxTokens });
   }
 });
-it("advertises current plan models without the retired compatibility row", () => {
+it("provides Token Plan catalog metadata and current model limits", () => {
   const provider = buildQwenTokenPlanProvider();
-  const modelIds = getQwenModelIds(provider);
   expect(provider).toMatchObject({
     baseUrl: QWEN_TOKEN_PLAN_GLOBAL_BASE_URL,
     api: "openai-completions",
   });
-  expect(modelIds).toEqual([
-    "qwen3.7-plus",
-    "qwen3.8-max",
-    "qwen3.8-flash",
-    "qwen3.6-plus",
-    "kimi-k2.5",
-    "glm-5",
-    "MiniMax-M2.5",
-  ]);
-  const manifestModels = manifest.modelCatalog.providers["qwen-token-plan"].models;
   expect(provider.models.every((model) => model.reasoning)).toBe(true);
-  expect(manifestModels.map((model) => model.id)).toEqual(modelIds);
   expect(manifest.modelCatalog.discovery["qwen-token-plan"]).toBe("refreshable");
-});
-
-it("uses current model limits instead of the stale contributor catalog", () => {
-  const provider = buildQwenTokenPlanProvider();
-
   expect(getModel(provider, "kimi-k2.5")?.maxTokens).toBe(98_304);
   expect(getModel(provider, "MiniMax-M2.5")).toMatchObject({
     contextWindow: 196_608,

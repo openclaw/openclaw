@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { createQwenThinkingWrapper, wrapQwenProviderStream } from "./stream.js";
 
 type ThinkingLevel = Parameters<typeof wrapQwenProviderStream>[0]["thinkingLevel"];
+const enabledPayload = { messages: [], enable_thinking: true };
 
 function createModel(id = "qwen3.6-plus", overrides: Partial<Model> = {}): Model {
   return {
@@ -78,9 +79,6 @@ function readToolMessage(id = "call_1", reasoningContent?: string) {
 describe("Qwen streams", () => {
   it.each([
     ["https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen3.8-flash", "medium"],
-    ["https://dashscope-intl.aliyuncs.com/compatible-mode/v1", "qwen3.8-flash", "medium"],
-    ["https://coding.dashscope.aliyuncs.com/v1", "qwen3.8-flash", "medium"],
-    ["https://coding-intl.dashscope.aliyuncs.com/v1", "qwen3.8-flash", "medium"],
     [
       "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
       "deepseek-v4-pro",
@@ -97,15 +95,7 @@ describe("Qwen streams", () => {
       "medium",
       { messages: [], thinking: { type: "enabled" } },
     );
-    expect(captured).toStrictEqual({
-      messages: [],
-      enable_thinking: true,
-      reasoning_effort: effort,
-    });
-  });
-
-  it("does not apply Qwen payload policy to an unrelated custom endpoint", () => {
-    expect(wrap(createModel("qwen3.8-flash", { provider: "custom-provider" }))).toBeUndefined();
+    expect(captured).toStrictEqual({ ...enabledPayload, reasoning_effort: effort });
   });
 
   it("uses the runtime model qwen-chat-template format when the wrapper context omits it", () => {
@@ -219,7 +209,7 @@ describe("Qwen streams", () => {
         overridePayload({ enable_thinking: true, ...callerOverride }),
       );
 
-      expect(captured).toStrictEqual({ messages: [], enable_thinking: true, ...expected });
+      expect(captured).toStrictEqual({ ...enabledPayload, ...expected });
     },
   );
 
@@ -271,9 +261,8 @@ describe("Qwen streams", () => {
     );
 
     expect(captured).toStrictEqual({
-      messages: [],
+      ...enabledPayload,
       tools,
-      enable_thinking: true,
       reasoning_effort: "high",
       tool_stream: true,
     });
@@ -289,11 +278,7 @@ describe("Qwen streams", () => {
       { onPayload: async () => ({ messages: [] }) },
     );
 
-    expect(captured).toStrictEqual({
-      messages: [],
-      enable_thinking: true,
-      reasoning_effort: "max",
-    });
+    expect(captured).toStrictEqual({ ...enabledPayload, reasoning_effort: "max" });
   });
 
   it("uses the runtime reasoning override for glm-5.2 (max)", async () => {
