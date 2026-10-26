@@ -36,6 +36,7 @@ function entry(
 function setup(
   responses: Array<PluginDiscoveryResult | Promise<PluginDiscoveryResult>>,
   responder?: (method: string, params: unknown) => Promise<unknown>,
+  category?: string,
 ) {
   const request = createGatewayRequestMock(async (method, params) => {
     if (responder) {
@@ -56,6 +57,7 @@ function setup(
     discovery = createPluginDiscovery(
       { getClient: () => client, isConnected: () => true },
       () => {},
+      { category },
     );
     return stop;
   });
@@ -74,6 +76,22 @@ async function settleQuery(
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+it("keeps Appearance search, clear, and refresh scoped to Lobster Packs", async () => {
+  vi.useFakeTimers();
+  const { discovery, request, read } = setup([], async () => ({ items: [] }), "lobster-packs");
+  await discovery.refresh();
+  await settleQuery(discovery, "reef");
+  expect(read().category).toBe("lobster-packs");
+  discovery.updateQuery("");
+  await discovery.refresh();
+  discovery.invalidate();
+  await discovery.refresh();
+  expect(request.mock.calls.length).toBeGreaterThanOrEqual(4);
+  for (const [, params] of request.mock.calls) {
+    expect(params).toMatchObject({ category: "lobster-packs", intent: "all" });
+  }
 });
 
 it("settles empty categories, deduplicates warm loads, and retries errors explicitly", async () => {

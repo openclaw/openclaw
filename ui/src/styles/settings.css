@@ -1643,3 +1643,71 @@ openclaw-settings-save-indicator:empty {
   font-variant-numeric: tabular-nums;
   color: var(--muted);
 }
+
+.settings-theme-discovery {
+  padding: 12px 16px;
+}
+
+.settings-appearance-discovery {
+  padding: 12px 16px;
+}
+
+.settings-appearance-discovery > h3 {
+  margin: 0 0 12px;
+}
+
+.settings-appearance-discovery__links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.settings-theme-discovery__panel {
+  display: grid;
+  gap: 12px;
+  padding-top: 16px;
+}
+
+.settings-theme-discovery__panel h3,
+.settings-theme-discovery__panel p {
+  margin: 0;
+}
+
+.settings-theme-discovery__search,
+.settings-theme-discovery__installed {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.settings-theme-discovery__search input {
+  flex: 1;
+  min-width: 0;
+}
+
+.settings-theme-discovery__results {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  gap: 12px;
+}
+
+.settings-theme-discovery__card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 16px;
+  background: var(--bg);
+  overflow-wrap: anywhere;
+}
+
+.settings-theme-discovery__card p {
+  margin-top: 8px;
+}
+
+.settings-theme-discovery__installed {
+  justify-content: space-between;
+}

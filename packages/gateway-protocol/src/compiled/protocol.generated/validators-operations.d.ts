@@ -131,6 +131,9 @@ export {
   isThemesGetParams,
   isThemesSetParams,
   isThemesImportParams,
+  isThemesBrowseParams,
+  isThemesInstallParams,
+  isThemesRemoveParams,
   isCatalogBrowseParams,
   isCatalogSearchKeywordsParams,
 } from "./predicates.js";

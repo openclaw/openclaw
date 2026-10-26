@@ -169,6 +169,28 @@ Docs translations are generated for the same non-English locale set, including S
 
 ## Appearance themes
 
+**Explore Appearance** groups **Themes** and **Lobster Packs** in the same
+settings area. Themes are data-only profile preferences. Lobster Packs remain
+plugin packages: review a pack's details and install through the existing plugin
+controls, or choose **Manage pack** for an installed one. **View in LobsterDex**
+opens the collection without moving or copying its browser-local history.
+Browsing or installing a pack does not record a character encounter.
+
+Use **Settings → Appearance → Browse and manage themes** to find themes on
+ClawHub, search by name, and choose **Install and apply**. Theme discovery stays
+in Appearance; themes do not appear in the general ClawHub or Plugins listings.
+Installed personal themes join the existing theme grid, where you can switch
+between them and built-in themes. Remove a personal theme from the same panel;
+removing the active theme restores the Gateway default. Selection and imported
+definitions are saved to your authenticated profile.
+
+ClawHub themes are data-only JSON using the existing OpenClaw theme format:
+complete light and/or dark palettes, local font-family names, and optional
+built-in branding choices. Installing a theme does not install or execute a
+plugin. This first version does not accept external stylesheets, scripts, or
+custom artwork; existing plugin artwork and the browser-local tweakcn importer
+continue to work unchanged.
+
 Ask the agent to list themes, choose one by name or description, or design and apply a new theme. The `theme` tool uses the same catalog and profile selection as Appearance. Plugin themes and agent-created personal themes appear alongside built-ins with their names and descriptions. Profile theme changes reach connected browsers live; plugin theme additions, updates, and removals take effect after plugin hot reload without restarting the Gateway or reloading the browser. If a selected plugin theme becomes unavailable, Claw renders temporarily and the selection returns when the theme is available again. A loading error in Appearance offers **Retry** to refresh the catalog and palette.
 
 Personal theme definitions are saved to your authenticated Gateway profile. Existing browser-local tweakcn imports remain local and are never uploaded automatically. The agent reports a selection as saved; a browser that is offline applies it when it next connects. Reconnecting preserves your pending local choices while refreshing other appearance preferences from your profile. A theme that supplies only one color mode uses that mode even when the preference is System. Explicit accent and font overrides continue to take precedence over the theme.

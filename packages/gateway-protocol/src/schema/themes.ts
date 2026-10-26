@@ -84,6 +84,57 @@ export const ThemesImportParamsSchema = closedObject({
   mode: Type.Optional(ThemeModeSchema),
 });
 
+export const CLAWHUB_THEME_PAGE_SIZE = 24;
+export const CLAWHUB_THEME_MAX_PAGE_SIZE = 48;
+const RegistryThemeId = Type.String({
+  maxLength: 105,
+  pattern: "^[a-z0-9](?:[a-z0-9._-]{0,38}[a-z0-9])?/[a-z0-9][a-z0-9_-]{0,63}$",
+});
+const RegistryThemeVersion = Type.String({
+  minLength: 1,
+  maxLength: 64,
+  pattern: "^[a-zA-Z0-9][a-zA-Z0-9._+-]*$",
+});
+const RegistryThemeCursor = Type.String({ minLength: 1, maxLength: 4096 });
+export const ThemesBrowseParamsSchema = closedObject({
+  query: Type.Optional(Type.String({ maxLength: 200 })),
+  cursor: Type.Optional(RegistryThemeCursor),
+  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: CLAWHUB_THEME_MAX_PAGE_SIZE })),
+});
+export const ThemesInstallParamsSchema = closedObject({
+  id: RegistryThemeId,
+  version: RegistryThemeVersion,
+});
+export const ThemesRemoveParamsSchema = closedObject({
+  id: Type.String({ maxLength: 69, pattern: "^user/[a-z0-9][a-z0-9_-]{0,63}$" }),
+});
+export const ThemeSummarySchema = closedObject({
+  id: RegistryThemeId,
+  name: Type.String({ minLength: 1, maxLength: THEME_NAME_MAX_LENGTH }),
+  description: Type.String({ minLength: 1, maxLength: THEME_DESCRIPTION_MAX_LENGTH }),
+  version: RegistryThemeVersion,
+  category: Type.Literal("themes"),
+  author: closedObject({ handle: Type.String({ minLength: 1, maxLength: 64 }) }),
+  updatedAt: Type.Integer({ minimum: 0 }),
+});
+export const ThemesBrowseResultSchema = closedObject({
+  items: Type.Array(ThemeSummarySchema, { maxItems: CLAWHUB_THEME_MAX_PAGE_SIZE }),
+  nextCursor: Type.Union([RegistryThemeCursor, Type.Null()]),
+});
+export const ThemeReleaseSchema = closedObject({
+  ...ThemeSummarySchema.properties,
+  definition: ThemeDefinitionSchema,
+  sha256: Type.String({ pattern: "^[a-f0-9]{64}$" }),
+});
+export const ThemeReleaseResultSchema = closedObject({ item: ThemeReleaseSchema });
+
+export type ThemesBrowseParams = Static<typeof ThemesBrowseParamsSchema>;
+export type ThemesInstallParams = Static<typeof ThemesInstallParamsSchema>;
+export type ThemesRemoveParams = Static<typeof ThemesRemoveParamsSchema>;
+export type ThemeSummary = Static<typeof ThemeSummarySchema>;
+export type ThemeRelease = Static<typeof ThemeReleaseSchema>;
+export type ThemesBrowseResult = Static<typeof ThemesBrowseResultSchema>;
+
 export type ThemesListParams = Static<typeof ThemesListParamsSchema>;
 export type ThemesGetParams = Static<typeof ThemesGetParamsSchema>;
 export type ThemesSetParams = Static<typeof ThemesSetParamsSchema>;

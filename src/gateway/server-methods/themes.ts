@@ -5,6 +5,10 @@ import {
   validateThemesGetParams,
   validateThemesSetParams,
   validateThemesImportParams,
+  validateThemesBrowseParams,
+  validateThemesInstallParams,
+  validateThemesRemoveParams,
+  type ThemesMutationResult,
   type ThemesGetResult,
   type ThemeSelection,
 } from "../../../packages/gateway-protocol/src/index.js";
@@ -19,6 +23,7 @@ import {
   normalizeThemeMode,
   parseThemeDefinition,
   THEME_LOCAL_ID_PATTERN,
+  type ThemeDefinition,
   type ThemeCatalogEntry,
   type ThemeDescriptor,
   type ThemeColorMode,
@@ -30,6 +35,11 @@ import {
   resolveGatewayPersonalToolParticipant,
 } from "../../agents/tools/gateway-caller-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  browseClawHubThemes,
+  getClawHubThemeRelease,
+  clawHubThemeLocalId,
+} from "../../infra/clawhub-themes.js";
 import { listPluginThemes } from "../../plugins/theme-catalog.js";
 import {
   getCanonicalUserPreferences,
@@ -215,6 +225,62 @@ async function writeThemes(
   publishUserPreferencesChanged(options.context, written.value.profileId, Object.keys(entries));
 }
 
+async function savePersonalTheme(
+  options: ThemeRequest,
+  owner: ReturnType<typeof requestOwner>,
+  {
+    id,
+    definition,
+    apply,
+    mode,
+    resetAppearance,
+  }: {
+    id: string;
+    definition: ThemeDefinition;
+    apply?: boolean;
+    mode?: ThemeMode;
+    resetAppearance?: boolean;
+  },
+): Promise<ThemesMutationResult> {
+  const snapshot = await readThemes(options, owner);
+  const current = snapshot.result.current;
+  const appearance =
+    resetAppearance && current.id !== `user/${id}`
+      ? { "ui.accent": "theme", "ui.fontUi": null, "ui.fontChat": null }
+      : {};
+  const affectsSelection = apply || (current.requestedId ?? current.id) === `user/${id}`;
+  const nextMode = affectsSelection
+    ? selectionMode(
+        (["light", "dark"] as const).filter((palette) => Boolean(definition[palette])),
+        mode,
+        current.mode,
+        normalizeThemeMode(options.context.getRuntimeConfig().ui?.prefs?.themeMode) ?? "system",
+      )
+    : undefined;
+  await writeThemes(
+    options,
+    owner,
+    {
+      ...appearance,
+      [`${DEFINITION_PREFIX}${id}`]: definition,
+      ...(apply ? { "ui.theme": `user/${id}` } : {}),
+      ...(nextMode !== undefined ? { "ui.themeMode": nextMode } : {}),
+    },
+    {
+      ...Object.fromEntries(
+        Object.keys(appearance).map((key) => [key, snapshot.entries[key] ?? null]),
+      ),
+      "ui.theme": snapshot.entries["ui.theme"] ?? null,
+      "ui.themeMode": snapshot.entries["ui.themeMode"] ?? null,
+    },
+  );
+
+  return {
+    ...(await readThemes(options, owner, `user/${id}`)).result,
+    application: "saved",
+  };
+}
+
 function themeError(error: unknown) {
   return errorShape(
     ErrorCodes.INVALID_REQUEST,
@@ -223,6 +289,72 @@ function themeError(error: unknown) {
 }
 
 export const themeHandlers: GatewayRequestHandlers = {
+  "themes.browse": defineValidatedGatewayMethod(
+    "themes.browse",
+    validateThemesBrowseParams,
+    async (options) => {
+      const owner = requestOwner(options);
+      const result = await browseClawHubThemes(options.params);
+      owner.assertCurrent();
+      options.respond(true, result);
+    },
+    themeError,
+  ),
+  "themes.install": defineValidatedGatewayMethod(
+    "themes.install",
+    validateThemesInstallParams,
+    async (options) => {
+      const owner = requestOwner(options);
+      if (!owner.profileId) {
+        throw new Error(
+          "Installing themes requires your authenticated profile. Sign in to the Control UI.",
+        );
+      }
+      const release = await getClawHubThemeRelease(options.params);
+      owner.assertCurrent();
+      options.respond(
+        true,
+        await savePersonalTheme(options, owner, {
+          id: clawHubThemeLocalId(release.id),
+          definition: release.definition,
+          apply: true,
+          resetAppearance: true,
+        }),
+      );
+    },
+    themeError,
+  ),
+  "themes.remove": defineValidatedGatewayMethod(
+    "themes.remove",
+    validateThemesRemoveParams,
+    async (options) => {
+      const owner = requestOwner(options);
+      const { id } = options.params;
+      const snapshot = await readThemes(options, owner);
+      const theme = snapshot.catalog.find((entry) => entry.id === id);
+      if (!theme || theme.source !== "user") {
+        throw new Error("Only an installed personal theme can be removed.");
+      }
+      const key = DEFINITION_PREFIX + id.slice("user/".length);
+      const current = snapshot.result.current;
+      const selected = (current.requestedId ?? current.id) === id;
+      await writeThemes(
+        options,
+        owner,
+        {
+          [key]: null,
+          ...(selected ? { "ui.theme": null, "ui.themeMode": null } : {}),
+        },
+        {
+          [key]: snapshot.entries[key] ?? null,
+          "ui.theme": snapshot.entries["ui.theme"] ?? null,
+          ...(selected ? { "ui.themeMode": snapshot.entries["ui.themeMode"] ?? null } : {}),
+        },
+      );
+      options.respond(true, { ...(await readThemes(options, owner)).result, application: "saved" });
+    },
+    themeError,
+  ),
   "themes.list": defineValidatedGatewayMethod(
     "themes.list",
     validateThemesListParams,
@@ -320,34 +452,10 @@ export const themeHandlers: GatewayRequestHandlers = {
       if (mode && !apply) {
         throw new Error("Use apply: true when importing with a mode.");
       }
-      const snapshot = await readThemes(options, owner);
-      const current = snapshot.result.current;
-      const affectsSelection = apply || (current.requestedId ?? current.id) === `user/${id}`;
-      const nextMode = affectsSelection
-        ? selectionMode(
-            (["light", "dark"] as const).filter((palette) => Boolean(definition[palette])),
-            mode,
-            current.mode,
-            normalizeThemeMode(options.context.getRuntimeConfig().ui?.prefs?.themeMode) ?? "system",
-          )
-        : undefined;
-      await writeThemes(
-        options,
-        owner,
-        {
-          [`${DEFINITION_PREFIX}${id}`]: definition,
-          ...(apply ? { "ui.theme": `user/${id}` } : {}),
-          ...(nextMode !== undefined ? { "ui.themeMode": nextMode } : {}),
-        },
-        {
-          "ui.theme": snapshot.entries["ui.theme"] ?? null,
-          "ui.themeMode": snapshot.entries["ui.themeMode"] ?? null,
-        },
+      options.respond(
+        true,
+        await savePersonalTheme(options, owner, { id, definition, apply, mode }),
       );
-      options.respond(true, {
-        ...(await readThemes(options, owner, `user/${id}`)).result,
-        application: "saved",
-      });
     },
     themeError,
   ),

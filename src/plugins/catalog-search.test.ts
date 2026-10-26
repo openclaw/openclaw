@@ -61,6 +61,21 @@ describe("plugin catalog search", () => {
     expect(results[0]?.package.family).toBe("bundle-plugin");
   });
 
+  it("omits theme packages from the legacy plugin search", async () => {
+    const theme = searchResult("studio/theme", "bundle-plugin", 10);
+    mocks.searchClawHubPackages
+      .mockResolvedValueOnce([
+        { ...theme, package: { ...theme.package, categories: ["themes"] } },
+        searchResult("studio/tool", "code-plugin", 1),
+      ])
+      .mockResolvedValueOnce([]);
+    expect(
+      (await searchInstallablePluginPackages({ query: "studio" })).map(
+        (entry) => entry.package.name,
+      ),
+    ).toEqual(["studio/tool"]);
+  });
+
   it("uses the default limit for invalid programmatic values", async () => {
     mocks.searchClawHubPackages.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
 

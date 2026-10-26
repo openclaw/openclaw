@@ -70,6 +70,55 @@ function joinDetail(remote: Awaited<ReturnType<typeof fetchClawHubPluginDetail>>
 
 afterEach(() => vi.restoreAllMocks());
 
+it.each(["browse", "search", "overview"] as const)(
+  "keeps theme packages out of general plugin %s responses",
+  async (mode) => {
+    const theme = { ...remotePlugin, name: "theme", categories: ["themes", "media"] };
+    const themeCategory = { ...remoteCategory, slug: "themes", label: "Themes", order: 2 };
+    const items = [theme, remotePlugin];
+    mockResponse({
+      items,
+      results: items.map((pkg) => ({ package: pkg })),
+      categories: [remoteCategory, themeCategory],
+      nextCursor: "next",
+    });
+    const result =
+      mode === "overview"
+        ? await fetchClawHubPluginOverview(registry)
+        : await fetchClawHubPluginCatalog({
+            ...registry,
+            ...(mode === "search" ? { query: "theme" } : {}),
+          });
+    expect(result.items.map((item) => item.packageName)).toEqual(["memory-plus"]);
+    if (mode !== "search") {
+      expect(result.categories).toEqual([remoteCategory]);
+    }
+    if (mode === "browse") {
+      expect(result).toHaveProperty("nextCursor", "next");
+    }
+  },
+);
+
+it.each([undefined, "theme"])(
+  "does not request general plugin discovery for category=themes (query=%s)",
+  async (query) => {
+    const fetchImpl = vi.spyOn(globalThis, "fetch");
+    await expect(
+      fetchClawHubPluginCatalog({ ...registry, category: "themes", query }),
+    ).resolves.toEqual({ items: [] });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  },
+);
+
+it("omits Themes from the general plugin category picker", async () => {
+  expect(
+    await readCategories([
+      remoteCategory,
+      { ...remoteCategory, slug: "themes", label: "Themes", order: 2 },
+    ]),
+  ).toEqual([remoteCategory]);
+});
+
 it.each([false, true])(
   "attributes searches and retries only unrecorded requests: telemetry disabled=%s",
   async (disabled) => {

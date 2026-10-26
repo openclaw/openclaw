@@ -1738,6 +1738,21 @@ export function isThemesImportParams(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").ThemesImportParamsSchema
 >;
+export function isThemesBrowseParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").ThemesBrowseParamsSchema
+>;
+export function isThemesInstallParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").ThemesInstallParamsSchema
+>;
+export function isThemesRemoveParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").ThemesRemoveParamsSchema
+>;
 export function isCatalogBrowseParams(
   value: unknown,
 ): value is import("typebox").Static<

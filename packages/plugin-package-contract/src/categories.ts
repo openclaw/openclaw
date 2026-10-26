@@ -1,4 +1,4 @@
-/** Active browse taxonomy, ordered with the core configuration surfaces first. */
+/** Active package taxonomy, ordered with the core configuration surfaces first. */
 export const PLUGIN_CATEGORY_SLUGS = [
   "channels",
   "models",
@@ -9,6 +9,7 @@ export const PLUGIN_CATEGORY_SLUGS = [
   "web",
   "computer-use",
   "media",
+  "lobster-packs",
   "security",
   "integrations",
   "developer-tools",
@@ -22,6 +23,7 @@ export const PLUGIN_CATEGORY_SLUGS = [
   "data-analytics",
   "agent-orchestration",
   "research",
+  "themes",
   "other",
 ] as const;
 

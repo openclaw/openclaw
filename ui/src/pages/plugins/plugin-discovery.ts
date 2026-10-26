@@ -69,7 +69,11 @@ function rankedOverviewShelf(
     .slice(0, CATALOG_SECTION_SIZE);
 }
 
-export function createPluginDiscovery(gateway: PluginDiscoveryGateway, onChange: () => void) {
+export function createPluginDiscovery(
+  gateway: PluginDiscoveryGateway,
+  onChange: () => void,
+  options: { category?: string } = {},
+) {
   let overview: CatalogPageLoad | null = null;
   let resultSelection: CatalogPageLoad["selection"] | null = null;
   let categoriesReady = false;
@@ -97,7 +101,7 @@ export function createPluginDiscovery(gateway: PluginDiscoveryGateway, onChange:
     trending: [],
     loadMoreError: null,
     intent: "all",
-    category: null,
+    category: options.category ?? null,
     query: "",
     get reads() {
       return {
@@ -318,23 +322,26 @@ export function createPluginDiscovery(gateway: PluginDiscoveryGateway, onChange:
   }
 
   function selectIntent(intent: PluginDiscoveryIntent): Promise<void> {
-    state.intent = intent;
-    state.category = null;
+    state.intent = options.category ? "all" : intent;
+    state.category = options.category ?? null;
     return loadSelection();
   }
 
   function selectCategory(category: string | null): Promise<void> {
     state.intent = "all";
-    state.category = category;
+    state.category = options.category ?? category;
     return loadSelection();
   }
 
   function updateQuery(query: string): void {
     const previousQuery = state.query.trim();
     const nextQuery = query.trim();
-    const resetFilters = Boolean(nextQuery) && (state.intent !== "all" || state.category !== null);
+    const resetFilters =
+      !options.category &&
+      Boolean(nextQuery) &&
+      (state.intent !== "all" || state.category !== null);
     state.query = query;
-    if (nextQuery) {
+    if (nextQuery && !options.category) {
       state.intent = "all";
       state.category = null;
     }

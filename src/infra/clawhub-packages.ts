@@ -161,6 +161,7 @@ type ClawHubClawManifestSummary = {
   cronJobCount: number;
 };
 export type ClawHubPackageListItem = {
+  categories?: string[];
   name: string;
   displayName: string;
   family: ClawHubPackageFamily;
