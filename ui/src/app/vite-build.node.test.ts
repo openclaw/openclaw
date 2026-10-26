@@ -28,6 +28,8 @@ let root: string;
 let outDir: string;
 const info = vi.fn<(message: string) => void>();
 const writeRoot = (file: string, source: string) => fs.writeFile(path.join(root, file), source);
+const writeFiles = (files: Record<string, string>) =>
+  Promise.all(Object.entries(files).map(([file, source]) => writeRoot(file, source)));
 const readOutput = (file: string) => fs.readFile(path.join(outDir, file), "utf8");
 const readAsset = (file: string) => readOutput(`assets/${file}`);
 const assetNames = () => fs.readdir(path.join(outDir, "assets"));
@@ -121,13 +123,13 @@ function createConfig(level: "info" | "silent" = "silent"): InlineConfig {
 beforeEach(async () => {
   root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "control-ui-vite-build-")));
   outDir = path.join(root, "dist");
-  await writeRoot(
-    "index.html",
-    '<script>globalThis.fixtureBooted = true;</script><button>Load</button><script type="module" src="./main.js"></script>',
-  );
-  await writeRoot("main.js", 'globalThis.load = () => import("./lazy.js");');
-  await writeRoot("lazy.js", 'import "./lazy.css"; export const message = "Lazy content loaded";');
-  await writeRoot("lazy.css", "body { color: green; }");
+  await writeFiles({
+    "index.html":
+      '<script>globalThis.fixtureBooted = true;</script><button>Load</button><script type="module" src="./main.js"></script>',
+    "main.js": 'globalThis.load = () => import("./lazy.js");',
+    "lazy.js": 'import "./lazy.css"; export const message = "Lazy content loaded";',
+    "lazy.css": "body { color: green; }",
+  });
 });
 
 afterEach(async () => {
@@ -138,20 +140,16 @@ afterEach(async () => {
 
 it("omits already imported JavaScript from lazy preload tables, retaining lazy JS and CSS", async () => {
   const config = createConfig();
-  await writeRoot(
-    "main.js",
-    'import { shared } from "./shared.js"; globalThis.shared = shared; globalThis.load = () => import("./lazy.js"); globalThis.loadPlain = () => import("./plain.js");',
-  );
-  await writeRoot("shared.js", 'export const shared = "shared";');
-  await writeRoot("lazy-only.js", 'export const lazy = "lazy-only";');
-  await writeRoot(
-    "plain.js",
-    'import { lazy } from "./lazy-only.js"; export const message = "No stylesheet wait" + lazy;',
-  );
-  await writeRoot(
-    "lazy.js",
-    'import { shared } from "./shared.js"; import { lazy } from "./lazy-only.js"; import "./lazy.css"; export const message = shared + lazy;',
-  );
+  await writeFiles({
+    "main.js":
+      'import { shared } from "./shared.js"; globalThis.shared = shared; globalThis.load = () => import("./lazy.js"); globalThis.loadPlain = () => import("./plain.js");',
+    "shared.js": 'export const shared = "shared";',
+    "lazy-only.js": 'export const lazy = "lazy-only";',
+    "plain.js":
+      'import { lazy } from "./lazy-only.js"; export const message = "No stylesheet wait" + lazy;',
+    "lazy.js":
+      'import { shared } from "./shared.js"; import { lazy } from "./lazy-only.js"; import "./lazy.css"; export const message = shared + lazy;',
+  });
   setOutput(config, {
     codeSplitting: {
       groups: ["shared", "lazy-only"].map((name) => ({
@@ -164,7 +162,6 @@ it("omits already imported JavaScript from lazy preload tables, retaining lazy J
   const entryName = names.find((name) => /^index-.*\.js$/u.test(name))!;
   const entry = await readAsset(entryName);
   const table = /^const __vite__mapDeps=.*$/mu.exec(entry)?.[0];
-  expect(table).toBeDefined();
   const sharedName = names.find((name) => /^shared-.*\.js$/u.test(name))!;
   const lazyName = names.find((name) => /^lazy-only-.*\.js$/u.test(name))!;
   const plainName = names.find((name) => /^plain-.*\.js$/u.test(name))!;
