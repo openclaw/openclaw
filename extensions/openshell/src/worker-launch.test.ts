@@ -23,7 +23,10 @@ console.log(JSON.stringify({args, target, placeholder: process.env.OPENAI_API_KE
     const worker = resolveOpenShellPluginConfig({ worker: createWorkerFixture() }).worker!;
     worker.nodeCommand = executable;
     worker.stateDir = path.join(home, "node-state");
+    const pairingFile = path.join(worker.stateDir, "pairing-target");
     const brokerCredential = "openshell:resolve:env:synthetic-opaque-reference";
+    const expectMissing = (file: string) =>
+      expect(fs.stat(file)).rejects.toMatchObject({ code: "ENOENT" });
     const invoke = (credential?: string, target?: string) =>
       runUtf8CommandWithTimeout(
         [
@@ -50,17 +53,12 @@ console.log(JSON.stringify({args, target, placeholder: process.env.OPENAI_API_KE
       const rejected = await invoke(credential, "synthetic-pairing-target");
       expect(rejected).toMatchObject({ code: 1, stdout: "" });
       expect(rejected.stderr).toContain("broker placeholder");
-      await expect(fs.stat(worker.stateDir)).rejects.toMatchObject({ code: "ENOENT" });
+      await expectMissing(worker.stateDir);
     }
     const result = await invoke(brokerCredential, "synthetic-pairing-target");
     expect(result.code, result.stderr).toBe(0);
     const received = JSON.parse(result.stdout);
-    expect(received.args).toEqual([
-      "connect",
-      "--target-file",
-      path.join(worker.stateDir, "pairing-target"),
-      "--session-host",
-    ]);
+    expect(received.args).toEqual(["connect", "--target-file", pairingFile, "--session-host"]);
     expect(received).toMatchObject({
       target: "synthetic-pairing-target",
       placeholder: true,
@@ -70,9 +68,7 @@ console.log(JSON.stringify({args, target, placeholder: process.env.OPENAI_API_KE
     expect(received.config.models.providers.openai.apiKey).toBe("${OPENAI_API_KEY}");
     expect(received.config.nodeHost.workerRuns).toEqual({ enabled: true, isolation: "none" });
     expect(received.config.models.providers.openai.models[0]).not.toHaveProperty("credentialEnv");
-    await expect(fs.stat(path.join(worker.stateDir, "pairing-target"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    await expectMissing(pairingFile);
     const resumed = await invoke("openshell:resolve:env:synthetic-new-reference");
     expect(resumed.code, resumed.stderr).toBe(0);
     expect(JSON.parse(resumed.stdout).args).toEqual(["node", "run", "--session-host"]);
@@ -82,7 +78,7 @@ console.log(JSON.stringify({args, target, placeholder: process.env.OPENAI_API_KE
     const absent = await invoke(brokerCredential);
     expect(absent.code).toBe(1);
     expect(absent.stderr).toContain("Prepare the canonical agent workspace");
-    await expect(fs.stat(worker.stateDir)).rejects.toMatchObject({ code: "ENOENT" });
+    await expectMissing(worker.stateDir);
     await fs.mkdir(worker.agentWorkspace.remoteRoot, { mode: 0o700 });
     const document = path.join(worker.agentWorkspace.remoteRoot, "AGENTS.md");
     await fs.writeFile(document, "Preserve these remote instructions");

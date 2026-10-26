@@ -15,7 +15,7 @@ it.each<[string, string[]]>([
   [" 198.51.100.42 ", ["198.51.100.42/32"]],
 ])("host policy preserves IP override %j, endpoint and binary", (hostIp, allowedIps) => {
   const yaml = buildOpenShellPolicyYaml({ port: 17680, binaryPath: "/usr/bin/curl", hostIp });
-  const hostEcho = {
+  expect(parse(yaml).network_policies.host_echo).toMatchObject({
     endpoints: [
       {
         host: "host.openshell.internal",
@@ -27,8 +27,7 @@ it.each<[string, string[]]>([
       },
     ],
     binaries: [{ path: "/usr/bin/curl" }],
-  };
-  expect(parse(yaml)).toMatchObject({ network_policies: { host_echo: hostEcho } });
+  });
 });
 
 it.runIf(process.platform !== "win32")("reports a signal-killed probe as failure", async () => {
