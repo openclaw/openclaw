@@ -13,20 +13,26 @@ it.each([
   "delivers explicit commentary once through Gateway and ACP (preview: %s, separator: %j)",
   async (batchedPreview, separator, expected) => {
     const acp = createPromptScenario({ send: () => ({}) });
-    const { result: prompt, sent } = acp.start();
-    const runId = await sent;
+    const pending = acp.start();
+    const runId = await pending.sent;
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const gateway = createAgentEventTestHarness();
     gateway.register(runId, acp.sessionKey, runId);
-    const unsubscribe = subscribeAgentEvents((event) => {
-      if (event.runId === runId) {
-        return gateway.handler(event);
-      }
-    });
+    const unsubscribe = subscribeAgentEvents((event) =>
+      event.runId === runId ? gateway.handler(event) : undefined,
+    );
     const source = createSubscribedSessionHarness({ runId });
     const message = makeAgentAssistantMessage({ api: "openai-completions", content: [] });
-    const signature = (index: number) =>
-      JSON.stringify({ v: 1, id: `commentary-${index}`, phase: "commentary" });
+    const narrations = [
+      "Checking files.",
+      `${separator}Reading config.`,
+      `${separator}Checking files.`,
+    ];
+    const blocks = narrations.map((text, index) => ({
+      type: "text" as const,
+      text,
+      textSignature: JSON.stringify({ v: 1, id: `commentary-${index}`, phase: "commentary" }),
+    }));
     const emitText = (contentIndex: number, text: string, final = false) => {
       const partial = { contentIndex, partial: message };
       source.emit({
@@ -48,32 +54,19 @@ it.each([
     };
     try {
       source.emit({ type: "message_start", message });
-      const narrations = [
-        "Checking files.",
-        `${separator}Reading config.`,
-        `${separator}Checking files.`,
-      ];
       if (batchedPreview) {
         for (const [contentIndex, text] of narrations.entries()) {
           message.content.push({ type: "text", text });
           emitText(contentIndex, text);
           await deliver();
         }
-        for (const [index, block] of message.content.entries()) {
-          if (block.type === "text") {
-            block.textSignature = signature(index);
-          }
-        }
+        message.content.splice(0, blocks.length, ...blocks);
       }
-      for (const [index, text] of narrations.entries()) {
+      for (const [index, block] of blocks.entries()) {
         if (!batchedPreview) {
-          message.content.push({
-            type: "text",
-            text,
-            textSignature: signature(index),
-          });
+          message.content.push(block);
         }
-        emitText(batchedPreview ? index : message.content.length - 1, text, true);
+        emitText(batchedPreview ? index : message.content.length - 1, block.text, true);
         await deliver();
         message.content.push({
           type: "toolCall",
@@ -84,17 +77,9 @@ it.each([
       }
       source.emit({ type: "message_end", message });
       await deliver();
-      await acp.agent.handleGatewayEvent({
-        type: "event",
-        event: "chat",
-        payload: {
-          runId,
-          sessionKey: acp.sessionKey,
-          state: "final",
-          message: { role: "assistant", content: [{ type: "text", text: "Done." }] },
-        },
+      await acp.finish(pending, {
+        message: { role: "assistant", content: [{ type: "text", text: "Done." }] },
       });
-      await prompt;
       expect(
         acp.sessionUpdate.mock.calls
           .flatMap(([{ update }]) => {

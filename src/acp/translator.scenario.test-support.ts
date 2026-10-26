@@ -3,7 +3,6 @@ import { expect, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { GatewayClient } from "../gateway/client.js";
 import { createPromptRequest } from "./translator.bridge-test-helpers.js";
-import type { AcpGatewayAgent } from "./translator.js";
 import {
   createAcpConnection,
   createAcpGateway,
@@ -49,15 +48,6 @@ export function expectSingleCall(
   expect(source.mock.calls).toMatchObject([[fields]]);
 }
 
-function observeSettlement(promise: ReturnType<AcpGatewayAgent["prompt"]>) {
-  const settleSpy = vi.fn();
-  void promise.then(
-    (value) => settleSpy({ kind: "resolve", value }),
-    (error: unknown) => settleSpy({ kind: "reject", error }),
-  );
-  return settleSpy;
-}
-
 export function createPromptScenario({
   send = () => new Promise<never>(() => {}),
   request: handleRequest = () => ({}),
@@ -84,14 +74,19 @@ export function createPromptScenario({
   const h = createTranslatorScenario(request, options);
   const prompt = (sessionId = "session-1", text = "hello") =>
     h.agent.prompt(createPromptRequest(sessionId, text));
-  const start = (sessionId = "session-1", text = "hello") => {
+  const start = (...args: Parameters<typeof prompt>) => {
     const sent = nextSend.promise;
-    const result = prompt(sessionId, text);
-    return { result, sent, settlement: observeSettlement(result) };
+    const result = prompt(...args);
+    const settlement = vi.fn();
+    void result.then(
+      (value) => settlement({ kind: "resolve", value }),
+      (error: unknown) => settlement({ kind: "reject", error }),
+    );
+    return { result, sent, settlement };
   };
-  const active = async (sessionId = "session-1", text = "hello") => {
+  const active = async (...args: Parameters<typeof prompt>) => {
     const before = runIds.length;
-    const pending = start(sessionId, text);
+    const pending = start(...args);
     await vi.waitFor(() => expect(runIds).toHaveLength(before + 1));
     return { ...pending, runId: await pending.sent };
   };
