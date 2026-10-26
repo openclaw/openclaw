@@ -60,13 +60,13 @@ describe("AcpTranslatorSessionUpdates", () => {
     await updates.startLedgerSession({ ...session, cwd: "/tmp" }, { complete: true });
     await updates.recordUserPrompt(session, "run-1", []);
     await updates.emit(emission);
-    await expect(updates.readLedgerReplay(session)).resolves.toEqual(emptyReplay);
-    await expect(updates.readLedgerReplayBySessionId(session.sessionId)).resolves.toEqual(
-      emptyReplay,
-    );
-    await expect(updates.readLedgerReplayBySessionKey(session.sessionKey)).resolves.toEqual(
-      emptyReplay,
-    );
+    expect(
+      await Promise.all([
+        updates.readLedgerReplay(session),
+        updates.readLedgerReplayBySessionId(session.sessionId),
+        updates.readLedgerReplayBySessionKey(session.sessionKey),
+      ]),
+    ).toEqual([emptyReplay, emptyReplay, emptyReplay]);
     expect(sessionUpdate).not.toHaveBeenCalled();
     for (const method of Object.values(ledger)) {
       expect(method).not.toHaveBeenCalled();
@@ -81,17 +81,11 @@ describe("AcpTranslatorSessionUpdates", () => {
       const { updates, ledger } = harness();
       const firstUpdate = textUpdate("first");
       const secondUpdate = textUpdate("second");
-      ledger.recordUpdate.mockImplementation(async ({ update: recordedUpdate }) => {
-        if (
-          recordedUpdate.sessionUpdate === "agent_message_chunk" &&
-          recordedUpdate.content.type === "text" &&
-          recordedUpdate.content.text === "first"
-        ) {
-          writing.resolve();
-          await release.promise;
-          if (firstFails) {
-            throw new Error("ledger write failed during shutdown");
-          }
+      ledger.recordUpdate.mockImplementationOnce(async () => {
+        writing.resolve();
+        await release.promise;
+        if (firstFails) {
+          throw new Error("ledger write failed during shutdown");
         }
       });
       const first = updates.emit({ ...emission, update: firstUpdate });
@@ -108,10 +102,7 @@ describe("AcpTranslatorSessionUpdates", () => {
           firstUpdate,
           secondUpdate,
         ]);
-        expect(ledger.markIncomplete).toHaveBeenCalledTimes(firstFails ? 1 : 0);
-        if (firstFails) {
-          expect(ledger.markIncomplete).toHaveBeenCalledWith(session);
-        }
+        expect(ledger.markIncomplete.mock.calls).toEqual(firstFails ? [[session]] : []);
       } finally {
         release.resolve();
         await Promise.allSettled([first, second, closing]);

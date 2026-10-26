@@ -5,31 +5,28 @@ import { AcpSessionNewOrdering } from "./session-new-ordering.js";
 type Step = { inbound: AnyMessage } | AnyMessage;
 
 /** Observes inbound traffic synchronously before dispatch, as serveAcpGateway does. */
-async function runSteps(steps: Step[]): Promise<AnyMessage[]> {
+function runSteps(steps: Step[]): AnyMessage[] {
   const ordering = new AcpSessionNewOrdering();
-  const stream = new TransformStream<AnyMessage, AnyMessage>({
-    transform(message, controller) {
-      ordering.transformOutbound(message, controller);
-    },
-  });
   const output: AnyMessage[] = [];
-  const drained = stream.readable.pipeTo(
-    new WritableStream<AnyMessage>({
-      write(message) {
-        output.push(message);
-      },
-    }),
-  );
-  const writer = stream.writable.getWriter();
+  const controller: TransformStreamDefaultController<AnyMessage> = {
+    desiredSize: 1,
+    enqueue(message) {
+      output.push(message);
+    },
+    error(reason: unknown) {
+      throw reason;
+    },
+    terminate() {
+      throw new Error("Unexpected ordering stream termination");
+    },
+  };
   for (const step of steps) {
     if ("inbound" in step) {
       ordering.observeInbound(step.inbound);
       continue;
     }
-    await writer.write(step);
+    ordering.transformOutbound(step, controller);
   }
-  await writer.close();
-  await drained;
   return output;
 }
 
@@ -157,6 +154,6 @@ it.each<[string, Step[], AnyMessage[]]>([
     ],
     [...establishedResults, lateResult, lateUpdate],
   ],
-])("%s", async (_name, steps, expected) => {
-  await expect(runSteps(steps)).resolves.toEqual(expected);
+])("%s", (_name, steps, expected) => {
+  expect(runSteps(steps)).toEqual(expected);
 });

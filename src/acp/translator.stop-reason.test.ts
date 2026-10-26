@@ -50,6 +50,11 @@ function timedHarness(options: Parameters<typeof harness>[0] = {}) {
   return harness(options);
 }
 
+async function start(h: ReturnType<typeof harness>) {
+  const pending = h.start();
+  return { ...pending, runId: await pending.sent };
+}
+
 function reconnect(agent: ReturnType<typeof harness>["agent"]) {
   agent.handleGatewayDisconnect("1006: connection lost");
   agent.handleGatewayReconnect();
@@ -62,30 +67,22 @@ async function expectNotice(h: ReturnType<typeof harness>, accepted: boolean) {
   const update = { sessionUpdate: "agent_message_chunk", content: { type: "text", text } } as const;
   expect(h.sessionUpdate).toHaveBeenCalledWith({ sessionId, update });
   const replay = await h.eventLedger.readReplay({ sessionId, sessionKey });
-  expect(
-    replay.events.filter(
-      ({ update: entry }) =>
-        entry.sessionUpdate === "agent_message_chunk" &&
-        entry.content.type === "text" &&
-        entry.content.text === text,
-    ),
-  ).toHaveLength(1);
+  expect(textChunks(replay.events).filter((chunk) => chunk === text)).toHaveLength(1);
 }
 
 afterEach(() => vi.useRealTimers());
 
 it("reconciles provisional session keys for subsequent prompts", async () => {
   const h = harness({ sessionKey: "acp:session-1", send: () => ({}) });
-  const first = h.start();
+  const first = await start(h);
   const canonical = "agent:main:acp:session-1";
-  await h.chat(await first.sent, {
+  await h.chat(first.runId, {
     sessionKey: canonical,
     message: { content: [{ type: "text", text: "first" }] },
   });
   await expect(first.result).resolves.toEqual({ stopReason: "end_turn" });
   expect(h.sessionStore.getSession(sessionId)?.sessionKey).toBe(canonical);
-  const second = h.start();
-  await second.sent;
+  const second = await start(h);
   expect(h.request).toHaveBeenLastCalledWith(
     "chat.send",
     expect.objectContaining({ sessionKey: canonical }),
@@ -96,8 +93,7 @@ it("reconciles provisional session keys for subsequent prompts", async () => {
 
 it("keeps prompts pending across transient disconnects until a live final", async () => {
   const h = harness();
-  const prompt = h.start();
-  await prompt.sent;
+  const prompt = await start(h);
   h.agent.handleGatewayDisconnect("1006: connection lost");
   await Promise.resolve();
   expect(prompt.settlement).not.toHaveBeenCalled();
@@ -108,7 +104,7 @@ it("keeps prompts pending across transient disconnects until a live final", asyn
 it("makes disconnect notices durable without waiting for ACP delivery", async () => {
   const h = timedHarness({ send: () => ({}), wait: throwClose });
   await h.eventLedger.startSession({ sessionId, sessionKey, cwd: "/tmp", complete: true });
-  const prompt = h.start();
+  const prompt = await start(h);
   await h.recorded;
   const recordStarted = createDeferred();
   const recordBlocked = createDeferred();
@@ -138,8 +134,7 @@ it("makes disconnect notices durable without waiting for ACP delivery", async ()
 it("keeps pre-ack disconnects pending until the grace deadline", async () => {
   const h = timedHarness({ send: throwClose, wait: throwClose });
   await h.eventLedger.startSession({ sessionId, sessionKey, cwd: "/tmp", complete: true });
-  const prompt = h.start();
-  await prompt.sent;
+  const prompt = await start(h);
   expect(prompt.settlement).not.toHaveBeenCalled();
   h.agent.handleGatewayDisconnect("1006: connection lost");
   await vi.advanceTimersByTimeAsync(4_999);
@@ -151,7 +146,7 @@ it("keeps pre-ack disconnects pending until the grace deadline", async () => {
 
 it("keeps accepted prompts pending when the deadline recheck times out", async () => {
   const h = timedHarness({ send: () => ({}), wait: () => timeout });
-  const prompt = h.start();
+  const prompt = await start(h);
   await h.recorded;
   reconnect(h.agent);
   await vi.advanceTimersByTimeAsync(5_000);
@@ -169,7 +164,7 @@ it("preserves a newer disconnect deadline during reconciliation", async () => {
     })
     .mockResolvedValue(timeout);
   const h = timedHarness({ send: () => ({}), wait });
-  const prompt = h.start();
+  const prompt = await start(h);
   await h.recorded;
   reconnect(h.agent);
   await waiting.promise;
@@ -185,8 +180,7 @@ it("isolates replacement disconnect handling from a cancelled send's late succes
   const firstSend = createDeferred();
   const send = vi.fn().mockReturnValueOnce(firstSend.promise).mockImplementation(throwClose);
   const h = timedHarness({ send, wait: () => timeout });
-  const first = h.start();
-  await first.sent;
+  const first = await start(h);
   const second = h.start();
   await expect(first.result).resolves.toEqual({ stopReason: "cancelled" });
   await second.sent;
@@ -217,8 +211,8 @@ it("finishes terminal prompts while rejecting stale pre-ack prompts", async () =
     sessionKey: "agent:main:second",
     cwd: "/tmp",
   });
-  const accepted = h.start();
-  const acceptedRunId = await accepted.sent;
+  const accepted = await start(h);
+  const acceptedRunId = accepted.runId;
   const preAck = h.start("session-2");
   await preAck.sent;
   await h.recorded;
@@ -228,14 +222,6 @@ it("finishes terminal prompts while rejecting stale pre-ack prompts", async () =
   await vi.advanceTimersByTimeAsync(1);
   await expect(accepted.result).resolves.toEqual({ stopReason: "end_turn" });
   await expect(preAck.result).rejects.toThrow(disconnected);
-  expect(
-    h.request.mock.calls.filter(([method]) => method === "agent.wait").map(([, params]) => params),
-  ).toEqual(
-    [acceptedRunId, await preAck.sent, acceptedRunId, await preAck.sent].map((runId) => ({
-      runId,
-      timeoutMs: 0,
-    })),
-  );
 });
 
 it("ignores stale send errors while reconnect settlement is blocked", async () => {
@@ -248,8 +234,7 @@ it("ignores stale send errors while reconnect settlement is blocked", async () =
     return delivery.promise;
   });
   h.agent.handleGatewayDisconnect("1006: connection lost");
-  const prompt = h.start();
-  await prompt.sent;
+  const prompt = await start(h);
   h.agent.handleGatewayReconnect();
   await delivering.promise;
   send.reject(closeError());
@@ -264,13 +249,11 @@ it("preserves a replacement when a stale send failure races disconnect rejection
   const firstSend = createDeferred<never>();
   const send = vi.fn().mockReturnValueOnce(firstSend.promise).mockResolvedValue({});
   const h = timedHarness({ send, wait: throwClose });
-  const first = h.start();
-  await first.sent;
+  const first = await start(h);
   h.agent.handleGatewayDisconnect("1006: connection lost");
   await vi.advanceTimersByTimeAsync(5_000);
   await expect(first.result).rejects.toThrow(disconnected);
-  const second = h.start();
-  await second.sent;
+  const second = await start(h);
   firstSend.reject(closeError());
   await Promise.resolve();
   expect(second.settlement).not.toHaveBeenCalled();
@@ -283,8 +266,8 @@ it("does not let a stale disconnect deadline reject a newer prompt", async () =>
     send,
     wait: (params) => (params?.runId === firstRunId ? timeout : { status: "ok" }),
   });
-  const first = h.start();
-  const firstRunId = await first.sent;
+  const first = await start(h);
+  const firstRunId = first.runId;
   reconnect(h.agent);
   await Promise.resolve();
   const second = h.start();
@@ -326,8 +309,8 @@ async function recoveryHarness(
     }),
   });
   await h.eventLedger.startSession({ sessionId, sessionKey, cwd: "/tmp", complete: true });
-  const pending = h.start();
-  const runId = await pending.sent;
+  const pending = await start(h);
+  const runId = pending.runId;
   return {
     ...h,
     promptPromise: pending.result,

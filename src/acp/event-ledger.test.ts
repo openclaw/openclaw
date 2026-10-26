@@ -50,11 +50,12 @@ describe("ACP event ledger", () => {
       const replay = await second.readReplay(session);
 
       expect(replay.complete).toBe(true);
-      expect(replay.events.map((event) => [event.seq, event.sessionKey])).toEqual([
-        [1, "agent:main:work"],
-        [2, "agent:main:canonical-work"],
-      ]);
-      expect(replay.events.map((event) => event.update)).toEqual([thought, answer]);
+      expect(replay.events.map(({ seq, sessionKey, update }) => [seq, sessionKey, update])).toEqual(
+        [
+          [1, original.sessionKey, thought],
+          [2, session.sessionKey, answer],
+        ],
+      );
     });
   });
 
@@ -144,12 +145,10 @@ describe("ACP event ledger", () => {
       complete: true,
       sessionId: session.sessionId,
       sessionKey: canonical.sessionKey,
+      events: [
+        { seq: 1, runId: "run-1", update: { sessionUpdate: "user_message_chunk" } },
+        { seq: 2, runId: "run-1", update: { sessionUpdate: "agent_message_chunk" } },
+      ],
     });
-    expect(replay.events.map((event) => event.seq)).toEqual([1, 2]);
-    expect(replay.events.map((event) => event.runId)).toEqual(["run-1", "run-1"]);
-    expect(replay.events.map((event) => event.update.sessionUpdate)).toEqual([
-      "user_message_chunk",
-      "agent_message_chunk",
-    ]);
   });
 });
