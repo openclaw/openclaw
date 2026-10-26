@@ -21,6 +21,8 @@ import { createEnteredGate } from "./entered-gate.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const emptyConfig: OpenClawConfig = { plugins: { enabled: false }, mcp: { servers: {} } };
+const expectRead = (result: Promise<unknown>, text: string) =>
+  expect(result).resolves.toMatchObject({ content: [{ text }] });
 
 async function createFixture(workspaceDir: string) {
   const releases: Array<() => void> = [];
@@ -82,9 +84,7 @@ it("retains an empty runtime until its live materialized handle releases", async
     const acquired = await acquireSessionMcpRuntime(params);
     const handle = await materializeBundleMcpToolsForRun(acquired);
     try {
-      await expect(handle.tools[0]!.execute("before-removal", {})).resolves.toMatchObject({
-        content: [{ text: "/old" }],
-      });
+      await expectRead(handle.tools[0]!.execute("before-removal", {}), "/old");
       await reloadSessionMcpRuntimes({ cfg: emptyConfig });
       await expect(acquired.runtime.getCatalog()).resolves.toMatchObject({ tools: [] });
       expect(peekSessionMcpRuntime({ sessionKey })).toBe(acquired.runtime);
@@ -115,16 +115,12 @@ it("preserves a newer session binding while old empty cleanup drains", async () 
     const next = await acquireSessionMcpRuntime(input("new-binding", "/new", sessionKey));
     try {
       expect(peekSessionMcpRuntime({ sessionKey })).toBe(next.runtime);
-      await expect(next.runtime.callTool("probe", "read", {})).resolves.toMatchObject({
-        content: [{ text: "/new" }],
-      });
+      await expectRead(next.runtime.callTool("probe", "read", {}), "/new");
       deletion.release();
       await Promise.all([reloading, retiring]);
       expect(peekSessionMcpRuntime({ sessionKey })).toBe(next.runtime);
       expect(peekSessionMcpRuntime({ sessionId: "old-binding" })).toBeUndefined();
-      await expect(next.runtime.callTool("probe", "read", {})).resolves.toMatchObject({
-        content: [{ text: "/new" }],
-      });
+      await expectRead(next.runtime.callTool("probe", "read", {}), "/new");
     } finally {
       deletion.release();
       await releaseSessionMcpRuntime(next);
@@ -173,9 +169,7 @@ it("preserves the runtime admitted by an in-flight static native preflight", asy
       const result = await preflight;
       expect(result.backend.args).toContain("--mcp-config");
       expect(peekSessionMcpRuntime({ sessionKey })).toBe(admitted);
-      await expect(admitted.callTool("probe", "read", {})).resolves.toMatchObject({
-        content: [{ text: "/native" }],
-      });
+      await expectRead(admitted.callTool("probe", "read", {}), "/native");
     } finally {
       listing.release();
       await releaseSessionMcpRuntime(original);

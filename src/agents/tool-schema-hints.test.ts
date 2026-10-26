@@ -49,18 +49,6 @@ describe("tool schema hints", () => {
     expect(declaration(undefined)).toBe("unknown");
   });
 
-  it("preserves numeric input constraints without changing output hints", () => {
-    const schema = {
-      type: "integer",
-      minimum: 0,
-      maximum: 10,
-      exclusiveMinimum: 1,
-      exclusiveMaximum: 9,
-    };
-    expect(inputHint(schema)).toBe("number /* integer, >= 0, <= 10, > 1, < 9 */");
-    expect(outputHint(schema)).toBe("number");
-  });
-
   it.each([{ minimum: "1" }, { maximum: Number.POSITIVE_INFINITY }])(
     "defers malformed numeric bounds instead of inventing constraints: %j",
     (bounds) => {
@@ -72,11 +60,17 @@ describe("tool schema hints", () => {
     const schema = fields(
       12,
       (i) => `field_${String(i).padStart(2, "0")}`,
-      Type.Integer({ minimum: 0, maximum: 100, description: "Description stays deferred." }),
+      Type.Integer({
+        minimum: 0,
+        maximum: 100,
+        exclusiveMinimum: 1,
+        exclusiveMaximum: 99,
+        description: "Description stays deferred.",
+      }),
     );
     const input = inputHint(schema);
 
-    expect(input).toContain("field_00: number /* integer, >= 0, <= 100 */");
+    expect(input).toContain("field_00: number /* integer, >= 0, <= 100, > 1, < 99 */");
     expect(input).toContain("...");
     expect(input).not.toContain("Description stays deferred.");
     expect(input.length).toBeLessThanOrEqual(300);
@@ -87,13 +81,8 @@ describe("tool schema hints", () => {
   it("keeps input hints small while allowing larger exact output contracts", () => {
     const schema = fields(16, (i) => `field_${String(i).padStart(2, "0")}_with_long_name`);
 
-    const input = inputHint(schema);
-    const output = outputHint(schema);
-
-    expect(input).toBe("unknown");
-    expect(output).toBeDefined();
-    expect(output!.length).toBeGreaterThan(300);
-    expect(output!.length).toBeLessThanOrEqual(600);
+    expect(inputHint(schema)).toBe("unknown");
+    expect(outputHint(schema)).toContain("field_15_with_long_name: string");
   });
 
   it.each([

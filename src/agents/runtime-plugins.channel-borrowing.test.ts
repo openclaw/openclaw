@@ -1,4 +1,5 @@
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -89,17 +90,12 @@ it.each(["direct-loader-successor", "prepared"] as const)(
       runtimeSideEffects: true,
       cache: false,
     });
-    const runtime = getPluginRegistryRuntime(registry);
-    if (!runtime) {
-      throw new Error("Expected a loaded Gateway runtime");
-    }
+    const runtime = expectDefined(getPluginRegistryRuntime(registry), "loaded Gateway runtime");
     bindGatewayContextResolver(runtime, () => undefined);
     activatePluginRegistry(registry, null, "gateway-bindable", workspaceDir);
     const gateway = createPluginRegistryOwner(registry, workspaceDir);
     await using cleanup = new AsyncDisposableStack();
-    cleanup.defer(async () => {
-      await gateway.close();
-    });
+    cleanup.defer(() => gateway.close());
     const liveRecord = gateway.registry.plugins.find((record) => record.id === channelId)!;
     const liveInstance = getPluginInstance(liveRecord)!;
     const liveEntry = gateway.registry.channels[0]!;
@@ -135,11 +131,8 @@ it.each(["direct-loader-successor", "prepared"] as const)(
         [channelId, freshId],
         buildResources.load.bind(buildResources),
       );
-      if (!prepared.runtimePluginRegistry) {
-        throw new Error("Expected a prepared registry");
-      }
       return {
-        registry: prepared.runtimePluginRegistry,
+        registry: expectDefined(prepared.runtimePluginRegistry, "prepared registry"),
         release: () => buildResources[Symbol.asyncDispose](),
       };
     });

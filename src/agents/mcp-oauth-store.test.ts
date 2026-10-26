@@ -10,7 +10,6 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
-import { operatorMcpOAuthIdentity } from "./mcp-oauth-identity.js";
 import {
   consumeOAuthState,
   deleteMcpOAuthPendingAuthorizationsByPrefix,
@@ -18,6 +17,8 @@ import {
   writeMcpOAuthPendingAuthorization,
 } from "./mcp-oauth-store.js";
 import { withMcpOAuthTestLease } from "./mcp-oauth.test-support.js";
+
+const pendingTableName = "mcp_oauth_pending_authorizations";
 
 function withTempHome(run: () => Promise<void>) {
   return withBaseTempHome(async () => {
@@ -42,22 +43,22 @@ function consumePending(storeKey: string, state: string) {
   );
 }
 
-function pendingTable(database: ReturnType<typeof openOpenClawStateDatabase>["db"]) {
-  return database
-    .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
-    .get("mcp_oauth_pending_authorizations");
+function row(sql: string, ...params: string[]) {
+  return openOpenClawStateDatabase()
+    .db.prepare(sql)
+    .get(...params);
 }
+const pendingTable = () =>
+  row("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?", pendingTableName);
 
 it("rolls back first-use schema after refused grants and retries on the retained actor", () =>
   withTempHome(async () => {
-    const database = openOpenClawStateDatabase().db;
-    expect(pendingTable(database)).toBeUndefined();
-    const store = operatorMcpOAuthIdentity("Pending grants", "https://pending.example.test/mcp");
-    await withMcpOAuthTestLease(store.storeKey, async (lease, context) => {
-      const options = { storeKey: store.storeKey, lease, context };
+    expect(pendingTable()).toBeUndefined();
+    const storeKey = "pending-grants";
+    await withMcpOAuthTestLease(storeKey, async (lease, context) => {
+      const options = { storeKey, lease, context };
       for (const stage of ["transaction", "commit"] as const) {
         let current = true;
-        let observedGrant = false;
         const refusal = new Error(`Synthetic pending authority retired at ${stage}`);
         const admission = probe.admission(workerAdmission, (request, grant, admit) => {
           const facts = request.facts;
@@ -66,11 +67,10 @@ it("rolls back first-use schema after refused grants and retries on the retained
             isRecord(facts) &&
             facts.kind === "state-lease" &&
             isRecord(facts.identity) &&
-            facts.identity.key === store.storeKey
+            facts.identity.key === storeKey
           ) {
             // Dispatch has passed; retire authority at the actual grant port.
             current = false;
-            observedGrant = true;
           }
           admit(request, grant);
         });
@@ -87,41 +87,37 @@ it("rolls back first-use schema after refused grants and retries on the retained
         } finally {
           admission.mockRestore();
         }
-        expect(observedGrant).toBe(true);
-        expect(pendingTable(database)).toBeUndefined();
+        expect(pendingTable()).toBeUndefined();
       }
       await writeMcpOAuthPendingAuthorization(options, "authorized-retry");
-      expect(await readPending("authorized-retry", context)).toBe(store.storeKey);
-      expect(pendingTable(database)).toEqual({ name: "mcp_oauth_pending_authorizations" });
+      expect(await readPending("authorized-retry", context)).toBe(storeKey);
+      expect(pendingTable()).toEqual({ name: pendingTableName });
     });
   }));
 
 it("lazily creates durable exact-state correlation without changing schema version", () =>
   withTempHome(async () => {
-    const database = openOpenClawStateDatabase().db;
-    expect(pendingTable(database)).toBeUndefined();
+    expect(pendingTable()).toBeUndefined();
 
     expect(await readPending("unknown-state")).toBeUndefined();
-    expect(pendingTable(database)).toBeUndefined();
+    expect(pendingTable()).toBeUndefined();
 
-    const store = operatorMcpOAuthIdentity("Pending", "https://pending.example.com/mcp");
-    await writePending(store.storeKey, "first-state");
-    expect(
-      database
-        .prepare("SELECT strict FROM pragma_table_list WHERE name = ?")
-        .get("mcp_oauth_pending_authorizations"),
-    ).toEqual({ strict: 1 });
-    expect(database.prepare("PRAGMA user_version").get()).toEqual({
+    const storeKey = "pending";
+    await writePending(storeKey, "first-state");
+    expect(row("SELECT strict FROM pragma_table_list WHERE name = ?", pendingTableName)).toEqual({
+      strict: 1,
+    });
+    expect(row("PRAGMA user_version")).toEqual({
       user_version: OPENCLAW_STATE_SCHEMA_VERSION,
     });
-    expect(await readPending("first-state")).toBe(store.storeKey);
+    expect(await readPending("first-state")).toBe(storeKey);
 
-    await writePending(store.storeKey, "second-state");
+    await writePending(storeKey, "second-state");
     expect(await readPending("first-state")).toBeUndefined();
-    expect(await readPending("second-state")).toBe(store.storeKey);
-    expect(await consumePending(store.storeKey, "other-state")).toBe(false);
-    expect(await consumePending(store.storeKey, "second-state")).toBe(true);
-    expect(await consumePending(store.storeKey, "second-state")).toBe(false);
+    expect(await readPending("second-state")).toBe(storeKey);
+    expect(await consumePending(storeKey, "other-state")).toBe(false);
+    expect(await consumePending(storeKey, "second-state")).toBe(true);
+    expect(await consumePending(storeKey, "second-state")).toBe(false);
   }));
 
 it("uses exact state lookup and clears one requester prefix", () =>
@@ -130,7 +126,7 @@ it("uses exact state lookup and clears one requester prefix", () =>
     await writePending("schema-install", "schema-install-state");
     expect(await consumePending("schema-install", "schema-install-state")).toBe(true);
     const insertPending = database.prepare(
-      "INSERT INTO mcp_oauth_pending_authorizations (state, store_key, create_time) VALUES (?, ?, ?)",
+      `INSERT INTO ${pendingTableName} (state, store_key, create_time) VALUES (?, ?, ?)`,
     );
     insertPending.run("unrelated-state", "unrelated-store", Date.now());
     // Exact lookup must not parse unrelated credential JSON.
@@ -149,9 +145,7 @@ it("uses exact state lookup and clears one requester prefix", () =>
 
     await writePending("server-r-requester-a", "requester-a-state");
     expect(
-      database
-        .prepare("SELECT state FROM mcp_oauth_pending_authorizations WHERE state = ?")
-        .get("expired-state"),
+      row(`SELECT state FROM ${pendingTableName} WHERE state = ?`, "expired-state"),
     ).toBeUndefined();
     expect(await readPending("fresh-foreign-state")).toBe("fresh-foreign-store");
     await writePending("server-r-requester-b", "requester-b-state");

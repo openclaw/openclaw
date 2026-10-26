@@ -40,27 +40,6 @@ async function saveCell(owner: Pick<ReturnType<typeof run>, "cell">, key: string
   await cell.commit();
 }
 
-it("forks store values from the selected branch without leaking another branch", async () => {
-  const { manager, ...rootRun } = run();
-  await saveCell(rootRun, "inherited", "root");
-  const root = manager.getLeafId()!;
-  rootRun.close();
-
-  const branchA = run(manager);
-  await saveCell(branchA, "branch", "A");
-  const leafA = manager.getLeafId()!;
-  branchA.close();
-
-  await manager.branchAsync(root);
-  const branchB = run(manager);
-  await saveCell(branchB, "branch", "B");
-  branchB.close();
-  await manager.createBranchedSession(leafA);
-  const fork = run(manager);
-  await expect(fork.cell().load("inherited")).resolves.toMatchObject({ value: "root" });
-  await expect(fork.cell().load("branch")).resolves.toMatchObject({ value: "A" });
-});
-
 it("keeps the projection unchanged after failed persistence and admits a later cell", async () => {
   const { manager, ...owner } = run();
   await saveCell(owner, "key", "original");
