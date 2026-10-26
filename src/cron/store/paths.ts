@@ -21,7 +21,6 @@ import {
 import { CronStoreSelectionRequiredError } from "./selection-error.js";
 import type { CronStoreSelection } from "./selection.types.js";
 
-export { CronStoreSelectionRequiredError };
 export type { CronStoreSelection } from "./selection.types.js";
 
 function resolveDefaultCronDir(env: NodeJS.ProcessEnv): string {
@@ -199,18 +198,6 @@ export function resolveCronJobsStorePath(
 ) {
   const selected = storePath?.trim() || readCronStoreStatePath(stateEnv);
   return resolveSelectedCronJobsStorePath(selected, env);
-}
-
-/** Resolve the selected partition on the caller's admitted database connection. */
-export function resolveCronJobsStorePathInDatabase(
-  db: EngineConnection,
-  storePath: string | undefined,
-  env: NodeJS.ProcessEnv = process.env,
-): string {
-  return resolveSelectedCronJobsStorePath(
-    storePath?.trim() || readCronStoreStatePathInDatabase(db),
-    env,
-  );
 }
 
 /** Expand an already-selected partition without reading machine state. */
