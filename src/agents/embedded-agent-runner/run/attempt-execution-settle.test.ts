@@ -208,15 +208,10 @@ describe("runEmbeddedAttemptSettledPhase", () => {
     expect(fixture.sessionManager.appendMessageAsync.mock.calls[0]?.[0]).not.toHaveProperty(
       "excludeFromContext",
     );
-    expect(mocks.completeResult).toHaveBeenCalledWith(
-      fixture.input,
-      expect.any(Object),
-      expect.objectContaining({
-        messagesSnapshot: expect.arrayContaining([
-          expect.objectContaining({ customType: "openclaw.system-note", display: true }),
-        ]),
-      }),
-    );
+    const [input, stream, result] = mocks.completeResult.mock.calls[0]!;
+    expect(input).toBe(fixture.input);
+    expect(stream).toEqual(expect.any(Object));
+    expect(result.messagesSnapshot).toContainEqual(expect.objectContaining(imageNote));
   });
 
   it("persists and publishes image failure notes through settlement without parent SQL", async () => {
