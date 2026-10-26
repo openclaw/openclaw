@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import photon from "@silvia-odwyer/photon-node";
 import type { BrowserContextOptions, Locator, Page } from "playwright";
@@ -184,24 +184,56 @@ suite.define(() => {
     expect(loginModuleRequests).toEqual([]);
   });
 
-  it("shows a shimmer skeleton until the chat route finishes loading", async () => {
-    const page = await createPage();
+  it("keeps the chat placeholder pixels stable through app and route loading", async () => {
+    const page = await createPage({ locale: "en-US", viewport, colorScheme: "light" });
     let chatModuleRequested = false;
+    const entryModule = createDeferredCore();
     const chatModule = createDeferredCore();
     await page.route(`${new URL(suite.server.baseUrl).origin}/**`, async (route) => {
-      if (new URL(route.request().url()).pathname.endsWith("/chat-page.tsx")) {
+      const pathname = new URL(route.request().url()).pathname;
+      if (pathname.endsWith("/src/main.ts")) {
+        await entryModule.promise;
+      }
+      if (pathname.endsWith("/chat-page.tsx")) {
         chatModuleRequested = true;
         await chatModule.promise;
       }
       await route.continue();
     });
     // The held chat module cannot publish the foreground readiness that releases the roster.
-    await installMockGateway(page, { awaitInitialRoster: false });
+    const gateway = await installMockGateway(page, {
+      awaitInitialRoster: false,
+      deferredMethods: ["connect"],
+    });
+    const artifactDir = createControlUiE2eArtifactDir("boot-placeholder-parity");
+    const placeholderFrame = async (root: Locator, phase: string) => {
+      const skeleton = root.locator(".loading-skeleton");
+      const label = root.locator(".connect-splash__status");
+      expect(await label.textContent()).toBe("Loading…");
+      const png = await takeControlUiElementScreenshot(page, skeleton, [skeleton, label]);
+      await writeFile(path.join(artifactDir, `${phase}.png`), png);
+      const geometry = await skeleton.evaluate((element) =>
+        [element, ...element.querySelectorAll(".skeleton")].map((node) => {
+          const { x, y, width, height } = node.getBoundingClientRect();
+          return { x, y, width, height };
+        }),
+      );
+      return { png: decodeProofPng(png), geometry, label: await label.boundingBox() };
+    };
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat?session=main`, {
-        waitUntil: "domcontentloaded",
-      });
+      await page.goto(`${suite.server.baseUrl}chat?session=main`, { waitUntil: "commit" });
+      const initial = await placeholderFrame(page.locator("#openclaw-boot-shell"), "document");
+      entryModule.resolve();
+      await gateway.waitForRequest("connect");
+      const connecting = await placeholderFrame(page.locator(".connect-splash"), "connecting");
+      expect(connecting.geometry).toEqual(initial.geometry);
+      expect(connecting.label).toEqual(initial.label);
+      expect(
+        Buffer.from(connecting.png.data).equals(Buffer.from(initial.png.data)),
+        "connection loading preserves the document placeholder pixels",
+      ).toBe(true);
+      await gateway.resolveDeferred("connect");
       await page.locator("openclaw-app-shell").waitFor();
       await expect.poll(() => chatModuleRequested).toBe(true);
 
@@ -209,13 +241,23 @@ suite.define(() => {
       await loadingState.waitFor();
       expect(await loadingState.getAttribute("role")).toBe("status");
       expect(await loadingState.getAttribute("aria-label")).toBe("Loading…");
-      expect((await loadingState.textContent())?.trim()).toBe("");
+      expect((await loadingState.textContent())?.trim()).toBe("Loading…");
       expect(await page.getByText("Loading panel", { exact: true }).count()).toBe(0);
 
       const skeleton = loadingState.locator(".loading-skeleton");
       await skeleton.waitFor();
       expect(await loadingState.getAttribute("aria-busy")).toBeNull();
       expect(await loadingState.locator("openclaw-mascot").count()).toBe(0);
+      const routeLoading = await placeholderFrame(loadingState, "route");
+      expect(routeLoading.geometry).toEqual(initial.geometry);
+      expect(routeLoading.label).toEqual(initial.label);
+      expect(
+        Buffer.from(routeLoading.png.data).equals(Buffer.from(initial.png.data)),
+        "route loading preserves the document placeholder pixels",
+      ).toBe(true);
+      expect(
+        await skeleton.evaluate((element) => element.getAnimations({ subtree: true }).length),
+      ).toBe(0);
 
       for (const size of [viewport, { width: 1440, height: 1440 }, { width: 390, height: 844 }]) {
         await page.setViewportSize(size);
@@ -262,6 +304,7 @@ suite.define(() => {
       await page.locator("openclaw-chat-page").waitFor();
       expect(await loadingState.count()).toBe(0);
     } finally {
+      entryModule.resolve();
       chatModule.resolve();
     }
   });

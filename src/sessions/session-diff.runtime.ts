@@ -473,6 +473,8 @@ export async function collectCheckoutDiff(
     ? await applySessionDiffBaseline({
         baseline: params.baseline,
         checkout,
+        // Stored fingerprints use the default base, not an explicit managed review base.
+        defaultBase: params.baseCommit ? undefined : branchBase,
         diff,
         scope,
         sessionId: params.sessionId,
@@ -574,11 +576,15 @@ async function gitOutForBaseline(cwd: string, args: string[]): Promise<string | 
 async function collectBaselineCandidates(
   checkout: NonNullable<Awaited<ReturnType<typeof loadCheckoutRevision>>>,
   untrackedPaths?: string[],
+  defaultBase?: { base: string } | null,
 ): Promise<{ candidates: BaselineCandidate[]; root: string; truncated: boolean }> {
   const { root, head, branch, objectFormat } = checkout;
-  const baseInfo = head
-    ? await resolveSessionDiffBase({ branch, gitOut, head, root })
-    : await resolveSessionDiffEmptyTree(root, objectFormat);
+  const baseInfo =
+    defaultBase !== undefined
+      ? defaultBase
+      : head
+        ? await resolveSessionDiffBase({ branch, gitOut, head, root })
+        : await resolveSessionDiffEmptyTree(root, objectFormat);
   const [trackedText, untracked] = await Promise.all([
     baseInfo
       ? gitOutForBaseline(root, ["diff", "-M", baseInfo.base, "--name-status", "-z"])
@@ -651,6 +657,7 @@ async function fingerprintBaselineCandidates(params: {
 async function applySessionDiffBaseline(params: {
   baseline: SessionDiffBaseline | undefined;
   checkout: NonNullable<Awaited<ReturnType<typeof loadCheckoutRevision>>>;
+  defaultBase: { base: string } | null | undefined;
   diff: CheckoutDiffResult;
   scope: NonNullable<GitCheckoutDiffInput["scope"]>;
   sessionId: string;
@@ -670,11 +677,13 @@ async function applySessionDiffBaseline(params: {
     return diff;
   }
   const candidates =
-    params.scope === "uncommitted"
+    params.scope === "uncommitted" &&
+    diff.files.some((file) => !file.untracked && fingerprints.has(file.path))
       ? (
           await collectBaselineCandidates(
             params.checkout,
             diff.files.filter((file) => file.untracked).map((file) => file.path),
+            params.defaultBase,
           )
         ).candidates
       : diff.files;

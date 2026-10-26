@@ -99,6 +99,72 @@ ${prepareAvailable ? `- prepare_pr: when the user asks to continue their own exi
     : `${inspection}${publication}`;
 }
 
+// Tool construction runs every turn; one schema object per availability combination keeps
+// identity-keyed schema normalization and prepared-descriptor caches warm.
+const githubPublishParameterSchemas = new Map<string, AnyAgentTool["parameters"]>();
+
+function resolveGitHubPublishParameters(params: {
+  publicationAvailable: boolean;
+  actionsAvailable: boolean;
+  prepareAvailable: boolean;
+  refreshBaseAvailable: boolean;
+  evidenceAvailable: boolean;
+  workspaceActions: readonly string[];
+}): AnyAgentTool["parameters"] {
+  const {
+    publicationAvailable,
+    actionsAvailable,
+    refreshBaseAvailable,
+    evidenceAvailable,
+    workspaceActions,
+  } = params;
+  // workspaceActions derives from the availability flags, so they fully key the schema.
+  const key = [
+    publicationAvailable,
+    actionsAvailable,
+    params.prepareAvailable,
+    refreshBaseAvailable,
+    evidenceAvailable,
+  ].join(":");
+  let schema = githubPublishParameterSchemas.get(key);
+  if (!schema) {
+    schema = publicationAvailable
+      ? Type.Object(
+          {
+            ...(actionsAvailable ? GitHubPublicationActionSchema.properties : {}),
+            ...(refreshBaseAvailable ? GitHubBaseRefreshSchema.properties : {}),
+            pullRequestUrl: Type.Optional(GitHubPullRequestInspectSchema.properties.pullRequestUrl),
+            ...GitHubPublicationEditSchema.properties,
+            ...(evidenceAvailable
+              ? { evidence: Type.Optional(GitHubPublicationEvidenceSchema) }
+              : {}),
+            action: Type.Optional(
+              stringEnum([
+                ...new Set([
+                  ...workspaceActions,
+                  ...(actionsAvailable ? publicationOperatorActions : []),
+                ]),
+              ]),
+            ),
+            title: Type.Optional(GitHubPublicationTitleSchema),
+            body: GitHubPublicationEditSchema.properties.body,
+            draft: Type.Optional(Type.Boolean()),
+          },
+          { additionalProperties: false },
+        )
+      : Type.Object(
+          {
+            ...GitHubPublicationActionSchema.properties,
+            pullRequestUrl: Type.Optional(GitHubPullRequestInspectSchema.properties.pullRequestUrl),
+            action: stringEnum(["inspect_pr", ...publicationOperatorActions]),
+          },
+          { additionalProperties: false },
+        );
+    githubPublishParameterSchemas.set(key, schema);
+  }
+  return schema;
+}
+
 export function createGitHubPublishTool(
   options: {
     publicationAvailable?: boolean;
@@ -142,38 +208,14 @@ export function createGitHubPublishTool(
       refreshBaseAvailable,
       evidenceAvailable,
     ),
-    parameters: publicationAvailable
-      ? Type.Object(
-          {
-            ...(actionsAvailable ? GitHubPublicationActionSchema.properties : {}),
-            ...(refreshBaseAvailable ? GitHubBaseRefreshSchema.properties : {}),
-            pullRequestUrl: Type.Optional(GitHubPullRequestInspectSchema.properties.pullRequestUrl),
-            ...GitHubPublicationEditSchema.properties,
-            ...(evidenceAvailable
-              ? { evidence: Type.Optional(GitHubPublicationEvidenceSchema) }
-              : {}),
-            action: Type.Optional(
-              stringEnum([
-                ...new Set([
-                  ...workspaceActions,
-                  ...(actionsAvailable ? publicationOperatorActions : []),
-                ]),
-              ]),
-            ),
-            title: Type.Optional(GitHubPublicationTitleSchema),
-            body: GitHubPublicationEditSchema.properties.body,
-            draft: Type.Optional(Type.Boolean()),
-          },
-          { additionalProperties: false },
-        )
-      : Type.Object(
-          {
-            ...GitHubPublicationActionSchema.properties,
-            pullRequestUrl: Type.Optional(GitHubPullRequestInspectSchema.properties.pullRequestUrl),
-            action: stringEnum(["inspect_pr", ...publicationOperatorActions]),
-          },
-          { additionalProperties: false },
-        ),
+    parameters: resolveGitHubPublishParameters({
+      publicationAvailable,
+      actionsAvailable,
+      prepareAvailable,
+      refreshBaseAvailable,
+      evidenceAvailable,
+      workspaceActions,
+    }),
     execute: async (toolCallId, rawArgs, signal) => {
       // SAFETY: the tool runtime validates rawArgs against the closed schema above.
       const input = rawArgs as Omit<SessionGitHubPublishParams, "idempotencyKey" | "sessionKey"> &

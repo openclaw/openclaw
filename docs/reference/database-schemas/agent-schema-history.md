@@ -53,6 +53,7 @@ backup and its matching build, not just reinstalling the older package.
 | 34      | Native PostgreSQL index ordering for non-null keys; metadata-only SQLite advance ([#183015](https://github.com/openclaw/openclaw/pull/183015))                                                                                                         | `Unreleased` |
 | 35      | Native PostgreSQL ordering for predicate-proven non-null partial-index keys; metadata-only SQLite advance ([#183443](https://github.com/openclaw/openclaw/pull/183443))                                                                                | `Unreleased` |
 | 36      | Indexed PostgreSQL exact-path memory candidates with unchanged ranking; metadata-only SQLite advance                                                                                                                                                   | `Unreleased` |
+| 37      | Ordered cold transcript archive chunks with a 64 MiB uncompressed bound per file                                                                                                                                                                       | `Unreleased` |
 
 Schema 1 first appeared in `v2026.5.30-beta.1` and was also written by the
 extended-stable `v2026.7.35`. Versions 2, 4, 5–6, and 7 were development-only
@@ -72,6 +73,28 @@ including shared agent registration. Run `openclaw doctor --fix` with OpenClaw
 be verified, follow the explicit agent-restoration instructions it reports, then
 rerun Doctor before upgrading the copy. Schema-8 and later session migrations
 remain supported.
+
+### Agent schema 37
+
+Schema 37 adds `session_transcript_cold_archive_chunks`, keyed by session ID and
+chunk index. Each row records one immutable file's name, SHA-256, sequence range,
+event and byte counts, and optional compressed backup payload. The parent cold
+archive row keeps the window totals and storage location; deleting it cascades to
+its chunk metadata. Existing single-file archives retain their representation.
+
+The forward migration creates only the empty child table and advances schema
+metadata. It does not rewrite or backfill transcript or archive rows, build an
+index on existing data, or add DDL to ordinary database admission. Its SQLite
+startup backup scope contains the child table and schema metadata. Existing
+integrity admission and full updater recovery-backup requirements still apply.
+PostgreSQL installs the equivalent generated table through its forward runner.
+
+Older binaries cannot interpret a chunked window and refuse schema 37 before
+reading it. The supported updater's Doctor retains its existing private rehearsal
+and verified backup handoff for older update drivers. Rollback requires restoring
+the verified pre-upgrade backup with its matching build; never lower schema markers.
+See [cold transcript storage](/reference/session-management-compaction/maintenance#cold-transcript-storage)
+for bounded preparation, restore, retention, and missing-file recovery.
 
 ### Agent schema 36
 

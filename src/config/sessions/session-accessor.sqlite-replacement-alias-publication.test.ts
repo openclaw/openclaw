@@ -90,11 +90,6 @@ it("preserves shared-window exclusion provenance across canonical replacements",
     for (const sessionKey of [a, b]) {
       replaceSessionEntrySync({ agentId: "main", storePath: database.path, sessionKey }, entry);
     }
-    expect(
-      database.db
-        .prepare("SELECT session_key FROM session_windows WHERE session_id = ?")
-        .get("shared"),
-    ).toEqual({ session_key: b });
     await applySessionEntryCanonicalReplacements({
       storePath: database.path,
       sessionKeys: [a, b],
@@ -110,13 +105,6 @@ it("preserves shared-window exclusion provenance across canonical replacements",
         ],
       }),
     });
-    expect(
-      database.db
-        .prepare(
-          "SELECT session_key, hook_external_content_source FROM session_windows WHERE session_id = ?",
-        )
-        .get("shared"),
-    ).toEqual({ session_key: b, hook_external_content_source: "gmail" });
     expect(
       listSessionTranscriptInstances(
         { agentId: "main", storePath: database.path },

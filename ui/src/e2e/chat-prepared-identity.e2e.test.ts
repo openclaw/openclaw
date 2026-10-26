@@ -22,6 +22,7 @@ const publication = {
 async function openPendingChat() {
   const page = await newChatPage(suite);
   const gateway = await installMockGateway(page, {
+    subscriptionInitialHistory: false,
     connectCapabilities: [GATEWAY_SERVER_CAPS.MODEL_CATALOG_SNAPSHOT],
     sessionKey,
     sessions: [{ key: sessionKey, kind: "direct", displayName: "Current title", updatedAt: 1 }],

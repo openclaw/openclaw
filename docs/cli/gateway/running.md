@@ -179,3 +179,12 @@ automatically. The explicit command is needed for crashed owners whose death
 cannot be verified from the new process, including containers with separate PID
 namespaces. `openclaw gateway recover-lock --json` exposes the inspection and
 confirmation command for operator tooling.
+
+Recovery supports SQLite global state and the selected PostgreSQL state family.
+For PostgreSQL, inspection binds the original local anchor, remote store UUID and
+namespace, and complete Gateway-owner lease record. Confirmation clears only that
+unchanged lease under native custody and a bounded PostgreSQL transaction; it
+does not migrate schemas or remove agent data. An unavailable store, incompatible
+lease table, changed anchor or renewed lease remains refused. Inspection may read
+a different application schema version through its verified stable lease contract;
+confirmation requires this binary's current GLOBAL schema version before any cleanup.

@@ -33,7 +33,6 @@ import {
 } from "../registry/subagent-requester-settle-identity.js";
 import { isClaimedByLiveRequesterTurn } from "../registry/subagent-requester-turn-liveness.js";
 import { isSameSubagentRunOwner } from "../registry/subagent-run-generation.js";
-import { hasSubagentRunEnded } from "../registry/subagent-run-liveness.js";
 import { captureRequesterContinuationCaller } from "../requester-cron-authority.js";
 import { transferRequesterFinalAttachment } from "../requester-final-attachment.js";
 import { getSubagentDepthFromSessionStoreInWorker } from "../spawn/subagent-depth.js";
@@ -64,6 +63,7 @@ import {
   createRequesterSettleBatchCompletion,
   REQUESTER_SETTLE_WAKE_MAX_ATTEMPTS,
   needsRequesterSettleFindings,
+  isRequesterSettleMemberReady,
   resolveRequesterSettleRetryState,
   captureRequesterRunOwner,
   isRequesterSettleDeliveryClosed,
@@ -156,10 +156,6 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
   const hasCurrentWake = (entry: SubagentRunRecord | undefined): entry is SubagentRunRecord =>
     Boolean(entry?.requesterSettleWake) &&
     entry?.requesterSettleWake?.rearmGeneration === currentRearmGeneration;
-  const hasSettled = (entry: SubagentRunRecord) =>
-    entry.execution.status !== "running" &&
-    entry.pauseReason !== "sessions_yield" &&
-    hasSubagentRunEnded(entry);
   let settledBatch: SubagentRunRecord[];
   if (pauseNotice) {
     settledBatch = [currentSettledEntry];
@@ -168,14 +164,14 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     // Retired rows no longer own completion, but every surviving frozen member
     // must be terminal before this batch can wake its requester.
     settledBatch = frozenBatchRunIds.map((runId) => runsById.get(runId)).filter(hasCurrentWake);
-    if (!settledBatch.every(hasSettled)) {
+    if (!settledBatch.every(isRequesterSettleMemberReady)) {
       params.onDescendantsPending?.();
       return false;
     }
   } else {
     // An unfrozen wave cannot absorb a different requester-yield generation.
     settledBatch = selectConnectedSettledSubagentWave(
-      requesterRuns.filter((entry) => hasCurrentWake(entry) && hasSettled(entry)),
+      requesterRuns.filter((entry) => hasCurrentWake(entry) && isRequesterSettleMemberReady(entry)),
       currentSettledEntry,
     );
   }

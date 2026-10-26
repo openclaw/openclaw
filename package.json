@@ -16,7 +16,7 @@
     ],
     "schemaVersions": {
       "state": 33,
-      "agent": 36
+      "agent": 37
     }
   },
   "description": "Multi-channel AI gateway with extensible messaging integrations",

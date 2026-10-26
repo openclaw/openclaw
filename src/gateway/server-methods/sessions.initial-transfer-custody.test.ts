@@ -5,7 +5,7 @@ import {
 } from "../../agents/subagents/registry/subagent-control.test-support.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import {
   emptySqliteCounts,
   observeParentSqlite,
@@ -88,12 +88,7 @@ function holdCommit() {
 }
 
 async function waitForHold(pending: Promise<unknown>, held: Promise<unknown>, message: string) {
-  await Promise.race([
-    held,
-    pending.then(() => {
-      throw new Error(message);
-    }),
-  ]);
+  await awaitGateBeforeSettlement(held, pending, message);
 }
 
 function registerChild(

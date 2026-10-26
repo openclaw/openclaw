@@ -200,8 +200,8 @@ suite.define(() => {
       expect(await page.locator(".activity-entry").count()).toBe(0);
       await work.click();
       await waitForControlUiRoute(page, { routeId: "chat", pathname: "/chat/work" });
-      await gateway.waitForRequest("chat.startup", {
-        match: { sessionKey: "agent:work:main", agentId: "work" },
+      await gateway.waitForRequest("sessions.messages.subscribe", {
+        match: { key: "agent:work:main", agentId: "work" },
       });
     });
   });

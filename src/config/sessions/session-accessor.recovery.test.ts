@@ -94,6 +94,13 @@ async function createFixture() {
   return { root, sourceKey, successorKey, scope, recoveryParams };
 }
 
+function expectUnrecovered(fixture: Awaited<ReturnType<typeof createFixture>>) {
+  const source = readEntry(fixture.scope());
+  expect(source).toMatchObject({ pinnedAt: 5, mainRestartRecovery: { revision: 4 } });
+  expect(source?.archivedAt).toBeUndefined();
+  expect(readEntry(fixture.scope(fixture.successorKey))).toBeUndefined();
+}
+
 describe("recoverSessionEntryFromRestartTombstone", () => {
   it("clones and publishes the atomic archived successor transition without host SQLite", async () => {
     const fixture = await createFixture();
@@ -258,12 +265,7 @@ describe("recoverSessionEntryFromRestartTombstone", () => {
     );
 
     await expect(recover(fixture.recoveryParams())).rejects.toThrow(/JSON/);
-    expect(readEntry(fixture.scope())).toMatchObject({
-      pinnedAt: 5,
-      mainRestartRecovery: { revision: 4 },
-    });
-    expect(readEntry(fixture.scope())?.archivedAt).toBeUndefined();
-    expect(readEntry(fixture.scope(fixture.successorKey))).toBeUndefined();
+    expectUnrecovered(fixture);
     expect(
       readTranscriptStatsSync({
         ...fixture.scope(fixture.successorKey),
@@ -285,8 +287,7 @@ describe("recoverSessionEntryFromRestartTombstone", () => {
       expected: { ...fixture.recoveryParams().expected, ...expected },
     });
     expect(result).toEqual({ status: "conflict", reason: "source-changed" });
-    expect(readEntry(fixture.scope(fixture.sourceKey))?.archivedAt).toBeUndefined();
-    expect(readEntry(fixture.scope(fixture.successorKey))).toBeUndefined();
+    expectUnrecovered(fixture);
   });
 
   it.each(["transaction", "commit"] as const)(
@@ -319,11 +320,7 @@ describe("recoverSessionEntryFromRestartTombstone", () => {
         stop();
         intercepted.mockRestore();
       }
-      expect(readEntry(fixture.scope(fixture.sourceKey))).toMatchObject({
-        pinnedAt: 5,
-        mainRestartRecovery: { revision: 4 },
-      });
-      expect(readEntry(fixture.scope(fixture.successorKey))).toBeUndefined();
+      expectUnrecovered(fixture);
       expect(
         await readEvents({
           ...fixture.scope(fixture.successorKey),

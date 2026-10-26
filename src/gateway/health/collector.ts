@@ -220,11 +220,13 @@ function buildPluginHealthSummary(cfg: OpenClawConfig): PluginHealthSummary | un
       state,
       diagnostic: toPublicPluginVerificationDiagnostic(diagnostic),
     }))
-    .toSorted((left, right) => left.id.localeCompare(right.id));
+    // oxlint-disable-next-line unicorn/no-array-sort -- The mapped health summaries are private to this collection.
+    .sort((left, right) => left.id.localeCompare(right.id));
   const loaded = (registry?.plugins ?? [])
     .filter((plugin) => plugin.status === "loaded")
     .map((plugin) => plugin.id)
-    .toSorted((left, right) => left.localeCompare(right));
+    // oxlint-disable-next-line unicorn/no-array-sort -- The mapped plugin IDs are private to this collection.
+    .sort((left, right) => left.localeCompare(right));
   const loadErrors = (registry?.plugins ?? [])
     .filter(
       (plugin) =>
@@ -262,7 +264,8 @@ function buildPluginHealthSummary(cfg: OpenClawConfig): PluginHealthSummary | un
         ),
       )
     : [];
-  const errors = [...loadErrors, ...serviceErrors].toSorted(
+  // oxlint-disable-next-line unicorn/no-array-sort -- The combined error array is private to this collection.
+  const errors = [...loadErrors, ...serviceErrors].sort(
     (left, right) => left.id.localeCompare(right.id) || left.error.localeCompare(right.error),
   );
   if (loaded.length === 0 && errors.length === 0 && unavailable.length === 0) {

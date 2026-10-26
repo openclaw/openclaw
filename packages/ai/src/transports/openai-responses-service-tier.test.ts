@@ -5,6 +5,7 @@ import { assert, describe, expect, it } from "vitest";
 import { makeProviderModel } from "../providers/provider-model.test-support.js";
 import { createResponsesStreamWithRecovery } from "./openai-responses-replay-internal.js";
 import { nextResponsesServiceTier as nextTier } from "./openai-responses-service-tier.js";
+import { completedResponse } from "./openai-stream-cases.test-support.js";
 
 const model = makeProviderModel("openai-responses", "openai", "fixture-model", {
   baseUrl: "https://api.openai.com/v1",
@@ -21,10 +22,7 @@ function sse(events: unknown[]) {
     { headers: { "content-type": "text/event-stream" } },
   );
 }
-const complete = {
-  type: "response.completed",
-  response: { id: "resp_ok", status: "completed", output: [] },
-};
+const complete = completedResponse("resp_ok", []);
 const created = { type: "response.created", response: { id: "resp_rejected", output: [] } };
 async function fixture(
   respond: (attempt: number) => Response,

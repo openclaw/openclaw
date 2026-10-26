@@ -330,7 +330,7 @@ async function archiveSessionColdBatch(
       }
       for (const { sessionId, lowerBoundBytes } of batch.oversizedTranscripts) {
         oversizedUntil.set(`${storePath}\0${sessionId}`, Date.now() + RESTORE_COOLDOWN_MS);
-        log.warn("Transcript remains in SQLite because its archive exceeds the 64 MiB limit", {
+        log.warn("Transcript remains in SQLite because one event exceeds the 64 MiB chunk limit", {
           agentId: input.databaseOptions.agentId,
           sessionId,
           lowerBoundBytes,

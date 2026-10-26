@@ -74,11 +74,13 @@ try {
         includeObjectsCollectedByMinorGC: true,
       });
     }
+    // Amplify the small-result control above CPU clock granularity.
+    const iterations = scenario === "small" ? 20_000 : 200;
     const samples = [];
     for (let sample = 0; sample < 5; sample++) {
       const start = performance.now();
       const cpu = process.threadCpuUsage();
-      for (let iteration = 0; iteration < 200; iteration++) {
+      for (let iteration = 0; iteration < iterations; iteration++) {
         invoke();
       }
       const used = process.threadCpuUsage(cpu);
@@ -103,7 +105,7 @@ try {
         digest,
         stringifyCalls,
         serializedChars,
-        operations: 1000,
+        operations: iterations * 5,
         samples,
         sampledBytes,
       }),

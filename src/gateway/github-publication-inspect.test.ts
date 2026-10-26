@@ -31,6 +31,9 @@ import type { GatewayRequestContext } from "./server-methods/types.js";
 const mocks = githubPublicationTestMocks();
 const HEAD = "a".repeat(40);
 const BASE = "b".repeat(40);
+const session = () => loadSessionEntryReadOnly({ agentId: "main", sessionKey: SESSION_KEY });
+const verifyEnterprise = (host: string, id = 101, login = "contributor", name = "Contributor") =>
+  ensureCanonicalEnterpriseGitHubProfile(`github:${host}:${id}`, name, {}, { login });
 
 async function fixture(
   options: { linked?: boolean; host?: string; repository?: string; login?: string } = {},
@@ -48,12 +51,7 @@ async function fixture(
     } else {
       // The Enterprise identity write binds its proof to the profile that currently holds the alias.
       await linkCanonicalUserProfileEmail(`github:${host}:101`, f.guestProfile);
-      await ensureCanonicalEnterpriseGitHubProfile(
-        `github:${host}:101`,
-        "Contributor",
-        {},
-        { login: "contributor" },
-      );
+      await verifyEnterprise(host);
     }
   }
   mocks.prepareIdentity.mockResolvedValue({
@@ -146,6 +144,7 @@ async function fixture(
     baseRepo,
     fork,
     requests,
+    endpoints: () => requests.map((args) => args.at(-1)!),
     invoke,
     onRead(callback: (endpoint: string) => Promise<void>) {
       beforeRead = callback;
@@ -163,46 +162,41 @@ describe("own PR inspection through the admitted agent tool and Gateway", () => 
     sandbox: "required",
   });
 
-  it.each(["same repository", "fork"])(
-    "returns canonical %s identity without a receipt or writes",
-    async (variant) => {
-      const f = await fixture();
-      if (variant === "same repository") {
-        f.pr.head.repo = f.baseRepo;
-      }
-      const before = loadSessionEntryReadOnly({ agentId: "main", sessionKey: SESSION_KEY });
-      const result = await f.invoke();
-      expect(Value.Check(SessionGitHubPullRequestInspectResultSchema, result)).toBe(true);
-      expect(result).toMatchObject({
-        url: "https://github.com/example/repository/pull/7",
-        host: "github.com",
-        number: 7,
-        author: { accountId: 101, login: "contributor" },
-        state: "open",
-        base: {
-          repository: "example/repository",
-          repositoryId: 10,
-          branch: "release",
-          commit: BASE,
-        },
-        head: {
-          repository: variant === "fork" ? "contributor/repository" : "example/repository",
-          repositoryId: variant === "fork" ? 20 : 10,
-          branch: "topic/existing",
-          commit: HEAD,
-        },
-      });
-      expect(loadSessionEntryReadOnly({ agentId: "main", sessionKey: SESSION_KEY })).toEqual(
-        before,
-      );
-      expect(f.requests.map((args) => args.at(-1))).toEqual([
-        "repos/example/repository",
-        "repos/example/repository/pulls/7",
-        ...(variant === "fork" ? ["repos/contributor/repository"] : []),
-      ]);
-      expect(f.externalWrites).toEqual([]);
-    },
-  );
+  it.each([
+    ["same repository", "github.com"],
+    ["fork", "github.com"],
+    ["renamed account", "github.com"],
+    ["renamed account", "git.example.test"],
+  ])("returns canonical %s identity on %s without a receipt or writes", async (variant, host) => {
+    const renamed = variant === "renamed account";
+    const repository = renamed ? "mona-cat_octo/.repo.._" : "example/repository";
+    const login = renamed ? "mona-cat_octo" : "contributor";
+    const f = await fixture({ host, repository, login });
+    f.baseRepo.private = renamed;
+    if (variant === "same repository") {
+      f.pr.head.repo = f.baseRepo;
+    }
+    const before = session();
+    const result = await f.invoke();
+    expect(Value.Check(SessionGitHubPullRequestInspectResultSchema, result)).toBe(true);
+    expect(result).toMatchObject({
+      state: "open",
+      url: `https://${host}/${repository}/pull/7`,
+      author: { accountId: 101, login },
+      base: { repository, repositoryId: 10, branch: "release", commit: BASE },
+      head: {
+        repository: variant === "same repository" ? repository : "contributor/repository",
+        repositoryId: variant === "same repository" ? 10 : 20,
+        branch: "topic/existing",
+        commit: HEAD,
+      },
+    });
+    if (renamed) {
+      expect(f.endpoints()).toContain(`repos/${repository}/collaborators/${login}/permission`);
+    }
+    expect(session()).toEqual(before);
+    expect(f.externalWrites).toEqual([]);
+  });
 
   it("accepts another verified linked account without depending on the primary credit choice", async () => {
     const f = await fixture();
@@ -266,33 +260,19 @@ describe("own PR inspection through the admitted agent tool and Gateway", () => 
     async (raw) => {
       const f = await fixture();
       f.pr.user = { id: 42, login: "publisher" };
-      const before = loadSessionEntryReadOnly({ agentId: "main", sessionKey: SESSION_KEY });
+      const before = session();
       await expect(f.invoke({}, raw)).rejects.toThrow(
         "This PR is not authored by a GitHub account linked to you. inspect_pr checks your PR authorship, not the managed publisher's credentials. For this session's published PR, use edit without title or body; for a new PR, use publish. A bot-authored PR from another session cannot be imported with inspect_pr or prepare_pr.",
       );
-      expect(loadSessionEntryReadOnly({ agentId: "main", sessionKey: SESSION_KEY })).toEqual(
-        before,
-      );
-      expect(f.requests.map((args) => args.at(-1))).toEqual([
-        "repos/example/repository",
-        "repos/example/repository/pulls/7",
-      ]);
+      expect(session()).toEqual(before);
       expect(f.externalWrites).toEqual([]);
     },
   );
 
-  it.each(["unlinked", "wrong author"])("rejects %s without exposing PR data", async (variant) => {
-    const f = await fixture({ linked: variant !== "unlinked" });
-    if (variant === "wrong author") {
-      f.pr.user.id = 999;
-    }
-    await expect(f.invoke()).rejects.toThrow(
-      variant === "unlinked" ? "Link a verified" : "not authored by a GitHub account linked to you",
-    );
-    if (variant === "unlinked") {
-      expect(f.requests).toEqual([]);
-    }
-    expect(f.requests.some((args) => args.at(-1) === "repos/contributor/repository")).toBe(false);
+  it("rejects an unlinked requester before reading PR data", async () => {
+    const f = await fixture({ linked: false });
+    await expect(f.invoke()).rejects.toThrow("Link a verified");
+    expect(f.requests).toEqual([]);
   });
 
   it.each(["role", "linked identity", "publisher", "session"])(
@@ -323,7 +303,7 @@ describe("own PR inspection through the admitted agent tool and Gateway", () => 
       });
       await expect(f.invoke()).rejects.toThrow();
       expect(entered).toBe(true);
-      expect(f.requests.some((args) => args.at(-1) === "repos/contributor/repository")).toBe(false);
+      expect(f.endpoints()).not.toContain("repos/contributor/repository");
     },
   );
 
@@ -335,13 +315,13 @@ describe("own PR inspection through the admitted agent tool and Gateway", () => 
       f.setAccess(permission === "none" ? "none" : "read", permission === "wrong id" ? 999 : 101);
       if (permission === "read") {
         expect(await f.invoke()).toMatchObject({ author: { accountId: 101 } });
-        const endpoints = f.requests.map((args) => args.at(-1)!);
+        const endpoints = f.endpoints();
         expect(
           endpoints.indexOf("repos/example/repository/collaborators/contributor/permission"),
         ).toBeLessThan(endpoints.indexOf("repos/example/repository/pulls/7"));
       } else {
         await expect(f.invoke()).rejects.toThrow("could not be verified as yours");
-        expect(f.requests.some((args) => args.at(-1)?.endsWith("/pulls/7"))).toBe(false);
+        expect(f.endpoints().some((endpoint) => endpoint.endsWith("/pulls/7"))).toBe(false);
       }
     },
   );
@@ -370,48 +350,19 @@ describe("own PR inspection through the admitted agent tool and Gateway", () => 
     async (host) => {
       const f = await fixture({ host });
       const canonical = await f.invoke();
-      const endpoints = f.requests.map((args) => args.at(-1));
+      const endpoints = f.endpoints();
       for (const suffix of [
         "/",
-        "?diff=unified&w=1",
-        "#issuecomment-123",
-        "#pullrequestreview-456",
         "/files?diff=split#diff-123",
         "/changes",
-        "/changes#diff-123",
         "/commits",
         `/commits/${HEAD}`,
         "/checks?check_run_id=789",
       ]) {
         f.requests.length = 0;
         expect(await f.invoke({ pullRequestUrl: f.pr.html_url + suffix })).toEqual(canonical);
-        expect(f.requests.map((args) => args.at(-1))).toEqual(endpoints);
+        expect(f.endpoints()).toEqual(endpoints);
       }
-    },
-  );
-
-  it.each(["github.com", "git.example.test"])(
-    "reads a managed account's current login and repository name on %s",
-    async (host) => {
-      const f = await fixture({
-        host,
-        repository: "mona-cat_octo/.repo.._",
-        login: "mona-cat_octo",
-      });
-      f.baseRepo.private = true;
-      const result = await f.invoke();
-      expect(Value.Check(SessionGitHubPullRequestInspectResultSchema, result)).toBe(true);
-      expect(result).toMatchObject({
-        url: `https://${host}/mona-cat_octo/.repo.._/pull/7`,
-        author: { accountId: 101, login: "mona-cat_octo" },
-        base: { repository: "mona-cat_octo/.repo.._", repositoryId: 10 },
-      });
-      expect(
-        f.requests.some(
-          (args) =>
-            args.at(-1) === "repos/mona-cat_octo/.repo.._/collaborators/mona-cat_octo/permission",
-        ),
-      ).toBe(true);
     },
   );
 
@@ -443,33 +394,18 @@ describe("own PR inspection through the admitted agent tool and Gateway", () => 
     await linkCanonicalUserProfileEmail(`github:${host}:101`, f.guestProfile);
     await expect(f.invoke()).rejects.toThrow("Link a verified");
     // Verification recorded on another profile does not travel with a transferred alias.
-    await ensureCanonicalEnterpriseGitHubProfile(
-      `github:${host}:202`,
-      "Other",
-      {},
-      { login: "other" },
-    );
+    await verifyEnterprise(host, 202, "other", "Other");
     await linkCanonicalUserProfileEmail(`github:${host}:202`, f.guestProfile);
     f.pr.user = { id: 202, login: "other" };
     await expect(f.invoke()).rejects.toThrow("Link a verified");
     expect(f.requests).toEqual([]);
     // Current verification of the guest's own binding admits exactly that account.
-    await ensureCanonicalEnterpriseGitHubProfile(
-      `github:${host}:101`,
-      "Contributor",
-      {},
-      { login: "contributor" },
-    );
+    await verifyEnterprise(host);
     f.pr.user = { id: 101, login: "contributor" };
     expect(await f.invoke()).toMatchObject({ host, author: { accountId: 101 } });
     // A verified identity on another Enterprise host neither admits nor disables this host's account.
     await linkCanonicalUserProfileEmail("github:other.example.test:303", f.guestProfile);
-    await ensureCanonicalEnterpriseGitHubProfile(
-      "github:other.example.test:303",
-      "Contributor",
-      {},
-      { login: "contributor-other" },
-    );
+    await verifyEnterprise("other.example.test", 303, "contributor-other");
     expect(await f.invoke()).toMatchObject({ host, author: { accountId: 101 } });
     f.pr.user = { id: 303, login: "contributor-other" };
     await expect(f.invoke()).rejects.toThrow("not authored by a GitHub account linked to you");

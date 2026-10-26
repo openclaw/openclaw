@@ -122,6 +122,7 @@ export async function sendCronAnnouncePayloadStrict(params: {
   const payloads = appendCronRunInspectionLink(
     prepared.filter((payload) => hasReplyPayloadContent(payload, { trimText: true })),
     params.inspectionUrl,
+    channelId,
   );
   if (payloads.length === 0) {
     return { status: "suppressed", reason: "empty_after_tts" };

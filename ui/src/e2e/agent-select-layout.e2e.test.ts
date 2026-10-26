@@ -76,6 +76,7 @@ suite.define(() => {
         await openPicker();
         await expect.poll(() => writer.getAttribute("aria-checked")).toBe("true");
         expect(await selected.locator(".agent-select__option-check").count()).toBe(0);
+        await writer.locator(".agent-select__option-check svg").waitFor({ state: "visible" });
         const writerCheck = await writer.locator(".agent-select__option-check svg").boundingBox();
         expect(writerCheck?.width).toBe(check!.width);
         expect(writerCheck?.height).toBe(check!.height);

@@ -13,9 +13,11 @@ export type SessionColdPlan = {
 export type SessionColdPrepared = {
   plan: SessionColdPlan;
   archive: SessionColdArchive;
+  chunks: import("./session-cold-storage-chunks.js").SessionColdChunkMetadata[];
   envelopeBytes: number;
 };
 export type SessionColdExternalization = {
+  chunks: import("./session-cold-storage-chunks.js").SessionColdChunkMetadata[];
   archive: Omit<SessionColdArchive, "archive_blob">;
   envelopeBytes: number;
 };

@@ -1552,13 +1552,44 @@ async function prepareModelPicker(page: Page) {
 }
 
 async function searchModels(page: Page) {
-  await page.locator("[data-chat-model-search]").pressSequentially(modelQuery);
+  await searchModelQuery(page, modelQuery);
+}
+
+async function searchModelQuery(page: Page, query: string) {
+  await page.locator("[data-chat-model-search]").pressSequentially(query);
   await page.locator('[data-chat-model-option="example/model-999"]').waitFor();
   await page.waitForFunction(
     () =>
       [...document.querySelectorAll<HTMLElement>("[data-chat-model-option]")].filter((option) =>
         option.checkVisibility(),
       ).length === 1,
+  );
+}
+
+async function navigateModels(page: Page) {
+  const search = page.locator("[data-chat-model-search]");
+  const initial = await search.getAttribute("aria-activedescendant");
+  if (!initial) {
+    throw new Error("Expected an initial active model descendant");
+  }
+  await search.press("ArrowDown");
+  await page.waitForFunction(
+    (id) =>
+      document.querySelector("[data-chat-model-search]")?.getAttribute("aria-activedescendant") !==
+      id,
+    initial,
+  );
+  for (let index = 0; index < 9; index++) {
+    await search.press("ArrowDown");
+  }
+  for (let index = 0; index < 10; index++) {
+    await search.press("ArrowUp");
+  }
+  await page.waitForFunction(
+    (id) =>
+      document.querySelector("[data-chat-model-search]")?.getAttribute("aria-activedescendant") ===
+      id,
+    initial,
   );
 }
 
@@ -2361,34 +2392,28 @@ export const interactionScenarios: readonly InteractionScenario[] = [
       await page.locator("[data-chat-model-search]").waitFor();
       await frames(page);
     },
-    run: async (page) => {
-      const search = page.locator("[data-chat-model-search]");
-      const initial = await search.getAttribute("aria-activedescendant");
-      if (!initial) {
-        throw new Error("Expected the selected model to be the initial active descendant");
-      }
-      await search.press("ArrowDown");
+    run: navigateModels,
+  },
+  {
+    id: "model-picker-filtered-navigate",
+    route: controlUiSessionPath(sessionKeys[0]),
+    resourceOnly: true,
+    expected: "Keyboard navigation retains the active descendant across 1,000 filtered models.",
+    prepare: async (page) => {
+      await prepareModelPicker(page);
+      await page.locator(`${activePane} [data-chat-model-select]`).click();
+      await page.locator("[data-chat-model-search]").fill("Warm model");
       await page.waitForFunction(
-        (id) =>
-          document
-            .querySelector("[data-chat-model-search]")
-            ?.getAttribute("aria-activedescendant") !== id,
-        initial,
+        () =>
+          Number.parseFloat(
+            document.querySelector<HTMLElement>(
+              "[data-chat-model-filtering] .chat-controls__model-virtual-content",
+            )?.style.height ?? "",
+          ) >= 30_000,
       );
-      for (let index = 0; index < 9; index++) {
-        await search.press("ArrowDown");
-      }
-      for (let index = 0; index < 10; index++) {
-        await search.press("ArrowUp");
-      }
-      await page.waitForFunction(
-        (id) =>
-          document
-            .querySelector("[data-chat-model-search]")
-            ?.getAttribute("aria-activedescendant") === id,
-        initial,
-      );
+      await frames(page);
     },
+    run: navigateModels,
   },
   {
     id: "model-picker-search",
@@ -2401,6 +2426,19 @@ export const interactionScenarios: readonly InteractionScenario[] = [
       await frames(page);
     },
     run: searchModels,
+  },
+  {
+    id: "model-picker-reference-search",
+    route: controlUiSessionPath(sessionKeys[0]),
+    resourceOnly: true,
+    expected: "A case-insensitive provider/model reference finds the original model choice.",
+    prepare: async (page) => {
+      await prepareModelPicker(page);
+      await page.locator(`${activePane} [data-chat-model-select]`).click();
+      await page.locator("[data-chat-model-search]").waitFor();
+      await frames(page);
+    },
+    run: (page) => searchModelQuery(page, "EXAMPLE/MODEL-999"),
   },
   ...(["sessions", "cron"] as const).map((route): InteractionScenario => ({
     id: `${route}-open`,

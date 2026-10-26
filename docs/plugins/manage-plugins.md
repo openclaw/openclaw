@@ -333,6 +333,11 @@ already-installed local TypeScript plugin, use `reload` with its plugin ID.
 Installing new local, npm, Git, or archive sources still uses the CLI workflow
 above.
 
+When the current turn uses the plugin being reloaded, use `reloadAndResume`.
+It checks administrator authority before yielding, finishes turn cleanup, then
+reloads and resumes the same conversation with the result. Permission revocation
+still stops the reload; do not repeat a completed mutation.
+
 In the embedded agent runtime, an applied change refreshes tools before the next
 model request after running code programs have settled. A parked program may need
 further model steps to wait for completion; completed actions and accepted steering

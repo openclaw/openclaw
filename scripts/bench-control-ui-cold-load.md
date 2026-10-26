@@ -489,6 +489,12 @@ hello, live catch-up, enabled input, layout shifts, mutation batches, and retain
 row elements, duplicate visible row keys, and the same visible row's viewport offset
 at the cached-to-live handoff. Visibility and enabled-input milestones are DOM observations;
 FCP is the browser's paint metric. Diagnostic runs also save filmstrip frames.
+Live catch-up recognizes both `chat.startup` and initial history in a
+`sessions.messages.subscribe` reply, so cross-revision runs do not label live rows
+as cached rows after the subscription starts carrying history.
+The benchmark enables `subscriptionInitialHistory`; requested initial history uses
+the shared startup-response fixture owner. Older clients still make a separate
+startup request. Scenarios testing that fallback set `subscriptionInitialHistory: false`.
 Use `--untraced` for timing comparisons without boot tracing or CPU sampling,
 then collect separate traced runs for the storyboard and attribution.
 
@@ -634,6 +640,9 @@ cycles with `--bundle-dir <baseline> --compare-bundle-dir <candidate> --runs 20
 --streaming-reply --transcript-messages 400 --face chat --untraced`. The benchmark
 restores each build's warm state before each run. Streaming comparisons do not
 require the separate `--warm-reload` diagnostics or external probe scripts.
+The native typing probe appends to the existing draft and verifies that every
+dispatched character survives streaming; `streaming.typing` retains the count
+and final synthetic draft alongside the timing evidence.
 
 Add `--streaming-allocations` to sample JavaScript allocations during the stream
 with CDP HeapProfiler at a 4 KiB interval, retaining samples collected by both

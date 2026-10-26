@@ -15,6 +15,8 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+const emptyReport = { stalls: [], dropped: 0, unattributedDropped: 0, delayMaxMs: 0 };
+
 function fixture() {
   let now = 0;
   const monitor = createMainThreadStallMonitor(() => now);
@@ -118,12 +120,7 @@ describe("main-thread stall attribution", () => {
       dropped: 0,
       delayMaxMs: 1_220,
     });
-    expect(monitor.drain()).toEqual({
-      stalls: [],
-      dropped: 0,
-      unattributedDropped: 0,
-      delayMaxMs: 0,
-    });
+    expect(monitor.drain()).toEqual(emptyReport);
   });
 
   it("returns the original promise without observing its continuations", async () => {
@@ -134,12 +131,7 @@ describe("main-thread stall attribution", () => {
     elapse(5_000);
     ready.resolve();
     await operation;
-    expect(monitor.drain()).toEqual({
-      stalls: [],
-      dropped: 0,
-      unattributedDropped: 0,
-      delayMaxMs: 0,
-    });
+    expect(monitor.drain()).toEqual(emptyReport);
   });
 
   it("restores same-name phases after nested work throws", () => {
@@ -217,12 +209,7 @@ describe("main-thread stall attribution", () => {
       monitor.reset();
       elapse(20);
     });
-    expect(monitor.drain()).toEqual({
-      stalls: [],
-      dropped: 0,
-      unattributedDropped: 0,
-      delayMaxMs: 20,
-    });
+    expect(monitor.drain()).toEqual({ ...emptyReport, delayMaxMs: 20 });
   });
 
   it("bounds retained stalls and releases observation with the Gateway lifetime", () => {
@@ -235,11 +222,6 @@ describe("main-thread stall attribution", () => {
     expect(report.dropped).toBe(4);
     monitor.stop();
     runWithMainThreadTask("maintenance", () => elapse(1_001));
-    expect(monitor.drain()).toEqual({
-      stalls: [],
-      dropped: 0,
-      unattributedDropped: 0,
-      delayMaxMs: 0,
-    });
+    expect(monitor.drain()).toEqual(emptyReport);
   });
 });

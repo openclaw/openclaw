@@ -26,6 +26,8 @@ it.each([
   ["किताब", "किताब"],
   ["कुतुब", "कुतुब"],
   ["कीताब", "कीताब"],
+  [" _Alpha--\u00a0\t!_Beta-- ", "alpha-beta"],
+  [" --\u2028__ ", "page"],
 ])("slugifies %j without collapsing distinct combining marks", (input, expected) => {
   expect(slugifyWikiSegment(input)).toBe(expected);
 });
