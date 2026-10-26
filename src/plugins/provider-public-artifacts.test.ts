@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
+import { captureEnv } from "../test-utils/env.js";
 import { createPluginCache, retirePluginCache, withPluginCache } from "./plugin-cache.js";
 import { bindPluginInstanceModuleLoader } from "./plugin-instance-module-loader.js";
 import { getPluginValueInstance } from "./plugin-instance-scope.js";
@@ -84,21 +85,10 @@ async function loadPolicyResolver(scope: string, loader: (params: { dirName: str
 }
 
 describe("provider public artifacts", () => {
-  const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-  const originalTrustBundledPluginsDir = process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
-
-  function restoreBundledPluginEnv() {
-    if (originalBundledPluginsDir === undefined) {
-      delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-    } else {
-      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = originalBundledPluginsDir;
-    }
-    if (originalTrustBundledPluginsDir === undefined) {
-      delete process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
-    } else {
-      process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = originalTrustBundledPluginsDir;
-    }
-  }
+  const bundledPluginEnv = captureEnv([
+    "OPENCLAW_BUNDLED_PLUGINS_DIR",
+    "OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR",
+  ]);
 
   beforeEach(() => {
     vi.resetModules();
@@ -106,7 +96,7 @@ describe("provider public artifacts", () => {
   });
 
   afterEach(() => {
-    restoreBundledPluginEnv();
+    bundledPluginEnv.restore();
     vi.doUnmock("./bundled-dir.js");
     vi.doUnmock("./manifest-registry.js");
     vi.doUnmock("./public-surface-loader.js");
@@ -333,7 +323,7 @@ describe("provider public artifacts", () => {
         requirement: "fixture-setup",
       });
     } finally {
-      restoreBundledPluginEnv();
+      bundledPluginEnv.restore();
       fs.rmSync(pluginRoot, { recursive: true, force: true });
       fs.rmSync(bundledPluginsDir, { recursive: true, force: true });
     }
@@ -582,7 +572,7 @@ describe("provider public artifacts", () => {
           ?.levels.map((level) => level.id),
       ).toEqual(["off", "high", "max"]);
     } finally {
-      restoreBundledPluginEnv();
+      bundledPluginEnv.restore();
       fs.rmSync(pluginRoot, { recursive: true, force: true });
       fs.rmSync(bundledPluginsDir, { recursive: true, force: true });
     }

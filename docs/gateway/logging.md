@@ -31,6 +31,22 @@ isolate). Both values are in MiB and are sampled when the phase finishes, so
 service journals can attribute startup memory growth before readiness. They are
 point-in-time readings, not peak memory measurements.
 
+Before readiness, plugin load details are logged when loading and registration
+take at least 250 ms or start a pooled worker. `workersStarted` counts confirmed
+pool worker starts caused by that plugin's preparation, module evaluation, and registration;
+`workerScripts` breaks those starts down by script. Concurrent recovery work is
+excluded, as are unmanaged workers created directly by plugins. These are starts,
+not live-worker or retained-memory counts; background
+work that starts after the plugin's load detail is emitted is not included.
+`OPENCLAW_GATEWAY_STARTUP_TRACE=1` also logs the faster, worker-free plugin loads.
+
+Environment selection reports imports, config reading, recovery (including its
+config-health database read), guarding, and runtime-path pinning separately.
+These sub-phases appear during ordinary foreground Gateway startup without
+enabling full startup tracing. Parent timings include their nested sub-phases;
+do not add them together. Config-health timing includes any private database
+snapshot preparation and cleanup required by that read.
+
 The same lines include `workers` (live tracked worker isolates) and
 `workerHeapSamples` (sampled workers/live workers). When samples are available,
 `workerHeapMb` sums their total heap capacity in MiB; `workerHeapSource=cached`

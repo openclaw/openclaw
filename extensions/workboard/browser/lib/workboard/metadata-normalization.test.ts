@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { normalizeMetadata } from "./metadata-normalization.ts";
+import { normalizeCardPayload } from "./normalization.ts";
+
+const normalizeMetadata = (metadata: unknown) =>
+  normalizeCardPayload({ card: { id: "card", title: "Card", metadata } }).metadata;
 
 describe("Workboard automation metadata boundary", () => {
   it("keeps valid fields and filters malformed optional fields without losing string bytes", () => {

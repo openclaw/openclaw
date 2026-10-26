@@ -44,6 +44,7 @@ import { scheduleMainSessionRecoveryPendingTarget } from "./main-session-recover
 import type { MainSessionRecoveryReservation } from "./main-session-recovery-state.js";
 import { commitMainSessionRecovery } from "./main-session-recovery-store.js";
 import {
+  reconcileAcceptedRestartRecoveryCancellation,
   rollbackRestartRecoveryReservation,
   settleAcceptedRestartRecovery,
   settleRejectedRestartRecovery,
@@ -623,25 +624,21 @@ async function resumeMainSessionWithinAdmission(
     return resumeResult;
   } catch (error) {
     const explicitlyRejected = error instanceof GatewayClientRequestError && !dispatchAccepted;
-    if (
-      dispatchAccepted &&
-      !executionStarted &&
-      (!preStartAbortAttempted || preStartAbortConfirmed) &&
-      params.shouldContinue?.() !== false
-    ) {
-      await repairAcceptedRecovery();
-    } else if (
-      dispatchAccepted &&
-      !executionStarted &&
-      preStartAbortAttempted &&
-      !preStartAbortConfirmed &&
-      params.shouldContinue?.() !== false
-    ) {
-      log.warn(
-        `restart recovery execution start timed out without confirmed cancellation: ${params.sessionKey}`,
-      );
-    }
     try {
+      const unconfirmedStartTimeout = await reconcileAcceptedRestartRecoveryCancellation({
+        controllerInput,
+        dispatchAccepted,
+        executionStarted,
+        preStartAbortAttempted,
+        preStartAbortConfirmed,
+        repairAcceptedRecovery,
+        shouldContinue: params.shouldContinue,
+      });
+      if (unconfirmedStartTimeout) {
+        log.warn(
+          `restart recovery execution start timed out without confirmed cancellation: ${params.sessionKey}`,
+        );
+      }
       if (
         dispatchStarted &&
         (!explicitlyRejected || controllerInput?.abortSignal.aborted) &&
@@ -651,8 +648,6 @@ async function resumeMainSessionWithinAdmission(
           recoveryRunId,
           params.gatewayRuntime,
         );
-        // Stop can revoke operator admission before acceptance. Reconcile its
-        // recorded cancellation without treating other authority rejections as accepted work.
         if (
           terminalStatus &&
           (!explicitlyRejected || terminalStatus === "cancelled") &&

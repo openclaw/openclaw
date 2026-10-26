@@ -401,12 +401,10 @@ export function loadSubagentSessionListRunsFromSqlite(
     return runs;
   }
   for (const row of readSubagentSessionListRows({ controllerSessionKeys: keys }, database)) {
-    const entry = rowToSubagentRunRecord({
-      ...row,
-      run_id: row.run_id.trim(),
-      child_session_key: row.child_session_key.trim(),
-      requester_session_key: row.requester_session_key.trim(),
-    });
+    row.run_id = row.run_id.trim();
+    row.child_session_key = row.child_session_key.trim();
+    row.requester_session_key = row.requester_session_key.trim();
+    const entry = rowToSubagentRunRecord(row);
     if (entry) {
       runs.set(entry.runId, projectSubagentRunForSessionList(entry));
     }

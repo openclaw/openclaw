@@ -39,6 +39,20 @@ beforeEach(() => {
 });
 const visibleTools = { showToolCalls: true, showReasoning: true };
 
+it("commits a cached activity summary with its transcript row", () => {
+  const group = createToolGroup("cached", [
+    createMessageEntry(
+      "cached-tool",
+      createAssistantMessage([], { activity: [preparedOutcome("failed")] }),
+    ),
+  ]);
+  activityRoot.render([group], visibleTools);
+  const row = summaryContainer.querySelector('[data-chat-row-key="cached"]');
+  expect(row).not.toBeNull();
+  expect(row?.querySelector(".chat-activity-group__summary")?.textContent).toContain("1 read");
+  expect(row?.querySelector(".chat-tool-failure")?.textContent).toBe("1 failed");
+});
+
 function read(id: string, overrides: Record<string, unknown> = {}) {
   return createToolCall(id, "read", { path: `/repo/${id}.ts` }, overrides);
 }

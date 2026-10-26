@@ -1,6 +1,6 @@
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
+import { createEnteredGate } from "../../entered-gate.test-support.js";
 import { prepareSubagentKillSession } from "./subagent-control-session.js";
 import { reconcileDurableSubagentKillIntent } from "./subagent-registry-sweep-kill.js";
 import {
@@ -55,22 +55,20 @@ export function registerSubagentSweepKillCustodyTests(killSessionEntry: {
         entry.killIntent.sessionLifecycleRevision = undefined;
         addSuccessor();
       }
-      const entered = createDeferred();
-      const prepared = createDeferred();
+      const preparation = createEnteredGate();
       const prepare = vi.mocked(prepareSubagentKillSession).getMockImplementation();
       if (!prepare) {
         throw new Error("Missing synthetic session preparation");
       }
       vi.mocked(prepareSubagentKillSession).mockImplementation(async (...args) => {
-        entered.resolve();
-        await prepared.promise;
+        await preparation.wait();
         return prepare(...args);
       });
       const pending = h.reconcile();
 
       try {
         if (change !== "existing successor") {
-          await entered.promise;
+          await preparation.entered;
           if (change === "same run id") {
             runs.set(entry.runId, run());
           } else if (change === "newer generation") {
@@ -84,7 +82,7 @@ export function registerSubagentSweepKillCustodyTests(killSessionEntry: {
           }
         }
       } finally {
-        prepared.resolve();
+        preparation.release();
         await pending;
         h.childLookup.mockRestore();
         vi.mocked(prepareSubagentKillSession).mockImplementation(prepare);

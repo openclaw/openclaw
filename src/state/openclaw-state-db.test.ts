@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { captureThrown } from "../../test/helpers/capture-thrown.js";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import {
   cleanupTempDirs,
@@ -264,12 +265,7 @@ function createTempStateDir(): string {
 }
 
 function captureFailure(run: () => unknown) {
-  try {
-    run();
-  } catch (error) {
-    return error;
-  }
-  throw new Error("Expected operation to fail");
+  return captureThrown(run, "Expected operation to fail");
 }
 
 function expectStateSchemaMigrationRequired(

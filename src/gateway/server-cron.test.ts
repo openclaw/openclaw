@@ -27,7 +27,7 @@ import type * as deliveryTarget from "../cron/isolated-agent/delivery-target.js"
 import { CronService } from "../cron/service.js";
 import { waitForCronRunQueue } from "../cron/service/run-queue.js";
 import { onTimer as onCronTimer } from "../cron/service/timer.test-support.js";
-import { resolveSelectedCronJobsStorePath } from "../cron/store/paths.js";
+import { resolveCronJobsStorePath, resolveDefaultCronStorePath } from "../cron/store/paths.js";
 import { makeCronStreamSandboxTarget } from "../cron/stream-sandbox.test-support.js";
 import {
   OutboundDeliveryError,
@@ -234,10 +234,10 @@ function buildGatewayCronService(
   return buildGatewayCronServiceRuntime({
     ...params,
     env,
-    storePath: resolveSelectedCronJobsStorePath(
-      typeof legacyStore === "string" ? legacyStore : undefined,
-      env,
-    ),
+    storePath:
+      typeof legacyStore === "string"
+        ? resolveCronJobsStorePath(legacyStore, env, env)
+        : resolveDefaultCronStorePath(env),
   });
 }
 

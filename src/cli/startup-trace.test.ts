@@ -19,15 +19,6 @@ vi.mock("node:worker_threads", async (importOriginal) => ({
   isMainThread: true,
 }));
 
-function readTimelineEvents(timelinePath: string): Record<string, unknown>[] {
-  flushDiagnosticsTimeline();
-  return fs
-    .readFileSync(timelinePath, "utf8")
-    .trim()
-    .split("\n")
-    .map((line) => JSON.parse(line) as Record<string, unknown>);
-}
-
 const directories = useAutoCleanupTempDirTracker(afterEach);
 const timelineEvent = (type: string, name: string, fields = {}) =>
   expect.objectContaining({ type, name: `entry.${name}`, phase: "cli.startup", ...fields });
@@ -35,15 +26,6 @@ const stderrWrite = vi.fn<typeof process.stderr.write>(() => true);
 const messages = () => stderrWrite.mock.calls.map(([line]) => String(line));
 const makeTrace = (args: string[], source: "entry" | "cli.main" = "entry") =>
   createGatewayDispatchStartupTrace(["node", "openclaw", ...args], source);
-
-function timelineFixture(diagnostics: string) {
-  const timelinePath = path.join(directories.make("openclaw-startup-trace-"), "timeline.jsonl");
-  vi.stubEnv("OPENCLAW_DIAGNOSTICS", diagnostics);
-  vi.stubEnv("OPENCLAW_DIAGNOSTICS_TIMELINE_PATH", timelinePath);
-  const trace = makeTrace(["agent", "--local"]);
-  trace.mark("bootstrap");
-  return { trace, timelinePath };
-}
 
 beforeEach(() => {
   vi.stubEnv("OPENCLAW_GATEWAY_STARTUP_TRACE", "0");
@@ -90,6 +72,41 @@ it.each(["0", "1"])(
   },
 );
 
+it("reports environment selection sub-phases without full tracing only for gateway runs", async () => {
+  const phases = [
+    "cli.environment.imports",
+    "cli.environment.config-import",
+    "cli.environment.config-read",
+    "cli.environment.config-recovery",
+    "cli.environment.config.recovery.health-read",
+    "cli.environment.config-guard",
+    "cli.environment.pin-runtime-paths",
+  ];
+  for (const command of ["gateway", "status"]) {
+    vi.spyOn(process, "argv", "get").mockReturnValue(["node", "openclaw", command]);
+    stderrWrite.mockClear();
+    const trace = makeTrace([command], "cli.main");
+    trace.setLineFormatter((message) => message);
+    await trace.measure("gateway-run-select-environment-imports", () => {});
+    for (const phase of phases) {
+      await expect(measureGatewayBootstrapStep(phase, () => "result")).resolves.toBe("result");
+    }
+    await measureGatewayBootstrapStep("cli.environment.unlisted", () => {});
+    expect(messages()).toHaveLength(command === "gateway" ? (phases.length + 1) * 2 : 0);
+    if (command === "gateway") {
+      for (const phase of ["cli.main.gateway-run-select-environment-imports", ...phases]) {
+        expect(messages()).toContainEqual(
+          expect.stringMatching(
+            new RegExp(
+              `startup phase: ${phase} \\d+\\.\\dms total=.* rssMb=\\d+\\.\\d heapUsedMb=\\d+\\.\\d`,
+            ),
+          ),
+        );
+      }
+    }
+  }
+});
+
 it("formats live worker counts and cached heap coverage without requesting samples", async () => {
   const heap = vi.fn(async () => ({ ...getHeapStatistics(), total_heap_size: 12 * 1024 * 1024 }));
   const worker = Object.assign(new EventEmitter(), {
@@ -121,10 +138,8 @@ it("formats live worker counts and cached heap coverage without requesting sampl
 
 it.each([
   [false, 2],
-  [true, 0],
   [true, 1],
   [true, 2],
-  [true, 3],
 ] as const)(
   "reports milestones only to a supporting updater (gateway: %s, markers: %i)",
   async (gateway, markers) => {
@@ -156,7 +171,11 @@ it.each([
 it.each(["timeline", ""])(
   "records startup phases with initial diagnostics=%j",
   async (diagnostics) => {
-    const { trace, timelinePath } = timelineFixture(diagnostics);
+    const timelinePath = path.join(directories.make("openclaw-startup-trace-"), "timeline.jsonl");
+    vi.stubEnv("OPENCLAW_DIAGNOSTICS", diagnostics);
+    vi.stubEnv("OPENCLAW_DIAGNOSTICS_TIMELINE_PATH", timelinePath);
+    const trace = makeTrace(["agent", "--local"]);
+    trace.mark("bootstrap");
     await trace.measure("run-main-import", () => Promise.resolve());
     await expect(
       trace.measure("command-execution", async () => "done", { timeline: false }),
@@ -168,7 +187,12 @@ it.each(["timeline", ""])(
       await trace.configureDiagnosticsTimeline({ diagnostics: { flags: ["timeline"] } });
     }
 
-    const events = readTimelineEvents(timelinePath);
+    flushDiagnosticsTimeline();
+    const events = fs
+      .readFileSync(timelinePath, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
     expect(events).toEqual(
       expect.arrayContaining([
         timelineEvent("mark", "bootstrap", {

@@ -7,11 +7,9 @@ import { text as readText } from "node:stream/consumers";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { expect, it, vi } from "vitest";
 import { createOpenAiResponsesModelConfig } from "../../test/helpers/openai-responses-model-fixture.js";
-import {
-  writeOpenAiResponsesSse,
-  writeOpenAiResponsesText,
-} from "../../test/helpers/openai-responses-sse.js";
+import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { writeToolCallResponse } from "../gateway/gateway-provider-fixture.test-support.js";
 import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
 import {
   withOpenClawTestState,
@@ -123,29 +121,7 @@ function writeRepairToolCall(response: ServerResponse, name: "exec" | "write"): 
     ),
     status: "completed",
   };
-  writeOpenAiResponsesSse(response, [
-    {
-      type: "response.output_item.added",
-      output_index: 0,
-      item: { ...item, status: "in_progress", arguments: "" },
-    },
-    {
-      type: "response.function_call_arguments.done",
-      item_id: item.id,
-      output_index: 0,
-      arguments: item.arguments,
-    },
-    { type: "response.output_item.done", output_index: 0, item },
-    {
-      type: "response.completed",
-      response: {
-        id: "resp_repair_marker",
-        status: "completed",
-        output: [item],
-        usage: { input_tokens: 10, output_tokens: 10, total_tokens: 20 },
-      },
-    },
-  ]);
+  writeToolCallResponse(response, item, "resp_repair_marker", 10, 10);
 }
 
 const repairEntries = ["released-parent", "manual"] as const;

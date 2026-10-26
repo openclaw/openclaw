@@ -43,6 +43,7 @@ import {
 } from "./main-session-restart-recovery-delivery.js";
 import {
   skippedMainSessionRecoveryDecision,
+  logMainSessionRecoveryDecision,
   type MainSessionRecoveryDecision,
   type MainSessionRecoverySkipReason,
 } from "./main-session-restart-recovery-diagnostics.js";
@@ -50,6 +51,7 @@ import { loadExpectedRestartRecoveryTarget } from "./main-session-restart-recove
 import {
   prepareRequesterRestartRecovery,
   finishDelegatedRestartRecovery,
+  settleFailedWorkerRestartRecovery,
   tombstoneMainRestartRecoveryWithNotice,
 } from "./main-session-restart-recovery-failure.js";
 import {
@@ -321,6 +323,24 @@ export async function recoverStore(params: {
         } else {
           skip("state_changed");
         }
+        continue;
+      }
+      const placementOutcome = await settleFailedWorkerRestartRecovery({
+        ...target,
+        cfg: params.cfg,
+        entry,
+        observation: recoveryView.observation,
+        gatewayRuntime: params.gatewayRuntime,
+        placementSessionKey: dispatchSessionKey,
+        shouldContinue: params.shouldContinue,
+      });
+      if (placementOutcome) {
+        result[placementOutcome]++;
+        decision = {
+          decision: placementOutcome === "settled" ? "settled" : "deferred",
+          reason: "failed_worker_placement",
+          nextOwner: placementOutcome === "settled" ? "none" : "main-session-recovery",
+        };
         continue;
       }
       const harnessCompletion = entry.restartRecoveryHarnessCompletion;
@@ -681,24 +701,15 @@ export async function recoverStore(params: {
     } finally {
       releaseCompletionSource?.();
       if (isRecoveryCandidate && isMainRestartRecoveryCandidate(loadedEntry, sessionKey)) {
-        mainSessionRecoveryLog.info(
-          `main-session restart recovery candidate ${JSON.stringify({
-            boot: lifecycleGeneration,
-            pass: passId,
-            agentId: params.storeAgentId?.slice(0, 256),
-            storePath: params.storePath.slice(0, 512),
-            sessionKey: sessionKey.slice(0, 256),
-            sessionId: loadedEntry.sessionId.slice(0, 256),
-            sourceRunId: (
-              loadedEntry.restartRecoveryDeliverySourceRunId ?? loadedEntry.lifecycleRunId
-            )?.slice(0, 256),
-            recoveryRunId: loadedEntry.restartRecoveryDeliveryRunId?.slice(0, 256),
-            interruptedRunIds: loadedEntry.restartRecoveryRuns
-              ?.slice(0, 8)
-              .map(({ runId }) => runId.slice(0, 256)),
-            ...decision,
-          })}`,
-        );
+        logMainSessionRecoveryDecision({
+          entry: loadedEntry,
+          sessionKey,
+          storePath: params.storePath,
+          agentId: params.storeAgentId,
+          lifecycleGeneration,
+          passId,
+          decision,
+        });
       }
     }
   }
