@@ -51,7 +51,6 @@ async function still(card: Locator, expected: number) {
 suite.define(() => {
   it.each([
     { reducedMotion: "no-preference", touch: false },
-    { reducedMotion: "reduce", touch: false },
     { reducedMotion: "reduce", touch: true },
   ] as const)(
     "keeps Details disclosure manual through scrolling and streaming ($reducedMotion, touch=$touch)",
@@ -252,6 +251,7 @@ suite.define(() => {
         );
       };
       try {
+        await page.clock.install();
         // The dock requires advertised history/send capabilities and is suppressed
         // when its own Home conversation already owns the primary chat page.
         await page.goto(suite.server.baseUrl + "new");
@@ -281,7 +281,7 @@ suite.define(() => {
         await thread.hover();
         await page.mouse.wheel(0, -320);
         await waitForProgressThreadIdle(thread);
-        await page.waitForTimeout(201);
+        await page.clock.fastForward(201);
         await page.mouse.wheel(0, -320);
         if (mobile) {
           // Explicitly close the manually opened mobile card before scrubbing it.

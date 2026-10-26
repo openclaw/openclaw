@@ -7,11 +7,6 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { liveProvidersShareOwningPlugin } from "../live-provider-owner.js";
 
-type ModelTarget = {
-  raw: string;
-  provider?: string;
-  modelId: string;
-};
 type TargetFilters = {
   providerFilter: Set<string> | null;
   modelFilter: Set<string> | null;
@@ -22,35 +17,25 @@ type TargetFilters = {
 
 const GOOGLE_LIVE_TARGET_PROVIDERS = new Set(["google", "google-gemini-cli", "google-vertex"]);
 
-function normalizeLiveTargetModelId(provider: string, modelId: string): string {
-  const trimmed = modelId.trim();
-  return GOOGLE_LIVE_TARGET_PROVIDERS.has(provider)
-    ? normalizeGooglePreviewModelId(trimmed)
-    : trimmed;
-}
-
 function normalizeCsvSet(values: Set<string> | null): Set<string> | null {
   const normalized = new Set([...(values ?? [])].map((value) => value.trim()).filter(Boolean));
   return normalized.size > 0 ? normalized : null;
 }
 
-function parseModelTarget(raw: string): ModelTarget | null {
+function parseModelTarget(raw: string) {
   const trimmed = raw.trim();
   if (!trimmed) {
     return null;
   }
   const slash = trimmed.indexOf("/");
-  if (slash === -1) {
-    return {
-      raw: trimmed,
-      modelId: normalizeLowercaseStringOrEmpty(trimmed),
-    };
-  }
-  const provider = normalizeProviderId(trimmed.slice(0, slash));
+  const provider = slash === -1 ? undefined : normalizeProviderId(trimmed.slice(0, slash));
+  const rawModelId = trimmed.slice(slash + 1).trim();
   const modelId = normalizeLowercaseStringOrEmpty(
-    normalizeLiveTargetModelId(provider, trimmed.slice(slash + 1)),
+    provider && GOOGLE_LIVE_TARGET_PROVIDERS.has(provider)
+      ? normalizeGooglePreviewModelId(rawModelId)
+      : rawModelId,
   );
-  if (!provider || !modelId) {
+  if ((slash !== -1 && !provider) || !modelId) {
     return null;
   }
   return { raw: trimmed, provider, modelId };
@@ -60,8 +45,8 @@ function parseModelTarget(raw: string): ModelTarget | null {
 export function createLiveTargetMatcher(params: TargetFilters) {
   const providerFilter = normalizeCsvSet(params.providerFilter);
   const modelTargets = [...(normalizeCsvSet(params.modelFilter) ?? [])]
-    .map((value) => parseModelTarget(value))
-    .filter((value): value is ModelTarget => value !== null);
+    .map(parseModelTarget)
+    .filter((value) => value !== null);
   const ownerCache = new Map<string, readonly string[]>();
   const sameProvider = (left: string, right: string) =>
     left === right ||

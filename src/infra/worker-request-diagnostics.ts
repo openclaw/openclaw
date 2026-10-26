@@ -110,6 +110,7 @@ const coreCommands = new Set([
   "session.maintenance.size",
   "session.rowTranscript.backfill",
   "usageCache.writeRollup",
+  "usageCache.writeQuarters",
   "usageCache.prune",
   "trajectory.events.append",
   "trajectory.retention.begin",

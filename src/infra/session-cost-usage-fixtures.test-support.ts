@@ -1,3 +1,5 @@
+import { readUsageOverviewBatch } from "./session-cost-usage-overview-batch.js";
+import type { UsageOverviewLoad } from "./session-cost-usage-overview-load.js";
 import { partitionUsageCostRollup } from "./session-cost-usage-partitions.js";
 import {
   encodeUsageCostRollup,
@@ -92,4 +94,13 @@ export function encodeOversizedUsageRollup(
   }
   encoded.valueJson = JSON.stringify(envelope);
   return encoded;
+}
+
+/** Overview load with its rows expanded, as the off-thread report reads them. */
+export function overviewRows({ usage, ...load }: UsageOverviewLoad) {
+  return {
+    ...load,
+    rows:
+      usage.kind === "packed" ? readUsageOverviewBatch(usage.batch, usage.refreshing) : usage.rows,
+  };
 }

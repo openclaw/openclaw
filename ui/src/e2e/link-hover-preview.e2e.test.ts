@@ -227,34 +227,43 @@ suite.define(() => {
         const hovercardModule = controlUiE2eBuiltModuleRequest(
           "ui/src/components/link-reader-hovercard.ts",
         );
-        await page.route(hovercardModule, (request) => request.abort());
-        const gateway = await openPreviewPage(
-          page,
-          {
-            historyMessages: route === "chat" ? historyMessages : [],
-            controlUiLinkReaders: reader ? [TEST_LINK_READER] : [],
-            featureMethods: readerMethods,
-          },
-          route,
-        );
-        await waitForControlUiRoute(page, { routeId });
-        const link = page.locator(selector);
-        await prepareFallbackLink(link);
-        await expectProviderUnloaded(page);
-        // A missing hashed chunk reloads the page; wait before hovering the new document.
-        await Promise.all([
-          page.waitForEvent("requestfailed", (request) => hovercardModule.test(request.url())),
-          page.waitForEvent("domcontentloaded"),
-          link.hover(),
-        ]);
-        await waitForControlUiRoute(page, { routeId });
-        await prepareFallbackLink(link);
-        await page.mouse.move(0, 0);
-        await link[input === "focus" ? "focus" : "hover"]();
-        await page.locator(".tooltip-content").filter({ hasText: "Guide details" }).waitFor();
-        expect(await page.locator(".link-hovercard").count()).toBe(0);
-        expect(await gateway.getRequests("controlUi.linkPreview")).toEqual([]);
-        expect(await gateway.getRequests("forge.preview")).toEqual([]);
+        const failRuntime = Promise.withResolvers<void>();
+        await page.route(hovercardModule, async (request) => {
+          await failRuntime.promise;
+          await request.abort();
+        });
+        try {
+          const gateway = await openPreviewPage(
+            page,
+            {
+              historyMessages: route === "chat" ? historyMessages : [],
+              controlUiLinkReaders: reader ? [TEST_LINK_READER] : [],
+              featureMethods: readerMethods,
+            },
+            route,
+          );
+          await waitForControlUiRoute(page, { routeId });
+          const link = page.locator(selector);
+          await prepareFallbackLink(link);
+          await expectProviderUnloaded(page);
+          // A missing hashed chunk reloads the page; wait before hovering the new document.
+          await Promise.all([
+            page.waitForEvent("requestfailed", (request) => hovercardModule.test(request.url())),
+            page.waitForEvent("domcontentloaded"),
+            // Reader prefetch may request the module before hover; release its failure only now.
+            link.hover().then(() => failRuntime.resolve()),
+          ]);
+          await waitForControlUiRoute(page, { routeId });
+          await prepareFallbackLink(link);
+          await page.mouse.move(0, 0);
+          await link[input === "focus" ? "focus" : "hover"]();
+          await page.locator(".tooltip-content").filter({ hasText: "Guide details" }).waitFor();
+          expect(await page.locator(".link-hovercard").count()).toBe(0);
+          expect(await gateway.getRequests("controlUi.linkPreview")).toEqual([]);
+          expect(await gateway.getRequests("forge.preview")).toEqual([]);
+        } finally {
+          failRuntime.resolve();
+        }
       }),
   );
 

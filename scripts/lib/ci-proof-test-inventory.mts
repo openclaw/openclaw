@@ -1766,7 +1766,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/cli/program/register.status-health-sessions.test.ts",
   "src/cli/program/registration-runtime-boundary.test.ts",
   "src/cli/program/root-command-descriptions.test.ts",
-  "src/cli/program/root-help.test.ts",
   "src/cli/proxy-cli.runtime.theme.test.ts",
   "src/cli/qr-cli.test.ts",
   "src/cli/resume-cli.test.ts",

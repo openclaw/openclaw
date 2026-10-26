@@ -186,6 +186,7 @@ const repositoryScriptEntries = [
   "scripts/perf/approval-replay-burst-measure.ts!",
   "scripts/perf/channels-status-inventory.ts!",
   "scripts/perf/extension-handler-lookup-measure.ts!",
+  "scripts/perf/knowledge-git-transactions.ts!",
   "scripts/perf/reply-tool-authority-measure.ts!",
   "scripts/perf/select-environment-scale.ts!",
   "scripts/perf/session-archive-staging-measure.ts!",
@@ -201,6 +202,7 @@ const repositoryScriptEntries = [
   "scripts/perf/harness-selection-copy-measure.ts!",
   "scripts/perf/session-catalog-pairing-measure.ts!",
   "scripts/perf/session-involvement-measure.ts!",
+  "scripts/perf/sqlite-native-lease-measure.mjs!",
   "scripts/perf/sqlite-owner-dispatch-measure.mjs!",
   "scripts/perf/sqlite-wal-scan-measure.mjs!",
   "scripts/perf/state-engine-schema-bench.ts!",
@@ -220,6 +222,8 @@ const repositoryScriptEntries = [
   "scripts/lib/gateway-bench-transport-preload.ts!",
   "scripts/perf/async-store-measure.mjs!",
   "scripts/perf/code-mode-store-measure.ts!",
+  // Its header documents the long-history session-store replay benchmark.
+  "scripts/perf/code-mode-store-replay-measure.ts!",
   "scripts/perf/gateway-agent-event-measure.ts!",
   "scripts/perf/transcript-hydration-counts-preload.ts!",
   // The performance guide and retained package-integrity rerun invoke these benchmarks by path.
@@ -244,6 +248,7 @@ const repositoryScriptEntries = [
   "scripts/perf/plugin-policy-read-measure.mjs!",
   "scripts/perf/prompt-cache-observation-measure.ts!",
   "scripts/perf/reconnect-read-wave-measure.ts!",
+  "scripts/perf/session-actor-receipt-measure.ts!",
   "scripts/perf/session-actor-retention-measure.ts!",
   // The row-churn instrumenter injects this probe from its compiled source path.
   "scripts/perf/session-row-churn-probe.ts!",
@@ -387,6 +392,7 @@ const repositoryScriptEntries = [
   "scripts/perf/session-run-progress-measure.ts!",
   "scripts/perf/session-tool-pin-measure.ts!",
   "scripts/perf/sidebar-presentation-measure.ts!",
+  "scripts/perf/sidebar-fact-sharing-measure.ts!",
   "scripts/perf/source-kind-progress-equality-measure.ts!",
   "scripts/perf/sqlite-reclamation-retention.ts!",
   "scripts/perf/state-db-cache-admission-measure.ts!",
@@ -418,6 +424,7 @@ const repositoryScriptEntries = [
   "scripts/perf/identifier-renormalization-measure.ts!",
   "scripts/perf/ingress-ip-measure.ts!",
   "scripts/perf/memory-ranking-copies.ts!",
+  "scripts/perf/memory-prompt-copy-measure.ts!",
   "scripts/perf/misc-fresh-array-copies-measure.mjs!",
   "scripts/perf/native-control-port-measure.ts!",
   "scripts/perf/plugin-fresh-arrays-measure.mjs!",

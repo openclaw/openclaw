@@ -93,6 +93,7 @@ async function openMenu(root: HTMLElement) {
   const trigger = root.querySelector<HTMLButtonElement>(".chat-pane__sharing-trigger");
   if (panel && trigger && !trigger.disabled && !panel.matches(":popover-open")) {
     trigger.click();
+    await vi.dynamicImportSettled();
     await waitForSolid(() => {
       expect(panel.matches(":popover-open")).toBe(true);
       expect(panel.querySelector('[data-value="access"]')).not.toBeNull();
