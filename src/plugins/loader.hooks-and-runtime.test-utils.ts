@@ -354,19 +354,11 @@ ${channelPluginSource({
   blurb: "auto-enabled load-path setup gate",
 })}`,
     });
-    fs.writeFileSync(
-      path.join(plugin.dir, "openclaw.plugin.json"),
-      JSON.stringify(
-        {
-          id: "auto-enabled-load-path-channel",
-          configSchema: EMPTY_PLUGIN_SCHEMA,
-          channels: ["auto-enabled-load-path-channel"],
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    writeFixtureJson(plugin.dir, "openclaw.plugin.json", {
+      id: "auto-enabled-load-path-channel",
+      configSchema: EMPTY_PLUGIN_SCHEMA,
+      channels: ["auto-enabled-load-path-channel"],
+    });
 
     const scopedSetupRegistry = loadOpenClawPlugins({
       cache: false,

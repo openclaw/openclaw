@@ -5,7 +5,8 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../../config/runtime-snapshot.js";
 import type { SessionSystemPromptReport } from "../../../config/sessions/types.js";
-import { addSession, deleteSession } from "../../bash-process-registry.js";
+import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
+import { addSession, appendOutput, deleteSession } from "../../bash-process-registry.js";
 import { createProcessSessionFixture } from "../../bash-process-registry.test-helpers.js";
 import * as mediaTaskStatus from "../../media-generation-task-status.js";
 import type { AgentMessage } from "../../runtime/index.js";
@@ -138,6 +139,77 @@ afterEach(async () => {
 });
 
 describe("prepareEmbeddedAttemptPromptContext", () => {
+  it.each(
+    [3, 4].flatMap((sessionVersion) =>
+      ["dispatched", "pending", "internal", "raw"].map((state) => ({ sessionVersion, state })),
+    ),
+  )(
+    "separates fallback hooks from the canonical user only after dispatch (v$sessionVersion, $state)",
+    async ({ sessionVersion, state }) => {
+      const original = "Describe the attached landscape.";
+      const prepend = "Use the backup provider's visual guidance.";
+      const append = "Explain the visible colors.";
+      const recorder = createUserTurnTranscriptRecorder({
+        input: { text: original, idempotencyKey: "fallback-context:user", timestamp: 123 },
+        target: () => undefined,
+      });
+      if (state !== "pending") {
+        recorder.markSentToProvider?.();
+      }
+      const fixture = createInput({
+        attempt: createAttempt({
+          userTurnTranscriptRecorder: recorder,
+          skipPreparedUserTurnMessage: state === "internal",
+          fallbackActive: true,
+        }),
+        preparedUserTurnMessage: recorder.message,
+        messages: recorder.message ? [recorder.message] : [],
+        prompt: createPrompt({
+          effectivePrompt: [prepend, original, append].join("\n\n"),
+          effectiveTranscriptPrompt: original,
+          promptBuildPrependContext: prepend,
+          promptBuildAppendContext: append,
+        }),
+      });
+
+      const result = await prepareContext({
+        ...fixture.input,
+        sessionVersion,
+        appendOnlyRuntimeContext: sessionVersion === 4,
+        inHistorySystemUpdates: sessionVersion === 4,
+        isRawModelRun: state === "raw",
+      });
+
+      const dispatchedFallback = state === "dispatched";
+      expect(result.isDispatchedCanonicalFallback).toBe(dispatchedFallback);
+      expect(result.promptForSession).toBe(original);
+      expect(result.llmBoundaryPromptForPrecheck).toBe(
+        dispatchedFallback ? original : [prepend, original, append].join("\n\n"),
+      );
+      const carrier = result.runtimeContextMessageForCurrentTurn;
+      expect(carrier?.content).not.toContain(original);
+      if (dispatchedFallback) {
+        expect(carrier?.details).toMatchObject({
+          kind: "runtime-context",
+          turnScoped: true,
+          replay: "append",
+        });
+        expect(carrier?.content.match(/Use the backup provider's visual guidance\./g)).toHaveLength(
+          1,
+        );
+        expect(carrier?.content.match(/Explain the visible colors\./g)).toHaveLength(1);
+        expect(JSON.stringify(result.hookMessagesForCurrentPrompt)).toContain(prepend);
+      } else {
+        expect(carrier?.content).not.toContain(prepend);
+        expect(carrier?.content).not.toContain(append);
+        expect(carrier?.details).not.toHaveProperty("replay");
+      }
+      if (state !== "raw") {
+        expect(carrier?.content).toContain("## Temporal Context");
+      }
+    },
+  );
+
   it("carries execution-owned processes in id order without elapsed time or output", async () => {
     const fixture = createInput();
     fixture.input.capabilityToolNames.add("process");
@@ -148,7 +220,7 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
     for (const id of ["exec-z", "exec-a"]) {
       const session = createProcessSessionFixture({ id, backgrounded: true });
       session.scopeKey = fixture.input.attempt.sessionKey;
-      session.tail = "private output tail";
+      appendOutput(session, "stdout", "private output tail");
       addSession(session);
     }
     const active = await prepareContext(fixture.input);

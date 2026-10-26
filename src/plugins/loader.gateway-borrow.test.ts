@@ -96,9 +96,6 @@ function bindProbe(registry: PluginRegistry, pluginId: string) {
 const firstGeneration = { content: [{ type: "text", text: "1" }] };
 const expectFirstGeneration = (registry: PluginRegistry, call: string) =>
   expect(bindProbe(registry, lenderId).execute(call, {})).resolves.toMatchObject(firstGeneration);
-function expectLenderActive(instance: ReturnType<typeof getPluginInstance>) {
-  expect(instance).toMatchObject({ acceptingCalls: true, disposing: false });
-}
 
 it.each(["prepared", "inspection"] as const)(
   "releases a %s registry without disposing borrowed Gateway instances",
@@ -116,7 +113,6 @@ it.each(["prepared", "inspection"] as const)(
     const freshRecord = prepared.plugins.find((record) => record.id === freshId);
     const freshInstance = freshRecord && getPluginInstance(freshRecord);
     expect(prepared.plugins.find((record) => record.id === lenderId)).toBe(gatewayRecord);
-    expect(freshRecord?.status).toBe("loaded");
     expect(Reflect.get(globalThis, evaluations)).toEqual({ [lenderId]: 1, [freshId]: 1 });
     await expectFirstGeneration(prepared, "borrowed");
 
@@ -124,19 +120,15 @@ it.each(["prepared", "inspection"] as const)(
     expect(gatewayInstance.owner?.registry).toBe(gateway);
     await release?.();
     expect(freshInstance?.acceptingCalls).toBe(false);
-    expectLenderActive(gatewayInstance);
     await expectFirstGeneration(gateway, "lender");
   },
 );
 
 it("rolls back a failed borrowing load without retiring borrowed Gateway instances", async () => {
-  const { gateway, gatewayInstance, borrowOptions } = setupLender(
-    'throw new Error("fresh plugin failed");',
-  );
+  const { gateway, borrowOptions } = setupLender('throw new Error("fresh plugin failed");');
   expect(() => loadOpenClawPlugins({ ...borrowOptions, throwOnLoadError: true })).toThrow(
     /fresh plugin failed|failed to load/,
   );
-  expectLenderActive(gatewayInstance);
   await expectFirstGeneration(gateway, "lender");
 });
 

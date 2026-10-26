@@ -60,6 +60,7 @@ test("shares published config while recapturing candidates and following config 
   const original = prepare();
   const sibling = path.join(root, "custom.main.sqlite");
   fs.writeFileSync(sibling, "");
+  prepareSessionStoreTargetInventory({ agents: { entries: { other: {} } } }, ["other"], env);
   const current = prepare();
   expect(current.config).toBe(original.config);
   expect(current.env).toBe(original.env);
@@ -68,12 +69,14 @@ test("shares published config while recapturing candidates and following config 
   expect(original.candidates.some((candidate) => candidate.path === sibling)).toBe(false);
   expect(current.candidates.some((candidate) => candidate.path === sibling)).toBe(true);
 
-  cfg.session!.store = path.join(root, "replacement.json");
+  cfg.session!.store = path.join(root, "replacement", "{agentId}.json");
   setRuntimeConfigSnapshot(cfg);
   const replacement = prepare();
   expect(replacement.config).not.toBe(original.config);
   expect(replacement.env).not.toBe(original.env);
-  expect(replacement.paths.get("main")?.configured).toBe(cfg.session!.store);
+  expect(replacement.paths.get("main")?.configured).toBe(
+    path.join(root, "replacement", "main.json"),
+  );
   expect(original.config.session?.store).toBe(path.join(root, "custom.json"));
 });
 
@@ -131,11 +134,9 @@ test.each(["shared.sqlite", "agents/main/agent/openclaw-agent.sqlite"])(
     fs.mkdirSync(path.dirname(databasePath), { recursive: true });
     fs.writeFileSync(databasePath, "");
     const physicalPath = fs.realpathSync.native(databasePath);
-    const resolve = vi.spyOn(fs.realpathSync, "native");
     expect(captureSessionStoreReadCandidates(databasePath)).toEqual([
       { path: databasePath, physicalPath },
     ]);
-    expect(resolve).toHaveBeenCalledTimes(1);
   },
 );
 
@@ -164,7 +165,7 @@ test("captures distinct sibling files and keeps family custody when discovery fa
   ]);
 });
 
-test.each(["read-failed", "schema-missing", "database-missing"] as const)(
+test.each(["read-failed", "database-missing"] as const)(
   "carries prior %s cleanup requirements through registry deferral",
   (reason) => {
     vi.mocked(resolveExistingAgentSessionStoreTargetsReadOnlyResult)

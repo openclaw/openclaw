@@ -1,4 +1,3 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
@@ -45,7 +44,6 @@ import {
 } from "./update-command-readiness.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import {
-  isPackageManagerUpdateMode,
   GatewayRestartHealthError,
   restartRetainedUpdateGatewayService,
   runUpdatedInstallGatewayCommand,
@@ -60,6 +58,9 @@ import {
   readGatewayServiceStateForUpdate,
   resolveUpdatedGatewayRestartPort,
 } from "./update-command-service-plan.js";
+
+// Published updater chunks resolve this binding after replacing the installation.
+export { isPackageManagerUpdateMode } from "./update-command-service-command.js";
 
 const QUIET_SERVICE_STDOUT = createNullWriter();
 
@@ -156,34 +157,6 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
   return { health, launchAgentRecovery };
 }
 
-export function formatPostUpdateGatewayRecoveryInstructions(
-  result: UpdateRunResult,
-  platform: NodeJS.Platform = process.platform,
-): string[] {
-  const restartCommand = formatCliCommand("openclaw gateway restart");
-  const installCommand = formatCliCommand("openclaw gateway install --force");
-  const statusCommand = formatCliCommand("openclaw gateway status --deep");
-  const condition =
-    platform === "darwin"
-      ? "LaunchAgent is installed but not loaded"
-      : platform === "linux"
-        ? "systemd user service is missing, stale, or not active"
-        : platform === "win32"
-          ? "gateway Scheduled Task or Windows login item is missing, stale, or not running"
-          : "local service manager reports the gateway service is missing, stale, or not running";
-  const session = platform === "darwin" ? "logged-in macOS user session" : "same user account";
-  const lines = [
-    `Recovery: run \`${restartCommand}\`; if the ${condition}, run \`${installCommand}\` from the ${session}, then rerun \`${statusCommand}\`.`,
-  ];
-  const beforeVersion = normalizeOptionalString(result.before?.version);
-  if (isPackageManagerUpdateMode(result.mode) && beforeVersion) {
-    lines.push(
-      `Rollback: reinstall OpenClaw ${beforeVersion} with the same package manager, then rerun \`${installCommand}\`.`,
-    );
-  }
-  return lines;
-}
-
 export function refuseUnsettledDoctorRecovery(
   result: UpdateRunResult,
   root: string,
@@ -233,12 +206,14 @@ export async function admitInstalledGatewayRecovery(
   }
   const settlement = result.steps.findLast((step) => step.name === "doctor process settlement");
   const databaseRollback = result.steps.findLast((step) => step.name === "database rollback");
-  // Current-core maintenance has no package rollback, but still owns its Doctor park.
+  // Current-core maintenance owns its Doctor park even after a normal child exit,
+  // which needs no cancellation settlement receipt. Explicit writer risks still refuse recovery.
   const currentCore =
     params.coreAlreadyCurrent === true &&
     !params.packageTransaction &&
     result.status === "error" &&
-    settlement !== undefined;
+    (settlement !== undefined ||
+      result.steps.some((step) => step.name === "post-plugin doctor" && step.exitCode !== null));
   if (
     (!currentCore && result.reason !== "state-migrated-no-rollback") ||
     (result.recovery?.serviceRestartSafe === false &&
@@ -250,7 +225,7 @@ export async function admitInstalledGatewayRecovery(
     databaseRollback?.exitCode === 0 ||
     // Normal Doctor completion needs no settlement receipt. The candidate's
     // schema inspection below can still admit forward recovery after migration.
-    (!settlement && !databaseRollback && !params.candidateSchemaVersions) ||
+    (!currentCore && !settlement && !databaseRollback && !params.candidateSchemaVersions) ||
     (result.recovery?.serviceRestartSafe === false &&
       result.recovery.reason === "source-rollback-failed")
   ) {

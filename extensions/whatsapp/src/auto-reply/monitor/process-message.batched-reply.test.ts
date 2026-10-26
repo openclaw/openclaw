@@ -45,7 +45,6 @@ describe("WhatsApp debounce reply quoting boundary", () => {
           const { replyPayloads } = await buildReplyPayloads({
             config: cfg,
             payloads: [{ text: "plain model answer" }],
-            isHeartbeat: false,
             blockStreamingEnabled: false,
             blockReplyPipeline: null,
             replyToMode: "batched",

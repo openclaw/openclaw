@@ -17,7 +17,6 @@ function paramsFor(
     allowFrom: ["+15555550123"],
     groupAllowFrom: ["+15555550123"],
     groupPolicy: "allowlist",
-    isKnownFromMeMessageId: undefined,
     ...overrides,
     message: {
       id: 1,

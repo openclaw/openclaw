@@ -2,6 +2,12 @@ import { expect, it } from "vitest";
 import { prepareSessionAncestor, ConnectionSessionRows } from "./session-ancestor-references.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
 
+const child: GatewaySessionRow = {
+  key: "agent:main:child",
+  kind: "direct",
+  updatedAt: 1,
+};
+
 it("preserves presentation clocks and the delivered baseline when serialization fails", () => {
   const references = new ConnectionSessionRows();
   const row: GatewaySessionRow = {
@@ -12,9 +18,9 @@ it("preserves presentation clocks and the delivered baseline when serialization 
     snapshotAt: 10,
     label: "Parent",
   };
-  const first = references.prepare([prepareSessionAncestor(row)]);
-  first.delivered();
-  expect(first.ancestorSessions[0]?.snapshotAt).toBe(10);
+  const first = references.prepareDelivery(child, [prepareSessionAncestor(row)]);
+  references.deliver(first);
+  expect(first.ancestor?.ancestorSessions[0]?.snapshotAt).toBe(10);
   expect(row.snapshotAt).toBe(10);
 
   row.snapshotAt = 20;
@@ -25,27 +31,29 @@ it("preserves presentation clocks and the delivered baseline when serialization 
       throw new Error("presentation unavailable");
     },
   });
-  expect(() => references.prepare([prepareSessionAncestor(row)])).toThrow(
+  expect(() => references.prepareDelivery(child, [prepareSessionAncestor(row)])).toThrow(
     "presentation unavailable",
   );
   expect(row.snapshotAt).toBe(20);
   Object.defineProperty(row, "label", { value: "Parent" });
-  const next = references.prepare([prepareSessionAncestor(row)]);
-  expect(next.ancestorSessions).toEqual([]);
-  expect(next.ancestorSessionRefs).toEqual([
+  const next = references.prepareDelivery(child, [prepareSessionAncestor(row)]);
+  expect(next.ancestor?.ancestorSessions).toEqual([]);
+  expect(next.ancestor?.ancestorSessionRefs).toEqual([
     expect.objectContaining({
-      revision: first.ancestorSessions[0]?.ancestorRevision,
+      revision: first.ancestor?.ancestorSessions[0]?.ancestorRevision,
       snapshotAt: 20,
     }),
   ]);
   expect(row.snapshotAt).toBe(20);
 
   delete row.snapshotAt;
-  const unclocked = references.prepare([prepareSessionAncestor(row)]);
-  unclocked.delivered();
+  const unclocked = references.prepareDelivery(child, [prepareSessionAncestor(row)]);
+  references.deliver(unclocked);
   expect(Object.hasOwn(row, "snapshotAt")).toBe(false);
   row.snapshotAt = 30;
-  expect(references.prepare([prepareSessionAncestor(row)]).ancestorSessionRefs).toBeUndefined();
+  expect(
+    references.prepareDelivery(child, [prepareSessionAncestor(row)]).ancestor?.ancestorSessionRefs,
+  ).toBeUndefined();
 });
 
 it.each([
@@ -65,17 +73,18 @@ it.each([
       label,
     }));
     for (const row of rows) {
-      references.prepare([prepareSessionAncestor(row)]).delivered();
+      references.deliver(references.prepareDelivery(child, [prepareSessionAncestor(row)]));
     }
 
     if (count > 1) {
       expect(
-        references.prepare([prepareSessionAncestor(rows.at(-1)!)]).ancestorSessionRefs,
+        references.prepareDelivery(child, [prepareSessionAncestor(rows.at(-1)!)]).ancestor
+          ?.ancestorSessionRefs,
       ).toEqual([expect.objectContaining({ key: rows.at(-1)!.key })]);
     }
     const row = { ...rows[0]!, snapshotAt };
-    const evicted = references.prepare([prepareSessionAncestor(row)]);
-    expect(evicted.ancestorSessions).toEqual([expect.objectContaining(row)]);
-    expect(evicted.ancestorSessionRefs).toBeUndefined();
+    const evicted = references.prepareDelivery(child, [prepareSessionAncestor(row)]);
+    expect(evicted.ancestor?.ancestorSessions).toEqual([expect.objectContaining(row)]);
+    expect(evicted.ancestor?.ancestorSessionRefs).toBeUndefined();
   },
 );

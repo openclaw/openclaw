@@ -243,11 +243,7 @@ export function useSessionMenuDetails(
     communicationEnd,
   ];
   const ReadStatus = () => {
-    const consume = () => {
-      latest(actions.advanced.read);
-      return null;
-    };
-    return <>{consume()}</>;
+    return <>{(latest(actions.advanced.read), null)}</>;
   };
   const readStatus: MenuEntry = {
     id: "reload-settings",

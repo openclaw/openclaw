@@ -2,6 +2,8 @@ import { spawn, type ChildProcessByStdio } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import type { Readable, Writable } from "node:stream";
+import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
+import { resolveRuntimeWorkerArgv } from "./runtime-worker-url.js";
 
 type Listener = (event: string, filename?: string) => void;
 export type DirectoryWatch = {
@@ -20,47 +22,6 @@ type Host = {
 // seconds, and Node's exit cleanup closes leftover watchers the same way. A helper
 // process owns those streams and never closes one: a close only retires its id, and
 // the helper exits without teardown once its input ends.
-const HOST_SCRIPT = `
-const fs = require("node:fs");
-const { Worker } = require("node:worker_threads");
-// Node still closes a watch natively when it errors, which can hold this loop on
-// fseventsd for minutes, leaving end of input unread; the worker still ends the
-// helper once its caller process is gone.
-new Worker(
-  "const caller = " + Number(process.argv[1]) +
-    "; setInterval(() => process.ppid === caller || process.kill(process.pid, 'SIGKILL'), 1000);",
-  { eval: true },
-)
-  .on("error", () => {})
-  .unref();
-const live = new Set();
-const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n");
-let buffered = "";
-process.stdin.setEncoding("utf8").on("data", (chunk) => {
-  const lines = (buffered + chunk).split("\\n");
-  buffered = lines.pop();
-  for (const line of lines) {
-    const { id, path, recursive } = JSON.parse(line);
-    if (path === undefined) {
-      live.delete(id);
-      continue;
-    }
-    try {
-      fs.watch(path, { persistent: false, recursive }, (event, filename) => {
-        if (live.has(id)) {
-          send({ id, event, filename });
-        }
-      }).on("error", () => live.delete(id) && send({ id }));
-      live.add(id);
-      // Registration is asynchronous; invalidate once live to cover the startup gap.
-      send({ id, event: "change" });
-    } catch {
-      send({ id });
-    }
-  }
-});
-process.stdin.on("end", () => process.exit(0));
-`;
 
 let host: Host | undefined;
 let nextId = 0;
@@ -71,20 +32,27 @@ const MAX_RETIRED_WATCHES = 64;
 
 function startHost(): Host {
   // The caller passes its PID so a helper that starts after it died still exits.
-  const child = spawn(process.execPath, ["-e", HOST_SCRIPT, String(process.pid)], {
-    stdio: ["pipe", "pipe", "ignore"],
-    // Terminal signals reach the caller first; the helper exits when its input ends
-    // or its caller is gone.
-    detached: true,
-    env: { ...process.env, NODE_OPTIONS: undefined },
-  });
+  const child = spawn(
+    process.execPath,
+    [
+      ...resolveRuntimeWorkerArgv(resolveRuntimeProcessEntrypointUrl("directoryWatchHost")),
+      String(process.pid),
+    ],
+    {
+      stdio: ["pipe", "pipe", "ignore"],
+      // Terminal signals reach the caller first; the helper exits when its input ends
+      // or its caller is gone.
+      detached: true,
+      env: { ...process.env, NODE_OPTIONS: undefined },
+    },
+  );
   const started: Host = { child, watches: new Map(), retired: 0 };
   let buffered = "";
   child.stdout.setEncoding("utf8").on("data", (chunk: string) => {
     const lines = (buffered + chunk).split("\n");
     buffered = lines.pop() ?? "";
     for (const line of lines) {
-      // SAFETY: HOST_SCRIPT is the only writer and sends exactly this shape.
+      // SAFETY: The dedicated host entry is the only writer and sends this shape.
       const message = JSON.parse(line) as { id: number; event?: string; filename?: string | null };
       const watch = started.watches.get(message.id);
       if (!watch) {

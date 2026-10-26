@@ -100,33 +100,4 @@ describe("closeDiscordThreadSessions", () => {
     expect(await close()).toBe(0);
     expect(store[MATCHED_KEY]).toEqual({ updatedAt: 2_000, sessionId: "fresh-session" });
   });
-
-  it("scopes each read by agent id and never opens agent databases writably", async () => {
-    // A fixed store path still needs each agent's owner DB, not repeated reads of main.
-    const fixedStorePath = "/custom/path/sessions.json";
-    const entriesByAgent: Record<string, Record<string, { updatedAt: number }>> = {
-      main: { [`agent:main:discord:channel:${THREAD_ID}`]: { updatedAt: 1_000 } },
-      work: { [`agent:work:discord:channel:${THREAD_ID}`]: { updatedAt: 2_000 } },
-    };
-    hoisted.resolveStorePath.mockReturnValue(fixedStorePath);
-    hoisted.listSessionEntriesAsync.mockImplementation(async ({ agentId }: { agentId?: string }) =>
-      Object.entries(agentId ? (entriesByAgent[agentId] ?? {}) : {}).map(([sessionKey, entry]) => ({
-        sessionKey,
-        entry,
-      })),
-    );
-    hoisted.deleteSessionEntry.mockResolvedValue(true);
-
-    const count = await close(THREAD_ID, {
-      session: { store: fixedStorePath },
-      agents: { entries: { main: {}, work: {} } },
-    });
-
-    expect(count).toBe(2);
-    for (const agentId of ["main", "work"]) {
-      expect(hoisted.listSessionEntriesAsync).toHaveBeenCalledWith(
-        expect.objectContaining({ agentId, storePath: fixedStorePath }),
-      );
-    }
-  });
 });

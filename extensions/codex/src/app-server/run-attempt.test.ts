@@ -53,6 +53,7 @@ import {
   shouldEnableCodexAppServerNativeToolSurface,
 } from "./dynamic-tool-build.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
+import { flattenSpecsWithNamespace } from "./dynamic-tools.test-support.js";
 import * as elicitationBridge from "./elicitation-bridge.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
 import { setCodexTestToolFactory } from "./host-capability.test-support.js";
@@ -67,6 +68,8 @@ import { codexApprovalTimeoutText } from "./plugin-approval-roundtrip.js";
 import {
   appInfo,
   appSummary,
+  codexPluginConfig,
+  curatedPlugin,
   pluginDetail,
   pluginInstalled,
   pluginList,
@@ -76,7 +79,6 @@ import { buildCodexPluginThreadConfig } from "./plugin-thread-config.js";
 import {
   flattenCodexDynamicToolFunctions,
   isJsonObject,
-  type CodexDynamicToolFunctionSpec,
   type CodexDynamicToolSpec,
   type CodexThreadStartParams,
   type CodexThreadResumeParams,
@@ -88,6 +90,7 @@ import {
 import { itemNotification, rawItemCompleted, turnCompleted } from "./protocol.test-helpers.js";
 import { registerCodexFastModeTests } from "./run-attempt-fast-mode.test-support.js";
 import {
+  expectResumeRequest,
   expectRetainedSuccessfulThread,
   observeAttemptProjectionReady,
   startClockControlledAttempt,
@@ -161,20 +164,6 @@ import { buildThreadStartParams } from "./thread-requests.js";
 import { buildTurnStartParams } from "./turn-params.js";
 import { readMirrorIdentity } from "./upstream-prompt-provenance.js";
 import * as userInputBridge from "./user-input-bridge.js";
-
-function expectResumeRequest(
-  requests: Array<{ method: string; params: unknown }>,
-  params: Record<string, unknown>,
-) {
-  const request = requests.find((entry) => entry.method === "thread/resume");
-  if (!request) {
-    throw new Error("Expected thread/resume request");
-  }
-  const requestParams = request.params as Record<string, unknown> | undefined;
-  for (const [key, value] of Object.entries(params)) {
-    expect(requestParams?.[key]).toEqual(value);
-  }
-}
 
 const DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT = JSON.stringify({
   "features.standalone_web_search": false,
@@ -394,16 +383,6 @@ async function startThreadWithDisabledNativeSurfaceForTest(
 type RuntimeDynamicToolForTest = Parameters<
   typeof createCodexDynamicToolBridge
 >[0]["tools"][number];
-
-function flattenSpecsWithNamespace(
-  specs: readonly CodexDynamicToolSpec[],
-): Array<CodexDynamicToolFunctionSpec & { namespace?: string }> {
-  return specs.flatMap((spec) =>
-    spec.type === "namespace"
-      ? spec.tools.map((tool) => ({ ...tool, namespace: spec.name }))
-      : [spec],
-  );
-}
 
 function specNames(specs: readonly CodexDynamicToolSpec[]): string[] {
   return flattenCodexDynamicToolFunctions(specs).map((tool) => tool.name);
@@ -1432,18 +1411,15 @@ describe("runCodexAppServerAttempt", () => {
     expect(readAttemptTerminal(result)).toMatchObject({ aborted: false, timedOut: false });
   });
 
-  it("keeps the heartbeat schema deferred and stable across normal and heartbeat turns", async () => {
+  it("keeps a deferred tool schema stable across turns with different tool availability", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
-    const registeredTools = ["message", "heartbeat_respond"].map(createRuntimeDynamicTool);
-    const makeHeartbeatTurn = (trigger?: "heartbeat") => {
+    const registeredTools = ["message", "web_search"].map(createRuntimeDynamicTool);
+    const makeTurn = (webSearchAvailable = false) => {
       const params = createParams(sessionFile, workspaceDir);
       params.disableTools = false;
       params.runtimePlan = createCodexRuntimePlanFixture();
       params.sourceReplyDeliveryMode = "message_tool_only";
-      if (trigger) {
-        params.trigger = "heartbeat";
-      }
-      const tools = (trigger ? ["message", "heartbeat_respond"] : ["message"]).map(
+      const tools = (webSearchAvailable ? ["message", "web_search"] : ["message"]).map(
         createRuntimeDynamicTool,
       );
       const bridge = createCodexToolBridgeForTest(params, tools, registeredTools);
@@ -1455,25 +1431,25 @@ describe("runCodexAppServerAttempt", () => {
         },
       };
     };
-    const normal = makeHeartbeatTurn();
-    const heartbeat = makeHeartbeatTurn("heartbeat");
-    const nextNormal = makeHeartbeatTurn();
+    const normal = makeTurn();
+    const withWebSearch = makeTurn(true);
+    const nextNormal = makeTurn();
     const registeredToolNames = specNames(normal.bridge.specs);
     expect(registeredToolNames).toContain("message");
-    expect(registeredToolNames).toContain("heartbeat_respond");
+    expect(registeredToolNames).toContain("web_search");
     expect(normal.instructions).not.toContain(
-      "Deferred searchable OpenClaw dynamic tools available: openclaw.heartbeat_respond",
+      "Deferred searchable OpenClaw dynamic tools available: openclaw.web_search",
     );
-    expect(heartbeat.instructions).toContain(
-      "Deferred searchable OpenClaw dynamic tools available: openclaw.heartbeat_respond.",
+    expect(withWebSearch.instructions).toContain(
+      "Deferred searchable OpenClaw dynamic tools available: openclaw.web_search.",
     );
-    for (const bridge of [normal.bridge, heartbeat.bridge, nextNormal.bridge]) {
-      const heartbeatSpec = flattenSpecsWithNamespace(bridge.specs).find(
-        (tool) => tool.name === "heartbeat_respond",
+    for (const bridge of [normal.bridge, withWebSearch.bridge, nextNormal.bridge]) {
+      const webSearchSpec = flattenSpecsWithNamespace(bridge.specs).find(
+        (tool) => tool.name === "web_search",
       );
-      expect(heartbeatSpec).toMatchObject({ namespace: "openclaw", deferLoading: true });
+      expect(webSearchSpec).toMatchObject({ namespace: "openclaw", deferLoading: true });
     }
-    expect(codexDynamicToolsFingerprint(heartbeat.bridge.specs)).toBe(
+    expect(codexDynamicToolsFingerprint(withWebSearch.bridge.specs)).toBe(
       codexDynamicToolsFingerprint(normal.bridge.specs),
     );
     expect(codexDynamicToolsFingerprint(nextNormal.bridge.specs)).toBe(
@@ -1482,7 +1458,7 @@ describe("runCodexAppServerAttempt", () => {
     let startedThreadId: string | undefined;
     const respond = createLifecycleRequest(async (method) => {
       if (method === "thread/start") {
-        startedThreadId = "thread-stable-heartbeat";
+        startedThreadId = "thread-stable-tools";
         return threadStartResult(startedThreadId);
       }
       if (method === "thread/resume") {
@@ -1491,13 +1467,13 @@ describe("runCodexAppServerAttempt", () => {
       throw new Error(`unexpected method: ${method}`);
     });
     const fixture = await createLeasedCodexLifecycleHarness({
-      agentDir: path.join(tempDir, "heartbeat-agent"),
+      agentDir: path.join(tempDir, "stable-tools-agent"),
       respond,
     });
     const { client, request } = fixture;
     const turns = [
       { params: createRunParams(), bridge: normal.bridge },
-      { params: heartbeat.params, bridge: heartbeat.bridge },
+      { params: withWebSearch.params, bridge: withWebSearch.bridge },
       { params: nextNormal.params, bridge: nextNormal.bridge },
     ];
     for (const turn of turns) {
@@ -1509,7 +1485,7 @@ describe("runCodexAppServerAttempt", () => {
         appServer: createThreadLifecycleAppServerOptions(),
         signal: new AbortController().signal,
       });
-      await fixture.endTurn("thread-stable-heartbeat");
+      await fixture.endTurn("thread-stable-tools");
     }
     expect(withoutCodexSkillDiscovery(request.mock.calls.map(([method]) => method))).toEqual([
       "config/read",
@@ -1544,15 +1520,9 @@ describe("runCodexAppServerAttempt", () => {
       {
         pluginConfig: {
           appServer: { mode: "yolo" },
-          codexPlugins: {
-            enabled: true,
-            plugins: {
-              "google-calendar": {
-                marketplaceName: "openai-curated",
-                pluginName: "google-calendar",
-              },
-            },
-          },
+          ...codexPluginConfig({
+            plugins: { "google-calendar": curatedPlugin("google-calendar") },
+          }),
         },
         developerInstructions: params.extraSystemPrompt,
       },
@@ -1917,7 +1887,6 @@ describe("runCodexAppServerAttempt", () => {
       return originalParse(text, reviver);
     });
     const originalClone = structuredClone;
-    let historyClones = 0;
     let privateCloneBytes = 0;
     const cloneSpy = vi
       .spyOn(globalThis, "structuredClone")
@@ -1931,15 +1900,6 @@ describe("runCodexAppServerAttempt", () => {
             return;
           }
           seen.add(node);
-          if (
-            "role" in node &&
-            node.role === "user" &&
-            "content" in node &&
-            Array.isArray(node.content) &&
-            node.content[0]?.text === "previous visible request"
-          ) {
-            historyClones += 1;
-          }
           for (const child of Object.values(node)) {
             visit(child);
           }
@@ -1953,8 +1913,11 @@ describe("runCodexAppServerAttempt", () => {
       await finishRun(run, harness);
       expect(privateParseBytes).toBe(0);
       expect(privateCloneBytes).toBe(0);
-      expect(historyClones).toBeGreaterThan(0);
-      expect(hook).toHaveBeenCalled();
+      // Hook isolation copies only unowned fields, so assert what the authorized hook receives.
+      const [event] = mockCall(hook, "before_prompt_build");
+      const hookInput = JSON.stringify(event);
+      expect(hookInput).toContain("previous visible request");
+      expect(hookInput).not.toContain(marker);
     } finally {
       parseSpy.mockRestore();
       cloneSpy.mockRestore();
@@ -3061,6 +3024,7 @@ describe("runCodexAppServerAttempt", () => {
       error,
     );
     expect(withoutCodexSkillDiscovery(harness.requests.map((request) => request.method))).toEqual([
+      "configRequirements/read",
       "config/read",
       "configRequirements/read",
       ...(transient ? ["thread/start"] : ["thread/read", "thread/resume", "thread/inject_items"]),
@@ -3116,6 +3080,7 @@ describe("runCodexAppServerAttempt", () => {
     await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
     await run;
     expect(withoutCodexSkillDiscovery(harness.requests.map((request) => request.method))).toEqual([
+      "configRequirements/read",
       "config/read",
       "configRequirements/read",
       "thread/read",
@@ -3181,6 +3146,7 @@ describe("runCodexAppServerAttempt", () => {
     });
     await finishRun(run, harness, "thread-existing");
     expect(withoutCodexSkillDiscovery(harness.requests.map((request) => request.method))).toEqual([
+      "configRequirements/read",
       "config/read",
       "configRequirements/read",
       "thread/read",
@@ -3606,6 +3572,8 @@ describe("runCodexAppServerAttempt", () => {
     const appServer = resolveCodexAppServerRuntimeOptions({
       pluginConfig: readCodexPluginConfig(pluginConfig),
     });
+    vi.stubEnv("CODEX_API_KEY", "old-codex-env-key");
+    vi.stubEnv("OPENAI_API_KEY", "");
     const cacheKey = buildCodexPluginAppCacheKey({
       appServer,
       agentDir,
@@ -3615,7 +3583,6 @@ describe("runCodexAppServerAttempt", () => {
         : {
             envApiKeyFingerprint: resolveCodexAppServerFallbackApiKeyCacheKey({
               startOptions: appServer.start,
-              ...(key === "changed" ? { baseEnv: { CODEX_API_KEY: "old-codex-env-key" } } : {}),
             }),
           }),
     });
@@ -3642,7 +3609,6 @@ describe("runCodexAppServerAttempt", () => {
       };
     } else if (key === "changed") {
       vi.stubEnv("CODEX_API_KEY", "new-codex-env-key");
-      vi.stubEnv("OPENAI_API_KEY", "");
     }
     await finishRun(runCodexAppServerAttempt(params, { pluginConfig }), harness);
     const { requests } = harness;
@@ -3975,8 +3941,9 @@ describe("runCodexAppServerAttempt", () => {
     const { result, requests, client } = await runSettledFailureClientReplacementTest();
     expect(readAttemptTerminal(result).aborted).toBe(false);
     expect(requests.map(withoutCodexSkillDiscovery)).toEqual([
-      ["config/read", "configRequirements/read", "thread/read"],
+      ["configRequirements/read", "config/read", "configRequirements/read", "thread/read"],
       [
+        "configRequirements/read",
         "config/read",
         "configRequirements/read",
         "thread/read",
@@ -3993,8 +3960,8 @@ describe("runCodexAppServerAttempt", () => {
       runSettledFailureClientReplacementTest({ denyReplacementShell: true, requests }),
     ).rejects.toThrow("Codex native code mode requires shell_tool");
     expect(requests.map(withoutCodexSkillDiscovery)).toEqual([
-      ["config/read", "configRequirements/read", "thread/read"],
-      ["config/read", "configRequirements/read"],
+      ["configRequirements/read", "config/read", "configRequirements/read", "thread/read"],
+      ["configRequirements/read", "config/read", "configRequirements/read"],
     ]);
   });
 

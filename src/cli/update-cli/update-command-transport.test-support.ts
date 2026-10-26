@@ -64,7 +64,10 @@ export function createUpdateExecTransportFixture(params: {
 }): typeof runExec {
   return async (...args: Parameters<typeof runExec>) => {
     const [command, argv, options] = args;
-    if (argv[0] === "-e" && argv[1]?.includes("sqliteSelectionError")) {
+    if (
+      path.basename(argv[0] ?? "") === "daemon-runtime-probe.mjs" &&
+      (argv[1] === "node" || argv[1] === "bun")
+    ) {
       const result = await params.run(...args);
       if (result.stdout.trim() || result.stderr.trim()) {
         return result;
@@ -231,9 +234,8 @@ export async function createUpdateUtf8CommandTransportFixture(
       }
     }
     if (
-      argv.length === 3 &&
-      argv[2] === "--check" &&
-      path.basename(argv[1] ?? "") ===
+      argv.at(-1) === "--check" &&
+      path.basename(argv.at(-2) ?? "") ===
         path.basename(runtimeProcessEntrypoints.updateMigratedFinalize.distWorkerPath)
     ) {
       // These CLI fixture packages do not implement the delegated post-core worker.

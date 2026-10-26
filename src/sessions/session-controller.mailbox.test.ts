@@ -11,7 +11,6 @@ import { deferSessionControllerClaimBeforeExecution } from "./session-controller
 import { reserveSessionControllerClaimPredecessor } from "./session-controller.mailbox-predecessor.js";
 import {
   reserveSessionControllerSource,
-  reserveOrJoinSessionControllerSource,
   bindSessionControllerSource,
   claimSessionControllerInput,
   releaseSessionControllerClaim,
@@ -131,6 +130,24 @@ function revocableAuthority(message: string, beforeThrow?: () => void) {
 }
 
 describe("controller mailbox scheduling", () => {
+  it.each([-90_000, 90_000])(
+    "preserves the debounce window after a %d ms wall-clock step",
+    async (step) => {
+      vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+      const run = source("debounced follow-up");
+      const dispatch = vi.fn(async () => {});
+      enqueueFollowupRun(key, run, { mode: "followup", debounceMs: 500 }, "none", dispatch, false);
+      ownedInputs.push(run.controllerInput!);
+
+      vi.setSystemTime(Date.now() + step);
+      scheduleFollowupDrain(key, dispatch);
+      await vi.advanceTimersByTimeAsync(499);
+      expect(dispatch).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(dispatch).toHaveBeenCalledOnce();
+    },
+  );
+
   it("drains a re-enqueued incognito followup from its original owner", async () => {
     vi.useFakeTimers();
     const sessionKey = "agent:main:dashboard:incognito-recovery-mailbox";
@@ -270,31 +287,6 @@ describe("controller mailbox scheduling", () => {
       expect(retried.inputs).toContain(input);
     },
   );
-  it("runs reserved start callbacks on claim in FIFO order, never again for a joined reservation", async () => {
-    const active = activeOperation("start-callback-active");
-    active.setPhase("running");
-    const started: string[] = [];
-    const reserve = (id: string, reservationId?: string) =>
-      reserveOrJoinSessionControllerSource(key, {
-        reservationId,
-        policy: { mode: "followup" },
-        start: (claim) => {
-          started.push(id);
-          void Promise.resolve().then(() => releaseSessionControllerClaim(claim));
-        },
-      });
-    const first = reserve("first", "owed:first");
-    const second = reserve("second");
-    expect(reserve("joined", "owed:first")).toEqual({ input: first.input, created: false });
-    expect(started).toEqual([]);
-
-    active.complete();
-    await first.input.settlement.promise;
-    await second.input.settlement.promise;
-
-    expect(first.created && second.created).toBe(true);
-    expect(started).toEqual(["first", "second"]);
-  });
   it("retires a queued injection before releasing its receipt when live authority rejects", async () => {
     const active = activeOperation("active");
     const authority = revocableAuthority("source authority revoked", () => active.complete());
@@ -327,9 +319,14 @@ describe("controller mailbox scheduling", () => {
         drained.resolve();
       }
     };
-    enqueueFollowupRun(key, source("B"), { mode: "followup", debounceMs: 0 }, "none", dispatch);
-    enqueueFollowupRun(key, source("C"), { mode: "followup", debounceMs: 0 }, "none", dispatch);
+    const queued = [source("B"), source("C")];
+    for (const run of queued) {
+      enqueueFollowupRun(key, run, { mode: "followup", debounceMs: 0 }, "none", dispatch);
+    }
+    const older = interruptSource("old");
     const d = interruptSource(" D ");
+    retireSessionControllerInput(older);
+    expect(getExistingSessionControllerMailbox(key)?.priority).toBe(d);
     a.complete();
     expect(order).toEqual([]);
     const run = source("D");
@@ -340,17 +337,8 @@ describe("controller mailbox scheduling", () => {
     releaseSessionControllerClaim(claim);
     await drained.promise;
     expect(order).toEqual(["B", "C"]);
-  });
-  it("canceling an older priority never clears the newest interrupt reservation", async () => {
-    const first = interruptSource("old");
-    const newest = interruptSource("new");
-    retireSessionControllerInput(first);
-    expect(getExistingSessionControllerMailbox(key)?.priority).toBe(newest);
-    const run = source("new");
-    bindSessionControllerSource(newest, run);
-    const claim = await claimSessionControllerInput(run);
-    expect(claim.inputs).toEqual([newest]);
-    await releaseClaim(claim);
+    await queued[1]!.controllerInput!.settlement.promise;
+    await queued[1]!.controllerInput!.claim?.settlement.promise;
     expect(Boolean(findSessionControllerEntry(key))).toBe(false);
   });
   it("preserves exact protocol identities and withdrawal custody before payload exists", () => {

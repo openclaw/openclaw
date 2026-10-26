@@ -1,8 +1,10 @@
 import type { MarkdownIt } from "markdown-it";
 import { escapeHtml } from "../../../src/shared/html-escape.js";
 import { t } from "../i18n/index.ts";
+import { formatUiError, UserFacingError } from "../lib/format-error.ts";
 import { anchorFromNavigationEvent } from "../lib/navigation-click.ts";
 import { listen } from "../lib/reactive/listener.ts";
+import { showToast } from "../lib/toast.ts";
 import { copyMarkdownText } from "./markdown-copy.ts";
 import { createIconElement } from "./markdown-icon.ts";
 import { SESSION_TITLE_TARGET_SELECTOR } from "./session-progress-hovercard-target.ts";
@@ -11,6 +13,7 @@ import { registerSessionTitleTarget } from "./session-title-target-registration.
 const tableShellSelector = ".chat-text .markdown-table[data-table-interactions]";
 const tableViewportSelector = ".markdown-table__viewport";
 const enhancedTableShells = new WeakSet<HTMLElement>();
+const tableCopyStatuses = new WeakMap<HTMLElement, HTMLElement>();
 const tableOwnerStates = new WeakMap<HTMLElement, TableOwnerState>();
 
 type TableOwnerState = {
@@ -78,6 +81,11 @@ function enhanceTableShell(shell: HTMLElement): void {
   label.textContent = t("common.expandTable");
   expand.replaceChildren(createIconElement("maximize", shell.ownerDocument), label);
   copy.replaceChildren(createIconElement("copy", shell.ownerDocument));
+  const status = shell.ownerDocument.createElement("span");
+  status.className = "sr-only";
+  status.setAttribute("role", "status");
+  copy.after(status);
+  tableCopyStatuses.set(copy, status);
 }
 
 export function enhanceMarkdownTables(owner: HTMLElement): TableOwnerState {
@@ -127,6 +135,10 @@ export function enhanceMarkdownTables(owner: HTMLElement): TableOwnerState {
           if (node.matches(tableShellSelector)) {
             shells.add(node);
           }
+          // Syntax highlighting inserts many leaf spans, which cannot contain tables.
+          if (!node.firstElementChild) {
+            continue;
+          }
           for (const added of node.querySelectorAll<HTMLElement>(tableShellSelector)) {
             shells.add(added);
           }
@@ -137,7 +149,9 @@ export function enhanceMarkdownTables(owner: HTMLElement): TableOwnerState {
           }
           const removed = [
             node,
-            ...node.querySelectorAll<HTMLElement>(`${tableViewportSelector}, table`),
+            ...(node.firstElementChild
+              ? node.querySelectorAll<HTMLElement>(`${tableViewportSelector}, table`)
+              : []),
           ];
           for (const observed of removed) {
             if (observedNodes.delete(observed)) {
@@ -214,7 +228,13 @@ async function showTableDialog(
   // Reserve through teardown before loading; reconnect cannot revive this request.
   state.closeDialog = close;
   try {
-    await import("./modal-dialog.tsx");
+    try {
+      await import("./modal-dialog.tsx");
+    } catch (cause) {
+      throw new UserFacingError(`${t("lazyView.errorTitle")}. ${t("lazyView.staleSubtitle")}`, {
+        cause,
+      });
+    }
     if (state.closeDialog !== close || !owner.isConnected || !trigger.isConnected) {
       return;
     }
@@ -265,6 +285,10 @@ async function showTableDialog(
     for (const target of content.querySelectorAll<HTMLElement>(SESSION_TITLE_TARGET_SELECTOR)) {
       stopListeners.push(registerSessionTitleTarget(target, document.createElement("span")));
     }
+  } catch (error) {
+    if (state.closeDialog === close && owner.isConnected && trigger.isConnected) {
+      showToast({ message: formatUiError(error), severity: "error" });
+    }
   } finally {
     if (!dialog) {
       close();
@@ -303,6 +327,11 @@ export function handleMarkdownTableInteraction(event: Event): void {
         markdownTableCopyText(table) === text,
       (copied) => {
         copy.replaceChildren(createIconElement(copied ? "check" : "copy", copy.ownerDocument));
+        const status = tableCopyStatuses.get(copy);
+        if (status) {
+          status.textContent =
+            copied === undefined ? "" : t(copied ? "common.copied" : "common.copyFailed");
+        }
         if (copied === undefined) {
           copy.setAttribute("aria-label", t("common.copyTable"));
         } else {

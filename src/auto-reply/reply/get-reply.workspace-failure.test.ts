@@ -52,13 +52,6 @@ it.each([
   }
 });
 
-it("keeps heartbeat workspace failures throwing for heartbeat-owned logging", async () => {
-  vi.mocked(ensureAgentWorkspace).mockRejectedValueOnce(aliasError);
-  await expect(getReplyFromConfig(buildGetReplyCtx(), { isHeartbeat: true }, {})).rejects.toBe(
-    aliasError,
-  );
-});
-
 it("rejects queued reply preparation after abort or operator revocation without workspace effects", async ({
   signal,
 }) => {

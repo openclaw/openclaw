@@ -448,6 +448,15 @@ describe("createVerifiedSqliteSnapshot", () => {
     await expectPreservedTarget(/target already exists/u, {}, "keep");
   });
 
+  it.runIf(process.platform !== "win32")("preserves a dangling target link", async () => {
+    await fs.symlink("missing.sqlite", targetPath);
+
+    await expect(snapshot()).rejects.toThrow(
+      `SQLite snapshot target already exists: ${targetPath}`,
+    );
+    await expect(fs.readlink(targetPath)).resolves.toBe("missing.sqlite");
+  });
+
   it("preserves a target created while the snapshot is being prepared", async () => {
     await expectPreservedTarget(/EEXIST|already exists/iu, {
       transform: async () => {

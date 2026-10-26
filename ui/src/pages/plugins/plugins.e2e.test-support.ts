@@ -26,6 +26,7 @@ import {
   type ControlUiE2eServer,
 } from "../../test-helpers/control-ui-e2e.ts";
 import {
+  createPluginDeclaredSurface,
   discoveryCategories,
   discoveryResult,
   finalDiscoveryPageItems,
@@ -224,18 +225,7 @@ const workboardInspection = {
     enabled: false,
   },
   source: { kind: "npm", packageName: workboardDisabled.packageName },
-  declared: {
-    channels: [],
-    providers: [],
-    tools: [],
-    contracts: [],
-    hooks: [],
-    mcpServers: [],
-    cliCommands: [],
-    cliBackends: [],
-    skills: [],
-    dangerousConfigFlags: [],
-  },
+  declared: createPluginDeclaredSurface(),
   components: {
     mapped: [],
     skills: [],

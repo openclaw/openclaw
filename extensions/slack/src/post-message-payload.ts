@@ -6,7 +6,7 @@ export type SlackUnfurlOptions = {
   unfurlMedia?: boolean;
 };
 
-type SlackPostThreadPayload =
+export type SlackBasePostMessagePayload = (
   | {
       thread_ts: string;
       reply_broadcast: true;
@@ -14,9 +14,8 @@ type SlackPostThreadPayload =
   | {
       thread_ts?: string;
       reply_broadcast?: never;
-    };
-
-export type SlackBasePostMessagePayload = SlackPostThreadPayload & {
+    }
+) & {
   channel: string;
   text: string;
   blocks?: (Block | KnownBlock)[];

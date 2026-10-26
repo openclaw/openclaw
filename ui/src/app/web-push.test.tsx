@@ -10,7 +10,9 @@ import {
 } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { NotificationsSection } from "../pages/config/notifications-section.tsx";
+import { createApplicationGateway } from "../test-helpers/application-context-fixtures.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { restorePropertyDescriptor } from "../test-helpers/property-descriptor.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
 import { createConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
 import type { ApplicationGateway, ApplicationGatewaySnapshot } from "./gateway.ts";
@@ -35,14 +37,6 @@ function setNavigatorValue(key: string, value: unknown): void {
   Object.defineProperty(navigator, key, { configurable: true, value });
 }
 
-function restoreNavigatorValue(key: string, descriptor: PropertyDescriptor | undefined): void {
-  if (descriptor) {
-    Object.defineProperty(navigator, key, descriptor);
-  } else {
-    Reflect.deleteProperty(navigator, key);
-  }
-}
-
 function encodedVapidKey(bytes: number[]): string {
   return Buffer.from(bytes).toString("base64url");
 }
@@ -65,25 +59,15 @@ function existingSubscription(
 }
 
 function gatewayHarness() {
-  let snapshot = {
+  const { gateway, publish } = createApplicationGateway({
     phase: "connecting",
     client: null,
-  } as unknown as ApplicationGatewaySnapshot;
-  const listeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
+  } as unknown as ApplicationGatewaySnapshot);
   const eventListeners = new Set<Parameters<ApplicationGateway["subscribeEvents"]>[0]>();
-  const gateway = {
-    get snapshot() {
-      return snapshot;
-    },
-    subscribe(listener: (next: ApplicationGatewaySnapshot) => void) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    subscribeEvents(listener: Parameters<ApplicationGateway["subscribeEvents"]>[0]) {
-      eventListeners.add(listener);
-      return () => eventListeners.delete(listener);
-    },
-  } as unknown as ApplicationGateway;
+  gateway.subscribeEvents = (listener) => {
+    eventListeners.add(listener);
+    return () => eventListeners.delete(listener);
+  };
   return {
     gateway,
     connect(
@@ -91,8 +75,8 @@ function gatewayHarness() {
       profileId = "profile-owner",
       scopes = ["operator.admin"],
     ) {
-      snapshot = {
-        ...snapshot,
+      publish({
+        ...gateway.snapshot,
         phase: "connected",
         client,
         selfUser: { id: profileId },
@@ -100,16 +84,10 @@ function gatewayHarness() {
           auth: { role: "operator", scopes },
           features: { methods: ["push.web.preferences.get", "push.web.preferences.set"] },
         },
-      } as unknown as ApplicationGatewaySnapshot;
-      for (const listener of listeners) {
-        listener(snapshot);
-      }
+      } as unknown as ApplicationGatewaySnapshot);
     },
     disconnect() {
-      snapshot = { ...snapshot, phase: "offline", client: null };
-      for (const listener of listeners) {
-        listener(snapshot);
-      }
+      publish({ ...gateway.snapshot, phase: "offline", client: null });
     },
     emit(event: Parameters<Parameters<ApplicationGateway["subscribeEvents"]>[0]>[0]) {
       for (const listener of eventListeners) {
@@ -199,15 +177,11 @@ describe("web push Gateway reconciliation", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
-    restoreNavigatorValue("userAgent", originalUserAgentDescriptor);
-    restoreNavigatorValue("maxTouchPoints", originalMaxTouchPointsDescriptor);
-    restoreNavigatorValue("standalone", originalStandaloneDescriptor);
-    restoreNavigatorValue("platform", originalPlatformDescriptor);
-    if (originalServiceWorkerDescriptor) {
-      Object.defineProperty(navigator, "serviceWorker", originalServiceWorkerDescriptor);
-    } else {
-      Reflect.deleteProperty(navigator, "serviceWorker");
-    }
+    restorePropertyDescriptor(navigator, "userAgent", originalUserAgentDescriptor);
+    restorePropertyDescriptor(navigator, "maxTouchPoints", originalMaxTouchPointsDescriptor);
+    restorePropertyDescriptor(navigator, "standalone", originalStandaloneDescriptor);
+    restorePropertyDescriptor(navigator, "platform", originalPlatformDescriptor);
+    restorePropertyDescriptor(navigator, "serviceWorker", originalServiceWorkerDescriptor);
   });
 
   it("does not offer or prompt for push when the connected guest lacks method access", async () => {
@@ -306,11 +280,9 @@ describe("web push Gateway reconciliation", () => {
       await vi.waitFor(() =>
         expect(container.querySelector(".settings-stack")?.hasAttribute("inert")).toBe(false),
       );
-      const controls = Array.from(
-        container.querySelectorAll(".settings-stack input, .settings-stack select"),
-      );
+      const controls = container.querySelectorAll(".settings-stack input, .settings-stack select");
       expect(controls.length).toBeGreaterThan(0);
-      expect(controls.every((control) => control.matches(":disabled"))).toBe(true);
+      expect([...controls].every((control) => control.matches(":disabled"))).toBe(true);
       container.querySelector<HTMLInputElement>(".settings-stack input")?.click();
       expect(changePreferences).not.toHaveBeenCalled();
       expect(container.textContent).not.toContain("Send test");

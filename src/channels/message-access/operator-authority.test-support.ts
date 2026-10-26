@@ -11,6 +11,7 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import type { BuildChannelInboundEventContextParams } from "../inbound-event/context.js";
 import {
   createHostIngressFixture,
   ingressInput,
@@ -45,11 +46,8 @@ export async function withAdminIngress(
   await withTestChannelRegistry(plugin, () =>
     withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const fixture = await createAdminIngressFixture(state, authority, channelId);
-      try {
-        await run(fixture);
-      } finally {
-        fixture.unregister();
-      }
+      using _ = { [Symbol.dispose]: () => fixture.unregister() };
+      await run(fixture);
     }),
   );
 }
@@ -94,10 +92,16 @@ export async function createAdminIngressFixture(
   setRuntimeConfigSnapshot(cfg);
   const host = createHostIngressFixture(channelId, cfg);
   const key = `agent:main:${channelId}:channel:maintainers`;
-  const context = async (senderId: string, verified = true, accountId = "team") => {
+  const context = async (
+    senderId: string,
+    verified = true,
+    accountId = "team",
+    overrides: Partial<BuildChannelInboundEventContextParams> = {},
+  ) => {
     const message = ingressMessage(channelId, key, senderId, {
       accountId,
       message: { rawBody: "Assign this session to the requester" },
+      ...overrides,
     });
     const ingress = await host.ingress.resolveStable(
       ingressInput(message, {

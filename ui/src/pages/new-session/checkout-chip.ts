@@ -3,10 +3,6 @@ import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-sessio
 
 registerNewSessionSetupEnglish();
 
-type CheckoutChipState = Readonly<{
-  label: string;
-}>;
-
 export function resolveCheckoutChip(params: {
   destination: "local" | "remote" | "cloud";
   worktree: boolean;
@@ -14,7 +10,9 @@ export function resolveCheckoutChip(params: {
   headBranch?: string;
   baseRef: string;
   repository?: boolean;
-}): CheckoutChipState {
+}): Readonly<{
+  label: string;
+}> {
   const worktreeName = params.worktreeName.trim();
   if (params.worktree && !params.repository && worktreeName) {
     return { label: t("newSession.checkoutWorktreeNamed", { name: worktreeName }) };

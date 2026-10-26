@@ -111,11 +111,7 @@ type NodeRegistryPrivateContext = {
     },
   ) => void;
   publishActiveNodeContext: () => void;
-};
-
-type GenerationBoundPendingInvoke = {
-  expectedGeneration: string;
-  controller: AbortController;
+  closeHostStats: () => Promise<void>;
 };
 
 type NodeRegistryPrivateState = {
@@ -124,7 +120,10 @@ type NodeRegistryPrivateState = {
   runnerInventoryByConn: Map<string, NodeRunnerInventoryRecord>;
   bundleStatusByConn: Map<string, NodeWorkerBundleStatusObservation>;
   runnerState: NodeRunnerStatePublisher;
-  generationBoundInvokes: WeakMap<PendingInvoke, GenerationBoundPendingInvoke>;
+  generationBoundInvokes: WeakMap<
+    PendingInvoke,
+    { expectedGeneration: string; controller: AbortController }
+  >;
   workerSupervisorTransport: NodeWorkerSupervisorTransport;
 };
 
@@ -533,20 +532,13 @@ export function registerNodeRegistryPrivateRuntime(
   NODE_REGISTRY_PRIVATE_STATES.set(nodeRegistry, state);
 }
 
-export function createNodeRegistryRuntime<TRegistry extends object>(
-  create: () => TRegistry,
-): {
-  nodeRegistry: TRegistry;
-  nodeWorkerSupervisorTransport: NodeWorkerSupervisorTransport;
-} {
+export function createNodeRegistryRuntime<TRegistry extends object>(create: () => TRegistry) {
   const nodeRegistry = create();
-  const state = NODE_REGISTRY_PRIVATE_STATES.get(nodeRegistry);
-  if (!state) {
-    throw new Error("node registry private runtime was not initialized during creation");
-  }
+  const state = requireNodeRegistryPrivateState(nodeRegistry);
   return {
     nodeRegistry,
     nodeWorkerSupervisorTransport: state.workerSupervisorTransport,
+    closeHostStats: state.context.closeHostStats,
   };
 }
 
@@ -591,10 +583,7 @@ export function reconcileNodeRunnerAvailability(nodeRegistry: object, nodeId: st
   requireNodeRegistryPrivateState(nodeRegistry).runnerState.reconcile(nodeId, false);
 }
 
-export function invokePublicNodeRegistry(
-  nodeRegistry: object,
-  params: NodeInvokeParams,
-): Promise<NodeInvokeResult> {
+export function invokePublicNodeRegistry(nodeRegistry: object, params: NodeInvokeParams) {
   return invokeNodeRegistryCore(requireNodeRegistryPrivateState(nodeRegistry), params, false);
 }
 

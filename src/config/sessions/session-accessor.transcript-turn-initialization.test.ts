@@ -108,7 +108,7 @@ describe("first transcript turn initialization", () => {
     const turn = await admit({ onMessageCommitted });
     expect(turn.sessionEntry?.status).toBeUndefined();
     expect(turn).toMatchObject({
-      appendedCount: 1,
+      messages: [{ appended: true }],
       sessionEntry: {
         ...initialSessionEntry,
         updatedAt: expect.any(Number),
@@ -137,7 +137,7 @@ describe("first transcript turn initialization", () => {
     const replay = await admit({ onMessageCommitted });
     expect(onMessageCommitted).toHaveBeenCalledTimes(1);
     expect(replay).toMatchObject({
-      appendedCount: 0,
+      messages: [],
       sessionTurnMutationResult: { replayed: true, result: turn.sessionTurnMutationResult?.result },
     });
     expect(counts()).toEqual({ nodes: 1, windows: 1, events: 2, receipts: 1 });
@@ -199,7 +199,9 @@ describe("first transcript turn initialization", () => {
         release.resolve();
         const result = await outcome;
         if (mode === "success") {
-          expect(result).toMatchObject({ value: { appendedCount: 2 } });
+          expect(result).toMatchObject({
+            value: { messages: [{ appended: true }, { appended: true }] },
+          });
           expect(order).toEqual([...completedOrder, "published", "published"]);
         } else {
           expect(result).toEqual({ error: failure });
@@ -225,7 +227,7 @@ describe("first transcript turn initialization", () => {
           return true;
         }),
       });
-      expect(turn).toMatchObject({ rejectedReason: "session-rebound", appendedCount: 0 });
+      expect(turn).toMatchObject({ rejectedReason: "session-rebound", messages: [] });
       expect(loadSessionEntry(scope())).toMatchObject(competing);
       expect(loadSessionEntry(scope())?.goal).toBeUndefined();
       expect(await loadTranscriptEvents(scope())).toEqual([]);
@@ -247,7 +249,7 @@ describe("first transcript turn initialization", () => {
     expect(counts()).toEqual({ nodes: 0, windows: 0, events: 0, receipts: 4096 });
     expect(receiptRows()).toEqual(retained);
     db.exec("DELETE FROM session_goal_operations");
-    await expect(admit()).resolves.toMatchObject({ appendedCount: 1 });
+    await expect(admit()).resolves.toMatchObject({ messages: [{ appended: true }] });
   });
 
   it("does not recreate a deleted session from its retained Goal receipt", async () => {
@@ -263,7 +265,7 @@ describe("first transcript turn initialization", () => {
     expect(before).toMatchObject({ receipts: 1 });
     await expect(admit()).resolves.toMatchObject({
       rejectedReason: "session-rebound",
-      appendedCount: 0,
+      messages: [],
     });
     expect(loadSessionEntry(scope())).toBeUndefined();
     expect(counts()).toEqual(before);

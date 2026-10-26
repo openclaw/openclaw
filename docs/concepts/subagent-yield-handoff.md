@@ -19,6 +19,11 @@ This design applies equally to an orchestrator spawned from an interactive
 session and one spawned from an isolated cron run. Cron owns delivery of the
 scheduled result, while the registry owns the nested orchestrator's continuation.
 
+An accepted yield stops new steering immediately. Tool calls in the same model
+response settle before the execution ends, preserving each call's own result.
+Stop, timeouts, and permission revocation can still cancel those calls while
+they settle. The handoff does not start another model request.
+
 ## Ownership through the handoff
 
 | Phase                | Owner                                         | Required handoff                                                                                                                                                       |
@@ -69,6 +74,29 @@ first, then resumes child cleanup under that owner. Late announcement failures
 cannot replace the batch's delivery state; already committed delivery evidence
 remains valid. Restart activation reconciles retained requester-turn bindings
 before resuming child completion.
+
+Restart restores ready completion reservations in requester FIFO order. A cohort
+still waiting for a child or descendant stays with the registry without reserving
+the requester's mailbox, so ordinary user input can run in FIFO order while it
+waits. The existing settlement events make its continuation eligible when ready.
+Interrupted terminal deliveries also wait for their recovery owner to reconcile
+them before reserving the mailbox. Retained recovery records from an older child
+execution must not block a ready continuation after another Gateway restart.
+When a restored wave needs no further delivery, the registry releases its unclaimed
+mailbox reservations after its settlement commits. Already delivered waves must
+not hold later yielded cohorts behind an unprepared input. Claimed turns keep
+their existing execution owner.
+
+For retired cancellation records, recovery reconciles a late kill marker against
+the terminal run's current generation before resuming its pending completion.
+A kill request recorded after execution ended does not reopen execution or prevent
+completion from settling. A newer child run keeps its own completion ownership.
+
+Restored delivery preparation uses the bounded background budget only until the
+Gateway accepts the input. Waiting for mailbox dispatch or requester completion
+does not hold a preparation slot: earlier FIFO inputs may need that same budget
+to become ready. The registry retains the delivery lifetime and records its
+outcome after the requester finishes.
 
 For a nested requester, settlement persists its paused run together with the
 child wake batch before scheduling the continuation. This also covers a child
@@ -192,6 +220,10 @@ owner, so callbacks from the closed Gateway cannot settle the recovered wake.
   idle. `requesterTurnRunId` identifies the spawning cohort. Whether that turn
   still owns its children is read from the session controller, so a turn that
   ended without transferring them no longer holds their completions.
+  Failed announcement preparation retains only the durable obligation; prompt
+  assembly does not drain those records into a separate steering queue. Recovery
+  retries the same controller reservation, whose confirmed consumption settles
+  delivery. An unconsumed input remains owed across requester or Gateway failure.
 - **Retirement is an event.** Kill, Stop of a paused or queued child, child
   session deletion, and requester reset or deletion retire the child's owed
   inputs. A retired member is terminal, so it never holds its siblings'
@@ -208,9 +240,10 @@ owner, so callbacks from the closed Gateway cannot settle the recovered wake.
   regardless of its size. A mixed wave delivers only its undelivered results;
   already delivered children are referenced in one short line without their
   payloads. An explicit `sessions_yield` still owes one continuation, using the
-  same rule even when every result was already delivered.
+  same rule even when every result was already delivered, but that continuation may finish silently without missing-answer recovery when no member still needs delivery or restart reconciliation.
   Restart-interrupted children still need reconciliation: their retained partial
-  results remain in the continuation even if an earlier result was delivered.
+  results remain in the continuation if delivery predates the interruption. A
+  confirmed delivery of the interruption notice satisfies that obligation.
   The unfinished-child roster is independent of result delivery and includes
   only children whose captured requester identity still matches.
   A Stop, reset, or deletion
@@ -240,9 +273,18 @@ owner, so callbacks from the closed Gateway cannot settle the recovered wake.
   an observed terminal delivery outcome, the registry settles that outcome
   without resending an ambiguously committed result. If persistence fails, it
   retains the observed receipt and retries bookkeeping, not the send. The
-  outbound durable delivery queue keeps its own transport retry policy.
+  same rule covers private parent completions resumed by restart recovery:
+  their captured successful result settles the original input, including a
+  silent result, without starting another requester turn. Failed or missing
+  recovery evidence does not establish successful consumption.
+  Before that result exists, the original private completion owner resumes its
+  interrupted input; its own pending recovery claim does not block the replay.
+  The outbound durable delivery queue keeps its own transport retry policy.
   Delivery bookkeeping for executions that ended before the current batch's
   earliest child was created cannot block its continuation.
+  After a restart, saved interrupted results finish their own cleanup even if
+  the child session has since run a newer task. That cleanup releases the older
+  mailbox reservation without changing the newer task's session or execution.
   A private handoff's observation timeout does not cancel the underlying Gateway
   turn. When the Gateway reports that turn as
   in flight, settlement observes the same request without spending failure

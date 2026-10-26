@@ -7,9 +7,7 @@ import {
   isPending,
   latest,
   Loading,
-  onCleanup,
   Show,
-  untrack,
   type Accessor,
 } from "solid-js";
 import {
@@ -19,11 +17,13 @@ import {
   type RouteId,
 } from "../app-route-paths.ts";
 import { registerCommandPaletteEnglish } from "../i18n/locales/en-command-palette.ts";
+import { isMobileBrowserPlatform, keepMobileReturnNative } from "../lib/browser-platform.ts";
 import { MAX_HUMAN_MENTIONS } from "../lib/chat/human-mentions.ts";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
 } from "../lib/keyboard-shortcut-contract.ts";
+import { elementRef } from "../lib/reactive/element-ref.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { createParkedProjection } from "../lib/reactive/parked-projection.ts";
 import { resolveUiSessionRowAgentId } from "../lib/sessions/session-key.ts";
@@ -36,15 +36,18 @@ import {
   PaletteSessionAuxiliary,
   PaletteSessionRecovery,
 } from "../pages/new-session/palette-session-draft-view.tsx";
+import { PaletteSessionDraft } from "../pages/new-session/palette-session-draft.ts";
 import { createSubmissionAction } from "../pages/new-session/submission-action.ts";
 import "../styles/command-palette.css";
 import {
   commandPaletteCategoryLabel,
   filterCommandPaletteItems,
+  getStaticCommandPaletteCatalogItems,
   type CommandPaletteItem,
 } from "./command-palette-catalog-search.ts";
 import { COMMAND_PALETTE_DIALOG_STYLE } from "./command-palette-contract.ts";
 import { COMMAND_PALETTE_INPUT_ID, CommandPaletteInput } from "./command-palette-input.tsx";
+import { createCommandPaletteMatches } from "./command-palette-matches.ts";
 import { CommandPaletteResult } from "./command-palette-result.tsx";
 import { SESSION_ACTION_PREFIX } from "./command-palette-session-search.ts";
 import type { CommandPaletteState, PaletteFilter } from "./command-palette-state.ts";
@@ -130,6 +133,9 @@ function handleKeydown(
   ) {
     return;
   }
+  if (keepMobileReturnNative(event)) {
+    return;
+  }
   if (event.key === "Enter" && event.repeat) {
     event.preventDefault();
     return;
@@ -163,6 +169,9 @@ function handleKeydown(
   if (props.draft.submitting) {
     return;
   }
+  if (event.key !== "Enter" && event.key !== "ArrowDown" && event.key !== "ArrowUp") {
+    return;
+  }
   if (event.key === "Enter" && props.searchDebouncing) {
     props.onFlushSearch();
     // Read the applied query and retired rows, not the previous render snapshot.
@@ -179,11 +188,7 @@ function handleKeydown(
     }
     return;
   }
-  if (
-    items.length === 0 ||
-    props.query.includes("\n") ||
-    (event.key !== "ArrowDown" && event.key !== "ArrowUp")
-  ) {
+  if (items.length === 0 || props.query.includes("\n")) {
     return;
   }
   event.preventDefault();
@@ -200,16 +205,26 @@ function matchesFilter(item: CommandPaletteItem, filter: PaletteFilter) {
   return filter === "all" || item.category === (filter === "sessions" ? "chats" : "messages");
 }
 
-function resolvePaletteResults(snapshot: CommandPaletteProps) {
+function resolvePaletteResults(snapshot: CommandPaletteProps, prepared?: CommandPaletteItem[]) {
   const hideSearch =
     snapshot.promptMode || snapshot.mentionMenu.open || snapshot.draft.mentions.length > 0;
-  const matches = hideSearch
-    ? []
-    : filterCommandPaletteItems({
-        ...snapshot,
-        query: snapshot.searchQuery,
-        includeSlashCommands: Boolean(snapshot.onSlashCommand),
-      });
+  const matches =
+    prepared ??
+    (hideSearch
+      ? []
+      : filterCommandPaletteItems({
+          ...snapshot,
+          catalogItems: [
+            ...getStaticCommandPaletteCatalogItems(
+              snapshot.canAdmin,
+              snapshot.nativeDeviceSettings,
+            ),
+            ...snapshot.catalogItems,
+            ...snapshot.modelItems,
+          ],
+          query: snapshot.searchQuery,
+          includeSlashCommands: Boolean(snapshot.onSlashCommand),
+        }));
   const grouped = groupItems(matches.filter((item) => matchesFilter(item, snapshot.filter)));
   const items = grouped.flatMap(([, entries]) => entries);
   // Preserve explicit selection through transient result changes, but only
@@ -229,8 +244,27 @@ function PaletteHint(props: { shortcut: SolidJSX.Element; label: string }) {
   );
 }
 
+function PaletteNewlineHint() {
+  return (
+    <PaletteHint
+      shortcut={
+        <KeyboardShortcut
+          combo={
+            isMobileBrowserPlatform()
+              ? KEYBOARD_SHORTCUT_COMBOS.sendMessage
+              : KEYBOARD_SHORTCUT_COMBOS.newline
+          }
+        />
+      }
+      label={t("palette.footer.newline")}
+    />
+  );
+}
+
 function PaletteSearch(props: {
   readProps: () => CommandPaletteProps;
+  readCurrentProps: () => CommandPaletteProps;
+  results: ReturnType<typeof resolvePaletteResults>;
   sessionRead: Accessor<void | undefined>;
   catalogRead: Accessor<void | undefined>;
   modelRead: Accessor<unknown>;
@@ -238,20 +272,17 @@ function PaletteSearch(props: {
 }) {
   const current = () => props.readProps();
   const sessionSearchPending = () => isPending(props.sessionRead);
-  const readSessionSearch = () => {
-    latest(props.sessionRead);
-    return null;
-  };
+  // A cold receipt can suspend a pending probe; owner facts keep filtering live.
   const catalogSearchPending = () =>
     Boolean(current().searchQuery.trim()) &&
     !current().promptMode &&
-    (isPending(props.catalogRead) || isPending(props.modelRead));
+    current().catalogSearchPending;
   const readCatalog = () => {
     latest(props.catalogRead);
     latest(props.modelRead);
     return null;
   };
-  const results = createMemo(() => resolvePaletteResults(current()));
+  const results = () => props.results;
   const notices = () =>
     [
       current().remoteSearchOffline ? t("palette.searchOffline") : null,
@@ -280,7 +311,7 @@ function PaletteSearch(props: {
     current().archivedTranscriptsExcluded === 0;
   return (
     <>
-      {readSessionSearch()}
+      {(latest(props.sessionRead), null)}
       {/* A cold catalog read must not hide already available commands. */}
       <Loading>{readCatalog()}</Loading>
       <Show when={current().searchQuery.trim() && current().onSelectSession}>
@@ -291,7 +322,7 @@ function PaletteSearch(props: {
                 type="button"
                 class="cmd-palette__filter"
                 aria-pressed={current().filter === filter ? "true" : "false"}
-                onClick={() => current().onFilterChange(filter)}
+                onClick={() => props.readCurrentProps().onFilterChange(filter)}
               >
                 {t(`palette.filters.${filter}`)}
                 <span>
@@ -328,9 +359,11 @@ function PaletteSearch(props: {
               </div>
               <For each={group()[1]} keyed={(item) => item.id}>
                 {(item) => {
-                  // Search can move a session between groups; both keys own this row.
-                  const initialKey = untrack(() => `${item().category}:${item().id}`);
-                  onCleanup(() => props.optionElements.delete(initialKey));
+                  const optionRef = (key: string) =>
+                    elementRef<HTMLDivElement>((element) => {
+                      props.optionElements.set(key, element);
+                      return () => props.optionElements.delete(key);
+                    });
                   const index = () => results().items.indexOf(item());
                   const active = () => index() === results().activeIndex;
                   const agentId = () =>
@@ -343,7 +376,7 @@ function PaletteSearch(props: {
                       : undefined;
                   return (
                     <div
-                      ref={(element) => props.optionElements.set(initialKey, element)}
+                      ref={[optionRef(`${item().category}:${item().id}`)]}
                       id={getOptionId(index())}
                       class={[
                         "cmd-palette__item",
@@ -361,9 +394,9 @@ function PaletteSearch(props: {
                       }
                       onClick={(event) => {
                         event.stopPropagation();
-                        selectItem(item(), current());
+                        selectItem(item(), props.readCurrentProps());
                       }}
-                      onMouseEnter={() => current().onActiveIdChange(item().id)}
+                      onMouseEnter={() => props.readCurrentProps().onActiveIdChange(item().id)}
                     >
                       <CommandPaletteResult
                         item={item()}
@@ -395,25 +428,26 @@ function PaletteSearch(props: {
             <Icon name="messageSquarePlus" />
           </span>
           <h2>{t("palette.noResults")}</h2>
-          <p>
-            <ShortcutText
-              text={t("palette.noResultsStart", { shortcut: "{shortcut}" })}
-              shortcut={() => (
-                <KeyboardShortcut combo={KEYBOARD_SHORTCUT_COMBOS.modifiedEnter} inline />
-              )}
-            />
-          </p>
+          <Show when={!isMobileBrowserPlatform()}>
+            <p>
+              <ShortcutText
+                text={t("palette.noResultsStart", { shortcut: "{shortcut}" })}
+                shortcut={() => (
+                  <KeyboardShortcut combo={KEYBOARD_SHORTCUT_COMBOS.modifiedEnter} inline />
+                )}
+              />
+            </p>
+          </Show>
         </div>
       </Show>
       <div id="cmd-palette-keys" class="cmd-palette__footer">
         <Show when={results().items.length > 0 && !current().query.includes("\n")}>
           <PaletteHint shortcut={<Kbd keys={["↑", "↓"]} />} label={t("palette.footer.navigate")} />
-          <PaletteHint shortcut={<Kbd keys="↵" />} label={t("palette.footer.select")} />
+          <Show when={!isMobileBrowserPlatform()}>
+            <PaletteHint shortcut={<Kbd keys="↵" />} label={t("palette.footer.select")} />
+          </Show>
         </Show>
-        <PaletteHint
-          shortcut={<KeyboardShortcut combo={KEYBOARD_SHORTCUT_COMBOS.newline} />}
-          label={t("palette.footer.newline")}
-        />
+        <PaletteNewlineHint />
       </div>
     </>
   );
@@ -421,18 +455,23 @@ function PaletteSearch(props: {
 
 export function CommandPaletteView(props: { readProps: () => CommandPaletteProps }) {
   let initialInput!: HTMLTextAreaElement;
-  const current = () => props.readProps();
+  // Share one presentation snapshot; event handlers retain synchronous owner reads.
+  const current = createMemo(() => props.readProps());
+  const readCurrent = () => props.readProps();
+  const drop = PaletteSessionDraft.createDropHandlers(() => readCurrent().draft);
   const error = createMemo(() => current().draft.error);
   const saving = createSubmissionAction(
-    () => current().draft,
+    () => readCurrent().draft,
     current,
     error,
-    (failure) => current().draft.setSubmissionError(failure),
+    (failure) => readCurrent().draft.setSubmissionError(failure),
   );
-  const results = createMemo(() => resolvePaletteResults(current()));
-  const hideSearch = () => results().hideSearch;
+  const hideSearch = () =>
+    current().promptMode || current().mentionMenu.open || current().draft.mentions.length > 0;
   // The collapsing search remains mounted with its last presented projection.
   const search = createParkedProjection(current, () => !hideSearch());
+  const matches = createCommandPaletteMatches(search);
+  const results = createMemo(() => resolvePaletteResults(search(), matches()));
   const sessionRequest = createMemo(() => search().sessionSearchRead);
   const sessionRead = createMemo(() => sessionRequest()?.promise);
   const catalogRequest = createMemo(() => search().catalogSearchRead);
@@ -442,6 +481,9 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
   const modelRead = createDeferred(() => modelRequest()?.promise);
   const optionElements = new Map<string, HTMLDivElement>();
   const activeElement = () => {
+    if (hideSearch()) {
+      return undefined;
+    }
     const item = results().items[results().activeIndex];
     return item && optionElements.get(`${item.category}:${item.id}`);
   };
@@ -460,39 +502,46 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
         label={t("palette.placeholder")}
         style={COMMAND_PALETTE_DIALOG_STYLE}
         onModal-cancel={(event: Event) => {
-          if (current().composing || current().mentionMenu.open) {
+          const snapshot = readCurrent();
+          if (snapshot.composing || snapshot.mentionMenu.open) {
             event.preventDefault();
-            if (!current().composing) {
-              current().mentionMenu.close();
+            if (!snapshot.composing) {
+              snapshot.mentionMenu.close();
             }
             return;
           }
-          if (current().draft.submitting) {
+          if (snapshot.draft.submitting) {
             event.preventDefault();
             return;
           }
-          current().onToggle();
+          snapshot.onToggle();
         }}
       >
         <div
           class={["cmd-palette", { "cmd-palette--prompt": hideSearch() }]}
           onClick={(event) => event.stopPropagation()}
-          onKeyDown={(event) => handleKeydown(event, current, activeElement)}
+          onKeyDown={(event) => handleKeydown(event, readCurrent, activeElement)}
+          onDragEnter={drop.onDragenter}
+          onDragLeave={drop.onDragleave}
+          onDragOver={drop.onDragover}
+          onDrop={drop.onDrop}
         >
           <CommandPaletteInput
             onAutofocusRef={(element) => {
               initialInput = element;
             }}
             value={current().query}
-            placeholder={t("palette.placeholder")}
+            placeholder={t(
+              current().draft.attachmentMode ? "palette.attachmentPrompt" : "palette.placeholder",
+            )}
             onInputRef={current().onInputRef}
             onValueChange={current().onQueryChange}
             onBeforeInput={current().onBeforeInput}
             onSelectionChange={current().onSelectionChange}
             onCompositionStart={current().onCompositionStart}
             onCompositionEnd={current().onCompositionEnd}
-            onPaste={(event) => current().draft.pasteImages(event)}
-            disabled={current().draft.submitting}
+            onPaste={(event) => readCurrent().draft.pasteImages(event)}
+            busy={current().draft.submitting}
             readOnly={current().draft.messageLocked}
             controls={
               current().mentionMenu.open
@@ -506,7 +555,9 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
                 ? current().draft.mentions.length < MAX_HUMAN_MENTIONS
                   ? (current().mentionMenu.activeId(current().mentionHost.paneId) ?? undefined)
                   : undefined
-                : !current().searchDebouncing && results().items[results().activeIndex]
+                : !hideSearch() &&
+                    !current().searchDebouncing &&
+                    results().items[results().activeIndex]
                   ? getOptionId(results().activeIndex)
                   : undefined
             }
@@ -527,8 +578,9 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
                     aria-busy={saving() || current().draft.submitting ? "true" : "false"}
                     disabled={current().composing || !current().draft.canSubmit}
                     onClick={() => {
-                      if (!current().composing) {
-                        void current().draft.submit();
+                      const snapshot = readCurrent();
+                      if (!snapshot.composing) {
+                        void snapshot.draft.submit();
                       }
                     }}
                   >
@@ -537,7 +589,9 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
                         ? "palette.startingSession"
                         : "palette.startSession",
                     )}
-                    <KeyboardShortcut combo={KEYBOARD_SHORTCUT_COMBOS.modifiedEnter} />
+                    <Show when={!isMobileBrowserPlatform()}>
+                      <KeyboardShortcut combo={KEYBOARD_SHORTCUT_COMBOS.modifiedEnter} />
+                    </Show>
                   </button>
                 </openclaw-tooltip>
                 <PaletteSessionControls draft={current().draft} revision={current()} />
@@ -550,9 +604,10 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
                 text={current().query}
                 mentions={current().draft.mentions}
                 onRemove={() => {
-                  current().draft.setMessage(current().query, []);
-                  current().onMentionChange();
-                  current().mentionHost.getTextarea()?.focus({ preventScroll: true });
+                  const snapshot = readCurrent();
+                  snapshot.draft.setMessage(snapshot.query, []);
+                  snapshot.onMentionChange();
+                  snapshot.mentionHost.getTextarea()?.focus({ preventScroll: true });
                 }}
                 avatarUrls={current().mentionMenu.selectedAvatarUrls}
               />
@@ -591,6 +646,8 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
                 >
                   <PaletteSearch
                     readProps={search}
+                    readCurrentProps={readCurrent}
+                    results={results()}
                     sessionRead={sessionRead}
                     catalogRead={catalogRead}
                     modelRead={modelRead}
@@ -600,6 +657,17 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
               </Errored>
             </div>
           </div>
+          <Show when={current().draft.attachmentMode}>
+            <div class="cmd-palette__footer">
+              <Show when={!isMobileBrowserPlatform()}>
+                <PaletteHint
+                  shortcut={<KeyboardShortcut combo={KEYBOARD_SHORTCUT_COMBOS.modifiedEnter} />}
+                  label={t("palette.startSession")}
+                />
+              </Show>
+              <PaletteNewlineHint />
+            </div>
+          </Show>
           <Show when={error()}>
             <div class="cmd-palette__creation-error" role="alert">
               {error()}

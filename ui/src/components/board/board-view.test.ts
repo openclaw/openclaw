@@ -2,10 +2,10 @@ import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { BOARD_GRID_GAP, BOARD_GRID_ROW_HEIGHT } from "../../lib/board/grid.ts";
 import "../../lib/toast-host.tsx";
-import "../mcp-app-view-registration.ts";
+import "../mcp-app-view.tsx";
 // Side-effect import: registers the custom elements mount() depends on
 // without relying on transitive fixture imports.
-import "./board-view.ts";
+import "./board-view.tsx";
 import {
   createApplicationContextProvider,
   createApplicationGateway,
@@ -122,7 +122,8 @@ describe("openclaw-board-view", () => {
     });
     const frame = view.querySelector("iframe")!;
     const source = frame.src;
-    const reload = vi.spyOn(frame, "src", "set");
+    // Browser navigation keeps the WindowProxy; jsdom replaces it when src is assigned.
+    const reload = vi.spyOn(frame, "src", "set").mockImplementation(() => {});
     await vi.advanceTimersByTimeAsync(10_000);
     await settleCells(view);
     expect(view.querySelector('.board-widget__notice[role="status"]')).not.toBeNull();
@@ -405,6 +406,39 @@ describe("openclaw-board-view", () => {
     expect(applyOps).toHaveBeenCalledTimes(1);
     pending.resolve();
     await vi.waitFor(() => expect(secondRemove?.disabled).toBe(false));
+  });
+
+  it("clears a failed mutation during retry without replacing the widget document", async () => {
+    const pending = deferred();
+    const applyOps = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("fixture write failed"))
+      .mockImplementationOnce(() => pending.promise);
+    const view = await mount({ callbacks: callbacks({ applyOps }) });
+    const frame = view.querySelector("iframe");
+    await openBoardMenu(view);
+    view.querySelector<HTMLButtonElement>(".board-widget__menu-danger")?.click();
+    await vi.waitFor(() =>
+      expectText(view.querySelector(".board-view__error"), "could not be saved"),
+    );
+
+    await openBoardMenu(view);
+    const remove = view.querySelector<HTMLButtonElement>(".board-widget__menu-danger");
+    remove?.click();
+    await vi.waitFor(() => {
+      expect(applyOps).toHaveBeenCalledTimes(2);
+      expect(view.querySelector(".board-view__error")).toBeNull();
+      expect(remove?.disabled).toBe(true);
+    });
+    expect(view.querySelector("iframe")).toBe(frame);
+
+    pending.resolve();
+    await vi.waitFor(() => {
+      expect(remove?.disabled).toBe(false);
+      expectText(view.querySelector(".board-announcer"), "Removed Alpha status");
+    });
+    expect(view.querySelector(".board-view__error")).toBeNull();
+    expect(view.querySelector("iframe")).toBe(frame);
   });
 
   it("ignores a late operation failure after switching sessions", async () => {

@@ -7,6 +7,7 @@
     "onStartup": false
   },
   "enabledByDefault": true,
+  "contracts": { "decisionProviders": ["baseten"] },
   "providers": [
     "baseten"
   ],
@@ -30,6 +31,76 @@
         "api": "openai-completions",
         "defaultModel": "deepseek-ai/DeepSeek-V4.1-Flash",
         "models": [
+          {
+            "id": "decision-models/baseten-elephant-9b-latest",
+            "name": "elephant-1 (9B)",
+            "inference": {
+              "chat": false,
+              "decision": {
+                "protocol": "baseten-systemone",
+                "input": [
+                  "text"
+                ],
+                "reasoning": {
+                  "modes": [
+                    "auto"
+                  ]
+                },
+                "questions": {
+                  "boolean": {
+                    "probabilities": "boolean",
+                    "abstention": false
+                  },
+                  "choice": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2
+                  },
+                  "score": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2
+                  }
+                },
+                "confidence": "provider-specific"
+              }
+            }
+          },
+          {
+            "id": "decision-models/baseten-mammoth-27b-latest",
+            "name": "mammoth-1 (27B)",
+            "inference": {
+              "chat": false,
+              "decision": {
+                "protocol": "baseten-systemone",
+                "input": [
+                  "text"
+                ],
+                "reasoning": {
+                  "modes": [
+                    "auto"
+                  ]
+                },
+                "questions": {
+                  "boolean": {
+                    "probabilities": "boolean",
+                    "abstention": false
+                  },
+                  "choice": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2
+                  },
+                  "score": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2
+                  }
+                },
+                "confidence": "provider-specific"
+              }
+            }
+          },
           {
             "id": "deepseek-ai/DeepSeek-V4.1-Flash",
             "name": "DeepSeek V4.1 Flash",

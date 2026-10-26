@@ -1,11 +1,19 @@
 import { mkdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { PassThrough } from "node:stream";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 import { expect, it, vi } from "vitest";
 import { PresenceQueryParamsSchema } from "../../packages/gateway-protocol/src/schema/presence.js";
-import type { WorkerTranscriptCommitParams } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import type {
+  WorkerConnectRequestFrame,
+  WorkerTranscriptCommitParams,
+} from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import {
+  validateWorkerExecApprovalParams,
+  type WorkerExecApprovalParams,
+} from "../../packages/gateway-protocol/src/schema/worker-exec-approval.js";
 import {
   WorkerToolSurfaceSchema,
   WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE,
@@ -33,8 +41,10 @@ import {
 } from "../agents/tools/sessions-placement-tool-contract.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createWorkerComputerTool } from "./computer-runtime.js";
-import type { WorkerLaunchDescriptor } from "./launch-descriptor.js";
+import { buildWorkerConnectParams, type WorkerLaunchDescriptor } from "./launch-descriptor.js";
 import { runWorkerCommand } from "./worker-command.runtime.js";
+import { createWorkerConnection } from "./worker-connection.js";
+import { workerExecApprovalDigest } from "./worker-exec-approval-binding.js";
 import { createWorkerPlacementTools } from "./worker-placement-tools.js";
 import {
   buildWorkerProcessTurn,
@@ -42,6 +52,109 @@ import {
   type WorkerProcessResult,
 } from "./worker-process-protocol.js";
 import { runWorkerDescriptor } from "./worker.runtime.js";
+
+export type WorkerExecFixtureOptions = {
+  backgroundCommand?: string;
+  backgroundYieldMs?: number;
+  execCommand?: string;
+  execApprovalDecision?: "allow-once" | "deny";
+};
+
+export abstract class WorkerExecApprovalFixture {
+  abstract readonly methods: string[];
+  readonly execApprovalRequests: WorkerExecApprovalParams[] = [];
+
+  constructor(private readonly execOptions: WorkerExecFixtureOptions) {}
+
+  protected handleExecApproval(frame: unknown, reply: (id: string, payload: object) => void) {
+    if (
+      !isRecord(frame) ||
+      frame.type !== "req" ||
+      typeof frame.id !== "string" ||
+      frame.method !== "worker.exec.approval" ||
+      !validateWorkerExecApprovalParams(frame.params)
+    ) {
+      return false;
+    }
+    const request = frame.params;
+    const decision = this.execOptions.execApprovalDecision ?? "deny";
+    this.methods.push(frame.method);
+    this.execApprovalRequests.push(structuredClone(request));
+    reply(frame.id, {
+      operation: request.operation,
+      binding: workerExecApprovalDigest(request.binding),
+      ...(request.operation === "review"
+        ? { decision: { decision, risk: "low", rationale: "Synthetic Gateway review" } }
+        : request.operation === "request"
+          ? { id: request.id, expiresAtMs: Date.now() + 60_000 }
+          : { decision }),
+    });
+    return true;
+  }
+}
+
+export function buildWorkerExecToolCall(
+  fixture: WorkerExecFixtureOptions,
+  options: { background: boolean; safe: boolean },
+) {
+  const args = options.background
+    ? {
+        // POSIX sleep avoids Node startup; Windows keeps the portable Node fixture.
+        command:
+          fixture.backgroundCommand ??
+          (process.platform === "win32"
+            ? `${JSON.stringify(process.execPath)} -e ${JSON.stringify(
+                "setInterval(() => undefined, 1000)",
+              )}`
+            : "exec sleep 60"),
+        ...(fixture.backgroundYieldMs === undefined
+          ? { background: true }
+          : { yieldMs: fixture.backgroundYieldMs }),
+      }
+    : {
+        command:
+          fixture.execCommand ?? (options.safe ? "wc -c" : "printf worker-local > local-proof.txt"),
+      };
+  return { args, toolCallId: "local-exec-call", toolName: "exec" };
+}
+
+export function createWorkerConnectionForTest(
+  launch: WorkerLaunchDescriptor,
+  options: Partial<Parameters<typeof createWorkerConnection>[0]> = {},
+) {
+  return createWorkerConnection({
+    endpoint: launch.connectionEndpoint,
+    connectParams: buildWorkerConnectParams(launch),
+    ...options,
+  });
+}
+export function createWorkerHelloForTest(
+  admission: Omit<WorkerConnectRequestFrame["params"]["admission"], "runId">,
+  toolSurface = createEmptyWorkerToolSurfaceForTest(),
+  heartbeatIntervalMs = 60_000,
+) {
+  const { environmentId, sessionId, ownerEpoch, rpcSetVersion, handshake } = admission;
+  return {
+    type: "worker-hello-ok" as const,
+    toolSurface,
+    environmentId,
+    sessionId,
+    ownerEpoch,
+    rpcSetVersion,
+    protocolFeatures: [...handshake.protocolFeatures],
+    credentialExpiresAtMs: Date.now() + 60_000,
+    policy: { heartbeatIntervalMs, maxPayload: 25 * 1024 * 1024 },
+  };
+}
+
+export function createEmptyWorkerToolSurfaceForTest(): WorkerToolSurface {
+  return {
+    generation: "runtime-surface",
+    presentation: createToolSurfacePresentationForTest(),
+    policy: prepareCoreToolPolicy({}),
+    tools: [],
+  };
+}
 
 type WorkerToolFixture = {
   assignment: WorkerLaunchDescriptor["assignment"];
@@ -263,7 +376,7 @@ export function registerWorkerGatewayToolAvailabilityTests({ setup }: WorkerGate
       .filter((message) => message.role === "toolResult");
     expect(
       JSON.stringify(results.find((message) => message.toolCallId === "refused-exec")),
-    ).toContain("approval_required");
+    ).toContain("SYSTEM_RUN_DENIED: approval cannot safely bind this command");
     expect(results.find((message) => message.toolCallId === "allowed-write")).toMatchObject({
       isError: false,
     });

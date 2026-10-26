@@ -1,10 +1,11 @@
 import { dynamic } from "@solidjs/web";
 import type { Component } from "solid-js";
-import { createMemo, lazy, Loading, merge, Show } from "solid-js";
+import { createMemo, lazy, merge, Show } from "solid-js";
 import type { ControlUiSurfaceProps } from "../../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../../app/context-types.ts";
 import { createSkillFileHovercard } from "../../components/skill-file-hovercard.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
+import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
@@ -12,13 +13,14 @@ import {
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { ApplicationProvider, useOptionalApplication } from "../../lib/reactive/context.ts";
 import { connectedElementRef, elementRef } from "../../lib/reactive/element-ref.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { projectPresentation } from "../../lib/reactive/presentation.ts";
 import { orderSessionPullRequests } from "../../lib/session-pull-request-presentation.ts";
 import { scopedSessionArtifactKey } from "../../lib/sessions/session-key.ts";
 import { PluginSurface } from "../../plugins/control-ui-view.solid.tsx";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
-import { loadChatPendingInputs } from "./chat-pending-inputs.ts";
+import { listDismissablePendingInputs, loadChatPendingInputs } from "./chat-pending-inputs.ts";
+import { hasTerminalRunStatus, isChatRunWorking } from "./chat-run-working.ts";
 import { forwardChatWheelToTranscript } from "./chat-scroll-input.ts";
 import { listSubagents } from "./chat-subagent-wait.ts";
 import { createChatViewFrame, type ChatProps, type ChatViewFrame } from "./chat-view-frame.ts";
@@ -34,25 +36,24 @@ import {
 } from "./components/chat-composer-question.tsx";
 import type { ComposerQuestions } from "./components/chat-composer-questions.ts";
 import { ComposerQueue } from "./components/chat-composer-regions.tsx";
-import {
-  getChatComposerState,
-  hasTerminalRunStatus,
-  isChatRunWorking,
-} from "./components/chat-composer-state.ts";
+import { getChatComposerState } from "./components/chat-composer-state.ts";
 import { ChatComposer } from "./components/chat-composer.tsx";
 import { ChatConversationHistoryError } from "./components/chat-conversation-history-error.tsx";
 import { ChatConversationMobile } from "./components/chat-conversation-presentation.ts";
 import { isImageLightboxEvent, openInlineChatImage } from "./components/chat-image-lightbox.ts";
+import { ChatLazyBoundary } from "./components/chat-lazy-boundary.tsx";
 import { ChatPullRequests } from "./components/chat-pull-requests.tsx";
 import { ChatSelectionAnnotations } from "./components/chat-selection-annotations.tsx";
-import { resolveChatSwarmParent } from "./components/chat-swarm-progress-parent.ts";
 import {
   getTranscriptState,
   toggleTranscriptSearch,
 } from "./components/chat-thread-interactions.ts";
+import "../../components/resizable-divider.ts";
 import { ChatThread } from "./components/chat-thread-view.tsx";
 import { TranscriptSearch } from "./components/chat-transcript-search.tsx";
-import "../../components/resizable-divider.ts";
+
+registerEnglishCatalog(registerChatSessionEnglish);
+
 export type { ChatProps } from "./chat-view-frame.ts";
 
 const ExecApprovalCard = lazy(() => import("../../components/exec-approval-card-solid.tsx"), {
@@ -64,9 +65,6 @@ const ChatSessionSuggestions = lazy(
     export: "ChatSessionSuggestions",
   },
 );
-const ChatSwarmProgress = lazy(() => import("./components/chat-swarm-progress.solid.tsx"), {
-  export: "ChatSwarmProgress",
-});
 const ChatTaskSuggestionTray = lazy(() => import("./components/chat-task-suggestions.tsx"), {
   export: "ChatTaskSuggestionTray",
 });
@@ -98,13 +96,13 @@ function ChatFooterContent(
     activities?: ChatActivityPillsProps;
   },
 ) {
-  const swarm = createMemo(() => {
-    const progress = input.props.swarm;
-    return progress && resolveChatSwarmParent(progress)?.swarm?.groups.length
-      ? progress
-      : undefined;
-  });
   const pendingInputs = () => input.frame.pendingInputs;
+  const dismissableInputIds = () => {
+    const view = pendingInputs();
+    return input.frame.dismissPendingInputs && view
+      ? listDismissablePendingInputs(view).map((pending) => pending.id)
+      : [];
+  };
   const pendingButton = (page: "earlier" | "latest") => (
     <button
       class="btn btn--sm"
@@ -129,7 +127,8 @@ function ChatFooterContent(
           pendingInputs() &&
           (pendingInputs()?.error ||
             pendingInputs()?.page.nextBefore !== undefined ||
-            pendingInputs()?.before !== undefined)
+            pendingInputs()?.before !== undefined ||
+            dismissableInputIds().length)
         }
       >
         <div class="chat-pending-inputs" role="status">
@@ -140,6 +139,16 @@ function ChatFooterContent(
             {pendingButton("earlier")}
           </Show>
           <Show when={pendingInputs()?.before !== undefined}>{pendingButton("latest")}</Show>
+          <Show when={dismissableInputIds().length}>
+            <button
+              class="btn btn--sm"
+              type="button"
+              aria-label={t("chat.pendingInputs.dismissAllLabel")}
+              onClick={() => input.frame.dismissPendingInputs?.(dismissableInputIds())}
+            >
+              {t("chat.pendingInputs.dismissAll")}
+            </button>
+          </Show>
         </div>
       </Show>
       <Show
@@ -148,11 +157,16 @@ function ChatFooterContent(
         }
       >
         <div class="chat-inline-approval">
-          <Loading>
+          <ChatLazyBoundary>
             <ExecApprovalCard
               props={{
                 approval: input.props.inlineApproval!,
                 sourceSession: input.frame.approvalSourceSession,
+                nodeDisplayName: input.props.approvalNodeNames?.get(
+                  input.props.inlineApproval!.request.nodeId ?? "",
+                ),
+                pendingCount: input.props.approvalPendingCount,
+                onOpenPending: input.props.onOpenPendingApprovals,
                 busy: input.props.approvalBusy === true,
                 connected: input.props.connected,
                 canGrant: input.props.approvalCanGrant,
@@ -161,7 +175,7 @@ function ChatFooterContent(
                 onDecision: input.props.onApprovalDecision!,
               }}
             />
-          </Loading>
+          </ChatLazyBoundary>
         </div>
       </Show>
       <Show when={!input.props.detailsEnabled}>
@@ -184,7 +198,7 @@ function ChatFooterContent(
         />
       </Show>
       <Show when={input.props.sessionSuggestions?.length}>
-        <Loading>
+        <ChatLazyBoundary>
           <ChatSessionSuggestions
             suggestions={input.props.sessionSuggestions ?? []}
             role={input.props.sessionSuggestionRole}
@@ -195,14 +209,7 @@ function ChatFooterContent(
               input.props.onResolveSessionSuggestion?.(suggestion, resolution)
             }
           />
-        </Loading>
-      </Show>
-      <Show when={swarm()}>
-        {(progress) => (
-          <Loading>
-            <ChatSwarmProgress {...progress()} />
-          </Loading>
-        )}
+        </ChatLazyBoundary>
       </Show>
       <Show when={input.application}>
         <openclaw-plugin-contributions
@@ -239,7 +246,6 @@ function ChatComposerView(input: ChatViewInput) {
         card && destinations?.onOpenProgress
           ? {
               card,
-              showInChat: true,
               sessionStatus: input.props.selectedSession?.status,
               startedAt: input.props.selectedSession?.startedAt,
               endedAt: input.props.selectedSession?.endedAt,
@@ -293,11 +299,16 @@ function ChatComposerView(input: ChatViewInput) {
           }
         >
           <div class="agent-chat__mobile-approval">
-            <Loading>
+            <ChatLazyBoundary>
               <ExecApprovalCard
                 props={{
                   approval: input.props.inlineApproval!,
                   sourceSession: input.frame.approvalSourceSession,
+                  nodeDisplayName: input.props.approvalNodeNames?.get(
+                    input.props.inlineApproval!.request.nodeId ?? "",
+                  ),
+                  pendingCount: input.props.approvalPendingCount,
+                  onOpenPending: input.props.onOpenPendingApprovals,
                   busy: input.props.approvalBusy ?? false,
                   connected: input.props.connected,
                   canGrant: input.props.approvalCanGrant,
@@ -307,7 +318,7 @@ function ChatComposerView(input: ChatViewInput) {
                   onDecision: input.props.onApprovalDecision!,
                 }}
               />
-            </Loading>
+            </ChatLazyBoundary>
           </div>
         </Show>
       }
@@ -639,9 +650,9 @@ function ChatContent(input: { props: ChatProps; questions: ComposerQuestions }) 
                           </Show>
                         </div>
                         <Show when={input.props.taskSuggestions?.length}>
-                          <Loading>
+                          <ChatLazyBoundary>
                             <ChatTaskSuggestionTray view={input.props} />
-                          </Loading>
+                          </ChatLazyBoundary>
                         </Show>
                       </div>
                     </Show>

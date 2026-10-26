@@ -22,14 +22,13 @@ export async function resolveStatusMemoryStatusSnapshot(params: {
   memoryPlugin: MemoryPluginStatus;
   requireDefaultDatabasePath?: (agentId: string) => string;
 }): Promise<MemoryStatusSnapshot | null> {
-  const { getMemoryProvider, getMemorySearchManager, isMemoryProviderNative } =
+  const { getMemoryProvider, isMemoryProviderNative } =
     await import("./status.scan.deps.runtime.js");
   return await resolveSharedMemoryStatusSnapshot({
     cfg: params.cfg,
     agentStatus: params.agentStatus,
     memoryPlugin: params.memoryPlugin,
     resolveMemoryConfig: resolveMemorySearchConfig,
-    getMemorySearchManager,
     getMemoryProvider,
     isMemoryProviderNative,
     requireDefaultDatabasePath: params.requireDefaultDatabasePath,

@@ -49,13 +49,112 @@ vi.mock("../../sessions/session-participant-recording.js", async (importOriginal
 
 const agentWaitMock = vi.hoisted(() => vi.fn());
 
-const bundleMcpRuntimeMocks = vi.hoisted(() => ({
-  retireSessionMcpRuntimeForSessionKey: vi.fn(async () => true),
-}));
+function peerFixture(
+  config: OpenClawConfig,
+  peerAgentId = "main",
+  restricted?: "receive-only" | "ask-send",
+) {
+  peer.config = config;
+  setRuntimeConfigSnapshot(config);
+  const sourceKey = `agent:${peerAgentId}:peer`;
+  const targetKey = "agent:main:requester";
+  const source = sessionEntry(
+    "peer",
+    restricted ? { send: restricted === "ask-send" ? "ask" : "never" } : undefined,
+  );
+  const target = sessionEntry("requester", restricted ? { receive: "never" } : undefined);
+  const rows: Record<string, SessionEntry> = { [sourceKey]: source, [targetKey]: target };
+  const storeTarget = (key: string) => ({
+    agentId: key === sourceKey ? peerAgentId : "main",
+    canonicalKey: key,
+    storePath: "/fixture/sessions",
+    store: rows,
+  });
+  peer.load.mockImplementation(async ({ key }: { key: string }) => storeTarget(key));
+  const endpoint = (agentId: string, sessionKey: string, entry: SessionEntry) => ({
+    agentId,
+    sessionKey,
+    entry,
+    storePath: "/fixture/sessions",
+  });
+  return {
+    sourceKey,
+    targetKey,
+    source,
+    target,
+    rows,
+    storeTarget,
+    requester: endpoint("main", targetKey, target),
+    peerEndpoint: endpoint(peerAgentId, sourceKey, source),
+    flow: {
+      targetSessionKey: sourceKey,
+      targetAgentId: peerAgentId,
+      displayKey: "peer",
+      replyTimeoutMs: 10_000,
+      requesterSessionKey: targetKey,
+      requesterAgentId: "main",
+    },
+    step: {
+      agentId: "main",
+      sessionKey: targetKey,
+      sourceAgentId: peerAgentId,
+      sourceSessionKey: sourceKey,
+      expectedSession: target,
+      expectedSourceSession: source,
+      timeoutMs: 10_000,
+    },
+    accept: (
+      runId: string,
+      callGateway: AgentToolGatewayRequestCaller = async <T>() => ({ runId }) as T,
+    ) =>
+      acceptRequest(
+        {
+          config,
+          source: endpoint("main", targetKey, target),
+          target: endpoint(peerAgentId, sourceKey, source),
+          message: "original request",
+          inputProvenance: {
+            kind: "inter_session",
+            sourceTool: "sessions_send",
+            sourceSessionKey: targetKey,
+          },
+          callGateway,
+        },
+        runId,
+      ),
+  };
+}
 
-vi.mock("../agent-bundle-mcp-tools.js", () => ({
-  retireSessionMcpRuntimeForSessionKey: bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey,
-}));
+const communicationConfig = (): OpenClawConfig => ({
+  tools: { sessions: { visibility: "all" } },
+  session: { communication: { send: "always", receive: "always" } },
+});
+
+async function acceptRequest(
+  params: Parameters<typeof prepareSessionsSendCommunication>[0],
+  runId: string,
+) {
+  const original = await prepareSessionsSendCommunication(params);
+  try {
+    expect(() => original.captureReplyAdmission(runId)).toThrow("no accepted source request");
+    await original.callGateway({
+      method: "agent",
+      params: {
+        agentId: params.target.agentId,
+        sessionKey: params.target.sessionKey,
+        message: params.message,
+        inputProvenance: params.inputProvenance,
+        idempotencyKey: runId,
+      },
+    });
+    expect(() => original.captureReplyAdmission("another-run")).toThrow(
+      "no accepted source request",
+    );
+    return original.captureReplyAdmission(runId);
+  } finally {
+    original.close();
+  }
+}
 
 afterEach(() => {
   agentWaitMock.mockReset();
@@ -67,72 +166,14 @@ afterEach(() => {
 
 it("surfaces a failed accepted requester continuation without redispatching the peer result", async () => {
   const failure = "Codex thread synthetic-thread is claimed by active work; stop it first.";
-  const config: OpenClawConfig = {
-    tools: { sessions: { visibility: "all" } },
-    session: { communication: { send: "always", receive: "always" } },
-  };
-  peer.config = config;
-  setRuntimeConfigSnapshot(config);
-  const requesterKey = "agent:main:requester";
-  const peerKey = "agent:main:peer";
-  const requester = {
-    sessionId: "requester-id",
-    lifecycleRevision: "requester-v1",
-    updatedAt: 1,
-  };
-  const recipient = { sessionId: "peer-id", lifecycleRevision: "peer-v1", updatedAt: 1 };
-  const rows = { [requesterKey]: requester, [peerKey]: recipient };
-  peer.load.mockImplementation(async ({ key }: { key: string }) => ({
-    agentId: "main",
-    canonicalKey: key,
-    storePath: "/fixture/sessions",
-    store: rows,
-  }));
-  const provenance = {
-    kind: "inter_session" as const,
-    sourceTool: "sessions_send",
-    sourceSessionKey: requesterKey,
-  };
-  const original = await prepareSessionsSendCommunication({
-    config,
-    source: {
-      agentId: "main",
-      sessionKey: requesterKey,
-      storePath: "/fixture/sessions",
-      entry: requester,
-    },
-    target: {
-      agentId: "main",
-      sessionKey: peerKey,
-      storePath: "/fixture/sessions",
-      entry: recipient,
-    },
-    message: "original request",
-    inputProvenance: provenance,
-    callGateway: async <T>(request: Parameters<AgentToolGatewayRequestCaller>[0]) => {
+  const fixture = peerFixture(communicationConfig());
+  const replyAdmission = await fixture.accept(
+    "completed-peer-run",
+    async <T>(request: Parameters<AgentToolGatewayRequestCaller>[0]) => {
       request.sessionMutationCommitGuard?.();
       return { runId: "completed-peer-run" } as T;
     },
-  });
-  let replyAdmission: ReturnType<typeof original.captureReplyAdmission>;
-  try {
-    expect(() => original.captureReplyAdmission("completed-peer-run")).toThrow(
-      "no accepted source request",
-    );
-    await original.callGateway({
-      method: "agent",
-      params: {
-        agentId: "main",
-        sessionKey: peerKey,
-        message: "original request",
-        inputProvenance: provenance,
-        idempotencyKey: "completed-peer-run",
-      },
-    });
-    replyAdmission = original.captureReplyAdmission("completed-peer-run");
-  } finally {
-    original.close();
-  }
+  );
   const gatewayCalls: CallGatewayOptions[] = [];
   const callGateway = async <T = unknown>(opts: CallGatewayOptions): Promise<T> => {
     gatewayCalls.push(opts);
@@ -147,16 +188,11 @@ it("surfaces a failed accepted requester continuation without redispatching the 
 
   await expect(
     runSessionsSendA2AFlow({
+      ...fixture.flow,
       callGateway,
-      targetSessionKey: "agent:main:peer",
-      targetAgentId: "main",
-      displayKey: "peer",
       runId: "completed-peer-run",
-      replyTimeoutMs: 10_000,
-      requesterSessionKey: requesterKey,
-      requesterAgentId: "main",
-      requesterSession: requester,
-      targetSession: recipient,
+      requesterSession: fixture.target,
+      targetSession: fixture.source,
       replyAdmission,
       reply: {
         status: "ok",
@@ -166,14 +202,8 @@ it("surfaces a failed accepted requester continuation without redispatching the 
       deliverRequesterReply: (reply) =>
         runAgentStep({
           ...reply,
-          agentId: "main",
-          sessionKey: requesterKey,
-          sourceAgentId: "main",
-          sourceSessionKey: peerKey,
-          expectedSession: requester,
-          expectedSourceSession: recipient,
+          ...fixture.step,
           replyAdmission,
-          timeoutMs: 10_000,
           callGateway,
         }),
     }),
@@ -243,17 +273,13 @@ it.each([false, true])(
         ],
       ]);
     }
-    expect(bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey).not.toHaveBeenCalled();
   },
 );
 
 it.each(["direct", "cron-fallback", "receive-only", "ask-send", "send-only"] as const)(
   "admits %s peer results durably under the captured session incarnations",
   async (route) => {
-    const config: OpenClawConfig = {
-      tools: { sessions: { visibility: "all" } },
-      session: { communication: { send: "always", receive: "always" } },
-    };
+    const config = communicationConfig();
     if (route === "send-only") {
       config.agents = {
         entries: {
@@ -266,33 +292,11 @@ it.each(["direct", "cron-fallback", "receive-only", "ask-send", "send-only"] as 
         agentToAgent: { enabled: true, allow: ["main", "research"] },
       };
     }
-    peer.config = config;
-    setRuntimeConfigSnapshot(config);
     const peerAgentId = route === "send-only" ? "research" : "main";
-    const sourceKey = `agent:${peerAgentId}:peer`;
-    const targetKey = "agent:main:requester";
     const restricted = route === "receive-only" || route === "ask-send";
-    const source = sessionEntry(
-      "peer",
-      restricted ? { send: route === "ask-send" ? "ask" : "never" } : undefined,
-    );
-    const target = sessionEntry("requester", restricted ? { receive: "never" } : undefined);
-    const rows: Record<string, SessionEntry> = { [sourceKey]: source, [targetKey]: target };
-    const storeTarget = (key: string) => ({
-      agentId: key === sourceKey ? peerAgentId : "main",
-      canonicalKey: key,
-      storePath: "/fixture/sessions",
-      store: rows,
-    });
-    peer.load.mockImplementation(async ({ key }: { key: string }) => storeTarget(key));
-    const endpoint = (agentId: string, sessionKey: string, entry: SessionEntry) => ({
-      agentId,
-      sessionKey,
-      entry,
-      storePath: "/fixture/sessions",
-    });
-    const requester = endpoint("main", targetKey, target);
-    const peerEndpoint = endpoint(peerAgentId, sourceKey, source);
+    const fixture = peerFixture(config, peerAgentId, restricted ? route : undefined);
+    const { sourceKey, targetKey, source, target, rows, storeTarget, requester, peerEndpoint } =
+      fixture;
     const inputProvenance = {
       kind: "inter_session" as const,
       sourceTool: "sessions_send",
@@ -303,30 +307,7 @@ it.each(["direct", "cron-fallback", "receive-only", "ask-send", "send-only"] as 
       replyText: "completed peer result",
       terminalReply: { disposition: "visible" as const, text: "completed peer result" },
     };
-    const original = await prepareSessionsSendCommunication({
-      config,
-      source: requester,
-      target: peerEndpoint,
-      message: "original request",
-      inputProvenance,
-      callGateway: async <T>() => ({ runId: "peer-run" }) as T,
-    });
-    expect(() => original.captureReplyAdmission("peer-run")).toThrow("no accepted source request");
-    await original.callGateway({
-      method: "agent",
-      params: {
-        agentId: peerAgentId,
-        sessionKey: sourceKey,
-        message: "original request",
-        idempotencyKey: "peer-run",
-        inputProvenance,
-      },
-    });
-    expect(() => original.captureReplyAdmission("another-run")).toThrow(
-      "no accepted source request",
-    );
-    const replyAdmission = original.captureReplyAdmission("peer-run");
-    original.close();
+    const replyAdmission = await fixture.accept("peer-run");
     const admitted: SessionSendDelivery[] = [];
     const callGateway: AgentToolGatewayRequestCaller = async <T>(
       request: Parameters<AgentToolGatewayRequestCaller>[0],
@@ -372,14 +353,10 @@ it.each(["direct", "cron-fallback", "receive-only", "ask-send", "send-only"] as 
         route === "cron-fallback" ? { ...source, sessionId: "expired-cron-run" } : source,
       requesterTarget: { ...storeTarget(targetKey), storeKeys: [targetKey] },
       context: {
+        ...fixture.flow,
         callGateway,
-        targetSessionKey: sourceKey,
-        targetAgentId: peerAgentId,
         replyAdmission,
         displayKey: sourceKey,
-        replyTimeoutMs: 10_000,
-        requesterSessionKey: targetKey,
-        requesterAgentId: "main",
       },
     });
     if (route === "cron-fallback") {
@@ -474,16 +451,11 @@ it.each(["direct", "cron-fallback", "receive-only", "ask-send", "send-only"] as 
     rows[sourceKey] = { ...source, lifecycleRevision: "peer-v2" };
     await expect(
       runAgentStep({
-        agentId: "main",
-        sessionKey: targetKey,
+        ...fixture.step,
         expectedSession: context.requesterSession,
-        sourceAgentId: peerAgentId,
-        sourceSessionKey: sourceKey,
         replyAdmission,
-        expectedSourceSession: source,
         message: "stale result",
         extraSystemPrompt: "Consume once",
-        timeoutMs: 10_000,
         callGateway,
       }),
     ).rejects.toThrow("session changed before admission");

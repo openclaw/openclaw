@@ -11,6 +11,7 @@ import { isSecretRefShape } from "../config/redact-snapshot.secret-ref.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { UPDATE_CANDIDATE_STARTUP_FAILURES } from "../infra/update-preflight-details.js";
 import { tokenizeConcreteConfigPath } from "../shared/dot-path.js";
+import { createSupportKeyChecker } from "./diagnostic-support-key-check.js";
 import { replaceRedactPattern } from "./redact-pattern-runtime.js";
 import { AWS_SECRET_ACCESS_KEY_MATCHER, VENDOR_TOKEN_REDACT_PATTERNS } from "./redact-patterns.js";
 import { redactSensitiveText, redactText, resolveRedactOptions } from "./redact.js";
@@ -77,6 +78,8 @@ type SupportObjectEntry = {
   value: unknown;
 };
 
+const isUnchangedSupportKey = createSupportKeyChecker(redactTextForSupport);
+
 function isPrivateSupportField(key: string): boolean {
   return (
     SECRET_SUPPORT_FIELD_RE.test(key) ||
@@ -103,7 +106,7 @@ function sanitizeSupportKey(
   privateMap: boolean,
 ): string {
   // Reserve the placeholder namespace so literal keys cannot overwrite redacted entries.
-  if (!privateMap && !key.startsWith("<identifier#") && redactTextForSupport(key) === key) {
+  if (!privateMap && !key.startsWith("<identifier#") && isUnchangedSupportKey(key, redaction)) {
     return key;
   }
   const identifiers = (redaction.identifierKeys ??= new Map<string, string>());
@@ -175,7 +178,27 @@ function isWindowsAbsolutePath(value: string): boolean {
   return /^(?:[A-Za-z]:[\\/]|\\\\)/u.test(value);
 }
 
+// Support sanitizers call this per string; absolute inputs fully determine the table.
+let cachedPathRedactionPrefixes:
+  | { inputs: readonly (string | undefined)[]; prefixes: PathRedactionPrefix[] }
+  | undefined;
+
 function pathRedactionPrefixes(options: SupportRedactionContext): PathRedactionPrefix[] {
+  const inputs = [options.stateDir, options.env.HOME, options.env.USERPROFILE];
+  // Relative inputs resolve against cwd, which can vanish mid-update; never read it here.
+  if (inputs.some((value) => value && !path.isAbsolute(value) && !isWindowsAbsolutePath(value))) {
+    return buildPathRedactionPrefixes(options);
+  }
+  const cached = cachedPathRedactionPrefixes;
+  if (cached && inputs.every((value, index) => value === cached.inputs[index])) {
+    return cached.prefixes;
+  }
+  const prefixes = buildPathRedactionPrefixes(options);
+  cachedPathRedactionPrefixes = { inputs, prefixes };
+  return prefixes;
+}
+
+function buildPathRedactionPrefixes(options: SupportRedactionContext): PathRedactionPrefix[] {
   const prefixes = new Map<string, PathRedactionPrefix>();
   for (const [value, label] of [
     [options.stateDir, "$OPENCLAW_STATE_DIR"],

@@ -21,6 +21,9 @@ must still check the process exit status: `Doctor complete.` records completion
 of the checks, but a subsequent crash remains a failed candidate-Doctor step
 during an update.
 
+Doctor checks every configured agent. Plugin metadata retained between workspace
+checks is bounded, so adding agents does not retain a full plugin inventory per agent.
+
 SIGINT and SIGTERM cancel Doctor's preparation before it stops a Gateway or
 starts repairs. If repair already owns state, Doctor settles its admitted work
 and restores any service it stopped before exiting.
@@ -148,6 +151,26 @@ Native clients can invoke the same operation with
 `openclaw doctor --client-credentials --repair --non-interactive`. This command only
 prepares the selected root's client credentials and required source schema. It does not
 run health checks or control services. Add `--json` for a completion report.
+
+If a replacement host retains PostgreSQL state but loses `client/credentials.sqlite`,
+restore the matching credential backup when available. Without a backup, run:
+
+```bash
+openclaw doctor --fix
+```
+
+Doctor reports the missing local credentials and asks before creating new identities.
+Clients on this host get new identities and must re-pair. Paired remote devices
+keep working; their pairing records stay in PostgreSQL. Retained legacy identity
+and token JSON files remain retired. To accept the repair without prompting, use
+`openclaw doctor --fix --yes` (or `--repair --yes`). `--non-interactive` without
+`--yes` does not rebind identities; it reports `openclaw doctor --fix --yes` as the
+next step because this identity change is not a safe migration.
+
+Ordinary startup never rebinds automatically and points to `openclaw doctor --fix`.
+This repair applies only to an entirely absent local credential store with
+PostgreSQL state. It does not replace a present store or change SQLite recovery;
+mismatched, incomplete, unsafe, and corrupt local stores keep their existing refusals.
 
 Migration checks default to whole-database `quick_check`, full integrity checks
 for tables the migration rewrites or re-indexes, and foreign-key checks. Add

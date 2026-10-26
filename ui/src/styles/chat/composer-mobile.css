@@ -24,7 +24,9 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
-  min-height: 0;
+  /* One 36px activity row plus its 4px vertical insets. Its metadata arrives
+     after the saved transcript; reserve the same clearance while it is empty. */
+  min-height: 44px;
   max-height: max(0px, calc(100cqh - 100% - 8px));
   pointer-events: none;
 }
@@ -116,13 +118,13 @@
   .agent-chat__composer-lead
   > :first-child {
   grid-column: 1;
-  grid-row: 2;
+  grid-row: var(--chat-composer-action-row, 2);
 }
 
 .agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
   .agent-chat__composer-actions {
   grid-column: 3;
-  grid-row: 2;
+  grid-row: var(--chat-composer-action-row, 2);
   justify-self: end;
 }
 
@@ -150,13 +152,10 @@
    Reserve their intrinsic height here; editing uses the native content flow. */
 .agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
   .agent-chat__input:has(.agent-chat__composer-combobox[data-prediction]) {
-  grid-template-rows: max-content max-content 36px;
-}
+  /* Keep :has() on the subject; a descendant selector invalidates unrelated subtrees. */
+  --chat-composer-action-row: 3;
 
-.agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
-  .agent-chat__input:has(.agent-chat__composer-combobox[data-prediction])
-  :is(.agent-chat__composer-lead > :first-child, .agent-chat__composer-actions) {
-  grid-row: 3;
+  grid-template-rows: max-content max-content 36px;
 }
 
 .agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
@@ -188,10 +187,6 @@
 
 .agent-chat__composer-shell[data-mobile-composer="true"] .chat-queue__text {
   font-weight: 500;
-}
-
-.chat-footer:has(.agent-chat__composer-shell[data-mobile-composer="true"]) {
-  --chat-transcript-fade-height: 10px;
 }
 
 .agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]

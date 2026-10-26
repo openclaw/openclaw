@@ -15,6 +15,7 @@ import {
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { deleteSessionEntryLifecycle } from "../../config/sessions/session-accessor.sqlite-lifecycle.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import * as gitBudget from "../../infra/git-content-budget.js";
 import * as gitExec from "../../infra/git-exec.js";
 import {
   isSessionMutationActive,
@@ -135,16 +136,7 @@ it("releases session mutation admission during Git while the registry claim fenc
   });
   void cleanup.catch(() => {});
   const waitForStage = (gate: Promise<void>, stage: string) =>
-    withinTest(
-      awaitGateBeforeSettlement(
-        gate,
-        cleanup.then((result) => {
-          throw new Error(`Cleanup settled before ${stage}: ${JSON.stringify(result)}`);
-        }),
-        `Cleanup settled before ${stage}`,
-      ),
-      signal,
-    );
+    withinTest(awaitGateBeforeSettlement(gate, cleanup, `Cleanup settled before ${stage}`), signal);
   const identities = [sessionKey, entry.sessionId];
   try {
     await waitForStage(entered.promise, "snapshot capture");
@@ -212,52 +204,123 @@ it("refuses unarchive after an interrupted removal releases its process claim", 
   expect(getRegistryWorktree(env, record.id)?.removedAt).toBeUndefined();
 });
 
+it(
+  "lets admitted content writers publish refs while pack maintenance waits for a slot",
+  { timeout: 5_000 },
+  async ({ signal }) => {
+    const root = tempDirs.make("worktree-maintenance-content-admission-");
+    const repoRoot = await initializeRepository(root);
+    const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
+    setRuntimeConfigSnapshot({});
+    await materializeManagedWorktreeFixture({
+      env,
+      stateDir: root,
+      repoRoot,
+      name: "publication",
+      now: 1,
+    });
+    await requireGit(repoRoot, ["repack", "-d"]);
+    const head = await requireGit(repoRoot, ["rev-parse", "HEAD"]);
+    const refs = ["refs/openclaw/test-publication/one", "refs/openclaw/test-publication/two"];
+    const abort = new AbortController();
+    const occupied = createDeferred();
+    const publish = createDeferred();
+    const maintenanceWaiting = createDeferred();
+    const withSlot = gitBudget.withContentGitSlot;
+    let observeWait = false;
+    vi.spyOn(gitBudget, "withContentGitSlot").mockImplementation(
+      (run, queueSignal, interactive) => {
+        const pending = withSlot(run, queueSignal, interactive);
+        if (observeWait) {
+          maintenanceWaiting.resolve();
+        }
+        return pending;
+      },
+    );
+    let writers: Promise<string>[] = [];
+    const execute = gitExec.executeGitCommand;
+    vi.spyOn(gitExec, "executeGitCommand").mockImplementation(async (cwd, args, options) => {
+      const result = await execute(cwd, args, options);
+      if (options?.operation === "worktree.maintenance" && args[1] === "--git-common-dir") {
+        let active = 0;
+        // Fill the budget after maintenance's metadata read. Snapshot workers also
+        // hold a content slot while publishing through the real shared ref queue.
+        writers = refs.map((ref) =>
+          withSlot(async () => {
+            if (++active === refs.length) {
+              occupied.resolve();
+            }
+            await publish.promise;
+            return requireGit(repoRoot, ["update-ref", ref, head], { signal: abort.signal });
+          }, abort.signal),
+        );
+        for (const writer of writers) {
+          void writer.catch(() => {});
+        }
+        await occupied.promise;
+        observeWait = true;
+      }
+      return result;
+    });
+    const maintenance = createWorktreeGitMaintenance(env)({ signal: abort.signal });
+    void maintenance.catch(() => {});
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(
+          maintenanceWaiting.promise,
+          maintenance,
+          "Maintenance settled before waiting for content admission",
+        ),
+        signal,
+      );
+      publish.resolve();
+      await withinTest(Promise.all([...writers, maintenance]), signal);
+      for (const ref of refs) {
+        expect(await requireGit(repoRoot, ["rev-parse", ref])).toBe(head);
+      }
+    } finally {
+      abort.abort(new Error("content admission test finished"));
+      publish.resolve();
+      await Promise.allSettled([...writers, maintenance]);
+    }
+  },
+);
+
 it("bounds Git housekeeping without delaying orphan cleanup or newly registered repositories", async () => {
   const root = tempDirs.make("worktree-gc-cadence-state-");
   const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
   setRuntimeConfigSnapshot({});
   const repo = await initializeRepository(tempDirs.make("worktree-gc-cadence-"));
-  await materializeManagedWorktreeFixtures({
-    env,
-    repoRoot: repo,
-    stateDir: repo,
-    names: ["first", "second", "third"],
-    now: 1,
-  });
+  const seed = (repoRoot: string, names: string[], now = 1) =>
+    materializeManagedWorktreeFixtures({ env, repoRoot, stateDir: repoRoot, names, now });
+  await seed(repo, ["first", "second", "third"]);
   const service = new ManagedWorktreeService({ env });
   const commands = vi.spyOn(gitExec, "executeGitCommand");
-  const maintenanceRoots = () =>
-    commands.mock.calls.flatMap(([cwd, , options]) =>
-      options?.operation === "worktree.maintenance" ? [cwd] : [],
+  const expectMaintenance = (...roots: string[]) => {
+    const calls = commands.mock.calls.filter(
+      (call) => call[2]?.operation === "worktree.maintenance",
     );
+    expect(new Set(calls.map(([cwd]) => cwd))).toEqual(new Set(roots));
+    commands.mockClear();
+  };
   await service.gc();
-  expect(maintenanceRoots().length).toBeGreaterThan(0);
-  expect(new Set(maintenanceRoots())).toEqual(new Set([repo]));
-  commands.mockClear();
+  expectMaintenance(repo);
 
   const orphan = path.join(env.OPENCLAW_STATE_DIR, "worktrees", "unregistered", "empty");
   await fs.mkdir(orphan, { recursive: true });
   expect(await service.gc()).toMatchObject({ orphansDeleted: 1, outcome: "completed" });
   await expect(fs.access(orphan)).rejects.toMatchObject({ code: "ENOENT" });
-  expect(maintenanceRoots()).toEqual([]);
+  expectMaintenance();
 
   const otherRepo = await initializeRepository(tempDirs.make("worktree-gc-new-repo-"));
-  await materializeManagedWorktreeFixtures({
-    env,
-    repoRoot: otherRepo,
-    stateDir: otherRepo,
-    names: ["new-repo"],
-    now: Date.now(),
-  });
+  await seed(otherRepo, ["new-repo"], Date.now());
   await service.gc();
-  expect(new Set(maintenanceRoots())).toEqual(new Set([otherRepo]));
-  commands.mockClear();
+  expectMaintenance(otherRepo);
 
   await service.gc({ retryDeferred: true });
-  expect(new Set(maintenanceRoots())).toEqual(new Set([repo, otherRepo]));
-  commands.mockClear();
+  expectMaintenance(repo, otherRepo);
   await service.gc();
-  expect(maintenanceRoots()).toEqual([]);
+  expectMaintenance();
 
   // Registry preparation and native leases finish before the cadence-only clock scope.
   const records = await registryReads.readRegistryWorktrees(env);
@@ -268,14 +331,13 @@ it("bounds Git housekeeping without delaying orphan cleanup or newly registered 
   try {
     const maintain = createWorktreeGitMaintenance(env);
     await maintain({});
-    expect(new Set(maintenanceRoots())).toEqual(new Set([repo, otherRepo]));
-    commands.mockClear();
+    expectMaintenance(repo, otherRepo);
     now += WORKTREE_GC_INTERVAL_MS - 1;
     await maintain({});
-    expect(maintenanceRoots()).toEqual([]);
+    expectMaintenance();
     now += 1;
     await maintain({});
-    expect(new Set(maintenanceRoots())).toEqual(new Set([repo, otherRepo]));
+    expectMaintenance(repo, otherRepo);
   } finally {
     clock.mockRestore();
     inventory.mockRestore();

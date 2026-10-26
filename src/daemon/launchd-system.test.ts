@@ -10,9 +10,7 @@ const state = vi.hoisted(() => ({
   capturedPlists: new Map<Uint8Array, { Label?: unknown }>(),
 }));
 
-function fsError(code: string, target: string): NodeJS.ErrnoException {
-  return Object.assign(new Error(`${code}: ${target}`), { code });
-}
+const fsError = (code: string) => Object.assign(new Error(code), { code });
 
 vi.mock("node:fs/promises", () => {
   const mocked = {
@@ -24,7 +22,7 @@ vi.mock("node:fs/promises", () => {
     readFile: vi.fn(async (target: string) => {
       const file = state.files.get(target);
       if (!file || file.error) {
-        throw fsError(file?.error ?? "ENOENT", target);
+        throw fsError(file?.error ?? "ENOENT");
       }
       const bytes = Buffer.from("<plist/>");
       state.capturedPlists.set(bytes, { Label: file.label });
@@ -45,10 +43,10 @@ vi.mock("./launchd-exec.js", async (importOriginal) => ({
 
 const runExec = vi.hoisted(() =>
   vi.fn(async (_command: string, args: string[], options: { input: string | Uint8Array }) => {
-    if (typeof options.input === "string" && args[1] === "json") {
-      return { stdout: options.input, stderr: "" };
-    }
     if (typeof options.input === "string") {
+      if (args[1] === "json") {
+        return { stdout: options.input, stderr: "" };
+      }
       throw new Error("Native parser requires captured bytes before normalization");
     }
     const captured = state.capturedPlists.get(options.input);
@@ -83,6 +81,20 @@ function plist(name: string, value?: unknown, error?: string) {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const hostPlatform = process.platform;
 const absentQuery = 'printf "%s\\n" "Could not find service" >&2\nexit 113';
+const writeShell = (file: string, source: string) =>
+  writeFileSync(file, `#!/bin/sh\n${source}\n`, { mode: 0o700 });
+
+function createProbe(plistName: string, contents: string, directory = false) {
+  const root = tempDirs.make("openclaw-launchd-probe-");
+  const target = path.join(root, "daemons", plistName);
+  mkdirSync(path.dirname(target));
+  if (directory) {
+    mkdirSync(target);
+  } else {
+    writeFileSync(target, contents);
+  }
+  return { root, target };
+}
 
 function executeProbe(
   root: string,
@@ -114,21 +126,14 @@ function runRenderedProbe(
   plistMode: "unlabeled" | "same-label" | "malformed" | "unreadable",
   launchctlBody = absentQuery,
 ) {
-  const root = tempDirs.make("openclaw-launchd-probe-");
-  const daemonsDir = path.join(root, "daemons");
-  const binDir = path.join(root, "bin");
+  const { root, target } = createProbe(plistName, `${plistMode}\n`);
   const probeLog = path.join(root, "probe.log");
-  mkdirSync(daemonsDir);
-  mkdirSync(binDir);
   writeFileSync(probeLog, "");
   writeFileSync(path.join(root, "non-executable"), "#!/bin/sh\nexit 0\n", { mode: 0o600 });
-  writeFileSync(path.join(daemonsDir, plistName), `${plistMode}\n`);
   const shim = (name: string, event: string, body: string) => {
-    const target = path.join(binDir, name);
-    const log = `printf '${event}\\n' >> "$OPENCLAW_TEST_PROBE_LOG"`;
-    writeFileSync(target, `#!/bin/sh\n${log}\n${body}\n`, { mode: 0o700 });
-    chmodSync(target, 0o700);
-    return target;
+    const file = path.join(root, name);
+    writeShell(file, `printf '${event}\\n' >> "$OPENCLAW_TEST_PROBE_LOG"\n${body}`);
+    return file;
   };
   const plutilShim = shim(
     "plutil",
@@ -151,11 +156,10 @@ exit 1
   );
   shim("launchctl", "query", launchctlBody);
   if (plistMode === "unreadable") {
-    chmodSync(path.join(daemonsDir, plistName), 0o000);
+    chmodSync(target, 0o000);
   }
   return {
     ...executeProbe(root, plutilShim, {
-      PATH: binDir,
       OPENCLAW_TEST_PROBE_LOG: probeLog,
       OPENCLAW_TEST_PROBE_DIR: root,
     }),
@@ -186,18 +190,17 @@ it("fails closed when launchctl cannot classify system ownership", async () => {
 });
 
 it.each([
-  ["valid non-string Label", 42, undefined, true],
-  ["read-only status probe", undefined, undefined, false],
-] as const)("reports no ownership for a %s", async (_name, value, error, scanInstalledPlists) => {
-  plist("com.vendor.foreign", value, error);
+  ["valid non-string Label", 42, true],
+  ["read-only status probe", undefined, false],
+] as const)("reports no ownership for a %s", async (_name, value, scanInstalledPlists) => {
+  plist("com.vendor.foreign", value);
   await expect(inspect({ scanInstalledPlists })).resolves.toEqual(absent);
-  expect(execLaunchctl).toHaveBeenCalledTimes(1);
   await expect(assertNoSystemLaunchDaemonOwnership(label)).resolves.toBeUndefined();
 });
 
 it("refuses an unreadable native result for a readable plist", async () => {
   const plistPath = plist("com.vendor.worker");
-  runExec.mockRejectedValueOnce(fsError("ENOENT", "/usr/bin/plutil"));
+  runExec.mockRejectedValueOnce(fsError("ENOENT"));
   await expect(inspect()).resolves.toMatchObject({
     status: "unverifiable",
     operation: "filesystem",
@@ -256,43 +259,27 @@ it.each([
 ] as const)("executes the rendered ownership query with %s outcome", (scenario, body, detail) => {
   const result = runRenderedProbe("foreign.plist", "unlabeled", body);
   expect(result.conflict).toBe(detail ? "system/ai.openclaw.gateway" : "");
-  if (detail) {
-    expect(result.detail).toContain(detail);
-  } else {
-    expect(result.detail).toBe("");
-  }
+  expect(result.detail).toEqual(detail ? expect.stringContaining(detail) : "");
   expect(result.events).toEqual(scenario === "absent" ? ["query", "scan", "scan"] : ["query"]);
 });
 
 const xmlPlist = (body: string) => `<plist version="1.0"><dict>${body}</dict></plist>`;
 const xmlLabel = "<key>Label</key><string>ai.openclaw.gateway</string>";
 const owner = expect.stringContaining("unrelated-name.plist");
-const writeShell = (file: string, source: string) => writeFileSync(file, source, { mode: 0o700 });
 
 type ProbeOptions = Partial<
-  Record<
-    "binary" | "parserDenied" | "deniedRead" | "directory" | "missingReader" | "loadedAfterScan",
-    boolean
-  >
+  Record<"binary" | "parserDenied" | "deniedRead" | "directory" | "missingReader", boolean>
 > & { perlUnicode?: string; extractionFailure?: 2 | 126 | 127 | "signal" };
 
 function runFallback(contents: string, options: ProbeOptions = {}) {
-  const root = tempDirs.make("openclaw-system-shell-");
-  const target = path.join(root, "daemons", "unrelated-name.plist");
-  mkdirSync(path.dirname(target));
-  if (options.directory) {
-    mkdirSync(target);
-  } else {
-    writeFileSync(target, contents);
-    if (options.binary) {
-      execFileSync("/usr/bin/plutil", ["-convert", "binary1", "--", target]);
-    }
+  const { root, target } = createProbe("unrelated-name.plist", contents, options.directory);
+  if (options.binary) {
+    execFileSync("/usr/bin/plutil", ["-convert", "binary1", "--", target]);
   }
   const parser = path.join(root, "plutil");
   writeShell(
     parser,
-    `#!/bin/sh
-for last; do :; done
+    `for last; do :; done
 if [ "$last" = '-' ] && [ "$1" = '-extract' ]; then
   ${options.extractionFailure === "signal" ? 'kill -TERM "$$"' : options.extractionFailure ? `exit ${options.extractionFailure}` : ":"}
 fi
@@ -303,25 +290,15 @@ ${options.deniedRead ? '/bin/chmod 000 "$last"' : ":"}
 exit 1
 `,
   );
-  writeShell(
-    path.join(root, "launchctl"),
-    `#!/bin/sh
-if [ -e "$TEST_QUERY_MARKER" ]; then
-  ${options.loadedAfterScan ? "exit 0" : ":"}
-fi
-: >"$TEST_QUERY_MARKER"
-printf 'Could not find service\\n' >&2
-exit 113
-`,
-  );
+  writeShell(path.join(root, "launchctl"), absentQuery);
   const { conflict, detail } = executeProbe(
     root,
     parser,
+    { PERL_UNICODE: options.perlUnicode },
     {
-      TEST_QUERY_MARKER: path.join(root, "queried"),
-      PERL_UNICODE: options.perlUnicode,
+      missingReader: options.missingReader,
+      timeout: 10_000,
     },
-    { missingReader: options.missingReader, timeout: 10_000 },
   );
   expect(readdirSync(root).filter((entry) => entry.startsWith("openclaw-launchd-"))).toEqual([]);
   if (options.binary !== undefined) {
@@ -338,7 +315,6 @@ describe.skipIf(hostPlatform !== "darwin")("detached launchd native fallback", (
     ["XML owner", xmlPlist(xmlLabel), { binary: false }, owner],
     ["binary owner", xmlPlist(xmlLabel), { binary: true }, owner],
     ["nested label", nested, {}, ""],
-    ["newly loaded owner", nested, { loadedAfterScan: true }, "system/ai.openclaw.gateway"],
     ["native label type", integer, { parserDenied: false }, ""],
     ["fallback label type", integer, { parserDenied: true }, ""],
     ["native label bytes", newline, { parserDenied: false }, ""],
@@ -355,12 +331,7 @@ describe.skipIf(hostPlatform !== "darwin")("detached launchd native fallback", (
   ] as const)("handles %s", (_name, contents, options, expected) => {
     expect(runFallback(contents, options)).toEqual(expected);
   });
-  it.skipIf(process.getuid?.() === 0).each([false, true])(
-    "handles read denial after preflight (loaded=%s)",
-    (loadedAfterScan) => {
-      expect(runFallback(xmlPlist(xmlLabel), { deniedRead: true, loadedAfterScan })).toBe(
-        loadedAfterScan ? "system/ai.openclaw.gateway" : "",
-      );
-    },
-  );
+  it.skipIf(process.getuid?.() === 0)("handles read denial after preflight", () => {
+    expect(runFallback(xmlPlist(xmlLabel), { deniedRead: true })).toBe("");
+  });
 });

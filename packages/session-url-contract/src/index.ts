@@ -29,26 +29,6 @@ export {
 // Control UI session URL grammar shared by browser and plugin consumers.
 export type ControlUiSessionNamespace = "chat" | "dashboard";
 
-type BuildControlUiSessionPathParams = {
-  namespace: ControlUiSessionNamespace;
-  sessionKey: string;
-  fallbackAgentId?: string;
-  basePath?: string;
-  displayName?: string;
-  exactKey?: boolean;
-  mainKey?: string;
-  shortIdLength?: number;
-};
-
-type BuildControlUiCatalogSessionUrlParams = {
-  namespace: ControlUiSessionNamespace;
-  agentId: string;
-  basePath?: string;
-  catalog: string;
-  host: string;
-  thread: string;
-};
-
 export const SESSION_UUID_SUFFIX_RE =
   /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/iu;
 export const SHORT_SESSION_ID_RE = /^[0-9a-f]{8,32}$/iu;
@@ -75,7 +55,16 @@ function encodePathSegment(segment: string): string {
   return encoded.startsWith("~") ? `~${encoded}` : encoded;
 }
 
-export function buildControlUiSessionPath(params: BuildControlUiSessionPathParams): string | null {
+export function buildControlUiSessionPath(params: {
+  namespace: ControlUiSessionNamespace;
+  sessionKey: string;
+  fallbackAgentId?: string;
+  basePath?: string;
+  displayName?: string;
+  exactKey?: boolean;
+  mainKey?: string;
+  shortIdLength?: number;
+}): string | null {
   const rawKey = normalizeNullableString(params.sessionKey);
   const parsed = rawKey ? agentSessionKeyParts(rawKey) : null;
   const fallbackAgentId = normalizeNullableString(params.fallbackAgentId);
@@ -131,9 +120,14 @@ export function buildControlUiSessionPath(params: BuildControlUiSessionPathParam
   return `${namespace}/${encodedAgentId}/${segments.map(encodePathSegment).join("/")}`;
 }
 
-export function buildControlUiCatalogSessionUrl(
-  params: BuildControlUiCatalogSessionUrlParams,
-): string | null {
+export function buildControlUiCatalogSessionUrl(params: {
+  namespace: ControlUiSessionNamespace;
+  agentId: string;
+  basePath?: string;
+  catalog: string;
+  host: string;
+  thread: string;
+}): string | null {
   const catalog = normalizeNullableString(params.catalog);
   const host = normalizeNullableString(params.host);
   const thread = normalizeNullableString(params.thread);

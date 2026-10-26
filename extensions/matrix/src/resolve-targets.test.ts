@@ -1,7 +1,8 @@
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelDirectoryEntry } from "../runtime-api.js";
+import { matrixPlugin } from "./channel.js";
 import { listMatrixDirectoryGroupsLive, listMatrixDirectoryPeersLive } from "./directory-live.js";
-import { resolveMatrixTargets } from "./resolve-targets.js";
 
 vi.mock("./directory-live.js", () => ({
   listMatrixDirectoryPeersLive: vi.fn(),
@@ -9,7 +10,16 @@ vi.mock("./directory-live.js", () => ({
 }));
 
 function resolve(kind: "user" | "group", inputs: string[], accountId?: string) {
-  return resolveMatrixTargets({ cfg: {}, inputs, kind, accountId });
+  return expectDefined(
+    matrixPlugin.resolver?.resolveTargets,
+    "registered Matrix resolver",
+  )({
+    cfg: {},
+    inputs,
+    kind,
+    accountId,
+    runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+  });
 }
 
 describe("resolveMatrixTargets (users)", () => {

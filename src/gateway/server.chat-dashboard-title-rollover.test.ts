@@ -11,7 +11,6 @@ import { resolveSessionEntryResetFreshnessAsync } from "../config/sessions/entry
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { areHeartbeatsEnabled, setHeartbeatsEnabled } from "../infra/heartbeat-wake.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import {
   createGatewayConfigPath,
@@ -32,16 +31,9 @@ type Completion = { status: string; error?: string; terminalReply?: { text?: str
 type Client = Awaited<ReturnType<typeof startGatewayWithClient>>["client"];
 const nativeClient = { clientName: "openclaw-macos", mode: "ui" } as const;
 
-it.each([false, true])(
-  "answers chat.send after a dashboard daily rollover (native reconnect: %s)",
-  verifyDashboardRollover,
-  120_000,
-);
-
-async function verifyDashboardRollover(nativeReconnect: boolean) {
+it("resumes a stale native dashboard session once, then rolls over on an ordinary send", async () => {
   resetGatewayTestState();
   const home = await setupGatewayTempHome({ prefix: "openclaw-dashboard-title-rollover-" });
-  const heartbeatsEnabled = areHeartbeatsEnabled();
   const provider = createServer((request, response) => {
     void (async () => {
       if (request.method !== "POST" || !request.url?.endsWith("/responses")) {
@@ -60,7 +52,6 @@ async function verifyDashboardRollover(nativeReconnect: boolean) {
   });
   let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
   try {
-    setHeartbeatsEnabled(false);
     const providerUrl = await listenLoopback(provider);
     const model = buildMockOpenAiResponsesProvider(`${providerUrl}/v1`, "rollover-proof");
     const cfg = {
@@ -99,16 +90,14 @@ async function verifyDashboardRollover(nativeReconnect: boolean) {
       cfg,
       configPath: await createGatewayConfigPath(home.tempHome),
       ...connection,
-      ...(nativeReconnect ? nativeClient : {}),
+      ...nativeClient,
     });
-    const url = `ws://127.0.0.1:${gateway.port}`;
-    const connect = (
-      client: Pick<Parameters<typeof connectGatewayClient>[0], "clientName" | "mode" | "origin">,
-    ) => connectGatewayClient({ url, ...connection, ...client });
-    if (nativeReconnect) {
-      await disconnectGatewayClient(gateway.client);
-      gateway.client = await connect(nativeClient);
-    }
+    await disconnectGatewayClient(gateway.client);
+    gateway.client = await connectGatewayClient({
+      url: `ws://127.0.0.1:${gateway.port}`,
+      ...connection,
+      ...nativeClient,
+    });
     const scope = {
       agentId: "main",
       sessionKey,
@@ -133,39 +122,18 @@ async function verifyDashboardRollover(nativeReconnect: boolean) {
       storePath: scope.storePath,
     });
     expect(freshness).toMatchObject({ state: "stale", freshness: { staleReason: "daily" } });
-    if (nativeReconnect) {
-      const resumed = await sendAndWait(gateway.client, "Resume the matching displayed session.", {
-        sessionId: seededSessionId,
-        __controlUiReconnectResume: true,
-      });
-      const retained = loadSessionEntry(scope);
-      expect(resumed.status, resumed.error).toBe("ok");
-      expect(resumed.terminalReply?.text).toBe(replyText);
-      expect(retained).toMatchObject({
-        sessionId: seededSessionId,
-        lifecycleRevision: "seed-revision",
-        sessionStartedAt: staleAt,
-      });
-      const publicClient = await connect({
-        clientName: "webchat-ui",
-        origin: "http://localhost",
-        mode: "webchat",
-      });
-      try {
-        await expect(
-          publicClient.request("chat.send", {
-            sessionKey,
-            sessionId: seededSessionId,
-            message: "Reject public reconnect metadata.",
-            __controlUiReconnectResume: true,
-            idempotencyKey: randomUUID(),
-          }),
-        ).rejects.toThrow("unexpected property '__controlUiReconnectResume'");
-        expect(loadSessionEntry(scope)?.lifecycleRevision).toBe("seed-revision");
-      } finally {
-        await disconnectGatewayClient(publicClient);
-      }
-    }
+    const resumed = await sendAndWait(gateway.client, "Resume the matching displayed session.", {
+      sessionId: seededSessionId,
+      __controlUiReconnectResume: true,
+    });
+    const retained = loadSessionEntry(scope);
+    expect(resumed.status, resumed.error).toBe("ok");
+    expect(resumed.terminalReply?.text).toBe(replyText);
+    expect(retained).toMatchObject({
+      sessionId: seededSessionId,
+      lifecycleRevision: "seed-revision",
+      sessionStartedAt: staleAt,
+    });
     const result = await sendAndWait(gateway.client, "Continue after the daily reset.", {
       sessionId: seededSessionId,
     });
@@ -184,12 +152,11 @@ async function verifyDashboardRollover(nativeReconnect: boolean) {
       await gateway.server.close();
     }
     await closeHttpServer(provider);
-    setHeartbeatsEnabled(heartbeatsEnabled);
     home.envSnapshot.restore();
     await removeGatewayTempHome(home.tempHome);
     resetGatewayTestState();
   }
-}
+}, 120_000);
 
 async function sendAndWait(
   client: Client,

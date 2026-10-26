@@ -25,7 +25,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import * as agentDb from "../state/openclaw-agent-db.js";
 import * as stateCache from "../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { captureEnv, captureFullEnv, setTestEnvValue, withEnvAsync } from "./env.js";
+import { captureEnv, captureFullEnv, setTestEnvValue, withEnv, withEnvAsync } from "./env.js";
 import * as sessionCleanup from "./session-state-cleanup.js";
 
 const spyOnDrain = () => vi.spyOn(sessionCleanup, "cleanupSessionStateForTest");
@@ -420,7 +420,8 @@ describe("openclaw test state", () => {
       const open = (stateDir: string, configured?: string) => {
         const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
         const authDir = path.join(configured ?? stateDir, "agents", "auth", "agent");
-        saveAuthFixture(authDir);
+        // Auth's retained agent lease must release into this root's shared database.
+        withEnv(env, () => saveAuthFixture(authDir));
         const shared = openOpenClawStateDatabase({ env });
         const agent = agentDb.openOpenClawAgentDatabase({
           agentId: "main",
@@ -496,6 +497,9 @@ describe("openclaw test state", () => {
         expect(removal).toHaveBeenCalledWith(state.root, removeOptions);
         await expectPathMissing(state.root);
         expectUnrelated();
+        await sessionCleanup.cleanupSessionStateForTest({ stateDir: sibling });
+        // Closing the sibling must not reopen the already-removed fixture database.
+        await expectPathMissing(state.root);
       } finally {
         state.restoreEnv = restore;
         openSpy.mockRestore();

@@ -7,7 +7,7 @@ read_when:
 ---
 
 This page covers the authoring commands: `plugins init`, `plugins build`,
-`plugins validate`, and `plugins pack`, plus the tool, feature, and provider
+`plugins validate`, `plugins lint`, and `plugins pack`, plus the tool, feature, and provider
 scaffolds they generate.
 
 ## Author
@@ -31,6 +31,14 @@ id for the default output directory and package naming. Tool scaffolds use
 current entry export still agree. Pass `--json` for a machine-readable
 validation result. See [Tool Plugins](/plugins/tool-plugins) for the full
 authoring workflow.
+
+Authoring metadata must be regular files containing valid UTF-8 JSON. Symlinks to
+regular files are supported; pipes and other special files are rejected before reading.
+
+`plugins lint --root <path>` inspects a plugin and its materialized runtime
+dependencies without importing plugin code or reading operator configuration.
+Use `--json` for structured compatibility warnings. Findings do not block installs;
+see [Runtime compatibility](/plugins/runtime-compatibility) for scope and limits.
 
 The scaffold writes TypeScript source but generates metadata from the built
 `./dist/index.js` entry, so the workflow also works with the published CLI. Use

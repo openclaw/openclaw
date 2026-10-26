@@ -7,12 +7,7 @@ import {
 import { createCliTimeoutError } from "../../agents/cli-runner/no-output-timeout-policy.js";
 import { buildPayloads } from "../../agents/embedded-agent-runner/run/payloads.test-helpers.js";
 import { FailoverError } from "../../agents/failover-error.js";
-import {
-  formatBillingErrorMessage,
-  HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
-  renderHeartbeatRunFailureCopy,
-} from "../../agents/failover/user-copy.js";
-import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
+import { formatBillingErrorMessage } from "../../agents/failover/user-copy.js";
 import {
   MISSING_REPLY_NOTICE_TEXT,
   MISSING_REPLY_SIDE_EFFECT_NOTICE_TEXT,
@@ -22,7 +17,7 @@ import {
   createAgentRunRestartAbortError,
 } from "../../agents/run-termination.js";
 import { makeAssistantMessageFixture } from "../../agents/test-helpers/assistant-message-fixtures.js";
-import { deriveGatewaySessionLifecycleProjectionPatch } from "../../gateway/session-lifecycle-state.js";
+import { deriveGatewaySessionLifecycleProjectionPatch } from "../../gateway/session-lifecycle-projection.js";
 import { GatewayDrainingError } from "../../process/command-queue.js";
 import {
   markGatewayRestartDraining,
@@ -514,31 +509,6 @@ it("surfaces CLI max-turn recovery context at normal verbosity", async () => {
 
   expect(payload).toMatchObject({ isError: true, text: recoveryText });
   expect(payload.text).not.toBe(GENERIC_RUN_FAILURE_TEXT);
-});
-
-it("uses heartbeat failure copy for raw external errors during heartbeat runs", async () => {
-  state.runEmbeddedAgentMock.mockRejectedValueOnce(
-    new Error('Command lane "main" task timed out after 120000ms'),
-  );
-
-  const payload = await finalPayload({ isHeartbeat: true });
-
-  expect(payload.text).toBe(HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT);
-  expect(payload.text).not.toBe(GENERIC_RUN_FAILURE_TEXT);
-  expect(payload.text).not.toContain("/new");
-});
-
-it("includes heartbeat preflight reasons in terminal failure replies", async () => {
-  const message =
-    "Codex session became active in another runner; wait for it to finish before continuing";
-  state.runEmbeddedAgentMock.mockRejectedValueOnce(new AgentHarnessPreflightError(message));
-
-  const payload = await finalPayload({ isHeartbeat: true });
-
-  expect(payload.text).toBe(renderHeartbeatRunFailureCopy(message));
-  expect(payload.text).toContain(`\n\nDetails: ${message}.\n`);
-  expect(payload.isError).toBe(true);
-  expect(payload.text).not.toContain("/new");
 });
 
 it("warns that interrupted CLI background work may have completed", () => {

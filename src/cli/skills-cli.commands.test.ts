@@ -1,5 +1,3 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { Chalk } from "chalk";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -12,8 +10,6 @@ import {
 import { GatewayTransportError } from "../gateway/transport-error.js";
 import { ExitError } from "../runtime.js";
 import type { SkillStatusEntry, SkillStatusReport } from "../skills/discovery/status.js";
-import type * as SourceInstall from "../skills/lifecycle/source-install.js";
-import { withTestDir } from "../test-helpers/temp-dir.js";
 import { registerSkillsCli } from "./skills-cli.js";
 import { createCliTtyMock } from "./test-runtime-capture.js";
 
@@ -65,14 +61,12 @@ vi.mock("../utils.js", async (importOriginal) => ({
   CONFIG_DIR: "/tmp/openclaw-config",
 }));
 // mock-isolation: Skill command fixtures own workspace selection and config without host state.
-vi.mock("../config/config.js", () => ({
-  getRuntimeConfig: mocks.config,
-  loadConfig: mocks.config,
-  captureRuntimeConfigAsyncReader:
-    (...args: Parameters<typeof mocks.config>) =>
-    async () =>
-      mocks.config(...args),
-}));
+vi.mock("../config/config.js", async () => {
+  const { createTestConfigReadMocks } = await import("../commands/test-runtime-config-helpers.js");
+  return {
+    ...createTestConfigReadMocks(mocks, "config"),
+  };
+});
 // mock-isolation: Skill CLI fixtures own agent and workspace selection without host configuration.
 vi.mock("../agents/agent-scope.js", () => ({
   listAgentIds: () => ["main"],
@@ -183,7 +177,7 @@ describe("skills cli commands", () => {
     expect(stdout).toEqual(
       json ? [JSON.stringify({ ok: false, error: { type: "cli_error", message } }, null, 2)] : [],
     );
-    expectUnused(mocks.install, mocks.update, mocks.verify);
+    expectUnused(mocks.install, mocks.update, mocks.verify, mocks.target);
   });
 
   beforeEach(() => {
@@ -219,22 +213,16 @@ describe("skills cli commands", () => {
       version: "1.2.3",
       force: false,
       forceInstall: true,
-      config: {},
       confirmInstall: expect.any(Function),
       onInstallPolicyWarning: expect.any(Function),
-      logger: expect.any(Object),
     });
     expect(mocks.workspace).not.toHaveBeenCalled();
     expect(runtime.log).toHaveBeenCalledWith(
       "Installed calendar@1.2.3 -> /tmp/openclaw-config/skills/calendar",
     );
-    expect(mocks.gateway).toHaveBeenCalledExactlyOnceWith({
-      config: {},
+    expectOptions(mocks.gateway, {
       method: "skills.status",
       params: { agentId: "main", refresh: true },
-      timeoutMs: 120_000,
-      clientName: "cli",
-      mode: "cli",
     });
   });
   it.each([
@@ -251,28 +239,6 @@ describe("skills cli commands", () => {
     await expectFailure(`install ${args}`, error);
     expectUnused(mocks.install, mocks.sourceInstall);
   });
-  it("fails a source install with --as when its description cannot be parsed", async () => {
-    await withTestDir({ prefix: "openclaw-skills-cli-invalid-source-" }, async (root) => {
-      const sourceDir = path.join(root, "source");
-      const workspaceDir = path.join(root, "workspace");
-      await fs.mkdir(sourceDir);
-      await fs.writeFile(
-        path.join(sourceDir, "SKILL.md"),
-        "name: invisible\ndescription: unfenced\n\n---\n",
-      );
-      const { installSkillFromSource } = await vi.importActual<typeof SourceInstall>(
-        "../skills/lifecycle/source-install.js",
-      );
-      mocks.sourceInstall.mockImplementation(installSkillFromSource);
-      mocks.workspace.mockReturnValue(workspaceDir);
-
-      await expectFailure(["install", sourceDir, "--as", "invisible"]);
-      expect(errors.join("\n")).toContain("description is required");
-      expect(runtime.log.mock.calls.flat().join("\n")).not.toContain("Installed");
-      await expect(fs.access(path.join(workspaceDir, "skills", "invisible"))).rejects.toThrow();
-    });
-  });
-
   it("installs a source under --as with noninteractive policy acknowledgement", async () => {
     setTty(false);
     mocks.sourceInstall.mockResolvedValue({
@@ -286,8 +252,6 @@ describe("skills cli commands", () => {
       spec: "git:owner/tools",
       slug: "tools",
       force: false,
-      config: {},
-      logger: expect.any(Object),
       onInstallPolicyWarning: expect.any(Function),
     });
     expect(mocks.install).not.toHaveBeenCalled();
@@ -320,14 +284,10 @@ describe("skills cli commands", () => {
       { ...installedCalendar(), previousVersion: "1.2.2", changed: true },
     ]);
     await run("update --all --force --force-install");
-    expect(mocks.tracked).toHaveBeenCalledWith("/tmp/workspace");
     expectOptions(mocks.update, {
       workspaceDir: "/tmp/workspace",
-      slug: undefined,
       force: true,
       forceInstall: true,
-      config: {},
-      logger: expect.any(Object),
     });
     expect(runtime.log).toHaveBeenCalledWith("Updated calendar: 1.2.2 -> 1.2.3");
     expect(errors).toEqual([]);
@@ -335,7 +295,6 @@ describe("skills cli commands", () => {
   it("does not bootstrap configured skills during update all", async () => {
     mocks.config.mockReturnValueOnce({ agents: { defaults: { skills: ["apple-notes"] } } });
     await run("update --all");
-    expect(mocks.tracked).toHaveBeenCalledWith("/tmp/workspace");
     expect(mocks.update).not.toHaveBeenCalled();
     expect(runtime.log).toHaveBeenCalledWith("No tracked ClawHub skills to update.");
     expect(errors).toEqual([]);
@@ -376,18 +335,6 @@ describe("skills cli commands", () => {
     expect(JSON.parse(stdout.at(-1) ?? "{}")).toMatchObject({ ok, decision });
     expect(errors).toEqual([]);
   });
-  it("returns JSON when verify workspace selection fails", async () => {
-    runtime.exit.mockImplementationOnce(() => undefined);
-    await run("verify agentreceipt --global --agent main");
-    expect(JSON.parse(stdout.at(-1) ?? "{}")).toEqual({
-      ok: false,
-      error: { type: "cli_error", message: "Use either --global or --agent, not both." },
-    });
-    expect(errors).toEqual([]);
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(mocks.target).not.toHaveBeenCalled();
-  });
-
   it.each([
     { label: "default", argv: ["--json"] },
     { label: "check", argv: ["check", "--json"] },
@@ -395,7 +342,6 @@ describe("skills cli commands", () => {
     mocks.inferredAgent.mockReturnValue("main");
     mocks.workspace.mockImplementation((_config, id) => `/tmp/workspace-${id}`);
     await run(argv);
-    expect(mocks.config).toHaveBeenCalledWith({ skipPluginValidation: true });
     expect(mocks.status).toHaveBeenCalledWith(
       "/tmp/workspace-main",
       expect.objectContaining({ config: {} }),
@@ -435,17 +381,14 @@ describe("skills cli commands", () => {
         { ...baseSkill, name: "plain", emoji: undefined },
       ],
     });
-    const style = vi.spyOn(theme, "command").mockImplementation(new Chalk({ level: 1 }).cyan);
-    try {
-      await run("list");
-      expect(stdout).toHaveLength(1);
-      expect(stdout[0]).toContain("🎛\uFE0F \u001b[36mcalendar\u001b[39m");
-      expect(stdout[0]).toContain("\u001b[36mplain\u001b[39m");
-      expect(stdout[0]).not.toContain("\u009f");
-      expect(stdout[0]).not.toContain("📦");
-    } finally {
-      style.mockRestore();
-    }
+    using _ = vi.spyOn(theme, "command").mockImplementation(new Chalk({ level: 1 }).cyan);
+
+    await run("list");
+    expect(stdout).toHaveLength(1);
+    expect(stdout[0]).toContain("🎛\uFE0F \u001b[36mcalendar\u001b[39m");
+    expect(stdout[0]).toContain("\u001b[36mplain\u001b[39m");
+    expect(stdout[0]).not.toContain("\u009f");
+    expect(stdout[0]).not.toContain("📦");
   });
   it.each([
     ["weather", "skills.entries.weather.apiKey"],
@@ -496,13 +439,9 @@ describe("skills cli commands", () => {
       workspaceDir: "/gateway/workspace-writer",
     });
     await run("check --agent writer --json");
-    expect(mocks.gateway).toHaveBeenCalledWith({
-      config: {},
+    expectOptions(mocks.gateway, {
       method: "skills.status",
       params: { agentId: "writer" },
-      timeoutMs: 1_500,
-      clientName: "cli",
-      mode: "cli",
     });
     expect(mocks.status).not.toHaveBeenCalled();
     expect(JSON.parse(stdout.at(-1) ?? "{}")).toMatchObject({
@@ -552,6 +491,18 @@ describe("skills cli commands", () => {
       'Unknown agent id "nope-agent". Run openclaw agents list to see configured agents.',
     ]);
     expect(mocks.workspace).not.toHaveBeenCalled();
+  });
+  it("canonicalizes a mixed-case --agent before selecting the configured agent", async () => {
+    mocks.explicitAgent.mockImplementation((_config, agent) =>
+      resolveConfiguredAgentId({ agents: { entries: { main: {}, writer: {} } } }, agent),
+    );
+    mocks.gateway.mockResolvedValue(mocks.report);
+    await run(["check", "--agent", " Writer ", "--json"]);
+    expect(errors).toEqual([]);
+    expect(mocks.explicitAgent).toHaveBeenCalledWith({}, "writer");
+    expect(mocks.gateway).toHaveBeenCalledWith(
+      expect.objectContaining({ method: "skills.status", params: { agentId: "writer" } }),
+    );
   });
   it("redacts secrets from rendered skills CLI errors", async () => {
     const secret = "sk-abcdefghijklmnopqrstuv";

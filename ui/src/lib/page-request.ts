@@ -69,3 +69,18 @@ export function createPageRequest<Args, Value>(
     },
   };
 }
+
+export function createPageRequestDelay(delay: number) {
+  let cancelled = false;
+  const completion = delay ? Promise.withResolvers<void>() : undefined;
+  const timer = completion ? setTimeout(completion.resolve, delay) : undefined;
+  return {
+    ready: completion?.promise,
+    isCancelled: () => cancelled,
+    cancel: () => {
+      cancelled = true;
+      clearTimeout(timer);
+      completion?.resolve();
+    },
+  };
+}

@@ -6,6 +6,21 @@ import type {
 
 type Tool = Pick<McpCatalogTool, "toolName"> & Partial<McpCatalogTool>;
 
+export function catalogTool(
+  serverName: string,
+  toolName: string,
+  overrides: Partial<McpCatalogTool> = {},
+): McpCatalogTool {
+  return {
+    serverName,
+    safeServerName: serverName,
+    toolName,
+    inputSchema: { type: "object", properties: {} },
+    fallbackDescription: toolName,
+    ...overrides,
+  };
+}
+
 export function fixtureCatalog(serverName: string, tools: Tool[], generatedAt = 0): McpToolCatalog {
   return {
     version: 1,
@@ -83,5 +98,18 @@ export function bindFixtureIdentity(
     workspaceDir: params.workspaceDir,
     configFingerprint: params.configFingerprint ?? "fingerprint",
     requesterScope: params.requesterScope,
+  };
+}
+
+export function staticRuntime(
+  fields: Omit<SessionMcpRuntime, "createdAt" | "lastUsedAt" | "markUsed" | "dispose"> &
+    Partial<SessionMcpRuntime>,
+): SessionMcpRuntime {
+  return {
+    createdAt: 0,
+    lastUsedAt: 0,
+    markUsed: () => {},
+    dispose: async () => {},
+    ...fields,
   };
 }

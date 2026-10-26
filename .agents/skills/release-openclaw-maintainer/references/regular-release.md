@@ -2,6 +2,14 @@
 
 ## Orchestrated stable release
 
+This section describes the executable stable-release controller, not the
+[cross-release manager role](release-manager.md). The release owner selects its
+approved cut and authority through the [owner lifecycle](release-owner.md).
+For a new controller state on a patch or promotion branch, pass
+`--cut-sha <selected-sha>` and `--confirm-cut-sha <selected-sha>` for that branch's
+approved cut, not moving `main`. Confirmation alone does not select the cut.
+On resume, preserve the state's recorded cut.
+
 Stable policy (Peter, 2026-09-28): the GitHub release becomes public and Latest
 as soon as core npm is verified. It never waits for ClawHub, Docker, or native
 apps. The orchestrator does this in `flip-github`; the manual direct publisher
@@ -76,8 +84,11 @@ Release SHA, Q=C, independently pinned P, and one validation parent.
 Record the cut time; aim to seal validation in approximately 20 minutes and
 publish within an hour, with actual timing recorded separately. Backports are
 merged `main` PRs cherry-picked before dispatch (pure-data model/catalog
-additions and bundled-runtime bumps qualify); after dispatch admit only a fix
-for a required-lane defect. A second cut (re-basing the candidate on newer
+additions and bundled-runtime bumps require the approved selection scope);
+after dispatch admit only a fix for a required-lane defect unless the operator
+explicitly reopens intake through the
+[owner lifecycle](release-owner.md#prepare-and-admit-hotfixes).
+A second cut (re-basing the candidate on newer
 `main`) requires the approval specified in the parent skill's
 [release authority rules](../SKILL.md#shared-release-boundaries); otherwise cherry-pick
 merged `main` commits only for a confirmed release blocker and name each one in
@@ -129,7 +140,8 @@ Beta-publish uses
 `release_profile=beta`, `run_release_soak=false` (`npm-beta-v1` for a qualifying
 canonical beta target). Stable-publish requires `release_profile=stable` or
 `full`, soak, and blocking performance. Beta-profile evidence cannot qualify
-stable. Every selected validation lane must pass.
+stable. FRV must conclude success under its pinned
+[release-tooling policy](../../../../docs/reference/full-release-validation/evidence.md#release-tooling-waivers).
 See [shared release boundaries](../SKILL.md#shared-release-boundaries),
 [validation](validation.md), and
 [publication recovery](publication-recovery.md). Diagnose
@@ -243,7 +255,7 @@ completes package/install proof and prints the selected route's next command; do
 another equivalent validation. Its `npm-beta-v1` Telegram package result is
 `deferred-postpublish`, never passed. Stable `npm-stable-v1` and admitted stable/full
 coverage reuse authenticated mock-provider package Telegram proof for the exact
-FRV-qualified tarball, without a Telegram waiver. Separately packed historical
+FRV-qualified tarball. Separately packed historical
 tarballs and explicit live-provider checks require supplemental Telegram proof
 from the retained, verified `release-ci/*` ref at Q=C with `harness_ref` pinned
 to C; missing or moved transport refs require newly bound candidate evidence,
@@ -432,8 +444,8 @@ failure without republishing npm.
 Run [postpublish confidence](validation.md#postpublish-confidence) against the
 exact published package. For a beta-to-latest promotion, retain available
 deferred-lane results, including published-package Telegram, while enforcing
-the shared required publication proofs. All selected tests must pass before
-publication. Run safe
+the shared required publication proofs. The exact FRV must succeed, with any
+tooling-policy waivers already recorded there. Run safe
 independent rosters concurrently while controlling local Docker/VM load.
 Classify failures before admitting a fix to the next beta; do not scan moving
 main or automatically rerun all groups. An operator's beta-attempt cap counts

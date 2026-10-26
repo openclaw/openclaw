@@ -1,9 +1,10 @@
 /** Browser-only diagnostic, serialized after the mock socket and wire-delay probe. */
-export function warmReloadProbe() {
+export function warmReloadProbe(observeAvatars = false) {
   const milestones: Record<string, number> = {};
   const mutations: Array<{ at: number; count: number; region: string }> = [];
   const shifts: Array<{ at: number; value: number }> = [];
   const states: Array<{ at: number; state: string }> = [];
+  const longTasks: Array<{ at: number; duration: number }> = [];
   const reads: Array<{ at: number; store: string; hit: boolean }> = [];
   const transactions: Array<{
     at: number;
@@ -13,6 +14,8 @@ export function warmReloadProbe() {
     boardFrames: number;
   }> = [];
   const rows = new Set<Element>();
+  const avatars = new WeakSet<Element>();
+  const avatarTransitions: Array<{ at: number; region: string; attribute: string }> = [];
   const sidebarFrames: Array<{
     at: number;
     cached: boolean;
@@ -42,6 +45,15 @@ export function warmReloadProbe() {
   let stopped = false;
   let cachedRows: Element[] = [];
   let retainedAtCatchup: number | null = null;
+  const duplicateRowKeys = new Set<string>();
+  type TranscriptAnchor = {
+    at: number;
+    rowKey: string;
+    offset: number;
+    scrollTop: number;
+  };
+  let cachedAnchor: TranscriptAnchor | null = null;
+  let liveAnchor: TranscriptAnchor | null = null;
   const mark = (name: string) => {
     milestones[name] ??= performance.now();
   };
@@ -54,6 +66,11 @@ export function warmReloadProbe() {
   observe("paint", (entries) => {
     for (const entry of entries) {
       milestones[entry.name] = entry.startTime;
+    }
+  });
+  observe("longtask", (entries) => {
+    for (const entry of entries) {
+      longTasks.push({ at: entry.startTime, duration: entry.duration });
     }
   });
   const elementLabel = (element: Element) =>
@@ -166,13 +183,19 @@ export function warmReloadProbe() {
       };
       socket.addEventListener("message", (event) => {
         const frame = JSON.parse(event.data);
+        if (frame.type === "event" && frame.event === "connect.challenge") {
+          mark("challenge");
+        }
         const method = pending.get(frame.id);
         if (method) {
           pending.delete(frame.id);
           if (method === "connect") {
             mark("hello");
           }
-          if (method === "chat.startup") {
+          if (
+            method === "chat.startup" ||
+            (method === "sessions.messages.subscribe" && frame.payload?.initialHistory)
+          ) {
             mark("catchupResponse");
           }
         }
@@ -192,6 +215,17 @@ export function warmReloadProbe() {
         ? "transcript"
         : (element?.closest("openclaw-chat-pane, openclaw-app-sidebar")?.localName ?? "shell");
       regions.set(region, (regions.get(region) ?? 0) + 1);
+      if (
+        observeAvatars &&
+        element &&
+        avatars.has(element) &&
+        record.type === "attributes" &&
+        record.attributeName &&
+        ["class", "src", "data-avatar-state"].includes(record.attributeName) &&
+        record.oldValue !== element.getAttribute(record.attributeName)
+      ) {
+        avatarTransitions.push({ at: performance.now(), region, attribute: record.attributeName });
+      }
       const textRoot = element?.closest(".chat-text");
       if (textRoot) {
         textRoots.add(textRoot);
@@ -244,6 +278,7 @@ export function warmReloadProbe() {
     subtree: true,
     childList: true,
     attributes: true,
+    attributeOldValue: observeAvatars,
     characterData: true,
   });
   const sample = () => {
@@ -283,8 +318,23 @@ export function warmReloadProbe() {
     const thread = pane?.querySelector(".chat-thread");
     const inner = thread?.querySelector(".chat-thread-inner");
     const currentRows = [...(thread?.querySelectorAll(".chat-virtual-row") ?? [])];
+    if (observeAvatars && currentRows.length) {
+      for (const element of document.querySelectorAll(
+        ".chat-thread :is(.chat-avatar-slot, .chat-author-avatar, .identity-avatar--agent, img), aside.sidebar :is(.viewer-avatar, .identity-avatar--agent, img)",
+      )) {
+        avatars.add(element);
+      }
+    }
+    const currentKeys = new Set<string>();
     for (const row of currentRows) {
       rows.add(row);
+      const key = row.getAttribute("data-virtual-row-key");
+      if (key) {
+        if (currentKeys.has(key)) {
+          duplicateRowKeys.add(key);
+        }
+        currentKeys.add(key);
+      }
     }
     const visible = Boolean(
       currentRows.length && inner && getComputedStyle(inner).visibility !== "hidden",
@@ -296,12 +346,40 @@ export function warmReloadProbe() {
         if (!cachedRows.length) {
           cachedRows = currentRows;
         }
+        if (thread) {
+          const bounds = thread.getBoundingClientRect();
+          for (const row of currentRows) {
+            const rowKey = row.getAttribute("data-virtual-row-key");
+            const rect = row.getBoundingClientRect();
+            if (rowKey && rect.bottom > bounds.top && rect.top < bounds.bottom) {
+              // Keep the last cached frame, after initial virtualizer positioning.
+              cachedAnchor = {
+                at: performance.now(),
+                rowKey,
+                offset: rect.top - bounds.top,
+                scrollTop: thread.scrollTop,
+              };
+              break;
+            }
+          }
+        }
       }
     }
     const caughtUp = Boolean(pane && Reflect.get(pane, "transcriptReady"));
     if (caughtUp && !milestones.catchupApplied) {
       mark("catchupApplied");
       retainedAtCatchup = cachedRows.filter((row) => row.isConnected).length;
+      const row = currentRows.find(
+        (candidate) => candidate.getAttribute("data-virtual-row-key") === cachedAnchor?.rowKey,
+      );
+      if (cachedAnchor && thread && row) {
+        liveAnchor = {
+          at: performance.now(),
+          rowKey: cachedAnchor.rowKey,
+          offset: row.getBoundingClientRect().top - thread.getBoundingClientRect().top,
+          scrollTop: thread.scrollTop,
+        };
+      }
     }
     const input = pane?.querySelector<HTMLTextAreaElement>("textarea");
     if (input && !input.disabled && !input.readOnly) {
@@ -309,6 +387,9 @@ export function warmReloadProbe() {
     }
     const state = JSON.stringify({
       shell: Boolean(document.querySelector(".shell")),
+      bootSkeleton: Boolean(document.querySelector("#openclaw-boot-shell")),
+      viewSkeleton: Boolean(document.querySelector(".lazy-view-state--loading")),
+      pane: Boolean(pane),
       sidebar: Boolean(document.querySelector("aside.sidebar")),
       header: pane?.querySelector(".chat-pane__session-title-text")?.textContent ?? null,
       rows: visible,
@@ -339,12 +420,24 @@ export function warmReloadProbe() {
         lastMutationBurst: mutations.findLast((batch) => batch.count >= 10)?.at ?? null,
         mutations,
         states,
+        longTasks,
         sidebarFrames,
+        avatarTransitions: observeAvatars ? avatarTransitions : undefined,
         rows: {
           mounted: rows.size,
           removed: removedRows,
           cached: cachedRows.length,
           retainedAtCatchup,
+          duplicateKeys: [...duplicateRowKeys],
+        },
+        handoff: {
+          cachedAnchor,
+          liveAnchor,
+          anchorShift: cachedAnchor && liveAnchor ? liveAnchor.offset - cachedAnchor.offset : null,
+        },
+        externalRig: {
+          loaf: perf !== undefined,
+          rpcCensus: Reflect.has(window, "__wsLog"),
         },
         loaf: perf?.loaf ?? [],
         rpcCensus: Reflect.get(window, "__wsLog") ?? [],

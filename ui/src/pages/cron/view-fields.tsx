@@ -71,6 +71,11 @@ export function focusFormField(props: string) {
   if (!(el instanceof HTMLElement)) {
     return;
   }
+  // Advanced fields cannot be scrolled to or focused while their disclosure is closed.
+  const details = el.closest("details");
+  if (details) {
+    details.open = true;
+  }
   el.scrollIntoView?.({ block: "center", behavior: resolveScrollBehavior() });
   el.focus();
 }

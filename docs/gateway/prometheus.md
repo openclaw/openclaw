@@ -20,6 +20,10 @@ GET /api/diagnostics/prometheus
 Content type is `text/plain; version=0.0.4; charset=utf-8`, the standard
 Prometheus exposition format.
 
+Worker queue depths, wait times, and request durations are aggregated directly
+from worker observations. Metrics collection does not enable per-request
+diagnostic events; explicit diagnostic subscribers still receive those events.
+
 <Warning>
 The route uses Gateway authentication (operator scope, trusted-operator surface) and requires the caller's effective scopes to include `operator.read` (implied by `operator.write` or `operator.admin`). Do not expose it as a public unauthenticated `/metrics` endpoint. Scrape it through the same auth path you use for other operator APIs.
 </Warning>
@@ -212,6 +216,9 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_worker_started_total`                           | counter   | `script`                                                                                  |
 | `openclaw_worker_retired_total`                           | counter   | `script`, `reason`                                                                        |
 | `openclaw_worker_messages_total`                          | counter   | `kind`, `direction`                                                                       |
+| `openclaw_session_row_selections_total`                   | counter   | `kind`, `task`                                                                            |
+| `openclaw_session_row_selection_rows_total`               | counter   | `kind`, `task`                                                                            |
+| `openclaw_session_row_selection_resets_total`             | counter   | none                                                                                      |
 | `openclaw_worker_message_payload_bytes_total`             | counter   | `kind`, `direction`                                                                       |
 | `openclaw_worker_message_unmeasured_total`                | counter   | `kind`, `direction`                                                                       |
 | `openclaw_child_process_spawn_total`                      | counter   | `family`, `operation`                                                                     |
@@ -240,6 +247,9 @@ memory, realtime, and other messages. Totals survive worker retirement and are
 published with memory samples. Posts queued on a worker-bound port count when
 accepted by the port, even if cancellation later prevents handing that port to a
 worker. These counters describe transport work, not confirmed delivery.
+Retained-worker `ref()` and `unref()` update host-owned process liveness locally;
+they do not send lifecycle messages to the supervisor. Active work, pending
+samples, and unfinished native cleanup still keep the host alive.
 
 Payload bytes use existing encoded buffer sizes or inexpensive owner estimates;
 they exclude transport framing and do not measure structured-clone allocations.
@@ -255,6 +265,18 @@ does not cross the main-thread boundary.
 Foreign Worker instances with accessor or read-only methods, or nonextensible
 instances, retain CPU and lifecycle tracking but exclude per-message traffic.
 Instrumentation does not replace those protected methods.
+
+Session-row selection counters report successful resident selections and returned
+rows before federation and visibility filtering. `kind` is `broad`, `agent`,
+`store`, `exact`, `session-id`, `parent`, or `running-candidate`. The bounded `task`
+labels are `sessions.list`, `sessions.catalog.list`, `sessions.resolve`,
+`sessions.usage`, `status`, `control-ui-pr`, and `other`. The task is the enclosing
+instrumented operation, not necessarily the original cause of background work;
+detached work without a recognized task is `other`. No session or agent identities
+are exported. `openclaw_session_row_selection_resets_total` counts broad selection
+invalidations, including topology replacement and projection disposal. These
+process-lifetime totals travel with periodic memory samples; scrapes do not select
+rows, and repeated samples do not increase the counters.
 
 For model-call metrics, `observation_unit="request"` measures one observable
 provider request. `observation_unit="turn"` measures a synthetic Claude Code
@@ -279,8 +301,11 @@ client receipt. Their only label is `event`: a known protocol event name, such a
 `chat` or `sessions.changed`, or `other` for an unrecognized name. No payload,
 session, user, or connection identifiers are exported. The
 `openclaw_gateway_ws_operator_connections` gauge reports connected authenticated
-operator sockets without labels. These observations use the existing bounded
-diagnostic queue and shared exporter series cap. Event observations are batched
+operator sockets without labels. Event counters reach Prometheus directly at flush,
+without allocating diagnostic event snapshots. Explicit diagnostic subscribers,
+including OpenTelemetry metrics, still receive queued snapshots. Connection counts
+use the bounded diagnostic queue; all metrics share the exporter series cap.
+Event observations are batched
 by event name within one event-loop turn while preserving per-socket frame and
 byte totals. Connection counts update on
 connect/disconnect and refresh every 30 seconds so a late-starting exporter or
@@ -613,10 +638,30 @@ These observations use the existing bounded diagnostic queue when diagnostics
 and an interested trusted consumer are enabled. Compare each stage's count;
 this metric is attribution for waiting callers, not total host work.
 
+### Chat startup stages
+
+`openclaw_gateway_rpc_stage_seconds{method="chat.startup",phase}` attributes
+completed startup work with fixed labels:
+
+| Phase                | Observation                                                            |
+| -------------------- | ---------------------------------------------------------------------- |
+| `session_entry`      | Exact session row preparation and initial access check                 |
+| `pending_inputs`     | Pending-input page and orphaned-input reconciliation                   |
+| `history_page`       | Transcript page read and display projection                            |
+| `startup_projection` | Command preparation and optional settled model projections             |
+| `projection_final`   | Final session row readiness, access revalidation and response assembly |
+| `session_info`       | Synchronous session snapshot presentation                              |
+
+Only entered phases contribute samples, including when they fail. These are
+elapsed durations, including worker queues and scheduling; they do not report
+CPU time. Phases can overlap: `session_info` is included in `projection_final`.
+Startup projection preparation can overlap the history read. Do not sum
+these phases as a request total; use the RPC handler duration for that total.
+Labels contain no agent, session, account or transcript identifiers.
+
 ### Catalog list stages
 
-The stage histograms currently cover only `sessions.catalog.list`. They use
-six fixed phase labels:
+For `sessions.catalog.list`, the stage histograms use six fixed phase labels:
 
 | Phase                | Observation                                                                          |
 | -------------------- | ------------------------------------------------------------------------------------ |
@@ -972,7 +1017,9 @@ script. These counts share the registry coverage limits above; they do not
 measure resident memory released by an exit.
 
 `openclaw gateway call diagnostics.lanes --json` also reports `workerCount`,
-`workerPoolCount`, and `workerPools`. Each pool entry contains a process-local
+`postgresBridgeCount`, `workerPoolCount`, and `workerPools`. The bridge count also
+includes bridges inside registered worker parents; direct bridges overlap
+`workerCount`, so the two counts must not be added. Each pool entry contains a process-local
 `poolId`, an allowlisted `script`, and its live `workerCount`. The response lists
 the 100 largest live pools; `workerPoolCount` includes all live pools. Counts
 include pending retirements until native exit and disappear when a pool has no
@@ -1141,7 +1188,7 @@ exports are suppressed in the meantime.
 
 The histogram is absent until the first observation, so absence does not prove
 zero GC. At startup, the exporter reserves four slots within the GC family's
-32-entry reserve for native main-thread GC (`reason="other"`), so startup traffic cannot prevent
+384-entry reserve for native main-thread GC (`reason="other"`), so startup traffic cannot prevent
 these histograms from appearing later. Reservation does not add observations.
 Queue drops, the series cap for other GC labels, observation gaps and process restarts limit
 coverage. Diagnostics disable/re-enable preserves the exporter's existing
@@ -1203,7 +1250,7 @@ attributes.
   <Accordion title="Series cap and overflow accounting">
     The exporter retains at most **16,384 aggregate label sets** across counters, gauges, and histograms. Each histogram consumes one entry, regardless of its bucket count; the rendered scrape has more time series. The WebSocket frame-size family is different: its nine cumulative scalar bounds each consume an entry, so 200 event names use 1,800 entries.
 
-    A fixed catalog of 134 metric families reserves **14,740 entries**, leaving **1,644 shared entries**. Each family can retain at most **128 entries** or its reserve, whichever is larger. Unused reserves are not borrowed. This protects late RPC, run, model, tool, GC, and memory observations from startup traffic in other families. Existing entries continue updating after admission fills. Gauge replacement releases its entries and preserves its family's reserve.
+    A fixed catalog of 137 metric families reserves **15,512 entries**, leaving **872 shared entries**. Each family can retain at most **128 entries** or its reserve, whichever is larger. Unused reserves are not borrowed. This protects late RPC, run, model, tool, GC, and memory observations from startup traffic in other families. Existing entries continue updating after admission fills. Gauge replacement releases its entries and preserves its family's reserve.
 
     The following reserves apply per family (all names have the `openclaw_` prefix):
 
@@ -1211,14 +1258,16 @@ attributes.
     | --- | --- |
     | 2,048 | `gateway_ws_event_frame_bytes` |
     | 1,024 | `worker_request_phase_seconds` |
+    | 640 | `worker_heap_space_used_bytes` |
     | 512 | `gateway_rpc_client_requests_total`, `worker_queue_depth`, `worker_queue_wait_seconds`, `worker_request_seconds` |
-    | 256 | All other `gateway_rpc_*` families; `gateway_ws_event_bytes_total`, `gateway_ws_event_wire_bytes_total`, `gateway_ws_events_total`, `gateway_ws_session_event_bytes_total`, `gateway_ws_session_event_frames_total`; `heap_space_bytes`, `worker_heap_space_used_bytes` |
-    | 128 | `run_completed_total`, `run_duration_seconds`, `harness_run_total`, `harness_run_duration_seconds`, `model_call_total`, `model_call_duration_seconds`, `model_cost_usd_total`, `model_failover_total`, `model_tokens_total`, `model_usage_duration_seconds`, `gen_ai_client_token_usage`, `tool_catalog_total`, `tool_catalog_tools_total`, `tool_execution_blocked_total`, `tool_execution_total`, `tool_execution_duration_seconds`, `gc_duration_seconds`, `code_mode_worker_heap_bytes`, `code_mode_worker_memory_bytes`, `heap_old_generation_after_gc_bytes`, `heap_old_generation_after_gc_ratio`, `heap_size_limit_bytes`, `heap_used_ratio`, `memory_bytes`, `worker_count`, `worker_heap_sampled_count`, `worker_heap_used_bytes`, `worker_external_bytes`, `worker_array_buffers_bytes`, `worker_gc_collections_total`, `worker_gc_duration_seconds_total`, `worker_gc_reclaimed_bytes_total`, `worker_heap_used_high_water_bytes`, `worker_tasks_completed_total` |
-    | 64 | `worker_started_total`, `worker_retired_total`, `worker_message_payload_bytes_total`, `worker_message_unmeasured_total`, `worker_messages_total` |
+    | 384 | `gc_duration_seconds` |
+    | 256 | All other `gateway_rpc_*` families; `gateway_ws_event_bytes_total`, `gateway_ws_event_wire_bytes_total`, `gateway_ws_events_total`, `gateway_ws_session_event_bytes_total`, `gateway_ws_session_event_frames_total`; `heap_space_bytes` |
+    | 128 | `run_completed_total`, `run_duration_seconds`, `harness_run_total`, `harness_run_duration_seconds`, `model_call_total`, `model_call_duration_seconds`, `model_cost_usd_total`, `model_failover_total`, `model_tokens_total`, `model_usage_duration_seconds`, `gen_ai_client_token_usage`, `tool_catalog_total`, `tool_catalog_tools_total`, `tool_execution_blocked_total`, `tool_execution_total`, `tool_execution_duration_seconds`, `code_mode_worker_heap_bytes`, `code_mode_worker_memory_bytes`, `heap_old_generation_after_gc_bytes`, `heap_old_generation_after_gc_ratio`, `heap_size_limit_bytes`, `heap_used_ratio`, `memory_bytes`, `worker_count`, `worker_heap_sampled_count`, `worker_heap_used_bytes`, `worker_external_bytes`, `worker_array_buffers_bytes`, `worker_gc_collections_total`, `worker_gc_duration_seconds_total`, `worker_gc_reclaimed_bytes_total`, `worker_heap_used_high_water_bytes`, `worker_tasks_completed_total` |
+    | 64 | `session_row_selections_total`, `session_row_selection_rows_total`, `worker_started_total`, `worker_retired_total`, `worker_message_payload_bytes_total`, `worker_message_unmeasured_total`, `worker_messages_total` |
     | 32 | `chat_send_phase_seconds`, `worktree_preparation_seconds` |
     | 4 | Every other cataloged family |
 
-    These budgets cover 170 RPC methods (including two client kinds per method), 400 worker request/queue label sets, 400 worker phase label sets, and 200 WebSocket event names without using the shared pool. Worker phases multiply `kind × request_class × phase`: 400 fully timed request combinations would need 2,800 phase entries, exceeding that family's 1,024-entry limit. Reservations guarantee capacity, not unlimited cardinality.
+    These budgets cover 170 RPC methods (including two client kinds per method), 400 worker request/queue label sets, 400 worker phase label sets, 200 WebSocket event names, 390 worker heap-space label sets, and 250 main/worker GC label sets without using the shared pool. Worker heap spaces multiply `script × space`; GC can multiply `thread × kind × reason × slot`. The GC `reason` and reusable Code Mode `slot` labels retain callback attribution and per-isolate correlation with heap samples. Worker phases multiply `kind × request_class × phase`: 400 fully timed request combinations would need 2,800 phase entries, exceeding that family's 1,024-entry limit. Reservations guarantee capacity, not unlimited cardinality.
 
     Rejected new-series observations increment `openclaw_prometheus_series_dropped_total` and `openclaw_prometheus_family_series_dropped_total{family="..."}`. Repeated observations of the same rejected label set increment again; these counters do not count unique rejected sets. Both counters bypass admission, so saturation cannot hide drops. The family label comes only from the fixed catalog, never from diagnostic label values. The exporter also logs one warning per affected family per process, including across exporter restarts.
 

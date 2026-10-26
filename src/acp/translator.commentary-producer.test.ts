@@ -5,9 +5,6 @@ import { createAgentEventTestHarness } from "../gateway/server-chat.agent-events
 import { subscribeAgentEvents } from "../gateway/server-chat.agent-events.test-helpers.js";
 import { createPromptScenario } from "./translator.scenario.test-support.js";
 
-// mock-isolation: Command discovery loads unrelated plugins outside this event delivery contract.
-vi.mock("./commands.js", () => ({ getAvailableCommands: () => [] }));
-
 it.each([
   [false, "", "Checking files.\nReading config.\nChecking files.Done."],
   [true, "", "Checking files.Reading config.Checking files.Done."],

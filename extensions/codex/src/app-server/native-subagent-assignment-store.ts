@@ -33,13 +33,11 @@ export function createNativeSubagentAssignmentStore(params: {
   readBinding: () => CodexAppServerThreadBinding | undefined;
   identity: CodexAppServerBindingIdentity;
   owner: CodexNativeSubagentHistoryOwner;
-  assertLifecycleCurrent?: () => void;
   assertLifecycleCurrentAsync?: () => Promise<void>;
   authority?: CodexBindingAuthority;
 }): CodexNativeSubagentAssignmentStore {
   const { bindingStore, identity, owner } = params;
   const assertCurrent = () => {
-    params.assertLifecycleCurrent?.();
     const binding = params.readBinding();
     if (!binding || !matchesCodexNativeSubagentSubmissionBinding(binding, owner)) {
       throw new Error("Native assignment binding is no longer current.");
@@ -62,18 +60,10 @@ export function createNativeSubagentAssignmentStore(params: {
       bindingStore.mutate(
         identity,
         { kind: "record-native-subagent-assignment", owner, assignment },
-        () => {
-          // The binding mutation compares its own row; this guard owns source custody only.
-          params.assertLifecycleCurrent?.();
-          assertSourceCurrent();
-        },
+        assertSourceCurrent,
         params.authority,
       ),
     consume: async (assignment, assertSourceCurrent, undelivered) => {
-      const assertRetirementCurrent = () => {
-        params.assertLifecycleCurrent?.();
-        assertSourceCurrent();
-      };
       const applied = await bindingStore.mutate(
         identity,
         {
@@ -82,7 +72,7 @@ export function createNativeSubagentAssignmentStore(params: {
           assignment,
           ...(undelivered ? { undelivered: true } : {}),
         },
-        assertRetirementCurrent,
+        assertSourceCurrent,
         params.authority,
       );
       if (applied && undelivered) {

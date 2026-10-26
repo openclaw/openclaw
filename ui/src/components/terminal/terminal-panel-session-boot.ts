@@ -1,5 +1,6 @@
 import type { GhosttyTerminalController } from "@openclaw/libterminal/browser";
 import { t } from "../../i18n/index.ts";
+import { registerTerminalEnglish } from "../../i18n/locales/en-terminal.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import type { CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
@@ -36,6 +37,8 @@ import { createIsolatedGhosttyTerminal } from "./terminal-runtime.ts";
 import { createTerminalStartupInput } from "./terminal-startup-input.ts";
 import type { createTerminalTabReadiness } from "./terminal-tab-readiness.ts";
 import { terminalDynamicColors, terminalTheme } from "./terminal-theme.ts";
+
+registerTerminalEnglish();
 
 type TerminalSink = Parameters<TerminalConnection["open"]>[1];
 
@@ -108,11 +111,11 @@ export function observeTerminalRestoreInput(document: Document, signal: AbortSig
   function stop() {
     stopPointer();
     stopKeyboard();
-    signal.removeEventListener("abort", stop);
+    stopAbort();
   }
   const stopPointer = listen(document, "pointerdown", onInteraction, true);
   const stopKeyboard = listen(document, "keydown", onInteraction, true);
-  signal.addEventListener("abort", stop, { once: true });
+  const stopAbort = listen(signal, "abort", stop, { once: true });
   return input;
 }
 

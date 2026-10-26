@@ -1,4 +1,5 @@
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { scanReasoningTags } from "../../packages/markdown-core/src/reasoning-tags.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import type { AssistantMessage } from "../llm/types.js";
 import {
@@ -7,6 +8,7 @@ import {
 } from "../shared/chat-message-content.js";
 import { toolCallXmlTextFilter } from "../shared/text/assistant-visible-text.js";
 import { downgradedToolCallTextFilter } from "../shared/text/downgraded-tool-call-text.js";
+import { findNativeToolMarkerTextBlocks } from "../shared/text/native-tool-marker.js";
 import { createTextProjection, trimTextFilter } from "../shared/text/text-projection.js";
 import { resolveCurrentSourceMessagingToolPartial } from "./embedded-agent-helpers/messaging-dedupe.js";
 import { updateLiveEditDiffProgress } from "./embedded-agent-live-edit-diff.js";
@@ -49,7 +51,6 @@ import {
 } from "./embedded-agent-utils.js";
 import type { AgentEvent, AgentMessage } from "./runtime/index.js";
 
-const REASONING_TAG_RE = /<\s*\/?\s*(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking)\b/i;
 // Text outside this set cannot open or close a tag, fence, code span, directive, or tool markup,
 // complete a MEDIA: token, or start a new line the media parser would see differently.
 const BLOCK_MARKUP_RE = /[<>[\]`~:\r]/;
@@ -350,7 +351,7 @@ export function handleMessageUpdate(
   ctx.emitReasoningStream(
     extractThinkingFromTaggedStream(ctx.state.deltaBuffer, ctx.state.thinkingTagStream, chunk),
   );
-  const wasThinking = ctx.state.partialBlockState.thinking;
+  const wasThinking = ctx.state.partialBlockState.reasoningDepth > 0;
   const hadPendingBlockFragment = Boolean(
     ctx.state.partialBlockState.pendingTagFragment ||
     ctx.state.partialBlockState.pendingFenceFragment,
@@ -368,6 +369,10 @@ export function handleMessageUpdate(
   const isTerminalSnapshot = evtType === "text_end" && shouldReadPartialText;
   let selectedAssistant =
     shouldUsePhaseAwareBlockReply || isResponsesTextEvent ? streamAssistant : partialAssistant;
+  // Capture the following native call before the text checkpoint drops later blocks.
+  const nativeToolMarkerBlocks = isTerminalSnapshot
+    ? findNativeToolMarkerTextBlocks(selectedAssistant)
+    : undefined;
   if (
     isTerminalSnapshot &&
     selectedAssistant === partialAssistant &&
@@ -383,7 +388,10 @@ export function handleMessageUpdate(
     };
   }
   const snapshot = shouldReadPartialText
-    ? extractAssistantStreamSnapshot(ctx, selectedAssistant, { final: finalText })
+    ? extractAssistantStreamSnapshot(ctx, selectedAssistant, {
+        final: finalText,
+        nativeToolMarkerBlocks,
+      })
     : undefined;
   const previousPreparedSource = ctx.getPartialReplySourceText();
   if (snapshot) {
@@ -422,7 +430,11 @@ export function handleMessageUpdate(
     textIsAppend = true;
   } else if (next === undefined && deliveryPhase !== "final_answer") {
     const pendingTagFragment = ctx.state.partialBlockState.pendingTagFragment;
-    const shouldRecomputeFullStream = Boolean(pendingTagFragment) || REASONING_TAG_RE.test(chunk);
+    const reasoningTags = scanReasoningTags(chunk, false);
+    const shouldRecomputeFullStream =
+      Boolean(pendingTagFragment) ||
+      reasoningTags.tags.length > 0 ||
+      reasoningTags.pendingStart !== undefined;
     if (shouldRecomputeFullStream) {
       const recomputeState = createAssistantStreamBlockState();
       const recomputedRawText = ctx.stripBlockTags(preparedSource, recomputeState, {
@@ -505,9 +517,9 @@ export function handleMessageUpdate(
       }
     }
     if (!suppressSourceReplyOutput) {
-      if (!wasThinking && ctx.state.partialBlockState.thinking) {
+      if (!wasThinking && ctx.state.partialBlockState.reasoningDepth > 0) {
         openReasoningStream(ctx);
-      } else if (wasThinking && !ctx.state.partialBlockState.thinking) {
+      } else if (wasThinking && ctx.state.partialBlockState.reasoningDepth === 0) {
         emitReasoningEnd(ctx);
       }
     }
@@ -554,7 +566,7 @@ export function handleMessageUpdate(
       verbatimBlock !== undefined &&
       !hadPendingBlockFragment &&
       partialBlockState.final &&
-      !partialBlockState.thinking &&
+      partialBlockState.reasoningDepth === 0 &&
       !partialBlockState.pendingTagFragment &&
       !partialBlockState.pendingFenceFragment &&
       !BLOCK_MARKUP_RE.test(chunk) &&
@@ -574,14 +586,15 @@ export function handleMessageUpdate(
       ((previousText === previousCleaned && next === cleanedText) ||
         (appendDelta !== null && replyDelta === appendDelta));
     let blockVerbatim: { endsOnBlankLine: boolean } | undefined;
-    if (plainAppend) {
+    // Block snapshots only serve the optional block-delivery consumer.
+    if (ctx.params.onBlockReply && plainAppend) {
       ctx.blockChunker.append(chunk);
       if (taggedVerbatimAppend && verbatimBlock) {
         blockVerbatim = {
           endsOnBlankLine: appendedEndsOnBlankLine(verbatimBlock.endsOnBlankLine, chunk),
         };
       }
-    } else {
+    } else if (ctx.params.onBlockReply) {
       const previousBlock = extractAssistantStreamSnapshot(ctx, partialAssistant, {
         throughIndex: streamItemChanged ? blockSourceIndex : priorSourceIndex,
         observedText: streamItemChanged ? "" : priorBlockText,

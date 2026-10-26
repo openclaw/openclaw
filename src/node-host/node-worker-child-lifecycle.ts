@@ -65,22 +65,7 @@ export class NodeWorkerChildLifecycle {
   private readonly processObservations = new NodeWorkerProcessObservations();
 
   observeProcesses(input: NodeWorkerProcessInput, signal?: AbortSignal) {
-    const owner = [...this.owners.values()].find(
-      (entry) =>
-        entry.binding.environmentId === input.environmentId &&
-        entry.binding.gatewayNamespace === input.gatewayNamespace,
-    );
-    if (!owner || owner.state !== "running" || this.options.isClosed()) {
-      throw new Error(
-        "Retained worker process observation unavailable; start a new turn and retry.",
-      );
-    }
-    return this.processObservations.request(
-      owner,
-      input,
-      () => !this.options.isClosed() && this.owners.get(owner.launchId) === owner,
-      signal,
-    );
+    return this.processObservations.observe(input, signal, this.owners, this.options);
   }
 
   constructor(private readonly options: NodeWorkerChildLifecycleOptions) {
@@ -562,7 +547,7 @@ export class NodeWorkerChildLifecycle {
         throw new Error("node worker returned a result outside its active turn");
       }
       // Publish this operation before finish can invoke a reentrant cancellation.
-      const settling = Promise.resolve()
+      await (turn.settling = Promise.resolve()
         .then(async () => {
           const receipt = await this.options.turns.finish({
             expected: turn.claim,
@@ -584,12 +569,8 @@ export class NodeWorkerChildLifecycle {
           turn.settle();
         })
         .finally(() => {
-          if (turn.settling === settling) {
-            turn.settling = undefined;
-          }
-        });
-      turn.settling = settling;
-      await settling;
+          turn.settling = undefined;
+        }));
     } else if (active.turn || active.retention?.turnId !== frame.turnId) {
       return;
     }

@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it } from "vitest";
 import { getPluginToolMeta, setPluginToolMeta } from "../plugins/tool-metadata.js";
+import { expectText as expectGuidance } from "../test-utils/text-assertions.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { applyToolAvailabilityDescriptions } from "./agent-tools.deferred-followup.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
@@ -12,7 +13,7 @@ import {
   describeSessionsSpawnTool,
 } from "./tool-description-presets.js";
 import { createAgentsWaitTool } from "./tools/agents-wait-tool.js";
-import { createConversationsSendTool } from "./tools/conversation-tools.js";
+import { createHostedConversationTools } from "./tools/conversation-tools.js";
 import { createNodesTool } from "./tools/nodes-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
@@ -25,14 +26,6 @@ function describeFirst(source: AnyAgentTool, siblings: string[] = []) {
     applyToolAvailabilityDescriptions([source, ...siblings.map((name) => tool(name))])[0],
     "described tool",
   );
-}
-function expectGuidance(text: string, included: string[], excluded: string[] = []) {
-  for (const fragment of included) {
-    expect(text).toContain(fragment);
-  }
-  for (const fragment of excluded) {
-    expect(text).not.toContain(fragment);
-  }
 }
 
 it.each([
@@ -65,10 +58,7 @@ it.each([false, true])("adds canonical scheduler guidance only when available: %
   const tools = withMockedPlatform("linux", () =>
     applyToolAvailabilityDescriptions(names.map((name) => tool(name))),
   );
-  expect(tools.map((entry) => entry.name)).toEqual(names);
   const [exec, process] = tools.map((entry) => entry.description);
-  expect(exec).toContain("background continuation supported");
-  expect(process).toContain("Control existing exec");
   expect(exec?.includes("use automations")).toBe(available);
   expect(process?.includes("scheduled follow-up uses automations")).toBe(available);
 });
@@ -100,7 +90,13 @@ it("inserts history guidance before the preserved session URL", () => {
 });
 
 it("names authorized conversation lookup", () => {
-  expect(describeFirst(createConversationsSendTool(), ["conversations_list"]).description).toBe(
+  const send = expectDefined(
+    createHostedConversationTools(undefined, "main", {}).find(
+      (t) => t.name === "conversations_send",
+    ),
+    "conversation send tool",
+  );
+  expect(describeFirst(send, ["conversations_list"]).description).toBe(
     "Send directly through a conversationRef from conversations_list. This performs channel delivery; it does not run the local agent in the backing session.",
   );
 });

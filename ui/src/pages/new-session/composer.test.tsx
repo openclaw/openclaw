@@ -9,6 +9,7 @@ import {
   getSkillCommandCompletions,
   replaceSlashCommands,
 } from "../../lib/chat/commands.ts";
+import { createFrameClock } from "../../test-helpers/animation-frame-clock.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { adjustTextareaHeight } from "../chat/components/chat-composer-dom.ts";
@@ -72,23 +73,16 @@ afterEach(() => {
 
 describe("new-session placeholder animation", () => {
   it("preserves animation progress through draft refreshes and cancels it with the input", () => {
-    let nextFrame = 0;
-    const frames = new Map<number, FrameRequestCallback>();
-    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
-      frames.set(++nextFrame, callback);
-      return nextFrame;
-    });
-    vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
+    const framesClock = createFrameClock();
+    const frames = framesClock.frames;
+    vi.stubGlobal("requestAnimationFrame", framesClock.request);
+    vi.stubGlobal("cancelAnimationFrame", framesClock.cancel);
     const view = renderComposer();
     document.body.append(view.container);
     const textarea = getComposerTextarea(view.composer);
     const target = textarea.getAttribute("aria-label")!;
     const advance = (timestamp: number) => {
-      const callbacks = [...frames.values()];
-      frames.clear();
-      for (const callback of callbacks) {
-        callback(timestamp);
-      }
+      framesClock.flush(timestamp);
       flush();
     };
 
@@ -326,22 +320,36 @@ describe("new-session composer keyboard submission", () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ["Enter", false, false, false, false],
-    ["Ctrl+Enter in Enter mode", false, true, false, false],
-    ["Meta+Enter in Enter mode", false, false, true, false],
-    ["Ctrl+Enter in modifier mode", true, true, false, false],
-    ["Meta+Enter in modifier mode", true, false, true, false],
-    ["Meta+Shift+Enter in Enter mode", false, false, true, true],
-    ["Ctrl+Shift+Enter in modifier mode", true, true, false, true],
-  ] as const)("submits once with %s", (_label, requiresModifier, ctrlKey, metaKey, background) => {
-    const onSubmit = vi.fn();
-    const onBackgroundSubmit = vi.fn();
-    const { composer } = renderComposer({ onSubmit, onBackgroundSubmit, requiresModifier });
-    const event = enter(getComposerTextarea(composer), { ctrlKey, metaKey, shiftKey: background });
-    expect(event.defaultPrevented).toBe(true);
-    expect(background ? onBackgroundSubmit : onSubmit).toHaveBeenCalledOnce();
-    expect(background ? onSubmit : onBackgroundSubmit).not.toHaveBeenCalled();
+  describe.each([false, true])("submission keys on mobile=%s", (mobile) => {
+    beforeEach(() => {
+      vi.spyOn(navigator, "userAgent", "get").mockReturnValue(mobile ? "Android" : "Windows");
+    });
+    it.each([
+      ["Enter", false, false, false, false],
+      ["Ctrl+Enter in Enter mode", false, true, false, false],
+      ["Meta+Enter in Enter mode", false, false, true, false],
+      ["Ctrl+Enter in modifier mode", true, true, false, false],
+      ["Meta+Enter in modifier mode", true, false, true, false],
+      ["Meta+Shift+Enter in Enter mode", false, false, true, true],
+      ["Ctrl+Shift+Enter in modifier mode", true, true, false, true],
+    ] as const)("handles %s", (_label, requiresModifier, ctrlKey, metaKey, background) => {
+      const onSubmit = vi.fn();
+      const onBackgroundSubmit = vi.fn();
+      const { composer } = renderComposer({ onSubmit, onBackgroundSubmit, requiresModifier });
+      const event = enter(getComposerTextarea(composer), {
+        ctrlKey,
+        metaKey,
+        shiftKey: background,
+      });
+      expect(event.defaultPrevented).toBe(!mobile);
+      expect(background ? onBackgroundSubmit : onSubmit).toHaveBeenCalledTimes(mobile ? 0 : 1);
+      expect(background ? onSubmit : onBackgroundSubmit).not.toHaveBeenCalled();
+      if (mobile) {
+        composer.querySelector<HTMLButtonElement>(".new-session-page__start-submit")!.click();
+        expect(onSubmit).toHaveBeenCalledOnce();
+        expect(onBackgroundSubmit).not.toHaveBeenCalled();
+      }
+    });
   });
 
   it("keeps an IME confirmation Enter from starting a session", () => {
@@ -383,29 +391,23 @@ describe("new-session composer keyboard submission", () => {
     expect(onSubmit).toHaveBeenCalledOnce();
   });
 
-  it("renders a reasoned submit block as an attached notice and keeps Start explanatory", () => {
+  it("keeps Start disabled and reports an attempted press to the owner", () => {
     const onSubmit = vi.fn();
+    const onBlockedSubmit = vi.fn();
     const { composer } = renderComposer({
       canSubmit: false,
       submitDisabledReason: "Restoring your last session setup…",
-      blockedSubmitNotice: "Restoring your last session setup…",
       onSubmit,
+      onBlockedSubmit,
     });
-    const notice = composer.querySelector<HTMLElement>(".new-session-page__blocked-submit");
-    const input = composer.querySelector<HTMLElement>(".agent-chat__input");
     const start = composer.querySelector<HTMLButtonElement>(".new-session-page__start-submit");
 
-    expect(notice?.getAttribute("role")).toBe("status");
-    expect(notice?.classList.contains("agent-chat__composer-status")).toBe(true);
-    expect(notice?.getAttribute("data-tone")).toBe("info");
-    expect(notice?.querySelector(".agent-chat__composer-status-band")).not.toBeNull();
-    expect(notice?.textContent?.trim()).toBe("Restoring your last session setup…");
-    expect(input?.contains(notice ?? null)).toBe(false);
-    expect(notice?.querySelector("svg")).not.toBeNull();
-    expect(start?.disabled).toBe(false);
+    expect(start?.disabled).toBe(true);
     expect(start?.getAttribute("aria-disabled")).toBe("true");
     start?.click();
-    expect(onSubmit).toHaveBeenCalledOnce();
+    expect(onSubmit).not.toHaveBeenCalled();
+    start?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0 }));
+    expect(onBlockedSubmit).toHaveBeenCalledOnce();
   });
 
   it("previews dictation in a locked draft and reserves the primary slot for Send", () => {

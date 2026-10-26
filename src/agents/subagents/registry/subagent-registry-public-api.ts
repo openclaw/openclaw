@@ -1,10 +1,5 @@
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
-import {
-  planAgentSteeringAcknowledgment,
-  preparePendingAgentSteeringLease,
-  planAgentSteeringRelease,
-} from "../../agent-steering-queue.js";
 import { captureGatewayToolCallerAssertion } from "../../tools/gateway-caller-context.js";
 import { prepareRequesterCronAuthority } from "../requester-cron-authority.js";
 import { resolveRecordedRequester } from "./subagent-child-owner-match.js";
@@ -39,86 +34,13 @@ import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
 export function createSubagentRegistryPublicApi(config: {
   runs: Map<string, SubagentRunRecord>;
   restoreOnce: (context?: OpenClawStateWorkerContext) => Promise<void>;
-  startAnnounceCleanup: (entry: SubagentRunRecord) => boolean;
   settleRequesterTurn: SubagentLifecycleController["settleRequesterTurnAfterSessionSpawns"];
   markRequesterYielded: SubagentLifecycleController["markRequesterTurnYielded"];
 }) {
-  const { runs, restoreOnce, startAnnounceCleanup, settleRequesterTurn } = config;
+  const { runs, restoreOnce, settleRequesterTurn } = config;
   const readRuns = () => getSubagentRunsSnapshotForRead(runs);
   const findRunById = (records: Map<string, SubagentRunRecord>, runId: string) =>
     records.get(runId) ?? [...records.values()].find((entry) => entry.swarmRunId === runId);
-
-  async function leasePendingAgentSteeringItems(params: {
-    requesterSessionKey: string;
-    leaseId: string;
-  }) {
-    const context = captureOpenClawStateWorkerContext();
-    await restoreOnce(context);
-    const prepared = await preparePendingAgentSteeringLease({
-      ...params,
-      runs,
-      readResult: async (entry) => {
-        const { readSubagentRunAnnounceResult } =
-          await import("../announce/subagent-announce-output.js");
-        return readSubagentRunAnnounceResult(entry, (runId) => runs.get(runId));
-      },
-    });
-    if (!prepared) {
-      return undefined;
-    }
-    const assertCurrent = () => {
-      if (!prepared.isCurrent()) {
-        throw new SubagentRegistryMutationRejectedError(
-          "A queued child result changed while preparing the requester prompt.",
-        );
-      }
-    };
-    return mutateSubagentRuns(
-      prepared.runIds,
-      (rows) => {
-        const planned = prepared.plan(rows);
-        if (!planned) {
-          throw new SubagentRegistryMutationRejectedError(
-            "A queued child result is no longer available for requester steering.",
-          );
-        }
-        return planned;
-      },
-      { runs, context, assertCurrent },
-    );
-  }
-
-  function ackPendingAgentSteeringItems(params: {
-    runIds: readonly string[];
-    leaseId: string;
-  }): Promise<number> {
-    return mutateSubagentRuns(
-      params.runIds,
-      (rows) => planAgentSteeringAcknowledgment({ ...params, runs: rows }),
-      {
-        runs,
-        onPublished: (postimages) => {
-          for (const entry of postimages.values()) {
-            if (entry && typeof entry.cleanupCompletedAt !== "number") {
-              startAnnounceCleanup(entry);
-            }
-          }
-        },
-      },
-    );
-  }
-
-  function releasePendingAgentSteeringItems(params: {
-    runIds: readonly string[];
-    leaseId: string;
-    error?: string;
-  }): Promise<number> {
-    return mutateSubagentRuns(
-      params.runIds,
-      (rows) => planAgentSteeringRelease({ ...params, runs: rows }),
-      { runs },
-    );
-  }
 
   function getSubagentRunByRunId(runId: string): SubagentRunRecord | undefined {
     return findRunById(readRuns(), runId.trim());
@@ -399,9 +321,6 @@ export function createSubagentRegistryPublicApi(config: {
         assertCurrent,
       });
     },
-    leasePendingAgentSteeringItems,
-    ackPendingAgentSteeringItems,
-    releasePendingAgentSteeringItems,
     getSubagentRunByRunId,
     prepareSubagentRunsByRunIds,
     completeCollectorLaunchCleanup,

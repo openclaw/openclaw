@@ -1,5 +1,5 @@
 /** Builds agent tools registered by plugins, preserving plugin scope around callbacks and descriptors. */
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "../agents/glob-pattern.js";
 import { normalizeToolPolicyName } from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
@@ -18,11 +18,7 @@ import {
 import { applyTestPluginDefaults, normalizePluginsConfig } from "./config-state.js";
 import type { PluginMetadataSnapshotScopeRunner } from "./current-plugin-metadata-snapshot.js";
 import { createInstalledPluginEnabledPredicate } from "./installed-plugin-index.js";
-import {
-  acquirePluginRegistryForInspection,
-  loadPluginRegistryHandle,
-  type PluginLoadOptions,
-} from "./loader.js";
+import { acquirePluginRegistryForInspection, loadPluginRegistryHandle } from "./loader.js";
 import {
   isManifestPluginAvailableForControlPlane,
   loadManifestContractSnapshot,
@@ -47,7 +43,7 @@ import {
   bindPluginToolCallbacks,
   createPluginToolFactoryResolver,
 } from "./tool-factory-runtime.js";
-import { createPluginToolAllowlist, type PluginToolAllowlist } from "./tool-grant-allowlist.js";
+import { createPluginToolAllowlist } from "./tool-grant-allowlist.js";
 import {
   createPluginToolInspection,
   inspectionToolOwners,
@@ -92,16 +88,7 @@ function resolvePluginToolLoadState(params: {
   hasAuthForProvider?: (providerId: string) => boolean;
   env?: NodeJS.ProcessEnv;
   preparedRuntime?: PreparedPluginToolRuntime;
-}):
-  | {
-      context: ReturnType<typeof resolvePluginRuntimeLoadContext>;
-      env: NodeJS.ProcessEnv;
-      loadOptions: PluginLoadOptions;
-      onlyPluginIds: string[];
-      allowlist: PluginToolAllowlist;
-      snapshot: PluginMetadataManifestView;
-    }
-  | undefined {
+}) {
   const env = params.env ?? process.env;
   const baseConfig = applyTestPluginDefaults(params.context.config ?? {}, env);
   const preparedLoadContext = params.preparedRuntime?.loadContext;
@@ -194,10 +181,7 @@ function resolvePluginToolLoadState(params: {
 export function ensureStandalonePluginToolRegistryLoaded(params: {
   context: OpenClawPluginToolContext;
   toolAllowlist?: string[];
-  toolDenylist?: string[];
   allowGatewaySubagentBinding?: boolean;
-  hasAuthForProvider?: (providerId: string) => boolean;
-  env?: NodeJS.ProcessEnv;
 }): PluginRegistry | undefined {
   const loadState = resolvePluginToolLoadState(params);
   if (!loadState) {
@@ -556,7 +540,7 @@ function* resolvePluginToolsFromRegistry(
         workspace.assertCurrent();
         factoryContext.assertInvocationCurrent?.();
       }
-      const factoryResult = factories.resolve(entry, factoryContext, declaredNames, owner.registry);
+      const factoryResult = factories.resolve(entry, factoryContext, declaredNames);
       if (factoryResult.failed) {
         continue;
       }
@@ -623,9 +607,7 @@ function* resolvePluginToolsFromRegistry(
             inspected = { error: "tool must be an object" };
           } else {
             const requiredClientCaps = toolRaw.requiredClientCaps;
-            const validCaps =
-              Array.isArray(requiredClientCaps) &&
-              requiredClientCaps.every((requiredCap) => typeof requiredCap === "string");
+            const validCaps = isStringArray(requiredClientCaps);
             if (
               validCaps &&
               requiredClientCaps.some((requiredCap) => !clientCaps.has(requiredCap))

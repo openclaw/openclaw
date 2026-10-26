@@ -8,6 +8,10 @@ import {
   type Context,
 } from "../../../llm/types.js";
 import {
+  memoizeFrozenPlainDataProjection,
+  isDeeplyFrozenPlainData,
+} from "../../../shared/immutable-data.js";
+import {
   OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
   STEERING_RUNTIME_CONTEXT,
   SYSTEM_UPDATE_MESSAGE_CUSTOM_TYPE,
@@ -41,7 +45,12 @@ export type RuntimeContextCustomMessage = {
         runtimeContextCarrier: true;
         fragments?: RuntimeContextFragment[];
       }
-    | { kind: "prompt-update" | "runtime-context"; turnScoped: boolean; fragments?: never };
+    | {
+        kind: "prompt-update" | "runtime-context";
+        turnScoped: boolean;
+        replay?: "append";
+        fragments?: never;
+      };
   timestamp: number;
 };
 
@@ -161,15 +170,34 @@ export function resolveRuntimeContextPromptParts(params: {
   };
 }
 
+const retainedRuntimeContexts = [undefined, false, true].map((retained) =>
+  memoizeFrozenPlainDataProjection((message: Context["messages"][number]) => {
+    if (!isRuntimeContextMessage(message)) {
+      return message;
+    }
+    const projected = { ...message };
+    setRuntimeContextRetention(projected, retained);
+    return projected;
+  }),
+);
+
 export function applyRuntimeContextCarrierRetention(
   messages: Context["messages"],
   appendOnlyRuntimeContext: boolean | undefined,
 ): void {
-  for (const message of messages) {
+  messages.forEach((message, index) => {
     if (isRuntimeContextMessage(message)) {
-      setRuntimeContextRetention(message, appendOnlyRuntimeContext);
+      if (isDeeplyFrozenPlainData(message)) {
+        const project =
+          retainedRuntimeContexts[
+            appendOnlyRuntimeContext === undefined ? 0 : appendOnlyRuntimeContext ? 2 : 1
+          ]!;
+        messages[index] = project(message);
+      } else {
+        setRuntimeContextRetention(message, appendOnlyRuntimeContext);
+      }
     }
-  }
+  });
 }
 
 export function buildRuntimeContextCustomMessage(
@@ -199,10 +227,12 @@ export function buildSystemUpdateMessage(
   content: string,
   kind: "prompt-update" | "runtime-context",
   turnScoped: boolean,
+  replay?: "append",
 ): RuntimeContextCustomMessage {
   return buildContextCustomMessage(content, SYSTEM_UPDATE_MESSAGE_CUSTOM_TYPE, {
     kind,
     turnScoped,
+    ...(replay ? { replay } : {}),
   });
 }
 

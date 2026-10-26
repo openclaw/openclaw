@@ -21,7 +21,6 @@ import {
 } from "./new-session-page.scenario.test-support.ts";
 import {
   REFRESHED_RESEARCH_WORKSPACE,
-  SESSION_LIST_DEFAULTS,
   WORKSPACE,
   LOCAL_GIT_WORKSPACE_RESPONSES,
   checkoutBaseRefInput,
@@ -31,6 +30,7 @@ import {
   navigateInApp,
   pollLocatorText,
 } from "./new-session-page.test-support.ts";
+import { sessionList } from "./new-session-shard.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
 const captureCliAgentsProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
@@ -434,13 +434,7 @@ suite.define(() => {
   it("navigates to a created session while canonical session refresh is pending", async () => {
     const page = await openPage(createControlUiE2eContextOptions());
     const sessionKey = "agent:main:refresh-overlap-e2e";
-    const listResponse = {
-      count: 0,
-      defaults: SESSION_LIST_DEFAULTS,
-      path: "",
-      sessions: [],
-      ts: Date.now(),
-    };
+    const listResponse = sessionList();
     const gateway = await installMockGateway(page, {
       workspaceGit: true,
       methodResponses: {

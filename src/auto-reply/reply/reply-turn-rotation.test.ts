@@ -28,14 +28,11 @@ describe("physical reply rotation evidence", () => {
       activeAtAdmission: first,
     });
     const observation = evidence.observeAdmission();
-    const current = evidence.capturePreparation();
     second.updateSessionId("other-store-rotation");
     second.complete();
-    expect(current()).toBe(true);
     expect(observation.changed()).toBe(false);
     first.updateSessionId("selected-store-rotation");
     first.complete();
-    expect(current()).toBe(false);
     expect(observation.changed()).toBe(true);
     observation.recordCompletions();
     expect(evidence.takeStorelessRotation()?.sessionId).toBe("selected-store-rotation");

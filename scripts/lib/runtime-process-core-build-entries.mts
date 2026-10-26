@@ -1,5 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { runtimeProcessEntrypoints } from "../../src/infra/runtime-process-entrypoints.ts";
+import { runtimeProcessScriptEntrypoints } from "../../src/infra/runtime-process-manifest.ts";
 import { managedMemoryEntrypoint } from "./managed-memory-entrypoint.mts";
 import { managedWindowsJobEntrypoint } from "./managed-windows-job-entrypoint.mts";
 
@@ -8,7 +9,7 @@ export function createRuntimeProcessBuildEntries(
     currentModuleUrl: string;
     sourceWorkerName: string;
     distWorkerPath: string;
-    sourceExtension?: ".ts" | ".mts";
+    sourceExtension?: ".ts" | ".mts" | ".mjs";
   }[],
 ) {
   return Object.fromEntries(
@@ -25,7 +26,10 @@ export function createRuntimeProcessBuildEntries(
 }
 
 export const runtimeProcessCoreEntrypoints = [
-  ...Object.values(runtimeProcessEntrypoints),
+  // Recovery artifacts are built by the sealed handoff owner, never the shared graph.
+  ...Object.values(runtimeProcessEntrypoints).filter((entry) =>
+    entry.distWorkerPath.endsWith(".js"),
+  ),
   managedWindowsJobEntrypoint,
   managedMemoryEntrypoint,
 ];
@@ -33,10 +37,15 @@ export const runtimeProcessCoreEntrypoints = [
 // Keep small helper processes out of the shared runtime bundle.
 export const standaloneRuntimeProcessBuildEntries = createRuntimeProcessBuildEntries([
   managedMemoryEntrypoint,
+  ...Object.values(runtimeProcessScriptEntrypoints).flatMap((entry) =>
+    "runtimeEntrypoint" in entry ? [runtimeProcessEntrypoints[entry.runtimeEntrypoint]] : [],
+  ),
   runtimeProcessEntrypoints.pluginGenerationPreparation,
   runtimeProcessEntrypoints.sqliteReadOnly,
   runtimeProcessEntrypoints.sqliteSourceRevision,
   runtimeProcessEntrypoints.stateRead,
+  runtimeProcessEntrypoints.sessionTranscript,
+  runtimeProcessEntrypoints.shellSnapshotEnvironment,
   runtimeProcessEntrypoints.nativeHookRelayClient,
   runtimeProcessEntrypoints.spawnBroker,
   runtimeProcessEntrypoints.stateLeaseHeartbeat,
@@ -64,6 +73,9 @@ export function getStandaloneRuntimeProcessOutputOptions(name: string) {
   }
   if (name === sqliteReadEntry) {
     return { codeSplitting: true, chunkFileNames: "infra/sqlite-readonly-[name]-[hash].mjs" };
+  }
+  if (name === runtimeProcessEntrypoints.sessionTranscript.distWorkerPath.replace(/\.js$/u, "")) {
+    return { codeSplitting: true, chunkFileNames: "config/sessions/transcript-[name]-[hash].mjs" };
   }
   return { codeSplitting: false };
 }

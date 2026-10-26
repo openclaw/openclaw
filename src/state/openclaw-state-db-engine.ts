@@ -12,6 +12,10 @@ import {
   requireNativeDatabaseFile,
 } from "../infra/database-engine/physical-facts.js";
 import { assertPostgresCatalog } from "../infra/database-engine/postgres-catalog.js";
+import {
+  postgresIndexOrderingMigration,
+  withLegacyPostgresIndexOrdering,
+} from "../infra/database-engine/postgres-index-ordering.js";
 import { isPostgresSqlConnection, type PostgresSqlConnection } from "../infra/sql-connection.js";
 import {
   invalidateLocalSqliteSchemaAdmissions,
@@ -35,7 +39,11 @@ import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { openTrackedStateDatabase } from "./openclaw-state-db-handle.js";
 import { withLegacyPublicationDraft } from "./openclaw-state-db-schema-v28-publication.js";
 import { withLegacyLocalWorkspaceManifests } from "./openclaw-state-db-schema-v31-workspace-manifests.js";
-import { admitStateSchemaFacts } from "./openclaw-state-db-schema-version.js";
+import {
+  admitStateSchemaFacts,
+  PostgresSchemaAdmissionUnavailableError,
+} from "./openclaw-state-db-schema-version.js";
+import { withPostgresSchemaAdmissionRetry } from "./openclaw-state-postgres-admission.js";
 import { writeStateSchemaContentVersion } from "./openclaw-state-schema-publication.js";
 import { statePostgresRuntime as runtime } from "./postgres-schema.generated/runtime.js";
 
@@ -79,10 +87,15 @@ export function admitStatePostgres(db: PostgresSqlConnection, fresh: boolean): v
   if (!fresh && getStateRuntimeSchemaAdmission(db)?.startupReady) {
     return;
   }
-  const facts = getPostgresPhysicalFacts(db);
-  if (!facts) {
-    throw new Error(`Missing PostgreSQL state admission. ${recovery}`);
-  }
+  const facts = withPostgresSchemaAdmissionRetry(db, () => {
+    const admitted = getPostgresPhysicalFacts(db);
+    if (!admitted) {
+      throw new PostgresSchemaAdmissionUnavailableError(
+        `Missing PostgreSQL state admission. ${recovery}`,
+      );
+    }
+    return admitted;
+  });
   const tables = new Set(
     facts.catalog.filter((fact) => fact.kind === "table").map((fact) => fact.table),
   );
@@ -150,9 +163,23 @@ const statePostgresSchema = {
     };
   }),
 };
-const statePostgresSchemaV30 = {
-  postgres: withLegacyLocalWorkspaceManifests(statePostgresSchema.postgres),
+const statePostgresSchemaV32 = {
+  postgres: withLegacyPostgresIndexOrdering(statePostgresSchema.postgres, "schema-nullability"),
   postgresFragments: statePostgresSchema.postgresFragments.map((fragment) => ({
+    ...fragment,
+    sql: withLegacyPostgresIndexOrdering(fragment.sql, "schema-nullability"),
+  })),
+};
+const statePostgresSchemaV31 = {
+  postgres: withLegacyPostgresIndexOrdering(statePostgresSchemaV32.postgres),
+  postgresFragments: statePostgresSchemaV32.postgresFragments.map((fragment) => ({
+    ...fragment,
+    sql: withLegacyPostgresIndexOrdering(fragment.sql),
+  })),
+};
+const statePostgresSchemaV30 = {
+  postgres: withLegacyLocalWorkspaceManifests(statePostgresSchemaV31.postgres),
+  postgresFragments: statePostgresSchemaV31.postgresFragments.map((fragment) => ({
     ...fragment,
     tables: fragment.tables.filter((table) => table !== "local_workspace_manifest_nodes"),
     sql: withLegacyLocalWorkspaceManifests(fragment.sql),
@@ -183,6 +210,19 @@ const statePostgresSchemaV26 = {
   postgresFragments: statePostgresSchemaV27.postgresFragments,
 };
 
+function statePostgresVersionSql(version: number): string {
+  return `UPDATE schema_meta
+        SET schema_version = ${version},
+          app_version = '${VERSION.replaceAll("'", "''")}',
+          updated_at = CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint)
+        WHERE meta_key = 'primary';
+        INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
+        VALUES ('state.schema.contentVersion', '${version}',
+          CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint))
+        ON CONFLICT (state_key) DO UPDATE
+          SET value_json = EXCLUDED.value_json, updated_at_ms = EXCLUDED.updated_at_ms;`;
+}
+
 export const stateEngineSchema: StoreSchema = {
   id: "state",
   version: OPENCLAW_STATE_SCHEMA_VERSION,
@@ -200,32 +240,14 @@ export const stateEngineSchema: StoreSchema = {
       // WITHOUT ROWID only changes SQLite storage; PostgreSQL keeps the same catalog.
       fromSchema: statePostgresSchemaV26,
       schema: statePostgresSchemaV26,
-      sql: `UPDATE schema_meta
-        SET schema_version = 26,
-          app_version = '${VERSION.replaceAll("'", "''")}',
-          updated_at = CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint)
-        WHERE meta_key = 'primary';
-        INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
-        VALUES ('state.schema.contentVersion', '26',
-          CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint))
-        ON CONFLICT (state_key) DO UPDATE
-          SET value_json = EXCLUDED.value_json, updated_at_ms = EXCLUDED.updated_at_ms;`,
+      sql: statePostgresVersionSql(26),
     },
     {
       version: 27,
       fromSchema: statePostgresSchemaV26,
       schema: statePostgresSchemaV27,
       sql: `${runtime.writeIndexesV27Sql}
-        UPDATE schema_meta
-        SET schema_version = 27,
-          app_version = '${VERSION.replaceAll("'", "''")}',
-          updated_at = CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint)
-        WHERE meta_key = 'primary';
-        INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
-        VALUES ('state.schema.contentVersion', '27',
-          CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint))
-        ON CONFLICT (state_key) DO UPDATE
-          SET value_json = EXCLUDED.value_json, updated_at_ms = EXCLUDED.updated_at_ms;`,
+        ${statePostgresVersionSql(27)}`,
     },
     {
       version: 28,
@@ -234,16 +256,7 @@ export const stateEngineSchema: StoreSchema = {
       sql: `ALTER TABLE IF EXISTS github_publication_requests ADD COLUMN draft bigint;
         ALTER TABLE IF EXISTS github_personal_publication_requests ADD COLUMN draft bigint;
         ALTER TABLE IF EXISTS github_repository_publication_requests ADD COLUMN draft bigint;
-        UPDATE schema_meta
-        SET schema_version = 28,
-          app_version = '${VERSION.replaceAll("'", "''")}',
-          updated_at = CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint)
-        WHERE meta_key = 'primary';
-        INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
-        VALUES ('state.schema.contentVersion', '28',
-          CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint))
-        ON CONFLICT (state_key) DO UPDATE
-          SET value_json = EXCLUDED.value_json, updated_at_ms = EXCLUDED.updated_at_ms;`,
+        ${statePostgresVersionSql(28)}`,
     },
     {
       version: 29,
@@ -255,21 +268,12 @@ export const stateEngineSchema: StoreSchema = {
       version: 30,
       fromSchema: statePostgresSchemaV30,
       schema: statePostgresSchemaV30,
-      sql: `UPDATE schema_meta
-        SET schema_version = 30,
-          app_version = '${VERSION.replaceAll("'", "''")}',
-          updated_at = CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint)
-        WHERE meta_key = 'primary';
-        INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
-        VALUES ('state.schema.contentVersion', '30',
-          CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint))
-        ON CONFLICT (state_key) DO UPDATE
-          SET value_json = EXCLUDED.value_json, updated_at_ms = EXCLUDED.updated_at_ms;`,
+      sql: statePostgresVersionSql(30),
     },
     {
       version: 31,
       fromSchema: statePostgresSchemaV30,
-      schema: statePostgresSchema,
+      schema: statePostgresSchemaV31,
       sql: `DO $workspace$
         DECLARE baseline_constraint text;
         BEGIN
@@ -291,16 +295,36 @@ export const stateEngineSchema: StoreSchema = {
             );
           END IF;
         END $workspace$;
-        UPDATE schema_meta
-        SET schema_version = 31,
-          app_version = '${VERSION.replaceAll("'", "''")}',
-          updated_at = CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint)
-        WHERE meta_key = 'primary';
-        INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
-        VALUES ('state.schema.contentVersion', '31',
-          CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint))
-        ON CONFLICT (state_key) DO UPDATE
-          SET value_json = EXCLUDED.value_json, updated_at_ms = EXCLUDED.updated_at_ms;`,
+        ${statePostgresVersionSql(31)}`,
+    },
+    {
+      version: 32,
+      fromSchema: statePostgresSchemaV31,
+      schema: statePostgresSchemaV32,
+      sql: `${postgresIndexOrderingMigration(
+        [
+          statePostgresSchemaV32.postgres,
+          ...statePostgresSchemaV32.postgresFragments.map((fragment) => fragment.sql),
+        ].join("\n"),
+      )}
+        ${statePostgresVersionSql(32)}`,
+    },
+    {
+      version: 33,
+      fromSchema: statePostgresSchemaV32,
+      schema: statePostgresSchema,
+      sql: `${postgresIndexOrderingMigration(
+        [runtime.eagerSql, ...runtime.fragments.map((fragment) => fragment.sql)].join("\n"),
+        "schema-nullability",
+      )}
+        ${statePostgresVersionSql(33)}`,
+    },
+    {
+      version: 34,
+      fromSchema: statePostgresSchema,
+      schema: statePostgresSchema,
+      // The state owner's beforeMigrate hook binds identity before this atomic version advance.
+      sql: statePostgresVersionSql(34),
     },
   ],
 };
@@ -308,7 +332,9 @@ export const stateEngineSchema: StoreSchema = {
 export function ensureStatePostgresFragment(db: PostgresSqlConnection, table: string): void {
   const facts = getPostgresPhysicalFacts(db);
   if (!facts) {
-    throw new Error(`Missing PostgreSQL state admission. ${recovery}`);
+    throw new PostgresSchemaAdmissionUnavailableError(
+      `Missing PostgreSQL state admission. ${recovery}`,
+    );
   }
   const fragment = runtime.fragments.find((item) => item.tables.includes(table));
   if (!fragment) {
@@ -343,8 +369,16 @@ export function ensureStatePostgresFragment(db: PostgresSqlConnection, table: st
     throw new Error("PostgreSQL state fragments require the owner's transaction");
   }
   invalidateLocalSqliteSchemaAdmissions(db);
+  // Lazy fragments can be created before Doctor upgrades a predecessor's index ordering.
   // sqlite-allow-raw: The schema owner installs a verified fragment under its transaction.
-  db.exec(fragment.sql);
+  db.exec(
+    facts.version < 33
+      ? withLegacyPostgresIndexOrdering(
+          fragment.sql,
+          facts.version < 32 ? "sqlite" : "schema-nullability",
+        )
+      : fragment.sql,
+  );
   admitPostgresPhysicalFacts({
     db,
     namespace: facts.namespace,

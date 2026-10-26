@@ -1,16 +1,18 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { resolveModelPromptText } from "../agents/embedded-agent-runner/run/attempt-llm-boundary.js";
 import { applyEmbeddedAttemptToolsAllow } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
+import { canonicalizeSessionEntry } from "../agents/sessions/session-manager-persistence-entry.js";
 import { readToolAllowlistIntersection } from "../agents/tool-policy.js";
+import { normalizeTranscriptJsonValue } from "../config/sessions/transcript-json.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { PluginHookAgentContext } from "./hook-types.js";
 import { createHookRunner } from "./hooks.js";
-import {
-  addStaticTestHooks,
-  createMockPluginRegistry,
-  TEST_PLUGIN_AGENT_CTX,
-} from "./hooks.test-fixtures.js";
+import { createMockPluginRegistry, TEST_PLUGIN_AGENT_CTX } from "./hooks.test-fixtures.js";
+import { getPluginInstance } from "./plugin-instance-scope.js";
+import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
 import { createEmptyPluginRegistry } from "./registry.js";
+import { createPluginRecord } from "./status.test-helpers.js";
 import type {
   PluginHookBeforeAgentFinalizeResult,
   PluginHookBeforePromptBuildResult,
@@ -19,10 +21,115 @@ import type {
 
 type PromptHook = Pick<
   PluginHookRegistration<"before_prompt_build">,
-  "handler" | "requiresToolAuthority" | "priority"
->;
+  "handler" | "requiresToolAuthority" | "priority" | "timeoutMs"
+> & { pluginId?: string };
 const phaseEvent = { prompt: "test", messages: [] };
-function promptRunner(hooks: PromptHook[]) {
+function hookRunner(
+  hooks: Parameters<typeof createMockPluginRegistry>[0],
+  options?: Parameters<typeof createHookRunner>[1],
+) {
+  return createHookRunner(createMockPluginRegistry(hooks), options);
+}
+
+describe("pre-durable channel ingress policy", () => {
+  const context = () => ({
+    channelId: "discord",
+    accountId: "account",
+    signal: new AbortController().signal,
+  });
+  const raw = { id: "event", channel_id: "room", content: "private" };
+
+  function ownedPolicy(allowConversationAccess: boolean) {
+    const builder = createTestPluginRegistry();
+    const record = createPluginRecord({ id: "ingress-policy", origin: "global" });
+    builder.registry.plugins.push(record);
+    const api = builder.createApi(record, { config: {}, hookPolicy: { allowConversationAccess } });
+    const instance = getPluginInstance(record)!;
+    onTestFinished(async () => {
+      await instance.dispose();
+    });
+    return { api, instance, registry: builder.registry };
+  }
+
+  it.each([false, true])("requires the existing conversation-access grant (%s)", (allowed) => {
+    const owner = ownedPolicy(allowed);
+    owner.api.on("before_channel_ingress", () => undefined);
+    expect(owner.registry.typedHooks.map((entry) => entry.hookName)).toEqual(
+      allowed ? ["before_channel_ingress"] : [],
+    );
+  });
+
+  it("chains isolated transformed events and retains the earlier replacement on a later decline", async () => {
+    const runner = hookRunner([
+      {
+        hookName: "before_channel_ingress",
+        priority: 2,
+        handler: () => ({ event: { ...raw, content: "[redacted]" } }),
+      },
+      {
+        hookName: "before_channel_ingress",
+        handler: (value) => {
+          expect(value).toEqual({ event: { ...raw, content: "[redacted]" } });
+          return {};
+        },
+      },
+    ]);
+    const result = await runner.runBeforeChannelIngress({ event: raw }, context());
+    expect(result?.event).toEqual({ ...raw, content: "[redacted]" });
+    result?.assertCurrent();
+    expect(raw.content).toBe("private");
+  });
+
+  it("does not fail open or expose policy error contents after a timeout", async () => {
+    const release = createDeferred();
+    const error = vi.fn();
+    const runner = hookRunner(
+      [
+        {
+          hookName: "before_channel_ingress",
+          timeoutMs: 2,
+          handler: async () => {
+            await release.promise;
+            throw new Error("PRIVATE_ERROR_SENTINEL");
+          },
+        },
+      ],
+      {
+        logger: { error, warn: vi.fn() },
+        failurePolicyByHook: { before_channel_ingress: "fail-open" },
+      },
+    );
+    try {
+      await expect(runner.runBeforeChannelIngress({ event: raw }, context())).rejects.toThrow(
+        "Channel ingress transform failed",
+      );
+      expect(error).not.toHaveBeenCalled();
+    } finally {
+      release.resolve();
+    }
+  });
+
+  it("rejects a result from an actual registered instance retired during its awaited policy", async () => {
+    const owner = ownedPolicy(true);
+    const entered = createDeferred();
+    const release = createDeferred();
+    owner.api.on("before_channel_ingress", async () => {
+      entered.resolve();
+      await release.promise;
+      return { event: { ...raw, content: "[redacted]" } };
+    });
+    const promise = createHookRunner(owner.registry).runBeforeChannelIngress(
+      { event: raw },
+      context(),
+    );
+    await entered.promise;
+    const disposing = owner.instance.dispose();
+    release.resolve();
+    await expect(promise).rejects.toThrow(/Channel ingress transform/);
+    await disposing;
+  });
+});
+function promptRunner(hooks: PromptHook[], options?: Parameters<typeof createHookRunner>[1]) {
   const registry = createEmptyPluginRegistry();
   registry.typedHooks.push(
     ...hooks.map((hook) => ({
@@ -32,7 +139,7 @@ function promptRunner(hooks: PromptHook[]) {
       ...hook,
     })),
   );
-  return createHookRunner(registry);
+  return createHookRunner(registry, options);
 }
 const authority = {
   toolAuthorityFingerprint: "turn-authority",
@@ -44,25 +151,15 @@ describe("prompt phase hooks", () => {
   it.each(["prependSystemContext", "appendSystemContext"] as const)(
     "bounds oversized %s per plugin and warns once per session",
     async (field) => {
-      const registry = createEmptyPluginRegistry();
       const oversized = "x".repeat(824_170);
-      registry.typedHooks.push(
-        {
-          pluginId: "verbose-plugin",
-          hookName: "before_prompt_build",
-          source: "test",
-          priority: 10,
-          handler: () => ({ [field]: oversized }),
-        },
-        {
-          pluginId: "small-plugin",
-          hookName: "before_prompt_build",
-          source: "test",
-          handler: () => ({ [field]: "  small guidance\r\n" }),
-        },
-      );
       const warn = vi.fn();
-      const runner = createHookRunner(registry, { logger: { warn, error: vi.fn() } });
+      const runner = promptRunner(
+        [
+          { pluginId: "verbose-plugin", priority: 10, handler: () => ({ [field]: oversized }) },
+          { pluginId: "small-plugin", handler: () => ({ [field]: "  small guidance\r\n" }) },
+        ],
+        { logger: { warn, error: vi.fn() } },
+      );
       const ctx = { sessionId: "session-1", contextTokenBudget: 32_000 };
       const first = await runner.runBeforePromptBuild(phaseEvent, ctx);
       expect(first?.[field]).toMatch(
@@ -122,14 +219,7 @@ describe("prompt phase hooks", () => {
       { handler: () => ({ toolsAllow }) },
       { handler: () => ({ toolsAllow: ["read"] }) },
     ]);
-    await expect(runner.runBeforePromptBuild(phaseEvent, {})).resolves.toStrictEqual({
-      systemPrompt: undefined,
-      prependContext: undefined,
-      appendContext: undefined,
-      prependSystemContext: undefined,
-      appendSystemContext: undefined,
-      toolsAllow: [],
-    });
+    expect((await runner.runBeforePromptBuild(phaseEvent, {}))?.toolsAllow).toEqual([]);
   });
 
   it("preserves overlapping frozen restrictions for the concrete tool surface", async () => {
@@ -234,20 +324,16 @@ function isActive(invocation: Invocation): boolean | undefined {
 
 function createRunner(
   phase: PromptPhase,
-  hooks: PluginHookRegistration<"before_prompt_build">[],
+  hooks: PromptHook[],
   logger: { warn: (message: string) => void; error: (message: string) => void },
 ) {
-  const registry = createEmptyPluginRegistry();
-  registry.typedHooks.push(
-    ...hooks.map((hook) => ({
+  return promptRunner(
+    hooks.map((hook) => ({
       ...hook,
       ...(phase === "authorized" ? { requiresToolAuthority: true as const } : {}),
     })),
+    { logger, modifyingHookTimeoutMsByHook: { before_prompt_build: 100 } },
   );
-  return createHookRunner(registry, {
-    logger,
-    modifyingHookTimeoutMsByHook: { before_prompt_build: 100 },
-  });
 }
 
 function dispatch(
@@ -289,8 +375,6 @@ describe("prompt hook invocation", () => {
         [
           {
             pluginId: "settling-handler",
-            hookName: "before_prompt_build",
-            source: "test",
             handler: (_event, ctx) => {
               handlerContext = ctx;
               activeOnEntry = isActive(ctx.hookInvocation);
@@ -354,8 +438,6 @@ describe("prompt hook invocation", () => {
         [
           {
             pluginId: "timed-out-handler",
-            hookName: "before_prompt_build",
-            source: "test",
             timeoutMs: 5,
             handler: (_event, ctx) => {
               contexts.push(ctx);
@@ -369,8 +451,6 @@ describe("prompt hook invocation", () => {
           },
           {
             pluginId: "live-sibling",
-            hookName: "before_prompt_build",
-            source: "test",
             handler: (_event, ctx) => {
               firstActiveAtSecondEntry = isActive(contexts[0]?.hookInvocation);
               contexts.push(ctx);
@@ -420,19 +500,248 @@ describe("prompt hook invocation", () => {
 const promptEvent = (prompt: string) => ({ prompt, messages: [] });
 
 describe("before_prompt_build dispatch", () => {
+  it.each([
+    Object.freeze({ buffer: new SharedArrayBuffer(4) }),
+    new Error("shared", { cause: new Uint8Array(new SharedArrayBuffer(4)) }),
+    { __openclaw: { upstreamUserText: "storage only", shared: new SharedArrayBuffer(4) } },
+    {
+      get buffer() {
+        return new SharedArrayBuffer(4);
+      },
+    },
+  ])("rejects unowned shared memory beside an owned payload (%#)", async (unowned) => {
+    const message = { role: "user", content: [{ type: "text", text: "owned" }] };
+    normalizeTranscriptJsonValue(message, "");
+    const handler = vi.fn();
+    const runner = promptRunner([{ handler }]);
+    await expect(
+      runner.runBeforePromptBuild({ prompt: "test", messages: [message, unowned] }, {}),
+    ).rejects.toThrow("before_prompt_build mutable input isolation failed");
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { mix: [], expected: "Ask 🌍\r\n\ud800" },
+    { mix: ["read"], expected: "Ask 🌍\r\n\ud800" },
+    { mix: ["contribute"], expected: "context:history\n\nAsk 🌍\r\n\ud800\n\ntail" },
+    {
+      mix: ["mutate", "read", "contribute"],
+      expected: "context:dispatch only\n\nAsk 🌍\r\n\ud800\n\ntail",
+    },
+  ])("preserves model prompt bytes for hook mix $mix", async ({ mix, expected }) => {
+    const source = { role: "user", content: "history" };
+    const event = { prompt: "Ask 🌍\r\n\ud800", messages: [source] };
+    const runner = promptRunner(
+      mix.map((kind) => ({
+        handler: (input) => {
+          const message = input.messages[0] as typeof source;
+          if (kind === "mutate") {
+            input.prompt = "dispatch prompt";
+            message.content = "dispatch only";
+          } else if (kind === "contribute") {
+            return { prependContext: `context:${message.content}`, appendContext: "tail" };
+          }
+          return undefined;
+        },
+      })),
+    );
+    for (let turn = 0; turn < 2; turn++) {
+      const contribution = await runner.runBeforePromptBuild(event, {});
+      const prompt = resolveModelPromptText({
+        text: event.prompt,
+        transcriptPrompt: event.prompt,
+        ...contribution,
+      });
+      expect(prompt).toBe(expected);
+      expect(Buffer.from(prompt, "utf16le")).toEqual(Buffer.from(expected, "utf16le"));
+      expect(source.content).toBe("history");
+      expect(event.prompt).toBe("Ask 🌍\r\n\ud800");
+    }
+  });
+
+  it("preserves aliases and native values in unowned hook data", async () => {
+    const date = new Date("2026-01-01T00:00:00Z");
+    const leaf = { text: "caller" };
+    const map = new Map([["leaf", leaf]]);
+    const metadata = {
+      upstreamUserText: "storage only",
+      leaf,
+      map,
+      [Symbol("omitted")]: Symbol("not cloned"),
+    };
+    const event = {
+      prompt: "test",
+      messages: [{ date, leaf, map, __openclaw: metadata }, { leaf }],
+    };
+    const ownKeys = vi.spyOn(Reflect, "ownKeys");
+    onTestFinished(() => ownKeys.mockRestore());
+    const runner = promptRunner(
+      [
+        {
+          handler: (input) => {
+            const [first, second] = input.messages as typeof event.messages;
+            expect(first!.date).toEqual(date);
+            expect(first!.date).not.toBe(date);
+            expect(first!.leaf).toBe(second!.leaf);
+            expect(first!.map!.get("leaf")).toBe(first!.leaf);
+            expect(first!["__openclaw"]!.leaf).toBe(first!.leaf);
+            expect(first!["__openclaw"]!.map).toBe(first!.map);
+            expect(first!["__openclaw"]).not.toHaveProperty("upstreamUserText");
+            expect(Object.getOwnPropertySymbols(first!["__openclaw"]!)).toEqual([]);
+            first!.leaf.text = "local";
+            expect(second!.leaf.text).toBe("local");
+          },
+        },
+      ],
+      { catchErrors: false },
+    );
+    await runner.runBeforePromptBuild(event, {});
+    expect(leaf.text).toBe("caller");
+    expect(map.get("leaf")).toBe(leaf);
+    // Node preserves Error.cause, so only the detached graph needs a safety scan.
+    expect(ownKeys.mock.calls.some(([value]) => value === leaf)).toBe(
+      Boolean(process.versions.bun),
+    );
+  });
+
+  it.each(["before_prompt_build", "agent_turn_prepare"] as const)(
+    "%s shares immutable payloads without exposing stored metadata",
+    async (hookName) => {
+      const message = {
+        role: "toolResult" as const,
+        toolCallId: "call-1",
+        toolName: "synthetic",
+        isError: false,
+        timestamp: 0,
+        content: [{ type: "text" as const, text: "caller history" }],
+        details: { private: "storage only" },
+        __openclaw: { upstreamUserText: "storage prompt", retained: "visible" },
+      };
+      const entry = canonicalizeSessionEntry({
+        type: "message",
+        id: "entry-1",
+        parentId: null,
+        timestamp: "2026-01-01T00:00:00.000Z",
+        message: structuredClone(message),
+      });
+      normalizeTranscriptJsonValue(message, "");
+      const messages = [message, entry.message];
+      const owned = new Set<object>(messages.flatMap((item) => [item.content, item.content[0]!]));
+      const ownKeys = vi.spyOn(Reflect, "ownKeys");
+      const clone = vi.spyOn(globalThis, "structuredClone");
+      onTestFinished(() => {
+        ownKeys.mockRestore();
+        clone.mockRestore();
+      });
+      const runner = hookRunner(
+        [
+          {
+            hookName,
+            handler: (value: unknown) => {
+              const event = value as { messages: (typeof message)[] };
+              for (const [index, source] of messages.entries()) {
+                const projected = event.messages[index]!;
+                expect(projected.content).toBe(source.content);
+                expect(() => {
+                  projected.content[0]!.text = "forbidden mutation";
+                }).toThrow(TypeError);
+                expect(projected).not.toHaveProperty("details");
+                expect(projected["__openclaw"]).toEqual({ retained: "visible" });
+                projected["__openclaw"].retained = "local metadata";
+                projected.toolName = "local tool name";
+              }
+              return { prependContext: "returned context" };
+            },
+          },
+        ],
+        { catchErrors: false },
+      );
+      for (let turn = 0; turn < 2; turn++) {
+        ownKeys.mockClear();
+        clone.mockClear();
+        const event = { prompt: "test", messages };
+        const result =
+          hookName === "before_prompt_build"
+            ? await runner.runBeforePromptBuild(event, {})
+            : await runner.runAgentTurnPrepare({ ...event, queuedInjections: [] }, {});
+        expect(result?.prependContext).toBe("returned context");
+        expect(clone).toHaveBeenCalledTimes(hookName === "before_prompt_build" ? 0 : 1);
+        // Warm dispatch must not rescan the frozen payload graph (#182349).
+        if (turn > 0) {
+          expect(ownKeys.mock.calls.filter(([value]) => owned.has(value))).toHaveLength(0);
+        }
+        for (const source of messages) {
+          expect(source.content[0]!.text).toBe("caller history");
+          expect(source.toolName).toBe("synthetic");
+          expect(source["__openclaw"].retained).toBe("visible");
+        }
+      }
+    },
+  );
+
+  it.each(["before_prompt_build", "agent_turn_prepare"] as const)(
+    "%s isolates array, envelope, and non-owned edits across dispatches",
+    async (hookName) => {
+      const message = { role: "user", content: [{ type: "text", text: "history" }] };
+      normalizeTranscriptJsonValue(message, "");
+      const unowned = { content: Object.freeze([{ text: "unowned" }]) };
+      const event = { prompt: "test", messages: [message, unowned], queuedInjections: [] };
+      const snapshots: unknown[] = [];
+      const runner = hookRunner(
+        [
+          {
+            hookName,
+            handler: (value: unknown) => {
+              const input = value as typeof event;
+              snapshots.push(input);
+              expect(input.messages).toEqual(event.messages);
+              const first = input.messages[0] as typeof message;
+              first.role = "assistant";
+              first.content = [{ type: "text", text: "local replacement" }];
+              const second = input.messages[1] as typeof unowned;
+              second.content[0]!.text = "local unowned mutation";
+              input.messages.push({ content: [] });
+            },
+          },
+          {
+            hookName,
+            handler: (value: unknown) => {
+              const input = value as typeof event;
+              expect(input).toBe(snapshots.at(-1));
+              expect(input.messages).toHaveLength(3);
+              expect(input.messages[0]).toMatchObject({
+                role: "assistant",
+                content: [{ text: "local replacement" }],
+              });
+              expect(input.messages[1]).toMatchObject({
+                content: [{ text: "local unowned mutation" }],
+              });
+            },
+          },
+        ],
+        { catchErrors: false },
+      );
+      for (let turn = 0; turn < 2; turn++) {
+        if (hookName === "before_prompt_build") {
+          await runner.runBeforePromptBuild(event, {});
+        } else {
+          await runner.runAgentTurnPrepare(event, {});
+        }
+        expect(event.messages).toHaveLength(2);
+        expect(message).toEqual({ role: "user", content: [{ type: "text", text: "history" }] });
+        expect(unowned.content[0]!.text).toBe("unowned");
+      }
+      expect(snapshots[0]).not.toBe(snapshots[1]);
+    },
+  );
+
   it("keeps sibling hook families and other runners active during dispatch", async () => {
     const turnPrepare = vi.fn(() => ({ prependContext: "turn" }));
     const heartbeat = vi.fn(() => ({ appendContext: "heartbeat" }));
     const otherPromptBuild = vi.fn(() => ({ prependContext: "other runner" }));
-    const otherRunner = createHookRunner(
-      createMockPluginRegistry([
-        {
-          hookName: "before_prompt_build",
-          handler: otherPromptBuild,
-          pluginId: "other",
-        },
-      ]),
-    );
+    const otherRunner = hookRunner([
+      { hookName: "before_prompt_build", handler: otherPromptBuild, pluginId: "other" },
+    ]);
     const promptBuild = vi.fn(async () => {
       await runner.runAgentTurnPrepare(
         { prompt: "nested", messages: [], queuedInjections: [] },
@@ -445,25 +754,11 @@ describe("before_prompt_build dispatch", () => {
       await otherRunner.runBeforePromptBuild(promptEvent("nested"), TEST_PLUGIN_AGENT_CTX);
       return {};
     });
-    const runner = createHookRunner(
-      createMockPluginRegistry([
-        {
-          hookName: "before_prompt_build",
-          handler: promptBuild,
-          pluginId: "prompt",
-        },
-        {
-          hookName: "agent_turn_prepare",
-          handler: turnPrepare,
-          pluginId: "turn",
-        },
-        {
-          hookName: "heartbeat_prompt_contribution",
-          handler: heartbeat,
-          pluginId: "heartbeat",
-        },
-      ]),
-    );
+    const runner = hookRunner([
+      { hookName: "before_prompt_build", handler: promptBuild, pluginId: "prompt" },
+      { hookName: "agent_turn_prepare", handler: turnPrepare, pluginId: "turn" },
+      { hookName: "heartbeat_prompt_contribution", handler: heartbeat, pluginId: "heartbeat" },
+    ]);
 
     await runner.runBeforePromptBuild(promptEvent("outer"), TEST_PLUGIN_AGENT_CTX);
 
@@ -474,10 +769,7 @@ describe("before_prompt_build dispatch", () => {
   });
 
   it("allows detached descendants to dispatch after the outer call settles", async () => {
-    let releaseDetached: (() => void) | undefined;
-    const detachedGate = new Promise<void>((resolve) => {
-      releaseDetached = resolve;
-    });
+    const { promise: detachedGate, resolve: releaseDetached } = createDeferredCore();
     let detachedDispatch: Promise<unknown> | undefined;
     const promptBuild = vi.fn(async (event: unknown) => {
       const prompt = (event as { prompt: string }).prompt;
@@ -489,29 +781,17 @@ describe("before_prompt_build dispatch", () => {
       }
       return { prependContext: prompt };
     });
-    const runner = createHookRunner(
-      createMockPluginRegistry([
-        {
-          hookName: "before_prompt_build",
-          handler: promptBuild,
-          pluginId: "prompt",
-        },
-      ]),
-    );
+    const runner = hookRunner([
+      { hookName: "before_prompt_build", handler: promptBuild, pluginId: "prompt" },
+    ]);
 
     await runner.runBeforePromptBuild(promptEvent("outer"), TEST_PLUGIN_AGENT_CTX);
-    releaseDetached?.();
+    releaseDetached();
     const pendingDetachedDispatch = detachedDispatch;
     if (!pendingDetachedDispatch) {
       throw new Error("detached prompt dispatch was not created");
     }
-    await expect(pendingDetachedDispatch).resolves.toEqual({
-      systemPrompt: undefined,
-      prependContext: "detached",
-      appendContext: undefined,
-      prependSystemContext: undefined,
-      appendSystemContext: undefined,
-    });
+    await expect(pendingDetachedDispatch).resolves.toMatchObject({ prependContext: "detached" });
     expect(promptBuild).toHaveBeenCalledTimes(2);
   });
 });
@@ -523,13 +803,8 @@ const finalizeEvent = {
   lastAssistantMessage: "done",
 };
 function finalize(...results: PluginHookBeforeAgentFinalizeResult[]) {
-  return createHookRunner(
-    createMockPluginRegistry(
-      results.map((result) => ({
-        hookName: "before_agent_finalize",
-        handler: () => result,
-      })),
-    ),
+  return hookRunner(
+    results.map((result) => ({ hookName: "before_agent_finalize", handler: () => result })),
   ).runBeforeAgentFinalize(finalizeEvent, TEST_PLUGIN_AGENT_CTX);
 }
 
@@ -584,10 +859,8 @@ describe("before_agent_finalize", () => {
     vi.useFakeTimers();
     try {
       const logger = { error: vi.fn(), warn: vi.fn(), debug: vi.fn() };
-      const runner = createHookRunner(
-        createMockPluginRegistry([
-          { hookName: "before_agent_finalize", handler: () => new Promise(() => {}) },
-        ]),
+      const runner = hookRunner(
+        [{ hookName: "before_agent_finalize", handler: () => new Promise(() => {}) }],
         { logger },
       );
       const run = runner.runBeforeAgentFinalize(finalizeEvent, TEST_PLUGIN_AGENT_CTX);
@@ -609,40 +882,26 @@ it.each([
 ])(
   "keeps the first defined routing overrides after a broken plugin ($priority)",
   async ({ higher, lower, priority, expected }) => {
-    const registry = createEmptyPluginRegistry();
+    const routing = (name: string, fallbacksOverride: string[] | undefined) => ({
+      modelOverride: `${name}-model`,
+      providerOverride: `${name}-provider`,
+      fallbacksOverride,
+    });
     const broken = vi.fn(() => {
       throw new Error("plugin crashed");
     });
-    addStaticTestHooks(registry, {
-      hookName: "before_model_resolve",
-      hooks: [
-        {
-          pluginId: "low",
-          result: {
-            modelOverride: "low-model",
-            providerOverride: "low-provider",
-            fallbacksOverride: lower,
-          },
-        },
-        {
-          pluginId: "broken",
-          priority: 100,
-          result: {},
-          handler: broken,
-        },
-        {
-          pluginId: "high",
-          priority,
-          result: {
-            modelOverride: "high-model",
-            providerOverride: "high-provider",
-            fallbacksOverride: higher,
-          },
-        },
-      ],
-    });
+    const runner = hookRunner([
+      { hookName: "before_model_resolve", pluginId: "low", handler: () => routing("low", lower) },
+      { hookName: "before_model_resolve", pluginId: "broken", priority: 100, handler: broken },
+      {
+        hookName: "before_model_resolve",
+        pluginId: "high",
+        priority,
+        handler: () => routing("high", higher),
+      },
+    ]);
     await expect(
-      createHookRunner(registry).runBeforeModelResolve({ prompt: "test" }, TEST_PLUGIN_AGENT_CTX),
+      runner.runBeforeModelResolve({ prompt: "test" }, TEST_PLUGIN_AGENT_CTX),
     ).resolves.toEqual({
       modelOverride: priority ? "high-model" : "low-model",
       providerOverride: priority ? "high-provider" : "low-provider",

@@ -6,7 +6,7 @@ import {
 } from "./prepared-model-runtime.test-harness.js";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { applyAgentConfig, pruneAgentConfig } from "../commands/agents.config.js";
 import {
   createPluginMetadataSnapshot,
@@ -48,6 +48,7 @@ import {
   type PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.js";
 import { retainPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
+import { loadSubagentRegistryPluginRuntimeHandle } from "./subagents/registry/subagent-registry-deps.js";
 
 const fixture = usePreparedModelRuntimeHarness({ label: "prepared-model-runtime" });
 const { mocks } = fixture;
@@ -139,6 +140,48 @@ async function useDiscoveryCredentials() {
 }
 
 describe("prepared reply dispatch runtime", () => {
+  it("reuses the published workspace registry for repeated subagent cleanup", async () => {
+    mocks.configuredAgentIds = ["default"];
+    const config = {};
+    await publishGateway(config, { allowGatewaySubagentBinding: true });
+    const published = (await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }))!;
+    const input = {
+      config,
+      agentId: published.agentId,
+      agentDir: published.agentDir,
+      workspaceDir: published.workspaceDir,
+      allowGatewaySubagentBinding: true,
+    };
+    mocks.loadAgentRuntimePluginRegistryHandle.mockClear();
+    expect(await loadSubagentRegistryPluginRuntimeHandle(input)).toBe(
+      published.inboundPluginRegistry,
+    );
+    expect(await loadSubagentRegistryPluginRuntimeHandle(input)).toBe(
+      published.inboundPluginRegistry,
+    );
+    expect(mocks.loadAgentRuntimePluginRegistryHandle).not.toHaveBeenCalled();
+
+    const replacementConfig = { plugins: { enabled: false } };
+    await publishGateway(replacementConfig, { allowGatewaySubagentBinding: true });
+    const replacement = (await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }))!;
+    mocks.loadAgentRuntimePluginRegistryHandle.mockClear();
+    expect(
+      await loadSubagentRegistryPluginRuntimeHandle({ ...input, config: replacementConfig }),
+    ).toBe(replacement.inboundPluginRegistry);
+    expect(mocks.loadAgentRuntimePluginRegistryHandle).not.toHaveBeenCalled();
+
+    // Historical workspaces and changed policy cannot borrow the current publication.
+    for (const unmatched of [
+      input,
+      { ...input, config: replacementConfig, workspaceDir: fixture.state.path("old-workspace") },
+    ]) {
+      expect(await loadSubagentRegistryPluginRuntimeHandle(unmatched)).not.toBe(
+        replacement.inboundPluginRegistry,
+      );
+    }
+    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(2);
+  });
+
   it("holds inspected input through accepted preparation and refuses a retired result", async () => {
     const database = new DatabaseSync(fixture.state.path("prepared-registration.sqlite"));
     database.exec(
@@ -177,12 +220,11 @@ describe("prepared reply dispatch runtime", () => {
     );
     const outcome = preparation.catch((error: unknown) => error);
     try {
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         gate.started,
-        preparation.then(() => {
-          throw new Error("Preparation completed before its static catalog dependency");
-        }),
-      ]);
+        preparation,
+        "Preparation completed before its static catalog dependency",
+      );
       await resources.release();
       expect(database.isOpen).toBe(true);
       expect(dispose).not.toHaveBeenCalled();
@@ -569,7 +611,7 @@ describe("prepared reply dispatch runtime", () => {
     }
   });
 
-  it("keeps a rejected auth refresh projection unavailable without affecting siblings", async () => {
+  it("recovers a rejected auth refresh projection without affecting siblings", async () => {
     mocks.configuredAgentIds = ["default", "worker"];
     await publishGateway();
     const defaultRuntime = await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" });
@@ -584,12 +626,11 @@ describe("prepared reply dispatch runtime", () => {
     });
     await refreshFailed();
 
-    await expect(loadPublishedGatewayReplyDispatchRuntime({ agentId: "worker" })).rejects.toThrow(
-      "prepared reply dispatch runtime owner was not published for worker",
-    );
-    await expect(loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" })).resolves.toBe(
-      defaultRuntime,
-    );
+    await expect(
+      loadPublishedGatewayReplyDispatchRuntime({ agentId: "worker" }),
+    ).resolves.toMatchObject({ agentId: "worker" });
+    const retained = await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" });
+    expect(retained?.pluginGeneration).toBe(defaultRuntime?.pluginGeneration);
   });
 
   it("aborts run admission without retaining an owner after auth publication", async () => {
@@ -779,7 +820,15 @@ describe("catalog-worker replacement demand", () => {
         const shared = Promise.all([foreground, background]);
         finish.resolve();
         if (outcome === "failed") {
-          await expect(shared).rejects.toBe(failure);
+          await shared.catch(() => undefined);
+          await expect(foreground).rejects.toMatchObject({
+            reason: "attempt-failed",
+            cause: failure,
+          });
+          await expect(background).rejects.toMatchObject({
+            reason: "attempt-failed",
+            cause: failure,
+          });
           await expect(dispatch("scheduled")).rejects.toThrow("was not published");
           expect(mocks.resolveAmbientCredentials).toHaveBeenCalledTimes(1);
           return;
@@ -803,12 +852,12 @@ describe("catalog-worker replacement demand", () => {
       throw repeatedFailure;
     });
     try {
-      await expect(dispatch("scheduled")).rejects.toBe(repeatedFailure);
+      await expect(dispatch("scheduled")).rejects.toMatchObject({ cause: repeatedFailure });
       await expect(dispatch()).rejects.toThrow("was not published");
       clock.mockReturnValue(20_000);
       await expect(dispatch("scheduled")).rejects.toThrow("was not published");
       expect(mocks.resolveAmbientCredentials).toHaveBeenCalledTimes(1);
-      await expect(dispatch()).rejects.toBe(repeatedFailure);
+      await expect(dispatch()).rejects.toMatchObject({ cause: repeatedFailure });
       clock.mockReturnValue(30_000);
       await expect(dispatch("scheduled")).rejects.toThrow("was not published");
       expect(mocks.resolveAmbientCredentials).toHaveBeenCalledTimes(2);

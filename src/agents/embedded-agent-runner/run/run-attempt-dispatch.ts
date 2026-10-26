@@ -6,6 +6,8 @@ import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-requ
 import { copyExplicitSkillSelectionFileHost } from "../../../skills/discovery/skill-command-provenance.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import { createAgentHarnessCompletionScope } from "../../agent-harness-completion-scope.js";
+import { resizeExecApprovalContinuationPrompt } from "../../bash-tools.exec-approval-output.js";
+import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { prepareDelegationCapability } from "../../delegation-capability.js";
 import { agentHarnessBuildsOpenClawTools } from "../../harness/tool-surface.js";
 import { applyAuthHeaderOverride, applyLocalNoAuthHeaderOverride } from "../../model-auth.js";
@@ -14,6 +16,7 @@ import { captureAgentPluginRuntimeRefresh } from "../../plugin-runtime-refresh.j
 import { resolveReplyExpectation } from "../../reply-completion.js";
 import { buildAgentRuntimePlan } from "../../runtime-plan/build.js";
 import { resolveSessionPermissionExecMode } from "../../session-permission-exec-mode.js";
+import { resolveLiveToolResultMaxChars } from "../../tool-result-limits.js";
 import { createToolTerminalObserver } from "../../tool-terminal-outcome.js";
 import { preparePluginHarnessWorkspace, resolveHarnessWorkspace } from "../../workspace-sandbox.js";
 import { log } from "../logger.js";
@@ -21,7 +24,6 @@ import { remapExplicitSkillSelectionPath, remapSkillReferencePaths } from "../sa
 import { preparePluginHarnessSkills } from "../skill-runtime.js";
 import { mapThinkingLevelForProvider } from "../utils.js";
 import { createAttemptContinuationRetryCount } from "./attempt-continuation-retry.js";
-import { prepareExecApprovalContinuationForAttempt } from "./attempt-exec-approval-continuation.js";
 import { withPreparedEmbeddedGatewayTools } from "./attempt-gateway-tools.js";
 import { resolveEmbeddedAttemptMemoryAudience } from "./attempt-memory-audience.js";
 import { applyResolvedToolPromptFinalizer } from "./attempt-prompt-support.js";
@@ -203,16 +205,33 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     Boolean(fallbackReason);
   const attemptContextEngine =
     nativeModelOwned && contextEngine?.info.id === "legacy" ? undefined : contextEngine;
-  const preparedExecApprovalContinuation = prepareExecApprovalContinuationForAttempt({
-    prompt,
-    transcriptPrompt: params.transcriptPrompt,
-    promptRange: params.execApprovalContinuationPromptRange,
-    transcriptPromptRange: params.execApprovalContinuationTranscriptPromptRange,
-    contextTokenBudget: runtime.contextTokenBudget,
-    modelContextWindow: effectiveModel.contextWindow,
-    modelMaxTokens: effectiveModel.maxTokens,
-    userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
-  });
+  const preparedExecApprovalContinuation = { prompt, transcriptPrompt: params.transcriptPrompt };
+  const promptRange = params.execApprovalContinuationPromptRange;
+  if (promptRange) {
+    const contextWindowTokens = Math.max(
+      1,
+      Math.floor(
+        runtime.contextTokenBudget ??
+          effectiveModel.contextWindow ??
+          effectiveModel.maxTokens ??
+          DEFAULT_CONTEXT_TOKENS,
+      ),
+    );
+    const maxOutputUtf16Units = resolveLiveToolResultMaxChars({ contextWindowTokens });
+    const resize = (outputPrompt: string, range = promptRange) =>
+      resizeExecApprovalContinuationPrompt({ prompt: outputPrompt, range, maxOutputUtf16Units });
+    preparedExecApprovalContinuation.prompt = resize(prompt);
+    preparedExecApprovalContinuation.transcriptPrompt =
+      params.transcriptPrompt === undefined
+        ? undefined
+        : resize(
+            params.transcriptPrompt,
+            params.execApprovalContinuationTranscriptPromptRange ?? promptRange,
+          );
+    params.userTurnTranscriptRecorder?.replaceTextBeforePersistence?.(
+      preparedExecApprovalContinuation.transcriptPrompt ?? preparedExecApprovalContinuation.prompt,
+    );
+  }
   const assertActiveRun = requireActiveAssertion(params.abortSignal);
   assertActiveRun();
   if (runtime.pluginHarnessOwnsTransport) {
@@ -303,12 +322,10 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
   // Resolve after the last fallible preparation so the attempt's finally owns the leases.
   const { memoryAudience, release: releaseMemoryAudience } =
     await resolveEmbeddedAttemptMemoryAudience({
-      memoryAudience: params.memoryAudience,
-      config: params.config,
+      run: params,
       agentId: workspaceResolution.agentId,
       sessionKey: resolvedSessionKey,
       sessionId,
-      senderIsOwner: params.senderIsOwner,
       admission: runInput.sessionAdmission,
       assertCallerCurrent: assertActiveRun,
     });
@@ -334,7 +351,6 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
             storePath: resolvedSessionTarget.storePath,
           }),
           assertCurrent: () => {
-            assertActiveRun();
             if (
               !attemptControls.isCurrent() ||
               sessionPromptState.sessionId !== sessionId ||
@@ -345,6 +361,8 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
             ) {
               throw new Error("Session target preparation outlived its attempt");
             }
+            // Attempt controls check the source; retain its exact binding after that callback.
+            assertActiveRun.assertScopeCurrent();
           },
         }
       : undefined;
@@ -366,7 +384,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     pluginRuntimeRefreshMessages: params.pluginRuntimeRefreshMessages,
     continuation: sessionPromptState.continuation,
     runCleanupSettlement: params.runCleanupSettlement,
-    executionSelection: params.executionSelection,
+    joinObservation: params.joinObservation,
     permissionChange: input.permissionChange,
     admittedRunContext: params.admittedRunContext,
     startedAtMs: runInput.startedAtMs,
@@ -524,6 +542,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     agentId: workspaceResolution.agentId,
     thinkLevel: runtime.thinkLevel,
     thinkingExplicit: params.thinkingExplicit,
+    cyberAccessProgram: params.cyberAccessProgram,
     onToolOutcome: input.observeToolOutcome,
     isTurnTainted: input.isTurnTainted,
     allocateToolOutcomeOrdinal: input.allocateToolOutcomeOrdinal,
@@ -575,6 +594,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     onDeferredLifecycleAbort: params.onDeferredLifecycleAbort,
     onExecutionPhase: params.onExecutionPhase,
     extraSystemPrompt,
+    extraSystemPromptTurnContext: params.extraSystemPromptTurnContext,
     gitCoauthorPrompt,
     preparedTtsPreferences: params.preparedTtsPreferences,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
@@ -622,6 +642,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     codeModeOverride: params.codeModeOverride,
     disableToolSearch: params.disableToolSearch,
     sessionReadScopeKey: params.sessionReadScopeKey,
+    blindPrompt: params.blindPrompt,
     forceMessageTool: params.forceMessageTool,
     requireExplicitMessageTarget: params.requireExplicitMessageTarget,
     internalEvents: params.internalEvents,

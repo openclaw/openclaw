@@ -136,6 +136,39 @@ export async function verifyLateActiveCallDrainObservation(
   }
 }
 
+export async function verifyAdmittedWorkBudgetIgnoresWallClockStep(
+  createRecoveryFixture: RecoveryFixtureFactory,
+) {
+  const fixture = await createRecoveryFixture({ abortOnCandidateStart: false });
+  const record = fixture.previousRegistry.plugins[0];
+  const instance = record && getPluginInstance(record);
+  assert(instance);
+  const release = createDeferredCore();
+  const call = instance.run(() => release.promise);
+  const releaseWork = instance.retainWork();
+  vi.useFakeTimers();
+  try {
+    const reloading = observeSettlement(fixture.reload(undefined, [record.id]));
+    await vi.waitFor(() =>
+      expect(fixture.owner.getReloadStatus()?.deadlineAtMs).toEqual(expect.any(Number)),
+    );
+    // The retained-work stage seeds the 60s budget; the admitted-call stage reuses it.
+    vi.setSystemTime(Date.now() - 300_000);
+    releaseWork();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(reloading.settled).toBe(true);
+    expect(await reloading.promise).toMatchObject({
+      details: { phase: "drain", committed: false },
+      cause: { message: expect.stringContaining("admitted work did not settle within 60s") },
+    });
+  } finally {
+    releaseWork();
+    release.resolve();
+    await call;
+    vi.useRealTimers();
+  }
+}
+
 export async function verifyActiveCallDrainLease(
   createRecoveryFixture: RecoveryFixtureFactory,
   stateDir: string,

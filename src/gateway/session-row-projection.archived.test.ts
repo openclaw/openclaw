@@ -47,11 +47,11 @@ import {
   yieldSessionListBackgroundWork,
 } from "./session-projection-work.js";
 import { observeSessionRowBackfill } from "./session-row-backfill.test-support.js";
-import * as databaseFactsRead from "./session-row-database-facts.js";
 import { withReadySessionRows, SessionRowFactsPending } from "./session-row-prepared-read.js";
 import * as materialization from "./session-row-projection-materialize.js";
 import { listRows, writeRow } from "./session-row-projection-read-fixtures.test-support.js";
 import * as records from "./session-row-projection-record.js";
+import * as rowRefresh from "./session-row-projection-refresh.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 import { waitForRead, watchRowFacts } from "./session-row-projection.read-fixture.test-support.js";
 import { withSessionRowProjectionState } from "./session-row-projection.test-support.js";
@@ -326,6 +326,21 @@ it("bounds archived residency across pages and evicts the least recently read ro
     }
     cleanup.defer(yieldSessionListBackgroundWork);
     cleanup.defer(retainSessionListForegroundWork());
+    let afterExactPreparation: (() => Promise<void> | undefined) | undefined;
+    const createRefresh = rowRefresh.createSessionRowRefresh;
+    vi.spyOn(rowRefresh, "createSessionRowRefresh").mockImplementation((owner) => {
+      const refresh = createRefresh(owner);
+      return {
+        ...refresh,
+        prepareExactRows(queries) {
+          // All materialization slices finish here while the reader still holds archive pins.
+          const pending = refresh.prepareExactRows(queries);
+          return pending
+            ? pending.then(() => afterExactPreparation?.())
+            : afterExactPreparation?.();
+        },
+      };
+    });
     const projection = await create({ cfg, modelCatalog: [] });
     expect(projection.materializedCount).toBe(0);
     const first = await listRows(projection, { archived: true, limit: 80 });
@@ -343,38 +358,51 @@ it("bounds archived residency across pages and evicts the least recently read ro
     expect(projection.selectEntries().filter(ready)).toHaveLength(100);
     const pagePrepared = createDeferredCore();
     const releasePage = createDeferredCore();
-    const readFacts = databaseFactsRead.withSessionRowDatabaseFacts;
     let wholePagePaused = false;
-    const prepare = vi
-      .spyOn(databaseFactsRead, "withSessionRowDatabaseFacts")
-      .mockImplementation(async (...args) => {
-        // Prepared suffixes may finish without another Worker read; pause after either path.
-        await readFacts(...args);
-        if (!wholePagePaused && projection.selectEntries().filter(ready).length === 128) {
-          wholePagePaused = true;
-          pagePrepared.resolve();
-          await releasePage.promise;
-        }
-      });
+    afterExactPreparation = () => {
+      if (!wholePagePaused && projection.selectEntries().filter(ready).length === 128) {
+        wholePagePaused = true;
+        pagePrepared.resolve();
+        return releasePage.promise;
+      }
+      return undefined;
+    };
     const pendingPage = listRows(projection, {
       archived: true,
       limit: 128,
       includeLastMessage: true,
     });
+    let overlappingPage: ReturnType<typeof listProjectedSessions> | undefined;
+    const secondPrepared = createDeferredCore();
+    const releaseSecond = createDeferredCore();
     try {
       await waitForPage(pendingPage, pagePrepared, signal);
       await listRows(projection, { archived: true, limit: 1 });
       expect(projection.selectEntries().filter(ready)).toHaveLength(128);
+      let secondPaused = false;
+      afterExactPreparation = () => {
+        if (!secondPaused) {
+          secondPaused = true;
+          secondPrepared.resolve();
+          return releaseSecond.promise;
+        }
+        return undefined;
+      };
+      overlappingPage = listRows(projection, { archived: true, limit: 110, offset: 18 });
+      await waitForPage(overlappingPage, secondPrepared, signal);
+      releasePage.resolve();
+      const wholePage = await pendingPage;
+      expect(wholePage.sessions).toHaveLength(128);
+      expect(projection.selectEntries().filter(ready)).toHaveLength(110);
     } finally {
       releasePage.resolve();
-      await pendingPage;
-      prepare.mockRestore();
+      releaseSecond.resolve();
+      await Promise.allSettled([pendingPage, overlappingPage]);
+      afterExactPreparation = undefined;
     }
-    const wholePage = await pendingPage;
-    expect(wholePage.sessions).toHaveLength(128);
-    expect(projection.selectEntries().filter(ready)).toHaveLength(128);
-    await listRows(projection, { archived: true, limit: 1 });
+    expect((await overlappingPage)?.sessions).toHaveLength(110);
     expect(projection.selectEntries().filter(ready)).toHaveLength(100);
+    const wholePage = await pendingPage;
 
     sessionChanges.emit({ all: true, scope: "catalog" });
     await projection.ensureMaterialized();
@@ -385,25 +413,22 @@ it("bounds archived residency across pages and evicts the least recently read ro
       prepared: createDeferredCore(),
       resume: createDeferredCore(),
     }));
-    const reads = vi
-      .spyOn(databaseFactsRead, "withSessionRowDatabaseFacts")
-      .mockImplementation(async (...args) => {
-        // Prepared suffixes may finish without another Worker read; pause after either path.
-        await readFacts(...args);
-        const readyKeys = new Set(
-          projection
-            .selectEntries()
-            .filter(ready)
-            .map((row) => row.key),
-        );
-        for (const barrier of barriers) {
-          if (!barrier.paused && barrier.keys.every((key) => readyKeys.has(key))) {
-            barrier.paused = true;
-            barrier.prepared.resolve();
-            await barrier.resume.promise;
-          }
+    afterExactPreparation = () => {
+      const readyKeys = new Set(
+        projection
+          .selectEntries()
+          .filter(ready)
+          .map((row) => row.key),
+      );
+      for (const barrier of barriers) {
+        if (!barrier.paused && barrier.keys.every((key) => readyKeys.has(key))) {
+          barrier.paused = true;
+          barrier.prepared.resolve();
+          return barrier.resume.promise;
         }
-      });
+      }
+      return undefined;
+    };
     const pages: Array<ReturnType<typeof listProjectedSessions>> = [];
     try {
       for (const [index, barrier] of barriers.entries()) {
@@ -420,7 +445,7 @@ it("bounds archived residency across pages and evicts the least recently read ro
         barrier.resume.resolve();
       }
       await Promise.allSettled(pages);
-      reads.mockRestore();
+      afterExactPreparation = undefined;
     }
     const disjoint = await Promise.all(pages);
     expect(disjoint.map((page) => page.sessions.length)).toEqual([64, 64]);

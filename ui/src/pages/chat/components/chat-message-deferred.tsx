@@ -1,4 +1,7 @@
-import { lazy, Loading, Show } from "solid-js";
+import { lazy, Show } from "solid-js";
+import { parseYouTubeVideoUrl } from "../../../lib/chat/youtube-video.ts";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
+import { widgetPreviewHeight } from "./widget-preview-layout.ts";
 
 const Images = lazy(() => import("./chat-message-images-solid.tsx"), {
   export: "MessageImages",
@@ -21,9 +24,9 @@ export function MessageImages(
 ) {
   return (
     <Show when={props.images.length + (props.previews?.length ?? 0) > 0}>
-      <Loading>
+      <ChatLazyBoundary>
         <Images {...props} />
-      </Loading>
+      </ChatLazyBoundary>
     </Show>
   );
 }
@@ -33,9 +36,9 @@ export function AssistantAttachments(
 ) {
   return (
     <Show when={props.attachments.length > 0}>
-      <Loading>
+      <ChatLazyBoundary>
         <Attachments {...props} />
-      </Loading>
+      </ChatLazyBoundary>
     </Show>
   );
 }
@@ -44,9 +47,9 @@ export function MessageAttachment(
   props: Parameters<typeof import("./chat-message-attachments-solid.tsx").MessageAttachment>[0],
 ) {
   return (
-    <Loading>
+    <ChatLazyBoundary>
       <Attachment {...props} />
-    </Loading>
+    </ChatLazyBoundary>
   );
 }
 
@@ -54,9 +57,33 @@ export function ToolPreview(
   props: Parameters<typeof import("./widget-card-view.tsx").ToolPreview>[0],
 ) {
   return (
-    <Loading>
+    <ChatLazyBoundary
+      fallback={
+        <Show
+          when={
+            props.preview?.kind === "canvas" &&
+            props.preview.surface === "assistant_message" &&
+            (props.options?.mediaReadAllowed === false ||
+              props.preview.mcpApp ||
+              !parseYouTubeVideoUrl(props.preview.url))
+              ? props.preview
+              : undefined
+          }
+        >
+          {(preview) => (
+            <div
+              class="chat-tool-card__preview"
+              aria-hidden="true"
+              style={{
+                "min-height": `${widgetPreviewHeight(preview(), props.options?.widgetLayout)}px`,
+              }}
+            />
+          )}
+        </Show>
+      }
+    >
       <Preview {...props} />
-    </Loading>
+    </ChatLazyBoundary>
   );
 }
 
@@ -64,8 +91,8 @@ export function ChatClawHubCard(
   props: Parameters<typeof import("./chat-clawhub-card.tsx").ChatClawHubCard>[0],
 ) {
   return (
-    <Loading>
+    <ChatLazyBoundary>
       <Recommendation {...props} />
-    </Loading>
+    </ChatLazyBoundary>
   );
 }

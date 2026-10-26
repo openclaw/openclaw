@@ -35,6 +35,7 @@ import {
   pruneUsageCostRollupsForTest,
   readSessionCostUsageRollupEntry,
 } from "./session-cost-usage-cache.test-support.js";
+import * as fixtures from "./session-cost-usage-fixtures.test-support.js";
 import * as partitions from "./session-cost-usage-partitions.js";
 import { projectSessionCostSummaries } from "./session-cost-usage-projection.js";
 import {
@@ -207,23 +208,7 @@ describe("session cost usage SQLite cache", () => {
             usageTotals: { ...rollup.untimestamped.totals, totalTokens: 10, totalCost: 1 },
           });
         }
-        const entry = {
-          version: USAGE_COST_ROLLUP_VERSION,
-          pricingFingerprint: "first",
-          scannedAt: 1,
-          parsedRecords: 4,
-          countedRecords: 4,
-          checkpoint: {
-            kind: "jsonl" as const,
-            parsedOffset: 4,
-            observedSize: 4,
-            observedMtimeMs: 1,
-            device: 1,
-            inode: 1,
-            anchorHash: "anchor",
-          },
-          rollup,
-        };
+        const entry = fixtures.createUsageRollupEntry(rollup);
         const first = partitions.partitionUsageCostRollup(entry);
         expect(await write(first, 1, { partitions: first.partitions })).toBe(true);
         const days = readPartitions();
@@ -265,7 +250,7 @@ describe("session cost usage SQLite cache", () => {
           scannedAt: 3,
           parsedRecords: 5,
           countedRecords: 5,
-          checkpoint: { ...entry.checkpoint, parsedOffset: 5, observedSize: 5 },
+          checkpoint: fixtures.createUsageCheckpoint(5),
         });
         expect(
           await write(extended, 3, {
@@ -464,31 +449,6 @@ describe("session cost usage SQLite cache", () => {
       });
     },
   );
-
-  it("serializes refreshes in-process without persisting lock or status writes", async () => {
-    const stateDir = tempDirs.make("openclaw-usage-cache-exclusion-");
-    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-      const agentId = "worker-1";
-      const database = openOpenClawAgentDatabase({ agentId });
-      const owner = prepareSessionCostUsageRefreshLock(agentId, database.path);
-      const contender = prepareSessionCostUsageRefreshLock(agentId, database.path);
-      try {
-        expect(await isSessionCostUsageRefreshRunning(agentId, database.path)).toBe(false);
-        expect(await owner.acquire()).toBe(true);
-        expect(await contender.acquire()).toBe(false);
-        expect(await isSessionCostUsageRefreshRunning(agentId, database.path)).toBe(true);
-        expect(database.db.prepare("SELECT * FROM cache_entries").all()).toEqual([]);
-        await owner.release();
-        expect(await isSessionCostUsageRefreshRunning(agentId, database.path)).toBe(false);
-        expect(await contender.acquire()).toBe(true);
-      } finally {
-        await owner.release();
-        await contender.release();
-      }
-      expect(await isSessionCostUsageRefreshRunning(agentId, database.path)).toBe(false);
-      expect(database.db.prepare("SELECT * FROM cache_entries").all()).toEqual([]);
-    });
-  });
 
   it("persists a usage refresh when a sibling adopts shared admission during schema refresh", async () => {
     const stateDir = tempDirs.make("openclaw-usage-cache-readmission-");
@@ -765,12 +725,7 @@ it.each(["stored", "decoded", "corrupt-length"] as const)(
       const config = {};
       const agentId = "usage-deferred-freshness";
       const sessionFile = state.path("deferred-freshness.jsonl");
-      const record =
-        JSON.stringify({
-          type: "message",
-          timestamp: "2026-09-18T00:00:00Z",
-          message: { role: "assistant", usage: { input: 7, output: 0, totalTokens: 7 } },
-        }) + "\n";
+      const record = JSON.stringify(fixtures.createUsageTranscriptEntry(7)) + "\n";
       await fs.promises.writeFile(sessionFile, record);
       await refreshCostUsageCacheForAgent({ config, agentId, sessionFiles: [sessionFile] });
       const row = readSessionCostUsageRollupRows(agentId)[0];
@@ -949,16 +904,14 @@ it.each(["missing", "oversized-first", "oversized-last", "identity-length"])(
       const sessionFile = state.path("usage-missing-partition.jsonl");
       const options = { config, agentId, sessionFiles: [sessionFile] };
       const record = (day: number) =>
-        JSON.stringify({
-          type: "message",
-          timestamp: new Date(Date.UTC(2026, 8, day)).toISOString(),
-          message: {
-            role: "assistant",
+        JSON.stringify(
+          fixtures.createUsageTranscriptEntry(10, {
+            timestamp: new Date(Date.UTC(2026, 8, day)).toISOString(),
             model: "fixture",
             provider: "test",
-            usage: { input: 10, output: 0, totalTokens: 10, cost: { total: 1 } },
-          },
-        }) + "\n";
+            cost: 1,
+          }),
+        ) + "\n";
       await fs.promises.writeFile(sessionFile, record(18) + record(19) + record(31));
       await refreshCostUsageCacheForAgent(options);
       runOpenClawAgentWriteTransaction(

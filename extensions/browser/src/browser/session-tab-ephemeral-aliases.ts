@@ -12,11 +12,6 @@ type AliasIdentity = {
   profile?: string;
 };
 
-type VolatileAliasTarget = {
-  sessionKey: string;
-  tabKey: string;
-};
-
 function interactionKey(identity: AliasIdentity): string {
   const route = browserSessionTabRouteKey(identity.route ?? { kind: "browser-control" });
   return `${identity.sessionKey}\u0000${route}\u0000${identity.profile ?? ""}\u0000${identity.targetId}`;
@@ -102,7 +97,7 @@ export const clearDurableTabAliases = durableAliases.clear;
 export const rememberDurableTabAliases = durableAliases.remember;
 export const readDurableTabAlias = durableAliases.read;
 
-function volatileAliasTargetKey(target: VolatileAliasTarget): string {
+function volatileAliasTargetKey(target: { sessionKey: string; tabKey: string }): string {
   return JSON.stringify([target.sessionKey, target.tabKey]);
 }
 

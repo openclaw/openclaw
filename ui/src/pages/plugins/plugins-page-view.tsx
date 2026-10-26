@@ -33,6 +33,7 @@ import {
   pluginHostControlsSchema,
 } from "./settings-model.ts";
 import {
+  PluginRetryError,
   renderPluginSettingsDetail as PluginSettingsDetail,
   renderPluginSettingsInventory as PluginSettingsInventory,
   type PluginSettingsTab,
@@ -366,22 +367,13 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
         ) : (
           <Errored
             fallback={(error, reset) => (
-              <div
-                class="callout danger plugins-settings-error oc-banner oc-banner-error"
-                role="alert"
-              >
-                <span>{formatUiError(error())}</span>
-                <button
-                  type="button"
-                  class="btn btn--sm oc-action oc-action-secondary"
-                  onClick={() => {
-                    void page().refreshCatalog();
-                    reset();
-                  }}
-                >
-                  {t("pluginsPage.tryAgain")}
-                </button>
-              </div>
+              <PluginRetryError
+                error={formatUiError(error())}
+                onRetry={() => {
+                  void page().refreshCatalog();
+                  reset();
+                }}
+              />
             )}
           >
             <Show when={hasInventory()} fallback={<Inventory loading={page().loading} />}>

@@ -87,7 +87,7 @@ function findEntry(
   }
   const namedEntries =
     match === "exact-id" ? [] : entries.filter((candidate) => candidate.name === needle);
-  if (namedEntries.length > 1) {
+  if (namedEntries.length > 1 || namedEntries[0]?.requiresExactId) {
     throw new ToolInputError(`Ambiguous tool name: ${needle}; use an exact tool id.`);
   }
   const namedEntry = namedEntries[0];

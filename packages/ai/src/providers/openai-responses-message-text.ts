@@ -7,10 +7,7 @@ export type ResponsesMessageText = {
 };
 
 /** Keep provider prose separate from source formatting so terminal annotations can extend it. */
-export function renderResponsesMessageText(
-  content: readonly unknown[],
-  previous?: ResponsesMessageText,
-): ResponsesMessageText {
+export function renderResponsesMessageText(content: readonly unknown[]): ResponsesMessageText {
   const citations = new Map<string, string>();
   const prose = content
     .map((part) => {
@@ -53,7 +50,7 @@ export function renderResponsesMessageText(
       return typeof part.text === "string" ? part.text : "";
     })
     .join("");
-  return extendResponsesMessageText({ prose, citations }, previous);
+  return extendResponsesMessageText({ prose, citations });
 }
 
 /** The visible source links after provider prose; replay must strip them. */

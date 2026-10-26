@@ -1,20 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 // Control UI tests cover config form constraints, draft recovery, and repeated controls.
 import {
+  expectElement,
   renderAnalyzedFormFixture,
   renderArrayFixture,
 } from "../test-helpers/config-form-fixtures.tsx";
 import { flush } from "../test-helpers/solid-settle.ts";
 import { analyzeConfigSchema } from "./config-form.analyze.ts";
 import { configFieldId } from "./config-form.shared.ts";
-
-function expectElement<T extends Element>(element: T | null | undefined, label: string): T {
-  expect(element instanceof Element, label).toBe(true);
-  if (!(element instanceof Element)) {
-    throw new Error(`missing ${label}`);
-  }
-  return element;
-}
 
 describe("config form integrity", () => {
   it("applies schema constraints and derives bounded repeated defaults", () => {
@@ -644,10 +637,13 @@ describe("config form integrity", () => {
 
     expect(textarea.value).toBe('{"enabled":');
     expect(textarea.getAttribute("aria-invalid")).toBe("true");
+    const errorId = configFieldId(["accounts", "primary"], "json-error");
+    expect(textarea.getAttribute("aria-describedby")?.split(" ")).toContain(errorId);
     const error = expectElement(
-      container.querySelector<HTMLElement>("[role='alert']"),
-      "JSON error",
+      container.querySelector<HTMLElement>(`#${errorId}`),
+      "associated JSON error",
     );
+    expect(error.getAttribute("role")).toBe("alert");
     expect(error.hidden).toBe(false);
     expect(error.textContent).toContain("valid JSON");
     expect(onPatch).not.toHaveBeenCalled();

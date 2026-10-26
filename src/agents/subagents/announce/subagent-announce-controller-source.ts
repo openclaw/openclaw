@@ -5,6 +5,7 @@ import {
   hasRestartRecoverySourceClaim,
   hasRestartRecoveryTerminalRun,
 } from "../../../config/sessions/restart-recovery-state.js";
+import { isRestartRecoveryTombstone } from "../../../config/sessions/session-work-start.js";
 import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import {
   getGatewayContextResolver,
@@ -15,16 +16,28 @@ import {
   reserveSessionControllerSource,
   type SessionControllerInput,
 } from "../../../sessions/session-controller.mailbox.js";
+import {
+  buildAnnounceIdFromChildRun,
+  buildAnnounceIdempotencyKey,
+} from "../../announce-idempotency.js";
 import { readInterruptedRunId } from "../../main-session-recovery/main-session-restart-recovery-shared.js";
 import { subagentCompletionSourceId } from "../registry/subagent-controller-inputs.js";
 import { getCurrentSubagentRunOwner, subagentRuns } from "../registry/subagent-registry-memory.js";
+import { getLatestLiveSubagentRunByChildSessionKey } from "../registry/subagent-registry-read.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import {
   buildRequesterSettleWakeIdentity,
   hasRequesterCompletionCohort,
+  isRequesterCompletionCohortCurrent,
   isSubagentObligationRetired,
 } from "../registry/subagent-requester-settle-identity.js";
+import { captureRequesterFollowupContinuationCaller } from "../requester-cron-authority.js";
 import { loadRequesterSessionEntry } from "./subagent-announce-delivery.runtime.js";
+import { createRequesterDescendantReader } from "./subagent-announce.requester-settle-descendants.js";
+import {
+  isRequesterSettleMemberReady,
+  waitForRequesterDescendants,
+} from "./subagent-announce.requester-settle-state.js";
 
 /** Recovery already owns this exact input; the wake only reconciles its final receipt. */
 export function resolveRequesterSettleRecoveryCustody(
@@ -92,10 +105,22 @@ export async function reserveSubagentControllerSource(
   if (!requester.entry?.sessionId || !requester.storePath) {
     return undefined;
   }
+  const privateSourceRunId =
+    protocolRunId ??
+    requester.entry.restartRecoveryDeliverySourceRunId ??
+    readInterruptedRunId(requester.entry);
+  const { resolvePrivateRequesterSettleRecoveryOwner } =
+    await import("../registry/subagent-registry-restart-recovery.js");
+  const privateOwner = resolvePrivateRequesterSettleRecoveryOwner(requester, privateSourceRunId);
+  // Unadmitted completions must not occupy the mailbox ahead of an operator's Resume.
+  if (privateOwner !== "owned" && isRestartRecoveryTombstone(requester.entry)) {
+    return undefined;
+  }
   // Recover the interrupted requester before another completion wave reserves its mailbox.
   // An exact recovered receipt may still reconcile without starting replacement work.
   if (
     requester.entry.abortedLastRun === true &&
+    privateOwner !== "owned" &&
     hasMainSessionRecoveryClaim(requester.entry) &&
     !requester.entry.mainRestartRecovery?.tombstone &&
     (!protocolRunId ||
@@ -127,7 +152,24 @@ export async function reserveSubagentControllerSource(
 export const reserveSubagentCompletionControllerSource = (
   entry: SubagentRunRecord,
   protocolRunId?: string,
-) => reserveSubagentControllerSource(entry, subagentCompletionSourceId(entry), protocolRunId);
+  options: Parameters<typeof reserveSubagentControllerSource>[4] = {},
+) =>
+  reserveSubagentControllerSource(
+    entry,
+    subagentCompletionSourceId(entry),
+    protocolRunId,
+    captureRequesterFollowupContinuationCaller(
+      entry,
+      protocolRunId ??
+        buildAnnounceIdempotencyKey(
+          buildAnnounceIdFromChildRun({
+            childSessionKey: entry.childSessionKey,
+            childRunId: entry.runId,
+          }),
+        ),
+    ),
+    options,
+  );
 
 /** Rebuilds process-local mailbox custody from durable completion obligations in owed order. */
 export async function reserveRestoredSubagentControllerSources(
@@ -171,14 +213,33 @@ export async function reserveRestoredSubagentControllerSources(
   const selectWakeOwner = (
     batch: readonly SubagentRunRecord[],
     wake: NonNullable<SubagentRunRecord["requesterSettleWake"]>,
-  ) =>
-    batch.find((member) => !isSubagentObligationRetired(member)) ??
-    (wake.requesterYieldBatch === true ? batch[0] : undefined);
+  ) => {
+    const pause = batch[0]?.pauseReason === "sessions_yield" && wake.pauseNotice !== undefined;
+    // Unsettled work is not yet a runnable input and must not hold foreground FIFO.
+    if (!pause && !batch.every(isRequesterSettleMemberReady)) {
+      return undefined;
+    }
+    // Keep the full frozen cohort's custody, but never park the requester behind
+    // an unprepared reservation whose members live dispatch can no longer use.
+    if (
+      !batch.some((member) =>
+        isRequesterCompletionCohortCurrent(member, getLatestLiveSubagentRunByChildSessionKey),
+      )
+    ) {
+      return undefined;
+    }
+    return (
+      batch.find((member) => !isSubagentObligationRetired(member)) ??
+      (wake.requesterYieldBatch === true ? batch[0] : undefined)
+    );
+  };
   for (const entry of entries) {
     // A retired child no longer owns its own completion delivery.
     if (
       !isSubagentObligationRetired(entry) &&
       entry.expectsCompletionMessage === true &&
+      // Interrupted terminal delivery is reserved by recovery after reconciliation.
+      entry.terminalOwner !== "interrupted-recovery" &&
       !hasRequesterCompletionCohort(entry) &&
       (entry.delivery?.status === "pending" || entry.delivery?.status === "in_progress") &&
       (entry.delivery.nextAttemptAt ?? 0) <= Date.now()
@@ -205,13 +266,10 @@ export async function reserveRestoredSubagentControllerSources(
           ) {
             return undefined;
           }
-          return reserveSubagentControllerSource(
-            current,
-            subagentCompletionSourceId(current),
-            undefined,
-            undefined,
-            { replaceInactiveTarget: true, requester },
-          );
+          return reserveSubagentCompletionControllerSource(current, undefined, {
+            replaceInactiveTarget: true,
+            requester,
+          });
         },
       ]);
     }
@@ -249,13 +307,17 @@ export async function reserveRestoredSubagentControllerSources(
           entry.requesterSessionKey,
           entry.requesterAgentId,
         );
+        const { resolvePrivateRequesterSettleRecoveryOwner } =
+          await import("../registry/subagent-registry-restart-recovery.js");
+        const privateOwner = resolvePrivateRequesterSettleRecoveryOwner(requester, identity.runId);
         if (
+          privateOwner !== "owned" &&
           !(wake.status === "pending" && wake.nextAttemptAt !== undefined) &&
           resolveRequesterSettleRecoveryCustody(requester.entry, identity)
         ) {
           return undefined;
         }
-        if (!(await prepareRestoredRequester(requester))) {
+        if (privateOwner !== "owned" && !(await prepareRestoredRequester(requester))) {
           return undefined;
         }
         // Recheck after requester recovery preparation; the same frozen cohort still owns FIFO.
@@ -270,6 +332,24 @@ export async function reserveRestoredSubagentControllerSources(
           currentBatch.length === batch.length ? selectWakeOwner(currentBatch, wake) : undefined;
         if (!current) {
           return undefined;
+        }
+        if (!pause) {
+          const descendants = await createRequesterDescendantReader({
+            requesterSessionKey: current.requesterSessionKey,
+            requesterAgentId: current.requesterAgentId,
+            requesterStorePath: current.requesterStorePath ?? null,
+            settledEntry: current,
+            settledBefore: Math.min(...currentBatch.map((member) => member.createdAt)),
+            rootRunIds: new Set(wake.batchRunIds),
+            isSourceCurrent: () =>
+              currentBatch.every(
+                (member) => getCurrentSubagentRunOwner(subagentRuns, member) === member,
+              ),
+          })();
+          assertCurrent?.();
+          if (!descendants || waitForRequesterDescendants(descendants, true)) {
+            return undefined;
+          }
         }
         const caller = Object.freeze({
           deliveryRoute:

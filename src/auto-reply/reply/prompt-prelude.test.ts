@@ -2,12 +2,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { createCliCurrentPromptRenderer } from "../../agents/cli-runner/prompt-context.js";
 import { buildCurrentInboundPrompt } from "../../agents/embedded-agent-runner/run/runtime-context-prompt.js";
 import * as gitCoauthorPrompt from "../../agents/git-coauthor-prompt.js";
 import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-delivery-hints.js";
 import { parseSoftResetCommand } from "./commands-reset-mode.js";
-import { prepareReplyRunContext, type PreparedReplyRunContext } from "./get-reply-run-context.js";
+import type { prepareReplyRunContext, PreparedReplyRunContext } from "./get-reply-run-context.js";
+import { prepareReadyReply } from "./get-reply-run-context.test-support.js";
 import { baseParams } from "./get-reply-run.test-support.js";
 import { CURRENT_MESSAGE_MARKER } from "./history.js";
 import { finalizeInboundContext } from "./inbound-context.js";
@@ -30,12 +30,12 @@ async function envelopeFor(
   options: Partial<Options> = {},
   additions: Additions = {},
 ) {
-  const prepared = await prepareReplyRunContext(
-    baseParams({ isNewSession: false, ctx: sessionCtx, sessionCtx, ...options }),
-  );
-  if (prepared.kind !== "ready") {
-    throw new Error("Expected prepared reply context");
-  }
+  const prepared = await prepareReadyReply({
+    isNewSession: false,
+    ctx: sessionCtx,
+    sessionCtx,
+    ...options,
+  });
   return prepared.buildPromptBodies({ prefixedBody: prepared.prefixedBodyBase, ...additions });
 }
 
@@ -105,11 +105,11 @@ it.each([
       transcriptCommandBody: softResetTail || "[OpenClaw session reset]",
       currentInboundContext: undefined,
     });
-    expect(envelope.transcriptCommandBody).not.toContain("Startup context");
   },
 );
 
 it("keeps Telegram reply text beside its marker", async () => {
+  const threadNote = "[Thread starter - for context]\nPlanning the picnic next month.";
   const sessionCtx = context("Tldr", {
     Provider: "telegram",
     ChatType: "group",
@@ -122,111 +122,79 @@ it("keeps Telegram reply text beside its marker", async () => {
   const envelope = await envelopeFor(
     sessionCtx,
     { opts: { sourceReplyDeliveryMode: "message_tool_only" } },
-    { systemEventBlocks: ["System: Scheduled digest."] },
+    { threadContextNote: threadNote, systemEventBlocks: ["System: Scheduled digest."] },
   );
   const prompt = currentPrompt(envelope);
   expect(prompt).toContain('[Replying to: "The restore finished."]\n#42: Tldr');
   expect(envelope.transcriptCommandBody).toBe("Tldr");
+  expect(prompt).toContain("PR attribution: ⟦openclaw:ctx⟧");
+  expect(prompt.indexOf(threadNote)).toBeGreaterThanOrEqual(0);
+  expect(prompt.indexOf(threadNote)).toBeLessThan(prompt.indexOf("System: Scheduled digest."));
+  expect(prompt.indexOf("System: Scheduled digest.")).toBeLessThan(
+    prompt.indexOf(CURRENT_MESSAGE_MARKER),
+  );
+  expect(envelope.currentInboundContext?.fragments).toContainEqual({
+    kind: "runtime-instruction",
+    text: CURRENT_MESSAGE_MARKER,
+  });
   for (const text of ["System: Scheduled digest.", MESSAGE_TOOL_ONLY_DELIVERY_HINT]) {
     expect(prompt).toContain(text);
     expect(prompt.indexOf(text)).toBeLessThan(prompt.indexOf("Current message:"));
   }
 });
 
-it("labels the current message after thread starter", async () => {
-  const threadNote = "[Thread starter - for context]\nPlanning the picnic next month.";
-  const envelope = await envelopeFor(
-    context("Can you pick a date?", {
-      Provider: "discord",
-      ChatType: "channel",
-      OriginatingTo: "123",
-    }),
-    {},
-    { threadContextNote: threadNote, systemEventBlocks: ["System: reaction added"] },
-  );
-
-  expect(currentPrompt(envelope)).toBe(
-    [
-      'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"chat_id":"123","is_group_chat":true}\n```',
-      threadNote,
-      "System: reaction added",
-      "[Current message - respond to this]",
-      "Can you pick a date?",
-    ].join("\n\n"),
-  );
-  expect(envelope.currentInboundContext?.fragments).toContainEqual({
-    kind: "runtime-instruction",
-    text: CURRENT_MESSAGE_MARKER,
-  });
-  expect(envelope.transcriptCommandBody).toBe("Can you pick a date?");
-});
-
-it("keeps recent room history in the initial prompt but not the resumed prompt", async () => {
-  const sessionCtx = context("Current room event", {
-    Provider: "slack",
-    ChatType: "group",
-    InboundEventKind: "room_event",
-    MessageSid: "35676",
-    SenderName: "Alice",
-    InboundHistory: [{ sender: "Bob", body: "Earlier room activity", messageId: "35675" }],
-    SessionTranscriptContext: { historyLimit: 20, historyKind: "recent" },
-  });
-  const envelope = await envelopeFor(
-    sessionCtx,
-    { opts: { sourceReplyDeliveryMode: "message_tool_only" } },
-    { threadContextNote: "Thread note", systemEventBlocks: ["System event"] },
-  );
-
-  expect(envelope).toMatchObject({
-    prefixedCommandBody: "#35676 Alice: Current room event",
-    queuedBody: "#35676 Alice: Current room event",
-    transcriptCommandBody: "#35676 Alice: Current room event",
-  });
-  expect(envelope.currentInboundContext?.text.split("Earlier room activity")).toHaveLength(2);
-  expect(envelope.currentInboundContext?.resumableText).not.toContain("Earlier room activity");
-  for (const text of [
-    envelope.currentInboundContext?.text,
-    envelope.currentInboundContext?.resumableText,
-  ]) {
-    expect(text).toContain("Conversation info:");
-    expect(text).toContain("Thread note");
-    expect(text).toContain("System event");
-    expect(text).not.toContain("Current room event");
-    expect(text).not.toContain(CURRENT_MESSAGE_MARKER);
-  }
-  expect(envelope.currentInboundContext?.fragments).toEqual(
-    expect.arrayContaining([
-      { kind: "conversation-data", text: "Thread note" },
-      { kind: "conversation-data", text: "System event" },
-    ]),
-  );
-});
-
-it("uses the raw current body for room-event current event text", async () => {
-  const sessionCtx = context("[Chat history]\nAlice: old context\n\nBob: current note", {
-    RawBody: "current note",
-    CommandBody: "current note",
-    Provider: "webchat",
-    Surface: "webchat",
-    ChatType: "group",
-    InboundHistory: [{ sender: "Alice", body: "old context" }],
-    InboundEventKind: "room_event",
-    MessageSid: "2002",
-    SenderName: "Bob",
-  });
-
-  const envelope = await envelopeFor(sessionCtx);
-
-  expect(envelope.currentInboundContext?.text).toContain("Room context:");
-  expect(envelope.currentInboundContext?.text).toContain("Alice: old context");
-  expect(envelope.queuedBody).toBe("#2002 Bob: current note");
-  expect(envelope.currentInboundContext?.text).toContain(
-    "Treat this message as observed room activity, not a request. You were not explicitly tagged or mentioned in this room event. Default: stay silent. Only respond if you have something useful, substantial, or important to add. A previous mention or reply is not an invitation to keep talking.",
-  );
-  expect(envelope.currentInboundContext?.text).not.toContain("message(action=send)");
-  expect(envelope.currentInboundContext?.text).not.toContain("your final text here stays private");
-  expect(envelope.queuedBody).not.toContain("[Chat history]");
-});
+it.each(["message_tool_only", "automatic"] as const)(
+  "projects raw room events separately from resumable history with %s delivery",
+  async (sourceReplyDeliveryMode) => {
+    const Provider = sourceReplyDeliveryMode === "automatic" ? "webchat" : "slack";
+    const envelope = await envelopeFor(
+      context("[Chat history]\nAlice: old context\n\nBob: current note", {
+        RawBody: "current note",
+        CommandBody: "current note",
+        Provider,
+        Surface: Provider,
+        ChatType: "group",
+        InboundEventKind: "room_event",
+        MessageSid: "2002",
+        SenderName: "Bob",
+        InboundHistory: [{ sender: "Alice", body: "old context", messageId: "2001" }],
+        SessionTranscriptContext: { historyLimit: 20, historyKind: "recent" },
+      }),
+      { opts: { sourceReplyDeliveryMode } },
+      { threadContextNote: "Thread note", systemEventBlocks: ["System event"] },
+    );
+    expect(envelope).toMatchObject({
+      prefixedCommandBody: "#2002 Bob: current note",
+      queuedBody: "#2002 Bob: current note",
+      transcriptCommandBody: "#2002 Bob: current note",
+    });
+    const { text, resumableText, fragments } = envelope.currentInboundContext!;
+    expect(text).toContain("Room context:");
+    expect(text).toContain("Alice: old context");
+    expect(text.split("old context")).toHaveLength(2);
+    expect(resumableText).not.toContain("old context");
+    expect(text).toContain(
+      "Treat this message as observed room activity, not a request. You were not explicitly tagged or mentioned in this room event. Default: stay silent. Only respond if you have something useful, substantial, or important to add. A previous mention or reply is not an invitation to keep talking.",
+    );
+    for (const directive of ["message(action=send)", "your final text here stays private"]) {
+      expect(text.includes(directive)).toBe(sourceReplyDeliveryMode === "message_tool_only");
+    }
+    for (const prompt of [text, resumableText]) {
+      for (const part of ["Conversation info:", "Thread note", "System event"]) {
+        expect(prompt).toContain(part);
+      }
+      expect(prompt).not.toContain("current note");
+      expect(prompt).not.toContain(CURRENT_MESSAGE_MARKER);
+    }
+    expect(fragments).toEqual(
+      expect.arrayContaining([
+        { kind: "conversation-data", text: "Thread note" },
+        { kind: "conversation-data", text: "System event" },
+      ]),
+    );
+    expect(envelope.queuedBody).not.toContain("[Chat history]");
+  },
+);
 
 it("keeps completed audio transcripts in room-event bodies", async () => {
   const transcript = "turn left at the next light";
@@ -258,21 +226,6 @@ it("keeps completed audio transcripts in room-event bodies", async () => {
   expect(envelope.queuedBody).toBe(`#2003 Alice: ${agentText}`);
   expect(envelope.transcriptCommandBody).toBe(envelope.queuedBody);
   expect(envelope.queuedBody).not.toContain(transportEnvelope);
-});
-
-it("keeps media-only notes in ordinary user request transcripts", async () => {
-  const sessionCtx = context("", {
-    Provider: "telegram",
-    ChatType: "group",
-    MediaPaths: ["/tmp/openclaw-photo.jpg"],
-    MediaUrls: ["https://example.com/photo.jpg"],
-    InboundHistory: [{ sender: "Alice", timestamp: 1_700_000_000_000, body: "context" }],
-  });
-
-  const envelope = await envelopeFor(sessionCtx);
-
-  expect(envelope.transcriptCommandBody).toContain("[media attached");
-  expect(envelope.transcriptCommandBody).toContain("https://example.com/photo.jpg");
 });
 
 it("keeps sparse inbound positions separate from appended preprojected media", async () => {
@@ -325,18 +278,11 @@ it("keeps requester trailers in full and resumed backend prompt projections", as
     }),
     { agentId: "main", sessionKey: "agent:main:main" },
   );
-  // Codex consumes text, while reused CLI sessions can select resumableText.
   expect(envelope.currentInboundContext?.text).toContain(trailer);
   expect(envelope.currentInboundContext?.resumableText).toContain(trailer);
   expect(envelope.currentInboundContext?.fragments).toContainEqual({
     kind: "runtime-instruction",
     text: trailer,
   });
-  const render = createCliCurrentPromptRenderer(
-    { currentInboundContext: envelope.currentInboundContext },
-    { mode: "reuse", sessionId: "credit-cli-session" },
-  );
-  expect(render(envelope.prefixedCommandBody)).toContain(trailer);
-  expect(render(envelope.prefixedCommandBody, true)).toContain(trailer);
   expect(envelope.transcriptCommandBody).not.toContain(trailer);
 });

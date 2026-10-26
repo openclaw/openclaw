@@ -15,7 +15,6 @@ import type {
   WebPushDevicePreferences,
   WebPushNotificationPreferences,
 } from "../../../../packages/gateway-protocol/src/schema/push.js";
-import type { NativeNotificationsPermission } from "../../app/native-notifications.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import {
   SettingsPage,
@@ -49,22 +48,6 @@ export type NotificationsSectionProps = Pick<
   | "onWebPushSetUserPreferences"
   | "onWebPushSetDevicePreferences"
 >;
-
-function nativeNotificationsStatus(permission: NativeNotificationsPermission | "unknown"): {
-  kind: "ok" | "danger" | "accent" | "muted";
-  label: string;
-} {
-  switch (permission) {
-    case "granted":
-      return { kind: "ok", label: t("configView.notifications.granted") };
-    case "denied":
-      return { kind: "danger", label: t("configView.notifications.denied") };
-    case "notDetermined":
-      return { kind: "accent", label: t("configView.notifications.notRequested") };
-    default:
-      return { kind: "muted", label: t("configView.notifications.checking") };
-  }
-}
 
 function NotificationActions(props: { children: JSX.Element }) {
   return (
@@ -104,6 +87,7 @@ const NativeTestStatus = (props: { state: "pending" | "sent" | "error"; message?
   <SettingsRow
     title={t("configView.notifications.testOutcome")}
     description={props.message}
+    role={props.state === "error" ? "alert" : undefined}
     control={
       <SettingsStatus
         kind={props.state === "pending" ? "accent" : props.state === "sent" ? "ok" : "danger"}
@@ -123,7 +107,24 @@ function NativeNotificationSection(props: {
   native: NonNullable<NotificationsSectionProps["nativeNotifications"]>;
   actions: NotificationsSectionProps;
 }) {
-  const status = () => nativeNotificationsStatus(props.native.permission);
+  const status = (): {
+    kind: "ok" | "danger" | "accent" | "muted";
+    label: string;
+  } => {
+    const permission = props.native.permission;
+    switch (permission) {
+      case "granted":
+        return { kind: "ok", label: t("configView.notifications.granted") };
+      case "denied":
+        return { kind: "danger", label: t("configView.notifications.denied") };
+      case "notDetermined":
+        return { kind: "accent", label: t("configView.notifications.notRequested") };
+      default:
+        return { kind: "muted", label: t("configView.notifications.checking") };
+    }
+  };
+  const testAnnouncement = () =>
+    props.native.test?.state === "sent" ? t("configView.notifications.testQueued") : "";
   const [sending, setSending] = createOptimistic(false);
   const testPending = () => sending() || props.native.test?.state === "pending";
   const presentTest = action(function* (pending: Promise<unknown> | void, retired: Promise<void>) {
@@ -144,6 +145,9 @@ function NativeNotificationSection(props: {
       title={t("configView.notifications.nativeTitle")}
       status={<SettingsStatus kind={status().kind} label={status().label} />}
     >
+      <span class="sr-only" role="status" aria-live="polite">
+        {testAnnouncement()}
+      </span>
       <SettingsRow
         title={t("configView.notifications.permission")}
         control={<SettingsValue value={status().label} />}
@@ -210,6 +214,14 @@ function NativeNotificationSection(props: {
     </NotificationSection>
   );
 }
+
+const renderWebPushError = (error: () => unknown) => (
+  <div class="settings-row">
+    <div class="settings-row__text">
+      <span class="cfg-field__error">{formatUiError(error())}</span>
+    </div>
+  </div>
+);
 
 function WebPushSection(props: {
   push: NonNullable<NotificationsSectionProps["webPush"]>;
@@ -404,29 +416,13 @@ function WebPushSection(props: {
             </div>
           </div>
         </Show>
-        <Errored
-          fallback={(error) => (
-            <div class="settings-row">
-              <div class="settings-row__text">
-                <span class="cfg-field__error">{formatUiError(error())}</span>
-              </div>
-            </div>
-          )}
-        >
+        <Errored fallback={renderWebPushError}>
           <Loading on={props.push.command} fallback={null}>
             {(commandOutcome(), null)}
           </Loading>
         </Errored>
       </NotificationSection>
-      <Errored
-        fallback={(error) => (
-          <div class="settings-row">
-            <div class="settings-row__text">
-              <span class="cfg-field__error">{formatUiError(error())}</span>
-            </div>
-          </div>
-        )}
-      >
+      <Errored fallback={renderWebPushError}>
         <Loading on={props.push.read} fallback={null}>
           <Show when={props.push.canReadPreferences ? latest(preferences) : (read(), undefined)}>
             {(current) => (

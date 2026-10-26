@@ -21,6 +21,7 @@ import {
   streamMocks,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
 import { getActiveNativeAttempt, getEmbeddedRunAttachment } from "../run-state.js";
+import { registerReplyPromotionTests } from "./attempt-stream-prepare.reply-promotion.test-support.js";
 
 type QuestionDispatcher = Extract<
   Parameters<typeof registerPendingAgentQuestion>[0]["gatewayCall"],
@@ -202,6 +203,45 @@ describe("prepareEmbeddedAttemptStream", () => {
     expect(mocks.subscribe).toHaveBeenCalledWith(
       expect.objectContaining({ trustedLocalMediaToolNames, sessionKey }),
     );
+  });
+
+  registerReplyPromotionTests();
+
+  it("borrows live fork history until the fork owner creates an isolated context", async () => {
+    const { session } = await createTestSession();
+    const model = session.model!;
+    const content = [{ type: "text" as const, text: "parent history" }];
+    const message = createAssistant(model, content);
+    session.agent.state.messages = [message];
+    const prepared = prepareCatalogExecutor({
+      activeSession: session,
+      attempt: { model, sessionFile: "agent:main:main" },
+    });
+    expect(prepared.queueHandle.readSessionForkContext?.()?.messages).toBe(session.messages);
+
+    const { prepareEmbeddedSessionForkContext } = await import("../session-fork-context.js");
+    const context = await prepareEmbeddedSessionForkContext({
+      target: {
+        agentId: "main",
+        sessionId: "session-output-schema",
+        sessionKey: "agent:main:main",
+      },
+      sessionFile: "agent:main:main",
+      model,
+      workspaceDir: "/synthetic/fork",
+      agentDir: "/synthetic/fork/agent",
+      agentId: "main",
+      assertCurrent() {},
+    });
+    expect(context.messages).toEqual([message]);
+    const forkContent = context.messages[0]?.content;
+    if (!Array.isArray(forkContent) || forkContent[0]?.type !== "text") {
+      throw new Error("expected fork text content");
+    }
+    forkContent[0].text = "child edit";
+    context.messages.push({ role: "user", content: "child turn", timestamp: 2 });
+    expect(session.messages).toEqual([message]);
+    expect(content[0]?.text).toBe("parent history");
   });
 
   it.each([

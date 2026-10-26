@@ -1,5 +1,6 @@
 import { sha256HexPrefixCore } from "@openclaw/normalization-core/node-crypto";
 import pLimit from "p-limit";
+import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import { resolveNestedAgentLaneForSession } from "../agents/lanes.js";
 import { discoverRestartRecoveryStoreTargets } from "../agents/main-session-recovery/main-session-restart-recovery-shared.js";
 import { decodeRequesterOrigin } from "../agents/requester-origin.js";
@@ -20,11 +21,20 @@ import { isTransientRestartRecoveryError } from "../infra/restart-recovery-error
 import { getRetryAttemptErrors } from "../infra/retry-attempt-errors.js";
 import { retryAsync } from "../infra/retry.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
+import { getGatewayRestartDrainSignal } from "../process/gateway-work-admission.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import {
+  captureSessionTarget,
+  runSessionMutation,
+} from "../sessions/session-controller.lifecycle.js";
 import { AgentDatabaseAdmissionError } from "../state/agent-database-admission.js";
-import { recoverAfterAgentDatabasePreparation } from "../state/agent-database-preparation-recovery.js";
+import {
+  recoverAfterAgentDatabasePreparation,
+  type AgentRecoveryProgress,
+} from "../state/agent-database-preparation-recovery.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { CHAT_INPUT_RECOVERY_MAX_AGE_MS } from "./chat-input-recovery-source.js";
+import { bindInProcessSessionRun } from "./in-process-session-run.js";
 import type { RestoredGatewayOperatorAuthority } from "./operator-run-recovery.js";
 import {
   createPendingInputRecoveryTrace,
@@ -41,17 +51,18 @@ import { SessionStoreUnavailableError } from "./session-utils-store-error.js";
 class SessionSendRequesterUnavailableError extends Error {}
 
 /** Discover saved inputs; existing turn owners retain execution and sender custody. */
-export async function recoverSessionSendDeliveries(
+export function recoverSessionSendDeliveries(
   context: GatewayRequestContext,
   signal: AbortSignal,
   startupTrace?: GatewayStartupTrace,
-): Promise<void> {
+): AgentRecoveryProgress {
   if (!context.recoveryRuntime) {
-    return;
+    const settled = Promise.resolve();
+    return { initial: settled, pending: new Map(), settled };
   }
   const config = context.getRuntimeConfig();
   const replaySession = pLimit(4);
-  await recoverAfterAgentDatabasePreparation(signal, (agentIds) =>
+  return recoverAfterAgentDatabasePreparation(signal, (agentIds) =>
     recoverSessionSendDeliveriesForAgents(
       context,
       agentIds ? context.getRuntimeConfig() : config,
@@ -108,7 +119,8 @@ async function recoverSessionSendDeliveriesForAgents(
       ? ("endpoint-replaced" as const)
       : error instanceof SessionSendRequesterUnavailableError
         ? ("requester-unavailable" as const)
-        : error instanceof SessionCommunicationDeniedError
+        : error instanceof SessionCommunicationDeniedError ||
+            (error instanceof GatewayClientRequestError && error.code === "FORBIDDEN")
           ? ("permission-denied" as const)
           : isTransient(error)
             ? ("transient-admission" as const)
@@ -195,6 +207,20 @@ async function recoverSessionSendDeliveriesForAgents(
                 (input) => input.state === "interrupted" && readSessionSendDelivery(input.message),
               )
             ) {
+              // Keep saved-input custody while the boot owner pauses the predecessor.
+              // Drain cancels this idle wait before shutdown joins startup work.
+              const preparationSignal = AbortSignal.any([signal, getGatewayRestartDrainSignal()]);
+              for (;;) {
+                const pausedUntilMs = await runtime.prepareRestartRecovery(preparationSignal);
+                preparationSignal.throwIfAborted();
+                assertCurrent();
+                if (pausedUntilMs === undefined) {
+                  break;
+                }
+                await sleepWithAbort(Math.max(1, pausedUntilMs - Date.now()), preparationSignal, {
+                  ref: false,
+                });
+              }
               const { retryRestartAbortedMainSessionRecovery } =
                 await import("../agents/main-session-recovery/main-session-restart-recovery.js");
               const recovery = await retryRestartAbortedMainSessionRecovery({
@@ -375,23 +401,29 @@ async function recoverSessionSendDeliveriesForAgents(
                       await trace.measure("dispatchAckMs", () =>
                         withSessionSendDelivery({ delivery, acceptedMessage: input.message }, () =>
                           runtime.dispatchAgent(
-                            {
-                              agentId: delivery.target.agentId,
-                              sessionKey: delivery.target.sessionKey,
-                              expectedExistingSessionId: delivery.target.sessionId,
-                              expectedExistingSessionLifecycleRevision:
-                                delivery.target.lifecycleRevision ?? null,
-                              idempotencyKey: delivery.runId,
-                              message: delivery.message,
-                              ...(delivery.returnedResult
-                                ? { extraSystemPrompt: delivery.returnedResult.extraSystemPrompt }
-                                : {}),
-                              inputProvenance: input.message.provenance,
-                              deliver: false,
-                              sourceReplyDeliveryMode: "message_tool_only",
-                              channel: INTERNAL_MESSAGE_CHANNEL,
-                              lane: resolveNestedAgentLaneForSession(delivery.target.sessionKey),
-                            },
+                            // Recreate the live send's session binding after validating its source.
+                            bindInProcessSessionRun(
+                              {
+                                agentId: delivery.target.agentId,
+                                sessionKey: delivery.target.sessionKey,
+                                idempotencyKey: delivery.runId,
+                                message: delivery.message,
+                                ...(delivery.returnedResult
+                                  ? { extraSystemPrompt: delivery.returnedResult.extraSystemPrompt }
+                                  : {}),
+                                inputProvenance: input.message.provenance,
+                                deliver: false,
+                                sourceReplyDeliveryMode: "message_tool_only",
+                                channel: INTERNAL_MESSAGE_CHANNEL,
+                                lane: resolveNestedAgentLaneForSession(delivery.target.sessionKey),
+                              },
+                              {
+                                sessionKey: delivery.target.sessionKey,
+                                sessionId: delivery.target.sessionId,
+                                lifecycleRevision: delivery.target.lifecycleRevision ?? null,
+                                runId: delivery.runId,
+                              },
+                            ),
                             undefined,
                             {
                               signal,
@@ -505,23 +537,38 @@ async function recoverSessionSendDeliveriesForAgents(
                   : "");
               const result = await measureStartup(startupTrace, "sidecars.delivery-notices", () =>
                 retry(() =>
-                  withSessionTranscriptWriteAssertion(scope, assertCurrent, () =>
-                    appendSessionTranscriptReport(scope, {
-                      kind: "custom",
-                      customTypes: [customType],
-                      selectReport: (latest) =>
-                        latest?.content === content &&
-                        JSON.stringify(latest.details) === JSON.stringify(details)
-                          ? undefined
-                          : {
-                              customType,
-                              content,
-                              details,
-                              display: true,
-                              excludeFromContext: true,
-                            },
+                  // A display-only report still advances transcript ancestry. Wait for the
+                  // selected turn before it can close an admitted keyed user during preparation.
+                  runSessionMutation({
+                    target: captureSessionTarget({
+                      storeScope: scope.storePath,
+                      sessionKey,
+                      agentId: scope.agentId,
+                      incarnation: scope.sessionId,
                     }),
-                  ),
+                    requiredSessionId: scope.sessionId,
+                    policy: "wait",
+                    signal,
+                    assertCurrent,
+                    run: () =>
+                      withSessionTranscriptWriteAssertion(scope, assertCurrent, () =>
+                        appendSessionTranscriptReport(scope, {
+                          kind: "custom",
+                          customTypes: [customType],
+                          selectReport: (latest) =>
+                            latest?.content === content &&
+                            JSON.stringify(latest.details) === JSON.stringify(details)
+                              ? undefined
+                              : {
+                                  customType,
+                                  content,
+                                  details,
+                                  display: true,
+                                  excludeFromContext: true,
+                                },
+                        }),
+                      ),
+                  }),
                 ),
               );
               if (!result.ok) {

@@ -187,6 +187,12 @@ writer's transaction. SQLite and PostgreSQL drop the triggers without changing
 retained rows or revision values. Older writers require the verified pre-upgrade
 backup because they rely on those triggers to invalidate readers.
 
+Agent [schema 32](/reference/database-schemas/agent-schema-history#agent-schema-32)
+replaces the PostgreSQL vector decoder without rewriting embeddings or indexes.
+SQLite advances metadata only. PostgreSQL stores that have not admitted vector
+search remain unchanged until first use. Older binaries require the verified
+pre-upgrade backup with its matching build for catalog compatibility.
+
 Shared-state [schema 31](/reference/database-schemas/state-schema-history#state-schema-31)
 stores local workspace baselines by path and checkpoints as recoverable deltas.
 The schema migration preserves legacy manifest documents and pending receipts;
@@ -195,6 +201,14 @@ unfinished conversions from the retained input. Archives and publications keep
 their complete manifest format. This is a shared-state change only: the agent
 schema version is unchanged. Older checkpoint writers require the verified
 pre-upgrade backup for rollback.
+
+State schemas 32–33 and agent schemas 34–35 correct PostgreSQL index ordering;
+agent schema 36 adds indexed memory keyword path candidates. With writers
+stopped, `openclaw doctor --fix` backs up older stores and applies consecutive
+forward migrations before PostgreSQL runtime admission. SQLite advances metadata
+only for these versions. Logbook's service-open owner applies its ordering
+migrations through schema 3. See the [ordering migration contract](/reference/database-schemas/storage-changes#postgresql-index-ordering-migrations)
+and [agent schema 36](/reference/database-schemas/agent-schema-history#agent-schema-36).
 
 Target-release checks distinguish the target's schema support from the running
 inspector's capabilities. When shared state is too new for the target but still
@@ -354,7 +368,7 @@ permissions, and transaction ownership are unchanged. Older same-version
 readers ignore the additional nonunique index, so binary rollback leaves both
 caption rows and the index intact.
 
-Logbook's plugin-local database keeps schema version 1 while replacing the unused
+At Logbook schema 1, its plugin-local database replaced the unused
 batch-day index with a nonunique partial index on `batches(start_ms, id)` where
 `status = 'pending'`. The existing worker-owned schema open installs the index on
 populated databases before dropping the retired index. Batch rows remain the source of truth;
@@ -362,7 +376,10 @@ the index is derived, and retention and recovery are unchanged. Initial construc
 scans batch history once and stores only pending entries. Older same-version builds
 can read and write the database safely, leaving the new index intact and recreating
 their day index; reopening with the current build retires it again. Binary rollback
-requires no row conversion or schema-version change.
+for that index-only change requires no row conversion or schema-version change.
+Subsequent [PostgreSQL ordering migrations](/reference/database-schemas/storage-changes#postgresql-index-ordering-migrations)
+advance Logbook through schema 3; their rollback requires the matching predecessor
+backup and build.
 
 Memory chunk admission retires the nonunique `idx_memory_index_chunks_path`
 index at the same agent schema version. Both schema publishers retain the

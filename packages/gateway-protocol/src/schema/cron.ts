@@ -1,6 +1,10 @@
 import { Type, type Static, type TSchema } from "typebox";
 import { closedObject } from "./closed-object.js";
 import {
+  AutomationLastMeaningfulResultSchema,
+  AutomationResultSchema,
+} from "./cron-automation-result.js";
+import {
   CronDateTimestampMsSchema,
   MAX_DATE_TIMESTAMP_MS,
   cronAgentTurnPayloadSchema,
@@ -426,6 +430,7 @@ export const CronJobStateSchema = closedObject({
   scheduleActivatedAtMs: Type.Optional(CronDateTimestampMsSchema),
   runningAtMs: Type.Optional(CronDateTimestampMsSchema),
   lastRunAtMs: Type.Optional(CronDateTimestampMsSchema),
+  lastMeaningfulResult: Type.Optional(AutomationLastMeaningfulResultSchema),
   lastRunStatus: Type.Optional(CronRunStatusSchema),
   lastStatus: Type.Optional(DeprecatedCronRunStatusSchema),
   lastError: Type.Optional(Type.String()),
@@ -460,6 +465,7 @@ export const CronJobStateSchema = closedObject({
 const CronJobStatePatchSchema = closedObject(
   Type.Omit(CronJobStateSchema, [
     "scheduleActivatedAtMs",
+    "lastMeaningfulResult",
     "lastDiagnostics",
     "lastDiagnosticSummary",
     "scheduleErrorCount",
@@ -479,6 +485,17 @@ export const CronJobSchema = closedObject({
   scheduledToolPolicy: Type.Optional(CronScheduledToolPolicySchema),
   streamExecutionHost: Type.Optional(
     Type.Union([Type.Literal("gateway"), Type.Literal("sandbox")]),
+  ),
+  /**
+   * Report-only stored payload kind. Present when `payload` is a compatibility placeholder, such
+   * as the reserved agentTurn sentinel of a requester-scheduled plugin command.
+   */
+  payloadSource: Type.Optional(
+    closedObject({
+      kind: Type.Literal("pluginCommand"),
+      pluginId: NonEmptyString,
+      command: NonEmptyString,
+    }),
   ),
   agentId: Type.Optional(NonEmptyString),
   sessionKey: Type.Optional(NonEmptyString),
@@ -649,6 +666,12 @@ export const CronRemoveParamsSchema = cronIdOrJobIdParams({
   expectedConfigRevision: Type.Optional(CronConfigRevisionSchema),
 });
 
+/**
+ * Records the current incarnation of a key-only automation's parent conversation.
+ * The conversation is the caller's signed agent-runtime session, never a parameter.
+ */
+export const CronBindParamsSchema = cronIdOrJobIdParams({});
+
 /** Runs a cron job immediately, immediately if enabled, or only if due. */
 export const CronRunParamsSchema = cronIdOrJobIdParams({
   mode: Type.Optional(stringLiteralUnion(["due", "force", "if-enabled"])),
@@ -681,6 +704,7 @@ export const CronRunsParamsSchema = closedObject({
 
 /** One persisted cron run history entry. */
 export const CronRunLogEntrySchema = closedObject({
+  result: Type.Optional(AutomationResultSchema),
   ts: Type.Integer({ minimum: 0 }),
   jobId: NonEmptyString,
   action: Type.Literal("finished"),

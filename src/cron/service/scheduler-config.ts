@@ -34,6 +34,7 @@ export async function captureCronSchedulerSnapshot(
       missedJobStaggerMs: state.deps.missedJobStaggerMs,
       startupDeferredMissedAgentJobDelayMs: state.deps.startupDeferredMissedAgentJobDelayMs,
       hostProcessId: currentPluginCommandHostProcessId(),
+      pluginCommandHosts: state.deps.resolvePluginCommandScheduleHosts?.(),
     },
   };
 }

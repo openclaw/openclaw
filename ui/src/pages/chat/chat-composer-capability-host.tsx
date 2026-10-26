@@ -1,12 +1,11 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import { createMemo, lazy, Loading, Show } from "solid-js";
+import { createMemo, lazy, Show } from "solid-js";
 import { createChangeListeners } from "../../../../src/shared/listeners.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSnapshot, GatewaySessionRow, ToolsEffectiveResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import type { McpServerForm } from "../../components/mcp-server-form.ts";
-import "../../components/modal-dialog.tsx";
 import { LoadingState } from "../../components/solid/loading-state.tsx";
 import { registerMcpEnglish } from "../../i18n/locales/en-mcp.ts";
 import { buildToolsEffectiveRequestKey } from "../../lib/agents/tools-effective.ts";
@@ -25,7 +24,7 @@ import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import {
   scopedAgentListParamsForSession,
   scopedAgentParamsForSession,
-} from "../../lib/sessions/index.ts";
+} from "../../lib/sessions/navigation.ts";
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { nextBooleanToolOverrides } from "../../lib/sessions/tool-overrides.ts";
@@ -33,11 +32,13 @@ import { refreshCurrentChatSessionList } from "./chat-session.ts";
 import { patchChatSessionSettings } from "./chat-settings-patches.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import type { ChatComposerCapabilityMenuProps } from "./components/chat-composer-plus-menu.types.ts";
+import { ChatLazyBoundary } from "./components/chat-lazy-boundary.tsx";
 import {
   ComposerSkillCatalog,
   composerWebSearchBaseEnabled,
 } from "./composer-capability-catalog.ts";
 import { ComposerLibrarySession } from "./composer-library-session.ts";
+import { hasDirectSessionRun } from "./run-lifecycle.ts";
 
 registerMcpEnglish();
 
@@ -72,9 +73,16 @@ export class ChatComposerCapabilityHost {
   private readonly skillCatalog = new ComposerSkillCatalog(() => this.publish());
   private readonly library = new ComposerLibrarySession(() => this.publish());
   private readonly patchTokens = new Map<string, symbol>();
-  private effectiveTools: { key: string; result: ToolsEffectiveResult } | null = null;
+  private effectiveTools: {
+    key: string;
+    settledRuns: number;
+    result: ToolsEffectiveResult;
+  } | null = null;
   private effectiveToolsErrorKey: string | null = null;
-  private effectiveToolsRequest: { key: string } | null = null;
+  private effectiveToolsRequest: { key: string; settledRuns: number } | null = null;
+  private runSessionKey: string | null = null;
+  private runActive = false;
+  private settledRuns = 0;
   private client: GatewayBrowserClient | null = null;
   private connectionEpoch: number | undefined;
   private addDialogOpen = false;
@@ -109,23 +117,25 @@ export class ChatComposerCapabilityHost {
     context: ApplicationContext,
     state: ChatPageHost,
     agentId: string,
-    retryError = false,
+    refresh = false,
   ): void {
     const client = state.client;
     const sessionKey = state.sessionKey;
     const cacheKey = this.effectiveToolsKeys(context, state, agentId);
+    const settledRuns = this.settledRuns;
+    const matches = (entry: { key: string; settledRuns: number } | null) =>
+      entry?.key === cacheKey && entry.settledRuns === settledRuns;
     if (
       !state.connected ||
       !client ||
       !agentId.trim() ||
       !sessionKey.trim() ||
-      this.effectiveTools?.key === cacheKey ||
-      this.effectiveToolsRequest?.key === cacheKey ||
-      (!retryError && this.effectiveToolsErrorKey === cacheKey)
+      matches(this.effectiveToolsRequest) ||
+      (!refresh && (matches(this.effectiveTools) || this.effectiveToolsErrorKey === cacheKey))
     ) {
       return;
     }
-    const request = { key: cacheKey };
+    const request = { key: cacheKey, settledRuns };
     const connectionEpoch = state.connectionEpoch;
     this.effectiveToolsRequest = request;
     const isCurrent = () =>
@@ -146,7 +156,7 @@ export class ChatComposerCapabilityHost {
       })
       .then((result) => {
         if (isCurrent()) {
-          this.effectiveTools = { key: cacheKey, result };
+          this.effectiveTools = { key: cacheKey, settledRuns, result };
         }
       })
       .catch(() => {
@@ -162,6 +172,15 @@ export class ChatComposerCapabilityHost {
           }
         }
       });
+  }
+
+  private trackRunSettlement(state: ChatPageHost): void {
+    const runActive = hasDirectSessionRun(state);
+    if (this.runActive && !runActive && this.runSessionKey === state.sessionKey) {
+      this.settledRuns += 1;
+    }
+    this.runSessionKey = state.sessionKey;
+    this.runActive = runActive;
   }
 
   private async patch(
@@ -318,7 +337,7 @@ export class ChatComposerCapabilityHost {
     try {
       await patchMcpServers(context.runtimeConfig, {
         buildPatch: (servers) => buildAddMcpServerPatch(servers, name, globalConfig),
-        note: `composer connectors: add MCP server ${name}`,
+        note: `composer plugins: add MCP server ${name}`,
       });
       if (scope === "session") {
         stage = "session";
@@ -401,6 +420,7 @@ export class ChatComposerCapabilityHost {
       this.effectiveToolsErrorKey = null;
       this.effectiveToolsRequest = null;
     }
+    this.trackRunSettlement(state);
     const client = state.client;
     const connectionEpoch = state.connectionEpoch;
     const sessionKey = state.sessionKey;
@@ -564,15 +584,15 @@ export function ChatComposerCapabilityDialogs(props: ChatComposerCapabilityDialo
   return (
     <>
       <Show when={view().open}>
-        <Loading fallback={<LoadingState />}>
+        <ChatLazyBoundary fallback={<LoadingState />} onClose={() => view().onCancel()}>
           <ComposerAddServerDialog {...view()} />
-        </Loading>
+        </ChatLazyBoundary>
       </Show>
       <Show when={view().library}>
         {(library) => (
-          <Loading fallback={<LoadingState />}>
+          <ChatLazyBoundary fallback={<LoadingState />} onClose={() => library().onClose()}>
             <LibraryPinRead {...library()} />
-          </Loading>
+          </ChatLazyBoundary>
         )}
       </Show>
     </>

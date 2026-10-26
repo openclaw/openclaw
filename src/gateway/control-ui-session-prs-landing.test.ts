@@ -1,10 +1,13 @@
 import { execFile } from "node:child_process";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as worktreeGit from "../agents/worktrees/git.js";
+import { withGitWorkerContext } from "../infra/git-worker-context.js";
+import { readCheckoutGitRevision } from "./control-ui-session-prs-git.runtime.js";
 import { resolveBranchLanding } from "./control-ui-session-prs-landing.js";
 
 const execFileAsync = promisify(execFile);
@@ -48,6 +51,37 @@ describe("resolveBranchLanding", () => {
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
     await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("reads packed HEAD once while preparing a checkout revision", async () => {
+    await git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+    await git("pack-refs", "--all", "--prune");
+    const opens = vi.spyOn(fsSync, "openSync");
+    const revision = await withGitWorkerContext(
+      {
+        consumeInput() {},
+        notify() {},
+        async request() {
+          throw new Error("The file-backed revision must not invoke Git");
+        },
+      },
+      () => readCheckoutGitRevision({ root, scope: "context" }),
+      "fixture-environment",
+    );
+
+    expect(revision).not.toBeNull();
+    expect(JSON.parse(revision!).slice(0, 4)).toEqual([
+      { branch: "main", refsBase: path.join(root, ".git") },
+      "origin/main",
+      [],
+      [],
+    ]);
+    expect(
+      opens.mock.calls.filter(([file]) => file === path.join(root, ".git", "HEAD")),
+    ).toHaveLength(1);
+    expect(
+      opens.mock.calls.filter(([file]) => file === path.join(root, ".git", "packed-refs")).length,
+    ).toBeLessThanOrEqual(3);
   });
 
   it.each(["unrelated descendant", "other base", "unavailable merged head"])(

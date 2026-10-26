@@ -5,8 +5,10 @@ import type { AgentsFilesListResult, AgentsListResult } from "../../api/types.ts
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { createGatewayMetadataObserver } from "../../app/gateway-observers.ts";
+import { createAgentCapability } from "../../lib/agents/index.ts";
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
 import { createInitialConfigState } from "../../lib/config/config-state-model.ts";
+import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createAgentsPageState } from "./agents-page-state.ts";
@@ -21,6 +23,7 @@ const AGENTS_PAGE_GATEWAY_HELLO = gatewayHelloForMethods([
 ]);
 
 const pages = new Set<() => void>();
+const agentOwners = new Set<() => void>();
 type GatewayListener = Parameters<ApplicationContext["gateway"]["subscribe"]>[0];
 const gatewayListeners = new WeakMap<ApplicationContext["gateway"], Set<GatewayListener>>();
 
@@ -29,6 +32,10 @@ afterEach(() => {
     dispose();
   }
   pages.clear();
+  for (const dispose of agentOwners) {
+    dispose();
+  }
+  agentOwners.clear();
 });
 
 function fillMissing(target: object, defaults: object) {
@@ -132,6 +139,7 @@ export function createAgentsPage(context: ApplicationContext, routeData?: Agents
   return {
     identitySavePending: state.identitySavePending,
     read: () => state.read(),
+    data: () => state.read().readData(),
     setRouteData(next?: AgentsRouteData) {
       state.setRouteData(next);
       flush();
@@ -159,17 +167,12 @@ export function snapshot(
   client: GatewayBrowserClient | null,
   connected = true,
 ): ApplicationGatewaySnapshot {
-  return {
+  return createApplicationGatewaySnapshot({
     client,
     phase: connected ? "connected" : "stopped",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
     hello: AGENTS_PAGE_GATEWAY_HELLO,
-    assistantAgentId: null,
     sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
-  };
+  });
 }
 
 const eventListeners = new WeakMap<
@@ -236,21 +239,18 @@ export const agentsList: AgentsListResult = {
 };
 
 export function agentsRouteData(
-  currentGateway: ApplicationContext["gateway"],
+  _currentGateway: ApplicationContext["gateway"],
   roster: AgentsListResult | null = agentsList,
   requestedAgentId: string | null = "main",
   selection: ApplicationContext["settingsAgentSelection"] = settingsSelection(roster),
 ): AgentsRouteData {
   const pathname = requestedAgentId ? `/settings/agents/${requestedAgentId}` : "/settings/agents";
   return {
-    gateway: currentGateway,
-    gatewaySnapshot: currentGateway.snapshot,
     location: { pathname, search: "", hash: "" },
     requestedAgentId,
     settingsAgentSelection: selection,
     selectionIntentRevision: selection.intentRevision,
     panel: "files",
-    agentsList: roster,
   };
 }
 
@@ -306,4 +306,25 @@ export function pageContext(
     channels: { subscribe },
     runtimeConfig: { subscribe },
   } as unknown as ApplicationContext;
+}
+
+/** Connection tests use the roster and selection owners that retire and publish together. */
+export async function ownedAgentsContext(
+  currentGateway: ApplicationContext["gateway"],
+  options?: Parameters<typeof pageContext>[2],
+): Promise<ApplicationContext> {
+  const agents = createAgentCapability(currentGateway);
+  const settingsAgentSelection = createAgentSelectionCapability(
+    currentGateway,
+    agents,
+    undefined,
+    undefined,
+    { requireConfiguredAgent: true },
+  );
+  agentOwners.add(() => {
+    settingsAgentSelection.dispose();
+    agents.dispose();
+  });
+  await agents.ensureList();
+  return { ...pageContext(currentGateway, agents, options), settingsAgentSelection };
 }

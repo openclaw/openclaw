@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { deserialize } from "node:v8";
 import { Worker } from "node:worker_threads";
@@ -13,6 +15,7 @@ import {
   WORKTREE_CREATE_LEASE_SCOPE,
   WORKTREE_MUTATION_LEASE_SCOPE,
 } from "../../agents/worktrees/capacity-contract.js";
+import { requireGit } from "../../agents/worktrees/git.js";
 import {
   type SqliteWorkerReply,
   SQLITE_WORKER_MAX_MESSAGE_BYTES,
@@ -28,6 +31,10 @@ import * as stateRead from "../../state/openclaw-state-read-operation.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import * as stateWorker from "../../state/openclaw-state-worker-store.js";
 import {
+  executeLocalWorkspaceManifestRead,
+  readLocalWorkspaceManifestRows,
+} from "./local-workspace-manifest-scan.js";
+import {
   createLocalWorkspaceManifestTree,
   localWorkspaceManifestRootReference,
   updateLocalWorkspaceManifestTree,
@@ -42,6 +49,7 @@ import {
   localWorkspaceProjectionFixture,
   readLocalWorkspaceProjection,
 } from "./local-workspace-store.test-support.js";
+import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterAll(async () => {
@@ -202,6 +210,58 @@ it("cancels an accepted manifest read when the workspace lease ends", async () =
   }
 });
 
+it("releases encoded inventory at the read boundary and materializes after close", async () => {
+  const database = new DatabaseSync(":memory:");
+  const worktreeId = randomUUID();
+  const records = createLocalWorkspaceManifestTree([
+    { path: "entry.txt", type: "file", mode: 0o644, size: 1, sha256: "a".repeat(64) },
+  ]);
+  const action = { kind: "materialize" as const };
+  const snapshot = (() => {
+    try {
+      mutateProjection(database, worktreeId, {
+        kind: "create",
+        row: localWorkspaceProjectionFixture(worktreeId, root),
+      });
+      mutateProjection(database, worktreeId, {
+        kind: "update",
+        revision: 0,
+        patch: {},
+        manifest: {
+          previousRoot: null,
+          resultingRoot: localWorkspaceManifestRootReference(records, "a".repeat(40)),
+          records: [...records.values()],
+          removed: [],
+          replace: true,
+        },
+      });
+      return readLocalWorkspaceManifestRows(database, { id: worktreeId, revision: 1, action });
+    } finally {
+      database.close();
+    }
+  })();
+  const encoded = new Set([...records.values()].map((record) => JSON.stringify(record)));
+  // Count retained payloads independently of snapshot field names or collection layout.
+  const retainedBytes = (value: unknown): number => {
+    if (typeof value === "string") {
+      return encoded.has(value) ? Buffer.byteLength(value) : 0;
+    }
+    const values = value instanceof Map ? [...value.values()] : Object.values(value ?? {});
+    return values.reduce<number>((bytes, child) => bytes + retainedBytes(child), 0);
+  };
+  expect(retainedBytes(snapshot)).toBe(0);
+  // The read scope is closed: materialization must own all facts, not a live SQLite cursor.
+  const value = await executeLocalWorkspaceManifestRead(snapshot, action);
+  expect(value).toMatchObject({
+    kind: "materialize",
+    rawManifest: JSON.stringify({
+      version: 1,
+      baseCommit: "a".repeat(40),
+      entries: [{ path: "entry.txt", type: "file", mode: 0o644, size: 1, sha256: "a".repeat(64) }],
+    }),
+  });
+});
+
 it("accepts manifest nodes and checkpoint headers atomically and preserves them on rollback", async () => {
   const worktreeId = randomUUID();
   const database = openOpenClawStateDatabase({ env });
@@ -289,6 +349,208 @@ it("accepts manifest nodes and checkpoint headers atomically and preserves them 
     expect(row).toMatchObject({ baseline_ref: nextRoot, checkpoint_json: "next receipt" });
   });
   expect(nodeRows().map((row) => row.path)).toEqual(["", "kept.txt"]);
+});
+
+it("keeps prepared baseline replacement atomic through rollback and a lost commit reply", async () => {
+  const worktreeId = randomUUID();
+  const rawManifest = serializeWorkerWorkspaceManifest({
+    version: 1,
+    baseCommit: "a".repeat(40),
+    entries: [{ path: "src/next.txt", type: "file", mode: 0o644, size: 4, sha256: "b".repeat(64) }],
+    directories: ["src"],
+  });
+  const manifestRef = `sha256:${createHash("sha256").update(rawManifest).digest("hex")}`;
+  const document = { rawManifest, manifestRef, buildCacheInputs: [] };
+  const initial = await withLocalWorkspaceStore({ worktreeId, env }, (store) =>
+    store.create({
+      ...localWorkspaceProjectionFixture(worktreeId, root),
+      baseline_json: rawManifest,
+      baseline_ref: manifestRef,
+    }),
+  );
+  const database = openOpenClawStateDatabase({ env });
+  const nodePaths = () =>
+    database.db
+      .prepare(
+        "SELECT path FROM local_workspace_manifest_nodes WHERE worktree_id = ? ORDER BY path",
+      )
+      .all(worktreeId)
+      .map((row) => row.path);
+  const replace = () =>
+    withLocalWorkspaceStore({ worktreeId, env }, (store) =>
+      store.update(
+        store.get()!,
+        {
+          pending_ref: "refs/openclaw/results/accepted",
+          // Manifest publication must override obsolete full-document fields in the patch.
+          baseline_ref: "sha256:superseded",
+          baseline_json: "superseded",
+        },
+        undefined,
+        document,
+      ),
+    );
+  database.db
+    .exec(`CREATE TRIGGER refuse_prepared_baseline BEFORE UPDATE ON local_workspace_projections
+    WHEN NEW.worktree_id = '${worktreeId}'
+    BEGIN SELECT RAISE(ABORT, 'synthetic prepared baseline interruption'); END;`);
+  try {
+    await expect(replace()).rejects.toThrow("synthetic prepared baseline interruption");
+    expect(await readLocalWorkspaceProjection(worktreeId, env)).toEqual(initial);
+    expect(nodePaths()).toEqual([]);
+  } finally {
+    database.db.exec("DROP TRIGGER refuse_prepared_baseline;");
+  }
+  let writes = 0;
+  const lostReply = probe.command(stateWorker, async (command, executeOptions, scope) => {
+    const reply = await scope.execute(command, executeOptions);
+    if (command.type === "localWorkspace.mutate") {
+      writes++;
+      throw new Error("Synthetic prepared baseline reply lost after commit");
+    }
+    return reply;
+  });
+  const acknowledged = await replace();
+  lostReply.mockRestore();
+  expect(writes).toBe(1);
+  expect(acknowledged).toMatchObject({
+    revision: initial.revision + 1,
+    baseline_json: null,
+    pending_ref: "refs/openclaw/results/accepted",
+  });
+  expect(acknowledged.baseline_ref).not.toBe(manifestRef);
+  expect(await readLocalWorkspaceProjection(worktreeId, env)).toEqual(acknowledged);
+  expect(nodePaths()).toEqual(["", "src", "src/next.txt"]);
+  await withLocalWorkspaceStore({ worktreeId, env }, async (store) => {
+    const materialized = await store.manifest(store.get()!, { kind: "materialize" });
+    assert(materialized.kind === "materialize");
+    expect(JSON.parse(materialized.rawManifest)).toMatchObject(JSON.parse(rawManifest));
+  });
+});
+
+it("accepts worker-prepared observations without consuming edits or replaying stale metadata", async () => {
+  const worktreeId = randomUUID();
+  const canonical = dirs.make("openclaw-local-workspace-observation-");
+  const unchangedPaths = Array.from({ length: 32 }, (_, index) => `kept-${index}.txt`);
+  const baselinePaths = [...unchangedPaths, "edited.txt"];
+  const hash = (value: string) => createHash("sha256").update(value).digest("hex");
+  for (const entryPath of baselinePaths) {
+    await fs.writeFile(path.join(canonical, entryPath), "before");
+  }
+  await requireGit(canonical, ["init", "--quiet"]);
+  const rawManifest = serializeWorkerWorkspaceManifest({
+    version: 1,
+    baseCommit: "a".repeat(40),
+    entries: baselinePaths.map((entryPath) => ({
+      path: entryPath,
+      type: "file" as const,
+      mode: 0o644,
+      size: 6,
+      sha256: hash("before"),
+    })),
+    directories: [],
+  });
+  const initial = await withLocalWorkspaceStore({ worktreeId, env }, async (store) => {
+    const row = await store.create({
+      ...localWorkspaceProjectionFixture(worktreeId, root),
+      projection_path: canonical,
+      source_paths_json: JSON.stringify(baselinePaths),
+    });
+    return store.update(row, {}, undefined, {
+      rawManifest,
+      manifestRef: `sha256:${hash(rawManifest)}`,
+      buildCacheInputs: [],
+    });
+  });
+  const addedPath = ".artifacts/build-cache-inputs/added.txt";
+  await fs.mkdir(path.dirname(path.join(canonical, addedPath)), { recursive: true });
+  await fs.writeFile(path.join(canonical, addedPath), "admitted");
+  await fs.writeFile(path.join(canonical, "edited.txt"), "after");
+  await requireGit(canonical, ["add", "--force", "--", addedPath]);
+  const action = { kind: "scan" as const, target: "projection" as const, canonicalRoot: canonical };
+  const database = openOpenClawStateDatabase({ env });
+  const nodeRows = () =>
+    database.db
+      .prepare(
+        "SELECT path, node_json FROM local_workspace_manifest_nodes WHERE worktree_id = ? ORDER BY path",
+      )
+      .all(worktreeId);
+  const initialNodes = nodeRows();
+  const pending = {
+    pending_ref: "refs/openclaw/results/retained",
+    checkpoint_json: "retained checkpoint receipt",
+  };
+  await expect(
+    withLocalWorkspaceStore({ worktreeId, env }, async (store) => {
+      const scan = await store.manifest(store.get()!, action);
+      assert(scan.kind === "scan");
+      // Count expanded tree records crossing the worker boundary, regardless of field name.
+      // Unchanged metadata must remain encoded instead of cloning the whole inventory on host.
+      const expandedRecords = Object.values(scan).reduce<number>(
+        (count, value) =>
+          count +
+          (Array.isArray(value)
+            ? value.filter((entry) => entry && typeof entry === "object" && "node" in entry).length
+            : 0),
+        0,
+      );
+      expect(expandedRecords).toBeLessThan(unchangedPaths.length);
+      assert(scan.observation);
+      expect(scan.resultingRoot).not.toBe(initial.baseline_ref);
+      await store.update(store.get()!, pending);
+      await store.accept(scan.observation);
+    }),
+  ).rejects.toThrow("Local workspace binding changed");
+  expect(nodeRows()).toEqual(initialNodes);
+  expect(await readLocalWorkspaceProjection(worktreeId, env)).toMatchObject({
+    ...pending,
+    revision: initial.revision + 1,
+    baseline_ref: initial.baseline_ref,
+    source_paths_json: initial.source_paths_json,
+  });
+  await withLocalWorkspaceStore({ worktreeId, env }, async (store) => {
+    const scan = await store.manifest(store.get()!, action);
+    assert(scan.kind === "scan" && scan.observation);
+    const observed = await store.accept(scan.observation);
+    expect(observed).toMatchObject({
+      ...pending,
+      revision: initial.revision + 2,
+      baseline_ref: initial.baseline_ref,
+      baseline_json: null,
+    });
+    expect(JSON.parse(observed.source_paths_json)).toContain(addedPath);
+    const persisted = nodeRows();
+    expect(persisted).not.toEqual(initialNodes);
+    expect(persisted.map((row) => row.path)).toEqual(initialNodes.map((row) => row.path));
+    expect(
+      persisted.map((row) => {
+        assert(typeof row.node_json === "string");
+        return JSON.parse(row.node_json);
+      }),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          canonicalIdentity: expect.any(String),
+          node: expect.objectContaining({ sha256: hash("before") }),
+        }),
+      ]),
+    );
+    const baseline = await store.manifest(observed, { kind: "materialize" });
+    assert(baseline.kind === "materialize");
+    expect(JSON.parse(baseline.rawManifest)).toEqual(JSON.parse(rawManifest));
+
+    const accepted = await store.update(observed, { pending_ref: null }, undefined, scan);
+    expect(accepted.baseline_ref).toBe(scan.resultingRoot);
+    const materialized = await store.manifest(accepted, { kind: "materialize" });
+    assert(materialized.kind === "materialize");
+    expect(JSON.parse(materialized.rawManifest).entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ path: "edited.txt", sha256: hash("after"), size: 5 }),
+        expect.objectContaining({ path: addedPath, sha256: hash("admitted"), size: 8 }),
+        expect.objectContaining({ path: "kept-0.txt", sha256: hash("before"), size: 6 }),
+      ]),
+    );
+  });
 });
 
 it.each([

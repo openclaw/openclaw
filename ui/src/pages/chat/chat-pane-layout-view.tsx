@@ -1,5 +1,5 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { Show } from "solid-js";
+import { createSignal, Show } from "solid-js";
 import type { ApplicationContext } from "../../app/context-types.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import { SessionBackgroundView } from "../../components/session-background-view.tsx";
@@ -20,11 +20,12 @@ import { ChatImageLightbox } from "./components/chat-image-lightbox-view.tsx";
 import { PaneHeaderView } from "./components/chat-pane-header.tsx";
 import type { ChatPaneHeaderPresentation } from "./components/chat-pane-header.types.ts";
 import type { SidebarRegionViewProps } from "./components/chat-sidebar-region-types.ts";
+import { SubagentDesktopAvatar } from "./components/chat-subagent-avatar.tsx";
 import {
   ChatSubagentMobileHeader,
   type ChatSubagentMobileStop,
-} from "./components/chat-subagents-mobile.tsx";
-import { SubagentDesktopAvatar } from "./components/chat-subagents-panel-desktop.tsx";
+} from "./components/chat-subagent-mobile-header.tsx";
+import { isSidebarSlotVisible } from "./sidebar-layout.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 
@@ -32,12 +33,10 @@ function PaneSubagentHeader(props: {
   sessionKey: string;
   title: string;
   onBack: () => void;
-  stop: Parameters<typeof PaneSubagentStop>[0] | undefined;
+  stop: (Parameters<typeof PaneSubagentStop>[0] & { target: string }) | undefined;
   details: ChatDetailsViewProps | undefined;
   /** Supplied by the chrome owner for desktop, including embedded child panes. */
   desktop?: { sessionKey: string };
-  /** Complete mobile rail supplied by the native mobile composition owner. */
-  mobileHeader?: SolidJSX.Element;
   /** Explicit native presentation, including child panes without a mobile host. */
   mobile?: boolean;
 }) {
@@ -45,6 +44,7 @@ function PaneSubagentHeader(props: {
     const stop = props.stop;
     return stop
       ? {
+          target: stop.target,
           label: t("chat.runControls.stop"),
           accessibleLabel: t("chat.subagentsPanel.stop", { name: props.title }),
           disabled: false,
@@ -62,94 +62,87 @@ function PaneSubagentHeader(props: {
   };
   return (
     <Show
-      when={props.mobileHeader}
+      when={props.mobile === true}
       fallback={
         <Show
-          when={props.mobile === true}
+          when={props.desktop}
           fallback={
-            <Show
-              when={props.desktop}
-              fallback={
-                <header class="chat-subagent-detail__header">
-                  <button
-                    class="chat-subagent-detail__back"
-                    type="button"
-                    onClick={() => props.onBack()}
-                  >
-                    <Icon name="arrowLeft" />
-                    {t("chat.subagentsPanel.back")}
-                  </button>
-                  <div class="chat-subagent-detail__heading">
-                    <strong class="chat-subagent-detail__title">{props.title}</strong>
-                    <Show when={props.stop}>{(stop) => <PaneSubagentStop {...stop()} />}</Show>
-                    <Show when={props.details !== undefined}>
-                      <ChatDetails {...props.details!} />
-                    </Show>
-                  </div>
-                </header>
-              }
-            >
-              {(desktop) => {
-                const nameRef = useScrollState(true, false);
-                return (
-                  <header
-                    class="subagents-desktop__child-rail session-panel-rail"
-                    data-presentation="desktop"
-                  >
-                    <span class="session-panel-rail__group">
-                      <button
-                        class="subagents-desktop__back session-panel-rail__button"
-                        type="button"
-                        aria-label={t("chat.subagentsPanel.back")}
-                        onClick={() => props.onBack()}
-                      >
-                        <Icon name="chevronLeft" />
-                      </button>
-                    </span>
-                    <SubagentDesktopAvatar sessionKey={desktop().sessionKey} />
-                    <strong ref={nameRef} class="subagents-desktop__child-name" title={props.title}>
-                      {props.title}
-                    </strong>
-                    <Show when={props.stop}>
-                      {(stop) => (
-                        <span class="session-panel-rail__group">
-                          <button
-                            class="subagents-desktop__stop session-panel-rail__button session-panel-rail__button--labelled"
-                            type="button"
-                            aria-label={t("chat.runControls.stopGenerating")}
-                            onClick={() => stop().onAbort()}
-                          >
-                            <Icon name="stop" />
-                            <span>{t("chat.runControls.stop")}</span>
-                          </button>
-                        </span>
-                      )}
-                    </Show>
-                    <Show when={props.details !== undefined}>
-                      <ChatDetails {...props.details!} />
-                    </Show>
-                  </header>
-                );
-              }}
-            </Show>
+            <header class="chat-subagent-detail__header">
+              <button
+                class="chat-subagent-detail__back"
+                type="button"
+                onClick={() => props.onBack()}
+              >
+                <Icon name="arrowLeft" />
+                {t("chat.subagentsPanel.back")}
+              </button>
+              <div class="chat-subagent-detail__heading">
+                <strong class="chat-subagent-detail__title">{props.title}</strong>
+                <Show when={props.stop}>{(stop) => <PaneSubagentStop {...stop()} />}</Show>
+                <Show when={props.details !== undefined}>
+                  <ChatDetails {...props.details!} />
+                </Show>
+              </div>
+            </header>
           }
         >
-          <ChatSubagentMobileHeader
-            sessionKey={props.sessionKey}
-            title={props.title}
-            backLabel={t("chat.subagentsPanel.back")}
-            onBack={() => props.onBack()}
-            stop={mobileStop()}
-            actions={
-              <Show when={props.details !== undefined}>
-                <ChatDetails {...props.details!} />
-              </Show>
-            }
-          />
+          {(desktop) => {
+            const nameRef = useScrollState(true, false);
+            return (
+              <header
+                class="subagents-desktop__child-rail session-panel-rail"
+                data-presentation="desktop"
+              >
+                <span class="session-panel-rail__group">
+                  <button
+                    class="subagents-desktop__back session-panel-rail__button"
+                    type="button"
+                    aria-label={t("chat.subagentsPanel.back")}
+                    onClick={() => props.onBack()}
+                  >
+                    <Icon name="chevronLeft" />
+                  </button>
+                </span>
+                <SubagentDesktopAvatar sessionKey={desktop().sessionKey} />
+                <strong ref={nameRef} class="subagents-desktop__child-name" title={props.title}>
+                  {props.title}
+                </strong>
+                <Show when={props.stop}>
+                  {(stop) => (
+                    <span class="session-panel-rail__group">
+                      <button
+                        class="subagents-desktop__stop session-panel-rail__button session-panel-rail__button--labelled"
+                        type="button"
+                        aria-label={t("chat.runControls.stopGenerating")}
+                        onClick={() => stop().onAbort()}
+                      >
+                        <Icon name="stop" />
+                        <span>{t("chat.runControls.stop")}</span>
+                      </button>
+                    </span>
+                  )}
+                </Show>
+                <Show when={props.details !== undefined}>
+                  <ChatDetails {...props.details!} />
+                </Show>
+              </header>
+            );
+          }}
         </Show>
       }
     >
-      {(header) => header()}
+      <ChatSubagentMobileHeader
+        sessionKey={props.sessionKey}
+        title={props.title}
+        backLabel={t("chat.subagentsPanel.back")}
+        onBack={() => props.onBack()}
+        stop={mobileStop()}
+        actions={
+          <Show when={props.details !== undefined}>
+            <ChatDetails {...props.details!} />
+          </Show>
+        }
+      />
     </Show>
   );
 }
@@ -192,6 +185,12 @@ export type PaneLayoutData = {
 
 function PaneContent(props: { data: PaneLayoutData; questions: ComposerQuestions }) {
   const presented = usePanePresentation(() => props.data.overlays.presentation);
+  // A restored tool-only layout needs no conversation root until first revealed.
+  // Once mounted, keep its composer and transcript DOM through later panel changes.
+  const [conversationMounted] = createSignal(
+    (previous = false) =>
+      previous || (presented() && isSidebarSlotVisible(props.data.region.layout, "conversation")),
+  );
   const header = (
     <Show
       when={props.data.subagentHeader}
@@ -203,15 +202,21 @@ function PaneContent(props: { data: PaneLayoutData; questions: ComposerQuestions
     </Show>
   );
   const primary = (
-    <div class="chat-pane-primary-column">
-      <ChatView
-        props={props.data.primary.chat}
-        application={props.data.primary.application}
-        questions={props.questions}
-      />
-    </div>
+    <Show when={conversationMounted()}>
+      <div class="chat-pane-primary-column">
+        <ChatView
+          props={props.data.primary.chat}
+          application={props.data.primary.application}
+          questions={props.questions}
+        />
+      </div>
+    </Show>
   );
-  const background = <SessionBackgroundView {...props.data.background} />;
+  const background = (
+    <Show when={conversationMounted()}>
+      <SessionBackgroundView {...props.data.background} />
+    </Show>
+  );
   return (
     <>
       <SidebarRegionView

@@ -8,6 +8,7 @@ import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-clien
 import { requestPreparedOpenAIResponsesCompaction } from "./openai-responses-compact-request.js";
 import { captureOpenAIResponsesCompaction } from "./openai-responses-compaction-replay.js";
 import * as fixtures from "./openai-responses-prompt-observer.test-support.js";
+import { outputItem } from "./openai-stream-cases.test-support.js";
 const initialHost = getAiTransportHost();
 const model = fixtures.createModel({
   id: "gpt-5.4",
@@ -26,15 +27,23 @@ const context = {
   systemPrompt: "Stable instructions",
   tools: [{ name: "lookup", description: "Read", parameters: Type.Object({ key: Type.String() }) }],
   messages: [
-    { role: "user", content: "remember copper", timestamp: 1 },
-    { role: "user", content: "runtime context", runtimeContext: { retained: true }, timestamp: 2 },
+    fixtures.userMessage("remember copper", 1),
+    fixtures.userMessage("runtime context", 2, { runtimeContext: { retained: true } }),
   ],
 } satisfies Context;
-const checkpoint = (value = "opaque") => ({
-  type: "response.output_item.done",
-  output_index: 0,
-  item: { type: "compaction", id: "cmp_provider_id", encrypted_content: value },
-});
+const syntheticMessages = convertToLlm([
+  fixtures.userMessage("real request", 1),
+  { role: "compactionSummary", summary: "old summary", tokensBefore: 100, timestamp: 2 },
+  {
+    role: "custom",
+    customType: "test-notice",
+    content: "synthetic notice",
+    display: false,
+    timestamp: 3,
+  },
+]);
+const checkpoint = (value = "opaque") =>
+  outputItem("done", { type: "compaction", id: "cmp_provider_id", encrypted_content: value });
 const completed = (status = "completed") =>
   fixtures.completedResponse("resp-test", [], {
     status,
@@ -118,43 +127,6 @@ describe.each([
     expect(result.usage.input_tokens_details).toEqual({ cached_tokens: 900 });
   });
 
-  it("does not retain summaries or custom context as human-authored messages", async () => {
-    const result = await compact({
-      ...context,
-      messages: convertToLlm([
-        { role: "user", content: "real request", timestamp: 1 },
-        { role: "compactionSummary", summary: "old summary", tokensBefore: 100, timestamp: 2 },
-        {
-          role: "custom",
-          customType: "test-notice",
-          content: "synthetic notice",
-          display: false,
-          timestamp: 3,
-        },
-      ]),
-    });
-    expect(JSON.stringify(requests[0]?.body)).toContain("old summary");
-    expect(JSON.stringify(result.output)).not.toContain("old summary");
-    expect(JSON.stringify(result.output)).not.toContain("synthetic notice");
-    expect(JSON.stringify(result.output)).toContain("real request");
-  });
-
-  it.each<[string, unknown]>([
-    ["unfinished stream", undefined],
-    ["cancelled terminal", completed("cancelled")],
-    [
-      "failed terminal",
-      failed("failed", { error: { code: "server_error", message: "synthetic failure" } }),
-    ],
-    [
-      "incomplete terminal",
-      failed("incomplete", { output: [], incomplete_details: { reason: "max_output_tokens" } }),
-    ],
-  ])("rejects %s without adopting its checkpoint", async (_name, terminal) => {
-    events = [checkpoint(), ...(terminal ? [terminal] : [])];
-    await expect(compact()).rejects.toThrow();
-  });
-
   it("does not adopt an item after cancellation or carry it into the next attempt", async () => {
     const controller = new AbortController();
     afterFetch = () => controller.abort();
@@ -165,7 +137,12 @@ describe.each([
   });
 
   it("retains earlier users across two compactions and persisted replay", async () => {
-    const first = await compact();
+    const first = await compact({ ...context, messages: syntheticMessages });
+    expect(JSON.stringify(requests[0]?.body)).toContain("old summary");
+    expect(first.output).toEqual([
+      fixtures.inputMessage("real request"),
+      { type: "compaction", encrypted_content: "opaque" },
+    ]);
     const owner = fixtures.createAssistant(model, [], { timestamp: 3 });
     captureOpenAIResponsesCompaction(
       owner,
@@ -179,10 +156,7 @@ describe.each([
     const serializedOwner = JSON.stringify(owner);
     const second = await compact({
       ...context,
-      messages: [
-        JSON.parse(serializedOwner),
-        { role: "user", content: "now silver", timestamp: 4 },
-      ],
+      messages: [JSON.parse(serializedOwner), fixtures.userMessage("now silver", 4)],
     });
     expect(second.output).toEqual([
       first.output[0],
@@ -190,16 +164,13 @@ describe.each([
       { type: "compaction", encrypted_content: "second" },
     ]);
     expect(JSON.stringify(requests[1]?.body)).toContain("opaque");
-    expect(JSON.stringify(requests[1]?.body)).toContain("remember copper");
+    expect(JSON.stringify(requests[1]?.body)).toContain("real request");
   });
 });
 it("bounds retained multilingual input without reviving older users", async () => {
   const result = await compact({
     ...context,
-    messages: [
-      { role: "user", content: "oldest", timestamp: 1 },
-      { role: "user", content: "中".repeat(64_001), timestamp: 2 },
-    ],
+    messages: [fixtures.userMessage("oldest", 1), fixtures.userMessage("中".repeat(64_001), 2)],
   });
   expect(result.output).toHaveLength(2);
   expect(JSON.stringify(result.output)).not.toContain("oldest");
@@ -208,6 +179,22 @@ it("bounds retained multilingual input without reviving older users", async () =
   });
 });
 it.each<[string, unknown[]]>([
+  ["unfinished stream", [checkpoint()]],
+  ["cancelled terminal", [checkpoint(), completed("cancelled")]],
+  [
+    "failed terminal",
+    [
+      checkpoint(),
+      failed("failed", { error: { code: "server_error", message: "synthetic failure" } }),
+    ],
+  ],
+  [
+    "incomplete terminal",
+    [
+      checkpoint(),
+      failed("incomplete", { output: [], incomplete_details: { reason: "max_output_tokens" } }),
+    ],
+  ],
   ["duplicate item", [checkpoint(), checkpoint(), completed()]],
   ["empty item", [checkpoint(""), completed()]],
 ])("rejects %s without adopting its checkpoint", async (_name, sequence) => {

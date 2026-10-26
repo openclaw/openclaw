@@ -27,7 +27,7 @@ export function openWorkspaceItem<T>(
   state: SessionWorkspaceHost,
   workspace: SessionWorkspaceState,
   itemId: string,
-  load: () => Promise<T | null | undefined>,
+  load: (signal: AbortSignal) => Promise<T | null | undefined>,
   render: (result: T) => SidebarContent | null,
   missingMessage: string,
   options: {
@@ -137,10 +137,16 @@ export function openWorkspaceItem<T>(
       read.published = capturePreview(preview);
       workspace.previews = [...workspace.previews];
     };
+    const controller = new AbortController();
+    const stopWatching = sessionWorkspaceForHost(state).subscribe(() => {
+      if (!isCurrent()) {
+        controller.abort();
+      }
+    });
     read.settled = (async () => {
       setSessionWorkspaceError(workspace, null);
       try {
-        const result = await readResult();
+        const result = await readResult(controller.signal);
         const content = result == null ? null : render(result);
         const label = result == null ? undefined : options.resolveLabel?.(result);
         const canonicalKey = result == null ? undefined : options.resolveKey?.(result);
@@ -215,6 +221,7 @@ export function openWorkspaceItem<T>(
       } catch (error) {
         fail(options.resolveError?.(error) ?? formatUiError(error));
       } finally {
+        stopWatching();
         if (isCurrentSessionWorkspace(state, workspace)) {
           sessionWorkspaceForHost(state).publish();
         }
@@ -230,9 +237,15 @@ export function openWorkspaceItem<T>(
     workspace.activeId = itemId;
     setSessionWorkspaceError(workspace, null);
     sessionWorkspaceForHost(state).publish();
+    const controller = new AbortController();
+    const stopWatching = sessionWorkspaceForHost(state).subscribe(() => {
+      if (workspace.pendingPreview !== intent || !isCurrentSessionWorkspace(state, workspace)) {
+        controller.abort();
+      }
+    });
     return (async () => {
       try {
-        const result = await load();
+        const result = await load(controller.signal);
         if (workspace.pendingPreview !== intent || !isCurrentSessionWorkspace(state, workspace)) {
           return undefined;
         }
@@ -246,6 +259,7 @@ export function openWorkspaceItem<T>(
         }
         return begin(() => Promise.reject(toErrorObject(error, formatUiError(error))));
       } finally {
+        stopWatching();
         if (workspace.pendingPreview === intent) {
           workspace.pendingPreview = undefined;
         }

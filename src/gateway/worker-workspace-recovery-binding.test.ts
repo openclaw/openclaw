@@ -1,13 +1,8 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
-import {
-  WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
-  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
-} from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
   getRuntimeConfig,
   resetConfigRuntimeState,
@@ -32,6 +27,7 @@ import {
   REQUEST,
   seedActivePlacement,
 } from "./worker-environments/placement-dispatch-test-fixtures.js";
+import { WORKER_PROTOCOL_FEATURES } from "./worker-environments/placement-lifecycle.test-support.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { createWorkerSessionPlacementGate } from "./worker-environments/placement-worker-gate.js";
 import * as support from "./worker-environments/service.test-support.js";
@@ -45,6 +41,11 @@ import {
   WORKSPACE_CONFLICT_TRANSCRIPT_TYPE,
   WORKSPACE_RECOVERY_FAILURE_TRANSCRIPT_TYPE,
 } from "./worker-environments/workspace-conflicts.js";
+import {
+  sha256,
+  workspaceManifest,
+} from "./worker-environments/workspace-manifest-fixtures.test-support.js";
+import { gitInit } from "./worker-environments/workspace-recovery.test-support.js";
 import {
   applyStagedWorkerWorkspaceResult,
   workerWorkspaceResultStaging,
@@ -101,18 +102,10 @@ vi.mock("../config/sessions/session-accessor.sqlite-scope.js", async (importOrig
 });
 
 function manifest(content?: string) {
-  const entries = [];
-  if (content !== undefined) {
-    entries.push({
-      path: "result.txt",
-      type: "file",
-      mode: 0o644,
-      size: Buffer.byteLength(content),
-      sha256: createHash("sha256").update(content).digest("hex"),
-    });
-  }
-  const raw = JSON.stringify({ version: 1, baseCommit: null, entries });
-  return { raw, ref: `sha256:${createHash("sha256").update(raw).digest("hex")}` };
+  const raw = JSON.stringify(
+    workspaceManifest(content === undefined ? {} : { "result.txt": content }),
+  );
+  return { raw, ref: `sha256:${sha256(raw)}` };
 }
 
 const base = manifest();
@@ -183,10 +176,7 @@ async function withRecovery(verify: (fixture: RecoveryFixture) => Promise<void>)
 
 async function createRecoveryFixture(workspacePath: string) {
   boundary.worktreePath = workspacePath;
-  const initialized = await runCommandWithTimeout(["git", "-C", workspacePath, "init", "--quiet"], {
-    timeoutMs: 10_000,
-  });
-  expect(initialized.code).toBe(0);
+  await gitInit(workspacePath);
   const sessionStore = (name: string) => ({
     agentId: REQUEST.agentId,
     sessionId: REQUEST.sessionId,
@@ -228,10 +218,7 @@ async function createRecoveryFixture(workspacePath: string) {
       },
     ]);
   }
-  const protocolFeatures = [
-    WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
-    WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
-  ];
+  const protocolFeatures = [...WORKER_PROTOCOL_FEATURES];
   support.testState.prepareInstallation = async () => ({
     ...support.BUNDLE_ARTIFACT,
     protocolFeatures,

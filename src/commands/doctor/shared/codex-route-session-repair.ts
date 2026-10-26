@@ -253,7 +253,6 @@ function repairSessionAuthProfileReferences(
 /** Complete account renames or repair legacy session bindings and model routes. */
 function repairCodexSessionStoreRoutes(params: {
   store: Record<string, SessionEntry>;
-  now?: number;
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
   authProfileIdMap?: ReadonlyMap<string, string>;
   authProfileOnly?: boolean;
@@ -262,7 +261,7 @@ function repairCodexSessionStoreRoutes(params: {
   providerRenames?: readonly ProviderRename[];
   warnings?: string[];
 }): string[] {
-  const now = params.now ?? Date.now();
+  const now = Date.now();
   const sessionKeys: string[] = [];
   for (const [sessionKey, entry] of Object.entries(params.store)) {
     if (!entry) {
@@ -582,8 +581,6 @@ export async function maybeRepairCodexSessionRoutes(params: {
     });
     return {
       scannedStores: targets.length,
-      repairedStores: 0,
-      repairedSessions: 0,
       warnings: [
         ...warnings,
         ...(stale.length > 0
@@ -644,8 +641,6 @@ export async function maybeRepairCodexSessionRoutes(params: {
   const repairedScope = `${repairedSessions} session${repairedSessions === 1 ? "" : "s"} across ${repairedStores} store${repairedStores === 1 ? "" : "s"}`;
   return {
     scannedStores: targets.length,
-    repairedStores,
-    repairedSessions,
     warnings,
     changes:
       repairedSessions > 0

@@ -1,9 +1,12 @@
 // Own synthetic state only. Run with node --import ./scripts/tsx.mjs.
+// --worker-census observes native worker births/tasks and RSS/CPU/allocation in per-thread
+// JSONL beside the result. Compare fresh fixtures and alternate already-built revisions.
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash, generateKeyPairSync, randomUUID } from "node:crypto";
 import { createWriteStream, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
+import { finished as streamFinished } from "node:stream/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import { buildDeviceAuthPayloadV3 } from "../../packages/gateway-client/src/device-auth.ts";
@@ -21,7 +24,12 @@ import {
 } from "../e2e/lib/mock-inference-facts.ts";
 import { readBody } from "../e2e/lib/mock-openai-http.mjs";
 import { stopChild } from "../lib/gateway-bench-child.ts";
-import { buildGatewayBenchChildArgs, createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
+import { GATEWAY_GC_TRACE_MARKER, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
+import {
+  buildGatewayBenchChildArgs,
+  createGatewayBenchEnv,
+  writeGatewayAuthorityCountsPreload,
+} from "../lib/gateway-bench-runtime.ts";
 import { createGatewayWsClient } from "../lib/gateway-ws-client.ts";
 import {
   inspectManagedProcessGroup,
@@ -37,6 +45,13 @@ const { values } = parseArgs({
     "mock-port": { type: "string", default: "41059" },
     clients: { type: "string" },
     "reconnect-waves": { type: "boolean", default: false },
+    "cold-row-reads": { type: "boolean", default: false },
+    "startup-admission": { type: "boolean", default: false },
+    "request-start-owner": { type: "string" },
+    "row-refresh-owner": { type: "string" },
+    "trace-gc": { type: "boolean", default: false },
+    "authority-counts": { type: "boolean", default: false },
+    "authority-source-preload": { type: "string" },
     "reconnect-count": { type: "string" },
     waves: { type: "string", default: "10" },
     "start-at": { type: "string" },
@@ -48,6 +63,7 @@ const { values } = parseArgs({
     "cheap-handlers": { type: "boolean", default: false },
     "transcript-reads": { type: "boolean", default: false },
     "sqlite-queues": { type: "boolean", default: false },
+    "worker-census": { type: "boolean", default: false },
   },
 });
 if (!values["state-dir"]) {
@@ -61,7 +77,35 @@ if (port > 65535 || mockPort > 65535 || port === mockPort) {
   throw new Error("ports must be distinct and between 40000 and 65535");
 }
 const reconnectWaves = values["reconnect-waves"];
-const clientCount = integer(values.clients ?? (reconnectWaves ? "40" : "50"), "--clients");
+const coldRowReads = values["cold-row-reads"];
+const startupAdmission = values["startup-admission"];
+if (startupAdmission && !coldRowReads) {
+  throw new Error("--startup-admission requires --cold-row-reads");
+}
+if (values["request-start-owner"] && !startupAdmission) {
+  throw new Error("--request-start-owner requires --startup-admission");
+}
+const requestStartOwner = startupAdmission
+  ? path.resolve(
+      values["request-start-owner"] ?? "src/gateway/server/ws-connection/request-start.ts",
+    )
+  : undefined;
+const requestStartOwnerSha256 = requestStartOwner
+  ? createHash("sha256").update(readFileSync(requestStartOwner)).digest("hex")
+  : undefined;
+if ((values["row-refresh-owner"] || values["trace-gc"]) && !coldRowReads) {
+  throw new Error("--row-refresh-owner and --trace-gc require --cold-row-reads");
+}
+const rowRefreshOwner = coldRowReads
+  ? path.resolve(values["row-refresh-owner"] ?? "src/gateway/session-row-projection-refresh.ts")
+  : undefined;
+const rowRefreshOwnerSha256 = rowRefreshOwner
+  ? createHash("sha256").update(readFileSync(rowRefreshOwner)).digest("hex")
+  : undefined;
+const clientCount = integer(
+  values.clients ?? (coldRowReads ? "70" : reconnectWaves ? "40" : "50"),
+  "--clients",
+);
 const reconnectCount = values["reconnect-count"]
   ? integer(values["reconnect-count"], "--reconnect-count")
   : Math.min(30, clientCount - 1);
@@ -69,8 +113,19 @@ const waveCount = integer(values.waves, "--waves");
 const measurementStartAt = values["start-at"]
   ? integer(values["start-at"], "--start-at")
   : undefined;
-if (measurementStartAt !== undefined && !reconnectWaves) {
-  throw new Error("--start-at requires --reconnect-waves");
+if (measurementStartAt !== undefined && !reconnectWaves && !coldRowReads) {
+  throw new Error("--start-at requires --reconnect-waves or --cold-row-reads");
+}
+if (
+  coldRowReads &&
+  (reconnectWaves ||
+    values["writer-reads"] ||
+    values["worktree-churn"] ||
+    values["cheap-handlers"] ||
+    values["transcript-reads"] ||
+    values["sqlite-queues"])
+) {
+  throw new Error("--cold-row-reads cannot be combined with another workload mode");
 }
 if (values["reconnect-count"] !== undefined && !reconnectWaves) {
   throw new Error("--reconnect-count requires --reconnect-waves");
@@ -89,6 +144,27 @@ if (
 ) {
   throw new Error("--reconnect-waves requires at least two clients and no restart workload flags");
 }
+if (
+  values["authority-counts"] &&
+  (path.resolve(values.entry) !== path.resolve("src/entry.ts") ||
+    reconnectWaves ||
+    coldRowReads ||
+    values["trace-gc"])
+) {
+  throw new Error("--authority-counts requires source-entry restart mode without GC tracing");
+}
+if (
+  values["authority-source-preload"] &&
+  path.resolve(values.entry) !== path.resolve("src/entry.ts")
+) {
+  throw new Error("--authority-source-preload requires --entry src/entry.ts");
+}
+const authoritySourcePreload = values["authority-source-preload"]
+  ? path.resolve(values["authority-source-preload"])
+  : undefined;
+const authoritySourcePreloadSha256 = authoritySourcePreload
+  ? createHash("sha256").update(readFileSync(authoritySourcePreload)).digest("hex")
+  : undefined;
 const runCount = integer(values.runs, "--runs");
 const durationMs = integer(values.seconds, "--seconds") * 1000;
 const pollMs = integer(values["poll-ms"], "--poll-ms");
@@ -104,6 +180,15 @@ const fixture: unknown = JSON.parse(
 if (!isRecord(fixture) || fixture.format !== "openclaw-team-shape-v1") {
   throw new Error("--state-dir must contain a generated team-shape fixture; never use live state");
 }
+if (
+  coldRowReads &&
+  (fixture.sessionCount !== 5000 || (fixture.retainedRuns !== 0 && fixture.settledRuns !== true))
+) {
+  throw new Error("--cold-row-reads requires 5000 sessions and --settled-runs (or --runs 0)");
+}
+if (startupAdmission && 1 + 10 * (clientCount - 1) > 5000) {
+  throw new Error("--startup-admission requires at most 500 clients for distinct shared sessions");
+}
 const worktreeProject = Array.isArray(fixture.projectWorktrees)
   ? fixture.projectWorktrees[0]
   : undefined;
@@ -116,21 +201,31 @@ if (values["worktree-churn"] && !worktreeProjectId) {
 }
 const output = path.join(root, `post-restart-burst-${Date.now()}`);
 mkdirSync(output);
+const authorityPreload = path.join(output, "authority-counts-preload.mjs");
+if (values["authority-counts"]) {
+  writeGatewayAuthorityCountsPreload(authorityPreload, true, false);
+}
+let recoveryAuthorityCounts: Record<string, unknown> | undefined;
+let recoveryArrivalsAtSnapshot = 0;
 const cfg = JSON.parse(readFileSync(path.join(root, "openclaw.json"), "utf8"));
 const token = "synthetic-post-restart-burst-token";
 cfg.gateway = { ...cfg.gateway, auth: { mode: "token", token } };
 if (reconnectWaves) {
   cfg.gateway.trustedProxies = ["127.0.0.1", "::1"];
 }
-applyMockOpenAiModelConfig(cfg, { mockPort, modelRef: "openai/gpt-4.1" });
+if (!coldRowReads) {
+  applyMockOpenAiModelConfig(cfg, { mockPort, modelRef: "openai/gpt-4.1" });
+}
 cfg.agents.defaults = { ...cfg.agents.defaults, maxConcurrent: runCount, skipBootstrap: true };
 cfg.memory = { ...cfg.memory, search: { enabled: false } };
 cfg.tools = { codeMode: false };
-cfg.plugins = {
-  ...cfg.plugins,
-  enabled: true,
-  entries: { "memory-core": { config: { dreaming: { enabled: false } } } },
-};
+cfg.plugins = coldRowReads
+  ? { enabled: false }
+  : {
+      ...cfg.plugins,
+      enabled: true,
+      entries: { "memory-core": { config: { dreaming: { enabled: false } } } },
+    };
 if (
   values["writer-reads"] ||
   values["cheap-handlers"] ||
@@ -154,18 +249,19 @@ const previewUrl = "https://github.com/openclaw-fixture/restart/issues/1";
 const previewTitle = "Synthetic post-restart issue";
 const catalogId = "synthetic-restart-catalog";
 const pluginDir = path.join(output, catalogId);
-mkdirSync(pluginDir);
-writeFileSync(
-  path.join(pluginDir, "openclaw.plugin.json"),
-  JSON.stringify({
-    id: catalogId,
-    activation: { onStartup: true },
-    configSchema: { type: "object", additionalProperties: false },
-  }),
-);
-writeFileSync(
-  path.join(pluginDir, "index.mjs"),
-  `export default {
+if (!coldRowReads) {
+  mkdirSync(pluginDir);
+  writeFileSync(
+    path.join(pluginDir, "openclaw.plugin.json"),
+    JSON.stringify({
+      id: catalogId,
+      activation: { onStartup: true },
+      configSchema: { type: "object", additionalProperties: false },
+    }),
+  );
+  writeFileSync(
+    path.join(pluginDir, "index.mjs"),
+    `export default {
   id: '${catalogId}', register(api) {
     ${
       values["writer-reads"]
@@ -189,19 +285,135 @@ writeFileSync(
     });
   },
 };\n`,
-);
-cfg.plugins.load = { ...cfg.plugins.load, paths: [...(cfg.plugins.load?.paths ?? []), pluginDir] };
-cfg.plugins.entries = { ...cfg.plugins.entries, [catalogId]: { enabled: true } };
+  );
+  cfg.plugins.load = {
+    ...cfg.plugins.load,
+    paths: [...(cfg.plugins.load?.paths ?? []), pluginDir],
+  };
+  cfg.plugins.entries = { ...cfg.plugins.entries, [catalogId]: { enabled: true } };
+}
 const configPath = path.join(output, "openclaw.json");
 writeFileSync(configPath, JSON.stringify(cfg));
 // Private IPC only, no inspector listener or product RPC. Deltas include startup and recovery.
 const preloadPath = path.join(output, "elu-preload.mjs");
 writeFileSync(
   preloadPath,
-  `import { performance, monitorEventLoopDelay } from 'node:perf_hooks';
+  `import { performance, monitorEventLoopDelay, PerformanceObserver, constants } from 'node:perf_hooks';
 import { isMainThread, MessagePort } from 'node:worker_threads';
 if (isMainThread) {
   if (!process.send) throw new Error('Benchmark requires private IPC');
+  ${
+    coldRowReads
+      ? `const { registerHooks, stripTypeScriptTypes } = await import('node:module');
+  const { readFileSync, writeSync } = await import('node:fs');
+  const { createHash } = await import('node:crypto');
+  const rowOwnerPath = ${JSON.stringify(rowRefreshOwner)};
+  const rowOwnerSha256 = ${JSON.stringify(rowRefreshOwnerSha256)};
+  const rowCounts = { active: false, selectPage: 0, taskSamples: 0, taskMaxMs: 0, taskName: null, taskPhase: null };
+  Object.defineProperty(globalThis, Symbol.for('openclaw.bench.cold-row-counts'), { value: rowCounts });
+  const admissionSamples = new Map();
+  let admissionSampleCount = 0;
+  let admissionOverflow = false;
+  const recordAdmissionSample = (key, ms) => {
+    if (!rowCounts.active || !Number.isFinite(ms)) return;
+    if (admissionSampleCount >= 200000) { admissionOverflow = true; return; }
+    const samples = admissionSamples.get(key) ?? [];
+    if (!admissionSamples.has(key)) admissionSamples.set(key, samples);
+    samples.push(ms);
+    admissionSampleCount++;
+  };
+  if (${startupAdmission}) {
+    const { channel } = await import('node:diagnostics_channel');
+    const methods = new Set(['models.list', 'sessions.subscribe', 'sessions.list', 'board.get', 'sessions.resolve', 'sessions.messages.subscribe', 'chat.startup']);
+    channel('openclaw.gateway.rpc').subscribe((event) => {
+      if (!rowCounts.active || !methods.has(event.method)) return;
+      if (event.phase === 'dispatch') recordAdmissionSample(event.method + ':queue_wait', event.queueWaitMs);
+      if (event.phase === 'handler') {
+        recordAdmissionSample(event.method + ':admission', event.admissionMs);
+        recordAdmissionSample(event.method + ':handler', event.durationMs);
+      }
+      if (event.phase === 'response' && event.firstResponse) recordAdmissionSample(event.method + ':first_response', event.durationMs);
+    });
+    rowCounts.startSpan = (name) => {
+      if (!rowCounts.active || (!name.startsWith('gateway.chat.startup.') && !name.startsWith('startup-boundary.'))) return undefined;
+      const startedAt = performance.now();
+      return { [Symbol.dispose]() { recordAdmissionSample(name, performance.now() - startedAt); } };
+    };
+  }
+  let rowOwnerLoaded = false;
+  let rowSelectionHookLoaded = false;
+  let rowTaskHookLoaded = false;
+  let startupSpanHookLoaded = false;
+  let requestStartOwnerLoaded = false;
+  const markColdGc = (phase) => {
+    if (${values["trace-gc"]}) writeSync(1, ${JSON.stringify(GATEWAY_GC_TRACE_MARKER)} + JSON.stringify({ phase, pid: process.pid, profilePath: 'cold-rows' }) + '\\n');
+  };
+  if (${values["trace-gc"]}) {
+    if (typeof globalThis.gc !== 'function') throw new Error('Cold-row trace requires --expose-gc');
+    markColdGc('identify-start');
+    globalThis.gc();
+    markColdGc('identify-stop');
+  }
+  registerHooks({ load(url, context, next) {
+    const loaded = next(url, context);
+    if (${startupAdmission} && url.endsWith('/src/gateway/server/ws-connection/request-start.ts')) {
+      const source = readFileSync(${JSON.stringify(requestStartOwner)}, 'utf8');
+      if (createHash('sha256').update(source).digest('hex') !== ${JSON.stringify(requestStartOwnerSha256)}) {
+        throw new Error('Request start owner changed after measurement preparation');
+      }
+      requestStartOwnerLoaded = true;
+      return { ...loaded, source: stripTypeScriptTypes(source) };
+    }
+    if (url.endsWith('/src/gateway/session-row-projection-refresh.ts')) {
+      const source = readFileSync(rowOwnerPath, 'utf8');
+      if (createHash('sha256').update(source).digest('hex') !== rowOwnerSha256) {
+        throw new Error('Row refresh owner changed after measurement preparation');
+      }
+      loaded.source = stripTypeScriptTypes(source);
+      rowOwnerLoaded = true;
+      process.stdout.write('COLD_ROWS_OWNER ' + JSON.stringify({ path: rowOwnerPath, sha256: rowOwnerSha256 }) + '\\n');
+    }
+    if (url.endsWith('/src/gateway/session-utils-list.ts')) {
+      let source = stripTypeScriptTypes(readFileSync(new URL(url), 'utf8'));
+      const selection = /const selectPage\\s*=\\s*\\(\\)\\s*=>\\s*\\{/;
+      if (!selection.test(source)) throw new Error('Missing selectPage source counter hook');
+      source = source.replace(selection, '$&if (globalThis[Symbol.for("openclaw.bench.cold-row-counts")].active) globalThis[Symbol.for("openclaw.bench.cold-row-counts")].selectPage++;');
+      rowSelectionHookLoaded = true;
+      return { ...loaded, source };
+    }
+    if (url.endsWith('/src/infra/main-thread-stall.ts')) {
+      let source = stripTypeScriptTypes(readFileSync(new URL(url), 'utf8'));
+      const task = /function runWithMainThreadTask\\s*\\([^)]*\\)\\s*\\{/;
+      if (!task.test(source)) throw new Error('Missing runWithMainThreadTask source hook');
+      source = source.replace(task, '$&const probe = globalThis[Symbol.for("openclaw.bench.cold-row-counts")]; if (probe.active) { const originalRun = run; run = () => { const at = performance.now(); try { return originalRun(); } finally { const ms = performance.now() - at; probe.taskSamples++; if (ms > probe.taskMaxMs) { probe.taskMaxMs = ms; probe.taskName = name.slice(0, 160); probe.taskPhase = phase?.slice(0, 160) ?? null; } } }; }');
+      rowTaskHookLoaded = true;
+      return { ...loaded, source };
+    }
+    if (${startupAdmission} && url.endsWith('/src/infra/diagnostics-timeline.ts')) {
+      let source = stripTypeScriptTypes(readFileSync(new URL(url), 'utf8'));
+      const span = /function measureDiagnosticsTimelineSpan(?:Sync)?\\s*\\([^)]*\\)\\s*\\{/g;
+      if ([...source.matchAll(span)].length !== 2) throw new Error('Missing chat startup timeline span hooks');
+      source = source.replace(span, '$&using benchmarkSpan = globalThis[Symbol.for("openclaw.bench.cold-row-counts")].startSpan(name);');
+      startupSpanHookLoaded = true;
+      return { ...loaded, source };
+    }
+    if (${startupAdmission}) {
+      const boundary = url.endsWith('/src/gateway/server-methods/chat-pending-inputs.ts')
+        ? ['readChatPendingInputs', 'pending_inputs']
+        : url.endsWith('/src/agents/subagents/registry/subagent-registry-state.ts')
+          ? ['prepareOptionalSubagentSessionListReadCache', 'subagent_snapshot'] : undefined;
+      if (boundary) {
+        let source = stripTypeScriptTypes(readFileSync(new URL(url), 'utf8'));
+        const start = new RegExp('async function ' + boundary[0] + '\\\\s*\\\\([^)]*\\\\)\\\\s*\\\\{');
+        if (!start.test(source)) throw new Error('Missing startup boundary hook: ' + boundary[0]);
+        source = source.replace(start, '$&using benchmarkSpan = globalThis[Symbol.for("openclaw.bench.cold-row-counts")].startSpan("startup-boundary.' + boundary[1] + '");');
+        return { ...loaded, source };
+      }
+    }
+    return loaded;
+  } });`
+      : ""
+  }
   ${
     values["sqlite-queues"]
       ? `if (process.env.OPENCLAW_BENCH_QUEUE_START_NS) {
@@ -393,8 +605,13 @@ if (isMainThread) {
   };
   process.on('message', (message) => {
     if (message?.channel === 'post-restart-burst-snapshot') {
+      const authority = globalThis[Symbol.for('openclaw.benchmark.authorityCounts')];
+      if (authority) authority.active = false;
       process.send?.({ channel: 'post-restart-burst-tasks', pid: process.pid,
-        taskCounts: Object.fromEntries(taskCounts) });
+        taskCounts: Object.fromEntries(taskCounts),
+        authorityCounts: authority ? { counts: authority.counts, installed: authority.installed,
+          startedAtEpochMs: authority.startedAtEpochMs, finishedAtEpochMs: Date.now(),
+          sourceOverlay: globalThis[Symbol.for('openclaw.benchmark.sourceOverlay')] } : undefined });
     }
   });
   let before = performance.eventLoopUtilization();
@@ -402,6 +619,72 @@ if (isMainThread) {
   let cpu = process.threadCpuUsage();
   const lag = monitorEventLoopDelay({ resolution: 20 });
   lag.enable();
+  ${
+    coldRowReads
+      ? `const coldLag = monitorEventLoopDelay({ resolution: 10 });
+  const coldCollections = [];
+  let coldStartedAt = Infinity;
+  let coldFinishedAt = Infinity;
+  let coldThreadCpu;
+  let coldProcessCpu;
+  const collectColdGc = (entries) => {
+    for (const entry of entries) {
+      if (entry.startTime >= coldStartedAt && entry.startTime < coldFinishedAt) {
+        coldCollections.push({ kind: entry.detail.kind, ms: entry.duration });
+      }
+    }
+  };
+  const coldGcObserver = new PerformanceObserver((list) => collectColdGc(list.getEntries()));
+  coldGcObserver.observe({ entryTypes: ['gc'] });
+  const gcSummary = (kind) => {
+    const pauses = coldCollections.filter((entry) => kind === undefined || entry.kind === kind).map((entry) => entry.ms).sort((a, b) => a - b);
+    const percentile = (fraction) => pauses[Math.max(0, Math.ceil(pauses.length * fraction) - 1)] ?? null;
+    return { samples: pauses.length, totalMs: pauses.reduce((sum, ms) => sum + ms, 0), p95Ms: percentile(0.95), p99Ms: percentile(0.99), maxMs: pauses.at(-1) ?? null };
+  };
+  process.on('message', async (message) => {
+    if (message?.channel === 'cold-rows-ready') {
+      markColdGc('diagnostics-start');
+      coldStartedAt = performance.now();
+      coldThreadCpu = process.threadCpuUsage();
+      coldProcessCpu = process.cpuUsage();
+      rowCounts.active = true;
+      coldLag.enable();
+      process.send?.({ channel: 'cold-rows-ready', pid: process.pid });
+    }
+    if (message?.channel === 'cold-rows-finish') {
+      coldFinishedAt = performance.now();
+      const threadCpu = process.threadCpuUsage(coldThreadCpu);
+      const processCpu = process.cpuUsage(coldProcessCpu);
+      markColdGc('diagnostics-stop');
+      rowCounts.active = false;
+      coldLag.disable();
+      await new Promise(setImmediate);
+      collectColdGc(coldGcObserver.takeRecords());
+      coldGcObserver.disconnect();
+      if (!rowOwnerLoaded || !rowSelectionHookLoaded || !rowTaskHookLoaded || rowCounts.selectPage === 0 || rowCounts.taskSamples === 0) {
+        throw new Error('Cold row measurement did not load the selected owner, selection, and task hooks');
+      }
+      if (${startupAdmission} && (!requestStartOwnerLoaded || !startupSpanHookLoaded || admissionOverflow || !admissionSamples.has('chat.startup:handler'))) {
+        throw new Error('Startup admission diagnostics are incomplete');
+      }
+      const admission = ${startupAdmission} ? Object.fromEntries([...admissionSamples].map(([key, samples]) => {
+        samples.sort((a, b) => a - b);
+        const percentile = (fraction) => samples[Math.max(0, Math.ceil(samples.length * fraction) - 1)] ?? null;
+        return [key, { samples: samples.length, totalMs: samples.reduce((sum, ms) => sum + ms, 0), p50Ms: percentile(0.5), p90Ms: percentile(0.9), p95Ms: percentile(0.95), p99Ms: percentile(0.99), maxMs: samples.at(-1) ?? null }];
+      })) : undefined;
+      process.send?.({ channel: 'cold-rows-loop', pid: process.pid,
+        samples: coldLag.count, p95Ms: coldLag.percentile(95)/1e6,
+        p99Ms: coldLag.percentile(99)/1e6, maxMs: coldLag.max/1e6,
+        mainThreadCpuMs: (threadCpu.user + threadCpu.system)/1000,
+        processCpuMs: (processCpu.user + processCpu.system)/1000,
+        selectPageCalls: rowCounts.selectPage, rowOwnerSha256,
+        admission,
+        synchronousTasks: { samples: rowCounts.taskSamples, maxMs: rowCounts.taskMaxMs, task: rowCounts.taskName, phase: rowCounts.taskPhase, boundary: 'inclusive synchronous runWithMainThreadTask callbacks; nested scopes may overlap' },
+        gc: { scope: 'main-isolate', all: gcSummary(), minor: gcSummary(constants.NODE_PERFORMANCE_GC_MINOR), major: gcSummary(constants.NODE_PERFORMANCE_GC_MAJOR) } });
+    }
+  });`
+      : ""
+  }
   setInterval(() => {
     const now = performance.now();
     const after = performance.eventLoopUtilization();
@@ -419,7 +702,7 @@ const env = {
   ...createGatewayBenchEnv(path.join(root, "home"), configPath, { startupTrace: false }),
   OPENCLAW_STATE_DIR: root,
   TMPDIR: path.join(root, "tmp"),
-  OPENAI_API_KEY: "synthetic-fixture",
+  ...(!coldRowReads ? { OPENAI_API_KEY: "synthetic-fixture" } : {}),
   OPENCLAW_SKIP_CHANNELS: "1",
   OPENCLAW_PROFILE: `team-shape-${port}`,
   OPENCLAW_SYSTEMD_UNIT: `openclaw-gateway-team-shape-${port}`,
@@ -429,9 +712,13 @@ const env = {
 const cohort = randomUUID();
 const message = (index: number) =>
   `Reply with benchmark stream ${index}. Post-restart cohort ${cohort}.`;
+const primaryMessageIndexes = new Map<string, number>(
+  Array.from({ length: runCount }, (_, index) => [message(index + 1), index + 1]),
+);
 const initialArrivals = new Set<number>();
 const heldResponses = new Map<number, ServerResponse>();
 const recoveryArrivals = new Set<number>();
+let allRecoveryPrimaryArrivalsMs: number | undefined;
 let crashExpected = false;
 let activePrimaryHoldsAtCrash: number;
 let recovering = false;
@@ -441,6 +728,7 @@ let restartAt = 0;
 let loadStartedAt = Number.POSITIVE_INFINITY;
 let closing = false;
 const children: ChildProcess[] = [];
+const childLogs = new Map<ChildProcess, ReturnType<typeof createWriteStream>>();
 const expectedExits = new Set<ChildProcess>();
 const listeners = new Set<ChildProcess>();
 const clients = new Set<ReturnType<typeof createGatewayWsClient>>();
@@ -454,6 +742,20 @@ type EluSample = {
 const eluSamples: EluSample[] = [];
 const transcriptSnapshot = Promise.withResolvers<Record<string, number>>();
 const sqliteQueueSnapshot = Promise.withResolvers<Record<string, unknown>>();
+const coldRowsReady = Promise.withResolvers<void>();
+const coldRowsLoop = Promise.withResolvers<{
+  samples: number;
+  p95Ms: number;
+  p99Ms: number;
+  maxMs: number;
+  mainThreadCpuMs: number;
+  processCpuMs: number;
+  selectPageCalls: number;
+  rowOwnerSha256: string;
+  gc: Record<string, unknown>;
+  synchronousTasks: Record<string, unknown>;
+  admission?: Record<string, unknown>;
+}>();
 let githubFixtureRequests = 0;
 let vapidPublicKey: string | undefined;
 let timeToSteadyMs: number | null = null;
@@ -463,8 +765,33 @@ const mock = createServer((req, res) => {
     res.end("ok");
     return;
   }
+  if (req.method === "GET" && (req.url === "/v1/models" || req.url === "/models")) {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(
+      JSON.stringify({
+        object: "list",
+        data: [{ id: "gpt-4.1", object: "model", owned_by: "synthetic" }],
+      }),
+    );
+    return;
+  }
+  if (req.method !== "POST") {
+    res.writeHead(404);
+    res.end();
+    return;
+  }
   void (async () => {
-    const body: unknown = JSON.parse(await readBody(req));
+    let body: unknown;
+    try {
+      body = JSON.parse(await readBody(req));
+    } catch {
+      console.warn(
+        `Mock refused malformed JSON: ${req.method} ${(req.url ?? "").split("?")[0]?.slice(0, 160)}`,
+      );
+      res.writeHead(400);
+      res.end("Invalid JSON");
+      return;
+    }
     const facts = summarizeMockInferenceRequest(body);
     const input = isRecord(body) ? (body.input ?? body.messages) : undefined;
     const lastUser = Array.isArray(input)
@@ -473,21 +800,41 @@ const mock = createServer((req, res) => {
           .map(readMockUserText)
           .find((text) => text !== undefined)
       : undefined;
-    const index = facts.turnIndex;
+    // Restart appends a continuation user message after the original cohort marker.
+    // Utility prompts can quote that history, so retain the shared purpose exclusions.
+    const recoveryIndex =
+      recovering &&
+      facts.purpose !== "activity-recap" &&
+      facts.purpose !== "session-observer" &&
+      Array.isArray(input)
+        ? input
+            .map(readMockUserText)
+            .map((text) =>
+              text === undefined
+                ? undefined
+                : primaryMessageIndexes.get(stripInboundMetadata(text).trim()),
+            )
+            .find((index) => index !== undefined)
+        : undefined;
+    const index = recovering ? recoveryIndex : facts.turnIndex;
     const primary =
-      facts.purpose === "benchmark-turn" &&
-      !facts.hasToolOutput &&
       index !== undefined &&
       index >= 1 &&
       index <= runCount &&
-      lastUser !== undefined &&
-      stripInboundMetadata(lastUser).trim() === message(index);
+      (recovering ||
+        (facts.purpose === "benchmark-turn" &&
+          !facts.hasToolOutput &&
+          lastUser !== undefined &&
+          stripInboundMetadata(lastUser).trim() === message(index)));
     if (primary) {
       const arrivals = recovering ? recoveryArrivals : initialArrivals;
       if (!recovering && arrivals.has(index)) {
         throw new Error(`duplicate initial primary model request ${index}`);
       }
       arrivals.add(index);
+      if (recovering && arrivals.size === runCount && allRecoveryPrimaryArrivalsMs === undefined) {
+        allRecoveryPrimaryArrivalsMs = performance.now() - restartAt;
+      }
     }
     res.writeHead(200, { "content-type": "text/event-stream" });
     if (primary && !recovering) {
@@ -577,7 +924,17 @@ async function assertPortAvailable(targetPort: number) {
 }
 function launch(name: string) {
   const log = createWriteStream(path.join(output, `${name}.log`));
+  const censusDirectory = path.join(output, `${name}-workers`);
+  if (values["worker-census"]) {
+    mkdirSync(censusDirectory);
+  }
   const args = buildGatewayBenchChildArgs(values.entry, port, [
+    ...(values["worker-census"]
+      ? ["--import", path.resolve("scripts/perf/transcript-boot-preload.mjs")]
+      : []),
+    ...(values["trace-gc"] ? ["--expose-gc", "--trace-gc-nvp"] : []),
+    ...(authoritySourcePreload ? ["--import", authoritySourcePreload] : []),
+    ...(recovering && values["authority-counts"] ? ["--import", authorityPreload] : []),
     "--import",
     "./scripts/tsx.mjs",
     "--import",
@@ -605,6 +962,7 @@ function launch(name: string) {
     env: {
       ...env,
       ...queueClock,
+      ...(values["worker-census"] ? { OPENCLAW_BENCH_TRANSCRIPT_BOOT_DIR: censusDirectory } : {}),
       OPENCLAW_BENCH_CAPTURE_DEADLINE_MS: String(Date.now() + Math.min(durationMs, 120_000)),
     },
     detached: true,
@@ -612,6 +970,7 @@ function launch(name: string) {
   });
   child.stdout?.pipe(log, { end: false });
   child.stderr?.pipe(log, { end: false });
+  childLogs.set(child, log);
   child.once("close", () => log.end());
   let startupOutput = "";
   const observe = (chunk: Buffer) => {
@@ -631,6 +990,40 @@ function launch(name: string) {
     }
   });
   child.on("message", (sample: unknown) => {
+    if (coldRowReads && recovering && isRecord(sample) && sample.pid === child.pid) {
+      if (sample.channel === "cold-rows-ready") {
+        coldRowsReady.resolve();
+        return;
+      }
+      if (
+        sample.channel === "cold-rows-loop" &&
+        typeof sample.samples === "number" &&
+        typeof sample.p95Ms === "number" &&
+        typeof sample.p99Ms === "number" &&
+        typeof sample.maxMs === "number" &&
+        typeof sample.mainThreadCpuMs === "number" &&
+        typeof sample.processCpuMs === "number" &&
+        typeof sample.selectPageCalls === "number" &&
+        typeof sample.rowOwnerSha256 === "string" &&
+        isRecord(sample.gc) &&
+        isRecord(sample.synchronousTasks)
+      ) {
+        coldRowsLoop.resolve({
+          samples: sample.samples,
+          p95Ms: sample.p95Ms,
+          p99Ms: sample.p99Ms,
+          maxMs: sample.maxMs,
+          mainThreadCpuMs: sample.mainThreadCpuMs,
+          processCpuMs: sample.processCpuMs,
+          selectPageCalls: sample.selectPageCalls,
+          rowOwnerSha256: sample.rowOwnerSha256,
+          gc: sample.gc,
+          synchronousTasks: sample.synchronousTasks,
+          ...(isRecord(sample.admission) ? { admission: sample.admission } : {}),
+        });
+        return;
+      }
+    }
     if (
       recovering &&
       isRecord(sample) &&
@@ -658,6 +1051,10 @@ function launch(name: string) {
           throw new Error("Invalid transcript task count");
         }
         counts[kind] = count;
+      }
+      if (values["authority-counts"] && isRecord(sample.authorityCounts)) {
+        recoveryAuthorityCounts = sample.authorityCounts;
+        recoveryArrivalsAtSnapshot = recoveryArrivals.size;
       }
       transcriptSnapshot.resolve(counts);
       return;
@@ -947,7 +1344,7 @@ async function connect(index: number, options?: { proxy?: boolean; attempt?: Con
     // Reconnecting cheap handlers start immediately after auth, without warming a profile read.
     if (
       !options?.proxy &&
-      (!recovering || (!values["cheap-handlers"] && !values["transcript-reads"]))
+      (!recovering || (!coldRowReads && !values["cheap-handlers"] && !values["transcript-reads"]))
     ) {
       const self = await rpc(client, "users.self", {});
       if (
@@ -1248,6 +1645,7 @@ function summarize(rows: typeof timings) {
     completed: successful.length,
     errors: rows.length - successful.length,
     p50Ms: percentile(0.5),
+    p90Ms: percentile(0.9),
     p95Ms: percentile(0.95),
     p99Ms: percentile(0.99),
     maxMs: successful.at(-1) ?? null,
@@ -1509,7 +1907,7 @@ for (const [signal, exitCode] of [
 }
 try {
   await assertPortAvailable(port);
-  if (!reconnectWaves) {
+  if (!reconnectWaves && !coldRowReads) {
     await assertPortAvailable(mockPort);
     await new Promise<void>((resolve, reject) => {
       mock.once("error", reject);
@@ -1529,7 +1927,9 @@ try {
       )),
     );
   }
-  if (reconnectWaves) {
+  if (coldRowReads) {
+    await measureColdRowReads(initial, initialClients);
+  } else if (reconnectWaves) {
     await measureReconnectWaves(initialClients);
   } else {
     await measureRestartBurst(initial, initialClients);
@@ -1537,6 +1937,300 @@ try {
 } finally {
   if (!closing) {
     await cleanup();
+  }
+}
+async function measureColdRowReads(
+  initial: ChildProcess,
+  initialClients: Awaited<ReturnType<typeof connect>>[],
+) {
+  const sender = initialClients[0];
+  if (!sender) {
+    throw new Error("No synthetic sender connected");
+  }
+  const sessionKey = "agent:main:team-shape-session-1";
+  for (let index = 0; index < 3; index++) {
+    await rpc(sender, "board.widget.put", {
+      sessionKey,
+      name: `synthetic-cold-row-${index}`,
+      content: { kind: "html", html: `<p>Synthetic cold row ${index}</p>` },
+    });
+  }
+  for (const client of initialClients) {
+    await closeMeasuredClient(client);
+  }
+  expectedExits.add(initial);
+  await stopChild(initial, { teardownGraceMs: 30_000, killGraceMs: 2000 });
+  if (inspectManagedProcessGroup(initial, { errorPolicy: "indeterminate" }) !== "dead") {
+    throw new Error("Initial Gateway process group did not stop before the cold restart");
+  }
+  console.log(`PHASE cold-row-restart-prepared output=${output}`);
+  if (measurementStartAt !== undefined) {
+    const remaining = measurementStartAt - Date.now();
+    if (remaining < 0) {
+      throw new Error("--start-at deadline passed before cold restart preparation finished");
+    }
+    await delay(remaining);
+  }
+  recovering = true;
+  await assertPortAvailable(port);
+  const startedAtEpochMs = Date.now();
+  const restarted = launch("gateway-cold-rows");
+  await ready(restarted);
+  const readyMs = performance.now() - restartAt;
+  loadStartedAt = performance.now();
+  restarted.send({ channel: "cold-rows-ready" });
+  await Promise.race([
+    coldRowsReady.promise,
+    delay(10_000, undefined, { ref: false }).then(() => {
+      throw new Error("Cold row probe did not start");
+    }),
+  ]);
+  const makeReadShapes = (clientSessionKey: string) => [
+    ...(startupAdmission
+      ? [
+          {
+            name: "models.list",
+            method: "models.list",
+            params: { agentId: "main", sessionKey: clientSessionKey, view: "configured" },
+          },
+          {
+            name: "sessions.subscribe",
+            method: "sessions.subscribe",
+            params: { includeMessageBodies: false },
+          },
+        ]
+      : []),
+    { name: "sessions.list:sidebar", method: "sessions.list", params: shapes[0]!.params },
+    {
+      name: "sessions.list:agent-roster",
+      method: "sessions.list",
+      params: {
+        source: "agent-roster",
+        rowMode: "sidebar",
+        limit: 100,
+        archived: "all",
+        excludeDock: true,
+        includeDerivedTitles: true,
+        includeLastMessage: true,
+      },
+    },
+    { name: "board.get", method: "board.get", params: { sessionKey } },
+    ...(startupAdmission
+      ? [
+          {
+            name: "sessions.resolve",
+            method: "sessions.resolve",
+            params: { key: clientSessionKey },
+          },
+          {
+            name: "sessions.messages.subscribe",
+            method: "sessions.messages.subscribe",
+            params: { key: clientSessionKey },
+          },
+          {
+            name: "chat.startup",
+            method: "chat.startup",
+            params: { sessionKey: clientSessionKey, limit: 40, maxBytes: 262144 },
+          },
+        ]
+      : []),
+  ];
+  // The fixture's indices ending in 1 are shared and unarchived.
+  const clientSessionKeys = Array.from({ length: clientCount }, (_, index) =>
+    startupAdmission ? `agent:main:team-shape-session-${1 + 10 * index}` : sessionKey,
+  );
+  const clientReadShapes = clientSessionKeys.map(makeReadShapes);
+  const readShapes = clientReadShapes[0]!;
+  const deadline = loadStartedAt + durationMs;
+  console.log(`PHASE cold-row-ready ${readyMs.toFixed(1)}ms`);
+  const observations = await Promise.allSettled(
+    Array.from({ length: clientCount }, async (_, index) => {
+      const client = await connect(index);
+      const clientSessionKey = clientSessionKeys[index]!;
+      connectedClients.add(index);
+      for (
+        let wave = 0;
+        startupAdmission ? wave < waveCount : performance.now() < deadline;
+        wave++
+      ) {
+        await Promise.all(
+          clientReadShapes[index]!.map(async ({ name, method, params }) => {
+            const startedMs = performance.now() - restartAt;
+            let error: string | undefined;
+            try {
+              const response = await rpc(client, method, params);
+              if (method === "board.get") {
+                if (
+                  !isRecord(response) ||
+                  !Array.isArray(response.widgets) ||
+                  response.widgets.length !== 3
+                ) {
+                  throw new Error("Board did not return all three seeded widgets");
+                }
+              } else if (method === "models.list") {
+                if (!isRecord(response) || !Array.isArray(response.models)) {
+                  throw new Error("Model catalog did not return its models array");
+                }
+              } else if (method === "sessions.resolve") {
+                if (
+                  !isRecord(response) ||
+                  response.ok !== true ||
+                  response.key !== clientSessionKey
+                ) {
+                  throw new Error("Session resolution did not return the seeded session");
+                }
+              } else if (method === "sessions.messages.subscribe") {
+                if (
+                  !isRecord(response) ||
+                  response.subscribed !== true ||
+                  response.key !== clientSessionKey
+                ) {
+                  throw new Error("Message subscription did not admit the seeded session");
+                }
+              } else if (method === "chat.startup") {
+                if (
+                  !isRecord(response) ||
+                  response.sessionKey !== clientSessionKey ||
+                  !Array.isArray(response.messages) ||
+                  !isRecord(response.sessionInfo)
+                ) {
+                  throw new Error(
+                    "Chat startup did not return the seeded session and history page",
+                  );
+                }
+              } else if (method === "sessions.subscribe") {
+                if (!isRecord(response) || response.subscribed !== true) {
+                  throw new Error("Session subscription did not enroll its observer");
+                }
+              } else if (
+                !isRecord(response) ||
+                !Array.isArray(response.sessions) ||
+                !response.sessions.some(
+                  (row: unknown) =>
+                    isRecord(row) &&
+                    typeof row.key === "string" &&
+                    row.key.startsWith("agent:main:team-shape-session-"),
+                )
+              ) {
+                throw new Error("Session list did not return the seeded roster");
+              }
+            } catch (cause) {
+              error = String(cause);
+            }
+            timings.push({
+              method: name,
+              client: index,
+              wave,
+              startedMs,
+              elapsedMs: performance.now() - restartAt - startedMs,
+              ...(error ? { error } : {}),
+            });
+          }),
+        );
+        await delay(
+          startupAdmission ? pollMs : Math.max(0, Math.min(pollMs, deadline - performance.now())),
+        );
+      }
+    }),
+  );
+  assertAlive();
+  // Successful socket replies precede the dispatch-finally diagnostic publication.
+  if (startupAdmission) {
+    await delay(0);
+  }
+  restarted.send({ channel: "cold-rows-finish" });
+  const {
+    mainThreadCpuMs,
+    processCpuMs,
+    selectPageCalls,
+    rowOwnerSha256,
+    gc,
+    synchronousTasks,
+    admission,
+    ...loop
+  } = await Promise.race([
+    coldRowsLoop.promise,
+    delay(10_000, undefined, { ref: false }).then(() => {
+      throw new Error("Cold row probe did not finish");
+    }),
+  ]);
+  const errors = observations.flatMap((observation) =>
+    observation.status === "rejected" ? [String(observation.reason)] : [],
+  );
+  const afterReadyDurationMs = performance.now() - loadStartedAt;
+  let promotion: ReturnType<typeof readGatewayGcTrace> | undefined;
+  if (values["trace-gc"]) {
+    await cleanup();
+    await Promise.all([...childLogs.values()].map((log) => streamFinished(log)));
+    promotion = readGatewayGcTrace(
+      path.join(output, "gateway-cold-rows.log"),
+      "cold-rows",
+      "diagnostics",
+    );
+  }
+  const completedReads = timings.filter((row) => !row.error).length;
+  const result = {
+    output,
+    fixture,
+    scenario: startupAdmission ? "startup-admission" : "cold-row-reads",
+    clientCount,
+    ...(startupAdmission
+      ? {
+          waves: waveCount,
+          pollMs,
+          clientSessionKeys,
+          admission,
+          requestStartOwner: { path: requestStartOwner, sha256: requestStartOwnerSha256 },
+        }
+      : {}),
+    readyMs,
+    startedAtEpochMs,
+    afterReadyDurationMs,
+    loop,
+    synchronousTasks,
+    mainThreadCpuMs,
+    processCpuMs,
+    selectPageCalls,
+    rowRefreshOwner: { path: rowRefreshOwner, sha256: rowOwnerSha256 },
+    gc,
+    promotion,
+    promotedBytesPerRead:
+      promotion && completedReads ? promotion.promotedBytes / completedReads : null,
+    connectedClients: connectedClients.size,
+    ...(startupAdmission ? { completedRequests: completedReads } : {}),
+    errors,
+    reads: Object.fromEntries(
+      readShapes.map(({ name, params }, shapeIndex) => [
+        name,
+        {
+          ...(startupAdmission
+            ? {
+                paramsByClient: clientReadShapes.map(
+                  (clientShapes) => clientShapes[shapeIndex]!.params,
+                ),
+              }
+            : { params }),
+          ...summarize(timings.filter((row) => row.method === name)),
+          firstBatch: summarize(timings.filter((row) => row.method === name && row.wave === 0)),
+        },
+      ]),
+    ),
+    timings,
+    eluSamples,
+  };
+  writeFileSync(path.join(output, "result.json"), `${JSON.stringify(result, null, 2)}\n`);
+  console.log(JSON.stringify({ ...result, timings: undefined, eluSamples: undefined }, null, 2));
+  if (
+    errors.length ||
+    connectedClients.size !== clientCount ||
+    loop.samples === 0 ||
+    timings.some((row) => row.error) ||
+    readShapes.some(
+      ({ name }) =>
+        timings.filter((row) => row.method === name && row.wave === 0).length !== clientCount,
+    )
+  ) {
+    throw new Error(`Incomplete cold row measurement; inspect ${output}/result.json`);
   }
 }
 async function measureRestartBurst(
@@ -1707,6 +2401,17 @@ async function measureRestartBurst(
   const transcriptMetrics = delay(
     Math.max(0, Math.min(durationMs, 120_000) - (performance.now() - restartAt)),
   ).then(async () => {
+    if (values["authority-counts"]) {
+      while (recoveryArrivals.size !== runCount) {
+        assertAlive();
+        if (performance.now() >= restartAt + durationMs) {
+          throw new Error(
+            `Recovery count window ended with ${recoveryArrivals.size}/${runCount} arrivals`,
+          );
+        }
+        await delay(25);
+      }
+    }
     restarted.send({ channel: "post-restart-burst-snapshot" });
     return await Promise.race([
       transcriptSnapshot.promise,
@@ -1798,6 +2503,21 @@ async function measureRestartBurst(
     initialPrimaryArrivals: initialArrivals.size,
     activePrimaryHoldsAtCrash,
     recoveryPrimaryArrivals: recoveryArrivals.size,
+    allRecoveryPrimaryArrivalsMs,
+    recoveryAuthority: values["authority-counts"]
+      ? {
+          ...recoveryAuthorityCounts,
+          sourcePreloadSha256: authoritySourcePreloadSha256,
+          windowMs:
+            typeof recoveryAuthorityCounts?.startedAtEpochMs === "number" &&
+            typeof recoveryAuthorityCounts?.finishedAtEpochMs === "number"
+              ? recoveryAuthorityCounts.finishedAtEpochMs - recoveryAuthorityCounts.startedAtEpochMs
+              : undefined,
+          primaryArrivalsAtSnapshot: recoveryArrivalsAtSnapshot,
+          scope:
+            "restarted main isolate including startup; nested authority calls, not distinct decisions; counting-only timings are not acceptance evidence",
+        }
+      : undefined,
     ownerProfileIds: [...ownerProfileIds],
     catalogFixture:
       "synthetic provider consumes Gateway sessionEntries metadata; no real provider scan or network latency",
@@ -1862,6 +2582,10 @@ async function measureRestartBurst(
     ),
   );
   if (
+    (values["authority-counts"] &&
+      (recoveryArrivalsAtSnapshot !== runCount ||
+        !isRecord(recoveryAuthorityCounts?.counts) ||
+        !(Number(recoveryAuthorityCounts.counts["operator-run-recovery.assertPolicy"]) > 0))) ||
     connectedClients.size < clientCount ||
     shapes.some(({ method }) => !timings.some((row) => row.method === method && !row.error)) ||
     (values["cheap-handlers"] && githubFixtureRequests === 0) ||

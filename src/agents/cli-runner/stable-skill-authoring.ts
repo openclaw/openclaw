@@ -1,13 +1,11 @@
 import type { SkillLibraryAuthoringCapability } from "../../skills/library/authoring.js";
 import { SkillLibraryError } from "../../skills/skill-library-error.js";
 
-type SkillAuthoringShape = Pick<
-  SkillLibraryAuthoringCapability,
-  "defaultTarget" | "multipleProfiles"
->;
-
 const MAX_REMEMBERED_SESSIONS = 512;
-const shapes = new Map<string, SkillAuthoringShape>();
+const shapes = new Map<
+  string,
+  Pick<SkillLibraryAuthoringCapability, "defaultTarget" | "multipleProfiles">
+>();
 
 /**
  * Keeps the skill_workshop definition stable across a session's CLI turns.

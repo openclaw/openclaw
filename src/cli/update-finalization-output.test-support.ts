@@ -44,6 +44,7 @@ const sourceUrl = (relative: string) =>
 const doctorDeadline = scenario === "doctor-hang" || scenario === "doctor-progress";
 // Keep native/HTTP observations and their full budgets; only recovery polling advances time.
 const recoveryClockUrl = `data:text/javascript,${encodeURIComponent(`
+export * from ${JSON.stringify(sourceUrl("../utils.ts"))};
 const realMonotonicNow = performance.now.bind(performance);
 const realWallNow = Date.now;
 export let elapsed = 0;
@@ -227,20 +228,21 @@ const blockedPhase = repairDeadline
   ? "plugins"
   : doctorDeadline
     ? "doctor"
-    : scenario === "phase-hang"
+    : scenario === "phase-hang" || scenario === "borrowed-phase"
       ? "configSnapshot"
       : scenario === "completion-hang"
         ? "completionCache"
         : undefined;
-if (blockedPhase || scenario === "borrowed-phase") {
-  // Keep real phase ownership; only the deliberately blocked phase gets a short budget.
+if (blockedPhase) {
+  // Doctor needs time for native admission; its output markers advance the deadline.
+  // Keep real phase ownership and the short budget for other blocked phases.
   stub(
     "./update-cli/update-finalization-lifecycle.ts",
     `import { once } from 'node:events';
 import { UpdateFinalizationLifecycle as RealLifecycle } from ${original("./update-cli/update-finalization-lifecycle.ts")};
 import { startFinalizationFixtureClock, restoreFinalizationFixtureClock } from ${JSON.stringify(fixtureClockUrl)};
 export class UpdateFinalizationLifecycle extends RealLifecycle {
-  budget(phase) { return phase === ${JSON.stringify(blockedPhase)} ? 1_000 : super.budget(phase); }
+  budget(phase) { return phase === ${JSON.stringify(blockedPhase)} ? ${doctorDeadline ? "30_000" : "1_000"} : super.budget(phase); }
   ${
     scenario === "phase-hang"
       ? `run(phase, operation, outcome, custody) {
@@ -287,7 +289,7 @@ export function captureUpdateFinalizationDoctorOutput(phase) {
         : "output.stdout.includes('Doctor complete.')"
     }) {
       ready = true;
-      ${doctorDeadline ? "advanceFinalizationFixtureClock(1_000);" : "restoreFinalizationFixtureClock();"}
+      ${doctorDeadline ? "advanceFinalizationFixtureClock(30_000);" : "restoreFinalizationFixtureClock();"}
     }
   });
 }`,

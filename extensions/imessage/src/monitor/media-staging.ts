@@ -10,11 +10,6 @@ import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plug
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import type { IMessageAttachment } from "./types.js";
 
-type StagedIMessageAttachments = {
-  attachments: ChannelInboundMediaInput[];
-  unavailableCount: number;
-};
-
 function createTypeOnlyIMessageAttachment(
   attachment: IMessageAttachment,
 ): ChannelInboundMediaInput {
@@ -108,7 +103,7 @@ export async function stageIMessageAttachments(
     maxBytes: number;
     allowedRoots?: readonly string[];
   },
-): Promise<StagedIMessageAttachments> {
+) {
   const staged: ChannelInboundMediaInput[] = [];
   let unavailableCount = 0;
 

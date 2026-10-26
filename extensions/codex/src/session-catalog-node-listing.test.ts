@@ -8,6 +8,7 @@ import {
   CODEX_CATALOG_TRANSCRIPT_READ_COMMAND,
   tempDirs,
   listCodexSessionCatalog,
+  readCodexSessionTranscript,
   createCodexSessionCatalogNodeHostCommands,
   createCodexSessionCatalogControlFactory,
   config,
@@ -446,6 +447,9 @@ it("serves bounded generic items through the optional node transcript command", 
   const source = catalogThreadItem("tool-1", {
     type: "commandExecution",
     aggregatedOutput: output,
+    command: "false",
+    status: "failed",
+    exitCode: 1,
   });
   const listItemPage = vi.fn(async () => ({
     data: [{ turnId: "turn-1", item: source }],
@@ -484,6 +488,100 @@ it("serves bounded generic items through the optional node transcript command", 
       limit: 2,
     }),
   );
+  const { runtime } = createRuntime({
+    nodes: [
+      node("devbox", {
+        commands: [
+          CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
+          CODEX_CATALOG_TRANSCRIPT_READ_COMMAND,
+        ],
+      }),
+    ],
+    invoke: vi.fn(async () => ({ payloadJSON: payload })),
+  });
+  const received = await readCodexSessionTranscript({
+    runtime,
+    control,
+    hostId: "node:devbox",
+    threadId: "thread-1",
+    limit: 2,
+  });
+  expect(received.nextCursor).toBe("native-older");
+  expect(received.items).toMatchObject([
+    {
+      activity: { name: "bash", status: "failed" },
+      toolName: "bash",
+      toolCallId: "tool-1",
+      toolInput: { command: "false" },
+      isError: true,
+      exitCode: 1,
+    },
+  ]);
+});
+
+it("bounds recovered display inputs from released nodes without losing their source or cursor", async () => {
+  const largeInput = { prompt: "x".repeat(11 * 1024 * 1024) };
+  const source = catalogThreadItem("large-input", {
+    type: "dynamicToolCall",
+    tool: "custom",
+    arguments: largeInput,
+    status: "completed",
+    success: true,
+  });
+  const { runtime } = createRuntime({
+    nodes: [
+      node("devbox", {
+        commands: [
+          CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
+          CODEX_CATALOG_TRANSCRIPT_READ_COMMAND,
+        ],
+      }),
+    ],
+    invoke: vi.fn(async () =>
+      nodePayload({
+        items: [{ id: source.id, type: "toolResult", text: "done", raw: source }],
+        nextCursor: "native-older",
+      }),
+    ),
+  });
+  const received = await readCodexSessionTranscript({
+    runtime,
+    control: createEligibleControl(),
+    hostId: "node:devbox",
+    threadId: "thread-1",
+    limit: 1,
+  });
+  expect(received.nextCursor).toBe("native-older");
+  expect(received.items).toEqual([
+    {
+      id: source.id,
+      type: "toolResult",
+      text: "done",
+      raw: source,
+      activity: expect.objectContaining({ name: "custom", status: "completed" }),
+      toolName: "custom",
+      toolCallId: source.id,
+      isError: false,
+      toolInputOmitted: true,
+    },
+  ]);
+  expect(
+    Buffer.byteLength(JSON.stringify({ payloadJSON: JSON.stringify(received) }), "utf8"),
+  ).toBeLessThanOrEqual(20 * 1024 * 1024);
+  const local = await readCodexSessionTranscript({
+    runtime,
+    control: createEligibleControl({
+      requireEligibleThread: vi.fn(async () => idleThread({ historyMode: "paginated" })),
+      listItemPage: vi.fn(async () => ({ data: [{ turnId: "turn-1", item: source }] })),
+    }),
+    hostId: CODEX_LOCAL_SESSION_HOST_ID,
+    threadId: "thread-1",
+    limit: 1,
+  });
+  expect(local.items).toEqual([{ ...received.items[0], text: "" }]);
+  expect(
+    Buffer.byteLength(JSON.stringify({ payloadJSON: JSON.stringify(local) }), "utf8"),
+  ).toBeLessThanOrEqual(20 * 1024 * 1024);
 });
 
 it("rejects malformed terminal resume thread ids before spawning", async () => {

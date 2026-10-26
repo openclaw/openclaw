@@ -6,19 +6,13 @@ import {
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { setMSTeamsRuntime } from "./runtime.js";
 import { createMSTeamsSsoTokenStoreFs } from "./sso-token-store.js";
 import { msteamsRuntimeStub } from "./test-support/runtime.js";
+import { useMSTeamsStateTempDirs } from "./test-support/state.js";
 
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterAll(async () => {
-    await closeOpenClawStateDatabaseAsync();
-    resetPluginStateStoreForTests();
-    cleanup();
-  }),
-);
+const tempDirs = useMSTeamsStateTempDirs();
 
 const makeToken = (connectionName: string, userId: string, token: string) => ({
   connectionName,
@@ -53,6 +47,24 @@ it("keeps distinct tokens when connectionName and userId contain the legacy deli
 
   await expect(fs.access(storePath)).rejects.toThrow();
   await fs.access(path.join(stateDir, "state", "openclaw.sqlite"));
+});
+
+it("orders concurrent token changes while isolating account namespaces", async () => {
+  const store = createMSTeamsSsoTokenStoreFs();
+  const sibling = createMSTeamsSsoTokenStoreFs();
+  const named = createMSTeamsSsoTokenStoreFs({ accountId: "support" });
+  const first = makeToken("graph", "same-user", "first");
+  const replacement = { ...first, token: "replacement" };
+  const namedToken = { ...first, token: "named" };
+
+  const save = store.save(first);
+  const saveNamed = named.save(namedToken);
+  const remove = sibling.remove(first);
+  const replace = store.save(replacement);
+  await Promise.all([save, saveNamed, expect(remove).resolves.toBe(true), replace]);
+
+  expect(await sibling.get(first)).toEqual(replacement);
+  expect(await named.get(first)).toEqual(namedToken);
 });
 
 it("ignores legacy flat-key token files at runtime", async () => {

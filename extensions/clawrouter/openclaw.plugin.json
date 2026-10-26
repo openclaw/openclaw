@@ -76,6 +76,7 @@
     ]
   },
   "modelCatalog": {
+    "configuredEndpointDiscovery": ["clawrouter"],
     "discovery": { "clawrouter": "runtime" },
     "runtimeAugment": true,
     "providers": {
@@ -120,7 +121,7 @@
                 },
                 "confidence": "provider-specific",
                 "limits": {
-                  "maxQuestions": 200,
+                  "maxQuestions": 400,
                   "image": {
                     "maxBytes": 4194304,
                     "mimeTypes": [

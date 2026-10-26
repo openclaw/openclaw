@@ -17,28 +17,13 @@ import { onIrcTestLine, startIrcTestServer as startServer } from "./irc-server.t
 import { setIrcRuntime } from "./runtime.js";
 import type { CoreConfig } from "./types.js";
 
-const effectGate = vi.hoisted(() => ({
-  beforeInitiate: undefined as (() => Promise<void>) | undefined,
-}));
-vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/fetch-runtime")>();
-  return {
-    ...actual,
-    captureEffectAuthority: () => {
-      const authority = actual.captureEffectAuthority();
-      const beforeInitiate = effectGate.beforeInitiate;
-      return beforeInitiate
-        ? {
-            ...authority,
-            initiate: async <T>(effect: () => T | Promise<T>) => {
-              await beforeInitiate();
-              return authority.initiate(effect);
-            },
-          }
-        : authority;
-    },
-  };
-});
+const effectGate = await vi.hoisted(async () =>
+  (
+    await import("../../test-support/effect-preparation.test-support.js")
+  ).createEffectPreparationGate(),
+);
+// mock-isolation: Share the export-preserving factory, but keep the preparation gate suite-local.
+vi.mock("openclaw/plugin-sdk/fetch-runtime", effectGate.mockRuntime);
 
 async function startIrcTestServer(onConnection: (socket: net.Socket) => void) {
   const server = await startServer(onConnection);
@@ -67,6 +52,7 @@ type LoopbackIrcServer = Awaited<ReturnType<typeof startLoopbackIrcServer>>;
 
 async function startLoopbackIrcServer(options?: {
   rejectInitialNick?: boolean;
+  register?: boolean;
   onLine?: (socket: net.Socket, line: string) => void;
 }) {
   const lines: string[] = [];
@@ -82,7 +68,7 @@ async function startLoopbackIrcServer(options?: {
       if (line.startsWith("QUIT :")) {
         quitReceived.resolve();
       }
-      if (line.startsWith("USER ")) {
+      if (line.startsWith("USER ") && options?.register !== false) {
         if (options?.rejectInitialNick) {
           awaitingFallbackNick = true;
           socket.write(":server 433 * bot :Nickname in use\r\n");
@@ -127,30 +113,6 @@ async function connectAfterNickCollision(nick: string): Promise<string> {
   const nickLines = server.lines.filter((line) => line.startsWith("NICK "));
   expect(nickLines).toHaveLength(2);
   return nickLines[1]!.slice("NICK ".length);
-}
-
-async function startHangingIrcServer() {
-  let acceptedCount = 0;
-  let closedCount = 0;
-  const socketClosed = createDeferred<void>();
-  const server = await startIrcTestServer((socket) => {
-    acceptedCount += 1;
-    socket.on("data", () => {});
-    socket.on("close", () => {
-      closedCount += 1;
-      socketClosed.resolve();
-    });
-  });
-  return {
-    ...server,
-    socketClosed: socketClosed.promise,
-    get acceptedCount() {
-      return acceptedCount;
-    },
-    get closedCount() {
-      return closedCount;
-    },
-  };
 }
 
 describe("irc client nickserv", () => {
@@ -199,13 +161,11 @@ describe("irc client server password", () => {
 
 describe("irc client readiness timeout", () => {
   it("closes the socket when registration never becomes ready", async () => {
-    const server = await startHangingIrcServer();
+    const server = await startLoopbackIrcServer({ register: false });
     await expect(connectTestClient(server, { connectTimeoutMs: 50 })).rejects.toThrow(
       /IRC connect/,
     );
     await withTimeout(server.socketClosed, 1000, "timed-out IRC socket close");
-    expect(server.acceptedCount).toBeGreaterThanOrEqual(1);
-    expect(server.closedCount).toBeGreaterThanOrEqual(1);
     expect(server.openSocketCount()).toBe(0);
   });
 });
@@ -221,16 +181,13 @@ describe("irc client fallback nick", () => {
     expect(new Set([first, second, third]).size).toBe(3);
   });
 
-  it("falls back to openclaw when a colliding nick is entirely special characters", async () => {
-    const nick = await connectAfterNickCollision("!!!");
-    expect(nick).toMatch(/^openclaw_\d*$/);
-  });
-
-  it("truncates a long fallback nick to 30 characters", async () => {
-    const longNick = "a".repeat(50);
-    const nick = await connectAfterNickCollision(longNick);
+  it.each([
+    ["!!!", /^openclaw_\d*$/],
+    ["a".repeat(50), /^a+_\d*$/],
+  ] as const)("normalizes and bounds fallback for %s", async (initial, expected) => {
+    const nick = await connectAfterNickCollision(initial);
     expect(nick.length).toBeLessThanOrEqual(30);
-    expect(nick).toMatch(/^a+_\d*$/);
+    expect(nick).toMatch(expected);
   });
 });
 
@@ -267,7 +224,7 @@ function maxRelayedLineBytes(bodies: string[]): number {
 
 describe("irc client PRIVMSG chunking on the wire", () => {
   afterEach(() => {
-    effectGate.beforeInitiate = undefined;
+    effectGate.prepare = undefined;
   });
   const refusal = new PlatformMessageNotDispatchedError("authority ended", {
     cause: new Error("scheduled sender retired"),
@@ -275,7 +232,7 @@ describe("irc client PRIVMSG chunking on the wire", () => {
   it("admits all raw chunks before sending the message", async () => {
     const server = await startLoopbackIrcServer();
     let attempts = 0;
-    effectGate.beforeInitiate = async () => {
+    effectGate.prepare = async () => {
       if (++attempts > 1) {
         throw refusal;
       }
@@ -289,7 +246,7 @@ describe("irc client PRIVMSG chunking on the wire", () => {
 
   it("preserves an admission refusal without sending any raw chunks", async () => {
     const server = await startLoopbackIrcServer();
-    effectGate.beforeInitiate = async () => {
+    effectGate.prepare = async () => {
       throw refusal;
     };
     const client = await connectTestClient(server, { messageChunkMaxChars: 3 });
@@ -395,23 +352,17 @@ describe("irc client inbound line bound", () => {
     return { client, errors, lines, disconnected: disconnected.promise };
   }
 
-  it("drops a peer that never terminates a line and reports a disconnect", async () => {
-    const server = await startFloodServer("A".repeat(256 * 1024));
-    const { client, errors, disconnected } = await connectToFlood(server);
-    await withTimeout(disconnected, 2000, "IRC disconnect after unterminated flood");
+  it.each([
+    ["unterminated", "A".repeat(256 * 1024)],
+    ["terminated", `:peer!test@example.com PRIVMSG bot :${"B".repeat(64 * 1024)}\r\n`],
+  ])("drops an oversized %s line without dispatch", async (_kind, payload) => {
+    const server = await startFloodServer(payload);
+    const { client, errors, lines, disconnected } = await connectToFlood(server);
+    await withTimeout(disconnected, 2000, "IRC oversized-line disconnect");
     await withTimeout(server.socketClosed, 2000, "IRC peer socket close");
     expect(errors.some((error) => error.message.includes("longer than"))).toBe(true);
     expect(client.isReady()).toBe(false);
     expect(server.openSocketCount()).toBe(0);
-  });
-
-  it("drops a peer that sends an oversized terminated line", async () => {
-    const server = await startFloodServer(
-      `:peer!test@example.com PRIVMSG bot :${"B".repeat(64 * 1024)}\r\n`,
-    );
-    const { errors, lines, disconnected } = await connectToFlood(server);
-    await withTimeout(disconnected, 2000, "IRC disconnect after oversized line");
-    expect(errors.some((error) => error.message.includes("longer than"))).toBe(true);
     expect(lines).toEqual([]);
   });
 
@@ -586,9 +537,24 @@ describe("IRC formatted text on the wire", () => {
   let cfg: CoreConfig;
   const messages = () => server.lines.filter((line) => line.startsWith(prefix));
   const send = async (text: string, options: SendOptions = {}) => {
-    const results = await sendFormattedIrcText({ cfg, to: "#room", text, ...options });
+    const onDeliveryResult = vi.fn(),
+      onPlatformSendDispatch = vi.fn();
+    const results = await sendFormattedIrcText({
+      cfg,
+      to: "#room",
+      text,
+      onDeliveryResult,
+      onPlatformSendDispatch,
+      ...options,
+    });
     await server.socketClosed;
     expect(results).toHaveLength(messages().length);
+    for (const callback of [onDeliveryResult, onPlatformSendDispatch]) {
+      expect(callback).toHaveBeenCalledTimes(results.length);
+    }
+    for (const command of ["USER ", "JOIN #room", "QUIT :"]) {
+      expect(server.lines.filter((line) => line.startsWith(command))).toHaveLength(1);
+    }
     expect(server.openSocketCount()).toBe(0);
     return results;
   };
@@ -652,7 +618,6 @@ describe("IRC formatted text on the wire", () => {
         .map((line) => line.slice(prefix.length))
         .join(" "),
     ).toBe(expected);
-    expect(server.lines.filter((line) => line.startsWith("USER "))).toHaveLength(1);
   });
 
   it.each([

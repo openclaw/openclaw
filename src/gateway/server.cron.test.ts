@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { setImmediate as setImmediatePromise } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import type WebSocket from "ws";
 import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
@@ -16,6 +15,7 @@ import { loadCronStore, saveCronStore } from "../cron/store.js";
 import { resolveCronJobsStorePathFromConfigAsync } from "../cron/store/paths.js";
 import type { CronJobCreate } from "../cron/types.js";
 import type { GuardedFetchOptions } from "../infra/net/fetch-guard.js";
+import { getGatewayContextResolver } from "../plugins/runtime/gateway-context-binding.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
@@ -25,6 +25,7 @@ import {
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
 import { getGatewayProcessInstanceId } from "./process-instance.js";
+import type { GatewayCronState } from "./server-cron-contract.js";
 import {
   cleanupCronTestRun,
   expectEnqueuedRunPayload,
@@ -33,8 +34,11 @@ import {
   runCronJobAndWaitForFinished,
   waitForCronEvent,
 } from "./server-cron.events.test-support.js";
-import type { GatewayCronState } from "./server-cron.js";
-import { expectCronJobIdFromResponse } from "./server.cron.assertions.test-support.js";
+import { registerCronRepairCases } from "./server.cron-repair.cases.js";
+import {
+  expectCronJobIdFromResponse,
+  expectCronRows as rows,
+} from "./server.cron.assertions.test-support.js";
 import {
   agentCommandMock,
   connectOk,
@@ -139,20 +143,6 @@ type DirectCronResponse = {
   payload?: unknown;
   error?: { code?: string; message?: string; details?: unknown };
 };
-
-function rows(response: DirectCronResponse, key: "entries" | "jobs" = "entries") {
-  expect(response.ok).toBe(true);
-  const payload = response.payload;
-  if (!isRecord(payload) || !Array.isArray(payload[key])) {
-    throw new Error(`expected cron ${key}`);
-  }
-  return payload[key].map((row: unknown) => {
-    if (!isRecord(row)) {
-      throw new Error(`expected a cron ${key} row`);
-    }
-    return row;
-  });
-}
 
 async function createDirectCronState(params?: {
   broadcast?: CronBroadcast;
@@ -748,6 +738,12 @@ describe("gateway server cron", () => {
 
     const { request, add, waitForJob } = await startCronClient();
 
+    // Minimal Gateway startup skips cron recovery; finish it before the timed requests.
+    const { getGatewayRecoveryRuntime } = await import("./server-recovery-runtime-context.js");
+    const runtime = expectDefined(getGatewayRecoveryRuntime(), "Gateway runtime");
+    const resolveContext = expectDefined(getGatewayContextResolver(runtime), "Gateway context");
+    await expectDefined(resolveContext(), "Gateway context").cron.start();
+
     const jobId = await add("busy job", {
       sessionTarget: "isolated",
       payloadText: "still busy",
@@ -804,7 +800,9 @@ describe("gateway server cron", () => {
     });
 
     const notifyRuns = await request("cron.runs", { id: notifyJobId, limit: 10 });
-    expect(rows(notifyRuns).at(-1)).toMatchObject({ deliveryStatus: "delivered" });
+    expect(rows(notifyRuns).at(-1)).toMatchObject({
+      deliveryStatus: "delivered",
+    });
 
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
 
@@ -869,7 +867,13 @@ describe("gateway server cron", () => {
   }, 45_000);
 
   test("persists settled failure-alert outcomes for cron get and list", async () => {
+    // Delivery persistence is independent of cold fallback-session creation and runtime preparation.
+    testState.sessionStorePath = path.join(caseDir, "sessions.json");
+    await writeSessionStore({
+      entries: { main: { sessionId: "cron-failure-alert-session", updatedAt: Date.now() } },
+    });
     const { request, add, run } = await startCronClient();
+    await prepareGatewayReplyRuntimeForTest({ force: true });
 
     const expectOutcome = async (jobId: string, expected: Record<string, unknown>) => {
       await vi.waitFor(async () => {
@@ -984,6 +988,8 @@ describe("gateway server cron", () => {
       expect.objectContaining({ id: jobId, trigger: validTrigger }),
     ]);
   });
+
+  registerCronRepairCases(() => caseDir, startCronClient, sendCronAnnouncePayloadStrictMock);
 
   test.for(["success", "error"] as const)(
     "keeps owner-topic repair pending through retries until the agent turn settles with %s",

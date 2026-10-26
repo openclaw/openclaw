@@ -11,7 +11,7 @@ import { readScratchStateFromDatabase } from "../cron/scratch-read.kernel.js";
 import { writeCronJobScratchInDatabase } from "../cron/scratch-write.kernel.js";
 import { CronService } from "../cron/service.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
-import { cronStoreKey } from "../cron/store/key.js";
+import { resolveCronStoreKeyInDatabase } from "../cron/store/paths.js";
 import {
   loadedCronStoreFromRows,
   loadCronRows,
@@ -34,6 +34,7 @@ import {
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import { updateConfigMachineStateInDatabase } from "../state/config-machine-state-write.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import {
@@ -47,10 +48,12 @@ import { prepareAutomaticHeartbeatRepair } from "./doctor-automatic-heartbeat-re
 import {
   collectHeartbeatCadenceMigrationFindings,
   ensureHeartbeatMonitorJobs,
-  maybeMigrateHeartbeatCadenceToCron,
 } from "./doctor-heartbeat-cadence-migration.js";
 import type { DoctorCronJob } from "./doctor-heartbeat-jobs.js";
-import { retireHeartbeatWithDoctor } from "./doctor-heartbeat-retirement.js";
+import {
+  maybeMigrateHeartbeatCadenceToCron,
+  retireHeartbeatWithDoctor,
+} from "./doctor-heartbeat-retirement.js";
 import {
   resolveHeartbeatPhaseMs,
   resolveHeartbeatSchedulerSeed,
@@ -84,23 +87,24 @@ function fixture(heartbeat: LegacyHeartbeatConfig = { every: "15m" }) {
     },
   };
   const storePath = resolveCronJobsStorePathFromConfig(cfg, env);
-  return { root, env, cfg, storePath, storeKey: cronStoreKey(storePath) };
+  return { root, env, cfg, storePath };
 }
 type Fixture = ReturnType<typeof fixture>;
 
 function readState(f: Fixture) {
   return withExistingOpenClawStateDatabaseReadOnly(
     ({ db }) => {
-      const rows = loadCronRows(db, f.storeKey);
+      const storeKey = resolveCronStoreKeyInDatabase(db, f.storePath, f.env);
+      const rows = loadCronRows(db, storeKey);
       const jobs = loadedCronStoreFromRows(rows).store.jobs;
-      loadCronRuntimeAuthorities({ db, storeKey: f.storeKey, jobs });
+      loadCronRuntimeAuthorities({ db, storeKey, jobs });
       return {
         rows,
         jobs,
-        receipt: readDefaultProactiveJobReceiptInDatabase(db, f.storePath, "main"),
+        receipt: readDefaultProactiveJobReceiptInDatabase(db, storeKey, "main"),
         history: readCronRunRecordsInDatabase(db),
         scratch: new Map(
-          jobs.map((job) => [job.id, readScratchStateFromDatabase(db, f.storeKey, job.id)]),
+          jobs.map((job) => [job.id, readScratchStateFromDatabase(db, storeKey, job.id)]),
         ),
       };
     },
@@ -111,8 +115,9 @@ function readState(f: Fixture) {
 function writeJob(f: Fixture, job: CronStoredJob) {
   runOpenClawStateWriteTransaction(
     ({ db }) => {
-      upsertCronJobRow(db, f.storeKey, job, 0);
-      replaceCronRuntimeAuthorityRows({ db, storeKey: f.storeKey, jobs: [job] });
+      const storeKey = resolveCronStoreKeyInDatabase(db, f.storePath, f.env);
+      upsertCronJobRow(db, storeKey, job, 0);
+      replaceCronRuntimeAuthorityRows({ db, storeKey, jobs: [job] });
     },
     { env: f.env },
   );
@@ -121,11 +126,12 @@ function writeJob(f: Fixture, job: CronStoredJob) {
 function deleteJob(f: Fixture, jobId: string) {
   runOpenClawStateWriteTransaction(
     ({ db }) => {
+      const storeKey = resolveCronStoreKeyInDatabase(db, f.storePath, f.env);
       executeSqliteQuerySync(
         db,
         getCronStoreKysely(db)
           .deleteFrom("cron_jobs")
-          .where("store_key", "=", f.storeKey)
+          .where("store_key", "=", storeKey)
           .where("job_id", "=", jobId),
       );
     },
@@ -167,9 +173,10 @@ function seedLegacyMonitor(f: Fixture, overrides: Partial<Omit<DoctorCronJob, "p
   };
   runOpenClawStateWriteTransaction(
     ({ db }) => {
-      upsertCronJobRow(db, f.storeKey, placeholder, 0);
-      replaceCronRuntimeAuthorityRows({ db, storeKey: f.storeKey, jobs: [placeholder] });
-      const row = loadCronRows(db, f.storeKey).find((candidate) => candidate.job_id === legacy.id)!;
+      const storeKey = resolveCronStoreKeyInDatabase(db, f.storePath, f.env);
+      upsertCronJobRow(db, storeKey, placeholder, 0);
+      replaceCronRuntimeAuthorityRows({ db, storeKey, jobs: [placeholder] });
+      const row = loadCronRows(db, storeKey).find((candidate) => candidate.job_id === legacy.id)!;
       executeSqliteQuerySync(
         db,
         getCronStoreKysely(db)
@@ -178,18 +185,18 @@ function seedLegacyMonitor(f: Fixture, overrides: Partial<Omit<DoctorCronJob, "p
             payload_kind: "heartbeat",
             job_json: JSON.stringify({ ...JSON.parse(row.job_json), payload: legacy.payload }),
           })
-          .where("store_key", "=", f.storeKey)
+          .where("store_key", "=", storeKey)
           .where("job_id", "=", legacy.id),
       );
       writeCronJobScratchInDatabase(db, {
-        storeKey: f.storeKey,
+        storeKey,
         jobId: legacy.id,
         content: "Check the backup.\n",
         expectedRevision: 0,
         nowMs: NOW - 1000,
       });
       recordCronRunInDatabase(db, {
-        storeKey: f.storeKey,
+        storeKey,
         jobId: legacy.id,
         runId: `cron:${legacy.id}:previous`,
         agentId: "main",
@@ -197,7 +204,7 @@ function seedLegacyMonitor(f: Fixture, overrides: Partial<Omit<DoctorCronJob, "p
         endedAt: NOW - 899_000,
         status: "succeeded",
         summary: "No change",
-        detail: { storeKey: f.storeKey },
+        detail: { storeKey },
       });
     },
     { env: f.env },
@@ -206,6 +213,59 @@ function seedLegacyMonitor(f: Fixture, overrides: Partial<Omit<DoctorCronJob, "p
 }
 
 describe("heartbeat cadence Doctor cutover", () => {
+  it("warns with the exact repair for old receipts without disabled provenance", async () => {
+    const f = fixture();
+    const monitors = await ensureHeartbeatMonitorJobs(f.cfg, f.storePath, f.env);
+    const job = monitors.get("main")!;
+    runOpenClawStateWriteTransaction(
+      ({ db }) =>
+        updateConfigMachineStateInDatabase(
+          db,
+          `automation-default:${resolveCronStoreKeyInDatabase(db, f.storePath, f.env)}:main`,
+          () => ({ jobId: job.id, provisionedAtMs: NOW, phase: "pending" }),
+          NOW,
+        ),
+      { env: f.env },
+    );
+    delete f.cfg.agents!.defaults!.heartbeat;
+    const note = vi.spyOn(terminalNote, "note");
+    const result = await maybeMigrateHeartbeatCadenceToCron({
+      cfg: f.cfg,
+      env: f.env,
+      shouldRepair: true,
+    });
+    expect(result.changes).toEqual([]);
+    expect(result.warnings.join("\n")).toContain(`openclaw automations disable ${job.id}`);
+    expect(readState(f)!.receipt?.phase).toBe("pending");
+    expect(readState(f)!.jobs[0]?.enabled).toBe(true);
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining(`openclaw automations disable ${job.id}`),
+      "Doctor warnings",
+    );
+    writeJob(f, { ...job, enabled: false });
+    await retireHeartbeatWithDoctor(f.cfg, f.env);
+    expect(readState(f)!.receipt?.phase).toBe("complete");
+  });
+
+  it.each([false, true])(
+    "repairs an interrupted disabled cutover (source retired: %s)",
+    async (sourceRetired) => {
+      const f = fixture({ every: "0m" });
+      const monitors = await ensureHeartbeatMonitorJobs(f.cfg, f.storePath, f.env);
+      const original = monitors.get("main")!;
+      writeJob(f, { ...original, enabled: true });
+      if (sourceRetired) {
+        delete f.cfg.agents!.defaults!.heartbeat;
+      }
+      await retireHeartbeatWithDoctor(f.cfg, f.env);
+      const repaired = readState(f)!;
+      expect(repaired.jobs[0]?.enabled).toBe(false);
+      expect(repaired.jobs[0]?.payload).toEqual(original.payload);
+      expect(repaired.jobs[0]?.schedule).toEqual(original.schedule);
+      expect(repaired.receipt).toMatchObject({ jobId: original.id, phase: "complete" });
+    },
+  );
+
   it("previews without creating state, identity, or changing the input config", async () => {
     const f = fixture();
     const input = structuredClone(f.cfg);
@@ -256,9 +316,10 @@ describe("heartbeat cadence Doctor cutover", () => {
         OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
       };
       const readRows = () =>
-        withExistingOpenClawStateDatabaseReadOnly(({ db }) => loadCronRows(db, f.storeKey), {
-          env,
-        });
+        withExistingOpenClawStateDatabaseReadOnly(
+          ({ db }) => loadCronRows(db, resolveCronStoreKeyInDatabase(db, f.storePath, f.env)),
+          { env },
+        );
       const before = readRows();
       const admission = prepareAutomaticHeartbeatRepair({ nonInteractive: true }, env);
       if (storedState === "invalid-legacy-row") {
@@ -298,7 +359,12 @@ describe("heartbeat cadence Doctor cutover", () => {
       const legacy = seedLegacyMonitor(f, { enabled, runtimeAuthority: authority });
       const previous = readState(f)!;
       const scratch = withExistingOpenClawStateDatabaseReadOnly(
-        ({ db }) => readScratchStateFromDatabase(db, f.storeKey, legacy.id),
+        ({ db }) =>
+          readScratchStateFromDatabase(
+            db,
+            resolveCronStoreKeyInDatabase(db, f.storePath, f.env),
+            legacy.id,
+          ),
         { env: f.env },
       );
 
@@ -674,7 +740,7 @@ describe("heartbeat cadence Doctor cutover", () => {
       runOpenClawStateWriteTransaction(
         ({ db }) => {
           writeCronJobScratchInDatabase(db, {
-            storeKey: f.storeKey,
+            storeKey: resolveCronStoreKeyInDatabase(db, f.storePath, f.env),
             jobId: job.id,
             content:
               "tasks:\n  - name: recovery\n    interval: 1h\n    prompt: Check the backup.\n\nKeep this checklist.\n",
@@ -882,9 +948,10 @@ describe("heartbeat cadence Doctor cutover", () => {
       anchorMs: phase(supplied.deviceId, agentId),
     });
     expect(
-      withExistingOpenClawStateDatabaseReadOnly(({ db }) => loadCronRows(db, f.storeKey), {
-        env: ambientEnv,
-      }),
+      withExistingOpenClawStateDatabaseReadOnly(
+        ({ db }) => loadCronRows(db, resolveCronStoreKeyInDatabase(db, f.storePath, f.env)),
+        { env: ambientEnv },
+      ),
     ).toBeUndefined();
   });
 });

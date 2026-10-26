@@ -9,6 +9,18 @@ export function isOwnedTranscriptPayload(value: object): boolean {
   return ownedTranscriptRoots.has(value);
 }
 
+/** Keep admitted children shared when replacing an immutable payload's envelope. */
+export function cloneTranscriptEnvelope<T extends object>(value: T): T {
+  if (ownedTranscriptRoots.has(value)) {
+    for (const child of Object.values(value)) {
+      if (child && typeof child === "object") {
+        ownedTranscriptRoots.add(child);
+      }
+    }
+  }
+  return { ...value };
+}
+
 /** Preserve ordinary transcript objects while admitting their JSON storage shape. */
 export function normalizeTranscriptJsonValue(value: unknown, key: string): unknown {
   const visited = new Set<object>();
@@ -27,6 +39,10 @@ export function normalizeTranscriptJsonValue(value: unknown, key: string): unkno
 function requiresNativeJson(value: unknown, ancestors: Set<object>): boolean {
   if (value === null || typeof value !== "object") {
     return typeof value === "bigint" || typeof value === "function";
+  }
+  // Admission already checked and sealed the entire payload, including its descendants.
+  if (ownedTranscriptRoots.has(value)) {
+    return false;
   }
   if (isProxy(value)) {
     return true;

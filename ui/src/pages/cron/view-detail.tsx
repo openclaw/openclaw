@@ -15,6 +15,7 @@ import {
 import { Editor } from "./view-editor.tsx";
 import { describeJobSchedule, TriggerIndicator } from "./view-job-status.tsx";
 import { RunsSection } from "./view-runs.tsx";
+import { CronSuggestionLists } from "./view-suggestions.tsx";
 import type { CronProps, CronPanelMode } from "./view-types.ts";
 export function DetailView(
   props: CronProps & {
@@ -55,7 +56,7 @@ export function DetailView(
         <DetailHeader {...props} mode={props.mode} selectedJob={selectedJob()} />
         <AdminRequired {...props} />
         {hasDetailTabs() ? <DetailTabs {...props} /> : undefined}
-        <ErrorBanner error={props.error} />
+        <ErrorBanner error={props.error} reads={props.reads} />
         <NoticeBanner notice={props.notice} />
         <div
           id="cron-detail-panel"
@@ -70,7 +71,10 @@ export function DetailView(
               </div>
             </SettingsSection>
           ) : (
-            <Editor {...props} mode={props.mode} />
+            <>
+              <Editor {...props} mode={props.mode} />
+              <CronSuggestionLists {...props} />
+            </>
           )}
         </div>
       </SettingsPage>

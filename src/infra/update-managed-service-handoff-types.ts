@@ -44,7 +44,7 @@ export type ManagedServiceUpdateHandoffResult = {
   logPath: string;
 } & (
   | { status: "started"; handoffId: string; installRoot: string }
-  | { status: "joined"; handoffId?: string }
+  | { status: "joined"; handoffId?: string; message: string }
 );
 
 export type ActiveManagedServiceUpdateHandoff = {

@@ -6,8 +6,10 @@ import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/c
 import { createChannelCapability } from "../../lib/channels/index.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import type { PluginCatalogItem } from "../../lib/plugins/index.ts";
+import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
+import { emptyPairingSnapshot } from "./pairing.test-support.ts";
 
 export async function choosePairingFilter(page: HTMLElement, index: number, value: string) {
   const settle = async () => {
@@ -116,12 +118,7 @@ export function createGateway(
         return responses[method]();
       }
       return method === "channels.pairing.list"
-        ? {
-            accounts: [],
-            requests: [],
-            commandOwnerConfigured: true,
-            limits: { pendingPerAccount: 3, ttlMs: 3_600_000 },
-          }
+        ? emptyPairingSnapshot()
         : method === "channels.status"
           ? channelSnapshot()
           : method === "plugins.list"
@@ -129,17 +126,11 @@ export function createGateway(
             : {};
     }),
   } as unknown as GatewayBrowserClient;
-  const snapshot: ApplicationGatewaySnapshot = {
+  const snapshot: ApplicationGatewaySnapshot = createApplicationGatewaySnapshot({
     client,
     phase: "connected",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    hello: null,
-    assistantAgentId: null,
     sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
-  };
+  });
   const fixture = createApplicationGateway(snapshot);
   const gateway = Object.assign(fixture.gateway, {
     emit(patch: Partial<ApplicationGatewaySnapshot>) {

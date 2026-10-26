@@ -17,12 +17,14 @@ function mountIdentity(overrides: Partial<IdentitySectionProps> = {}) {
     avatarUrl: "/api/users/profile-1/avatar?v=2",
     displayName: "Ada Lovelace",
     gitCoauthorEnabled: false,
+    prAttributionEnabled: false,
     busy: null,
     error: null,
     onDisplayNameInput: vi.fn(),
     onSaveDisplayName: vi.fn(),
     onAvatarSelect: vi.fn(),
     onGitCoauthorChange: vi.fn(),
+    onPrAttributionChange: vi.fn(),
     ...overrides,
   };
   unmount?.();
@@ -112,8 +114,7 @@ it("explains personal GitHub sign-in for the shared owner without email or retry
   );
   expect(container.textContent).not.toContain("Linked emails");
   expect(container.textContent).not.toContain("Refresh to retry");
-  expect(container.querySelector("input.settings-toggle__input")).toMatchObject({
-    checked: false,
-    disabled: true,
-  });
+  const toggle = container.querySelector<HTMLInputElement>("input.settings-toggle__input");
+  expect(toggle?.checked).toBe(false);
+  expect(toggle?.disabled).toBe(true);
 });

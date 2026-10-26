@@ -13,6 +13,10 @@ import * as gitWorker from "../../infra/git-worker.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
+import {
+  registerProjectRegistry,
+  selectStoredProjectRegistry,
+} from "../../projects/project-registry.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -276,6 +280,160 @@ describe("managed worktree pending slots", () => {
       expect(await fs.readFile(path.join(record.path, "README.md"), "utf8")).toBe("base\n");
     }
   });
+
+  it("releases allocation while a registered source waits behind Git work", async ({ signal }) => {
+    config.worktreeMaxCount = 3;
+    const otherRepo = await initializeRepository(tempDirs.make("openclaw-other-project-"));
+    const projects = await Promise.all(
+      [repoRoot, otherRepo].map((root) => registerProjectRegistry({ path: root }, { env })),
+    );
+    const selections = await Promise.all(
+      [projects[0]!, projects[0]!, projects[1]!].map((project) =>
+        selectStoredProjectRegistry(project.id, { env, signal }),
+      ),
+    );
+    const create = (index: number, name: string) => {
+      const selected = selections[index]!;
+      return service.createWithOutcome({
+        repoRoot: selected.project.repoRoot,
+        name,
+        baseRef: "HEAD",
+        ownerKind: "session",
+        ownerId: `agent:main:${name}`,
+        provisionIgnoredFiles: false,
+        signal,
+        withSource: selected.withCurrent,
+        withRollback: selected.withRollback,
+      });
+    };
+    const held = createDeferred();
+    const release = createDeferred();
+    const commonDir = await requireGit(repoRoot, ["rev-parse", "--git-common-dir"]);
+    const predecessor = gitExec.enqueueGitRefMutation(repoRoot, commonDir, async () => {
+      held.resolve();
+      await release.promise;
+    });
+    const operations: Promise<unknown>[] = [predecessor];
+    try {
+      await withinTest(held.promise, signal);
+      const queued = createDeferred();
+      const enqueue = gitExec.enqueueGitRefMutation;
+      vi.spyOn(gitExec, "enqueueGitRefMutation").mockImplementation((cwd, common, run, abort) => {
+        if (cwd === repoRoot) {
+          queued.resolve();
+        }
+        return enqueue(cwd, common, run, abort);
+      });
+      const first = create(0, "project-first");
+      operations.push(first);
+      await withinTest(
+        awaitGateBeforeSettlement(queued.promise, first, "First creator did not enter Git queue"),
+        signal,
+      );
+      const sourceWaiting = createDeferred();
+      const acquire = stateLease.withOpenClawStateLease;
+      vi.spyOn(stateLease, "withOpenClawStateLease").mockImplementation((options, run) => {
+        if (options.scope === "projects.checkout" && options.key === repoRoot) {
+          sourceWaiting.resolve();
+        }
+        return acquire(options, run);
+      });
+      const second = create(1, "project-second");
+      operations.push(second);
+      await withinTest(
+        awaitGateBeforeSettlement(sourceWaiting.promise, second, "Second creator did not wait"),
+        signal,
+      );
+      const unrelated = create(2, "project-unrelated");
+      operations.push(unrelated);
+      const completed = await withinTest(
+        awaitGateBeforeSettlement(
+          unrelated,
+          second,
+          "Busy project settled before the unrelated repository could finish",
+        ),
+        signal,
+      );
+      expect(completed.materialized).toBe(true);
+      expect(await service.listRegistryRecords()).toEqual([completed.record]);
+      expect((await readPendingWorktrees(env)).map(({ record }) => record.name)).toEqual([
+        "project-first",
+      ]);
+      release.resolve();
+      const results = await Promise.all([first, second, unrelated]);
+      expect(new Set(results.map(({ record }) => record.id)).size).toBe(3);
+      for (const [index, { record }] of results.entries()) {
+        expect(record.ownerId).toBe(`agent:main:${record.name}`);
+        expect(record.repoRoot).toBe(index === 2 ? otherRepo : repoRoot);
+        expect(await fs.readFile(path.join(record.path, "README.md"), "utf8")).toBe("base\n");
+      }
+      expect(await readPendingWorktrees(env)).toEqual([]);
+      expect(await create(1, "project-second")).toEqual({
+        record: results[1]!.record,
+        materialized: false,
+        sourceRoot: repoRoot,
+      });
+    } finally {
+      release.resolve();
+      await Promise.allSettled(operations);
+    }
+  });
+
+  it.each(["abort", "deadline"] as const)(
+    "settles a registered-source %s without a slot or late creation",
+    async (ending) => {
+      const project = await registerProjectRegistry({ path: repoRoot }, { env });
+      const caller = new AbortController();
+      const selected = await selectStoredProjectRegistry(project.id, {
+        env,
+        signal: caller.signal,
+      });
+      expect(selected).toBeDefined();
+      const entered = createDeferred();
+      const release = createDeferred();
+      const holder = selected!.withCurrent(async () => {
+        entered.resolve();
+        await release.promise;
+      });
+      await entered.promise;
+      let clock = 0;
+      vi.spyOn(performance, "now").mockImplementation(() => clock);
+      vi.spyOn(backoff, "sleepWithAbort").mockImplementation(async () => {
+        // The actual acquisition loop must wait with global allocation available.
+        await stateLease.withOpenClawStateLeaseAsync(
+          { scope: WORKTREE_CREATE_LEASE_SCOPE, key: "capacity", leaseMs: 60_000, waitMs: 0 },
+          captureWorktreeRunEndContext(env),
+          async () => {},
+        );
+        if (ending === "abort") {
+          caller.abort(new Error("Stop waiting for project"));
+        } else {
+          clock += 30_001;
+        }
+      });
+      try {
+        await expect(
+          service.create({
+            repoRoot,
+            name: "stopped-project",
+            baseRef: "HEAD",
+            signal: caller.signal,
+            withSource: selected!.withCurrent,
+            withRollback: selected!.withRollback,
+          }),
+        ).rejects.toMatchObject({
+          code: ending === "abort" ? "OPENCLAW_STATE_LEASE_ABORTED" : "OPENCLAW_STATE_LEASE_HELD",
+        });
+      } finally {
+        release.resolve();
+        // The source holder shares cancellation for this fixture and must drain too.
+        await Promise.allSettled([holder]);
+      }
+      expect(await service.listRegistryRecords()).toEqual([]);
+      expect(await readPendingWorktrees(env)).toEqual([]);
+      expect(await requireGit(repoRoot, ["branch", "--list", "openclaw/stopped-project"])).toBe("");
+    },
+  );
 
   it("publishes a reserved checkout while another creator holds allocation", async ({ signal }) => {
     config.worktreeMaxCount = 1;

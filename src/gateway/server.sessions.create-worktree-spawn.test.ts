@@ -4,12 +4,15 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterAll, afterEach, beforeEach, expect, test, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, expect, onTestFinished, test, vi } from "vitest";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import { captureMethodCall } from "../../test/helpers/capture-method-call.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { persistSubagentSessionTiming } from "../agents/subagents/registry/subagent-registry-helpers.js";
+import { getSubagentRunsForChildSession } from "../agents/subagents/registry/subagent-registry-memory.js";
+import * as spawnRuntime from "../agents/subagents/spawn/subagent-spawn.runtime.js";
 import { createSessionsSpawnTool } from "../agents/tools/sessions-spawn-tool.js";
+import * as repositoryPaths from "../agents/worktrees/repository-paths.js";
 import { managedWorktrees, ManagedWorktreeService } from "../agents/worktrees/service.js";
 import {
   loadSessionEntry,
@@ -33,12 +36,15 @@ import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
+import { createGatewayInstanceRuntime } from "./server-instance-runtime.js";
+import { createRequestGatewayMethodRegistry } from "./server-methods.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import { createWorktreeSpawnRepositoryFixture } from "./server.sessions.create-worktree-spawn.test-support.js";
 import {
   controlUiClient,
   settleWorkspaceRuns,
 } from "./server.sessions.create.projects.test-support.js";
+import * as worktreePreparation from "./session-worktree-preparation.js";
 import { agentDiscoveryMock, dispatchInboundMessageMock, testState } from "./test-helpers.js";
 import {
   directSessionReq,
@@ -355,6 +361,87 @@ test("worktree spawns inherit the managed parent when the default workspace is u
   expect(await fs.readFile(defaultWorkspace, "utf8")).toBe("unavailable workspace");
 });
 
+test.each(["startup", "source settlement"] as const)(
+  "cleans the committed native child when Stop interrupts %s",
+  async (failure) => {
+    const parent = await createDirectProjectParent();
+    const scope = { agentId: "main", storePath };
+    const originalKeys = await sessionAccess.listSessionEntryKeysReadOnly(scope);
+    const { getRuntimeConfig } = await getGatewayConfigModule();
+    const context = createDirectChatContext({
+      getRuntimeConfig,
+      trackExecution: async (run) => run(),
+    });
+    const methodRegistry = createRequestGatewayMethodRegistry();
+    const runtime = createGatewayInstanceRuntime({
+      getContext: () => context,
+      getMethodRegistry: () => methodRegistry,
+      isDispatchAvailable: () => true,
+    });
+    context.recoveryRuntime = runtime.recovery;
+    onTestFinished(() => runtime.close());
+    const invocation = new AbortController();
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: parent.key,
+      expectedParentSessionId: parent.entry.sessionId,
+      config: getRuntimeConfig(),
+      countActiveRuns: () => 0,
+    });
+    let sourceSettled = false;
+    if (failure === "source settlement") {
+      const prepare = worktreePreparation.prepareSessionWorktreeCreation;
+      vi.spyOn(worktreePreparation, "prepareSessionWorktreeCreation").mockImplementation(
+        async (...args) => {
+          const prepared = await prepare(...args);
+          if (!prepared.ok || !prepared.value.withCommit) {
+            throw new Error("Expected the inherited project source commit owner");
+          }
+          const withCommit = prepared.value.withCommit;
+          return {
+            ...prepared,
+            value: {
+              ...prepared.value,
+              withCommit: async (commit) => {
+                await withCommit(commit);
+                sourceSettled = true;
+                // Model source settlement failure after the real child write has completed.
+                throw new Error("Source settlement stopped after child commit");
+              },
+            },
+          };
+        },
+      );
+    }
+    const upsert = spawnRuntime.upsertSessionEntryCore;
+    let committedChildKey: string | undefined;
+    vi.spyOn(spawnRuntime, "upsertSessionEntryCore").mockImplementation(async (...args) => {
+      const entry = await upsert(...args);
+      committedChildKey = args[0].sessionKey;
+      expect(readEntry(committedChildKey)).toMatchObject({
+        sessionId: entry?.sessionId,
+        lifecycleRevision: entry?.lifecycleRevision,
+      });
+      invocation.abort(new Error("Stop after child commit"));
+      return entry;
+    });
+    const result = await withPluginRuntimeGatewayContextResolver(
+      () => context,
+      () =>
+        tool.execute(
+          "post-commit-stop",
+          { task: "Read README.md", worktree: true },
+          invocation.signal,
+        ),
+    ).catch((error: unknown) => error);
+    expect(result).not.toMatchObject({ details: { status: "accepted" } });
+    expect(committedChildKey).toEqual(expect.any(String));
+    expect(sourceSettled).toBe(failure === "source settlement");
+    expect(await sessionAccess.listSessionEntryKeysReadOnly(scope)).toEqual(originalKeys);
+    expect([...getSubagentRunsForChildSession(committedChildKey!)]).toEqual([]);
+    expect(await managedWorktrees.listRegistryRecords()).toEqual([]);
+  },
+);
+
 test("required project preparation isolates host filters without rejecting the registered source", async () => {
   await createManagedProjectParent(true);
   const marker = path.join(state.root, "host-filter-marker");
@@ -488,7 +575,7 @@ test.each(["empty metadata", "missing worktree target", "partial metadata"])(
       expect(stored).toMatchObject({ parentSessionKey: parentKey });
       expect(stored?.pendingWorktree).toBeUndefined();
       expect(await fs.readdir(metadata)).toEqual([]);
-      await expect(managedWorktrees.resolveRepositoryPaths(workspace)).rejects.toThrow(
+      await expect(repositoryPaths.resolveRepositoryPaths(workspace)).rejects.toThrow(
         "not a git checkout",
       );
       await expectCreationError(
@@ -754,7 +841,7 @@ test.each(["archive", "stale-child"] as const)(
       expect(readEntry(parentKey)?.archivedAt).toBeDefined();
     }
     mockDispatch();
-    const resolveRepository = vi.spyOn(ManagedWorktreeService.prototype, "resolveRepositoryPaths");
+    const resolveRepository = vi.spyOn(repositoryPaths, "resolveRepositoryPaths");
     const createWorktree = vi.spyOn(ManagedWorktreeService.prototype, "createWithOutcome");
     let replaced = false;
     const unsubscribe = onAgentEvent((event) => {

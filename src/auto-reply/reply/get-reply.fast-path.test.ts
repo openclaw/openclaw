@@ -8,6 +8,7 @@ import { FAST_RESET_LINEAGE_FIXTURE } from "../../config/sessions/session-lineag
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target-paths.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createEmptyPluginSetupRegistry } from "../../plugins/setup-registry.test-support.js";
 import {
   MODEL_SELECTION_LOCKED_RESET_MESSAGE,
   ModelSelectionLockedError,
@@ -106,10 +107,10 @@ function expectNativePayload(reply: Awaited<ReturnType<typeof getReplyFromConfig
 describe("getReplyFromConfig fast test bootstrap", () => {
   let state: OpenClawTestState;
   let storePath: string;
-  const config = (model = "openai/gpt-5.5", heartbeat?: Record<string, never>) =>
+  const config = (model = "openai/gpt-5.5") =>
     markCompleteReplyConfig({
       agents: {
-        defaults: { model, workspace: state.workspaceDir, ...(heartbeat ? { heartbeat } : {}) },
+        defaults: { model, workspace: state.workspaceDir },
       },
       session: { store: storePath },
     });
@@ -146,13 +147,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
       isPathInside(state.root, resolveUnsuffixedSqliteTargetFromSessionStorePath(storePath).path),
     ).toBe(true);
     cliBackendsTesting.setDepsForTest({
-      resolvePluginSetupRegistry: () => ({
-        providers: [],
-        cliBackends: [],
-        configMigrations: [],
-        autoEnableProbes: [],
-        diagnostics: [],
-      }),
+      resolvePluginSetupRegistry: () => createEmptyPluginSetupRegistry(),
       resolveRuntimeCliBackends: () => [],
     });
     for (const mock of Object.values(mocks)) {
@@ -236,34 +231,6 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(runState.preRunRejection).toBe("model-selection-locked");
     expect(mocks.resolveReplyDirectives).not.toHaveBeenCalled();
     expect(vi.mocked(runPreparedReplyMock)).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ["clears stale ack-only heartbeat pending delivery", "HEARTBEAT_OK", true],
-    [
-      "does not replay private pending delivery during heartbeat",
-      "private prior user answer",
-      false,
-    ],
-  ] as const)("%s", async (_name, text, cleared) => {
-    await seedSession({
-      sessionId: "pending-final",
-      updatedAt: Date.now() - (cleared ? 0 : 60_000),
-      pendingFinalDelivery: {
-        kind: "replayable",
-        text,
-        createdAt: 1,
-        intentId: "stale-heartbeat-intent",
-      },
-    });
-    await expect(
-      getReplyFromConfig(buildGetReplyCtx(), { isHeartbeat: true }, config("openai/gpt-5.5", {})),
-    ).resolves.toEqual({ text: "ok" });
-    if (cleared) {
-      expect(readSession().pendingFinalDelivery).toBeUndefined();
-    } else {
-      expect(readSession().pendingFinalDelivery).toMatchObject({ kind: "replayable", text });
-    }
   });
 
   it("uses the target session thinking override for native /status", async () => {

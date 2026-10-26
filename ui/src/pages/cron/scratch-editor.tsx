@@ -7,7 +7,6 @@ import {
   createStore,
   Errored,
   isPending,
-  latest,
   Loading,
   onSettled,
   refresh,
@@ -105,10 +104,10 @@ function ScratchFields(props: {
     conflict: false,
     redacted: false,
   });
-  const [readReceipt, setReadReceipt] = createSignal<Promise<void>>();
-  const read = createMemo(() => readReceipt());
+  const [receipt, setReceipt] = createSignal<Promise<void>>();
+  const read = createMemo(() => receipt());
   const readResult = () => {
-    latest(read);
+    read();
     return null;
   };
   let pending = false;
@@ -126,21 +125,14 @@ function ScratchFields(props: {
     retired: Promise<void>,
     ownsPresentation: () => boolean,
   ) {
-    try {
-      if (ownsPresentation()) {
-        setSaving(true);
-        affects(snapshotRead);
-      }
-      yield Promise.race([result, retired]);
-      if (ownsPresentation()) {
-        yield refresh(snapshotRead);
-      }
-    } catch (error) {
-      if (ownsPresentation()) {
-        setView((state) => {
-          state.message = formatUiError(error);
-        });
-      }
+    if (ownsPresentation()) {
+      setSaving(true);
+      affects(snapshotRead);
+    }
+    // The completion reader presents failures; this action only owns saving.
+    yield Promise.race([result.catch(() => undefined), retired]);
+    if (ownsPresentation()) {
+      yield refresh(snapshotRead);
     }
   });
 
@@ -184,13 +176,10 @@ function ScratchFields(props: {
     }
     // Guard duplicate admission synchronously; signals publish on the next Solid flush.
     pending = true;
-    if (isSave) {
-      setReadReceipt(undefined);
-    }
     setView((state) => {
       state.message = "";
     });
-    return (async () => {
+    const completion = (async () => {
       try {
         const result = isSave
           ? await client.request<CronScratchSetResult>("cron.scratch.set", {
@@ -228,22 +217,21 @@ function ScratchFields(props: {
         });
       } catch (error) {
         if (isCurrent()) {
-          if (!isSave) {
-            throw error;
-          }
-          setView((state) => {
-            state.message = formatUiError(error);
-          });
+          throw error;
         }
       } finally {
         pending = false;
       }
     })();
+    void setReceipt(completion);
+    // A retired or disposed editor may no longer consume its completion.
+    void completion.catch(() => undefined);
+    return completion;
   }
 
   function loadScratch() {
     if (!pending && isCurrent()) {
-      void setReadReceipt(request());
+      void request();
     }
   }
 
@@ -309,15 +297,17 @@ function ScratchFields(props: {
               {t("cron.scratch.clear")}
             </button>
           </Show>
-          <Errored
-            fallback={(error) => (
-              <p class="cron-help" role="status">
-                {formatUiError(error())}
-              </p>
-            )}
-          >
-            {readResult()}
-          </Errored>
+          <Loading on={receipt()}>
+            <Errored
+              fallback={(error) => (
+                <p class="cron-help" role="status">
+                  {formatUiError(error())}
+                </p>
+              )}
+            >
+              {readResult()}
+            </Errored>
+          </Loading>
           <Show when={view.message}>
             <p class="cron-help" role="status">
               {view.message}

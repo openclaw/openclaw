@@ -22,6 +22,14 @@ import { applyMockOpenAiModelConfig } from "./e2e/lib/fixtures/mock-openai-confi
 import { stopChild } from "./lib/gateway-bench-child.ts";
 import { getFreePort } from "./lib/gateway-bench-probes.ts";
 import {
+  controlGatewayProfile,
+  measureGatewayCpuUsage,
+  readGatewayCpuUsage,
+  readGatewayResources,
+  type GatewayCpuUsage,
+  type GatewayResourceSnapshot,
+} from "./lib/gateway-bench-profile.ts";
+import {
   BASE_GATEWAY_BENCH_CONFIG,
   buildGatewayBenchChildArgs,
   createGatewayBenchEnv,
@@ -32,6 +40,8 @@ const { values } = parseArgs({
   options: {
     entry: { type: "string", default: "dist/entry.js" },
     help: { type: "boolean", short: "h" },
+    resources: { type: "boolean", default: false },
+    "cpu-profile": { type: "boolean", default: false },
     "tool-invocations": { type: "boolean", default: false },
     "tool-argument-bytes": { type: "string", default: "65536" },
     "tool-progress-events": { type: "string", default: "500" },
@@ -40,11 +50,12 @@ const { values } = parseArgs({
     "tool-start-file": { type: "string" },
     "tool-interval-ms": { type: "string", default: "100" },
     "tool-gc-log": { type: "string" },
+    "tool-args-chars": { type: "string", default: "0" },
   },
 });
 if (values.help) {
   console.log(
-    "Usage: node --import ./scripts/tsx.mjs scripts/bench-channel-turn.mts [--entry dist/entry.js]\nRuns one cold and ten warmed QA-channel turns with an isolated local mock provider.\nOr use --tool-invocations [--tool-argument-bytes 65536] [--tool-progress-events 500] [--tool-calls 200] [--tool-samples 5] [--tool-interval-ms 100] --tool-gc-log <stdout-log> with --expose-gc --trace-gc-nvp, redirecting stdout to that log, for real tool-owner allocation, promotion, GC and latency measurements without a Gateway.",
+    "Usage: node --import ./scripts/tsx.mjs scripts/bench-channel-turn.mts [--entry dist/entry.js] [--tool-args-chars N]\nRuns one cold and ten warmed QA-channel turns with an isolated local mock provider.\nWith --tool-args-chars, each turn first streams a Chat Completions write call carrying N content characters.\nOr use --tool-invocations [--tool-argument-bytes 65536] [--tool-progress-events 500] [--tool-calls 200] [--tool-samples 5] [--tool-interval-ms 100] --tool-gc-log <stdout-log> with --expose-gc --trace-gc-nvp, redirecting stdout to that log, for real tool-owner allocation, promotion, GC and latency measurements without a Gateway.",
   );
   process.exit(0);
 }
@@ -52,6 +63,16 @@ if (values["tool-invocations"]) {
   await measureToolInvocations();
   process.exit(0);
 }
+const toolArgsChars = Number(values["tool-args-chars"]);
+if (!Number.isSafeInteger(toolArgsChars) || toolArgsChars < 0) {
+  console.error("--tool-args-chars must be a non-negative integer");
+  process.exit(2);
+}
+// Brace-dense TypeScript, like a coding agent writing a source file.
+const toolCallSource = readFileSync(new URL(import.meta.url), "utf8");
+const toolCallContent = toolCallSource
+  .repeat(Math.ceil(toolArgsChars / toolCallSource.length))
+  .slice(0, toolArgsChars);
 const output = mkdtempSync(path.join(tmpdir(), "sqlmeasure-channel-"));
 const fixture = path.join(output, "fixture");
 mkdirSync(fixture);
@@ -60,12 +81,17 @@ type TurnEvidence = TurnIdentity & {
   key: string;
   messageId: string;
   firstOutboundMs: number;
+  finalOutboundMs: number;
+  settledMs: number;
+  outboundMessages: number;
+  cpu?: GatewayCpuUsage;
   result: { status: "ok" };
   outboundId: string;
 };
 const evidence: {
   output: string;
   harnessVersion: string;
+  toolArgsChars: number;
   phases: { phase: string; start: number; end: number }[];
   turns: TurnEvidence[];
   children: { name: string; pid: number }[];
@@ -73,11 +99,13 @@ const evidence: {
   ready?: unknown;
   shutdown?: [number | null, NodeJS.Signals | null];
   bus?: unknown;
+  resources?: { before: GatewayResourceSnapshot; after: GatewayResourceSnapshot };
   ok?: boolean;
   error?: string;
 } = {
   output,
   harnessVersion: "2.0.0-channel.1",
+  toolArgsChars,
   phases: [],
   turns: [],
   children: [],
@@ -129,7 +157,7 @@ function setPhase(next: string) {
   console.log("PHASE", phase);
   save();
 }
-function launch(args: string[], env: NodeJS.ProcessEnv, name: string) {
+function launch(args: string[], env: NodeJS.ProcessEnv, name: string, ipc = false) {
   if (interrupted) {
     throw new Error("Benchmark interrupted");
   }
@@ -137,7 +165,7 @@ function launch(args: string[], env: NodeJS.ProcessEnv, name: string) {
   const child = spawn(process.execPath, args, {
     cwd: process.cwd(),
     env,
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: ipc ? ["ignore", "pipe", "pipe", "ipc"] : ["ignore", "pipe", "pipe"],
     detached: true,
   });
   child.stdout?.pipe(out);
@@ -165,7 +193,21 @@ try {
   bus = await startQaBusServer({ state });
   const cfg: OpenClawConfig = structuredClone(BASE_GATEWAY_BENCH_CONFIG);
   cfg.tools = { codeMode: false };
-  applyMockOpenAiModelConfig(cfg, { mockPort, modelRef: "openai/gpt-4.1" });
+  applyMockOpenAiModelConfig(cfg, {
+    mockPort,
+    modelRef: toolArgsChars > 0 ? "mock-completions/gpt-4.1" : "openai/gpt-4.1",
+  });
+  const mockProvider = cfg.models?.providers?.openai;
+  if (toolArgsChars > 0 && mockProvider) {
+    // Malformed tool-call argument repair wraps Chat Completions streams, not Responses.
+    mockProvider.api = "openai-completions";
+    for (const model of mockProvider.models) {
+      model.api = "openai-completions";
+    }
+    cfg.models = { ...cfg.models, providers: { "mock-completions": mockProvider } };
+    // One session per turn keeps large tool-call histories below the context window.
+    cfg.session = { dmScope: "per-peer" };
+  }
   cfg.agents = {
     ...cfg.agents,
     defaults: { ...cfg.agents?.defaults, skipBootstrap: true },
@@ -207,15 +249,29 @@ try {
   if (mockReady.status !== 200) {
     throw new Error("Mock provider not ready");
   }
+  const observe = values.resources || values["cpu-profile"];
+  const profilePath = path.join(output, "warm.cpuprofile");
   gateway = launch(
-    buildGatewayBenchChildArgs(values.entry, port),
+    buildGatewayBenchChildArgs(values.entry, port, [
+      ...(observe
+        ? [
+            "--import",
+            "./scripts/tsx.mjs",
+            "--import",
+            "./scripts/lib/gateway-bench-profile-preload.ts",
+          ]
+        : []),
+      ...(values["cpu-profile"] ? ["--cpu-prof", `--cpu-prof-dir=${output}`] : []),
+    ]),
     {
       ...createGatewayBenchEnv(fixture, configPath, { caseEnv: {} }),
       OPENAI_API_KEY: "synthetic-sqlmeasure-fixture",
       SQLMEASURE_OUT: output,
       NODE_OPTIONS: process.env.OPENCLAW_CHANNEL_BENCH_NODE_OPTIONS ?? "--enable-source-maps",
+      NODE_DISABLE_COMPILE_CACHE: process.env.NODE_DISABLE_COMPILE_CACHE,
     },
     "gateway",
+    observe,
   );
   const ready = await waitForInitialProbe({
     port,
@@ -229,7 +285,19 @@ try {
     throw new Error("Gateway not ready");
   }
   await delay(1000);
+  let warmResources: GatewayResourceSnapshot | undefined;
   for (let i = 0; i <= 10; i++) {
+    if (i === 1) {
+      if (values.resources) {
+        warmResources = await readGatewayResources(gateway);
+      }
+      if (values["cpu-profile"]) {
+        await controlGatewayProfile(gateway, "cpu", "start", profilePath, { includeWorkers: true });
+      }
+    }
+    const cpuBefore = observe
+      ? await readGatewayCpuUsage(gateway, { includeWorkers: values.resources })
+      : undefined;
     setPhase(i === 0 ? "02.first-turn" : `03.turn-${String(i).padStart(2, "0")}`);
     const turnId = createHash("sha256").update(phase).digest("hex").slice(0, 32);
     const messageId = `sqlmeasure-${i}`;
@@ -238,7 +306,20 @@ try {
     publish("trace-map.json", traces);
     publish("channel-turns.json", messages);
     const reply = `Synthetic channel measurement response ${i}. The Gateway receives this streamed answer from the local mock provider and delivers it to the isolated QA bus.`;
-    publish("mock-control.json", { text: reply, chunkDelayMs: 5 });
+    publish("mock-control.json", {
+      text: reply,
+      chunkDelayMs: 5,
+      ...(toolArgsChars > 0
+        ? {
+            toolCall: {
+              name: "write",
+              arguments: { path: `turn-${i}.ts`, content: toolCallContent },
+              argumentChunkChars: 4,
+            },
+          }
+        : {}),
+    });
+    const peer = toolArgsChars > 0 ? `sqlmeasure-peer-${i}` : "sqlmeasure-peer";
     const start = Date.now();
     const cursor = state.getSnapshot().cursor;
     const firstOutbound = state
@@ -252,8 +333,8 @@ try {
     state.addInboundMessage(
       {
         accountId: "default",
-        conversation: { kind: "direct", id: "sqlmeasure-peer" },
-        senderId: "sqlmeasure-user",
+        conversation: { kind: "direct", id: peer },
+        senderId: toolArgsChars > 0 ? `sqlmeasure-user-${i}` : "sqlmeasure-user",
         senderName: "SQL measurement",
         text: `Please give a short synthetic status report for measurement turn ${i}.`,
         timestamp: 1800000000000 + i,
@@ -267,6 +348,7 @@ try {
       textIncludes: reply,
       timeoutMs: 180000,
     });
+    const finalOutboundMs = Date.now() - start;
     const firstOutboundMs = await firstOutbound;
     // The poll acknowledgement follows dispatch, preview cleanup and receipt settlement.
     const deadline = Date.now() + 180000;
@@ -279,6 +361,13 @@ try {
       }
       await delay(50);
     }
+    const settledMs = Date.now() - start;
+    const cpu = cpuBefore
+      ? measureGatewayCpuUsage(
+          cpuBefore,
+          await readGatewayCpuUsage(gateway, { includeWorkers: values.resources }),
+        )
+      : undefined;
     const result = state
       .getSnapshot()
       .messages.find(
@@ -294,14 +383,30 @@ try {
     }
     evidence.turns.push({
       phase,
-      key: "qa-channel:sqlmeasure-peer",
+      key: `qa-channel:${peer}`,
       turnId,
       messageId,
       firstOutboundMs,
+      finalOutboundMs,
+      settledMs,
+      outboundMessages: state
+        .getSnapshot()
+        .messages.filter(
+          (message) => message.direction === "outbound" && message.replyToId === messageId,
+        ).length,
+      ...(cpu ? { cpu } : {}),
       result: { status: "ok" },
       outboundId: result.id,
     });
     save();
+    if (i === 10) {
+      if (values["cpu-profile"]) {
+        await controlGatewayProfile(gateway, "cpu", "stop", profilePath);
+      }
+      if (warmResources) {
+        evidence.resources = { before: warmResources, after: await readGatewayResources(gateway) };
+      }
+    }
     await delay(1000);
   }
   setPhase("08.shutdown");

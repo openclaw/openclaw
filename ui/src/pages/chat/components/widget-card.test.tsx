@@ -11,6 +11,7 @@ import { bumpCanvasWidgetFrameConnectionGeneration } from "../../../lib/chat/can
 import { projectGateway } from "../../../lib/reactive/application.ts";
 import { createTestSessionCapability } from "../../../lib/sessions/session-capability.test-support.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
+import * as toast from "../../../lib/toast.ts";
 import { disposeSidebarContextLifecycles } from "../../../test-helpers/app-sidebar-context-lifecycle.ts";
 import { createContext } from "../../../test-helpers/app-sidebar.ts";
 import {
@@ -18,12 +19,14 @@ import {
   createApplicationGateway,
 } from "../../../test-helpers/application-context.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { stubTargetRetainingObserver } from "../../../test-helpers/resize-observer.ts";
 import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { ToolPreview as DeferredToolPreview } from "./chat-message-deferred.tsx";
 import { SidebarPanel } from "./chat-sidebar-content.tsx";
 import { ToolPreview } from "./widget-card-view.tsx";
-import { ToolPreview as DeferredToolPreview } from "./widget-card.ts";
 import * as widgetExport from "./widget-export.ts";
+import { WidgetPinButton } from "./widget-pin-button.tsx";
 
 const canvasPreview = {
   kind: "canvas",
@@ -156,6 +159,23 @@ afterEach(async () => {
 });
 
 describe("widget-card", () => {
+  it("retains saved geometry while active widget content waits for admission", () => {
+    const preview = documentPreview("saved-widget", { sandbox: "strict" });
+    const widgetLayout = { read: vi.fn(() => 700), write: vi.fn() };
+    const host = mountWidget(preview, { mediaReadAllowed: false, widgetLayout });
+    const shell = host.querySelector('[data-content-kind="canvas-html"]');
+    expect(shell).not.toBeNull();
+    expect(
+      shell?.querySelector<HTMLElement>(".chat-tool-card__preview-panel > div")?.style.minHeight,
+    ).toBe("700px");
+    expect(host.querySelector("iframe")).toBeNull();
+    expect(actionButton(host)).toBeNull();
+
+    mountWidget(preview, { mediaReadAllowed: true, widgetLayout }, host);
+    expect(host.querySelector('[data-content-kind="canvas-html"]')).toBe(shell);
+    expect(host.querySelector("iframe")?.style.height).toBe("700px");
+  });
+
   it.each(["transcript", "strict transcript", "sidebar"] as const)(
     "retains the %s document through a blip and retires it on identity or access change",
     async (surface) => {
@@ -261,13 +281,7 @@ describe("widget-card", () => {
     },
   );
   it("retains video playback through title changes after the player loads", async () => {
-    vi.stubGlobal(
-      "ResizeObserver",
-      class {
-        observe() {}
-        disconnect() {}
-      },
-    );
+    stubTargetRetainingObserver("ResizeObserver");
     onTestFinished(() => {
       vi.unstubAllGlobals();
     });
@@ -505,7 +519,9 @@ describe("widget-card", () => {
       }),
       { boardProvider: provider },
     );
-    expect(canvas.querySelector("openclaw-canvas-widget-view")).not.toBeNull();
+    await waitForSolid(() =>
+      expect(canvas.querySelector("openclaw-canvas-widget-view")).not.toBeNull(),
+    );
     pinButton(canvas)?.click();
     await vi.waitFor(() => {
       expect(pinWidget).toHaveBeenCalledWith({
@@ -553,6 +569,9 @@ describe("widget-card", () => {
         title: "Could not pin to dashboard. Try again.",
       }),
     );
+    mountWidget({ ...preview, title: "Retained failure" }, { boardProvider: provider }, host);
+    expect(pinButton(host)).toBe(button);
+    expect(button.title).toBe("Could not pin to dashboard. Try again.");
     button.click();
     await waitForSolid(() =>
       expect(button).toMatchObject({ disabled: true, ariaLabel: "Pinning…" }),
@@ -560,7 +579,7 @@ describe("widget-card", () => {
     expect(pinWidget).toHaveBeenLastCalledWith({
       docId: "cv_pin_feedback",
       name: "canvas-cv_pin_feedback",
-      title: "Updated release status",
+      title: "Retained failure",
     });
     snapshot.set({ widgets: [{ name: "canvas-cv_pin_feedback" }] });
     retry.resolve();
@@ -572,6 +591,116 @@ describe("widget-card", () => {
       expect(button).toMatchObject({ disabled: false, ariaLabel: "Pin to dashboard" }),
     );
     expect(button.hasAttribute("data-pinned")).toBe(false);
+  });
+
+  it("keeps pin failure feedback focused through title updates and clears it on membership changes without replaying its toast", async () => {
+    const pending = Promise.withResolvers<void>();
+    const { provider, snapshot } = boardProvider({ pinWidget: vi.fn(() => pending.promise) });
+    const showToast = vi.spyOn(toast, "showToast").mockReturnValue(true);
+    onTestFinished(() => showToast.mockRestore());
+    let setTitle!: (title: string) => void;
+    const root = mountSolid(() => {
+      const [title, updateTitle] = createSignal("Synthetic chart");
+      setTitle = updateTitle;
+      return (
+        <WidgetPinButton
+          target={{ board: provider, name: "widget", viewId: "view", mcpApp: false }}
+          title={title()}
+        />
+      );
+    });
+    onTestFinished(root.unmount);
+    const button = pinButton(root.container)!;
+    button.focus();
+    button.click();
+    pending.reject(new Error("Synthetic pin failure"));
+    await waitForSolid(() => expect(button.title).toBe("Could not pin to dashboard. Try again."));
+    expect(pinButton(root.container)).toBe(button);
+    expect(document.activeElement).toBe(button);
+    expect(showToast).toHaveBeenCalledExactlyOnceWith({
+      message: "Could not pin to dashboard. Try again.",
+    });
+
+    setTitle("Updated chart");
+    flush();
+    expect(pinButton(root.container)).toBe(button);
+    expect(document.activeElement).toBe(button);
+    expect(button.title).toBe("Could not pin to dashboard. Try again.");
+    expect(showToast).toHaveBeenCalledTimes(1);
+
+    snapshot.set({ widgets: [{ name: "widget" }] });
+    await waitForSolid(() => expect(button.title).toBe("Pinned"));
+    snapshot.set({ widgets: [] });
+    await waitForSolid(() => expect(button.title).toBe("Pin to dashboard"));
+    expect(showToast).toHaveBeenCalledTimes(1);
+  });
+
+  it("shares one snapshot subscription and membership scan across independently mounted pin buttons", () => {
+    const pinWidget = vi.fn(async () => undefined);
+    const first = boardProvider({ pinWidget });
+    const second = boardProvider();
+    const firstName = vi.fn();
+    const secondName = vi.fn();
+    const widgetRows = (count: number, read: () => void, pinned: boolean) =>
+      Array.from({ length: count }, (_, index) => ({
+        get name() {
+          read();
+          return pinned && index === 0 ? "wanted" : `widget-${index}`;
+        },
+      }));
+    first.snapshot.set({ widgets: widgetRows(100, firstName, false) });
+    second.snapshot.set({ widgets: widgetRows(200, secondName, true) });
+    const track = (source: typeof first.snapshot) => {
+      const subscribe = source.subscribe.bind(source);
+      const active = new Set<() => void>();
+      const subscriptions = vi.spyOn(source, "subscribe").mockImplementation((listener) => {
+        active.add(listener);
+        const stop = subscribe(listener);
+        return () => {
+          active.delete(listener);
+          stop();
+        };
+      });
+      onTestFinished(() => subscriptions.mockRestore());
+      return { active, subscriptions };
+    };
+    const firstObserved = track(first.snapshot);
+    const secondObserved = track(second.snapshot);
+    const mounts = Array.from({ length: 12 }, (_, index) => {
+      const board = index % 2 === 0 ? first.provider : second.provider;
+      const mounted = mountSolid(() => (
+        <WidgetPinButton target={{ board, name: "wanted", viewId: "view", mcpApp: false }} />
+      ));
+      onTestFinished(mounted.unmount);
+      return mounted;
+    });
+    flush();
+    expect(firstName).toHaveBeenCalledTimes(100);
+    expect(secondName).toHaveBeenCalledTimes(200);
+    expect(firstObserved.subscriptions).toHaveBeenCalledOnce();
+    expect(secondObserved.subscriptions).toHaveBeenCalledOnce();
+    expect(pinButton(mounts[0]!.container)?.disabled).toBe(false);
+    expect(pinButton(mounts[1]!.container)?.disabled).toBe(true);
+
+    // Admission samples the replacement immediately, before Solid updates the disabled button.
+    first.snapshot.set({ widgets: widgetRows(1, firstName, true) });
+    pinButton(mounts[0]!.container)!.click();
+    expect(pinWidget).not.toHaveBeenCalled();
+    expect(firstName).toHaveBeenCalledTimes(101);
+    flush();
+    expect(firstName).toHaveBeenCalledTimes(101);
+    expect(secondName).toHaveBeenCalledTimes(200);
+    expect(pinButton(mounts[0]!.container)?.disabled).toBe(true);
+
+    mounts[0]!.unmount();
+    flush();
+    expect(firstObserved.active.size).toBe(1);
+    for (const mounted of mounts.slice(1)) {
+      mounted.unmount();
+    }
+    flush();
+    expect(firstObserved.active.size).toBe(0);
+    expect(secondObserved.active.size).toBe(0);
   });
 
   it("replaces a pin target while its previous board write is still pending", async () => {
@@ -661,14 +790,30 @@ describe("widget-card", () => {
   it("releases placement observation while a retained widget is hidden", () => {
     const observers: ResizeObserverStub[] = [];
     class ResizeObserverStub implements ResizeObserver {
-      observe = vi.fn();
-      unobserve = vi.fn();
-      disconnect = vi.fn();
+      private readonly targets = new Set<Element>();
+      observe = vi.fn((target: Element) => {
+        this.targets.add(target);
+      });
+      unobserve = vi.fn((target: Element) => {
+        this.targets.delete(target);
+      });
+      disconnect = vi.fn(() => {
+        this.targets.clear();
+      });
       constructor(private readonly callback: ResizeObserverCallback) {
         observers.push(this);
       }
       deliver() {
-        this.callback([], this);
+        this.callback(
+          [...this.targets].map((target) => ({
+            target,
+            contentRect: new DOMRectReadOnly(),
+            borderBoxSize: [],
+            contentBoxSize: [],
+            devicePixelContentBoxSize: [],
+          })),
+          this,
+        );
       }
     }
     vi.stubGlobal("ResizeObserver", ResizeObserverStub);
@@ -742,21 +887,29 @@ describe("widget-card", () => {
     ["strict", "scripts", false],
     ["trusted", undefined, true],
     ["trusted", "strict", false],
-  ] as const)("applies %s policy to preview sandbox %s", (embedSandboxMode, sandbox, scripted) => {
-    const { provider, snapshot } = boardProvider();
-    snapshot.value = { widgets: [{ name: "canvas-cv_clock" }] };
-    const host = mountWidget(
-      { ...preview, sandbox },
-      { embedSandboxMode, boardProvider: provider },
-    );
-    const managedView = host.querySelector("openclaw-canvas-widget-view");
-    expect(managedView !== null).toBe(sandbox !== "strict");
-    expect(pinButton(host) !== null).toBe(scripted);
-    if (managedView) {
-      expect(managedView.allowScripts).toBe(scripted);
-      expect(host.querySelector("iframe")).toBeNull();
-    } else {
-      expect(host.querySelector("iframe")?.getAttribute("sandbox")).toBe("");
-    }
-  });
+  ] as const)(
+    "applies %s policy to preview sandbox %s",
+    async (embedSandboxMode, sandbox, scripted) => {
+      const { provider, snapshot } = boardProvider();
+      snapshot.value = { widgets: [{ name: "canvas-cv_clock" }] };
+      const host = mountWidget(
+        { ...preview, sandbox },
+        { embedSandboxMode, boardProvider: provider },
+      );
+      await waitForSolid(() =>
+        expect(host.querySelector("openclaw-canvas-widget-view") !== null).toBe(
+          sandbox !== "strict",
+        ),
+      );
+      const managedView = host.querySelector("openclaw-canvas-widget-view");
+      expect(managedView !== null).toBe(sandbox !== "strict");
+      expect(pinButton(host) !== null).toBe(scripted);
+      if (managedView) {
+        expect(managedView.allowScripts).toBe(scripted);
+        expect(host.querySelector("iframe")).toBeNull();
+      } else {
+        expect(host.querySelector("iframe")?.getAttribute("sandbox")).toBe("");
+      }
+    },
+  );
 });

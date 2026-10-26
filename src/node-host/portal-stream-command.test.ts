@@ -2,7 +2,10 @@ import net from "node:net";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { mockIpv4OnlyLocalhostLookup } from "../../test/helpers/loopback-dns.js";
-import { invokeNodeWorkerPortalStream } from "./portal-stream-command.js";
+import { NODE_WORKER_PORTAL_STREAM_COMMAND } from "../infra/node-commands.js";
+import * as logger from "../logger.js";
+import { invokeNodeWorkerSupervisorCommand } from "./node-worker-supervisor-commands.js";
+import type { NodeWorkerSupervisorControl } from "./node-worker-supervisor-contract.js";
 import {
   listen,
   portOf,
@@ -12,11 +15,26 @@ import {
 } from "./stream-command.test-support.js";
 
 const { cleanups, closeServer, gateway } = useStreamFixture();
+const unexpectedSupervisorCommand = async (): Promise<never> => {
+  throw new Error("Portal stream must not call another supervisor command");
+};
+const portalSupervisor: NodeWorkerSupervisorControl = {
+  launch: unexpectedSupervisorCommand,
+  status: unexpectedSupervisorCommand,
+  retainWorkspaces: unexpectedSupervisorCommand,
+  cancel: unexpectedSupervisorCommand,
+  observeProcesses: unexpectedSupervisorCommand,
+  stopEnvironment: unexpectedSupervisorCommand,
+};
 function invokePortal(
   port: number,
-  options: Partial<Parameters<typeof invokeNodeWorkerPortalStream>[0]> = {},
+  options: Partial<
+    Omit<Parameters<typeof invokeNodeWorkerSupervisorCommand>[0], "command" | "supervisor">
+  > = {},
 ) {
-  return invokeNodeWorkerPortalStream({
+  return invokeNodeWorkerSupervisorCommand({
+    command: NODE_WORKER_PORTAL_STREAM_COMMAND,
+    supervisor: portalSupervisor,
     paramsJSON: portalCommand(port),
     gatewayUrl: "ws://127.0.0.1:1",
     signal: new AbortController().signal,
@@ -40,7 +58,12 @@ it.each([
     invokePortal(8080, {
       paramsJSON: portalCommand(8080, override),
     }),
-  ).rejects.toThrow("INVALID_REQUEST");
+  ).resolves.toMatchObject({
+    handled: true,
+    ok: false,
+    code: "INVALID_REQUEST",
+    message: "INVALID_REQUEST: invalid node worker portal stream request",
+  });
 });
 
 it.for([
@@ -91,7 +114,7 @@ it.for([
 
     controller.abort();
 
-    await expect(running).resolves.toBeUndefined();
+    await expect(running).resolves.toEqual({ handled: true, ok: true, payload: null });
     await vi.waitFor(() => expect(peer.closed).toBe(true));
     await vi.waitFor(() => expect(peers.size).toBe(0));
   },
@@ -126,16 +149,22 @@ it("closes an attached Gateway socket without a readiness frame when loopback re
     return Reflect.apply(originalConnect, this, args);
   });
 
+  const warning = vi.spyOn(logger, "logWarn").mockImplementation(() => {});
   try {
-    await expect(invokePortal(targetPort, { gatewayUrl })).rejects.toMatchObject({
-      code: "ECONNREFUSED",
+    await expect(invokePortal(targetPort, { gatewayUrl })).resolves.toEqual({
+      handled: true,
+      ok: false,
+      code: "UNAVAILABLE",
+      message: "node worker supervisor command failed",
     });
 
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining("ECONNREFUSED"));
     expect(refusedTargets).toBe(1);
     expect(peer.socket).toBeDefined();
     await vi.waitFor(() => expect(peer.closed).toBe(true));
     expect(peer.frames).toEqual([]);
   } finally {
     connect.mockRestore();
+    warning.mockRestore();
   }
 });

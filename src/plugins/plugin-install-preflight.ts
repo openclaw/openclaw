@@ -32,9 +32,8 @@ type InstalledClawHubPluginResolution =
 /** Resolves one installed plugin by its stable ClawHub package identity. */
 export async function resolveInstalledClawHubPlugin(params: {
   clawhubPackage: string;
-  loadInstallRecords?: typeof loadInstalledPluginIndexInstallRecords;
 }): Promise<InstalledClawHubPluginResolution> {
-  const records = await (params.loadInstallRecords ?? loadInstalledPluginIndexInstallRecords)();
+  const records = await loadInstalledPluginIndexInstallRecords();
   const matches = Object.entries(records).filter(
     ([, record]) =>
       (record.clawhubPackage ??
@@ -59,9 +58,8 @@ export async function resolveInstalledClawHubPlugin(params: {
 export async function preflightPluginInstall(params: {
   clawhubPackage: string;
   expectedVersion: string;
-  loadInstallRecords?: typeof loadInstalledPluginIndexInstallRecords;
 }): Promise<PluginInstallPreflightResult> {
-  const records = await (params.loadInstallRecords ?? loadInstalledPluginIndexInstallRecords)();
+  const records = await loadInstalledPluginIndexInstallRecords();
   const installedEntry = Object.entries(records).find(
     ([, record]) =>
       (record.clawhubPackage ?? parseClawHubPluginSpec(record.spec ?? "")?.name) ===

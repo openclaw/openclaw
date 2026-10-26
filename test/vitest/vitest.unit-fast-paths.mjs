@@ -218,7 +218,6 @@ const broadUnitFastCandidateSkipPatterns = prepareGlobPatterns(
     "src/proxy-capture/runtime.test.ts",
     "src/plugins/install.npm-spec.test.ts",
     "src/plugins/contracts/**/*.test.ts",
-    "src/pairing/pairing-store.test.ts",
     "src/plugin-sdk/browser-subpaths.test.ts",
     "src/security/**/*.test.ts",
     "src/secrets/**/*.test.ts",
@@ -368,15 +367,29 @@ function collectRepoTestFiles(cwd, selected) {
   if (cached) {
     return cached;
   }
-  const inventory = getRepositoryFileInventory(cwd, selected);
+  const roots = ["src/", "packages/", "test/"];
+  let inventory = new Set();
+  // A single glob per root filters non-test files before Git checks deleted-file
+  // metadata, while retaining untracked tests and each root's directory prefix.
+  for (const scope of selected ? [selected] : roots.map((root) => [`${root}**/*.test.ts`])) {
+    const files = getRepositoryFileInventory(cwd, scope, selected ? "literal" : "glob");
+    if (!files) {
+      inventory = null;
+      break;
+    }
+    for (const file of files) {
+      inventory.add(file);
+    }
+  }
   const files = inventory
     ? [...inventory]
         .map(normalizeRepoPath)
         .filter((file) => /^(?:src|packages|test)\//u.test(file) && file.endsWith(".test.ts"))
-    : (selected ??
-      ["src", "packages", "test"]
-        .flatMap((directory) => walkFiles(path.join(cwd, directory)))
-        .map((file) => normalizeRepoPath(path.relative(cwd, file))));
+    : selected?.every((file) => file.endsWith(".test.ts"))
+      ? selected
+      : roots
+          .flatMap((directory) => walkFiles(path.join(cwd, directory)))
+          .map((file) => normalizeRepoPath(path.relative(cwd, file)));
   walkedTestFilesByCwd.set(key, files);
   return files;
 }
@@ -585,11 +598,19 @@ export function getUnitFastTestFilesForIncludePatterns(includePatterns, options 
     return [];
   }
   const compiledPatterns = prepareGlobPatterns(patterns);
+  const directories = [...new Set(patterns.map(directoryPrefixForGlob))];
   const candidates = patterns.every(
     (pattern) => pattern.endsWith(".test.ts") && literalGlobPrefix(pattern) === pattern,
   )
     ? collectUnitFastCandidateInventory(cwd, patterns)
-    : collectUnitFastCandidateInventory(cwd);
+    : directories.every(Boolean)
+      ? [
+          ...new Set(
+            // Git applies --deleted's metadata filter early only for one pathspec.
+            directories.flatMap((directory) => collectUnitFastCandidateInventory(cwd, [directory])),
+          ),
+        ]
+      : collectUnitFastCandidateInventory(cwd);
 
   const files = candidates
     .filter((file) => {

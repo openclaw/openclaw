@@ -73,6 +73,11 @@ whichever is longer). These retained counts govern `/subagents list`,
 status summaries, descendant completion gating, and per-session concurrency
 checks; they are not proof that an executor is live.
 
+After execution ownership ends, the sweeper can reconcile the child's persisted
+terminal state even if routing metadata remains in memory. The completed result
+then follows normal completion delivery and retry; retained routing metadata does
+not keep the child running.
+
 During a graceful restart or Gateway suspension, lifecycle events from
 already-admitted runs remain tracked through restart preservation and completion
 processing. An already-admitted replacement run can finish refreshing a deferred
@@ -86,7 +91,10 @@ report an error and remain fenced until recovery reads the stored state.
 
 After a Gateway restart, unfinished sub-agents with a recorded restart interruption
 resume in their retained session once the original operator's current authority
-is restored. They check uncertain tool outcomes before continuing. The registry
+is restored. This includes visible dashboard children and interruptions saved in
+the session before the registry's shutdown listener finished. Automatic recovery
+uses the same owner as `sessions.recover`; it does not notify the parent that work
+settled while the child can still resume. They check uncertain tool outcomes before continuing. The registry
 keeps the original task and parent completion ownership, including late delivery
 when the parent's own turn already finished. Explicit Stop and cancellation remain
 terminal. Children without verifiable ownership or restorable authority report their
@@ -101,6 +109,9 @@ Detached orphan reads, restored requester wakes, and cleanup share a bounded
 background budget per Gateway. A large retained backlog waits there instead of
 filling the reader task limit needed by reconnecting clients. Queued cleanup stays
 tracked through restart drain and checks its original ownership before proceeding.
+Delivery releases that preparation budget when the Gateway accepts its input,
+while the registry keeps tracking the result. A queued completion never blocks
+the preparation of an earlier input in the same mailbox.
 
 Operator-admitted children retain bounded source evidence with their run record.
 Before continuing the requester after restart, the Gateway revalidates the current

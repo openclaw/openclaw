@@ -2,17 +2,16 @@
 import { createMemo } from "solid-js";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import {
-  agentsCapability,
   agentsList,
   agentsRouteData,
   gateway,
-  pageContext,
-  settingsSelection,
+  ownedAgentsContext,
   snapshot,
   createAgentsPage,
   emitGatewaySnapshot,
@@ -57,6 +56,12 @@ it.each([
         expectedMissing?: true;
       },
     ) => {
+      if (method === "agents.list") {
+        return roster;
+      }
+      if (method === "agents.files.list") {
+        return fileList(params.agentId);
+      }
       if (method === "agents.files.set") {
         if (params.expectedMissing ? !mainMissing : params.expectedHash !== mainHash) {
           throw new GatewayRequestError({
@@ -92,16 +97,10 @@ it.each([
   const client = { request } as unknown as GatewayBrowserClient;
   const connected = { ...snapshot(client), hello: gatewayHelloForMethods(["agents.files.set"]) };
   const currentGateway = gateway(connected);
-  const selection = settingsSelection(roster);
-  const agents = {
-    ...agentsCapability(async () => fileList("main")),
-    state: { ...agentsCapability(async () => fileList("main")).state, agentsList: roster },
-    files: () => ({ list: null, loading: false, error: null, read: null }),
-    ensureFiles: vi.fn(async (agentId: string) => fileList(agentId)),
-    recordFile: vi.fn(),
-  };
+  const baseContext = await ownedAgentsContext(currentGateway);
+  const selection = baseContext.settingsAgentSelection;
   const context = {
-    ...pageContext(currentGateway, agents),
+    ...baseContext,
     basePath: "",
     settingsAgentSelection: selection,
     channels: { state: {}, subscribe: () => () => undefined },
@@ -235,7 +234,7 @@ it.each([
     }
     expect(textarea().value).toBe(transition === "connection replacement" ? mainContent : draft);
     if (transition !== "pending save") {
-      expect(request.mock.calls.every(([method]) => method === "agents.files.get")).toBe(true);
+      expect(request.mock.calls.some(([method]) => method === "agents.files.set")).toBe(false);
     } else {
       expect(save().disabled).toBe(true);
     }
@@ -282,7 +281,6 @@ it.each([
   } finally {
     pendingSave.resolve();
     page.dispose();
-    selection.dispose();
     mounted.unmount();
   }
 });

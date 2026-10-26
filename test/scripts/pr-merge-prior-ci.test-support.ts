@@ -158,9 +158,12 @@ const securityResponse=()=>{
     const state=statuses.some(status=>["failure","error"].includes(status.state))?"failure":statuses.some(status=>status.state==="pending")?"pending":"success";
     reply({total_count:statuses.length,sha:s.pr.headRefOid,state,statuses});
   } else if(endpoint.startsWith("repos/fixture/repo/actions/runs/901")&&endpoint.includes("/jobs?")) {
-    const jobs=[{id:902,run_id:901,head_sha:source,name:"review (123, "+s.pr.headRefOid+")",status:"completed",conclusion:"success",
+    const headName="review (123, "+s.pr.headRefOid+")";
+    const attemptName="review (123, "+s.pr.headRefOid+", "+(config.fault==="wrong-ci-run"?502:501)+", "+(config.fault==="wrong-ci-attempt"?3:2)+")";
+    const jobs=[{id:902,run_id:901,head_sha:source,name:config.fault==="head-only-enforcement"?headName:attemptName,status:"completed",conclusion:"success",
       steps:config.fault==="missing-enforcement"?[]:[{name:"Enforce security review",status:"completed",conclusion:"success",started_at:"2026-09-20T00:00:00Z",completed_at:"2026-09-20T00:01:00Z"}]}];
-    reply({total_count:config.fault==="incomplete-publisher"?2:1,jobs});
+    if(config.fault==="duplicate-enforcement") jobs.push({...jobs[0],id:903,name:headName});
+    reply({total_count:jobs.length+(config.fault==="incomplete-publisher"?1:0),jobs});
   } else if(endpoint.startsWith("repos/fixture/repo/actions/runs/901")) {
     reply(endpoint.includes("/attempts/")?{...publisher,run_attempt:1}:publisher);
   } else if(endpoint.startsWith("repos/fixture/repo/contents/")) {

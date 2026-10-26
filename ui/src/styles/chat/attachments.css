@@ -63,10 +63,6 @@ openclaw-chat-svg-attachment {
   color: var(--danger);
 }
 
-.chat-attachment-compress--retry > span {
-  text-decoration: none;
-}
-
 .chat-attachment-video__placeholder > .chat-attachment-compression-progress {
   flex: none;
   width: 32px;

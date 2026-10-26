@@ -18,13 +18,8 @@ type TurnAdmissionRefusalReason =
   | "entry-retired"
   | "mailbox-clearing";
 
-export type TurnAdmissionDecision =
-  | { admitted: true }
-  | { admitted: false; reason: TurnAdmissionRefusalReason };
-
 const waitsForFollowupBarrier = {
   visible: false,
-  heartbeat: true,
   queued_followup: true,
   direct: false,
 } as const satisfies Record<SessionControllerTurnKind, boolean>;
@@ -39,7 +34,7 @@ export function evaluateTurnAdmission(
     claim?: SessionControllerMailboxClaim;
     selectedInput?: SessionControllerInput | null;
   },
-): TurnAdmissionDecision {
+): { admitted: true } | { admitted: false; reason: TurnAdmissionRefusalReason } {
   if (options.registeredEntry !== entry) {
     return { admitted: false, reason: "entry-retired" };
   }

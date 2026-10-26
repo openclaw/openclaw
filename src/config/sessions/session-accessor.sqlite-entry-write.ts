@@ -13,6 +13,7 @@ import { conversationPublication } from "./session-accessor.sqlite-conversation-
 import {
   linkSessionConversation,
   prepareConversationIdentities,
+  prepareRetainedSessionConversationForWrite,
   prepareSessionConversationForWrite,
   upsertConversationIdentities,
 } from "./session-accessor.sqlite-conversation.js";
@@ -38,6 +39,7 @@ import { prepareSessionEntryWindowRow } from "./session-accessor.sqlite-provenan
 import { bindSessionNode, bindSessionRoot } from "./session-accessor.sqlite-session-row.js";
 import { hasValidSessionEntryIdentity } from "./session-accessor.sqlite-status.js";
 import { readSessionTranscriptWatermarkInDatabase } from "./session-accessor.sqlite-transcript-watermark.js";
+import type { SessionActorStoredState } from "./session-actor-hydration.types.js";
 import {
   readSessionActorTransactionState,
   replaceSessionActorStoredEntry,
@@ -54,7 +56,10 @@ import {
   splitSessionEntrySnapshots,
   writeSessionEntrySnapshots,
 } from "./session-entry-snapshots.js";
-import type { SessionEntryWindowFacts } from "./session-entry-window.types.js";
+import type {
+  SessionEntryWindowFacts,
+  SessionEntryWindowRow,
+} from "./session-entry-window.types.js";
 import { applySessionEntryWritePolicy } from "./session-entry-write-policy.js";
 import {
   createSessionEntryWriteRow,
@@ -73,33 +78,67 @@ import {
 import { resolveDeliveryProvenCanonicalSessionKey } from "./store-entry.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
+type SessionEntryWriteOptions = {
+  allowStoredAliases?: boolean;
+  /** Only the personal involvement owner may replace this logical-node state. */
+  profileInvolvement?: SessionEntry["profileInvolvement"];
+  /** Only the provider review owner may replace a generation-bound pause. */
+  providerReviewMutation?: boolean;
+  /** Canonical row revalidated in this write transaction; null proves absence. */
+  canonicalPreviousEntry?: SessionEntry | null;
+  /** Raw canonical columns from the same transaction, for exact no-op comparison. */
+  canonicalPreviousRow?: ResolvedSessionEntryRow["row"];
+  canonicalPreviousWindow?: SessionEntryWindowFacts;
+  canonicalPreviousSideTables?: SessionEntryWritePostimage["sideTables"];
+  postimages?: SessionEntryWritePostimages;
+  consumePendingReset?: boolean;
+  /** A rehome can bind historical windows to an otherwise unchanged target. */
+  publishConversationBinding?: boolean;
+  preserveNodeSuggestions?: boolean;
+  previousEntry?: SessionEntry | null;
+  observeConversation?: boolean;
+  routeContext?: ConversationRouteContext | null;
+};
+
+type PreparedSessionEntryWrite = {
+  sessionKey: string;
+  node:
+    | (ReturnType<typeof bindSessionNode> & { legacy_acp_migration_json?: string | null })
+    | undefined;
+  window:
+    | (Omit<ReturnType<typeof bindSessionRoot>, "primary_conversation_id"> & {
+        primary_conversation_id: string | null;
+        transcript_observed_at: number;
+      })
+    | undefined;
+  windowPostimage: SessionEntryWindowRow;
+  setWindowPostimage(postimage: SessionEntryWindowRow): void;
+  batchable: boolean;
+  write(): ReturnType<typeof trackSessionEntryCacheWrite>;
+  publish(writeGeneration: ReturnType<typeof trackSessionEntryCacheWrite>): SessionEntry;
+};
+
 function prepareSessionEntryWrite(
   database: OpenClawAgentDatabase,
   sessionKey: string,
   entry: SessionEntry,
-  options: {
-    allowStoredAliases?: boolean;
-    /** Only the personal involvement owner may replace this logical-node state. */
-    profileInvolvement?: SessionEntry["profileInvolvement"];
-    /** Only the provider review owner may replace a generation-bound pause. */
-    providerReviewMutation?: boolean;
-    /** Canonical row revalidated in this write transaction; null proves absence. */
-    canonicalPreviousEntry?: SessionEntry | null;
-    /** Raw canonical columns from the same transaction, for exact no-op comparison. */
-    canonicalPreviousRow?: ResolvedSessionEntryRow["row"];
-    canonicalPreviousWindow?: SessionEntryWindowFacts;
-    canonicalPreviousSideTables?: SessionEntryWritePostimage["sideTables"];
-    postimages?: SessionEntryWritePostimages;
-    consumePendingReset?: boolean;
-    /** A rehome can bind historical windows to an otherwise unchanged target. */
-    publishConversationBinding?: boolean;
-    preserveNodeSuggestions?: boolean;
-    previousEntry?: SessionEntry | null;
-    observeConversation?: boolean;
-    routeContext?: ConversationRouteContext | null;
-  } = {},
-) {
-  const actor = readSessionActorTransactionState(database, { sessionKey });
+  options?: SessionEntryWriteOptions,
+): PreparedSessionEntryWrite;
+function prepareSessionEntryWrite(
+  database: OpenClawAgentDatabase,
+  sessionKey: string,
+  entry: SessionEntry,
+  options: SessionEntryWriteOptions,
+  actorPreparation: SessionActorStoredState,
+): PreparedSessionEntryWrite | undefined;
+function prepareSessionEntryWrite(
+  database: OpenClawAgentDatabase,
+  sessionKey: string,
+  entry: SessionEntry,
+  options: SessionEntryWriteOptions = {},
+  actorPreparation?: SessionActorStoredState,
+): PreparedSessionEntryWrite | undefined {
+  const actor = actorPreparation ?? readSessionActorTransactionState(database, { sessionKey });
   if (actor && sessionKey !== actor.hot.target.sessionKey) {
     throw new Error("Session actor cannot write a lookup sibling");
   }
@@ -186,6 +225,14 @@ function prepareSessionEntryWrite(
   const persisted = splitSessionEntrySnapshots(canonicalEntry, {
     previousEntry: canonicalPreviousEntry,
   });
+  if (
+    actorPreparation &&
+    (canonicalPreviousEntry?.sessionId !== normalizedEntry.sessionId ||
+      canonicalPreviousEntry.lifecycleRevision !== normalizedEntry.lifecycleRevision ||
+      persisted.snapshotsChanged)
+  ) {
+    return undefined;
+  }
   const legacySources = prepareLegacyAcpMigrationSourcesForEntryWrite(
     database,
     sessionKey,
@@ -193,6 +240,9 @@ function prepareSessionEntryWrite(
     canonicalPreviousEntry,
     canonicalPreviousRow,
   );
+  if (actorPreparation && "legacy_acp_migration_json" in legacySources) {
+    return undefined;
+  }
   const sessionNode = {
     ...bindSessionNode({
       entry: canonicalEntry,
@@ -230,7 +280,7 @@ function prepareSessionEntryWrite(
     () => {
       const boundSessionRoot = bindSessionRoot({ entry: normalizedEntry, sessionKey, updatedAt });
       const preparedWindow = options.canonicalPreviousWindow ?? canonicalFacts?.window;
-      const { conversation, primaryConversationId } = prepareSessionConversationForWrite({
+      const conversationInput = {
         database,
         entry: normalizedEntry,
         previousEntry,
@@ -239,7 +289,15 @@ function prepareSessionEntryWrite(
         observeConversation: options.observeConversation || options.allowStoredAliases,
         ...(options.routeContext !== undefined ? { routeContext: options.routeContext } : {}),
         sessionScope: boundSessionRoot.session_scope,
-      });
+      };
+      const retainedConversation = actorPreparation
+        ? prepareRetainedSessionConversationForWrite(conversationInput)
+        : undefined;
+      if (actorPreparation && !retainedConversation) {
+        return undefined;
+      }
+      const { conversation, primaryConversationId } =
+        retainedConversation ?? prepareSessionConversationForWrite(conversationInput);
       const retainWindowOwner = canonicalPreviousEntry?.sessionId === normalizedEntry.sessionId;
       const window = prepareSessionEntryWindowRow({
         boundSessionRow: { ...boundSessionRoot, primary_conversation_id: primaryConversationId },
@@ -252,6 +310,9 @@ function prepareSessionEntryWrite(
           ? undefined
           : readStagedSessionTranscriptUpdatedAt(database, normalizedEntry.sessionId),
       });
+      if (actorPreparation && window.changed) {
+        return undefined;
+      }
       const queries = getSessionEntryWriteQueries(database.db);
       const withLegacySources = "legacy_acp_migration_json" in legacySources;
       // The child key consumes the node's RETURNING row, including on first creation.
@@ -503,6 +564,54 @@ function prepareSessionEntryWrite(
   );
 }
 
+/** Certify a resident actor's one native effect using the ordinary entry writer's policy. */
+export function prepareSessionActorEntryWrite(
+  database: OpenClawAgentDatabase,
+  state: SessionActorStoredState,
+  next: SessionEntry,
+) {
+  const sessionKey = state.hot.target.sessionKey;
+  const previous = state.hot.entry;
+  const selected = state.entryRows.get(sessionKey);
+  if (!previous || !selected || !state.window || state.window.session_id !== previous.sessionId) {
+    return { kind: "requires-transaction" as const };
+  }
+  const prepared = prepareSessionEntryWrite(
+    database,
+    sessionKey,
+    next,
+    {
+      canonicalPreviousEntry: previous,
+      canonicalPreviousRow: selected.row,
+      canonicalPreviousWindow: { sessionId: previous.sessionId, row: state.window },
+      previousEntry: previous,
+    },
+    state,
+  );
+  if (!prepared) {
+    return { kind: "requires-transaction" as const };
+  }
+  if (!prepared.node) {
+    return { kind: "unchanged" as const };
+  }
+  const node = prepared.node;
+  const terminal = getSessionEntryWriteQueries(database.db).terminalNode;
+  if (!terminal) {
+    return { kind: "requires-transaction" as const };
+  }
+  return {
+    kind: "single-node" as const,
+    database: terminal.database,
+    publish: () => prepared.publish(undefined),
+    write: () =>
+      withSqliteDatabaseWriteScope(
+        database.db,
+        [sessionKey, sqliteSessionIdWriteScope(previous.sessionId)],
+        () => terminal.write(node),
+      ),
+  };
+}
+
 export function writeSessionEntry(
   database: OpenClawAgentDatabase,
   sessionKey: string,
@@ -523,7 +632,7 @@ export function writeArchivedSessionEntries(
   }[],
   postimages?: SessionEntryWritePostimages,
 ): SessionEntry[] {
-  type Prepared = ReturnType<typeof prepareSessionEntryWrite>;
+  type Prepared = PreparedSessionEntryWrite;
   const written = new Map<string, SessionEntry>();
   const pendingWindows = new Map<string, Prepared["windowPostimage"]>();
   let batch: Prepared[] = [];

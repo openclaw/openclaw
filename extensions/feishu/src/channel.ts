@@ -137,6 +137,17 @@ function resolveFeishuSendAttachmentMedia(params: Record<string, unknown>): stri
     return snakeKey !== key && Object.hasOwn(record, snakeKey) ? record[snakeKey] : undefined;
   };
 
+  const addCandidate = (value: unknown): void => {
+    if (typeof value !== "string") {
+      malformed = true;
+      return;
+    }
+    const normalized = normalizeOptionalString(value);
+    if (normalized) {
+      candidates.push(normalized);
+    }
+  };
+
   const inspect = (record: Record<string, unknown>, nested = false): void => {
     const keys = nested ? [...sourceKeys.slice(0, -1), "url", "image"] : sourceKeys;
     for (const key of keys) {
@@ -144,27 +155,13 @@ function resolveFeishuSendAttachmentMedia(params: Record<string, unknown>): stri
       if (value === undefined) {
         continue;
       }
-      if (typeof value !== "string") {
-        malformed = true;
-        continue;
-      }
-      const normalized = normalizeOptionalString(value);
-      if (normalized) {
-        candidates.push(normalized);
-      }
+      addCandidate(value);
     }
 
     const multiple = read(record, "mediaUrls");
     if (multiple !== undefined) {
       for (const value of Array.isArray(multiple) ? multiple : [multiple]) {
-        if (typeof value !== "string") {
-          malformed = true;
-          continue;
-        }
-        const normalized = normalizeOptionalString(value);
-        if (normalized) {
-          candidates.push(normalized);
-        }
+        addCandidate(value);
       }
     }
 
@@ -1005,7 +1002,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             const mediaUrl = resolveFeishuSendAttachmentMedia(ctx.params);
             const audioAsVoice = readBooleanParam(ctx.params, ["asVoice", "audioAsVoice"]);
             if (textCard && !presentation) {
-              assertFeishuCardWithinEnvelope(textCard, "Feishu native card");
+              assertFeishuCardWithinEnvelope(textCard);
             }
             const generatedCard = presentation
               ? buildFeishuPresentationCard({

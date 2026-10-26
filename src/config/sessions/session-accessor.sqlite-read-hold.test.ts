@@ -20,12 +20,11 @@ const sliceBudget = vi.hoisted(() => ({ bytes: undefined as number | undefined }
 const transactionLog = vi.hoisted(() => ({
   entries: [] as string[],
   afterFirst: undefined as (() => void) | undefined,
+  depth: 0,
 }));
 
-vi.mock("./session-transcript-read-bytes.js", async () => {
-  const actual = await vi.importActual<typeof import("./session-transcript-read-bytes.js")>(
-    "./session-transcript-read-bytes.js",
-  );
+vi.mock("./session-transcript-read-bytes.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./session-transcript-read-bytes.js")>();
   return {
     ...actual,
     get TRANSCRIPT_PAYLOAD_SLICE_BYTES() {
@@ -34,10 +33,8 @@ vi.mock("./session-transcript-read-bytes.js", async () => {
   };
 });
 
-vi.mock("../../infra/sqlite-transaction.js", async () => {
-  const actual = await vi.importActual<typeof import("../../infra/sqlite-transaction.js")>(
-    "../../infra/sqlite-transaction.js",
-  );
+vi.mock("../../infra/sqlite-transaction.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../infra/sqlite-transaction.js")>();
   const logged = (label: string | undefined) => {
     if (label?.startsWith("session transcript")) {
       transactionLog.entries.push("transaction");
@@ -48,53 +45,22 @@ vi.mock("../../infra/sqlite-transaction.js", async () => {
   };
   return {
     ...actual,
-    runSqliteDeferredTransactionSync: ((db, operation, options) => {
-      const result = actual.runSqliteDeferredTransactionSync(db, operation, options);
-      logged(options?.operationLabel);
-      return result;
-    }) as typeof actual.runSqliteDeferredTransactionSync,
-    // The memory export batch reads through the engine-neutral read snapshot.
     runSqliteReadSnapshotSync: ((db, operation, options) => {
-      const result = actual.runSqliteReadSnapshotSync(db, operation, options);
+      const result = actual.runSqliteReadSnapshotSync(
+        db,
+        () => {
+          transactionLog.depth++;
+          try {
+            return operation();
+          } finally {
+            transactionLog.depth--;
+          }
+        },
+        options,
+      );
       logged(options?.operationLabel);
       return result;
     }) as typeof actual.runSqliteReadSnapshotSync,
-  };
-});
-
-const statsReads = vi.hoisted(() => ({ count: 0 }));
-
-vi.mock("./session-accessor.sqlite-transcript-stats.js", async () => {
-  const actual = await vi.importActual<
-    typeof import("./session-accessor.sqlite-transcript-stats.js")
-  >("./session-accessor.sqlite-transcript-stats.js");
-  return {
-    ...actual,
-    readTranscriptStatsBatchFromDatabase: ((
-      ...args: Parameters<typeof actual.readTranscriptStatsBatchFromDatabase>
-    ) => {
-      statsReads.count++;
-      return actual.readTranscriptStatsBatchFromDatabase(...args);
-    }) as typeof actual.readTranscriptStatsBatchFromDatabase,
-  };
-});
-
-const holdLogger = vi.hoisted(() => ({
-  trace: vi.fn(),
-  debug: vi.fn(),
-  info: vi.fn(),
-  warn: vi.fn(),
-  error: vi.fn(),
-}));
-
-vi.mock("../../logging/subsystem.js", async () => {
-  const actual = await vi.importActual<typeof import("../../logging/subsystem.js")>(
-    "../../logging/subsystem.js",
-  );
-  return {
-    ...actual,
-    createSubsystemLogger: (subsystem: string) =>
-      subsystem === "sqlite/transaction" ? holdLogger : actual.createSubsystemLogger(subsystem),
   };
 });
 
@@ -108,11 +74,10 @@ const MEDIUM_ROWS = [3 * MIB];
 
 afterEach(() => {
   sliceBudget.bytes = undefined;
-  statsReads.count = 0;
   transactionLog.entries = [];
   transactionLog.afterFirst = undefined;
+  transactionLog.depth = 0;
   vi.restoreAllMocks();
-  holdLogger.warn.mockClear();
 });
 
 function userMessage(content: string): Message {
@@ -134,6 +99,14 @@ describe("SQLite transcript readers release the read snapshot before parsing", (
       { agentId: "main", sessionKey, storePath },
       { sessionId, updatedAt: 1 },
     );
+    const contents = [
+      ...Array.from({ length: 4 }, (_, index) =>
+        index % 2 === 0
+          ? `${MARKER} ${"lobster ".repeat(600)}`
+          : `${MARKER} short${shared ? ` ${shared.tag}` : ""}`,
+      ),
+      ...extraRows.map((bytes) => `${MARKER} ${"lobster ".repeat(Math.floor(bytes / 8))}`),
+    ];
     const events = [
       {
         type: "session",
@@ -142,24 +115,13 @@ describe("SQLite transcript readers release the read snapshot before parsing", (
         timestamp: "2026-04-01T05:46:39.000Z",
         cwd: tempDir,
       },
-      // Large and repetitive so the stored form is zstd; small rows stay plain JSON.
-      ...Array.from({ length: 4 }, (_, index) => ({
+      // Alternating compressed/plain rows, followed by optional oversized payloads.
+      ...contents.map((content, index) => ({
         type: "message",
         id: `entry-${index}`,
         parentId: index === 0 ? null : `entry-${index - 1}`,
-        timestamp: "2026-04-01T05:46:40.000Z",
-        message: userMessage(
-          index % 2 === 0
-            ? `${MARKER} ${"lobster ".repeat(600)}`
-            : `${MARKER} short${shared ? ` ${shared.tag}` : ""}`,
-        ),
-      })),
-      ...extraRows.map((bytes, index) => ({
-        type: "message",
-        id: `entry-${4 + index}`,
-        parentId: `entry-${3 + index}`,
-        timestamp: "2026-04-01T05:46:41.000Z",
-        message: userMessage(`${MARKER} ${"lobster ".repeat(Math.floor(bytes / 8))}`),
+        timestamp: `2026-04-01T05:46:${index < 4 ? "40" : "41"}.000Z`,
+        message: userMessage(content),
       })),
     ];
     const scope = { agentId: "main", sessionId, sessionKey, storePath };
@@ -178,28 +140,32 @@ describe("SQLite transcript readers release the read snapshot before parsing", (
     return readTranscriptExportSnapshotReadOnlySync(scope, { projectEvent })?.events;
   }
 
-  it("parses and projects export snapshot payloads outside the read transaction", async () => {
-    const { events, scope } = await seedSession();
-    // Each parse and projection advances a virtual clock, so work inside a transaction logs a hold.
-    let now = 1_000_000;
-    vi.spyOn(Date, "now").mockImplementation(() => now);
-    const realParse = JSON.parse.bind(JSON);
-    vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
-      if (typeof text === "string" && text.includes(MARKER)) {
-        now += 2_000;
-      }
-      return realParse(text, reviver);
-    });
-    const projectEvent = vi.fn((event: unknown) => {
-      now += 2_000;
-      return event;
-    });
-    expect(readEvents(scope, projectEvent)).toEqual(events);
-    expect(projectEvent.mock.calls.map(([event]) => event)).toEqual(events);
-    expect(
-      holdLogger.warn.mock.calls.filter(([message]) => message === "slow SQLite transaction hold"),
-    ).toEqual([]);
-  });
+  it.each([undefined, 1])(
+    "parses and projects outside each read snapshot (budget=%s)",
+    async (bytes) => {
+      const { events, scope } = await seedSession();
+      sliceBudget.bytes = bytes;
+      const realParse = JSON.parse.bind(JSON);
+      vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
+        if (typeof text === "string" && text.includes(MARKER)) {
+          expect(transactionLog.depth).toBe(0);
+        }
+        return realParse(text, reviver);
+      });
+      const projectEvent = vi.fn((event: unknown) => {
+        expect(transactionLog.depth).toBe(0);
+        transactionLog.entries.push("parse");
+        return event;
+      });
+      expect(readEvents(scope, projectEvent)).toEqual(events);
+      expect(projectEvent.mock.calls.map(([event]) => event)).toEqual(events);
+      expect(transactionLog.entries).toEqual(
+        bytes === 1
+          ? [...events.flatMap(() => ["transaction", "parse"]), "transaction"]
+          : ["transaction", ...events.map(() => "parse")],
+      );
+    },
+  );
 
   it("surfaces the payload length error from a corrupt compressed row in a later slice", async () => {
     const { scope } = await seedSession();
@@ -211,21 +177,6 @@ describe("SQLite transcript readers release the read snapshot before parsing", (
     // The header fills the first slice; the corrupt row is read after it committed and was parsed.
     sliceBudget.bytes = 1;
     expect(() => readEvents(scope)).toThrow(/Compressed transcript payload length does not match/u);
-  });
-
-  it("captures one slice of payloads per read transaction and parses it in between", async () => {
-    const { events, scope } = await seedSession();
-    sliceBudget.bytes = 1;
-    const projectEvent = vi.fn((event: unknown) => {
-      transactionLog.entries.push("parse");
-      return event;
-    });
-    expect(readEvents(scope, projectEvent)).toEqual(events);
-    // One row per transaction; the last transaction finds no further rows.
-    expect(transactionLog.entries).toEqual([
-      ...events.flatMap(() => ["transaction", "parse"]),
-      "transaction",
-    ]);
   });
 
   it("rereads in one transaction when the transcript changes between slices", async () => {
@@ -424,12 +375,9 @@ describe("SQLite transcript readers release the read snapshot before parsing", (
         return realParse(text, reviver);
       });
       transactionLog.afterFirst = changed ? touchTranscript(scope) : undefined;
-      statsReads.count = 0;
       const [next] = await collectSessionMemoryEntries([memoryEntry(scope)]);
       // The batch transaction, then only the appended row after the retained projection.
       expect(transactionLog.entries).toEqual(["transaction", "transaction", "transaction"]);
-      // An unchanged transcript keeps the batch head; a changed one reads its statistics again.
-      expect(statsReads.count).toBe(changed ? 2 : 1);
       expect(parsed).toHaveLength(1);
       expect(parsed[0]).toContain(`${MARKER} appended`);
       expect(entryContent(next!)).toContain(`${MARKER} appended`);

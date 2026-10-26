@@ -34,11 +34,6 @@ export type WorkerProvisioningDispatchPlacement = Extract<
   { state: "provisioning" }
 >;
 type WorkerDrainingDispatchPlacement = Extract<WorkerDispatchPlacement, { state: "draining" }>;
-type WorkerReconcilingDispatchPlacement = Extract<
-  WorkerDispatchPlacement,
-  { state: "reconciling" }
->;
-
 export type WorkerDispatchPlacementStore = Pick<
   ReturnType<typeof createWorkerSessionPlacementStore>,
   | "adoptActive"
@@ -100,6 +95,7 @@ export type WorkerDispatchEnvironmentService = Pick<
   | "schedulePreparedRefill"
   | "createWithRequest"
   | "destroy"
+  | "reclaim"
   | "get"
   | "fenceWorkerTurnForRecovery"
   | "reconcileEnvironment"
@@ -326,7 +322,7 @@ export function createPlacementFailureActions(deps: {
 
   const startReconcile = async (
     placement: WorkerDrainingDispatchPlacement,
-  ): Promise<WorkerReconcilingDispatchPlacement> => {
+  ): Promise<Extract<WorkerDispatchPlacement, { state: "reconciling" }>> => {
     const reconciling = await placements.startReconcile({
       sessionId: placement.sessionId,
       environmentId: placement.environmentId,
