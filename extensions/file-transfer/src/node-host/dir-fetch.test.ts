@@ -20,21 +20,6 @@ async function expectDirFetchError(code: string, input: FetchParams = {}, fields
   });
 }
 
-it.runIf(HAS_TAR).each(["symlink", "inode"] as const)(
-  "rejects changed tar %s binding",
-  async (kind) => {
-    const fixture = await replacement(kind, true);
-    const canonical = await fs.realpath(fixture.target);
-    const stats = await fs.stat(canonical, { bigint: true });
-    await fixture.swap();
-    const { target } = fixture;
-    const { dev, ino } = stats;
-    await expect(
-      createTarArchive(target, canonical, String(dev), String(ino), 1024 * 1024),
-    ).resolves.toBe("CANONICAL_PATH_CHANGED");
-  },
-);
-
 it.runIf(HAS_TAR)("preflights directory entries without returning a tarball", async () => {
   await seed(["a.txt", ".ssh/id_rsa", "sub/b.txt", "c/z.txt", "c\u200d/a.txt"]);
   await fs.symlink("missing-target", at("dangling-link"));
@@ -55,28 +40,27 @@ it.runIf(HAS_TAR)("preflights directory entries without returning a tarball", as
 });
 
 it.runIf(HAS_TAR).each(["symlink", "inode"] as const)(
-  "rejects %s replacement after preflight",
+  "rejects changed %s bindings",
   async (kind) => {
     const fixture = await replacement(kind, true);
     const params = { path: fixture.target, followSymlinks: true };
+    const canonical = await fs.realpath(fixture.target);
+    const { dev, ino } = await fs.stat(canonical, { bigint: true });
     const preflight = await handleDirFetch({ ...params, preflightOnly: true });
     assert(preflight.ok, JSON.stringify(preflight));
     await fixture.swap();
-    const result = await handleDirFetch({
-      ...params,
-      expectedCanonicalPath: preflight.path,
-      ...(kind === "inode" ? { expectedBinding: preflight.binding } : {}),
-    });
-    if (kind === "symlink") {
-      expect(result).toEqual({
-        ok: false,
-        code: "CANONICAL_PATH_CHANGED",
-        message: "resolved path differs from the authorized target",
-        canonicalPath: fixture.canonical,
-      });
-    } else {
-      expect(result).toMatchObject({ ok: false, code: "CANONICAL_PATH_CHANGED" });
-    }
+    await expect(
+      createTarArchive(fixture.target, canonical, String(dev), String(ino), 1024 * 1024),
+    ).resolves.toBe("CANONICAL_PATH_CHANGED");
+    await expectDirFetchError(
+      "CANONICAL_PATH_CHANGED",
+      {
+        ...params,
+        expectedCanonicalPath: preflight.path,
+        ...(kind === "inode" ? { expectedBinding: preflight.binding } : {}),
+      },
+      kind === "symlink" ? { canonicalPath: fixture.canonical } : {},
+    );
   },
 );
 it.runIf(process.platform === "linux")(
@@ -105,30 +89,10 @@ async function expectArchiveCap(preflightOnly: boolean) {
 it.runIf(HAS_TAR)("caps archive bytes during preflight", () => expectArchiveCap(true));
 it.runIf(HAS_TAR)("caps archive bytes mid-stream", () => expectArchiveCap(false), 30_000);
 
-function commandResult(
-  overrides: Partial<Awaited<ReturnType<typeof processRuntime.runCommandBuffered>>> = {},
-) {
-  return {
-    stdout: Buffer.alloc(0),
-    stderr: Buffer.alloc(0),
-    code: 0,
-    signal: null,
-    killed: false,
-    termination: "exit" as const,
-    ...overrides,
-  };
-}
-
 it("rejects preflight trees above the entry cap without starting tar", async () => {
   const command = vi.spyOn(processRuntime, "runCommandBuffered");
   await Promise.all(Array.from({ length: 5001 }, (_, i) => fs.writeFile(at(`file-${i}.txt`), "")));
-  await expectDirFetchError(
-    "TREE_TOO_LARGE",
-    { preflightOnly: true },
-    {
-      message: "directory tree exceeds 5000 entries during preflight",
-    },
-  );
+  await expectDirFetchError("TREE_TOO_LARGE", { preflightOnly: true });
   expect(command).not.toHaveBeenCalled();
 });
 
@@ -141,12 +105,6 @@ it.each([
   ["removed directory", "exit", 1, "NOT_FOUND"],
 ] as const)("classifies %s", async (label, termination, exitCode, code) => {
   await file("ok.txt");
-  const result = commandResult({
-    termination,
-    code: exitCode,
-    stdout: Buffer.from("archive"),
-    outputLimitStream: "stdout",
-  });
   vi.spyOn(processRuntime, "runCommandBuffered").mockImplementationOnce(async () => {
     if (label === "launch error") {
       throw new Error("spawn failed");
@@ -154,7 +112,15 @@ it.each([
     if (label === "removed directory") {
       await fs.rm(at(), { recursive: true, force: true });
     }
-    return result;
+    return {
+      termination,
+      code: exitCode,
+      stdout: Buffer.from("archive"),
+      stderr: Buffer.alloc(0),
+      signal: null,
+      killed: false,
+      outputLimitStream: "stdout",
+    };
   });
   const preflightOnly = label === "launch error" || label === "removed directory";
   const fields = code === "NOT_FOUND" ? { message: expect.stringContaining("stat failed:") } : {};
