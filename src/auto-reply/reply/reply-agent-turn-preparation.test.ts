@@ -624,30 +624,41 @@ it.each([
       cyberAccessProgram: provided ? saved : "daybreak_blue",
     });
     const admittedEntry = makeEntry({ cyberAccessProgram: saved });
+    const providedReplyOperation = provided
+      ? createReplyOperation({
+          sessionKey: "agent:main:admitted-access",
+          sessionId: initialEntry.sessionId,
+          resetTriggered: false,
+        })
+      : undefined;
     state.admitReply.mockImplementation(async ({ captureRunSelection }) => {
       // The preference committed before this source entered the queue, so no queue refresh saw it.
       captureRunSelection();
       return { status: "owned", operation, sessionEntry: admittedEntry };
     });
 
-    const turn = await admitted(
-      prepare(
-        queued,
-        {
-          sessionEntry: initialEntry,
-          sessionStore: { main: initialEntry },
-          opts: {
-            onQueuedFollowupAdmitted: async () => {
-              admittedEntry.cyberAccessProgram = "daybreak_red";
-              queued.run.cyberAccessProgram = "daybreak_red";
+    try {
+      const turn = await admitted(
+        prepare(
+          queued,
+          {
+            sessionEntry: initialEntry,
+            sessionStore: { main: initialEntry },
+            opts: {
+              onQueuedFollowupAdmitted: async () => {
+                admittedEntry.cyberAccessProgram = "daybreak_red";
+                queued.run.cyberAccessProgram = "daybreak_red";
+              },
             },
           },
-        },
-        { kind, ...(provided ? { providedReplyOperation: operation } : {}) },
-      ),
-    );
+          { kind, providedReplyOperation },
+        ),
+      );
 
-    expect(turn.queued.run.cyberAccessProgram).toBe(expected);
+      expect(turn.queued.run.cyberAccessProgram).toBe(expected);
+    } finally {
+      providedReplyOperation?.complete();
+    }
   },
 );
 
