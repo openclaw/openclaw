@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -40,6 +41,7 @@ import {
 import { tryBeginGatewayRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { withSessionTurn } from "../sessions/session-controller.admission.js";
 import * as userTurnTranscript from "../sessions/user-turn-transcript.js";
+import { AsyncWorkScope, getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createOperatorClient } from "./server-plugin-in-process-dispatch.test-support.js";
@@ -289,8 +291,8 @@ describe("native completion final-effect authority", () => {
     },
   );
 
-  it.for(["operator-revoked", "requester-replaced"] as const)(
-    "revalidates %s authority at real Gateway input staging",
+  it.for(["live", "operator-revoked", "requester-replaced"] as const)(
+    "revalidates %s authority at real Gateway input staging after foreground scope closes",
     async (change, { signal }) => {
       const context = getContext();
       using completion = await createCompletion(context);
@@ -311,7 +313,17 @@ describe("native completion final-effect authority", () => {
         },
       );
       agentCommandMock.mockImplementation((input) => receiveCompletion(input as AgentCommandOpts));
-      const delivery = completion.deliver();
+      const foreground = new AsyncWorkScope();
+      // Model a persistent transport callback retaining the spawning turn's async context.
+      const resumeMonitor = foreground.run(() => AsyncLocalStorage.snapshot());
+      await foreground.drain();
+      expect(foreground.signal.aborted).toBe(true);
+      const deliver = () =>
+        resumeMonitor(() => {
+          expect(getAsyncWorkSignal()).toBe(foreground.signal);
+          return completion.deliver();
+        });
+      const delivery = deliver();
       try {
         await reachBoundary(entered.promise, delivery);
         await completion.changeOwner(change);
@@ -319,12 +331,27 @@ describe("native completion final-effect authority", () => {
         const result = await delivery;
         // The RPC responds before its request owner releases the unaccepted reservation.
         await settleRequests();
-        expect(result.delivered).toBe(false);
-        expect(execution).not.toHaveBeenCalled();
-        expect(agentCommandMock).not.toHaveBeenCalled();
         expect(await completion.pendingTotal()).toBe(0);
-        expect(completion.transcript()).toEqual(before);
-        expect(context.dedupe.get(`agent:${completion.idempotencyKey}`)).toBeUndefined();
+        if (change === "live") {
+          expect(result).toMatchObject({ delivered: true, path: "direct" });
+          expect(execution).toHaveBeenCalledOnce();
+          expect(agentCommandMock).toHaveBeenCalledOnce();
+          expect(context.dedupe.get(`agent:${completion.idempotencyKey}`)).toMatchObject({
+            ok: true,
+          });
+          const events = completion.transcript();
+          expect(JSON.stringify(events)).toContain(`${completion.idempotencyKey}:user`);
+          await deliver();
+          await settleRequests();
+          expect(agentCommandMock).toHaveBeenCalledOnce();
+          expect(completion.transcript()).toEqual(events);
+        } else {
+          expect(result.delivered).toBe(false);
+          expect(execution).not.toHaveBeenCalled();
+          expect(agentCommandMock).not.toHaveBeenCalled();
+          expect(completion.transcript()).toEqual(before);
+          expect(context.dedupe.get(`agent:${completion.idempotencyKey}`)).toBeUndefined();
+        }
       } finally {
         release();
         await Promise.allSettled([delivery, settleRequests()]);
