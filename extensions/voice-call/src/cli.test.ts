@@ -66,7 +66,7 @@ function commandArgs(command: string, options: Record<string, string>) {
 async function captureCli(program: Command, args: string[]) {
   const capture = captureStdout();
   await runCli(program, args);
-  return capture();
+  return JSON.parse(capture());
 }
 
 const continueArgs = ["continue", "--call-id", "call-1", "--message", "hello"];
@@ -130,8 +130,8 @@ describe("voice-call CLI status fallback", () => {
 
   const run = (args: string[], config: Record<string, unknown> = {}) =>
     runCli(buildProgram(config), args);
-  const capture = async (args: string[], config: Record<string, unknown> = {}) =>
-    JSON.parse(await captureCli(buildProgram(config), args));
+  const capture = (args: string[], config: Record<string, unknown> = {}) =>
+    captureCli(buildProgram(config), args);
   const briefArgs = (file: string, subcommand = "start") =>
     commandArgs(subcommand, { to: "+15550001111", "brief-file": file });
   it("reports an ambiguous phone-call owner during setup without starting telephony", async () => {
@@ -142,7 +142,7 @@ describe("voice-call CLI status fallback", () => {
       },
     });
     const output = await captureCli(program, ["setup", "--json"]);
-    expect(JSON.parse(output)).toMatchObject({
+    expect(output).toMatchObject({
       ok: false,
       checks: expect.arrayContaining([
         {
@@ -182,13 +182,12 @@ describe("voice-call CLI status fallback", () => {
       "--json",
     ]);
     expect(ensureRuntime).not.toHaveBeenCalled();
-    if (kind === "persisted") {
-      expect(JSON.parse(output)).toMatchObject(persisted);
-    } else {
-      expect(JSON.parse(output)).toEqual(
-        kind === "active" ? { found: true, calls: [active] } : { found: false },
-      );
-    }
+    const expected = {
+      persisted,
+      active: { found: true, calls: [active] },
+      missing: { found: false },
+    };
+    expect(output).toEqual(expected[kind]);
   });
 
   it.each(["printed", "creation", "operation"] as const)(
@@ -280,7 +279,6 @@ describe("voice-call CLI status fallback", () => {
       throw Object.assign(new Error("listen failed"), { code: "EADDRINUSE" });
     });
     const program = buildProgram({ serve: { port: 3334 } }, ensureRuntime);
-
     await expect(runCli(program, ["call", "--message", "hello"])).rejects.toThrow(
       "Voice-call webhook port 3334 is already in use. A running Gateway probably already serves it",
     );

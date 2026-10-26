@@ -41,10 +41,10 @@ describe("errand features config", () => {
       callbacks: { windowMinutes: 60 },
       voicemail: { onMachine: "leave-message", holdOpeningMaxMs: 45000 },
     });
-    expect(() => normalizeVoiceCallConfig({ voicemail: { holdOpeningMaxMs: 0 } })).toThrow();
-    expect(() => normalizeVoiceCallConfig({ callbacks: { windowMinutes: 0 } })).toThrow();
-    expect(() => normalizeVoiceCallConfig({ live: { minIntervalMs: 0 } })).toThrow();
-    expect(() => normalizeVoiceCallConfig({ voicemail: { detection: "unsupported" } })).toThrow();
+    rejectsConfig({ voicemail: { holdOpeningMaxMs: 0 } });
+    rejectsConfig({ callbacks: { windowMinutes: 0 } });
+    rejectsConfig({ live: { minIntervalMs: 0 } });
+    rejectsConfig({ voicemail: { detection: "unsupported" } });
   });
 
   it.each([
@@ -58,10 +58,10 @@ describe("errand features config", () => {
       expect(config.voicemail[key]).toBe(value);
     }
     for (const value of [minimum - step, maximum + step, minimum + 0.5]) {
-      expect(() => normalizeVoiceCallConfig({ voicemail: { [key]: value } })).toThrow();
+      rejectsConfig({ voicemail: { [key]: value } });
     }
     if (step > 1) {
-      expect(() => normalizeVoiceCallConfig({ voicemail: { [key]: minimum + 1 } })).toThrow();
+      rejectsConfig({ voicemail: { [key]: minimum + 1 } });
     }
   });
 });
@@ -93,25 +93,25 @@ function envRef(id: string) {
   return { source: "env" as const, provider: "default", id };
 }
 
+function rejectsConfig(input: unknown, error?: RegExp) {
+  expect(() => normalizeVoiceCallConfig(input)).toThrow(error);
+}
+
 const providerCredentials = [
-  {
-    provider: "twilio",
-    values: { accountSid: "AC123", authToken: "secret" },
-    env: ["TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN"],
-  },
-  {
-    provider: "telnyx",
-    values: { apiKey: "KEY123", connectionId: "CONN456", publicKey: "public-key" },
-    env: ["TELNYX_API_KEY", "TELNYX_CONNECTION_ID", "TELNYX_PUBLIC_KEY"],
-  },
-  {
-    provider: "plivo",
-    values: { authId: "MA123", authToken: "secret" },
-    env: ["PLIVO_AUTH_ID", "PLIVO_AUTH_TOKEN"],
-  },
+  [
+    "twilio",
+    { accountSid: "AC123", authToken: "secret" },
+    ["TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN"],
+  ],
+  [
+    "telnyx",
+    { apiKey: "KEY123", connectionId: "CONN456", publicKey: "public-key" },
+    ["TELNYX_API_KEY", "TELNYX_CONNECTION_ID", "TELNYX_PUBLIC_KEY"],
+  ],
+  ["plivo", { authId: "MA123", authToken: "secret" }, ["PLIVO_AUTH_ID", "PLIVO_AUTH_TOKEN"]],
 ] as const;
 const providerEnv = [
-  ...providerCredentials.flatMap(({ env }): readonly string[] => env),
+  ...providerCredentials.flatMap((row): readonly string[] => row[2]),
   "TWILIO_FROM_NUMBER",
   "NGROK_AUTHTOKEN",
   "NGROK_DOMAIN",
@@ -120,18 +120,16 @@ const valid = { valid: true, errors: [] };
 const errorPrefix = "plugins.entries.voice-call.config.";
 
 describe("validateProviderConfig", () => {
-  const clearProviderEnv = () => {
+  beforeEach(() => {
     for (const name of providerEnv) {
       vi.stubEnv(name, undefined);
     }
-  };
-
-  beforeEach(clearProviderEnv);
+  });
   afterEach(() => vi.unstubAllEnvs());
 
-  it("passes validation when credentials come from config or environment", () => {
-    for (const { provider, values, env } of providerCredentials) {
-      clearProviderEnv();
+  it.each(providerCredentials)(
+    "resolves %s config/environment credentials and rejects blank environment values",
+    (provider, values, env) => {
       const fromConfig = { ...createBaseConfig(provider), [provider]: values };
       fromConfig.realtime.enabled = provider !== "plivo";
       fromConfig.inboundPolicy = "allowlist";
@@ -148,16 +146,9 @@ describe("validateProviderConfig", () => {
         expect(fromEnv.fromNumber).toBe("+15550001234");
       }
       expect(validateProviderConfig(fromEnv)).toEqual(valid);
-    }
-  });
-
-  it("ignores blank provider and tunnel environment values", () => {
-    for (const { provider, values, env } of providerCredentials) {
-      clearProviderEnv();
       for (const name of providerEnv) {
         vi.stubEnv(name, "   ");
       }
-
       const config = resolveVoiceCallConfig(
         normalizeVoiceCallConfig({
           ...createBaseConfig(provider),
@@ -168,14 +159,9 @@ describe("validateProviderConfig", () => {
       const result = validateProviderConfig(config);
 
       expect(result.valid).toBe(false);
-      expect([config.tunnel.ngrokAuthToken, config.tunnel.ngrokDomain]).toEqual([
-        undefined,
-        undefined,
-      ]);
-      for (const key of Object.keys(values)) {
-        expect(Reflect.get(config[provider] ?? {}, key)).toBeUndefined();
-      }
+      expect(config.tunnel).toMatchObject({ ngrokAuthToken: undefined, ngrokDomain: undefined });
       Object.keys(values).forEach((key, index) => {
+        expect(Reflect.get(config[provider] ?? {}, key)).toBeUndefined();
         if (key !== "publicKey") {
           expect(result.errors).toContain(
             `${errorPrefix}${provider}.${key} is required (or set ${env[index]} env)`,
@@ -188,11 +174,11 @@ describe("validateProviderConfig", () => {
           `${errorPrefix}fromNumber is required (or set TWILIO_FROM_NUMBER env)`,
         );
       }
-    }
-  });
+    },
+  );
   it("accepts supported Twilio Regions and rejects unknown ones", () => {
     expect(normalizeVoiceCallConfig({ twilio: { region: "ie1" } }).twilio?.region).toBe("ie1");
-    expect(() => normalizeVoiceCallConfig({ twilio: { region: "de1" } })).toThrow();
+    rejectsConfig({ twilio: { region: "de1" } });
   });
 
   it("accepts SecretRef-backed auth tokens before runtime resolution", () => {
@@ -270,7 +256,7 @@ describe("Tailscale external HTTPS port", () => {
   });
 
   it.each([0, 1.5, 65_536])("rejects invalid HTTPS port %s", (port) => {
-    expect(() => normalizeVoiceCallConfig({ tailscale: { port } })).toThrow();
+    rejectsConfig({ tailscale: { port } });
   });
 
   it.each([
@@ -417,7 +403,7 @@ describe("normalizeVoiceCallConfig", () => {
     { streaming: { providers: [] } },
     { numbers: [] },
   ])("rejects malformed config instead of replacing it with defaults: %j", (config) => {
-    expect(() => normalizeVoiceCallConfig(config)).toThrow();
+    rejectsConfig(config);
   });
 
   it("keeps default containers owned by each normalized configuration", () => {
@@ -501,7 +487,7 @@ describe("resolveVoiceCallConfig realtime settings", () => {
     [{ idleHangupMs: 0 }, undefined],
     [{ consultThinkingLevel: "turbo" }, /Invalid option/],
   ] as const)("rejects invalid realtime settings %j", (realtime, error) => {
-    expect(() => sessionConfig({ realtime })).toThrow(error);
+    rejectsConfig({ enabled: true, provider: "mock", realtime }, error);
   });
 });
 
@@ -621,6 +607,6 @@ it("validates the realtime input transcription model in runtime and manifest sch
     validateJsonSchemaValue({ schema: configSchema, value: { realtime: { providers } } }).ok,
   ).toBe(true);
   const invalid = { realtime: { providers: { openai: { inputTranscriptionModel: 123 } } } };
-  expect(() => normalizeVoiceCallConfig(invalid)).toThrow(/inputTranscriptionModel/);
+  rejectsConfig(invalid, /inputTranscriptionModel/);
   expect(validateJsonSchemaValue({ schema: configSchema, value: invalid }).ok).toBe(false);
 });
