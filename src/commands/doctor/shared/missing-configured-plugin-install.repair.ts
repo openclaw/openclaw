@@ -212,7 +212,7 @@ async function repairMissingPluginInstalls(
   // authorize only returning without writes, never package or record publication.
   // Baseline, awaited review, package publication, and the index write share one generation.
   return await withPluginLifecycleLeaseAsync({ env: params.env }, (lease) =>
-    withPluginInstallTransactions(params, lease, async (owned, assertCurrent) => {
+    withPluginInstallTransactions(params, lease, async (owned, assertCurrent, prepareEffect) => {
       const dependencyRepairMarkers = new Map<string, string>();
       let result: RepairMissingPluginInstallsResult | undefined;
       let failure: unknown;
@@ -222,6 +222,7 @@ async function repairMissingPluginInstalls(
           lease,
           dependencyRepairMarkers,
           assertCurrent,
+          prepareEffect,
         );
       } catch (error) {
         failure = error;
@@ -233,8 +234,7 @@ async function repairMissingPluginInstalls(
           continue;
         }
         try {
-          await lease.assertOwned();
-          await clearRetainedManagedNpmInstallMarker(packageDir, assertCurrent);
+          await clearRetainedManagedNpmInstallMarker(packageDir, prepareEffect);
         } catch (error) {
           // Revoked authority preserves retention and remains the operation's failure.
           assertCurrent();
@@ -265,6 +265,7 @@ async function repairMissingPluginInstallsWithLease(
   lease: PluginMetadataLeaseContext,
   dependencyRepairMarkers: Map<string, string>,
   assertCurrent: () => void,
+  prepareEffect: () => void | Promise<void>,
 ): Promise<RepairMissingPluginInstallsResult> {
   const env = params.env ?? process.env;
   const installContext = await resolveConfiguredPluginInstallContext({
@@ -389,7 +390,7 @@ async function repairMissingPluginInstallsWithLease(
             packageDir: missingDependencies.rootDir,
             pluginId,
             reason: "doctor-missing-required-dependencies",
-            assertCurrent,
+            assertCurrent: prepareEffect,
           });
         }
       }

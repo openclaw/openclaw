@@ -247,7 +247,6 @@ async function markRetiredManagedNpmInstallRecords(params: {
   previousInstallRecords: Record<string, PluginInstallRecord>;
   nextInstallRecords: Record<string, PluginInstallRecord>;
   createdMarkerPaths: string[];
-  assertCurrent: () => void;
   prepareEffect: () => Promise<void>;
 }): Promise<void> {
   const activeInstallPaths = Object.values(params.nextInstallRecords).flatMap((record) => {
@@ -278,11 +277,10 @@ async function markRetiredManagedNpmInstallRecords(params: {
     }
     const markerPath = resolveRetainedManagedNpmInstallMarkerPath(packageDir);
     const markerAlreadyExisted = fs.existsSync(markerPath);
-    await params.prepareEffect();
     const marked = await markRetainedManagedNpmInstall({
       packageDir,
       pluginId,
-      assertCurrent: params.assertCurrent,
+      assertCurrent: params.prepareEffect,
       reason:
         nextRecord?.source === "npm"
           ? "replaced-by-managed-npm-generation-update"
@@ -321,7 +319,6 @@ async function markRetiredManagedNpmInstallRecords(params: {
 async function clearActiveRetainedManagedNpmInstallMarkers(
   nextInstallRecords: Record<string, PluginInstallRecord>,
   clearedMarkers: Array<{ markerPath: string; contents: string }>,
-  assertCurrent: () => void,
   prepareEffect: () => Promise<void>,
 ): Promise<void> {
   for (const record of Object.values(nextInstallRecords)) {
@@ -345,8 +342,7 @@ async function clearActiveRetainedManagedNpmInstallMarkers(
     }
     // Journal before removal: the helper can refuse after deleting the marker.
     clearedMarkers.push({ markerPath, contents });
-    await prepareEffect();
-    await clearRetainedManagedNpmInstallMarker(record.installPath, assertCurrent);
+    await clearRetainedManagedNpmInstallMarker(record.installPath, prepareEffect);
   }
 }
 
@@ -465,13 +461,11 @@ async function commitPluginInstallRecordsWithWriter<T extends ConfigReplaceResul
         nextInstallRecords: prepared.nextInstallRecords,
         // Keep partial progress visible to the rollback path.
         createdMarkerPaths: retainedMarkerPaths,
-        assertCurrent,
         prepareEffect,
       });
       await clearActiveRetainedManagedNpmInstallMarkers(
         prepared.nextInstallRecords,
         clearedMarkerSnapshots,
-        assertCurrent,
         prepareEffect,
       );
       const writeOptions = copyRuntimeConfigWriteApplication(params.writeOptions, {
@@ -535,11 +529,10 @@ async function commitPluginInstallRecordsWithWriter<T extends ConfigReplaceResul
           if (restored) {
             // Marker compensation belongs to the same tentative revision. A newer
             // index owner may rely on the current marker state.
-            await assertOwned();
             await restoreRetainedManagedNpmInstallMarkers({
               clearedMarkerSnapshots,
               createdMarkerPaths: retainedMarkerPaths,
-              assertCurrent: lease.assertCurrent,
+              assertCurrent: assertOwned,
             });
           }
         } catch (rollbackError) {

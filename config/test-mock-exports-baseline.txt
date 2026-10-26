@@ -3000,7 +3000,6 @@
 ["src/cli/plugins-install-config.test.ts","../plugins/location-bridges.js","89db342486af12d98d73cdd41b1a6c25ab6dca45a0117458e3b3da470cd9ae20",1]
 ["src/cli/plugins-install-preflight-config.test.ts","../config/config.js","78f24d7ac3b562c4ef31f6eed48f7c63cef79367041a724c15ca46618c3ed9f9",1]
 ["src/cli/plugins-install-preflight-config.test.ts","../plugins/marketplace.js","cfad477ac3067c88a025e2a63c108ec1c3f2857d19b82b60708fe39f687f86fa",1]
-["src/cli/plugins-install-preflight.test.ts","../plugins/plugin-lifecycle-lease.js","d0b70b5e0abd9787cd518242842a3eec5c0ff821ee5e9787e04bf8ed6dcfbc49",1]
 ["src/cli/plugins-lifecycle-client.test.ts","../infra/gateway-lock.js","ad40c0e4a768066f959ae65e5abf45bb02c76615a869cae69c83602e9b5373d8",1]
 ["src/cli/plugins-list-route-cold-imports.test.ts","./command-execution-startup.js","58d681d39afc16dad26f4e36fa365dff7475519bf0f4797d04a3b821003c208c",1]
 ["src/cli/plugins-location-bridges.test.ts","../plugins/installed-plugin-index-store.js","55f6687c98e37048fdc51331771cd5cd1cae544aaa6fe9007fa4e4862c1a8460",1]

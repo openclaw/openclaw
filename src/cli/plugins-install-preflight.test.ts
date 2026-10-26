@@ -6,8 +6,10 @@ const { withPluginLifecycleLeaseMock } = vi.hoisted(() => ({
   withPluginLifecycleLeaseMock: vi.fn(),
 }));
 
-vi.mock("../plugins/plugin-lifecycle-lease.js", () => ({
+vi.mock("../plugins/plugin-lifecycle-lease.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-lifecycle-lease.js")>()),
   withPluginLifecycleLease: withPluginLifecycleLeaseMock,
+  withPluginLifecycleLeaseAsync: withPluginLifecycleLeaseMock,
   hasPluginLifecycleLease: () => false,
 }));
 
@@ -42,7 +44,7 @@ describe("plugin install mutation-free preflight", () => {
       .mockReset()
       .mockImplementation(
         async (_options: unknown, run: (lease: unknown) => Promise<unknown>) =>
-          await run({ assertOwned: vi.fn() }),
+          await run({ assertOwned: vi.fn(), assertCurrent: vi.fn() }),
       );
   });
 
@@ -54,6 +56,7 @@ describe("plugin install mutation-free preflight", () => {
     });
 
     await expect(install("superpowers@claude-plugins-official")).rejects.toThrow("__exit__:1");
+    expect(fixture.runtimeErrors.at(-1)).toContain("marketplace install failed");
 
     expect(fixture.installPluginFromMarketplaceMock).toHaveBeenCalledWith(
       expect.objectContaining({
