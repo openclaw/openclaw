@@ -241,9 +241,7 @@ describe("plugin-sdk facade loader", () => {
     const fixture = createMarkerFixture("identity-check");
 
     const first = loadFixture(fixture.pluginId);
-    const second = loadFixture(fixture.pluginId);
-
-    expect(first).toBe(second);
+    expect(loadFixture(fixture.pluginId)).toBe(first);
     expect(first.marker).toBe("identity-check");
     expect(listImportedBundledPluginFacadeIds()).toEqual([fixture.pluginId]);
     expect(listImportedFacadeRuntimeIds()).toEqual([fixture.pluginId]);
@@ -257,13 +255,12 @@ describe("plugin-sdk facade loader", () => {
     ({ origin, expected }) => {
       const pluginRoot = fs.realpathSync(createTempDirSync("openclaw-facade-replacement-"));
       const modulePath = path.join(pluginRoot, "api.js");
-      const dependencyPath = path.join(pluginRoot, "dependency.js");
-      fs.writeFileSync(path.join(pluginRoot, "package.json"), '{"type":"commonjs"}\n', "utf8");
-
-      const writeArtifact = (marker: string) => {
-        fs.writeFileSync(dependencyPath, `module.exports = ${JSON.stringify(marker)};\n`, "utf8");
-        fs.writeFileSync(modulePath, 'module.exports = { marker: require("./dependency.js") };\n');
-      };
+      const writeArtifact = (marker: string) =>
+        writeFacadeFiles(pluginRoot, {
+          "package.json": { type: "commonjs" },
+          "dependency.js": `module.exports = ${JSON.stringify(marker)};\n`,
+          "api.js": 'module.exports = { marker: require("./dependency.js") };\n',
+        });
       const loadArtifact = () =>
         loadFacadeModuleAtLocationSync<{ marker: string }>({
           location: { modulePath, boundaryRoot: pluginRoot, origin },

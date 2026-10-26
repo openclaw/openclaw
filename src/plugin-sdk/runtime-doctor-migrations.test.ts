@@ -26,6 +26,24 @@ describe("defineLegacyJsonStateMigration retention", () => {
   let stateDir: string;
   let env: NodeJS.ProcessEnv;
   let context: PluginDoctorStateMigrationContext;
+  const openStore = () =>
+    context.openPluginStateKeyedStore({ namespace: "entries", maxEntries: 2 });
+  const params = () => ({ config: {}, env, stateDir, oauthDir: stateDir, context });
+  const sourcePath = () => path.join(stateDir, "legacy.json");
+  const migration = (id: string) =>
+    defineLegacyJsonStateMigration({
+      id,
+      label: "Fixture entries",
+      resolvePath: sourcePath,
+      parse: (value) => value as { key: string; value: string }[],
+      namespace: "entries",
+      maxEntries: 2,
+      describeEntries: () => ({
+        preview: ["legacy entries"],
+        change: ({ imported }) => `Migrated ${imported} entries`,
+      }),
+      toRows: (entries) => entries,
+    });
 
   beforeEach(async () => {
     resetPluginStateStoreForTests();
@@ -44,78 +62,50 @@ describe("defineLegacyJsonStateMigration retention", () => {
   });
 
   it("refuses malformed UTF-8 before importing or archiving legacy plugin state", async () => {
-    const sourcePath = path.join(stateDir, "legacy.json");
     const source = Buffer.concat([
       Buffer.from('[{"key":"entry","value":"'),
       Buffer.from([0xff]),
       Buffer.from('"}]'),
     ]);
-    await fs.writeFile(sourcePath, source);
-    const migration = defineLegacyJsonStateMigration({
-      id: "utf8-fixture",
-      label: "Fixture entries",
-      resolvePath: () => sourcePath,
-      parse: (value) => value as { key: string; value: string }[],
-      namespace: "entries",
-      maxEntries: 2,
-      describeEntries: () => ({ preview: ["legacy entries"], change: () => "Migrated entries" }),
-      toRows: (entries) => entries,
-    });
-    const params = { config: {}, env, stateDir, oauthDir: stateDir, context };
-    await expect(migration.detectLegacyState(params)).resolves.toEqual({
+    await fs.writeFile(sourcePath(), source);
+    const subject = migration("utf8-fixture");
+    await expect(subject.detectLegacyState(params())).resolves.toEqual({
       preview: [expect.stringContaining("UTF-8")],
     });
-    await expect(migration.migrateLegacyState(params)).resolves.toEqual({
+    await expect(subject.migrateLegacyState(params())).resolves.toEqual({
       changes: [],
       warnings: [expect.stringContaining("UTF-8")],
       warningDisposition: "recoverable",
     });
-    expect(
-      await context.openPluginStateKeyedStore({ namespace: "entries", maxEntries: 2 }).entries(),
-    ).toEqual([]);
-    expect(await fs.readFile(sourcePath)).toEqual(source);
+    expect(await openStore().entries()).toEqual([]);
+    expect(await fs.readFile(sourcePath())).toEqual(source);
     expect(await fs.readdir(stateDir)).not.toContain("legacy.json.migrated");
   });
 
   it.each(["imported", "pre-existing"])(
     "preserves the source and warns when a row is evicted (%s)",
     async (evicted) => {
-      const sourcePath = path.join(stateDir, "legacy.json");
       const rows = ["first", "second", ...(evicted === "imported" ? ["third"] : [])].map((key) => ({
         key,
         value: key,
       }));
       const source = JSON.stringify(rows);
-      await fs.writeFile(sourcePath, source);
-      const store = context.openPluginStateKeyedStore({ namespace: "entries", maxEntries: 2 });
+      await fs.writeFile(sourcePath(), source);
+      const store = openStore();
       if (evicted === "pre-existing") {
         await store.register("existing", "canonical");
       }
-      const migration = defineLegacyJsonStateMigration({
-        id: "retention-fixture",
-        label: "Fixture entries",
-        resolvePath: () => sourcePath,
-        parse: (value) => value as typeof rows,
-        namespace: "entries",
-        maxEntries: 2,
-        describeEntries: () => ({
-          preview: ["legacy entries"],
-          change: ({ imported }) => `Migrated ${imported} entries`,
-        }),
-        toRows: (entries) => entries,
-      });
-      const params = { config: {}, env, stateDir, oauthDir: stateDir, context };
-
-      const result = await migration.migrateLegacyState(params);
+      const subject = migration("retention-fixture");
+      const result = await subject.migrateLegacyState(params());
 
       expect(await store.entries()).toHaveLength(2);
       expect(result).toEqual({
         changes: [],
         warnings: [expect.stringContaining("failed to retain every required entry (1 missing)")],
       });
-      await expect(fs.readFile(sourcePath, "utf8")).resolves.toBe(source);
-      await expect(fs.access(`${sourcePath}.migrated`)).rejects.toThrow();
-      await expect(migration.detectLegacyState(params)).resolves.not.toBeNull();
+      await expect(fs.readFile(sourcePath(), "utf8")).resolves.toBe(source);
+      await expect(fs.access(`${sourcePath()}.migrated`)).rejects.toThrow();
+      await expect(subject.detectLegacyState(params())).resolves.not.toBeNull();
     },
   );
 });
