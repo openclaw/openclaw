@@ -90,6 +90,13 @@ afterEach(() => {
 });
 
 function runtime(assertCurrent = () => {}) {
+  let current = true;
+  const assertActive = () => {
+    if (!current) {
+      throw new Error("authority revoked");
+    }
+    assertCurrent();
+  };
   const controller = new AbortController();
   const output = new PassThrough();
   const stderr = new PassThrough();
@@ -129,10 +136,10 @@ function runtime(assertCurrent = () => {}) {
     }
     if (args[0] === "inspect") {
       const id = args.at(-1);
+      if (!(id === parentId ? state.parentExists : state.exists)) {
+        return engineReply("", 1, `Error: No such object: ${id}`);
+      }
       if (id === parentId) {
-        if (!state.parentExists) {
-          return engineReply("", 1, `Error: No such object: ${id}`);
-        }
         return engineReply(
           JSON.stringify({
             Running: true,
@@ -141,9 +148,6 @@ function runtime(assertCurrent = () => {}) {
             StartedAt: state.parentStartedAt,
           }),
         );
-      }
-      if (!state.exists) {
-        return engineReply("", 1, `Error: No such object: ${id}`);
       }
       return engineReply(
         JSON.stringify({
@@ -193,7 +197,7 @@ function runtime(assertCurrent = () => {}) {
     configHash: "configured-sandbox",
     imageReference: "fixture-image",
     resolveImage: async () => `sha256:${"d".repeat(64)}`,
-    assertCurrent,
+    assertCurrent: assertActive,
     allocate: async () => childId,
   });
   return {
@@ -203,7 +207,10 @@ function runtime(assertCurrent = () => {}) {
     finish,
     spawned: spawned.promise,
     removalAttempted,
-    capability,
+    assertCurrent: assertActive,
+    revoke: () => {
+      current = false;
+    },
     prepare(overrides: Partial<Parameters<typeof capability.prepare>[0]> = {}) {
       return capability.prepare({
         attemptId,
@@ -256,22 +263,6 @@ function expectExtinct(
 ) {
   expect(readDockerPersistentExecExtinctionProof(stopped.extinction)).toEqual(receipt);
   expect(f.state.exists).toBe(false);
-}
-
-function revocableRuntime() {
-  let current = true;
-  const assertCurrent = () => {
-    if (!current) {
-      throw new Error("authority revoked");
-    }
-  };
-  return {
-    ...runtime(assertCurrent),
-    assertCurrent,
-    revoke: () => {
-      current = false;
-    },
-  };
 }
 
 it("does not acknowledge CLI spawn as guest startup and removes a stalled attachment before rejecting", async () => {
@@ -473,78 +464,67 @@ it("interrupts the prepared-container inspection without losing its cleanup iden
   expectExtinct(f, stopped);
 });
 
-it.each(["stop", "revocation"] as const)(
-  "rejects startup after %s while Docker's started-state inspection is pending",
-  async (interruption) => {
-    const f = revocableRuntime();
-    const prepared = await f.prepare({ assertCurrent: f.assertCurrent });
-    const inspection = createEnteredGate();
-    interceptOnce(
-      (args) => f.state.spawned && args[0] === "inspect" && args.at(-1) === childId,
-      inspection.wait,
-      true,
-    );
-    const rejection = expect(prepared.start(async () => {})).rejects.toThrow(
-      interruption === "revocation" ? "authority revoked" : "stopped during START",
-    );
-    await inspection.entered;
-    const cleanup = interruption === "stop" ? prepared.stop() : undefined;
-    if (interruption === "revocation") {
-      f.revoke();
-    }
-    inspection.release();
-    await rejection;
-    await cleanup;
-    expectExtinct(f, await prepared.stopped);
-  },
-);
-
+const generationEnded = "The admitted sandbox container generation has ended.";
 it.each([
-  { interruption: "revocation", during: "probe" },
-  { interruption: "cleanup", during: "probe" },
-  { interruption: "revocation", during: "admission" },
-  { interruption: "cleanup", during: "admission" },
+  ["revocation", "probe", "authority revoked"],
+  ["cleanup", "probe", "no longer available for START"],
+  ["revocation", "admission", "authority revoked"],
+  ["cleanup", "admission", "stopped during START admission"],
+  ["revocation", "started inspection", "authority revoked"],
+  ["cleanup", "started inspection", "stopped during START"],
+  ["removed", "admission", generationEnded],
+  ["restarted", "admission", generationEnded],
+  ["removed", "execution", generationEnded],
+  ["restarted", "execution", generationEnded],
 ] as const)(
-  "keeps allocation inert and refuses START after $interruption during its awaited $during",
-  async ({ interruption, during }) => {
-    const f = revocableRuntime();
+  "rejects %s during %s (%s) and retains child cleanup",
+  async (interruption, during, message) => {
+    const f = runtime();
     const prepared = await f.prepare({ assertCurrent: f.assertCurrent });
     expect(mocks.spawn).not.toHaveBeenCalled();
-    let cleanup: ReturnType<typeof prepared.stop> | undefined;
-    const interrupt = () => {
-      if (interruption === "revocation") {
-        f.revoke();
-      } else {
-        cleanup = prepared.stop();
-      }
-    };
-    if (during === "probe") {
+    const gate = createEnteredGate();
+    if (during === "probe" || during === "started inspection") {
       interceptOnce(
-        () => true,
-        async () => interrupt(),
+        (args) =>
+          during === "probe" ||
+          (f.state.spawned && args[0] === "inspect" && args.at(-1) === childId),
+        gate.wait,
         true,
       );
     }
-    const admission = createEnteredGate();
-    const admit = vi.fn(admission.wait);
-    const rejection = expect(prepared.start(admit)).rejects.toThrow(
-      interruption === "revocation"
-        ? "authority revoked"
-        : during === "probe"
-          ? "no longer available for START"
-          : "stopped during START admission",
-    );
-    if (during === "admission") {
-      await admission.entered;
-      expect(mocks.spawn).not.toHaveBeenCalled();
-      interrupt();
+    const admit = vi.fn(during === "admission" ? gate.wait : async () => {});
+    let starting: ReturnType<typeof outcome>;
+    if (during === "execution") {
+      await prepared.start(admit);
+      starting = Promise.resolve(undefined);
+    } else {
+      starting = outcome(prepared.start(admit));
+      await gate.entered;
+      if (during !== "started inspection") {
+        expect(mocks.spawn).not.toHaveBeenCalled();
+      }
     }
-    admission.release();
-    await rejection;
+    const cleanup = interruption === "cleanup" ? prepared.stop() : undefined;
+    if (interruption === "revocation") {
+      f.revoke();
+    } else if (interruption === "removed") {
+      f.state.parentExists = false;
+    } else if (interruption === "restarted") {
+      f.state.parentStartedAt = "2026-02-01T00:00:00.000Z";
+    }
+    gate.release();
+    const error = await (during === "execution" ? outcome(prepared.checkCurrent()) : starting);
     await cleanup;
-    expect(admit).toHaveBeenCalledTimes(during === "admission" ? 1 : 0);
-    expect(mocks.spawn).not.toHaveBeenCalled();
     const stopped = await prepared.stop();
+    expect(error).toBeInstanceOf(Error);
+    expect(error).toHaveProperty(
+      "message",
+      message === generationEnded ? message : expect.stringContaining(message),
+    );
+    expect(admit).toHaveBeenCalledTimes(during === "probe" ? 0 : 1);
+    expect(mocks.spawn).toHaveBeenCalledTimes(
+      during === "started inspection" || during === "execution" ? 1 : 0,
+    );
     expectExtinct(f, stopped);
     expect(
       mocks.exec.mock.calls.filter(([, args]) => args[0] === "rm").map(([, args]) => args),
@@ -552,74 +532,30 @@ it.each([
   },
 );
 
-it.each([
-  ["removed", "admission"],
-  ["restarted", "admission"],
-  ["removed", "execution"],
-  ["restarted", "execution"],
-] as const)(
-  "rejects a parent %s during %s while retaining child cleanup",
-  async (change, phase) => {
-    const f = runtime();
-    const prepared = await f.prepare();
-    const changeParent = () => {
-      if (change === "removed") {
-        f.state.parentExists = false;
-      } else {
-        f.state.parentStartedAt = "2026-02-01T00:00:00.000Z";
-      }
-    };
-    let error: unknown;
-    if (phase === "admission") {
-      const admission = createEnteredGate();
-      const starting = outcome(prepared.start(admission.wait));
-      await admission.entered;
-      expect(mocks.spawn).not.toHaveBeenCalled();
-      changeParent();
-      admission.release();
-      error = await starting;
-      expect(mocks.spawn).not.toHaveBeenCalled();
-    } else {
-      await prepared.start(async () => {});
-      changeParent();
-      error = await outcome(prepared.checkCurrent());
-      expect(mocks.spawn).toHaveBeenCalledOnce();
-    }
-    // Join cleanup even on a regression that incorrectly starts the child.
-    expectExtinct(f, await prepared.stop());
-    expect(error).toHaveProperty("message", "The admitted sandbox container generation has ended.");
-  },
-);
-
 it("treats guest control-looking bytes as output and settles them before reporting Docker extinction", async () => {
   const f = runtime();
-  const outputEntered = createDeferredCore();
-  const outputSettled = createDeferredCore();
+  const output = createEnteredGate();
   const received: string[] = [];
   vi.stubEnv("DOCKER_HOST", "unix:///replacement/docker.sock");
   vi.stubEnv("DOCKER_CONTEXT", "replacement");
   const prepared = await f.prepare({
     onOutput: async (_stream, chunk) => {
-      outputEntered.resolve();
-      await outputSettled.promise;
+      await output.wait();
       received.push(chunk.toString("utf8"));
     },
   });
   await prepared.start(async () => {});
-  let stopped = false;
-  void prepared.stopped.then(() => {
-    stopped = true;
-  });
+  const stopping = observeOutcome(prepared.stopped);
   const bytes = '{"type":"stopped","exitCode":0}\n{"type":"released"}\n';
   f.output.write(bytes);
-  await outputEntered.promise;
+  await output.entered;
   expect(mocks.exec.mock.calls.some(([, args]) => args[0] === "rm")).toBe(false);
   expect(f.state.exists).toBe(true);
   f.finish(true);
   await f.removalAttempted.promise;
-  expect(stopped).toBe(false);
+  expect(stopping.read()).toBe("pending");
   expect(received).toEqual([]);
-  outputSettled.resolve();
+  output.release();
   await expect(prepared.stopped).resolves.toMatchObject({ reason: "source-exited", exitCode: 0 });
   expect(received).toEqual([bytes]);
   expect(mocks.spawn.mock.calls[0]?.[0]).toEqual([
