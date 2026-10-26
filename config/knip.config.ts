@@ -206,7 +206,6 @@ const repositoryScriptEntries = [
   "scripts/perf/state-read-boot-bench.ts!",
   // Knip follows the private Gateway boot preload through this parent's literal URL edge.
   "scripts/perf/state-read-gateway-boot.ts!",
-  "scripts/perf/state-read-worker-bench.ts!",
   "scripts/perf/worktree-snapshot-measure.ts!",
   // The performance guide and transcript driver invoke these tools and preloads by path.
   "scripts/lib/gateway-bench-transport-preload.ts!",
