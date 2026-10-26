@@ -56,6 +56,13 @@ describe("Team-scale Gateway fixture", () => {
           pendingInputs: "fixture-pending-inputs-v1",
         },
       });
+      if (mode === "normal") {
+        const catalog = await request("models.list", {});
+        expect(catalog.payload.models).toContainEqual(
+          expect.objectContaining({ id: fixture.scenario.agentModel, reasoning: true }),
+        );
+        expect(full).toHaveProperty("metadata.models", catalog.payload.models);
+      }
       const messageCount = mode === "large" ? 1_100 : 240;
       expect(full?.messages).toHaveLength(messageCount);
       expect(full?.messages).toEqual(
