@@ -13,7 +13,6 @@ import { hasModelFallbackStop } from "../failover-error.js";
 import { createAgentCleanupScope } from "../run-cleanup-timeout.js";
 import {
   acceptsCliLiveSession,
-  buildCliLiveOwnerKey,
   closeCliLiveSession,
   createCliLiveSessionCapability,
   getCliLiveSessionApprovalGrants,
@@ -197,32 +196,10 @@ describe("generic plugin-owned live session registry", () => {
     },
   );
 
-  it("keeps owner identity deterministic and isolated across sessions", () => {
-    const owner = {
-      agentAccountId: "acct-1",
-      agentId: "agent-main",
-      authProfileId: "profile-a",
-      sessionId: "sess-1",
-      sessionKey: "key-a",
-    };
-
-    expect(buildCliLiveOwnerKey({ ...owner })).toBe(buildCliLiveOwnerKey(owner));
-    expect(buildCliLiveOwnerKey({ ...owner, sessionKey: "key-b" })).not.toBe(
-      buildCliLiveOwnerKey(owner),
-    );
-  });
-
-  it("does not reuse a warm process across a native login owner change", async () => {
-    const withOwner = async (nativeLogin?: string) =>
-      (await createOwner({ nativeLogin })).capability.fingerprint;
-    const ownerA = await withOwner("a".repeat(64));
-    expect(await withOwner("a".repeat(64))).toBe(ownerA);
-    expect(await withOwner("b".repeat(64))).not.toBe(ownerA);
-    expect(await withOwner(undefined)).not.toBe(ownerA);
-  });
-
   it.each<[NonNullable<Parameters<typeof createOwner>[0]>, boolean]>([
     [{}, true],
+    [{ nativeLogin: "b".repeat(64) }, false],
+    [{ nativeLogin: undefined }, false],
     [{ systemPrompt: "Changed system policy." }, false],
     [{ args: ["--resume", "native-session", "--effort", "max"] }, false],
     [{ env: { PATH: "/usr/bin:/bin", CLAUDE_CODE_EFFORT_LEVEL: "max" } }, false],
@@ -234,6 +211,7 @@ describe("generic plugin-owned live session registry", () => {
     const shared = {
       systemPrompt: "Original system policy.",
       mcpConfigHash: overrides.mcpConfigHash,
+      nativeLogin: "a".repeat(64),
     };
     const fresh = await createOwner({
       ...shared,

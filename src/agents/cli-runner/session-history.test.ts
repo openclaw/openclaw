@@ -9,7 +9,6 @@ import {
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
-  loadTranscriptEventsSync,
   resolveSessionTranscriptDatabasePath,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
@@ -68,14 +67,16 @@ async function withCliSessionState<T>(stateDir: string, run: () => Promise<T>): 
   });
 }
 
-async function createSession(messages: string[] = [], agentId = "main") {
+async function createSession(messages: string[] = [], agentId = "main", legacyPath = false) {
   const dir = tempDirs.make("openclaw-cli-history-");
   setRuntimeConfigSnapshot({});
   const target = {
     agentId,
     sessionId: "history-session",
     sessionKey: `agent:${agentId}:history`,
-    storePath: path.join(dir, "openclaw-agent.sqlite"),
+    storePath: legacyPath
+      ? path.join(dir, "agents", agentId, "sessions", "sessions.json")
+      : path.join(dir, "openclaw-agent.sqlite"),
   };
   await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
   for (const [index, content] of messages.entries()) {
@@ -107,51 +108,6 @@ function systemNote(content: string, extra = {}) {
     ...extra,
   };
 }
-
-it("recovers SQLite-only compacted history across every CLI reader", async () => {
-  const stateDir = tempDirs.make("openclaw-cli-sqlite-");
-  await withCliSessionState(stateDir, async () => {
-    const target = {
-      agentId: "audit",
-      sessionId: "sqlite-only",
-      sessionKey: "agent:audit:main",
-      storePath: path.join(stateDir, "agents", "audit", "sessions", "sessions.json"),
-    };
-    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-    const manager = SessionManager.open(target, stateDir);
-    const kept = manager.appendMessage(makeUserMessage("CANONICAL_HISTORY", 1));
-    manager.appendCompaction("CANONICAL_SUMMARY", kept, 1000);
-    manager.appendMessage({ role: "user", content: "CANONICAL_TAIL", timestamp: 3 });
-    manager.flushPendingPersistence();
-    expect(loadTranscriptEventsSync(target)).toHaveLength(4);
-    expect(SessionManager.open(target).buildSessionContext().messages).toMatchObject([
-      { role: "compactionSummary", summary: "CANONICAL_SUMMARY" },
-      { role: "user", content: "CANONICAL_HISTORY" },
-      { role: "user", content: "CANONICAL_TAIL" },
-    ]);
-    const params = { ...target, sessionTarget: target, sessionFile: target.sessionKey, config: {} };
-    const history = await loadCliSessionHistoryMessages(params);
-    const reseed = await loadCliSessionReseedMessages(params);
-    const context = await loadCliSessionContextEngineMessages(params);
-    const present = await hasCliSessionTranscript(params);
-    const prompt = buildCliSessionHistoryPrompt({ messages: reseed, prompt: "next" });
-    expect.soft(history).toMatchObject([
-      { role: "user", content: "CANONICAL_HISTORY" },
-      { role: "user", content: "CANONICAL_TAIL" },
-    ]);
-    for (const messages of [reseed, context]) {
-      expect.soft(messages).toMatchObject([
-        { role: "compactionSummary", summary: "CANONICAL_SUMMARY" },
-        { role: "user", content: "CANONICAL_HISTORY" },
-        { role: "user", content: "CANONICAL_TAIL" },
-      ]);
-    }
-    expect.soft(present).toBe(true);
-    expect.soft(prompt).toContain("CANONICAL_SUMMARY");
-    expect.soft(prompt).toContain("CANONICAL_HISTORY");
-    expect.soft(prompt).toContain("CANONICAL_TAIL");
-  });
-});
 
 describe("canonical CLI history", () => {
   it("reseeds persisted group senders as structured context without changing roles or stored text", async () => {
@@ -468,31 +424,6 @@ describe("canonical CLI history", () => {
     }
   });
 
-  it("uses retained prefixes for compaction and reset without reviving older context", async () => {
-    const { params, manager } = await createSession(["summarized", "retained"]);
-    manager.appendCompaction("summary", "msg-1", 1000);
-    const tail = manager.appendMessage({ role: "user", content: "tail", timestamp: 3 });
-    await expect(loadCliSessionContextEngineMessages(params)).resolves.toMatchObject([
-      { role: "compactionSummary", summary: "summary", firstKeptEntryId: "msg-1" },
-      { content: "retained" },
-      { content: "tail" },
-    ]);
-    await expect(loadCliSessionHistoryMessages(params)).resolves.toMatchObject([
-      { content: "summarized" },
-      { content: "retained" },
-      { content: "tail" },
-    ]);
-    manager.appendResetBoundary("reset", tail);
-    manager.appendMessage({ role: "user", content: "after reset", timestamp: 4 });
-    for (const load of [loadCliSessionHistoryMessages, loadCliSessionContextEngineMessages]) {
-      await expect(load(params)).resolves.toMatchObject([
-        { content: "tail" },
-        { content: "after reset" },
-      ]);
-    }
-    await expect(loadCliSessionReseedMessages(params)).resolves.toEqual([]);
-  });
-
   it.each([
     ["compaction", "durable"],
     ["reset", "durable"],
@@ -559,56 +490,86 @@ describe("canonical CLI history", () => {
     },
   );
 
-  it("preserves custom and branch context and compaction metadata", async () => {
-    const { params, target } = await createSession(["retained"]);
-    await appendTranscriptEvent(target, {
-      type: "compaction",
-      id: "compact",
-      parentId: "msg-0",
-      timestamp: "2026-01-01T00:00:00.000Z",
-      summary: "summary",
-      firstKeptEntryId: "msg-0",
-      tokensBefore: 100,
-      tokensAfter: 10,
-      details: { source: "test" },
-    });
-    await appendTranscriptEvent(target, {
-      type: "custom_message",
-      id: "custom",
-      parentId: "compact",
-      timestamp: "2026-01-01T00:00:01.000Z",
-      customType: "runtime-note",
-      content: "custom context",
-      display: false,
-    });
-    await appendTranscriptEvent(target, {
-      type: "branch_summary",
-      id: "branch",
-      parentId: "custom",
-      fromId: "msg-0",
-      timestamp: "2026-01-01T00:00:02.000Z",
-      summary: "branch context",
-    });
-    await expect(loadCliSessionContextEngineMessages(params)).resolves.toMatchObject([
-      {
-        role: "compactionSummary",
-        summary: "summary",
+  it.each([false, true])(
+    "recovers SQLite compaction and branch context, then resets its retained window (legacy path=%s)",
+    async (legacyPath) => {
+      const { params, target } = await createSession(
+        ["summarized", "retained"],
+        "audit",
+        legacyPath,
+      );
+      await appendTranscriptEvent(target, {
+        type: "compaction",
+        id: "compact",
+        parentId: "msg-1",
         timestamp: "2026-01-01T00:00:00.000Z",
+        summary: "summary",
+        firstKeptEntryId: "msg-1",
         tokensBefore: 100,
         tokensAfter: 10,
-        firstKeptEntryId: "msg-0",
         details: { source: "test" },
-      },
-      { content: "retained" },
-      { role: "custom", content: "custom context", display: false },
-      { role: "branchSummary", summary: "branch context" },
-    ]);
-    const reseed = await loadCliSessionReseedMessages(params);
-    expect(reseed).toMatchObject([
-      { role: "compactionSummary", timestamp: "2026-01-01T00:00:00.000Z" },
-      { content: "retained", timestamp: "1970-01-01T00:00:00.001Z" },
-    ]);
-  });
+      });
+      await appendTranscriptEvent(target, {
+        type: "custom_message",
+        id: "custom",
+        parentId: "compact",
+        timestamp: "2026-01-01T00:00:01.000Z",
+        customType: "runtime-note",
+        content: "custom context",
+        display: false,
+      });
+      await appendTranscriptEvent(target, {
+        type: "branch_summary",
+        id: "branch",
+        parentId: "custom",
+        fromId: "msg-1",
+        timestamp: "2026-01-01T00:00:02.000Z",
+        summary: "branch context",
+      });
+      const manager = SessionManager.open(target);
+      const tail = await manager.appendMessageAsync(makeUserMessage("tail", 3));
+      await expect(loadCliSessionContextEngineMessages(params)).resolves.toMatchObject([
+        {
+          role: "compactionSummary",
+          summary: "summary",
+          timestamp: "2026-01-01T00:00:00.000Z",
+          tokensBefore: 100,
+          tokensAfter: 10,
+          firstKeptEntryId: "msg-1",
+          details: { source: "test" },
+        },
+        { content: "retained" },
+        { role: "custom", content: "custom context", display: false },
+        { role: "branchSummary", summary: "branch context" },
+        { role: "user", content: "tail" },
+      ]);
+      const reseed = await loadCliSessionReseedMessages(params);
+      expect(reseed).toMatchObject([
+        { role: "compactionSummary", timestamp: "2026-01-01T00:00:00.000Z" },
+        { content: "retained", timestamp: "1970-01-01T00:00:00.002Z" },
+        { role: "user", content: "tail" },
+      ]);
+      await expect(hasCliSessionTranscript(params)).resolves.toBe(true);
+      await expect(loadCliSessionHistoryMessages(params)).resolves.toMatchObject([
+        { role: "user", content: "summarized" },
+        { role: "user", content: "retained" },
+        { role: "user", content: "tail" },
+      ]);
+      const prompt = buildCliSessionHistoryPrompt({ messages: reseed, prompt: "next" });
+      for (const text of ["summary", "retained", "tail"]) {
+        expect(prompt).toContain(text);
+      }
+      await manager.appendResetBoundaryAsync("reset", tail);
+      await manager.appendMessageAsync(makeUserMessage("after reset", 4));
+      for (const load of [loadCliSessionHistoryMessages, loadCliSessionContextEngineMessages]) {
+        await expect(load(params)).resolves.toMatchObject([
+          { role: "user", content: "tail" },
+          { role: "user", content: "after reset" },
+        ]);
+      }
+      await expect(loadCliSessionReseedMessages(params)).resolves.toEqual([]);
+    },
+  );
 
   it("bounds SQLite payload hydration and announces discarded history", async () => {
     const { params } = await createSession(["x".repeat(5 * 1024 * 1024), "tail history"]);
