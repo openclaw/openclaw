@@ -62,6 +62,9 @@ export type NavigationDocumentRequest = {
   url: () => string;
   isTopLevel: () => boolean;
 };
+export type NavigationAuthorityFenceDisposeOptions = {
+  stopLoading?: boolean;
+};
 
 /** Fence every Chromium redirect hop, including separately hosted iframe targets. */
 export async function installNavigationAuthorityFence(
@@ -72,7 +75,7 @@ export async function installNavigationAuthorityFence(
     route: NavigationDocumentRoute,
     request: NavigationDocumentRequest,
   ) => Promise<void>,
-): Promise<() => Promise<unknown>> {
+): Promise<(options?: NavigationAuthorityFenceDisposeOptions) => Promise<unknown>> {
   const assertCurrent = policy.assertNavigationCurrent ?? (() => {});
   const session = await page.context().newCDPSession(page);
   let mainFrameId: string | undefined;
@@ -479,7 +482,7 @@ export async function installNavigationAuthorityFence(
     states.clear();
     page.off("close", closed);
   };
-  const dispose = async () => {
+  const dispose = async (options: NavigationAuthorityFenceDisposeOptions = {}) => {
     const deadline = createDeferred<never>();
     const timer = setTimeout(() => {
       deadline.reject(new Error("Browser navigation did not settle before authority cleanup"));
@@ -505,6 +508,13 @@ export async function installNavigationAuthorityFence(
       // the WebContents' entire frame tree, including out-of-process iframes.
       if (!page.isClosed()) {
         await bounded(session.send("Page.stopLoading"));
+        // The command acknowledgement is the terminal ownership boundary. CDP
+        // does not consistently emit Network.loadingFailed for every committed
+        // streaming document, so do not wait for an optional follow-up event.
+        for (const state of states.values()) {
+          state.documents.clear();
+        }
+        notify();
       }
     };
     const drain = async () => {
@@ -520,6 +530,13 @@ export async function installNavigationAuthorityFence(
       // A same-target round trip establishes an event-delivery barrier before
       // the first idle-state decision tears down interception.
       await bounded(session.send("Runtime.evaluate", { expression: "void 0" }));
+      if (options.stopLoading) {
+        // A Playwright navigation timeout can leave a committed document's
+        // response open indefinitely. The caller owns that timed-out load, so
+        // settle it before waiting for Network.loadingFailed and preserve the
+        // original recoverable TimeoutError for committed-tab adoption.
+        await stopLoading();
+      }
       for (;;) {
         // Capture before reading state so a terminal event cannot notify
         // between the predicate and the wait and leave cleanup asleep.

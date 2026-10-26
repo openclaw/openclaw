@@ -138,6 +138,18 @@ describe("navigation authority fence lifecycle", () => {
     expect(detach).toHaveBeenCalledOnce();
   });
 
+  it("stops a timed-out committed document before waiting for cleanup", async () => {
+    const { send, session, dispose } = await fence();
+    session.emit("Network.requestWillBeSent", {
+      requestId: "streaming-document",
+      type: "Document",
+      frameId: "MAIN_FRAME",
+    });
+
+    await expect(dispose({ stopLoading: true })).resolves.toBeUndefined();
+    expect(send).toHaveBeenCalledWith("Page.stopLoading", undefined);
+  });
+
   it("removes the paused-request listener before detachment releases interception", async () => {
     let detached = false;
     const { session, errors, dispose } = await fence({

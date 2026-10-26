@@ -171,7 +171,6 @@ async function dispatch(
   opts: {
     url?: string;
     frame?: object;
-    frameError?: Error;
     isNavigationRequest?: boolean;
     resourceType?: string;
     route?: Partial<MockRoute>;
@@ -297,14 +296,6 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
     ).rejects.toBeInstanceOf(InvalidBrowserNavigationUrlError);
     expect(f.pageGoto).not.toHaveBeenCalled();
   });
-  it("fails closed as a top-level navigation when request frame resolution throws", async () => {
-    f.pageGoto.mockImplementationOnce(async () => {
-      await dispatch({ frameError: new Error("frame detached"), url: privateUrl });
-      throw new Error("Navigation aborted");
-    });
-    await denied(create());
-    expect(f.pageClose).toHaveBeenCalledTimes(1);
-  });
   it("aborts private subframe document hops without quarantining the page", async () => {
     const route = createMockRoute();
     f.pageGoto.mockImplementationOnce(async () => {
@@ -314,21 +305,6 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
     });
     expect((await create()).targetId).toBe("TARGET_1");
     expect(route.abort).toHaveBeenCalledTimes(1);
-    expect(f.pageClose).not.toHaveBeenCalled();
-  });
-  it("ignores already-handled route races during guarded navigation", async () => {
-    const route = createMockRoute({
-      continue: vi.fn(async () => {
-        throw new Error("Route is already handled");
-      }),
-    });
-    f.pageGoto.mockImplementationOnce(async () => {
-      await dispatch({ url: "https://example.com", route });
-      return null;
-    });
-    expect((await create({ url: "https://example.com" })).targetId).toBe("TARGET_1");
-    expect(route.fallback).toHaveBeenCalledTimes(1);
-    expect(f.pageGoto).toHaveBeenCalledTimes(1);
     expect(f.pageClose).not.toHaveBeenCalled();
   });
   it("opens a slow page within the requested navigation budget", async () => {

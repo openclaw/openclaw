@@ -283,7 +283,7 @@ export async function withPageNavigationRequestGuard<T>(
     return operation;
   };
 
-  let removeAuthorityFence: (() => Promise<unknown>) | undefined;
+  let removeAuthorityFence: Awaited<ReturnType<typeof installNavigationAuthorityFence>> | undefined;
   let result: T | undefined;
   let actionFailed = false;
   let actionError: unknown;
@@ -404,7 +404,7 @@ export async function gotoPageWithNavigationGuard(
     await resumeRouteSafely(route, "continue");
   };
 
-  let removeAuthorityFence: (() => Promise<unknown>) | undefined;
+  let removeAuthorityFence: Awaited<ReturnType<typeof installNavigationAuthorityFence>> | undefined;
   let response: Response | null = null;
   let navigationFailed = false;
   let navigationError: unknown;
@@ -429,7 +429,7 @@ export async function gotoPageWithNavigationGuard(
     navigationError = err;
   }
 
-  const authorityCleanupError = await removeAuthorityFence?.();
+  const authorityCleanupError = await removeAuthorityFence?.({ stopLoading: navigationFailed });
   const cleanupError = authorityCleanupError;
   if (blockedError) {
     if (isPolicyDenyNavigationError(blockedError)) {
