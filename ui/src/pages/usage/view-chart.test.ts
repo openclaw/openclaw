@@ -1,4 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { createSignal } from "solid-js";
 /* @vitest-environment jsdom */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -166,6 +167,52 @@ describe("DailyChartCompact", () => {
       ).toEqual(partial ? ["OpenAI", "Anthropic"] : ["OpenAI60%", "Anthropic40%"]);
     },
   );
+
+  it("retains provider segments and updates their values, colors and order across reports", () => {
+    const date = "2026-05-01";
+    const providers = (tokens: number[]) =>
+      buildProviderSeries(
+        tokens.map((value, index) => ({
+          date,
+          provider: `provider-${index}`,
+          model: "model",
+          tokens: value,
+          cost: 0,
+          count: 1,
+        })),
+      );
+    const [series, setSeries] = createSignal(providers([300, 100]));
+    const { container } = mountSolid(() =>
+      DailyChartCompact({
+        dailyEntries: [dailyEntry(date, 400)],
+        selectedDays: [],
+        chartMode: "tokens",
+        dailyChartMode: "by-provider",
+        onDailyChartModeChange: () => {},
+        get providerSeries() {
+          return series();
+        },
+        onSelectDay: () => {},
+        range: { startDate: date, endDate: date, complete: true },
+      }),
+    );
+    flush();
+    const segments = () => [...container.querySelectorAll<HTMLElement>(".daily-bar .cost-segment")];
+    const [first, second] = segments();
+    expect(first?.style.flexGrow).toBe("300");
+    expect(first?.style.background).toBe("var(--chart-series-1)");
+
+    setSeries(providers([100, 300]));
+    flush();
+    const refreshed = segments();
+    expect(refreshed).toHaveLength(2);
+    expect(refreshed[0]).toBe(second);
+    expect(refreshed[1]).toBe(first);
+    expect(first?.style.flexGrow).toBe("100");
+    expect(first?.style.background).toBe("var(--chart-series-2)");
+    expect(second?.style.flexGrow).toBe("300");
+    expect(second?.style.background).toBe("var(--chart-series-1)");
+  });
 
   it("keeps usage without per-model rows in the by-provider day total", () => {
     const series = buildProviderSeries([
