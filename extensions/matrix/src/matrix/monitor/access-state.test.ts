@@ -6,9 +6,7 @@ import {
   resolveMatrixMonitorCommandAccess,
 } from "./access-state.js";
 
-beforeEach(() => {
-  setMatrixRuntime(createPluginRuntimeMock());
-});
+beforeEach(() => setMatrixRuntime(createPluginRuntimeMock()));
 
 function resolveAccess(overrides: Partial<Parameters<typeof resolveMatrixMonitorAccessState>[0]>) {
   return resolveMatrixMonitorAccessState({
@@ -93,27 +91,21 @@ describe("resolveMatrixMonitorAccessState", () => {
     },
   );
 
-  it("treats unresolved configured room allowlists as configured but nonmatching", async () => {
-    const groupState = await resolveAccess({
-      groupAllowFrom: ["Alice"],
-      groupPolicy: "allowlist",
-    });
-    const roomState = await resolveAccess({
-      roomUsers: ["Dana"],
-      senderId: "@dana:example.org",
-      groupPolicy: "open",
-    });
-
-    expect(groupState.effectiveGroupAllowFrom).toEqual(["alice"]);
-    expect(roomState.effectiveRoomUsers).toEqual(["dana"]);
-    for (const state of [groupState, roomState]) {
+  it.each([
+    ["groupAllowFrom", "effectiveGroupAllowFrom", "allowlist"],
+    ["roomUsers", "effectiveRoomUsers", "open"],
+  ] as const)(
+    "keeps unresolved %s configured but nonmatching",
+    async (input, effective, groupPolicy) => {
+      const state = await resolveAccess({ [input]: ["Alice"], groupPolicy });
+      expect(state[effective]).toEqual(["alice"]);
       expect(state.messageIngress.ingress).toMatchObject({
         decision: "block",
         reasonCode: "group_policy_not_allowlisted",
       });
       await expectBlockedCommand(state);
-    }
-  });
+    },
+  );
 
   it("keeps room-user allowlists out of dm traffic", async () => {
     const state = await resolveAccess({
