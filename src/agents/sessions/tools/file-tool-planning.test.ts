@@ -43,16 +43,15 @@ it.each([
   expect(isTrustedToolInputError(error)).toBe(!storageError);
   if (storageError) {
     expect(error).toHaveProperty("cause", fileError);
-  } else {
-    expect(error).toMatchObject({ message: expect.stringContaining(message) });
-    if (oldText === "absent") {
-      expect(error).toMatchObject({
-        message: expect.stringContaining(content),
-        cause: { message: expect.not.stringContaining(content) },
-      });
-    }
-    expect(operations.writeFile).not.toHaveBeenCalled();
   }
+  expect(error).toMatchObject({ message: expect.stringContaining(message) });
+  if (oldText === "absent") {
+    expect(error).toMatchObject({
+      message: expect.stringContaining(content),
+      cause: { message: expect.not.stringContaining(content) },
+    });
+  }
+  expect(operations.writeFile).not.toHaveBeenCalled();
 });
 
 it.each(

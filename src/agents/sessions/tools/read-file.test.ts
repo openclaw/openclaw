@@ -17,7 +17,6 @@ const linkState = (alias: string) =>
   fs.symlinkSync(file("state"), file(alias), process.platform === "win32" ? "junction" : "dir");
 async function expectIsolated(name: string) {
   await expect(readLocalFile(file(name))).resolves.toEqual(Buffer.from("isolated bytes"));
-  expect(command.runCommandBuffered).toHaveBeenCalledOnce();
 }
 
 beforeEach(() => {

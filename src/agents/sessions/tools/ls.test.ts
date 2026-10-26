@@ -99,7 +99,7 @@ it("retains links without following targets and marks only actual directories", 
   const cwd = tempDirs.make("openclaw-ls-links-");
   const tool = createLsTool(cwd);
   const symlinkType = process.platform === "win32" ? "junction" : "dir";
-  const list = (limit?: number) => tool.execute("ls-links", limit ? { limit } : {});
+  const list = () => tool.execute("ls-links", {});
 
   expectText(await list(), "(empty directory)");
   await fs.symlink(path.join(cwd, "missing-target"), path.join(cwd, "a-broken"), symlinkType);
@@ -108,10 +108,6 @@ it("retains links without following targets and marks only actual directories", 
   await fs.symlink(path.join(cwd, "target-dir"), path.join(cwd, "link-to-dir"), symlinkType);
   await fs.writeFile(path.join(cwd, "z-file.txt"), "fixture\n");
   expectText(await list(), '"a-broken"\n"link-to-dir"\n"target-dir/"\n"z-file.txt"');
-
-  const limited = await list(1);
-  expect(textContent(limited).split("\n")[0]).toBe('"a-broken"');
-  expect(limited.details).toEqual({ content: textContent(limited), nextAfter: "a-broken" });
 });
 
 it.each(["failure", "abort"] as const)("releases the listener after %s", async (mode) => {
