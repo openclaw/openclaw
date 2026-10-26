@@ -31,19 +31,20 @@ it("removes copied xAI thinking fields from disk through runModelsAuthLoginFlowC
     const configPath = path.join(stateDir, "openclaw.json");
     vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
     const model = createTestModelDefinition("grok-4.6", {
-      name: "Grok fixture",
       reasoning: true,
-      contextWindow: 131072,
-      maxTokens: 512,
       thinkingLevelMap: { xhigh: null },
       compat: { supportedReasoningEfforts: ["low", "high"] },
     });
     const other = {
       ...model,
       id: "custom-model",
-      name: "Operator model",
       thinkingLevelMap: { xhigh: "high" },
     };
+    const provider = (models: (typeof model)[], baseUrl: string) => ({
+      api: "openai-responses",
+      baseUrl,
+      models,
+    });
     await fs.writeFile(
       configPath,
       JSON.stringify({
@@ -54,17 +55,8 @@ it("removes copied xAI thinking fields from disk through runModelsAuthLoginFlowC
         },
         models: {
           providers: {
-            xai: {
-              api: "openai-responses",
-              auth: "oauth",
-              baseUrl: "https://cli-chat-proxy.grok.com/v1",
-              models: [model],
-            },
-            custom: {
-              api: "openai-responses",
-              baseUrl: "https://custom.example.invalid/v1",
-              models: [other],
-            },
+            xai: { ...provider([model], "https://cli-chat-proxy.grok.com/v1"), auth: "oauth" },
+            custom: provider([other], "https://custom.example.invalid/v1"),
           },
         },
       }),
@@ -72,43 +64,43 @@ it("removes copied xAI thinking fields from disk through runModelsAuthLoginFlowC
     const payload = Buffer.from(
       JSON.stringify({ sub: "fixture-account", exp: Math.floor(Date.now() / 1000) + 86400 }),
     ).toString("base64url");
+    const responses = {
+      discovery: {
+        device_authorization_endpoint: "https://auth.x.ai/oauth2/device/code",
+        token_endpoint: "https://auth.x.ai/oauth2/token",
+      },
+      "/device/code": {
+        device_code: "fixture-device",
+        user_code: "FIXTURE",
+        verification_uri: "https://auth.x.ai/device",
+        expires_in: 600,
+        interval: 1,
+      },
+      "/token": {
+        access_token: `eyJhbGciOiJub25lIn0.${payload}.signature`,
+        refresh_token: "fixture-refresh",
+        expires_in: 86400,
+      },
+      "/models": {
+        data: [
+          {
+            id: model.id,
+            api_backend: "responses",
+            supports_reasoning_effort: true,
+            reasoning_efforts: ["low", "high", "xhigh"],
+          },
+        ],
+      },
+    };
     vi.stubGlobal(
       "fetch",
       vi.fn<typeof fetch>(async (input) => {
         const url = requestUrl(input);
-        if (url.includes("/.well-known/")) {
-          return jsonResponse({
-            device_authorization_endpoint: "https://auth.x.ai/oauth2/device/code",
-            token_endpoint: "https://auth.x.ai/oauth2/token",
-          });
-        }
-        if (url.endsWith("/device/code")) {
-          return jsonResponse({
-            device_code: "fixture-device",
-            user_code: "FIXTURE",
-            verification_uri: "https://auth.x.ai/device",
-            expires_in: 600,
-            interval: 1,
-          });
-        }
-        if (url.endsWith("/token")) {
-          return jsonResponse({
-            access_token: `eyJhbGciOiJub25lIn0.${payload}.signature`,
-            refresh_token: "fixture-refresh",
-            expires_in: 86400,
-          });
-        }
-        if (url.endsWith("/models")) {
-          return jsonResponse({
-            data: [
-              {
-                id: model.id,
-                api_backend: "responses",
-                supports_reasoning_effort: true,
-                reasoning_efforts: ["low", "high", "xhigh"],
-              },
-            ],
-          });
+        const route = Object.entries(responses).find(([suffix]) =>
+          suffix === "discovery" ? url.includes("/.well-known/") : url.endsWith(suffix),
+        );
+        if (route) {
+          return jsonResponse(route[1]);
         }
         throw new Error(`Unexpected xAI login request: ${url}`);
       }),

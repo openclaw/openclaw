@@ -75,24 +75,17 @@ it("probes account SecretRefs without persisting resolved credentials or sending
     });
     await state.writeAuthProfiles({
       version: 1,
-      profiles: {
-        [`${provider}:inline`]: { type: "api_key", provider, key: credential },
-        [`${provider}:env`]: {
-          type: "api_key",
-          provider,
-          keyRef: { source: "env", provider: "default", id: "PROBE_ACCOUNT_KEY" },
-        },
-        [`${provider}:store`]: {
-          type: "api_key",
-          provider,
-          keyRef: { source: "store", provider: "default", id: "PROBE_ACCOUNT_STORED" },
-        },
-        [`${provider}:missing`]: {
-          type: "api_key",
-          provider,
-          keyRef: { source: "env", provider: "default", id: "PROBE_ACCOUNT_MISSING" },
-        },
-      },
+      profiles: Object.fromEntries(
+        Object.entries({
+          inline: { key: credential },
+          env: { keyRef: { source: "env", provider: "default", id: "PROBE_ACCOUNT_KEY" } },
+          store: { keyRef: { source: "store", provider: "default", id: "PROBE_ACCOUNT_STORED" } },
+          missing: { keyRef: { source: "env", provider: "default", id: "PROBE_ACCOUNT_MISSING" } },
+        } as const).map(([id, value]) => [
+          `${provider}:${id}`,
+          { type: "api_key", provider, ...value },
+        ]),
+      ),
     });
     const before = loadPersistedAuthProfileStore(state.agentDir());
     const result = await runAuthProbes({
