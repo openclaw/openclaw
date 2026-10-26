@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, nextEventLoopTurn } from "../../test/helpers/promise.js";
 import * as failoverClassifier from "../agents/failover/classify-core.js";
 import { createTuiCommandHandlersHarness } from "./tui-command-handlers-test-support.js";
 import {
@@ -23,11 +23,6 @@ function sendingSubmit(runId: string, draftText = "pending"): TuiPendingSubmit {
 function acceptedSubmit(runId: string, draftText: string | null = "pending"): TuiPendingSubmit {
   return { phase: "accepted", runId, draftText };
 }
-
-const settleHistory = () =>
-  new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
 
 function contentEvent(
   runId: string,
@@ -55,18 +50,18 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     });
     h.reconcileHistoryAfterGap();
     expect(h.state.sessionProjection?.hasTransportGap).toBe(true);
-    await settleHistory();
+    await nextEventLoopTurn();
     expect(h.loadHistory).toHaveBeenCalledTimes(1);
     expect(h.state.activeChatRunId).toBe(h.runId);
     expect(h.status).not.toHaveBeenCalledWith("idle");
     h.reconcileHistoryAfterGap();
-    await settleHistory();
+    await nextEventLoopTurn();
     expect(h.state.activeChatRunId).toBeNull();
     expect(h.status).toHaveBeenCalledWith("idle", "completed");
     expect(h.programStates).toEqual(["done"]);
     h.dispose();
     h.reconcileHistoryAfterGap();
-    await settleHistory();
+    await nextEventLoopTurn();
     expect(h.loadHistory).toHaveBeenCalledTimes(3);
     expect(h.state.activeChatRunId).toBeNull();
   });
@@ -84,7 +79,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
             : { state: outcome },
       });
       h.reconcileHistoryAfterGap();
-      await settleHistory();
+      await nextEventLoopTurn();
       expect(h.state.activeChatRunId).toBeNull();
       expect(h.programStates).toEqual(["working", outcome === "failed" ? "error" : "idle"]);
     },
@@ -581,7 +576,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(h.render).toHaveBeenCalledTimes(1);
     h.agent("run-old", { phase: "start", toolCallId: "tc-old", name: "exec" }, { stream: "tool" });
     expect(h.log.startTool).not.toHaveBeenCalled();
-    await settleHistory();
+    await nextEventLoopTurn();
     expect(h.programStates).toEqual(["done", "working", "idle"]);
   });
 
@@ -622,9 +617,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
         h.handleSessionsChangedEvent({ reason: "new", sessionId: "replacement" });
       }
       history.resolve({ loaded: true, runOutcome: { state: "completed" } });
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await nextEventLoopTurn();
       expect(h.log.addSystem).not.toHaveBeenCalled();
     },
   );
@@ -1163,7 +1156,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       h.handleSessionsChangedEvent({ runId: h.runId, phase: "end" });
       expect(h.loadHistory).toHaveBeenCalledTimes(1);
       h.text(h.runId, "keep this visible", "final");
-      await settleHistory();
+      await nextEventLoopTurn();
       expect(h.loadHistory).toHaveBeenCalledTimes(1);
       expectCall(h.log.finalizeAssistant, ["keep this visible", h.runId, []], "once");
     });

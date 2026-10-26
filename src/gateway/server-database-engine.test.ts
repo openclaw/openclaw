@@ -1,5 +1,5 @@
 import type { Worker } from "node:worker_threads";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   installDatabaseEngineSelection,
   type DatabaseEngineSelection,
@@ -23,6 +23,8 @@ vi.mock("node:worker_threads", async (importOriginal) => {
     },
   };
 });
+
+beforeEach(resetDatabaseEngineSelectionForTest);
 
 afterEach(async () => {
   await closePostgresPool();

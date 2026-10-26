@@ -4399,9 +4399,9 @@ async function drainEvents(requireSubscriberQuiet = true) {
     assertGatewayAlive();
     if (
       activeStreams === 0 &&
-      (!requireSubscriberQuiet ||
-        (performance.now() - lastSubscriberEventAt >= 1000 &&
-          !teamStressFanout?.pendingInjections().length))
+      (teamStressFanout
+        ? teamStressFanout.isDrained(requireSubscriberQuiet)
+        : !requireSubscriberQuiet || performance.now() - lastSubscriberEventAt >= 1000)
     ) {
       return;
     }
@@ -6493,8 +6493,8 @@ try {
         }
         measuring = true;
         await workload();
-        // Polling has stopped and in-flight RPCs have completed; drain their
-        // remaining events before freezing measured counters.
+        // Polling has stopped and in-flight RPCs have completed. Team receipts
+        // drain their workload while unrelated background metadata stays active.
         if (turnScenario || !values["dashboard-rpc"]) {
           const beforeDrain = perClientCounters.map((counts) => Object.fromEntries(counts));
           const drainStarted = performance.now();

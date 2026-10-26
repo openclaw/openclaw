@@ -579,15 +579,11 @@ test.each(["unchanged", "caller", "runtime"] as const)(
           spawnedCwd: worktree.path,
         });
       } else {
-        if (change === "runtime") {
-          // The retained target preimage fails CAS before the source-specific fence runs.
-          await expect(pending).rejects.toMatchObject({
-            name: "SqliteSessionMutationConflictError",
-            operationLabel: "session-entry.patch",
-          });
-        } else {
-          await expect(pending).rejects.toThrow("Session changed during worker admission");
-        }
+        await expect(pending).rejects.toThrow(
+          change === "runtime"
+            ? "SQLite session state changed while preparing session-entry.patch"
+            : "Session changed during worker admission",
+        );
         expect(dispatch).not.toHaveBeenCalled();
         const entry = loadSessionEntry({ ...identity, storePath });
         expect(entry).not.toHaveProperty("worktree");

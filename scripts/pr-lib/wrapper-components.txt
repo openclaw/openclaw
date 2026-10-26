@@ -947,6 +947,7 @@ src/infra/config-dir.ts
 src/infra/container-env-file.ts
 src/infra/container-environment.ts
 src/infra/crypto-digest.ts
+src/infra/current-machine-identity.ts
 src/infra/dedupe.ts
 src/infra/deep-merge.ts
 src/infra/deferred-plugin-migrations.contract.ts

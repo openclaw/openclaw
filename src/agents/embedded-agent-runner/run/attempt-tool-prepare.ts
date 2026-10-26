@@ -117,8 +117,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   const requireExplicitMessageTarget =
     attempt.requireExplicitMessageTarget ?? isSubagentSessionKey(attempt.sessionKey);
   const forceDirectMessageTool = messageToolOwnsVisibleReply(attempt);
-  const toolRunContext = buildEmbeddedAttemptToolRunContext({
-    ...attempt,
+  const toolRunContext = buildEmbeddedAttemptToolRunContext(attempt, {
     forceMessageTool: forceDirectMessageTool,
     trace: params.runTrace,
   });

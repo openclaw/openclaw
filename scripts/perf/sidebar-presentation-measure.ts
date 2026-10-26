@@ -10,6 +10,9 @@
  * with matched A/A controls before timing claims. Each run needs a fresh state dir.
  * Use separate --allocations runs for sampled bytes including collected objects;
  * use separate --trace-gc-nvp runs with --gc-log <redirected stdout> for promotion.
+ * --max-presentation-bytes-per-call <bytes> adds an opt-in allocation regression budget
+ * (requires --allocations). For scratch-fact packing, use 310000 with the default
+ * 10k sessions / 100-row pages, 66 clients and 3000 operations; never a timing gate.
  * Timing and GC gates use untraced, unsampled runs. Defaults: 10k rows, 10 clients,
  * two identities, 100-row pages, 1,000 warm reads. --sessions 10 --operations 10
  * is a setup smoke. The clients are in-process recipients, not live sockets.
@@ -55,6 +58,7 @@ const { values } = parseArgs({
     clients: { type: "string", default: "10" },
     operations: { type: "string", default: "1000" },
     allocations: { type: "boolean", default: false },
+    "max-presentation-bytes-per-call": { type: "string" },
   },
 });
 assert(values["state-dir"] && values.output, "--state-dir and --output are required");
@@ -65,6 +69,19 @@ const sessions = integer("sessions", 2);
 const clients = integer("clients", 2);
 const operations = integer("operations", 1);
 const repeats = integer("repeats", 1);
+const allocationBudget =
+  values["max-presentation-bytes-per-call"] === undefined
+    ? undefined
+    : parseStrictIntegerOption({
+        raw: values["max-presentation-bytes-per-call"],
+        label: "max-presentation-bytes-per-call",
+        min: 1,
+        fallback: 1,
+      });
+assert(
+  allocationBudget === undefined || values.allocations,
+  "allocation budget requires --allocations",
+);
 const warmCalls = Math.min(operations, Math.max(clients * 5, 1000));
 const barrierDir = values["barrier-dir"] && path.resolve(values["barrier-dir"]);
 if (barrierDir) {
@@ -476,6 +493,12 @@ try {
     };
     writeFileSync(repeatOutput, `${JSON.stringify(result, null, 2)}\n`);
     writeSync(1, `${JSON.stringify(result)}\n`);
+    if (allocationBudget !== undefined) {
+      assert(
+        allocation!.presentationBytesPerCall <= allocationBudget,
+        `Presentation allocation ${allocation!.presentationBytesPerCall} bytes/call exceeds ${allocationBudget}`,
+      );
+    }
   }
 } finally {
   observer.disconnect();

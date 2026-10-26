@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import type { SecretsStoreMutationResult } from "../../packages/gateway-protocol/src/schema/secrets.js";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { isRedactedSecretValue } from "../config/redact-sentinel.js";
 import { ENV_SECRET_REF_ID_RE } from "../config/types.secrets.js";
 import { danger } from "../globals.js";
@@ -183,7 +184,10 @@ export function registerSecretStoreCli(secrets: Command): void {
             return;
           }
           for (const entry of entries) {
-            const value = entry.kind === "env" ? ` = ${entry.valuePreview ?? ""}` : " (write-only)";
+            const value =
+              entry.kind === "env"
+                ? ` = ${sanitizeTerminalText(entry.valuePreview ?? "")}`
+                : " (write-only)";
             const hosts =
               entry.kind === "secret"
                 ? `; allowed hosts: ${(entry.allowedHosts ?? []).join(", ") || "none"}`
@@ -362,7 +366,7 @@ export function registerSecretStoreCli(secrets: Command): void {
           if (options.plain) {
             defaultRuntime.writeStdout(result.value);
           } else {
-            defaultRuntime.log(`${name}=${result.value}`);
+            defaultRuntime.log(`${name}=${sanitizeTerminalText(result.value)}`);
           }
         },
       ),

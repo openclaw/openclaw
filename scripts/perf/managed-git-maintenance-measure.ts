@@ -1,4 +1,9 @@
 // Run only on an authorized benchmark host; prepare and measure in separate scopes.
+// Repeated owner proof (Linux or macOS, 48 MiB synthetic payload):
+//   node --import ./scripts/tsx.mjs scripts/perf/managed-git-maintenance-measure.ts --mode prepare --packs 1536 --promisor-packs 1257 --blobs-per-pack 1 --state-dir <new-directory>
+//   node --import ./scripts/tsx.mjs scripts/perf/managed-git-maintenance-measure.ts --mode measure --passes 3 --state-dir <prepared-directory>
+// Each pass starts a fresh maintenance owner, retains its production budgets, and
+// reports elapsed time and monotonic pack counts. The final check reads every blob.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createCipheriv, createHash } from "node:crypto";
@@ -12,19 +17,27 @@ const { values } = parseArgs({
     policy: { type: "string", default: "candidate" },
     "state-dir": { type: "string" },
     packs: { type: "string", default: "32" },
+    "promisor-packs": { type: "string", default: "0" },
+    passes: { type: "string", default: "1" },
     "blobs-per-pack": { type: "string", default: "128" },
     consolidate: { type: "boolean" },
     help: { type: "boolean" },
   },
 });
 if (values.help) {
-  console.log(`Synthetic managed Git maintenance, Linux/GNU time required:
+  console.log(`Synthetic managed Git maintenance, Linux/GNU time or macOS/BSD time:
   node --import ./scripts/tsx.mjs scripts/perf/managed-git-maintenance-measure.ts --mode prepare --state-dir <new-directory>
   node --import ./scripts/tsx.mjs scripts/perf/managed-git-maintenance-measure.ts --mode measure --state-dir <prepared-directory>
 Prepare creates 32 indexed packs × 128 blobs × 32 KiB (128 MiB), sequentially.
 --packs and --blobs-per-pack may reduce the fixture; payload is capped at 128 MiB.
-Measure invokes the real hourly maintenance owner, records GNU time's largest-process
-RSS and Git trace2 children, then verifies retained objects.
+Measure invokes the real hourly maintenance owner, records time's largest-process
+RSS and Git trace2 children, then verifies every retained fixture blob.
+--passes N (default 1) creates a fresh owner for each consecutive pass and reports
+each pass's elapsed time and pack counts, asserting that pack counts never increase.
+For repeated bounded convergence use --packs 1536 --blobs-per-pack 1 at prepare
+time and --passes 3 at measure time (48 MiB payload).
+Add --promisor-packs 1257 at prepare time for mixed promisor/ordinary pack groups;
+markers are added only after generation, to the first N packs in filename order.
 Use --policy baseline or --policy candidate (default) at prepare time to compare
 the existing owner with and without the managed project repository policy.
 Use a fresh fixture for each run; measurement consumes its fragmented layout.
@@ -49,8 +62,8 @@ assert(
 assert(["baseline", "candidate"].includes(values.policy), "invalid --policy");
 const nativeMidx = values.mode.endsWith("-midx");
 assert(
-  process.platform === "linux" || (nativeMidx && process.platform === "darwin"),
-  "The owner benchmark requires Linux; native MIDX probes also support macOS",
+  process.platform === "linux" || process.platform === "darwin",
+  "The benchmark requires Linux or macOS",
 );
 const root = path.resolve(values["state-dir"]);
 const repo = path.join(root, "repository");
@@ -58,10 +71,20 @@ const marker = path.join(root, "fixture.json");
 const trace = path.join(root, "maintenance.trace.jsonl");
 const summary = path.join(root, "maintenance.json");
 const packCount = Number(values.packs);
+const promisorPackCount = Number(values["promisor-packs"]);
+const passCount = Number(values.passes);
 const blobsPerPack = Number(values["blobs-per-pack"]);
 const blobBytes = nativeMidx ? 16 : 32 * 1024;
 const payloadBytes = packCount * blobsPerPack * blobBytes;
 assert(Number.isSafeInteger(packCount) && packCount >= 16, "--packs must be an integer >=16");
+assert(
+  Number.isSafeInteger(promisorPackCount) &&
+    promisorPackCount >= 0 &&
+    promisorPackCount <= packCount,
+  "--promisor-packs must be an integer between 0 and --packs",
+);
+assert(!nativeMidx || promisorPackCount === 0, "Promisor packs require the owner benchmark");
+assert(Number.isSafeInteger(passCount) && passCount >= 1, "--passes must be a positive integer");
 assert(
   Number.isSafeInteger(blobsPerPack) && blobsPerPack >= 1,
   "--blobs-per-pack must be positive",
@@ -104,6 +127,10 @@ const git = (args: string[], input?: string | Buffer) => run("git", ["-C", repo,
 const packs = async () =>
   (await fs.readdir(path.join(repo, ".git", "objects", "pack"))).filter((name) =>
     name.endsWith(".pack"),
+  ).length;
+const promisorPacks = async () =>
+  (await fs.readdir(path.join(repo, ".git", "objects", "pack"))).filter((name) =>
+    name.endsWith(".promisor"),
   ).length;
 async function checkDirty() {
   if (process.platform !== "linux") {
@@ -177,6 +204,13 @@ if (values.mode === "prepare" || values.mode === "prepare-midx") {
     objects.push(...(await git(["ls-tree", "-r", "--format=%(objectname)", "HEAD"])).split("\n"));
   }
   assert.equal(await packs(), packCount);
+  if (promisorPackCount > 0) {
+    const directory = path.join(repo, ".git", "objects", "pack");
+    const names = (await fs.readdir(directory)).filter((name) => name.endsWith(".pack")).toSorted();
+    for (const name of names.slice(0, promisorPackCount)) {
+      await fs.writeFile(path.join(directory, name.replace(/\.pack$/, ".promisor")), "");
+    }
+  }
   if (nativeMidx) {
     const inventory = await git(["count-objects", "-v"]);
     assert.equal(Number(/^in-pack: (\d+)$/m.exec(inventory)?.[1]), packCount * blobsPerPack);
@@ -206,6 +240,7 @@ if (values.mode === "prepare" || values.mode === "prepare-midx") {
     version: 1,
     policy: values.policy,
     packs: packCount,
+    promisorPacks: promisorPackCount,
     blobBytes,
     payloadBytes,
     ...(nativeMidx ? { nativeMidx: true, objectCount: packCount * blobsPerPack } : {}),
@@ -218,6 +253,7 @@ if (values.mode === "prepare" || values.mode === "prepare-midx") {
     version: number;
     policy: string;
     packs: number;
+    promisorPacks?: number;
     blobBytes: number;
     payloadBytes: number;
     objects: string[];
@@ -227,6 +263,11 @@ if (values.mode === "prepare" || values.mode === "prepare-midx") {
   assert.equal(fixture.version, 1);
   if (!nativeMidx) {
     assert.equal(await packs(), fixture.packs, "Use a fresh prepared fixture for each run");
+    assert.equal(
+      await promisorPacks(),
+      fixture.promisorPacks ?? 0,
+      "Fixture promisor count changed",
+    );
   }
   if (values.mode === "measure-midx") {
     assert(fixture.nativeMidx, "Use a prepare-midx fixture");
@@ -403,14 +444,37 @@ if (values.mode === "prepare" || values.mode === "prepare-midx") {
     const { WorktreeGcProgress } = await import("../../src/agents/worktrees/gc-progress.js");
     const { closeOpenClawStateDatabaseAsync } =
       await import("../../src/state/openclaw-state-db.js");
-    const progress = new WorktreeGcProgress();
     process.env.GIT_TRACE2_EVENT = trace;
     const started = performance.now();
+    const passes = [];
     try {
-      await createWorktreeGitMaintenance(process.env)({ progress });
-      assert.equal(progress.result.issueCount, 0, JSON.stringify(progress.result.issues));
-      assert.equal(progress.result.gitMaintenance?.stage, "completed");
-      await fs.writeFile(summary, JSON.stringify({ elapsedMs: performance.now() - started }));
+      for (let pass = 1; pass <= passCount; pass++) {
+        await checkDirty();
+        const packsBefore = await packs();
+        const promisorPacksBefore = await promisorPacks();
+        const progress = new WorktreeGcProgress();
+        const passStarted = performance.now();
+        await createWorktreeGitMaintenance(process.env)({ progress });
+        const elapsedMs = performance.now() - passStarted;
+        assert.equal(progress.result.issueCount, 0, JSON.stringify(progress.result.issues));
+        assert.equal(progress.result.gitMaintenance?.stage, "completed");
+        const packsAfter = await packs();
+        const promisorPacksAfter = await promisorPacks();
+        assert(packsAfter <= packsBefore, `Pass ${pass} increased the synthetic pack count`);
+        assert(promisorPacksAfter <= promisorPacksBefore, `Pass ${pass} increased promisor packs`);
+        passes.push({
+          pass,
+          elapsedMs,
+          packsBefore,
+          packsAfter,
+          promisorPacksBefore,
+          promisorPacksAfter,
+        });
+        await fs.writeFile(
+          summary,
+          JSON.stringify({ elapsedMs: performance.now() - started, passes }),
+        );
+      }
     } finally {
       delete process.env.GIT_TRACE2_EVENT;
       await closeOpenClawStateDatabaseAsync();
@@ -420,7 +484,7 @@ if (values.mode === "prepare" || values.mode === "prepare-midx") {
     await fs.writeFile(trace, "");
     const timeOutput = path.join(root, "maintenance.time.txt");
     await run("/usr/bin/time", [
-      "-v",
+      ...(process.platform === "darwin" ? ["-l", "-p"] : ["-v"]),
       "-o",
       timeOutput,
       process.execPath,
@@ -430,12 +494,15 @@ if (values.mode === "prepare" || values.mode === "prepare-midx") {
       "owner",
       "--state-dir",
       root,
+      "--passes",
+      String(passCount),
     ]);
     const timing = await fs.readFile(timeOutput, "utf8");
-    const peakProcessRssKiB = Number(
-      /Maximum resident set size \(kbytes\):\s+(\d+)/.exec(timing)?.[1],
-    );
-    assert(peakProcessRssKiB > 0, "GNU time did not report peak RSS");
+    const peakProcessRssKiB =
+      process.platform === "darwin"
+        ? Number(/(\d+)\s+maximum resident set size/.exec(timing)?.[1]) / 1024
+        : Number(/Maximum resident set size \(kbytes\):\s+(\d+)/.exec(timing)?.[1]);
+    assert(peakProcessRssKiB > 0, "time did not report peak RSS");
     const childCommands: Record<string, number> = {};
     for (const line of (await fs.readFile(trace, "utf8")).trim().split("\n")) {
       if (!line) {
@@ -462,10 +529,13 @@ if (values.mode === "prepare" || values.mode === "prepare-midx") {
       JSON.stringify(
         {
           ...JSON.parse(await fs.readFile(summary, "utf8")),
+          platform: process.platform,
           policy: fixture.policy,
           peakProcessRssKiB,
           packsBefore: fixture.packs,
           packsAfter,
+          promisorPacksBefore: fixture.promisorPacks ?? 0,
+          promisorPacksAfter: await promisorPacks(),
           payloadBytes: fixture.payloadBytes,
           verifiedBlobs: fixture.objects.length,
           childCommands,

@@ -66,6 +66,7 @@ export function parseStressOptions(args: string[]) {
       "smoke-seconds": { type: "string" },
       "fixture-only": { type: "boolean" },
       "operator-model-policy": { type: "boolean" },
+      "gateway-preload": { type: "string" },
       port: { type: "string" },
       help: { type: "boolean" },
     },
@@ -119,6 +120,7 @@ export function parseStressOptions(args: string[]) {
     mode: values.mode,
     fixtureOnly: values["fixture-only"] ?? false,
     operatorModelPolicy: values["operator-model-policy"] ?? false,
+    gatewayPreload: values["gateway-preload"] ? path.resolve(values["gateway-preload"]) : undefined,
     port,
     help: values.help,
   };
@@ -273,6 +275,7 @@ Without --base, run candidate once per mode. See team-shape-stress.md.`);
             "--scenario",
             "memory-soak",
             "--team-stress",
+            ...(options.gatewayPreload ? ["--gateway-preload", options.gatewayPreload] : []),
             "--mixed-rpc",
             "--stress-tools",
             "--stress-subagents",

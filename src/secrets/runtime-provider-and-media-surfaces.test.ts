@@ -7,6 +7,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createAuthProfileStoreFixture } from "../agents/auth-profiles/credential-fixtures.test-support.js";
 import { resolveApiKeyForProviderCore } from "../agents/model-auth-provider.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { createProviderConfigFixture } from "../config/runtime-snapshot.test-fixtures.js";
 import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -255,15 +256,7 @@ describe("secrets runtime provider and media surfaces", () => {
   it("patches env shorthand model refs into the pinned runtime config", async () => {
     const config = asConfig({
       agents: { entries: { main: {} } },
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            apiKey: "$OPENAI_API_KEY",
-            models: [],
-          },
-        },
-      },
+      models: createProviderConfigFixture("$OPENAI_API_KEY").models,
     });
     const initial = await prepareSecretsRuntimeSnapshot({
       config,

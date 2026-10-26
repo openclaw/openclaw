@@ -1,10 +1,20 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { DEFAULT_WORKER_PENDING_BYTES } from "@openclaw/worker-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { publishSessionCostUsageUpdated } from "../../infra/session-cost-usage-events.js";
+import { compactUsageOverviewFamilies } from "../../infra/session-cost-usage-overview-load.js";
 import { createEmptyCostUsageTotals } from "../../infra/session-cost-usage-totals.js";
+import { workerTaskPoolEntrypoints } from "../../infra/worker-task-pool-runtime.test-support.js";
+import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
+import type {
+  PoolFixtureInput,
+  PoolFixtureResult,
+} from "../../infra/worker-task-pool.test-support.js";
 import type { SessionsUsageResult } from "../../shared/usage-types.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
@@ -25,11 +35,21 @@ vi.mock("../../infra/session-cost-usage.js", async () => ({
   )),
   discoverAllSessions: mocks.discoverAllSessions,
   loadSessionCostSummariesFromCache: mocks.loadSessionCostSummariesFromCache,
+  loadSessionUsageOverviewFromCache: vi.fn(
+    async (params: Parameters<typeof overviewFromSessionSummaries>[0]) =>
+      (await import("./usage.test-support.js")).overviewFromSessionSummaries(
+        params,
+        mocks.loadSessionCostSummariesFromCache,
+      ),
+  ),
 }));
 
+import { loadSessionUsageOverviewFromCache } from "../../infra/session-cost-usage.js";
 import {
+  createUsageSessionStoreFixture,
   freshUsageBatch,
   invokeUsage,
+  overviewFromSessionSummaries,
   usageClient,
   usageReply,
   usageRoleConfig,
@@ -409,4 +429,91 @@ describe("usage creator attribution", () => {
       expect(blocked.creatorOptions).toEqual(restricted.creatorOptions);
     });
   });
+});
+
+it("returns complete overview family usage while other reports occupy worker input capacity", async () => {
+  // The detail regression's reservation; one descriptor per instance would not fit.
+  const backgroundBytes = 265_155_910;
+  const storePath =
+    "/tmp/synthetic-usage-admission/retained-team-shaped-session-cost-usage-fixture/agents/opus/agent/openclaw-agent.sqlite";
+  const families = [
+    { key: "agent:opus:capacity-first", prefix: "capacity-first", count: 6001, tokens: 7 },
+    { key: "agent:opus:capacity-second", prefix: "capacity-second", count: 6000, tokens: 11 },
+  ];
+  mocks.discoverAllSessions.mockResolvedValue(
+    families.flatMap(({ prefix, count }) =>
+      Array.from({ length: count }, (_, index) => ({
+        sessionId: `${prefix}-${index}`,
+        sessionFile: `sqlite:opus:${prefix}-${index}:${storePath}`,
+        mtime: 1000,
+      })),
+    ),
+  );
+  const rows = createUsageSessionStoreFixture(
+    Object.fromEntries(
+      families.map(({ key, prefix, count }) => [
+        key,
+        {
+          sessionId: `${prefix}-0`,
+          updatedAt: 1000,
+          usageFamilyKey: key,
+          usageFamilySessionIds: Array.from({ length: count }, (_, index) => `${prefix}-${index}`),
+        },
+      ]),
+    ),
+    families.map(({ key }) => [key, "opus"] as const),
+  );
+  const pool = new WorkerTaskPool<PoolFixtureInput, PoolFixtureResult>({
+    workerUrl: resolveRuntimeWorkerUrl(workerTaskPoolEntrypoints.worker),
+    maxWorkers: 2,
+    idleTimeoutMs: 0,
+  });
+  const release = createDeferred();
+  const background = Promise.allSettled([
+    pool.run(
+      async () => {
+        await release.promise;
+        return { label: "background usage reports" };
+      },
+      { inputBytes: backgroundBytes },
+    ),
+  ]);
+  vi.mocked(loadSessionUsageOverviewFromCache).mockImplementationOnce(async (params) => {
+    const descriptors = params.families.map((family) =>
+      family.map(({ sessionId, sessionFile }) => ({ sessionId, sessionFile })),
+    );
+    expect(2 * JSON.stringify({ families: descriptors }).length).toBeGreaterThan(
+      DEFAULT_WORKER_PENDING_BYTES - backgroundBytes,
+    );
+    await pool.run(
+      { label: "family overview report" },
+      { inputBytes: 2 * JSON.stringify(compactUsageOverviewFamilies(params.families)).length },
+    );
+    return overviewFromSessionSummaries(params, async ({ sessions }) =>
+      freshUsageBatch(
+        sessions.map(({ sessionId }) =>
+          usageTotals(sessionId?.startsWith("capacity-first-") ? 7 : 11),
+        ),
+      ),
+    );
+  });
+  try {
+    const result = (await runSessionsUsage(
+      { ...baseParams, agentId: "opus", groupBy: "family", projection: "overview" },
+      config,
+      undefined,
+      "sessions.usage",
+      rows,
+    )) as SessionsUsageResult;
+    expect(result.partial).toBeUndefined();
+    expect(result.totals.totalTokens).toBe(6001 * 7 + 6000 * 11);
+    expect(
+      Object.fromEntries(result.sessions.map((row) => [row.key, row.usage?.totalTokens])),
+    ).toEqual({ "agent:opus:capacity-first": 6001 * 7, "agent:opus:capacity-second": 6000 * 11 });
+  } finally {
+    mocks.discoverAllSessions.mockReset();
+    release.resolve();
+    await background;
+    await pool.close();
+  }
 });

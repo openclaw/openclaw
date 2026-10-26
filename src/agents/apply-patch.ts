@@ -46,7 +46,6 @@ export type ApplyPatchSummary = {
 type ApplyPatchResult = {
   summary: ApplyPatchSummary;
   text: string;
-  noOp?: boolean;
 };
 
 type ApplyPatchToolDetails = {
@@ -664,7 +663,6 @@ async function commitPatchHunks(
   return {
     summary,
     text: noOp ? `No changes made to ${Array.from(noOpPaths).join(", ")}.` : formatSummary(summary),
-    ...(noOp ? { noOp: true } : {}),
   };
 }
 
@@ -795,11 +793,5 @@ async function resolvePatchPath(
     resolved,
     queueKey: await resolveFileMutationQueueKey(resolved),
     display: toDisplayPath(resolved, options.cwd),
-  };
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.applyPatchTestApi")] = {
-    applyPatch,
   };
 }

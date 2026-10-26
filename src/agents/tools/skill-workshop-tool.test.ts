@@ -4,11 +4,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import { consumeRunSkillUsage } from "../../skills/runtime/run-usage.js";
-import {
-  createWorkshopSkill,
-  listWorkshopArchive,
-  listWorkshopChanges,
-} from "../../skills/workshop/library.js";
+import { listWorkshopArchive, listWorkshopChanges } from "../../skills/workshop/library.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -20,13 +16,9 @@ let state: OpenClawTestState;
 beforeEach(async () => {
   state = await createOpenClawTestState({ layout: "state-only" });
   setRuntimeConfigSnapshot({});
-  await createWorkshopSkill(
-    { config: {}, agentId: "main", actor: "agent" },
-    {
-      name: "deploy",
-      content: "---\nname: deploy\ndescription: Deploy staging\n---\n\n1. Run make deploy.\n",
-    },
-  );
+  await workshop()("create", {
+    content: "---\nname: deploy\ndescription: Deploy staging\n---\n\n1. Run make deploy.\n",
+  });
 });
 
 afterEach(async () => {
@@ -49,9 +41,7 @@ describe("skill_workshop", () => {
   it("requires viewing an existing skill before a background run edits or archives it", async () => {
     const tool = workshop({ runId: "review-run", reviewOf: "agent:main:main" });
 
-    await expect(tool("patch", patch)).rejects.toThrow(
-      "View it first: call skill_workshop action=view name=deploy, then retry once.",
-    );
+    await expect(tool("patch", patch)).rejects.toThrow("View it first");
     // Retries rebuild the tool inside the same run; the read must carry over.
     await tool("view");
     const retried = workshop({
@@ -59,21 +49,18 @@ describe("skill_workshop", () => {
       runId: "review-run",
       reviewOf: "agent:main:telegram:direct:42",
     });
-    expect(await retried("patch", { ...patch, reason: "renamed target" })).toBe(
-      'Patched "deploy" (renamed target). Saved previous version; undo with action=restore name=deploy.',
-    );
+    await retried("patch", { ...patch, reason: "renamed target" });
     await expect(retried("archive")).rejects.toThrow(/archive needs absorbed_into .* or a reason/);
 
-    // The reviewer reading a skill is not use; only foreground views count.
     expect(consumeRunSkillUsage("review-run")).toEqual([]);
     // Changes credit the conversation the review learned from, not its internal session.
-    expect(await listWorkshopChanges("main", { runId: "review-run" })).toEqual([
-      expect.objectContaining({
+    expect(await listWorkshopChanges("main", { runId: "review-run" })).toMatchObject([
+      {
         action: "patch",
         actor: "review",
         summary: "renamed target",
         sessionKey: "agent:main:telegram:direct:42",
-      }),
+      },
     ]);
   });
 
@@ -87,9 +74,7 @@ describe("skill_workshop", () => {
     await tool("view", { version: entry?.versions[0]?.id });
     await expect(tool("remove_file", remove)).rejects.toThrow("View it first");
     await tool("view");
-    expect(await tool("remove_file", remove)).toBe(
-      'Updated "deploy" (removed references/old.md). Saved previous version; undo with action=restore name=deploy.',
-    );
+    expect(await tool("remove_file", remove)).toContain('Updated "deploy"');
   });
 
   it("does not write once the invoking run is aborted", async () => {

@@ -85,6 +85,10 @@ const RESTART_RECOVERY_OPENING = formatSystemTurnPrompt(
 );
 const internalWakeInputs = [
   ["heartbeat", `${HEARTBEAT_PROMPT}\nCurrent time: Saturday`],
+  [
+    "heartbeat",
+    `Run the following periodic tasks (only those due based on their intervals):\n\n- inbox: Check mail\n\nAfter completing all due tasks, reply with exactly NO_REPLY as the entire final answer. NO_REPLY discards anything written this turn that was not sent, so send confirmations before ending silently.`,
+  ],
   ["restart_recovery", RESTART_RECOVERY_OPENING],
   ["restart_recovery", `[Tue 2026-09-22 16:00 GMT+8] ${RESTART_RECOVERY_OPENING} Continue.`],
 ] as const;
