@@ -9,17 +9,14 @@ const manageMocks = vi.hoisted(() => {
     browser.command("tabs").action(tabsAction);
     browser.command("doctor").option("--deep").action(doctorAction);
   });
-  return {
-    doctorAction,
-    registerBrowserManageCommands,
-    tabsAction,
-  };
+  return { doctorAction, registerBrowserManageCommands, tabsAction };
 });
-const cookieSyncMocks = vi.hoisted(() => ({
+const passiveMocks = vi.hoisted(() => ({
   registerBrowserCookieSyncCommand: vi.fn(),
-}));
-const inspectMocks = vi.hoisted(() => ({
   registerBrowserInspectCommands: vi.fn(),
+  registerBrowserActionObserveCommands: vi.fn(),
+  registerBrowserDebugCommands: vi.fn(),
+  registerBrowserExtensionCommands: vi.fn(),
 }));
 const actionInputMocks = vi.hoisted(() => {
   const waitAction = vi.fn<(opts: unknown, parent: unknown) => void>();
@@ -33,12 +30,6 @@ const actionInputMocks = vi.hoisted(() => {
   );
   return { registerBrowserActionInputCommands, waitAction };
 });
-const actionObserveMocks = vi.hoisted(() => ({
-  registerBrowserActionObserveCommands: vi.fn(),
-}));
-const debugMocks = vi.hoisted(() => ({
-  registerBrowserDebugCommands: vi.fn(),
-}));
 const stateMocks = vi.hoisted(() => {
   const cookieSetAction =
     vi.fn<(name: string, value: string, opts: unknown, parent: unknown) => void>();
@@ -57,24 +48,31 @@ const stateMocks = vi.hoisted(() => {
   );
   return { cookieSetAction, registerBrowserStateCommands };
 });
-const extensionMocks = vi.hoisted(() => ({
-  registerBrowserExtensionCommands: vi.fn(),
-}));
-
 vi.mock("./browser-cli-manage.js", () => manageMocks);
-vi.mock("./browser-cli-cookie-sync.js", () => cookieSyncMocks);
-vi.mock("./browser-cli-inspect.js", () => inspectMocks);
+vi.mock("./browser-cli-cookie-sync.js", () => ({
+  registerBrowserCookieSyncCommand: passiveMocks.registerBrowserCookieSyncCommand,
+}));
+vi.mock("./browser-cli-inspect.js", () => ({
+  registerBrowserInspectCommands: passiveMocks.registerBrowserInspectCommands,
+}));
 vi.mock("./browser-cli-actions-input/register.js", () => actionInputMocks);
-vi.mock("./browser-cli-actions-observe.js", () => actionObserveMocks);
-vi.mock("./browser-cli-debug.js", () => debugMocks);
+vi.mock("./browser-cli-actions-observe.js", () => ({
+  registerBrowserActionObserveCommands: passiveMocks.registerBrowserActionObserveCommands,
+}));
+vi.mock("./browser-cli-debug.js", () => ({
+  registerBrowserDebugCommands: passiveMocks.registerBrowserDebugCommands,
+}));
 vi.mock("./browser-cli-state.js", () => stateMocks);
-vi.mock("./browser-cli-extension.js", () => extensionMocks);
+vi.mock("./browser-cli-extension.js", () => ({
+  registerBrowserExtensionCommands: passiveMocks.registerBrowserExtensionCommands,
+}));
 
 const { registerBrowserCli } = await import("./browser-cli.js");
 const machineOutput = (...args: string[]) =>
   isBrowserMachineOutput({ argv: ["node", "openclaw", "browser", ...args] });
 
-async function run(args: string[], positionalOptions = true) {
+async function run(command: string, positionalOptions = true) {
+  const args = command.split(" ");
   const program = new Command().name("openclaw");
   if (positionalOptions) {
     program.enablePositionalOptions();
@@ -104,16 +102,16 @@ describe("registerBrowserCli lazy browser subcommands", () => {
   });
 
   it("loads browser doctor from the manage group so --deep is available", async () => {
-    await run(["browser", "doctor", "--deep"], false);
+    await run("browser doctor --deep", false);
 
     expect(manageMocks.registerBrowserManageCommands).toHaveBeenCalledTimes(1);
-    expect(debugMocks.registerBrowserDebugCommands).not.toHaveBeenCalled();
+    expect(passiveMocks.registerBrowserDebugCommands).not.toHaveBeenCalled();
     expect(manageMocks.doctorAction).toHaveBeenCalledTimes(1);
     expect(manageMocks.doctorAction.mock.calls[0]?.[0]).toMatchObject({ deep: true });
   });
 
   it("keeps explicit Gateway and wait URLs under their separate owners", async () => {
-    await run(["browser", "--url", "ws://127.0.0.1:18789", "wait", "--url", "**/done"]);
+    await run("browser --url ws://127.0.0.1:18789 wait --url **/done");
 
     const [opts, parent] = actionInputMocks.waitAction.mock.calls[0]!;
     expect(opts).toMatchObject({ url: "**/done" });
@@ -121,7 +119,7 @@ describe("registerBrowserCli lazy browser subcommands", () => {
   });
 
   it("accepts the shipped trailing browser profile order after lazy loading", async () => {
-    await run(["browser", "tabs", "--browser-profile", "remote", "--timeout", "60000"]);
+    await run("browser tabs --browser-profile remote --timeout 60000");
 
     const tabsCommand = manageMocks.tabsAction.mock.calls[0]?.at(-1);
     if (!(tabsCommand instanceof Command)) {
@@ -134,18 +132,7 @@ describe("registerBrowserCli lazy browser subcommands", () => {
   });
 
   it("preserves parent timeout before a nested lazily loaded storage-family leaf", async () => {
-    await run([
-      "browser",
-      "--timeout",
-      "60000",
-      "--browser-profile",
-      "work",
-      "--json",
-      "cookies",
-      "set",
-      "session",
-      "abc",
-    ]);
+    await run("browser --timeout 60000 --browser-profile work --json cookies set session abc");
 
     const cookieCall = stateMocks.cookieSetAction.mock.calls[0]!;
     expect(cookieCall[3]).toMatchObject({ timeout: "60000", browserProfile: "work", json: true });
@@ -158,14 +145,14 @@ describe("registerBrowserCli lazy browser subcommands", () => {
     registerBrowserCli(program, ["node", "openclaw", "browser", "--help"]);
 
     await vi.waitFor(() => {
-      expect(manageMocks.registerBrowserManageCommands).toHaveBeenCalledTimes(1);
-      expect(cookieSyncMocks.registerBrowserCookieSyncCommand).toHaveBeenCalledTimes(1);
-      expect(inspectMocks.registerBrowserInspectCommands).toHaveBeenCalledTimes(1);
-      expect(actionInputMocks.registerBrowserActionInputCommands).toHaveBeenCalledTimes(1);
-      expect(actionObserveMocks.registerBrowserActionObserveCommands).toHaveBeenCalledTimes(1);
-      expect(debugMocks.registerBrowserDebugCommands).toHaveBeenCalledTimes(1);
-      expect(stateMocks.registerBrowserStateCommands).toHaveBeenCalledTimes(1);
-      expect(extensionMocks.registerBrowserExtensionCommands).toHaveBeenCalledTimes(1);
+      for (const register of [
+        manageMocks.registerBrowserManageCommands,
+        actionInputMocks.registerBrowserActionInputCommands,
+        stateMocks.registerBrowserStateCommands,
+        ...Object.values(passiveMocks),
+      ]) {
+        expect(register).toHaveBeenCalledTimes(1);
+      }
     });
   });
 });
