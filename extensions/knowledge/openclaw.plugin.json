@@ -8,10 +8,12 @@
     "type": "object",
     "properties": {
       "operatorRead": {
-        "type": "boolean"
+        "type": "boolean",
+        "default": true
       },
       "writesEnabled": {
-        "type": "boolean"
+        "type": "boolean",
+        "default": true
       },
       "stores": {
         "type": "object",
