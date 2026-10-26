@@ -71,11 +71,9 @@ if (isMainThread && process.send) {
       });
     }
   }
-  process.on("message", async (message) => {
-    try {
-      await control(message);
-    } catch (error) {
+  process.on("message", (message) => {
+    void control(message).catch((/** @type {unknown} */ error) => {
       process.send({ error: String(error) });
-    }
+    });
   });
 }
