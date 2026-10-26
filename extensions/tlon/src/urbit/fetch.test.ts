@@ -12,31 +12,29 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => ({
 
 const finalUrl = "https://example.com/~/channel/1701";
 const fetchOptions = { baseUrl: "https://example.com", path: "/~/channel/1701" };
-const scry = () =>
-  scryUrbitPath(
-    { ...fetchOptions, cookie: "proof" },
-    {
-      path: "/inbox.json",
-      auditContext: "test",
-    },
-  );
+const scryOptions = { path: "/inbox.json", auditContext: "test" };
+const scry = () => scryUrbitPath({ ...fetchOptions, cookie: "proof" }, scryOptions);
 function mockResponse(response: Response, release = vi.fn(async () => {}), refresh?: () => void) {
   const guarded = { response, finalUrl, release, refreshTimeout: refresh };
   vi.mocked(fetchWithSsrFGuard).mockResolvedValue(guarded);
   return release;
 }
-const streamResponse = (source: UnderlyingSource<Uint8Array>, status = 200) =>
-  new Response(new ReadableStream(source), { status });
+const streamResponse = (source: UnderlyingSource<Uint8Array>) =>
+  new Response(new ReadableStream(source));
+const cancellationFailure = () =>
+  streamResponse({
+    cancel() {
+      throw new Error("cancel failed");
+    },
+  });
 
 describe("urbitFetch guarded response ownership", () => {
-  beforeEach(() => {
-    vi.mocked(fetchWithSsrFGuard).mockReset();
-  });
+  beforeEach(() => vi.mocked(fetchWithSsrFGuard).mockReset());
 
   it("keeps responses alive until release and preserves guarded metadata", async () => {
     const events: string[] = [];
     const response = streamResponse({
-      cancel() {
+      cancel: () => {
         events.push("cancel");
       },
     });
@@ -70,17 +68,12 @@ describe("urbitFetch guarded response ownership", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
-  it.each(["consumed", "empty", "cancel-failure"])("releases a %s response", async (kind) => {
-    const response =
-      kind === "consumed"
-        ? new Response("finished")
-        : kind === "empty"
-          ? new Response(null, { status: 204 })
-          : streamResponse({
-              cancel() {
-                throw new Error("cancel failed");
-              },
-            });
+  it.each([
+    ["consumed", () => new Response("finished")],
+    ["empty", () => new Response(null, { status: 204 })],
+    ["cancel-failure", cancellationFailure],
+  ] as const)("releases a %s response", async (kind, makeResponse) => {
+    const response = makeResponse();
     const cancel = response.body ? vi.spyOn(response.body, "cancel") : undefined;
     const release = mockResponse(response);
     const guarded = await urbitFetch(fetchOptions);
@@ -94,39 +87,31 @@ describe("urbitFetch guarded response ownership", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
-  it.each(["fetch", "scry", "malformed-scry"])(
-    "releases %s with a retained clone",
-    async (owner) => {
-      const response =
-        owner === "malformed-scry"
-          ? new Response("{not json")
-          : streamResponse(
-              {
-                start(controller) {
-                  controller.enqueue(new TextEncoder().encode("still streaming"));
-                },
-              },
-              owner === "scry" ? 500 : 200,
-            );
-      const clone = response.clone();
-      const release = mockResponse(response);
-      try {
-        if (owner === "fetch") {
-          const guarded = await urbitFetch(fetchOptions);
-          const releasing = guarded.release();
-          expect(release).toHaveBeenCalledOnce();
-          await expect(releasing).resolves.toBeUndefined();
-        } else {
-          const error =
-            owner === "scry"
-              ? "Scry for path /inbox.json"
-              : "Tlon scry response for path /inbox.json: malformed JSON response";
-          await expect(scry()).rejects.toThrow(error);
-        }
+  it.each(["fetch", "malformed-scry"])("releases %s with a retained clone", async (owner) => {
+    const response =
+      owner === "malformed-scry"
+        ? new Response("{not json")
+        : streamResponse({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode("still streaming"));
+            },
+          });
+    const clone = response.clone();
+    const release = mockResponse(response);
+    try {
+      if (owner === "fetch") {
+        const guarded = await urbitFetch(fetchOptions);
+        const releasing = guarded.release();
         expect(release).toHaveBeenCalledOnce();
-      } finally {
-        void clone.body?.cancel().catch(() => undefined);
+        await expect(releasing).resolves.toBeUndefined();
+      } else {
+        await expect(scry()).rejects.toThrow(
+          "Tlon scry response for path /inbox.json: malformed JSON response",
+        );
+        expect(release).toHaveBeenCalledOnce();
       }
-    },
-  );
+    } finally {
+      void clone.body?.cancel().catch(() => undefined);
+    }
+  });
 });

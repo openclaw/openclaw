@@ -1,6 +1,7 @@
 import { once } from "node:events";
 import { createServer, type RequestListener, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import { Readable } from "node:stream";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, expect, it } from "vitest";
 import { tlonRuntimeOutbound } from "../channel.runtime.js";
@@ -47,23 +48,16 @@ const poke = async (handler: RequestListener) =>
   });
 function streamBody(res: ServerResponse, size: number, suffix = "") {
   const chunk = Buffer.alloc(64 * 1024, "X");
-  let written = 0;
-  const write = () => {
-    if (res.destroyed) {
-      return;
-    }
-    if (written >= size) {
-      res.end(suffix);
-      return;
-    }
-    written += chunk.length;
-    if (res.write(chunk)) {
-      setImmediate(write);
-    } else {
-      res.once("drain", write);
-    }
-  };
-  write();
+  const body = Readable.from(
+    (function* () {
+      for (let written = 0; written < size; written += chunk.length) {
+        yield chunk;
+      }
+      yield suffix;
+    })(),
+  );
+  res.once("close", () => body.destroy());
+  body.pipe(res);
 }
 
 it.each(["success", "creation", "activation"])("releases channel %s bodies", async (step) => {
