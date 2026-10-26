@@ -305,82 +305,62 @@ describe("stageSandboxMedia SCP", () => {
     },
   );
 
-  it("skips a denied installed owner before its media contract executes", async () => {
-    await withOpenClawTestState({ label: "scp-installed-owner-denied" }, async (state) => {
-      const canary = path.join(
-        state.path("installed-plugins", INSTALLED_OWNER_PLUGIN_ID),
-        "artifact-executed-canary",
-      );
-      const params = await installedOwnerStageParams({
-        state,
-        plugins: { deny: [INSTALLED_OWNER_PLUGIN_ID] },
-        artifactBody: [
-          `require("node:fs").writeFileSync(${JSON.stringify(canary)}, "executed");`,
-          'module.exports.resolveRemoteInboundAttachmentRoots = () => ["/installed/attachments"];',
-          "",
-        ].join("\n"),
+  it.each([false, true])(
+    "blocks an installed owner before loading its artifact (warm: %s)",
+    async (warm) => {
+      await withOpenClawTestState({ label: "scp-installed-owner-policy" }, async (state) => {
+        await withEmptyBundledPlugins(state, async () => {
+          const runScp = warm
+            ? mockSuccessfulScp("first transfer")
+            : vi.spyOn(processExec, "runCommandWithTimeout").mockResolvedValue({
+                ...SUCCESS,
+                code: 1,
+                stderr: "unexpected transfer",
+              });
+          try {
+            if (warm) {
+              const enabled = await installedOwnerStageParams({ state });
+              publishInstalledOwnerSnapshot(enabled.cfg, enabled.pluginDir);
+              expect((await stageSandboxMedia(enabled)).staged.size).toBe(1);
+              expect(runScp).toHaveBeenCalledOnce();
+              expectScpCommand(runScp, `user@gateway-host:${INSTALLED_REMOTE_PATH}`);
+              const fact = enabled.ctx.media?.[0];
+              expect(fact).toMatchObject({ staged: true, contentType: "text/plain" });
+              expect(await fs.readFile(path.join(fact!.workspaceDir!, fact!.path!), "utf8")).toBe(
+                "first transfer",
+              );
+              releaseInstalledOwnerSnapshot();
+            }
+            const canary = state.path(
+              "installed-plugins",
+              INSTALLED_OWNER_PLUGIN_ID,
+              "artifact-executed-canary",
+            );
+            const denied = await installedOwnerStageParams({
+              state,
+              plugins: { deny: [INSTALLED_OWNER_PLUGIN_ID] },
+              artifactBody: [
+                `require("node:fs").writeFileSync(${JSON.stringify(canary)}, "executed");`,
+                'module.exports.resolveRemoteInboundAttachmentRoots = () => ["/installed/attachments"];',
+                "",
+              ].join("\n"),
+            });
+            publishInstalledOwnerSnapshot(denied.cfg, denied.pluginDir);
+            const log = vi.spyOn(globals, "logVerbose").mockImplementation(() => {});
+            expect((await stageSandboxMedia(denied)).staged.size).toBe(0);
+            expect(runScp).toHaveBeenCalledTimes(warm ? 1 : 0);
+            expect(existsSync(canary)).toBe(false);
+            expect(log).toHaveBeenCalledWith(
+              `Blocking remote media staging from disallowed attachment path: ${INSTALLED_REMOTE_PATH}`,
+            );
+            expect(denied.ctx.media?.[0]).not.toMatchObject({ staged: true });
+          } finally {
+            releaseInstalledOwnerSnapshot();
+          }
+        });
       });
-      await withEmptyBundledPlugins(state, async () => {
-        publishInstalledOwnerSnapshot(params.cfg, params.pluginDir);
-        try {
-          const log = vi.spyOn(globals, "logVerbose").mockImplementation(() => {});
-          const runScp = vi
-            .spyOn(processExec, "runCommandWithTimeout")
-            .mockResolvedValue({ ...SUCCESS, code: 1, stderr: "unexpected transfer" });
-
-          const result = await stageSandboxMedia(params);
-
-          expect(result.staged.size).toBe(0);
-          expect(runScp).not.toHaveBeenCalled();
-          expect(existsSync(canary)).toBe(false);
-          expect(log).toHaveBeenCalledWith(
-            `Blocking remote media staging from disallowed attachment path: ${INSTALLED_REMOTE_PATH}`,
-          );
-          expect(params.ctx.media?.[0]).not.toMatchObject({ staged: true });
-        } finally {
-          releaseInstalledOwnerSnapshot();
-        }
-      });
-    });
-  });
-
-  it("stops staging after an earlier transfer once the installed owner is denied", async () => {
-    await withOpenClawTestState({ label: "scp-installed-owner-reload" }, async (state) => {
-      const enabled = await installedOwnerStageParams({ state });
-      await withEmptyBundledPlugins(state, async () => {
-        publishInstalledOwnerSnapshot(enabled.cfg, enabled.pluginDir);
-        try {
-          const runScp = mockSuccessfulScp("first transfer");
-
-          expect((await stageSandboxMedia(enabled)).staged.size).toBe(1);
-          expect(runScp).toHaveBeenCalledOnce();
-          expectScpCommand(runScp, `user@gateway-host:${INSTALLED_REMOTE_PATH}`);
-          const fact = enabled.ctx.media?.[0];
-          expect(fact).toMatchObject({ staged: true, contentType: "text/plain" });
-          expect(await fs.readFile(path.join(fact!.workspaceDir!, fact!.path!), "utf8")).toBe(
-            "first transfer",
-          );
-
-          releaseInstalledOwnerSnapshot();
-          const denied = await installedOwnerStageParams({
-            state,
-            plugins: { deny: [INSTALLED_OWNER_PLUGIN_ID] },
-          });
-          publishInstalledOwnerSnapshot(denied.cfg, denied.pluginDir);
-          const log = vi.spyOn(globals, "logVerbose").mockImplementation(() => {});
-
-          expect((await stageSandboxMedia(denied)).staged.size).toBe(0);
-          expect(runScp).toHaveBeenCalledTimes(1);
-          expect(log).toHaveBeenCalledWith(
-            `Blocking remote media staging from disallowed attachment path: ${INSTALLED_REMOTE_PATH}`,
-          );
-          expect(denied.ctx.media?.[0]).not.toMatchObject({ staged: true });
-        } finally {
-          releaseInstalledOwnerSnapshot();
-        }
-      });
-    });
-  });
+    },
+  );
 
   it("logs a bounded UTF-16-safe diagnostic without publishing failed media", async () => {
     await withOpenClawTestState({ label: "scp-stderr" }, async (state) => {

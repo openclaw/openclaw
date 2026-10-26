@@ -273,7 +273,7 @@ describe("dispatchReplyFromConfig owner settlement", () => {
     ["final", "delivered", "reply:final_delivered"],
     ["final", "failed", "reply:final_delivered"],
   ])("renews %s finalization only for its %s receipt", async (kind, outcome, event) => {
-    const observed = vi.fn();
+    let observed: ReturnType<typeof vi.spyOn>;
     const dispatcher = createReplyDispatcher({
       beforeDeliver: async (payload) => (outcome === "cancelled" ? null : payload),
       deliver: async () => {
@@ -294,11 +294,7 @@ describe("dispatchReplyFromConfig owner settlement", () => {
           if (!watchdog) {
             throw new Error("missing receipt owner");
           }
-          const progress = watchdog.progress.bind(watchdog);
-          vi.spyOn(watchdog, "progress").mockImplementation((...args) => {
-            observed(...args);
-            return progress(...args);
-          });
+          observed = vi.spyOn(watchdog, "progress");
           if (kind === "block") {
             await requireBlockReplyHandler(options?.onBlockReply)({ text: "receipt answer" });
             return undefined;
@@ -308,7 +304,7 @@ describe("dispatchReplyFromConfig owner settlement", () => {
       });
       await dispatcher.waitForIdle();
       expect(
-        observed.mock.calls.some(([phase, name]) => phase === "finalization" && name === event),
+        observed!.mock.calls.some(([phase, name]) => phase === "finalization" && name === event),
       ).toBe(outcome === "delivered");
     } finally {
       dispatcher.markComplete();
