@@ -1,6 +1,12 @@
-import { workerData, type Worker } from "node:worker_threads";
+import { workerData, type MessagePort, type Worker } from "node:worker_threads";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import type { PostgresPoolEndpoints } from "./pool.js";
+
+export type PostgresPoolEndpoint = { port: MessagePort; signal: SharedArrayBuffer };
+export type PostgresPoolEndpoints = {
+  services: PostgresPoolEndpoint[];
+  allocation: SharedArrayBuffer;
+  nextStep?: string;
+};
 
 type PoolState = {
   endpoints?: PostgresPoolEndpoints;

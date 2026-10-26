@@ -16,14 +16,12 @@ import { resolveRuntimeProcessEntrypointUrl } from "../runtime-process-url.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "../runtime-worker-url.js";
 import { recordPostgresPoolSelfRoot, trackNativeWorkerForCpu } from "../worker-cpu.js";
 import { workerScriptName } from "../worker-diagnostic-script.js";
-import { postgresPoolState as state } from "./pool-state.js";
+import {
+  postgresPoolState as state,
+  type PostgresPoolEndpoint,
+  type PostgresPoolEndpoints,
+} from "./pool-state.js";
 
-export type PostgresPoolEndpoint = { port: MessagePort; signal: SharedArrayBuffer };
-export type PostgresPoolEndpoints = {
-  services: PostgresPoolEndpoint[];
-  allocation: SharedArrayBuffer;
-  nextStep?: string;
-};
 export type PostgresPoolSetup =
   | { host: MessagePort }
   | { connection: import("./protocol.js").BridgeWorkerData };
