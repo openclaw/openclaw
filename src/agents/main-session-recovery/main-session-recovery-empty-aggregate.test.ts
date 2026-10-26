@@ -9,7 +9,6 @@ import {
   recoveryEntry as entry,
   recoveryState,
   recoveryRun,
-  executionIdentity,
 } from "./main-session-recovery-state.test-support.js";
 
 const sessionKey = "agent:main:main";

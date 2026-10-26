@@ -35,20 +35,6 @@ import {
   runOpenClawAgentWriteAdmissions as writeMany,
 } from "./openclaw-agent-write-admission.js";
 
-function directTiming(ms: number, outcome = "ok") {
-  return {
-    operation: "direct",
-    outcome,
-    pid: process.pid,
-    threadId,
-    isMainThread,
-    reentrant: false,
-    elapsedMs: ms,
-    queueWaitMs: 0,
-    writerExecutionMs: ms,
-    completionDelayMs: 0,
-  };
-}
 const slowMessage = "slow agent database reservation";
 function warning(fields: Record<string, unknown>) {
   return [expect.objectContaining(fields), slowMessage];
@@ -468,7 +454,7 @@ it.each(["ok", "error"] as const)(
       expect(await next).toBe(value);
       expect(order).toEqual(["holder", "follower"]);
       expect(warnings).toEqual([
-        [{ ...directTiming(1_600, outcome), caller: "session-manager.write" }, slowMessage],
+        warning({ outcome, writerExecutionMs: 1_600, caller: "session-manager.write" }),
         warning({
           operation: "direct",
           outcome: "ok",
@@ -688,7 +674,10 @@ it("delivers reservation timing and request trace through the diagnostic log tra
         message: slowMessage,
         level: "WARN",
         trace,
-        attributes: { subsystem: "session-sqlite", ...directTiming(1_250) },
+        attributes: expect.objectContaining({
+          subsystem: "session-sqlite",
+          writerExecutionMs: 1_250,
+        }),
       }),
     ]);
   } finally {

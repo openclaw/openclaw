@@ -66,11 +66,10 @@ it("preserves profile authority through unrelated feature schema admission", asy
       repeatedDdl.push(sql);
     }
   });
-  try {
+  {
+    using _ = { [Symbol.dispose]: () => observation.restore() };
     checkSchema();
     expect(repeatedDdl).toEqual([]);
-  } finally {
-    observation.restore();
   }
 
   setUserProfileRole(profile.id, "member", options);
