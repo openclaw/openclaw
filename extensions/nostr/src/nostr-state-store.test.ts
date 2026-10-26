@@ -241,6 +241,13 @@ describe("Nostr durable ingress state", () => {
     expect(enqueue).not.toHaveBeenCalled();
   });
 
+  it("returns a duplicate event's slot to the admission window", async () => {
+    const ingress = startIngress({ admissionRateLimit: { windowMs: 60_000, maxEvents: 2 } });
+    await expect(ingress.receive(createEvent("1"))).resolves.toBe("accepted");
+    await expect(ingress.receive(createEvent("1"))).resolves.toBe("duplicate");
+    await expect(ingress.receive(createEvent("2"))).resolves.toBe("accepted");
+  });
+
   it("applies bounded backpressure without latching admission", async () => {
     const held = createEvent("c");
     await queue.enqueue(

@@ -29,6 +29,10 @@ const NOSTR_INGRESS_ENVELOPE_OVERHEAD_BYTES = 16 * 1024;
 const NOSTR_INGRESS_MAX_PENDING_EVENTS = 1_000;
 const DEFAULT_EOSE_CONFIRM_DEADLINE_MS = 10_000;
 const LIBRARY_EOSE_TIMEOUT_MARGIN_MS = 1_000;
+// nostr-tools gives up on a relay socket that closes after connecting, so the bus resubscribes it.
+const RESUBSCRIBE_BACKOFF_MS = [10_000, 20_000, 30_000, 60_000];
+// Events already durably handled in this process skip admission when a relay replays them.
+const MAX_HANDLED_EVENT_IDS = 4_096;
 
 type BackfillStatus = "pending" | "confirmed" | "incomplete";
 
@@ -292,6 +296,14 @@ export async function startNostrBus(options: NostrBusOptions) {
       await cursorWriter.persistNow(cursor);
     }
   };
+  const handledEventIds = new Set<string>();
+  const rememberHandledEvent = (id: string): void => {
+    handledEventIds.delete(id);
+    handledEventIds.add(id);
+    if (handledEventIds.size > MAX_HANDLED_EVENT_IDS) {
+      handledEventIds.delete(handledEventIds.values().next().value as string);
+    }
+  };
   const handleRelayEvent = async (event: Event): Promise<void> => {
     // Apply the relay age fence once, before admission; recovered durable claims must still deliver.
     if (typeof event.created_at === "number" && event.created_at < since) {
@@ -305,6 +317,7 @@ export async function startNostrBus(options: NostrBusOptions) {
     }
     try {
       await ingress.receive(event);
+      rememberHandledEvent(event.id);
     } catch (error) {
       onError?.(error as Error, `durable admission for event ${event.id}`);
       if (error instanceof NostrIngressAdmissionRejectedError) {
@@ -353,8 +366,9 @@ export async function startNostrBus(options: NostrBusOptions) {
 
     /** Separates real relay EOSE frames from nostr-tools timeout/close synthesis. */
     const subscriptionRelays = [...new Set(relays)];
-    const subscriptions: Array<ReturnType<SimplePool["subscribeMany"]>> = [];
+    const subscriptions = new Map<string, ReturnType<SimplePool["subscribeMany"]>>();
     const deadlineTimers = new Set<ReturnType<typeof setTimeout>>();
+    const relayFailures = new Map<string, number>();
     let locallyClosing = false;
     const backfillStatus = new Map<string, BackfillStatus>(
       subscriptionRelays.map((relay): [string, BackfillStatus] => [relay, "pending"]),
@@ -389,7 +403,9 @@ export async function startNostrBus(options: NostrBusOptions) {
         clearTimeout(timer);
       }
       deadlineTimers.clear();
-      await Promise.all(subscriptions.map(async (subscription) => subscription.close(reason)));
+      await Promise.all(
+        [...subscriptions.values()].map(async (subscription) => subscription.close(reason)),
+      );
     };
 
     const onRelayEvent = (event: Event) => {
@@ -400,9 +416,10 @@ export async function startNostrBus(options: NostrBusOptions) {
       void task;
     };
 
-    for (const relay of subscriptionRelays) {
+    const subscribeRelay = (relay: string, relaySince: number): void => {
       let relayClosed = false;
       let deadlineReached = false;
+      let live = false;
       const deadlineTimer = setTimeout(() => {
         deadlineTimers.delete(deadlineTimer);
         deadlineReached = true;
@@ -411,38 +428,75 @@ export async function startNostrBus(options: NostrBusOptions) {
       deadlineTimer.unref?.();
       deadlineTimers.add(deadlineTimer);
 
-      subscriptions.push(
-        pool.subscribeMany([relay], dmFilter, {
-          onevent: onRelayEvent,
-          oneose: () => {
-            // Pool close is reported as EOSE first. Its onclose runs in this same turn.
-            queueMicrotask(() => {
-              if (!relayClosed && !deadlineReached) {
-                clearTimeout(deadlineTimer);
-                deadlineTimers.delete(deadlineTimer);
-                settleBackfill(relay, "confirmed");
+      subscriptions.set(
+        relay,
+        pool.subscribeMany(
+          [relay],
+          { ...dmFilter, since: relaySince },
+          {
+            onevent: onRelayEvent,
+            alreadyHaveEvent: (id) => handledEventIds.has(id),
+            oneose: () => {
+              // Pool close is reported as EOSE first. Its onclose runs in this same turn.
+              queueMicrotask(() => {
+                if (!relayClosed && !deadlineReached) {
+                  live = true;
+                  relayFailures.delete(relay);
+                  clearTimeout(deadlineTimer);
+                  deadlineTimers.delete(deadlineTimer);
+                  settleBackfill(relay, "confirmed");
+                }
+              });
+            },
+            onclose: (reasons) => {
+              relayClosed = true;
+              const closedAt = Math.floor(Date.now() / 1000);
+              clearTimeout(deadlineTimer);
+              deadlineTimers.delete(deadlineTimer);
+              settleBackfill(relay, "incomplete");
+              if (!locallyClosing && !relayAbort.signal.aborted) {
+                const closeReasons = reasons.map(({ reason }) => reason);
+                options.onDisconnect?.(relay);
+                onError?.(
+                  new Error(`Subscription closed: ${closeReasons.join(", ")}`),
+                  "subscription",
+                );
+                // Without a confirmed EOSE this subscription may not have replayed its window.
+                scheduleResubscribe(relay, live ? closedAt : relaySince + STARTUP_LOOKBACK_SEC);
               }
-            });
+            },
+            // Own earlier deadline marks synthetic library EOSE as incomplete.
+            maxWait: DEFAULT_EOSE_CONFIRM_DEADLINE_MS + LIBRARY_EOSE_TIMEOUT_MARGIN_MS,
+            abort: relayAbort.signal,
           },
-          onclose: (reasons) => {
-            relayClosed = true;
-            clearTimeout(deadlineTimer);
-            deadlineTimers.delete(deadlineTimer);
-            settleBackfill(relay, "incomplete");
-            if (!locallyClosing && !relayAbort.signal.aborted) {
-              const closeReasons = reasons.map(({ reason }) => reason);
-              options.onDisconnect?.(relay);
-              onError?.(
-                new Error(`Subscription closed: ${closeReasons.join(", ")}`),
-                "subscription",
-              );
-            }
-          },
-          // Own earlier deadline marks synthetic library EOSE as incomplete.
-          maxWait: DEFAULT_EOSE_CONFIRM_DEADLINE_MS + LIBRARY_EOSE_TIMEOUT_MARGIN_MS,
-          abort: relayAbort.signal,
-        }),
+        ),
       );
+    };
+
+    const scheduleResubscribe = (relay: string, caughtUpTo: number): void => {
+      const attempt = relayFailures.get(relay) ?? 0;
+      relayFailures.set(relay, attempt + 1);
+      const timer = setTimeout(
+        () => {
+          deadlineTimers.delete(timer);
+          if (locallyClosing || relayAbort.signal.aborted) {
+            return;
+          }
+          // Replay behind the outage and behind any event that is not durable yet.
+          const replayFrom = Math.min(
+            caughtUpTo,
+            durableCursor.transientReplayCeiling() ?? caughtUpTo,
+          );
+          subscribeRelay(relay, Math.max(since, replayFrom - STARTUP_LOOKBACK_SEC));
+        },
+        RESUBSCRIBE_BACKOFF_MS[Math.min(attempt, RESUBSCRIBE_BACKOFF_MS.length - 1)],
+      );
+      timer.unref?.();
+      deadlineTimers.add(timer);
+    };
+
+    for (const relay of subscriptionRelays) {
+      subscribeRelay(relay, since);
     }
   } catch (error) {
     await Promise.allSettled([stopRelays("startup failed"), ingress.stop()]);
