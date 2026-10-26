@@ -64,8 +64,7 @@ export function canonicalizeExecApprovalPolicyRules(
   rules: readonly ExecApprovalPolicyRule[],
 ): ExecApprovalPolicyRule[] {
   const rulesByKey = new Map(rules.map((rule) => [buildExecApprovalPolicyRuleKey(rule), rule]));
-  // oxlint-disable-next-line unicorn/no-array-sort -- Only the freshly owned array is mutated.
-  return [...rulesByKey.values()].sort(compareExecApprovalPolicyRules);
+  return [...rulesByKey.values()].toSorted(compareExecApprovalPolicyRules);
 }
 
 export function normalizeExecApprovalPolicySnapshot(

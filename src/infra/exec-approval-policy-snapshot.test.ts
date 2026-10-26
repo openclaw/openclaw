@@ -73,7 +73,7 @@ describe("exec approval policy rule identity", () => {
     for (let round = 0; round < 8; round++) {
       for (let index = rules.length - 1; index > 0; index--) {
         const other = next() % (index + 1);
-        [rules[index], rules[other]] = [rules[other], rules[index]];
+        [rules[index], rules[other]] = [rules[other]!, rules[index]!];
       }
       const expected = [
         ...new Map(
