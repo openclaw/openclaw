@@ -11,7 +11,10 @@ import {
   type ResponsesContinuationRequest,
   type ResponsesContinuationState,
 } from "./openai-responses-continuation.js";
-import { inputMessage as userInput } from "./openai-responses-prompt-observer.test-support.js";
+import {
+  inputMessage as userInput,
+  outputMessage,
+} from "./openai-responses-prompt-observer.test-support.js";
 import { normalizeOpenAIResponsesFunctionCallId as normalizeCallId } from "./openai-responses-tool-call-id-shape.js";
 
 type Input = NonNullable<ResponsesContinuationRequest["input"]>;
@@ -26,11 +29,10 @@ const nestedWhitespace = '{ "b": {"n":9007199254740993,"a":true},"a":[1] }';
 const reorderedString = '{"a":[1],"b":{"a":true,"n":"9007199254740993"}}';
 const chatCallId = "chatcmpl-tool-20cf1f2fabdd434da069764b4dca72eb";
 const replayedChatCallId = "call_chatcmpl-tool-20cf1f2fabdd434da069764b4dca72eb_f_3b92d47627";
+const gatewayCallId = "functions.gateway:0";
+const gatewayItemId = "fc_tmp_kegospxl46";
 const assistantOutput = {
-  id: "msg_1",
-  type: "message",
-  role: "assistant",
-  status: "completed",
+  ...outputMessage("answer", "msg_1"),
   phase: "final_answer",
   content: [
     {
@@ -69,16 +71,7 @@ function continuationState(
 
 function nextRequest(phase = "final_answer", text = "answer"): ResponsesContinuationRequest {
   return {
-    input: [
-      firstUser,
-      {
-        type: "message",
-        role: "assistant",
-        phase,
-        content: [{ type: "output_text", text, annotations: [] }],
-      },
-      secondUser,
-    ] as never,
+    input: [firstUser, { ...outputMessage(text), phase }, secondUser] as never,
     metadata: { openclaw_turn_attempt: "2", openclaw_turn_id: "turn-2", stable: "yes" },
     store: true,
     model: "gpt-5.6-luna",
@@ -122,12 +115,7 @@ function commitBaseline(owner: ReturnType<typeof claim>, id: string, text?: stri
   const output =
     text === undefined
       ? lastResponseItems
-      : [
-          {
-            ...assistantOutput,
-            content: [{ type: "output_text" as const, text, annotations: [], logprobs: [] }],
-          },
-        ];
+      : [{ ...outputMessage(text), phase: "final_answer" as const }];
   owner?.commit(lastRequest, { id, output });
 }
 
@@ -155,9 +143,17 @@ function expectHistoryChanged(
   state: ResponsesContinuationState,
   request: ResponsesContinuationRequest,
 ) {
-  expect(resolve(state, request)).toEqual({
-    continuationStatus: "history_changed",
-    request,
+  expect(resolve(state, request)).toEqual({ continuationStatus: "history_changed", request });
+}
+
+function expectContinuation(
+  state: ResponsesContinuationState,
+  request: ResponsesContinuationRequest,
+  input: Input,
+) {
+  expect(resolve(state, request)).toMatchObject({
+    continuationStatus: "continued",
+    request: { previous_response_id: "resp_1", input },
   });
 }
 
@@ -220,53 +216,50 @@ describe("OpenAI Responses continuation", () => {
   });
 
   it.each([
-    {
-      name: "omitted fields, sparse arrays, nonfinite numbers and signed zero",
+    [
+      "omitted fields, sparse arrays, nonfinite numbers and signed zero",
       // oxlint-disable-next-line no-sparse-arrays -- A genuine array hole must compare as JSON null.
-      value: { omit: undefined, values: [, undefined, Number.NaN, Infinity, -0], text: "🦞\ud800" },
-      expected: { values: [null, null, null, null, 0], text: "🦞\ud800" },
-    },
-    {
-      name: "built-in serializers",
-      value: {
+      { omit: undefined, values: [, undefined, Number.NaN, Infinity, -0], text: "🦞\ud800" },
+      { values: [null, null, null, null, 0], text: "🦞\ud800" },
+    ],
+    [
+      "built-in serializers",
+      {
         at: new Date("2026-01-01Z"),
         url: new URL("https://example.test/"),
         data: Buffer.from([1, 2]),
       },
-      expected: {
+      {
         at: "2026-01-01T00:00:00.000Z",
         url: "https://example.test/",
         data: { type: "Buffer", data: [1, 2] },
       },
-    },
-    {
-      name: "key-sensitive serializers on objects and functions",
-      value: {
+    ],
+    [
+      "key-sensitive serializers on objects and functions",
+      {
         nested: { toJSON: (key: string) => ({ key }) },
         array: [Object.assign(() => {}, { toJSON: (key: string) => key })],
       },
-      expected: { nested: { key: "nested" }, array: ["0"] },
-    },
-    {
-      name: "own __proto__ fields and null-prototype objects",
-      value: Object.assign(
-        Object.create(null),
-        JSON.parse('{"__proto__":{"own":true},"omit":null}'),
-      ),
-      expected: JSON.parse('{"omit":null,"__proto__":{"own":true}}'),
-    },
-    {
-      name: "proxy serializers",
-      value: new Proxy(
+      { nested: { key: "nested" }, array: ["0"] },
+    ],
+    [
+      "own __proto__ fields and null-prototype objects",
+      Object.assign(Object.create(null), JSON.parse('{"__proto__":{"own":true},"omit":null}')),
+      JSON.parse('{"omit":null,"__proto__":{"own":true}}'),
+    ],
+    [
+      "proxy serializers",
+      new Proxy(
         { text: "plain" },
         {
           get: (target, key) =>
             key === "toJSON" ? () => ({ text: "wire" }) : Reflect.get(target, key),
         },
       ),
-      expected: { text: "wire" },
-    },
-  ])("compares continuation envelopes using JSON semantics: $name", ({ value, expected }) => {
+      { text: "wire" },
+    ],
+  ])("compares continuation envelopes using JSON semantics: %s", (_name, value, expected) => {
     const state = continuationState();
     state.lastRequest.provider_options = expected;
     const request = { ...nextRequest(), provider_options: value };
@@ -288,11 +281,7 @@ describe("OpenAI Responses continuation", () => {
   });
 
   it("matches JSON wire semantics and provider-only assistant replay metadata", () => {
-    const continued = resolve(continuationState(), nextRequest());
-    expect(continued).toMatchObject({
-      continuationStatus: "continued",
-      request: { previous_response_id: "resp_1", input: [secondUser] },
-    });
+    expectContinuation(continuationState(), nextRequest(), [secondUser]);
     expect(resolve(continuationState(), nextRequest("commentary")).continuationStatus).toBe(
       "history_changed",
     );
@@ -321,10 +310,7 @@ describe("OpenAI Responses continuation", () => {
       ...state.lastRequest,
       input: [...(state.lastRequest.input ?? []), assistantOutput, ...nextTurn],
     };
-    expect(resolve(state, request)).toMatchObject({
-      continuationStatus: "continued",
-      request: { previous_response_id: "resp_1", input: nextTurn },
-    });
+    expectContinuation(state, request, nextTurn);
     const withoutPreviousCarrier = {
       ...request,
       input: request.input?.filter((item) => item !== firstCarrier),
@@ -408,15 +394,9 @@ describe("OpenAI Responses continuation", () => {
 
   it.each([
     ["paired reshape", chatCallId, "fc_1", replayedChatCallId, true],
-    ["unchanged pair", "functions.gateway:0", "fc_tmp_kegospxl46", "functions.gateway:0", true],
-    ["omitted item ID", "functions.gateway:0", "fc_tmp_kegospxl46", "functions.gateway:0", false],
-    [
-      "bare reshape",
-      "functions.gateway:0",
-      "fc_tmp_kegospxl46",
-      normalizeCallId("functions.gateway:0"),
-      false,
-    ],
+    ["unchanged pair", gatewayCallId, gatewayItemId, gatewayCallId, true],
+    ["omitted item ID", gatewayCallId, gatewayItemId, gatewayCallId, false],
+    ["bare reshape", gatewayCallId, gatewayItemId, normalizeCallId(gatewayCallId), false],
   ] as const)(
     "restores the provider call ID after %s replay",
     (_name, rawId, itemId, replayId, keepItemId) => {
@@ -436,10 +416,7 @@ describe("OpenAI Responses continuation", () => {
           toolOutput(replayId, "hi\n"),
         ] as never,
       };
-      expect(resolve(state, request)).toMatchObject({
-        continuationStatus: "continued",
-        request: { previous_response_id: "resp_1", input: [toolOutput(rawId, "hi\n")] },
-      });
+      expectContinuation(state, request, [toolOutput(rawId, "hi\n")]);
     },
   );
 

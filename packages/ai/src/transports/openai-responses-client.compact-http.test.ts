@@ -23,6 +23,10 @@ const compacted = {
   output: [{ type: "compaction", id: "cmp_http", encrypted_content: "synthetic-opaque" }],
   usage: { input_tokens: 10, output_tokens: 2 },
 };
+const boundedResponse = (body: ReadableStream<Uint8Array>) =>
+  createBoundedOpenAIResponsesCompactionFetch(async () => new Response(body))(
+    "https://synthetic.invalid/compact",
+  );
 
 describe("prepared Responses compaction HTTP lifetime", () => {
   it("settles pending reads and releases the body when the consumer cancels", async () => {
@@ -35,9 +39,7 @@ describe("prepared Responses compaction HTTP lifetime", () => {
       },
       cancel,
     });
-    const response = await createBoundedOpenAIResponsesCompactionFetch(
-      async () => new Response(body),
-    )("https://synthetic.invalid/compact");
+    const response = await boundedResponse(body);
     assert(response.body, "Bounded response is missing its body");
     const reader = response.body.getReader();
     const pending = reader.read();
@@ -60,9 +62,7 @@ describe("prepared Responses compaction HTTP lifetime", () => {
       },
       cancel,
     });
-    const response = await createBoundedOpenAIResponsesCompactionFetch(
-      async () => new Response(body),
-    )("https://synthetic.invalid/compact");
+    const response = await boundedResponse(body);
     await expect(response.json()).rejects.toThrow("response exceeds 16 MiB");
     expect(cancel).toHaveBeenCalledOnce();
     expect(body.locked).toBe(false);
@@ -78,7 +78,7 @@ describe("prepared Responses compaction HTTP lifetime", () => {
       let watchdogFired = false;
       const { promise: headersReceived, resolve: firstHeaders } = createDeferred();
       configureAiTransportHost({
-        resolveModelRequestTimeoutMs: () => (mode === "host-timeout" ? timeoutMs : undefined),
+        resolveModelRequestTimeoutMs: () => (deadlineCase ? timeoutMs : undefined),
         buildModelFetch: () => async (input, init) => {
           const response = await fetch(input, init);
           firstHeaders();
@@ -120,13 +120,8 @@ describe("prepared Responses compaction HTTP lifetime", () => {
         const address = server.address();
         assert(address && typeof address !== "string", "Missing loopback address");
         const model = createModel({
-          id: "synthetic-model",
-          name: "Synthetic model",
           provider: "synthetic-provider",
           baseUrl: `http://127.0.0.1:${address.port}/v1`,
-          reasoning: false,
-          contextWindow: 100_000,
-          maxTokens: 1_000,
         });
         const outcome = requestPreparedOpenAIResponsesCompaction(
           createOpenAIResponsesTransportStreamFn(),
@@ -134,7 +129,7 @@ describe("prepared Responses compaction HTTP lifetime", () => {
           context,
           {
             apiKey: "synthetic-loopback-only",
-            ...(mode !== "host-timeout" ? { timeoutMs } : {}),
+            ...(!deadlineCase ? { timeoutMs } : {}),
             signal: abortController.signal,
           },
         ).then(

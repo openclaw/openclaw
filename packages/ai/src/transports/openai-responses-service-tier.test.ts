@@ -1,8 +1,11 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import OpenAI from "openai";
 import type { ResponseError, ResponseErrorEvent } from "openai/resources/responses/responses.js";
-import { assert, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { makeProviderModel } from "../providers/provider-model.test-support.js";
+import {
+  requestBody,
+  sseResponse as sse,
+} from "./openai-responses-prompt-observer.test-support.js";
 import { createResponsesStreamWithRecovery } from "./openai-responses-replay-internal.js";
 import { nextResponsesServiceTier as nextTier } from "./openai-responses-service-tier.js";
 import { completedResponse } from "./openai-stream-cases.test-support.js";
@@ -16,12 +19,6 @@ const rejection = {
   param: "service_tier",
   message: "Invalid service_tier argument",
 };
-function sse(events: unknown[]) {
-  return new Response(
-    events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("") + "data: [DONE]\n\n",
-    { headers: { "content-type": "text/event-stream" } },
-  );
-}
 const complete = completedResponse("resp_ok", []);
 const created = { type: "response.created", response: { id: "resp_rejected", output: [] } };
 async function fixture(
@@ -36,9 +33,7 @@ async function fixture(
     organization: null,
     project: null,
     fetch: async (_url, init) => {
-      const body: unknown = await new Response(init?.body).json();
-      assert(isRecord(body), "Expected an encoded request object");
-      bodies.push(body);
+      bodies.push(await requestBody(init));
       return respond(bodies.length);
     },
   });
