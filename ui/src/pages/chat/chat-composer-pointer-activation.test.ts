@@ -107,8 +107,6 @@ it("does not leave composition state stuck after pointer Send", () => {
   expect(onSend).toHaveBeenCalledOnce();
   input.value = "next";
   input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
-  input.dispatchEvent(
-    new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter" }),
-  );
+  input.dispatchEvent(keyEvent());
   expect(onSend).toHaveBeenCalledTimes(2);
 });

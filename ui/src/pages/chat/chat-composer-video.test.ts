@@ -13,9 +13,10 @@ import {
 
 const shapes = (root: ParentNode) =>
   Array.from(root.querySelector("svg")?.children ?? [], (shape) => shape.outerHTML);
-function iconShapes(name: IconName) {
-  return shapes(mountSolid(() => createComponent(Icon, { name })).container);
-}
+const iconShapes = (name: IconName) =>
+  shapes(mountSolid(() => createComponent(Icon, { name })).container);
+const previewClass = "agent-chat__video-preview-mirrored";
+const switchLabel = () => t("chat.composer.switchCamera");
 function talk(overrides: Parameters<typeof renderComposer>[0] = {}) {
   return renderComposer({
     onToggleRealtimeTalk: vi.fn(),
@@ -59,30 +60,24 @@ it("switches multiple cameras and mirrors a user-facing preview", () => {
     onSwitchRealtimeCamera,
     realtimeTalkCameraDevices: [front, { deviceId: "back", label: "Back Camera" }],
   });
-  button(container, t("chat.composer.switchCamera")).click();
+  const switchButton = button(container, switchLabel());
+  switchButton.click();
   expect(onSwitchRealtimeCamera).toHaveBeenCalledOnce();
-  const switchButton = button(container, t("chat.composer.switchCamera"));
   const replacementSwitch = vi.fn();
   props.onSwitchRealtimeCamera = replacementSwitch;
   renderComposerInto(container, props);
-  expect(button(container, t("chat.composer.switchCamera"))).toBe(switchButton);
+  expect(button(container, switchLabel())).toBe(switchButton);
   switchButton.click();
   expect(replacementSwitch).toHaveBeenCalledOnce();
   expect(onSwitchRealtimeCamera).toHaveBeenCalledOnce();
-  expect(container.querySelector("video")?.classList).toContain(
-    "agent-chat__video-preview-mirrored",
-  );
+  expect(container.querySelector("video")?.classList).toContain(previewClass);
   const single = renderComposer({ ...props, realtimeTalkCameraDevices: [front] });
-  expect(
-    single.container.querySelector(`button[aria-label="${t("chat.composer.switchCamera")}"]`),
-  ).toBeNull();
+  expect(single.container.querySelector(`button[aria-label="${switchLabel()}"]`)).toBeNull();
 });
 
 it("does not mirror an environment-facing preview", () => {
   const { container } = renderComposer({ realtimeTalkVideoStream: cameraStream("environment") });
-  expect(container.querySelector("video")?.classList).not.toContain(
-    "agent-chat__video-preview-mirrored",
-  );
+  expect(container.querySelector("video")?.classList).not.toContain(previewClass);
 });
 
 it("reattaches only a changed camera stream, not on unrelated rerenders", () => {
@@ -92,9 +87,8 @@ it("reattaches only a changed camera stream, not on unrelated rerenders", () => 
     realtimeTalkStatus: "listening",
     realtimeTalkVideoStream: stream,
   });
-  const preview = container.querySelector<HTMLVideoElement>(
-    `video[aria-label="${t("chat.composer.cameraPreview")}"]`,
-  )!;
+  const preview = container.querySelector<HTMLVideoElement>("video")!;
+  expect(preview.getAttribute("aria-label")).toBe(t("chat.composer.cameraPreview"));
   let attachedStream = preview.srcObject;
   const setSrcObject = vi.fn((next: HTMLVideoElement["srcObject"]) => {
     attachedStream = next;
