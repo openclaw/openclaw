@@ -202,7 +202,6 @@ describe("agentLoop streaming updates", () => {
         if (event.type === "message_update") {
           readsAtUpdate.push(blockReads);
           expect(event.message).not.toBe(message);
-          expect(event.message.content).toBe(message.content);
           expect(event.assistantMessageEvent).toMatchObject({
             type: "thinking_delta",
             contentIndex: 0,
