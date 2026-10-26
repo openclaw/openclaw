@@ -15,7 +15,6 @@ import {
   TALK_TEST_PROVIDER_ID,
 } from "../test-utils/talk-test-provider.js";
 import { isSecretsApplyPlan, type SecretsPlanTarget } from "./plan.js";
-import { isValidExecSecretRefId, isValidFileSecretRefId } from "./ref-contract.js";
 import { listSecretTargetRegistryEntries } from "./target-registry.js";
 
 describe("exec SecretRef id parity", () => {
@@ -38,7 +37,6 @@ describe("exec SecretRef id parity", () => {
   const pluginSdkSecretInput = buildSecretInputSchema();
   const validEnvIds = ["OPENAI_API_KEY", "A", "A_1", `A${"B".repeat(127)}`];
   const invalidEnvIds = ["", "openai_api_key", "OPENAI-API-KEY", "1OPENAI", "A B"];
-  const isValidEnvId = (id: string) => validEnvIds.includes(id);
 
   function configAcceptsRef(ref: unknown): boolean {
     return validateConfigObjectRaw({
@@ -81,14 +79,17 @@ describe("exec SecretRef id parity", () => {
     expect(pluginSdkSecretInput.safeParse(ref).success).toBe(expected);
   }
 
-  for (const [source, provider, ids, valid] of [
-    ["env", "default", [...validEnvIds, ...invalidEnvIds], isValidEnvId],
-    ["file", "default", [...validFileIds, ...invalidFileIds], isValidFileSecretRefId],
-    ["exec", "vault", [...validExecIds, ...invalidExecIds], isValidExecSecretRefId],
+  for (const [source, provider, validIds, invalidIds] of [
+    ["env", "default", validEnvIds, invalidEnvIds],
+    ["file", "default", validFileIds, invalidFileIds],
+    ["exec", "vault", validExecIds, invalidExecIds],
   ] as const) {
-    for (const id of ids) {
-      it(`keeps ${source} ref parity for id "${id}"`, () => {
-        expectParity({ source, provider, id }, valid(id), source !== "env");
+    for (const [ids, expected] of [
+      [validIds, true],
+      [invalidIds, false],
+    ] as const) {
+      it.each(ids)(`keeps ${source} ref parity for id "%s"`, (id) => {
+        expectParity({ source, provider, id }, expected, source !== "env");
       });
     }
   }

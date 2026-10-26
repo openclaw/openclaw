@@ -18,19 +18,19 @@ vi.mock("@clack/prompts", () => ({
 }));
 
 vi.mock("./config-io.js", () => ({
-  createSecretsConfigIO: (...args: unknown[]) => createSecretsConfigIOMock(...args),
+  createSecretsConfigIO: createSecretsConfigIOMock,
 }));
 
 vi.mock("../agents/auth-profiles/persisted.js", () => ({
-  loadPersistedAuthProfileStore: (...args: unknown[]) => loadPersistedAuthProfileStoreMock(...args),
+  loadPersistedAuthProfileStore: loadPersistedAuthProfileStoreMock,
 }));
 
 vi.mock("../plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistryCore: (...args: unknown[]) => loadPluginManifestRegistryMock(...args),
+  loadPluginManifestRegistryCore: loadPluginManifestRegistryMock,
 }));
 
 vi.mock("./apply.js", () => ({
-  runSecretsApply: (...args: unknown[]) => runSecretsApplyMock(...args),
+  runSecretsApply: runSecretsApplyMock,
 }));
 
 const { runSecretsConfigureInteractive } = await import("./configure.js");
@@ -43,14 +43,9 @@ describe("runSecretsConfigureInteractive", () => {
     });
 
     selectMock.mockReset();
-    createSecretsConfigIOMock.mockReset();
-    createSecretsConfigIOMock.mockReturnValue({
+    createSecretsConfigIOMock.mockReset().mockReturnValue({
       readConfigFileSnapshotForWrite: async () => ({
-        snapshot: {
-          valid: true,
-          config: {},
-          resolved: {},
-        },
+        snapshot: { valid: true, config: {}, resolved: {} },
       }),
     });
     loadPersistedAuthProfileStoreMock.mockReset();

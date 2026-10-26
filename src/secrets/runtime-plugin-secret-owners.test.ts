@@ -16,12 +16,16 @@ const TAVILY_TOOL_KEY_REF = {
 const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function tavilyToolSecretConfig(commandPath: string) {
-  const config = { webSearch: { apiKey: TAVILY_TOOL_KEY_REF } };
-  return asConfig({
+function tavilyFixture() {
+  const commandPath = path.join(tempDirs.make("openclaw-tavily-secret-"), "provider.sh");
+  const config = asConfig({
     agents: { entries: { main: {} } },
     tools: { web: { search: { enabled: false } } },
-    plugins: { entries: { tavily: { enabled: true, config } } },
+    plugins: {
+      entries: {
+        tavily: { enabled: true, config: { webSearch: { apiKey: TAVILY_TOOL_KEY_REF } } },
+      },
+    },
     secrets: {
       providers: {
         "tavily-vault": {
@@ -34,46 +38,18 @@ function tavilyToolSecretConfig(commandPath: string) {
       },
     },
   });
-}
-
-async function writeTavilyExecProvider(commandPath: string, available: boolean): Promise<void> {
-  const script = available
-    ? [
-        "#!/bin/sh",
-        "cat >/dev/null",
-        `printf '%s' '${JSON.stringify({
-          protocolVersion: 1,
-          values: { [TAVILY_TOOL_KEY_REF.id]: "resolved-tavily-key" },
-        })}'`,
-      ].join("\n")
-    : "#!/bin/sh\nexit 1\n";
-  await fs.writeFile(commandPath, script, { encoding: "utf8", mode: 0o700 });
-}
-
-function activateColdTavilyAndExpectUnavailable(
-  snapshot: Awaited<ReturnType<typeof prepareSecretsRuntimeSnapshot>>,
-): void {
-  expect(snapshot.config.plugins?.entries?.tavily?.config).toMatchObject({
-    webSearch: { apiKey: TAVILY_TOOL_KEY_REF },
-  });
-  expect(snapshot.degradedOwners).toMatchObject([
-    { ownerKind: "capability", ownerId: TAVILY_TOOL_KEY_PATH, degradationState: "cold" },
-  ]);
-  activateSecretsRuntimeSnapshotState({ snapshot, refreshContext: null, refreshHandler: null });
-  expect(() => assertPluginCapabilitySecretAvailable(TAVILY_TOOL_KEY_PATH)).toThrow(
-    expect.objectContaining({
-      name: "SecretSurfaceUnavailableError",
-      ownerKind: "capability",
-      ownerId: TAVILY_TOOL_KEY_PATH,
-    }),
-  );
-}
-
-function tavilyFixture(kind: string) {
-  const commandPath = path.join(tempDirs.make(`openclaw-tavily-secret-${kind}-`), "provider.sh");
-  const config = tavilyToolSecretConfig(commandPath);
   return {
-    writeProvider: (available: boolean) => writeTavilyExecProvider(commandPath, available),
+    writeProvider: (available: boolean) =>
+      fs.writeFile(
+        commandPath,
+        available
+          ? `#!/bin/sh\ncat >/dev/null\nprintf '%s' '${JSON.stringify({
+              protocolVersion: 1,
+              values: { [TAVILY_TOOL_KEY_REF.id]: "resolved-tavily-key" },
+            })}'`
+          : "#!/bin/sh\nexit 1\n",
+        { encoding: "utf8", mode: 0o700 },
+      ),
     prepare: (allowUnavailableSecretOwners = false) =>
       prepareSecretsRuntimeSnapshot({
         config,
@@ -91,7 +67,7 @@ it.each([false, true])(
     if (process.platform === "win32") {
       return;
     }
-    const fixture = tavilyFixture(reload ? "reload" : "cold");
+    const fixture = tavilyFixture();
     if (reload) {
       await fixture.writeProvider(true);
       const active = await fixture.prepare();
@@ -105,6 +81,20 @@ it.each([false, true])(
       });
     }
     await fixture.writeProvider(false);
-    activateColdTavilyAndExpectUnavailable(await fixture.prepare(true));
+    const snapshot = await fixture.prepare(true);
+    expect(snapshot.config.plugins?.entries?.tavily?.config).toMatchObject({
+      webSearch: { apiKey: TAVILY_TOOL_KEY_REF },
+    });
+    expect(snapshot.degradedOwners).toMatchObject([
+      { ownerKind: "capability", ownerId: TAVILY_TOOL_KEY_PATH, degradationState: "cold" },
+    ]);
+    activateSecretsRuntimeSnapshotState({ snapshot, refreshContext: null, refreshHandler: null });
+    expect(() => assertPluginCapabilitySecretAvailable(TAVILY_TOOL_KEY_PATH)).toThrow(
+      expect.objectContaining({
+        name: "SecretSurfaceUnavailableError",
+        ownerKind: "capability",
+        ownerId: TAVILY_TOOL_KEY_PATH,
+      }),
+    );
   },
 );

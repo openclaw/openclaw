@@ -32,7 +32,7 @@ function readSource(config: OpenClawConfig, env = {}) {
 }
 
 describe("analyzeCommandSecretAssignmentsFromSnapshot", () => {
-  it("reports configured refs that are unresolved in the snapshot", () => {
+  it("reports unresolved snapshot refs", () => {
     const sourceConfig = buildTalkTestProviderConfig({
       source: "env",
       provider: "default",
@@ -43,7 +43,7 @@ describe("analyzeCommandSecretAssignmentsFromSnapshot", () => {
     expect(analyzeTalk(sourceConfig, resolvedConfig).unresolved).toEqual([talkPath]);
   });
 
-  it("reports unresolved refs under a bracket-quoted provider key", () => {
+  it("quotes dotted provider keys in unresolved paths", () => {
     const config = {
       talk: { providers: { "acme.speech": { apiKey: "${TALK_API_KEY}" } } },
     } as OpenClawConfig;
@@ -70,12 +70,11 @@ describe("analyzeCommandSecretAssignmentsFromSnapshot", () => {
       const resolvedConfig = cloneConfigWithResolutionFacts(sourceConfig);
       const result = analyzeTalk(sourceConfig, resolvedConfig);
 
-      expect(result.assignments).toEqual([]);
-      expect(result.unresolved).toEqual(unresolved ? [talkPath] : []);
+      expect([result.assignments, result.unresolved]).toEqual([[], unresolved ? [talkPath] : []]);
     },
   );
 
-  it("accepts a materialized shorthand whose literal still resembles a reference", () => {
+  it("accepts materialized reference-looking literals", () => {
     const sourceConfig = readSource(buildTalkTestProviderConfig("$SOURCE"));
     const resolvedConfig = buildTalkTestProviderConfig("${OTHER}");
     copyConfigResolutionFactsExcept(sourceConfig, resolvedConfig, [
@@ -84,23 +83,21 @@ describe("analyzeCommandSecretAssignmentsFromSnapshot", () => {
 
     const result = analyzeTalk(sourceConfig, resolvedConfig);
 
-    expect(result.unresolved).toEqual([]);
-    expect(result.assignments).toEqual([
-      expect.objectContaining({ path: TALK_TEST_PROVIDER_API_KEY_PATH, value: "${OTHER}" }),
+    expect([result.unresolved, result.assignments]).toEqual([
+      [],
+      [expect.objectContaining({ path: TALK_TEST_PROVIDER_API_KEY_PATH, value: "${OTHER}" })],
     ]);
   });
 
-  it("skips unresolved refs that are marked inactive by runtime warnings", () => {
+  it("skips inactive unresolved refs with a diagnostic", () => {
     const apiKey = { source: "env", provider: "default", id: "DEFAULT_MEMORY_KEY" };
     const sourceConfig = {
       memory: { search: { remote: { apiKey } } },
       agents: { defaults: {} },
     } as unknown as OpenClawConfig;
-    const resolvedConfig = structuredClone(sourceConfig);
-
     const result = analyzeCommandSecretAssignmentsFromSnapshot({
       sourceConfig,
-      resolvedConfig,
+      resolvedConfig: structuredClone(sourceConfig),
       targetIds: new Set(["memory.search.remote.apiKey"]),
       inactiveRefPaths: new Set(["memory.search.remote.apiKey"]),
     });

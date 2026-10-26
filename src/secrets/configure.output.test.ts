@@ -85,7 +85,6 @@ it.each(["plaintext", "references", "missing"])(
       });
       if (kind === "plaintext") {
         expect(stderr.match(/Shared auth-profile store/g)).toHaveLength(1);
-        expect(stderr).toContain("Shared auth-profile store");
         expect(stderr).toContain("2 plaintext credential(s)");
         expect(stderr).toContain("cannot migrate shared credentials");
       } else {

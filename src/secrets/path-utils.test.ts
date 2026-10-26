@@ -47,23 +47,15 @@ describe("secrets path utils", () => {
     );
   });
 
-  it("setPathCreateStrict rejects __proto__ before creating partial containers", () => {
-    const config = {};
-    expect(() =>
-      setPathCreateStrict(config, ["safe", "__proto__", POLLUTION_PROBE], "yes"),
-    ).toThrow(/prototype-polluting/);
-    expect(config).toEqual({});
-    expect(Object.hasOwn(Object.prototype, POLLUTION_PROBE)).toBe(false);
-  });
-
-  it("all mutation helpers reject blocked segments in the middle", () => {
+  it.each([{}, { safe: { value: "kept" } }])("rejects unsafe paths without mutating %j", (root) => {
     for (const blockedSegment of BLOCKED_PATH_SEGMENTS) {
       const segments = ["safe", blockedSegment, POLLUTION_PROBE];
-      const config = { safe: { value: "kept" } };
       for (const mutate of [setPathCreateStrict, setPathExistingStrict, deletePathStrict]) {
+        const config = structuredClone(root);
         expect(() => mutate(config, segments, "changed")).toThrow(/prototype-polluting/);
+        expect(config).toEqual(root);
+        expect(Object.hasOwn(Object.prototype, POLLUTION_PROBE)).toBe(false);
       }
-      expect(config).toEqual({ safe: { value: "kept" } });
     }
   });
 
