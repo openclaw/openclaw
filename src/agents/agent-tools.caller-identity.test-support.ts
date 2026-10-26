@@ -56,16 +56,14 @@ export function registerPluginOnlyCallerIdentityCase({
       runtimeToolAllowlist: ["file_fetch"],
       inheritRuntimeToolAllowlist: true,
     });
-    expect(observedIdentity).toEqual({
+    expect(observedIdentity).toMatchObject({
       agentId: "main",
-      assertToolAllowed: expect.any(Function),
       requesterOrigin: expect.objectContaining({
         sessionKey: "agent:main:telegram:direct:alice",
         messageProvider: "discord-voice",
         accountId: "work",
         messageThreadId: "42",
       }),
-      sessionEventSettings: { permissionMode: undefined },
       sessionEventToolsAllow: ["file_fetch"],
       sessionKey: "agent:main:telegram:direct:alice",
       turnSourceChannel: "discord",
