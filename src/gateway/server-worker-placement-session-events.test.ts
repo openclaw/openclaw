@@ -67,6 +67,7 @@ function startRuntime(
   warn: RuntimeOptions["warn"],
   placements: RuntimeOptions["placements"] = placementAsyncDefaults() as never,
   onReconciled = () => {},
+  scheduler = createTestGatewayScheduler(time.clock),
 ) {
   runtimeFactoryMocks.createDiskSpace.mockReturnValue({
     ...createIdleDiskSpace(),
@@ -82,7 +83,7 @@ function startRuntime(
   return startSidecar(
     createRuntime({
       githubPublicationRuntime,
-      scheduler: createTestGatewayScheduler(time.clock),
+      scheduler,
       placements,
       warn,
     }),
@@ -267,6 +268,41 @@ it("reports a failed reconciliation queued by a session change without leaking r
     releaseReconcile.resolve();
     await sidecar?.stop();
     await scheduledWake;
+  }
+});
+
+it("coalesces concurrent full recovery requests into the pending full pass", async () => {
+  const time = createGatewaySchedulerClock();
+  const scheduler = createTestGatewayScheduler(time.clock);
+  const scope = scheduler.scope();
+  vi.spyOn(scheduler, "scope").mockReturnValue(scope);
+  const schedule = vi.spyOn(scope, "schedule");
+  const reconcileStarted = createDeferredCore();
+  const releaseReconcile = createDeferredCore();
+  const reconcileActive = vi.fn(async () => {});
+  const warn = vi.fn();
+  const sidecar = await startRuntime(time, reconcileActive, warn, undefined, undefined, scheduler);
+  const requests: Promise<unknown>[] = [];
+  try {
+    await time.advanceBy(60_000);
+    reconcileActive.mockClear();
+    reconcileActive.mockImplementationOnce(() => {
+      reconcileStarted.resolve();
+      return releaseReconcile.promise;
+    });
+    const sweep = schedule.mock.calls.find(([job]) => job.id === "worker-placements:reconcile")![0]
+      .run;
+    requests.push(Promise.resolve(sweep()));
+    await reconcileStarted.promise;
+    requests.push(Promise.resolve(sweep()), Promise.resolve(sweep()), Promise.resolve(sweep()));
+    releaseReconcile.resolve();
+    await Promise.all(requests);
+    expect(reconcileActive).toHaveBeenCalledOnce();
+    expect(warn).not.toHaveBeenCalled();
+  } finally {
+    releaseReconcile.resolve();
+    await Promise.all(requests);
+    await sidecar?.stop();
   }
 });
 
