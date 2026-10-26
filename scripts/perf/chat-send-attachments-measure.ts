@@ -140,11 +140,12 @@ const offsets = objects.map((object, index) => {
 });
 const xref = Buffer.byteLength(pdf);
 pdf += `xref\n0 6\n0000000000 65535 f \n${offsets.map((offset) => `${String(offset).padStart(10, "0")} 00000 n \n`).join("")}trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
-const attachment = (fileName: string, mimeType: string, bytes: Buffer): Attachment => ({
-  fileName,
-  mimeType,
-  content: bytes.toString("base64"),
-});
+const attachment = (fileName: string, mimeType: string, bytes: Buffer) =>
+  ({
+    fileName,
+    mimeType,
+    content: bytes.toString("base64"),
+  }) satisfies Attachment;
 const workloads = [
   { name: "image", files: [attachment("synthetic.png", "image/png", png)] },
   { name: "pdf", files: [attachment("synthetic.pdf", "application/pdf", Buffer.from(pdf))] },
@@ -157,7 +158,7 @@ const workloads = [
 ].filter((workload) => values.workload === "mixed" || values.workload === workload.name);
 const expected = new Map(
   workloads.flatMap(({ files }) =>
-    files.map((file) => [file.fileName!, digest(Buffer.from(file.content!, "base64"))] as const),
+    files.map((file) => [file.fileName, digest(Buffer.from(file.content, "base64"))] as const),
   ),
 );
 const catalog: ModelCatalogEntry[] = [
@@ -326,7 +327,6 @@ await withOpenClawTestState({ label: "attachment-measure" }, async (state) => {
     allocation = {
       bytes,
       bytesPerOperation: bytes / iterations,
-      samples: profile.samples.length,
     };
     await fs.writeFile(`${output}.heapprofile`, JSON.stringify(profile));
     inspector.disconnect();
@@ -340,7 +340,7 @@ await withOpenClawTestState({ label: "attachment-measure" }, async (state) => {
     fixtures: workloads.map(({ name, files }) => ({
       name,
       count: files.length,
-      bytes: files.reduce((sum, file) => sum + Buffer.byteLength(file.content!, "base64"), 0),
+      bytes: files.reduce((sum, file) => sum + Buffer.byteLength(file.content, "base64"), 0),
     })),
     elapsedMs,
     mainThreadCpuMsPerOperation: threadCpuUs / 1000 / iterations,
