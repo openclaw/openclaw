@@ -56,6 +56,10 @@ describe("web-fetch-utils", () => {
     expect(markdownToText("`- not a list`\nNext line")).toBe("- not a list\nNext line");
     // A backtick run with no matching run of the same length is preserved.
     expect(markdownToText("cost is 5` per unit")).toBe("cost is 5` per unit");
+    // A fence-looking run inside an inline span is literal content, not a fence.
+    expect(markdownToText("Use `before ```x``` after`.")).toBe("Use before ```x``` after.");
+    // A backtick inside a link/image destination is not a code delimiter.
+    expect(markdownToText("![alt](image`1.png) and `code`.")).toBe("and code.");
   });
 
   it.each<[string, string, ("text" | "markdown")?]>([

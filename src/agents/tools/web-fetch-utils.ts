@@ -9,6 +9,7 @@ import {
   readRawTextBounds,
   skipRawTextElement,
 } from "../../../packages/markdown-core/src/html-scanner.js";
+import { findMarkdownCodeRegions } from "../../../packages/markdown-core/src/markdown-code-regions.js";
 import { stripInvisibleUnicode } from "../../infra/unicode-visibility.js";
 import { decodeHtmlEntities } from "../../shared/html-entities.js";
 import { readHtmlAttribute } from "./web-fetch-attributes.js";
@@ -372,69 +373,82 @@ function readBacktickRunEnd(value: string, start: number): number {
 }
 
 /**
- * Inline code spans are literal text: replace each one with a placeholder so that
- * the prose formatting that follows (inline links, heading and list markers) cannot
- * reinterpret Markdown-looking content written between backticks. A run of N
- * backticks closes only on a matching run of exactly N backticks; unmatched runs
- * are left untouched, matching the previous behavior for stray backticks.
+ * Inline code ownership is decided on the original Markdown, not on the prose that is
+ * left after fenced blocks are removed. The shared parser knows that backticks inside a
+ * link or image destination are not code delimiters, that code inside an image label is
+ * alt text, and that a span wrapping a fence-looking run is still one literal span.
+ * Hiding those ranges up front keeps their content literal without nesting the
+ * placeholders that fenced blocks already own.
  */
-function hideInlineCodeSpans(text: string, codeBlocks: string[]): string {
-  let result = "";
-  let pos = 0;
-  while (pos < text.length) {
-    const open = text.indexOf("`", pos);
-    if (open === -1) {
-      result += text.slice(pos);
-      break;
-    }
-    result += text.slice(pos, open);
-    const openEnd = readBacktickRunEnd(text, open);
-    const runLength = openEnd - open;
-    let close = -1;
-    let cursor = openEnd;
-    while (cursor < text.length) {
-      const candidate = text.indexOf("`", cursor);
-      if (candidate === -1) {
-        break;
+function createInlineCodeHider(markdown: string, codeBlocks: string[]) {
+  const regions = findMarkdownCodeRegions(markdown).filter((region) => !region.block);
+  const insideInline = (index: number): boolean =>
+    regions.some((region) => index >= region.start && index < region.end);
+  const emit = (from: number, to: number): string => {
+    let out = "";
+    let cursor = from;
+    for (const region of regions) {
+      if (region.end <= from || region.start >= to) {
+        continue;
       }
-      const candidateEnd = readBacktickRunEnd(text, candidate);
-      if (candidateEnd - candidate === runLength) {
-        close = candidate;
-        break;
+      const start = Math.max(region.start, from);
+      const end = Math.min(region.end, to);
+      if (start > cursor) {
+        out += markdown.slice(cursor, start).replaceAll("\0", "\0\0");
       }
-      cursor = candidateEnd;
+      if (start === region.start && end === region.end) {
+        const delimiter = readBacktickRunEnd(markdown, region.start) - region.start;
+        const literal = markdown.slice(region.start + delimiter, region.end - delimiter);
+        if (literal) {
+          out += `\0${codeBlocks.length}\0`;
+          codeBlocks.push(literal);
+        }
+      } else {
+        // Only a fence boundary can split a region; keep that slice verbatim.
+        out += markdown.slice(start, end).replaceAll("\0", "\0\0");
+      }
+      cursor = end;
     }
-    if (close === -1) {
-      result += text.slice(open, openEnd);
-      pos = openEnd;
-      continue;
+    if (cursor < to) {
+      out += markdown.slice(cursor, to).replaceAll("\0", "\0\0");
     }
-    // Prose NULs were escaped into doubled pairs; restore the literal content.
-    const content = text.slice(openEnd, close).replaceAll("\0\0", "\0");
-    if (content) {
-      result += `\0${codeBlocks.length}\0`;
-      codeBlocks.push(content);
-    }
-    pos = close + runLength;
-  }
-  return result;
+    return out;
+  };
+  return { insideInline, emit };
 }
 
 export function markdownToText(markdown: string): string {
   const codeBlocks: string[] = [];
+  const inline = createInlineCodeHider(markdown, codeBlocks);
   let text = "";
   const opener = /`{3,}|(?:^|\n) {0,3}(~{3,})/g;
   let pos = 0;
   while (pos < markdown.length) {
-    opener.lastIndex = pos;
-    const opening = opener.exec(markdown);
+    // A fence-looking run inside an inline code span is literal content, not a fence.
+    let opening: RegExpExecArray | null = null;
+    let searchFrom = pos;
+    while (searchFrom < markdown.length) {
+      opener.lastIndex = searchFrom;
+      const candidate = opener.exec(markdown);
+      if (!candidate) {
+        break;
+      }
+      const candidateIsTilde = candidate[1] !== undefined;
+      const candidateOpen =
+        candidate.index + (candidateIsTilde && candidate[0].startsWith("\n") ? 1 : 0);
+      if (!inline.insideInline(candidateOpen)) {
+        opening = candidate;
+        break;
+      }
+      searchFrom = candidateOpen + 1;
+    }
     if (!opening) {
-      text += markdown.slice(pos).replaceAll("\0", "\0\0");
+      text += inline.emit(pos, markdown.length);
       break;
     }
     const isTilde = opening[1] !== undefined;
     const open = opening.index + (isTilde && opening[0].startsWith("\n") ? 1 : 0);
-    text += markdown.slice(pos, open).replaceAll("\0", "\0\0");
+    text += inline.emit(pos, open);
     const afterOpen = opening.index + opening[0].length;
     const fenceLength = opening[1]?.length ?? afterOpen - open;
     let close: { start: number; end: number } | undefined;
@@ -471,7 +485,7 @@ export function markdownToText(markdown: string): string {
     if (!close && !isTilde) {
       const lineStart = markdown.lastIndexOf("\n", open) + 1;
       if (firstLineEnd === -1 || !/^[ \t]*$/.test(markdown.slice(lineStart, open))) {
-        text += markdown.slice(open).replaceAll("\0", "\0\0");
+        text += inline.emit(open, markdown.length);
         break;
       }
     }
@@ -494,10 +508,8 @@ export function markdownToText(markdown: string): string {
     text += lineEnd;
     pos = close?.end ?? markdown.length;
   }
-  // Inline code spans are literal text too: hide them before link/heading/list
-  // formatting so Markdown-looking content between backticks survives verbatim.
-  text = hideInlineCodeSpans(text, codeBlocks);
   text = stripInlineLinks(text, { images: "omit" });
+  text = text.replace(/`([^`]+)`/g, "$1");
   text = text.replace(/^#{1,6}\s+/gm, "");
   text = text.replace(/^[^\S\n]*[-*+]\s+/gm, "");
   text = text.replace(/^[^\S\n]*\d+\.\s+/gm, "");
