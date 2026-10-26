@@ -77,6 +77,8 @@ export type StreamBlockState = {
   finalFence?: FenceScanState;
   pendingFenceFragment?: string;
   pendingTagFragment?: string;
+  /** The last scan ended on an orphan reasoning close that non-blank text would turn into a drop. */
+  trailingOrphanReasoningClose?: boolean;
 };
 
 /** A response-ending answer and the message index its reply payload belongs to. */

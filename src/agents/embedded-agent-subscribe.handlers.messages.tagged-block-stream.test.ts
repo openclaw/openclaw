@@ -61,6 +61,7 @@ describe("tagged block reply streaming", () => {
     };
     return {
       ctx,
+      message,
       fast,
       onBlockReply,
       canonicalBlockText,
@@ -250,6 +251,12 @@ describe("tagged block reply streaming", () => {
     "</mm:thought>",
     "</antthinking>",
     "< / think >",
+    "</reasoning>",
+    "</internal>",
+    "</mm:reasoning>",
+    '</think foo="x">',
+    "</think\n>",
+    "</reasoning >",
   ];
 
   it.each(phases)(
@@ -270,6 +277,62 @@ describe("tagged block reply streaming", () => {
       }
     },
   );
+
+  it.each(phases)(
+    "reconciles text appended after a reasoning close that ends the final answer (phase %s)",
+    async (phase) => {
+      const stream = createTaggedStream(phase);
+      await stream.delta("<final>Hello world.</reasoning>");
+      await stream.delta(" word");
+      expect(stream.fast).toEqual([false, false]);
+      // The orphan close drops the earlier <final> opener too, so nothing is visible yet.
+      expect(stream.ctx.blockChunker.bufferedText).toBe("");
+    },
+  );
+
+  it.each(phases)(
+    "keeps appending after a literal reasoning close inside a code span (phase %s)",
+    async (phase) => {
+      const stream = createTaggedStream(phase);
+      for (const delta of ["<final>Write `</think>`", " literally", " here"]) {
+        await stream.delta(delta);
+      }
+      // The code span owns the tag, so canonical processing keeps the text before it.
+      expect(stream.fast).toEqual([false, true, true]);
+      expect(stream.ctx.blockChunker.bufferedText).toBe("Write `</think>` literally here");
+    },
+  );
+
+  it.each(phases)(
+    "keeps an unclosed reasoning block out of the verbatim fast path (phase %s)",
+    async (phase) => {
+      const stream = createTaggedStream(phase);
+      await stream.delta("<final>Hello <think>plan");
+      const snapshot = extractAssistantStreamSnapshot(stream.ctx, stream.message as never, {
+        final: false,
+      });
+      expect(snapshot.state.reasoningDepth).toBe(1);
+      expect(snapshot.verbatim).toBe(false);
+      await stream.delta(" more plan");
+      await stream.delta("</think> and the answer");
+      expect(stream.fast).toEqual([false, false, false]);
+    },
+  );
+
+  it("matches canonical extraction for every short tag-heavy delta sequence", async () => {
+    const fragments = [" word", "</think>", '</reasoning foo="x">', "<think>", "`", " ", "\n"];
+    for (const a of fragments) {
+      for (const b of fragments) {
+        for (const c of fragments) {
+          const stream = createTaggedStream(undefined);
+          // The delta helper compares every step with a canonical snapshot.
+          for (const delta of ["<final>Hi", a, b, c]) {
+            await stream.delta(delta);
+          }
+        }
+      }
+    }
+  });
 
   it.each(phases)(
     "matches canonical text after a reasoning close that text already follows (phase %s)",

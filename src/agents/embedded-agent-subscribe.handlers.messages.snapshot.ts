@@ -24,7 +24,6 @@ import {
   createAssistantStreamBlockState,
   prepareAssistantVisibleText,
   stripDowngradedToolCallText,
-  THINKING_TAG_TRAILING_CLOSE_RE,
 } from "./embedded-agent-utils.js";
 
 export function extractAssistantStreamSnapshot(
@@ -153,9 +152,9 @@ export function extractAssistantStreamSnapshot(
     visibleBlockSource.trim() !== "" &&
     !/media:/i.test(lastLine()) &&
     // An orphan reasoning close drops the text before it once non-blank text follows, so a
-    // trailing close tag (plus whitespace) is not append-stable.
-    !THINKING_TAG_TRAILING_CLOSE_RE.test(protocol.sourceText) &&
-    !state.thinking &&
+    // source that ends on one is not append-stable. The tag scanner owns that grammar.
+    !state.trailingOrphanReasoningClose &&
+    state.reasoningDepth === 0 &&
     !state.pendingTagFragment &&
     !state.pendingFenceFragment &&
     (!ctx.params.enforceFinalTag || state.final);

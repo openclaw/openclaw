@@ -18,7 +18,10 @@ import {
   readAgentAssistantSource,
 } from "../infra/agent-events.js";
 import { findFinalTagMatches } from "../shared/text/final-tags.js";
-import { hasOrphanReasoningCloseBoundary } from "../shared/text/reasoning-tags.js";
+import {
+  hasOrphanReasoningCloseBoundary,
+  hasPendingOrphanReasoningCloseBoundary,
+} from "../shared/text/reasoning-tags.js";
 import {
   createTextProjection,
   trimTextFilter,
@@ -151,6 +154,7 @@ export function createStreamRendering({
     const input = `${stateLocal.pendingFenceFragment ?? ""}${stateLocal.pendingTagFragment ?? ""}${text}`;
     stateLocal.pendingFenceFragment = undefined;
     stateLocal.pendingTagFragment = undefined;
+    stateLocal.trailingOrphanReasoningClose = false;
     if (!input) {
       return text;
     }
@@ -256,6 +260,10 @@ export function createStreamRendering({
             processed = "";
           } else {
             processed += before;
+            stateLocal.trailingOrphanReasoningClose = hasPendingOrphanReasoningCloseBoundary({
+              before,
+              after,
+            });
           }
           lastIndex = afterIndex;
           continue;
