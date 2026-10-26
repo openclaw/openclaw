@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getRuntimeConfigWriteApplication } from "../../config/runtime-write-application.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
 
 const configMocks = vi.hoisted(() => ({
   replaceConfigFile: vi.fn(),
@@ -11,6 +12,26 @@ const secretsMocks = vi.hoisted(() => ({
     sourceConfig: OpenClawConfig;
     config: OpenClawConfig;
   } | null,
+}));
+const restartSentinelMocks = vi.hoisted(() => ({
+  writeRestartSentinel: vi.fn(async (_payload: RestartSentinelPayload) => ({
+    version: 1 as const,
+    payload: _payload,
+    revision: 1,
+  })),
+}));
+const restartMocks = vi.hoisted(() => ({
+  scheduleGatewayRestart: vi.fn(() => ({
+    ok: true,
+    pid: process.pid,
+    signal: "SIGUSR2",
+    delayMs: 1_000,
+    reason: "config.patch",
+    mode: "emit",
+    coalesced: false,
+    cooldownMsApplied: 0,
+    emitHooksQueued: false,
+  })),
 }));
 
 vi.mock("../../config/config.js", async (importOriginal) => ({
@@ -24,9 +45,20 @@ vi.mock("../../secrets/runtime-state.js", async (importOriginal) => ({
   getActiveSecretsRuntimeSnapshotState: () => secretsMocks.activeSnapshot,
 }));
 
+vi.mock("../../infra/restart-sentinel.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/restart-sentinel.js")>()),
+  writeRestartSentinel: restartSentinelMocks.writeRestartSentinel,
+}));
+
+// mock-isolation: Gateway restart scheduling is process-global; tests verify the write result without triggering a real restart.
+vi.mock("../../infra/restart.js", () => ({
+  scheduleGatewayRestart: restartMocks.scheduleGatewayRestart,
+}));
+
 import {
   commitGatewayConfigWrite,
   didActiveSharedGatewayAuthChange,
+  resolveGatewayConfigRestartWriteResult,
   shouldAwaitGatewayConfigApplication,
 } from "./config-write-flow.js";
 
@@ -50,6 +82,27 @@ const commit = (exists = true) =>
     writeOptions: {},
     nextConfig: exists ? hookConfig : {},
     ...(exists ? { awaitRuntimeApplication: true } : {}),
+  });
+const restartWriteActor = {
+  actor: "openclaw-control-ui",
+  deviceId: "device-1",
+  clientIp: "127.0.0.1",
+  connId: "conn-1",
+} as const;
+const resolveRestartWrite = (
+  changedPaths: string[],
+  previousConfig: OpenClawConfig,
+  nextConfig: OpenClawConfig,
+) =>
+  resolveGatewayConfigRestartWriteResult({
+    requestParams: {},
+    kind: "config-patch",
+    mode: "config.patch",
+    configPath: "/tmp/openclaw.json",
+    changedPaths,
+    previousConfig,
+    nextConfig,
+    actor: restartWriteActor,
   });
 
 it("awaits transcript additions and title edits only when the reload owner can apply them", () => {
@@ -164,3 +217,38 @@ it.each([
     expect(didActiveSharedGatewayAuthChange({ fallbackPrev, next, fallbackSource })).toBe(expected);
   },
 );
+
+describe("resolveGatewayConfigRestartWriteResult", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("does not persist a restart sentinel for a hot-applied write", async () => {
+    const result = await resolveRestartWrite(
+      ["agents.defaults.model"],
+      { agents: { defaults: { model: "old-model" } } },
+      { agents: { defaults: { model: "new-model" } } },
+    );
+
+    expect(result.sentinelPersisted).toBe(false);
+    expect(result.restart).toBeUndefined();
+    expect(restartSentinelMocks.writeRestartSentinel).not.toHaveBeenCalled();
+    expect(restartMocks.scheduleGatewayRestart).not.toHaveBeenCalled();
+    expect(result.payload.stats?.requiresRestart).toBe(false);
+    expect(result.payload.doctorHint).toBeNull();
+  });
+
+  it("persists a restart sentinel with a doctor hint for a restart-requiring write", async () => {
+    const result = await resolveRestartWrite(
+      ["gateway.port"],
+      { gateway: { port: 4_000 } },
+      { gateway: { port: 4_001 } },
+    );
+
+    expect(result.sentinelPersisted).toBe(true);
+    expect(restartSentinelMocks.writeRestartSentinel).toHaveBeenCalledOnce();
+    expect(result.payload.stats?.requiresRestart).toBe(true);
+    expect(result.payload.doctorHint).not.toBeNull();
+    expect(result.payload.doctorHint).toContain("openclaw doctor --non-interactive");
+  });
+});

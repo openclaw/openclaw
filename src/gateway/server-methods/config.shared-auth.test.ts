@@ -88,6 +88,9 @@ const { configHandlers } = await import("./config.js");
 function tokenAuthConfig(token: string): OpenClawConfig {
   return { gateway: { auth: { mode: "token", token } } };
 }
+function passwordAuthConfig(password: string): OpenClawConfig {
+  return { gateway: { auth: { mode: "password", password } } };
+}
 
 function mockPreviousConfig(config: OpenClawConfig): void {
   readConfigFileSnapshotForWriteMock.mockResolvedValue(createConfigWriteSnapshot(config));
@@ -207,7 +210,7 @@ describe("config shared auth disconnects", () => {
       started.resolve();
       await release.promise;
     });
-    const { options, respond } = prepareWrite("config.apply", tokenAuthConfig("new-token"), {
+    const { options, respond } = prepareWrite("config.apply", passwordAuthConfig("new-password"), {
       restartDelayMs: 1000,
     });
     const handler = expectDefined(configHandlers["config.apply"], "config.apply handler");
