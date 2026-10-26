@@ -15,25 +15,13 @@ const folder = {
   deviceFolder: { deviceId: "device-1", path: "/srv/project" },
 };
 const placementCases = [
-  ["writer device dispatch", "sessions.dispatch", { key, deviceId: "device-1" }, writer, true],
-  [
-    "writer profile dispatch",
-    "sessions.dispatch",
-    { key, profileId: "development" },
-    writer,
-    false,
-  ],
-  ["writer gateway move", "sessions.move", move({ kind: "gateway" }), writer, true],
-  ["writer profile move", "sessions.move", profileMove, writer, false],
-  ["admin profile move", "sessions.move", profileMove, ["operator.admin"], true],
-  ["writer device folder", "sessions.create", folder, writer, true],
-  [
-    "own-session writer device folder",
-    "sessions.create",
-    folder,
-    ["operator.sessions.write"],
-    false,
-  ],
+  ["writer device dispatch", "dispatch", { key, deviceId: "device-1" }, writer, true],
+  ["writer profile dispatch", "dispatch", { key, profileId: "development" }, writer, false],
+  ["writer gateway move", "move", move({ kind: "gateway" }), writer, true],
+  ["writer profile move", "move", profileMove, writer, false],
+  ["admin profile move", "move", profileMove, ["operator.admin"], true],
+  ["writer device folder", "create", folder, writer, true],
+  ["own-session writer device folder", "create", folder, ["operator.sessions.write"], false],
 ] as const;
 
 async function dispatch(method: string, params: unknown, scopes: readonly string[], stub = true) {
@@ -49,8 +37,8 @@ async function dispatch(method: string, params: unknown, scopes: readonly string
 
 it.each(placementCases)(
   "authorizes %s before the handler",
-  async (_name, method, params, scopes, allowed) => {
-    const { handler, respond } = await dispatch(method, params, scopes);
+  async (_name, operation, params, scopes, allowed) => {
+    const { handler, respond } = await dispatch(`sessions.${operation}`, params, scopes);
     // The handler owns node validation and persistence, so a refusal here precedes both.
     expect(handler).toHaveBeenCalledTimes(allowed ? 1 : 0);
     if (allowed) {
@@ -62,7 +50,7 @@ it.each(placementCases)(
         expect.objectContaining({
           code: "FORBIDDEN",
           details:
-            method === "sessions.create"
+            operation === "create"
               ? expect.objectContaining({ missingScope: "operator.write" })
               : {
                   code: "MISSING_SCOPE",

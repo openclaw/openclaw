@@ -9,18 +9,10 @@ vi.mock("../config/config.js", () => ({ getRuntimeConfig: () => cfg }));
 // mock-isolation: Supply the same fixture config without loading host config files.
 vi.mock("../config/io.js", () => ({ getRuntimeConfig: () => cfg }));
 
-vi.mock("../config/sessions.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../config/sessions.js")>()),
-  resolveMainSessionKey: () => "agent:main:main",
-}));
-
 // mock-isolation: Admit transport authentication so the test exercises the tool denylist.
 vi.mock("./auth.js", () => ({
   authorizeHttpGatewayConnect: async () => ({ ok: true as const }),
 }));
-
-// mock-isolation: Keep synthetic denylist warnings out of the process-wide logger.
-vi.mock("../logger.js", () => ({ logWarn: () => {} }));
 
 // mock-isolation: Supply loop policy without initializing the real agent tool runtime.
 vi.mock("../agents/agent-tools.js", () => ({
@@ -33,11 +25,6 @@ vi.mock("../agents/agent-tools.before-tool-call.js", () => ({
     blocked: false as const,
     params,
   }),
-}));
-
-vi.mock("../plugins/config-state.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../plugins/config-state.js")>()),
-  isTestDefaultMemorySlotDisabled: () => false,
 }));
 
 // mock-isolation: Exercise the HTTP denylist with inert automation and Gateway tools.

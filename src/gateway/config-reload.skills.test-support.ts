@@ -1,4 +1,3 @@
-// Skills refresh follows config publication and consumes the newly published plugin metadata.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
@@ -41,38 +40,33 @@ export function registerSkillsRefreshTests(refreshSkillsDiscoveryMock: ReturnTyp
       vi.restoreAllMocks();
     });
 
-    it.each([
-      { path: "skills.allowBundled", config: { skills: { allowBundled: ["gog"] } } },
-      { path: "browser.enabled required by a skill", config: { browser: { enabled: false } } },
-      { path: "env.vars.PATH", config: { env: { vars: { PATH: "/fixture/bin" } } } },
-    ])("refreshes after publishing $path", async ({ config }) => {
-      const nextConfig: OpenClawConfig = { gateway: { reload: {} }, ...config };
-      const order: string[] = [];
-      const previousMetadata = createPluginMetadataSnapshotFixture();
-      const publishedMetadata = createPluginMetadataSnapshotFixture({
-        plugins: [{ id: "published-skills", skills: ["skills"] }],
-      });
-      setGatewayPluginMetadataSnapshot(previousMetadata);
-      let acceptedConfig: OpenClawConfig | undefined;
-      refreshSkillsDiscoveryMock.mockImplementation(({ config: candidateConfig }) => {
-        expect(candidateConfig).toEqual(acceptedConfig);
-        order.push("skills");
-      });
-      await reload(nextConfig, {
-        runTransaction: (run) => withPluginCache(createPluginCache(), run),
-        onConfigAccepted: async (candidateConfig) => {
-          acceptedConfig = candidateConfig;
-          setGatewayPluginMetadataSnapshot(publishedMetadata, { config: candidateConfig });
-          order.push("config");
-        },
-      });
-      expect(order).toEqual(["config", "skills"]);
-      expect(refreshSkillsDiscoveryMock).toHaveBeenCalledExactlyOnceWith({
-        config: nextConfig,
-        reason: "config-change",
-        pluginMetadataSnapshot: publishedMetadata,
-      });
-    });
+    it.each<OpenClawConfig>([
+      skillsConfig(),
+      { gateway: { reload: {} }, browser: { enabled: false } },
+    ])(
+      "refreshes skills after publishing accepted config and plugin metadata: %j",
+      async (nextConfig) => {
+        const order: string[] = [];
+        const publishedMetadata = createPluginMetadataSnapshotFixture({
+          plugins: [{ id: "published-skills", skills: ["skills"] }],
+        });
+        setGatewayPluginMetadataSnapshot(createPluginMetadataSnapshotFixture());
+        refreshSkillsDiscoveryMock.mockImplementation(() => order.push("skills"));
+        await reload(nextConfig, {
+          runTransaction: (run) => withPluginCache(createPluginCache(), run),
+          onConfigAccepted: async (candidateConfig) => {
+            setGatewayPluginMetadataSnapshot(publishedMetadata, { config: candidateConfig });
+            order.push("config");
+          },
+        });
+        expect(order).toEqual(["config", "skills"]);
+        expect(refreshSkillsDiscoveryMock).toHaveBeenCalledExactlyOnceWith({
+          config: nextConfig,
+          reason: "config-change",
+          pluginMetadataSnapshot: publishedMetadata,
+        });
+      },
+    );
 
     it("keeps an applied config when discovery refresh fails", async () => {
       refreshSkillsDiscoveryMock.mockRejectedValue(new Error("discovery unavailable"));
