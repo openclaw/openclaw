@@ -50,6 +50,14 @@ import {
 import { buildInitialChatSubmission, buildLocalUserMessage } from "./user-message-content.ts";
 
 const pendingScope = { sessionKey, currentSessionId: sessionId };
+const userMessage = <Metadata extends Record<string, unknown>>(
+  content: string,
+  __openclaw: Metadata,
+) => ({
+  role: "user",
+  content,
+  __openclaw,
+});
 function queuedSource(sendRunId: string, overrides: Partial<ChatQueueItem> = {}): ChatQueueItem {
   return { id: sendRunId, sendRunId, sessionKey, createdAt: 1, text: sendRunId, ...overrides };
 }
@@ -213,11 +221,11 @@ describe("server-owned pending input display", () => {
     async (receipt) => {
       const host = makeChatHost({ ...pendingScope, requestHandlers: {} });
       const runId = "consumed-delivery";
-      const canonical = {
-        role: "user",
-        content: "Authoritative input",
-        __openclaw: { id: "canonical-input", seq: 1, idempotencyKey: `${runId}:user` },
-      };
+      const canonical = userMessage("Authoritative input", {
+        id: "canonical-input",
+        seq: 1,
+        idempotencyKey: `${runId}:user`,
+      });
       if (receipt === "canonical-first") {
         reduceChatSessionProjection(host, { type: "snapshotLoaded", messages: [canonical] });
       } else if (receipt === "pending-first") {
@@ -377,14 +385,12 @@ describe("server-owned pending input display", () => {
   ] as const)(
     "retires an attributed $source source on $delivery $custody custody without disturbing active work",
     async ({ delivery, source, custody }) => {
-      const canonical = {
-        role: "user",
-        content: "An earlier canonical input",
-        __openclaw:
-          source === "delivered" && custody === "consumed"
-            ? { id: "aggregate", seq: 1, idempotencyKey: "followup-collect:session:batch" }
-            : { id: "canonical-user", seq: 1, runId: "canonical-run" },
-      };
+      const canonical = userMessage(
+        "An earlier canonical input",
+        source === "delivered" && custody === "consumed"
+          ? { id: "aggregate", seq: 1, idempotencyKey: "followup-collect:session:batch" }
+          : { id: "canonical-user", seq: 1, runId: "canonical-run" },
+      );
       const acceptedPage =
         custody === "consumed"
           ? emptyPage
@@ -485,10 +491,7 @@ describe("server-owned pending input display", () => {
         }
       }
       expect(host.chatMessages).toEqual([...history, unrelated]);
-      expect(host).toMatchObject({
-        chatRunId: "active-run",
-        chatStream: "Still working",
-      });
+      expect(host).toMatchObject({ chatRunId: "active-run", chatStream: "Still working" });
       expect(host.chatToolMessages).toEqual([tool]);
       const displayed = getChatPendingInputs(host)?.page;
       expect(displayed).toEqual(acceptedPage);
@@ -526,17 +529,13 @@ describe("server-owned pending input display", () => {
       applyChatPendingInputs(host, { items: [], total: 0 });
       expect(host.chatMessages).toEqual([...history, unrelated]);
       if (custody !== "consumed") {
-        const promoted = {
-          role: "user",
-          content: "authoritative projection",
-          __openclaw: {
-            id: input.id,
-            seq: 4,
-            idempotencyKey: `${input.runId}:user`,
-            runId: "execution-run",
-            senderName: "Authoritative Author",
-          },
-        };
+        const promoted = userMessage("authoritative projection", {
+          id: input.id,
+          seq: 4,
+          idempotencyKey: `${input.runId}:user`,
+          runId: "execution-run",
+          senderName: "Authoritative Author",
+        });
         reduceChatSessionProjection(host, { type: "messagePersisted", message: promoted });
         expect(host.chatMessages).toHaveLength(history.length + 2);
         expect(host.chatMessages).toContain(promoted);
@@ -582,16 +581,8 @@ describe("server-owned pending input display", () => {
       const stale = createDeferred<unknown>();
       const fresh = createDeferred<unknown>();
       const freshStarted = createDeferred();
-      const initialUser = {
-        role: "user",
-        content: "First turn",
-        __openclaw: { id: "first", seq: 1 },
-      };
-      const promoted = {
-        role: "user",
-        content: "Keep my accepted input",
-        __openclaw: { id: input.id, seq: 2 },
-      };
+      const initialUser = userMessage("First turn", { id: "first", seq: 1 });
+      const promoted = userMessage("Keep my accepted input", { id: input.id, seq: 2 });
       const toolMessage = { role: "assistant", runId: "active-run", toolCallId: "live-tool" };
       let historyReads = 0;
       const host = makeChatPageHost({
