@@ -34,6 +34,19 @@ vi.mock("./openclaw-state-worker-store.js", async (importOriginal) => {
 });
 
 const catalog = useProfileState();
+async function withoutWriter<T>(run: () => Promise<T>) {
+  vi.mocked(runWorker).mockClear();
+  vi.mocked(executeWorker).mockClear();
+  const sql = observeMainThreadSql();
+  try {
+    const result = await run();
+    expectCalls(0, runWorker, executeWorker);
+    sql.expectIdle();
+    return result;
+  } finally {
+    sql.restore();
+  }
+}
 
 it("reuses committed email profiles and roster facts without writer admission across edits and merges", async () => {
   const first = await ensureEmail("first@example.test");
@@ -43,20 +56,9 @@ it("reuses committed email profiles and roster facts without writer admission ac
     profile: typeof first,
     githubIdentity: UserProfileListItem["githubIdentity"] = null,
   ) => {
-    const { id, displayName, avatarMime, mergedInto, createdAt, updatedAt, role } = profile;
-    const expected = {
-      id,
-      displayName,
-      avatarMime,
-      mergedInto,
-      createdAt,
-      updatedAt,
-      ...(role ? { role } : {}),
-    };
-    vi.mocked(runWorker).mockClear();
-    vi.mocked(executeWorker).mockClear();
-    const sql = observeMainThreadSql();
-    try {
+    const { role, ...fields } = profile;
+    const expected = { ...fields, ...(role ? { role } : {}) };
+    await withoutWriter(async () => {
       expect(await ensureEmail(" FIRST@EXAMPLE.TEST ")).toEqual(expected);
       expect(await ensureTailscale({ login: "first@example.test", name: "Provider Name" })).toEqual(
         expected,
@@ -70,29 +72,24 @@ it("reuses committed email profiles and roster facts without writer admission ac
         githubIdentity,
         hasAvatar: false,
       });
-      expectCalls(0, runWorker, executeWorker);
-      sql.expectIdle();
-    } finally {
-      sql.restore();
-    }
+    });
   };
   await expectResident(first);
-  const renamed = (await setName(first.id, "Saved Name")).profile;
-  await expectResident(renamed);
-  const assigned = await setRole(first.id, "reader");
-  await expectResident(assigned);
+  await expectResident((await setName(first.id, "Saved Name")).profile);
+  await expectResident(await setRole(first.id, "reader"));
   const githubIdentity = {
     login: "first-account",
     profileUrl: "https://github.com/first-account",
     avatarUrl: "https://avatars.githubusercontent.com/u/101?v=4",
   };
-  const verified = await syncGitHub({
-    identity: { accountId: 101, login: "first-account" },
-    authenticationAlias: { kind: "email", email: "first@example.test" },
-  });
-  await expectResident(verified, githubIdentity);
-  const linked = await linkEmail("first@example.test", second.id);
-  await expectResident(linked.profile, githubIdentity);
+  await expectResident(
+    await syncGitHub({
+      identity: { accountId: 101, login: "first-account" },
+      authenticationAlias: { kind: "email", email: "first@example.test" },
+    }),
+    githubIdentity,
+  );
+  await expectResident((await linkEmail("first@example.test", second.id)).profile, githubIdentity);
   await expect(
     ensureEmail("first@example.test", {
       assertCurrent() {
@@ -106,34 +103,23 @@ it("reuses committed email profiles and roster facts without writer admission ac
 it("serves the first owner ensure after catalog hydration and applies write receipts", async () => {
   const owner = await ensureOwner("Host Person");
   await catalog.hydrate();
-  vi.mocked(runWorker).mockClear();
-  const sql = observeMainThreadSql();
-  const reused = await ensureOwner("Host Person");
+  const reused = await withoutWriter(() => ensureOwner("Host Person"));
   expect(reused).toEqual(owner);
-  expect(runWorker).not.toHaveBeenCalled();
-  sql.expectIdle();
   const hostName = vi.fn(async () => "Host Person");
   expect(await ensureOwner(hostName)).toEqual(owner);
   expect(hostName).not.toHaveBeenCalled();
-  vi.restoreAllMocks();
 
   reused.displayName = "Caller mutation";
   expect((await ensureOwner("Host Person")).displayName).toBe("Host Person");
   await setName(owner.id, "Saved Owner");
-  vi.mocked(runWorker).mockClear();
-  expect((await ensureOwner(hostName)).displayName).toBe("Saved Owner");
-  expectCalls(0, runWorker, hostName);
+  expect((await withoutWriter(() => ensureOwner(hostName))).displayName).toBe("Saved Owner");
+  expect(hostName).not.toHaveBeenCalled();
 
   await setName(owner.id, null);
   await ensureOwner(null);
-  vi.mocked(runWorker).mockClear();
   const missingName = vi.fn(async () => null);
-  const unnamedSql = observeMainThreadSql();
-  expect((await ensureOwner(missingName)).displayName).toBeNull();
+  expect((await withoutWriter(() => ensureOwner(missingName))).displayName).toBeNull();
   expect(missingName).toHaveBeenCalledOnce();
-  expect(runWorker).not.toHaveBeenCalled();
-  unnamedSql.expectIdle();
-  vi.restoreAllMocks();
   const adoptedName = vi.fn(async () => "New Host Name");
   expect((await ensureOwner(adoptedName)).displayName).toBe("New Host Name");
   expect(adoptedName).toHaveBeenCalledOnce();
