@@ -24,11 +24,6 @@ type StreamingSessionState = {
   hasNote: boolean;
 };
 
-type LocalServer = {
-  port: number;
-  stop: () => Promise<void>;
-};
-
 type StreamingRequest = {
   url: URL;
   body: string;
@@ -37,15 +32,11 @@ type StreamingRequest = {
 };
 
 const serverStops: Array<() => Promise<void>> = [];
-const HERMETIC_PUBLIC_LOOKUP_ADDRESS = "93.184.216.34";
+const hermeticPublicLookup: LookupFn = async () => [{ address: "93.184.216.34", family: 4 }];
 
-const hermeticPublicLookup: LookupFn = async () => [
-  { address: HERMETIC_PUBLIC_LOOKUP_ADDRESS, family: 4 },
-];
-
-async function startLocalServer(
+async function createStreamingFetch(
   handler: (request: StreamingRequest) => void | Promise<void>,
-): Promise<LocalServer> {
+): Promise<StreamingFetchDeps> {
   const server = createServer((req, res) => {
     void (async () => {
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
@@ -59,13 +50,12 @@ async function startLocalServer(
     });
   });
   const port = await listenOnLoopback(server);
-  return {
-    port,
-    stop: async () =>
-      await new Promise<void>((resolve, reject) => {
-        server.close((err) => (err ? reject(err) : resolve()));
-      }),
-  };
+  serverStops.push(async () => {
+    await new Promise<void>((resolve, reject) => {
+      server.close((err) => (err ? reject(err) : resolve()));
+    });
+  });
+  return { fetchImpl: createLocalRedirectFetch(port), lookupFn: hermeticPublicLookup };
 }
 
 function createLocalRedirectFetch(port: number): FeishuStreamingFetch {
@@ -80,26 +70,15 @@ function createLocalRedirectFetch(port: number): FeishuStreamingFetch {
   });
 }
 
-async function createStreamingFetch(
-  handler: (request: StreamingRequest) => void | Promise<void>,
-): Promise<StreamingFetchDeps> {
-  const server = await startLocalServer(handler);
-  serverStops.push(server.stop);
-  return {
-    fetchImpl: createLocalRedirectFetch(server.port),
-    lookupFn: hermeticPublicLookup,
-  };
-}
-
 function createMemoryFetch(
-  handler: (url: URL, body: string) => Response | Promise<Response>,
+  handler: (url: URL, body: string, init?: RequestInit) => Response | Promise<Response>,
 ): StreamingFetchDeps {
   return {
     fetchImpl: withFetchPreconnect(
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = new URL(input instanceof Request ? input.url : input.toString());
         const body = typeof init?.body === "string" ? init.body : "";
-        return await handler(url, body);
+        return await handler(url, body, init);
       }),
     ) as FeishuStreamingFetch,
     lookupFn: hermeticPublicLookup,
@@ -115,7 +94,7 @@ function createActiveSession(
   deps: StreamingFetchDeps,
   options: {
     cardId: string;
-    messageId: string;
+    messageId?: string;
     text?: string;
     hasNote?: boolean;
     lastUpdateTime?: number;
@@ -134,7 +113,7 @@ function createActiveSession(
   };
   internals.state = {
     cardId: options.cardId,
-    messageId: options.messageId,
+    messageId: options.messageId ?? options.cardId.replace(/^card/, "om"),
     sequence: 1,
     currentText: options.text ?? "",
     sentText: options.text ?? "",
@@ -142,6 +121,17 @@ function createActiveSession(
   };
   internals.lastUpdateTime = options.lastUpdateTime ?? 0;
   return session;
+}
+
+function partialDelivery(content: string, details: Record<string, unknown> = {}) {
+  return {
+    code: "CHANNEL_PARTIAL_DELIVERY",
+    deliveryResult: { visibleReplySent: true, content, ...details },
+  };
+}
+
+function readSummary(body: string | undefined): string {
+  return JSON.parse(JSON.parse(body ?? "{}").settings ?? "{}").config?.summary?.content ?? "";
 }
 
 describe("FeishuStreamingSession", () => {
@@ -164,6 +154,7 @@ describe("FeishuStreamingSession", () => {
       updateStatuses?: ReadonlyMap<number, number>;
       replaceStatuses?: ReadonlyMap<number, number>;
       bodyErrors?: Record<string, { code: number; msg: string }>;
+      onSettings?: (session: FeishuStreamingSession) => void;
     } = {},
   ) {
     const updateBodies: string[] = [];
@@ -197,14 +188,16 @@ describe("FeishuStreamingSession", () => {
         noteBodies.push(body);
       } else if (url.pathname.includes("/settings")) {
         settingsBodies.push(body);
+        failures.onSettings?.(session);
       }
       const error = Object.entries(failures.bodyErrors ?? {}).find(([path]) =>
         url.pathname.endsWith(path),
       )?.[1];
       return jsonResponse(error ?? { code: 0, msg: "ok" }, status);
     });
+    const session = createActiveSession(deps, { ...options, log });
     return {
-      session: createActiveSession(deps, { ...options, log }),
+      session,
       updateBodies,
       replaceBodies,
       noteBodies,
@@ -213,52 +206,25 @@ describe("FeishuStreamingSession", () => {
     };
   }
 
-  function mockStreamingTokenStart(resolveAuthJson: (token: string) => Record<string, unknown>): {
-    authTokens: string[];
-    startSession: () => Promise<void>;
-  } {
-    const authTokens: string[] = [];
-    const deps = createMemoryFetch((url) => {
-      if (url.pathname.includes("/auth/")) {
-        const token = `token-${authTokens.length + 1}`;
-        authTokens.push(token);
-        return jsonResponse(resolveAuthJson(token));
-      }
-      return jsonResponse({
-        code: 0,
-        msg: "ok",
-        data: { card_id: `card-${authTokens.length}` },
-      });
-    });
-    const client = {
-      im: {
-        message: {
-          create: vi.fn(async () => ({ code: 0, msg: "ok", data: { message_id: "om_1" } })),
-        },
-      },
-    } as unknown as ConstructorParameters<typeof FeishuStreamingSession>[0];
-    return {
-      authTokens,
-      startSession: () =>
-        createStreamingSession(
-          client,
-          { appId: "app_unsafe_token_expiry", appSecret: "secret" },
-          undefined,
-          deps,
-        ).start("chat_id", "open_id"),
-    };
-  }
-
   function mockAcceptedStreamingCard(params: {
     accountId: string;
     response?: { code: number; msg: string; data?: { message_id?: string } };
     rejectClose?: boolean;
     rejectClear?: boolean;
+    tokenExpiry?: number;
   }) {
+    const authTokens: string[] = [];
     const requests: Array<{ path: string; body: Record<string, unknown> }> = [];
     const deps = createMemoryFetch((url, body) => {
       if (url.pathname.includes("/auth/")) {
-        return jsonResponse(createStreamingTokenPayload());
+        const token = `token-${authTokens.length + 1}`;
+        authTokens.push(token);
+        return jsonResponse({
+          ...createStreamingTokenPayload(),
+          ...(params.tokenExpiry !== undefined
+            ? { tenant_access_token: token, expire: params.tokenExpiry }
+            : {}),
+        });
       }
       if (url.pathname.endsWith("/cardkit/v1/cards")) {
         return jsonResponse({ code: 0, msg: "ok", data: { card_id: "card_accepted" } });
@@ -277,28 +243,42 @@ describe("FeishuStreamingSession", () => {
     const reply = vi.fn(async () => response);
     const remove = vi.fn(async () => ({ code: 0, msg: "ok" }));
     const client = {
-      im: { message: { create, reply, delete: remove } },
+      im: {
+        message: params.tokenExpiry === undefined ? { create, reply, delete: remove } : { create },
+      },
     } as unknown as ConstructorParameters<typeof FeishuStreamingSession>[0];
-    const session = createStreamingSession(
-      client,
-      { appId: params.accountId, appSecret: "test-secret" },
-      undefined,
-      deps,
-    );
-    return { session, requests, create, reply, remove };
+    const newSession = () =>
+      createStreamingSession(
+        client,
+        { appId: params.accountId, appSecret: "test-secret" },
+        undefined,
+        deps,
+      );
+    return { session: newSession(), newSession, authTokens, requests, create, reply, remove };
   }
 
   it.each([
-    { mode: "create", options: undefined, method: "create" },
-    { mode: "root_create", options: { rootId: "root_1" }, method: "create" },
+    {
+      mode: "create",
+      options: undefined,
+      method: "create",
+      data: expect.not.objectContaining({ root_id: expect.anything() }),
+    },
+    {
+      mode: "root_create",
+      options: { rootId: "root_1" },
+      method: "create",
+      data: expect.objectContaining({ root_id: "root_1" }),
+    },
     {
       mode: "reply",
       options: { replyToMessageId: "inbound_1", replyInThread: true, rootId: "root_1" },
       method: "reply",
+      data: expect.objectContaining({ reply_in_thread: true }),
     },
   ] as const)(
     "updates and closes an accepted $mode card when its optional message receipt is absent",
-    async ({ mode, options, method }) => {
+    async ({ mode, options, method, data }) => {
       const { session, requests, create, reply } = mockAcceptedStreamingCard({
         accountId: `accepted-without-receipt-${mode}`,
       });
@@ -310,28 +290,13 @@ describe("FeishuStreamingSession", () => {
         visibleReplySent: true,
         content: "The accepted answer",
       });
-      expect(method === "reply" ? reply : create).toHaveBeenCalledOnce();
+      expect(method === "reply" ? reply : create).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          data,
+          ...(method === "reply" ? { path: { message_id: "inbound_1" } } : {}),
+        }),
+      );
       expect(method === "reply" ? create : reply).not.toHaveBeenCalled();
-      if (mode === "root_create") {
-        expect(create).toHaveBeenCalledWith(
-          expect.objectContaining({
-            data: expect.objectContaining({ root_id: "root_1" }),
-          }),
-        );
-      } else if (mode === "create") {
-        expect(create).toHaveBeenCalledWith(
-          expect.objectContaining({
-            data: expect.not.objectContaining({ root_id: expect.anything() }),
-          }),
-        );
-      } else {
-        expect(reply).toHaveBeenCalledWith(
-          expect.objectContaining({
-            path: { message_id: "inbound_1" },
-            data: expect.objectContaining({ reply_in_thread: true }),
-          }),
-        );
-      }
       expect(requests.map(({ path }) => path)).toEqual([
         "/open-apis/cardkit/v1/cards/card_accepted/elements/content/content",
         "/open-apis/cardkit/v1/cards/card_accepted/settings",
@@ -340,45 +305,40 @@ describe("FeishuStreamingSession", () => {
     },
   );
 
-  it("clears an accepted preview without requesting deletion with an absent message receipt", async () => {
-    const { session, requests, remove } = mockAcceptedStreamingCard({
-      accountId: "discard-without-receipt",
-    });
+  it.each([undefined, "om_accepted"])(
+    "discards an accepted preview with receipt %s",
+    async (messageId) => {
+      const { session, requests, remove } = mockAcceptedStreamingCard({
+        accountId: `discard-${messageId ?? "without-receipt"}`,
+        response: { code: 0, msg: "ok", data: { message_id: messageId } },
+      });
 
-    await session.start("chat_1");
-    await session.update("Transient preview");
-    await session.discard();
+      await session.start("chat_1");
+      await session.update("Transient preview");
+      await session.discard();
 
-    expect(remove).not.toHaveBeenCalled();
-    expect(requests.map(({ path }) => path)).toEqual([
-      "/open-apis/cardkit/v1/cards/card_accepted/elements/content/content",
-      "/open-apis/cardkit/v1/cards/card_accepted/elements/content",
-      "/open-apis/cardkit/v1/cards/card_accepted/settings",
-    ]);
-    expect(JSON.parse(String(requests[1]?.body.element))).toEqual({
-      tag: "markdown",
-      content: "",
-      element_id: "content",
-    });
-    expect(session.isActive()).toBe(false);
-  });
-
-  it("deletes an accepted preview normally when its message receipt is present", async () => {
-    const { session, requests, remove } = mockAcceptedStreamingCard({
-      accountId: "discard-with-receipt",
-      response: { code: 0, msg: "ok", data: { message_id: "om_accepted" } },
-    });
-
-    await session.start("chat_1");
-    await session.update("Transient preview");
-    await session.discard();
-
-    expect(remove).toHaveBeenCalledExactlyOnceWith({ path: { message_id: "om_accepted" } });
-    expect(requests.map(({ path }) => path)).toEqual([
-      "/open-apis/cardkit/v1/cards/card_accepted/elements/content/content",
-    ]);
-    expect(session.isActive()).toBe(false);
-  });
+      if (messageId) {
+        expect(remove).toHaveBeenCalledExactlyOnceWith({ path: { message_id: messageId } });
+      } else {
+        expect(remove).not.toHaveBeenCalled();
+        expect(JSON.parse(String(requests[1]?.body.element))).toEqual({
+          tag: "markdown",
+          content: "",
+          element_id: "content",
+        });
+      }
+      expect(requests.map(({ path }) => path)).toEqual([
+        "/open-apis/cardkit/v1/cards/card_accepted/elements/content/content",
+        ...(!messageId
+          ? [
+              "/open-apis/cardkit/v1/cards/card_accepted/elements/content",
+              "/open-apis/cardkit/v1/cards/card_accepted/settings",
+            ]
+          : []),
+      ]);
+      expect(session.isActive()).toBe(false);
+    },
+  );
 
   it.each([undefined, "om_accepted"])(
     "retains accepted content and receipt %s when preview removal fails",
@@ -392,14 +352,9 @@ describe("FeishuStreamingSession", () => {
       await session.start("chat_1");
       await session.update("Already visible answer");
 
-      await expect(session.discard()).rejects.toMatchObject({
-        code: "CHANNEL_PARTIAL_DELIVERY",
-        deliveryResult: {
-          visibleReplySent: true,
-          content: "Already visible answer",
-          ...(messageId ? { messageIds: [messageId] } : {}),
-        },
-      });
+      await expect(session.discard()).rejects.toMatchObject(
+        partialDelivery("Already visible answer", messageId ? { messageIds: [messageId] } : {}),
+      );
       expect(remove).toHaveBeenCalledTimes(messageId ? 1 : 0);
       expect(session.isActive()).toBe(false);
     },
@@ -414,13 +369,9 @@ describe("FeishuStreamingSession", () => {
     await session.start("chat_1");
     await session.update("Already visible answer");
 
-    await expect(session.closeWithResult("Already visible answer")).rejects.toMatchObject({
-      code: "CHANNEL_PARTIAL_DELIVERY",
-      deliveryResult: {
-        visibleReplySent: true,
-        content: "Already visible answer",
-      },
-    });
+    await expect(session.closeWithResult("Already visible answer")).rejects.toMatchObject(
+      partialDelivery("Already visible answer"),
+    );
   });
 
   it("still rejects provider-declined streaming card messages", async () => {
@@ -470,37 +421,29 @@ describe("FeishuStreamingSession", () => {
   it("aborts a stalled Feishu tenant-token request after the configured timeout", async () => {
     vi.useFakeTimers();
     let authRequestReceived = false;
-    const deps: StreamingFetchDeps = {
-      fetchImpl: withFetchPreconnect(
-        vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-          const url = new URL(input instanceof Request ? input.url : input.toString());
-          if (!url.pathname.includes("/auth/")) {
-            return jsonResponse({ code: 0, msg: "ok", data: { card_id: "card_should_not_reach" } });
-          }
-          authRequestReceived = true;
-          return await new Promise<Response>((_resolve, reject) => {
-            const signal = init?.signal;
-            if (!signal) {
-              reject(new Error("missing guarded fetch signal"));
-              return;
-            }
-            signal.addEventListener(
-              "abort",
-              () => {
-                const reason = signal.reason;
-                reject(
-                  reason instanceof Error
-                    ? reason
-                    : new Error("request aborted", { cause: reason }),
-                );
-              },
-              { once: true },
+    const deps = createMemoryFetch(async (url, _body, init) => {
+      if (!url.pathname.includes("/auth/")) {
+        return jsonResponse({ code: 0, msg: "ok", data: { card_id: "card_should_not_reach" } });
+      }
+      authRequestReceived = true;
+      return await new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal;
+        if (!signal) {
+          reject(new Error("missing guarded fetch signal"));
+          return;
+        }
+        signal.addEventListener(
+          "abort",
+          () => {
+            const reason = signal.reason;
+            reject(
+              reason instanceof Error ? reason : new Error("request aborted", { cause: reason }),
             );
-          });
-        }),
-      ) as FeishuStreamingFetch,
-      lookupFn: hermeticPublicLookup,
-    };
+          },
+          { once: true },
+        );
+      });
+    });
 
     const session = createStreamingSession(
       {} as never,
@@ -524,32 +467,45 @@ describe("FeishuStreamingSession", () => {
     await vi.advanceTimersByTimeAsync(26);
     await result;
     expect(authRequestReceived).toBe(true);
-    console.log(
-      "[feishu streaming-card stall proof] stalled tenant-token fetch honored configured timeout",
-    );
   });
 
-  it("flushes only the latest authoritative snapshot after the throttle window", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1_000);
-    const { session, updateBodies } = mockActiveSession({
+  it.each([
+    {
+      name: "latest throttled snapshot",
       cardId: "card_1",
-      messageId: "om_1",
-      text: "visible",
-      lastUpdateTime: 1_000,
+      time: 1_000,
+      previous: "visible",
+      drafts: ["draft one", "draft two"],
+      delayed: true,
+    },
+    {
+      name: "natural boundary immediately",
+      cardId: "card_2",
+      time: 2_000,
+      previous: "hello",
+      drafts: ["hello!"],
+      delayed: false,
+    },
+  ])("flushes $name", async ({ cardId, time, previous, drafts, delayed }) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(time);
+    const { session, updateBodies } = mockActiveSession({
+      cardId,
+      text: previous,
+      lastUpdateTime: time,
     });
-
-    await session.update("draft one");
-    await session.update("draft two");
-    expect(updateBodies).toHaveLength(0);
-
-    await vi.advanceTimersByTimeAsync(160);
-
+    for (const draft of drafts) {
+      await session.update(draft);
+    }
+    if (delayed) {
+      expect(updateBodies).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(160);
+    }
     expect(updateBodies).toHaveLength(1);
     expect(JSON.parse(updateBodies[0] ?? "{}")).toEqual({
-      content: "draft two",
+      content: drafts.at(-1),
       sequence: 2,
-      uuid: "s_card_1_2",
+      uuid: `s_${cardId}_2`,
     });
   });
 
@@ -562,7 +518,6 @@ describe("FeishuStreamingSession", () => {
     const { session, updateBodies, log } = mockActiveSession(
       {
         cardId: "card_rejected_flush",
-        messageId: "om_rejected_flush",
         text: "hello",
         lastUpdateTime: 1_500,
       },
@@ -585,26 +540,6 @@ describe("FeishuStreamingSession", () => {
     ]);
   });
 
-  it("pushes natural-boundary updates immediately inside the throttle window", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(2_000);
-    const { session, updateBodies } = mockActiveSession({
-      cardId: "card_2",
-      messageId: "om_2",
-      text: "hello",
-      lastUpdateTime: 2_000,
-    });
-
-    await session.update("hello!");
-
-    expect(updateBodies).toHaveLength(1);
-    expect(JSON.parse(updateBodies[0] ?? "{}")).toEqual({
-      content: "hello!",
-      sequence: 2,
-      uuid: "s_card_2_2",
-    });
-  });
-
   it("closes with a throttled divergent latest snapshot without merging it", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(2_750);
@@ -612,7 +547,6 @@ describe("FeishuStreamingSession", () => {
     const next = "> Thinking two\n\n---\n\nanswer more";
     const { session, updateBodies, replaceBodies } = mockActiveSession({
       cardId: "card_pending_reasoning_close",
-      messageId: "om_pending_reasoning_close",
       text: previous,
       lastUpdateTime: 2_750,
     });
@@ -636,50 +570,28 @@ describe("FeishuStreamingSession", () => {
   it("retains prior visible content when CardKit rejects a divergent close replacement", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(2_900);
-    const replaceBodies: string[] = [];
-    const settingsBodies: string[] = [];
     const previous = "> Thinking one\n\n---\n\nanswer";
     const next = "> Thinking two\n\n---\n\nanswer more";
     let sentTextWhenSettingsClosed: string | undefined;
-    const deps = createMemoryFetch((url, body) => {
-      if (url.pathname.includes("/auth/")) {
-        return jsonResponse(createStreamingTokenPayload());
-      }
-      if (url.pathname.endsWith("/elements/content")) {
-        replaceBodies.push(body);
-        return jsonResponse({ code: 19_002, msg: "replacement rejected" });
-      }
-      if (url.pathname.includes("/settings")) {
-        settingsBodies.push(body);
-        sentTextWhenSettingsClosed = (session as unknown as { state: StreamingSessionState }).state
-          .sentText;
-      }
-      return jsonResponse({ code: 0, msg: "ok" });
-    });
-    const log = vi.fn();
-    const session = createActiveSession(deps, {
-      cardId: "card_rejected_pending_reasoning_close",
-      messageId: "om_rejected_pending_reasoning_close",
-      text: previous,
-      lastUpdateTime: 2_900,
-      log,
-    });
+    const { session, replaceBodies, settingsBodies, log } = mockActiveSession(
+      { cardId: "card_rejected_pending_reasoning_close", text: previous, lastUpdateTime: 2_900 },
+      {
+        bodyErrors: { "/elements/content": { code: 19_002, msg: "replacement rejected" } },
+        onSettings: (active) => {
+          sentTextWhenSettingsClosed = (active as unknown as { state: StreamingSessionState }).state
+            .sentText;
+        },
+      },
+    );
 
     await session.update(next);
-    await expect(session.closeWithResult()).rejects.toMatchObject({
-      code: "CHANNEL_PARTIAL_DELIVERY",
-      deliveryResult: { visibleReplySent: true, content: previous },
-    });
+    await expect(session.closeWithResult()).rejects.toMatchObject(partialDelivery(previous));
 
     expect(replaceBodies).toHaveLength(1);
     expect(settingsBodies).toHaveLength(1);
     expect(sentTextWhenSettingsClosed).toBe(previous);
-    const settingsPayload = JSON.parse(settingsBodies[0] ?? "{}") as { settings?: string };
-    const settings = JSON.parse(settingsPayload.settings ?? "{}") as {
-      config?: { summary?: { content?: string } };
-    };
-    expect(settings.config?.summary?.content).toBe(previous.replaceAll("\n", " ").trim());
-    expect(settings.config?.summary?.content).not.toContain("Thinking two");
+    expect(readSummary(settingsBodies[0])).toBe(previous.replaceAll("\n", " ").trim());
+    expect(readSummary(settingsBodies[0])).not.toContain("Thinking two");
     expect(log).toHaveBeenCalledWith(
       "Final replace failed: Error: Replace card content failed: replacement rejected (code=19002)",
     );
@@ -689,7 +601,6 @@ describe("FeishuStreamingSession", () => {
     const { session, noteBodies, settingsBodies, log } = mockActiveSession(
       {
         cardId: "card_rejected_note_and_close",
-        messageId: "om_rejected_note_and_close",
         text: "visible answer",
         hasNote: true,
       },
@@ -706,14 +617,9 @@ describe("FeishuStreamingSession", () => {
       .catch((caught: unknown) => caught);
 
     expect(error).toBeInstanceOf(Error);
-    expect(error).toMatchObject({
-      code: "CHANNEL_PARTIAL_DELIVERY",
-      deliveryResult: {
-        visibleReplySent: true,
-        content: "visible answer",
-        messageIds: ["om_rejected_note_and_close"],
-      },
-    });
+    expect(error).toMatchObject(
+      partialDelivery("visible answer", { messageIds: ["om_rejected_note_and_close"] }),
+    );
 
     expect(noteBodies).toHaveLength(1);
     expect(settingsBodies).toHaveLength(1);
@@ -731,7 +637,7 @@ describe("FeishuStreamingSession", () => {
       vi.useFakeTimers();
       vi.setSystemTime(3_000);
       const { session, updateBodies } = mockActiveSession(
-        { cardId: `card_${kind}`, messageId: `om_${kind}`, text: "hello", lastUpdateTime: 2_000 },
+        { cardId: `card_${kind}`, text: "hello", lastUpdateTime: 2_000 },
         kind === "network"
           ? { updateIndexes: new Set([0]) }
           : { updateStatuses: new Map([[0, 429]]) },
@@ -766,18 +672,13 @@ describe("FeishuStreamingSession", () => {
 
     const session = createActiveSession(deps, {
       cardId: "card_surrogate",
-      messageId: "om_surrogate",
       lastUpdateTime: 3_000,
     });
 
     await session.closeWithResult(finalText);
 
     expect(settingsBodies).toHaveLength(1);
-    const settingsPayload = JSON.parse(settingsBodies[0] ?? "{}") as { settings?: string };
-    const settings = JSON.parse(settingsPayload.settings ?? "{}") as {
-      config?: { summary?: { content?: string } };
-    };
-    const summary = settings.config?.summary?.content ?? "";
+    const summary = readSummary(settingsBodies[0]);
     expect(summary).toBe(`${"a".repeat(46)}...`);
     expect(summary).not.toContain("\uD83D");
     expect(summary.charCodeAt(summary.length - 4)).not.toBe(0xd83d);
@@ -796,7 +697,6 @@ describe("FeishuStreamingSession", () => {
       const { session, updateBodies, replaceBodies, log } = mockActiveSession(
         {
           cardId: `card_failed_${mode}`,
-          messageId: `om_failed_${mode}`,
           text,
           lastUpdateTime: 3_000,
         },
@@ -806,14 +706,12 @@ describe("FeishuStreamingSession", () => {
       );
       const error = await session.closeWithResult(finalText).catch((caught: unknown) => caught);
       if (text) {
-        expect(error).toMatchObject({
-          code: "CHANNEL_PARTIAL_DELIVERY",
-          deliveryResult: {
-            visibleReplySent: true,
-            content: text,
-            ...(replace ? {} : { messageIds: [`om_failed_${mode}`], finalTextAccepted: false }),
-          },
-        });
+        expect(error).toMatchObject(
+          partialDelivery(
+            text,
+            replace ? {} : { messageIds: [`om_failed_${mode}`], finalTextAccepted: false },
+          ),
+        );
       } else {
         expect(error).toBeInstanceOf(Error);
         expect(error).toMatchObject({ message: "Update card content failed with HTTP 500" });
@@ -832,18 +730,17 @@ describe("FeishuStreamingSession", () => {
   it("bounds streaming token cache lifetime when token expiry overflows", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-29T12:00:00.000Z"));
-    const { authTokens, startSession } = mockStreamingTokenStart((token) => ({
-      code: 0,
-      msg: "ok",
-      tenant_access_token: token,
-      expire: Number.MAX_SAFE_INTEGER,
-    }));
+    const { authTokens, newSession } = mockAcceptedStreamingCard({
+      accountId: "app_unsafe_token_expiry",
+      tokenExpiry: Number.MAX_SAFE_INTEGER,
+      response: { code: 0, msg: "ok", data: { message_id: "om_1" } },
+    });
 
-    await startSession();
+    await newSession().start("chat_id", "open_id");
     expect(authTokens).toEqual(["token-1"]);
 
     vi.setSystemTime(Date.now() + 7200 * 1000 - 60_000 + 1);
-    await startSession();
+    await newSession().start("chat_id", "open_id");
 
     expect(authTokens).toEqual(["token-1", "token-2"]);
   });
