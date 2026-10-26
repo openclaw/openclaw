@@ -2404,6 +2404,29 @@ try {
                       reportAnonymousScripts: false,
                     });
                   }
+                  const activation =
+                    id === "roster-create-claw"
+                      ? await page.evaluateHandle(() => {
+                          const recorded = { at: null as number | null };
+                          const capture = (event: MouseEvent) => {
+                            if (
+                              event.button === 0 &&
+                              event
+                                .composedPath()
+                                .some(
+                                  (member) =>
+                                    member instanceof Element &&
+                                    member.matches('[role="menuitem"][data-value="create-claw"]'),
+                                )
+                            ) {
+                              recorded.at = performance.now();
+                              document.removeEventListener("click", capture, true);
+                            }
+                          };
+                          document.addEventListener("click", capture, true);
+                          return recorded;
+                        })
+                      : undefined;
                   const cpuBefore = await metrics(cdp);
                   const started = await page.evaluate(() => performance.now());
                   if (id in creationInteractions) {
@@ -2434,6 +2457,13 @@ try {
                     mode === "coverage" ? await page.coverage.stopJSCoverage() : undefined;
                   cell.wallMs = ended - started;
                   cell.cpu = cpuDelta(cpuBefore, await metrics(cdp));
+                  if (activation) {
+                    const activated = await activation.evaluate((recorded) => recorded.at);
+                    assert(activated !== null && activated >= started && activated <= ended);
+                    cell.preActivationMs = activated - started;
+                    cell.activationToReadyMs = ended - activated;
+                    await activation.dispose();
+                  }
                   cell.newJsRequests = atEnd.filter(
                     (request) =>
                       !prior.has(request.requestId) &&
