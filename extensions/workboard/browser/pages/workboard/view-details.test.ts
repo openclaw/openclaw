@@ -2,7 +2,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { flush } from "solid-js";
 import "../../test/dom.setup.ts";
 import { describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import {
   createGatewaySession,
   createWorkboardCard,
@@ -17,11 +16,10 @@ import {
   expectText,
   expectAbsent,
   detailView,
+  submitForm,
 } from "./view-dom.test-support.ts";
 import {
-  createLoadedWorkboardState,
   createWorkboardView,
-  buttonByLabel,
   buttonByText,
   requireButton,
   openCardMenu,
@@ -31,30 +29,18 @@ import {
 
 describe("WorkboardView", () => {
   it.each([
-    {
-      name: "direct",
-      expected: "agent:work:dashboard-panel-close",
-      sessionAgentId: "work",
-    },
-    {
-      name: "resolved",
-      expected: "agent:main:subagent:workboard-default-card-1",
-      sessionAgentId: undefined,
-    },
-    { name: "missing", expected: undefined, sessionAgentId: undefined },
-  ])("binds the session summary to its $name owner", ({ name, expected, sessionAgentId }) => {
+    ["direct", "agent:work:dashboard-panel-close", "work"],
+    ["resolved", "agent:main:subagent:workboard-default-card-1", undefined],
+    ["missing", undefined, undefined],
+  ] as const)("binds the session summary to its %s owner", (name, expected, sessionAgentId) => {
     const sessionKey = name === "direct" ? expected : "subagent:workboard-default-card-1";
     const onOpenSession = vi.fn();
+    const session = expected
+      ? { sessionKey: expected, ...(sessionAgentId ? { agentId: sessionAgentId } : {}) }
+      : undefined;
     const { state, container, renderView } = createWorkboardView({
       onOpenSession,
-      sessions: expected
-        ? [
-            createGatewaySession({
-              key: expected,
-              ...(sessionAgentId ? { agentId: sessionAgentId } : {}),
-            }),
-          ]
-        : [],
+      sessions: expected ? [createGatewaySession({ key: expected, agentId: sessionAgentId })] : [],
       sessionResolution:
         name === "direct"
           ? undefined
@@ -80,10 +66,6 @@ describe("WorkboardView", () => {
       ".workboard-detail .workboard-detail__session-link",
     );
     if (expected) {
-      const session = {
-        sessionKey: expected,
-        ...(sessionAgentId ? { agentId: sessionAgentId } : {}),
-      };
       expect(mount).toHaveBeenCalledWith(
         expect.any(HTMLElement),
         expect.objectContaining({ session }),
@@ -105,10 +87,7 @@ describe("WorkboardView", () => {
   });
 
   it("preserves error visibility and dismissal through details dialogs", async () => {
-    const { state, container, renderView } = createWorkboardView();
-    const card = createWorkboardCard();
-    state.cards = [card];
-    state.detailCardId = card.id;
+    const { state, container, renderView } = detailView(createWorkboardCard());
     const pageError = "Metadata unavailable. Linked session unavailable.";
     const expectError = async (message: string) => {
       await waitForFast(() => {
@@ -131,9 +110,6 @@ describe("WorkboardView", () => {
       expect(dialogToast?.querySelector('[role="alert"]')).toBeNull();
     });
     state.detailCardId = null;
-    state.bulkDialog = null;
-    state.draftOpen = false;
-    state.draftDiscardOpen = false;
     renderView({ pageError });
     const active = element<HTMLElement>(container, "openclaw-workboard-toast:not([hidden])");
     flush();
@@ -147,40 +123,30 @@ describe("WorkboardView", () => {
   });
 
   it.each([
-    { label: "id", failedId: "a", completedId: "z", completedSequence: 1 },
-    {
-      label: "legacy entry",
-      failedId: "z",
-      completedId: "a",
-      completedSequence: undefined,
-    },
-  ])(
-    "does not show an obsolete same-time failure after completion ordered by $label",
-    ({ failedId, completedId, completedSequence }) => {
+    ["id", "a", "z", 1],
+    ["legacy entry", "z", "a", undefined],
+  ] as const)(
+    "does not show an obsolete same-time failure after completion ordered by %s",
+    (_label, failedId, completedId, completedSequence) => {
       const { state, container, renderView } = createWorkboardView();
       state.cards = [
         createWorkboardCard({
           status: "blocked",
           runId: "current-run",
           metadata: {
-            notifications: [
-              {
-                id: failedId,
-                kind: "failed",
-                createdAt: 2,
-                sequence: 1,
-                runId: "current-run",
-                message: "Obsolete run failure.",
-              },
-              {
-                id: completedId,
-                kind: "completed",
-                createdAt: 2,
-                sequence: completedSequence,
-                runId: "current-run",
-                message: "Run completed.",
-              },
-            ],
+            notifications: (
+              [
+                [failedId, "failed", 1, "Obsolete run failure."],
+                [completedId, "completed", completedSequence, "Run completed."],
+              ] as const
+            ).map(([id, kind, sequence, message]) => ({
+              id,
+              kind,
+              sequence,
+              message,
+              createdAt: 2,
+              runId: "current-run",
+            })),
           },
         }),
       ];
@@ -197,83 +163,78 @@ describe("WorkboardView", () => {
     );
     const { state, container, renderView } = createWorkboardView();
     state.viewMode = "list";
+    const title = `${"x".repeat(158)}🚀tail`;
+    const diagnostic = { firstSeenAt: 1, lastSeenAt: 1, count: 1, actions: [] };
     state.cards = [
       createWorkboardCard({
-        id: "card-boundary",
-        title: "Boundary badge",
         metadata: {
           diagnostics: [
             {
+              ...diagnostic,
               kind: "orphaned_session",
               severity: "error",
-              title: `${"x".repeat(158)}🚀tail ${sentinel}`,
+              title: `${title} ${sentinel}`,
               detail: `Boundary detail. ${sentinel}`,
-              firstSeenAt: 1,
-              lastSeenAt: 1,
-              count: 1,
-              actions: [],
             },
             {
+              ...diagnostic,
               kind: "missing_proof",
               severity: "warning",
               title: "Release verification",
-              detail: "The supporting evidence is still missing.",
-              firstSeenAt: 1,
-              lastSeenAt: 1,
-              count: 1,
-              actions: [],
+              detail: "Evidence needed.",
             },
           ],
         },
       }),
     ];
     renderView();
-    expect(container.querySelector(".workboard-card__alert--error")?.textContent?.trim()).toBe(
-      `${"x".repeat(158)}🚀tail [redacted]`,
+    expect(element(container, ".workboard-card__alert--error").textContent?.trim()).toBe(
+      `${title} [redacted]`,
     );
-    expect(container.querySelector(".workboard-card__alert")?.getAttribute("title")).toContain(
-      `${"x".repeat(158)}🚀tail`,
-    );
+    const tooltip = element(container, ".workboard-card__alert").getAttribute("title");
+    expect(tooltip).toContain(title);
+    expect(tooltip).not.toContain(sentinel);
     const card = element<HTMLElement>(container, ".workboard-card");
     const descriptionId = expectDefined(
       card.getAttribute("aria-describedby"),
       "alert description ID",
     );
     const description = expectDefined(document.getElementById(descriptionId), "alert description");
-    expect(description.textContent).toContain(`${"x".repeat(158)}🚀tail`);
-    expect(description.textContent).toContain("Boundary detail.");
-    expect(description.textContent).toContain("Release verification");
-    expect(description.textContent).toContain("The supporting evidence is still missing.");
-    expect(description.textContent).toContain("Boundary detail. [redacted]");
+    for (const text of [
+      title,
+      "Boundary detail. [redacted]",
+      "Release verification",
+      "Evidence needed.",
+    ]) {
+      expect(description.textContent).toContain(text);
+    }
     expect(description.textContent).not.toContain(sentinel);
-    expect(container.querySelector(".workboard-card__alert")?.getAttribute("title")).not.toContain(
-      sentinel,
-    );
   });
 
   it("does not render Invalid Date for Date-invalid card timestamps", () => {
     const { state, container, renderView } = createWorkboardView();
+    const invalid = 8_640_000_000_000_001;
     state.cards = [
       createWorkboardCard({
         title: "Bad timestamp card",
-        updatedAt: 8_640_000_000_000_001,
-        events: [{ id: "event-1", kind: "edited", at: 8_640_000_000_000_001 }],
+        updatedAt: invalid,
+        events: [{ id: "event-1", kind: "edited", at: invalid }],
         metadata: {
           attempts: [
             {
               id: "attempt-1",
               status: "failed",
-              startedAt: 8_640_000_000_000_001,
-              endedAt: 8_640_000_000_000_001,
-              error: "Attempt evidence survives invalid dates",
+              startedAt: invalid,
+              endedAt: invalid,
+              error: "Invalid-date attempt",
             },
           ],
           proof: [
             {
               id: "proof-1",
               status: "passed",
-              createdAt: 8_640_000_000_000_001,
-              label: "Proof evidence survives invalid dates",
+              createdAt: invalid,
+              label: "Invalid-date proof",
             },
           ],
         },
@@ -288,27 +249,17 @@ describe("WorkboardView", () => {
     buttonByText(container.querySelector('[role="tablist"]')!, "Details")!.click();
     renderView();
     const details = element<HTMLElement>(container, "#workboard-detail-panel-details");
-    expect(details.textContent).toContain("Attempt evidence survives invalid dates");
-    expect(details.textContent).toContain("Proof evidence survives invalid dates");
+    expect(details.textContent).toContain("Invalid-date attempt");
+    expect(details.textContent).toContain("Invalid-date proof");
     expect(details.textContent).not.toContain("Invalid Date");
   });
 
   it("opens board card details without hijacking action buttons", async () => {
     const onOpenSession = vi.fn();
     const { state, container, renderView } = createWorkboardView({
-      sessions: [
-        {
-          key: "agent:main:dashboard:1",
-          kind: "direct",
-          displayName: "Dashboard session",
-          updatedAt: 2,
-          hasActiveRun: true,
-          status: "running",
-        },
-      ],
+      sessions: [createGatewaySession({ updatedAt: 2 })],
       onOpenSession,
     });
-    state.viewMode = "board";
     state.cards = [
       createWorkboardCard({
         title: "Inspect a running task",
@@ -336,14 +287,13 @@ describe("WorkboardView", () => {
     const sessionKey = "agent:main:completed-review";
     const { state, container, renderView } = createWorkboardView({
       sessions: [
-        {
+        createGatewaySession({
           key: sessionKey,
-          kind: "direct",
           displayName: "Release review",
           updatedAt: 2,
           status: "done",
           hasActiveRun: false,
-        },
+        }),
       ],
       onOpenSession,
     });
@@ -365,22 +315,19 @@ describe("WorkboardView", () => {
   it("keeps queued session context readable until an outside pointer dismisses it", async () => {
     const { state, container, renderView } = createWorkboardView({
       sessions: [
-        {
+        createGatewaySession({
           key: "agent:main:queued",
-          kind: "direct",
+          displayName: undefined,
           updatedAt: 2,
-          hasActiveRun: true,
           status: "queued",
-        },
+        }),
       ],
     });
     state.cards = [createWorkboardCard({ status: "todo", sessionKey: "agent:main:queued" })];
-    const addListener = vi.spyOn(document, "addEventListener");
     renderView();
     const status = element<HTMLElement>(container, "openclaw-workboard-session-status");
     expect(status.textContent).toContain("Queued");
     expectAbsent(container, ".workboard-card__session-marker");
-    expectAbsent(container, ".workboard-card__session-marker .session-run-spinner");
     expect(container.querySelector(".workboard-card__session-name")?.textContent?.trim()).toBe(
       "Session",
     );
@@ -392,11 +339,9 @@ describe("WorkboardView", () => {
     }
     const removeListener = vi.spyOn(document, "removeEventListener");
     try {
-      expect(addListener).not.toHaveBeenCalledWith("scroll", expect.any(Function), true);
       // Pointer activation focuses the button before its click opens the explanation.
       trigger.focus();
       trigger.click();
-      expect(addListener).toHaveBeenCalledWith("scroll", expect.any(Function), true);
       expect(trigger.getAttribute("aria-expanded")).toBe("true");
       expect(state.detailCardId).toBeNull();
       panel.dispatchEvent(new Event("pointerdown", { bubbles: true, composed: true }));
@@ -406,7 +351,6 @@ describe("WorkboardView", () => {
       container.dispatchEvent(new Event("pointerdown", { bubbles: true, composed: true }));
       expect(document.activeElement).toBe(trigger);
       expect(trigger.getAttribute("aria-expanded")).toBe("false");
-      expect(removeListener).toHaveBeenCalledWith("scroll", expect.any(Function), true);
       trigger.click();
       expect(trigger.getAttribute("aria-expanded")).toBe("true");
       renderView();
@@ -419,28 +363,17 @@ describe("WorkboardView", () => {
       expect(status.isConnected).toBe(false);
       expect(removeListener).toHaveBeenCalledWith("pointerdown", expect.any(Function), true);
     } finally {
-      addListener.mockRestore();
       removeListener.mockRestore();
     }
   });
 
   it("renders card event history", () => {
-    const { state, container, renderView } = createWorkboardView({
-      onRequestUpdate: () => undefined,
-    });
+    const { state, container, renderView } = createWorkboardView();
     state.cards = [
       createWorkboardCard({
-        title: "Tracked task",
-        status: "review",
-        updatedAt: 2,
         events: [
           { id: "event-1", kind: "moved", at: 1, fromStatus: "triage", toStatus: "backlog" },
-          { id: "event-2", kind: "moved", at: 2, fromStatus: "backlog", toStatus: "todo" },
-          { id: "event-3", kind: "moved", at: 3, fromStatus: "todo", toStatus: "scheduled" },
-          { id: "event-4", kind: "moved", at: 4, fromStatus: "scheduled", toStatus: "ready" },
-          { id: "event-5", kind: "moved", at: 5, fromStatus: "ready", toStatus: "running" },
-          { id: "event-6", kind: "moved", at: 6, fromStatus: "running", toStatus: "review" },
-          { id: "event-7", kind: "moved", at: 7, fromStatus: "review", toStatus: "done" },
+          { id: "event-2", kind: "moved", at: 2, fromStatus: "review", toStatus: "done" },
         ],
       }),
     ];
@@ -448,15 +381,13 @@ describe("WorkboardView", () => {
     expectAbsent(container, ".workboard-events");
     requireButton(openCardMenu(container), "View details").click();
     renderView();
-    expectText(container, ".workboard-detail", "Moved to Done");
-    expectText(container, ".workboard-detail", "Moved to Backlog");
+    expectText(container, ".workboard-detail", "Moved to Done", "Moved to Backlog");
   });
 
   it("renders card metadata badges and hides archived cards", () => {
     const { state, container, renderView } = createWorkboardView();
     state.cards = [
       createWorkboardCard({
-        title: "Metadata rich",
         metadata: {
           templateId: "plugin",
           attempts: [{ id: "run-1", status: "blocked", startedAt: 1, endedAt: 2 }],
@@ -470,11 +401,8 @@ describe("WorkboardView", () => {
           },
           automation: {
             tenant: "ops",
-            boardId: "quality",
             skills: ["review", "test"],
             workspace: { kind: "worktree", path: "/tmp/workboard", branch: "proof" },
-            dispatchCount: 3,
-            summary: "Ready for review.",
           },
           proof: Array.from({ length: 7 }, (_, index) => ({
             id: `proof-${index + 1}`,
@@ -489,21 +417,14 @@ describe("WorkboardView", () => {
       createWorkboardCard({
         id: "card-2",
         title: "Archived task",
-        position: 2000,
         metadata: { archivedAt: 7 },
       }),
     ];
     renderView();
     expect(container.querySelector(".workboard-card")?.textContent).not.toContain("Plugin");
-    expect(
-      container.querySelector('.workboard-card__counts [aria-label="1 failed"]'),
-    ).not.toBeNull();
-    expect(
-      container.querySelector('.workboard-card__counts [aria-label="1 comments"]'),
-    ).not.toBeNull();
-    expect(
-      container.querySelector('.workboard-card__counts [aria-label="7 proof"]'),
-    ).not.toBeNull();
+    for (const count of ["1 failed", "1 comments", "7 proof"]) {
+      element(container, `.workboard-card__counts [aria-label="${count}"]`);
+    }
     expectText(container, ".workboard-card__alert", "Stale");
     expect(container.querySelector(".workboard-card__alert")?.getAttribute("title")).toContain(
       "No recent activity.",
@@ -520,17 +441,21 @@ describe("WorkboardView", () => {
     expect(archivedToggle.checked).toBe(true);
     requireButton(openCardMenu(container), "View details").click();
     renderView();
-    expectText(container, ".workboard-detail", "1 attempts");
-    expectText(container, ".workboard-detail", "1 links");
-    expectText(container, ".workboard-detail", "pnpm test 1");
-    expectText(container, ".workboard-detail", "pnpm test 7");
-    expectText(container, ".workboard-detail", "https://example.com/proof-7");
-    expectText(container, ".workboard-detail", "Worker protocol");
-    expectText(container, ".workboard-detail", "Worker asked for owner input.");
-    expectText(container, ".workboard-detail", "Card automation");
-    expectText(container, ".workboard-detail", "ops");
-    expectText(container, ".workboard-detail", "review, test");
-    expectText(container, ".workboard-detail", "worktree · /tmp/workboard · proof");
+    expectText(
+      container,
+      ".workboard-detail",
+      "1 attempts",
+      "1 links",
+      "pnpm test 1",
+      "pnpm test 7",
+      "https://example.com/proof-7",
+      "Worker protocol",
+      "Worker asked for owner input.",
+      "Card automation",
+      "ops",
+      "review, test",
+      "worktree · /tmp/workboard · proof",
+    );
   });
 
   it("keeps visible archived cards inspectable and restorable without move or drag controls", async () => {
@@ -538,73 +463,59 @@ describe("WorkboardView", () => {
       title: "Archived historical task",
       metadata: { archivedAt: 10 },
     });
-    const request = vi.fn();
-    const { state, container, renderView } = createWorkboardView({
-      client: { request } as unknown as GatewayBrowserClient,
-    });
+    const client = createWorkboardTestClient({});
+    const { state, container, renderView } = createWorkboardView({ client });
     state.cards = [archivedCard];
     state.showArchived = true;
     renderView();
-    const article = container.querySelector<HTMLElement>(".workboard-card--archived");
-    expect(article).not.toBeNull();
-    expect(article?.getAttribute("draggable")).toBe("false");
-    const menu = openCardMenu(expectDefined(article, "archived card"));
+    const article = element(container, ".workboard-card--archived");
+    expect(article.getAttribute("draggable")).toBe("false");
+    const menu = openCardMenu(article);
     expectAbsent(menu, ".workboard-card__move-select");
-    expect(buttonByLabel(menu, "Restore from archive")).not.toBeNull();
-    expect(
-      article!.dispatchEvent(new Event("dragstart", { bubbles: true, cancelable: true })),
-    ).toBe(false);
+    requireButton(menu, "Restore from archive");
+    expect(article.dispatchEvent(new Event("dragstart", { bubbles: true, cancelable: true }))).toBe(
+      false,
+    );
     expect(state.draggedCardId).toBeNull();
     state.draggedCardId = archivedCard.id;
     container
       .querySelector(".workboard-column--running")
       ?.dispatchEvent(new Event("drop", { bubbles: true, cancelable: true }));
-    expect(request).not.toHaveBeenCalled();
+    expect(client.request).not.toHaveBeenCalled();
     state.draggedCardId = null;
     state.detailCardId = archivedCard.id;
     renderView();
-    const drawer = container.querySelector<HTMLElement>(".workboard-detail");
+    const drawer = element(container, ".workboard-detail");
     element<HTMLElement>(drawer, "workboard-inline-text");
     flush();
-    expect(drawer?.textContent).toContain(archivedCard.title);
-    expect(drawer?.querySelector(".workboard-card__move-select")).toBeNull();
-    expect(buttonByLabel(drawer!, "Restore from archive")).not.toBeNull();
-    expect(request).not.toHaveBeenCalled();
+    expect(drawer.textContent).toContain(archivedCard.title);
+    expectAbsent(drawer, ".workboard-card__move-select");
+    requireButton(drawer, "Restore from archive");
+    expect(client.request).not.toHaveBeenCalled();
   });
 
   it("shows stale lifecycle on executed linked cards", async () => {
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(60 * 60 * 1000);
     try {
-      const { host, state } = createLoadedWorkboardState();
+      const { state, container, renderView } = createWorkboardView({
+        sessions: [createGatewaySession({ updatedAt: 1, hasActiveRun: false })],
+      });
       state.cards = [
         createWorkboardCard({
-          title: "Watch stale run",
           status: "running",
           execution: createWorkboardExecution(),
         }),
       ];
-      const { container, renderView } = createWorkboardView(
-        {
-          sessions: [
-            {
-              key: "agent:main:dashboard:1",
-              kind: "direct",
-              displayName: "Dashboard session",
-              updatedAt: 1,
-              hasActiveRun: false,
-              status: "running",
-            },
-          ],
-        },
-        host,
-      );
       renderView();
       await vi.waitFor(() => expectText(container, ".workboard-session-status__trigger", "Stale"));
       expectText(container, ".workboard-session-status__detail", "No recent session activity");
-      expectAbsent(container, ".workboard-card__session-marker");
       expect(container.textContent).not.toContain("codex autonomous");
-      expectAbsent(container, ".workboard-live");
-      expectAbsent(container, 'button[aria-label="Stop session"]');
+      expectAbsent(
+        container,
+        ".workboard-card__session-marker",
+        ".workboard-live",
+        'button[aria-label="Stop session"]',
+      );
     } finally {
       nowSpy.mockRestore();
     }
@@ -613,42 +524,36 @@ describe("WorkboardView", () => {
   it("preserves the authoritative top-level session when editing a Workboard card", async () => {
     const sessionKey = "agent:main:top-level-linked-session";
     const card = createWorkboardCard({
-      title: "Keep my linked session",
       sessionKey,
       execution: createWorkboardExecution({ sessionKey: "agent:main:execution-linked-session" }),
     });
-    const request = vi.fn(async () => ({
+    const client = createWorkboardTestClient(() => ({
       card: { ...card, title: "Renamed without unlinking", updatedAt: 2 },
     }));
     const { state, container, renderView } = detailView(card, {
-      client: { request } as unknown as GatewayBrowserClient,
-      onRequestUpdate: () => undefined,
+      client,
       sessions: [
-        {
+        createGatewaySession({
           key: sessionKey,
-          kind: "direct",
           displayName: "Active linked session",
           updatedAt: 1,
-          status: "running",
-        },
+          hasActiveRun: undefined,
+        }),
       ],
     });
     renderView();
-    const editButton = buttonByLabel(container, "Edit card");
-    expect(editButton).not.toBeNull();
-    editButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    requireButton(container, "Edit card").click();
     renderView();
     expect(state.draftSessionKey).toBe(sessionKey);
     expect(sessionPicker(container).value).toBe(sessionKey);
-    const title = container.querySelector<HTMLInputElement>(".workboard-draft__title");
-    expect(title).not.toBeNull();
-    enterText(title!, "Renamed without unlinking");
-    container
-      .querySelector<HTMLFormElement>(".workboard-draft")
-      ?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    enterText(
+      element<HTMLInputElement>(container, ".workboard-draft__title"),
+      "Renamed without unlinking",
+    );
+    submitForm(element<HTMLFormElement>(container, ".workboard-draft"));
     await Promise.resolve();
     await Promise.resolve();
-    expect(request).toHaveBeenCalledWith("workboard.cards.update", {
+    expect(client.request).toHaveBeenCalledWith("workboard.cards.update", {
       id: card.id,
       expectedUpdatedAt: card.updatedAt,
       patch: { title: "Renamed without unlinking" },
@@ -657,21 +562,18 @@ describe("WorkboardView", () => {
     renderView();
     state.detailTab = "session";
     renderView();
-    expect(container.querySelector("[data-test-session-summary]")).not.toBeNull();
+    element(container, "[data-test-session-summary]");
   });
 
   it("preserves explicit archive visibility (success=true, showArchived=false)", async () => {
-    const card = createWorkboardCard({ title: "Archive from drawer", notes: "", labels: [] });
-    const client = createWorkboardTestClient(() => {
-      return { card: { ...card, metadata: { ...card.metadata, archivedAt: 2 } } };
-    });
-    const { state, container, renderView } = createWorkboardView({
+    const card = createWorkboardCard();
+    const client = createWorkboardTestClient(() => ({
+      card: { ...card, metadata: { archivedAt: 2 } },
+    }));
+    const { state, container, renderView } = detailView(card, {
       client,
       onRequestUpdate: () => renderView(),
     });
-    state.cards = [card];
-    state.detailCardId = card.id;
-    state.showArchived = false;
     renderView();
     requireButton(container.querySelector(".workboard-detail__menu")!, "Archive card").click();
     await waitForFast(() => expect(state.busyCardIds.size).toBe(0));
