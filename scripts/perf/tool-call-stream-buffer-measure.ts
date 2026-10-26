@@ -65,7 +65,7 @@ async function run(turnCount: number) {
     let thinking = "";
     let eventIndex = 0;
     for await (const event of owner.normalizePlainTextToolCallStreamEvents(source(), options)) {
-      assert(event && typeof event === "object" && "delta" in event);
+      assert(event && typeof event === "object" && "type" in event && "delta" in event);
       assert(typeof event.delta === "string");
       if (values.kind === "passthrough") {
         assert.equal(event, events[eventIndex++]);
