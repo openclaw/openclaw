@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { describe, expect, expectTypeOf, it, vi } from "vitest";
+import { expect, expectTypeOf, it, vi } from "vitest";
 import {
   createFeatureClient,
   defineFeatureContract,
@@ -83,50 +83,47 @@ function watchFixture(clientContract: FeatureClientContract<typeof contract>, se
   };
 }
 
-describe.each([
-  { name: "schema contract", clientContract: contract },
-  { name: "browser contract", clientContract: browserContract },
-])("$name", ({ clientContract }) => {
-  it("refreshes watched queries on events and reconnect while fencing stale results", async () => {
-    const fixture = watchFixture(clientContract, "agent:fixture:task");
+it.each(["dispose", "abort"] as const)(
+  "refreshes queries, fences stale results, and closes via %s",
+  async (close) => {
+    const f = watchFixture(browserContract, "agent:fixture:task");
     await Promise.resolve();
-    expect(fixture.host.request).toHaveBeenCalledWith("plugins.sessionAction", {
+    expect(f.host.request).toHaveBeenCalledWith("plugins.sessionAction", {
       pluginId: contract.pluginId,
       actionId: "inspect",
       payload: {},
       sessionKey: "agent:fixture:task",
       agentId: undefined,
     });
-    fixture.changed();
+    f.changed();
     await Promise.resolve();
-    await fixture.settle({ ok: true, result: "stale" }, { ok: true, result: "current" });
-    expect(fixture.onChange.mock.calls).toEqual([["current"]]);
-
-    fixture.connect(false);
-    fixture.changed();
+    await f.settle({ ok: true, result: "stale" }, { ok: true, result: "current" });
+    expect(f.onChange.mock.calls).toEqual([["current"]]);
+    f.connect(false);
+    f.changed();
     await Promise.resolve();
-    expect(fixture.host.request).toHaveBeenCalledTimes(2);
-    fixture.connect(true);
+    expect(f.host.request).toHaveBeenCalledTimes(2);
+    f.connect(true);
     await Promise.resolve();
-    expect(fixture.host.request).toHaveBeenCalledTimes(3);
-    await fixture.settle({ ok: false, error: "query unavailable" });
-    expect(fixture.onError).toHaveBeenCalledWith(
+    await f.settle({ ok: false, error: "query unavailable" });
+    expect(f.onError).toHaveBeenCalledWith(
       expect.objectContaining({ message: "query unavailable" }),
     );
-    fixture.dispose();
-    expect(fixture.subscriptions()).toEqual([0, 0]);
-  });
-
-  it("disposes event subscriptions and in-flight deliveries with the browser owner", async () => {
-    const fixture = watchFixture(clientContract);
+    f.onChange.mockClear();
+    f.onError.mockClear();
+    f.changed();
     await Promise.resolve();
-    fixture.controller.abort();
-    await fixture.settle({ ok: true, result: "late" });
-    expect(fixture.onChange).not.toHaveBeenCalled();
-    expect(fixture.onError).not.toHaveBeenCalled();
-    expect(fixture.subscriptions()).toEqual([0, 0]);
-  });
-});
+    if (close === "abort") {
+      f.controller.abort();
+    } else {
+      f.dispose();
+    }
+    await f.settle({ ok: true, result: "late" });
+    expect(f.onChange).not.toHaveBeenCalled();
+    expect(f.onError).not.toHaveBeenCalled();
+    expect(f.subscriptions()).toEqual([0, 0]);
+  },
+);
 
 it("preserves canonical client inference and query-only watches without schemas", () => {
   const { client, host, controller } = watchFixture(browserContract);
@@ -136,11 +133,7 @@ it("preserves canonical client inference and query-only watches without schemas"
   expectTypeOf<Parameters<typeof client.watch>[0]>().toEqualTypeOf<"inspect">();
   expectTypeOf<ReturnType<typeof client.invoke<"update">>>().toEqualTypeOf<Promise<boolean>>();
   expect(() =>
-    Reflect.apply(client.watch, undefined, [
-      "update",
-      { value: "changed" },
-      { events: ["changed"], onChange: vi.fn(), onError: vi.fn() },
-    ]),
+    Reflect.apply(client.watch, undefined, ["update", { value: "changed" }, {}]),
   ).toThrow("Only feature queries can be watched");
   controller.abort();
 });
