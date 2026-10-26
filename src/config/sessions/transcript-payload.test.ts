@@ -518,6 +518,28 @@ describe("transcript payload storage boundary", () => {
     },
   );
 
+  it("bounds retained backing storage across small payload decompressions", () => {
+    const original = Buffer.from(`{"type":"custom","data":"${"x".repeat(2048)}雪🦞"}`);
+    const codec = resolveZstdCodec();
+    const compressed = codec.compress(original);
+    const decoded = Array.from({ length: 64 }, () =>
+      codec.decompress(compressed, original.byteLength),
+    );
+
+    for (const payload of decoded) {
+      expect(payload).toEqual(original);
+    }
+    const backingStores = new Set(decoded.map((payload) => payload.buffer));
+    const retainedBytes = [...backingStores].reduce(
+      (total, backing) => total + backing.byteLength,
+      0,
+    );
+    // Allow pool alignment and partially filled first/last slabs, without pinning 16 KiB per row.
+    expect(retainedBytes).toBeLessThanOrEqual(
+      2 * original.byteLength * decoded.length + 2 * Buffer.poolSize,
+    );
+  });
+
   it("bounds malformed frames and rejects size, checksum and UTF-8 corruption", () => {
     const database = openNodeSqliteDatabase(":memory:");
     try {

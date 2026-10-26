@@ -22,11 +22,7 @@ describe("image generation credential availability", () => {
       const agentDir = state.agentDir();
       const provider: ImageGenerationProvider = {
         id: "fixture-image",
-        defaultModel: "fixture-model",
-        capabilities: {
-          generate: { maxCount: 1 },
-          edit: { enabled: false, maxInputImages: 0 },
-        },
+        capabilities: { generate: {}, edit: { enabled: false } },
         generateImage: async () => {
           throw new Error("Provider listing must not generate images");
         },

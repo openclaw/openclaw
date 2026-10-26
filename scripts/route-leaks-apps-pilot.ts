@@ -5,10 +5,10 @@ import type { ControlUiMockGatewayScenario } from "../ui/src/test-helpers/contro
 import { createControlUiSandboxFixtureServer } from "../ui/src/test-helpers/control-ui-sandbox-fixture-server.ts";
 import { mcpResourceHtml } from "../ui/src/test-helpers/control-ui-team-scale-widget-html.ts";
 
-export const appsPilotIds = ["apps-catalog", "apps-open-immediate", "apps-open-idle"] as const;
+const appsPilotIds = ["apps-catalog", "apps-open-immediate", "apps-open-idle"] as const;
 export type AppsPilotId = (typeof appsPilotIds)[number];
-export const appsEntryTitle = "Synthetic route library";
-export const appsServerLabel = "Synthetic route apps";
+const appsEntryTitle = "Synthetic route library";
+const appsServerLabel = "Synthetic route apps";
 const serverName = "route-leaks-apps";
 const toolName = "library";
 const viewId = "route-leaks-first-app";
