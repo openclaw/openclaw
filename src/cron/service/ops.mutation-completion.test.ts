@@ -2,24 +2,20 @@ import { afterEach, beforeEach, expect, it } from "vitest";
 import { createCronRegressionState } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { createCronMutationCompletion } from "../mutation-completion.js";
+import { cronTestInput } from "../service.fixture-builders.test-support.js";
 import { setupCronServiceSuite } from "../service.test-harness.js";
 import { loadCronStore } from "../store.js";
-import type { CronJobCreate } from "../types.js";
 import { stop } from "./ops-lifecycle.js";
 import { add, remove, update } from "./ops-mutations.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-mutation-completion" });
 const guarded = { commitGuard: () => {} };
-function makeInput(): CronJobCreate {
-  return {
+const makeInput = () =>
+  cronTestInput({
     name: "mutation completion",
-    enabled: true,
-    schedule: { kind: "every", everyMs: 60_000 },
-    sessionTarget: "isolated",
     wakeMode: "now",
     payload: { kind: "agentTurn", message: "run" },
-  };
-}
+  });
 
 let storePath: string;
 let state: ReturnType<typeof createCronRegressionState>;
