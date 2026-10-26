@@ -171,6 +171,23 @@ const copilotOptions = {
   scopes: ["operator.read", "operator.write"],
 };
 
+async function rejectCopilot(
+  deviceIdentityPath: string,
+  options: Parameters<typeof connectReq>[1],
+  error: { code?: string; message?: string },
+  origin: string | undefined = copilotOrigin,
+) {
+  using ws = await openTestSocket({ origin });
+  const response = await connectReq(ws, { ...copilotOptions, deviceIdentityPath, ...options });
+  expect(response.ok).toBe(false);
+  if (error.code) {
+    expect(response.error?.code).toBe(error.code);
+  }
+  if (error.message) {
+    expect(response.error?.message).toContain(error.message);
+  }
+}
+
 async function withOperatorSessionSubscriber<T>(
   run: (ws: NonNullable<typeof subscribedOperatorWs>) => Promise<T>,
 ) {
@@ -355,11 +372,7 @@ describe("session.message websocket events", () => {
       other: { sessionId: "sess-other" },
     });
     const copilotIdentityPath = sessionClientCredentialPath(storePath, "copilot-device");
-    using unpairedWs = await openTestSocket({ origin: copilotOrigin });
     using pairingWs = await openTestSocket({ origin: copilotOrigin });
-    using wrongOriginWs = await openTestSocket({
-      origin: "chrome-extension://bcdefghijklmnopabcdefghijklmnopa",
-    });
     using mainWs = await openTestSocket({ origin: copilotOrigin });
     using otherWs = await openTestSocket();
     using legacyWs = await openTestSocket();
@@ -370,14 +383,11 @@ describe("session.message websocket events", () => {
     };
     try {
       const scopedCaps = [GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS];
-      const unpaired = await connectReq(unpairedWs, {
-        ...copilotOptions,
-        prePairDevice: false,
-        deviceIdentityPath: sessionClientCredentialPath(storePath, "unpaired-copilot-device"),
-      });
-      expect(unpaired.ok).toBe(false);
-      expect(unpaired.error?.code).toBe("NOT_PAIRED");
-      unpairedWs.close();
+      await rejectCopilot(
+        sessionClientCredentialPath(storePath, "unpaired-copilot-device"),
+        { prePairDevice: false },
+        { code: "NOT_PAIRED" },
+      );
 
       const pairedHello = await connectOk(pairingWs, {
         ...copilotOptions,
@@ -388,16 +398,12 @@ describe("session.message websocket events", () => {
       const deviceToken = (pairedHello as { auth?: { deviceToken?: string } }).auth?.deviceToken;
       expect(deviceToken).toBeTruthy();
       pairingWs.close();
-      const wrongOrigin = await connectReq(wrongOriginWs, {
-        ...copilotOptions,
-        deviceIdentityPath: copilotIdentityPath,
-        deviceToken,
-        skipDefaultAuth: true,
-      });
-      expect(wrongOrigin.ok).toBe(false);
-      expect(wrongOrigin.error?.code).toBe("NOT_PAIRED");
-      expect(wrongOrigin.error?.message).toContain("dedicated paired device identity");
-      wrongOriginWs.close();
+      await rejectCopilot(
+        copilotIdentityPath,
+        { deviceToken, skipDefaultAuth: true },
+        { code: "NOT_PAIRED", message: "dedicated paired device identity" },
+        "chrome-extension://bcdefghijklmnopabcdefghijklmnopa",
+      );
 
       await connectOk(mainWs, {
         ...copilotOptions,
@@ -448,53 +454,34 @@ describe("session.message websocket events", () => {
     const identityPath = sessionClientCredentialPath(storePath, "other-client-device");
     const copilotIdentityPath = sessionClientCredentialPath(storePath, "copilot-paired-device");
     using controlWs = await openTestSocket({ origin: `http://127.0.0.1:${harness.port}` });
-    using copilotWs = await openTestSocket({
-      origin: copilotOrigin,
-    });
-    using pairingWs = await openTestSocket({
-      origin: copilotOrigin,
-    });
+    using pairingWs = await openTestSocket({ origin: copilotOrigin });
     using downgradeWs = await openTestSocket();
-    using wrongModeWs = await openTestSocket({
-      origin: copilotOrigin,
-    });
-    using webOriginWs = await openTestSocket({ origin: `http://127.0.0.1:${harness.port}` });
-    using missingCapsWs = await openTestSocket({
-      origin: copilotOrigin,
-    });
-    const wrongMode = await connectReq(wrongModeWs, {
-      ...copilotOptions,
-      prePairDevice: false,
-      client: {
-        ...copilotClient,
-        id: GATEWAY_CLIENT_IDS.BROWSER_COPILOT,
-        mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+    const invalidConnections = [
+      {
+        name: "wrong-mode",
+        options: { client: { ...copilotClient, mode: GATEWAY_CLIENT_MODES.WEBCHAT } },
+        message: "requires ui mode",
       },
-      deviceIdentityPath: sessionClientCredentialPath(storePath, "wrong-mode-device"),
-    });
-    expect(wrongMode.ok).toBe(false);
-    expect(wrongMode.error?.message).toContain("requires ui mode");
-    wrongModeWs.close();
-
-    const missingCaps = await connectReq(missingCapsWs, {
-      ...copilotOptions,
-      caps: [GATEWAY_CLIENT_CAPS.RUN_TOOL_BINDINGS],
-      deviceIdentityPath: sessionClientCredentialPath(storePath, "missing-caps-device"),
-      prePairDevice: false,
-      scopes: ["operator.read", "operator.write"],
-    });
-    expect(missingCaps.ok).toBe(false);
-    expect(missingCaps.error?.message).toContain("session-scoped-events");
-    missingCapsWs.close();
-
-    const webOrigin = await connectReq(webOriginWs, {
-      ...copilotOptions,
-      prePairDevice: false,
-      deviceIdentityPath: sessionClientCredentialPath(storePath, "web-origin-device"),
-    });
-    expect(webOrigin.ok).toBe(false);
-    expect(webOrigin.error?.message).toContain("canonical Chrome extension origin");
-    webOriginWs.close();
+      {
+        name: "missing-caps",
+        options: { caps: [GATEWAY_CLIENT_CAPS.RUN_TOOL_BINDINGS] },
+        message: "session-scoped-events",
+      },
+      {
+        name: "web-origin",
+        options: {},
+        origin: `http://127.0.0.1:${harness.port}`,
+        message: "canonical Chrome extension origin",
+      },
+    ];
+    for (const invalid of invalidConnections) {
+      await rejectCopilot(
+        sessionClientCredentialPath(storePath, `${invalid.name}-device`),
+        { prePairDevice: false, ...invalid.options },
+        { message: invalid.message },
+        invalid.origin,
+      );
+    }
 
     await connectOk(controlWs, {
       client: { ...copilotClient, id: GATEWAY_CLIENT_IDS.CONTROL_UI },
@@ -504,14 +491,11 @@ describe("session.message websocket events", () => {
     });
     controlWs.close();
 
-    const response = await connectReq(copilotWs, {
-      ...copilotOptions,
-      prePairDevice: false,
-      deviceIdentityPath: identityPath,
-    });
-    expect(response.ok).toBe(false);
-    expect(response.error?.code).toBe("NOT_PAIRED");
-    expect(response.error?.message).toContain("dedicated paired device identity");
+    await rejectCopilot(
+      identityPath,
+      { prePairDevice: false },
+      { code: "NOT_PAIRED", message: "dedicated paired device identity" },
+    );
 
     await connectOk(pairingWs, {
       ...copilotOptions,
@@ -701,17 +685,15 @@ describe("session.message websocket events", () => {
     const sessionId = "sess-web-tui-committed-turn";
     const sessionKey = "agent:main:web-tui-committed-turn";
     const storePath = await createSessionStore({ "web-tui-committed-turn": { sessionId } });
+    const target = { agentId: "main", sessionId, sessionKey, storePath };
 
     const earlierMessage = {
       id: "committed-existing-turn",
       text: "An existing message establishes the active-branch sequence.",
     };
-    const seeded = await persistSessionTranscriptTurn(
-      { agentId: "main", sessionId, sessionKey, storePath },
-      {
-        messages: [userTurn(earlierMessage.id, earlierMessage.text, 1_699_999_999_999)],
-      },
-    );
+    const seeded = await persistSessionTranscriptTurn(target, {
+      messages: [userTurn(earlierMessage.id, earlierMessage.text, 1_699_999_999_999)],
+    });
     expect(seeded.messages.filter((m) => m.appended)).toHaveLength(1);
 
     using webWs = await openTestSocket({ origin: `http://127.0.0.1:${harness.port}` });
@@ -730,61 +712,38 @@ describe("session.message websocket events", () => {
 
     using webEvents = collectEventPayloads(webWs, "session.message", { sessionKey });
     using tuiEvents = collectEventPayloads(tuiWs, "session.message", { sessionKey });
-    const observedByClient = [webEvents.messages, tuiEvents.messages];
-    const position = (payload: Record<string, unknown>) => ({
-      messageId: payload.messageId,
-      messageSeq: payload.messageSeq,
-      sessionKey: payload.sessionKey,
-    });
-
-    // Install every real socket listener before the one SQLite commit can broadcast.
+    // The final message is the barrier; collectors retain every preceding frame in socket order.
     const deliveriesByClient = [webWs, tuiWs].map((ws) =>
-      committedMessages.map(({ id }) =>
-        onceMessage(ws, matchingEvent("session.message", { messageId: id })),
-      ),
+      onceMessage(ws, matchingEvent("session.message", { messageId: "committed-final-turn" })),
     );
     const committedTurn = {
       messages: committedMessages.map(({ id, text }, index) =>
         userTurn(id, text, 1_700_000_000_000 + index),
       ),
     };
-    const persisted = await persistSessionTranscriptTurn(
-      { agentId: "main", sessionId, sessionKey, storePath },
-      committedTurn,
-    );
+    const persisted = await persistSessionTranscriptTurn(target, committedTurn);
     expect(persisted.messages.filter((m) => m.appended)).toHaveLength(committedMessages.length);
 
-    for (const [clientIndex, clientDeliveries] of deliveriesByClient.entries()) {
-      const frames = await Promise.all(clientDeliveries);
-      expect(observedByClient[clientIndex]?.map(position)).toEqual(
-        committedMessages.map(({ id }, index) => ({
+    await Promise.all(deliveriesByClient);
+    for (const { messages } of [webEvents, tuiEvents]) {
+      expect(messages).toMatchObject(
+        committedMessages.map(({ id, text }, index) => ({
           messageId: id,
           messageSeq: index + 2,
           sessionKey,
+          message: expectedUserMessage(id, text, index + 2),
         })),
       );
-      for (const [index, frame] of frames.entries()) {
-        const expected = committedMessages[index];
-        if (!expected) {
-          throw new Error(`unexpected committed-turn delivery at index ${index}`);
-        }
-        expect(requireRecord(frame.payload, "committed session event").message).toMatchObject(
-          expectedUserMessage(expected.id, expected.text, index + 2),
-        );
-      }
     }
 
     using reconnectedTuiWs = await openTestSocket();
-    const history = await (async () => {
-      try {
-        await connectOk(reconnectedTuiWs, { scopes: ["operator.read"] });
-        return await rpcReq(reconnectedTuiWs, "chat.history", { sessionKey });
-      } finally {
-        reconnectedTuiWs.close();
-      }
-    })();
+    await connectOk(reconnectedTuiWs, { scopes: ["operator.read"] });
+    const history = await rpcReq<{ messages?: unknown[] }>(reconnectedTuiWs, "chat.history", {
+      sessionKey,
+    });
+    reconnectedTuiWs.close();
     expect(history.ok).toBe(true);
-    expect((history.payload as { messages?: unknown[] }).messages).toMatchObject(
+    expect(history.payload?.messages).toMatchObject(
       [earlierMessage, ...committedMessages].map(({ id, text }, index) =>
         expectedUserMessage(id, text, index + 1),
       ),
@@ -796,10 +755,7 @@ describe("session.message websocket events", () => {
         () => false,
       ),
     );
-    const replayed = await persistSessionTranscriptTurn(
-      { agentId: "main", sessionId, sessionKey, storePath },
-      committedTurn,
-    );
+    const replayed = await persistSessionTranscriptTurn(target, committedTurn);
     expect(replayed.messages.filter((m) => m.appended)).toHaveLength(0);
     await expect(Promise.all(duplicateDeliveries)).resolves.toEqual([false, false]);
   });

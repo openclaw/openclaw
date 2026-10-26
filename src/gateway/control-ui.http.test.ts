@@ -1119,53 +1119,30 @@ it("does not expose avatar HEAD representation length before authentication", as
   expect(response.setHeader).not.toHaveBeenCalledWith("Content-Length", expect.anything());
 });
 
-it("rejects hardlinked avatar bytes and reports matching metadata", async () => {
-  const tmp = testTempDirs.make("openclaw-avatar-http-hardlink-");
-  await fs.writeFile(path.join(tmp, "original.png"), REAL_PNG);
-  await fs.link(path.join(tmp, "original.png"), path.join(tmp, "avatar.png"));
-  const config = createAvatarConfig(tmp, "avatar.png");
-
-  expectNotFoundResponse(await runAvatarRequest({ url: "/avatar/main", method: "GET", config }));
-  const meta = await runAvatarRequest({ url: "/avatar/main?meta=1", config });
-  expectStatus(meta);
-  expect(responseJson(meta.end)).toEqual({
-    avatarUrl: null,
-    avatarSource: "avatar.png",
-    avatarStatus: "none",
-    avatarReason: "unreadable",
-  });
-});
-
-it("rejects avatar symlink paths from resolver", async () => {
-  const tmp = testTempDirs.make("openclaw-avatar-http-link-");
-  const outside = testTempDirs.make("openclaw-avatar-http-outside-");
-  const outsideFile = path.join(outside, "secret.txt");
-  await fs.writeFile(outsideFile, "outside-secret\n");
-  const linkPath = path.join(tmp, "avatar-link.png");
-  await fs.symlink(outsideFile, linkPath);
-
-  const reply = await runAvatarRequest({
-    url: "/avatar/main",
-    config: createAvatarConfig(tmp, "avatar-link.png"),
-  });
-
-  expectNotFoundResponse(reply);
-});
-
-it("redacts unsafe avatar source values from metadata", async () => {
-  const reply = await runAvatarRequest({
-    url: "/avatar/main?meta=1",
-    config: createAvatarConfig("/tmp/workspace", "/Users/test/private/avatar.png"),
-  });
-
-  expectStatus(reply);
-  expect(responseJson(reply.end)).toEqual({
-    avatarUrl: null,
-    avatarSource: null,
-    avatarStatus: "none",
-    avatarReason: "outside_workspace",
-  });
-});
+it.each(["hardlink", "symlink", "outside"] as const)(
+  "rejects unsafe %s avatars without exposing their bytes or private source",
+  async (kind) => {
+    const tmp = testTempDirs.make("openclaw-avatar-unsafe-");
+    const avatar = kind === "outside" ? "/Users/test/private/avatar.png" : "avatar.png";
+    const config = createAvatarConfig(tmp, avatar);
+    if (kind !== "outside") {
+      const sourceRoot = kind === "symlink" ? testTempDirs.make("avatar-outside-") : tmp;
+      const source = await writeFile(sourceRoot, "original.png", REAL_PNG);
+      await fs[kind === "symlink" ? "symlink" : "link"](source, path.join(tmp, avatar));
+      expectNotFoundResponse(await runAvatarRequest({ url: "/avatar/main", config }));
+    }
+    if (kind !== "symlink") {
+      const meta = await runAvatarRequest({ url: "/avatar/main?meta=1", config });
+      expectStatus(meta);
+      expect(responseJson(meta.end)).toEqual({
+        avatarUrl: null,
+        avatarSource: kind === "hardlink" ? avatar : null,
+        avatarStatus: "none",
+        avatarReason: kind === "hardlink" ? "unreadable" : "outside_workspace",
+      });
+    }
+  },
+);
 
 it("rejects trusted-proxy avatar metadata requests without operator.read scope", async () => {
   expectMissingOperatorReadResponse(

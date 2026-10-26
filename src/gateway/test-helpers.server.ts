@@ -968,42 +968,6 @@ export async function readConnectChallengeNonce(
   }
 }
 
-function shouldPrePairTestDevice(params: {
-  client: ConnectReqClient;
-  opts?: ConnectReqOptions;
-}): boolean {
-  if (params.opts?.device !== undefined || params.opts?.deviceToken) {
-    return false;
-  }
-  if (params.opts?.prePairDevice !== undefined) {
-    return params.opts.prePairDevice;
-  }
-  if (params.opts?.skipDefaultAuth === true) {
-    return false;
-  }
-  return (
-    params.client.mode === GATEWAY_CLIENT_MODES.WEBCHAT ||
-    params.client.id === GATEWAY_CLIENT_NAMES.WEBCHAT_UI
-  );
-}
-
-function pairedDeviceAllowsScopes(params: {
-  paired: Awaited<ReturnType<typeof getPairedDevice>>;
-  publicKey: string;
-  role: string;
-  scopes: string[];
-}): boolean {
-  if (!params.paired || params.paired.publicKey !== params.publicKey) {
-    return false;
-  }
-  const pairedRoles = params.paired.roles ?? (params.paired.role ? [params.paired.role] : []);
-  if (!pairedRoles.includes(params.role)) {
-    return false;
-  }
-  const approvedScopes = params.paired.approvedScopes ?? params.paired.scopes ?? [];
-  return params.scopes.every((scope) => approvedScopes.includes(scope));
-}
-
 async function prePairTestDevice(params: {
   device: ConnectReqDevice;
   client: ConnectReqClient;
@@ -1012,13 +976,12 @@ async function prePairTestDevice(params: {
   browserOrigin?: string;
 }): Promise<void> {
   const paired = await getPairedDevice(params.device.id);
+  const pairedRoles = paired?.roles ?? (paired?.role ? [paired.role] : []);
+  const approvedScopes = paired?.approvedScopes ?? paired?.scopes ?? [];
   if (
-    pairedDeviceAllowsScopes({
-      paired,
-      publicKey: params.device.publicKey,
-      role: params.role,
-      scopes: params.scopes,
-    })
+    paired?.publicKey === params.device.publicKey &&
+    pairedRoles.includes(params.role) &&
+    params.scopes.every((scope) => approvedScopes.includes(scope))
   ) {
     return;
   }
@@ -1111,7 +1074,14 @@ export async function connectReq(
       nonce: connectChallengeNonce,
     };
   })();
-  if (device && shouldPrePairTestDevice({ client, opts })) {
+  const prePairDevice =
+    opts?.device === undefined &&
+    !opts?.deviceToken &&
+    (opts?.prePairDevice ??
+      (opts?.skipDefaultAuth !== true &&
+        (client.mode === GATEWAY_CLIENT_MODES.WEBCHAT ||
+          client.id === GATEWAY_CLIENT_NAMES.WEBCHAT_UI)));
+  if (device && prePairDevice) {
     await prePairTestDevice({
       device,
       client,
