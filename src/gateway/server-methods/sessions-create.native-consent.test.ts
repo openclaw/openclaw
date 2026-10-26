@@ -73,10 +73,7 @@ it.each([
         };
       }
       const context = createDirectChatContext({ getRuntimeConfig: () => config });
-      context.readPreparedGatewayModelCatalog = async () => {
-        const catalog = await context.loadGatewayModelCatalogSnapshot();
-        return { entries: catalog.entries, routeVariants: catalog.routeVariants };
-      };
+      context.readPreparedGatewayModelCatalog = () => context.loadGatewayModelCatalogSnapshot();
       const key = `agent:main:dashboard:native-create-${admin}`;
       const respond = vi.fn<RespondFn>();
       try {

@@ -42,18 +42,14 @@ beforeEach(async () => {
   await fs.mkdir(skillDir, { recursive: true });
   await fs.mkdir(workspace);
   await fs.writeFile(skillPath, content);
-  entries = [
-    {
-      frontmatter: {},
-      skill: createCanonicalFixtureSkill({
-        name: "release-notes",
-        description: "Write clear release notes.",
-        filePath: skillPath,
-        baseDir: skillDir,
-        source: "openclaw-managed",
-      }),
-    },
-  ];
+  const skill = createCanonicalFixtureSkill({
+    name: "release-notes",
+    description: "Write clear release notes.",
+    filePath: skillPath,
+    baseDir: skillDir,
+    source: "openclaw-managed",
+  });
+  entries = [{ frontmatter: {}, skill }];
   discovered.mockResolvedValue({ entries });
 });
 afterEach(() => vi.clearAllMocks());
@@ -82,7 +78,7 @@ describe("skills.files.get", () => {
     expect((await read("SKILL.md")).ok).toBe(false);
   });
 
-  it("accepts a skill-directory alias without allowing final symlink escapes or hardlinks", async () => {
+  it("allows directory aliases and only bundled hardlinks, with bounded reads", async () => {
     const alias = path.join(directory, "alias");
     await fs.symlink(skillDir, alias);
     expect((await read(path.join(alias, "SKILL.md"))).ok).toBe(true);
@@ -93,13 +89,6 @@ describe("skills.files.get", () => {
       await link(privateFile, skillPath);
       expect((await read()).ok).toBe(false);
     }
-  });
-
-  it("preserves bundled hardlink support and rejects files over the discovery byte limit", async () => {
-    const source = path.join(directory, "package.md");
-    await fs.writeFile(source, content);
-    await fs.unlink(skillPath);
-    await fs.link(source, skillPath);
     entries[0].skill.source = "openclaw-bundled";
     expect((await read()).ok).toBe(true);
     await fs.writeFile(skillPath, "x".repeat(256_001));

@@ -6,7 +6,7 @@ import { normalizeUserBackgroundImage } from "../../state/user-background-image.
 import { getUserBackground } from "../../state/user-background.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
-import { handleGatewayRequest } from "../server-methods.js";
+import { chatRpc } from "./chat-rpc-fixture.test-support.js";
 import { createSessionMutationTestClient } from "./sessions-mutations.owner.test-support.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
@@ -49,29 +49,18 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
   vi.unstubAllEnvs();
 });
-async function rpc(operation: string, params: Record<string, unknown> = {}) {
-  const method = `users.background.${operation}`;
-  const respond = vi.fn();
-  await handleGatewayRequest({
-    req: { type: "req", id: method, method, params },
-    client,
-    context,
-    respond,
-    isWebchatConnect: () => false,
-  });
-  expect(respond).toHaveBeenCalledOnce();
-  return respond.mock.calls[0]!;
-}
+const rpc = (operation: string, params: Record<string, unknown> = {}) =>
+  chatRpc(context, client, `users.background.${operation}`, params);
 
 describe("registered private background methods", () => {
   it("allows ordinary profile read/write scopes and emits only a profile-targeted invalidation", async () => {
-    expect(await rpc("upload", { ...empty, imageBase64: "dGVzdA==" })).toEqual([
+    expect(await rpc("upload", { ...empty, imageBase64: "dGVzdA==" })).toMatchObject([
       true,
-      expect.objectContaining({
+      {
         status: "ok",
-        asset: expect.objectContaining({ mime: "image/jpeg" }),
-        preference: expect.objectContaining({ showInSessions: false }),
-      }),
+        asset: { mime: "image/jpeg" },
+        preference: { showInSessions: false },
+      },
     ]);
     expect(broadcast).toHaveBeenCalledWith(
       "users.prefs.changed",

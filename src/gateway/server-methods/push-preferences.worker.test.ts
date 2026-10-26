@@ -1,6 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { normalizeWebPushNotificationPreferences } from "../../infra/push-web-preferences.js";
 import { runWebPushStoreMutation } from "../../infra/push-web-store.scope.js";
@@ -11,7 +10,7 @@ import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { pushHandlers } from "./push.js";
-import { pushClient } from "./push.test-support.js";
+import { holdPushStorage, pushClient } from "./push.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -55,18 +54,15 @@ it("runs web-push preference get and set without preparing SQLite on the calling
     options.client && (!predicate || predicate(options.client))
       ? new Set(["preferences-owner"])
       : new Set();
-  const entered = createDeferred();
-  const release = createDeferred();
+  const storage = holdPushStorage();
   const write = preferences.setCanonicalUserPreferences;
   vi.spyOn(preferences, "setCanonicalUserPreferences").mockImplementationOnce(async (...args) => {
-    entered.resolve();
-    await release.promise;
+    await storage.wait();
     return write(...args);
   });
   const pending = Promise.resolve(pushHandlers["push.web.preferences.set"](options));
   let bindingMutation: Promise<void> | undefined;
-  try {
-    await awaitGateBeforeSettlement(entered.promise, pending, "preference worker was not reached");
+  await storage.settle(pending, () => {
     bindingMutation = runWebPushStoreMutation(
       captureOpenClawStateWorkerContext(),
       undefined,
@@ -74,11 +70,8 @@ it("runs web-push preference get and set without preparing SQLite on the calling
         order.push("binding mutation");
       },
     );
-  } finally {
-    release.resolve();
-    await pending;
-    await bindingMutation;
-  }
+  });
+  await bindingMutation;
   expect(order).toEqual(["response", "binding mutation"]);
   expect(options.context.broadcastToConnIds).toHaveBeenCalledWith(
     "users.prefs.changed",

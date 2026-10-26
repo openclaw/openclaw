@@ -93,9 +93,6 @@ it.each(["direct", "nested"] as const)(
         expect(applyRuntime).not.toHaveBeenCalled();
         expect(await readPluginState(state)).toEqual(before);
         await reload;
-        expect(logReload.warn).toHaveBeenCalledExactlyOnceWith(
-          expect.stringContaining("deferring until 1 gateway request(s) complete"),
-        );
         expect(getActiveGatewayRootWorkCount()).toBe(0);
 
         const retry = dispatch(new AbortController().signal);

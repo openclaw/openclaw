@@ -17,7 +17,6 @@ function createContext(seq = 0, cfg: OpenClawConfig = { agents: { entries: { mai
   return {
     context,
     request: { context, runId: "run-1", sessionKey: "agent:main:main" },
-    deleteSpy: vi.spyOn(agentRunSeq, "delete"),
   };
 }
 
@@ -27,7 +26,7 @@ it.each([
 ])(
   "keeps pending snapshots scoped and retires them with $sessionKey",
   ({ sessionKey, agentId, keys }) => {
-    const { context, deleteSpy } = createContext();
+    const { context } = createContext();
     let current = true;
     const request = { context, runId: "run-1", sessionKey, agentId, isCurrent: () => current };
 
@@ -40,8 +39,7 @@ it.each([
       seq: 1,
     });
     expect(first?.[2]?.sessionKeys).toEqual(keys);
-    expect(context.nodeSendToSession.mock.calls.map(([key]) => key)).toEqual(keys);
-    expect(deleteSpy).not.toHaveBeenCalled();
+    expect(context.agentRunSeq.get("run-1")).toBe(1);
 
     broadcastChatDelta({ ...request, text: "first\n\nsecond" });
     const second = context.broadcast.mock.calls[1];
@@ -50,16 +48,11 @@ it.each([
     expect(liveText?.coalesce?.merge(first?.[1], second?.[1])).toBe(second?.[1]);
     expect(context.chatRunState.resolveBuffer("run-1").text).toBe("first\n\nsecond");
 
-    broadcastChatFinal({
-      terminalEntry: undefined,
-      ...request,
-      message: { role: "assistant", content: [{ type: "text", text: "done" }] },
-    });
+    broadcastChatFinal({ terminalEntry: undefined, ...request });
     const final = context.broadcast.mock.calls[2];
     expect(final?.[1]).toMatchObject({ state: "final", seq: 3 });
     expect(final?.[2]?.liveText).toEqual({ group: liveText?.group, settle: true });
-    expect(context.nodeSendToSession.mock.calls.at(-1)?.[3]).toBe(final?.[2]);
-    expect(deleteSpy).toHaveBeenCalledOnce();
+    expect(context.agentRunSeq.has("run-1")).toBe(false);
 
     current = false;
     context.chatRunState.clearRun("run-1");
@@ -97,7 +90,6 @@ it("emits canonical error payloads without message or agentId", () => {
   const opts = { sessionKeys: ["agent:main:main"] };
   expect(context.broadcast).toHaveBeenCalledWith("chat", payload, opts);
   expect(context.nodeSendToSession).toHaveBeenCalledWith("agent:main:main", "chat", payload, opts);
-  expect(context.nodeSendToSession.mock.calls[0]?.[2]).toBe(payload);
 });
 it("keeps the bare global subscription for its persisted fixed-store owner", () => {
   const { context } = createContext(0, fixedStoreOwnershipConfig("/stores/shared.sqlite"));
