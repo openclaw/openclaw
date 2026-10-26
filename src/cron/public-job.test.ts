@@ -43,42 +43,27 @@ describe("toPublicCronJob", () => {
     });
   });
 
-  it("strips runtime and executable provenance without mutating the stored job", () => {
+  it("strips private provenance and sandbox targets without mutating the stored job", () => {
     const target = { version: 1, host: "gateway", ask: "always" } as const;
     const fields: Partial<CronStoredJob> = {
-      runtimeAuthority: {
-        version: 1,
-        runtimeId: "codex",
-        namespace: "codex.apps",
-        payload: { apps: [{ id: "calendar" }] },
-      },
+      runtimeAuthority: { version: 1, runtimeId: "test", namespace: "test", payload: {} },
       runtimeAuthorityRecoveryRequired: true,
-      toolsAllowProvenance: {
-        version: 1,
-        source: "final-executable-surface",
-        callerOrigin: { kind: "unknown" },
-        channelRequester: { version: 1, channel: "discord", accountId: "work", senderId: "123" },
-      },
+      toolsAllowProvenance: { version: 1, source: "final-executable-surface" },
       toolsAllowExecTarget: target,
       toolsAllowExecTargetRequirement: { version: 1, target, grantIndex: 0 },
-    };
-    publicJob({ ...makeCronJob({}), ...fields }, Object.keys(fields));
-  });
-
-  it("strips private creator provenance and sandbox target without mutating the stored job", () => {
-    const streamSandbox = makeCronStreamSandboxTarget();
-    const job: CronStoredJob = {
-      ...makeCronJob({ schedule: { kind: "stream", command: ["watch-source"] } }),
       createdActor: { type: "human", source: "profile", id: "profile-ada" },
-      streamSandbox,
+      streamSandbox: makeCronStreamSandboxTarget(),
       sourceConversation: {
         sessionKey: "agent:main:conversation",
         sessionId: "creating-session",
         lifecycleRevision: "generation-1",
       },
     };
-
-    expect(publicJob(job, ["createdActor", "sourceConversation", "streamSandbox"])).toMatchObject({
+    const job = {
+      ...makeCronJob({ schedule: { kind: "stream", command: ["watch-source"] } }),
+      ...fields,
+    };
+    expect(publicJob(job, Object.keys(fields))).toMatchObject({
       schedule: { kind: "stream" },
       streamExecutionHost: "sandbox",
     });

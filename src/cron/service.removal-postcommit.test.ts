@@ -36,11 +36,7 @@ async function createFixture() {
       storePath,
       log: logger,
       nowMs: () => nowMs,
-      runIsolatedAgentJob: vi.fn(async () => ({
-        status: "ok" as const,
-        summary: "done",
-        delivered: true,
-      })),
+      runIsolatedAgentJob: async () => ({ status: "ok", summary: "done", delivered: true }),
       onEvent: (event) => {
         events.push(structuredClone(event));
         if (event.action === "removed") {

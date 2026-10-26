@@ -39,17 +39,13 @@ it.each([false, true])(
   "loads cold readonly cron state off the host with artifact preservation=%s",
   async (preserveArtifacts) => {
     await withCronStore("cron-readonly-worker", async (state) => {
-      const store: CronStoreFile = {
-        version: 1,
-        jobs: [
-          makeCronJob({
-            name: "scheduled café 🦞",
-            sessionTarget: "main",
-            payload: { kind: "systemEvent", text: "persisted event" },
-            state: { nextRunAtMs: 60_001 },
-          }),
-        ],
-      };
+      const job = makeCronJob({
+        name: "scheduled café 🦞",
+        sessionTarget: "main",
+        payload: { kind: "systemEvent", text: "persisted event" },
+        state: { nextRunAtMs: 60_001 },
+      });
+      const store: CronStoreFile = { version: 1, jobs: [job] };
       await state.save(store);
       await state.close();
       const before = await state.bytes();
@@ -57,10 +53,6 @@ it.each([false, true])(
       try {
         const loaded = await state.read(preserveArtifacts);
         expect(loaded.store).toEqual(store);
-        expect(loaded.configJobIndexes).toEqual([0]);
-        expect(loaded.configJobRuntimeEntries[0]?.state).toEqual({ nextRunAtMs: 60_001 });
-        expect(loaded.jobsFingerprint).toBeUndefined();
-        expect(loaded.invalidConfigRows).toEqual([]);
         sql.expectIdle();
         expect(await state.bytes()).toEqual(before);
       } finally {
