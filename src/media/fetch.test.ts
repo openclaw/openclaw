@@ -17,7 +17,9 @@ import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { hasErrnoCode } from "../infra/errors.js";
+import { makeStallingStream } from "../infra/http-body.test-support.js";
 
 function makeResponseHeaderStallingFetch() {
   return vi.fn(
@@ -208,14 +210,7 @@ describe("readRemoteMediaBuffer", () => {
       const fetchImpl = vi
         .fn()
         .mockResolvedValueOnce(
-          new Response(
-            new ReadableStream<Uint8Array>({
-              start(controller) {
-                controller.enqueue(new Uint8Array([1, 2]));
-              },
-            }),
-            { status: 200 },
-          ),
+          new Response(makeStallingStream([new Uint8Array([1, 2])]), { status: 200 }),
         )
         .mockResolvedValueOnce(new Response("ok", { status: 200 }));
 
@@ -415,10 +410,7 @@ describe("readRemoteMediaBuffer", () => {
 
   it("keeps the parent abort active while saving the response body", async () => {
     const parent = new AbortController();
-    let bodyStarted!: () => void;
-    const bodyReady = new Promise<void>((resolve) => {
-      bodyStarted = resolve;
-    });
+    const { promise: bodyReady, resolve: bodyStarted } = createDeferred();
     const fetchImpl = abortableBodyFetch(bodyStarted);
     const result = saveMedia({
       url: "https://example.com/download",

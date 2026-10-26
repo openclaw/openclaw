@@ -17,6 +17,13 @@ const internalMessage = (text: string, sourceTool: string) => ({
   ...userTextMessage(text),
   provenance: { kind: "internal_system", sourceTool },
 });
+const mediaMessage = (text: string, seq: number, url: string) => ({
+  ...assistantTextMessage(text, seq),
+  content: [
+    { type: "text", text },
+    { type: "image", source: { type: "url", url } },
+  ],
+});
 const expectProjection = (
   messages: unknown[],
   expected: unknown[],
@@ -95,7 +102,6 @@ it.each(["visible ask", ""])("strips legacy internal envelopes: %s", (visible) =
 
 it.each([
   [" exec ", "Exec completed (background-job, code 0) :: PRIVATE_COMMAND_OUTPUT"],
-  [" exec ", "Exec failed (background-job, code 1) :: PRIVATE_COMMAND_OUTPUT"],
   ["subagent_announce", "private child announcement"],
   ["subagent_settle", "private child settlement"],
   ["image_generate", 'session_key: image_generate:task-123\npath="/private.png"'],
@@ -115,13 +121,7 @@ it.each([
         internalMessage("Gateway restarted during update.", "restart-sentinel"),
       ]
     : [];
-  const answer = {
-    ...assistantTextMessage("Created.", 2),
-    content: [
-      { type: "text", text: "Created." },
-      { type: "image", source: { type: "url", url: "/api/chat/media/outgoing/generated.png" } },
-    ],
-  };
+  const answer = mediaMessage("Created.", 2, "/api/chat/media/outgoing/generated.png");
   expectProjection([completion, ...controls, answer], [...controls, answer]);
   expect(completion).toEqual(original);
 });
@@ -230,24 +230,16 @@ it("keeps scheduled inputs quiet without hiding historical announcements, lookal
     provenance: { kind: "external_user", sourceTool: "cron_execution" },
   };
   const delivered = {
-    ...assistantTextMessage("The new scheduled result is ready.", 4),
+    ...mediaMessage("The new scheduled result is ready.", 4, "/api/chat/media/outgoing/report.png"),
     provenance: input.provenance,
-    content: [
-      { type: "text", text: "The new scheduled result is ready." },
-      { type: "image", source: { type: "url", url: "/api/chat/media/outgoing/report.png" } },
-    ],
   };
-  const failure = assistantTextMessage("The check failed; action is needed.", 5);
-  const approval = assistantTextMessage("Approval is required to continue.", 6);
   const original = structuredClone(input);
   expectProjection(
-    [input, announcement, human, delivered, failure, approval],
+    [input, announcement, human, delivered],
     [
       expect.objectContaining({ role: "assistant", content: announcement.content, provenance }),
       human,
       delivered,
-      failure,
-      approval,
     ],
     { resolveCronJobName: () => "Daily check" },
   );

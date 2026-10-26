@@ -70,15 +70,17 @@ export async function withNodeEventSessionSource(
     source?: NodeEventSessionSource,
   ) => Promise<NodeEventHandleResult | undefined>,
 ): Promise<NodeEventHandleResult | undefined> {
-  const requestedKey = normalizeOptionalString(parseNodeEventPayload(evt.payloadJSON)?.sessionKey);
-  const namespace =
-    requestedKey &&
-    ["voice.transcript", "agent.request", "notifications.changed"].includes(evt.event)
-      ? captureSessionActorStorageOwner(
-          { sessionKey: requestedKey },
-          { assertCurrent() {}, authorize() {} },
-        )
-      : undefined;
+  const requestedKey = ["voice.transcript", "agent.request", "notifications.changed"].includes(
+    evt.event,
+  )
+    ? normalizeOptionalString(parseNodeEventPayload(evt.payloadJSON)?.sessionKey)
+    : undefined;
+  const namespace = requestedKey
+    ? captureSessionActorStorageOwner(
+        { sessionKey: requestedKey },
+        { assertCurrent() {}, authorize() {} },
+      )
+    : undefined;
   if (!namespace || !requestedKey) {
     return consume(opts);
   }

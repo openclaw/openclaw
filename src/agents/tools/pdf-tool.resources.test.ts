@@ -17,6 +17,10 @@ import {
   useNoBundledPlugins,
   writePlugin,
 } from "../../plugins/loader.test-fixtures.js";
+import {
+  cleanupNativeFixture,
+  nativeFixtureEnv,
+} from "../../plugins/native-resource.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import {
@@ -189,46 +193,34 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     parent,
     async run(test: () => Promise<void>) {
       try {
-        await withEnvAsync(
-          {
-            OPENCLAW_HOME: dir,
-            OPENCLAW_STATE_DIR: path.join(dir, "state"),
-            OPENCLAW_CONFIG_PATH: path.join(dir, "config.json"),
-          },
-          async () => {
-            useNoBundledPlugins();
-            stubPdfInput("Synthetic PDF text");
-            lease = await preparedRuntime.acquireReadOnlyPreparedModelRuntime(
-              {
-                config,
-                agentId: "main",
-                agentDir,
-                workspaceDir: dir,
-                loadRuntimePlugins: true,
-                skipCredentials: true,
-                runtimePluginSelections: [{ provider: id, modelId: "pdf-model" }],
-              },
-              { catalogMode: "static" },
-            );
-            try {
-              await test();
-            } finally {
-              state.finish.resolve();
-              state.finishCleanup.resolve();
-              await outcome;
-              await parent.drain();
-              await lease[Symbol.asyncDispose]();
-              await closePreparedModelRuntimeSnapshots();
-            }
-          },
-        );
-      } finally {
-        for (const connection of connections) {
-          if (connection.database.isOpen) {
-            connection.database.close();
+        await withEnvAsync(nativeFixtureEnv(dir, path.join(dir, "state")), async () => {
+          useNoBundledPlugins();
+          stubPdfInput("Synthetic PDF text");
+          lease = await preparedRuntime.acquireReadOnlyPreparedModelRuntime(
+            {
+              config,
+              agentId: "main",
+              agentDir,
+              workspaceDir: dir,
+              loadRuntimePlugins: true,
+              skipCredentials: true,
+              runtimePluginSelections: [{ provider: id, modelId: "pdf-model" }],
+            },
+            { catalogMode: "static" },
+          );
+          try {
+            await test();
+          } finally {
+            state.finish.resolve();
+            state.finishCleanup.resolve();
+            await outcome;
+            await parent.drain();
+            await lease[Symbol.asyncDispose]();
+            await closePreparedModelRuntimeSnapshots();
           }
-        }
-        Reflect.deleteProperty(globalThis, stateKey);
+        });
+      } finally {
+        cleanupNativeFixture(stateKey, connections);
       }
     },
     get lease() {

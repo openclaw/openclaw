@@ -104,21 +104,22 @@ describe("renderUsage", () => {
     const base = createUsageProps();
     const [filters, setFilters] = createSignal({ ...base.filters, queryDraft: "provider:OpenAI" });
     const [display, setDisplay] = createSignal(base.display);
+    const overview = createUsageOverview({
+      filterOptions: {
+        agent: [],
+        channel: ["slack"],
+        provider: ["OpenAI"],
+        model: ["synthetic-model"],
+        tool: ["read"],
+      },
+    });
     const parse = vi.spyOn(usageQuery, "extractQueryTerms");
     try {
       const container = mountUsage({
         ...base,
         data: {
           ...base.data,
-          overview: createUsageOverview({
-            filterOptions: {
-              agent: [],
-              channel: ["slack"],
-              provider: ["OpenAI"],
-              model: ["synthetic-model"],
-              tool: ["read"],
-            },
-          }),
+          overview,
         },
         get filters() {
           return filters();

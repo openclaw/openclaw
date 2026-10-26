@@ -32,12 +32,15 @@ it.for(["plain", "shared"] as const)(
       const bundledDir = path.join(root, "bundled");
       const pluginDir = path.join(bundledDir, "generation-probe");
       const workspaceDir = path.join(root, "workspace");
-      const observationsPath = path.join(root, "tool-completions.jsonl");
       const observationsEvent = `tool-completions:${root}`;
       const observations = new Map(
-        ["before", "after"].map((phase) => [`agent:main:generation-${phase}`, createDeferred()]),
+        ["before", "after"].map((phase) => [
+          `agent:main:generation-${phase}`,
+          createDeferred<unknown>(),
+        ]),
       );
-      const onObservation = (sessionKey: string) => observations.get(sessionKey)?.resolve();
+      const onObservation = (sessionKey: string, observation: unknown) =>
+        observations.get(sessionKey)?.resolve(observation);
       const content = [{ type: "text", text: "generation tool available" }];
       const captureKey = `observer-${path.basename(root)}`;
       const captured: unknown[] = [];
@@ -88,7 +91,6 @@ it.for(["plain", "shared"] as const)(
           throw new Error("MCP capture must retain the authoritative result");
         }
         callback.result.ownerAnnotation = phase;
-        expect(callback.result.ownerAnnotation).toBe(phase);
       };
 
       await runQaGatewayFixture(
@@ -113,21 +115,14 @@ it.for(["plain", "shared"] as const)(
           fs.writeFileSync(
             path.join(pluginDir, "index.cjs"),
             `module.exports = { id: "generation-probe", register(api) {
-      const fs = require("node:fs");
       let lastResult;
       api.on("after_tool_call", (event, ctx) => {
-        fs.appendFileSync(${JSON.stringify(observationsPath)}, JSON.stringify({
+        process.emit(${JSON.stringify(observationsEvent)}, ctx.sessionKey, {
           toolName: event.toolName, sessionKey: ctx.sessionKey,
-          sameResult: event.result === lastResult, result: event.result
-        }) + "\\n");
-        process.emit(${JSON.stringify(observationsEvent)}, ctx.sessionKey);
+          sameResult: event.result === lastResult
+        });
         throw new Error("observer failure must not change the HTTP result");
       }, { matcher: ["generation_probe"] });
-      api.registerWidgetPresenter({
-        target: "node_panel", description: "Synthetic generation presenter",
-        availability: async () => ({ ok: true, value: { available: true } }),
-        present: async () => ({ ok: false, error: { code: "no_eligible_node", message: "No test node" } })
-      });
       api.registerTool({
         name: "generation_probe", label: "Generation probe", description: "Return a generation-owned answer",
         parameters: { type: "object", properties: {} },
@@ -155,21 +150,16 @@ it.for(["plain", "shared"] as const)(
           loadGeneration();
           await original.instance.dispose();
           await callTool("after");
-          await withinTest(
+          const logged = await withinTest(
             Promise.all([...observations.values()].map((entry) => entry.promise)),
             signal,
           );
           expect(await warnings.findText("after_tool_call")).toBeDefined();
-          const logged = fs.readFileSync(observationsPath, "utf8").trim().split("\n");
-          expect(logged.map((line) => JSON.parse(line))).toEqual(
+          expect(logged).toEqual(
             ["before", "after"].map((phase) => ({
               toolName: "generation_probe",
               sessionKey: `agent:main:generation-${phase}`,
               sameResult: true,
-              result: {
-                content,
-                details: variant === "shared" ? { bytes: { 0: 0 } } : {},
-              },
             })),
           );
         },

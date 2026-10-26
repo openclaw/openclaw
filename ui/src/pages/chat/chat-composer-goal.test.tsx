@@ -2,23 +2,18 @@
 
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createSessionGoalFixture } from "../../../../src/gateway/session-goal.test-support.js";
 import type { SessionGoal } from "../../api/types.ts";
 import { i18n } from "../../i18n/index.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { ChatGoal } from "./components/chat-composer-goal.tsx";
 
-const goal: SessionGoal = {
-  schemaVersion: 1,
-  id: "goal-timing",
-  objective: "Verify the deployment",
-  status: "active",
+const goal: SessionGoal = createSessionGoalFixture("goal-timing", "Verify the deployment", {
   createdAt: 1_000,
   updatedAt: 61_000,
-  tokenStart: 0,
   tokensUsed: 100,
-  continuationTurns: 0,
-};
+});
 
 type GoalProps = Parameters<typeof ChatGoal>[0];
 function mountGoal(initial: SessionGoal, options: Partial<GoalProps> = {}) {
@@ -39,11 +34,10 @@ function mountGoal(initial: SessionGoal, options: Partial<GoalProps> = {}) {
   vi.advanceTimersToNextFrame();
   flush();
   return {
-    container: view.container,
+    ...view,
     draw: (value: SessionGoal | undefined) => update({ goal: value }),
     update,
     query: view.container.querySelector.bind(view.container),
-    unmount: view.unmount,
     elapsed: () => view.container.querySelector(".agent-chat__goal-elapsed")?.textContent,
   };
 }
@@ -92,12 +86,11 @@ it("replaces a live tick with the authoritative stop time and resumes ticking", 
   advanceTime(1_000);
   expect(view.elapsed()).toBe("2m 01s");
 
-  const transitions: [SessionGoal, string, string][] = [
+  for (const [next, immediate, afterMinute] of [
     [{ ...goal, status: "paused", pausedAt: 46_000 }, "45s", "45s"],
     [goal, "3m 01s", "4m 01s"],
     [{ ...goal, status: "complete", completedAt: 151_000 }, "2m 30s", "2m 30s"],
-  ];
-  for (const [next, immediate, afterMinute] of transitions) {
+  ] satisfies [SessionGoal, string, string][]) {
     view.draw(next);
     expect(view.elapsed()).toBe(immediate);
     advanceTime(60_000);

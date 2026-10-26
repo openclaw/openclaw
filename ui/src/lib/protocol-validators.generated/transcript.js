@@ -72,7 +72,10 @@ var isChatTranscriptMetadata = (() => {
           check_43(value.participants)) &&
         (value.expandedParticipants === void 0 ||
           !("expandedParticipants" in value) ||
-          check_46(value.expandedParticipants)),
+          check_46(value.expandedParticipants)) &&
+        (value.contextTokens === void 0 ||
+          !("contextTokens" in value) ||
+          check_47(value.contextTokens)),
       check_2 = (value) => typeof value == "string",
       check_3 = (value) => check_4(value) || check_5(value) || check_6(value) || check_7(value),
       check_4 = (value) => typeof value == "string" && value === "direct",
@@ -246,7 +249,8 @@ var isChatTranscriptMetadata = (() => {
       check_46 = (value) =>
         Array.isArray(value) &&
         value.every((unique_19, index) => check_44(unique_19)) &&
-        value.length <= 32;
+        value.length <= 32,
+      check_47 = (value) => Number.isFinite(value);
     return (value) => check_0(value);
   })(),
   isProgressCard = (() => {
@@ -291,5 +295,42 @@ var isChatTranscriptMetadata = (() => {
             ) &&
             value.steps.length <= 50));
     return (value) => check_0(value);
+  })(),
+  isMessageReactionSummary = (() => {
+    let External = [/(^id$|^label$)/u],
+      check_0 = (value) =>
+        typeof value == "object" &&
+        value !== null &&
+        !Array.isArray(value) &&
+        "emoji" in value &&
+        "count" in value &&
+        "identities" in value &&
+        Object.getOwnPropertyNames(value).length === 3 &&
+        typeof value.emoji == "string" &&
+        (value.emoji.length >= 2 ||
+          (value.emoji.length >= 1 && CodePointCount(value.emoji) >= 1)) &&
+        (value.emoji.length <= 32 ||
+          (value.emoji.length <= 64 && CodePointCount(value.emoji) <= 32)) &&
+        Number.isInteger(value.count) &&
+        (!(Number.isFinite(value.count) || typeof value.count == "bigint") || value.count >= 1) &&
+        Array.isArray(value.identities) &&
+        value.identities.every(
+          (unique_0, index) =>
+            typeof unique_0 == "object" &&
+            unique_0 !== null &&
+            !Array.isArray(unique_0) &&
+            "id" in unique_0 &&
+            Object.getOwnPropertyNames(unique_0).every(
+              (unique_1, unique_2) => External[0].test(unique_1) || !1,
+            ) &&
+            typeof unique_0.id == "string" &&
+            (unique_0.id.length >= 2 ||
+              (unique_0.id.length >= 1 && CodePointCount(unique_0.id) >= 1)) &&
+            (unique_0.label === void 0 ||
+              !("label" in unique_0) ||
+              typeof unique_0.label == "string"),
+        ) &&
+        value.identities.length >= 1;
+    return (value) => check_0(value);
   })();
-export { isChatTranscriptMetadata, isProgressCard };
+export { isChatTranscriptMetadata, isMessageReactionSummary, isProgressCard };

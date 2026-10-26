@@ -3,14 +3,49 @@ import { createPermitPool } from "openclaw/plugin-sdk/concurrency-runtime";
 import type { DiscordCommandDeployHashStore } from "../command-deploy-store.js";
 import { DiscordCommandDeployer } from "./command-deploy.js";
 import type { DiscordCommand } from "./commands.js";
-import { ComponentRegistry } from "./component-registry.js";
-import { BaseMessageInteractiveComponent } from "./components.base.js";
+import { BaseMessageInteractiveComponent, parseCustomId } from "./components.base.js";
 import type { Modal } from "./components.modal.js";
 import { DiscordEntityCache } from "./entity-cache.js";
 import { dispatchInteraction } from "./interaction-dispatch.js";
 import type { GatewayPluginContract, VoicePluginContract } from "./plugin-contract.js";
 import { RequestClient, type RequestClientOptions } from "./rest.js";
 import type { Guild, GuildMember, User } from "./structures.js";
+
+class ComponentRegistry<
+  T extends { customId: string; customIdParser?: typeof parseCustomId; type?: number },
+> {
+  private entries = new Map<string, T[]>();
+  private wildcardEntries: T[] = [];
+
+  register(entry: T): void {
+    const key = (entry.customIdParser ?? parseCustomId)(entry.customId).key;
+    const entries = key === "*" ? this.wildcardEntries : (this.entries.get(key) ?? []);
+    if (!entries.includes(entry)) {
+      entries.push(entry);
+      if (key !== "*") {
+        this.entries.set(key, entries);
+      }
+    }
+  }
+
+  resolve(customId: string, options?: { componentType?: number }): T | undefined {
+    for (const entries of this.entries.values()) {
+      const match = entries.find((entry) => {
+        if (options?.componentType !== undefined && entry.type !== options.componentType) {
+          return false;
+        }
+        const parser = entry.customIdParser ?? parseCustomId;
+        return parser(entry.customId).key === parser(customId).key;
+      });
+      if (match) {
+        return match;
+      }
+    }
+    return this.wildcardEntries.find(
+      (entry) => options?.componentType === undefined || entry.type === options.componentType,
+    );
+  }
+}
 
 export type RegisteredPlugin = (GatewayPluginContract | VoicePluginContract) & {
   registerClient?(client: Client): Promise<void> | void;

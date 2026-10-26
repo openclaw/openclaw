@@ -35,6 +35,8 @@ export type SpawnSubagentParams = {
   sandbox?: SpawnSubagentSandboxMode;
   context?: SpawnSubagentContextMode;
   lightContext?: boolean;
+  /** The child's rendered prompt omits its model, agent/session identity and workspace path. */
+  blind?: boolean;
   expectsCompletionMessage?: boolean;
   completionTarget?: "parent";
   attachments?: Array<{
@@ -70,6 +72,8 @@ export type SpawnSubagentContext = SpawnedToolContext &
     requesterRunId?: string;
     /** Private invocation fence, consumed only before registration transfers ownership. */
     assertActive?: SessionSourceAssertion;
+    /** Cancels initial preparation only; accepted children own their execution lifetime. */
+    signal?: AbortSignal;
   };
 
 export type SpawnSubagentResult = {

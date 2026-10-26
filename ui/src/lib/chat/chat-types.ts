@@ -241,6 +241,8 @@ export type ChatItem =
       /** Total identical failures represented by the latest display notice. */
       repeatCount?: number;
       permissionMissing?: NodePermissionRequest;
+      /** Retained input that ended interrupted or cancelled and may be dismissed. */
+      retiredPendingInput?: { id: string; status: "interrupted" | "cancelled"; preview: string };
     }
   | {
       kind: "divider";

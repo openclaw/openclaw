@@ -796,7 +796,10 @@ censuses with fixed structure labels, entry counts, approximate bytes, and
 aggregate generation, provider, and account counts where applicable. They never
 include catalog contents, object keys, provider or account identities, or secrets.
 The census uses the existing worker-memory sampling channel; it does not take a
-heap snapshot. Byte counts estimate owner-held data, not V8 retained size; shared
+heap snapshot. Unchanged immutable metadata and remote catalog publications reuse their
+size estimates; replacing, adding, or removing a publication refreshes its census on
+the next worker sample. Mutable data is measured on each sample.
+Byte counts estimate owner-held data, not V8 retained size; shared
 objects are counted once within each structure, and structures can overlap.
 `stringBytes` estimates string payload bytes, while `objects` counts traversed
 objects. Coverage includes the named structures, not module runtime or closure roots.

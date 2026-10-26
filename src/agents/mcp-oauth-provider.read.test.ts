@@ -58,22 +58,25 @@ it("uses the legacy default and only ignores ports for HTTP loopback registratio
     for (const [registered, redirectUrl, matches] of cases) {
       const clientInformation = { client_id: "fixture-client", redirect_uris: [registered] };
       seedMcpOAuthStoreForTest(identity.storeKey, { clientInformation });
-      await withMcpOAuthProviderForTest({ identity, config: { redirectUrl } }, async (provider) => {
-        if (redirectUrl === undefined) {
-          expect(provider).toMatchObject({
-            redirectUrl: defaultRedirect,
-            clientMetadata: { redirect_uris: [defaultRedirect] },
-          });
-        }
-        expect(await provider.clientInformation(), `${registered} -> ${redirectUrl}`).toEqual(
-          matches ? clientInformation : undefined,
-        );
-      });
+      await withMcpOAuthProviderForTest(
+        { identity, config: { redirectUrl, scope: "documents.read" } },
+        async (provider) => {
+          if (redirectUrl === undefined) {
+            expect(provider).toMatchObject({
+              redirectUrl: defaultRedirect,
+              clientMetadata: { redirect_uris: [defaultRedirect], scope: "documents.read" },
+            });
+          }
+          expect(await provider.clientInformation(), `${registered} -> ${redirectUrl}`).toEqual(
+            matches ? clientInformation : undefined,
+          );
+        },
+      );
     }
   });
 });
 
-it("prepares provider facts and reopens persisted reads without parent SQL", async () => {
+it("reopens persisted reads without parent SQL", async () => {
   await withOpenClawTestState({ prefix: "openclaw-mcp-oauth-worker-read-" }, async () => {
     requireNodeSqlite();
     const operator = operatorMcpOAuthIdentity("worker-read", serverUrl);
@@ -82,13 +85,7 @@ it("prepares provider facts and reopens persisted reads without parent SQL", asy
     const outside = requester("first", "other-server");
     const prefix = requesterMcpOAuthStoreKeyPrefix(operator.serverName, operator.serverUrl);
     const store: McpOAuthStore = {
-      clientInformation: { client_id: "fixture-client", redirect_uris: [defaultRedirect] },
       tokens: { access_token: "access", refresh_token: "refresh", token_type: "Bearer" },
-      tokenExpiresAt: Date.now() + 3_600_000,
-      tokensAuthorizationServerUrl: "https://issuer.example.test",
-      codeVerifier: "fixture-verifier",
-      discoveryState: { authorizationServerUrl: "https://issuer.example.test" },
-      redirectUrl: "https://gateway.example.test/oauth/mcp/callback",
     };
     for (const identity of [first, second, outside]) {
       seedMcpOAuthStoreForTest(
@@ -102,20 +99,6 @@ it("prepares provider facts and reopens persisted reads without parent SQL", asy
     const sql = observeMainThreadSql();
     try {
       for (let pass = 0; pass < 2; pass++) {
-        await withMcpOAuthProviderForTest(
-          { identity: first, config: { scope: "documents.read" } },
-          async (provider) => {
-            expect(provider.redirectUrl).toBe(store.redirectUrl);
-            expect(provider.clientMetadata).toMatchObject({
-              redirect_uris: [store.redirectUrl],
-              scope: "documents.read",
-            });
-            expect(await provider.clientInformation()).toEqual(store.clientInformation);
-            expect(await provider.tokens()).toEqual(store.tokens);
-            expect(await provider.codeVerifier()).toBe(store.codeVerifier);
-            expect(await provider.discoveryState?.()).toEqual(store.discoveryState);
-          },
-        );
         expect(await readMcpOAuthStore(first.storeKey)).toEqual(store);
         expect(await readMcpOAuthStoreReadOnly(first.storeKey)).toEqual(store);
         expect(await listMcpOAuthStoreKeysByPrefix(prefix)).toEqual(

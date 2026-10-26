@@ -39,7 +39,7 @@ vi.mock(
       >();
     return {
       ...actual,
-      withSqliteReclamationWorker: ((options, claim, run, assertRequestCurrent, signal) =>
+      withSqliteReclamationWorker: ((options, claim, run, ...rest) =>
         actual.withSqliteReclamationWorker(
           options,
           claim,
@@ -65,8 +65,7 @@ vi.mock(
               spy.mockRestore();
             }
           },
-          assertRequestCurrent,
-          signal,
+          ...rest,
         )) satisfies typeof actual.withSqliteReclamationWorker,
     };
   },
@@ -104,8 +103,10 @@ it("retains a void extension message until its durable append and publication pr
       },
     });
   });
-  const manager = SessionManager.open(target, cwd);
-  const { session } = await createTestSession({ sessionManager: manager, resourceLoader });
+  const { session } = await createTestSession({
+    sessionManager: SessionManager.open(target, cwd),
+    resourceLoader,
+  });
   session.subscribe((event) => {
     if (
       (event.type === "message_start" || event.type === "message_end") &&
@@ -125,8 +126,7 @@ it("retains a void extension message until its durable append and publication pr
   const readDurableMessages = () =>
     SessionManager.open(target, cwd)
       .getEntries()
-      .filter((entry) => entry.type === "custom_message")
-      .map((entry) => ({ customType: entry.customType, content: entry.content }));
+      .filter((entry) => entry.type === "custom_message");
   let durableAtRelease: ReturnType<typeof readDurableMessages> | undefined;
   try {
     await owner.run(() =>
@@ -152,7 +152,7 @@ it("retains a void extension message until its durable append and publication pr
       "message_end",
       "resource-released",
     ]);
-    expect(durableAtRelease).toEqual([payload]);
+    expect(durableAtRelease).toMatchObject([payload]);
   } finally {
     gate.release();
     await writer;
@@ -197,13 +197,9 @@ it("queues an unrelated custom-message append behind reclamation writer admissio
     commitGuard: () => {},
     storePath,
     target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
-  }).then(
-    (result) => ({ result }),
-    (error: unknown) => ({ error }),
-  );
+  }).catch((error: unknown) => error);
   const outcomes = await Promise.allSettled(write ? [write] : []);
-  expect(deletion).toMatchObject({ result: { deleted: true } });
-  expect(checkpoint.startForeground).toHaveBeenCalledOnce();
+  expect(deletion).toMatchObject({ deleted: true });
   expect(outcomes).toEqual([{ status: "fulfilled", value: undefined }]);
   expect(publishedDuringCommitAuthorization).toEqual([]);
   expect(published).toEqual(["admission-proof"]);

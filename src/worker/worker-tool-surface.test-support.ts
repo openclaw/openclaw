@@ -130,7 +130,7 @@ export function createWorkerConnectionForTest(
 }
 export function createWorkerHelloForTest(
   admission: Omit<WorkerConnectRequestFrame["params"]["admission"], "runId">,
-  toolSurface: WorkerToolSurface,
+  toolSurface = createEmptyWorkerToolSurfaceForTest(),
   heartbeatIntervalMs = 60_000,
 ) {
   const { environmentId, sessionId, ownerEpoch, rpcSetVersion, handshake } = admission;
@@ -144,6 +144,15 @@ export function createWorkerHelloForTest(
     protocolFeatures: [...handshake.protocolFeatures],
     credentialExpiresAtMs: Date.now() + 60_000,
     policy: { heartbeatIntervalMs, maxPayload: 25 * 1024 * 1024 },
+  };
+}
+
+function createEmptyWorkerToolSurfaceForTest(): WorkerToolSurface {
+  return {
+    generation: "runtime-surface",
+    presentation: createToolSurfacePresentationForTest(),
+    policy: prepareCoreToolPolicy({}),
+    tools: [],
   };
 }
 

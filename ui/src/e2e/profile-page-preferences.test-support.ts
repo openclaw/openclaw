@@ -1,9 +1,7 @@
 import { expect, type Page } from "playwright/test";
 import { it } from "vitest";
-import {
-  GIT_COAUTHOR_PREFERENCE_KEY,
-  type UserProfile,
-} from "../../../packages/gateway-protocol/src/index.ts";
+import { GIT_COAUTHOR_PREFERENCE_KEY } from "../../../packages/gateway-protocol/src/schema/user-profile-constants.js";
+import type { UserProfile } from "../../../packages/gateway-protocol/src/schema/users.js";
 import type { MockGatewayControls } from "../test-helpers/control-ui-e2e.ts";
 import type { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 

@@ -141,6 +141,7 @@ export type ChatThreadProps = Omit<
     retryAt?: number;
     onRetryRun?: (runId: string) => void;
     failureActionsRunId?: string;
+    onDismissPendingInput?: (inputId: string) => void;
     waitingApproval?: boolean;
     questionPrompts?: readonly QuestionPrompt[];
     sessions: SessionsListResult | null;
@@ -157,7 +158,8 @@ export type ChatThreadProps = Omit<
     loadFullAssistantMessage?: SidebarFullMessageLoader | null;
     mediaPolicyEpoch?: number;
     autoExpandToolCalls?: boolean;
-    realtimeTalkConversation?: RealtimeTalkConversationEntry[];
+    /** Live captions update their retained row independently of the pane frame. */
+    readRealtimeTalkConversation?: () => readonly RealtimeTalkConversationEntry[];
     typingActors?: readonly ChatTypingActorView[];
     typingOverflow?: ChatTypingOverflow;
     onOpenSidebar?: (content: SidebarContent) => void;

@@ -5,7 +5,7 @@ import {
   RECENT_HISTORY_CONTEXT_MARKER,
 } from "../../auto-reply/reply/history.js";
 import {
-  INBOUND_METADATA_MARKERS,
+  createInboundMetadataProbe,
   stripInboundMetadata,
 } from "../../auto-reply/reply/strip-inbound-meta.js";
 import { RUNTIME_CONTEXT_HEADER } from "../../llm/types.js";
@@ -23,14 +23,14 @@ import {
   isInsideCode,
   stripLinesOutsideCode,
 } from "../../shared/text/code-regions.js";
-import { createFinalTagProbe, stripFinalTags } from "../../shared/text/final-tags.js";
+import { finalTagTextFilter } from "../../shared/text/final-tags.js";
 import {
   applyTextFilters,
   createConditionalTextProjector,
   duplicateParagraphTextFilter,
   leadingEmptyLinesTextFilter,
   type TextFilter,
-  type TextProjection,
+  type TextProjector,
 } from "../../shared/text/text-projection.js";
 import { EXEC_NO_OUTPUT_PLACEHOLDER } from "../bash-tools.exec-output.js";
 import {
@@ -294,43 +294,72 @@ function isPartialRuntimeContextDelimiter(line: string): boolean {
   );
 }
 
-function createRuntimeContextStreamProjector(): (input: TextProjection) => TextProjection {
+function createRuntimeContextStreamProjector(): TextProjector {
   let active = false;
   let published = "";
   let atLineStart = true;
   let withheld = "";
   let scanTail = "";
-  return (input) => {
+  let prefixOnly = true;
+  const result = (
+    input: Parameters<TextProjector>[0],
+    text: string,
+    delta: string | null,
+    previousPrefixOnly = prefixOnly,
+  ): ReturnType<TextProjector> => {
+    const retained = input.retained;
+    // Without a complete carrier, the canonical scrub only truncates a suffix.
+    // Replacements also require that prefix to have already been published.
+    const mapped =
+      prefixOnly &&
+      previousPrefixOnly &&
+      retained &&
+      retained.prefix.length <= text.length &&
+      (delta !== null || retained.prefix.length <= published.length)
+        ? {
+            prefix: retained.prefix,
+            tail: retained.tail.slice(0, text.length - retained.prefix.length),
+          }
+        : undefined;
+    published = text;
+    return mapped
+      ? { text, delta, retained: mapped }
+      : text === input.text && delta === input.delta
+        ? input
+        : { text, delta };
+  };
+  const projector: TextProjector = (input) => {
     if (input.delta === null) {
       // Every subscriber projection starts with replace(previousStream?.raw ?? ""). Only a
       // replacement that itself carried carrier bytes may latch the scrub; an empty or
       // marker-free replacement has to keep the fast path or the per-delta cost comes back.
       const text = stripInternalRuntimeContext(input.text, { streaming: true });
       const scan = normalizeRuntimeContextScan(input.text);
-      active = hasRuntimeContextStreamTrigger(scan) || text !== input.text;
-      published = text;
+      const previousPrefixOnly = prefixOnly;
+      prefixOnly = !hasRuntimeContextStreamTrigger(scan);
+      active = !prefixOnly || text !== input.text;
       scanTail = scan.slice(-RUNTIME_CONTEXT_STREAM_SCAN_LENGTH);
       atLineStart = isWhitespaceOnly(text.slice(text.lastIndexOf("\n") + 1));
       withheld = "";
-      return { text, delta: null };
+      return result(input, text, null, previousPrefixOnly);
     }
     // Provider deltas have no size limit, so the trigger has to see the whole incoming chunk
     // before only the bounded overlap is retained; otherwise a coalesced private block could
     // publish its body without ever activating the scrub.
     const scan = normalizeRuntimeContextScan(scanTail + input.delta);
     scanTail = scan.slice(-RUNTIME_CONTEXT_STREAM_SCAN_LENGTH);
-    if (!active && hasRuntimeContextStreamTrigger(scan)) {
+    if (hasRuntimeContextStreamTrigger(scan)) {
       active = true;
+      prefixOnly = false;
     }
     if (active) {
       // A complete delimiter owns the rest of the reply: the canonical streaming scrub
       // latches so the context body can never follow it into the preview.
       const text = stripInternalRuntimeContext(input.text, { streaming: true });
       const delta = text.startsWith(published) ? text.slice(published.length) : null;
-      published = text;
       atLineStart = text.length === 0 || text.endsWith("\n");
       withheld = "";
-      return text === input.text && delta === input.delta ? input : { text, delta };
+      return result(input, text, delta);
     }
     // A delimiter is removable only as a whole line, so a hold can start only where a
     // line starts - never from an ordinary line that already failed the prefix test.
@@ -345,19 +374,20 @@ function createRuntimeContextStreamProjector(): (input: TextProjection) => TextP
     if (candidate !== undefined && isPartialRuntimeContextDelimiter(candidate)) {
       const prefix = complete.slice(0, complete.length - candidate.length);
       withheld = candidate;
-      published = prefix ? published + prefix : published;
-      return { text: published, delta: prefix };
+      return result(input, prefix ? published + prefix : published, prefix);
     }
     if (withheld) {
       withheld = "";
-      published = input.text;
       atLineStart = advanceLineStart(true, complete);
-      return { text: input.text, delta: complete };
+      return result(input, input.text, complete);
     }
-    published = input.text;
     atLineStart = advanceLineStart(atLineStart, input.delta);
-    return input;
+    return result(input, input.text, input.delta);
   };
+  // Corrections still run the canonical replacement branch; retaining the instance
+  // preserves only the prior output boundary needed to prove unchanged-prefix metadata.
+  projector.canReplaceFrom = () => true;
+  return projector;
 }
 
 // Share descriptors only; createTextProjection owns each stream's mutable state.
@@ -371,10 +401,7 @@ export function userFacingTextFilters(
 ): readonly TextFilter[] {
   const key = `${errorContext ? "error" : "normal"}${streaming ? "-stream" : ""}` as const;
   return (userFacingFilters[key] ??= [
-    {
-      transform: stripFinalTags,
-      create: () => createConditionalTextProjector(stripFinalTags, createFinalTagProbe()),
-    },
+    finalTagTextFilter,
     streaming
       ? {
           transform: (text) => stripInternalRuntimeContext(text, { streaming: true }),
@@ -389,8 +416,12 @@ export function userFacingTextFilters(
             RUNTIME_CONTEXT_HEADER,
           ],
         },
-    { transform: stripInboundMetadata, activationTokens: INBOUND_METADATA_MARKERS },
-    minimaxToolCallTextFilter,
+    {
+      transform: stripInboundMetadata,
+      create: () =>
+        createConditionalTextProjector(stripInboundMetadata, createInboundMetadataProbe()),
+    },
+    minimaxToolCallTextFilter(streaming),
     toolCallXmlTextFilter({ stripFunctionCallsXmlPayloads: true }),
     {
       transform: stripInternalPlaceholderLines,

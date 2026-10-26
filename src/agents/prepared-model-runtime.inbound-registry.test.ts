@@ -48,6 +48,7 @@ import {
   type PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.js";
 import { retainPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
+import { loadSubagentRegistryPluginRuntimeHandle } from "./subagents/registry/subagent-registry-deps.js";
 
 const fixture = usePreparedModelRuntimeHarness({ label: "prepared-model-runtime" });
 const { mocks } = fixture;
@@ -139,6 +140,48 @@ async function useDiscoveryCredentials() {
 }
 
 describe("prepared reply dispatch runtime", () => {
+  it("reuses the published workspace registry for repeated subagent cleanup", async () => {
+    mocks.configuredAgentIds = ["default"];
+    const config = {};
+    await publishGateway(config, { allowGatewaySubagentBinding: true });
+    const published = (await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }))!;
+    const input = {
+      config,
+      agentId: published.agentId,
+      agentDir: published.agentDir,
+      workspaceDir: published.workspaceDir,
+      allowGatewaySubagentBinding: true,
+    };
+    mocks.loadAgentRuntimePluginRegistryHandle.mockClear();
+    expect(await loadSubagentRegistryPluginRuntimeHandle(input)).toBe(
+      published.inboundPluginRegistry,
+    );
+    expect(await loadSubagentRegistryPluginRuntimeHandle(input)).toBe(
+      published.inboundPluginRegistry,
+    );
+    expect(mocks.loadAgentRuntimePluginRegistryHandle).not.toHaveBeenCalled();
+
+    const replacementConfig = { plugins: { enabled: false } };
+    await publishGateway(replacementConfig, { allowGatewaySubagentBinding: true });
+    const replacement = (await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }))!;
+    mocks.loadAgentRuntimePluginRegistryHandle.mockClear();
+    expect(
+      await loadSubagentRegistryPluginRuntimeHandle({ ...input, config: replacementConfig }),
+    ).toBe(replacement.inboundPluginRegistry);
+    expect(mocks.loadAgentRuntimePluginRegistryHandle).not.toHaveBeenCalled();
+
+    // Historical workspaces and changed policy cannot borrow the current publication.
+    for (const unmatched of [
+      input,
+      { ...input, config: replacementConfig, workspaceDir: fixture.state.path("old-workspace") },
+    ]) {
+      expect(await loadSubagentRegistryPluginRuntimeHandle(unmatched)).not.toBe(
+        replacement.inboundPluginRegistry,
+      );
+    }
+    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(2);
+  });
+
   it("holds inspected input through accepted preparation and refuses a retired result", async () => {
     const database = new DatabaseSync(fixture.state.path("prepared-registration.sqlite"));
     database.exec(

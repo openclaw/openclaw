@@ -1,0 +1,415 @@
+// Owner-level Team-shaped list workload; transport/tool-turn proof stays in team-shape-stress.ts.
+// Run on an approved quiet host with --expose-gc --import ./scripts/tsx.mjs.
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { readFileSync, writeFileSync } from "node:fs";
+import type { HeapProfiler, Profiler } from "node:inspector";
+import { Session } from "node:inspector/promises";
+import { loadavg } from "node:os";
+import path from "node:path";
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { parseArgs } from "node:util";
+import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
+import type { SubagentRunRecord } from "../../src/agents/subagents/registry/subagent-registry.types.js";
+import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
+import type { SessionsListResult } from "../../src/gateway/session-utils.types.js";
+import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
+import { generateTeamShapeStressFixture } from "./team-shape-stress-fixture.ts";
+
+const { values } = parseArgs({
+  options: {
+    "state-dir": { type: "string" },
+    sessions: { type: "string", default: "10800" },
+    iterations: { type: "string", default: "1200" },
+    warmup: { type: "string", default: "48" },
+    "updates-per-list": { type: "string", default: "33" },
+    mode: { type: "string", default: "timing" },
+    reconciliation: { type: "boolean", default: false },
+    "cpu-profile": { type: "boolean", default: false },
+    golden: { type: "string" },
+  },
+});
+assert(values["state-dir"], "--state-dir must name a new synthetic directory");
+assert(values.mode === "timing" || values.mode === "allocation" || values.mode === "verify");
+assert(!values["cpu-profile"] || values.mode === "timing", "Separate CPU and heap sampling");
+assert(global.gc, "Run with --expose-gc");
+const integer = (name: "sessions" | "iterations" | "warmup" | "updates-per-list", min = 1) =>
+  parseStrictIntegerOption({ raw: values[name], label: `--${name}`, min, fallback: min });
+const sessions = integer("sessions", 100);
+const iterations = integer("iterations");
+const warmup = integer("warmup");
+const updatesPerList = integer("updates-per-list", 0);
+const root = path.resolve(values["state-dir"]);
+const anchor = Date.UTC(2026, 9, 25);
+const fixture = await generateTeamShapeStressFixture({
+  stateDir: root,
+  port: 40984,
+  seed: 224,
+  now: anchor,
+  sessions,
+  transcriptMiB: 0,
+});
+process.env = { ...fixture.env };
+const cfg: OpenClawConfig = JSON.parse(readFileSync(process.env.OPENCLAW_CONFIG_PATH!, "utf8"));
+const [
+  config,
+  memory,
+  registry,
+  publications,
+  sessionEntries,
+  changes,
+  projections,
+  lists,
+  foreground,
+  plugins,
+  pluginRegistry,
+  agentDb,
+  stateDb,
+] = await Promise.all([
+  import("../../src/config/runtime-snapshot.js"),
+  import("../../src/agents/subagents/registry/subagent-registry-memory.js"),
+  import("../../src/infra/agent-run-registry.js"),
+  import("../../src/agents/subagents/registry/subagent-registry-publication.js"),
+  import("../../src/config/sessions/session-accessor.js"),
+  import("../../src/sessions/session-row-changes.js"),
+  import("../../src/gateway/session-row-projection.js"),
+  import("../../src/gateway/session-utils-list.js"),
+  import("../../src/gateway/session-projection-work.js"),
+  import("../../src/plugins/runtime.js"),
+  import("../../src/plugins/registry-empty.js"),
+  import("../../src/state/openclaw-agent-db.js"),
+  import("../../src/state/openclaw-state-db.js"),
+]);
+config.setRuntimeConfigSnapshot(cfg);
+plugins.setActivePluginRegistry(pluginRegistry.createEmptyPluginRegistry());
+const releaseForeground = foreground.retainSessionListForegroundWork();
+const inspector = new Session();
+let connected = false;
+let projection: Awaited<ReturnType<typeof projections.createSessionRowProjection>> | undefined;
+const claims = new Map<string, string>();
+const active: SubagentRunRecord[] = [];
+const realNow = Date.now;
+let clock = anchor;
+Date.now = () => clock;
+
+const cases: SessionsListParams[] = [];
+for (const archived of [false, true, "all"] as const) {
+  for (const agentId of ["main", undefined]) {
+    for (const offset of [0, 50]) {
+      cases.push({
+        source: "sidebar",
+        rowMode: "sidebar",
+        agentId,
+        configuredAgentsOnly: true,
+        limit: 100,
+        offset,
+        archived,
+        excludeDock: true,
+      });
+    }
+  }
+}
+cases.push(
+  { source: "agent-roster", rowMode: "sidebar", archived: "all", limit: 50 },
+  {
+    source: "agent-roster",
+    rowMode: "sidebar",
+    archived: "all",
+    limit: 50,
+    includeOwnerSessionCounts: true,
+  },
+  { source: "sessions-page", rowMode: "compact", archived: "all", includePeople: true, limit: 50 },
+  { source: "sessions-page", agentId: "reviewer", limit: 50 },
+);
+
+if (values.mode === "verify") {
+  let seed = 224;
+  const choose = <T>(items: readonly T[]): T => {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    return items[seed % items.length]!;
+  };
+  for (let index = 0; index < 96; index++) {
+    cases.push({
+      source: choose(["sidebar", "agent-roster", "dashboard"] as const),
+      rowMode: choose(["sidebar", "compact", "dashboard"] as const),
+      agentId: choose([undefined, "main", "reviewer", "researcher"]),
+      archived: choose([false, true, "all"] as const),
+      limit: choose([1, 7, 25, 100]),
+      offset: choose([0, 1, 49, 100, 500, 5000]),
+      sortBy: choose(["updatedAt", "lastInteractionAt", "activity"] as const),
+      activeMinutes: choose([undefined, 1, 60]),
+      configuredAgentsOnly: choose([false, true]),
+      includePeople: choose([false, true]),
+      includeOwnerSessionCounts: choose([false, true]),
+      excludeSubagents: choose([false, true]),
+      excludeCron: choose([false, true]),
+      includeGlobal: choose([false, true]),
+      includeUnknown: choose([false, true]),
+    });
+  }
+}
+
+function canonicalResult(result: SessionsListResult): string {
+  const omitted = new Set(["ts", "rowsRevision", "rowRevision", "runtimeMs", "snapshotAt"]);
+  return JSON.stringify(result, (key, value: unknown) => {
+    if (omitted.has(key)) {
+      return undefined;
+    }
+    if (typeof value === "string") {
+      return value.replaceAll(root, "<synthetic-state>");
+    }
+    return value;
+  });
+}
+
+function sampledBytes(profile: HeapProfiler.SamplingHeapProfile) {
+  let total = 0;
+  let prepared = 0;
+  let roster = 0;
+  let list = 0;
+  const visit = (
+    node: HeapProfiler.SamplingHeapProfileNode,
+    inPrepared = false,
+    inRoster = false,
+    inList = false,
+  ) => {
+    const preparedFrame = inPrepared || node.callFrame.functionName === "withPreparedExactRows";
+    const rosterFrame = inRoster || node.callFrame.functionName === "withAgentRosterFactsBatch";
+    const listFrame = inList || node.callFrame.functionName === "listProjectedSessions";
+    total += node.selfSize;
+    prepared += preparedFrame ? node.selfSize : 0;
+    roster += rosterFrame ? node.selfSize : 0;
+    list += listFrame ? node.selfSize : 0;
+    for (const child of node.children) {
+      visit(child, preparedFrame, rosterFrame, listFrame);
+    }
+  };
+  visit(profile.head);
+  return { total, prepared, roster, list };
+}
+
+function sampledCpu(profile: Profiler.Profile) {
+  const targets = new Set(["withPreparedExactRows", "withAgentRosterFactsBatch", "selectPage"]);
+  const nodes = new Map(profile.nodes.map((node) => [node.id, node.callFrame.functionName]));
+  const selfMicros: Record<string, number> = {};
+  for (const [index, id] of (profile.samples ?? []).entries()) {
+    const name = nodes.get(id);
+    if (name && targets.has(name)) {
+      selfMicros[name] = (selfMicros[name] ?? 0) + (profile.timeDeltas?.[index] ?? 0);
+    }
+  }
+  return selfMicros;
+}
+
+try {
+  projection = await projections.createSessionRowProjection({ cfg, modelCatalog: [] });
+  await projection.ensureMaterialized();
+  const rows = projection.selectEntries({ agentId: "main" });
+  const children = rows.filter((row) => row.key.startsWith("agent:main:subagent:")).slice(0, 8);
+  const parent = rows.find((row) => row.key.startsWith("agent:main:dashboard:") && row.entry);
+  assert(parent && children.length > 0, "Team fixture must contain child and dashboard rows");
+  for (const [index, child] of children.entries()) {
+    assert(child.entry);
+    active.push({
+      runId: `prepared-list-live-${index}`,
+      childSessionKey: child.key,
+      childAgentId: "main",
+      childSessionIdentity: { sessionId: child.entry.sessionId },
+      requesterSessionKey: parent.key,
+      requesterAgentId: "main",
+      requesterDisplayKey: parent.key,
+      controllerSessionKey: parent.key,
+      task: "Synthetic list preparation churn",
+      cleanup: "keep",
+      generation: 1,
+      createdAt: clock,
+      execution: {
+        status: "terminal",
+        startedAt: clock,
+        endedAt: clock,
+        outcome: { status: "ok" },
+      },
+      delivery: { status: "not_required" },
+    });
+  }
+  const unrelated = rows.find((row) => row.entry?.archivedAt !== undefined);
+  assert(unrelated?.entry, "Team fixture must contain archived rows");
+  let updates = 0;
+  const update = () => {
+    const index = updates % active.length;
+    const previous = active[index]!;
+    const claim = claims.get(previous.runId);
+    if (claim) {
+      registry.releaseAgentRunContext(previous.runId, claim);
+      claims.delete(previous.runId);
+    }
+    const running = Math.floor(updates / active.length) % 2 === 0;
+    const next: SubagentRunRecord = {
+      ...previous,
+      execution: running
+        ? { status: "running", startedAt: clock }
+        : { status: "terminal", startedAt: clock - 500, endedAt: clock, outcome: { status: "ok" } },
+      cleanupCompletedAt: running ? undefined : clock,
+    };
+    memory.subagentRuns.set(next.runId, next);
+    if (running) {
+      const token = registry.claimAgentRunContext(
+        next.runId,
+        {
+          agentId: "main",
+          sessionKey: next.childSessionKey,
+          sessionId: next.childSessionIdentity?.sessionId,
+          lifecycleStartedAt: clock,
+          projectSessionActive: true,
+          isControlUiVisible: true,
+        },
+        { trackOwner: true, ownsContext: true },
+      );
+      assert(token);
+      claims.set(next.runId, token);
+    }
+    active[index] = next;
+    publications.publishSubagentRunChanges([next.childSessionKey], [next.runId]);
+    updates++;
+  };
+  const read = (index: number) =>
+    lists.listProjectedSessions({
+      projection: projection!,
+      opts: cases[index % cases.length]!,
+      acceptsSerializedJson: true,
+    });
+  const capture = async () => {
+    const digest = createHash("sha256");
+    for (let index = 0; index < cases.length; index++) {
+      digest.update(canonicalResult(await read(index)));
+    }
+    return digest.digest("hex");
+  };
+  const initialGolden = await capture();
+  let sequence = 0;
+  let listCpuMicros = 0;
+  let updateCpuMicros = 0;
+  let returnedRows = 0;
+  const responses = values.mode === "verify" ? createHash("sha256") : undefined;
+  const run = async (count: number, measured: boolean) => {
+    for (let index = 0; index < count; index++) {
+      clock += 1_000;
+      let before = process.threadCpuUsage();
+      for (let step = 0; step < updatesPerList; step++) {
+        update();
+      }
+      if (values.reconciliation) {
+        // Exercise the existing incomplete-postimage reconciliation contract explicitly.
+        sessionEntries.replaceSessionEntrySync(
+          { agentId: "main", sessionKey: unrelated.key },
+          { ...unrelated.entry!, label: `Synthetic reconciliation ${sequence % 2}` },
+        );
+        changes.sessionChanges.emit({
+          agentId: "main",
+          storePath: unrelated.storeTarget.storePath,
+          sessionKey: unrelated.key,
+          factsInvalidated: true,
+        });
+      }
+      let used = process.threadCpuUsage(before);
+      if (measured) {
+        updateCpuMicros += used.user + used.system;
+      }
+      before = process.threadCpuUsage();
+      const result = await read(sequence++);
+      used = process.threadCpuUsage(before);
+      assert.equal(result.count, result.sessions.length);
+      assert(typeof result.totalCount === "number");
+      assert(result.totalCount >= result.count);
+      responses?.update(canonicalResult(result));
+      if (measured) {
+        listCpuMicros += used.user + used.system;
+        returnedRows += result.count;
+      }
+    }
+  };
+  await run(warmup, false);
+  global.gc();
+  await nextTurn();
+  inspector.connect();
+  connected = true;
+  if (values.mode === "allocation") {
+    await inspector.post("HeapProfiler.startSampling", {
+      samplingInterval: 32768,
+      includeObjectsCollectedByMajorGC: true,
+      includeObjectsCollectedByMinorGC: true,
+    });
+  } else if (values["cpu-profile"]) {
+    await inspector.post("Profiler.enable");
+    await inspector.post("Profiler.setSamplingInterval", { interval: 100 });
+    await inspector.post("Profiler.start");
+  }
+  const started = performance.now();
+  const before = process.threadCpuUsage();
+  await run(iterations, true);
+  const used = process.threadCpuUsage(before);
+  const elapsedMs = performance.now() - started;
+  const allocation =
+    values.mode === "allocation"
+      ? (await inspector.post("HeapProfiler.stopSampling")).profile
+      : undefined;
+  const cpu = values["cpu-profile"] ? (await inspector.post("Profiler.stop")).profile : undefined;
+  if (allocation) {
+    writeFileSync(path.join(root, "allocation.heapprofile"), JSON.stringify(allocation));
+  }
+  if (cpu) {
+    writeFileSync(path.join(root, "cpu.cpuprofile"), JSON.stringify(cpu));
+  }
+  const golden = {
+    initial: initialGolden,
+    final: await capture(),
+    ...(responses ? { responses: responses.digest("hex") } : {}),
+  };
+  if (values.golden) {
+    assert.deepEqual(golden, JSON.parse(readFileSync(values.golden, "utf8")));
+  }
+  writeFileSync(path.join(root, "golden.json"), JSON.stringify(golden, null, 2));
+  const bytes = allocation ? sampledBytes(allocation) : undefined;
+  const result = {
+    mode: values.mode,
+    cpuProfile: values["cpu-profile"],
+    reconciliation: values.reconciliation,
+    sessions,
+    iterations,
+    warmup,
+    updatesPerList,
+    returnedRows,
+    elapsedMs,
+    threadCpuMs: (used.user + used.system) / 1000,
+    listCpuMsPerCall: listCpuMicros / 1000 / iterations,
+    updateCpuMsPerCall: updateCpuMicros / 1000 / iterations,
+    allocatedBytes: bytes,
+    allocatedBytesPerList:
+      bytes &&
+      Object.fromEntries(Object.entries(bytes).map(([key, value]) => [key, value / iterations])),
+    targetSelfCpuMicros: cpu ? sampledCpu(cpu) : undefined,
+    golden,
+    cases,
+    host: { node: process.version, load: loadavg() },
+    scope:
+      "Owner-level unfiltered lists with registry churn; no transport/model claim. Reconciliation is an explicit incomplete-postimage scenario. Heap family samples overlap and are estimates.",
+  };
+  writeFileSync(path.join(root, "result.json"), JSON.stringify(result, null, 2));
+  console.log(JSON.stringify(result));
+} finally {
+  Date.now = realNow;
+  if (connected) {
+    inspector.disconnect();
+  }
+  projection?.dispose();
+  releaseForeground();
+  for (const [runId, claim] of claims) {
+    registry.releaseAgentRunContext(runId, claim);
+  }
+  for (const entry of active) {
+    memory.subagentRuns.delete(entry.runId);
+  }
+  config.clearRuntimeConfigSnapshot();
+  await agentDb.closeOpenClawAgentDatabasesAsync();
+  await stateDb.closeOpenClawStateDatabaseAsync();
+}

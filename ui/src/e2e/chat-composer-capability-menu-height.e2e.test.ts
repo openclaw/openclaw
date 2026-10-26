@@ -123,7 +123,7 @@ suite.define(() => {
       });
 
       await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       const composer = page.locator(".agent-chat__input");
       await expect.poll(() => composer.isVisible()).toBe(true);
       const dropdown = composer.locator(".agent-chat__capability-menu");

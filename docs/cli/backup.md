@@ -13,10 +13,19 @@ title: "Backup"
 
 # `openclaw backup`
 
+Human-readable schedule acknowledgements and external backup record labels strip
+terminal escape sequences and display embedded newlines, tabs, and carriage returns
+as `\n`, `\t`, and `\r`. Scheduled command arguments, stored records, and JSON
+output retain their original values.
+
 Create backup archives for OpenClaw state, config, auth profiles, channel/provider
 credentials, sessions, and optionally workspaces. Save them locally or upload to
 a named [storage location](/concepts/storage-locations). SQLite snapshots and Git
 history provide database-focused alternatives.
+
+Archive creation, verification, and restore reports strip terminal escape sequences
+and display embedded newlines, tabs, and carriage returns as `\n`, `\t`, and `\r`.
+Archive paths, restored data, and `--json` output retain their original values.
 
 ```bash
 openclaw backup create
@@ -392,7 +401,7 @@ Snapshot repositories are local directories. Scheduling, upload, retention, incr
 
 ## Versioned Git backups
 
-Human-readable Git backup reports escape control characters in paths, commit subjects, and diagnostics. JSON values and recorded diagnostics are unchanged.
+Human-readable Git backup reports escape control characters in paths, commit subjects, and diagnostics. Push-failure diagnostics keep escaped lines separated so credential redaction preserves the stderr and stdout tails. JSON values and recorded diagnostics are unchanged.
 
 `openclaw backup git create --all` also includes PostgreSQL stores discovered
 through declared plugin backup resources, including retained roots. Each store

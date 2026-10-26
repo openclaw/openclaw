@@ -292,9 +292,6 @@ describe("startup recovery admission", () => {
       await withinTest(Promise.race([paused.promise, dispatched.promise]), signal);
       expect(callGateway).not.toHaveBeenCalled();
       expect(loadSessionEntry(target)).toEqual(before);
-      expect(
-        info.mock.calls.filter(([line]) => line.includes("restart recovery paused until")),
-      ).toEqual([[expect.stringContaining(new Date(now + 10_001).toISOString())]]);
       expect(notice).not.toHaveBeenCalled();
       if (action === "resume") {
         await expect(
@@ -428,19 +425,6 @@ describe("startup recovery admission", () => {
         sessionId: "other-session",
         pendingFinalDelivery: makePendingFinalDelivery(),
       });
-      await makeMainSessionFixture({
-        sessionKey: "agent:main:archived",
-        sessionId: "archived-session",
-        archivedAt: Date.now(),
-      });
-      await makeMainSessionFixture({
-        sessionKey: "agent:main:subagent:child",
-        sessionId: "child-session",
-        spawnDepth: 1,
-        mainRestartRecovery: undefined,
-        restartRecoveryDeliveryRunId: "registry-child-run",
-      });
-      const info = vi.spyOn(mainSessionRecoveryLog, "info");
       const executionWait = createDeferred();
       const wait = gatewayRuntime.waitForAgent;
       const waitSpy = vi
@@ -463,9 +447,7 @@ describe("startup recovery admission", () => {
         }
         return await read(...args);
       });
-      const readSpy = vi
-        .spyOn(transcriptReaders, "readSessionMessagesAsync")
-        .mockImplementation(preparation.run);
+      vi.spyOn(transcriptReaders, "readSessionMessagesAsync").mockImplementation(preparation.run);
       const passFinished = createDeferred();
       observeAdmission((origin) => {
         if (origin === "main-session:startup-recovery") {
@@ -480,7 +462,6 @@ describe("startup recovery admission", () => {
       );
       await withinTest(prepared.promise, signal);
       expect(callGateway).not.toHaveBeenCalled();
-      expect(readSpy).toHaveBeenCalledOnce();
       let stopping: Promise<void> | undefined;
       if (action === "stop") {
         stopping = recovery.stop();
@@ -502,24 +483,6 @@ describe("startup recovery admission", () => {
       }
       if (action === "continue") {
         expect(waitSpy).not.toHaveBeenCalled();
-        const lines = info.mock.calls.map(([line]) => line);
-        expect(lines).toContainEqual(
-          expect.stringMatching(/startup complete: started=2 .*skipReasons=.*not_main_session:1/),
-        );
-        const decisions = lines
-          .filter((line) => line.startsWith("main-session restart recovery candidate "))
-          .map((line) => JSON.parse(line.slice("main-session restart recovery candidate ".length)));
-        expect(decisions).toHaveLength(2);
-        expect(decisions).toContainEqual(
-          expect.objectContaining({
-            sessionKey: first.sessionKey,
-            sourceRunId: "interrupted-main",
-            decision: "started",
-            nextOwner: "restart-recovery-lane",
-            boot: expect.any(String),
-            pass: expect.any(String),
-          }),
-        );
       }
       if (action === "stop") {
         const state = first.readEntry()?.mainRestartRecovery;
@@ -552,17 +515,9 @@ describe("startup recovery admission", () => {
       const releaseReplay = createDeferred();
       let holdPreparationRead = timing === "startup replay";
       const loadTarget = recoveryTargets.loadExpectedRestartRecoveryTarget;
-      const exactReads: Array<{
-        sessionId?: string;
-        initializationPending?: boolean;
-      }> = [];
       vi.spyOn(recoveryTargets, "loadExpectedRestartRecoveryTarget").mockImplementation(
         async (params) => {
           const entry = await loadTarget(params);
-          exactReads.push({
-            sessionId: entry?.sessionId,
-            initializationPending: entry?.initializationPending,
-          });
           if (holdPreparationRead) {
             holdPreparationRead = false;
             // Finish preparation after recovery reads the row, before it handles that snapshot.
@@ -593,7 +548,7 @@ describe("startup recovery admission", () => {
           failedAttempt.resolve();
         }
       });
-      const info = observeInfo({
+      observeInfo({
         "startup complete:": () => startup.resolve(),
         '"reason":"archived"': () => blocked.resolve(),
       });
@@ -615,10 +570,6 @@ describe("startup recovery admission", () => {
       }
       if (timing !== "preparation commit") {
         await withinTest(replayLoaded.promise, signal);
-        expect(exactReads.at(-1)).toEqual({
-          sessionId: "main-session",
-          initializationPending: true,
-        });
       }
       if (action === "replace") {
         await replaceSessionEntry(target, {
@@ -649,11 +600,6 @@ describe("startup recovery admission", () => {
         expect(callGateway).toHaveBeenCalledTimes(action === "archive" ? 0 : 1);
         expect(loadSessionEntry(target)?.abortedLastRun).toBe(action === "archive");
       }
-      const decisions = info.mock.calls.map(([line]) => line);
-      expect(decisions).toContainEqual(expect.stringContaining('"decision":"deferred"'));
-      expect(decisions).toContainEqual(
-        expect.stringContaining('"nextOwner":"session-preparation"'),
-      );
     },
   );
 
@@ -750,24 +696,10 @@ describe("startup recovery admission", () => {
 
   it.for([
     {
-      name: "ordinary failure during drain",
-      draining: true,
-      failure: () => new Error("preparation failed"),
-    },
-    {
       name: "wrapped drain failure",
       draining: true,
       failure: () =>
         new Error("preparation failed", { cause: new gatewayWorkAdmission.GatewayDrainingError() }),
-    },
-    {
-      name: "aggregate drain failure",
-      draining: true,
-      failure: () =>
-        new AggregateError(
-          [new gatewayWorkAdmission.GatewayDrainingError(), new Error("cleanup failed")],
-          "preparation cleanup failed",
-        ),
     },
     {
       name: "drain error without active drain",

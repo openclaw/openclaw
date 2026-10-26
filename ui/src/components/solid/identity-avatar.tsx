@@ -6,14 +6,13 @@ import {
 } from "../../../../packages/gateway-protocol/src/theme.ts";
 import { isReservedSystemAgentId } from "../../../../src/system-agent/agent-id.js";
 import { inferControlUiPublicAssetPath } from "../../app/public-assets.ts";
-import { currentThemeBranding, subscribeThemeBranding } from "../../app/theme-branding.ts";
 import {
   resolveAgentIdentityAvatarView,
   type AgentIdentity,
   type IdentityAvatarView,
 } from "../../lib/identity-avatar-view.ts";
 import type { IdentityAvatarInput } from "../../lib/identity-avatar.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
+import { themeBrandingProjection } from "../../lib/reactive/theme-branding.ts";
 import { resolveAvatarHat } from "../agent-avatar-hat.ts";
 import type { AgentSelectOption } from "../agent-select-types.ts";
 import { PluginThemeArtwork } from "../plugin-theme-artwork.tsx";
@@ -28,11 +27,7 @@ const AgentAvatarFace = lazy(() => import("../agent-avatar-face.tsx"), {
   export: "AgentAvatarFace",
 });
 
-const avatarBranding = projectSource(null, {
-  read: currentThemeBranding,
-  subscribe: (_source, notify) => subscribeThemeBranding(notify),
-  equality: Object.is,
-});
+const avatarBranding = themeBrandingProjection;
 
 export function AgentIdentityAvatar(props: {
   elementRef?: (element: HTMLElement) => void;

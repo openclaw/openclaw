@@ -1,13 +1,14 @@
 /* @vitest-environment jsdom */
 
-import {
-  buildSystemAgentSessionInvalidatedErrorDetails,
-  type SystemAgentChatResult as ChatResult,
-  type SystemAgentChatHistoryResult as History,
+import type {
+  SystemAgentChatResult as ChatResult,
+  SystemAgentChatHistoryResult as History,
 } from "@openclaw/gateway-protocol";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { buildSystemAgentSessionInvalidatedErrorDetails } from "../../../../packages/gateway-protocol/src/system-agent-error-details.ts";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { hasSensitiveConfigData } from "../../components/config-form.shared.ts";
 import { QUICK_ACTIONS_QUESTION } from "../../test-helpers/custodian-quick-actions.ts";
 import { installSafeLocalStorageForTesting } from "../../test-helpers/storage.ts";

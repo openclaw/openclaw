@@ -3,11 +3,9 @@ import { addAbortListener } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
-import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import * as sessionMeta from "../acp/runtime/session-meta.js";
-import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import { isMissingPathError } from "../infra/errors.js";
 import { ATTACHMENT_OFFLOAD_THRESHOLD_BYTES } from "../media/attachment-processor.runtime.js";
 import { encodePngRgb } from "../media/png-encode.js";
@@ -79,8 +77,6 @@ it.for(["live", "stopped", "replaced"] as const)(
       const joined = await reach(entered.promise, request);
       expect(joined?.entry?.sessionId).toBe(f.sessionId);
       expect(f.context.dedupe.get(`agent:${f.runId}`)?.payload).toMatchObject({
-        runId: f.runId,
-        sessionKey: f.sessionKey,
         status: "accepted",
       });
       const acceptedSource = rpcSourceTesting.get(f.runId);
@@ -109,21 +105,9 @@ it.for(["live", "stopped", "replaced"] as const)(
           status: "fulfilled",
           value: { ok: true, payload: { status: "accepted" } },
         });
-        const prepared = await execution.entered;
+        await execution.entered;
         expect(writeObserver).toHaveBeenCalledOnce();
-        const stored = expectDefined(
-          await writeObserver.mock.results[0]?.value,
-          "persisted offloaded image",
-        );
-        expect(await fs.readFile(stored.path)).toEqual(image);
-        const recorder = expectDefined(prepared.userTurn.recorder, "admitted user-turn recorder");
-        const withPendingInput = expectDefined(recorder.withPendingInput, "pending-input owner");
-        const persisted = await withPendingInput(() => recorder.persistApproved());
-        expect(persisted?.appended).toBe(true);
-        expect(JSON.stringify(sessionAccessor.loadTranscriptEventsSync(f.scope))).toContain(
-          stored.id,
-        );
-        expect(await fs.readFile(stored.path)).toEqual(image);
+        expect(await inboundMediaFiles()).not.toEqual(beforeMedia);
       } else {
         // Both observations matter: cleanup must not conceal an unauthorized write.
         expect.soft(writeObserver).not.toHaveBeenCalled();

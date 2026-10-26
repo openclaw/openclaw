@@ -280,6 +280,13 @@ Do not:
 These are intentionally guarded by the `ci-workflow-guards`,
 `ci-workflow-planning`, and `ci-workflow-evidence` tests under `test/scripts/`:
 
+- Current-target Control UI locale checks share an already-selected public
+  artifact producer on real PR/push/schedule events. Keep verification before
+  generators, settle the existing strict/advisory outcomes after build diagnostics,
+  and route the logical locale gate to that explicit result. Dispatches, frozen
+  and compatibility targets, and standalone locale selections retain their job.
+  Hosted row accounting omits only the shared locale row; no build is newly selected.
+
 - `CI` concurrency key version, PR cancellation, and canonical `main`'s two
   non-canceling parity slots, each with one coalesced pending tip.
 - `preflight` starts immediately without a debounce or standalone admission job.
@@ -689,11 +696,12 @@ These are intentionally guarded by the `ci-workflow-guards`,
   manual runs, unknown paths and older planners retain coverage. Preserve the
   target's existing performance-script capability checks.
 - Eligible Control UI E2E rows request the 16-vCPU class with unchanged live
-  backend/event routing and project worker limits. Current canonical ordinary
-  plans with known changed paths, including fork PRs targeting OpenClaw, use
-  eight Control UI shards plus one browser-extension row. Hourly main also uses
-  eight without a changed-path inventory. Non-main full manual, noncanonical,
-  compatibility, and other unknown-path inventories retain twelve Control UI
+  backend/event routing. Compact plans use six mocked Control UI shards with four
+  workers each, matching four observed CPUs per runner and retaining 24 aggregate
+  worker slots. Private source-server projects remain serial. The conditional
+  browser-extension row keeps its existing reuse and routing rules. Hourly main
+  uses the same compact plan without a changed-path inventory. Non-main full
+  manual, noncanonical, compatibility, and other unknown-path inventories retain twelve Control UI
   shards plus one browser-extension row. Historical targets without the named-project contract retain four total rows on
   Blacksmith or fourteen on GitHub/hybrid. Failed-job-only retries retain their
   previously emitted matrix, including older six-shard Control UI plans; PR and

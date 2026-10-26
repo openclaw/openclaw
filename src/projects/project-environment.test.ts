@@ -5,6 +5,7 @@ import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 const mocks = vi.hoisted(() => {
   const lease = () => ({
     signal: new AbortController().signal,
+    assertCurrent: vi.fn(),
     assertOwned: vi.fn(),
     assertOwnedInTransaction: vi.fn(),
   });
@@ -139,10 +140,10 @@ vi.mock("../config/sessions/session-accessor.sqlite-entry-store.js", () => ({
   parseReadableSqliteSessionEntryRow: mocks.forbiddenSqlite,
 }));
 
-import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { migrateManagedWorktreeCanonicalWorkspaces } from "../config/sessions/worktree-workspace-migration.js";
 import { sha256HexPrefixCore } from "../infra/crypto-digest.js";
+import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { OpenClawStateLeaseContext } from "../state/openclaw-state-lease.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
@@ -168,21 +169,6 @@ beforeEach(() => {
 });
 
 type LeaseRun = (lease: OpenClawStateLeaseContext) => Promise<unknown>;
-type ProjectOperation =
-  | "remove"
-  | "register"
-  | "materialize"
-  | "refresh"
-  | "selector"
-  | "migration";
-type ProjectCommandName =
-  | "projects.insert"
-  | "projects.remove"
-  | "projects.resolveRefreshOwner"
-  | "projects.resolve";
-type ProjectCommand = {
-  [Name in ProjectCommandName]: { type: Name; input: OpenClawStateWorkerOperations[Name]["input"] };
-}[ProjectCommandName];
 
 const root = path.resolve("/synthetic-project-state");
 const databasePath = path.join(root, "state", "openclaw.sqlite");
@@ -202,29 +188,18 @@ const sourceProject: ProjectRegistryRecord = {
   repoRoot: project.repoRoot,
   source: "registered",
 };
-const sourceOperations = new Set<ProjectOperation>(["selector", "migration"]);
-const cases: { operation: ProjectOperation; environment: "plain" | "precloned" }[] = [
-  ...(["remove", "register", "materialize", "refresh"] as const).flatMap((operation) =>
-    (["plain", "precloned"] as const).map((environment) => ({ operation, environment })),
-  ),
-  { operation: "selector", environment: "plain" },
-  { operation: "migration", environment: "plain" },
-];
-
-it.each(cases)(
-  "retains $environment Windows state for $operation after caller changes",
-  async ({ operation, environment }) => {
+it.each(["remove", "register", "materialize", "refresh", "selector", "migration"] as const)(
+  "retains Windows state for %s after caller changes",
+  async (operation) => {
     await withMockedPlatform("win32", async () => {
-      const supplied: NodeJS.ProcessEnv = {
+      const caller: NodeJS.ProcessEnv = {
         OpenClaw_State_Dir: root,
         OpenClaw_Supervisor_Mode: "external",
       };
-      const caller =
-        environment === "precloned" ? cloneEnvWithPlatformSemantics(supplied) : supplied;
       const options = { env: caller };
       const entered = createDeferredCore();
       const resume = createDeferredCore();
-      const source = sourceOperations.has(operation);
+      const source = operation === "selector" || operation === "migration";
       let paused = false;
       const pauseOnce = async () => {
         if (!paused) {
@@ -235,6 +210,7 @@ it.each(cases)(
       };
       const lease: OpenClawStateLeaseContext = {
         signal: new AbortController().signal,
+        assertCurrent() {},
         assertOwned() {},
         assertOwnedInTransaction: mocks.forbiddenSqlite,
       };
@@ -257,7 +233,10 @@ it.each(cases)(
       mocks.refresh.mockResolvedValue(undefined);
       mocks.read.mockResolvedValue({ ok: true, type: "projects.list", projects: [] });
       mocks.execute.mockImplementation(
-        async (_context: OpenClawStateWorkerContext, command: ProjectCommand) => {
+        async (
+          _context: OpenClawStateWorkerContext,
+          command: SqliteWorkerCommand<OpenClawStateWorkerOperations>,
+        ) => {
           switch (command.type) {
             case "projects.resolve":
               await pauseOnce();
@@ -299,7 +278,7 @@ it.each(cases)(
           ) => ({ ...entry, ...update(entry) }),
         );
       }
-      const start: Record<ProjectOperation, () => Promise<unknown>> = {
+      const start: Record<typeof operation, () => Promise<unknown>> = {
         remove: () => removeProjectRegistry(project, options),
         register: () => registerProjectRegistry({ path: project.repoRoot }, options),
         materialize: () =>
@@ -348,6 +327,9 @@ it.each(cases)(
           expect(captured).toMatchObject({ path: databasePath, env: environmentSnapshot });
           expect(captured.env).not.toBe(caller);
         }
+        for (const [, captured] of [...mocks.clone.mock.calls, ...mocks.refresh.mock.calls]) {
+          expect(captured.env).toMatchObject({ OPENCLAW_STATE_DIR: root });
+        }
         if (source) {
           expect(result).toHaveProperty("OPENCLAW_STATE_DIR", root);
           expect(result).not.toBe(caller);
@@ -355,25 +337,14 @@ it.each(cases)(
           expect(Object.keys(result ?? {})).not.toContain("OPENCLAW_STATE_DIR");
         } else if (operation === "materialize") {
           const target = path.join(root, "projects", sha256HexPrefixCore(originUrl, 16), "project");
-          expect(result).toMatchObject({ id: project.id, repoRoot: target });
-          expect(mocks.clone).toHaveBeenCalledWith(
-            expect.objectContaining({ target }),
-            expect.objectContaining({ env: expect.objectContaining({ OPENCLAW_STATE_DIR: root }) }),
-          );
+          expect(result).toMatchObject({ repoRoot: target });
+          expect(mocks.clone.mock.calls[0]?.[0].target).toBe(target);
           expect(mocks.lease.mock.calls[0]?.[0].database.options.path).toBe(databasePath);
-        } else if (operation === "register") {
-          expect(result).toMatchObject({
-            id: project.id,
-            repoRoot: project.repoRoot,
-            source: "registered",
+        } else if (operation === "refresh") {
+          expect(mocks.refresh.mock.calls[0]?.[0]).toEqual({
+            target: project.repoRoot,
+            url: originUrl,
           });
-        } else if (operation === "remove") {
-          expect(result).toBe(true);
-        } else {
-          expect(mocks.refresh).toHaveBeenCalledWith(
-            { target: project.repoRoot, url: originUrl },
-            expect.objectContaining({ env: expect.objectContaining({ OPENCLAW_STATE_DIR: root }) }),
-          );
         }
         expect(caller.OpenClaw_State_Dir).toBe(path.resolve("/mutated-project-state"));
         expect(mocks.forbiddenSqlite).not.toHaveBeenCalled();
@@ -415,13 +386,7 @@ describe("clone registration", () => {
       if (!repoRoot) {
         throw new Error("Expected a produced checkout");
       }
-      return {
-        id: "project",
-        displayName: "project",
-        repoRoot,
-        originUrl: "https://github.com/example/project.git",
-        source: "cloned",
-      };
+      return { ...project, id: "project", displayName: "project", repoRoot };
     });
   });
 

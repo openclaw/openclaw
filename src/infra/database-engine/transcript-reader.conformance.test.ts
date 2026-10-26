@@ -114,7 +114,11 @@ it.skipIf(typeof connection !== "string")(
       const postgres: DatabaseSync = remote;
       const databases = [sqlite, postgres];
       const table = (db: DatabaseSync) =>
-        getNodeSqliteKysely<DB>(db).selectFrom("transcript_events");
+        getNodeSqliteKysely<DB>(db).selectFrom("transcript_events").orderBy("seq");
+      const setEnvelope = (navigation: string | null, eventJson: string) =>
+        remote
+          .prepare("UPDATE transcript_events SET navigation_json = ?, event_json = ? WHERE seq = 0")
+          .run(navigation, eventJson);
       try {
         remote.exec(`CREATE SCHEMA "${namespace}"`);
         for (const db of databases) {
@@ -139,27 +143,25 @@ it.skipIf(typeof connection !== "string")(
             eb("seq", ">=", fixtures.length + passthrough.length),
           ]),
         );
-        const legacy = executeSqliteQuerySync(
+        const legacy = readRows(
           postgres,
-          validRows
-            .select([
-              "seq",
-              legacyModelNavigationSql(
-                postgres,
-                event,
-                /* kysely-allow-raw: The original query extracted its discriminant from JSONB. */ sql`${event}::jsonb ->> 'type'`,
-              ).as("navigation_json"),
-              /* kysely-allow-raw: Frozen legacy model-byte expression is the independent oracle. */ sql<number>`octet_length(${legacyModelContextEventSql(postgres, event, sql.lit(0))})`.as(
-                "model_bytes",
-              ),
-              /* kysely-allow-raw: Frozen legacy retained-byte expression is the independent oracle. */ sql<number>`octet_length(${legacyModelContextEventSql(postgres, event, sql.lit(1))})`.as(
-                "retained_bytes",
-              ),
-            ])
-            .orderBy("seq"),
-        ).rows;
+          validRows.select([
+            "seq",
+            legacyModelNavigationSql(
+              postgres,
+              event,
+              /* kysely-allow-raw: The original query extracted its discriminant from JSONB. */ sql`${event}::jsonb ->> 'type'`,
+            ).as("navigation_json"),
+            /* kysely-allow-raw: Frozen legacy model-byte expression is the independent oracle. */ sql<number>`octet_length(${legacyModelContextEventSql(postgres, event, sql.lit(0))})`.as(
+              "model_bytes",
+            ),
+            /* kysely-allow-raw: Frozen legacy retained-byte expression is the independent oracle. */ sql<number>`octet_length(${legacyModelContextEventSql(postgres, event, sql.lit(1))})`.as(
+              "retained_bytes",
+            ),
+          ]),
+        );
         const native = () =>
-          executeSqliteQuerySync(
+          readRows(
             postgres,
             getNodeSqliteKysely(postgres)
               .selectFrom(
@@ -168,27 +170,21 @@ it.skipIf(typeof connection !== "string")(
                 ).as("context"),
               )
               .selectAll(),
-          ).rows;
+          );
         expect(native()).toEqual(legacy);
         // Existing stored envelopes bypass canonical JSON parsing even when its text is unavailable.
-        remote
-          .prepare("UPDATE transcript_events SET navigation_json = ?, event_json = ? WHERE seq = 0")
-          .run(
-            JSON.stringify({
-              model: JSON.parse(legacy[0]!.navigation_json),
-              modelBytes: legacy[0]!.model_bytes,
-              modelWithoutCheckpointBytes: legacy[0]!.retained_bytes,
-            }),
-            "{ unavailable",
-          );
+        setEnvelope(
+          JSON.stringify({
+            model: JSON.parse(legacy[0]!.navigation_json),
+            modelBytes: legacy[0]!.model_bytes,
+            modelWithoutCheckpointBytes: legacy[0]!.retained_bytes,
+          }),
+          "{ unavailable",
+        );
         try {
           expect(native()).toEqual(legacy);
         } finally {
-          remote
-            .prepare(
-              "UPDATE transcript_events SET navigation_json = NULL, event_json = ? WHERE seq = 0",
-            )
-            .run(JSON.stringify(fixtures[0]));
+          setEnvelope(null, JSON.stringify(fixtures[0]));
         }
         for (const omit of [0, 1]) {
           for (const notice of [false, true]) {
@@ -208,8 +204,7 @@ it.skipIf(typeof connection !== "string")(
                     projectResetBoundaryNavigationSql(db, event).as("reset"),
                     projectTranscriptRetainedDataSql(db, event, ["retained"]).as("retained"),
                   ])
-                  .where("seq", "<", fixtures.length)
-                  .orderBy("seq"),
+                  .where("seq", "<", fixtures.length),
               ).map(({ seq, ...views }) => Object.assign({ seq }, decodeViews(views))),
             );
             expect(projections[0]).toHaveLength(fixtures.length);
@@ -224,8 +219,7 @@ it.skipIf(typeof connection !== "string")(
             table(db)
               .select(projectResetBoundaryNavigationSql(db, event).as("reset"))
               .where("seq", ">=", fixtures.length)
-              .where("seq", "<", fixtures.length + passthrough.length)
-              .orderBy("seq"),
+              .where("seq", "<", fixtures.length + passthrough.length),
           );
           expect(rows.map((row) => row.reset)).toEqual(passthrough);
         }

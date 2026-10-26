@@ -1,5 +1,8 @@
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { publishRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
+import * as normalization from "@openclaw/normalization-core";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { canonicalizeSessionEntry } from "../sessions/session-manager-persistence-entry.js";
 import type { SessionEntry } from "../sessions/session-manager-types.js";
 import type { AnyAgentTool } from "../tools/common.js";
 import {
@@ -379,12 +382,16 @@ describe("session tool surface", () => {
   const routeKey = "openai/gpt-6-sol/openai-responses";
   const fixture = promptFixture("tool-surface", routeKey);
   const names = (tools: { name: string }[]) => tools.map(({ name }) => name).toSorted();
-  const tool = (name: string, description = `${name} tool`) =>
+  const tool = (
+    name: string,
+    description = `${name} tool`,
+    parameters: unknown = { type: "object", properties: { [name]: { type: "string" } } },
+  ) =>
     ({
       name,
       label: name,
       description,
-      parameters: { type: "object", properties: { [name]: { type: "string" } } },
+      parameters,
       execute: async () => ({
         content: [{ type: "text" as const, text: `${name} ran` }],
         details: {},
@@ -411,6 +418,42 @@ describe("session tool surface", () => {
     fixture.prepare(prompt, entries).commit();
     await fixture.persist(entries);
   }
+
+  it("reuses admitted tool payloads when checkpointing a changed prompt", async () => {
+    const entries: SessionEntry[] = [];
+    surface([tool("read"), tool("exec")]);
+    const write = (customType: string, data: unknown) => {
+      const entry = {
+        ...entryMetadata,
+        type: "custom" as const,
+        id: `checkpoint-${entries.length}`,
+        customType,
+        data,
+      };
+      const expected = JSON.stringify(entry);
+      const canonical = canonicalizeSessionEntry(entry);
+      expect(JSON.stringify(canonical)).toBe(expected);
+      entries.push(canonical);
+    };
+    fixture.prepare("Base.", entries).commit();
+    await persistSessionSystemPrompt(fixture.state, write);
+    const pinned = fixture.state.toolSurface!.tools;
+    fixture.prepare("Base.\n## Skills\nRefreshed.", entries).commit();
+    const ownKeys = vi.spyOn(Reflect, "ownKeys");
+    const descriptors = vi.spyOn(Object, "getOwnPropertyDescriptor");
+    try {
+      await persistSessionSystemPrompt(fixture.state, write);
+      expect(ownKeys.mock.calls.filter(([value]) => value === pinned)).toHaveLength(0);
+      expect(descriptors.mock.calls.filter(([value]) => value === pinned)).toHaveLength(0);
+    } finally {
+      ownKeys.mockRestore();
+      descriptors.mockRestore();
+    }
+    expect(entries).toHaveLength(2);
+    expect(entries[1]).toMatchObject({
+      data: { tools: pinned, renderedPrefix: "Base.\n## Skills\nRefreshed." },
+    });
+  });
 
   it("keeps every pinned definition on a turn that builds fewer tools and refuses the missing ones", async () => {
     const entries: SessionEntry[] = [];
@@ -504,6 +547,44 @@ describe("session tool surface", () => {
     expect(changed.map((entry) => entry.description)).toEqual([description]);
     expect(fixture.state.pendingToolSurface?.tools).toEqual(definitions(changed));
   });
+
+  it.each([false, true])(
+    "reuses published schema facts while preserving pin equality (restored=%s)",
+    async (restored) => {
+      const entries: SessionEntry[] = [];
+      const original = publishRuntimeToolInputSchema({
+        type: "object",
+        properties: { read: { type: "string" } },
+      }).schema;
+      const reordered = publishRuntimeToolInputSchema({
+        properties: { read: { type: "string" } },
+        type: "object",
+      }).schema;
+      const changed = publishRuntimeToolInputSchema({
+        type: "object",
+        properties: { read: { type: "number" } },
+      }).schema;
+      surface([tool("read", "Pinned description", original)]);
+      await persist(entries);
+      if (restored) {
+        fixture.reload();
+      }
+      const stringify = vi.spyOn(normalization, "stableStringify");
+      try {
+        const unchanged = surface([tool("read", "New guidance", reordered)], entries);
+        expect(unchanged[0]?.description).toBe("Pinned description");
+        expect(fixture.state.pendingToolSurface).toBeUndefined();
+        expect(stringify).toHaveBeenCalledTimes(restored ? 1 : 0);
+        stringify.mockClear();
+        const replacement = surface([tool("read", "Changed schema", changed)], entries);
+        expect(replacement[0]?.description).toBe("Changed schema");
+        expect(fixture.state.pendingToolSurface?.tools).toEqual(definitions(replacement));
+        expect(stringify).toHaveBeenCalledTimes(restored ? 1 : 0);
+      } finally {
+        stringify.mockRestore();
+      }
+    },
+  );
 });
 
 describe("embedded session active project keys", () => {

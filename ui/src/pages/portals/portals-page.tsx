@@ -28,8 +28,8 @@ import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-brid
 import { showToast } from "../../lib/toast.ts";
 import { PendingEnvironment, PortalProbeLoading } from "./portals-read-states.tsx";
 import { createPortals, type PortalsModel, type PortalsPresentation } from "./portals-state.ts";
-import "../../styles/session-panel-rail.css";
-import "./portals.css";
+import sessionPanelRailStyles from "../../styles/session-panel-rail.css?inline";
+import portalStyles from "./portals.css?inline";
 
 registerEnglishCatalog(registerPortalsEnglish);
 const PORTAL_FRAME_SANDBOX =
@@ -45,9 +45,12 @@ function PortalsPageContent(props: PortalsPageProps, host: PortalsPageElement) {
   owners.set(host, model);
   onCleanup(() => owners.delete(host));
   return (
-    <Show when={model.state().previewEpoch} keyed>
-      {(_previewEpoch) => <PortalContent model={model} mobile={props.mobile} />}
-    </Show>
+    <>
+      <style>{`${sessionPanelRailStyles}\n${portalStyles}`}</style>
+      <Show when={model.state().previewEpoch} keyed>
+        {(_previewEpoch) => <PortalContent model={model} mobile={props.mobile} />}
+      </Show>
+    </>
   );
 }
 

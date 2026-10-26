@@ -1,7 +1,7 @@
 import type { Server as HttpServer } from "node:http";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/index.js";
+import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/server-capabilities.js";
 import { SANDBOX_HOST_PATH } from "../../../src/agents/sandbox-host.js";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";

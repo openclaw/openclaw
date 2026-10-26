@@ -46,15 +46,33 @@ export function rewriteStandaloneImports({
   const generatedTargets = new Set([...Object.values(moduleAliases), workerThreadsShim]);
   const resolverNames = ["openclaw-plugin-sdk-alias", "openclaw-plugin-source-capture"];
   const pluginResolvers = new Set(resolverNames.filter((name) => contents.includes(name)));
-  const staticString = (node) =>
-    node?.type === "Literal"
+  const unwrapExpression = (expression) => {
+    let node = expression;
+    while (
+      [
+        "TSAsExpression",
+        "TSSatisfiesExpression",
+        "TSNonNullExpression",
+        "TSTypeAssertion",
+        "ParenthesizedExpression",
+      ].includes(node?.type)
+    ) {
+      node = node.expression;
+    }
+    return node;
+  };
+  const staticString = (expression) => {
+    const node = unwrapExpression(expression);
+    return node?.type === "Literal"
       ? node.value
       : node?.type === "TemplateLiteral" && node.expressions.length === 0
         ? node.quasis[0].value.cooked
         : undefined;
+  };
   // Rewrite syntax nodes only: loaders also contain quoted "import.meta.url" source.
   const ast =
-    pluginResolvers.size || /import\.meta|import\s*\(|createRequire|_resolveFilename/.test(contents)
+    pluginResolvers.size ||
+    /import\.meta|import\s*\(|createRequire|_resolveFilename|__dirname|__filename/.test(contents)
       ? parse(contents, {
           ecmaVersion: "latest",
           sourceType,
@@ -82,7 +100,7 @@ export function rewriteStandaloneImports({
     ),
   );
   let bindings;
-  const pending = [{ node: ast, owner: undefined }];
+  const pending = [{ node: ast, owner: undefined, parent: undefined, key: undefined }];
   const edits = [];
   const physicalUrl = `(globalThis.__openclawStandaloneRootUrl + ${JSON.stringify(relative)})`;
   let moduleUrlExpression;
@@ -119,7 +137,30 @@ export function rewriteStandaloneImports({
     if (!node || typeof node !== "object") {
       continue;
     }
+    const { parent, key } = current;
     let owner = current.owner;
+    if (
+      node.type === "Identifier" &&
+      ["__dirname", "__filename"].includes(node.name) &&
+      !(bindings ??= createStandaloneLexicalBindings(ast)).isBound(node) &&
+      !["ImportSpecifier", "ExportSpecifier", "ExportAllDeclaration"].includes(parent?.type) &&
+      key !== "label" &&
+      !(parent?.type === "MemberExpression" && key === "property" && !parent.computed) &&
+      !(
+        ["Property", "MethodDefinition", "PropertyDefinition"].includes(parent?.type) &&
+        key === "key" &&
+        !parent.computed
+      )
+    ) {
+      // Bun otherwise embeds the temporary build directory for free CJS globals.
+      const suffix = node.name === "__dirname" ? path.posix.dirname(relative) : relative;
+      edits.push([
+        node.start,
+        node.end,
+        `${parent?.type === "Property" && parent.shorthand ? `${node.name}: ` : ""}globalThis.__openclawStandaloneNativePath(${JSON.stringify(suffix)})`,
+      ]);
+      continue;
+    }
     if (
       node.type === "AssignmentExpression" &&
       node.operator === "=" &&
@@ -127,13 +168,13 @@ export function rewriteStandaloneImports({
       (staticString(node.left.property) === "_resolveFilename" ||
         node.left.property.name === "_resolveFilename" ||
         nativeResolverKeys.has(node.left.property.name)) &&
-      ["ArrowFunctionExpression", "FunctionExpression"].includes(node.right.type)
+      ["ArrowFunctionExpression", "FunctionExpression"].includes(unwrapExpression(node.right).type)
     ) {
       // CJS aliases bypass Bun's public hook. Map the loader handoff while
       // admission and SDK discovery continue to use physical filenames.
       const wrapper = preserveTypes
-        ? `((resolve: NonNullable<(${resolverOwnerType(node.left.object)})["_resolveFilename"]>) => function (this: ThisParameterType<typeof resolve>, ...args: Parameters<typeof resolve>): ReturnType<typeof resolve> { const target = resolve.apply(this, args); return globalThis.__openclawStandaloneEmbeddedPath(target) ?? target; })(`
-        : "((resolve) => function (...args) { const target = resolve.apply(this, args); return globalThis.__openclawStandaloneEmbeddedPath(target) ?? target; })(";
+        ? `((resolve: NonNullable<(${resolverOwnerType(node.left.object)})["_resolveFilename"]>) => function (this: ThisParameterType<typeof resolve>, ...args: Parameters<typeof resolve>): ReturnType<typeof resolve> { const target = resolve.apply(this, args); return globalThis.__openclawStandaloneExternalModulePath(target) ?? target; })(`
+        : "((resolve) => function (...args) { const target = resolve.apply(this, args); return globalThis.__openclawStandaloneExternalModulePath(target) ?? target; })(";
       edits.push([node.right.start, node.right.start, wrapper]);
       edits.push([node.right.end, node.right.end, ")"]);
     }
@@ -151,9 +192,9 @@ export function rewriteStandaloneImports({
       if (target?.value?.type === "Identifier" && staticString(namespace?.value) === "file") {
         // Bun does not resolve a hook's returned filename through subsequent hooks.
         edits.push([
-          target.value.start,
-          target.value.end,
-          `(globalThis.__openclawStandaloneEmbeddedPath(${contents.slice(target.value.start, target.value.end)}) ?? ${contents.slice(target.value.start, target.value.end)})`,
+          node.start,
+          node.end,
+          `globalThis.__openclawStandaloneExternalModuleResolution(${contents.slice(target.value.start, target.value.end)})`,
         ]);
         pluginResolvers.delete(owner);
       }
@@ -236,11 +277,13 @@ export function rewriteStandaloneImports({
         `globalThis.__openclawStandaloneCreateRequire.bind(null, ${name})`,
       ]);
     }
-    for (const value of Object.values(node)) {
+    for (const [childKey, value] of Object.entries(node)) {
       if (Array.isArray(value)) {
-        pending.push(...value.map((child) => ({ node: child, owner })));
+        pending.push(
+          ...value.map((child) => ({ node: child, owner, parent: node, key: childKey })),
+        );
       } else if (value && typeof value === "object") {
-        pending.push({ node: value, owner });
+        pending.push({ node: value, owner, parent: node, key: childKey });
       }
     }
   }

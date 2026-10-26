@@ -1,6 +1,9 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
-import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
+import {
+  getPreparedModelRuntimeMocks,
+  usePreparedModelRuntimeHarness,
+} from "./prepared-model-runtime.test-harness.js";
 import { isDeepStrictEqual } from "node:util";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -23,6 +26,17 @@ import {
   refreshPreparedModelRuntimeSnapshots as refreshRuntime,
 } from "./prepared-model-runtime.js";
 import { PreparedReplyDispatchPublicationOwner } from "./prepared-reply-dispatch-runtime.js";
+
+vi.mock("../logging/subsystem.js", async (importOriginal) => {
+  const { createMockSubsystemLogger } = await import("../../test/helpers/mock-subsystem-logger.js");
+  return {
+    ...(await importOriginal<typeof import("../logging/subsystem.js")>()),
+    createSubsystemLogger: (subsystem: string) =>
+      createMockSubsystemLogger(subsystem, {
+        warn: (...args) => getPreparedModelRuntimeMocks().warn(...args),
+      }),
+  };
+});
 
 const fixture = usePreparedModelRuntimeHarness({ label: "prepared-model-runtime" });
 const { mocks } = fixture;
@@ -132,80 +146,77 @@ describe("prepared model runtime reload auth adoption", () => {
     "%s after the next eligible real recovery without charging backoff replays",
     async (outcome) => {
       let now = 10_000;
-      const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
-      try {
-        await start();
-        const failure = new Error("configured model publication timed out");
-        mocks.resolveAmbientCredentials.mockRejectedValue(failure);
-        mutate();
-        await expect(loadDispatch({ agentId: "default" })).rejects.toBe(failure);
-        mocks.resolveAmbientCredentials.mockClear();
+      using _ = vi.spyOn(Date, "now").mockImplementation(() => now);
 
-        await withTempState(async (stateDir) => {
-          const queue = createTestIngressQueue(stateDir, { now: () => now });
-          await queue.enqueue("unavailable", { text: "retained request" });
-          const log = vi.fn();
-          const createDrain = () =>
-            createChannelIngressDrainOwner({
-              queue,
-              now: () => now,
-              onLog: log,
-              dispatchClaimedEvent: async () => {
-                await loadDispatch({ agentId: "default" });
-              },
-            });
-          let drain = createDrain();
-          try {
-            expect(await drain.drainOnce()).toEqual({ started: 1 });
-            await drain.waitForIdle();
-            expect(mocks.resolveAmbientCredentials).toHaveBeenCalledTimes(1);
-            expect(await queue.listPending()).toMatchObject([{ id: "unavailable", attempts: 1 }]);
-            now += 1_000;
-            expect(await drain.drainOnce()).toEqual({ started: 0 });
-            // An already-claimed replay must also preserve the real-attempt budget.
-            const replay = await queue.claim("unavailable");
-            expect(replay).not.toBeNull();
-            drain.dispatchClaimed(replay!, Promise.resolve());
-            await drain.waitForIdle();
-            expect(mocks.resolveAmbientCredentials).toHaveBeenCalledTimes(1);
-            const [pending] = await queue.listPending();
-            expect(pending).toMatchObject({
-              id: "unavailable",
-              attempts: 1,
-            });
-            drain.dispose();
-            drain = createDrain();
-            expect(await drain.drainOnce()).toEqual({ started: 0 });
-            now = 15_000;
-            if (outcome === "recovers") {
-              mocks.resolveAmbientCredentials.mockReturnValue({});
-            }
-            expect(await drain.drainOnce()).toEqual({ started: 1 });
-            await drain.waitForIdle();
-            expect(mocks.resolveAmbientCredentials).toHaveBeenCalledTimes(2);
-            expect(await queue.listPending()).toEqual([]);
-            if (outcome === "recovers") {
-              expect(await queue.listFailed?.()).toEqual([]);
-              expect(await queue.enqueue("unavailable", { text: "duplicate" })).toMatchObject({
-                kind: "completed",
-              });
-            } else {
-              expect(await queue.listFailed?.()).toMatchObject([
-                {
-                  id: "unavailable",
-                  payload: { text: "retained request" },
-                  reason: "runtime-recovery-failed",
-                },
-              ]);
-              expect(log).toHaveBeenCalledWith(expect.stringContaining("runtime-recovery-failed"));
-            }
-          } finally {
-            drain.dispose();
+      await start();
+      const failure = new Error("configured model publication timed out");
+      mocks.resolveAmbientCredentials.mockRejectedValue(failure);
+      mutate();
+      await expect(loadDispatch({ agentId: "default" })).rejects.toBe(failure);
+      mocks.resolveAmbientCredentials.mockClear();
+
+      await withTempState(async (stateDir) => {
+        const queue = createTestIngressQueue(stateDir, { now: () => now });
+        await queue.enqueue("unavailable", { text: "retained request" });
+        const log = vi.fn();
+        const createDrain = () =>
+          createChannelIngressDrainOwner({
+            queue,
+            now: () => now,
+            onLog: log,
+            dispatchClaimedEvent: async () => {
+              await loadDispatch({ agentId: "default" });
+            },
+          });
+        let drain = createDrain();
+        try {
+          expect(await drain.drainOnce()).toEqual({ started: 1 });
+          await drain.waitForIdle();
+          expect(mocks.resolveAmbientCredentials).toHaveBeenCalledTimes(1);
+          expect(await queue.listPending()).toMatchObject([{ id: "unavailable", attempts: 1 }]);
+          now += 1_000;
+          expect(await drain.drainOnce()).toEqual({ started: 0 });
+          // An already-claimed replay must also preserve the real-attempt budget.
+          const replay = await queue.claim("unavailable");
+          expect(replay).not.toBeNull();
+          drain.dispatchClaimed(replay!, Promise.resolve());
+          await drain.waitForIdle();
+          expect(mocks.resolveAmbientCredentials).toHaveBeenCalledTimes(1);
+          const [pending] = await queue.listPending();
+          expect(pending).toMatchObject({
+            id: "unavailable",
+            attempts: 1,
+          });
+          drain.dispose();
+          drain = createDrain();
+          expect(await drain.drainOnce()).toEqual({ started: 0 });
+          now = 15_000;
+          if (outcome === "recovers") {
+            mocks.resolveAmbientCredentials.mockReturnValue({});
           }
-        });
-      } finally {
-        clock.mockRestore();
-      }
+          expect(await drain.drainOnce()).toEqual({ started: 1 });
+          await drain.waitForIdle();
+          expect(mocks.resolveAmbientCredentials).toHaveBeenCalledTimes(2);
+          expect(await queue.listPending()).toEqual([]);
+          if (outcome === "recovers") {
+            expect(await queue.listFailed?.()).toEqual([]);
+            expect(await queue.enqueue("unavailable", { text: "duplicate" })).toMatchObject({
+              kind: "completed",
+            });
+          } else {
+            expect(await queue.listFailed?.()).toMatchObject([
+              {
+                id: "unavailable",
+                payload: { text: "retained request" },
+                reason: "runtime-recovery-failed",
+              },
+            ]);
+            expect(log).toHaveBeenCalledWith(expect.stringContaining("runtime-recovery-failed"));
+          }
+        } finally {
+          drain.dispose();
+        }
+      });
     },
   );
 

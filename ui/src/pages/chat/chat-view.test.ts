@@ -18,7 +18,7 @@ import type {
   SessionPatchResult,
   SessionPatchRoute,
 } from "../../lib/sessions/patch.ts";
-import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
+import { createSessionsListResult, sessionListResult } from "../../test-helpers/chat-model.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -246,13 +246,11 @@ beforeEach(() => {
 });
 
 function createSessionsResultFromRows(sessions: GatewaySessionRow[]): SessionsListResult {
-  return {
-    ts: 0,
-    path: "",
-    count: sessions.length,
-    defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
-    sessions,
-  };
+  return sessionListResult(0, sessions, {
+    modelProvider: "openai",
+    model: "gpt-5",
+    contextTokens: null,
+  });
 }
 
 function createSettingsLaneHost(patch: SessionPatchRoute) {
@@ -319,6 +317,8 @@ describe("chat typing status", () => {
   ])(
     "renders $expectedText in the transcript",
     async ({ actors, expectedText, expectedAvatars }) => {
+      // This checks presentation; cold module compilation is separate fixture setup.
+      await import("./components/chat-typing-indicator.tsx");
       const container = renderChatView({ typingActors: actors });
       await waitForSolid(() =>
         expect(container.querySelector(".agent-chat__typing-indicator--outside")).not.toBeNull(),
@@ -1407,16 +1407,9 @@ describe("chat loading skeleton", () => {
   }
 
   function createContextUsageSessions(): SessionsListResult {
-    return {
-      ts: 0,
-      path: "",
-      count: 1,
-      defaults: {
-        modelProvider: "openai",
-        model: "gpt-5.5",
-        contextTokens: 200_000,
-      },
-      sessions: [
+    return sessionListResult(
+      0,
+      [
         {
           key: "main",
           kind: "direct",
@@ -1425,14 +1418,19 @@ describe("chat loading skeleton", () => {
           totalTokensFresh: true,
         },
       ],
-    };
+      {
+        modelProvider: "openai",
+        model: "gpt-5.5",
+        contextTokens: 200_000,
+      },
+    );
   }
 
   it("retires only the exact saved Talk entries, retaining unsaved speech and repeated words", () => {
     const container = renderChatView({
       realtimeTalkActive: true,
       messages: [{ role: "user", content: "Repeated words", __openclaw: { id: "voice:call:1" } }],
-      realtimeTalkConversation: [
+      readRealtimeTalkConversation: () => [
         {
           id: "u1",
           role: "user",
@@ -1628,12 +1626,9 @@ describe("chat loading skeleton", () => {
           sessionKey: "main",
           occurredAt: 1_000,
         },
-        sessions: {
-          ts: 0,
-          path: "",
-          count: 1,
-          defaults: { modelProvider: null, model: null, contextTokens: 200_000 },
-          sessions: [
+        sessions: sessionListResult(
+          0,
+          [
             {
               key: "main",
               kind: "direct",
@@ -1644,7 +1639,8 @@ describe("chat loading skeleton", () => {
               contextTokens: 200_000,
             },
           ],
-        },
+          { modelProvider: null, model: null, contextTokens: 200_000 },
+        ),
       });
 
       expect(
@@ -1842,6 +1838,9 @@ describe("chat voice controls", () => {
 
       expect(visualizer?.getAttribute("data-level")).toBe("0.8");
       expect(centerBar?.style.getPropertyValue("--talk-bar-scale")).not.toBe(initialScale);
+      expect(visualizer?.querySelector(".agent-chat__voice-activity-bar:nth-child(4)")).toBe(
+        centerBar,
+      );
 
       const replacement = new RealtimeTalkLevelSignal();
       replacement.set(0.35);

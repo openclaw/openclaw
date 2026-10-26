@@ -548,6 +548,12 @@ Keep this directory private and retain the complete set. Former PostgreSQL
 namespaces are not dropped automatically.
 
 All destination stores are privately migrated and verified before publication.
+After committing a PostgreSQL bulk copy, port and backup restore run `ANALYZE`
+only on tables in the destination namespace. Agent ports refresh statistics again
+after the memory index rebuild. The port report records the result. Statistics
+refresh uses a 10-second statement timeout and a 1-second lock timeout; a failure
+is a warning and preserves the verified data for autovacuum to analyze later.
+
 Agent and shared-state columns normally created on a feature's first use are
 completed in the private copy when absent, preserving existing rows with `NULL`
 values and leaving the original SQLite store unchanged. Unknown columns still

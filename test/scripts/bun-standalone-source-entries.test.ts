@@ -30,6 +30,34 @@ function fixture() {
 }
 
 describe("standalone original-source entries", () => {
+  it("assigns package-owned worker wrappers to their isolated plugin build", () => {
+    const loader = pathToFileURL(path.resolve("scripts/lib/bun-standalone-source-entries.mjs"));
+    const env = { ...process.env };
+    delete env.OPENCLAW_TSDOWN_CACHE_PENDING;
+    delete env.OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS;
+    delete env.OPENCLAW_INTERNAL_DOCKER_BUILD_PLUGIN_IDS;
+    const result = execFileSync(
+      "node",
+      [
+        "--import",
+        path.resolve("scripts/tsx.mjs"),
+        "--input-type=module",
+        "--eval",
+        `const { loadStandaloneSourceEntries } = await import(${JSON.stringify(loader.href)});
+const entries = await loadStandaloneSourceEntries({ sourceRoot: process.cwd() });
+console.log(JSON.stringify(["catalog-page", "session-history"].map((name) => {
+  const entry = entries.resolve("dist/extensions/codex/" + name + "-worker-entrypoint.js");
+  return { source: entry?.relativeSource, plugin: entry?.pluginEntry?.id };
+})));`,
+      ],
+      { cwd: process.cwd(), env, encoding: "utf8", timeout: 30_000 },
+    );
+    expect(JSON.parse(result)).toEqual([
+      { source: "extensions/codex/catalog-page-worker-entrypoint.ts", plugin: "codex" },
+      { source: "extensions/codex/session-history-worker-entrypoint.ts", plugin: "codex" },
+    ]);
+  });
+
   it("loads original JavaScript workers through the public manifest projection", () => {
     const { root } = fixture();
     const write = (name: string, contents: string) => {

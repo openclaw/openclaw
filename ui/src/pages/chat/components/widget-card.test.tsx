@@ -19,6 +19,7 @@ import {
   createApplicationGateway,
 } from "../../../test-helpers/application-context.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { stubTargetRetainingObserver } from "../../../test-helpers/resize-observer.ts";
 import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ToolPreview as DeferredToolPreview } from "./chat-message-deferred.tsx";
@@ -280,21 +281,7 @@ describe("widget-card", () => {
     },
   );
   it("retains video playback through title changes after the player loads", async () => {
-    vi.stubGlobal(
-      "ResizeObserver",
-      class {
-        private readonly targets = new Set<Element>();
-        observe(target: Element) {
-          this.targets.add(target);
-        }
-        unobserve(target: Element) {
-          this.targets.delete(target);
-        }
-        disconnect() {
-          this.targets.clear();
-        }
-      },
-    );
+    stubTargetRetainingObserver("ResizeObserver");
     onTestFinished(() => {
       vi.unstubAllGlobals();
     });
@@ -646,6 +633,74 @@ describe("widget-card", () => {
     snapshot.set({ widgets: [] });
     await waitForSolid(() => expect(button.title).toBe("Pin to dashboard"));
     expect(showToast).toHaveBeenCalledTimes(1);
+  });
+
+  it("shares one snapshot subscription and membership scan across independently mounted pin buttons", () => {
+    const pinWidget = vi.fn(async () => undefined);
+    const first = boardProvider({ pinWidget });
+    const second = boardProvider();
+    const firstName = vi.fn();
+    const secondName = vi.fn();
+    const widgetRows = (count: number, read: () => void, pinned: boolean) =>
+      Array.from({ length: count }, (_, index) => ({
+        get name() {
+          read();
+          return pinned && index === 0 ? "wanted" : `widget-${index}`;
+        },
+      }));
+    first.snapshot.set({ widgets: widgetRows(100, firstName, false) });
+    second.snapshot.set({ widgets: widgetRows(200, secondName, true) });
+    const track = (source: typeof first.snapshot) => {
+      const subscribe = source.subscribe.bind(source);
+      const active = new Set<() => void>();
+      const subscriptions = vi.spyOn(source, "subscribe").mockImplementation((listener) => {
+        active.add(listener);
+        const stop = subscribe(listener);
+        return () => {
+          active.delete(listener);
+          stop();
+        };
+      });
+      onTestFinished(() => subscriptions.mockRestore());
+      return { active, subscriptions };
+    };
+    const firstObserved = track(first.snapshot);
+    const secondObserved = track(second.snapshot);
+    const mounts = Array.from({ length: 12 }, (_, index) => {
+      const board = index % 2 === 0 ? first.provider : second.provider;
+      const mounted = mountSolid(() => (
+        <WidgetPinButton target={{ board, name: "wanted", viewId: "view", mcpApp: false }} />
+      ));
+      onTestFinished(mounted.unmount);
+      return mounted;
+    });
+    flush();
+    expect(firstName).toHaveBeenCalledTimes(100);
+    expect(secondName).toHaveBeenCalledTimes(200);
+    expect(firstObserved.subscriptions).toHaveBeenCalledOnce();
+    expect(secondObserved.subscriptions).toHaveBeenCalledOnce();
+    expect(pinButton(mounts[0]!.container)?.disabled).toBe(false);
+    expect(pinButton(mounts[1]!.container)?.disabled).toBe(true);
+
+    // Admission samples the replacement immediately, before Solid updates the disabled button.
+    first.snapshot.set({ widgets: widgetRows(1, firstName, true) });
+    pinButton(mounts[0]!.container)!.click();
+    expect(pinWidget).not.toHaveBeenCalled();
+    expect(firstName).toHaveBeenCalledTimes(101);
+    flush();
+    expect(firstName).toHaveBeenCalledTimes(101);
+    expect(secondName).toHaveBeenCalledTimes(200);
+    expect(pinButton(mounts[0]!.container)?.disabled).toBe(true);
+
+    mounts[0]!.unmount();
+    flush();
+    expect(firstObserved.active.size).toBe(1);
+    for (const mounted of mounts.slice(1)) {
+      mounted.unmount();
+    }
+    flush();
+    expect(firstObserved.active.size).toBe(0);
+    expect(secondObserved.active.size).toBe(0);
   });
 
   it("replaces a pin target while its previous board write is still pending", async () => {

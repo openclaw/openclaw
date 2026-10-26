@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.js";
+import { createDeferred, nextEventLoopTurn } from "../../../../test/helpers/promise.js";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import type { BaseOpenAIStreamOptions } from "../provider-options.js";
 import { streamAzureOpenAIResponses } from "../providers/azure-openai-responses.js";
@@ -377,17 +377,8 @@ describe.each([fixtures.openai, fixtures.chatgpt])(
       async (settlement) => {
         const lifecycle = installResponse();
         const controller = new AbortController();
-        let settleHook!: () => void;
-        const pendingHook = new Promise<void>((resolve, reject) => {
-          settleHook = () => {
-            if (settlement === "resolve") {
-              resolve();
-            } else {
-              reject(new Error("late response hook rejection"));
-            }
-          };
-        });
-        const onResponse = vi.fn(() => pendingHook);
+        const pendingHook = createDeferred();
+        const onResponse = vi.fn(() => pendingHook.promise);
         const stream = createStream({ signal: controller.signal, onResponse });
         const eventTypes: string[] = [];
         const consume = collectEventTypes(stream, eventTypes);
@@ -407,10 +398,12 @@ describe.each([fixtures.openai, fixtures.chatgpt])(
         expect(eventTypes).toEqual(["error"]);
         expect(lifecycle.requestAborted).toHaveBeenCalledOnce();
 
-        settleHook();
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
+        if (settlement === "resolve") {
+          pendingHook.resolve();
+        } else {
+          pendingHook.reject(new Error("late response hook rejection"));
+        }
+        await nextEventLoopTurn();
         expect(eventTypes).toEqual(["error"]);
         lifecycle.assertListenersRemoved();
       },

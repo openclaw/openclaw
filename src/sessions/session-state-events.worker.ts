@@ -5,7 +5,6 @@ import {
 } from "../config/sessions/session-entry-current-admission.worker.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
-import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { SESSION_WATCH_PROVENANCE_EXPLICIT } from "../state/session-watch-cursor-provenance.js";
 import type {
@@ -38,9 +37,8 @@ export const sessionStateOperations = {
     input: SessionStateWorkerOperations["sessionState.cleanup"]["input"],
     context,
   ) => {
-    return context.write(({ db }) =>
+    return context.writeAdmitted(({ db }) =>
       captureSessionUpstreamMutation(db, () => {
-        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
         const kysely = getSessionStateKysely(db);
         if (input.kind === "delete") {
           deleteSessionUpstreamLinkInDatabase(db, input.sessionKey, input.agentId);
@@ -89,7 +87,6 @@ export const sessionStateOperations = {
               .where("target_session_key", "=", cursor.target_session_key),
           );
         }
-        requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
       }),
     );
   },
@@ -153,8 +150,10 @@ export const sessionStateOperations = {
       }
       return true;
     }
+    // Host admission must not hold the writer; current rows and commit authority
+    // are still checked after acquiring the transaction.
+    admit("transaction");
     return context.write(({ db }) => {
-      admit("transaction");
       const existing = readCursor(db, input.watcherSessionKey, input.targetSessionKey);
       if (existing?.watcher_store_path === input.watcherStorePath) {
         if (
@@ -191,8 +190,9 @@ export const sessionStateOperations = {
         stage,
         facts: undefined,
       });
+    context.open();
+    admit("transaction");
     return context.write(({ db }) => {
-      admit("transaction");
       const followups: SessionStateNotice[] = [];
       for (const { targetSessionKey, watcherStorePath } of cursors) {
         const row = readCursor(db, watcherSessionKey, targetSessionKey);
@@ -236,8 +236,9 @@ export const sessionStateOperations = {
         stage,
         facts: undefined,
       });
+    context.open();
+    admit("transaction");
     return context.write(({ db }) => {
-      admit("transaction");
       pruneSessionStateEventsInDatabase(db, input.now);
       admit("commit");
     });
@@ -265,8 +266,8 @@ export const sessionStateOperations = {
     if (!events.some((event) => current(database.db, event))) {
       return { rows: [], notices: [] };
     }
+    admit("transaction");
     return context.write(({ db }) => {
-      admit("transaction");
       assertAcpControl();
       const recorded = recordSessionStateEventsInDatabase(
         db,

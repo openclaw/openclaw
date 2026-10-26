@@ -1,8 +1,11 @@
+import path from "node:path";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { parseNodeOptionsEnvVar } from "../../node-runtime-env.mjs";
+import { resolveNodeStartupTlsEnvironment } from "../bootstrap/node-startup-env.js";
 import { isSecretEgressProxyEnv } from "../secrets/egress-proxy/environment.js";
 import { resolveGatewayServiceDescription } from "./constants.js";
 import { readServiceHeapExecArgv, resolveGatewayHeapNodeOptions } from "./gateway-heap.js";
+import { isNodeRuntime } from "./runtime-binary.js";
 import type {
   GatewayServiceCommand,
   GatewayServiceExpectedCommand,
@@ -168,10 +171,45 @@ export function auditGatewayInstallPreservation(
     ) {
       continue;
     }
+    if (
+      platform === "darwin" &&
+      key === "NODE_EXTRA_CA_CERTS" &&
+      value.trim() &&
+      replacement === undefined &&
+      resolveNodeStartupTlsEnvironment({ env: current.environment, platform })
+        .NODE_EXTRA_CA_CERTS === undefined
+    ) {
+      // Startup TLS policy retires the historical bundle; distinct operator CA paths survive.
+      findings.push({
+        kind: "outdated",
+        key: `Environment.${key}`,
+        current: "<redacted>",
+        expected: "<removed>",
+        sourcePath: command?.sourcePath,
+        message: `Gateway service Environment.${key} uses the outdated macOS CA bundle.`,
+      });
+      continue;
+    }
     if (upper === "PATH" && replacement !== undefined) {
       const paths = (text: string) =>
         text.split(":").map((part) => normalizeServicePathEntry(part, platform));
-      if (retains(paths(value), paths(replacement))) {
+      const previousPaths = paths(value);
+      const nextPaths = paths(replacement);
+      const previousNode = current.programArguments[0] ?? "";
+      const nextNode = expected.programArguments[0] ?? "";
+      if (
+        platform === "darwin" &&
+        path.posix.isAbsolute(previousNode) &&
+        path.posix.isAbsolute(nextNode) &&
+        isNodeRuntime(previousNode) &&
+        isNodeRuntime(nextNode) &&
+        previousPaths[0] === path.posix.dirname(previousNode) &&
+        nextPaths[0] === path.posix.dirname(nextNode)
+      ) {
+        // The installer owns the leading runtime bin; all other entries must survive in order.
+        previousPaths[0] = nextPaths[0]!;
+      }
+      if (retains(previousPaths, nextPaths)) {
         continue;
       }
     }

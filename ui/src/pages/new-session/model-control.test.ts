@@ -122,7 +122,12 @@ it("waits for selected-agent defaults after catalog hydration", async () => {
   expect(controlElement(ready, "model-default", "true")?.textContent).toContain(sol.name);
   expect(controlElement(ready, "model-select")?.textContent).toContain(sol.name);
   expect(controlElement(ready, "thinking-select")?.textContent).toContain("High");
-  expect(controlElement(ready, "thinking-slider")?.dataset.chatThinkingValues).toContain("high");
+  // The effort panel is lazy; its first chunk load can land after the synchronous draw.
+  await vi.waitFor(() =>
+    expect(
+      controlElement(draw(effortAgent), "thinking-slider")?.dataset.chatThinkingValues,
+    ).toContain("high"),
+  );
   expect(control).toMatchObject({ selected: "", thinkingLevel: "" });
 });
 

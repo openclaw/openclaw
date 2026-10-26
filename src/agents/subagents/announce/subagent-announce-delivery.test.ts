@@ -673,7 +673,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       sent: {
         requesterSessionKey: "global",
         agentId: "research",
-        mirror: expect.objectContaining({ sessionKey: "global", agentId: "research" }),
+        session: { agentId: "research", policyKey: "global" },
       },
     }),
     completionCase("channel-grammar direct target", "channel", {

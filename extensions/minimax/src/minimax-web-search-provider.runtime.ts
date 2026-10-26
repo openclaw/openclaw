@@ -35,24 +35,8 @@ const MINIMAX_TOKEN_PLAN_ENV_VARS = [
   "MINIMAX_OAUTH_TOKEN",
 ] as const;
 
-type MiniMaxSearchResult = {
-  title?: string;
-  link?: string;
-  snippet?: string;
-  date?: string;
-};
-
 type MiniMaxRelatedSearch = {
   query?: string;
-};
-
-type MiniMaxSearchResponse = {
-  organic?: MiniMaxSearchResult[];
-  related_searches?: MiniMaxRelatedSearch[];
-  base_resp?: {
-    status_code?: number;
-    status_msg?: string;
-  };
 };
 
 function isMiniMaxCnHost(value: string | undefined): boolean {
@@ -162,10 +146,19 @@ export async function executeMiniMaxWebSearchProviderTool(
         throw await createProviderHttpError(res, "MiniMax Search API error");
       }
 
-      const data = await readProviderJsonResponse<MiniMaxSearchResponse>(
-        res,
-        "MiniMax Search API error",
-      );
+      const data = await readProviderJsonResponse<{
+        organic?: {
+          title?: string;
+          link?: string;
+          snippet?: string;
+          date?: string;
+        }[];
+        related_searches?: MiniMaxRelatedSearch[];
+        base_resp?: {
+          status_code?: number;
+          status_msg?: string;
+        };
+      }>(res, "MiniMax Search API error");
 
       if (data.base_resp?.status_code && data.base_resp.status_code !== 0) {
         throw new Error(

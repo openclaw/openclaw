@@ -6,14 +6,12 @@ import type {
 } from "./realtime-quicksilver-socket.shared.js";
 
 const { createWorkerMock } = vi.hoisted(() => ({ createWorkerMock: vi.fn() }));
-vi.mock("node:worker_threads", async (importOriginal) => {
-  return {
-    ...(await importOriginal<typeof import("node:worker_threads")>()),
-    Worker: function MockWorker() {
-      return createWorkerMock();
-    },
-  };
-});
+vi.mock("node:worker_threads", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:worker_threads")>()),
+  Worker: function MockWorker() {
+    return createWorkerMock();
+  },
+}));
 
 import { OpenAIQuicksilverWorkerSocket } from "./realtime-quicksilver-socket.js";
 
@@ -57,6 +55,11 @@ const context = JSON.stringify({ type: "session.thinking.append", content: "acce
 const final = JSON.stringify({ type: "session.close" });
 const commandsOf = (worker: ControlledWorker, type: QuicksilverSocketCommand["type"]) =>
   worker.commands.filter((command) => command.type === type);
+function sendSession(socket: OpenAIQuicksilverWorkerSocket) {
+  for (const payload of [start, context, final]) {
+    socket.send(payload);
+  }
+}
 
 afterEach(() => vi.useRealTimers());
 
@@ -85,9 +88,7 @@ describe("GPT-Live worker socket control drain", () => {
 
   it("sends accepted context and session.close in FIFO order before transport close", () => {
     const { socket, worker, onError } = connect();
-    socket.send(start);
-    socket.send(context);
-    socket.send(final);
+    sendSession(socket);
     socket.close(1000, "fixture close");
     socket.close();
     socket.send("must not be admitted after close");
@@ -102,22 +103,20 @@ describe("GPT-Live worker socket control drain", () => {
     expect(worker.commands.at(-1)).toEqual({ type: "send", payload: final });
     expect(commandsOf(worker, "close")).toEqual([]);
     worker.message({ type: "send-ack" });
-    expect(
-      worker.commands.filter((command) => command.type === "send" || command.type === "close"),
-    ).toEqual([
-      { type: "send", payload: start },
-      { type: "send", payload: context },
-      { type: "send", payload: final },
+    expect(commandsOf(worker, "close")).toEqual([
       { type: "close", code: 1000, reason: "fixture close" },
     ]);
+    expect(
+      worker.commands
+        .filter((command) => command.type === "send")
+        .map((command) => command.payload),
+    ).toEqual([start, context, final]);
     expect(onError).not.toHaveBeenCalled();
   });
 
   it("aborts a draining FIFO when the worker reports a transport failure", () => {
     const { socket, worker, onError } = connect();
-    socket.send(start);
-    socket.send(context);
-    socket.send(final);
+    sendSession(socket);
     socket.close();
     worker.message({ type: "error" });
     worker.message({ type: "send-ack" });

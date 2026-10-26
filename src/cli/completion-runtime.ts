@@ -449,6 +449,13 @@ export async function usesSlowDynamicCompletion(
 
 const PROFILE_WRITE_ERROR_CODES = new Set(["EACCES", "EPERM", "EROFS"]);
 
+class CompletionCacheMissingError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "CompletionCacheMissingError";
+  }
+}
+
 export function findCompletionProfileWriteError(err: unknown): NodeJS.ErrnoException | undefined {
   if (isErrno(err) && PROFILE_WRITE_ERROR_CODES.has(err.code ?? "")) {
     return err;
@@ -464,7 +471,7 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
   const cachePath = resolveCompletionCachePath(shell, binName);
   const cacheExists = await pathExists(cachePath);
   if (!cacheExists) {
-    throw new Error(
+    throw new CompletionCacheMissingError(
       `Completion cache not found at ${cachePath}. Run \`${binName} completion --write-state\` first.`,
     );
   }

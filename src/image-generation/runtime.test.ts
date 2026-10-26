@@ -120,11 +120,6 @@ describe("image-generation runtime", () => {
   it("applies inferred resolution only to compatible fallback candidates", async () => {
     const seenResolutions: Array<string | undefined> = [];
     let unavailableProvider = "";
-    const refs = {
-      google: "google/gemini-3-pro-image-preview",
-      fal: "fal/google/nano-banana-2-lite",
-      openai: "openai/gpt-image-1",
-    };
     function resolutionProvider(
       id: string,
       supportsResolution: boolean,
@@ -147,19 +142,18 @@ describe("image-generation runtime", () => {
     providers = [
       resolutionProvider("openai", false),
       resolutionProvider("google", true),
-      resolutionProvider("fal", true, { "google/nano-banana-2-lite": [] }),
+      resolutionProvider("fal", true, { image: [] }),
     ];
     for (const [primary, fallback, unavailable, winner, expected] of [
-      [refs.google, refs.fal, "google", "fal", ["2K", undefined]],
-      [refs.fal, refs.google, "fal", "google", [undefined, "2K"]],
-      [refs.openai, refs.google, "openai", "google", [undefined, "2K"]],
-      [refs.openai, undefined, "", "openai", [undefined]],
+      ["google/image", "fal/image", "google", "fal", ["2K", undefined]],
+      ["fal/image", "google/image", "fal", "google", [undefined, "2K"]],
+      ["openai/image", "google/image", "openai", "google", [undefined, "2K"]],
+      ["openai/image", undefined, "", "openai", [undefined]],
     ] as const) {
       unavailableProvider = unavailable;
       seenResolutions.length = 0;
       const result = await runGenerateImage({
         cfg: imageConfig(primary, fallback ? [fallback] : []),
-        prompt: "edit this image",
         inferredResolution: "2K",
         inputImages: [referenceImage],
       });
@@ -190,13 +184,11 @@ describe("image-generation runtime", () => {
         return { images: imageResult.images };
       },
     });
-
     const result = await runGenerateImage({
       cfg: imageConfig("fal/xai/grok-imagine-image", ["fal/google/nano-banana-2-lite"]),
       prompt: "combine references",
       inputImages: Array.from({ length: 14 }, () => referenceImage),
     });
-
     expect(result.model).toBe("google/nano-banana-2-lite");
     expect(attemptedModels).toEqual(["google/nano-banana-2-lite"]);
     expect(result.attempts).toEqual([
@@ -258,7 +250,6 @@ describe("image-generation runtime", () => {
 
     const result = await runGenerateImage({
       cfg: imageConfig("canvas/flexible-image"),
-      prompt: "preserve the requested image geometry",
       aspectRatio: "9:16",
       inputImages: [referenceImage],
     });

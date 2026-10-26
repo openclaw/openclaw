@@ -1,6 +1,7 @@
 // Starts delayed maintenance, cron, recovery, and pricing refresh work.
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { CronStoreSelectionRequiredError } from "../cron/store/selection-error.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { outboundDeliveryNotifications } from "../infra/delivery-queue-cache.js";
 import {
@@ -79,6 +80,9 @@ export function startGatewayCronWithLogging(params: {
         await reconciliation.complete();
       } catch (err) {
         params.logCron.error(`failed to start: ${String(err)}`);
+        if (err instanceof CronStoreSelectionRequiredError) {
+          return;
+        }
         // Recovery callbacks must run before this independent root releases its
         // admission fence; restart and suspension cannot race past this point.
         params.onStartError?.(err);

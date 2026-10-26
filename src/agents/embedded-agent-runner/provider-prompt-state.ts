@@ -110,7 +110,8 @@ function providerPromptWorkerBytes(
     return undefined;
   }
   let bytes = 64;
-  for (const [index, key] of keys.entries()) {
+  for (let index = 0; index < keys.length; index++) {
+    const key = keys[index]!;
     if (array && key !== String(index)) {
       return undefined;
     }

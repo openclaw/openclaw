@@ -77,7 +77,6 @@ openclaw-chat-comment-pins {
   --openclaw-tooltip-background-color: var(--session-hovercard-surface);
   --openclaw-tooltip-border-color: var(--border);
   --openclaw-tooltip-border-radius: var(--radius-lg);
-  --openclaw-tooltip-shadow: var(--shadow-lg);
 }
 
 .chat-comment-preview__scroll {

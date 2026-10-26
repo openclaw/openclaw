@@ -1,5 +1,5 @@
 import type { Message } from "@openclaw/llm-core";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { AgentMessage } from "../../types.js";
 import { convertToLlm } from "../messages.js";
 import { estimateTokens } from "./compaction.js";
@@ -67,6 +67,24 @@ it("merges file identity forward across two compactions", () => {
 });
 
 describe("serializeConversation", () => {
+  it("serializes tool arguments once for the full call and sampled-result label", () => {
+    const payload = { path: "src/example.ts", content: "synthetic content" };
+    const stringify = vi.spyOn(JSON, "stringify");
+    try {
+      expect(
+        serializeConversation([
+          assistant([toolCall("write", { payload }, "call-1")]),
+          toolResult("saved", { toolCallId: "call-1", toolName: "write" }),
+        ]),
+      ).toBe(
+        '[Assistant tool calls]: write(payload={"path":"src/example.ts","content":"synthetic content"})\n\n[Tool result]: saved',
+      );
+      expect(stringify.mock.calls.filter(([value]) => value === payload)).toHaveLength(1);
+    } finally {
+      stringify.mockRestore();
+    }
+  });
+
   it.each([
     { name: "canonical", marker: { runtimeContext: {} } },
     { name: "shipped", marker: { runtimeContextCarrier: true } },

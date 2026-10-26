@@ -44,10 +44,26 @@ suite.define(() => {
           const card = page.locator(".community-invite-card");
           const close = card.getByRole("button", { name: "Dismiss and don't show again" });
           await close.waitFor();
+          const firstWindowRow = page.locator(".sidebar-session-window > [aria-setsize]").first();
           for (let index = 0; index < 3; index += 1) {
+            const visibleCount = Number(await firstWindowRow.getAttribute("aria-setsize"));
             await page.getByRole("button", { name: "Show more", exact: true }).click();
+            // Offscreen rows are virtualized; the set size records the published page.
+            await expect
+              .poll(async () => Number(await firstWindowRow.getAttribute("aria-setsize")))
+              .toBeGreaterThan(visibleCount);
           }
-          await page.locator('[data-session-key="agent:main:task-31"]').scrollIntoViewIfNeeded();
+          const list = page.locator(".sidebar-shell__body");
+          const lastSession = page.locator('[data-session-key="agent:main:task-31"]');
+          await expect
+            .poll(async () => {
+              await list.evaluate((node) => {
+                node.scrollTop = node.scrollHeight;
+              });
+              return lastSession.isVisible();
+            })
+            .toBe(true);
+          await lastSession.scrollIntoViewIfNeeded();
           const closeAppearance = await close.evaluate((node) => {
             const target = node.getBoundingClientRect();
             const backdrop = getComputedStyle(node, "::before");
@@ -79,7 +95,6 @@ suite.define(() => {
           });
           expect(closeAppearance.backdropSize).toBeLessThanOrEqual(24);
           expect(closeAppearance.targetSize).toBeGreaterThanOrEqual(mobile ? 44 : 24);
-          const list = page.locator(".sidebar-shell__body");
           const cardBounds = (await card.boundingBox())!;
           const shellBounds = (await page.locator(".sidebar-shell").boundingBox())!;
           const listBounds = (await list.boundingBox())!;

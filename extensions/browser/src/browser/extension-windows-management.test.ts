@@ -5,10 +5,9 @@ import { runCommandBuffered } from "openclaw/plugin-sdk/process-runtime";
 import {
   fixtureReceiptClientSource,
   openFixtureReceiptChannel,
-  type FixtureReceiptChannel,
   withinTest,
 } from "openclaw/plugin-sdk/test-fixtures";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   managementRequestSchema,
   parseWindowsJson,
@@ -80,32 +79,22 @@ describe("accepted Windows management ABI", () => {
     expect(() => parse({ ...owned, code: "context_conflict", ok: false })).toThrow();
   });
 });
-let receipts: FixtureReceiptChannel;
-beforeAll(async () => {
-  receipts = await openFixtureReceiptChannel();
-});
-afterAll(() => receipts.close());
-const directories: string[] = [];
 async function makeDirectory() {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-manage-"));
-  directories.push(directory);
+  onTestFinished(() => fs.rm(directory, { recursive: true, force: true }));
   return directory;
 }
-afterEach(async () => {
+afterEach(() => {
   vi.mocked(runCommandBuffered).mockReset();
-  for (const directory of directories.splice(0)) {
-    await fs.rm(directory, { recursive: true, force: true });
-  }
 });
 describe("real child-process management transport (not Windows PE proof)", () => {
   async function child(body: string) {
     const script = path.join(await makeDirectory(), "helper.mjs");
     await fs.writeFile(script, body);
-    const runner: typeof runCommandBuffered = (argv, options) => {
+    return vi.mocked(runCommandBuffered).mockImplementation((argv, options) => {
       expect(argv.slice(1)).toEqual(["--manage"]);
       return runProcess([process.execPath, script, ...argv.slice(1)], options);
-    };
-    return vi.mocked(runCommandBuffered).mockImplementation(runner);
+    });
   }
   it("sends exactly --manage, closes stdin at EOF and accepts a bounded typed failure on exit1", async () => {
     const response = { ...missing, ok: false, code: "busy", registration: null, store: null };
@@ -125,6 +114,8 @@ describe("real child-process management transport (not Windows PE proof)", () =>
     expect(run).toHaveBeenCalledTimes(1);
   });
   it("joins cancellation after the real child has consumed management EOF", async ({ signal }) => {
+    const receipts = await openFixtureReceiptChannel();
+    onTestFinished(() => receipts.close());
     const controller = new AbortController();
     const ready = path.join(await makeDirectory(), "ready");
     const encodedReady = JSON.stringify(ready);

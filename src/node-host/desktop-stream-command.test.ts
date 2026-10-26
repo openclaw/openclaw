@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import http from "node:http";
 import net from "node:net";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
@@ -11,33 +10,26 @@ import {
   invokeNodeDesktopStream,
   invokeNodeWorkerDesktopStream,
 } from "./desktop-stream-command.js";
-import { portOf, streamParams, TICKET } from "./stream-command.test-support.js";
+import { portOf, streamParams, TICKET, useStreamFixture } from "./stream-command.test-support.js";
 
-const cleanups: Array<() => Promise<void>> = [];
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const { cleanups, closeServer } = useStreamFixture();
 
-async function listenRfbSecurity(securityType: number) {
+async function listenRfbSecurity(securityTypes: number[]) {
   const peers = new Set<net.Socket>();
   const server = net.createServer((socket) => {
     peers.add(socket);
     socket.once("close", () => peers.delete(socket));
+    // Cancellation destroys the client socket; the synthetic server owns the matching reset.
     socket.on("error", handleExpectedPeerTeardownError);
     socket.write(Buffer.from("RFB 003.008\n", "ascii"));
-    socket.once("data", () => socket.write(Buffer.from([1, securityType])));
+    socket.once("data", () => socket.write(Buffer.from([securityTypes.length, ...securityTypes])));
   });
   await new Promise<void>((resolve) => {
     server.listen(0, "127.0.0.1", () => resolve());
   });
   const port = portOf(server);
-  cleanups.push(
-    async () =>
-      await new Promise<void>((resolve) => {
-        for (const peer of peers) {
-          peer.destroy();
-        }
-        server.close(() => resolve());
-      }),
-  );
+  closeServer(server, peers);
   return { port, peers };
 }
 
@@ -46,10 +38,6 @@ function handleExpectedPeerTeardownError(error: NodeJS.ErrnoException): void {
     throw error;
   }
 }
-
-afterEach(async () => {
-  await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
-});
 
 describe("node desktop stream command", () => {
   it("refuses streaming when the node-local setting is disabled", async () => {
@@ -124,7 +112,7 @@ describe("node desktop stream command", () => {
   ])(
     "refuses $name and closes its connection before Gateway attach",
     async ({ securityType, username, message }) => {
-      const rfb = await listenRfbSecurity(securityType);
+      const rfb = await listenRfbSecurity([securityType]);
 
       await expect(
         invokeNodeWorkerDesktopStream({
@@ -141,11 +129,10 @@ describe("node desktop stream command", () => {
   );
 
   it("bounds the provider-owned VNC password file", async () => {
-    const rfb = await listenRfbSecurity(2);
-    const root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "desktop-password-"));
+    const rfb = await listenRfbSecurity([2]);
+    const root = tempDirs.make("desktop-password-");
     const oversized = path.join(root, "oversized");
     await fs.writeFile(oversized, "x".repeat(4 * 1024 + 1));
-    cleanups.push(async () => fs.rm(root, { recursive: true, force: true }));
 
     for (const [passwordFilePath, message] of [
       [root, "must be a regular file"],
@@ -166,11 +153,10 @@ describe("node desktop stream command", () => {
   });
 
   it("honors cancellation before reading a VNC password file", async () => {
-    const rfb = await listenRfbSecurity(2);
-    const root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "desktop-password-"));
+    const rfb = await listenRfbSecurity([2]);
+    const root = tempDirs.make("desktop-password-");
     const passwordFilePath = path.join(root, "password");
     await fs.writeFile(passwordFilePath, "secret");
-    cleanups.push(async () => fs.rm(root, { recursive: true, force: true }));
     const controller = new AbortController();
     controller.abort(new Error("desktop owner closed"));
 
@@ -202,8 +188,7 @@ describe("node desktop stream command", () => {
   it("refuses an attach path that changes the connected gateway origin", async () => {
     await expect(
       invokeNodeDesktopStream({
-        paramsJSON: JSON.stringify({
-          ticket: TICKET,
+        paramsJSON: streamParams("desktop", {
           attachPath: `//attacker.example/node-desktop/attach?ticket=${TICKET}`,
         }),
         gatewayUrl: "ws://127.0.0.1:1",
@@ -238,30 +223,7 @@ describe("node desktop stream command", () => {
     async ({ contextPath, securityTypes, username, auth, workerAuth }) => {
       const passwordFilePath = path.join(tempDirs.make("desktop-account-"), "password");
       await fs.writeFile(passwordFilePath, "lease-password\n");
-      const rfbPeers = new Set<net.Socket>();
-      const rfbServer = net.createServer((socket) => {
-        rfbPeers.add(socket);
-        socket.once("close", () => rfbPeers.delete(socket));
-        // Cancellation destroys the client socket; the synthetic server owns the matching reset.
-        socket.on("error", handleExpectedPeerTeardownError);
-        socket.write(Buffer.from("RFB 003.008\n", "ascii"));
-        socket.once("data", () =>
-          socket.write(Buffer.from([securityTypes.length, ...securityTypes])),
-        );
-      });
-      await new Promise<void>((resolve) => {
-        rfbServer.listen(0, "127.0.0.1", resolve);
-      });
-      const rfbPort = portOf(rfbServer);
-      cleanups.push(
-        async () =>
-          await new Promise<void>((resolve) => {
-            for (const peer of rfbPeers) {
-              peer.destroy();
-            }
-            rfbServer.close(() => resolve());
-          }),
-      );
+      const { port: rfbPort, peers: rfbPeers } = await listenRfbSecurity(securityTypes);
 
       const httpServer = http.createServer();
       const wss = new WebSocketServer({

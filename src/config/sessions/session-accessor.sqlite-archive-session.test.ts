@@ -1,8 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { Worker } from "node:worker_threads";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -11,8 +13,8 @@ import {
   withinTest,
 } from "../../../test/helpers/promise.js";
 import { useSqliteWorkerFault } from "../../../test/helpers/sqlite-worker-fault.js";
+import * as nativeWorkerRecovery from "../../infra/gateway-native-worker-recovery.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
-import * as processRespawn from "../../infra/process-respawn.js";
 import * as workerCpu from "../../infra/worker-cpu.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import {
@@ -23,6 +25,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import * as writeAdmission from "../../state/openclaw-agent-write-admission.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db-cache.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { claimOpenClawStateOwnership } from "../../state/openclaw-state-ownership-operations.js";
 import {
@@ -37,6 +40,7 @@ import {
   replaceSessionEntry,
 } from "./session-accessor.js";
 import { withSqliteTranscriptArchiveSession as withArchiveSession } from "./session-accessor.sqlite-archive-session.js";
+import * as archiveSession from "./session-accessor.sqlite-archive-session.js";
 import * as archiveStore from "./session-accessor.sqlite-archive-store.js";
 import type {
   TranscriptArchivePublishWorkerMessage,
@@ -52,6 +56,11 @@ import * as reclamationWorker from "./session-accessor.sqlite-reclamation-worker
 import * as sessionWorker from "./session-accessor.sqlite-replacement-worker.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import * as archivePublication from "./session-archive-publication.js";
+import { runSessionColdStorageMaintenance } from "./session-cold-storage.js";
+import {
+  createSessionColdStorageFixture,
+  maintenanceConfig,
+} from "./session-cold-storage.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { waitForSessionTranscriptIndexReconcilesInStateDir as waitForReconciliation } from "./session-transcript-reconcile.js";
 
@@ -204,7 +213,7 @@ describe("SQLite transcript archive sessions", () => {
       let expire: (() => void) | undefined;
       let retireGrace: (() => void) | undefined;
       using recovery = vi
-        .spyOn(processRespawn, "requestGatewayNativeWorkerRecovery")
+        .spyOn(nativeWorkerRecovery, "requestGatewayNativeWorkerRecovery")
         .mockResolvedValue({
           status: "report-only",
           reason: "Synthetic test has no Gateway process lifecycle.",
@@ -289,6 +298,98 @@ describe("SQLite transcript archive sessions", () => {
       expectArchivedEvent(recovered.archivedTranscripts[0]?.archivedPath, event);
     },
     30_000,
+  );
+
+  it.each([false, true])(
+    "retires idle archive execution before cold restoration (open scope: %s)",
+    async (keepScopeOpen) => {
+      const fixture = await createSessionColdStorageFixture(
+        openLifecycleTestDatabase(storePath).path,
+      );
+      const original = fixture.snapshot();
+      const carriers: Worker[] = [];
+      const createWorker = vi.mocked(workerCpu.createCpuTrackedWorker).getMockImplementation();
+      if (!createWorker) {
+        throw new Error("Expected the suite's SQLite worker fault wrapper");
+      }
+      let finishClose: (() => void) | undefined;
+      vi.spyOn(workerCpu, "createCpuTrackedWorker").mockImplementation((...args) => {
+        const worker = createWorker(...args);
+        if (args[1]?.workerData?.operation === "archive-session") {
+          const previous = carriers[0];
+          if (previous) {
+            expect(previous.threadId).toBe(-1);
+          }
+          carriers.push(worker);
+        }
+        return worker;
+      });
+      const exercise = async () => {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        try {
+          await runSessionColdStorageMaintenance({
+            config: maintenanceConfig(fixture.scope.storePath),
+          });
+          expect(carriers).toHaveLength(1);
+          const carrier = expectDefined(carriers[0], "initial archive carrier");
+          const leases = () =>
+            openOpenClawStateDatabase()
+              .db.prepare(
+                "SELECT lease_id FROM agent_database_leases WHERE path = ? ORDER BY lease_id",
+              )
+              .all(fixture.options.path);
+          const baselineLeases = leases();
+          const postMessage = carrier.postMessage.bind(carrier);
+          vi.spyOn(carrier, "postMessage").mockImplementation((...args) => {
+            if (isRecord(args[0]) && args[0].type === "close") {
+              finishClose = () => postMessage(...args);
+              return;
+            }
+            postMessage(...args);
+          });
+          await vi.advanceTimersByTimeAsync(5 * 60_000 - 1);
+          expect(carrier.threadId).toBeGreaterThan(0);
+          // Empty scope preparation is not archive activity and cannot renew its deadline.
+          await archiveSession.withSqliteTranscriptArchiveSession(fixture.options, async () => {});
+          await vi.advanceTimersByTimeAsync(1);
+          expect(finishClose).toBeTypeOf("function");
+          const entered = createDeferred();
+          const mutate = archiveSession.runScopedSqliteArchiveMutation;
+          vi.spyOn(archiveSession, "runScopedSqliteArchiveMutation").mockImplementation(
+            (...args) => {
+              const result = mutate(...args);
+              entered.resolve();
+              return result;
+            },
+          );
+          const restored = loadTranscriptEvents(fixture.scope);
+          await entered.promise;
+          expect(carriers).toHaveLength(1);
+          const exited = once(carrier, "exit");
+          finishClose?.();
+          finishClose = undefined;
+          await exited;
+          expect(await restored).toHaveLength(3);
+          expect(carriers).toHaveLength(2);
+          expect(leases()).toEqual(baselineLeases);
+          expect(fixture.snapshot()).toEqual(original);
+          const replacement = expectDefined(carriers[1], "replacement archive carrier");
+          const replacementExited = once(replacement, "exit");
+          await vi.advanceTimersByTimeAsync(5 * 60_000);
+          await replacementExited;
+          expect(replacement.threadId).toBe(-1);
+          expect(leases()).toEqual(baselineLeases);
+        } finally {
+          finishClose?.();
+          vi.useRealTimers();
+        }
+      };
+      if (keepScopeOpen) {
+        await archiveSession.withSqliteTranscriptArchiveSession(fixture.options, exercise);
+      } else {
+        await exercise();
+      }
+    },
   );
 
   it("reads fresh pending archives without waiting for reclamation or writer admission", async ({

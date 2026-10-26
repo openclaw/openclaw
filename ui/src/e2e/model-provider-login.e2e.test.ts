@@ -13,6 +13,7 @@ import {
   pickerValue as modelPickerValue,
 } from "../test-helpers/select-picker-e2e.ts";
 import { sessionsUsageResponse } from "../test-helpers/sessions-usage-response.ts";
+import { agentRoster } from "./agent-roster.test-support.ts";
 import { createSettingsPageOptions } from "./config-composer-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { expandProvider } from "./model-providers.test-support.ts";
@@ -213,15 +214,7 @@ suite.define(() => {
               },
             ],
             methodResponses: {
-              "agents.list": {
-                defaultId: "main",
-                mainKey: "main",
-                scope: "per-sender",
-                agents: [
-                  { id: "main", name: "Main" },
-                  { id: "writer", name: "Writer" },
-                ],
-              },
+              "agents.list": agentRoster({ main: "Main", writer: "Writer" }, "main", "per-sender"),
               "models.authStatus": {
                 ts: 1,
                 providers: [

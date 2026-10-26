@@ -27,7 +27,7 @@ type PublicationDelivery = {
   payload: Record<string, unknown>;
   serializeSession: () => string;
   delivered: (client: GatewayClient) => void;
-  fieldRefs?: { indices: number[]; names: Set<string> };
+  fieldRefs?: { indices: number[]; omitted: Uint8Array };
 };
 
 /** Bind prepared rows without exposing their implementation to transport contracts. */
@@ -111,6 +111,8 @@ export function prepareSessionEventProjection(
       string,
       {
         row: GatewaySessionRow;
+        rowFields?: string[];
+        rowFieldIndices?: Map<string, number>;
         ancestors: ReturnType<typeof prepareSessionAncestor>[] | undefined;
         hiddenAncestors: Array<{ key: string; histories: Map<object, object> }>;
         ancestorInvalidations: Map<object, object> | undefined;
@@ -192,6 +194,7 @@ export function prepareSessionEventProjection(
         const projected: Record<string, unknown> = {
           ...base,
           session: plan.rows ? plan.rows.wire[0] : row,
+          cyberAccessProgram: row.cyberAccessProgram ?? null,
           fastMode: row.fastMode,
           effectiveFastMode: row.effectiveFastMode,
           ancestorSessions: plan.ancestor
@@ -235,32 +238,37 @@ export function prepareSessionEventProjection(
       if (!projected) {
         let refs = fieldRefs ? delivery.fieldRefs : undefined;
         if (fieldRefs && !refs) {
-          refs = { indices: [], names: new Set() };
-          // Indices address the reconstructed full row, independent of patch insertion order.
-          const fields = Object.entries(row)
-            .filter(([, value]) => value !== undefined)
-            .toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+          // Names index the immutable full row; values need no per-audience entry tuples.
+          const fields = (audience.rowFields ??= Object.keys(row)
+            .filter((field) => Reflect.get(row, field) !== undefined)
+            .toSorted());
+          audience.rowFieldIndices ??= new Map(fields.map((field, index) => [field, index]));
+          refs = { indices: [], omitted: new Uint8Array(fields.length) };
           for (let index = 0; index < fields.length; index++) {
-            const [field, value] = fields[index]!;
+            const field = fields[index]!;
             if (
               field !== "key" &&
               field !== "agentId" &&
               Object.hasOwn(delivery.payload, field) &&
-              isDeepStrictEqual(delivery.payload[field], value)
+              isDeepStrictEqual(delivery.payload[field], Reflect.get(row, field))
             ) {
               refs.indices.push(index);
-              refs.names.add(field);
+              refs.omitted[index] = 1;
             }
           }
           delivery.fieldRefs = refs;
         }
         let wirePayload = delivery.payload;
         if (refs || omitMessage) {
-          // Copy retained fields in wire order without deleting properties from the variant.
+          // Copy retained fields in wire order; omitted fields need no entry tuples.
           wirePayload = Object.fromEntries(
-            Object.entries(delivery.payload).filter(
-              ([field]) => (!omitMessage || field !== "message") && !refs?.names.has(field),
-            ),
+            Object.keys(delivery.payload)
+              .filter(
+                (field) =>
+                  (!omitMessage || field !== "message") &&
+                  !refs?.omitted[audience.rowFieldIndices!.get(field) ?? -1],
+              )
+              .map((field) => [field, delivery.payload[field]]),
           );
           if (refs) {
             wirePayload.sessionFieldRefs = refs.indices;

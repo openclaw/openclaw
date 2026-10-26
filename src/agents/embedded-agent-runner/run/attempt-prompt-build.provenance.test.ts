@@ -1,6 +1,6 @@
 // #143821: prompt-build hook context must carry the turn's typed input provenance so
 // plugins can distinguish inter-session deliveries from human messages.
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -28,27 +28,25 @@ vi.mock("../../../plugins/host-hook-state.js", () => ({
 
 registerAgentSessionLoopTestLifecycle();
 
-beforeEach(() => {
-  setRuntimeConfigSnapshot({});
-  vi.restoreAllMocks();
-});
-
 afterEach(() => {
   vi.restoreAllMocks();
   clearRuntimeConfigSnapshot();
 });
 
-async function assembleWithCapturedHookCtx(
-  runId: string,
-  attemptOverrides?: Partial<EmbeddedRunAttemptParams>,
-  promptPolicy: {
-    hookResult?: PluginHookBeforePromptBuildResult;
-    applyPromptBuildToolsAllow?: PromptAssemblyInput["applyPromptBuildToolsAllow"];
-    prepareSystemPrompt?: PromptAssemblyInput["prepareSystemPrompt"];
-    requiresToolAuthority?: true;
-  } = {},
-) {
-  const config = attemptOverrides?.config ?? {};
+async function assembleWithCapturedHookCtx({
+  attempt: attemptOverrides = {},
+  hookResult,
+  requiresToolAuthority,
+  ...promptPolicy
+}: {
+  attempt?: Partial<EmbeddedRunAttemptParams>;
+  hookResult?: PluginHookBeforePromptBuildResult;
+  applyPromptBuildToolsAllow?: PromptAssemblyInput["applyPromptBuildToolsAllow"];
+  prepareSystemPrompt?: PromptAssemblyInput["prepareSystemPrompt"];
+  requiresToolAuthority?: true;
+} = {}) {
+  const runId = "provenance-hook-test";
+  const config = attemptOverrides.config ?? {};
   setRuntimeConfigSnapshot(config);
   const { session, sessionManager } = await createTestSession({
     customTools: [createStubTool("read")],
@@ -82,17 +80,17 @@ async function assembleWithCapturedHookCtx(
         pluginId: "provenance-hook-test",
         hookName: "before_prompt_build",
         source: "test",
-        requiresToolAuthority: promptPolicy.requiresToolAuthority,
+        requiresToolAuthority,
         handler: async (_event: unknown, ctx: PluginHookAgentContext) => {
           captured.push(ctx);
-          return promptPolicy.hookResult;
+          return hookResult;
         },
       },
     ],
   });
-  const setSystemPrompt = vi.fn<(prompt: string) => void>();
+  let systemPrompt = "";
   const priorMessages = structuredClone(session.messages);
-  const prompt = await prepareEmbeddedAttemptPromptAssembly({
+  await prepareEmbeddedAttemptPromptAssembly({
     attempt,
     activeSession: session,
     sessionManager,
@@ -107,23 +105,23 @@ async function assembleWithCapturedHookCtx(
     hasBaselineTools: () => session.getActiveToolNames().length > 0,
     applyPromptBuildToolsAllow: promptPolicy.applyPromptBuildToolsAllow ?? (() => []),
     prepareSystemPrompt: promptPolicy.prepareSystemPrompt,
-    setActiveSessionSystemPrompt: setSystemPrompt,
+    setActiveSessionSystemPrompt: (prompt) => {
+      systemPrompt = prompt;
+    },
   });
   expect(session.messages).toEqual(priorMessages);
-  return { captured, prompt, setSystemPrompt };
+  return { captured, systemPrompt };
 }
 
 describe("prompt-build hook context input provenance", () => {
   it("bounds plugin system context using the resolved attempt budget before assembly", async () => {
-    const { setSystemPrompt } = await assembleWithCapturedHookCtx(
-      "bounded-plugin-system-context",
-      { contextTokenBudget: 32_000 },
-      { hookResult: { prependSystemContext: "x".repeat(824_170) } },
-    );
-    const finalPrompt = setSystemPrompt.mock.calls.at(-1)?.[0] ?? "";
-    expect(finalPrompt).toContain("[Plugin system context truncated to fit the model budget.]");
-    expect(finalPrompt).toContain("Base system prompt");
-    expect(finalPrompt.length).toBeLessThan(33_000);
+    const { systemPrompt } = await assembleWithCapturedHookCtx({
+      attempt: { contextTokenBudget: 32_000 },
+      hookResult: { prependSystemContext: "x".repeat(824_170) },
+    });
+    expect(systemPrompt).toContain("[Plugin system context truncated to fit the model budget.]");
+    expect(systemPrompt).toContain("Base system prompt");
+    expect(systemPrompt.length).toBeLessThan(33_000);
   });
 
   it("prepares the restricted prompt once before composing the original hook additions", async () => {
@@ -139,30 +137,24 @@ describe("prompt-build hook context input provenance", () => {
       expect(current).toBe("Base system prompt");
       return "Filtered capability guidance";
     });
-    const { captured, setSystemPrompt } = await assembleWithCapturedHookCtx(
-      "prompt-policy-composition",
-      undefined,
-      {
-        hookResult: {
-          toolsAllow: ["read"],
-          prependSystemContext: "Hook prefix",
-          appendSystemContext: "Hook suffix",
-        },
-        applyPromptBuildToolsAllow: applyPolicy,
-        prepareSystemPrompt,
+    const { captured, systemPrompt } = await assembleWithCapturedHookCtx({
+      hookResult: {
+        toolsAllow: ["read"],
+        prependSystemContext: "Hook prefix",
+        appendSystemContext: "Hook suffix",
       },
-    );
+      applyPromptBuildToolsAllow: applyPolicy,
+      prepareSystemPrompt,
+    });
     expect(order).toEqual(["policy", "prompt"]);
     expect(observeDecision).toHaveBeenCalledExactlyOnceWith({ effect: "skipped" });
     expect(captured).toHaveLength(1);
-    expect(prepareSystemPrompt).toHaveBeenCalledOnce();
-    const finalPrompt = setSystemPrompt.mock.calls.at(-1)?.[0] ?? "";
-    expect(finalPrompt).toContain("Filtered capability guidance");
-    expect(finalPrompt).toContain("Hook prefix");
-    expect(finalPrompt).toContain("Hook suffix");
-    expect(finalPrompt).not.toContain("Base system prompt");
-    expect(finalPrompt.match(/Hook prefix/g)).toHaveLength(1);
-    expect(finalPrompt.match(/Hook suffix/g)).toHaveLength(1);
+    expect(systemPrompt).toContain("Filtered capability guidance");
+    expect(systemPrompt).toContain("Hook prefix");
+    expect(systemPrompt).toContain("Hook suffix");
+    expect(systemPrompt).not.toContain("Base system prompt");
+    expect(systemPrompt.match(/Hook prefix/g)).toHaveLength(1);
+    expect(systemPrompt.match(/Hook suffix/g)).toHaveLength(1);
   });
 
   it.each([{ requiresToolAuthority: undefined }, { requiresToolAuthority: true }] as const)(
@@ -170,15 +162,12 @@ describe("prompt-build hook context input provenance", () => {
     async ({ requiresToolAuthority }) => {
       const observeDecision = vi.spyOn(decisionDiagnostics, "logDecisionToolPrefilter");
       const applyPolicy = vi.fn(() => []);
-      await assembleWithCapturedHookCtx(
-        "hook-prefilter-admission",
-        { supportsTurnScopedToolRestrictions: true },
-        {
-          requiresToolAuthority,
-          hookResult: { appendContext: "Answer warmly without tools." },
-          applyPromptBuildToolsAllow: applyPolicy,
-        },
-      );
+      await assembleWithCapturedHookCtx({
+        attempt: { supportsTurnScopedToolRestrictions: true },
+        requiresToolAuthority,
+        hookResult: { appendContext: "Answer warmly without tools." },
+        applyPromptBuildToolsAllow: applyPolicy,
+      });
       expect(observeDecision).toHaveBeenCalledExactlyOnceWith({ effect: "skipped" });
       expect(applyPolicy).toHaveBeenCalledExactlyOnceWith(undefined, false);
     },
@@ -192,8 +181,8 @@ describe("prompt-build hook context input provenance", () => {
       sourceTool: "sessions_send",
     },
   ] as const)("carries typed provenance into the prompt hook: %j", async (inputProvenance) => {
-    const { captured } = await assembleWithCapturedHookCtx("provenance-hook-turn", {
-      inputProvenance,
+    const { captured } = await assembleWithCapturedHookCtx({
+      attempt: { inputProvenance },
     });
     expect(captured).toMatchObject([{ trigger: "user", inputProvenance }]);
   });

@@ -137,12 +137,6 @@ export async function refreshOAuthCredentialForRuntime(params: {
 
 const oauthManager = createOAuthManager();
 
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.oauthTestApi")] = {
-    isRefreshTokenReusedError,
-  };
-}
-
 async function resolveOAuthProfileAccess(
   params: ResolveApiKeyForProfileParams,
   credential: OAuthCredential,

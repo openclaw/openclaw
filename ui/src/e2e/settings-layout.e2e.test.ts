@@ -6,6 +6,7 @@ import type { PresenceEntry } from "../../../packages/gateway-protocol/src/index
 import type { DevicePairingList } from "../../../src/gateway/device-pairing-list.types.js";
 import type { CronJob } from "../api/types.ts";
 import { pathForRoute, type RouteId } from "../app-route-paths.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -356,6 +357,8 @@ suite.define(() => {
     await installMockGateway(page, { methodResponses: emptyDeviceResponses });
 
     try {
+      const navigate = (route: RouteId) =>
+        evaluateControlUiContext(page, (app, routeId) => app.navigate(routeId), route);
       const readShellInsets = (route: RouteId) =>
         page.evaluate((activeRoute) => {
           const content = document.querySelector<HTMLElement>("main.content");
@@ -373,9 +376,14 @@ suite.define(() => {
           };
         }, route);
 
-      for (const route of mobileSettingsRoutes) {
+      // The desktop audit below owns cold CSS coverage; these rows check shell insets.
+      for (const [index, route] of mobileSettingsRoutes.entries()) {
         const pathname = pathForRoute(route);
-        await page.goto(new URL(pathname, suite.server.baseUrl).toString());
+        if (index === 0) {
+          await page.goto(new URL(pathname, suite.server.baseUrl).toString());
+        } else {
+          await navigate(route);
+        }
         await waitForControlUiRoute(page, { pathname, routeId: route });
         await expect
           .poll(() => readShellInsets(route), { message: `${route} settings shell alignment` })
@@ -384,7 +392,7 @@ suite.define(() => {
 
       for (const route of mobileStandaloneSettingsPageRoutes) {
         const pathname = pathForRoute(route);
-        await page.goto(new URL(pathname, suite.server.baseUrl).toString());
+        await navigate(route);
         await waitForControlUiRoute(page, { pathname, routeId: route });
         const settingsPage = page.locator(".settings-page").last();
         await settingsPage.waitFor({ state: "attached" });
@@ -397,11 +405,16 @@ suite.define(() => {
       }
 
       for (const { route, contentSelector } of mobileGeometryCases) {
-        await page.close();
-        page = await context.newPage();
-        await installMockGateway(page);
         const pathname = pathForRoute(route);
-        await page.goto(new URL(pathname, suite.server.baseUrl).toString());
+        // The desktop audit cold-loads these routes; keep fresh mobile loads for the rest.
+        if (settingsRowRoutes.some((settingsRoute) => settingsRoute === route)) {
+          await navigate(route);
+        } else {
+          await page.close();
+          page = await context.newPage();
+          await installMockGateway(page);
+          await page.goto(new URL(pathname, suite.server.baseUrl).toString());
+        }
         await waitForControlUiRoute(page, { pathname, routeId: route });
         const header = page.locator(".content-header").last();
         const title = header.locator(".page-title");
@@ -461,7 +474,7 @@ suite.define(() => {
           });
       }
 
-      await page.goto(`${suite.server.baseUrl}settings/appearance`);
+      await navigate("appearance");
       await waitForControlUiRoute(page, {
         pathname: "/settings/appearance",
         routeId: "appearance",
@@ -498,7 +511,7 @@ suite.define(() => {
       });
 
       await page.setViewportSize({ height: 900, width: 1440 });
-      await page.goto(`${suite.server.baseUrl}settings/appearance`);
+      await navigate("appearance");
       await waitForControlUiRoute(page, {
         pathname: "/settings/appearance",
         routeId: "appearance",
@@ -537,10 +550,10 @@ suite.define(() => {
     });
 
     try {
+      await page.goto(`${suite.server.baseUrl}automations`);
+      await waitForControlUiRoute(page, { pathname: "/automations", routeId: "cron" });
       for (const viewport of responsiveViewports) {
         await page.setViewportSize(viewport);
-        await page.goto(`${suite.server.baseUrl}automations`);
-        await waitForControlUiRoute(page, { pathname: "/automations", routeId: "cron" });
 
         await expect
           .poll(() =>
@@ -623,6 +636,7 @@ suite.define(() => {
           });
         }
         await page.keyboard.press("Escape");
+        await pickerTitle.waitFor({ state: "hidden" });
       }
     } finally {
       await context.close();
@@ -896,113 +910,102 @@ suite.define(() => {
             await link.evaluate((element) => getComputedStyle(element).textDecorationLine),
           ).toBe("none");
         }
-      }
+        for (const guidanceLink of settingsGuidanceLinks.filter((entry) => entry.route === route)) {
+          const root = guidanceLink.section
+            ? page.locator(".settings-section").filter({
+                has: page.getByRole("heading", { name: guidanceLink.section, exact: true }),
+              })
+            : page;
+          const link = (guidanceLink.container ? root.locator(guidanceLink.container) : root)
+            .getByRole("link", { name: "Learn more", exact: true })
+            .first();
+          await link.waitFor();
+          expect(
+            await link.evaluate((element) => getComputedStyle(element).textDecorationLine),
+          ).toBe("none");
+        }
 
-      expect(auditedPairCount).toBeGreaterThan(0);
+        for (const sectionCase of actionSectionCases.filter((entry) => entry.route === route)) {
+          const heading = page.getByRole("heading", {
+            name: sectionCase.heading,
+            exact: true,
+          });
+          const section = page.locator(".settings-section").filter({ has: heading });
+          const description = section.locator(".settings-section__desc");
+          const actions = section.locator(".settings-section__actions");
+          const group = section.locator(":scope > .settings-group");
+          await Promise.all([
+            heading.waitFor(),
+            description.waitFor(),
+            actions.waitFor(),
+            group.waitFor(),
+          ]);
+          // Cold route styles are covered above; this matrix checks responsive geometry.
+          for (const viewport of responsiveViewports) {
+            await page.setViewportSize(viewport);
+            await expect
+              .poll(async () => {
+                const [sectionBox, headingBox, descriptionBox, actionsBox, groupBox] =
+                  await Promise.all([
+                    section.boundingBox(),
+                    heading.boundingBox(),
+                    description.boundingBox(),
+                    actions.boundingBox(),
+                    group.boundingBox(),
+                  ]);
+                if (!sectionBox || !headingBox || !descriptionBox || !actionsBox || !groupBox) {
+                  return null;
+                }
+                return {
+                  actionPlacement:
+                    viewport.width <= 640
+                      ? Math.round(actionsBox.y - descriptionBox.y - descriptionBox.height)
+                      : Math.round(actionsBox.y - headingBox.y),
+                  actionGap:
+                    viewport.width <= 640
+                      ? null
+                      : Math.round(actionsBox.x - descriptionBox.x - descriptionBox.width),
+                  actionRightInset: Math.round(
+                    sectionBox.x + sectionBox.width - actionsBox.x - actionsBox.width,
+                  ),
+                  copyGap: Math.round(descriptionBox.y - headingBox.y - headingBox.height),
+                  groupClearance: Math.round(
+                    groupBox.y -
+                      Math.max(
+                        descriptionBox.y + descriptionBox.height,
+                        actionsBox.y + actionsBox.height,
+                      ),
+                  ),
+                  overlapsAction:
+                    descriptionBox.x < actionsBox.x + actionsBox.width &&
+                    descriptionBox.x + descriptionBox.width > actionsBox.x &&
+                    descriptionBox.y < actionsBox.y + actionsBox.height &&
+                    descriptionBox.y + descriptionBox.height > actionsBox.y,
+                };
+              })
+              .toEqual({
+                actionGap: viewport.width <= 640 ? null : 20,
+                actionPlacement: viewport.width <= 640 ? 8 : 0,
+                actionRightInset: 0,
+                copyGap: 4,
+                groupClearance: 12,
+                overlapsAction: false,
+              });
 
-      for (const guidanceLink of settingsGuidanceLinks) {
-        await page.goto(`${suite.server.baseUrl}settings/${guidanceLink.route}`);
-        await waitForControlUiRoute(page, {
-          pathname: `/settings/${guidanceLink.route}`,
-          routeId: guidanceLink.route,
-        });
-        const root = guidanceLink.section
-          ? page.locator(".settings-section").filter({
-              has: page.getByRole("heading", { name: guidanceLink.section, exact: true }),
-            })
-          : page;
-        const link = (guidanceLink.container ? root.locator(guidanceLink.container) : root)
-          .getByRole("link", { name: "Learn more", exact: true })
-          .first();
-        await link.waitFor();
-        expect(await link.evaluate((element) => getComputedStyle(element).textDecorationLine)).toBe(
-          "none",
-        );
-      }
-
-      for (const sectionCase of actionSectionCases) {
-        await page.goto(`${suite.server.baseUrl}settings/${sectionCase.route}`);
-        await waitForControlUiRoute(page, {
-          pathname: `/settings/${sectionCase.route}`,
-          routeId: sectionCase.route,
-        });
-        const heading = page.getByRole("heading", {
-          name: sectionCase.heading,
-          exact: true,
-        });
-        const section = page.locator(".settings-section").filter({ has: heading });
-        const description = section.locator(".settings-section__desc");
-        const actions = section.locator(".settings-section__actions");
-        const group = section.locator(":scope > .settings-group");
-        await Promise.all([
-          heading.waitFor(),
-          description.waitFor(),
-          actions.waitFor(),
-          group.waitFor(),
-        ]);
-        // Cold route styles are covered above; this matrix checks responsive geometry.
-        for (const viewport of responsiveViewports) {
-          await page.setViewportSize(viewport);
-          await expect
-            .poll(async () => {
-              const [sectionBox, headingBox, descriptionBox, actionsBox, groupBox] =
-                await Promise.all([
-                  section.boundingBox(),
-                  heading.boundingBox(),
-                  description.boundingBox(),
-                  actions.boundingBox(),
-                  group.boundingBox(),
-                ]);
-              if (!sectionBox || !headingBox || !descriptionBox || !actionsBox || !groupBox) {
-                return null;
-              }
-              return {
-                actionPlacement:
-                  viewport.width <= 640
-                    ? Math.round(actionsBox.y - descriptionBox.y - descriptionBox.height)
-                    : Math.round(actionsBox.y - headingBox.y),
-                actionGap:
-                  viewport.width <= 640
-                    ? null
-                    : Math.round(actionsBox.x - descriptionBox.x - descriptionBox.width),
-                actionRightInset: Math.round(
-                  sectionBox.x + sectionBox.width - actionsBox.x - actionsBox.width,
+            if (proofEnabled && viewport.width === 1440) {
+              await section.screenshot({
+                animations: "disabled",
+                path: path.join(
+                  path.join(suite.artifactDir, "settings-layout-audit"),
+                  `action-${sectionCase.route}.png`,
                 ),
-                copyGap: Math.round(descriptionBox.y - headingBox.y - headingBox.height),
-                groupClearance: Math.round(
-                  groupBox.y -
-                    Math.max(
-                      descriptionBox.y + descriptionBox.height,
-                      actionsBox.y + actionsBox.height,
-                    ),
-                ),
-                overlapsAction:
-                  descriptionBox.x < actionsBox.x + actionsBox.width &&
-                  descriptionBox.x + descriptionBox.width > actionsBox.x &&
-                  descriptionBox.y < actionsBox.y + actionsBox.height &&
-                  descriptionBox.y + descriptionBox.height > actionsBox.y,
-              };
-            })
-            .toEqual({
-              actionGap: viewport.width <= 640 ? null : 20,
-              actionPlacement: viewport.width <= 640 ? 8 : 0,
-              actionRightInset: 0,
-              copyGap: 4,
-              groupClearance: 12,
-              overlapsAction: false,
-            });
-
-          if (proofEnabled && viewport.width === 1440) {
-            await section.screenshot({
-              animations: "disabled",
-              path: path.join(
-                path.join(suite.artifactDir, "settings-layout-audit"),
-                `action-${sectionCase.route}.png`,
-              ),
-            });
+              });
+            }
           }
         }
       }
+
+      expect(auditedPairCount).toBeGreaterThan(0);
     } finally {
       await context.close();
     }

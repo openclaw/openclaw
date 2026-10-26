@@ -318,7 +318,11 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
     ({ createLifecycleEventBroadcastHandler }) => createLifecycleEventBroadcastHandler(params),
   );
 
-  const handleAgentEvent = (evt: AgentEventRuntimePayload, isDeliveryCurrent = () => true) => {
+  const isNonLifecycleDeliveryCurrent = () => true;
+  const handleAgentEvent = (
+    evt: AgentEventRuntimePayload,
+    isDeliveryCurrent = isNonLifecycleDeliveryCurrent,
+  ) => {
     if (evt.stream === "lifecycle") {
       const projection = params.getSessionRowProjection?.();
       if (projection) {
@@ -509,23 +513,26 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
       log: params.log,
       failureMessage: "Agent event dispatch failed",
       context: { runId: evt.runId, stream: evt.stream },
-      onFailure: (error) => {
-        if (terminalDispatch) {
-          terminalDispatch.failure = { error };
-          for (const [runId, entry] of terminalEntries ?? []) {
-            if (
-              isCurrentChatAbortTerminalDispatch(entry, terminalDispatch) &&
-              entry.adapter.projectSessionTerminalPending === true &&
-              !entry.adapter.projectSessionTerminalPersistence
-            ) {
-              // Failed dispatch cannot adopt a write later. Keep the failure for
-              // cancellation callers, but release its now-ownerless reservation.
-              settleTrackedTerminalEntry(runId, entry, false, error);
+      onFailure:
+        lifecyclePhase === "end" || lifecyclePhase === "error"
+          ? (error) => {
+              if (terminalDispatch) {
+                terminalDispatch.failure = { error };
+                for (const [runId, entry] of terminalEntries ?? []) {
+                  if (
+                    isCurrentChatAbortTerminalDispatch(entry, terminalDispatch) &&
+                    entry.adapter.projectSessionTerminalPending === true &&
+                    !entry.adapter.projectSessionTerminalPersistence
+                  ) {
+                    // Failed dispatch cannot adopt a write later. Keep the failure for
+                    // cancellation callers, but release its now-ownerless reservation.
+                    settleTrackedTerminalEntry(runId, entry, false, error);
+                  }
+                }
+              }
+              failedDispatchCleanup?.();
             }
-          }
-        }
-        failedDispatchCleanup?.();
-      },
+          : undefined,
     });
     bindChatAbortTerminalDispatch(
       terminalEntries ? [...terminalEntries.values()] : undefined,
@@ -537,7 +544,7 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
   };
   const unsubscribeAgentEvents = onAgentRuntimeEvent(handleAgentEvent, (evt) => {
     if (evt.stream !== "lifecycle") {
-      return () => true;
+      return isNonLifecycleDeliveryCurrent;
     }
     const runId = evt.runId;
     const chatLink = params.chatRunState.registry.peek(runId);

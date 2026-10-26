@@ -1,5 +1,4 @@
-import "./port-command-worker.test-support.js";
-import assert from "node:assert/strict";
+import "./database-suite-workers.test-support.js";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -32,6 +31,7 @@ describe.skipIf(!fixtures.connection)("family-scoped database port", () => {
   let client: Client;
   let workboard: string;
   let shared: string;
+  let agent: string;
   const hash = (file: string) => createHash("sha256").update(fs.readFileSync(file)).digest("hex");
   const config = () => JSON.parse(fs.readFileSync(state.configPath, "utf8")) as OpenClawConfig;
   const interruptPublication = () => {
@@ -50,6 +50,17 @@ describe.skipIf(!fixtures.connection)("family-scoped database port", () => {
     });
     workboard = state.statePath("plugins", "workboard", "workboard.sqlite");
     shared = state.statePath("state", "openclaw.sqlite");
+    agent = path.join(state.agentDir("main"), "openclaw-agent.sqlite");
+    fs.mkdirSync(path.dirname(agent), { recursive: true });
+    const descriptor = await agentPortProvider.loadDescriptor();
+    fixtures.seedPortSqlite(
+      agent,
+      `${descriptor.sqlite};
+      PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};
+      INSERT INTO schema_meta VALUES ('primary', 'agent', ${OPENCLAW_AGENT_SCHEMA_VERSION}, 'main', NULL, 1, 1);
+      INSERT INTO session_key_contract (id, main_key, updated_at) VALUES (1, 'main', 0);
+      INSERT INTO cache_entries VALUES ('retained', 'sentinel', '"agent-data"', NULL, NULL, 1);`,
+    );
     fs.mkdirSync(path.dirname(workboard), { recursive: true });
     fixtures.seedPortSqlite(
       workboard,
@@ -80,13 +91,13 @@ describe.skipIf(!fixtures.connection)("family-scoped database port", () => {
     await state?.cleanup();
   });
 
-  it.each(["state", "workboard"] as const)(
+  it.each(["state", "workboard", "agent"] as const)(
     "round-trips %s with an unrelated PostgreSQL family",
     async (family) => {
-      const other = family === "state" ? "workboard" : "state";
+      const other = family === "workboard" ? "state" : "workboard";
       const before = fixtures.canonical(workboard);
-      const selectedPath = family === "state" ? shared : workboard;
-      const otherPath = family === "state" ? workboard : shared;
+      const selectedPath = { state: shared, workboard, agent }[family];
+      const otherPath = { state: shared, workboard }[other];
       try {
         await port({ family: other, to: "postgres" });
         const untouched = hash(otherPath);
@@ -94,6 +105,9 @@ describe.skipIf(!fixtures.connection)("family-scoped database port", () => {
         const result = await port({ family, to: "postgres" });
         expect(result.stores).toEqual([selectedPath]);
         expect(hash(otherPath)).toBe(untouched);
+        if (family === "agent") {
+          expect(readBackupEngine(shared).engine).toBe("sqlite");
+        }
         expect(config().database).toMatchObject({
           engine: "sqlite",
           families: {
@@ -105,6 +119,13 @@ describe.skipIf(!fixtures.connection)("family-scoped database port", () => {
         expect(hash(otherPath)).toBe(untouched);
         expect(readBackupEngine(selectedPath).engine).toBe("sqlite");
         expect(config().database?.families).toEqual({ [other]: { engine: "postgres" } });
+        if (family === "agent") {
+          using db = openNodeSqliteDatabase(agent, { readOnly: true });
+          expect(
+            db.prepare("SELECT value_json FROM cache_entries WHERE scope = 'retained'").get(),
+          ).toEqual({ value_json: '"agent-data"' });
+          expect(readBackupEngine(shared).engine).toBe("sqlite");
+        }
       } finally {
         await port({ family: other, to: "sqlite" });
         expect(config().database?.families).toBeUndefined();
@@ -115,17 +136,6 @@ describe.skipIf(!fixtures.connection)("family-scoped database port", () => {
   );
 
   it("recovers and backs up scoped PostgreSQL agents with SQLite state", async () => {
-    const agent = path.join(state.agentDir("main"), "openclaw-agent.sqlite");
-    fs.mkdirSync(path.dirname(agent), { recursive: true });
-    const descriptor = await agentPortProvider.loadDescriptor();
-    {
-      using db = openNodeSqliteDatabase(agent);
-      db.exec(descriptor.sqlite);
-      db.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};
-        INSERT INTO schema_meta VALUES ('primary', 'agent', ${OPENCLAW_AGENT_SCHEMA_VERSION}, 'main', NULL, 1, 1);
-        INSERT INTO session_key_contract (id, main_key, updated_at) VALUES (1, 'main', 0);
-        INSERT INTO cache_entries VALUES ('retained', 'sentinel', '"agent-data"', NULL, NULL, 1);`);
-    }
     const unrelated = hash(workboard);
     interruptPublication();
     await expect(port({ family: "agent", to: "postgres" })).rejects.toThrow();
@@ -178,19 +188,12 @@ describe.skipIf(!fixtures.connection)("family-scoped database port", () => {
         expect(readBackupEngine(workboard).engine, String(failure)).toBe("postgres");
         expect(() => assertDatabasePortStartupAllowed(state.stateDir)).toThrow();
         const active = databasePortManifestPath(state.stateDir);
-        const inputsFile = fixtures
-          .manifest(state)
-          .artifacts.find((file) => path.basename(file.path) === "inputs.json");
-        assert(inputsFile);
-        expect(JSON.parse(fs.readFileSync(inputsFile.path, "utf8"))).toMatchObject({
-          selection: {
-            path: ["database", "families", "workboard", "engine"],
-            originalValue: null,
-            effectiveSource: "sqlite",
-          },
-        });
         await port({ [action]: active });
         expect(() => assertDatabasePortStartupAllowed(state.stateDir)).not.toThrow();
+        expect(config().database?.families).toEqual({
+          state: { engine: "postgres" },
+          ...(action === "resume" ? { workboard: { engine: "postgres" } } : {}),
+        });
         expect(hash(shared)).toBe(other);
         expect(readBackupEngine(workboard).engine).toBe(
           action === "resume" ? "postgres" : "sqlite",

@@ -638,6 +638,18 @@ export function ChatModelPickerPanel(panel: {
           <ChatModelAccountSectionView {...accounts()!} startIndex={0} />
         </div>
       ) : undefined}
+      {panel.params.accessProgramRecovery ? (
+        <div class="chat-controls__model-catalog-state">
+          <button
+            class="chat-controls__model-catalog-action"
+            type="button"
+            disabled={panel.params.accessProgramRecovery.disabled}
+            onClick={() => panel.params.accessProgramRecovery?.onClear(panel.params.sessionKey)}
+          >
+            {t("chat.modelControls.clearSavedAccess")}
+          </button>
+        </div>
+      ) : undefined}
       {panel.params.modelCatalogState?.modelSelectionPolicy?.restricted ? (
         <div class="chat-controls__model-catalog-state" data-chat-model-policy>
           {t("chat.modelControls.restrictedModelsHelp")}

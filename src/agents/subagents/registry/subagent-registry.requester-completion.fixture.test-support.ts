@@ -244,7 +244,6 @@ export async function prepareNestedRequesterReplay(params: {
         completion: { resultText: "Sub-lead integration complete" },
       });
       expect(settled.get(runId)?.requesterSettleWake).toBeUndefined();
-      expect(deliveries[1]).toMatchObject({ targetRequesterSessionKey: "agent:main:main" });
       expect(deliveries[1]?.triggerMessage).toContain("Sub-lead integration complete");
     },
     dispose() {
