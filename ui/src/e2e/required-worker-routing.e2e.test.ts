@@ -1,6 +1,4 @@
 import { expect, it } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
-import { projectSessionModelCatalog } from "../../../src/gateway/server-methods/chat-metadata-session-projection.js";
 import type { ModelCatalogEntry } from "../api/types.ts";
 import {
   createNewSessionPageE2eSuite,
@@ -9,17 +7,13 @@ import {
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
-const model = { id: "worker-model", provider: "openai", name: "Worker model" };
+const model = {
+  id: "worker-model",
+  provider: "openai",
+  name: "Worker model",
+} satisfies ModelCatalogEntry;
 const selection = { model: model.id, modelProvider: model.provider };
 const message = "Hello from the dedicated worker";
-const dedicated = {
-  provider: "device",
-  settings: { device: "paired", inference: "worker" },
-} as const;
-const config: OpenClawConfig = {
-  agents: { defaults: { model: { primary: "openai/worker-model" } }, entries: { main: {} } },
-  cloudWorkers: { requiredProfile: "dedicated", profiles: { dedicated } },
-};
 const hostModels: ModelCatalogEntry[] = [
   { ...model, available: false, unavailableReason: "missing-auth" },
 ];
@@ -28,12 +22,10 @@ suite.define(() => {
   it.each(["before", "main", "bookmark"])("cold required worker chat: %s", async (route) => {
     await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
       const sessionKey = route === "bookmark" ? "agent:main:saved-worker" : "agent:main:main";
-      const target = { agentId: "main", sessionKey };
-      const models =
-        route === "before"
-          ? hostModels
-          : projectSessionModelCatalog(target, hostModels, config, undefined);
+      // Backend projection is covered by chat-metadata-runtime.required-worker.test.ts.
+      const models: ModelCatalogEntry[] = route === "before" ? hostModels : [model];
       const gateway = await installMockGateway(page, {
+        subscriptionInitialHistory: false,
         sessionKey,
         agentModel: "openai/worker-model",
         models,

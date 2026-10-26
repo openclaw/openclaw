@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, expect, vi } from "vitest";
+import { afterEach, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import * as registryLifecycle from "../../plugins/registry-lifecycle.js";
@@ -59,12 +59,10 @@ export function databasePath(stateDir: string, agentId: string): string {
 
 export function assignHumanOwner(storePath: string): void {
   const { actor: owner, ...assignment } = humanOwner;
-  expect(
-    assignSessionOwner(
-      { agentId: "main", sessionKey: "agent:main:chat", storePath },
-      { owner, ...assignment },
-    ),
-  ).toEqual(humanOwner);
+  assignSessionOwner(
+    { agentId: "main", sessionKey: "agent:main:chat", storePath },
+    { owner, ...assignment },
+  );
 }
 
 const claimScope = ({

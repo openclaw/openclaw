@@ -1,5 +1,6 @@
 import "../../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -71,6 +72,32 @@ function configureLocation(
 }
 
 describe("storage CLI with filesystem transport", () => {
+  it.skipIf(process.platform === "win32")(
+    "escapes terminal controls without changing storage targets or probe data",
+    async () => {
+      const target = path.join(root, "café\u001b[31m\nforged\tend\rrow\u0007");
+      await fs.mkdir(target);
+      configureLocation("archive", "filesystem", { path: target });
+
+      await runStorageCli("list");
+      const uninitialized = runtime.log.mock.calls.flat().join("\n");
+      expect(uninitialized).toContain("café\\nforged\\tend\\rrow");
+      expect(uninitialized.replaceAll("\n", "")).not.toMatch(/\p{Cc}/u);
+      expect(uninitialized).not.toContain("\nforged");
+
+      runtime.log.mockClear();
+      await runStorageCli("init archive");
+      expect(runtime.log).toHaveBeenCalledWith(
+        `Storage location archive initialized: ${root}${path.sep}café\\nforged\\tend\\rrow`,
+      );
+      await expectJson("list --json", {
+        locations: [{ displayTarget: target, state: "ok" }],
+      });
+      await expectJson("test archive --json", { displayTarget: target, sizeBytes: 256 });
+      expect(await fs.readdir(target)).toEqual(["openclaw-storage.json"]);
+    },
+  );
+
   it("initializes, verifies a probe round trip, deletes the probe, and lists availability", async () => {
     await expectJson("--json init archive", {
       name: "archive",

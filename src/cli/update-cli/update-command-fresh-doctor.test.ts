@@ -113,6 +113,7 @@ vi.mock("./shared.js", async (importOriginal) => ({
   resolveNodeRunner: vi.fn(() => "/usr/bin/node"),
 }));
 
+import { writeFixtureJson } from "../cli-fixtures.test-support.js";
 import {
   completePostCorePluginUpdate,
   runUpdateFinalizationDoctorInFreshProcess,
@@ -164,7 +165,7 @@ const expectNoCalls = (...spies: unknown[]) => {
 };
 async function writeConfig(configPath: string, config: unknown) {
   await fs.mkdir(path.dirname(configPath), { recursive: true });
-  await fs.writeFile(configPath, JSON.stringify(config));
+  await writeFixtureJson(configPath, config);
 }
 async function useRealConfig() {
   const owner =
@@ -214,13 +215,11 @@ describe("post-plugin update readiness", () => {
       });
       const onWarnings = vi.fn();
       mocks.command.mockImplementationOnce(async (_command, _args, options) => {
-        await fs.writeFile(
+        await writeFixtureJson(
           options.env[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV],
-          JSON.stringify(
-            kind === "deferred"
-              ? { status: "ok", warnings: [warning], maintenanceRefusal: refusal }
-              : { status: "error", failureFacts: [], maintenanceRefusal: refusal },
-          ),
+          kind === "deferred"
+            ? { status: "ok", warnings: [warning], maintenanceRefusal: refusal }
+            : { status: "error", failureFacts: [], maintenanceRefusal: refusal },
         );
         if (kind === "data-at-risk") {
           throw childFailure;

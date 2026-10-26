@@ -2,7 +2,30 @@ import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
 import { castAgentMessages } from "./test-helpers/agent-message-fixtures.js";
 import { sparseAssistant, textToolResult } from "./test-helpers/sparse-transcript.test-support.js";
-import { sanitizeToolCallIdsForCloudCodeAssist as sanitize } from "./tool-call-id.js";
+import {
+  extractToolResultId,
+  extractToolResultIds,
+  sanitizeToolCallIdsForCloudCodeAssist as sanitize,
+} from "./tool-call-id.js";
+
+describe("tool result id aliases", () => {
+  it.each([
+    [{ toolCallId: " first ", toolUseId: "second" }, "first", ["first", "second"]],
+    [{ toolCallId: " ", toolUseId: " second ", call_id: "second" }, "second", ["second"]],
+    [{ toolCallId: 42, toolUseId: null, tool_call_id: " third " }, "third", ["third"]],
+    [{ toolCallId: "", tool_use_id: " fourth " }, "fourth", ["fourth"]],
+    [{ toolCallId: "", callId: " fifth ", call_id: "sixth" }, "fifth", ["fifth", "sixth"]],
+    [{ toolCallId: "", call_id: " sixth " }, "sixth", ["sixth"]],
+    [{ toolCallId: " ", toolUseId: 42, call_id: "\n" }, null, []],
+  ])("keeps first-id precedence and the complete unique list for %j", (aliases, first, all) => {
+    const [message] = castAgentMessages([{ role: "toolResult", content: [], ...aliases }]);
+    if (message?.role !== "toolResult") {
+      throw new Error("expected tool result fixture");
+    }
+    expect(extractToolResultId(message)).toBe(first);
+    expect(extractToolResultIds(message)).toEqual(all);
+  });
+});
 
 type Mode = "strict" | "strict9";
 const call = (id: string) => ({
@@ -93,13 +116,24 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
       result(native, "identity", true),
       result(foreign, "readme", true),
     ]);
-    const out = sanitize(input, "strict", { preserveNativeAnthropicToolUseIds: true });
+    let optionEnumerations = 0;
+    const options = new Proxy(
+      { preserveNativeAnthropicToolUseIds: true },
+      {
+        ownKeys(target) {
+          optionEnumerations++;
+          return Reflect.ownKeys(target);
+        },
+      },
+    );
+    const out = sanitize(input, "strict", options);
     expect((out[0] as Extract<AgentMessage, { role: "assistant" }>).content).toEqual([
       toolUse(native, "IDENTITY.md"),
       toolUse("call123fc123", "README.md"),
     ]);
     expect(out[1]).toMatchObject({ toolCallId: native, toolUseId: native });
     expect(out[2]).toMatchObject({ toolCallId: "call123fc123", toolUseId: "call123fc123" });
+    expect(optionEnumerations).toBe(0);
   });
 
   const replayOptions = { preserveReplaySafeThinkingToolCallIds: true, allowedToolNames: ["read"] };

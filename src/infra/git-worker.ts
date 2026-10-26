@@ -12,6 +12,11 @@ import type {
 } from "../agents/worktrees/git-worktree-operations.js";
 import { runGitBytes, runGitBuffered } from "../agents/worktrees/git.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  CommandProcessCleanupError,
+  hasCommandProcessCleanupError,
+  readCommandProcessFailure,
+} from "../process/exec-result.js";
 import { withGitProcessOperation, type GitProcessOperation } from "../process/spawn-diagnostics.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { DiffReadTiming } from "./diff-read-timing.js";
@@ -309,6 +314,7 @@ async function executeOperation(
   const hostWork = new Set<Promise<WorkerTaskResponse>>();
   const temporaryDirectories = new Set<string>();
   const hostErrors = new Map<number, unknown>();
+  let cleanupFailure: Error | undefined;
   let errorSequence = 0;
   const request = async (value: unknown, signal: AbortSignal): Promise<WorkerTaskResponse> => {
     try {
@@ -318,10 +324,6 @@ async function executeOperation(
       let result: unknown;
       const transferList: Transferable[] = [];
       if (effect.type === "git.text" || effect.type === "git.buffer") {
-        const run =
-          effect.type === "git.text"
-            ? (options.git?.text ?? runGitBytes)
-            : (options.git?.buffered ?? runGitBuffered);
         // The parent owns the operation identity; worker batches cannot relabel their launches.
         const queuedAt = measure ? performance.now() : 0;
         const execute = async () => {
@@ -332,16 +334,43 @@ async function executeOperation(
             summedGitQueueWaitMs += startedAt - queuedAt;
           }
           try {
-            const output = await withGitProcessOperation(SPAWN_OPERATIONS[command.type], () =>
-              run(effect.input.cwd, effect.input.args, {
-                ...effect.input.options,
-                operation: SPAWN_OPERATIONS[command.type],
-                baseEnv,
-                signal,
-                beforeRun: options.assertCurrent,
-                killProcessTree: true,
-                lowerPriority: contentGit,
-              }),
+            const output = await withGitProcessOperation(
+              SPAWN_OPERATIONS[command.type],
+              async () => {
+                const runOptions = {
+                  ...effect.input.options,
+                  operation: SPAWN_OPERATIONS[command.type],
+                  baseEnv,
+                  signal,
+                  beforeRun: options.assertCurrent,
+                  killProcessTree: true,
+                  lowerPriority: contentGit,
+                };
+                if (effect.type === "git.text") {
+                  const textOutput = await (options.git?.text ?? runGitBytes)(
+                    effect.input.cwd,
+                    effect.input.args,
+                    runOptions,
+                  );
+                  if (textOutput.cleanup === "uncertain") {
+                    throw new CommandProcessCleanupError();
+                  }
+                  return textOutput;
+                }
+                const bufferedOutput = await (options.git?.buffered ?? runGitBuffered)(
+                  effect.input.cwd,
+                  effect.input.args,
+                  runOptions,
+                );
+                if (
+                  bufferedOutput.error &&
+                  (hasCommandProcessCleanupError(bufferedOutput.error) ||
+                    readCommandProcessFailure(bufferedOutput.error)?.cleanup === "uncertain")
+                ) {
+                  throw bufferedOutput.error;
+                }
+                return bufferedOutput;
+              },
             );
             if (timing) {
               termination = output.termination;
@@ -421,6 +450,13 @@ async function executeOperation(
         timeoutMs: WORKER_PHASE_TIMEOUT_MS,
       };
     } catch (error) {
+      // Cancellation can discard this reply, even after hostWork forgets the settled batch.
+      if (hasCommandProcessCleanupError(error)) {
+        cleanupFailure ??=
+          error instanceof Error ? error : new CommandProcessCleanupError({ cause: error });
+      } else if (readCommandProcessFailure(error)?.cleanup === "uncertain") {
+        cleanupFailure ??= new CommandProcessCleanupError({ cause: error });
+      }
       const origin = ++errorSequence;
       hostErrors.set(origin, error);
       return {
@@ -491,12 +527,17 @@ async function executeOperation(
     let cleanupSucceeded = false;
     try {
       // A cancellation may terminate the worker before its host callback completes.
-      await Promise.allSettled(hostWork);
-      await Promise.all(
-        [...temporaryDirectories].map((directory) =>
-          fs.rm(directory, { recursive: true, force: true }),
-        ),
-      );
+      await Promise.allSettled(hostWork).then(() => {
+        if (cleanupFailure) {
+          // Unconfirmed native work may still use these artifacts; leave them for recovery.
+          throw cleanupFailure;
+        }
+        return Promise.all(
+          [...temporaryDirectories].map((directory) =>
+            fs.rm(directory, { recursive: true, force: true }),
+          ),
+        );
+      });
       cleanupSucceeded = true;
     } finally {
       timing?.finish(cleanupSucceeded ? outcome : "threw");

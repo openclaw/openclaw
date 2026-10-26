@@ -59,6 +59,36 @@ function localRoot() {
 }
 
 describe("resident Codex catalog", () => {
+  it("does not snapshot resident rows when a local DB-only walk cannot remove them", async () => {
+    const root = localRoot();
+    const native = idleThread({ id: "local-omission", source: "cli" });
+    const readNative = vi.fn(async (_params: CodexThreadListParams) =>
+      projectCodexCatalogPage({ data: [native] }),
+    );
+    const index = await initializedIndex("local-omission", readNative, root);
+    await advance(index, 0);
+    const resident = index.get(native.id)!;
+    const iterate = Map.prototype[Symbol.iterator];
+    let residentIterations = 0;
+    vi.spyOn(Map.prototype, Symbol.iterator).mockImplementation(function (
+      this: Map<unknown, unknown>,
+    ) {
+      if (this.get(native.id) === resident) {
+        residentIterations++;
+      }
+      return iterate.call(this);
+    });
+    readNative.mockImplementation(async () => projectCodexCatalogPage({ data: [] }));
+    await advance(index, 15 * 60_000);
+    await index.list({});
+    await advance(index, 0);
+    expect(readNative).toHaveBeenCalledTimes(2);
+    expect(readNative.mock.calls[1]?.[0]).toMatchObject({ useStateDbOnly: true });
+    expect(await listedIds(index)).toEqual([native.id]);
+    expect(index.get(native.id)).toBe(resident);
+    expect(residentIterations).toBe(0);
+  });
+
   it("runs due local file scans while a demand-triggered native walk is blocked", async () => {
     const root = localRoot();
     await fs.mkdir(root, { recursive: true });

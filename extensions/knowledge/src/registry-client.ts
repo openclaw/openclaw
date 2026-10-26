@@ -1,10 +1,18 @@
 import { Worker } from "node:worker_threads";
-import { pluginFilesLocation, workerUrl } from "./plugin-files.js";
+import {
+  createPluginRuntimeProcessEntrypoint,
+  resolveRuntimeWorkerUrl,
+} from "openclaw/plugin-sdk/process-runtime";
+import { pluginFilesLocation } from "./plugin-files.js";
 import type { RegistryOperations, RegistryRequest, RegistryResponse } from "./registry-host.js";
 import { sdkUrls } from "./storage-client.js";
 import type { RegistrySnapshot } from "./store-registry.js";
 
 type Pending = { resolve(value: unknown): void; reject(error: unknown): void };
+const registryEntrypoint = createPluginRuntimeProcessEntrypoint(
+  "knowledgeRegistry",
+  import.meta.url,
+);
 /** Registry failure that needs operator recovery, not a retry. */
 export class RegistryUnavailable extends Error {}
 
@@ -63,7 +71,7 @@ export class RegistryClient {
     if (this.worker) {
       return this.worker;
     }
-    const worker = new Worker(workerUrl("registry"), {
+    const worker = new Worker(resolveRuntimeWorkerUrl(registryEntrypoint), {
       workerData: { sdk: sdkUrls(), files: pluginFilesLocation(), stateRoot: this.stateRoot() },
     });
     worker.unref();

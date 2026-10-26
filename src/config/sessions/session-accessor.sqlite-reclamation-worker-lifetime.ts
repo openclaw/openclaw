@@ -7,6 +7,7 @@ import {
   getDatabaseEngineSelection,
   withDatabaseEngineSelection,
 } from "../../infra/database-engine/context.js";
+import { captureStateDatabaseAccess } from "../../infra/gateway-state-owner.js";
 import { resolveAgentDatabaseIdleHandleTtlMs } from "../../infra/sqlite-handle-lifecycle.js";
 import { publishSqliteWalCheckpointObservation } from "../../infra/sqlite-wal-checkpoint.js";
 import { recordWorkerMessage } from "../../infra/worker-message-metrics.js";
@@ -101,6 +102,7 @@ export class SqliteReclamationWorker {
   private readonly unregisterAgent: () => void;
   private readonly unregisterState: () => void;
   private readonly stateContext;
+  private readonly stateAccess;
   private readonly beforeExit = () => {
     void this.close().catch((error: unknown) => log.error(String(error)));
   };
@@ -117,6 +119,7 @@ export class SqliteReclamationWorker {
   ) {
     this.options = structuredClone(options);
     this.stateContext = captureOpenClawStateWorkerContext({ env: options.env });
+    this.stateAccess = captureStateDatabaseAccess(this.stateContext.admission.databasePath);
     this.unregisterAgent = registerOpenClawAgentDatabaseAsyncResource({
       agentId: options.agentId,
       path: options.path,
@@ -335,7 +338,7 @@ export class SqliteReclamationWorker {
           operationId,
           completion: "result",
           databaseAuthority: {
-            databasePath: this.stateContext.admission.databasePath,
+            stateAccess: this.stateAccess,
             maintenanceScope: this.stateContext.maintenanceScope,
             creationPaths: [
               this.options.path,

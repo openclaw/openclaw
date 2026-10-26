@@ -1,5 +1,4 @@
-// Qa Lab tests cover gateway log sentinel plugin behavior.
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import {
   assertNoGatewayLogSentinels,
   extractGatewayMessageText,
@@ -8,175 +7,97 @@ import {
   scanGatewayLogSentinels,
 } from "./gateway-log-sentinel.js";
 
-describe("gateway log sentinels", () => {
-  it.each([
+function directReply(args: unknown, type = "function_call") {
+  const block = { type, name: "message", [type === "tool_use" ? "input" : "arguments"]: args };
+  return scanDirectReplyTranscriptSentinels(
     [
-      {
-        content: [
-          "  plain  ",
-          " ",
-          null,
-          { type: "ToOl_ReSuLt", content: " nested " },
-          { type: "OUTPUT_TEXT", content: "output" },
-          { type: "unknown", text: " priority ", content: "ignored" },
-        ],
-      },
-      "plain\nnested\noutput\npriority",
-    ],
-  ])("extracts message text from tool result shapes", (message, expected) => {
-    expect(extractGatewayMessageText(message)).toBe(expected);
+      { role: "assistant", content: [block] },
+      { role: "assistant", content: "Sent." },
+    ]
+      .map((message) => JSON.stringify({ message }))
+      .join("\n"),
+  );
+}
+
+it("extracts message text from tool result shapes", () => {
+  expect(
+    extractGatewayMessageText({
+      content: [
+        "  plain  ",
+        " ",
+        null,
+        { type: "ToOl_ReSuLt", content: " nested " },
+        { type: "OUTPUT_TEXT", content: "output" },
+        { type: "unknown", text: " priority ", content: "ignored" },
+      ],
+    }),
+  ).toBe("plain\nnested\noutput\npriority");
+});
+
+it("classifies failures after a cursor without block-reply noise", () => {
+  const signatures = [
+    ["plugin-hook-failure", "plugin before_prompt_build hook failed: TypeError: boom"],
+    ["plugin-hook-failure", "plugin before_tool_call crashed while evaluating policy"],
+    ["plugin-contract-error", "plugin manifest invalid: missing contracts.tools registration"],
+    ["plugin-contract-error", "[plugins] plugin must declare contracts.tools for: runtime_tool"],
+    ["codex-app-server-timeout", "codex app-server attempt timed out after 180000ms"],
+    ["stalled-agent-run", "codex_app_server progress stalled for run abc123"],
+    ["cron-model-allowlist", "cron payload model is not in model allowlist"],
+    ["live-quota-or-subscription", "OpenAI quota exceeded for live-frontier request"],
+    ["final-reply-delivery-failure", "[telegram] final reply failed: Error: socket closed"],
+    [null, "msteams block reply failed: Error: throttled"],
+  ];
+  const prefix = "safe line\n";
+  const findings = scanGatewayLogSentinels(prefix + signatures.map(([, line]) => line).join("\n"), {
+    since: prefix.length,
   });
-
-  it("classifies May 13 beta.5 operational failure signatures", () => {
-    const findings = scanGatewayLogSentinels(
-      [
-        "2026-05-13T00:00:01Z plugin before_prompt_build hook failed: TypeError: boom",
-        "2026-05-13T00:00:02Z plugin before_tool_call crashed while evaluating policy",
-        "2026-05-13T00:00:03Z plugin manifest invalid: missing contracts.tools registration",
-        "[plugins] plugin must declare contracts.tools for: runtime_tool",
-        "2026-05-13T00:00:04Z codex app-server attempt timed out after 180000ms",
-        "2026-05-13T00:00:05Z codex_app_server progress stalled for run abc123",
-        "2026-05-13T00:00:06Z cron payload model openai/gpt-5.6-luna is not in model allowlist",
-        "2026-05-13T00:00:07Z OpenAI quota exceeded for live-frontier request",
-      ].join("\n"),
-    );
-
-    expect(findings.map((finding) => finding.kind)).toEqual([
-      "plugin-hook-failure",
-      "plugin-hook-failure",
-      "plugin-contract-error",
-      "plugin-contract-error",
-      "codex-app-server-timeout",
-      "stalled-agent-run",
-      "cron-model-allowlist",
-      "live-quota-or-subscription",
-    ]);
-    expect(findings.find((finding) => finding.kind === "plugin-hook-failure")).toMatchObject({
-      verdict: "qa-harness-bug",
-      owner: "plugin",
-      productImpact: "P1",
-    });
-    expect(findings.find((finding) => finding.kind === "live-quota-or-subscription")).toMatchObject(
-      {
-        verdict: "environment-blocked",
-        owner: "environment",
-        productImpact: "P4",
-      },
-    );
+  expect(findings.map(({ kind }) => kind)).toEqual(
+    signatures.map(([kind]) => kind).filter(Boolean),
+  );
+  expect(findings[0]).toMatchObject({
+    line: 2,
+    verdict: "qa-harness-bug",
+    owner: "plugin",
+    productImpact: "P1",
   });
-
-  it("classifies channel final reply delivery failures without block-reply noise", () => {
-    const findings = scanGatewayLogSentinels(
-      [
-        "2026-10-11T07:57:01.932+00:00 [telegram] final reply failed: SqliteWorkerError: Session actor version changed before command admission",
-        "[tlon] final reply failed after 812ms: Error: socket closed",
-        "msteams block reply failed: Error: throttled",
-      ].join("\n"),
-    );
-
-    expect(
-      findings.map(({ kind, line, verdict, owner }) => ({ kind, line, verdict, owner })),
-    ).toEqual([
-      {
-        kind: "final-reply-delivery-failure",
-        line: 1,
-        verdict: "product-bug",
-        owner: "openclaw-routing",
-      },
-      {
-        kind: "final-reply-delivery-failure",
-        line: 2,
-        verdict: "product-bug",
-        owner: "openclaw-routing",
-      },
-    ]);
+  expect(findings.find(({ kind }) => kind === "live-quota-or-subscription")).toMatchObject({
+    verdict: "environment-blocked",
+    owner: "environment",
+    productImpact: "P4",
   });
-
-  it("honors log cursors while preserving absolute line numbers", () => {
-    const prefix = "safe line\n";
-    const findings = scanGatewayLogSentinels(`${prefix}codex app-server attempt timed out`, {
-      since: prefix.length,
-    });
-
-    expect(findings).toHaveLength(1);
-    expect(findings[0]).toMatchObject({
-      kind: "codex-app-server-timeout",
-      line: 2,
-    });
+  expect(findings.at(-1)).toMatchObject({
+    kind: "final-reply-delivery-failure",
+    line: 10,
+    verdict: "product-bug",
+    owner: "openclaw-routing",
   });
+});
 
-  it("throws actionable summaries for product and environment failures", () => {
-    expect(() => assertNoGatewayLogSentinels("codex_app_server progress stalled")).toThrow(
-      "stalled-agent-run",
-    );
-    expect(() => assertNoGatewayLogSentinels("OpenAI quota exceeded")).toThrow(
-      "live-quota-or-subscription",
-    );
-    expect(formatGatewayLogSentinelSummary(scanGatewayLogSentinels("OpenAI quota exceeded"))).toBe(
-      "live-quota-or-subscription@1 environment-blocked owner=environment: OpenAI quota exceeded",
-    );
-  });
+it("throws actionable summaries for product and environment failures", () => {
+  expect(() => assertNoGatewayLogSentinels("codex_app_server progress stalled")).toThrow(
+    "stalled-agent-run",
+  );
+  expect(() => assertNoGatewayLogSentinels("OpenAI quota exceeded")).toThrow(
+    "live-quota-or-subscription",
+  );
+  expect(formatGatewayLogSentinelSummary(scanGatewayLogSentinels("OpenAI quota exceeded"))).toBe(
+    "live-quota-or-subscription@1 environment-blocked owner=environment: OpenAI quota exceeded",
+  );
+});
 
-  it("detects direct reply self-message transcripts separately from gateway logs", () => {
-    const findings = scanDirectReplyTranscriptSentinels(
-      [
-        JSON.stringify({
-          message: {
-            role: "assistant",
-            content: [
-              {
-                type: "tool_use",
-                name: "message",
-                input: { action: "send", conversationId: "qa-operator", text: "hello" },
-              },
-            ],
-          },
-        }),
-        JSON.stringify({ message: { role: "assistant", content: "Sent." } }),
-      ].join("\n"),
-    );
-
-    expect(findings).toHaveLength(1);
-    expect(findings[0]).toMatchObject({
-      kind: "direct-reply-self-message",
-      verdict: "product-bug",
-      owner: "openclaw-routing",
-    });
-  });
-
-  it.each([
-    [{ action: "send", target: "current", text: "hello" }, true],
-    ['{"action":"send","target":"current","text":"hello"}', true],
-    ['{"action":"send","target":"other-chat"}', false],
-    [null, false],
-    [[], false],
-    ["null", false],
-    ["[]", false],
-    ["42", false],
-    ['"text"', false],
-    [" ", false],
-    ["{", false],
-  ])("classifies function_call message arguments %j", (args, shouldFind) => {
-    const findings = scanDirectReplyTranscriptSentinels(
-      [
-        JSON.stringify({
-          message: {
-            role: "assistant",
-            content: [
-              {
-                type: "function_call",
-                name: "message",
-                arguments: args,
-              },
-            ],
-          },
-        }),
-        JSON.stringify({ message: { role: "assistant", content: "Sent." } }),
-      ].join("\n"),
-    );
-
-    expect(findings.map((finding) => finding.kind)).toEqual(
-      shouldFind ? ["direct-reply-self-message"] : [],
-    );
-  });
+it.each([
+  [{ action: "send", conversationId: "qa-operator" }, true, "tool_use"],
+  [{ action: "send", target: "current", text: "hello" }, true],
+  ['{"action":"send","target":"current","text":"hello"}', true],
+  ['{"action":"send","target":"other-chat"}', false],
+  [null, false],
+  ["null", false],
+  ["[]", false],
+  ["{", false],
+] as const)("detects self-message transcripts: %j", (args, shouldFind, type?: "tool_use") => {
+  expect(directReply(args, type)).toMatchObject(
+    shouldFind
+      ? [{ kind: "direct-reply-self-message", verdict: "product-bug", owner: "openclaw-routing" }]
+      : [],
+  );
 });

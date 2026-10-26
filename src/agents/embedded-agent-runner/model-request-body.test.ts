@@ -1,4 +1,5 @@
-import { hash } from "node:crypto";
+import crypto, { hash } from "node:crypto";
+import { syncBuiltinESMExports } from "node:module";
 import { serialize } from "node:v8";
 import { serializeModelRequestBody } from "@openclaw/ai/internal/shared";
 import { Type } from "typebox";
@@ -262,4 +263,34 @@ it("fingerprints serialized prompt segments with bounded, content-free history m
   expect(changed.cachePrefix?.messageDigests).toEqual(first.cachePrefix?.messageDigests);
   expect(changed.cachePrefix?.tail).not.toBe(first.cachePrefix?.tail);
   expect(prepareProviderPrompt({ payload: {}, encode: false }).cachePrefix).toBeUndefined();
+});
+
+it("hashes prompt prefixes without assembling copies of their serialized fields", () => {
+  const payload = {
+    system: "synthetic system 🦞".repeat(4_000),
+    tools: [{ name: "synthetic_tool", description: "synthetic tool ".repeat(8_000) }],
+    instructions: "synthetic instructions ".repeat(4_000),
+    input: [],
+  };
+  const system = JSON.stringify({ instructions: payload.instructions, system: payload.system });
+  const tools = JSON.stringify({ tools: payload.tools });
+  const expected = { system: hash("sha256", system), tools: hash("sha256", tools) };
+  const copiedPrefixes: string[] = [];
+  const originalHash = crypto.hash;
+  const spy = vi.spyOn(crypto, "hash").mockImplementation((algorithm, data, encoding) => {
+    if (data === system || data === tools) {
+      copiedPrefixes.push(data);
+    }
+    return originalHash(algorithm, data, encoding);
+  });
+  syncBuiltinESMExports();
+  try {
+    const result = prepareProviderPrompt({ payload, encode: true });
+    expect(result.cachePrefix).toMatchObject(expected);
+    expect(new TextDecoder().decode(result.encoded!.body)).toBe(JSON.stringify(payload));
+    expect(copiedPrefixes).toHaveLength(0);
+  } finally {
+    spy.mockRestore();
+    syncBuiltinESMExports();
+  }
 });

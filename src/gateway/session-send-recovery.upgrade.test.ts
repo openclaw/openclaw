@@ -92,27 +92,22 @@ it("keeps latest-stable pending rows visible without replaying missing operator 
     const stored = database.db
       .prepare("SELECT input_id, state, message_json FROM session_pending_inputs ORDER BY seq")
       .all();
-    expect(stored).toEqual(
-      rows.map((row) => ({
-        input_id: row.input_id,
-        state: row.state === "queued" ? "interrupted" : row.state,
-        message_json: row.message_json,
-      })),
+    const expectedStates = [
+      ["stable-queued", "interrupted"],
+      ["stable-interrupted", "interrupted"],
+      ["stable-cancelled", "cancelled"],
+    ];
+    expect(stored.map(({ input_id, state }) => [input_id, state])).toEqual(expectedStates);
+    expect(stored.map(({ message_json }) => message_json)).toEqual(
+      rows.map((row) => row.message_json),
     );
     expect(runtime.resumeChatInput).not.toHaveBeenCalled();
     expect(runtime.dispatchAgent).not.toHaveBeenCalled();
     const visible = await readChatPendingInputs(scope, { limit: 20, maxChars: 1_000 });
     expect(visible.total).toBe(3);
-    expect(visible.items).toEqual([
-      expect.objectContaining({
-        id: "stable-queued",
-        state: "interrupted",
-        message: expect.objectContaining({
-          content: "Synthetic input accepted by the stable release",
-        }),
-      }),
-      expect.objectContaining({ id: "stable-interrupted", state: "interrupted" }),
-      expect.objectContaining({ id: "stable-cancelled", state: "cancelled" }),
-    ]);
+    expect(visible.items.map(({ id, state }) => [id, state])).toEqual(expectedStates);
+    expect(visible.items[0]?.message).toMatchObject({
+      content: "Synthetic input accepted by the stable release",
+    });
   });
 });

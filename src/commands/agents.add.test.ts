@@ -211,6 +211,47 @@ describe("agents add command", () => {
     });
   }
 
+  it.each([false, true])(
+    "escapes terminal controls only in human agent creation output (json=%s)",
+    async (json) => {
+      const text = "café\u001b[31m\nforged\tend\rrow\u0007";
+      const workspace = `/tmp/${text}`;
+      const agentDir = `/tmp/agent-${text}`;
+      createAgent.mockResolvedValueOnce({
+        status: "created",
+        agentId: "work",
+        workspace,
+        agentDir,
+        model: text,
+        bindingResult: {
+          conflicts: [
+            {
+              binding: { agentId: "work", match: { channel: "slack", accountId: text } },
+              existingAgentId: "other",
+            },
+          ],
+        },
+      });
+      await add({ name: "work", workspace, nonInteractive: true, json });
+      if (json) {
+        expect(JSON.parse(String(runtime.log.mock.lastCall?.[0]))).toMatchObject({
+          workspace,
+          agentDir,
+          model: text,
+          bindings: { conflicts: [`slack accountId=${text} (agent=other)`] },
+        });
+      } else {
+        expect(runtime.log).toHaveBeenCalledWith("Workspace: /tmp/café\\nforged\\tend\\rrow");
+        expect(runtime.log).toHaveBeenCalledWith("Agent dir: /tmp/agent-café\\nforged\\tend\\rrow");
+        expect(runtime.log).toHaveBeenCalledWith("Model: café\\nforged\\tend\\rrow");
+        expect(runtime.error).toHaveBeenCalledWith(
+          "Skipped bindings already claimed by another agent:\n- slack accountId=café\\nforged\\tend\\rrow (agent=other)",
+        );
+      }
+      expect(createAgent).toHaveBeenCalledWith(expect.objectContaining({ workspace }));
+    },
+  );
+
   function useWizard(
     textValues: string[] = [],
     confirmValues?: boolean[],

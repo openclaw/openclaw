@@ -53,16 +53,17 @@ function preflight({
   apiKey = "test-api-key",
   output = defaults.output,
   profiler = audioProfile(["OpenClaw-Mic", "OpenClaw-Feed"]),
+  runningApp = "FaceTime",
   ...overrides
 }: Partial<Parameters<typeof runFaceTimePreflight>[0]> & {
   output?: typeof defaults.output;
   profiler?: string;
   available?: boolean;
   apiKey?: unknown;
+  runningApp?: "FaceTime" | "Phone";
 } = {}) {
   const responses = new Map([
     ["/bin/test", commandResult()],
-    ["/usr/bin/pgrep", commandResult("123\n")],
     ["/usr/sbin/system_profiler", commandResult(profiler)],
     ["--default-devices", commandResult(JSON.stringify({ ...defaults, output }))],
     ["--check", commandResult("", "capture ready")],
@@ -70,6 +71,9 @@ function preflight({
   const runCommandWithTimeout = vi.fn(async (argv: string[]) => {
     if (!available) {
       return commandResult("", "ENOENT", 1);
+    }
+    if (argv[0] === "/usr/bin/pgrep") {
+      return argv[2] === runningApp ? commandResult("123\n") : commandResult("", "", 1);
     }
     const response = responses.get(argv[0] ?? "") ?? responses.get(argv.at(-1) ?? "");
     if (!response) {
@@ -95,6 +99,16 @@ it.each([true, false])("reports readiness with dependencies=%s", async (availabl
   expect(result.checks.map((check) => [check.id, check.ok, check.required])).toEqual(
     checkIds.map((id) => [id, available, true]),
   );
+});
+
+it("does not treat a running Phone app as FaceTime readiness", async () => {
+  const result = await preflight({ runningApp: "Phone" });
+  expect(result.ok).toBe(false);
+  expect(result.checks.find((check) => check.id === "call-app-running")).toMatchObject({
+    ok: false,
+    label: "FaceTime process",
+    message: "open FaceTime for audio or video calls",
+  });
 });
 
 afterEach(() => vi.unstubAllEnvs());

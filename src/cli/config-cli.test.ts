@@ -16,7 +16,7 @@ import {
   createPluginManifestRecordFixture as createPluginManifestRecord,
   createPluginMetadataSnapshotFixture as createPluginMetadataSnapshot,
 } from "../plugins/plugin-metadata.test-support.js";
-import { mockCall } from "../test-utils/mock-call-assertions.js";
+import { expectNoCalls, mockCall } from "../test-utils/mock-call-assertions.js";
 import { configCliMutationRejectionCases } from "./config-cli-rejections.test-support.js";
 import { registerConfigJsonOutputTests } from "./config-cli.json-output.test-support.js";
 import { registerConfigMutationSchemaTests } from "./config-cli.mutation-schema.test-support.js";
@@ -27,6 +27,7 @@ import {
 } from "./config-cli.snapshot.test-support.js";
 import type { ConfigSetDryRunResult } from "./config-set-dryrun.js";
 import { applyCliProfileEnv } from "./profile.js";
+import { getMockCallOutput } from "./test-runtime-capture.js";
 
 // The metadata fixture can reach the runtime mock before ordinary imports finish.
 const { defaultRuntime, resetRuntimeCapture, mockRuntimeModule } = await vi.hoisted(async () => {
@@ -298,15 +299,15 @@ function requireWriteOptions(): NonNullable<Parameters<ConfigCliWriter>[1]> {
 }
 
 function expectLogIncludes(text: string) {
-  expect(mockLog.mock.calls.map((call) => String(call[0])).join("\n")).toContain(text);
+  expect(getMockCallOutput(mockLog)).toContain(text);
 }
 
 function expectLogExcludes(text: string) {
-  expect(mockLog.mock.calls.map((call) => String(call[0])).join("\n")).not.toContain(text);
+  expect(getMockCallOutput(mockLog)).not.toContain(text);
 }
 
 function expectErrorIncludes(text: string) {
-  expect(mockError.mock.calls.map((call) => String(call[0])).join("\n")).toContain(text);
+  expect(getMockCallOutput(mockError)).toContain(text);
 }
 
 const requireRecord = createRequireRecord("record", "expected-label-object");
@@ -332,12 +333,6 @@ function runConfigSet(...args: string[]) {
 
 function runConfigPatch(file: string, ...args: string[]) {
   return runConfigCommand(["config", "patch", "--file", file, ...args]);
-}
-
-function expectNoCalls(...mocks: Array<{ mock: { calls: unknown[][] } }>) {
-  for (const mock of mocks) {
-    expect(mock).not.toHaveBeenCalled();
-  }
 }
 
 function runDiscordRef(provider: string, source: string, id: string, ...options: string[]) {
@@ -463,7 +458,7 @@ describe("config cli", () => {
       } catch {
         // Tolerated: any downstream rejection. Inspected below.
       }
-      const errorMessages = mockError.mock.calls.map((call) => String(call[0])).join("\n");
+      const errorMessages = getMockCallOutput(mockError);
       expect(errorMessages).not.toContain("auto-managed");
     });
 
@@ -644,9 +639,7 @@ describe("config cli", () => {
         await expect(runConfigCommand(["config", "validate"])).rejects.toThrow(ExitError);
         messages.forEach(expectErrorIncludes);
         for (const text of excludes) {
-          expect(mockError.mock.calls.map((call) => String(call[0])).join("\n")).not.toContain(
-            text,
-          );
+          expect(getMockCallOutput(mockError)).not.toContain(text);
         }
         expect(mockLog).not.toHaveBeenCalled();
       },

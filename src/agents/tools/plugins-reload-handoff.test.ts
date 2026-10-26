@@ -68,12 +68,14 @@ afterEach(() => {
   resetGatewayWorkAdmission();
 });
 it.each([
+  ["host system", '"generation":2'],
   ["same-ID without run ID", ""],
   ["same-ID callback", '"generation":2'],
   ["same-ID late construction", '"generation":2'],
   ["same-ID prepublication", '"generation":2'],
   ["same-ID unmatched run", ""],
   ["permission denied", "operator.admin"],
+  ["personal permission denied", "operator.admin"],
 ])("ends the turn before reload and resumes once: %s", async (outcome, expectedText) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const sessionKey = "agent:main:reload";
@@ -81,7 +83,10 @@ it.each([
     const runId = "reload-run";
     const withoutRunId = outcome === "same-ID without run ID";
     const refusesHandoff =
-      outcome === "same-ID unmatched run" || outcome === "same-ID without run ID";
+      outcome === "same-ID unmatched run" ||
+      outcome === "same-ID without run ID" ||
+      outcome === "permission denied" ||
+      outcome === "personal permission denied";
     const config = { agents: { entries: { main: { workspace: state.workspaceDir } } } };
     setRuntimeConfigSnapshot(config);
     await upsertSessionEntryCore({ agentId: "main", sessionKey }, { sessionId, updatedAt: 1 });
@@ -160,11 +165,15 @@ it.each([
             ? withSessionControllerOwner(other, () => tool.execute("handoff", request))
             : tool.execute("handoff", request);
         if (refusesHandoff) {
-          await expect(execute()).rejects.toThrow(callerRequired);
+          await expect(execute()).rejects.toThrow(
+            outcome.includes("permission denied") ? "operator.admin" : callerRequired,
+          );
           expect(order).toEqual([]);
           expectNoHandoff();
           expect(operation.result).toBeNull();
-          expect(other).toMatchObject({ result: null, abortSignal: { aborted: false } });
+          if (other) {
+            expect(other).toMatchObject({ result: null, abortSignal: { aborted: false } });
+          }
           return;
         }
         const result = await execute();
@@ -223,12 +232,7 @@ it.each([
       }
       cleanup.resolve();
       const text = await resumed.promise;
-      expect(order).toEqual([
-        "yield",
-        "cleanup",
-        ...(outcome === "permission denied" ? [] : ["reload"]),
-        "resume",
-      ]);
+      expect(order).toEqual(["yield", "cleanup", "reload", "resume"]);
       expect(text).toContain(expectedText);
       expect(enqueue).toHaveBeenCalledOnce();
       if (other) {
@@ -241,19 +245,35 @@ it.each([
     };
     try {
       await withPluginRuntimeGatewayRequestScope(
-        { context, resolveGatewayContext: () => context, isWebchatConnect: () => false },
-        () =>
-          withOperatorToolGatewayAuthority(
-            {
-              scopes: outcome === "permission denied" ? ["operator.write"] : ["operator.admin"],
-              operatorRoleActor: { kind: "system" },
-            },
-            () =>
-              exec.withExecRequestTurn(
-                { identity: { agentId: "main", sessionKey, sessionId, runId } },
-                () => withGatewayToolCallerIdentity({ agentId: "main", sessionKey }, run),
-              ),
-          ),
+        {
+          context,
+          resolveGatewayContext: () => context,
+          isWebchatConnect: () => false,
+          ...(outcome === "personal permission denied"
+            ? {
+                client: createOperatorClient({
+                  profileName: "reload-reader",
+                  scopes: ["operator.read"],
+                }),
+              }
+            : {}),
+        },
+        () => {
+          const start = () =>
+            exec.withExecRequestTurn(
+              { identity: { agentId: "main", sessionKey, sessionId, runId } },
+              () => withGatewayToolCallerIdentity({ agentId: "main", sessionKey }, run),
+            );
+          return outcome === "host system" || outcome === "personal permission denied"
+            ? start()
+            : withOperatorToolGatewayAuthority(
+                {
+                  scopes: outcome === "permission denied" ? ["operator.write"] : ["operator.admin"],
+                  operatorRoleActor: { kind: "system" },
+                },
+                start,
+              );
+        },
       );
     } finally {
       cleanup.resolve();

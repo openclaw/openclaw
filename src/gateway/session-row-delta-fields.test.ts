@@ -81,6 +81,16 @@ describe("session row field deltas", () => {
     ).toEqual({ set: { usage: { input: 4, output: 5 } }, remove: [] });
   });
 
+  it("recomputes mutable children shared by distinct shallow-frozen row snapshots", () => {
+    const usage = { input: 4, output: 3 };
+    const previous = prepareSessionRowDeltaFields(Object.freeze({ usage }));
+    usage.output = 5;
+    const current = Object.freeze({ usage });
+    expect(
+      createSessionRowDeltaDiffer()(previous, prepareSessionRowDeltaFields(current), current),
+    ).toEqual({ set: { usage: { input: 4, output: 5 } }, remove: [] });
+  });
+
   it("prepares each immutable row once and reuses comparisons across interleaved recipients", () => {
     let reads = 0;
     const current = Object.freeze({

@@ -41,6 +41,10 @@ export type ChatModelPickerParams = {
   providerAuth?: ReadonlyMap<string, ModelProviderAuthLabel>;
   accountSection?: ChatModelAccountSection;
   contextWindow?: ChatContextWindowControlParams;
+  accessProgramRecovery?: {
+    disabled: boolean;
+    onClear: (sessionKey: string) => unknown;
+  };
   disabled: boolean;
   disabledReason?: string;
   modelCatalogState?: ModelCatalogState;

@@ -209,6 +209,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
       },
       chatType: attempt.chatType,
       requesterProfileId: readAdmittedRunOperatorAuthority(attempt.admittedRunContext)?.profileId,
+      blind: attempt.blindPrompt,
     },
   );
   const promptMode =
@@ -364,7 +365,8 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
       }),
       toolSchemaDirectoryPrompt,
       sandboxInfo,
-      capabilityToolNames: [...params.capabilityToolNames].toSorted(),
+      // oxlint-disable-next-line unicorn/no-array-sort -- The materialized set array is private.
+      capabilityToolNames: [...params.capabilityToolNames].sort(),
       tools: params.effectiveTools,
       contextFiles: params.bootstrap.contextFiles,
       bootstrapMode: params.bootstrap.bootstrapMode,
@@ -409,7 +411,8 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
   const readToolPromptInputs = (tools: PromptTools, permissionChanged = false) => ({
     mode: attempt.permissionMode,
     tools,
-    capabilities: [...params.capabilityToolNames].toSorted(),
+    // oxlint-disable-next-line unicorn/no-array-sort -- The materialized set array is private.
+    capabilities: [...params.capabilityToolNames].sort(),
     catalogEntries: params.toolSearchCatalogRef?.current?.entries,
     permissionChanged,
   });

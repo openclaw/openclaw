@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, vi, type Mock } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { buildRestartRecoveryTerminalDeliveryEvidence } from "../agents/agent-command-restart-recovery.js";
 import { buildAnnounceIdempotencyKey } from "../agents/announce-idempotency.js";
 import type { AgentCommandOpts } from "../agents/command/types.js";
@@ -10,6 +10,7 @@ import { createRestartRecoveryOperatorSource } from "../agents/operator-run-reco
 import { RESTART_RECOVERY_INTERRUPTION_NOTE } from "../agents/restart-recovery-prompt.js";
 import type { RequesterSettleWakeParams } from "../agents/subagents/announce/subagent-announce.requester-settle-state.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
+import { subscribeSubagentRunChanges } from "../agents/subagents/registry/subagent-registry-publication.js";
 import { loadSubagentRegistryFromSqlite } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import { getRuntimeConfig } from "../config/config.js";
@@ -452,13 +453,31 @@ export async function runPublicSettleRecoveryCase(
         await publishTerminal(command, finalResult(), true);
         return finalResult();
       });
-      await activateSubagentRegistry(
-        expectDefined(kernel.gatewayRequestContext.resolveGatewayContext, "Gateway resolver"),
-      ).settled;
-      await vi.waitFor(async () => {
-        expect(await readUserTurnCompletionForTest(scope, runId)).toMatchObject({
-          outcome: { status: "ok", reason: "completed" },
-        });
+      const batchSettled = createDeferred();
+      const stopObserving = subscribeSubagentRunChanges("persistence", () => {
+        if (
+          batchRunIds.every((id) => {
+            const entry = subagentRuns.get(id);
+            return entry !== undefined && entry.requesterSettleWake === undefined;
+          })
+        ) {
+          batchSettled.resolve();
+        }
+      });
+      try {
+        await withinTest(
+          activateSubagentRegistry(
+            expectDefined(kernel.gatewayRequestContext.resolveGatewayContext, "Gateway resolver"),
+          ).settled,
+          signal,
+        );
+        // The run receipt precedes the registry's settlement of the whole batch.
+        await withinTest(batchSettled.promise, signal);
+      } finally {
+        stopObserving();
+      }
+      expect(await readUserTurnCompletionForTest(scope, runId)).toMatchObject({
+        outcome: { status: "ok", reason: "completed" },
       });
       expect(agentCommandMock).toHaveBeenCalledTimes(2);
       assertSettled("done");

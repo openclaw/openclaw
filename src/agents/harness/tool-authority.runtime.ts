@@ -121,8 +121,22 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
   const { sessionId, sessionKey, sessionFile, agentId, runId } = attempt;
   const operatorAuthority = readAdmittedRunOperatorAuthority(admitted);
   const requesterOrigin = captureRequesterOrigin({
-    ...attempt,
+    requesterOrigin: attempt.requesterOrigin,
+    sessionKey,
     operatorProfileId: operatorAuthority?.profileId,
+    messageProvider: attempt.messageProvider,
+    messageChannel: attempt.messageChannel,
+    agentAccountId: attempt.agentAccountId,
+    chatType: attempt.chatType,
+    conversationId: attempt.conversationId,
+    messageThreadId: attempt.messageThreadId,
+    groupId: attempt.groupId,
+    groupChannel: attempt.groupChannel,
+    groupSpace: attempt.groupSpace,
+    senderId: attempt.senderId,
+    senderName: attempt.senderName,
+    senderUsername: attempt.senderUsername,
+    senderE164: attempt.senderE164,
   });
   const route = { provider: attempt.provider, model: attempt.modelId };
   // Maintenance borrows an operation for cancellation, not its injection snapshot.

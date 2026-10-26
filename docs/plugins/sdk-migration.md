@@ -317,6 +317,14 @@ runtime callers use the awaited reads. The execution owner still checks current
 approval policy immediately before command execution using committed in-process
 policy publications; that final check does not query SQLite.
 
+The SDK's `readExecApprovalsSnapshotAsync` returns a private mutable snapshot for
+edit-then-save callers. The deprecated synchronous readers likewise retain private
+mutable results through their compatibility window. `loadExecApprovalsReadOnlyAsync`
+shares frozen policy on cached reads: treat its file and nested grants as read-only,
+and use `structuredClone(file)` before preparing an edit. Internal execution reads
+still reuse frozen owner snapshots. Retaining any snapshot does not retain execution
+authority: pending updates and revocations still fail closed at the final execution check.
+
 ### Session reset freshness
 
 Channel runtime consumers should await

@@ -146,8 +146,18 @@ export function createLazyGatewayCronState(
     waitForManualRun: bindCron((state) => state.cron.waitForManualRun.bind(state.cron)),
     readEventSources: bindCron((state) => state.cron.readEventSources.bind(state.cron)),
     runEvent: bindCron((state) => state.cron.runEvent.bind(state.cron)),
+    getStoreKey() {
+      const storeKey = loaded?.cron.getStoreKey?.();
+      if (!storeKey) {
+        throw new Error("Cron store is not prepared; read cron jobs first");
+      }
+      return storeKey;
+    },
     getJob(id) {
       return loaded?.cron.getJob(id);
+    },
+    getLoadedJobs() {
+      return loaded?.cron.getLoadedJobs();
     },
     readJob: bindCron((state) => state.cron.readJob.bind(state.cron)),
     async readScratch(id, options) {

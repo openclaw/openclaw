@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   acquireSessionMcpRuntime,
   disposeAllSessionMcpRuntimes,
@@ -9,7 +10,11 @@ import { bindSessionMcpRuntimeTestScheduler } from "./agent-bundle-mcp-manager.t
 import { createSessionMcpRuntime } from "./agent-bundle-mcp-runtime.js";
 import type { SessionMcpRequesterScope, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { OpenClawStreamableHTTPClientTransport } from "./mcp-http-transport.js";
+import { withMcpOAuthBearer } from "./mcp-oauth-fetch.js";
+import { operatorMcpOAuthIdentity } from "./mcp-oauth-identity.js";
+import { saveMcpOAuthAccessTokenForTest } from "./mcp-oauth.test-support.js";
 import * as mcpTransport from "./mcp-transport.js";
+import { acquireNativeMcpServer } from "./native-mcp-runtime.js";
 
 const { warn } = vi.hoisted(() => ({
   warn: vi.fn(),
@@ -29,6 +34,7 @@ let remoteToolName = "probe";
 let reachable = false;
 let invalidListing = false;
 let listToolsGate: Promise<void> | undefined;
+let oauthRequired = false;
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -39,61 +45,74 @@ beforeEach(() => {
   reachable = false;
   invalidListing = false;
   listToolsGate = undefined;
+  oauthRequired = false;
   warn.mockClear();
   vi.spyOn(mcpTransport, "resolveMcpTransport").mockImplementation((serverName: string) => {
+    const fetchFixture = async (_input: string | URL, init?: RequestInit) => {
+      if (init?.method !== "POST") {
+        return new Response(null, { status: 405 });
+      }
+      if (oauthRequired && !new Headers(init.headers).has("authorization")) {
+        initializes += 1;
+        return new Response(null, { status: 401 });
+      }
+      const message = JSON.parse(await new Response(init.body).text()) as {
+        id?: number;
+        method: string;
+      };
+      if (message.method === "initialize") {
+        initializes += 1;
+        if (!reachable && serverName === "remote") {
+          return new Promise<Response>((_resolve, reject) => {
+            init.signal?.addEventListener(
+              "abort",
+              () => reject(new Error("Fixture request aborted", { cause: init.signal?.reason })),
+              { once: true },
+            );
+          });
+        }
+      }
+      if (message.id === undefined) {
+        return new Response(null, { status: 202 });
+      }
+      if (message.method === "tools/list" && serverName === "remote") {
+        await listToolsGate;
+      }
+      return Response.json({
+        jsonrpc: "2.0",
+        id: message.id,
+        result:
+          message.method === "initialize"
+            ? {
+                protocolVersion: "2025-06-18",
+                capabilities: { tools: { listChanged: true } },
+                serverInfo: { name: "fixture", version: "1" },
+              }
+            : {
+                tools: [
+                  {
+                    name: serverName === "remote" ? remoteToolName : "healthy_tool",
+                    inputSchema:
+                      invalidListing && serverName === "remote"
+                        ? { type: "array", items: { type: "number" } }
+                        : { type: "object" },
+                  },
+                ],
+              },
+      });
+    };
     const transport = new OpenClawStreamableHTTPClientTransport(
       new URL("https://mcp.invalid/mcp"),
       {
-        fetch: async (_input, init) => {
-          if (init?.method !== "POST") {
-            return new Response(null, { status: 405 });
-          }
-          if (typeof init.body !== "string") {
-            throw new Error("Expected a serialized JSON-RPC request body");
-          }
-          const message = JSON.parse(init.body) as { id?: number; method: string };
-          if (message.method === "initialize") {
-            initializes += 1;
-            if (!reachable && serverName === "remote") {
-              return new Promise<Response>((_resolve, reject) => {
-                init.signal?.addEventListener(
-                  "abort",
-                  () =>
-                    reject(new Error("Fixture request aborted", { cause: init.signal?.reason })),
-                  { once: true },
-                );
-              });
-            }
-          }
-          if (message.id === undefined) {
-            return new Response(null, { status: 202 });
-          }
-          if (message.method === "tools/list" && serverName === "remote") {
-            await listToolsGate;
-          }
-          return Response.json({
-            jsonrpc: "2.0",
-            id: message.id,
-            result:
-              message.method === "initialize"
-                ? {
-                    protocolVersion: "2025-06-18",
-                    capabilities: { tools: { listChanged: true } },
-                    serverInfo: { name: "fixture", version: "1" },
-                  }
-                : {
-                    tools: [
-                      {
-                        name: serverName === "remote" ? remoteToolName : "healthy_tool",
-                        inputSchema:
-                          invalidListing && serverName === "remote"
-                            ? { type: "array", items: { type: "number" } }
-                            : { type: "object" },
-                      },
-                    ],
-                  },
-          });
-        },
+        fetch: oauthRequired
+          ? withMcpOAuthBearer({
+              fetchFn: fetchFixture,
+              authFetchFn: fetchFixture,
+              identity: operatorMcpOAuthIdentity(serverName, "https://mcp.invalid/mcp", {
+                mcp: { servers: { remote: { url: "https://mcp.invalid/mcp", auth: "oauth" } } },
+              }),
+            })
+          : fetchFixture,
       },
     );
     transports.push(transport);
@@ -107,6 +126,69 @@ beforeEach(() => {
     };
   });
 });
+
+it.each(["embedded", "native"])(
+  "remembers %s OAuth-required startup until the credential owner changes",
+  async (mode) => {
+    await withOpenClawTestState({ prefix: "mcp-startup-oauth-" }, async () => {
+      oauthRequired = true;
+      reachable = true;
+      const catalogFor = async (runtime: SessionMcpRuntime) => {
+        if (mode === "embedded") {
+          return runtime.getCatalog();
+        }
+        const view = await acquireNativeMcpServer(runtime, "remote", {
+          capabilityContext: {},
+          capabilities: {},
+          roots: { roots: [] },
+          assertCurrent() {},
+        }).catch(() => undefined);
+        if (!view) {
+          return runtime.getCatalog();
+        }
+        try {
+          return await view.runtime.getCatalog();
+        } finally {
+          await view.release();
+        }
+      };
+      const first = makeRuntime();
+      const denied = await catalogFor(first);
+      expect(toolNames(denied)).toEqual([]);
+      expect(denied.diagnostics?.[0]?.message).toContain("Sign in from Settings");
+      await vi.advanceTimersByTimeAsync(86_400_000);
+      for (let index = 0; index < 8; index++) {
+        expect(toolNames(await catalogFor(makeRuntime()))).toEqual([]);
+      }
+      const otherWorkspace = createSessionMcpRuntime({
+        sessionId: "other-workspace",
+        workspaceDir: "/other-workspace",
+        agentDir: "/other-agent",
+        cfg: { mcp: { servers: { remote: remoteServer } } },
+      });
+      runtimes.push(otherWorkspace);
+      expect(toolNames(await catalogFor(otherWorkspace))).toEqual([]);
+      expect(initializes).toBe(1);
+      expect(transports).toHaveLength(1);
+      expect(warn).toHaveBeenCalledTimes(1);
+
+      await saveMcpOAuthAccessTokenForTest(
+        operatorMcpOAuthIdentity("other", remoteServer.url),
+        "synthetic-other",
+      );
+      expect(toolNames(await first.getCatalog())).toEqual([]);
+      expect(initializes).toBe(1);
+      await saveMcpOAuthAccessTokenForTest(
+        operatorMcpOAuthIdentity("remote", remoteServer.url),
+        "synthetic-remote",
+      );
+      expect(toolNames(await catalogFor(first))).toEqual(["probe"]);
+      expect(toolNames(await catalogFor(makeRuntime()))).toEqual(["probe"]);
+      expect(toolNames(await catalogFor(otherWorkspace))).toEqual(["probe"]);
+      expect(initializes).toBe(4);
+    });
+  },
+);
 
 afterEach(async () => {
   await Promise.all(runtimes.splice(0).map((runtime) => runtime.dispose()));

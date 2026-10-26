@@ -231,7 +231,16 @@ export async function completeEmbeddedAttemptAfterTurn(
       }
     }
     await finalizeHarnessContextEngineTurn({
-      ...attempt,
+      admittedRunContext: attempt.admittedRunContext,
+      sessionKey: attempt.sessionKey,
+      sessionTarget: attempt.sessionTarget,
+      sessionFile: attempt.sessionFile,
+      config: attempt.config,
+      modelId: attempt.modelId,
+      requestedModelId: attempt.requestedModelId,
+      modelContextWindow: attempt.modelContextWindow,
+      fallbackReason: attempt.fallbackReason,
+      degradedReason: attempt.degradedReason,
       abortSignal: input.runAbortController.signal,
       contextEngine: activeContextEngine,
       promptError: Boolean(promptError),
@@ -524,6 +533,11 @@ export function createEmbeddedAttemptExternalAbortController(input: {
     },
     dispose: () => {
       removeListener?.();
+      // Retained abort reasons can keep this controller after its attempt ends.
+      abortActiveSession = undefined;
+      abortRun = undefined;
+      isCompactionPendingOrRetrying = undefined;
+      isCompactionInFlight = undefined;
     },
     setActiveSessionAbort: (abort) => {
       abortActiveSession = abort;

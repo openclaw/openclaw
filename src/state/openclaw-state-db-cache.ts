@@ -329,16 +329,11 @@ function publishOpenClawStateDatabase(
   return database;
 }
 
-function getCachedOpenClawStateDatabase(pathname: string, options?: { readOnly: true }) {
-  return withCachedOpenClawStateDatabase(pathname, options, (database) => database);
-}
-
-/** Keep the admitted revision live while a synchronous reader consumes its row facts. */
-function withCachedOpenClawStateDatabase<T>(
+/** Looking up an admitted handle does not consume schema or row facts. */
+function getCachedOpenClawStateDatabase(
   pathname: string,
-  options: { readOnly: true } | undefined,
-  operation: (database: OpenClawStateDatabase) => T,
-): T | undefined {
+  options?: { readOnly: true },
+): OpenClawStateDatabase | undefined {
   const resolvedPath = resolveDatabasePath({ path: pathname });
   const maintenance = getOpenClawDatabaseMaintenanceScope();
   if (options?.readOnly) {
@@ -351,13 +346,24 @@ function withCachedOpenClawStateDatabase<T>(
   if (runtimeFailure) {
     throw runtimeFailure;
   }
-  return cacheAdmission.read(resolvedPath, (database) => {
+  const database = cachedDatabases.get(resolvedPath);
+  if (database) {
     if (borrowers.get(database.db)?.retiring) {
       throw new Error(`OpenClaw state database native borrower cleanup is pending: ${pathname}`);
     }
     touchStateDatabase(database);
-    return operation(database);
-  });
+  }
+  return database;
+}
+
+/** Keep the admitted revision live while a synchronous reader consumes its row facts. */
+function withCachedOpenClawStateDatabase<T>(
+  pathname: string,
+  options: { readOnly: true } | undefined,
+  operation: (database: OpenClawStateDatabase) => T,
+): T | undefined {
+  const database = getCachedOpenClawStateDatabase(pathname, options);
+  return database && cacheAdmission.read(database, operation);
 }
 
 function getOpenClawStateDatabaseIfOpenAtPath(pathname: string): OpenClawStateDatabase | undefined {

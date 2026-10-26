@@ -236,13 +236,14 @@ describe("memory embedding query retry cancellation", () => {
 
   it("retries provider success that arrives after each embedding deadline", async () => {
     vi.useFakeTimers();
-    vi.setSystemTime(0);
+    let elapsedMs = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
     const operationSignals: AbortSignal[] = [];
     const embedQuery = vi.fn<EmbeddingProvider["embed"]>(async (_input, options) => {
       if (options?.signal) {
         operationSignals.push(options.signal);
       }
-      vi.setSystemTime(Date.now() + 11);
+      elapsedMs += 11;
       return [1, 0, 0, 0];
     });
     const manager = createEmbeddingQueryRetryHarness(embedQuery, 10);

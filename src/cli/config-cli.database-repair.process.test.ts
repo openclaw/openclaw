@@ -3,14 +3,10 @@ import path from "node:path";
 import { afterAll, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
-import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
-import { localStateOwnerFixtureEntrypoint } from "./cli-entrypoint.test-support.js";
-import { runCliProcessChild } from "./cli-process-child.test-helpers.js";
+import { runStateOwnerCli, stateOwnerEnv } from "./cli-process-fixture.test-support.js";
 
 const roots = useAutoCleanupTempDirTracker(afterAll);
-const entrypoint = resolveRuntimeWorkerArgv(
-  resolveRuntimeWorkerUrl(localStateOwnerFixtureEntrypoint),
-);
+
 const database = {
   engine: "postgres",
   postgres: {
@@ -55,25 +51,16 @@ async function fixture(existingState = false) {
     await fs.mkdir(path.dirname(statePath));
     await fs.writeFile(statePath, originalState);
   }
-  const env: NodeJS.ProcessEnv = {
-    PATH: process.env.PATH,
-    SystemRoot: process.env.SystemRoot,
-    HOME: root,
-    USERPROFILE: root,
-    OPENCLAW_HOME: root,
+  const env: NodeJS.ProcessEnv = stateOwnerEnv(root, {
     OPENCLAW_STATE_DIR: root,
-    OPENCLAW_CONFIG_PATH: configPath,
-    OPENCLAW_NO_RESPAWN: "1",
-    OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
     OPENCLAW_DEBUG: "1",
-    NODE_DISABLE_COMPILE_CACHE: "1",
-  };
+  });
   return {
     root,
     configPath,
     env,
     async run(args: string[], code = 0, input?: string) {
-      const result = await runCliProcessChild({ nodeArgs: [...entrypoint, ...args], env, input });
+      const result = await runStateOwnerCli(env, args, input);
       expect(result.code, result.stderr).toBe(code);
       return result;
     },
@@ -207,10 +194,10 @@ it("validates the redirected source after selecting its engine", async () => {
     env: { vars: { OPENCLAW_STATE_DIR: targetDir } },
   });
   await writeJson(targetPath, { gateway: { port: "invalid" } });
-  const result = await runCliProcessChild({
-    nodeArgs: [...entrypoint, "config", "validate", "--json"],
-    env: { ...env, OPENCLAW_CONFIG_PATH: undefined, OPENCLAW_STATE_DIR: undefined },
-  });
+  const result = await runStateOwnerCli(
+    { ...env, OPENCLAW_CONFIG_PATH: undefined, OPENCLAW_STATE_DIR: undefined },
+    ["config", "validate", "--json"],
+  );
   expect(result.code, result.stderr).toBe(1);
   expect(JSON.parse(result.stdout)).toMatchObject({ valid: false, path: targetPath });
   for (const dir of [bootstrapDir, targetDir]) {

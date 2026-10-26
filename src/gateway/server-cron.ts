@@ -21,7 +21,6 @@ import { resolveCronJobBoundSessionKeys } from "../cron/job-session-bindings.js"
 import { cronScriptFailureMetadata } from "../cron/script-failure.js";
 import { CronService, type CronEvent } from "../cron/service.js";
 import { resolveCronSessionTargetSessionKey } from "../cron/session-target.js";
-import { getCronJobsStoreRevision } from "../cron/store.js";
 import { createCronScriptRuntime } from "../cron/trigger-script.js";
 import type { CronJob } from "../cron/types.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
@@ -29,7 +28,6 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { emitLegacyHeartbeatCronOutcome } from "../infra/heartbeat-events.js";
-import { readHeartbeatSummarySnapshot } from "../infra/heartbeat-summary-snapshot.js";
 import { mergeSsrFPolicies } from "../infra/net/ssrf.js";
 import { listConfiguredMessageChannels } from "../infra/outbound/channel-selection.js";
 import { getChildLogger, getResolvedLoggerSettings, toPinoLikeLogger } from "../logging.js";
@@ -78,6 +76,7 @@ import {
   resolveGatewayCronOriginDeliveryContext,
   runGatewayCronSessionEvent,
 } from "./server-cron-event-dispatch.js";
+import { createGatewayCronHeartbeatSummary } from "./server-cron-heartbeat-summary.js";
 import { describeCronInferenceMigration } from "./server-cron-inference.js";
 import {
   dispatchGatewayCronFinishedNotifications,
@@ -198,6 +197,7 @@ export function buildGatewayCronService(params: {
         createCronStreamSandboxExecutor({
           scheduler: params.scheduler,
           storePath,
+          storeKey: cron.getStoreKey(),
           getRuntimeConfig,
           getJob: (id) => cron.getJob(id),
           assertCurrent: () => {
@@ -330,19 +330,12 @@ export function buildGatewayCronService(params: {
     }
   };
 
-  // Store revisions also cover SDK writes that do not emit cron events.
-  let heartbeatSummary: { cfg: OpenClawConfig; revision: number; jobs: CronJob[] } | undefined;
-  const readHeartbeatSummary = async (cfg: OpenClawConfig) => {
-    const revision = getCronJobsStoreRevision(storePath);
-    if (heartbeatSummary?.cfg === cfg && heartbeatSummary.revision === revision) {
-      return heartbeatSummary.jobs;
-    }
-    const jobs = await readHeartbeatSummarySnapshot(cfg, storePath);
-    if (!stopped && revision === getCronJobsStoreRevision(storePath)) {
-      heartbeatSummary = { cfg, revision, jobs };
-    }
-    return jobs;
-  };
+  const heartbeatSummary = createGatewayCronHeartbeatSummary({
+    storePath,
+    prepareStoreKey: () => cron.prepareStoreKey(),
+    isStopped: () => stopped,
+  });
+  const readHeartbeatSummary = (cfg: OpenClawConfig) => heartbeatSummary.read(cfg);
   const legacyMonitorJobs = new Map<string, CronJob>();
   let legacyProjectionClosed = false;
   let legacyProjectionRevision = 0;
@@ -923,7 +916,7 @@ export function buildGatewayCronService(params: {
   let schedulingResume: Deferred | undefined;
   const stopCronLifecycle = (preserveExitWatchers = false) => {
     stopped = true;
-    heartbeatSummary = undefined;
+    heartbeatSummary.clear();
     started = false;
     legacyProjectionClosed = true;
     legacyProjectionRevision += 1;

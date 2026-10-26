@@ -11,6 +11,7 @@ import { withEnvAsync } from "../../../test-utils/env.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { suppressedInlineImageFacts } from "./image-media-facts.test-support.js";
 import {
+  buildPromptImageFailureNotice,
   detectAndLoadPromptImages,
   detectImageReferences,
   hydratePromptMediaMessages,
@@ -109,6 +110,26 @@ describe("structured prompt media replay", () => {
       __openclaw: { media: [expect.objectContaining({ path: missingPath })] },
     });
     expect(result).toHaveProperty("content", [{ type: "text", text }]);
+  });
+
+  it("asks the active turn to resend a recorded image it cannot read", async () => {
+    const media = mediaAt(path.join(workspaceDir, "missing.png"));
+    const message = {
+      role: "user",
+      content: "here",
+      __openclaw: { media, mediaImageLayout: { slots: [{ kind: "offloaded", factIndex: 0 }] } },
+    } as unknown as AgentMessage;
+    const onCurrentTurnImageFailure = vi.fn();
+    const result = await hydratePromptMediaMessages([message], {
+      ...options(),
+      workspaceOnly: true,
+      onCurrentTurnImageFailure,
+    });
+    expect(onCurrentTurnImageFailure).toHaveBeenCalledExactlyOnceWith(1);
+    expect(result[0]).toHaveProperty("content", [
+      { type: "text", text: "here" },
+      { type: "text", text: buildPromptImageFailureNotice(1) },
+    ]);
   });
 
   it("dedupes the rendered alias of a private macOS path", async () => {

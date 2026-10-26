@@ -20,11 +20,9 @@ import { t } from "../i18n/index.ts";
 import { retireStoredGoalOperations } from "../lib/chat/goal-operation-storage.ts";
 import { readConnectionAuthReason } from "../lib/connection-hints.ts";
 import { formatUiError, formatUiExternalText } from "../lib/format-error.ts";
-import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
-import { resolveSessionKey } from "../lib/sessions/index.ts";
+import { resolveSessionKey } from "../lib/sessions/navigation.ts";
 import { readSessionDefaults } from "../lib/sessions/session-key.ts";
 import { generateUUID } from "../lib/uuid.ts";
-import { resolveControlUiAuthCandidates } from "./control-ui-auth.ts";
 import { createGatewayCanvasSurfaceLease } from "./gateway-canvas-surface.ts";
 import {
   createGatewayControlUiReloadOptions,
@@ -39,6 +37,7 @@ import {
 } from "./gateway-observers.ts";
 import { readSuspensionPhase } from "./gateway-readiness.ts";
 import { createAvailabilityIndicators } from "./gateway-store.availability.ts";
+import { updateGatewayAvatarContext } from "./gateway-store.avatar-context.ts";
 import { createGatewayCredentials } from "./gateway-store.credentials.ts";
 import { createGatewayDeferredIntents } from "./gateway-store.deferred-intents.ts";
 import { createDeviceCredentialMethods } from "./gateway-store.device-credential.ts";
@@ -95,6 +94,8 @@ export function createApplicationGateway(
     selfUser: undefined,
   };
   let client: GatewayBrowserClient | null = null;
+  const updateAvatarContext = (hello?: GatewayHelloOk) =>
+    updateGatewayAvatarContext(client, connection, options.resourceBasePath, hello);
   const selfProfile = createGatewaySelfProfile({
     getSnapshot: () => snapshot,
     getConnection: () => connection,
@@ -366,19 +367,6 @@ export function createApplicationGateway(
       everConnected = false;
     }
     connection = nextConnection;
-    // Both connection setup and hello bind resources to this connection's credentials.
-    const updateAvatarContext = (hello?: GatewayHelloOk) => {
-      setAvatarGatewayOrigin(
-        nextConnection.gatewayUrl,
-        resolveControlUiAuthCandidates({
-          hello,
-          settings: nextConnection,
-          password: nextConnection.password,
-        }),
-        options.resourceBasePath,
-      );
-    };
-    updateAvatarContext();
     updateSettings(
       {
         gatewayUrl: nextConnection.gatewayUrl,
@@ -515,6 +503,7 @@ export function createApplicationGateway(
         if (client !== nextClient || snapshot.phase !== "connected") {
           return;
         }
+        updateAvatarContext(nextClient.hello ?? undefined);
         retireStoredGoalOperations(nextConnection.gatewayUrl, nextClient.recoveryScope);
         void deferredIntents.flush();
         setSnapshot({});
@@ -532,6 +521,7 @@ export function createApplicationGateway(
         canvasSurface.stop();
         if (readConnectionAuthReason(error?.details) || error?.code === "PAIRING_REQUIRED") {
           nextClient.retireOfflineRecoveryScope?.();
+          updateAvatarContext();
           everConnected = false;
           credentials.retire(false);
         }
@@ -626,6 +616,7 @@ export function createApplicationGateway(
       }),
     });
     client = nextClient;
+    updateAvatarContext();
     setConnectionSnapshot({
       client: nextClient,
       // Keep the shell mounted while a fresh client attempts event-gap
@@ -681,6 +672,9 @@ export function createApplicationGateway(
     },
     start: () => connect(),
     stop: () => {
+      if (client?.offlineRecoveryRetired) {
+        updateAvatarContext(snapshot.hello ?? undefined);
+      }
       stopped = true;
       deferredIntents.discard();
       clearOfflineIndicatorTimer();

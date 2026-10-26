@@ -1,8 +1,9 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { queryObjects } from "node:v8";
+import { promiseHooks, queryObjects } from "node:v8";
 import { expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { readResponseWithLimit } from "../http-body.js";
+import { makeStallingStream } from "../http-body.test-support.js";
 import { responseWithAbortSignal, wrapGuardedBodyStream } from "./guarded-body-stream.js";
 
 it("releases abandoned bodies before and after attaching their abort listener", async () => {
@@ -10,12 +11,7 @@ it("releases abandoned bodies before and after attaching their abort listener", 
   async function abandon(mode: "prefetched" | "unread" | "partial") {
     const cleaned = createDeferredCore();
     const cancel = vi.fn();
-    const source = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(new Uint8Array([1]));
-      },
-      cancel,
-    });
+    const source = makeStallingStream([new Uint8Array([1])], cancel);
     const wrapped = wrapGuardedBodyStream({
       body: source,
       cleanup: cleaned.resolve,
@@ -82,22 +78,35 @@ it.each([true, false])("releases cancellation resources (upstream failure=%s)", 
   }
 });
 
-it("releases the source reader lock while preserving a read failure", async () => {
-  const expected = new Error("source read failed");
-  const cleanup = vi.fn();
-  const source = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.error(expected);
-    },
-  });
-  const wrapped = wrapGuardedBodyStream({ body: source, cleanup });
-  const reader = wrapped.getReader();
+it.each(["read", "refresh"])(
+  "releases the source reader lock while preserving a %s failure",
+  async (failureSource) => {
+    const expected = new Error("source read failed");
+    const cleanup = vi.fn();
+    const source = new ReadableStream<Uint8Array>({
+      start(controller) {
+        if (failureSource === "read") {
+          controller.error(expected);
+        } else {
+          controller.enqueue(new Uint8Array([1]));
+        }
+      },
+    });
+    const wrapped = wrapGuardedBodyStream({
+      body: source,
+      cleanup,
+      refreshTimeout() {
+        throw expected;
+      },
+    });
+    const reader = wrapped.getReader();
 
-  await expect(reader.read()).rejects.toBe(expected);
-  reader.releaseLock();
-  expect(cleanup).toHaveBeenCalledOnce();
-  expect(source.locked).toBe(false);
-});
+    await expect(reader.read()).rejects.toBe(expected);
+    reader.releaseLock();
+    expect(cleanup).toHaveBeenCalledOnce();
+    expect(source.locked).toBe(false);
+  },
+);
 it("preserves response metadata across clones", async () => {
   const source = new Response("payload");
   Object.defineProperties(source, {
@@ -130,3 +139,78 @@ it("attaches the abort listener only when body consumption starts", async () => 
   await expect(read).rejects.toBe(reason);
   reader.releaseLock();
 });
+
+// Bun does not implement V8 promise hooks; the lifecycle tests above still run there.
+it.skipIf(Boolean(process.versions.bun))(
+  "forwards 1,000 chunks without per-chunk continuations or an extra async promise",
+  async () => {
+    const chunk = new Uint8Array([1, 2, 3]);
+    let sent = 0;
+    let refreshed = 0;
+    let released = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (sent++ < 1_000) {
+          controller.enqueue(chunk);
+        } else {
+          controller.close();
+        }
+      },
+    });
+    const upstream = body.getReader();
+    const read = upstream.read.bind(upstream);
+    const continuations = new Set<unknown>();
+    vi.spyOn(body, "getReader").mockReturnValue(upstream);
+    upstream.read = () => {
+      const pending = read();
+      const then = pending.then.bind(pending);
+      // Observe allocation work at the actual upstream read boundary, forwarding
+      // the original promise and handlers without replacing stream behavior.
+      // oxlint-disable-next-line unicorn/no-thenable -- This is already a Promise; spies add settlement promises.
+      pending.then = (fulfilled, rejected) => {
+        if (fulfilled) {
+          continuations.add(fulfilled);
+        }
+        if (rejected) {
+          continuations.add(rejected);
+        }
+        return then(fulfilled, rejected);
+      };
+      return pending;
+    };
+    const reader = wrapGuardedBodyStream({
+      body,
+      refreshTimeout: () => refreshed++,
+      cleanup: () => {
+        released++;
+      },
+    }).getReader();
+    let promises = 0;
+    let received = 0;
+    let identical = true;
+    const stop = promiseHooks.createHook({ init: () => promises++ });
+    try {
+      for (;;) {
+        const next = await reader.read();
+        if (next.done) {
+          break;
+        }
+        identical &&= next.value === chunk;
+        received++;
+      }
+    } finally {
+      stop();
+      reader.releaseLock();
+    }
+    expect({ received, refreshed, released, identical }).toEqual({
+      received: 1_000,
+      refreshed: 1_000,
+      released: 1,
+      identical: true,
+    });
+    // Six promises per chunk include source/consumer reads and stream backpressure.
+    // Leave room for fixed setup/EOF work, but reject another promise per chunk.
+    expect(promises).toBeLessThan(6_100);
+    expect(continuations.size).toBeLessThanOrEqual(2);
+  },
+);

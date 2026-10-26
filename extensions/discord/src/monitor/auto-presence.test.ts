@@ -35,6 +35,12 @@ function createController(
   };
 }
 
+const autoPresence = (intervalMs: number, minUpdateIntervalMs: number) => ({
+  enabled: true,
+  intervalMs,
+  minUpdateIntervalMs,
+});
+
 function createStore(params?: {
   cooldownUntil?: number;
   cooldownReason?: "rate_limit";
@@ -90,8 +96,7 @@ describe("discord auto presence", () => {
   });
 
   it("clears expired cooldowns without sending presence while disconnected", async () => {
-    const now = Date.now();
-    const store = createStore({ cooldownUntil: now - 1, cooldownReason: "rate_limit" });
+    const store = createStore({ cooldownUntil: Date.now() - 1, cooldownReason: "rate_limit" });
     const updatePresence = vi.fn();
     const controller = createController({
       gateway: { isConnected: false, updatePresence },
@@ -103,17 +108,12 @@ describe("discord auto presence", () => {
   });
 
   it("recovers from exhausted to online once a profile becomes usable", async () => {
-    const now = Date.now();
-    let store = createStore({ cooldownUntil: now + 60_000, cooldownReason: "rate_limit" });
+    let store = createStore({ cooldownUntil: Date.now() + 60_000, cooldownReason: "rate_limit" });
     const controller = createController({
       discordConfig: {
         activity: "working",
         activityType: 0,
-        autoPresence: {
-          enabled: true,
-          intervalMs: 5_000,
-          minUpdateIntervalMs: 1_000,
-        },
+        autoPresence: autoPresence(5_000, 1_000),
       },
       loadAuthStore: () => store,
     });
@@ -131,13 +131,7 @@ describe("discord auto presence", () => {
 
   it("re-applies presence on refresh even when signature is unchanged", async () => {
     const controller = createController({
-      discordConfig: {
-        autoPresence: {
-          enabled: true,
-          intervalMs: 60_000,
-          minUpdateIntervalMs: 60_000,
-        },
-      },
+      discordConfig: { autoPresence: autoPresence(60_000, 60_000) },
     });
 
     await controller.start();

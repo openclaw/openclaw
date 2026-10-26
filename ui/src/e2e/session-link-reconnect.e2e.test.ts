@@ -2,7 +2,7 @@ import { expect, it } from "vitest";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
-import { expectRequestCountStable } from "./chat-flow.test-support.ts";
+import { getInitialHistoryRequests } from "./chat-initial-history.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -67,7 +67,7 @@ suite.define(() => {
           match: resolutionMatch,
           after: initialTitleResolutions,
         });
-        expect(await requests("chat.startup", destinationMatch)).toEqual([]);
+        expect(await getInitialHistoryRequests(gateway, destinationKey)).toEqual([]);
 
         // Hold the new hello so navigation can change while the old route is interrupted.
         await gateway.deferNext("connect");
@@ -91,13 +91,6 @@ suite.define(() => {
             .getByText(destinationText, { exact: true })
             .waitFor({ state: "visible" });
         }
-        await expectRequestCountStable(
-          gateway,
-          "chat.startup",
-          navigateAway ? 0 : 1,
-          500,
-          destinationMatch,
-        );
         expect(await requests("chat.history", destinationMatch)).toEqual([]);
         expect(new URL(page.url()).pathname).toBe(navigateAway ? "/activity" : destinationPath);
         expect(await page.evaluate(() => history.length)).toBe(
@@ -107,6 +100,9 @@ suite.define(() => {
           initialTitleResolutions + (navigateAway ? 1 : 2),
         );
         expect(await page.locator(".lazy-view-error").count()).toBe(0);
+        expect(await getInitialHistoryRequests(gateway, destinationKey)).toHaveLength(
+          navigateAway ? 0 : 1,
+        );
       });
     },
   );

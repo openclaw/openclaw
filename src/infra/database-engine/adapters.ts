@@ -126,7 +126,13 @@ export const databaseEngineAdapters: {
               }
             }
           }
-          store.beforeMigrate?.(db, version - 1);
+          store.beforeMigrate?.(
+            db,
+            version - 1,
+            new Set(
+              snapshot.catalog.filter((fact) => fact.kind === "table").map((fact) => fact.table),
+            ),
+          );
           db.exec(migration.sql);
           db.prepare("UPDATE openclaw_schema_meta SET version = ? WHERE store = ?").run(
             version,

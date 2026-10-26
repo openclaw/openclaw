@@ -1,13 +1,10 @@
 import assert from "node:assert/strict";
 import { queryObjects } from "node:v8";
-import { afterAll, beforeAll, expect, it, onTestFinished } from "vitest";
+import { beforeAll, expect, it, onTestFinished } from "vitest";
 import { bindGatewayControlUiIngressHost } from "../gateway/remote-control-ui-ingress-host.js";
 import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
+import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type {
   GatewayControlUiIngressOpenOptionsV2,
   GatewayControlUiIngressV2,
@@ -23,11 +20,13 @@ import { startPluginServices, type PluginServicesHandle } from "./services.test-
 import { createPluginRecord } from "./status.test-helpers.js";
 import type { OpenClawPluginServiceContext } from "./types.js";
 
-let state: OpenClawTestState;
 beforeAll(async () => {
-  state = await createOpenClawTestState({ label: "ingress-capability", layout: "state-only" });
+  const state = await createOpenClawTestState({
+    label: "ingress-capability",
+    layout: "state-only",
+  });
+  return () => state.cleanup();
 });
-afterAll(() => state?.cleanup());
 
 async function fixture(recordOptions: Partial<PluginRecord> = {}) {
   const registry = createEmptyPluginRegistry();

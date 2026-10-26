@@ -48,6 +48,16 @@ const widgetSnapshot = (
 ): ChatSessionSnapshot => ({ messages, pagination: { hasMore: false }, sessionId, ...extras });
 
 describe("session message cache", () => {
+  it("retains reaction facts only across the same session incarnation", () => {
+    const { read, write } = createCacheContext();
+    const summaries = [{ emoji: "👍", count: 1, identities: [{ id: "peer" }] }];
+    write(widgetSnapshot(["first"], "session-1", { messageReactions: { reply: summaries } }));
+    write(widgetSnapshot(["new history"], "session-1"));
+    expect(read()?.messageReactions).toEqual({ reply: summaries });
+    write(widgetSnapshot(["replacement"], "session-2"));
+    expect(read()?.messageReactions).toBeUndefined();
+  });
+
   it("retains a scoped board through transcript replacement and clears it authoritatively", () => {
     const cache: ChatMessageCache = new Map();
     const host = {

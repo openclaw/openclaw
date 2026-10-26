@@ -2,7 +2,7 @@ import { createMemo } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { flattenTranslations } from "../../../../scripts/lib/control-ui-i18n-sync-plan.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ChannelAccountSnapshot, CronJob, ToolsCatalogResult } from "../../api/types.ts";
+import type { ChannelAccountSnapshot, ToolsCatalogResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { zh_CN } from "../../i18n/locales/zh-CN.ts";
@@ -21,6 +21,7 @@ import { createAgentCronPresenter } from "./agent-cron-presenter.ts";
 import { createAgentFileEditors } from "./agent-file-state.test-helpers.ts";
 import {
   createAgentViewTestProps as createProps,
+  createCronJob,
   inertAgentFileControls,
   primaryModelPicker,
 } from "./agents-view.test-helpers.ts";
@@ -79,21 +80,6 @@ function renderFiles(
   );
 }
 
-function createCronJob(id: string, overrides: Partial<CronJob> = {}): CronJob {
-  return {
-    id,
-    name: `Scheduled job ${id}`,
-    enabled: true,
-    createdAtMs: 0,
-    updatedAtMs: 0,
-    schedule: { kind: "cron", expr: "0 9 * * *" },
-    sessionTarget: "main",
-    wakeMode: "next-heartbeat",
-    payload: { kind: "systemEvent", text: "ping" },
-    ...overrides,
-  } as CronJob;
-}
-
 function directText(element: Element | null | undefined): string | undefined {
   return Array.from(element?.childNodes ?? [])
     .filter((node) => node.nodeType === Node.TEXT_NODE)
@@ -137,6 +123,8 @@ describe("renderAgents", () => {
         />
       );
     });
+    await vi.dynamicImportSettled();
+
     await waitForSolid(() =>
       expect(
         mounted.container.querySelector(
@@ -212,6 +200,8 @@ describe("renderAgents", () => {
       },
       container,
     );
+
+    await vi.dynamicImportSettled();
 
     await waitForSolid(() =>
       expect(container.textContent).toContain("Implicit default-agent reminder"),
@@ -410,10 +400,13 @@ describe("renderAgents", () => {
       container,
     );
 
+    await vi.dynamicImportSettled();
+
     const tabs = [...container.querySelectorAll(".agents-hub-tabs .hub-tab")].map((tab) =>
       directText(tab),
     );
     expect(tabs.slice(-2)).toEqual([t("agents.tabs.cronJobs"), t("agents.tabs.memory")]);
+    await vi.dynamicImportSettled();
     await waitForSolid(() =>
       expect(
         container.querySelector("openclaw-agent-memory-panel .agent-memory-panel__header"),

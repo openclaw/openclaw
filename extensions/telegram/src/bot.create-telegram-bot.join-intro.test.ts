@@ -23,12 +23,9 @@ const { runWithTelegramSpooledReplayUpdate, getTelegramSpooledReplayDeferredPart
 const chatId = -1001234567890;
 const room = { id: chatId, type: "supergroup", title: "Incident Response" };
 
-function createMembershipContext(
-  newStatus: "left" | "member" = "member",
-  options: { isForum?: boolean } = {},
-) {
+function createMembershipContext(newStatus: "left" | "member" = "member", isForum = false) {
   const membership = {
-    chat: { ...room, is_forum: options.isForum },
+    chat: { ...room, is_forum: isForum },
     from: { id: 12345, is_bot: false, first_name: "Sam", last_name: "Rivera" },
     date: 1736380800,
     old_chat_member: { status: "left", user: telegramBotInfoForTest },
@@ -120,45 +117,33 @@ describe("Telegram group join introductions", () => {
   });
 
   it.each([
-    {
-      name: "disabled General topic",
-      topic: { enabled: false },
-      roomAllowed: false,
-      agentId: "main",
-    },
-    {
-      name: "disabled General policy",
-      topic: { groupPolicy: "disabled" as const },
-      roomAllowed: false,
-      agentId: "main",
-    },
-    {
-      name: "General topic agent",
-      topic: { agentId: "triage" },
-      roomAllowed: true,
-      agentId: "triage",
-    },
-  ])("respects the $name for a forum introduction", async ({ topic, roomAllowed, agentId }) => {
-    const handler = await registerJoinHandler({
-      groupPolicy: "open",
-      groups: { [chatId]: { topics: { "1": topic } } },
-    });
-    await handler(createMembershipContext("member", { isForum: true }));
+    ["disabled General topic", { enabled: false }, false, "main"],
+    ["disabled General policy", { groupPolicy: "disabled" }, false, "main"],
+    ["General topic agent", { agentId: "triage" }, true, "triage"],
+  ] as const)(
+    "respects the %s for a forum introduction",
+    async (_name, topic, roomAllowed, agentId) => {
+      const handler = await registerJoinHandler({
+        groupPolicy: "open",
+        groups: { [chatId]: { topics: { "1": topic } } },
+      });
+      await handler(createMembershipContext("member", true));
 
-    expect(reportChannelRoomJoinMock).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        conversationId: String(chatId),
-        deliverTo: String(chatId),
-        threadId: 1,
-        roomAllowed,
-        route: expect.objectContaining({
-          agentId,
-          sessionKey: expect.stringContaining(":topic:1"),
+      expect(reportChannelRoomJoinMock).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          conversationId: String(chatId),
+          deliverTo: String(chatId),
+          threadId: 1,
+          roomAllowed,
+          route: expect.objectContaining({
+            agentId,
+            sessionKey: expect.stringContaining(":topic:1"),
+          }),
         }),
-      }),
-    );
-    expect(getChatSpy).not.toHaveBeenCalled();
-  });
+      );
+      expect(getChatSpy).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not start an introduction after its ingress owner was aborted", async () => {
     const frame = await replayJoin({

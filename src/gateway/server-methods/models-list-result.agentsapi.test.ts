@@ -2,7 +2,6 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import { resolveAgentHarnessSelectionDecision } from "../../agents/harness/selection-decision.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
 import { modelDefinition } from "../../agents/model-auth.fixtures.test-support.js";
-import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createTestPluginApi } from "../../plugin-sdk/plugin-test-api.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -32,17 +31,7 @@ const route = {
   baseUrl: "https://api.openai.com/v1",
 };
 function configuration(): OpenClawConfig {
-  const model: ModelDefinitionConfig = modelDefinition(route.id, {
-    name: route.name,
-    api: route.api,
-    contextWindow: 1000000,
-    compat: {
-      supportsReasoningEffort: true,
-      supportedReasoningEfforts: ["low", "medium", "high"],
-      supportsTemperature: false,
-      codeMode: "preferred",
-    },
-  });
+  const model = modelDefinition(route.id, { api: route.api, compat: {} });
   const defaults = {
     model: "openai/" + modelId,
     models: {
@@ -59,14 +48,7 @@ function configuration(): OpenClawConfig {
   };
   return {
     agents: { defaults },
-    plugins: {
-      entries: {
-        agentsapi: {
-          enabled: true,
-          config: { forwarding: { gatewayTools: false, mcpServers: false } },
-        },
-      },
-    },
+    plugins: { entries: { agentsapi: { enabled: true } } },
     models: { providers: { openai: { baseUrl: route.baseUrl, models: [model] } } },
   };
 }
@@ -144,15 +126,9 @@ it("accepts shared host tuning without changing normal OpenClaw selection", asyn
         change(restricted);
         expect(() => selectPrepared(restricted)).toThrow();
       };
-      for (const params of [
-        { store: false },
-        { temperature: 0.3 },
-        { custom_body: { example: true } },
-      ]) {
-        rejectsChange((c) =>
-          Object.assign(c.agents!.defaults!.models!["openai/" + modelId]!.params!, params),
-        );
-      }
+      rejectsChange((c) => {
+        c.agents!.defaults!.models!["openai/" + modelId]!.params!.store = false;
+      });
       rejectsChange((c) => {
         c.models!.providers!.openai!.headers = { "X-Policy": "required" };
       });

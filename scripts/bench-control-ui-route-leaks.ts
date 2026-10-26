@@ -2,7 +2,7 @@
 // node --import ./scripts/tsx.mjs scripts/bench-control-ui-route-leaks.ts \
 //   --bundle-dir BASE --compare-bundle-dir HEAD --mode all --pairs 10 --profiles local,remote
 import { createHash } from "node:crypto";
-import { readFile, writeFile } from "node:fs/promises";
+import { appendFile, readFile, writeFile } from "node:fs/promises";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
@@ -18,6 +18,10 @@ import {
   pathForRoute,
   type RouteId,
 } from "../ui/src/app-route-paths.ts";
+import {
+  createRfbRawFrame,
+  installScriptedRfbServer,
+} from "../ui/src/e2e/desktop-rfb-test-support.ts";
 import { CONFIG_PAGE_IDS } from "../ui/src/pages/config/config-sections.ts";
 import { createControlUiE2eArtifactDir } from "../ui/src/test-helpers/control-ui-e2e-artifacts.ts";
 import type { MockGatewayWindow } from "../ui/src/test-helpers/control-ui-e2e-contract.ts";
@@ -28,11 +32,47 @@ import {
   resolvePlaywrightChromiumExecutablePath,
   defaultControlUiFeatureMethods,
   prepareControlUiMockGatewayScenario,
+  type ControlUiMockGatewayScenario,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
 import { parityBaseScenario, parityWorkboardScenario } from "./control-ui-parity/fixtures.ts";
 import { startControlUiBenchGatewayServer } from "./lib/control-ui-bench-gateway-server.ts";
 import { summarizeScriptCoverage } from "./lib/control-ui-cold-load-trace.ts";
 import { createInteractionFixture } from "./lib/control-ui-interaction-scenarios.ts";
+import {
+  captureDockScenario,
+  DOCK_SCENARIO_IDS,
+  dockAsset,
+  dockContextOptions,
+  dockFixture,
+  dockTarget,
+  installDockInputTrace,
+  isDockScenario,
+  type DockAssetRequest,
+  type DockScenarioId,
+} from "./lib/control-ui-route-dock-scenarios.ts";
+import { qualifyRouteNetworkClock, routeNetworkPhase } from "./lib/control-ui-route-network.ts";
+import {
+  appsGatewayInitScript,
+  appsPilotFixture,
+  appsPilotTarget,
+  appsProbeSnapshot,
+  clickFirstAppAndWait,
+  isAppsOpenId,
+  isAppsPilotId,
+  startAppsPilotSandbox,
+  verifyFirstAppAndClose,
+  waitForAppsCatalog,
+  type AppsPilotId,
+} from "./route-leaks-apps-pilot.ts";
+
+type ProbeRoute =
+  | RouteId
+  | "sharing"
+  | AppsPilotId
+  | "desktop-document"
+  | "portal-embedded"
+  | DockScenarioId;
+let appsSandbox: Awaited<ReturnType<typeof startAppsPilotSandbox>> | undefined;
 
 const { values } = parseArgs({
   options: {
@@ -50,7 +90,8 @@ const { values } = parseArgs({
 });
 if (values.help) {
   console.log(
-    "--bundle-dir BASE [--compare-bundle-dir HEAD] --routes sessions,cron,usage --mode coverage|timing|all --pairs 10 --profiles local,remote [--screenshots] [--output DIR]. Default routes include every Settings section, Sessions, Cron, Agents, Usage, Plugins, Workboard and sharing. Optional --interactions agents-files,cron-history,cron-transcript probes follow cold readiness. Coverage and timing run in separate fresh contexts; comparison timings include a base/base control.",
+    "--bundle-dir BASE [--compare-bundle-dir HEAD] --routes sessions,cron,usage --mode coverage|timing|all --pairs 10 --profiles local,remote [--screenshots] [--output DIR]. Default routes include every Settings section, Sessions, Cron, Agents, Usage, Plugins, Workboard and sharing. Select --routes systems,portals,desktop-document for the optional Desktop probes; they use a scripted RFB endpoint and loaded synthetic portal. portal-embedded navigates Chat and opens its Portal panel through native controls, including iframe readiness and the rail CSS cascade. Optional --interactions agents-files,cron-history,cron-transcript probes follow cold readiness. Security uses --routes advanced with one settings-security-immediate or settings-security-idle interaction. Coverage and timing run in separate fresh contexts; comparison timings include a base/base control. Apps packet aliases: apps-catalog,apps-open-immediate,apps-open-idle. First App opens use real catalog navigation, actual launch/view receipts and the native sandbox; no prior Chat visit or manual preload.",
+    `Browser/Reader cells: ${DOCK_SCENARIO_IDS.join(",")}. Each owns its cold/native first-open phases; do not combine with --interactions.`,
   );
   process.exit(0);
 }
@@ -89,26 +130,75 @@ const defaults = [
   ]),
 ];
 const routes = (values.routes?.split(",") ?? defaults).map((id) => {
-  if (id !== "sharing" && !APP_ROUTE_IDS.some((route) => route === id)) {
+  if (
+    id !== "sharing" &&
+    id !== "desktop-document" &&
+    id !== "portal-embedded" &&
+    !isAppsPilotId(id) &&
+    !isDockScenario(id) &&
+    !APP_ROUTE_IDS.some((route) => route === id)
+  ) {
     throw new Error(`Unknown route: ${id}`);
   }
-  return id as RouteId | "sharing";
+  return id as ProbeRoute;
 });
+const appsProbesEnabled = routes.some(isAppsPilotId);
 const interactionIds = values.interactions?.split(",") ?? [];
-const knownInteractions = ["agents-files", "cron-history", "cron-transcript"];
+if (routes.some(isDockScenario) && interactionIds.length) {
+  throw new Error(`Dock cells (${DOCK_SCENARIO_IDS.join(",")}) own their native first-open phases`);
+}
+const securityInteractions = ["settings-security-immediate", "settings-security-idle"];
+const knownInteractions = [
+  "agents-files",
+  "cron-history",
+  "cron-transcript",
+  ...securityInteractions,
+];
 for (const id of interactionIds) {
   if (!knownInteractions.includes(id)) {
     throw new Error(`Unknown interaction: ${id}; choose ${knownInteractions.join(",")}`);
   }
 }
+const securityInteraction = interactionIds.find((id) => securityInteractions.includes(id));
+if (
+  securityInteraction &&
+  (interactionIds.length !== 1 || routes.length !== 1 || routes[0] !== "advanced")
+) {
+  throw new Error(
+    "Security navigation requires only --routes advanced and one Security interaction",
+  );
+}
 const output = createControlUiE2eArtifactDir("route-leaks", values.output);
 const configPages = new Set<string>(CONFIG_PAGE_IDS);
 const fields =
   ':is(input:not(:disabled),textarea:not(:disabled),select:not(:disabled),button[role="combobox"]:not(:disabled),[role="switch"]:not([aria-disabled="true"]))';
-function routeTarget(id: RouteId | "sharing", sessionKey: string) {
+function routeTarget(
+  id: ProbeRoute,
+  sessionKey: string,
+): {
+  route: RouteId | "desktop-document" | "browser-document";
+  pathname: string;
+  search: string;
+  selector: string | undefined;
+  requiredMethods?: string[];
+} {
+  if (isDockScenario(id)) {
+    return dockTarget(id);
+  }
+  if (isAppsPilotId(id)) {
+    return appsPilotTarget();
+  }
   const route =
-    id === "sharing" || id === "settings" ? "chat" : id === "config" ? "appearance" : id;
-  const selectors: Partial<Record<RouteId | "sharing", string>> = {
+    id === "sharing" || id === "settings" || id === "portal-embedded"
+      ? "chat"
+      : id === "config"
+        ? "appearance"
+        : id;
+  const selectors: Partial<Record<ProbeRoute, string>> = {
+    systems: ".systems-desktop .desktop-surface canvas",
+    portals: "openclaw-portals-page .portals-preview__frame",
+    "portal-embedded": "openclaw-portals-page[embedded] .portals-preview__frame",
+    "desktop-document": ".desktop-document .desktop-surface canvas",
     channels: "openclaw-channels-page .channels-item, openclaw-channels-page .channels-empty",
     connection: "openclaw-connection-page .settings-input-with-hint input:not(:disabled)",
     profile:
@@ -155,12 +245,29 @@ function routeTarget(id: RouteId | "sharing", sessionKey: string) {
   return {
     route,
     pathname:
-      id === "sharing"
-        ? controlUiSessionPath(sessionKey)
-        : id === "agents"
-          ? pathForAgentPanel("main")
-          : pathForRoute(id),
+      id === "desktop-document"
+        ? `/focus/desktop/session/${encodeURIComponent(sessionKey)}`
+        : id === "sharing" || id === "portal-embedded"
+          ? controlUiSessionPath(sessionKey)
+          : id === "agents"
+            ? pathForAgentPanel("main")
+            : pathForRoute(id),
     search: id === "model-setup" ? "?firstRun=explicit" : "",
+    ...(id === "desktop-document"
+      ? { requiredMethods: ["sessions.describe", "environments.status", "desktop.observe"] }
+      : id === "systems"
+        ? {
+            requiredMethods: [
+              "environments.list",
+              "node.list",
+              "system.info",
+              "backup.status",
+              "desktop.observe",
+            ],
+          }
+        : id === "portals" || id === "portal-embedded"
+          ? { requiredMethods: ["portal.list"] }
+          : {}),
     selector:
       selectors[id] ??
       selectors[route] ??
@@ -168,7 +275,20 @@ function routeTarget(id: RouteId | "sharing", sessionKey: string) {
   };
 }
 
-function fixtureFor(build: { buildId: string; version: string }, id: RouteId | "sharing") {
+function fixtureFor(
+  build: { buildId: string; version: string },
+  id: ProbeRoute,
+  baseUrl: string,
+): ControlUiMockGatewayScenario {
+  if (isDockScenario(id)) {
+    return dockFixture(build, id);
+  }
+  if (isAppsPilotId(id)) {
+    if (!appsSandbox) {
+      throw new Error("Apps sandbox was not prepared");
+    }
+    return appsPilotFixture(fixtureFor(build, "apps", baseUrl), appsSandbox.descriptor);
+  }
   const fixture = createInteractionFixture(build.buildId, build.version);
   const workboard = id === "workboard" ? parityWorkboardScenario : {};
   return {
@@ -176,6 +296,9 @@ function fixtureFor(build: { buildId: string; version: string }, id: RouteId | "
     ...workboard,
     serverBuildId: build.buildId,
     serverVersion: build.version,
+    ...(id === "systems" || id === "desktop-document"
+      ? { deferredMethods: ["desktop.observe"] }
+      : {}),
     ...(id === "profile" || id === "sharing"
       ? { presenceUsers: parityBaseScenario.presenceUsers }
       : {}),
@@ -199,6 +322,17 @@ function fixtureFor(build: { buildId: string; version: string }, id: RouteId | "
         ...(id === "sharing" ? ["session.visibility.set", "session.members.listEvidence"] : []),
         ...(id === "profile" || id === "sharing" ? ["users.self", "users.list"] : []),
         ...(id === "secrets" ? ["secrets.store.list"] : []),
+        ...(id === "portals" || id === "portal-embedded" ? ["portal.list"] : []),
+        ...(id === "systems" || id === "desktop-document"
+          ? [
+              "desktop.observe",
+              "environments.list",
+              "environments.status",
+              "node.list",
+              "system.info",
+              "backup.status",
+            ]
+          : []),
         ...(id === "search" ? ["webSearch.status"] : []),
         ...(id === "model-setup" ? ["openclaw.setup.detect"] : []),
         ...(id === "cron" && interactionIds.length ? ["cron.history"] : []),
@@ -207,6 +341,50 @@ function fixtureFor(build: { buildId: string; version: string }, id: RouteId | "
     methodResponses: {
       ...fixture.methodResponses,
       "config.schema": parityBaseScenario.methodResponses?.["config.schema"],
+      ...(id === "portals" || id === "portal-embedded"
+        ? {
+            "portal.list": {
+              portals: [
+                {
+                  id: "route-probe",
+                  title: "Route probe portal",
+                  port: 3000,
+                  listenPort: 3000,
+                  tokenQuery: "openclaw_portal=synthetic",
+                  createdAtMs: 1,
+                  publicUrl: `${baseUrl}/route-probe-portal/`,
+                  url: `${baseUrl}/route-probe-portal/?openclaw_portal=synthetic`,
+                },
+              ],
+            },
+          }
+        : {}),
+      ...(id === "systems" || id === "desktop-document"
+        ? {
+            "desktop.observe": {
+              transport: "rfb",
+              wsPath: "/desktop/observe?token=route-probe",
+              expiresAtMs: 60_000,
+              control: false,
+            },
+            "environments.status": {
+              id: "gateway",
+              type: "local",
+              label: "Synthetic Gateway",
+              status: "available",
+              desktop: true,
+            },
+            "node.list": { nodes: [] },
+            "backup.status": { targets: [], schedules: [], locations: [] },
+          }
+        : {}),
+      ...(id === "desktop-document"
+        ? {
+            "sessions.describe": {
+              session: { ...fixture.sessions[0], placement: { state: "local" } },
+            },
+          }
+        : {}),
       ...(id === "profile" || id === "sharing"
         ? {
             "users.self": parityBaseScenario.methodResponses?.["users.self"],
@@ -270,6 +448,23 @@ function fixtureFor(build: { buildId: string; version: string }, id: RouteId | "
           }
         : {}),
       "backup.status": { targets: [], schedules: [], locations: [] },
+      ...(id === "systems"
+        ? {
+            "environments.list": {
+              environments: [
+                {
+                  id: "gateway",
+                  type: "local",
+                  label: "Synthetic Gateway",
+                  status: "available",
+                  desktop: true,
+                },
+              ],
+              profiles: [],
+            },
+            "system.info": parityBaseScenario.methodResponses?.["system.info"],
+          }
+        : {}),
       ...(id === "agents" && interactionIds.includes("agents-files")
         ? {
             "agents.files.list": {
@@ -368,15 +563,7 @@ const variants = [
       ]
     : []),
 ];
-type AssetRequest = {
-  requestId: string;
-  url: string;
-  type: string;
-  initiator: unknown;
-  wireBytes?: number;
-  status?: number;
-  failed?: string;
-};
+type AssetRequest = DockAssetRequest;
 type CoverageEntry = Awaited<ReturnType<Page["coverage"]["stopJSCoverage"]>>[number];
 const evaluatedUrls = (entries: CoverageEntry[]) =>
   entries
@@ -448,9 +635,9 @@ async function save() {
     JSON.stringify(
       {
         workload:
-          "cold direct navigation; real production HTTP assets, synthetic in-document WebSocket Gateway; interaction routes receive a fixed minimum 2,000 ms post-ready think time on every variant",
+          "cold direct navigation; real production HTTP assets, synthetic in-document WebSocket Gateway; portal-embedded includes Chat navigation and native Portal panel activation; Agents/Cron interactions use a minimum2,000ms think time, Apps immediate has no intentional wait and Apps idle has a minimum2,000ms wait without manual preloading",
         instrumentation:
-          "Timing uses renderer-main-frame threadTicks without coverage. Optional interaction wallMs/CPU are automation-to-ready intervals after cold capture, not INP; evaluatedScriptUrls uses positive top-level V8 ranges. Parsed scripts without execution are reported separately. Import references are regex-extracted chunk references, not a complete source import graph. V8 coverage also belongs to the page target; workerUrls records any dedicated-worker coverage/network-emulation gap. Coverage is a separate pass bounded by usable route readiness and includes requested preloads absent from V8 as unexecuted. requestedRawBytes counts the full source of requested files; loadedBytes includes only completed/evaluated files. pendingJsRequests identifies incomplete transfer accounting, and jsResources contains completed Resource Timing entries. Remote emulates 100ms HTTP latency and 10Mbps; synthetic WS has no simulated RTT. Workboard plugin fixture is built from the current checkout and held identical across bundle variants; its bytes are reported separately from UI-bundle code. Ready requires route success and a visible enabled page control, then one animation frame. Sharing includes opening the menu after the chat becomes usable. Matching Agents/Cron interactions give every variant the same minimum 2,000 ms post-ready think time, recording warmup CPU/wall time even when no passive preload files exist. Passive preload completion may extend that window. Cold-only and sharing runs have no think-time delay.",
+          "Timing uses renderer-main-frame threadTicks without coverage. Optional interaction wallMs/CPU are automation-to-ready intervals after cold capture, not INP; evaluatedScriptUrls uses positive top-level V8 ranges. Parsed scripts without execution are reported separately. Import references are regex-extracted chunk references, not a complete source import graph. V8 coverage also belongs to the page target; workerUrls records any dedicated-worker coverage/network-emulation gap. Coverage is a separate pass bounded by usable route readiness and includes requested preloads absent from V8 as unexecuted. requestedRawBytes counts the full source of requested files; loadedBytes includes only completed/evaluated files. pendingJsRequests identifies incomplete transfer accounting, and jsResources contains completed Resource Timing entries. Remote emulates 100ms HTTP latency and 10Mbps; synthetic WS has no simulated RTT. Workboard plugin fixture is built from the current checkout and held identical across bundle variants; its bytes are reported separately from UI-bundle code. Ready requires route success and a visible enabled page control, then one animation frame. Security navigation additionally requires the checked/enabled Browser control and all four enabled tool profiles, with no fixture override selected; config/schema receipt counts must stay unchanged. Security before/after observations have their own timestamps, and no hover/focus/import or artificial preload precedes its native click. Its readinessToActionMs records observation overhead; coverage and screenshots are written after its action. Sharing includes opening the menu after the chat becomes usable. Apps first-open cells trigger before cold summarization/screenshot/file work; immediate has no intentional delay, idle has a native minimum2000ms from cold readiness without manual warming. Each cell starts a fresh context, with base eager imports observed naturally. Phase network data retains raw CDP MonotonicTime timestamps and the actual NavigationStart metric; RPC method counts use direct same-document performance.now. Native counter/Close assertions happen after first-open CPU cutoff. Cold-plus-first-open elapsed includes the idle interval and automation gap and does not waive any individual regression. Page-target V8/CPU excludes inner App and worker execution; frame URLs retain that scope gap. Matching Agents/Cron interactions give every variant the same minimum 2,000 ms post-ready think time, recording warmup CPU/wall time even when no passive preload files exist. Passive preload completion may extend that window. Cold-only and sharing runs have no think-time delay.",
         acceptance:
           "A measured real-scenario win of at least 5%; no median readiness regression over 5% or worse p95 unless an A/A control attributes the movement to host noise. On a noisy host, run 20 interleaved pairs and judge affected threadTicks CPU plus structural byte/request counts. Coverage-instrumented timings are diagnostic only.",
         buildVariants: variants,
@@ -473,18 +660,22 @@ async function metrics(cdp: CDPSession) {
 
 function cpuDelta(before: Record<string, number>, after: Record<string, number>) {
   return Object.fromEntries(
-    [
-      ["taskMs", "TaskDuration"],
-      ["scriptMs", "ScriptDuration"],
-      ["layoutMs", "LayoutDuration"],
-      ["styleMs", "RecalcStyleDuration"],
-    ].map(([name, metric]) => {
-      const first = before[metric!],
-        last = after[metric!];
+    (
+      [
+        ["taskMs", "TaskDuration", 1_000],
+        ["scriptMs", "ScriptDuration", 1_000],
+        ["layoutMs", "LayoutDuration", 1_000],
+        ["styleMs", "RecalcStyleDuration", 1_000],
+        ["layoutCount", "LayoutCount", 1],
+        ["recalcStyleCount", "RecalcStyleCount", 1],
+      ] as const
+    ).map(([name, metric, scale]) => {
+      const first = before[metric],
+        last = after[metric];
       if (!Number.isFinite(first) || !Number.isFinite(last) || last! < first!) {
         throw new Error(`Invalid threadTicks metric: ${metric}`);
       }
-      return [name!, 1000 * (last! - first!)];
+      return [name, scale * (last! - first!)];
     }),
   );
 }
@@ -547,11 +738,175 @@ async function summarizeCoverage(
   };
 }
 
+async function runSecurityNavigation(
+  page: Page,
+  cdp: CDPSession,
+  id: string,
+  mode: string,
+  readyMs: number,
+  requests: Map<string, AssetRequest>,
+  prefix: string,
+  coldCoverage: CoverageEntry[] = [],
+): Promise<InteractionResult> {
+  const observe = () =>
+    page.evaluate(() => ({
+      observedAtMs: performance.now(),
+      modulePreloads: [
+        ...document.querySelectorAll<HTMLLinkElement>('link[rel="modulepreload"]'),
+      ].map((link) => link.href),
+      resources: performance.getEntriesByType("resource").map((entry) => {
+        const resource = entry as PerformanceResourceTiming;
+        return {
+          url: resource.name,
+          initiatorType: resource.initiatorType,
+          responseEnd: resource.responseEnd,
+          encodedBytes: resource.encodedBodySize,
+          rawBytes: resource.decodedBodySize,
+        };
+      }),
+      rpc: (window as MockGatewayWindow).openclawControlUiE2eGateway
+        ?.findRequests()
+        .reduce<Record<string, number>>((counts, request) => {
+          counts[request.method] = (counts[request.method] ?? 0) + 1;
+          return counts;
+        }, {}),
+    }));
+  const minimumThinkTimeMs = id.endsWith("-idle") ? 2_000 : 0;
+  let idleCoverage: CoverageEntry[] | undefined;
+  let idleCpu: Record<string, number> | undefined;
+  if (minimumThinkTimeMs) {
+    const beforeIdle = await metrics(cdp);
+    if (mode === "coverage") {
+      await page.coverage.startJSCoverage({
+        resetOnNavigation: false,
+        reportAnonymousScripts: false,
+      });
+    }
+    await page.evaluate(async (until) => {
+      const remaining = until - performance.now();
+      if (remaining > 0) {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, remaining);
+        });
+      }
+    }, readyMs + minimumThinkTimeMs);
+    idleCoverage = mode === "coverage" ? await page.coverage.stopJSCoverage() : undefined;
+    idleCpu = cpuDelta(beforeIdle, await metrics(cdp));
+  }
+  // Observe without focusing, hovering, importing, or warming the destination.
+  const beforeAction = await observe();
+  const prior = new Map(Array.from(requests, ([key, request]) => [key, { ...request }]));
+  if (mode === "coverage") {
+    await page.coverage.startJSCoverage({
+      resetOnNavigation: false,
+      reportAnonymousScripts: false,
+    });
+  }
+  const before = await metrics(cdp);
+  const started = await page.evaluate(() => performance.now());
+  await page.locator(`a.settings-sidebar__item[href="${pathForRoute("security")}"]`).click();
+  await page.waitForFunction(() => {
+    const snapshot = window.openclawControlUi?.snapshot();
+    const root = document.querySelector(".security-page");
+    const rows = [...(root?.querySelectorAll(".settings-row") ?? [])];
+    const browser = rows.find(
+      (row) => row.querySelector(".settings-row__title")?.textContent?.trim() === "Browser enabled",
+    );
+    const tools = rows.find(
+      (row) => row.querySelector(".settings-row__title")?.textContent?.trim() === "Available tools",
+    );
+    const toolProfiles = [
+      ...(tools?.querySelectorAll<HTMLInputElement>('input[type="radio"]') ?? []),
+    ];
+    const visible = (node: Element | undefined) =>
+      Boolean(node?.getClientRects().length && getComputedStyle(node).visibility !== "hidden");
+    return (
+      snapshot?.routeReady &&
+      snapshot.route?.status === "success" &&
+      snapshot.route.matches[0]?.routeId === "security" &&
+      snapshot.route.pendingMatches.length === 0 &&
+      visible(browser) &&
+      visible(tools) &&
+      browser?.querySelector(
+        'input[type="checkbox"]:checked:not(:disabled):not([aria-disabled="true"])',
+      ) &&
+      toolProfiles.map((input) => input.value).join(",") === "minimal,coding,messaging,full" &&
+      toolProfiles.every(
+        (input) =>
+          !input.checked && !input.disabled && input.getAttribute("aria-disabled") !== "true",
+      )
+    );
+  });
+  const ended = await page.evaluate(
+    () =>
+      new Promise<number>((resolve) => {
+        requestAnimationFrame(() => resolve(performance.now()));
+      }),
+  );
+  const atEnd = Array.from(requests.values(), (request) => ({ ...request }));
+  const coverage = mode === "coverage" ? await page.coverage.stopJSCoverage() : undefined;
+  const cpu = cpuDelta(before, await metrics(cdp));
+  const afterAction = await observe();
+  for (const method of ["config.get", "config.schema"]) {
+    const beforeReads = beforeAction.rpc?.[method] ?? 0;
+    const afterReads = afterAction.rpc?.[method] ?? 0;
+    if (beforeReads !== 1 || afterReads !== beforeReads) {
+      throw new Error(
+        `Security navigation changed ${method} receipts: ${beforeReads} -> ${afterReads}`,
+      );
+    }
+  }
+  const alerts = await page.locator('[role="alert"]:visible').allTextContents();
+  if (alerts.length) {
+    throw new Error(`Security navigation visible alerts: ${alerts.join("; ")}`);
+  }
+  if (idleCoverage) {
+    await writeFile(
+      path.join(output, `${prefix}-${id}-idle-v8.json`),
+      JSON.stringify(idleCoverage),
+    );
+  }
+  if (coverage) {
+    await writeFile(path.join(output, `${prefix}-${id}-v8.json`), JSON.stringify(coverage));
+  }
+  return {
+    id,
+    targetRoute: "security",
+    minimumThinkTimeMs,
+    coldReadyMs: readyMs,
+    coldEvaluatedScriptUrls: evaluatedUrls(coldCoverage),
+    idleCpu,
+    idleEvaluatedScriptUrls: idleCoverage ? evaluatedUrls(idleCoverage) : undefined,
+    beforeAction,
+    afterAction,
+    actionStartedMs: started,
+    readinessToActionMs: started - readyMs,
+    wallMs: ended - started,
+    cpu,
+    jsRequestsBeforeAction: [...prior.values()].filter((request) =>
+      /\.m?js$/u.test(new URL(request.url).pathname),
+    ),
+    newJsRequests: atEnd.filter(
+      (request) => !prior.has(request.requestId) && /\.m?js$/u.test(new URL(request.url).pathname),
+    ),
+    previousPendingCompleted: atEnd.filter(
+      (request) =>
+        prior.has(request.requestId) &&
+        prior.get(request.requestId)!.wireBytes === undefined &&
+        request.wireBytes !== undefined,
+    ),
+    evaluatedScriptUrls: coverage ? evaluatedUrls(coverage) : undefined,
+  };
+}
+
 console.info("[route-leaks] starting production HTTP server");
 const server = await startControlUiBenchGatewayServer(base.root);
 console.info(`[route-leaks] HTTP ready: ${server.baseUrl}; launching isolated browser`);
 let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
 try {
+  if (appsProbesEnabled) {
+    appsSandbox = await startAppsPilotSandbox();
+  }
   browser = await chromium.launch({
     executablePath: resolvePlaywrightChromiumExecutablePath(chromium.executablePath()),
     headless: true,
@@ -575,6 +930,7 @@ try {
             await server.selectBuild(variant.root);
             const context = await browser.newContext({
               viewport: { width: 1440, height: 1000 },
+              ...(isDockScenario(route) ? dockContextOptions(route) : {}),
               serviceWorkers: "block",
             });
             const page = await context.newPage();
@@ -590,17 +946,26 @@ try {
               pair,
               hostLoad,
             };
+            let pendingColdCoverage: CoverageEntry[] | undefined;
+            let abortAfterContext = false;
             try {
               console.info(`[route-leaks] ${prefix}: preparing synthetic fixture`);
               const prepared = await prepareControlUiMockGatewayScenario(
-                fixtureFor(variant.build, route),
+                fixtureFor(variant.build, route, server.baseUrl),
               );
               const fixture = prepared.scenario;
               const bootstrapPayload = JSON.stringify(createControlUiMockBootstrapConfig(fixture));
               server.setFixtureReader((pathname) =>
                 pathname === CONTROL_UI_BOOTSTRAP_CONFIG_PATH
                   ? { body: bootstrapPayload, contentType: "application/json" }
-                  : prepared.assets.get(pathname),
+                  : (route === "portals" || route === "portal-embedded") &&
+                      pathname === "/route-probe-portal/"
+                    ? {
+                        body: '<!doctype html><title>Route probe portal</title><h1 data-route-probe-portal>Route probe portal</h1><button type="button">Ready</button>',
+                        contentType: "text/html",
+                      }
+                    : ((isDockScenario(route) ? dockAsset(route, pathname) : undefined) ??
+                      prepared.assets.get(pathname)),
               );
               const target = routeTarget(route, fixture.sessionKey!);
               result.target = target;
@@ -610,7 +975,16 @@ try {
                 throw new Error(String(result.gap));
               }
               await page.addInitScript("globalThis.__name = (fn) => fn");
-              await page.addInitScript({ content: createControlUiMockGatewayInitScript(fixture) });
+              if (isDockScenario(route)) {
+                await page.addInitScript(installDockInputTrace);
+              }
+              const gatewayInit = createControlUiMockGatewayInitScript(fixture);
+              await page.addInitScript({
+                content:
+                  isAppsPilotId(route) || (appsProbesEnabled && route === "memory")
+                    ? appsGatewayInitScript(gatewayInit)
+                    : gatewayInit,
+              });
               await page.addInitScript(
                 ({ attribute, bootstrap }) => {
                   const apply = () => {
@@ -651,6 +1025,7 @@ try {
                   url: event.request.url,
                   type: event.type ?? "",
                   initiator: event.initiator,
+                  timestampSeconds: event.timestamp,
                 }),
               );
               cdp.on("Network.responseReceived", (event) => {
@@ -663,12 +1038,14 @@ try {
                 const request = requests.get(event.requestId);
                 if (request) {
                   request.wireBytes = event.encodedDataLength;
+                  request.finishedTimestampSeconds = event.timestamp;
                 }
               });
               cdp.on("Network.loadingFailed", (event) => {
                 const request = requests.get(event.requestId);
                 if (request) {
                   request.failed = event.errorText;
+                  request.failedTimestampSeconds = event.timestamp;
                 }
               });
               if (mode === "coverage") {
@@ -682,14 +1059,86 @@ try {
               await page.goto(`${server.baseUrl}${target.pathname}${target.search}`, {
                 waitUntil: "domcontentloaded",
               });
+              if (isDockScenario(route)) {
+                await captureDockScenario({
+                  id: route,
+                  mode: mode as "coverage" | "timing",
+                  page,
+                  cdp,
+                  requests,
+                  before,
+                  output,
+                  prefix,
+                  screenshots: values.screenshots,
+                  result,
+                  metrics,
+                  cpuDelta,
+                  summarize: (coverage, phaseRequests) =>
+                    summarizeCoverage(coverage, phaseRequests, variant.root, prepared.assets),
+                });
+                if (errors.length) {
+                  throw new Error(errors.join("\n"));
+                }
+                continue;
+              }
+              if (route === "systems" || route === "desktop-document") {
+                const rfb = await installScriptedRfbServer(page);
+                await page.waitForFunction(
+                  () =>
+                    ((window as MockGatewayWindow).openclawControlUiE2eGateway?.findRequests(
+                      "desktop.observe",
+                    ).length ?? 0) > 0,
+                );
+                await page.evaluate(() =>
+                  (window as MockGatewayWindow).openclawControlUiE2eGateway?.resolveDeferred(
+                    "desktop.observe",
+                  ),
+                );
+                await page.waitForFunction(
+                  () =>
+                    (window as typeof window & { desktopRfbEvents?: () => string[] })
+                      .desktopRfbEvents?.()
+                      .includes("authenticated:1") === true,
+                );
+                await rfb.send([createRfbRawFrame()]);
+              }
               if (route === "sharing") {
                 await page
                   .locator(".chat-pane-cache__pane--active .agent-chat__composer-combobox textarea")
                   .waitFor();
                 await page.locator(".chat-pane__sharing-trigger").click();
               }
+              if (isAppsPilotId(route)) {
+                await waitForAppsCatalog(page);
+              }
+              if (route === "portal-embedded") {
+                const pane = page.locator(".chat-pane-cache__pane--active");
+                await pane.locator(".agent-chat__composer-combobox textarea").waitFor();
+                const toggle = pane
+                  .locator(".sidebar-region__panels-toggle")
+                  .getByRole("button", { name: "Panels", exact: true });
+                if ((await toggle.getAttribute("aria-expanded")) !== "true") {
+                  await toggle.click();
+                }
+                const launcher = pane.locator(".side-panel-launcher");
+                const newTab = pane
+                  .locator('[data-region-header="side"]')
+                  .getByRole("button", { name: "New tab", exact: true });
+                await launcher.or(newTab).filter({ visible: true }).first().waitFor();
+                if (!(await launcher.isVisible())) {
+                  await newTab.click();
+                }
+                await launcher
+                  .getByRole("button")
+                  .filter({
+                    has: page
+                      .getByText("Portal", { exact: true })
+                      .and(page.locator(".side-panel-type-option__label")),
+                  })
+                  .click();
+              }
               await page.waitForFunction(
-                ({ routeId, selector }) => {
+                ({ routeId, probeRoute, selector, requiredMethods }) => {
                   const snapshot = window.openclawControlUi?.snapshot();
                   const approvalsSettled =
                     routeId !== "approvals" ||
@@ -703,12 +1152,63 @@ try {
                         .querySelector(".standing-grants-table .data-table-empty-state")
                         ?.textContent?.trim() ===
                         "No standing grants. Answer an automation approval with Always allow to mint one.");
+                  // SAFETY: Every measured page receives this fixture before navigation.
+                  const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
+                  const desktopSettled =
+                    (routeId !== "systems" && routeId !== "desktop-document") ||
+                    (() => {
+                      const panel = document.querySelector("openclaw-desktop-panel");
+                      const canvas =
+                        panel?.querySelector<HTMLCanvasElement>(".desktop-surface canvas");
+                      const pixel = canvas?.getContext("2d")?.getImageData(0, 0, 1, 1).data;
+                      const desktopRequests = gateway?.findRequests("desktop.observe") ?? [];
+                      const source = desktopRequests[0]?.params as
+                        | { source?: { kind?: string }; control?: boolean }
+                        | undefined;
+                      return (
+                        pixel?.join(",") === "24,180,160,255" &&
+                        source?.source?.kind === "host" &&
+                        source?.control === false &&
+                        panel?.querySelector('button[aria-label="Take control"]:not(:disabled)') !==
+                          null
+                      );
+                    })();
+                  const portalSettled =
+                    (probeRoute !== "portals" && probeRoute !== "portal-embedded") ||
+                    (() => {
+                      const frame =
+                        document.querySelector<HTMLIFrameElement>(".portals-preview__frame");
+                      return (
+                        frame?.contentDocument?.querySelector("[data-route-probe-portal]")
+                          ?.textContent === "Route probe portal" &&
+                        frame.contentDocument.querySelector("button:not(:disabled)") !== null
+                      );
+                    })();
+                  const portalRailSettled =
+                    probeRoute !== "portal-embedded" ||
+                    (() => {
+                      const identity = document.querySelector(
+                        "openclaw-portals-page[embedded] .portals-embedded__identity",
+                      );
+                      if (!identity) {
+                        return false;
+                      }
+                      const style = getComputedStyle(identity);
+                      return style.display === "grid" && style.gap === "3px";
+                    })();
                   return (
+                    desktopSettled &&
+                    portalSettled &&
+                    portalRailSettled &&
                     approvalsSettled &&
-                    snapshot?.routeReady &&
-                    snapshot.route?.status === "success" &&
-                    snapshot.route.matches[0]?.routeId === routeId &&
-                    snapshot.route.pendingMatches.length === 0 &&
+                    (routeId === "desktop-document" ||
+                      (snapshot?.routeReady &&
+                        snapshot.route?.status === "success" &&
+                        snapshot.route.matches[0]?.routeId === routeId &&
+                        snapshot.route.pendingMatches.length === 0)) &&
+                    requiredMethods.every(
+                      (method) => (gateway?.findRequests(method).length ?? 0) > 0,
+                    ) &&
                     [...document.querySelectorAll<HTMLElement>(selector)].some(
                       (node) =>
                         node.getClientRects().length &&
@@ -717,7 +1217,12 @@ try {
                     )
                   );
                 },
-                { routeId: target.route, selector: target.selector },
+                {
+                  routeId: target.route,
+                  probeRoute: route,
+                  selector: target.selector,
+                  requiredMethods: target.requiredMethods ?? [],
+                },
                 { timeout: 30_000, polling: "raf" },
               );
               const readyMs = await page.evaluate(
@@ -732,6 +1237,10 @@ try {
               );
               const coverageAtReady =
                 mode === "coverage" ? await page.coverage.stopJSCoverage() : undefined;
+              pendingColdCoverage = coverageAtReady;
+              result.jsRequestsColdCapture = requestsAtReady.filter((request) =>
+                /\.m?js$/u.test(new URL(request.url).pathname),
+              );
               const after = await metrics(cdp);
               result.readyMs = readyMs;
               result.workerUrls = page.workers().map((worker) => worker.url());
@@ -741,6 +1250,172 @@ try {
               result.cpu = cpuDelta(before, after);
               result.target = target;
               result.errors = errors;
+              // First App opens happen before cold summaries, screenshots, or file writes.
+              // Each route/variant already owns a fresh browser context: never visit Chat first.
+              let appsFirstAction: InteractionResult | undefined;
+              if (isAppsOpenId(route)) {
+                const navigationStart = after.NavigationStart!;
+                const warm = route === "apps-open-idle";
+                let warmCoverage: CoverageEntry[] | undefined;
+                const warmBefore = after;
+                if (warm && mode === "coverage") {
+                  await page.coverage.startJSCoverage({
+                    resetOnNavigation: false,
+                    reportAnonymousScripts: false,
+                  });
+                }
+                if (warm) {
+                  await page.evaluate(async (coldReady) => {
+                    const remaining = coldReady + 2_000 - performance.now();
+                    if (remaining > 0) {
+                      await new Promise<void>((resolve) => {
+                        setTimeout(resolve, remaining);
+                      });
+                    }
+                  }, readyMs);
+                }
+                const warmEnded = warm ? await page.evaluate(() => performance.now()) : readyMs;
+                if (warm && mode === "coverage") {
+                  warmCoverage = await page.coverage.stopJSCoverage();
+                }
+                const prior = new Map(
+                  Array.from(requests, ([key, request]) => [key, Object.assign({}, request)]),
+                );
+                if (mode === "coverage") {
+                  await page.coverage.startJSCoverage({
+                    resetOnNavigation: false,
+                    reportAnonymousScripts: false,
+                  });
+                }
+                const actionBefore = await metrics(cdp);
+                const { started, appSessionKey } = await page.evaluate(() => ({
+                  started: performance.now(),
+                  appSessionKey: window.openclawControlUi?.snapshot().sessionKey,
+                }));
+                if (!appSessionKey) {
+                  throw new Error("First App launch requires the live selected session");
+                }
+                await clickFirstAppAndWait(page);
+                const ended = await page.evaluate(
+                  () =>
+                    new Promise<number>((resolve) => {
+                      requestAnimationFrame(() => resolve(performance.now()));
+                    }),
+                );
+                const atEnd = Array.from(requests.values(), (request) =>
+                  Object.assign({}, request),
+                );
+                const stepCoverage =
+                  mode === "coverage" ? await page.coverage.stopJSCoverage() : undefined;
+                const actionAfter = await metrics(cdp);
+                appsFirstAction = {
+                  id: route,
+                  wallMs: ended - started,
+                  cpu: cpuDelta(actionBefore, actionAfter),
+                  actionStartedMs: started,
+                  actionReadyMs: ended,
+                  coldToActionGapMs: started - readyMs,
+                  intentionalThinkTimeMs: warm ? 2_000 : 0,
+                  phaseClockEvidence: {
+                    navigationStart,
+                    coldMetricTimestamp: after.Timestamp,
+                    actionBeforeMetricTimestamp: actionBefore.Timestamp,
+                    actionAfterMetricTimestamp: actionAfter.Timestamp,
+                  },
+                  coldPlusFirstOpenMs: ended,
+                  coldPlusFirstOpenCpu: cpuDelta(before, actionAfter),
+                  postColdThroughFirstOpenMs: ended - readyMs,
+                  warmupCpu: cpuDelta(warmBefore, actionBefore),
+                  warmupObservedEndMs: warmEnded,
+                  newJsRequests: atEnd.filter(
+                    (request) =>
+                      !prior.has(request.requestId) &&
+                      /\.m?js$/u.test(new URL(request.url).pathname),
+                  ),
+                  evaluatedScriptUrls: stepCoverage ? evaluatedUrls(stepCoverage) : undefined,
+                  warmupEvaluatedScriptUrls: warmCoverage ? evaluatedUrls(warmCoverage) : undefined,
+                };
+                result.interactions = [appsFirstAction];
+                if (stepCoverage) {
+                  await writeFile(
+                    path.join(output, `${prefix}-apps-open-v8.json`),
+                    JSON.stringify(stepCoverage),
+                  );
+                }
+                if (warmCoverage) {
+                  await writeFile(
+                    path.join(output, `${prefix}-apps-idle-v8.json`),
+                    JSON.stringify(warmCoverage),
+                  );
+                }
+                // Timestamped method observations are read after CPU cutoff, then cutoff-filtered.
+                result.appsColdProbe = await appsProbeSnapshot(page, readyMs);
+                appsFirstAction.preClickProbe = await appsProbeSnapshot(page, started);
+                const readyProbe = await appsProbeSnapshot(page, ended);
+                appsFirstAction.readyProbe = readyProbe;
+                const clock = qualifyRouteNetworkClock(
+                  atEnd,
+                  navigationStart,
+                  readyProbe.completedResourcesAtCutoff,
+                );
+                result.appsClockQualification = clock;
+                if (!clock.passed) {
+                  abortAfterContext = true;
+                  throw new Error(
+                    "Apps clock qualification failed; phase totals withheld and remaining contexts aborted",
+                  );
+                }
+                appsFirstAction.networkPhases = {
+                  cold: routeNetworkPhase(atEnd, navigationStart, 0, readyMs),
+                  postColdBeforeClick: routeNetworkPhase(atEnd, navigationStart, readyMs, started),
+                  firstOpen: routeNetworkPhase(atEnd, navigationStart, started, ended),
+                };
+                appsFirstAction.frameUrlsAtReady = page.frames().map((frame) => frame.url());
+                if (stepCoverage) {
+                  appsFirstAction.phaseAllScriptCoverage = await summarizeCoverage(
+                    stepCoverage,
+                    atEnd.filter(
+                      (request) =>
+                        new URL(request.url).origin === server.baseUrl &&
+                        new URL(request.url).pathname.startsWith("/assets/") &&
+                        /\.m?js$/u.test(new URL(request.url).pathname),
+                    ),
+                    variant.root,
+                    prepared.assets,
+                  );
+                }
+                if (values.screenshots && pair === 0) {
+                  await page.screenshot({
+                    path: path.join(output, `${prefix}-apps-first-ready.png`),
+                  });
+                }
+                appsFirstAction.nativeBehavior = await verifyFirstAppAndClose(page, appSessionKey);
+              } else if (isAppsPilotId(route) || (appsProbesEnabled && route === "memory")) {
+                const probe = await appsProbeSnapshot(page, readyMs);
+                result.appsColdProbe = probe;
+                result.phaseClockEvidence = {
+                  navigationStart: after.NavigationStart,
+                  coldMetricTimestamp: after.Timestamp,
+                };
+                const clock = qualifyRouteNetworkClock(
+                  requestsAtReady,
+                  after.NavigationStart!,
+                  probe.completedResourcesAtCutoff,
+                );
+                result.appsClockQualification = clock;
+                if (!clock.passed) {
+                  abortAfterContext = true;
+                  throw new Error(
+                    "Apps clock qualification failed; phase totals withheld and remaining contexts aborted",
+                  );
+                }
+                if (
+                  route === "memory" &&
+                  Object.keys(probe.counts).some((method) => method.startsWith("mcp.app."))
+                ) {
+                  throw new Error("Memory control unexpectedly admitted an Apps request");
+                }
+              }
               const routeInteractions = interactionIds.filter((value) =>
                 value.startsWith(
                   route === "agents" ? "agents-" : route === "cron" ? "cron-" : "__none__",
@@ -787,11 +1462,37 @@ try {
                         getComputedStyle(node).visibility !== "hidden",
                     )
                     .map((node) => node.textContent),
+                  portalIdentity: (() => {
+                    const identity = document.querySelector(
+                      "openclaw-portals-page[embedded] .portals-embedded__identity",
+                    );
+                    if (!identity) {
+                      return null;
+                    }
+                    const style = getComputedStyle(identity);
+                    return { display: style.display, gap: style.gap };
+                  })(),
                 }),
                 readyMs,
               );
+              // Keep immediate navigation ahead of artifact analysis and screenshots.
+              const securityCell = securityInteraction
+                ? await runSecurityNavigation(
+                    page,
+                    cdp,
+                    securityInteraction,
+                    mode,
+                    readyMs,
+                    requests,
+                    prefix,
+                    coverageAtReady,
+                  )
+                : undefined;
               result.rpc = data.rpc;
               result.alerts = data.alerts;
+              if (route === "portal-embedded") {
+                result.portalIdentity = data.portalIdentity;
+              }
               const unexpectedAlerts = data.alerts.filter(
                 (alert) =>
                   !(
@@ -825,8 +1526,13 @@ try {
                   JSON.stringify(coverageAtReady),
                 );
               }
-              if (values.screenshots && pair === 0) {
-                await page.screenshot({ path: path.join(output, `${prefix}.png`) });
+              if (values.screenshots && pair === 0 && !isAppsOpenId(route)) {
+                await page.screenshot({
+                  path: path.join(
+                    output,
+                    securityCell ? `${prefix}-${securityInteraction}.png` : `${prefix}.png`,
+                  ),
+                });
               }
               // Keep coverage and screenshots even when the visible page is not usable.
               if (unexpectedAlerts.length) {
@@ -882,7 +1588,11 @@ try {
                   throw new Error(`Next panel evaluated before interaction: ${warmFiles[0]}`);
                 }
               }
-              result.interactions = [];
+              result.interactions = appsFirstAction
+                ? [appsFirstAction]
+                : securityCell
+                  ? [securityCell]
+                  : [];
               for (const id of routeInteractions) {
                 const cell: InteractionResult = { id };
                 try {
@@ -979,6 +1689,21 @@ try {
                 throw new Error(errors.join("\n"));
               }
             } catch (error) {
+              if (pendingColdCoverage) {
+                await writeFile(
+                  path.join(output, `${prefix}-cold-failure-v8.json`),
+                  JSON.stringify(pendingColdCoverage),
+                );
+              }
+              if (mode === "coverage") {
+                const failedCoverage = await page.coverage.stopJSCoverage().catch(() => []);
+                if (failedCoverage.length) {
+                  await writeFile(
+                    path.join(output, `${prefix}-failed-phase-v8.json`),
+                    JSON.stringify(failedCoverage),
+                  );
+                }
+              }
               result.error = String(error);
               result.errors = errors;
               await page
@@ -993,8 +1718,11 @@ try {
                 .catch(() => null);
             } finally {
               results.push(result);
-              await context.close();
-              await save();
+              try {
+                await appendFile(path.join(output, "samples.jsonl"), `${JSON.stringify(result)}\n`);
+              } finally {
+                await context.close();
+              }
               console.log(
                 JSON.stringify({
                   mode,
@@ -1008,6 +1736,12 @@ try {
                 }),
               );
             }
+            if (result.dockClockFailure) {
+              throw new Error("Dock clock qualification failed; stopped after saving the failure");
+            }
+            if (abortAfterContext) {
+              throw new Error("Apps clock qualification failed; stopped after saving the failure");
+            }
           }
         }
       }
@@ -1017,7 +1751,15 @@ try {
   try {
     await browser?.close();
   } finally {
-    await server.close();
+    try {
+      await appsSandbox?.close();
+    } finally {
+      try {
+        await server.close();
+      } finally {
+        await save();
+      }
+    }
   }
 }
 if (results.some((result) => result.error || result.interactions?.some((cell) => cell.error))) {

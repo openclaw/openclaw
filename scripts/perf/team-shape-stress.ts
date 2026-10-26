@@ -65,6 +65,8 @@ export function parseStressOptions(args: string[]) {
       mode: { type: "string", default: "both" },
       "smoke-seconds": { type: "string" },
       "fixture-only": { type: "boolean" },
+      "operator-model-policy": { type: "boolean" },
+      "gateway-preload": { type: "string" },
       port: { type: "string" },
       help: { type: "boolean" },
     },
@@ -117,6 +119,8 @@ export function parseStressOptions(args: string[]) {
     warmupMs: integer("warmup-ms", 0),
     mode: values.mode,
     fixtureOnly: values["fixture-only"] ?? false,
+    operatorModelPolicy: values["operator-model-policy"] ?? false,
+    gatewayPreload: values["gateway-preload"] ? path.resolve(values["gateway-preload"]) : undefined,
     port,
     help: values.help,
   };
@@ -173,6 +177,7 @@ async function main() {
   [--minutes 10 --pairs 2 --clients 65 --runs 4 --sessions 10800 --plugins 40]
   [--mode both|timing|allocation --poll-ms 25000 --list-weight 16 --round-ms 60000 --churn-ms 6000]
   [--warmup-ms 60000 --seed 1711 --transcript-mib 128]
+  [--operator-model-policy]
   --smoke-seconds 30 is setup proof only, never performance evidence.
 Timing and allocation are separate fresh-fixture passes. Pairs run AB then BA.
 Without --base, run candidate once per mode. See team-shape-stress.md.`);
@@ -270,9 +275,11 @@ Without --base, run candidate once per mode. See team-shape-stress.md.`);
             "--scenario",
             "memory-soak",
             "--team-stress",
+            ...(options.gatewayPreload ? ["--gateway-preload", options.gatewayPreload] : []),
             "--mixed-rpc",
             "--stress-tools",
             "--stress-subagents",
+            ...(options.operatorModelPolicy ? ["--operator-model-policy"] : []),
             "--clients",
             String(options.clients),
             "--exact-clients",

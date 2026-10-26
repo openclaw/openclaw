@@ -10,6 +10,7 @@ import {
 import { toErrorObject } from "../../infra/errors.js";
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import type { OutboundPayloadPlan } from "../../infra/outbound/reply-payload-parts.js";
+import { generateSecureInt } from "../../infra/secure-random.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
@@ -34,7 +35,6 @@ import {
   markReplyDispatchBeforeDeliverDeadlineOwned,
   runReplyDispatchBeforeDeliverStage,
 } from "./reply-dispatch-before-deliver.js";
-import { getHumanDelay, getHumanDelayMax } from "./reply-dispatch-delay.js";
 import {
   createReplyDispatchSettledCounts,
   isReplyDispatchDeliveryPending,
@@ -59,6 +59,30 @@ import type { ResponsePrefixContext } from "./response-prefix-template.js";
 import type { TypingController } from "./typing.js";
 
 export type { ReplyDispatchDeliveryOutcome };
+
+const DEFAULT_RANGE = { min: 800, max: 2500 };
+
+function resolveHumanDelayRange(config: HumanDelayConfig | undefined) {
+  if (!config?.mode || config.mode === "off") {
+    return undefined;
+  }
+  return config.mode === "custom"
+    ? { min: config.minMs ?? DEFAULT_RANGE.min, max: config.maxMs ?? DEFAULT_RANGE.max }
+    : DEFAULT_RANGE;
+}
+
+function getHumanDelay(config: HumanDelayConfig | undefined): number {
+  const range = resolveHumanDelayRange(config);
+  if (!range || range.max <= range.min) {
+    return range?.min ?? 0;
+  }
+  return range.min + generateSecureInt(range.max - range.min + 1);
+}
+
+function getHumanDelayMax(config: HumanDelayConfig | undefined): number {
+  const range = resolveHumanDelayRange(config);
+  return range ? Math.max(range.min, range.max) : 0;
+}
 
 type ReplyDispatchDeliveryOutcomeTracker = {
   promise: Promise<ReplyDispatchDeliveryOutcome>;

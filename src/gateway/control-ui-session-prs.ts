@@ -234,6 +234,10 @@ async function fetchBranchPullRequests(
   let items = parsePullList(
     await read.request(pullsByHeadUrl(context.owner, context.repo, head, read.apiBaseUrl)),
     read.host,
+  ).filter(
+    (item) =>
+      !item.headRepository ||
+      item.headRepository.toLowerCase() === `${item.owner}/${item.repo}`.toLowerCase(),
   );
   for (const candidate of context.forkHeadCandidates ?? []) {
     if (items.length > 0) {

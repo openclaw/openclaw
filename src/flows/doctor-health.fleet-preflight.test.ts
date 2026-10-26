@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import fs, { readFileSync as read } from "node:fs";
 import path from "node:path";
+import { expectDefined as required } from "@openclaw/normalization-core";
 import * as processIdentity from "@openclaw/proc-safe/identity";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 const { mocks, createDoctorRuntime, stubDoctorEnv } =
@@ -58,12 +59,6 @@ const withDoctorState: typeof import("./doctor-health.test-support.js").withDoct
 ) => withOpenClawTestState({ scenario: "minimal", env }, run);
 
 const repairOptions = { repair: true, nonInteractive: true };
-function required<T>(value: T | null | undefined, message: string): T {
-  if (value == null) {
-    throw new Error(message);
-  }
-  return value;
-}
 
 function installAdmissionContribution() {
   const noOp = async () => {};

@@ -53,6 +53,12 @@ are reported by the scheduler without restarting the Gateway.
 
 **Updates always work** (`openclaw update` finishes best effort everywhere). Changes to update, Doctor, service lifecycle, migrations, plugin loading: state their update behavior. Installed updater runs first, can't be patched; candidate fixes key on markers shipped drivers set; existing operator state = input. Recoverable hiccups → recorded warnings; back up before mutating, let rollback restore it; refuse only for named data risk with previous Gateway kept running. Timeouts and budgets: generous, derived from measured state, sized for slow hardware. Proof: published-driver × candidate cell.
 
+Update inspection and snapshot workers bind plugin metadata discovery to the
+selected installation's state directory, including requests from older installed
+updaters. A different profile's database version must not block that inspection.
+The candidate worker must contain this repair; an older updater inspecting with
+its own worker still needs an updated runtime.
+
 Private Doctor and post-core workers validate command fields before entering maintenance.
 The delegated executor admits its grant data separately and still checks live process and
 installation ownership before effects. Callbacks and live deadline objects stay in the
@@ -105,6 +111,54 @@ On macOS, reinstall and uninstall reconcile the launchd registration by service
 label even if its plist was deleted. Reinstall warns when the previous definition
 is missing; an existing plist and its private environment files remain backed up
 for rollback if activation fails.
+
+Update-time service reconciliation also removes the historical macOS
+`NODE_EXTRA_CA_CERTS=/etc/ssl/cert.pem` setting when the candidate installer retires
+it. This requires the candidate to contain the repair and the installed updater
+to delegate service refresh to that candidate. Custom CA bundles at other paths
+remain preserved, and unknown operator edits still require manual repair.
+
+For existing managed Gateway and node-host services, migration makes a one-time,
+best-effort copy of eligible operator CA additions into
+`<state directory>/service-ca/<service label>-operator-ca.pem` (mode `0600`).
+It reads the installed service's effective CA setting, so its custom trust need
+not be present in the updater shell. A distinct CA bundle already selected by
+the service remains preserved when the installer does not explicitly select a
+different bundle. An explicitly selected distinct bundle takes precedence.
+
+Automatic eligibility is deliberately narrow: the legacy file must retain the
+complete, byte-identical historical OpenBSD `1.22.2.1` stock prefix (333483 bytes,
+SHA256 `9dae8d76e55cb08991f2b672d58999ea15560d910759c16b544f843bdffbb994`),
+as observed in Apple's sealed macOS 27.0.1 template, followed by appended PEM
+certificates. Only appended self-signed CA roots with recognized clean native
+trust results are eligible. Self-signature alone does not establish provenance.
+Stock keys, known compromised keys and any explicit macOS distrust are excluded,
+including alternate certificates with the same public key. Native checks include
+user, administrator and system trust settings and offline Basic X509 evaluation.
+Other stock revisions, replaced or reordered bundles, intermediate-only additions,
+unknown native results and unresolvable distrust require manual review.
+
+Migration never changes `/etc/ssl/cert.pem` or overwrites a conflicting operator
+file. The CLI reports successful, unnecessary, ambiguous or failed migration,
+including partial migration where some additions cannot be established as
+eligible. Ambiguity, unavailable provenance or a write failure does not block
+the update: the obsolete override remains retired, and dependent private HTTPS
+or WSS connections may stop working. Review the guidance before relying on
+automatic recovery. Previously working connections that require compromised
+keys intentionally remain rejected.
+
+After migration, rotate legitimate private CAs in the maintained bundle and
+restart the service. OpenClaw does not synchronize future changes from the
+retired file or continuously rescreen this operator-owned bundle against OS
+trust changes. For manual recovery, create a distinct maintained PEM bundle,
+select its absolute path with `NODE_EXTRA_CA_CERTS`, then run
+`openclaw gateway install --force` or `openclaw node install --force` from that
+environment. Never restore the entire obsolete stock bundle
+or disable certificate verification to recover connectivity.
+
+When reconciliation replaces the service's Node executable, its leading runtime
+directory in `PATH` can move to the selected Node directory. Every other existing
+`PATH` entry must remain in order; this does not discard custom directories.
 
 When an updater stops a macOS LaunchAgent, it waits for both launchd's process
 and the verified serving Gateway child to exit before continuing. An unloaded
@@ -1074,6 +1128,15 @@ can settle `prepared`, `publishing`, `publication-complete`, and superseded oper
 when the journal's inodes still match under a consistent device-number mapping.
 Ordinary update admission stays strict.
 
+This settlement first shipped in 2026.10.5. Earlier releases, including the
+2026.9 extended-stable line, refuse with `Package publication journal does not
+match its installation` and cannot settle the change themselves; starting with
+2026.10.7, the message also names the changed bindings. From an earlier
+release, install 2026.10.5 or newer with the
+[manual npm procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun),
+then run `openclaw update repair --yes` from the new installation. See
+[#170031](https://github.com/openclaw/openclaw/issues/170031).
+
 If the installed updater cannot read the journal, a separately installed OpenClaw
 version containing this fix provides the same settlement-only path:
 
@@ -1086,6 +1149,12 @@ node /path/to/recovery-openclaw/dist/package-update-activation-recovery.mjs \
 Use the original anchor and operation ID with a supported external Node or Bun
 runtime. Keep other updaters and package managers stopped. Ordinary `status` and
 update admission remain strict for unfinished identity-mismatched journals.
+
+The helper can refuse when retained launcher evidence is missing. In one
+report, the 2026.10.5 helper refused a 2026.9.33 `publication-complete` journal
+whose anchor held only `previous`, with `ENOENT` on
+`<anchor>/launchers`. No supported procedure covers that layout yet. Preserve
+the journal, anchor, and retained generation, and report the exact output.
 
 If publication never started and the previous package is still installed, repair
 verifies its full tree fingerprint and unchanged launchers under the same device

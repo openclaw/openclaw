@@ -14,7 +14,6 @@ import type { ChatItem, ChatQueueDisplayItem } from "../../lib/chat/chat-types.t
 import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
-import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store-scope.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { resolveUiSelectedSessionAgentId } from "../../lib/sessions/session-key.ts";
 import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
@@ -410,20 +409,6 @@ export function listDismissablePendingInputs(
   );
 }
 
-function retireDismissedOutboxCopies(
-  state: ChatState,
-  scope: StoredChatOutboxScope,
-  sessionId: string,
-  runIds: readonly string[],
-): void {
-  for (const runId of runIds) {
-    const copy = readDeliveredQueuedChatSendForRun(state, runId, scope);
-    if (copy && (!copy.sessionId || copy.sessionId === sessionId)) {
-      removeDeliveredQueuedChatSendForRun(state, runId, scope);
-    }
-  }
-}
-
 /** Hide the selected retired inputs at once, then keep or restore them by the Gateway outcome. */
 export async function dismissChatPendingInputs(
   state: ChatState,
@@ -456,12 +441,13 @@ export async function dismissChatPendingInputs(
     );
     // Route changes retain this connection's custody; a replacement Gateway owns its own copies.
     if (connectionIsCurrent()) {
-      retireDismissedOutboxCopies(
-        state,
-        { sessionKey: view.sessionKey, agentId: view.agentId },
-        sessionId,
-        result.runIds,
-      );
+      const scope = { sessionKey: view.sessionKey, agentId: view.agentId };
+      for (const runId of result.runIds) {
+        const copy = readDeliveredQueuedChatSendForRun(state, runId, scope);
+        if (copy && (!copy.sessionId || copy.sessionId === sessionId)) {
+          removeDeliveredQueuedChatSendForRun(state, runId, scope);
+        }
+      }
     }
     if (!current()) {
       return;

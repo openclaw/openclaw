@@ -150,7 +150,7 @@ it("publishes initialization once and rolls back a later refused append without 
         }
         if (
           q.startsWith('select "seq",') &&
-          q.includes(' as "event_json" from "transcript_events"') &&
+          q.includes('"event_json", "event_zstd", "event_utf8_bytes" from "transcript_events"') &&
           q.includes('and "seq" in')
         ) {
           return "payload";

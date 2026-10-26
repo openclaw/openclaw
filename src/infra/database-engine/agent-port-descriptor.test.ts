@@ -5,6 +5,7 @@ import { memoryTextSearchSchema } from "../../../packages/memory-host-sdk/src/ho
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION as currentVersion } from "../../state/openclaw-agent-db-contract.js";
 import { seedOpenClawAgentSchemaV21 } from "../../state/openclaw-agent-schema-v21.test-support.js";
+import { seedAgentV30Schema } from "../../state/schema-migration.test-support.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import {
   LEGACY_USAGE_COST_PARTITION_SCOPE,
@@ -17,6 +18,30 @@ import { admitStoreSearch } from "./search-admission.js";
 import { loadSqliteVecExtension } from "./sqlite-vec.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
+
+it("backs up a schema-36 store without requiring the later cold archive chunk table", async () => {
+  const descriptor = await loadAgentPortDescriptor(36);
+  using db = openNodeSqliteDatabase(":memory:");
+  seedAgentV30Schema(db, 36);
+  db.exec(`
+    DROP TRIGGER memory_index_sources_revision_after_insert;
+    DROP TRIGGER memory_index_sources_revision_after_update;
+    DROP TRIGGER memory_index_sources_revision_after_delete;
+    DROP TRIGGER memory_index_chunks_revision_after_insert;
+    DROP TRIGGER memory_index_chunks_revision_after_update;
+    DROP TRIGGER memory_index_chunks_revision_after_delete;
+  `);
+  const inspected = await inspectDatabasePort({ engine: "sqlite", db }, descriptor);
+  expect(inspected.tables.session_transcript_cold_archives?.rows).toBe(0);
+  expect(inspected.tables.session_transcript_cold_archive_chunks).toBeUndefined();
+  using restored = openNodeSqliteDatabase(":memory:");
+  restored.exec(descriptor.sqlite);
+  expect(
+    restored
+      .prepare("SELECT name FROM sqlite_schema WHERE name = ?")
+      .get("session_transcript_cold_archive_chunks"),
+  ).toBeUndefined();
+});
 
 it.each([21, currentVersion])(
   "migrates only the private v%s copy, retiring legacy usage partitions",

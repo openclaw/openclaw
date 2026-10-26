@@ -228,7 +228,7 @@ suite.define(() => {
         expect(fontState).toContainEqual({ family: "TeamMetric", status: "loaded" });
         const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
         // Use the gutter outside widget frames and sample after native wheel delivery.
-        await thread.hover({ position: { x: 4, y: 4 } });
+        await thread.hover({ position: { x: 24, y: 24 } });
         const coverage = await thread.evaluateHandle((element) => {
           const initialTop = element.scrollTop;
           const padding = getComputedStyle(element);
@@ -276,7 +276,7 @@ suite.define(() => {
         const warm = await page.evaluate(persistColdLoadWarmState, warmInput);
         expect(warm).toMatchObject({
           databaseVersion: 8,
-          projectionVersion: 3,
+          projectionVersion: 4,
           sidebarView: "online",
           sidebarPeople: 120,
         });
@@ -331,6 +331,17 @@ suite.define(() => {
         await composer.fill("Synthetic streaming input");
         await draftWrite.evaluate(({ done }) => done);
         await draftWrite.dispose();
+        const leavingWarm = await page.evaluate(persistColdLoadWarmState, warmInput);
+        const exitKey = "control-ui-bench-exit";
+        await page.evaluate((key) => {
+          window.addEventListener("pagehide", () => localStorage.setItem(key, "saved"));
+        }, exitKey);
+        await restoreColdLoadWarmState(page, warm.storage, leavingWarm.storage);
+        expect(leavingWarm.storage.local).toContainEqual([exitKey, "saved"]);
+        expect(await page.evaluate((key) => localStorage.getItem(key), exitKey)).toBeNull();
+        await page.evaluate((key) => localStorage.setItem(key, "measured-change"), exitKey);
+        await restoreColdLoadWarmState(page, leavingWarm.storage);
+        expect(await page.evaluate((key) => localStorage.getItem(key), exitKey)).toBe("saved");
         await restoreColdLoadWarmState(page, warm.storage);
         expect(
           await page.evaluate(readStoredWarmState, { ...warmInput, includeDrafts: true }),

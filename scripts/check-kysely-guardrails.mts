@@ -137,6 +137,8 @@ const rawSqliteAllowPathGroups = {
     "src/agents/harness/native-hook-relay-client-read.ts",
   ],
   "read-only schema preflight and integrity verification access": [
+    // Legacy-table presence was split from the migration so readers avoid its codecs.
+    "src/infra/state-legacy-cron-presence.ts",
     "src/state/openclaw-database-preflight.ts",
     "src/state/openclaw-database-verify.worker.ts",
     "src/state/openclaw-state-ownership.ts",

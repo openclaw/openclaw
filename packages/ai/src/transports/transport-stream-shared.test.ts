@@ -1,6 +1,7 @@
 import type { Model } from "@openclaw/llm-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
+import { makeStallingStream } from "../providers/provider-stream.test-support.js";
 import { createOpenAIResponsesAssistantOutput } from "./openai-responses-replay-internal.js";
 import {
   assignTransportErrorDetails,
@@ -107,11 +108,9 @@ it("does not wait for unread response cancellation after the observer fails", as
   const hookError = new Error("acceptance failed");
   const { promise: cancelStarted, resolve: markCancelStarted } = Promise.withResolvers<void>();
   const response = new Response(
-    new ReadableStream<Uint8Array>({
-      cancel() {
-        markCancelStarted();
-        return new Promise<void>(() => {});
-      },
+    makeStallingStream([], () => {
+      markCancelStarted();
+      return new Promise<void>(() => {});
     }),
   );
   const options = withProviderAcceptanceObserver({}, () => {
@@ -278,6 +277,47 @@ describe("model stream cooperative scheduler", { concurrent: false }, () => {
 
   afterEach(async () => {
     await vi.runAllTimersAsync();
+  });
+
+  it("adds no per-event async checkpoints while the shared turn has capacity", async () => {
+    const values = Array.from({ length: 16 }, (_, index) => index);
+    async function countCheckpoints(stream: AsyncIterable<number>) {
+      let finished = false;
+      let checkpoints = 0;
+      const probe = (async () => {
+        // A stalled iterator must still let the runner's deadline fire.
+        while (checkpoints < 1024) {
+          if (finished) {
+            break;
+          }
+          await Promise.resolve();
+          checkpoints++;
+        }
+      })();
+      const received: number[] = [];
+      try {
+        for await (const value of stream) {
+          received.push(value);
+        }
+      } finally {
+        finished = true;
+        await probe;
+      }
+      return { checkpoints, received };
+    }
+    const control = await countCheckpoints(
+      (async function* (source: AsyncIterable<number> | Iterable<number>) {
+        for await (const value of source) {
+          yield value;
+        }
+      })(values),
+    );
+    const scheduled = await countCheckpoints(iterateModelStream(values));
+    expect(control.checkpoints).toBeGreaterThan(values.length);
+    expect(control.received).toEqual(values);
+    expect(scheduled.received).toEqual(values);
+    // The control includes iterator/consumer work; ready budget admission needs no extra await.
+    expect(scheduled.checkpoints).toBeLessThanOrEqual(control.checkpoints);
   });
 
   it("stops before pulling upstream again after cancellation", async () => {

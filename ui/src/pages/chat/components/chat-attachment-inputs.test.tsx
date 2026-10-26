@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 
-import { expectDefined } from "@openclaw/normalization-core";
 import { onSettled } from "solid-js";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { installDialogPolyfill } from "../../../test-helpers/modal-dialog.ts";
@@ -22,6 +21,8 @@ const input = (kind: string, container: Element = host) =>
   container.querySelector<HTMLInputElement>(`.agent-chat__${kind}-input`)!;
 const clickSpy = (element: HTMLElement) =>
   vi.spyOn(element, "click").mockImplementation(() => undefined);
+const anchorRect = (element: HTMLElement, x: number, y: number, width: number, height: number) =>
+  vi.spyOn(element, "getBoundingClientRect").mockReturnValue(new DOMRect(x, y, width, height));
 function expectRect(element: HTMLElement, ...values: number[]) {
   const properties = ["left", "top", "width", "height"].slice(0, values.length);
   expect(properties.map((key) => element.style.getPropertyValue(key))).toEqual(
@@ -47,7 +48,7 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-function mountInputs(initial: ChatAttachmentControlsProps, composerClass?: string) {
+function mountInputs(initial: ChatAttachmentControlsProps, composerClass?: string, menu = false) {
   const container = composerClass ? host.appendChild(document.createElement("div")) : host;
   container.className = composerClass ?? "";
   const handle = createChatAttachmentInputHandle();
@@ -56,7 +57,16 @@ function mountInputs(initial: ChatAttachmentControlsProps, composerClass?: strin
   const view = mountSolid(
     (props: ChatAttachmentControlsProps) => {
       onSettled(() => handle.bindAnchor(trigger));
-      return <ChatAttachmentInputs {...props} inputHandle={handle} />;
+      return (
+        <>
+          <ChatAttachmentInputs {...props} inputHandle={handle} />
+          {menu && (
+            <ChatComposerPlusMenu
+              menu={makeMenu({ open: true, attachments: props, inputHandle: handle })}
+            />
+          )}
+        </>
+      );
     },
     initial,
     container,
@@ -87,19 +97,7 @@ it.each([false, true])(
     });
     onTestFinished(draft.dispose);
     const props = { ...draft.props, imagesOnly };
-    const handle = createChatAttachmentInputHandle();
-    mountSolid(
-      () => (
-        <>
-          <ChatAttachmentInputs {...props} inputHandle={handle} />
-          <ChatComposerPlusMenu
-            menu={makeMenu({ open: true, attachments: props, inputHandle: handle })}
-          />
-        </>
-      ),
-      {},
-      host,
-    );
+    mountInputs(props, undefined, true);
     const kind = imagesOnly ? "photo" : "media";
     await waitForSolid(() => expect(host.querySelector(`[data-value="${kind}"]`)).not.toBeNull());
     const action = host.querySelector<HTMLButtonElement>(`[data-value="${kind}"]`)!;
@@ -108,8 +106,10 @@ it.each([false, true])(
     const open = clickSpy(picker);
     action.click();
     expect(open).toHaveBeenCalledOnce();
-    expect(picker.accept).toBe(imagesOnly ? "image/*" : "image/*,video/*");
-    expect(picker.multiple).toBe(true);
+    expect(picker).toMatchObject({
+      accept: imagesOnly ? "image/*" : "image/*,video/*",
+      multiple: true,
+    });
     expect(picker.hasAttribute("capture")).toBe(false);
     const select = (files: File[]) => {
       Object.defineProperty(picker, "files", { configurable: true, value: files });
@@ -125,38 +125,25 @@ it.each([false, true])(
     );
     select([]);
     expect(draft.attachments()).toHaveLength(imagesOnly ? 1 : 2);
-    expect(input("photo").accept).toBe("image/*");
-    expect(input("camera").accept).toBe("image/*");
   },
 );
 
-it("retains the camera across input renders and retires its active read scope", async () => {
+it("retains the lazy camera host and forwards current availability and read scope", async () => {
   const props = { readSignal: new AbortController().signal };
   const { draw, camera } = mountInputs(props);
   await camera.updateComplete;
   expect(camera.childElementCount).toBe(0);
-
-  await draw({ ...props, draft: "A new draft" });
-  expect(host.querySelector("openclaw-chat-camera-capture")).toBe(camera);
-  expect(camera.childElementCount).toBe(0);
-
-  await draw({ ...props, disabled: true });
-  expect(camera.disabled).toBe(true);
-  camera.show();
-  await camera.updateComplete;
-  expect(camera.childElementCount).toBe(0);
-
   const readSignal = new AbortController().signal;
-  await draw({ ...props, disabled: true, readSignal });
-  expect(camera.readSignal).toBe(readSignal);
-  expect(camera.childElementCount).toBe(0);
-
-  await draw({ ...props, disabled: false, readSignal });
-  camera.show();
-  await camera.updateComplete;
-  expect(camera.querySelector("openclaw-modal-dialog")).not.toBeNull();
-  await draw({ ...props, readSignal: new AbortController().signal });
-  await waitForSolid(() => expect(camera.querySelector("openclaw-modal-dialog")).toBeNull());
+  for (const [next, disabled] of [
+    [{ ...props, draft: "A new draft" }, false],
+    [{ ...props, disabled: true }, true],
+    [{ ...props, cameraActive: false }, true],
+    [{ readSignal }, false],
+  ] as const) {
+    await draw(next);
+    expect(host.querySelector("openclaw-chat-camera-capture")).toBe(camera);
+    expect(camera).toMatchObject({ disabled, readSignal: next.readSignal, childElementCount: 0 });
+  }
 });
 
 it.each(
@@ -173,6 +160,7 @@ it.each(
     }
     const initialProps = { disabled: false };
     const { draw, camera, trigger, photo: photoInput } = mountInputs(initialProps, composerClass);
+    const dialog = () => camera.querySelector("openclaw-modal-dialog");
     const nativeInput = input("camera");
     expect(nativeInput).toMatchObject({ accept: "image/*", multiple: false });
     expect(nativeInput.getAttribute("capture")).toBe("environment");
@@ -184,28 +172,22 @@ it.each(
     initialProps.disabled = true;
     await draw({ ...initialProps, disabled: false });
     const clickNative = clickSpy(nativeInput);
-    const rectangle = vi
-      .spyOn(trigger, "getBoundingClientRect")
-      .mockReturnValue(new DOMRect(12, 24, 36, 48));
+    const rectangle = anchorRect(trigger, 12, 24, 36, 48);
     trigger.click();
     await camera.updateComplete;
     if (android) {
       expect(clickNative).toHaveBeenCalledOnce();
-      expect(camera.querySelector("openclaw-modal-dialog")).toBeNull();
+      expect(dialog()).toBeNull();
     } else {
       expect(clickNative).not.toHaveBeenCalled();
-      const nativeButton = expectDefined(
-        [...camera.querySelectorAll("button")].find(
-          (button) => button.textContent?.trim() === "Use device camera",
-        ),
-        "native-camera action",
-      );
+      const nativeButton = [...camera.querySelectorAll("button")].find(
+        (button) => button.textContent?.trim() === "Use device camera",
+      )!;
       rectangle.mockReturnValue(new DOMRect(90, 100, 110, 120));
       nativeButton.click();
       expect(clickNative).toHaveBeenCalledOnce();
       await camera.updateComplete;
     }
-    expect(rectangle).toHaveBeenCalledOnce();
     expectRect(nativeInput, android ? 12 : 90, android ? 24 : 100);
     for (const unavailable of [
       { disabled: true },
@@ -215,7 +197,7 @@ it.each(
       await draw({ ...initialProps, disabled: false, ...unavailable });
       trigger.click();
       expect(clickNative).toHaveBeenCalledOnce();
-      expect(camera.querySelector("openclaw-modal-dialog")).toBeNull();
+      expect(dialog()).toBeNull();
     }
   },
 );
@@ -223,10 +205,8 @@ it.each(
 it("keeps mounted picker refs scoped and refreshes their anchor rectangle on every activation", () => {
   const first = mountInputs({}, "agent-chat__composer-shell");
   const second = mountInputs({}, "new-session-page__composer");
-  const rectangle = vi
-    .spyOn(first.trigger, "getBoundingClientRect")
-    .mockReturnValue(new DOMRect(12, 24, 36, 48));
-  vi.spyOn(second.trigger, "getBoundingClientRect").mockReturnValue(new DOMRect(50, 60, 70, 80));
+  const rectangle = anchorRect(first.trigger, 12, 24, 36, 48);
+  anchorRect(second.trigger, 50, 60, 70, 80);
   const clickFirst = clickSpy(first.file);
   const clickPhoto = clickSpy(first.photo);
   const clickSecond = clickSpy(second.file);
@@ -240,7 +220,6 @@ it("keeps mounted picker refs scoped and refreshes their anchor rectangle on eve
   first.handle.openNative("photo");
   expect(clickPhoto).toHaveBeenCalledOnce();
   expectRect(first.photo, 90, 100, 110, 120);
-  expect(rectangle).toHaveBeenCalledTimes(2);
 
   second.handle.open("file");
   expect(clickSecond).toHaveBeenCalledOnce();

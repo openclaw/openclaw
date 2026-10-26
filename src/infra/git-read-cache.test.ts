@@ -61,6 +61,45 @@ function contextRead(root: string) {
 }
 
 describe("typed Git read ownership", () => {
+  it("retains interleaved PR histories while sharing checks of the same checkout refs", async () => {
+    const read = (sha: string, branch = "feature", refreshIndex = false) =>
+      runGitReadOperation({
+        type: "pull-request.branch-facts",
+        input: {
+          root: "/shared-pr-histories",
+          branch,
+          defaultBranch: "main",
+          mergedHeads: [{ sha }],
+          refreshIndex,
+        },
+      });
+    gitRead.mockImplementation(async (operation) => {
+      if (operation.type !== "pull-request.branch-facts") {
+        throw new Error("Unexpected Git read");
+      }
+      return { creatable: operation.input.mergedHeads[0]?.sha === "a", stats: null };
+    });
+    const expected = [
+      { creatable: true, stats: null },
+      { creatable: false, stats: null },
+    ];
+    expect(await Promise.all([read("a"), read("b")])).toEqual(expected);
+    // One worktree check and one refs check, independent of each session's PR receipts.
+    expect(readRevision).toHaveBeenCalledTimes(2);
+    expect(gitRead).toHaveBeenCalledTimes(2);
+    expect(await read("a")).toEqual(expected[0]);
+    expect(await read("b")).toEqual(expected[1]);
+    expect(gitRead).toHaveBeenCalledTimes(2);
+
+    // The result includes branch and index-refresh policy; neither may cross slots.
+    await read("a", "other");
+    await read("a", "feature", true);
+    expect(gitRead).toHaveBeenCalledTimes(4);
+    readRevision.mockResolvedValue("refs-or-index-changed");
+    expect(await Promise.all([read("a"), read("b")])).toEqual(expected);
+    expect(gitRead).toHaveBeenCalledTimes(6);
+  });
+
   it("reports validation for cache hits and shared misses without replaying cached Git work", async () => {
     const events: DiagnosticEventPayload[] = [];
     const stop = onTrustedInternalDiagnosticEvent((event) => events.push(event), {

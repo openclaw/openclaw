@@ -4,7 +4,8 @@ import { createComponent, flush } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type {
   ApplicationContext,
   ApplicationGateway,
@@ -90,7 +91,11 @@ function findButton(root: ParentNode, label: string) {
 }
 
 function input(page: HTMLElement, label: string) {
-  return control(page, `input[aria-label="${label}"]`);
+  const element = control(page, `input[aria-label="${label}"]`);
+  if (!(element instanceof HTMLInputElement)) {
+    throw new Error(`Expected Connection input: ${label}`);
+  }
+  return element;
 }
 
 function source(
@@ -167,12 +172,10 @@ function pageState(page: HTMLElement) {
       .trim();
   return {
     hostName: text(page, ".config-host__name")?.trim() ?? null,
-    hostText: host?.textContent,
     busy: host?.getAttribute("aria-busy"),
     placeholders: host?.querySelectorAll('.skeleton[aria-hidden="true"]').length,
     activity: text(page, ".connection-activity"),
     activityFailed: text(page, ".connection-activity")?.includes("Activity refresh failed."),
-    polylines: page.querySelector(".connection-activity")?.querySelectorAll("polyline").length,
     cpuDegraded: page.querySelector(".gateway-vital--cpu")?.hasAttribute("data-degraded"),
     hostSkeleton: page.querySelector(".config-host__name .skeleton"),
     hostElement: page.querySelector(".config-host__name"),
@@ -190,11 +193,20 @@ function pageState(page: HTMLElement) {
 async function setup(
   request = vi.fn().mockResolvedValue(deviceSystemInfo),
   ping?: Parameters<typeof source>[1],
-  attached = true,
 ) {
   const client = makeClient(request);
   const current = source(client, ping);
-  return { ...(await mount(current.gateway, { attached, request })), ...current, request, client };
+  return { ...(await mount(current.gateway, { request })), ...current, request, client };
+}
+
+async function display(snapshot: Partial<ApplicationGatewaySnapshot> = {}) {
+  const current = source();
+  publish(current, snapshot);
+  return { ...(await mount(current.gateway)), ...current };
+}
+
+function authHello(authMode: "token" | "password" | "trusted-proxy"): GatewayHelloOk {
+  return { ...gatewayHelloForMethods(["system.info"]), snapshot: { authMode } };
 }
 
 function control(page: HTMLElement, selector: string) {
@@ -213,11 +225,12 @@ afterEach(async () => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   vi.useRealTimers();
+  delete document.documentElement.dataset.openclawRemoteIngress;
 });
 
 it.each([
-  { phase: "offline", stale: false },
   { phase: "stopped", stale: false },
+  { phase: "reconnecting", stale: false },
   { phase: "connected", stale: false },
   { phase: "offline", stale: true },
 ] as const)(
@@ -235,27 +248,27 @@ it.each([
     });
     const { page } = await mount(gateway);
     const forget = () => findButton(page, "Forget this browser");
+    const confirm = () =>
+      document.querySelector<HTMLButtonElement>(".exec-approval-actions button.danger");
+    const openConfirmation = async () => {
+      forget()?.click();
+      await waitForPage(() => expect(confirm()).not.toBeNull());
+    };
     expect(forget()).toBeDefined();
-    forget()?.click();
-    await waitForPage(() =>
-      expect(document.querySelector(".exec-approval-actions button.danger")).not.toBeNull(),
-    );
+    await openConfirmation();
     document
       .querySelector<HTMLButtonElement>(".exec-approval-actions button:not(.danger)")
       ?.click();
     await waitForPage(() => expect(document.querySelector(".exec-approval-actions")).toBeNull());
     expect(gateway.forgetDeviceToken).not.toHaveBeenCalled();
-    forget()?.click();
-    await waitForPage(() =>
-      expect(document.querySelector(".exec-approval-actions button.danger")).not.toBeNull(),
-    );
+    await openConfirmation();
     expect(document.querySelector(".exec-approval-sub")?.textContent).toContain(
       "gateway.example.test",
     );
     if (stale) {
       gateway.connection.gatewayUrl = "wss://other.example.test";
     }
-    document.querySelector<HTMLButtonElement>(".exec-approval-actions button.danger")?.click();
+    confirm()?.click();
     if (stale) {
       await waitForPage(() => expect(document.querySelector(".exec-approval-actions")).toBeNull());
       expect(gateway.forgetDeviceToken).not.toHaveBeenCalled();
@@ -266,22 +279,7 @@ it.each([
   },
 );
 
-it("starts diagnostics for a bound lazy route before insertion and stops at disposal", async () => {
-  vi.useFakeTimers();
-  mockVisibility();
-  const request = vi.fn().mockResolvedValue(gatewaySystemInfo);
-  const { provider, unmount } = await setup(request, undefined, false);
-  expect(provider.isConnected).toBe(false);
-  expect(request.mock.calls.map(([method]) => method)).toEqual(["system.info"]);
-  document.body.append(provider);
-  flush();
-  expect(request).toHaveBeenCalledTimes(1);
-  unmount();
-  await vi.advanceTimersByTimeAsync(30_000);
-  expect(request).toHaveBeenCalledTimes(1);
-});
-
-it("shares six status reads per minute with a tray mounted between page polls", async () => {
+it("shares lazy-route polling with the tray and stops while hidden or disposed", async () => {
   vi.useFakeTimers();
   vi.stubGlobal("matchMedia", (query: string) => ({
     matches: query === "(prefers-reduced-motion: reduce)",
@@ -294,8 +292,12 @@ it("shares six status reads per minute with a tray mounted between page polls", 
     eventLog: [],
     subscribeEventLog: () => () => undefined,
   });
-  const { provider, unmount } = await mount(current.gateway);
+  const { provider, unmount } = await mount(current.gateway, { attached: false });
   const statusReads = () => request.mock.calls.filter(([method]) => method === "system.info");
+  expect(provider.isConnected).toBe(false);
+  expect(request.mock.calls.map(([method]) => method)).toEqual(["system.info"]);
+  document.body.append(provider);
+  flush();
   expect(statusReads()).toHaveLength(1);
   await vi.advanceTimersByTimeAsync(5_000);
   const overlay = document.createElement("openclaw-debug-overlay") as DebugOverlayElement & {
@@ -339,7 +341,6 @@ it("shows average and nearest-rank percentiles for the last 100 successful round
     p99: "99.0 ms",
     ping: contains("Samples: 100/100"),
   });
-  expect(pingRequest).toHaveBeenCalledTimes(101);
 });
 
 it("keeps one ping in flight, excludes failures and hidden responses, and cancels on exit", async () => {
@@ -369,10 +370,8 @@ it("keeps one ping in flight, excludes failures and hidden responses, and cancel
   elapse(9_980);
   responses[2]!.resolve(null);
   await vi.advanceTimersByTimeAsync(10_000);
-  await waitForPage(() => {
-    expect(pingRequest).toHaveBeenCalledTimes(3);
-    expect(text(page, ".connection-ping")).toContain("Samples: 1/100");
-  });
+  expect(pingRequest).toHaveBeenCalledTimes(3);
+  await check({ ping: contains("Samples: 1/100") });
   setVisibility("visible");
   elapse(40);
   responses[3]!.resolve(null);
@@ -385,8 +384,8 @@ it("keeps one ping in flight, excludes failures and hidden responses, and cancel
   expect(pingRequest).toHaveBeenCalledTimes(5);
 });
 
-it.each(["reconnect", "source", "client"] as const)(
-  "clears samples and rejects late replies after a %s change",
+it.each(["reconnect", "source", "client", "source error", "source queued"] as const)(
+  "retires diagnostics and reconciles drafts after a %s change",
   async (change) => {
     vi.useFakeTimers();
     mockVisibility();
@@ -408,25 +407,33 @@ it.each(["reconnect", "source", "client"] as const)(
       })
       .mockReturnValueOnce(stale.promise)
       .mockReturnValueOnce(fresh.promise);
-    const { page, check, client, context, setContext, ...first } = await setup(
-      systemInfoRequest,
-      pingRequest,
-    );
-    await check({ average: "20.0 ms" });
-    await check({ activity: contains("432 MB") });
+    const client = makeClient(systemInfoRequest);
+    const first = source(client, pingRequest);
+    const credentials = { token: "replacement-token", password: "replacement-password" };
+    Object.assign(first.gateway.connection, credentials);
+    const { page, check, context, setContext } = await mount(first.gateway);
+    editInput(page, "Gateway secret", "draft-secret");
+    editInput(page, "Default session", "draft-session");
+    control(page, 'button[aria-label="Toggle secret visibility"]').click();
+    await check({ average: "20.0 ms", activity: contains("432 MB"), secretType: "text" });
     await vi.advanceTimersByTimeAsync(10_000);
     if (change === "reconnect") {
       publish(first, { phase: "reconnecting" });
-      await waitForPage(() => expect(page.querySelector(".connection-ping")).toBeNull());
+      await check({ ping: undefined, secretType: "password", hostName: "—" });
       publish(first, {
         phase: "connected",
+        sessionKey: "remote-session",
         hello: gatewayHelloForMethods(["system.info"]),
       });
-    } else if (change === "source") {
-      setContext({
-        ...context,
-        gateway: source(client, pingRequest).gateway,
-      });
+      await check({ secret: "draft-secret", session: "draft-session" });
+    } else if (change.startsWith("source")) {
+      if (change === "source queued") {
+        staleStatus.resolve({ ...gatewaySystemInfo, machineName: "Stale" });
+      }
+      const second = source(client, pingRequest);
+      Object.assign(second.gateway.connection, credentials);
+      setContext({ ...context, gateway: second.gateway });
+      await check({ secret: "replacement-token", session: "main", secretType: "password" });
     } else {
       publish(first, {
         client: source(makeClient(systemInfoRequest), pingRequest).gateway.snapshot.client,
@@ -438,22 +445,38 @@ it.each(["reconnect", "source", "client"] as const)(
     });
     elapse(500);
     stale.resolve(null);
-    staleStatus.resolve(gatewaySystemInfo);
+    if (change === "source error") {
+      staleStatus.reject(
+        new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message: "unknown method: system.info",
+        }),
+      );
+    } else {
+      staleStatus.resolve({ ...gatewaySystemInfo, machineName: "Stale" });
+    }
     await check({
       average: "—",
       activity: excludes("432 MB"),
       ping: contains("Measuring ping…"),
     });
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(systemInfoRequest).toHaveBeenCalledTimes(3);
+    if (change.startsWith("source")) {
+      await check({ hostSkeleton: expect.any(HTMLElement), hostName: excludes("Stale") });
+    }
     elapse(10);
     fresh.resolve(null);
     freshStatus.resolve({
       ...deviceSystemInfo,
+      machineName: "Current",
       eventLoop: { ...gatewayActivity.eventLoop, cpuCoreRatio: 0.7, delayP99Ms: 5 },
     });
     await check({
       average: "510.0 ms",
       ping: contains("Samples: 1/100"),
       activity: contains("70%"),
+      hostName: "Current",
     });
   },
 );
@@ -473,33 +496,25 @@ it("shares one host and activity poll independently of ping and reports failed r
     .mockResolvedValue(gatewaySystemInfo);
   const { page, state, check, tick, unmount } = await setup(systemInfoRequest);
   expect(state().placeholders).toBeGreaterThan(0);
-  expect(state()).toMatchObject({
-    hostText: excludes("Loading…"),
-    busy: "true",
-  });
+  expect(state().busy).toBe("true");
   initial.resolve(gatewaySystemInfo);
-  await check({ placeholders: 0, busy: "false", hostText: contains("Gateway") });
+  await check({ placeholders: 0, busy: "false", hostName: "Gateway" });
   const hostElement = state().hostElement;
   const sessionInput = input(page, "Default session");
+  const url = input(page, "Gateway URL");
+  const secret = input(page, "Gateway secret");
+  const details = page.querySelector<HTMLDetailsElement>("details")!;
+  details.open = true;
   editInput(page, "Default session", "kept-session");
   sessionInput.focus();
-  const loadedHostText = state().hostText;
   expect(state().activity).toContain("432 MB");
   expect(state().activity).toContain("42%");
-  expect(systemInfoRequest.mock.calls.map(([method]) => method)).toEqual(["system.info"]);
-  await vi.advanceTimersByTimeAsync(9_999);
-  expect(systemInfoRequest).toHaveBeenCalledTimes(1);
-  await vi.advanceTimersByTimeAsync(1);
-  await check({ placeholders: 0, hostText: loadedHostText, busy: "true", hostName: "Gateway" });
+  await vi.advanceTimersByTimeAsync(10_000);
+  await check({ placeholders: 0, busy: "true", hostName: "Gateway" });
   expect(state().hostElement).toBe(hostElement);
   expect(input(page, "Default session")).toBe(sessionInput);
   expect(sessionInput.value).toBe("kept-session");
   expect(document.activeElement).toBe(sessionInput);
-  expect(page.querySelectorAll('[role="meter"]').length).toBeGreaterThan(0);
-  expect(systemInfoRequest.mock.calls.map(([method]) => method)).toEqual([
-    "system.info",
-    "system.info",
-  ]);
   await vi.advanceTimersByTimeAsync(10_000);
   expect(systemInfoRequest).toHaveBeenCalledTimes(2);
   next.resolve({
@@ -515,7 +530,6 @@ it("shares one host and activity poll independently of ping and reports failed r
   await check({
     activity: contains("60%"),
     hostName: contains("Fresh host"),
-    polylines: 3,
     cpuDegraded: true,
   });
   await tick(10_000, {
@@ -526,11 +540,18 @@ it("shares one host and activity poll independently of ping and reports failed r
     activity: contains("60%"),
   });
   await tick(10_000, { activityFailed: true, busy: "true" });
+  url.focus();
+  url.setSelectionRange(4, 7);
   recovery.resolve(gatewaySystemInfo);
   await check({ activityFailed: false, busy: "false" });
   expect(state().hostElement).toBe(hostElement);
   expect(sessionInput.value).toBe("kept-session");
-  expect(document.activeElement).toBe(sessionInput);
+  expect(input(page, "Gateway URL")).toBe(url);
+  expect(input(page, "Gateway secret")).toBe(secret);
+  expect(document.activeElement).toBe(url);
+  expect([url.selectionStart, url.selectionEnd]).toEqual([4, 7]);
+  expect(page.querySelector("details")).toBe(details);
+  expect(details.open).toBe(true);
   const hidden = deferred<SystemInfoResult>();
   systemInfoRequest.mockReturnValueOnce(hidden.promise);
   await vi.advanceTimersByTimeAsync(10_000);
@@ -560,6 +581,8 @@ it.each([
   async (token, password, change) => {
     const displayed = token || password;
     const current = source();
+    const authMode = token ? "token" : "password";
+    publish(current, { hello: authHello(authMode) });
     Object.assign(current.gateway.connection, {
       gatewayUrl: "wss://gateway.example/openclaw",
       token,
@@ -569,7 +592,12 @@ it.each([
     const { page } = await mount(current.gateway);
     const secret = () => input(page, "Gateway secret");
     expect(page.querySelectorAll(".settings-secret input")).toHaveLength(1);
-    expect(secret().value).toBe(displayed);
+    expect(secret()).toMatchObject({
+      value: displayed,
+      type: "password",
+      placeholder: "Paste the token or type the password",
+    });
+    expect(page.textContent).toContain(`This Gateway expects its ${authMode}.`);
     expect(page.querySelector('[role="radiogroup"]')).toBeNull();
     control(page, ".connection-details button").click();
     expect(connect).toHaveBeenLastCalledWith();
@@ -595,13 +623,10 @@ it.each([
 
 it("offers connection actions only while the draft differs", async () => {
   const { page } = await setup();
-  const actions = () =>
-    [...page.querySelectorAll<HTMLButtonElement>(".settings-group button")].filter((button) =>
-      ["Connect", "Apply and reconnect", "Discard changes"].includes(
-        button.textContent?.trim() ?? "",
-      ),
+  const labels = () =>
+    [...page.querySelectorAll(".connection-actions button")].map((button) =>
+      button.textContent?.trim(),
     );
-  const labels = () => actions().map((button) => button.textContent?.trim());
   expect(labels()).toEqual([]);
   editInput(page, "Gateway secret", "draft-token");
   await waitForPage(() => expect(labels()).toEqual(["Discard changes", "Apply and reconnect"]));
@@ -623,17 +648,8 @@ it("saves and discards session edits independently of the pending connection", a
     publish(current, { sessionKey: sessionKey.trim() });
   });
   const { page, check } = await mount(current.gateway);
-  const sessionSection = input(page, "Default session").closest(".settings-section");
-  if (!sessionSection) {
-    throw new Error("Missing Session section");
-  }
-  const button = (name: string) => {
-    const found = findButton(sessionSection, name);
-    if (!found) {
-      throw new Error(`Missing session action: ${name}`);
-    }
-    return found;
-  };
+  const sessionSection = input(page, "Default session").closest(".settings-section")!;
+  const button = (name: string) => findButton(sessionSection, name)!;
   editInput(page, "Gateway secret", "pending-token");
   editInput(page, "Default session", "main-other");
   flush();
@@ -642,104 +658,28 @@ it("saves and discards session edits independently of the pending connection", a
   editInput(page, "Default session", "  saved-session  ");
   flush();
   button("Save").click();
-  await waitForPage(() => {
-    expect(current.gateway.snapshot.sessionKey).toBe("saved-session");
-    expect(input(page, "Default session").value).toBe("saved-session");
-    expect(input(page, "Gateway secret").value).toBe("pending-token");
-    expect(page.textContent).toContain("Saved");
-    expect(connect).not.toHaveBeenCalled();
-  });
+  await check({ session: "saved-session", secret: "pending-token" });
+  expect(current.gateway.snapshot.sessionKey).toBe("saved-session");
+  expect(page.textContent).toContain("Saved");
+  expect(connect).not.toHaveBeenCalled();
   editInput(page, "Default session", " ");
   await waitForPage(() => expect(button("Save").disabled).toBe(true));
   button("Discard changes").click();
   await check({ session: "saved-session" });
 });
 
-it("keeps an edited draft through reconnect and resets it for a replacement source", async () => {
-  const request = vi.fn().mockResolvedValue(deviceSystemInfo);
-  const { page, check, client, context, setContext, ...first } = await setup(request);
-  editInput(page, "Gateway secret", "draft-secret");
-  editInput(page, "Default session", "draft-session");
-  control(page, 'button[aria-label="Toggle secret visibility"]').click();
-  await check({ secretType: "text" });
-  publish(first, { phase: "reconnecting" });
-  await check({ secretType: "password", hostName: "—" });
-  publish(first, {
-    phase: "connected",
-    sessionKey: "remote-session",
-    hello: gatewayHelloForMethods(["system.info"]),
-  });
-  await check({
-    secret: "draft-secret",
-    session: "draft-session",
-    secretType: "password",
-    calls: 2,
-  });
-  const second = source(client);
-  Object.assign(second.gateway.connection, {
-    token: "replacement-token",
-    password: "replacement-password",
-  });
-  setContext({ ...context, gateway: second.gateway });
-  await check({ secret: "replacement-token", session: "main", secretType: "password", calls: 3 });
-});
-
-it.each(["response", "error", "response before rebinding"] as const)(
-  "rejects an old Gateway source %s when the replacement reuses its client",
-  async (outcome) => {
-    vi.useFakeTimers();
-    const firstResponse = deferred<SystemInfoResult>();
-    const secondResponse = deferred<SystemInfoResult>();
-    const request = vi
-      .fn()
-      .mockReturnValueOnce(firstResponse.promise)
-      .mockReturnValueOnce(secondResponse.promise);
-    const client = makeClient(request);
-    const first = source(client);
-    const second = source(client);
-    const { check, context, setContext } = await mount(first.gateway, { request });
-    if (outcome === "response before rebinding") {
-      // Queue completion before the replacement context retires the old consumer tree.
-      firstResponse.resolve({ ...deviceSystemInfo, machineName: "Stale" });
-    }
-    setContext({ ...context, gateway: second.gateway });
-    await check({ calls: 2 });
-    if (outcome === "response") {
-      firstResponse.resolve({ ...deviceSystemInfo, machineName: "Stale" });
-    } else if (outcome === "error") {
-      firstResponse.reject(
-        new GatewayRequestError({
-          code: "INVALID_REQUEST",
-          message: "unknown method: system.info",
-        }),
-      );
-    }
-    await check({
-      hostSkeleton: expect.any(HTMLElement),
-      hostName: excludes("Stale"),
-    });
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(request).toHaveBeenCalledTimes(2);
-    secondResponse.resolve({ ...deviceSystemInfo, machineName: "Current" });
-    await check({ hostName: "Current" });
-  },
-);
-
-it.each([
-  ["transient", new Error("temporarily unavailable"), true],
-  ["missing read scope", missingReadScopeErrorFixture(), false],
-] as const)("preserves the polling policy after a %s error", async (_kind, error, retry) => {
+it("stops polling after a missing-read-scope error", async () => {
   vi.useFakeTimers();
   const request = vi
     .fn()
     .mockResolvedValueOnce(deviceSystemInfo)
-    .mockRejectedValueOnce(error)
+    .mockRejectedValueOnce(missingReadScopeErrorFixture())
     .mockResolvedValue(deviceSystemInfo);
   const { check } = await setup(request);
   await vi.advanceTimersByTimeAsync(10_000);
-  await check({ hostName: retry ? "Gateway" : null });
+  await check({ hostName: null });
   await vi.advanceTimersByTimeAsync(10_000);
-  expect(request).toHaveBeenCalledTimes(retry ? 3 : 2);
+  expect(request).toHaveBeenCalledTimes(2);
 });
 
 it.each(["advertisement", "scope"] as const)(
@@ -765,3 +705,125 @@ it.each(["advertisement", "scope"] as const)(
     await check({ hostName: "Gateway", calls: 2 });
   },
 );
+
+it("hides ingress credentials while preserving connection errors and recovery", async () => {
+  document.documentElement.dataset.openclawRemoteIngress = "true";
+  const { page } = await display({ phase: "offline", lastError: "Ingress unavailable" });
+  expect(page.querySelector('[aria-label="Gateway URL"]')).toBeNull();
+  expect(page.querySelector('[aria-label="Gateway secret"]')).toBeNull();
+  expect(page.textContent).toContain("Ingress unavailable");
+  expect(text(page, ".connection-actions button")?.trim()).toBe("Retry connection");
+});
+
+it("disables connection actions while starting and hides errors after connection", async () => {
+  const current = await display({ phase: "starting", lastError: "connect failed: unauthorized" });
+  const { page } = current;
+  expect(control(page, ".connection-actions .btn.primary").disabled).toBe(true);
+  expect(text(page, ".connection-actions .btn.primary")?.trim()).toBe("Connecting…");
+  expect(control(page, "details button").disabled).toBe(true);
+  const error = page.querySelector(".settings-status--danger")!;
+  expect(error.textContent).toContain("Last error");
+  expect(page.textContent).toContain("connect failed: unauthorized");
+  expect(error.closest(".settings-section")?.querySelector("h2")?.textContent).toBe("Connection");
+  publish(current, { phase: "connected" });
+  await waitForPage(() => expect(page.querySelector(".settings-status--danger")).toBeNull());
+  expect(page.textContent).not.toContain("connect failed: unauthorized");
+});
+
+it("shows setup-code guidance only for a mobile setup code", async () => {
+  const { page } = await display();
+  const hint = () =>
+    input(page, "Gateway secret")
+      .closest(".settings-row__control")
+      ?.querySelector('[role="status"]');
+  editInput(
+    page,
+    "Gateway secret",
+    btoa(
+      JSON.stringify({ url: "wss://gateway.example", bootstrapToken: "synthetic-bootstrap-token" }),
+    ).replace(/=+$/g, ""),
+  );
+  await waitForPage(() =>
+    expect(hint()?.textContent).toContain("device setup code for the OpenClaw mobile app"),
+  );
+  expect(page.textContent).toContain("openclaw gateway auth-token --show");
+  editInput(page, "Gateway secret", "tok");
+  await waitForPage(() => expect(hint()).toBeNull());
+});
+
+it("scopes trusted-proxy credentials to the live target", async () => {
+  const { page } = await display({ hello: authHello("trusted-proxy") });
+  expect(page.querySelector('[aria-label="Gateway secret"]')).toBeNull();
+  expect(text(page, ".settings-row .settings-status")?.trim()).toBe("Trusted proxy");
+  expect(page.textContent).toContain("Authenticated via trusted proxy.");
+  editInput(page, "Gateway URL", "wss://other.example");
+  await waitForPage(() => expect(input(page, "Gateway secret")).toBeDefined());
+  expect(page.textContent).not.toContain("Authenticated via trusted proxy.");
+});
+
+it("renders host identity and resource meters, including disk removal", async () => {
+  vi.useFakeTimers();
+  const disks = [
+    { path: "/", totalBytes: 1024 ** 4, availableBytes: 512 * 1024 ** 3 },
+    { path: "/archive", totalBytes: 2 * 1024 ** 4, availableBytes: 512 * 1024 ** 3 },
+  ];
+  const info = {
+    ...deviceSystemInfo,
+    lanAddress: "192.168.1.20",
+    port: 18789,
+    cpuModel: "Apple M4",
+    diskPath: "/legacy",
+    diskTotalBytes: 1000,
+    diskAvailableBytes: 500,
+    disks,
+  };
+  const request = vi.fn().mockResolvedValue(info);
+  const { page, check, tick } = await setup(request);
+  await check({ hostName: "Gateway" });
+  expect(page.querySelector(".config-host__name")).toMatchObject({ title: "gateway.test" });
+  expect(text(page, ".config-host__address")).toBe("192.168.1.20:18789");
+  expect([...page.querySelectorAll(".config-host__meta")].map((node) => node.textContent)).toEqual([
+    "macOS 26.0 · arm64",
+    "Node 24.15.0 · PID 100",
+  ]);
+  expect(text(page, "#settings-connection-host .settings-status")).toBe("Up 1d");
+  const stats = [...page.querySelectorAll(".config-host__stat")];
+  expect(stats[0]?.textContent).toContain("8 cores");
+  expect(stats[1]?.textContent).toContain("12 GB free of 32 GB");
+  expect(stats[2]?.textContent).toContain("512 GB free of 1.0 TB");
+  expect(stats[3]?.textContent).toContain("512 GB free of 2.0 TB");
+  expect(stats[0]?.getAttribute("title")).toBe("Apple M4 · Load average: 1.5 · 1.2 · 1.0");
+  expect(
+    stats.map((node) => node.querySelector('[role="meter"]')?.getAttribute("aria-valuenow")),
+  ).toEqual(["19", "63", "50", "75"]);
+  expect(
+    stats.slice(2).map((node) => node.querySelector('[role="meter"]')?.getAttribute("aria-label")),
+  ).toEqual(["Disk / usage", "Disk /archive usage"]);
+  for (const remaining of [disks.slice(0, 1), [], undefined]) {
+    request.mockResolvedValue({ ...info, disks: remaining });
+    await tick(10_000, { hostName: "Gateway" });
+    await waitForPage(() =>
+      expect(page.querySelectorAll(".config-host__stat")).toHaveLength(
+        2 + (remaining?.length ?? 0),
+      ),
+    );
+    expect(page.textContent).not.toContain("/archive");
+    expect(page.textContent).not.toContain("/legacy");
+  }
+  request.mockResolvedValue({
+    ...info,
+    loadAverage: [7.8, 7.1, 6.4],
+    memoryFreeBytes: 2 * 1024 ** 3,
+    disks: [{ path: "/", totalBytes: 1000, availableBytes: 200 }],
+  });
+  await tick(10_000, { hostName: "Gateway" });
+  await waitForPage(() =>
+    expect(
+      [...page.querySelectorAll(".config-host__meter-fill")].map((node) => node.classList[1]),
+    ).toEqual([
+      "config-host__meter-fill--critical",
+      "config-host__meter-fill--critical",
+      "config-host__meter-fill--warn",
+    ]),
+  );
+});

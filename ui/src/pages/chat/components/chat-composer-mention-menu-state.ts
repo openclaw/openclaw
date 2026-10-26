@@ -4,8 +4,8 @@ import { createStore } from "solid-js";
 import {
   GatewayRequestError,
   resolveGatewayErrorDetailCode,
-  type GatewayBrowserClient,
-} from "../../../api/gateway.ts";
+} from "../../../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import { handleComposerMenuKeydown } from "../../../components/composer-menu.ts";
 import type { HumanMention } from "../../../lib/chat/chat-types.ts";
 import { MAX_HUMAN_MENTIONS, updateHumanMentions } from "../../../lib/chat/human-mentions.ts";

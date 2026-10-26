@@ -5,10 +5,11 @@ import type {
   SessionsCatalogReadResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { projectCatalogItemForDisplay } from "../../../../src/chat/session-catalog-display.js";
-import type {
-  ControlUiSessionBranch,
-  ControlUiSessionPullRequest,
-  ControlUiSessionPullRequestSnapshot,
+import {
+  SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+  type ControlUiSessionBranch,
+  type ControlUiSessionPullRequest,
+  type ControlUiSessionPullRequestSnapshot,
 } from "../../../../src/gateway/control-ui-contract.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { collectUnreadHiddenRunRows } from "../../components/app-sidebar-session-parent.ts";
@@ -20,7 +21,6 @@ import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import {
   summarizeSessionPullRequests,
-  SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
   sessionPullRequestsForGateway,
   sessionGitHubRepository,
 } from "../../lib/session-pull-requests.ts";
@@ -29,7 +29,7 @@ import {
   parseCatalogSessionKey,
   type CatalogSessionKey,
 } from "../../lib/sessions/catalog-key.ts";
-import { resolveSessionKey, scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
+import { resolveSessionKey, scopedAgentParamsForSession } from "../../lib/sessions/navigation.ts";
 import { parseAgentSessionKey, scopedSessionArtifactKey } from "../../lib/sessions/session-key.ts";
 import { SessionUnreadPatchGuard } from "../../lib/sessions/unread.ts";
 import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
@@ -284,6 +284,9 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       if (!isCurrent()) {
         retireIfCurrent();
         return;
+      }
+      if (historyCommitted) {
+        this.cacheSessionReactions();
       }
       if (!this.presented || document.visibilityState === "hidden") {
         hydration.resume = () => scheduleHydration(historyCommitted);

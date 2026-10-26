@@ -372,6 +372,9 @@ If navigation or a closed page stops the batch, text output reports the action n
 Malformed bytes are rejected before any browser action runs. Save the input as
 UTF-8 and retry; valid Unicode values, including emoji and CJK text, are preserved.
 
+`fill --fields-file` requires a regular file or a symlink to one. Pipes and other
+special files are rejected before dispatch. Fields files have no size cap.
+
 ## State and storage
 
 Viewport + emulation:

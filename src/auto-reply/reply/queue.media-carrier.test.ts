@@ -4,8 +4,10 @@ import * as policy from "../../agents/tool-policy.js";
 import * as identity from "../../audit/execution-identity-admission.js";
 import * as admission from "../../channels/message-access/admission-evidence.js";
 import * as ingress from "../../gateway/local-user-ingress.js";
+import { applyRunHydrationSuppression, readPersistedMediaFacts } from "../../media/media-facts.js";
 import { createReplyOperation } from "../../sessions/session-controller.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { runActiveReplySteer } from "./agent-runner-steer-adoption.js";
 import { createSteerParams } from "./agent-runner-steer-adoption.test-support.js";
 import { prepareChannelRunAdmission } from "./channel-run-admission.js";
@@ -279,6 +281,36 @@ it.each([
       expect(q.calls[index]?.prompt).toContain(text);
     }
   }
+});
+it("pairs each collected source's run-only image skip with the transcript facts", async () => {
+  const q = trackedQueue();
+  const shared = { path: "/tmp/shared.png", contentType: "image/png" };
+  // Same path in both sources: only the second one could not be read this turn.
+  for (const [prompt, skipped] of [
+    ["one", false],
+    ["two", true],
+  ] as const) {
+    q.add({
+      ...createQueueTestRun({ prompt }),
+      media: [
+        skipped ? { ...shared, hydrationSuppressed: true, unresolvedThisTurn: true } : shared,
+      ],
+      userTurnTranscriptRecorder: createUserTurnTranscriptRecorder({
+        input: { text: prompt, media: [shared] },
+        target: createTestUserTurnTranscriptTarget(),
+        updateMode: "none",
+      }),
+    });
+  }
+  await q.drain();
+  expect(q.calls).toHaveLength(1);
+  const message = await q.calls[0]?.userTurnTranscriptRecorder?.resolveMessage();
+  const recorded = message ? readPersistedMediaFacts(message) : undefined;
+  expect(
+    applyRunHydrationSuppression(recorded ?? [], q.calls[0]?.media).map(
+      (fact) => fact.hydrationSuppressed === true,
+    ),
+  ).toEqual([false, true]);
 });
 describe("queued Gateway attach evidence", () => {
   installQueueRuntimeErrorSilencer();

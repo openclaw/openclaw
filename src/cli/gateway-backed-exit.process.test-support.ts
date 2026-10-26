@@ -13,17 +13,12 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { cliRecoveryEntrypoints } from "./cli-entrypoint.test-support.js";
-import {
-  runCliProcessChild,
-  type CliProcessChildResult,
-} from "./cli-process-child.test-helpers.js";
+import { runCliProcessChild } from "./cli-process-child.test-helpers.js";
 import { closeActiveGatewayServers } from "./gateway-backed-exit.test-helpers.js";
 
 export const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 export const UNREACHABLE_GATEWAY_URL = "ws://127.0.0.1:9";
-afterEach(async () => {
-  await closeActiveGatewayServers();
-});
+afterEach(closeActiveGatewayServers);
 
 export async function prepareGatewayCliFixture(
   root: string,
@@ -35,18 +30,6 @@ export async function prepareGatewayCliFixture(
   await fs.mkdir(stateDir, { recursive: true });
   await fs.writeFile(configPath, JSON.stringify({ ...config, gateway }));
   return { root, stateDir, configPath };
-}
-
-// Establish SQLite coordination files before asserting persistent RPC non-mutation.
-function prepareSharedStateReadArtifacts(stateDir: string): void {
-  const database = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"), {
-    readOnly: true,
-  });
-  try {
-    database.prepare("PRAGMA schema_version").get();
-  } finally {
-    database.close();
-  }
 }
 
 export function seedDeviceAuth(root: string, stateDir: string, url: string, token: string) {
@@ -62,7 +45,11 @@ export function seedDeviceAuth(root: string, stateDir: string, url: string, toke
     env,
   });
   closeOpenClawStateDatabaseForTest();
-  prepareSharedStateReadArtifacts(stateDir);
+  // Establish SQLite coordination files before asserting persistent RPC non-mutation.
+  using database = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"), {
+    readOnly: true,
+  });
+  database.prepare("PRAGMA schema_version").get();
   return { identity, env };
 }
 
@@ -122,15 +109,15 @@ export async function prepareUnreachableGatewayCliFixture(params: {
   return { root, stateDir, configPath };
 }
 
-export async function runIsolatedGatewayCli(params: {
+export function runIsolatedGatewayCli(params: {
   args: string[];
   root: string;
   stateDir: string;
   configPath: string;
   env?: NodeJS.ProcessEnv;
   onStdout?: (stdout: string) => void;
-}): Promise<CliProcessChildResult> {
-  return await runCliProcessChild({
+}) {
+  return runCliProcessChild({
     nodeArgs: [
       ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli)),
       ...params.args,

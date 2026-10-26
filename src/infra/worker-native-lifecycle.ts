@@ -201,7 +201,7 @@ function nativeRuntime(source: NativeSource): NativeRuntime {
           throw runtime.failure;
         }
         const bytes = workerMessagePayloadBytes(message);
-        port1.postMessage(message, [...transfers]);
+        port1.postMessage(message, transfers);
         observeWorkerMessage(message, "to_worker", "lifecycle", bytes ?? null);
       },
       resourceBroker() {

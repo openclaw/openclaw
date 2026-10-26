@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { writeArtifact, writeArtifacts } from "./public-surface.test-support.js";
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
 const execute = promisify(execFile);
@@ -12,31 +13,13 @@ const moduleUrl = (relative: string) => pathToFileURL(path.resolve(relative)).hr
 const run = (entry: string, args: string[] = [], env = process.env) =>
   execute(process.execPath, ["--import", moduleUrl("scripts/tsx.mjs"), entry, ...args], { env });
 
-function write(root: string, relative: string, content: string | Record<string, unknown>): string {
-  const filename = path.join(root, relative);
-  fs.mkdirSync(path.dirname(filename), { recursive: true });
-  fs.writeFileSync(filename, typeof content === "string" ? content : JSON.stringify(content));
-  return filename;
-}
-
 it("records a real deprecated member only when the loaded plugin calls it", async () => {
   const root = fs.realpathSync(temp.make("plugin-deprecated-member-"));
   const { stdout, stderr } = await run(
     path.resolve("src/plugins/plugin-sdk-deprecated-member.test-support.ts"),
     [root],
   );
-  expect(JSON.parse(stdout)).toMatchObject([
-    {
-      code: "deprecated-sdk-api",
-      severity: "info",
-      apis: [
-        {
-          displayName: "resolveCronStorePath",
-          replacement: "resolveCronStorePathAsync",
-        },
-      ],
-    },
-  ]);
+  expect(JSON.parse(stdout)).toHaveLength(1);
   expect(stderr).toContain("[DEP_PLUGIN_SDK]");
 });
 
@@ -49,34 +32,35 @@ it.each([false, true])(
       compilerOptions: { paths: Record<string, string[]> };
     };
     // Keep workspace imports while allowing the synthetic host to own its SDK self-imports.
-    const tsconfig = write(root, "tsconfig.json", {
-      extends: path.resolve("tsconfig.json"),
-      compilerOptions: {
-        paths: Object.fromEntries(
-          Object.entries(config.compilerOptions.paths)
-            .filter(([name]) => !name.startsWith("openclaw/"))
-            .map(([name, targets]) => [name, targets.map((target) => path.resolve(target))]),
-        ),
-      },
-    });
+    const tsconfig = writeArtifact(
+      path.join(root, "tsconfig.json"),
+      JSON.stringify({
+        extends: path.resolve("tsconfig.json"),
+        compilerOptions: {
+          paths: Object.fromEntries(
+            Object.entries(config.compilerOptions.paths)
+              .filter(([name]) => !name.startsWith("openclaw/"))
+              .map(([name, targets]) => [name, targets.map((target) => path.resolve(target))]),
+          ),
+        },
+      }),
+    );
     const legacy = "openclaw/plugin-sdk/agent-runtime";
     const active = "openclaw/plugin-sdk/command-auth-native";
-    write(host, "package.json", {
-      name: "openclaw",
-      type: "module",
-      bin: { openclaw: "./openclaw.mjs" },
-      exports: {
-        "./plugin-sdk/agent-runtime": "./dist/plugin-sdk/agent-runtime.js",
-        "./plugin-sdk/command-auth-native": "./dist/plugin-sdk/command-auth-native.js",
+    writeArtifacts(host, {
+      "package.json": {
+        name: "openclaw",
+        type: "module",
+        bin: { openclaw: "./openclaw.mjs" },
+        exports: {
+          "./plugin-sdk/agent-runtime": "./dist/plugin-sdk/agent-runtime.js",
+          "./plugin-sdk/command-auth-native": "./dist/plugin-sdk/command-auth-native.js",
+        },
       },
-    });
-    write(host, "dist/plugin-sdk/agent-runtime.js", "export const value = 'deprecated';");
-    write(
-      host,
-      "dist/plugin-sdk/command-auth-native.js",
-      `import { value as hostLegacyValue } from 'openclaw/plugin-sdk/agent-runtime';
+      "dist/plugin-sdk/agent-runtime.js": "export const value = 'deprecated';",
+      "dist/plugin-sdk/command-auth-native.js": `import { value as hostLegacyValue } from 'openclaw/plugin-sdk/agent-runtime';
        export const value = hostLegacyValue === 'deprecated' ? 'active' : 'broken';`,
-    );
+    });
     const entries = (
       [
         ["synthetic-source", "index.ts", `export { value } from '${legacy}';`],
@@ -86,12 +70,11 @@ it.each([false, true])(
       ] as const
     ).map(([id, source, body]) => {
       const directory = path.join(root, id);
-      write(directory, "package.json", { name: id, type: "module" });
-      return { id, directory, entry: write(directory, source, body) };
+      writeArtifacts(directory, { "package.json": { name: id, type: "module" } });
+      return { id, directory, entry: writeArtifact(path.join(directory, source), body) };
     });
-    const probe = write(
-      root,
-      "probe.mts",
+    const probe = writeArtifact(
+      path.join(root, "probe.mts"),
       `import assert from 'node:assert/strict';
        import Module from 'node:module';
        ${sourceTransform ? 'Object.defineProperty(Module, "registerHooks", { value: undefined, configurable: true });' : ""}

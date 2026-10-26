@@ -165,6 +165,24 @@ describe("session PR fork head discovery", () => {
     expect(result.pullRequests.map((pull) => pull.number)).toEqual([183571]);
   });
 
+  it("continues fork discovery when the origin query returns another head repository", async () => {
+    await connectCheckout({ trackForkRef: true });
+    const routes = githubRoutes(183696);
+    routes[0] = {
+      match: "/repos/openclaw/openclaw/pulls?head=openclaw%3A",
+      response: () =>
+        githubJson([openPull(900001, { owner: "openclaw", repo: "another-repository" })]),
+    };
+    vi.stubGlobal("fetch", routedFetch(routes));
+
+    const result = await load(
+      { sessionKey: "agent:main:main" },
+      { resolveGitRoot: async () => root },
+    );
+
+    expect(result.pullRequests.map((pull) => pull.number)).toEqual([183696]);
+  });
+
   it("rejects a same-owner head from another repository", async () => {
     await connectCheckout({ trackForkRef: true });
     vi.stubGlobal(

@@ -47,7 +47,15 @@ describe("quiet requester restart continuation", () => {
     expect(child.requesterSettleWake).toBeUndefined();
   });
 
-  it.each(["main", "nested", "reset", "cancelled", "successful", "replaced-child"] as const)(
+  it.each([
+    "main",
+    "nested",
+    "reset",
+    "cancelled",
+    "successful",
+    "replaced-child",
+    "failed-placement",
+  ] as const)(
     "keeps a quiet restart continuation private to its original %s parent",
     async (scenario) => {
       const requesterSessionKey = scenario === "nested" ? "agent:main:subagent:middle" : REQUESTER;
@@ -64,21 +72,32 @@ describe("quiet requester restart continuation", () => {
         completionRequesterLifecycleRevision: "original",
         suppressCompletionDelivery: scenario === "cancelled",
         delivery: { status: "not_required" },
+        ...(scenario === "failed-placement"
+          ? { terminalOwner: "interrupted-recovery", endedReason: "subagent-error" }
+          : {}),
         execution: {
           status: "terminal",
           startedAt: 2_000,
           endedAt: 3_000,
-          interruptionReason: scenario === "successful" ? undefined : "gateway-restart",
+          interruptionReason:
+            scenario === "successful" || scenario === "failed-placement"
+              ? undefined
+              : "gateway-restart",
           outcome:
             scenario === "successful"
               ? { status: "ok" }
-              : { status: "error", error: "The original child session was replaced." },
+              : scenario === "failed-placement"
+                ? { status: "error", error: "Worker setup failed; repair it before resuming." }
+                : { status: "error", error: "The original child session was replaced." },
           suppressSessionEffects: scenario === "replaced-child" ? true : undefined,
         },
       });
       registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([child]);
       const shouldContinue =
-        scenario === "main" || scenario === "nested" || scenario === "replaced-child";
+        scenario === "main" ||
+        scenario === "nested" ||
+        scenario === "replaced-child" ||
+        scenario === "failed-placement";
       expect(
         await maybeWakeRequesterAfterAllChildrenSettled(
           wakeParams({ requesterSessionKey, settledEntry: child }),
@@ -93,10 +112,17 @@ describe("quiet requester restart continuation", () => {
           completionRequesterLifecycleRevision: "original",
           expectsCompletionMessage: false,
         });
-        expect(delivery.triggerMessage).toContain("Reconcile every listed unfinished child");
-        expect(delivery.triggerMessage).toContain(child.childSessionKey);
+        if (scenario === "failed-placement") {
+          expect(delivery.triggerMessage).toContain("Every subagent in this batch has now settled");
+          expect(delivery.triggerMessage).toContain(
+            "status: error: Worker setup failed; repair it before resuming.",
+          );
+        } else {
+          expect(delivery.triggerMessage).toContain("Reconcile every listed unfinished child");
+          expect(delivery.triggerMessage).toContain(child.childSessionKey);
+          expect(delivery.triggerMessage).toContain("The original child session was replaced.");
+        }
         expect(delivery.triggerMessage).toContain("Process this result privately");
-        expect(delivery.triggerMessage).toContain("The original child session was replaced.");
       }
       expect(child.requesterSettleWake).toBeUndefined();
     },

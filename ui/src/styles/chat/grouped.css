@@ -83,7 +83,7 @@
   max-width: none;
 }
 
-.chat-group-messages
+:is(.chat-group-messages, .chat-agent-run-body)
   > :is(
     .chat-bubble--tool-shell + .chat-bubble:not(.chat-bubble--tool-shell),
     .chat-bubble:not(.chat-bubble--tool-shell) + .chat-bubble--tool-shell
@@ -91,8 +91,7 @@
   margin-block-start: var(--chat-message-type-boundary-gap);
 }
 
-.chat-group
-  > .chat-group-messages
+:is(.chat-group > .chat-group-messages, .chat-agent-run-body)
   > :is(
     .chat-bubble--tool-shell + .chat-bubble:not(.chat-bubble--tool-shell),
     .chat-bubble:not(.chat-bubble--tool-shell) + .chat-bubble--tool-shell,
@@ -109,7 +108,7 @@
 .chat-group.tool {
   --chat-message-column-max: var(--chat-message-max-width, min(980px, 100%));
   display: block;
-  padding-inline-start: var(--chat-avatar-gutter);
+  padding-inline-start: calc(var(--chat-group-inset-start) + var(--chat-avatar-gutter));
 }
 
 /* Tool activity, completed work and live narration are blocks inside a turn,
@@ -151,12 +150,16 @@
 .chat-group:hover .chat-group-footer,
 .chat-group:focus-within .chat-group-footer,
 .chat-group-footer:has(.msg-meta[open]) {
+  --chat-footer-disclosure-opacity: 1;
+  --chat-footer-disclosure-pointer-events: auto;
   opacity: 1;
   pointer-events: auto;
 }
 
 /* Delivery recovery stays visible even when identity metadata is collapsed. */
 .chat-group-footer.chat-group-footer--send-status {
+  --chat-footer-disclosure-opacity: 1;
+  --chat-footer-disclosure-pointer-events: auto;
   opacity: 1;
   pointer-events: auto;
 }
@@ -262,10 +265,49 @@
   align-items: center;
   gap: 4px;
   margin-top: 6px;
+  pointer-events: auto;
+}
+
+.chat-group-footer > .chat-message-reactions,
+.chat-message-actions-row > .chat-message-reactions {
+  min-width: 0;
+  margin-top: 0;
+}
+
+/* One chip and its add button stay together while metadata yields width.
+   Longer reaction inventories retain their wrapping layout. */
+.chat-group-footer > .chat-message-reactions--single,
+.chat-message-actions-row > .chat-message-reactions--single {
+  flex-shrink: 0;
+  max-width: 100%;
+}
+
+/* Reactions share the reserved footer row without inheriting its hover fade.
+   Metadata and actions retain their own disclosure and keyboard access. */
+.chat-group-footer:has(> .chat-message-reactions) {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.chat-group-footer:has(> .chat-message-reactions)
+  > :is(.chat-group-footer__meta, .chat-group-footer-actions) {
+  opacity: var(--chat-footer-disclosure-opacity, 0);
+  pointer-events: var(--chat-footer-disclosure-pointer-events, none);
+  transition: opacity 120ms ease-out;
+}
+
+.chat-group-footer--persistent-identity:has(> .chat-message-reactions) > .chat-group-footer__meta {
+  opacity: var(--chat-persistent-footer-opacity, 1);
 }
 
 .chat-group.user:not(.chat-group--peer) .chat-message-reactions {
   justify-content: flex-end;
+}
+
+.chat-group.user:not(.chat-group--peer)
+  :is(.chat-group-footer, .chat-message-actions-row)
+  > .chat-message-reactions {
+  order: 1;
 }
 
 .chat-reaction-chip {
@@ -442,10 +484,11 @@
   flex: 0 0 20px;
   width: 20px;
   height: 20px;
+  aspect-ratio: 1;
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--border) 68%, transparent);
+  border: 0;
   border-radius: 50%;
-  box-shadow: 0 1px 2px color-mix(in srgb, var(--text) 9%, transparent);
+
   vertical-align: middle;
 }
 
@@ -475,13 +518,8 @@
   letter-spacing: -0.02em;
 }
 
-.chat-author-avatar__fallback,
 .chat-author-avatar.is-fallback .chat-author-avatar__image {
   display: none;
-}
-
-.chat-author-avatar.is-fallback .chat-author-avatar__fallback {
-  display: inline-flex;
 }
 
 .chat-group-timestamp {
@@ -914,21 +952,34 @@ img.chat-avatar.user {
   object-fit: cover;
 }
 
-/* Keep the image and its fallback in one stable grid item. display: contents
-   can lose the avatar column when Lit reconciles an attributed message. */
+/* The frame stays square while loading and when the image falls back. */
 .chat-avatar-slot {
   position: relative;
   display: grid;
+  width: 36px;
+  height: 36px;
+  aspect-ratio: 1;
+  flex-shrink: 0;
+  align-self: start;
+  margin-bottom: 4px;
+  border-radius: 50%;
 }
 
-.chat-avatar-slot > :not(img, .identity-avatar__hat),
+.chat-avatar-slot > .chat-avatar {
+  display: grid;
+  grid-area: 1 / 1;
+  width: 100%;
+  height: 100%;
+  margin-bottom: 0;
+}
+
+.chat-avatar-slot > img.chat-avatar {
+  z-index: 1;
+}
+
 .chat-avatar-slot.is-fallback > img.chat-avatar,
 .chat-avatar-slot.is-fallback > .identity-avatar__hat {
   display: none;
-}
-
-.chat-avatar-slot.is-fallback > :not(img, .identity-avatar__hat) {
-  display: grid;
 }
 
 .chat-avatar.assistant,
@@ -1048,6 +1099,7 @@ img.chat-avatar {
   border: 0;
   border-radius: var(--radius-full);
   background: var(--bg);
+  outline: 0;
   box-shadow: none;
 }
 
@@ -1055,17 +1107,18 @@ img.chat-avatar {
 .chat-message--reply > .chat-avatar-slot > .chat-avatar {
   border: 0;
   background: var(--bg);
+  outline: 0;
   box-shadow: none;
 }
 
 /* Center on the first text line inside the native 4px-padded assistant bubble:
    the strip row and bubble padding above the line, minus half the avatar's
-   overhang beyond one line box. */
+   overhang beyond one chat line box, independent of the avatar glyph line-height. */
 .chat-group.assistant.chat-group--reply > :is(.chat-avatar, .chat-avatar-slot) {
   grid-row: 1 / span 2;
   margin-top: calc(
     var(--chat-reply-attribution-line-height) + var(--chat-reply-attribution-gap) + 4px +
-      (1lh - var(--chat-avatar-column)) / 2
+      (var(--chat-text-size) * 1.5 - var(--chat-avatar-column)) / 2
   );
 }
 
@@ -1085,7 +1138,7 @@ img.chat-avatar {
   inset-inline-end: calc(100% + var(--chat-avatar-gap));
 }
 
-/* The child circle supplies the opaque surface; the slot includes its bottom margin. */
+/* The child circle supplies the opaque surface for the reply. */
 .chat-message--reply > .chat-avatar-slot {
   background: none;
 }
@@ -1172,13 +1225,8 @@ img.chat-avatar {
   width: 16px;
   height: 16px;
   border: 0;
+  outline: 0;
   box-shadow: none;
-}
-
-/* The agent avatar's hidden text fallback must not size its grid past the
-   16px circle, or the image stretches and crops. */
-.chat-reply-attribution__person .identity-avatar--agent {
-  grid-template: 100% / 100%;
 }
 
 .chat-reply-attribution__name {
@@ -1388,7 +1436,7 @@ button.chat-reply-attribution__target:disabled {
 
 /* User bubbles have different styling */
 .chat-group.user .chat-bubble {
-  --chat-bubble-background: var(--accent-subtle);
+  --chat-bubble-background: var(--chat-user-surface);
   background: var(--chat-bubble-background);
 
   :where(.shell[data-background-managed]) & {
@@ -1413,7 +1461,6 @@ button.chat-reply-attribution__target:disabled {
 
 /* Theme selection must not outrank the bare sent-media shell below. */
 :where(:root[data-theme-mode="light"]) .chat-group.user .chat-bubble {
-  --chat-bubble-background: color-mix(in srgb, var(--accent) 15%, var(--bg));
   border-color: transparent;
   background: var(--chat-bubble-background);
 
@@ -1935,8 +1982,11 @@ button.chat-reply-attribution__target:disabled {
     --chat-footer-disclosure-opacity: 0;
     --chat-footer-disclosure-pointer-events: none;
     --chat-footer-action-opacity: 0;
-    opacity: var(--chat-footer-disclosure-opacity);
     pointer-events: var(--chat-footer-disclosure-pointer-events);
+  }
+
+  .chat-group.user.chat-group--peer .chat-message-footer:not(:has(> .chat-message-reactions)) {
+    opacity: var(--chat-footer-disclosure-opacity);
   }
 
   .chat-group.user.chat-group--peer

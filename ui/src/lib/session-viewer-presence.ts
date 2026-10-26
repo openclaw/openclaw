@@ -2,7 +2,7 @@ import { SESSION_VIEWER_PRESENCE_MAX_KEYS } from "../../../packages/gateway-prot
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { isGatewayMethodAdvertised } from "./gateway-methods.ts";
 import { createGatewaySetSyncLifecycle } from "./gateway-set-sync-lifecycle.ts";
-import { resolveSessionKey } from "./sessions/index.ts";
+import { resolveSessionKey } from "./sessions/navigation.ts";
 
 const SESSION_VIEWERS_SET_METHOD = "sessions.viewers.set";
 

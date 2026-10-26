@@ -1,6 +1,6 @@
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
@@ -79,6 +79,38 @@ function fixture() {
   };
   return { writer, pathname, read, withReader };
 }
+
+it("reuses the prepared metadata key cohort across admission and later SQL batches", () => {
+  const { writer, read } = fixture();
+  insert(writer, "last-cohort");
+  const keyReads = Array.from({ length: 501 }, () => ({ count: 0 }));
+  const entries = keyReads.map((counter, index) => {
+    const keys = Object.freeze([index === 500 ? key : `missing-${index}`]);
+    return {
+      get keys() {
+        counter.count++;
+        return keys;
+      },
+      entry: command.entries[0]!.entry,
+    };
+  });
+  const deduplicate = vi.spyOn(Set.prototype, "add");
+  let result: ReturnType<typeof read>;
+  let missingKeyInsertions: number;
+  try {
+    result = read({ type: "acpSessions.metadata", entries });
+    missingKeyInsertions = deduplicate.mock.calls.filter(
+      ([value]) => typeof value === "string" && value.startsWith("missing-"),
+    ).length;
+  } finally {
+    deduplicate.mockRestore();
+  }
+  expect(result.rows.slice(0, 500)).toEqual(Array.from({ length: 500 }, () => null));
+  expectName(result.rows[500], "last-cohort");
+  // One cohort traversal and one ordered result match, including keys beyond admission's batch.
+  expect(keyReads.map(({ count }) => count)).toEqual(Array.from({ length: 501 }, () => 2));
+  expect(missingKeyInsertions).toBe(500);
+});
 
 it("keeps a pinned ACP snapshot and refreshes after it closes", () => {
   const { writer, pathname, read, withReader } = fixture();

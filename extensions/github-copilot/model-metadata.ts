@@ -5,11 +5,6 @@ import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coe
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 type CopilotRuntimeApi = "anthropic-messages" | "openai-completions" | "openai-responses";
-type CopilotReasoningCompat = {
-  supportsReasoningEffort?: boolean;
-  supportedReasoningEfforts?: readonly string[] | null;
-};
-
 // Provider-owned general-purpose preference. Setup verifies it against the
 // authenticated live catalog instead of assuming every account can use it.
 export const DEFAULT_COPILOT_MODEL = "github-copilot/claude-sonnet-5";
@@ -96,7 +91,10 @@ export function resolveCopilotModelCompat(
 
 export function resolveCopilotThinkingLevelMap(
   modelId: string,
-  compat?: CopilotReasoningCompat | null,
+  compat?: {
+    supportsReasoningEffort?: boolean;
+    supportedReasoningEfforts?: readonly string[] | null;
+  } | null,
   api?: string | null,
   params?: Record<string, unknown>,
 ): ModelDefinitionConfig["thinkingLevelMap"] | undefined {
