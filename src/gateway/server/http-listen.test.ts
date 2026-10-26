@@ -9,8 +9,8 @@ const sleepMock = vi.hoisted(() => vi.fn(async (_ms: number) => {}));
 // mock-isolation: Control retry timing without loading unrelated utility dependencies.
 vi.mock("../../utils.js", () => ({ sleep: (ms: number) => sleepMock(ms) }));
 
-function createFakeHttpServer(errors: string[]) {
-  class FakeHttpServer extends EventEmitter {
+function createFakeHttpServer(errors: string[], closeFailure?: "callback" | "throw") {
+  return new (class extends EventEmitter {
     public closeCalls = 0;
     listen() {
       const code = errors.shift();
@@ -26,12 +26,18 @@ function createFakeHttpServer(errors: string[]) {
 
     close(cb?: (error?: Error) => void) {
       this.closeCalls += 1;
-      setImmediate(() => cb?.());
+      const error = closeFailure ? new Error("retry cleanup failed") : undefined;
+      if (closeFailure === "throw") {
+        throw error;
+      }
+      if (closeFailure === "callback") {
+        cb?.(error);
+      } else {
+        setImmediate(() => cb?.());
+      }
       return this;
     }
-  }
-
-  return new FakeHttpServer();
+  })();
 }
 
 function listen(
@@ -69,42 +75,22 @@ it("releases its listeners when native listen throws synchronously", async () =>
   expect(onListening).not.toHaveBeenCalled();
 });
 
-it("retries EADDRINUSE and closes server handle before retry", async () => {
-  const fake = createFakeHttpServer(["EADDRINUSE"]);
-  await expect(listen(fake)).resolves.toBeUndefined();
-
-  expect(fake.closeCalls).toBe(1);
-  expect(sleepMock).toHaveBeenCalledTimes(1);
-});
-
-it.each(["callback", "throw"])("ignores close failures while retrying: %s", async (failure) => {
-  const fake = createFakeHttpServer(["EADDRINUSE"]);
-  const close = vi.spyOn(fake, "close").mockImplementation((callback) => {
-    const error = new Error("retry cleanup failed");
-    if (failure === "throw") {
-      throw error;
-    }
-    callback?.(error);
-    return fake;
-  });
-
-  await expect(listen(fake)).resolves.toBeUndefined();
-
-  expect(close).toHaveBeenCalledOnce();
-  expect(sleepMock).toHaveBeenCalledOnce();
-});
+it.each([undefined, "callback", "throw"] as const)(
+  "retries after close outcome: %s",
+  async (failure) => {
+    const fake = createFakeHttpServer(["EADDRINUSE"], failure);
+    await expect(listen(fake)).resolves.toBeUndefined();
+    expect(fake.closeCalls).toBe(1);
+    expect(sleepMock).toHaveBeenCalledOnce();
+  },
+);
 
 it.each([
-  {
-    reason: "exhausted retries",
-    errors: Array<string>(22).fill("EADDRINUSE"),
-    retry: true,
-    closes: 20,
-  },
-  { reason: "disabled retries", errors: ["EADDRINUSE"], retry: false, closes: 0 },
-  { reason: "non-EADDRINUSE error", errors: ["EACCES"], retry: true, closes: 0 },
-])("wraps $reason as GatewayLockError", async ({ errors, retry, closes }) => {
-  const fake = createFakeHttpServer(errors);
+  ["exhausted retries", Array<string>(22).fill("EADDRINUSE"), true, 20],
+  ["disabled retries", ["EADDRINUSE"], false, 0],
+  ["non-EADDRINUSE error", ["EACCES"], true, 0],
+] as const)("wraps %s as GatewayLockError", async (_reason, errors, retry, closes) => {
+  const fake = createFakeHttpServer([...errors]);
   await expect(listen(fake, retry)).rejects.toBeInstanceOf(GatewayLockError);
   expect(fake.closeCalls).toBe(closes);
   if (!retry) {

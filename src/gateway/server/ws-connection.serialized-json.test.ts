@@ -55,6 +55,20 @@ async function connect(perMessageDeflate: ClientOptions["perMessageDeflate"] = f
   await opened;
   return { peer, socket, request };
 }
+async function connectTransport(perMessageDeflate: ClientOptions["perMessageDeflate"] = false) {
+  const { peer, socket, request } = await connect(perMessageDeflate);
+  const codec = installGatewayDeflateCodec(socket)!;
+  const transport = createGatewayWebSocketTransport(socket, request.socket, codec);
+  return { peer, socket, request, codec, transport };
+}
+function send(
+  transport: ReturnType<typeof createGatewayWebSocketTransport>,
+  frame: Buffer | SerializedGatewayFrame,
+) {
+  return new Promise<void>((resolve, reject) => {
+    transport.send(frame, { binary: false }, (error) => (error ? reject(error) : resolve()));
+  });
+}
 afterEach(async () => {
   for (const socket of connections) {
     socket.terminate();
@@ -71,10 +85,8 @@ it.each([false, {}, { serverMaxWindowBits: 10 }] as const)(
     const unsubscribe = onInternalDiagnosticEvent((event) => observations.push(event), {
       include: ["gateway.ws.event"],
     });
-    const { peer, socket, request } = await connect(perMessageDeflate);
+    const { peer, socket, request, transport } = await connectTransport(perMessageDeflate);
     try {
-      const codec = installGatewayDeflateCodec(socket)!;
-      const transport = createGatewayWebSocketTransport(socket, request.socket, codec);
       const threshold = GATEWAY_PER_MESSAGE_DEFLATE.threshold;
       const envelope = { type: "event", event: "chat", payload: "" };
       const envelopeLength = JSON.stringify(envelope).length;
@@ -112,16 +124,16 @@ it.each([false, {}, { serverMaxWindowBits: 10 }] as const)(
       await yieldImmediate();
       await waitForDiagnosticEventsDrained();
       const events = observations.filter((event) => event.type === "gateway.ws.event");
-      const rawBytes = frames.reduce((sum, frame) => sum + frame.byteLength, 0);
-      const wireBytes = events.reduce((sum, event) => sum + (event.wireBytes ?? 0), 0);
+      const sum = (value: (event: (typeof events)[number]) => number) =>
+        events.reduce((total, event) => total + value(event), 0);
+      const rawBytes = frames.reduce((total, frame) => total + frame.byteLength, 0);
+      const wireBytes = sum((event) => event.wireBytes ?? 0);
       const headers = (perMessageDeflate === false ? 12 : 8) + 2 + 12; // Close and ping frames.
       expect(wireBytes).toBe(request.socket.bytesWritten - before - headers);
-      expect(events.reduce((sum, event) => sum + event.count, 0)).toBe(3);
-      expect(events.reduce((sum, event) => sum + event.bytes, 0)).toBe(rawBytes);
-      expect(events.reduce((sum, event) => sum + (event.frameBytes?.["+Inf"] ?? 0), 0)).toBe(3);
-      expect(
-        events.reduce((sum, event) => sum + (event.frameBytes?.[String(threshold)] ?? 0), 0),
-      ).toBe(1);
+      expect(sum((event) => event.count)).toBe(3);
+      expect(sum((event) => event.bytes)).toBe(rawBytes);
+      expect(sum((event) => event.frameBytes?.["+Inf"] ?? 0)).toBe(3);
+      expect(sum((event) => event.frameBytes?.[String(threshold)] ?? 0)).toBe(1);
       if (perMessageDeflate === false) {
         expect(wireBytes).toBe(rawBytes);
       } else {
@@ -135,12 +147,7 @@ it.each([false, {}, { serverMaxWindowBits: 10 }] as const)(
 );
 
 it("matches ws wire bytes with one native submission at every uncompressed frame length boundary", async () => {
-  const { peer, socket, request } = await connect();
-  const transport = createGatewayWebSocketTransport(
-    socket,
-    request.socket,
-    installGatewayDeflateCodec(socket),
-  );
+  const { peer, socket, request, transport } = await connectTransport();
   const writes = vi.spyOn(request.socket, "write");
   const nativeWrite = vi.spyOn(request.socket, "_write");
   // oxlint-disable-next-line no-underscore-dangle -- Count actual Writable submissions on Node and Bun.
@@ -158,9 +165,7 @@ it("matches ws wire bytes with one native submission at every uncompressed frame
     const frame = new SerializedGatewayFrame([bytes.subarray(0, 1), bytes.subarray(1)]);
     const materialize = vi.spyOn(frame, "toBuffer");
     const received = once(peer, "message");
-    const sent = new Promise<void>((resolve, reject) => {
-      transport.send(frame, { binary: false }, (error) => (error ? reject(error) : resolve()));
-    });
+    const sent = send(transport, frame);
     const [[data, binary]] = await Promise.all([received, sent]);
     expect(binary).toBe(false);
     expect(data).toEqual(bytes);
@@ -213,10 +218,12 @@ it.each(["small", "large"])("owns and reuses %s compressed segments per window",
   const messages = new SerializedJsonArray(bytes);
   const retained = new Map<number, Uint8Array>();
   for (const windowBits of [15, 10]) {
-    const { peer: client, socket, request } = await connect({ serverMaxWindowBits: windowBits });
-    const codec = installGatewayDeflateCodec(socket)!;
+    const {
+      peer: client,
+      codec,
+      transport,
+    } = await connectTransport({ serverMaxWindowBits: windowBits });
     expect(codec).toMatchObject({ acceptsDeflatedSegments: windowBits === 15 });
-    const transport = createGatewayWebSocketTransport(socket, request.socket, codec);
     const compressed = deflateRawSync(bytes, { level: 1, windowBits, finishFlush });
     expect(compressed.byteLength < Buffer.poolSize >>> 1).toBe(size === "small");
     for (let sequence = 0; sequence < 2; sequence++) {
@@ -228,13 +235,7 @@ it.each(["small", "large"])("owns and reuses %s compressed segments per window",
       const received = once(client, "message");
       let sent: Promise<void>;
       try {
-        sent = new Promise<void>((resolve, reject) => {
-          transport.send(
-            typeof frame === "string" ? Buffer.from(frame) : frame,
-            { binary: false },
-            (error) => (error ? reject(error) : resolve()),
-          );
-        });
+        sent = send(transport, typeof frame === "string" ? Buffer.from(frame) : frame);
         expect(materialize).not.toHaveBeenCalled();
       } finally {
         materialize.mockRestore();
@@ -273,12 +274,7 @@ it.each([15, 10])(
       bytes.subarray(2, -2),
       bytes.subarray(-2),
     ]);
-    const { peer, socket, request } = await connect({ serverMaxWindowBits: windowBits });
-    const transport = createGatewayWebSocketTransport(
-      socket,
-      request.socket,
-      installGatewayDeflateCodec(socket),
-    );
+    const { peer, transport } = await connectTransport({ serverMaxWindowBits: windowBits });
     const received = once(peer, "message");
     transport.send(frame, { binary: false });
     const [data, binary] = await received;
