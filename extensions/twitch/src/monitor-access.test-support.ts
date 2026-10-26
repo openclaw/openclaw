@@ -1,8 +1,9 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
-import { afterAll, vi } from "vitest";
+import { vi } from "vitest";
 import { monitorTwitchProvider } from "./monitor.js";
 import { setTwitchRuntime } from "./runtime.js";
-import type { TwitchClientManager } from "./twitch-client.js";
+import type { TwitchClientManager as Manager } from "./twitch-client.js";
 import type { TwitchChatMessage } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -18,24 +19,18 @@ vi.mock("./twitch-ingress.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./twitch-ingress.js")>()),
   createTwitchIngress: mocks.createIngress,
 }));
-afterAll(() => {
-  vi.doUnmock("./client-manager-registry.js");
-  vi.doUnmock("./twitch-ingress.js");
-  vi.resetModules();
-});
-
 function fixture() {
+  const pending: Promise<void>[] = [];
   const f = {
     core: createPluginRuntimeMock(),
-    send: vi
-      .fn<TwitchClientManager["sendMessage"]>()
-      .mockResolvedValue({ ok: true, messageId: "message-id" }),
+    send: vi.fn<Manager["sendMessage"]>().mockResolvedValue({ ok: true, messageId: "message-id" }),
     error: vi.fn(),
     unregister: vi.fn(),
-    ingressStop: vi.fn(),
+    ingressStop: vi.fn(async () => {
+      await Promise.allSettled(pending);
+    }),
   };
   let handler: ((message: TwitchChatMessage) => void) | undefined;
-  const pending: Promise<void>[] = [];
   mocks.manager.mockReturnValue({
     getClient: async () => ({}),
     sendMessage: f.send,
@@ -58,17 +53,12 @@ function fixture() {
       return undefined;
     },
     start: () => {},
-    stop: f.ingressStop.mockImplementation(async () => {
-      await Promise.allSettled(pending);
-    }),
+    stop: f.ingressStop,
   }));
   return {
     ...f,
     dispatch: async (message: TwitchChatMessage) => {
-      if (!handler) {
-        throw new Error("Expected Twitch message handler");
-      }
-      handler(message);
+      expectDefined(handler, "Expected Twitch message handler")(message);
       await Promise.all(pending);
     },
   };
@@ -96,11 +86,10 @@ export async function withTwitchMonitor<T>(
   }
 }
 
-export async function checkTwitchMessageThroughMonitor(
+export const checkTwitchMessageThroughMonitor = (
   params: Pick<Params, "account" | "accountId"> & { message: TwitchChatMessage },
-) {
-  return withTwitchMonitor({ ...params, config: {} }, async ({ core, dispatch }) => {
+) =>
+  withTwitchMonitor({ ...params, config: {} }, async ({ core, dispatch }) => {
     await dispatch(params.message);
     return { allowed: vi.mocked(core.channel.inbound.run).mock.calls.length > 0 };
   });
-}
