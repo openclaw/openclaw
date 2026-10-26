@@ -234,12 +234,6 @@ export function startOpenClawStateLeaseHeartbeat(
     rejectPending(error);
   };
   const lifecycle = createLeaseHeartbeatCleanup({ cancel: close });
-  const assertRunning = () => {
-    // Local lifetime only; protected effects still check durable ownership.
-    if (Atomics.load(shared, state.status) !== state.ready) {
-      throw new Error("state lease heartbeat is not running");
-    }
-  };
   let lossReported = false;
   let workerLoss: LeaseHeartbeatLoss | undefined;
   const lossDetail = () =>
@@ -263,6 +257,17 @@ export function startOpenClawStateLeaseHeartbeat(
     ready.reject(error);
     rejectPending(error);
     params.onLost(error);
+  };
+  const assertRunning = () => {
+    // Shared loss can precede carrier notification; publish it before returning to the owner.
+    if (Atomics.load(shared, state.status) !== state.ready) {
+      const error = new OpenClawStateLeaseError("state lease heartbeat is not running", {
+        code: "OPENCLAW_STATE_LEASE_LOST",
+        loss: workerLoss?.leaseLoss,
+      });
+      fail(error);
+      throw error;
+    }
   };
   const remainingLeaseMs = () => Number(Atomics.load(shared, state.expiresAt)) - Date.now();
   const operationBudget = () => {

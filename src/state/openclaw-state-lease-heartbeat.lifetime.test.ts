@@ -390,11 +390,24 @@ describe("state lease heartbeat lifetime", () => {
     }
   });
 
-  it.each(["reply-first", "deadline-first", "expired", "lost"] as const)(
+  it.each(["reply-first", "deadline-first", "expired", "lost", "lost-before-request"] as const)(
     "validates verify after %s delivery",
     async (delivery) => {
       const { params, heartbeat, worker } = await readyHeartbeat();
+      if (delivery === "lost-before-request") {
+        Atomics.store(worker.shared, state.status, state.lost);
+      }
       const outcome = heartbeat.verify().catch((error: unknown) => error);
+      if (delivery === "lost-before-request") {
+        const result = await outcome;
+        expect(result).toMatchObject({
+          message: "state lease heartbeat is not running",
+          code: "OPENCLAW_STATE_LEASE_LOST",
+        });
+        expect(params.onLost).toHaveBeenCalledExactlyOnceWith(result);
+        expect(worker.messages).toEqual([]);
+        return;
+      }
       const reply = await request(worker);
       let expiresAt = Number(Atomics.load(worker.shared, state.expiresAt));
       if (delivery === "deadline-first") {
@@ -413,7 +426,11 @@ describe("state lease heartbeat lifetime", () => {
       const result = await outcome;
       if (delivery === "lost") {
         assert(result instanceof Error);
-        expect(result).toEqual(new Error("state lease heartbeat is not running"));
+        expect(result).toMatchObject({
+          message: "state lease heartbeat is not running",
+          code: "OPENCLAW_STATE_LEASE_LOST",
+        });
+        expect(params.onLost).toHaveBeenCalledExactlyOnceWith(result);
       } else if (delivery === "expired") {
         expectMessage(
           result,
