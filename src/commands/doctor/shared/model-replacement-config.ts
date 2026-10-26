@@ -24,11 +24,11 @@ export function prepareModelReplacementConfig(
   cfg: OpenClawConfig,
   choices: readonly DoctorModelReplacement[],
 ) {
+  const changes: string[] = [];
   if (choices.length === 0) {
-    return { config: cfg, changes: [] as string[] };
+    return { config: cfg, changes };
   }
   const config = structuredClone(cfg);
-  const changes: string[] = [];
   for (const choice of choices) {
     const settings = [
       config.agents?.defaults?.models?.[choice.to],
