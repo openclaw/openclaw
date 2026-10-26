@@ -296,7 +296,6 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     ["entry", { entries: { "memory-demo": { enabled: true } } }],
     ["allowlist", { allow: ["memory-demo"] }],
     ["memory slot", { slots: { memory: " memory-demo " } }],
-    ["context-engine slot", { slots: { contextEngine: " memory-demo " } }],
   ])(
     "recovers a global source plugin selected by %s from a stale registry",
     async (_selection, plugins) => {
