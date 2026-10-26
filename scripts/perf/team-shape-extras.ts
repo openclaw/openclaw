@@ -61,8 +61,14 @@ function retainedRun(index: number, options: TeamShapeExtrasOptions): SubagentRu
   const collector = options.teamStress && options.settledRuns;
   const parent = options.sessions[childOffset % (collector ? Math.min(64, rootCount) : rootCount)]!;
   const runId = `team-shape-run-${index}`;
-  const endedAt =
-    options.now - 60_000 - (options.retainedRuns - 1 - index) * TEAM_SHAPE_RUN_SLOT_MS;
+  // Collector retention is derived from completion time, not the stored archive deadline.
+  const slotMs = collector
+    ? Math.max(
+        1,
+        Math.min(TEAM_SHAPE_RUN_SLOT_MS, Math.floor((30 * 60_000) / options.retainedRuns)),
+      )
+    : TEAM_SHAPE_RUN_SLOT_MS;
+  const endedAt = options.now - 60_000 - (options.retainedRuns - 1 - index) * slotMs;
   const startedAt = endedAt - 30_000 - (index % 100) * 1_000;
   const slot = index % 20;
   const failed = slot >= 12 && slot < 15;

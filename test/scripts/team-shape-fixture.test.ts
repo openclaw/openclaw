@@ -301,6 +301,12 @@ it("seeds the stress category mix with readable collector parents and settled un
   expectCounts(state, {
     "subagent_runs WHERE json_extract(payload_json, '$.swarmRequesterSessionKey') = requester_session_key AND json_extract(payload_json, '$.groupId') IS NOT NULL": 43,
   });
+  const oldest = state
+    .prepare(
+      "SELECT min(json_extract(payload_json, '$.completion.capturedAt')) AS at FROM subagent_runs",
+    )
+    .get();
+  expect(Number(oldest?.at)).toBeGreaterThan(summary.now - 31 * 60_000);
   expect(summary.stressTargets?.length).toBeGreaterThan(0);
   for (const target of summary.stressTargets ?? []) {
     const row = agent
