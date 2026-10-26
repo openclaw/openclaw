@@ -77,9 +77,7 @@ describe("computer tool guidance", () => {
   });
 
   it("does not present a Gateway desktop when the Gateway computer is not configured", () => {
-    const pairedOnly = buildComputerToolDescription(descriptor(["screenshot"]), "paired", {
-      gatewayConfigured: false,
-    });
+    const pairedOnly = buildComputerToolDescription(descriptor(["screenshot"]), "node");
     expect(pairedOnly).toContain("The Gateway has no computer provider configured");
     expect(pairedOnly).toContain("omit target or use target: node");
     expect(pairedOnly).not.toContain("the Gateway desktop");

@@ -381,17 +381,14 @@ describe("computer Gateway and node targets", () => {
     },
   );
 
-  it("points an explicit Gateway target at the paired node when no Gateway provider is configured", async () => {
+  it("explains the paired-node retry for an explicit Gateway target when no Gateway provider is configured", async () => {
     gatewayComputerStatusMock.mockResolvedValue({ configured: false, available: false });
     listNodesMock.mockResolvedValue([macComputerNode()]);
     const tool = createHostedComputerTool();
 
     await expect(
       tool.execute("unconfigured-gateway", { action: "screenshot", target: "gateway" }),
-    ).rejects.toThrow("Gateway computer is not configured on this host");
-    await expect(
-      tool.execute("unconfigured-gateway-retry", { action: "screenshot", target: "gateway" }),
-    ).rejects.toThrow(/Omit target, or use target: node/);
+    ).rejects.toThrow(/Gateway computer is not configured.*Omit target, or use target: node/);
     expect(callGatewayToolMock).not.toHaveBeenCalled();
   });
 

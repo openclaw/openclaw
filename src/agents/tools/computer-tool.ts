@@ -196,10 +196,11 @@ export function createComputerTool(options?: {
     1,
     Math.min(COMPUTER_REF_WIDTH, configuredLimits.maxDimensionPx ?? DEFAULT_IMAGE_MAX_DIMENSION_PX),
   );
-  const targetScope = options?.transport ? "session" : "paired";
-  // The resolved surface owns whether this host has a Gateway desktop. Advertise the
-  // Gateway target from that fact; an unknown status keeps the paired+gateway schema.
-  const gatewayConfigured = options?.pairedNodeComputerUse?.gateway?.configured !== false;
+  const targetScope = options?.transport
+    ? "session"
+    : options?.pairedNodeComputerUse?.gateway?.configured === false
+      ? "node"
+      : "paired";
   // Harnesses serialize the schema before execution; a prepared desktop must
   // advertise its full action surface before the first observation.
   const initialCapabilities =
@@ -214,7 +215,6 @@ export function createComputerTool(options?: {
   const parameterSchema = createComputerToolSchema(
     availableActions(options?.transport?.computerUse?.actions ?? initialPairedActions),
     targetScope,
-    { gatewayConfigured },
   );
   // Serialize execute() per tool instance. This runtime can dispatch parallel
   // tool calls (some providers enable it by default), but desktop input and the
@@ -241,11 +241,8 @@ export function createComputerTool(options?: {
       tool.parameters = createComputerToolSchema(
         availableActions(capabilities?.actions ?? COMPUTER_TOOL_ACTIONS),
         targetScope,
-        { gatewayConfigured },
       );
-      tool.description = buildComputerToolDescription(capabilities, targetScope, {
-        gatewayConfigured,
-      });
+      tool.description = buildComputerToolDescription(capabilities, targetScope);
     },
     registerRunCleanup: options?.registerRunCleanup,
     getOperationQueue: () => opQueue,
@@ -335,9 +332,7 @@ export function createComputerTool(options?: {
     // model-visible screenshot block that coordinate actions depend on.
     catalogMode: "direct-only",
     executionMode: "sequential",
-    description: buildComputerToolDescription(initialCapabilities, targetScope, {
-      gatewayConfigured,
-    }),
+    description: buildComputerToolDescription(initialCapabilities, targetScope),
     parameters: parameterSchema,
     prepareArguments: prepareComputerArguments,
     execute: (toolCallId, args, signal) =>
