@@ -4,7 +4,7 @@ import { page, userEvent } from "vitest/browser";
 import { registerMenuShortcuts } from "../../../components/menu-shortcuts.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
-import { focusChatComposerFromPrintableKeydown } from "../chat-pane-shared.ts";
+import { focusChatComposerFromKeydown } from "../chat-pane-shared.ts";
 import "../../../styles/base.css";
 import "../../../styles/chat/composer.css";
 import { focusComposerFromChrome } from "./chat-composer-dom.ts";
@@ -54,7 +54,7 @@ function mountPicker(optionsReady = true) {
           class="agent-chat__input"
           onPointerDown={(event) => focusComposerFromChrome(event, true, composer)}
           onClick={(event) => focusComposerFromChrome(event, true, composer)}
-          onKeyDown={(event) => focusChatComposerFromPrintableKeydown(container, event, composer)}
+          onKeyDown={(event) => focusChatComposerFromKeydown(container, event, composer)}
         >
           <div class="agent-chat__composer-combobox">
             <textarea ref={(element) => (composer = element)} />
@@ -294,7 +294,12 @@ it("windows a large catalog while keeping keyboard choices and accessible positi
   await open();
   const rows = () => [...container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]")];
   expect(rows()).toHaveLength(9);
-  const more = container.querySelector<HTMLButtonElement>("[data-chat-model-more-toggle]")!;
+  // Shortcut rows are pinned before the viewport's remaining rows are measured.
+  const more = await vi.waitFor(() => {
+    const button = container.querySelector<HTMLButtonElement>("[data-chat-model-more-toggle]");
+    expect(button?.checkVisibility()).toBe(true);
+    return button!;
+  });
   more.click();
   flush();
   const search = getSearch();

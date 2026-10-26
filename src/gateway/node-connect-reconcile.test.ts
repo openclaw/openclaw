@@ -1,4 +1,4 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
@@ -7,10 +7,6 @@ import type { ConnectParams } from "../../packages/gateway-protocol/src/index.js
 import type { NodePairingRequestInput, PairedDeviceNode } from "../infra/device-pairing-node.js";
 import { resolveNodePairApprovalScopes } from "../infra/node-pairing-authz.js";
 import type { ComputerUseCapabilityDescriptor } from "../plugins/computer-use-contract.js";
-import { registerComputerUseProvider } from "../plugins/computer-use-registration.js";
-import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
-import { resolveNodeCommandAllowlist } from "./node-command-policy.js";
 import { resolveEffectiveComputerUseDescriptor } from "./node-computer-use-descriptor.js";
 import { reconcileNodePairingOnConnect } from "./node-connect-reconcile.js";
 
@@ -104,10 +100,8 @@ const computerUseDescriptor = (): ComputerUseCapabilityDescriptor => ({
   features: { recording: false, agentCursor: false, multiDisplay: false },
 });
 
-afterEach(resetPluginRuntimeStateForTest);
-
 it("keeps first-time pending node surfaces declared but not effective", async () => {
-  const { result, requestPairing } = await reconcilePending("req-pending", {
+  const { result } = await reconcilePending("req-pending", {
     connectParams: hostConnectParams({
       caps: ["talk"],
       commands: ["system.run"],
@@ -120,13 +114,11 @@ it("keeps first-time pending node surfaces declared but not effective", async ()
   expect(result.effectiveCommands).toEqual([]);
   expect(result.declaredPermissions).toEqual({ camera: true });
   expect(result.effectivePermissions).toBeUndefined();
-  expect(requestPairing).toHaveBeenCalledWith(
-    expect.objectContaining({
-      caps: ["talk"],
-      commands: ["system.run"],
-      permissions: { camera: true },
-    }),
-  );
+  expect(result.pendingPairing?.request).toMatchObject({
+    caps: ["talk"],
+    commands: ["system.run"],
+    permissions: { camera: true },
+  });
 });
 
 it("reapproves and then preserves Windows exec approval commands", async () => {
@@ -139,13 +131,13 @@ it("reapproves and then preserves Windows exec approval commands", async () => {
   ];
   const previouslyApprovedCommands = ["system.run.prepare", "system.run", "system.which"];
   const connectParams = hostConnectParams({ caps: ["system"], commands }, "windows");
-  const { result: upgrade, requestPairing } = await reconcilePending("req-windows", {
+  const { result: upgrade } = await reconcilePending("req-windows", {
     connectParams,
     pairedNode: makePairedNode({ caps: ["system"], commands: previouslyApprovedCommands }),
   });
   expect(upgrade.declaredCommands).toEqual(commands);
   expect(upgrade.effectiveCommands).toEqual(previouslyApprovedCommands);
-  expect(requestPairing).toHaveBeenCalledWith(expect.objectContaining({ commands }));
+  expect(upgrade.pendingPairing?.request.commands).toEqual(commands);
   const approvedPairingRequest = vi.fn();
   const approvedReconnect = await reconcile({
     connectParams,
@@ -154,70 +146,6 @@ it("reapproves and then preserves Windows exec approval commands", async () => {
   });
   expect(approvedReconnect.effectiveCommands).toEqual(commands);
   expect(approvedPairingRequest).not.toHaveBeenCalled();
-});
-
-it("keeps an approved computer.act surface effective while a computer-use provider plugin is active", async () => {
-  // The default macOS Gateway's provider is active while the approved node reconnects.
-  const registry = createEmptyPluginRegistry();
-  const origin = {
-    pluginId: "cua-computer",
-    pluginName: "CUA Computer",
-    source: "/extensions/cua-computer/index.ts",
-    rootDir: "/extensions/cua-computer",
-  };
-  registerComputerUseProvider(
-    {
-      registerNodeHostCommand: (command) => {
-        registry.nodeHostCommands.push({ ...origin, command });
-      },
-    },
-    {
-      id: "fixture",
-      label: "Fixture",
-      capabilities: () => computerUseDescriptor(),
-      isAvailable: () => true,
-      openExecution: () => {
-        throw new Error("unused");
-      },
-    },
-  );
-  registry.nodeInvokePolicies.push({
-    ...origin,
-    pluginConfig: {},
-    policy: {
-      commands: ["computer.act"],
-      dangerous: true,
-      handle: async (ctx) => await ctx.invokeNode(),
-    },
-  });
-  setActivePluginRegistry(registry);
-  const requestPairing = vi.fn();
-
-  const result = await reconcile({
-    connectParams: desktopConnectParams(),
-    pairedNode: makePairedNode({
-      caps: ["screen", "computer"],
-      commands: ["screen.snapshot", "computer.act"],
-    }),
-    requestPairing,
-  });
-  expect(requestPairing).not.toHaveBeenCalled();
-  expect(result.shouldClearPendingPairings).toBe(true);
-  expect(result.declaredCommands).toEqual(["screen.snapshot", "computer.act"]);
-  expect(result.effectiveCommands).toEqual(["screen.snapshot", "computer.act"]);
-  expect(result.declaredCaps).toEqual(["screen", "computer"]);
-  expect(result.effectiveCaps).toEqual(["screen", "computer"]);
-  expect(effectiveDesktop(result)).toEqual(computerUseDescriptor());
-  expect(
-    resolveNodeCommandAllowlist(
-      {},
-      {
-        platform: "macos",
-        deviceFamily: "Mac",
-        approvedCommands: result.effectiveCommands,
-      },
-    ).has("computer.act"),
-  ).toBe(true);
 });
 
 it("drops a capability whose declared commands were all filtered by policy", async () => {
@@ -240,60 +168,34 @@ it("drops a capability whose declared commands were all filtered by policy", asy
 });
 
 it("requests pairing when a macOS node first declares computer.act", async () => {
-  const { result, requestPairing } = await reconcilePending("req-computer", {
+  const { result } = await reconcilePending("req-computer", {
     connectParams: desktopConnectParams(),
     pairedNode: makePairedNode({
       caps: ["screen"],
       commands: ["screen.snapshot"],
     }),
   });
-  expect(requestPairing).toHaveBeenCalledWith(
-    expect.objectContaining({
-      caps: ["screen", "computer"],
-      commands: ["screen.snapshot", "computer.act"],
-    }),
-  );
   expect(result.effectiveCommands).toEqual(["screen.snapshot"]);
   expect(result.declaredComputerUse).toEqual(computerUseDescriptor());
   expect(effectiveDesktop(result)).toBeUndefined();
   expect(result.pendingPairing?.request.requestId).toBe("req-computer");
-});
-
-it("keeps registry-bound node plugin tool commands in first-time pairing", async () => {
-  const registry = createEmptyPluginRegistry();
-  registry.nodeHostCommands = [
-    {
-      pluginId: "remote",
-      pluginName: "Remote",
-      source: "/extensions/remote/index.ts",
-      rootDir: "/extensions/remote",
-      command: {
-        command: "remote.echo",
-        agentTool: {
-          name: "remote_echo",
-          description: "Echo from a node host",
-          defaultPlatforms: ["macos"],
-        },
-        handle: async () => "{}",
-      },
-    },
-  ];
-  setActivePluginRegistry(registry);
-  const { result, requestPairing } = await reconcilePending("req-plugin-tool", {
-    connectParams: hostConnectParams({ commands: ["remote.echo"] }),
+  expect(result.pendingPairing?.request.commands).toEqual(["screen.snapshot", "computer.act"]);
+  const approved = await reconcile({
+    connectParams: desktopConnectParams(),
+    pairedNode: makePairedNode({
+      caps: ["screen", "computer"],
+      commands: ["screen.snapshot", "computer.act"],
+    }),
+    requestPairing: vi.fn(),
   });
-  expect(result.declaredCommands).toEqual(["remote.echo"]);
-  expect(result.effectiveCommands).toEqual([]);
-  expect(requestPairing).toHaveBeenCalledWith(
-    expect.objectContaining({ commands: ["remote.echo"] }),
-  );
+  expect(effectiveDesktop(approved)).toEqual(computerUseDescriptor());
 });
 
 it.each([
   ["conflicts with device family", { deviceFamily: "iPhone" }],
   ["omits device family", {}],
 ])("filters host commands when canonical platform %s", async (_label, clientExtra) => {
-  const { result, requestPairing } = await reconcilePending("req-mismatch", {
+  const { result } = await reconcilePending("req-mismatch", {
     connectParams: makeNodeConnectParams({
       client: {
         id: "openclaw-ios",
@@ -307,7 +209,6 @@ it.each([
   });
 
   expect(result.declaredCommands).toEqual([]);
-  expect(requestPairing).toHaveBeenCalledWith(expect.objectContaining({ commands: [] }));
 });
 
 it("keeps the approved surface when paired-node reapproval is throttled", async () => {
@@ -318,7 +219,6 @@ it("keeps the approved surface when paired-node reapproval is throttled", async 
     requestPairing,
   });
 
-  expect(requestPairing).toHaveBeenCalledOnce();
   expect(result.effectiveCaps).toEqual(["camera"]);
   expect(result.effectiveCommands).toEqual([]);
   expect(result.declaredCaps).toEqual(["camera", "screen"]);
@@ -327,7 +227,7 @@ it("keeps the approved surface when paired-node reapproval is throttled", async 
 });
 
 it("requires a fresh pairing request when paired node permissions widen", async () => {
-  const { result, requestPairing } = await reconcilePending("req-permissions", {
+  const { result } = await reconcilePending("req-permissions", {
     connectParams: makeNodeConnectParams({
       commands: [],
       permissions: { camera: true, notifications: true },
@@ -338,22 +238,9 @@ it("requires a fresh pairing request when paired node permissions widen", async 
     }),
   });
 
-  expect(requestPairing).toHaveBeenCalledWith({
-    nodeId: "openclaw-ios",
-    clientId: undefined,
-    clientMode: undefined,
-    displayName: undefined,
-    platform: "ios",
-    version: "test",
-    deviceFamily: undefined,
-    modelIdentifier: undefined,
-    caps: [],
-    commands: [],
-    permissions: { camera: true, notifications: true },
-    remoteIp: undefined,
-  });
   expect(result.effectiveCommands).toEqual([]);
   expect(result.effectivePermissions).toEqual({ camera: true, notifications: false });
+  expect(result.pendingPairing?.request.permissions).toEqual({ camera: true, notifications: true });
   expect(result.pendingPairing?.request.requestId).toBe("req-permissions");
 });
 

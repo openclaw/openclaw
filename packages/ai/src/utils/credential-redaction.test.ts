@@ -1,12 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  createDiagnosticArray,
-  createDiagnosticRecord,
+  projectPreparedDiagnosticValue as projectPrepared,
   projectDiagnosticValue as project,
 } from "./credential-redaction.js";
 
 describe("diagnostic descriptor snapshots", () => {
-  it("projects branded producer records exactly like the descriptor walk", () => {
+  it("projects prepared producer records exactly like the descriptor walk", () => {
     const plain = {
       name: "apiKey",
       value: "secret-value",
@@ -16,31 +15,56 @@ describe("diagnostic descriptor snapshots", () => {
       items: [{ mimeType: "image/png", bytes: new Uint8Array([1, 2, 3]) }, "text", 3],
       nested: { authorization: "Bearer abcdefghijklmnop", url: "data:image/png;base64,aGk=" },
     };
-    const brand = (value: unknown): unknown => {
-      if (Array.isArray(value)) {
-        const array = createDiagnosticArray();
-        for (const item of value) {
-          array.push(brand(item));
-        }
-        return array;
-      }
-      if (value && typeof value === "object" && !ArrayBuffer.isView(value)) {
-        const record = createDiagnosticRecord();
-        for (const [key, child] of Object.entries(value)) {
-          record[key] = brand(child);
-        }
-        return record;
-      }
-      return value;
-    };
     for (const policy of [
       {},
       { redactCredentials: false, omitField: (key: string) => key === "providerReplay" },
     ]) {
-      expect(JSON.stringify(project(brand(plain), policy))).toBe(
-        JSON.stringify(project(structuredClone(plain), policy)),
-      );
+      const expected = {
+        name: "apiKey",
+        value: policy.redactCredentials === false ? "secret-value" : "<redacted>",
+        ...(policy.omitField ? {} : { providerReplay: { kept: false } }),
+        type: "input_image",
+        data: { redacted: "<redacted>", bytes: 5 },
+        items: [{ mimeType: "image/png", bytes: { redacted: "<redacted>", bytes: 3 } }, "text", 3],
+        nested: {
+          ...(policy.redactCredentials === false
+            ? { authorization: "Bearer abcdefghijklmnop" }
+            : {}),
+          url: "<redacted>",
+        },
+      };
+      expect(projectPrepared(plain, policy)).toEqual(expected);
+      expect(project(structuredClone(plain), policy)).toEqual(expected);
     }
+  });
+
+  it("keeps the descriptor fallback for prepared records with a changed prototype", () => {
+    const getter = vi.fn(() => "must not be read");
+    const value = { safe: "kept" };
+    Object.setPrototypeOf(value, { inherited: "ignored" });
+    Object.defineProperty(value, "secret", { enumerable: true, get: getter });
+    expect(projectPrepared(value)).toEqual({ safe: "kept" });
+    expect(getter).not.toHaveBeenCalled();
+  });
+
+  it("does not transfer producer trust into a reentrant public projection", () => {
+    const getter = vi.fn(() => "must not be read");
+    const foreign = Object.defineProperty({ safe: "kept" }, "secret", {
+      enumerable: true,
+      get: getter,
+    });
+    expect(
+      projectPrepared(
+        { outer: "kept" },
+        {
+          omitField: () => {
+            expect(project(foreign)).toEqual({ safe: "kept" });
+            return false;
+          },
+        },
+      ),
+    ).toEqual({ outer: "kept" });
+    expect(getter).not.toHaveBeenCalled();
   });
 
   it("keeps media and credential classification isolated through reentrant policy callbacks", () => {

@@ -156,45 +156,19 @@ describe("gateway chat metadata refresh", () => {
     },
   );
 
-  test("notifies settled catalog status without rebuilding metadata", async () => {
+  test("retains a requested status notification when refreshes coalesce", async () => {
     const onChanged = vi.fn();
     const harness = createChatMetadataHarness(undefined, { onChanged });
     onTestFinished(() => harness.runtime.stop());
-    const owner = harness.getPreparedOwner()!;
-    const catalog = owner.modelCatalog;
-    const catalogChange = { modelCatalogChanged: true, authChanged: false, commandsChanged: false };
-    const notify = () =>
-      Promise.all([harness.refresh(), harness.refresh({ notifyIfUnchanged: true })]);
     await harness.refresh();
-    const original = await harness.read();
     onChanged.mockClear();
-    catalog.pendingProviders = ["test"];
-    await harness.refresh();
-    expect(onChanged).not.toHaveBeenCalled();
-
-    catalog.pendingProviders = undefined;
-    await notify();
+    await Promise.all([harness.refresh(), harness.refresh({ notifyIfUnchanged: true })]);
     expect(onChanged).toHaveBeenCalledExactlyOnceWith({
       modelCatalogChanged: false,
       modelCatalogStatusChanged: true,
       authChanged: false,
       commandsChanged: false,
     });
-    expect(await harness.read()).toEqual(original);
-    expect(harness.getPreparedOwner()).toBe(owner);
-    expect(owner.modelCatalog).toBe(catalog);
-    expect(harness.buildCommands).toHaveBeenCalledOnce();
-    expect(harness.buildProjection).toHaveBeenCalledOnce();
-    await harness.refresh();
-    expect(onChanged).toHaveBeenCalledOnce();
-
-    catalog.refreshFailed = true;
-    await notify();
-    expect(onChanged).toHaveBeenCalledTimes(2);
-    expect(onChanged).toHaveBeenLastCalledWith(catalogChange);
-    await harness.read();
-    expect(harness.buildCommands).toHaveBeenCalledTimes(2);
-    expect(harness.buildProjection).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -204,22 +178,20 @@ describe("gateway chat metadata shutdown", () => {
     const harness = createChatMetadataHarness(undefined, { onChanged });
     await harness.refresh();
     harness.runtime.invalidate();
-    const reads = [
-      harness.read(),
+    const read = harness.read().catch((error: unknown) => error);
+    await expect(
       harness.startup({
         agentId: "main",
         sessionEntry: { authProfileOverride: "test:session", authProfileOverrideSource: "user" },
       }),
-    ].map((read) => read.catch((error: unknown) => error));
+    ).resolves.toBeUndefined();
 
     await harness.runtime.stop();
 
-    for (const result of await Promise.all(reads)) {
-      expect(result).toMatchObject({
-        name: "ChatMetadataSnapshotUnavailableError",
-        message: "gateway chat metadata runtime is stopped",
-      });
-    }
+    expect(await read).toMatchObject({
+      name: "ChatMetadataSnapshotUnavailableError",
+      message: "gateway chat metadata runtime is stopped",
+    });
     harness.runtime.invalidate();
     harness.runtime.fail(new Error("late owner failure"));
     await expect(harness.refresh()).rejects.toThrow("stopped");

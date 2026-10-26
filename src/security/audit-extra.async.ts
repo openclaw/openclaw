@@ -1,5 +1,6 @@
 import path from "node:path";
 import { clearTimeout as clearNodeTimeout, setTimeout as setNodeTimeout } from "node:timers";
+import type { PermissionExec as ExecFn } from "@openclaw/fs-safe/advanced";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -16,7 +17,6 @@ import { resolveOAuthDir } from "../config/paths.js";
 import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { createLazyRuntimeModule, createLazyRuntimeNamedExport } from "../shared/lazy-runtime.js";
 import type { SecurityAuditFinding } from "./audit.types.js";
-import type { ExecFn } from "./windows-acl.js";
 
 type ExecDockerRawFn = typeof import("../agents/sandbox/docker.js").execDockerRaw;
 type DockerProbeOptions = {

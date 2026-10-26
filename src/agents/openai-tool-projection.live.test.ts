@@ -18,6 +18,19 @@ const OPENAI_KEY = process.env.OPENAI_API_KEY ?? "";
 const LIVE = isLiveTestEnabled(["OPENAI_LIVE_TEST"]) && Boolean(OPENAI_KEY);
 const describeLive = LIVE ? describe : describe.skip;
 
+function createValueProbeTool(name: string) {
+  return {
+    name,
+    description: "Return the requested probe value.",
+    parameters: {
+      type: "object",
+      properties: { value: { type: "string" } },
+      required: ["value"],
+      additionalProperties: false,
+    },
+  };
+}
+
 const probeTools = [
   {
     name: "unreadable_probe",
@@ -29,16 +42,7 @@ const probeTools = [
       },
     },
   },
-  {
-    name: "live_probe",
-    description: "Return the requested probe value.",
-    parameters: {
-      type: "object",
-      properties: { value: { type: "string" } },
-      required: ["value"],
-      additionalProperties: false,
-    },
-  },
+  createValueProbeTool("live_probe"),
 ];
 
 const context = {
@@ -144,16 +148,7 @@ describeLive("OpenAI tool projection live", () => {
         },
       ],
       tools: [
-        {
-          name: "exec",
-          description: "Return the requested probe value.",
-          parameters: {
-            type: "object",
-            properties: { value: { type: "string" } },
-            required: ["value"],
-            additionalProperties: false,
-          },
-        },
+        createValueProbeTool("exec"),
         {
           name: "wait",
           description: "Wait without doing work.",

@@ -38,23 +38,8 @@ import { saveSetupCredential } from "./setup-inference-credentials.js";
 
 afterEach(() => vi.restoreAllMocks());
 
-function authChoice(
-  providerId: string,
-  appGuidedAuth: "oauth" | "device-code",
-  choiceLabel = "Fixture sign-in",
-) {
-  return {
-    pluginId: providerId,
-    providerId,
-    methodId: "fixture-login",
-    choiceId: "fixture-login",
-    choiceLabel,
-    appGuidedAuth,
-  };
-}
-
-it.each([false, true])("fences credential writes after OAuth lock (revoked=%s)", async (revoke) => {
-  await withOpenClawTestState({ label: "setup-credential-authority" }, async (state) => {
+it.each([false, true])("fences credential writes after OAuth lock (revoked=%s)", (revoke) =>
+  withOpenClawTestState({ label: "setup-credential-authority" }, async (state) => {
     const config: OpenClawConfig = { agents: { entries: { main: {} } } };
     const existing = { type: "api_key" as const, provider: "fixture", key: "existing-fixture-key" };
     await state.writeAuthProfiles({ version: 1, profiles: { "fixture:existing": existing } });
@@ -119,8 +104,8 @@ it.each([false, true])("fences credential writes after OAuth lock (revoked=%s)",
       releaseLock.resolve();
       await settled;
     }
-  });
-});
+  }),
+);
 
 describe("native setup authority", () => {
   afterEach(async () => {
@@ -167,7 +152,14 @@ process.exit(1);
       return muse.run(ctx);
     };
     vi.spyOn(providerChoices, "resolveManifestDeclaredProviderAuthChoices").mockReturnValue([
-      authChoice("openai", "oauth"),
+      {
+        pluginId: "openai",
+        providerId: "openai",
+        methodId: "fixture-login",
+        choiceId: "fixture-login",
+        choiceLabel: "Fixture sign-in",
+        appGuidedAuth: "oauth",
+      },
     ]);
     const activate = setupExecution.activateGatewaySetupInference;
     vi.spyOn(setupExecution, "activateGatewaySetupInference").mockImplementation((params) =>
@@ -177,10 +169,7 @@ process.exit(1);
     const login = setupLoginSession(
       () => setup.config,
       { sessionId: "native-login", authChoice: "openai/fixture-login" },
-      {
-        connId: "native-login-owner",
-        connectionSignal: controller.signal,
-      },
+      { connId: "native-login-owner", connectionSignal: controller.signal },
     );
     try {
       const session = await login.start();
@@ -191,9 +180,6 @@ process.exit(1);
           "Provider login did not start",
         ),
         signal,
-      );
-      expect(setupExecution.activateGatewaySetupInference).toHaveBeenCalledWith(
-        expect.objectContaining({ selectModel: false }),
       );
       login.client.invalidated = true;
       expect([controller.signal.aborted, providerSignal?.aborted]).toEqual([false, false]);

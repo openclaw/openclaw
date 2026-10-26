@@ -11,11 +11,7 @@ import {
   type SandboxContainerEngine,
   type SandboxContainerEngineTarget,
 } from "./container-engine.js";
-import {
-  containerState,
-  readContainerLabel,
-  recordedPodmanContainerState,
-} from "./container-inspect.js";
+import { containerState, recordedPodmanContainerState } from "./container-inspect.js";
 import {
   admitSandboxContainerSource,
   bindSandboxContainerSource,
@@ -29,7 +25,7 @@ import {
   dockerPersistentTargetFromEngineTarget,
   dockerPersistentTargetToEngineTarget,
 } from "./docker-persistent-target.js";
-import { prepareSandboxMountPlan, sandboxMountPlanMatchesContainer } from "./mount-plan.js";
+import { compareSandboxMountPlan, prepareSandboxMountPlan } from "./mount-plan.js";
 import type { DockerPersistentExecTarget } from "./persistent-exec.types.js";
 import {
   assertPodmanSandboxTarget,
@@ -230,59 +226,57 @@ async function ensureSandboxContainerLifecycle(
     Boolean(params.cfg.docker.setupCommand?.trim()) ||
     existingRegistryEntry?.runtimeState === "pending";
   const state = await containerState(engine, containerName, { strict: needsSetupReservation });
-  let containerId = "";
-  if (state.exists) {
-    const identity = await execContainer(
-      engine,
-      ["inspect", "--format", "{{.Id}}", containerName],
-      {
-        signal: AbortSignal.timeout(5_000),
-      },
-    );
-    containerId = identity.stdout.trim();
-    if (!/^[a-f0-9]{64}$/u.test(containerId)) {
-      throw new Error("Container inspect did not return an immutable container ID.");
-    }
-  }
+  let containerId = state.exists ? state.id : "";
+  const readOnlyRoot = state.exists && state.readOnlyRoot;
   let hasContainer = state.exists;
   let running = state.running;
   let currentHash: string | null = null;
   let hashMismatch = false;
   const registryEntry = existingRegistryEntry;
-  if (hasContainer) {
+  if (state.exists) {
     if (registryEntry?.runtimeState === "pending") {
       throw new Error(
         `Sandbox ${containerName} setup did not complete. Inspect the retained container and preserve needed data before explicitly recreating it.`,
       );
     }
-    currentHash = await readContainerLabel(engine, containerName, "openclaw.configHash");
-    if (!currentHash) {
-      currentHash = registryEntry?.configHash ?? null;
-    }
+    currentHash = state.configHash ?? registryEntry?.configHash ?? null;
     hashMismatch = !currentHash || currentHash !== expectedHash;
     if (hashMismatch) {
       const lastUsedAtMs = registryEntry?.lastUsedAtMs;
       const { hasSandboxPersistentExecCustody } = await import("./persistent-exec.js");
       const persistent = await hasSandboxPersistentExecCustody({ containerName, containerId });
       params.assertCurrent?.();
-      const isHot =
+      let isHot =
         persistent ||
         (running &&
           (typeof lastUsedAtMs !== "number" || now - lastUsedAtMs < HOT_CONTAINER_WINDOW_MS));
       if (isHot) {
-        const mountsMatch =
-          params.requireCurrentConfig ||
-          (await sandboxMountPlanMatchesContainer({ engine, containerName, plan: mountPlan }));
-        handleHotSandboxConfigMismatch({
-          containerName,
-          scope: params.cfg.scope,
-          sessionKey: params.scopeKey,
-          mountsChanged: !mountsMatch,
-          ...(params.requireCurrentConfig !== undefined
-            ? { requireCurrentConfig: params.requireCurrentConfig }
-            : {}),
-        });
-      } else {
+        const mounts = params.requireCurrentConfig
+          ? "match"
+          : await compareSandboxMountPlan({ engine, containerName: containerId, plan: mountPlan });
+        if (
+          mounts === "protected-mounts-added" &&
+          !persistent &&
+          readOnlyRoot &&
+          typeof lastUsedAtMs === "number" &&
+          lastUsedAtMs < performance.timeOrigin
+        ) {
+          // A deploy can add protected overlays before the first resumed turn.
+          // The existing replacement path retains host-backed workspace bytes.
+          isHot = false;
+        }
+        params.assertCurrent?.();
+        if (isHot) {
+          handleHotSandboxConfigMismatch({
+            containerName,
+            scope: params.cfg.scope,
+            sessionKey: params.scopeKey,
+            mountsChanged: mounts !== "match",
+            requireCurrentConfig: params.requireCurrentConfig,
+          });
+        }
+      }
+      if (!isHot) {
         params.assertCurrent?.();
         const removed = await execContainer(engine, ["rm", "-f", containerId], {
           allowFailure: true,

@@ -24,6 +24,7 @@ const button = (label: string) =>
   [...document.querySelectorAll("button")].find((node) => node.textContent === label);
 
 function fixture(responses: unknown[], props: Record<string, string> = {}) {
+  const subscribers = new Set<() => void>();
   const request = vi.fn(async () => responses.shift());
   const registerPage = vi.fn<(page: UI.ControlUiPage) => () => void>(() => () => {});
   const controller = new AbortController();
@@ -33,7 +34,10 @@ function fixture(responses: unknown[], props: Record<string, string> = {}) {
     connection: { connected: true, canRead: true, canWrite: true, canAdmin: false },
     redact: (text: string) => text,
     request,
-    subscribe: () => () => {},
+    subscribe: (listener: () => void) => {
+      subscribers.add(listener);
+      return () => subscribers.delete(listener);
+    },
     ui: { registerPage },
     components: {
       mountDialog: (container: HTMLElement, { content }: UI.ControlUiDialogProps) => {
@@ -62,9 +66,44 @@ function fixture(responses: unknown[], props: Record<string, string> = {}) {
   });
   return {
     request,
+    connection: host.connection,
+    dispose: () => view?.dispose?.(),
+    publish: () => subscribers.forEach((listener) => listener()),
     navigate: (requestId: string) => view?.update?.({ ...context, props: { request: requestId } }),
   };
 }
+
+it("retains focused grant controls on unrelated host updates and applies permission changes", async () => {
+  const grant = {
+    grantId: "grant-owned",
+    clientName: "Personal app",
+    principal: caller.principal,
+    ceiling: ["operator.read"],
+    createdAt: 1_800_000_000_000,
+  };
+  const { connection, publish, request } = fixture([{ ...grants, grants: [grant] }]);
+  await shows("Personal app");
+  const row = document.querySelector(".mcp-connected-apps__grant");
+  const revoke = button("Revoke")!;
+  revoke.focus();
+  publish();
+  expect(document.querySelector(".mcp-connected-apps__grant")).toBe(row);
+  expect(document.activeElement).toBe(revoke);
+  expect(request).toHaveBeenCalledTimes(1);
+
+  connection.canWrite = false;
+  publish();
+  expect(button("Revoke")).toBeUndefined();
+  expect(body()).toContain("Personal app");
+
+  connection.connected = false;
+  publish();
+  expect(body()).toContain("Connect to the Gateway to manage connected apps.");
+  connection.connected = true;
+  connection.canRead = false;
+  publish();
+  expect(body()).toContain("Read access is required to view connected apps.");
+});
 
 function click(label: string) {
   const target = button(label);
@@ -86,6 +125,79 @@ it("pairs within the caller's ceiling without a browser-supplied principal", asy
     ceiling: ["operator.read", "operator.write"],
   });
   expect(body()).toContain("https://relay.example/mcp");
+});
+
+it("empties retained view roots and ignores detached controls and pending replies after disposal", async () => {
+  const pending = Promise.withResolvers<unknown>();
+  const grant = {
+    grantId: "grant-owned",
+    clientName: "Personal app",
+    principal: caller.principal,
+    ceiling: ["operator.read"],
+    createdAt: 1_800_000_000_000,
+  };
+  const { request, dispose, publish } = fixture([{ ...grants, grants: [grant] }, pending.promise]);
+  await shows("Personal app");
+  const page = document.querySelector(".mcp-connected-apps")!;
+  const overlay = page.nextElementSibling!;
+  const pair = button("Pair with code")!;
+  const revoke = button("Revoke")!;
+  pair.click();
+  const dialog = overlay.firstElementChild!;
+  click("Create pairing code");
+  expect(request).toHaveBeenCalledTimes(2);
+  const pairingReply = request.mock.results[1]?.value;
+
+  dispose();
+  expect(page.childNodes).toHaveLength(0);
+  expect(overlay.childNodes).toHaveLength(0);
+  expect(document.body.contains(page)).toBe(false);
+  pair.click();
+  revoke.click();
+  publish();
+  expect(request).toHaveBeenCalledTimes(2);
+  expect(page.childNodes).toHaveLength(0);
+  expect(overlay.childNodes).toHaveLength(0);
+
+  pending.resolve({
+    code: "ABCDE-FGHIJ",
+    expiresAt: 1_800_000_000_000,
+    mcpUrl: "https://relay.example/mcp",
+  });
+  await pairingReply;
+  expect(dialog.textContent).not.toContain("ABCDE-FGHIJ");
+  expect(overlay.childNodes).toHaveLength(0);
+  expect(request).toHaveBeenCalledTimes(2);
+});
+
+it("retains rows while refreshing and renders the authoritative reply on settlement", async () => {
+  const pending = Promise.withResolvers<unknown>();
+  const grant = {
+    grantId: "grant-owned",
+    clientName: "Personal app",
+    principal: caller.principal,
+    ceiling: ["operator.read"],
+    createdAt: 1_800_000_000_000,
+  };
+  const { request } = fixture([{ ...grants, grants: [grant] }, pending.promise, grants]);
+  await shows("Personal app");
+  const row = document.querySelector(".mcp-connected-apps__grant");
+  click("Refresh");
+  expect(document.querySelector(".mcp-connected-apps__grant")).toBe(row);
+  expect(document.querySelector('[role="status"]')?.textContent).toBe("Loading connected apps…");
+  expect(
+    [...document.querySelectorAll("button, input")].every((node) => node.matches(":disabled")),
+  ).toBe(true);
+  click("Revoke");
+  expect(request).toHaveBeenCalledTimes(2);
+  pending.reject(new Error("Try again"));
+  await shows("Try again");
+  expect(button("Refresh")?.disabled).toBe(false);
+  click("Refresh");
+  expect(document.querySelector('[role="alert"]')).toBeNull();
+  await shows("No connected apps yet");
+  expect(document.querySelector(".mcp-connected-apps__grant")).toBeNull();
+  expect(button("Refresh")?.disabled).toBe(false);
 });
 
 it("escapes app labels and rejects foreign relay continuations", async () => {

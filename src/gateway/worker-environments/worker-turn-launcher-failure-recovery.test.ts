@@ -6,6 +6,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, 
 import { WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { WORKER_TURN_ADMISSION_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-turn-admission.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import * as rootLogger from "../../logger.js";
 import type { SpawnResult } from "../../process/exec.js";
@@ -19,6 +20,7 @@ import { requestContext } from "../server-methods/sessions-read-cache.test-suppo
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
 import { placementTurnOwner, projectWorkerSessionTurnClaim } from "./placement-record.js";
+import { journalOwner } from "./placement-suite.test-support.js";
 import {
   WorkerRunnerCapacityError,
   WorkerRunnerUnavailableError,
@@ -36,6 +38,7 @@ import {
   runIdentity,
 } from "./worker-turn-launcher-flow.test-support.js";
 import * as fx from "./worker-turn-launcher.test-support.js";
+import { workspaceJournal } from "./workspace-manifest-fixtures.test-support.js";
 
 afterAll(closeStateDatabaseForTest);
 
@@ -414,14 +417,7 @@ describe("worker turn launcher failure recovery", () => {
         timestamp: 1,
       }),
     );
-    await manager.appendMessageAsync({
-      role: "toolResult",
-      toolCallId: "call-replay",
-      toolName: "read",
-      content: [{ type: "text", text: "result" }],
-      isError: false,
-      timestamp: 2,
-    });
+    await manager.appendMessageAsync(makeTextToolResult("call-replay", "read", "result", false, 2));
     const launchTurn = vi.fn(async (): Promise<SpawnResult> => {
       throw new Error("unexpected worker handoff");
     });
@@ -456,12 +452,7 @@ describe("worker turn launcher failure recovery", () => {
   it("preserves an unresolved rollback journal when pre-launch recovery conflicts", async () => {
     await fx.seedActivePlacement();
     const active = activePlacement();
-    const owner = {
-      sessionId: active.sessionId,
-      environmentId: active.environmentId,
-      ownerEpoch: active.activeOwnerEpoch,
-      placementGeneration: active.generation,
-    };
+    const owner = journalOwner(active);
     const basePack = Buffer.from("conflicted journal snapshot");
     const fileEntry = (text: string) => ({
       path: "blocked.txt",
@@ -470,17 +461,16 @@ describe("worker turn launcher failure recovery", () => {
       size: Buffer.byteLength(text),
       sha256: createHash("sha256").update(text).digest("hex"),
     });
-    await fx.placements.beginWorkspaceReconciliation(owner, {
-      version: 1,
-      temporaryNonce: "e".repeat(32),
-      baseManifestRef: active.workspaceBaseManifestRef,
-      currentManifestRef: `sha256:${"f".repeat(64)}`,
-      baseEntries: [fileEntry("base\n")],
-      appliedEntries: [fileEntry("worker\n")],
-      baseTree: "d".repeat(40),
-      basePackSha256: createHash("sha256").update(basePack).digest("hex"),
-      basePack,
-    });
+    await fx.placements.beginWorkspaceReconciliation(
+      owner,
+      workspaceJournal(active.workspaceBaseManifestRef, `sha256:${"f".repeat(64)}`, {
+        temporaryNonce: "e".repeat(32),
+        baseEntries: [fileEntry("base\n")],
+        appliedEntries: [fileEntry("worker\n")],
+        baseTree: "d".repeat(40),
+        basePack,
+      }),
+    );
     await fs.writeFile(path.join(fx.root, "blocked.txt"), "local\n");
     const environments: fx.WorkerTurnEnvironmentService = {
       ...fx.unusedEnvironments(),

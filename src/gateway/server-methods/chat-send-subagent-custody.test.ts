@@ -13,6 +13,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { captureGatewayAuthPolicy } from "../auth-policy.js";
 import { resolveGatewayOperatorAccessAuthority } from "../operator-access-policy.js";
+import { gatewayRequest } from "../request-frame.test-support.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { createOperatorClient } from "../server-plugin-in-process-dispatch.test-support.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";
@@ -32,6 +33,25 @@ vi.mock("../call.js", () => ({
 installGatewayTestHooks();
 const createFixture = useBrowserFollowupFixture();
 afterEach(() => resetSubagentRegistryForTests({ persist: false }));
+
+function holdExecution(signal: AbortSignal, text: string) {
+  const entered = createDeferred();
+  const release = createDeferred();
+  runtime.run.mockImplementation(async (params) => {
+    entered.resolve();
+    await withinTest(release.promise, signal);
+    return {
+      outcome: "completed",
+      result: { payloads: [{ text }], meta: { durationMs: 0 } },
+      provider: params.selection.provider,
+      model: params.selection.model,
+      attempts: [],
+      terminal: { outcome: { status: "ok", reason: "completed" }, metadata: {} },
+      settleSessionOverride: async () => {},
+    };
+  });
+  return { entered, release };
+}
 
 it("retains native child custody before a human continuation executes", async ({ signal }) => {
   const sessionKey = "agent:main:dashboard:retained-child";
@@ -87,21 +107,7 @@ it("retains native child custody before a human continuation executes", async ({
     value: undefined,
     postimages: new Map([[completed.runId, completed]]),
   }));
-  const entered = createDeferred();
-  const release = createDeferred();
-  runtime.run.mockImplementation(async (params) => {
-    entered.resolve();
-    await withinTest(release.promise, signal);
-    return {
-      outcome: "completed",
-      result: { payloads: [{ text: "Retained result verified." }], meta: { durationMs: 0 } },
-      provider: params.selection.provider,
-      model: params.selection.model,
-      attempts: [],
-      terminal: { outcome: { status: "ok", reason: "completed" }, metadata: {} },
-      settleSessionOverride: async () => {},
-    };
-  });
+  const { entered, release } = holdExecution(signal, "Retained result verified.");
   dispatchInboundMessageMock.mockImplementation(await loadRealChatDispatch());
   try {
     const ack = await fixture.send(undefined, {
@@ -114,10 +120,6 @@ it("retains native child custody before a human continuation executes", async ({
       expect.anything(),
     );
     await withinTest(entered.promise, signal);
-    expect(
-      dispatchInboundMessageMock.mock.calls.at(-1)?.[0].replyOptions?.operatorAuthority
-        ?.recoverySnapshot,
-    ).toEqual(expect.objectContaining({ profileId: operator.authenticatedUserProfile!.profileId }));
     expect([subagentRuns.get(runId), subagentRuns.get(completed.runId)]).toMatchObject([
       {
         runId,
@@ -240,21 +242,7 @@ it.for([
         ],
       ]),
     }));
-    const entered = createDeferred();
-    const release = createDeferred();
-    runtime.run.mockImplementation(async (params) => {
-      entered.resolve();
-      await withinTest(release.promise, signal);
-      return {
-        outcome: "completed",
-        result: { payloads: [{ text: "Continuing." }], meta: { durationMs: 0 } },
-        provider: params.selection.provider,
-        model: params.selection.model,
-        attempts: [],
-        terminal: { outcome: { status: "ok", reason: "completed" }, metadata: {} },
-        settleSessionOverride: async () => {},
-      };
-    });
+    const { entered, release } = holdExecution(signal, "Continuing.");
     dispatchInboundMessageMock.mockImplementation(await loadRealChatDispatch());
     try {
       if (source === "human") {
@@ -262,12 +250,7 @@ it.for([
       } else {
         const respond = vi.fn<Parameters<typeof handleGatewayRequest>[0]["respond"]>();
         await handleGatewayRequest({
-          req: {
-            type: "req",
-            id: "recover-interrupted-child",
-            method: "sessions.recover",
-            params: { key: sessionKey },
-          },
+          req: gatewayRequest("recover-interrupted-child", "sessions.recover", { key: sessionKey }),
           client: fixture.client,
           context: fixture.context,
           isWebchatConnect: () => true,

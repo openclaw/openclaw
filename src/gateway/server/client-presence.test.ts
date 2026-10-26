@@ -7,7 +7,7 @@ import {
   upsertPresence,
 } from "../../infra/system-presence.js";
 import { buildAuthenticatedPresenceUser } from "../authenticated-presence-user.js";
-import { gatewayConnect } from "./client-fixtures.test-support.js";
+import { dispatchProfile, gatewayConnect } from "./client-fixtures.test-support.js";
 import { startWorkerHumanPresence } from "./client-human-presence.js";
 import {
   recordClientPresenceActivity,
@@ -40,11 +40,7 @@ describe("live person presence timing", () => {
     expect(buildAuthenticatedPresenceUser({})).toBeUndefined();
     const profile = buildAuthenticatedPresenceUser({
       authenticatedUserId,
-      authenticatedUserProfile: {
-        profileId: authenticatedUserId,
-        displayName: "Person",
-        avatarRevision: "1",
-      },
+      authenticatedUserProfile: dispatchProfile(authenticatedUserId, { displayName: "Person" }),
     });
     expect(profile).toMatchObject({
       id: authenticatedUserId,
@@ -124,13 +120,7 @@ describe("live person presence timing", () => {
       authenticatedUserId: email,
       authenticatedUserProfile: options.raw
         ? undefined
-        : {
-            profileId,
-            displayName: "Timing Person",
-            avatarRevision: "1",
-            hasAvatar: false,
-            updatedAt: 1,
-          },
+        : dispatchProfile(profileId, { displayName: "Timing Person" }),
     };
     if (!options.deferAdmission) {
       expect(handler.setClient(client)).toBe(true);
@@ -289,8 +279,6 @@ describe("live person presence timing", () => {
   );
 
   it("keeps heartbeat freshness and cache eviction independent of person timing", async () => {
-    const tui = { clientId: "openclaw-tui", mode: "ui" };
-    const mac = { clientId: "openclaw-macos", mode: "ui" };
     const first = await connect("heartbeat@timing.test", "heartbeat-person", {
       nativeClient: "openclaw-tui",
     });
@@ -304,7 +292,6 @@ describe("live person presence timing", () => {
       lastInputSeconds: 0,
     });
     expectRow(first, {
-      ...tui,
       ts: t + 10_000,
       onlineSince: t,
       lastActivityAt: t,
@@ -319,7 +306,6 @@ describe("live person presence timing", () => {
     expect(snapshotClientPresence(clients)).toMatchObject([
       {
         connectionId: first.client.connId,
-        host: "openclaw-tui",
         user: { id: "heartbeat-person" },
         connectionLastActivityAt: t,
       },
@@ -327,19 +313,14 @@ describe("live person presence timing", () => {
     const overlap = await connect("eviction@timing.test", "heartbeat-person", {
       nativeClient: "openclaw-macos",
     });
-    expectRow(first, { ...tui, connectionLastActivityAt: t });
-    expectRow(overlap, {
-      ...mac,
-      onlineSince: t,
-      lastActivityAt: t,
-    });
+    expectRow(first, { connectionLastActivityAt: t });
+    expect(personTimes(row(overlap))).toEqual([t, t]);
 
     vi.setSystemTime(t + 400_000);
     expect(row(overlap)).toBeUndefined();
     expect(activity(overlap)).toBe(true);
-    expectRow(first, tui);
+    expect(row(first)).toBeDefined();
     expectRow(overlap, {
-      ...mac,
       onlineSince: t,
       lastActivityAt: t + 400_000,
       connectionLastActivityAt: t + 400_000,
@@ -366,7 +347,6 @@ describe("live person presence timing", () => {
     expectRow(delayed, { onlineSince: t });
     close(delayed.socket);
     vi.setSystemTime(t + 400_000);
-    expect(row(delayed)).toBeUndefined();
     expect(refreshClientPresence(clients, delayed.client)).toBe(false);
     expect(activity(delayed)).toBe(false);
     expect(row(delayed)).toBeUndefined();

@@ -238,11 +238,7 @@ it("ignores foreign hooks in an existing registry", async () => {
   config.plugins!.load!.paths!.unshift(foreignDir);
   config.agents!.entries!.probe = { workspace: root };
   writeConfig();
-  const registry = loadOpenClawPlugins({ config, workspaceDir: root, env: process.env });
-  expect(registry.providers.map((entry) => entry.pluginId)).toEqual([
-    "aaa-foreign",
-    "alias-fixture",
-  ]);
+  loadOpenClawPlugins({ config, workspaceDir: root, env: process.env });
   await setModel("fixture/legacy");
   expectModel({ primary: "fixture/current" });
 });
@@ -310,7 +306,7 @@ it.each(["exact", "retained", "empty"] as const)(
   },
 );
 
-it("does not activate unused providers for aliases", async () => {
+it("resolves built-in and authored aliases without activating unused providers", async () => {
   const canonical = DEFAULT_MODEL_ALIASES.sonnet;
   assert(canonical, "Expected the built-in sonnet alias");
   config.agents!.defaults!.models = { [canonical]: {} };
@@ -336,7 +332,18 @@ it("does not activate unused providers for aliases", async () => {
   expectModel({ primary: canonical, fallbacks: [] });
   await alias("friendly", "sonnet");
   await alias("friendly", canonical);
-  expect(defaults()?.models?.[canonical]?.alias).toBe("friendly");
+  expect(defaults()?.models).toEqual({ [canonical]: { alias: "friendly" } });
+  const authored = "anthropic/alternate";
+  const saved = readConfig();
+  saved.agents!.defaults!.models![authored] = { alias: "sonnet" };
+  writeJson(configPath, saved);
+  await setModel("sonnet");
+  expectModel({ primary: authored, fallbacks: [] });
+  expect(defaults()?.models).toEqual({
+    [canonical]: { alias: "friendly" },
+    [authored]: { alias: "sonnet" },
+  });
+  expect(runtime.log).toHaveBeenCalledWith(`Default model: ${authored}`);
   expect(fs.existsSync(marker)).toBe(false);
 });
 

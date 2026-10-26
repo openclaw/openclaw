@@ -1,9 +1,7 @@
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import type { ToolsEffectiveResult } from "../../api/types.ts";
-import {
-  createGitHubIdentityForTest,
-  githubIdentityViewFixture,
-} from "../../features/github-connections/github-identity.test-support.ts";
+import { createIdentityFixture } from "../../features/github-connections/github-identity-harness.test-support.ts";
+import { githubIdentityViewFixture } from "../../features/github-connections/github-identity.test-support.ts";
 import { captureI18nStateForTesting } from "../../i18n/lib/translate.test-support.ts";
 import { i18n } from "../../i18n/lib/translate.ts";
 import type { SolidBridgeElement } from "../../lib/solid-bridge.ts";
@@ -12,7 +10,7 @@ import { mountSolid as mountConnected } from "../../test-helpers/mount-solid.ts"
 import { cleanupSolid } from "../../test-helpers/solid-cleanup.ts";
 import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { createBaseParams } from "./panels-tools-skills.test-support.ts";
+import { createBaseParams, createReadToolCatalog } from "./panels-tools-skills.test-support.ts";
 import { AgentTools } from "./panels-tools-skills.tsx";
 
 installBrowserHistoryIsolation();
@@ -355,29 +353,18 @@ describe("agents tools panel (browser)", () => {
         pollAfterMs: 60_000,
       })),
     } as never;
-    const githubIdentity = createGitHubIdentityForTest({
-      runExternalMutation: async () => ({
-        ok: false,
-        reason: "unavailable",
-        error: "not used",
-      }),
-    });
-    githubIdentity.sync({
+    const { identity: githubIdentity, sync } = createIdentityFixture(
       client,
-      connected: true,
-      permissionsReady: true,
-      target: {
-        kind: "shared",
-        scope: "agent",
-        agentId: "main",
-        config: {},
-        profileId: "profile-a",
+      {
+        runExternalMutation: async () => ({
+          ok: false,
+          reason: "unavailable",
+          error: "not used",
+        }),
       },
-      statusReadable: true,
-      configurable: true,
-      authorizable: true,
-      clientRevision: 1,
-    });
+      { scope: "agent" },
+    );
+    sync();
     await githubIdentity.startAuthorization();
 
     mountSolid(AgentTools, createBaseParams({ githubIdentity }), container);
@@ -434,29 +421,18 @@ describe("agents tools panel (browser)", () => {
   it("keeps PAT fields hidden until the explicit fallback is selected", async () => {
     const container = document.createElement("div");
     const client = { request: vi.fn() } as never;
-    const githubIdentity = createGitHubIdentityForTest({
-      runExternalMutation: async () => ({
-        ok: false,
-        reason: "unavailable",
-        error: "not used",
-      }),
-    });
-    githubIdentity.sync({
+    const { identity: githubIdentity, sync } = createIdentityFixture(
       client,
-      connected: true,
-      permissionsReady: true,
-      target: {
-        kind: "shared",
-        scope: "agent",
-        agentId: "main",
-        config: {},
-        profileId: "profile-a",
+      {
+        runExternalMutation: async () => ({
+          ok: false,
+          reason: "unavailable",
+          error: "not used",
+        }),
       },
-      statusReadable: true,
-      configurable: true,
-      authorizable: true,
-      clientRevision: 1,
-    });
+      { scope: "agent" },
+    );
+    sync();
 
     const view = mountSolid(AgentTools, createBaseParams({ githubIdentity }), container);
     await settleGitHubIdentity(container);
@@ -556,26 +532,7 @@ describe("agents tools panel (browser)", () => {
     mountSolid(
       AgentTools,
       createBaseParams({
-        catalog: {
-          agentId: "main",
-          profiles: [{ id: "full", label: "Full" }],
-          groups: [
-            {
-              id: "files",
-              label: "Files",
-              source: "core",
-              tools: [
-                {
-                  id: "read",
-                  label: "read",
-                  description: "Read file contents",
-                  source: "core",
-                  defaultProfiles: ["full"],
-                },
-              ],
-            },
-          ],
-        },
+        catalog: createReadToolCatalog(),
       }),
       container,
     );
@@ -605,26 +562,7 @@ describe("agents tools panel (browser)", () => {
     mountSolid(
       AgentTools,
       createBaseParams({
-        catalog: {
-          agentId: "main",
-          profiles: [{ id: "full", label: "Full" }],
-          groups: [
-            {
-              id: "files",
-              label: "Files",
-              source: "core",
-              tools: [
-                {
-                  id: "read",
-                  label: "read",
-                  description: "Read file contents",
-                  source: "core",
-                  defaultProfiles: ["full"],
-                },
-              ],
-            },
-          ],
-        },
+        catalog: createReadToolCatalog(),
       }),
       container,
     );
@@ -694,26 +632,7 @@ describe("agents tools panel (browser)", () => {
     mountSolid(
       AgentTools,
       createBaseParams({
-        catalog: {
-          agentId: "main",
-          profiles: [{ id: "full", label: "Full" }],
-          groups: [
-            {
-              id: "files",
-              label: "Files",
-              source: "core",
-              tools: [
-                {
-                  id: "read",
-                  label: "read",
-                  description: "Read file contents",
-                  source: "core",
-                  defaultProfiles: ["full"],
-                },
-              ],
-            },
-          ],
-        },
+        catalog: createReadToolCatalog(),
         effective: {
           agentId: "main",
           profile: "full",

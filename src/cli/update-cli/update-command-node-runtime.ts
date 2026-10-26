@@ -38,31 +38,20 @@ export function createPackageRuntimeRecovery(params: {
               async (_grant, bindChild) => {
                 authority.assertRequesterCurrent();
                 const gate = prepareUpdateCommandNativeGate(randomUUID(), [env]);
-                const result = await runCommandWithTimeout(
-                  [
-                    process.execPath,
-                    "--input-type=module",
-                    "-e",
-                    gate.source,
-                    "--",
-                    command,
-                    ...args,
-                  ],
-                  {
-                    baseEnv: {},
-                    env: gate.env,
-                    cwd: params.root,
-                    input: gate.input,
-                    beforeInput: (pid, argv) => {
-                      authority.assertRequesterCurrent();
-                      bindChild(pid, argv);
-                    },
-                    timeoutMs: params.timeoutMs,
-                    killProcessTree: true,
-                    requireProcessTreeExtinction: true,
-                    maxOutputBytes: 64 * 1024,
+                const result = await runCommandWithTimeout([...gate.argv, command, ...args], {
+                  baseEnv: {},
+                  env: gate.env,
+                  cwd: params.root,
+                  input: gate.input,
+                  beforeInput: (pid, argv) => {
+                    authority.assertRequesterCurrent();
+                    bindChild(pid, argv);
                   },
-                );
+                  timeoutMs: params.timeoutMs,
+                  killProcessTree: true,
+                  requireProcessTreeExtinction: true,
+                  maxOutputBytes: 64 * 1024,
+                });
                 if (result.cleanup === "forced" || result.cleanup === "uncertain") {
                   throw new CommandProcessCleanupError();
                 }

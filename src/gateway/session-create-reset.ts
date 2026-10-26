@@ -42,6 +42,7 @@ export function tryResetGatewaySessionForCreation(
     // the prepared transcript or catalog-owned model/runtime pair is persisted.
     !params.initialAssistantMessage &&
     !params.catalogTarget &&
+    params.cyberAccessProgram === undefined &&
     params.cfg.session?.dmScope === "main"
   ) {
     const parentAgentId = normalizeAgentId(

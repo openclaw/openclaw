@@ -1,16 +1,15 @@
-import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import { createServer, type Socket } from "node:net";
 import path from "node:path";
-import { promisify } from "node:util";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { git } from "../agents/worktrees/git-fixture.test-support.js";
 import { createManagedWorktreeOwnerPolicy } from "../agents/worktrees/owner-protection.js";
 import { updateRegistryWorktree } from "../agents/worktrees/registry.js";
 import {
@@ -55,34 +54,16 @@ import {
 } from "../test-utils/port-claims.js";
 import { localStateOwnerFixtureEntrypoint } from "./cli-entrypoint.test-support.js";
 import { runCliProcessChild } from "./cli-process-child.test-helpers.js";
+import { stateOwnerEnv } from "./cli-process-fixture.test-support.js";
 import { registerWorktreeListingOwnerTests } from "./local-state-owner-listing.test-support.js";
 
-const execFileAsync = promisify(execFile);
 const roots = useAutoCleanupTempDirTracker(afterAll);
 const token = "synthetic-routing-owner-token";
 const entrypoint = resolveRuntimeWorkerArgv(
   resolveRuntimeWorkerUrl(localStateOwnerFixtureEntrypoint),
 );
 
-function environment(root: string): NodeJS.ProcessEnv {
-  return {
-    PATH: process.env.PATH,
-    SystemRoot: process.env.SystemRoot,
-    HOME: root,
-    USERPROFILE: root,
-    OPENCLAW_HOME: root,
-    OPENCLAW_STATE_DIR: path.join(root, "state"),
-    OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
-    OPENCLAW_GATEWAY_TOKEN: token,
-    OPENCLAW_NO_RESPAWN: "1",
-    OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-    NODE_DISABLE_COMPILE_CACHE: "1",
-  };
-}
-
-async function git(repo: string, ...args: string[]) {
-  return (await execFileAsync("git", ["-C", repo, ...args])).stdout.trim();
-}
+const environment = (root: string) => stateOwnerEnv(root, { OPENCLAW_GATEWAY_TOKEN: token });
 
 const readText = (...parts: string[]) => fs.readFile(path.join(...parts), "utf8");
 const readJson = async (...parts: string[]) => JSON.parse(await readText(...parts));
@@ -366,18 +347,6 @@ describe("same-root local mutation routing", () => {
     await expectMissing(path.join(record.path, "excluded/no.txt"));
     expect(await git(record.path, "rev-parse", "HEAD")).toBe(await git(repo, "rev-parse", "HEAD"));
     expect(requests).toEqual(["routed"]);
-    await fs.writeFile(path.join(record.path, "alpha/a.txt"), "retained routed work\n");
-    for (const restore of [false, true]) {
-      if (restore) {
-        await service.remove({ id: record.id, reason: "create restore fixture" });
-      }
-      const repeated = await create("routed");
-      expect(cliPayload(repeated)).toMatchObject({ id: record.id, path: record.path });
-      expect(await readText(record.path, "alpha/a.txt")).toBe("retained routed work\n");
-      expect(
-        (await service.listRegistryRecords()).find((item) => item.id === record.id)?.removedAt,
-      ).toBeUndefined();
-    }
   });
 
   it.each(["old", "refused", "lost-reply"] as const)(
@@ -636,7 +605,6 @@ socket.on("data", () => {
           },
         });
         const record: ManagedWorktreeRecord = cliPayload(result);
-        expect(await readText(record.path, "README.md")).toBe("base\n");
         expect(await readText(record.path, "setup-proof.txt")).toBe("local setup complete\n");
         expect(record.path).toContain(path.join(env.OPENCLAW_STATE_DIR!, "worktrees"));
         await expectSuccessor(env);

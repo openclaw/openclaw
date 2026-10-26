@@ -26,6 +26,7 @@ import * as registryRead from "./registry-read.js";
 import * as registry from "./registry.js";
 import { updateRegistryWorktree } from "./registry.js";
 import { getRegistryWorktree } from "./registry.test-support.js";
+import { resolveRepositoryPaths } from "./repository-paths.js";
 import { IDLE_GC_MS, ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "./service.js";
 import { useManagedWorktreeTestRepository } from "./service.test-support.js";
 
@@ -85,7 +86,7 @@ describe("ManagedWorktreeService canonical paths", () => {
     await expect(service.resolveRepositoryIdentity(repo)).rejects.toThrow(
       "synthetic repository read failure",
     );
-    await expect(service.resolveRepositoryPaths(repo)).resolves.toEqual({
+    await expect(resolveRepositoryPaths(repo)).resolves.toMatchObject({
       canonicalRoot: repo,
       sourceRoot: repo,
     });
@@ -536,7 +537,7 @@ describe("ManagedWorktreeService allocation and orphan preservation", () => {
         ownerId: "owner-1",
       };
       const created = await service.create(request);
-      const retained = { record: created, materialized: false };
+      const retained = { record: created, materialized: false, sourceRoot: repo };
       if (!rejectsChangedBase) {
         await expect(service.createWithOutcome({ ...request, baseRef: "main" })).resolves.toEqual(
           retained,

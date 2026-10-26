@@ -30,6 +30,13 @@ export const SCHEMA_MIGRATION_BACKUP_TABLES: Record<
     32: [],
     // PostgreSQL-only derived vector projection; SQLite advances metadata only.
     33: [],
+    // PostgreSQL-only index ordering; SQLite advances metadata only.
+    34: [],
+    // PostgreSQL-only partial-index ordering; SQLite advances metadata only.
+    35: [],
+    // PostgreSQL-only exact-path index; SQLite advances metadata only.
+    36: [],
+    37: ["session_transcript_cold_archive_chunks"],
   },
   state: {
     [CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION]: [
@@ -53,5 +60,11 @@ export const SCHEMA_MIGRATION_BACKUP_TABLES: Record<
       "sqlite_stat1",
       "sqlite_stat4",
     ],
+    // PostgreSQL-only index ordering; SQLite advances metadata only.
+    32: [],
+    // PostgreSQL-only partial-index ordering; SQLite advances metadata only.
+    33: [],
+    // Default cron identity is one machine-state binding; existing partition rows stay untouched.
+    34: ["config_machine_state"],
   },
 };

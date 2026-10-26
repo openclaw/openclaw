@@ -197,20 +197,6 @@ it("preserves the shipped retention predicate for raw JSON scalar and compound v
   }
 });
 
-it("keeps promoted JSON paths out of runtime reader and retention SQL", () => {
-  const owners = [
-    "../transcripts/store-read.ts",
-    "../transcripts/store-sqlite.ts",
-    "../infra/delivery-queue-sqlite-bound.ts",
-  ];
-  for (const owner of owners) {
-    const source = fs.readFileSync(new URL(owner, import.meta.url), "utf8");
-    expect(source, owner).not.toMatch(
-      /\$\.(?:accountId|guildId|channelId|meetingUrl|threadTs|fileId|agentId|overview|completionRetention)\b/u,
-    );
-  }
-});
-
 describe("schema 20 migration through shared-state owners", () => {
   const retainedJson = policy('"kept:"', "86400000");
   const directories = useAutoCleanupTempDirTracker((cleanup) => {

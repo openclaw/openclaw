@@ -1,8 +1,10 @@
-import fs, { open, writeFile } from "node:fs/promises";
+import { execFileSync, spawnSync } from "node:child_process";
+import fs, { open, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import { buildJsonPluginConfigSchema } from "openclaw/plugin-sdk/plugin-entry";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { resolveTestNodeExecPath } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
 import manifest from "../openclaw.plugin.json" with { type: "json" };
 import { parseTeamReportsConfig, resolveTeamReportsConfig } from "./config.js";
@@ -70,6 +72,54 @@ it("loads a bounded people artifact only when resolving startup configuration", 
   await expect(resolveTeamReportsConfig(config, {})).rejects.toThrow();
   await writeFile(peopleFile, " ".repeat(2 * 1024 * 1024 + 1));
   await expect(resolveTeamReportsConfig(config, {})).rejects.toThrow("at most 2 MiB");
+});
+
+it.skipIf(process.platform === "win32")("loads a people artifact through a symlink", async () => {
+  const directory = tempDirs.make("team-reports-people-link-");
+  const file = join(directory, "people.json");
+  const link = join(directory, "people-link.json");
+  const people = [{ github: ["alice"], display: "Alice" }];
+  await writeFile(file, JSON.stringify({ people }));
+  await symlink(file, link);
+  const resolved = await resolveTeamReportsConfig(
+    parseTeamReportsConfig({ ...minimal, peopleFile: link }),
+    {},
+  );
+  expect(resolved.people).toEqual(people);
+});
+
+it.skipIf(process.platform === "win32")("rejects a FIFO people file without a writer", () => {
+  const file = join(tempDirs.make("team-reports-people-fifo-"), "people.json");
+  execFileSync("mkfifo", [file]);
+  const script = `
+    import { parseTeamReportsConfig, resolveTeamReportsConfig } from ${JSON.stringify(new URL("./config.ts", import.meta.url).href)};
+    const config = parseTeamReportsConfig(${JSON.stringify({ ...minimal, peopleFile: file })});
+    process.stdout.write("resolving people file\\n");
+    try {
+      await resolveTeamReportsConfig(config, {});
+      process.exitCode = 1;
+    } catch (error) {
+      process.stdout.write(error.message);
+    }
+  `;
+  // A regressed blocking open must be killed outside the test worker's thread pool.
+  const result = spawnSync(
+    resolveTestNodeExecPath(),
+    ["--import", "./scripts/tsx.mjs", "--input-type=module", "--eval", script],
+    {
+      cwd: process.cwd(),
+      env: { ...process.env, VITEST: undefined },
+      encoding: "utf8",
+      timeout: 5_000,
+      killSignal: "SIGKILL",
+    },
+  );
+  expect(result.stdout).toContain("resolving people file\n");
+  expect(result.error).toBeUndefined();
+  expect(result.status, result.stderr).toBe(0);
+  expect(result.stdout).toBe(
+    "resolving people file\nteam-reports.peopleFile must be a regular JSON file of at most 2 MiB.",
+  );
 });
 
 it("rejects a people file that grows beyond 2 MiB after inspection", async () => {

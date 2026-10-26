@@ -236,7 +236,9 @@ export class IMessageRpcClient {
         this.child = null;
       }
       this.finish(this.buildCloseError(code, signal));
-      this.markReaped();
+      const resolve = this.reapedResolve;
+      this.reapedResolve = null;
+      resolve?.();
     });
   }
 
@@ -477,28 +479,18 @@ export class IMessageRpcClient {
     return new Error("imsg rpc closed");
   }
 
-  private failAll(err: Error) {
-    for (const [key, pending] of this.pending.entries()) {
-      pending.reject(err);
-      this.pending.delete(key);
-    }
-  }
-
   private finish(err: Error): boolean {
     const resolve = this.terminalResolve;
     if (!resolve) {
       return false;
     }
     this.terminalResolve = null;
-    this.failAll(err);
+    for (const [key, pending] of this.pending.entries()) {
+      pending.reject(err);
+      this.pending.delete(key);
+    }
     resolve(err);
     return true;
-  }
-
-  private markReaped(): void {
-    const resolve = this.reapedResolve;
-    this.reapedResolve = null;
-    resolve?.();
   }
 }
 

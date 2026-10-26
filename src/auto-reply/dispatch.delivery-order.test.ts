@@ -96,12 +96,6 @@ function buildForegroundCtx(
   return buildTestCtx({
     MessageSid: messageId,
     SessionKey: "agent:main:whatsapp:direct:+1000",
-    AccountId: "default",
-    From: "whatsapp:+1000",
-    To: "whatsapp:bot",
-    ChatType: "direct",
-    Provider: "whatsapp",
-    Surface: "whatsapp",
     OriginatingChannel: "whatsapp",
     OriginatingTo: "whatsapp:+1000",
     ...overrides,
@@ -369,8 +363,6 @@ describe("foreground reply delivery order", () => {
             "notice-message",
             noticeKind === "status command"
               ? {
-                  CommandAuthorized: true,
-                  CommandSource: "text",
                   CommandTurn: {
                     kind: "text-slash",
                     source: "text",
@@ -378,10 +370,6 @@ describe("foreground reply delivery order", () => {
                     commandName: "status",
                     body: "/status",
                   },
-                  Body: "/status",
-                  RawBody: "/status",
-                  CommandBody: "/status",
-                  BodyForAgent: "/status",
                 }
               : {},
           ),

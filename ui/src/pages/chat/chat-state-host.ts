@@ -7,12 +7,12 @@ import type {
   SessionsListResult,
 } from "../../api/types.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
+import type { EmbedSandboxMode } from "../../lib/chat/canvas-embed-policy.ts";
 import type {
   ChatComposerMemoryFallback,
   ChatGuardianNotice,
   HumanMention,
 } from "../../lib/chat/chat-types.ts";
-import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
 import type { PendingChatAbort } from "./chat-abort-request.ts";
 import type { ChatErrorState } from "./chat-error-state.ts";
 import type { PullRequestRefreshHost } from "./chat-pull-request-refresh.ts";

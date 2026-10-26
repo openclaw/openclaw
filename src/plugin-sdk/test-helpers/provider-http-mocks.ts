@@ -155,15 +155,10 @@ vi.mock("openclaw/plugin-sdk/provider-http", async (importActual) => {
     await import("../../provider-runtime/operation-retry.js");
   // Earlier SDK imports can retain the actual transport namespace; bind it at each call
   // so both those imports and tests that restore spies use the fixture transport.
-  const installTimeoutTransportMock = () => {
+  const installTransportMocks = () => {
     vi.spyOn(timeoutTransport, "fetchWithTimeout").mockImplementation((...args) =>
       providerHttpMocks.fetchWithTimeoutMock(...args),
     );
-  };
-  // A completed submission can download directly without first installing polling mocks.
-  installTimeoutTransportMock();
-  const installTransportMocks = () => {
-    installTimeoutTransportMock();
     vi.spyOn(guardedTransport, "fetchWithSsrFGuard").mockImplementation(async (params) => ({
       response: await providerHttpMocks.fetchWithTimeoutMock(
         params.url,
@@ -175,6 +170,8 @@ vi.mock("openclaw/plugin-sdk/provider-http", async (importActual) => {
       release: async () => {},
     }));
   };
+  // Completed submissions can download directly without first installing polling mocks.
+  installTransportMocks();
   providerHttpMocks.readProviderJsonResponseMock.mockImplementation(
     actual.readProviderJsonResponse,
   );

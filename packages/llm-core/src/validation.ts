@@ -3,10 +3,18 @@ import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coe
 import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { Compile } from "typebox/compile";
 import type { TLocalizedValidationError } from "typebox/error";
-import { Pointer } from "typebox/schema";
+import { CheckContext, CheckSchema, Pointer, Stack } from "typebox/schema";
+import { Convert, Errors } from "typebox/value";
+import { getRuntimeExecutionProfile } from "../../../standalone-runtime-profile.mjs";
 import type { Tool, ToolCall } from "./types.js";
 
-const validatorCache = new WeakMap<object, WeakMap<object, ReturnType<typeof Compile>>>();
+type ToolArgumentValidator = {
+  Check(value: unknown): boolean;
+  Convert(value: unknown): unknown;
+  Errors(value: unknown): TLocalizedValidationError[];
+};
+
+const validatorCache = new WeakMap<object, WeakMap<object, ToolArgumentValidator>>();
 
 /** Maximum string length accepted for schema-gated JSON coercion. */
 const MAX_JSON_COERCE_LENGTH = 64 * 1024;
@@ -103,7 +111,7 @@ function isValidatorSchema(value: unknown): value is Tool["parameters"] {
 function getSubSchemaValidator(
   schema: JsonSchemaObject,
   root?: JsonSchemaObject,
-): ReturnType<typeof Compile> | undefined {
+): ToolArgumentValidator | undefined {
   if (!isValidatorSchema(schema)) {
     return undefined;
   }
@@ -302,10 +310,7 @@ function coerceWithJsonSchema(
   return nextValue;
 }
 
-function getValidator(
-  schema: Tool["parameters"],
-  root?: JsonSchemaObject,
-): ReturnType<typeof Compile> {
+function getValidator(schema: Tool["parameters"], root?: JsonSchemaObject): ToolArgumentValidator {
   const scope = root ?? schema;
   let validators = validatorCache.get(scope);
   const cached = validators?.get(schema);
@@ -313,11 +318,22 @@ function getValidator(
     return cached;
   }
   // Keep root refs and non-enumerable TypeBox refinements when checking union candidates.
-  const validator = Compile(
+  const scopedSchema =
     root && root !== schema
       ? { $defs: root.$defs, definitions: root.definitions, allOf: [schema] }
-      : schema,
-  );
+      : schema;
+  let validator: ToolArgumentValidator;
+  if (getRuntimeExecutionProfile() === "embedded-aot") {
+    const stack = Stack({}, scopedSchema);
+    validator = {
+      // Evaluated properties and items belong to one input, including failed union branches.
+      Check: (value) => CheckSchema(stack, new CheckContext(), scopedSchema, value),
+      Convert: (value) => Convert(scopedSchema, value),
+      Errors: (value) => Errors(scopedSchema, value),
+    };
+  } else {
+    validator = Compile(scopedSchema);
+  }
   if (!validators) {
     validators = new WeakMap();
     validatorCache.set(scope, validators);

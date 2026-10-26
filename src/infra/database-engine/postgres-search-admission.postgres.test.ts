@@ -5,12 +5,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { isPostgresSqlConnection, type PostgresSqlConnection } from "../sql-connection.js";
-import { admitSqliteSchema } from "../sqlite-schema-facts.js";
 import { admitStoreSearch } from "./adapters.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
 import { DatabaseSearchCapabilityUnavailableError } from "./capability-unavailable.js";
 import type { StoreSchema } from "./contract.js";
-import { openEngineStore, readEngineAnchor } from "./open.js";
+import { createNotesSearch, openPostgresEngineTestStore } from "./engine-store.test-support.js";
+import { readEngineAnchor } from "./open.js";
 import {
   admitPostgresSearch,
   assertPostgresSearchAdmitted,
@@ -22,19 +22,7 @@ const configured = getEnvironmentData("openclaw.test.workboard.connection");
 const connection = typeof configured === "string" ? configured : undefined;
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
-const search: SearchSchema = {
-  text: {
-    notes: { table: "notes", fields: ["text"], postgres: { identity: "id", mode: "trigram" } },
-  },
-  vector: {
-    notes: {
-      table: "vectors",
-      alias: "v",
-      rowShape: { id: "string" },
-      postgres: { source: "notes", key: "id", embedding: "embedding", dimensions: 3 },
-    },
-  },
-};
+const search: SearchSchema = createNotesSearch();
 function fixture(
   dsn: string,
   selected: SearchSchema | undefined,
@@ -54,18 +42,10 @@ function fixture(
     };
     let db: PostgresSqlConnection | undefined;
     try {
-      const opened = openEngineStore({
+      const opened = openPostgresEngineTestStore({
         anchor,
         schema,
         input: { connection: dsn, schemaPrefix: "r6" },
-        openSqlite: () => {
-          throw new Error("Unexpected SQLite bootstrap");
-        },
-        prepareAnchor: () => {},
-        inspectSqlite: () => {
-          admitSqliteSchema(anchor);
-          return { hasExistingData: false, hasEngineAnchor: Boolean(readEngineAnchor(anchor)) };
-        },
       });
       if (!isPostgresSqlConnection(opened)) {
         throw new Error("Expected PostgreSQL");

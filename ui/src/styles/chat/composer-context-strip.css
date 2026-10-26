@@ -10,6 +10,12 @@
   font-size: 12px;
 }
 
+.chat-reply-preview.composer-context-strip {
+  padding-inline: var(--chat-composer-editor-inset-inline, 14px);
+  border-bottom-color: color-mix(in srgb, var(--text-strong) 8%, transparent);
+  line-height: 20px;
+}
+
 .composer-context-strip__label {
   display: inline-flex;
   align-items: center;
@@ -101,7 +107,7 @@
 .composer-context-strip__dismiss:hover,
 .agent-chat__goal-action:hover {
   color: var(--text);
-  background: color-mix(in srgb, var(--text) 10%, transparent);
+  background: var(--surface-hover);
 }
 
 .composer-context-strip__dismiss svg,

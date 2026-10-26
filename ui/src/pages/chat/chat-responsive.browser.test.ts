@@ -976,7 +976,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
 
   it("keeps custom avatar sizing and the user edge neutral", async () => {
     await withBrowserPage(openBrowserPage(430, 720), async (page) => {
-      await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+      await page.setContent(`<!doctype html><html><head><style>${readUiCss()}${readStyleSheet("ui/src/styles/identity-avatar.css")}</style></head><body>
         <img class="chat-avatar assistant" src="/avatar/main" alt="Custom" />
         <img class="chat-avatar user" src="/avatar/user" alt="User" />
       </body></html>`);
@@ -1003,7 +1003,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           boxSizing: "border-box",
           objectFit: "cover",
           padding: "0px",
-          borderWidth: "1px",
+          borderWidth: "0px",
         },
         {
           width: 36,
@@ -1011,7 +1011,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           boxSizing: "border-box",
           objectFit: "cover",
           padding: "0px",
-          borderWidth: "1px",
+          borderWidth: "0px",
         },
       ]);
 
@@ -1019,32 +1019,26 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         const edge = await page.evaluate((mode) => {
           document.documentElement.dataset.themeMode = mode;
           const probe = document.createElement("span");
-          probe.style.border = "1px solid var(--border)";
+          probe.style.outline = "1px solid color-mix(in srgb, var(--text) 8%, transparent)";
           document.body.append(probe);
-          const neutralColor = getComputedStyle(probe).borderTopColor;
-          probe.style.borderColor = "color-mix(in srgb, var(--accent) 20%, transparent)";
-          const accentColor = getComputedStyle(probe).borderTopColor;
+          const neutralOutline = getComputedStyle(probe).outline;
           const avatar = document.querySelector("img.chat-avatar.user");
           if (!avatar) {
             throw new Error("Expected user avatar fixture");
           }
           const avatarStyle = getComputedStyle(avatar);
           const result = {
-            accentColor,
-            borderColor: avatarStyle.borderTopColor,
-            borderStyle: avatarStyle.borderTopStyle,
             borderWidth: avatarStyle.borderTopWidth,
-            neutralColor,
-            outlineStyle: avatarStyle.outlineStyle,
+            neutralOutline,
+            outline: avatarStyle.outline,
+            outlineOffset: avatarStyle.outlineOffset,
           };
           probe.remove();
           return result;
         }, theme);
-        expect(edge.borderColor).toBe(edge.neutralColor);
-        expect(edge.borderColor).not.toBe(edge.accentColor);
-        expect(edge.borderStyle).toBe("solid");
-        expect(edge.borderWidth).toBe("1px");
-        expect(edge.outlineStyle).toBe("none");
+        expect(edge.outline).toBe(edge.neutralOutline);
+        expect(edge.borderWidth).toBe("0px");
+        expect(edge.outlineOffset).toBe("-1px");
       }
     });
   });
@@ -2339,9 +2333,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           };
         });
         expect(composerFontSizes).toEqual({
-          labels: [14, 14],
-          placeholder: 16,
-          textarea: 16,
+          labels: [13, 13],
+          placeholder: 14,
+          textarea: 14,
         });
         if (width === 320) {
           expect(attach.width).toBeGreaterThanOrEqual(36);

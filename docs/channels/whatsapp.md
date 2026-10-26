@@ -581,6 +581,8 @@ opt-in status surface described above.
 
 ## Troubleshooting
 
+Policy and allowlist denials appear in normal Gateway logs as `Inbound message blocked (reason=...)`. Each account listener logs a given reason at most once per minute, without sender identifiers or message content.
+
 <AccordionGroup>
   <Accordion title="Not linked (QR required)">
     Symptom: channel status reports not linked.
@@ -645,7 +647,7 @@ openclaw channels status
   </Accordion>
 
   <Accordion title="Bun runtime warning">
-    Node remains the primary and recommended Gateway runtime. Bun 1.4.3+ builds with WAL-reset-safe `node:sqlite` are supported as an explicit opt-in; doctor migrates only unsupported Bun services to Node.
+    Node remains the primary and recommended Gateway runtime. Bun 1.4.4+ builds with WAL-reset-safe `node:sqlite` are supported as an explicit opt-in; doctor migrates only unsupported Bun services to Node.
   </Accordion>
 </AccordionGroup>
 

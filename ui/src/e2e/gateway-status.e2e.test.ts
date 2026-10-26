@@ -61,7 +61,9 @@ suite.define(() => {
         }
         const requests = await gateway.getRequests();
         expect(requests.filter((request) => operatorMethods.includes(request.method))).toEqual([]);
-        expect(requests.some((request) => request.method === "chat.startup")).toBe(true);
+        expect(requests.some((request) => request.method === "sessions.messages.subscribe")).toBe(
+          true,
+        );
         await page.goto(`${suite.server.baseUrl}cron`);
         await page
           .getByText(

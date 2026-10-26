@@ -54,6 +54,7 @@ import {
   cancelSubagentCompletionToolHandoff,
   registerSubagentCompletionToolHandoff,
 } from "./subagent-completion-tool-handoff.js";
+import { prepareFailedWorkerPlacement } from "./worker-environments/session-placement-lifecycle.js";
 
 const loadRecoveryTypingAdapter = createLazyRuntimeModule(
   () => import("../channels/plugins/index.js"),
@@ -175,6 +176,20 @@ export function createGatewayInstanceRuntime(
     "sessions.delete",
   ]);
   const recovery: GatewayRecoveryRuntime = {
+    prepareFailedWorkerPlacement: async (target) => {
+      assertDispatchAvailable("restart recovery");
+      const context = options.getContext();
+      return prepareFailedWorkerPlacement({
+        ...target,
+        context,
+        assertCurrent: () => {
+          assertDispatchAvailable("restart recovery");
+          if (options.getContext() !== context) {
+            throw new GatewayDispatchUnavailableError("restart recovery", true);
+          }
+        },
+      });
+    },
     prepareRestartRecovery: (signal) => {
       signal?.throwIfAborted();
       assertDispatchAvailable("restart recovery");
@@ -623,6 +638,12 @@ export function createGatewayInstanceRuntime(
       },
     },
     nativeApprovals: {
+      getRuntimeConfig: () => {
+        if (closed) {
+          throw new Error("Gateway instance approval runtime is closed");
+        }
+        return options.getContext().getRuntimeConfig();
+      },
       request: async <T>(
         method: GatewayNativeApprovalMethod,
         payload: Record<string, unknown>,

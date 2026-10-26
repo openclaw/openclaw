@@ -30,6 +30,16 @@ before sharding; completed module identities and final counts prove coverage.
 Event intervals are not scheduler-admission times; repeated environment/prepare
 durations must not be summed into wall time.
 These receipts do not establish transform-cache hits.
+
+Ordinary Control UI E2E uses six browser shards with four workers each, retaining
+the previous aggregate ceiling of 24 workers across eight three-worker shards.
+This shares checkout, installation, fixture builds, and browser startup across
+more tests. Private source-server projects and runtime-budget cases remain
+serial within each shard. Full manual inventories retain twelve two-worker
+shards, and the browser-extension row remains separate. The extension command
+inherits the same managed Chromium path as setup, so it uses the restored browser
+instead of downloading another copy under its artifact directory.
+
 The protected cache warmer collects Gateway methods in sequential batches of
 at most 32 files. This releases the non-isolated Bun module graph between
 collections while warming the complete canonical inventory in the same cache

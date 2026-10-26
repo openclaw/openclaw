@@ -173,36 +173,29 @@ it("rejects workspace escapes and links before granting downloads", async () => 
   }
 });
 
-it.each([
-  ["txt", 97, ""],
-  ["pdf", 0xff, "%PDF-1.7"],
-  ["zip", 0xff, "PK\x03\x04"],
-] as const)(
-  "downloads Full Access host %s bytes without assistant-media policy",
-  async (extension, fill, header) => {
-    using connection = createSessionFileDownloadClient();
-    const filename = "original." + extension;
-    const outsidePath = path.join(outsideDirs.make("session-download-host-"), filename);
-    const bytes = Buffer.alloc(600_003, fill);
-    bytes.write(header, "binary");
-    fs.writeFileSync(outsidePath, bytes);
-    const fixture = prepareHostFileRead({ permissionMode: "full" });
-    const download = await fixture.files.ok("download", outsidePath, undefined, {
-      ...fixture.options,
-      ...connection,
-    });
-    expect(download.filename).toBe(filename);
-    const result = await connection.fetch(download.url);
-    expect(result.response.statusCode).toBe(200);
-    expect(Buffer.from(result.body as Uint8Array).equals(bytes)).toBe(true);
-    fixture.entry.permissionMode = "read-only";
-    expect((await connection.fetch(download.url)).response.statusCode).toBe(404);
-    await fixture.files.error("download", outsidePath, undefined, {
-      ...fixture.options,
-      ...connection,
-    });
-  },
-);
+it("downloads Full Access host bytes without assistant-media policy", async () => {
+  using connection = createSessionFileDownloadClient();
+  const filename = "original.zip";
+  const outsidePath = path.join(outsideDirs.make("session-download-host-"), filename);
+  const bytes = Buffer.alloc(600_003, 0xff);
+  bytes.write("PK\x03\x04", "binary");
+  fs.writeFileSync(outsidePath, bytes);
+  const fixture = prepareHostFileRead({ permissionMode: "full" });
+  const download = await fixture.files.ok("download", outsidePath, undefined, {
+    ...fixture.options,
+    ...connection,
+  });
+  expect(download.filename).toBe(filename);
+  const result = await connection.fetch(download.url);
+  expect(result.response.statusCode).toBe(200);
+  expect(Buffer.from(result.body as Uint8Array).equals(bytes)).toBe(true);
+  fixture.entry.permissionMode = "read-only";
+  expect((await connection.fetch(download.url)).response.statusCode).toBe(404);
+  await fixture.files.error("download", outsidePath, undefined, {
+    ...fixture.options,
+    ...connection,
+  });
+});
 
 it.each<[string, Partial<InternalSessionEntry>?, OpenClawConfig?]>([
   ["read-only mode", { permissionMode: "read-only" }],

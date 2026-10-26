@@ -18,11 +18,23 @@ let currentFetcher:
     }
   | undefined;
 
-function createLinkFaviconFetcher(params: {
-  authCandidates: string[];
-  resourceBasePath: string;
-  gatewayUrl: string;
-}): LinkFaviconFetcher {
+export function resolveChatLinkFaviconFetcher(
+  state: Parameters<typeof fetchLinkFaviconBlobUrl>[0]["auth"] & {
+    automaticallyFetchFavicons: boolean;
+    resourceBasePath: string;
+    settings: { gatewayUrl: string };
+    client: { gatewayUrl: string } | null;
+  },
+): LinkFaviconFetcher | undefined {
+  const gatewayUrl = state.client?.gatewayUrl ?? state.settings.gatewayUrl;
+  if (!state.automaticallyFetchFavicons || !hasSameOriginGatewayTransport(gatewayUrl)) {
+    return undefined;
+  }
+  const params = {
+    authCandidates: resolveControlUiAuthCandidates(state),
+    resourceBasePath: state.resourceBasePath,
+    gatewayUrl,
+  };
   if (
     currentFetcher?.resourceBasePath === params.resourceBasePath &&
     currentFetcher.gatewayUrl === params.gatewayUrl &&
@@ -35,24 +47,6 @@ function createLinkFaviconFetcher(params: {
     fetchLinkFaviconBlobUrl({ ...params, auth: {}, hostname, signal });
   currentFetcher = { ...params, fetcher };
   return fetcher;
-}
-
-export function resolveChatLinkFaviconFetcher(
-  state: Parameters<typeof fetchLinkFaviconBlobUrl>[0]["auth"] & {
-    automaticallyFetchFavicons: boolean;
-    resourceBasePath: string;
-    settings: { gatewayUrl: string };
-    client: { gatewayUrl: string } | null;
-  },
-): LinkFaviconFetcher | undefined {
-  const gatewayUrl = state.client?.gatewayUrl ?? state.settings.gatewayUrl;
-  return state.automaticallyFetchFavicons && hasSameOriginGatewayTransport(gatewayUrl)
-    ? createLinkFaviconFetcher({
-        authCandidates: resolveControlUiAuthCandidates(state),
-        resourceBasePath: state.resourceBasePath,
-        gatewayUrl,
-      })
-    : undefined;
 }
 
 const hydratedRoots = new WeakMap<

@@ -16,6 +16,7 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { writeFixtureTree as writeFiles } from "./fixture-tree.test-support.js";
 import { resolveSqliteDatabaseFilePaths } from "./sqlite-files.js";
 import {
   detectLegacyStateMigrations,
@@ -33,7 +34,6 @@ import {
   expectFiles,
   expectMissing,
   runPluginMigrations,
-  writeFiles,
 } from "./state-migrations.store.test-support.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
 

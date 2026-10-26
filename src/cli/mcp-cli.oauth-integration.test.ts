@@ -57,11 +57,12 @@ async function startOAuthFixture() {
   const mcpRequests: Array<Pick<IncomingMessage, "headers"> & { body: string }> = [];
   const handleRequest = async (request: IncomingMessage, response: ServerResponse) => {
     const url = new URL(request.url ?? "/", issuer);
+    const reply = (body: unknown, status = 200) => sendJson(response, body, status);
     if (url.pathname.startsWith("/.well-known/oauth-protected-resource")) {
-      return sendJson(response, { resource: `${issuer}/mcp`, authorization_servers: [issuer] });
+      return reply({ resource: `${issuer}/mcp`, authorization_servers: [issuer] });
     }
     if (url.pathname === "/.well-known/oauth-authorization-server") {
-      return sendJson(response, {
+      return reply({
         issuer,
         authorization_endpoint: `${issuer}/authorize`,
         token_endpoint: `${issuer}/token`,
@@ -79,18 +80,14 @@ async function startOAuthFixture() {
         redirect.port = "";
         return redirect.href;
       });
-      return sendJson(
-        response,
-        { ...metadata, redirect_uris: redirectUris, client_id: "fixture-client" },
-        201,
-      );
+      return reply({ ...metadata, redirect_uris: redirectUris, client_id: "fixture-client" }, 201);
     }
     if (url.pathname === "/authorize") {
       const redirectUri = url.searchParams.get("redirect_uri");
       const state = url.searchParams.get("state");
       codeChallenge = url.searchParams.get("code_challenge") ?? undefined;
       if (!redirectUri || !state || !codeChallenge) {
-        return sendJson(response, { error: "invalid_request" }, 400);
+        return reply({ error: "invalid_request" }, 400);
       }
       const callback = new URL(redirectUri);
       callback.searchParams.set("code", "fixture-code");
@@ -101,9 +98,9 @@ async function startOAuthFixture() {
       const form = new URLSearchParams(await readBody(request));
       if (form.get("grant_type") === "refresh_token") {
         if (form.get("refresh_token") !== "fixture-refresh-token") {
-          return sendJson(response, { error: "invalid_grant" }, 400);
+          return reply({ error: "invalid_grant" }, 400);
         }
-        return sendJson(response, oauthTokens("fixture-refreshed-access-token"));
+        return reply(oauthTokens("fixture-refreshed-access-token"));
       }
       tokenRedirectUri = form.get("redirect_uri") ?? undefined;
       tokenVerifier = form.get("code_verifier") ?? undefined;
@@ -111,9 +108,9 @@ async function startOAuthFixture() {
         ? createHash("sha256").update(tokenVerifier).digest("base64url")
         : undefined;
       if (form.get("code") !== "fixture-code" || challenge !== codeChallenge) {
-        return sendJson(response, { error: "invalid_grant" }, 400);
+        return reply({ error: "invalid_grant" }, 400);
       }
-      return sendJson(response, oauthTokens("fixture-access-token", "fixture-refresh-token"));
+      return reply(oauthTokens("fixture-access-token", "fixture-refresh-token"));
     }
     if (url.pathname === "/mcp" && request.method === "POST") {
       const body = await readBody(request);
@@ -132,10 +129,9 @@ async function startOAuthFixture() {
           .end("expired token");
       }
       const message = JSON.parse(body) as { id?: number; method?: string };
-      const reply = (result: unknown) =>
-        sendJson(response, { jsonrpc: "2.0", id: message.id, result });
+      const rpc = (result: unknown) => reply({ jsonrpc: "2.0", id: message.id, result });
       if (message.method === "initialize") {
-        return reply({
+        return rpc({
           protocolVersion: "2025-06-18",
           capabilities: { tools: {} },
           serverInfo: { name: "fixture", version: "1.0.0" },
@@ -145,7 +141,7 @@ async function startOAuthFixture() {
         return response.writeHead(202, { "Content-Length": "0" }).end();
       }
       if (message.method === "tools/list") {
-        return reply({ tools: [{ name: "read_page", inputSchema: { type: "object" } }] });
+        return rpc({ tools: [{ name: "read_page", inputSchema: { type: "object" } }] });
       }
     }
     response.writeHead(404).end();

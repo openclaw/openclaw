@@ -44,6 +44,8 @@ import {
 } from "../../../sessions/session-controller.rpc-sources.js";
 import { markReplyOperationExecutionStarted } from "../../../sessions/session-controller.state.js";
 import { rpcSourceTesting } from "../../../sessions/session-lifecycle-admission.test-support.js";
+import { createEnteredGate } from "../../entered-gate.test-support.js";
+import { observeSettlement } from "../../promise-settlement.test-support.js";
 import { isSubagentRegistryWriteCommand } from "../../subagent-test-fixtures.test-helpers.js";
 import * as subagentKillSettlement from "./subagent-control-kill-settlement.js";
 import {
@@ -521,8 +523,7 @@ it("joins an execution registered while its accepted Stop awaits kill-claim pers
   });
   dedupeLifecycle.reserve(sessionKey, "main");
   dedupeLifecycle.bindSessionTarget({ sessionKey, sessionId, agentId: "main" });
-  const claimCommitted = createDeferred();
-  const releaseClaim = createDeferred();
+  const claimGate = createEnteredGate();
   const interrupted = createDeferred();
   const releaseTail = createDeferred();
   const selectedTail = createDeferred();
@@ -532,7 +533,6 @@ it("joins an execution registered while its accepted Stop awaits kill-claim pers
   let registration: ReturnType<typeof registerChatAbortController> | undefined;
   let execution: Promise<void> | undefined;
   let pending: ReturnType<typeof killSubagentRunAdmin> | undefined;
-  let stopSettled = false;
   const onResult = vi.fn(() => undefined);
   try {
     // The fence blocks new admission. This existing lease is adopted after capture.
@@ -569,10 +569,7 @@ it("joins an execution registered while its accepted Stop awaits kill-claim pers
         return undefined;
       }
       heldClaim = true;
-      return async () => {
-        claimCommitted.resolve();
-        await releaseClaim.promise;
-      };
+      return claimGate.wait;
     });
     pending = killSubagentRunAdmin({
       cfg: getRuntimeConfig(),
@@ -580,16 +577,9 @@ it("joins an execution registered while its accepted Stop awaits kill-claim pers
       expectedRunId: runId,
       onResult,
     });
-    void pending.then(
-      () => {
-        stopSettled = true;
-      },
-      () => {
-        stopSettled = true;
-      },
-    );
+    const stopSettled = observeSettlement(pending);
     await awaitGateBeforeSettlement(
-      claimCommitted.promise,
+      claimGate.entered,
       pending,
       "Stop returned before the native kill claim committed",
     );
@@ -621,7 +611,7 @@ it("joins an execution registered while its accepted Stop awaits kill-claim pers
     })();
     trackSessionControllerSourceWork(owner.input, execution);
     const settlement = observeExecutionJoin(owner, selectedTail.resolve);
-    releaseClaim.resolve();
+    claimGate.release();
     await awaitGateBeforeSettlement(
       selectedTail.promise,
       pending,
@@ -631,7 +621,7 @@ it("joins an execution registered while its accepted Stop awaits kill-claim pers
     expect(owner.adapter.abortStopReason).toBe("rpc");
     expect(settlement.status).toBe("pending");
     expectIdle();
-    expect(stopSettled).toBe(false);
+    expect(stopSettled()).toBe(false);
     expect(onResult).not.toHaveBeenCalled();
     releaseTail.resolve();
     await expect(pending).resolves.toMatchObject({ found: true, killed: true });
@@ -641,7 +631,7 @@ it("joins an execution registered while its accepted Stop awaits kill-claim pers
     expect(getRpcSource(runId)).toBeUndefined();
     expect(onResult).toHaveBeenCalledOnce();
   } finally {
-    releaseClaim.resolve();
+    claimGate.release();
     interrupted.resolve();
     releaseTail.resolve();
     admission?.release();
@@ -718,8 +708,7 @@ it.each([
     expect(getGatewayContextResolver(registration.entry!.input)).toBe(resolver);
     const releaseTail = createDeferred();
     const tailSelected = createDeferred();
-    const cleanupEntered = createDeferred();
-    const releaseCleanup = createDeferred();
+    const cleanupGate = createEnteredGate();
     const failure = new Error("raw disposal callback failed");
     let callbackCompleted = false;
     let pending: ReturnType<typeof killAllControlledSubagentRuns> | undefined;
@@ -803,10 +792,7 @@ it.each([
         tailSelected.resolve();
       }
     });
-    fixture.cleanup.mockImplementationOnce(async () => {
-      cleanupEntered.resolve();
-      await releaseCleanup.promise;
-    });
+    fixture.cleanup.mockImplementationOnce(cleanupGate.wait);
     const startStop = async () => {
       observingStop = true;
       pending = stop();
@@ -828,13 +814,13 @@ it.each([
           terminalReply: { disposition: "visible", text: "completed" },
         },
       });
-      await cleanupEntered.promise;
+      await cleanupGate.entered;
       expect(subagentRuns.get(root.runId)?.execution.outcome?.status).toBe("ok");
       expect(getGatewayContextResolver(subagentRuns.get(root.runId)!)).toBe(resolver);
       if (!startsAfterCleanup) {
         await startStop();
       }
-      releaseCleanup.resolve();
+      cleanupGate.release();
       await fixture.settle();
       expect(subagentRuns.get(root.runId)?.cleanupCompletedAt).toBeTypeOf("number");
       expect(getGatewayContextResolver(subagentRuns.get(root.runId)!)).toBe(
@@ -883,7 +869,7 @@ it.each([
         expect(captureRootExecution()).toBeUndefined();
       }
     } finally {
-      releaseCleanup.resolve();
+      cleanupGate.release();
       releaseTail.resolve();
       await Promise.allSettled([pending, execution]);
       fixture.worker.mockImplementation(runSubagentStateWorkerOperation);

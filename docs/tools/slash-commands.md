@@ -155,7 +155,7 @@ native settings; per-account overrides may differ. Text-only surfaces keep the h
 </ParamField>
 
 <ParamField path="commands.restart" type="boolean" default="true">
-  Enables `/restart`, `/update`, and external `SIGUSR2` restart requests.
+  Enables `/restart`, `/update`, external-chat `gateway` tool restart/update actions, and external `SIGUSR2` restart requests. `gateway` cleanup does not restart and is independent of this setting.
 </ParamField>
 
 <ParamField path="commands.ownerAllowFrom" type="string[]">
@@ -347,7 +347,7 @@ list of requirements reaches the agent complete.
     | Command | Description |
     | --- | --- |
     | `/skill <name> [input]` | Run a skill by name |
-    | `/learn [request]` | Draft one reviewable skill from the current conversation or named sources through [Skill Workshop](/tools/skill-workshop) |
+    | `/learn [request]` | Learn from the current conversation or named sources: procedures become [Skill Workshop](/tools/skill-workshop) skills, and facts and preferences go to the selected memory plugin when it supports learning |
     | `/learn undo <id>` | Owner-only. Revert every skill change one background review made, as the notice's **Undo** button does |
     | `/loop [interval] <prompt>` | Owner-only. Repeat a prompt in this conversation; omit the interval for self-paced checks |
     | `/loop status` | Owner-only. List loops bound to this conversation |

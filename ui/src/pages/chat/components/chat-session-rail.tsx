@@ -13,22 +13,75 @@ import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-sk
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import type { MessageGroup as MessageGroupData } from "../../../lib/chat/chat-types.ts";
 import { cancelLayout, scheduleLayout } from "../../../lib/layout-frame.ts";
+import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { createParkedProjection } from "../../../lib/reactive/parked-projection.ts";
 import { projectOwner } from "../../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
+import type { SidebarPanelDefinitionParams } from "../chat-pane-embedded-types.ts";
+import { usePanePresentation } from "../chat-pane-presentation.ts";
+import { createSideChatModelControlProps } from "../chat-session-companion-model-controls.ts";
 import type {
   ChatSessionCompanionThread,
   ChatSessionCompanionTurn,
 } from "../chat-session-companion.ts";
+import { resolveChatAttachmentLimits } from "./chat-attachment-admission.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import { createChatAttachmentDropHandlers } from "./chat-attachments.ts";
 import { ChatCommentController } from "./chat-comment-controller.ts";
 import { MessageGroup } from "./chat-message-group-view.tsx";
 import { StreamGroup } from "./chat-message-stream-view.tsx";
-import type { ChatModelControlsProps } from "./chat-model-controls.tsx";
+import type { ChatModelControlsProps } from "./chat-model-controls.types.ts";
 import { SessionRailComposer, sessionRailQuestion } from "./chat-session-rail-composer.tsx";
+import type { SidebarPanelHostRegistration } from "./chat-sidebar-region-types.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
+
+/** Adapt pane facts only after Side Chat's first presentation loads this module. */
+export function ChatSessionRailPanel(
+  props: SidebarPanelDefinitionParams & { registerPanelHost?: SidebarPanelHostRegistration },
+) {
+  const presented = usePanePresentation(() => props.companionPresented);
+  const modelControls = createParkedProjection(
+    () =>
+      props.onCompanionModelSelect
+        ? createSideChatModelControlProps({
+            state: props.state,
+            companion: props.companion,
+            onSelect: (patch) => props.onCompanionModelSelect?.(patch),
+          })
+        : undefined,
+    presented,
+  );
+  return (
+    <ChatSessionRail
+      presentation={props.presentation}
+      data-sidebar-panel-host
+      ref={[elementRef((element: ChatSessionRailElement) => props.registerPanelHost?.(element))]}
+      presented={presented()}
+      focusRequest={props.companionFocusRequest}
+      sessionKey={props.state.sessionKey}
+      agentId={props.agentId}
+      assistantName={props.state.assistantName}
+      digest={props.digest}
+      running={Boolean(props.activeRunId)}
+      activeRunId={props.activeRunId}
+      pullRequests={props.pullRequests}
+      companion={props.companion}
+      modelControls={modelControls()}
+      client={props.state.connected ? props.state.client : null}
+      connected={props.state.connected}
+      sendShortcut={props.state.settings.chatSendShortcut ?? "enter"}
+      inputDeviceId={props.state.settings.realtimeTalkInputDeviceId}
+      onSubmit={props.onCompanionSubmit}
+      onDraftChange={props.onCompanionDraftChange}
+      onAttachmentsChange={props.onCompanionAttachmentsChange}
+      onOpenImage={props.state.handleOpenImage}
+      uploadConfig={props.state.uploadConfig}
+      attachmentLimits={resolveChatAttachmentLimits(props.state.hello?.policy)}
+    />
+  );
+}
 
 function checksSummary(pullRequest: ControlUiSessionPullRequest): string | null {
   const checks = pullRequest.checks;

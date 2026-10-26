@@ -126,21 +126,25 @@ export function mutateSessionGroupCatalogInDatabase(
           requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
           return false;
         }
-        const maxRow = executeSqliteQuerySync(
-          db,
-          kysely
-            .selectFrom("session_groups")
-            .select("position")
-            .orderBy("position", "desc")
-            .limit(1),
-        ).rows[0];
+        // PG READ COMMITTED + the store advisory lock (SQLite BEGIN IMMEDIATE) serialize allocation.
         executeSqliteQuerySync(
           db,
-          kysely.insertInto("session_groups").values({
+          kysely.insertInto("session_groups").values((eb) => ({
             name,
-            position: (maxRow?.position ?? -1) + 1,
+            position: eb(
+              eb.fn.coalesce(
+                eb
+                  .selectFrom("session_groups")
+                  .select("position")
+                  .orderBy("position", "desc")
+                  .limit(1),
+                eb.val(-1),
+              ),
+              "+",
+              1,
+            ),
             created_at: Date.now(),
-          }),
+          })),
         );
         requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
         return true;

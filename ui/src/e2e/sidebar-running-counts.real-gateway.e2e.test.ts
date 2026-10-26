@@ -1,5 +1,5 @@
 import { mkdir } from "node:fs/promises";
-import { createServer, type ViteDevServer } from "vite";
+import type { ViteDevServer } from "vite";
 import { expect, it } from "vitest";
 import { replaceSessionEntrySync } from "../../../src/config/sessions/session-accessor.ts";
 import type { GatewayServer } from "../../../src/gateway/server-public.ts";
@@ -21,7 +21,8 @@ import {
 } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { controlUiSessionUrl, pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { deviceGatewayEnv } from "./device-gateway.test-support.ts";
+import { deviceGatewayEnv } from "./device-gateway-env.test-support.ts";
+import { createGatewayProxy, gatewayProxyRoute } from "./gateway-proxy.test-support.ts";
 
 declare global {
   interface Window {
@@ -104,27 +105,8 @@ suite.define(() => {
         controlUiEnabled: false,
         sidecarStartup: "defer",
       });
-      proxy = await createServer({
-        configFile: false,
-        envFile: false,
-        root: state.workspaceDir,
-        appType: "custom",
-        logLevel: "error",
-        server: {
-          host: "127.0.0.1",
-          port: 0,
-          proxy: {
-            "/": {
-              target: "http://127.0.0.1:" + port,
-              ws: true,
-              headers: {
-                "x-forwarded-for": "192.0.2.10",
-                "x-forwarded-proto": "http",
-                "x-forwarded-user": email,
-              },
-            },
-          },
-        },
+      proxy = await createGatewayProxy(state.workspaceDir, {
+        "/": gatewayProxyRoute(port, email),
       });
       await proxy.listen();
       const proxyUrl = proxy.resolvedUrls?.local[0];

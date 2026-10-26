@@ -3,6 +3,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { expect, it, describe } from "vitest";
 import { readQaScenarioExecutionConfig } from "../../scenario-catalog.js";
 import type { AnthropicMessage } from "./mock-openai-contracts.js";
+import { settleParent } from "./server.fixtures.test-support.js";
 import {
   type AnthropicResponse,
   ANTHROPIC_GUEST_CODE_MODE_TOOLS,
@@ -39,15 +40,18 @@ const catalogTools = ["dispatch_action", "tool_search", "tool_describe", "sessio
     name,
   }),
 );
-const shellExec = {
-  type: "function",
-  name: "exec",
-  parameters: {
-    type: "object",
-    properties: { command: { type: "string" } },
-    required: ["command"],
-  },
-};
+function makeShellExecTool() {
+  return {
+    type: "function",
+    name: "exec",
+    parameters: {
+      type: "object",
+      properties: { command: { type: "string" } },
+      required: ["command"],
+    },
+  };
+}
+const shellExec = makeShellExecTool();
 const namespace = [{ type: "namespace", name: "openclaw", tools: catalogTools }];
 function catalogOutput(name: string, result: Record<string, unknown>) {
   return JSON.stringify({ tool: { id: `openclaw:${name}`, name, source: "openclaw" }, result });
@@ -393,21 +397,6 @@ it("binds crossed same-case catalog responses to their matching workers", async 
     );
     expect(outputText(await expectNonStreamingResponsesJson(server, body))).toBe("Worker started.");
   };
-  const settleParent = (n: number) =>
-    server.terminalRequesters.settle({
-      call: async () => ({
-        sessions: [
-          {
-            key: `agent:qa:${parentId(n)}`,
-            agentId: "qa",
-            sessionId: parentId(n),
-            hasActiveRun: false,
-            status: "done",
-            abortedLastRun: false,
-          },
-        ],
-      }),
-    });
   const settled: number[] = [];
   const first = startChild(1).then((response) => {
     settled.push(1);
@@ -422,12 +411,12 @@ it("binds crossed same-case catalog responses to their matching workers", async 
     .toBe(2);
   await acknowledgeParent(2);
   expect(settled).toEqual([]);
-  await settleParent(2);
+  await settleParent(server, parentId(2), `agent:qa:${parentId(2)}`);
   expect(outputText(await (await expectOk(second)).json())).toBe("QA-SUBAGENT-TERMINAL-VISIBLE-OK");
   expect(settled).toEqual([2]);
   await acknowledgeParent(1);
   expect(settled).toEqual([2]);
-  await settleParent(1);
+  await settleParent(server, parentId(1), `agent:qa:${parentId(1)}`);
   expect(outputText(await (await expectOk(first)).json())).toBe("QA-SUBAGENT-TERMINAL-VISIBLE-OK");
   expect(settled).toEqual([2, 1]);
 });
@@ -723,17 +712,7 @@ describe("subagent-handoff", () => {
 
   // Captured smoke-ci surface: exec is a shell tool, not Code Mode (no wait).
   const structuredTools = ["exec", "sessions_yield", "dispatch_action", "write"].map((name) =>
-    name === "exec"
-      ? {
-          type: "function",
-          name,
-          parameters: {
-            type: "object",
-            properties: { command: { type: "string" } },
-            required: ["command"],
-          },
-        }
-      : { type: "function", name },
+    name === "exec" ? makeShellExecTool() : { type: "function", name },
   );
   const metadataCarrier = user(
     [
@@ -841,20 +820,7 @@ describe("subagent-handoff", () => {
       });
       expect(outputItems(acknowledged).some((item) => item.type === "function_call")).toBe(false);
       expect(outputText(acknowledged)).toBe("QA-SUBAGENT-EMPTY-PARENT-ACK");
-      await server.terminalRequesters.settle({
-        call: async () => ({
-          sessions: [
-            {
-              key: "agent:qa:main",
-              agentId: "qa",
-              sessionId: "structured-parent",
-              hasActiveRun: false,
-              status: "done",
-              abortedLastRun: false,
-            },
-          ],
-        }),
-      });
+      await settleParent(server, "structured-parent");
       const child = {
         model: "gpt-5.6-luna",
         instructions: `Runtime: embedded\n- Your session: ${childSessionKey}.`,

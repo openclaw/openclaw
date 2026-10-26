@@ -1,25 +1,10 @@
 import { commonPrefixLength } from "@openclaw/normalization-core/string-normalization";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type {
+  RealtimeTalkConversationRole,
+  RealtimeTalkConversationState,
+} from "./conversation-state.ts";
 import type { RealtimeTalkTranscript } from "./shared.ts";
-
-type RealtimeTalkConversationRole = "user" | "assistant";
-
-export type RealtimeTalkConversationEntry = {
-  id: string;
-  role: RealtimeTalkConversationRole;
-  text: string;
-  isStreaming: boolean;
-  order?: number;
-  transcriptId?: string;
-};
-
-export type RealtimeTalkConversationState = {
-  entries: RealtimeTalkConversationEntry[];
-  nextEntryId: number;
-  userEntryId: string | null;
-  userEntryAwaitingFinalStartedAtMs: number | null;
-  assistantEntryId: string | null;
-};
 
 type RealtimeTalkTranscriptUpdate = RealtimeTalkTranscript & {
   nowMs?: number;
@@ -30,26 +15,6 @@ const MAX_CONVERSATION_ENTRY_CHARS = 8_000;
 const CONVERSATION_ENTRY_PREFIX_CHARS = 256;
 const CONVERSATION_ENTRY_TRUNCATION_MARKER = "\n…\n";
 const USER_FINAL_REWRITE_GRACE_MS = 1_500;
-
-export function createRealtimeTalkConversationState(): RealtimeTalkConversationState {
-  return {
-    entries: [],
-    nextEntryId: 1,
-    userEntryId: null,
-    userEntryAwaitingFinalStartedAtMs: null,
-    assistantEntryId: null,
-  };
-}
-
-export function continueRealtimeTalkConversation(
-  state: RealtimeTalkConversationState,
-): RealtimeTalkConversationState {
-  return {
-    ...createRealtimeTalkConversationState(),
-    nextEntryId: state.nextEntryId,
-    entries: state.entries.map((entry, order) => ({ ...entry, order, isStreaming: false })),
-  };
-}
 
 export function updateRealtimeTalkConversation(
   state: RealtimeTalkConversationState,

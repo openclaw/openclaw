@@ -1,14 +1,9 @@
 import { expect, it } from "vitest";
-import {
-  controlUiSessionUrl,
-  installMockGateway,
-  startControlUiE2eServer,
-} from "../test-helpers/control-ui-e2e.ts";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI approval bootstrap",
-  startServer: () => startControlUiE2eServer(undefined, { source: true }),
 });
 
 suite.define(() => {

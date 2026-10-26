@@ -12,6 +12,7 @@ import {
 import "./chat-detail-panel.tsx";
 // Ownership tests start with preview code ready; chat-html-preview-loading.test.tsx covers cold imports.
 import "./chat-html-preview-element.tsx";
+import { restorePropertyDescriptor } from "../../../test-helpers/property-descriptor.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { setFileDraft } from "./chat-file-drafts.ts";
 import type { ChatHtmlPreviewElement } from "./chat-html-preview-element.tsx";
@@ -804,11 +805,7 @@ describe("file sidebar clipboard feedback", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
-    if (originalExecCommand) {
-      Object.defineProperty(document, "execCommand", originalExecCommand);
-    } else {
-      Reflect.deleteProperty(document, "execCommand");
-    }
+    restorePropertyDescriptor(document, "execCommand", originalExecCommand);
     document.body.replaceChildren();
   });
 

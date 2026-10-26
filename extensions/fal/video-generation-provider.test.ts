@@ -1,6 +1,5 @@
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import * as providerAuth from "openclaw/plugin-sdk/provider-auth-runtime";
-import * as providerHttp from "openclaw/plugin-sdk/provider-http";
 import type { VideoGenerationRequest } from "openclaw/plugin-sdk/video-generation";
 import { generateVideo as generateRuntimeVideo } from "openclaw/plugin-sdk/video-generation-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -97,13 +96,6 @@ describe("fal video generation provider", () => {
       source: "env",
       mode: "api-key",
     });
-    vi.spyOn(providerHttp, "resolveProviderHttpRequestConfig").mockReturnValue({
-      baseUrl: "https://fal.run",
-      allowPrivateNetwork: false,
-      headers: new Headers({ Authorization: "Key fal-key", "Content-Type": "application/json" }),
-      dispatcherPolicy: undefined,
-    });
-    vi.spyOn(providerHttp, "assertOkOrThrowHttpError").mockResolvedValue(undefined);
   }
 
   function releasedJson(value: unknown) {

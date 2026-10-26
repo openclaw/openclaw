@@ -20,41 +20,41 @@ const fixture = vi.hoisted(() => ({
   audit: vi.fn(async () => {}),
 }));
 
-// mock-isolation: Discovery and provider activation must never use this host's credentials.
+// mock-isolation: Discovery must never use this host's credentials.
 vi.mock("../../system-agent/setup-inference-detect.js", () => ({
   detectSetupInference: fixture.detect,
 }));
-// mock-isolation: Keep the real target admission lock, without starting provider subprocesses.
+// mock-isolation: Keep real admission without provider subprocesses.
 vi.mock("./system-agent-execution.js", () => ({
   createSystemAgentGatewayRuntime: () => ({ log: vi.fn(), error: vi.fn(), exit: vi.fn() }),
   runSystemAgentGatewayTask: async <T>(task: () => Promise<T>) => await task(),
   activateGatewaySetupInference: fixture.activate,
 }));
-// mock-isolation: Managed installation is an external effect owned by the Codex preparation tests.
+// mock-isolation: Managed installation is covered by Codex preparation tests.
 vi.mock("../../system-agent/setup-inference-codex.js", () => ({
   prepareAutomaticSetupCodex: fixture.prepare,
 }));
-// mock-isolation: Config snapshots are fixed inputs; only the admission lock touches the filesystem.
+// mock-isolation: Config snapshots are fixed inputs; admission alone touches disk.
 vi.mock("../../config/config.js", () => ({ readConfigFileSnapshot: fixture.readConfig }));
-// mock-isolation: Runtime config application is separately tested; observe its requested config here.
+// mock-isolation: Observe requested config without applying it to the runtime.
 vi.mock("../../system-agent/setup-inference-transition.js", () => ({
   commitSetupInferenceActivation: fixture.commit,
   captureSetupInferenceFileUndo: vi.fn(),
   setupConfigPatchConflicts: vi.fn(),
 }));
-// mock-isolation: The mocked commit never invokes the production config writer.
+// mock-isolation: The mocked commit never invokes the config writer.
 vi.mock("../../plugins/install-record-commit.js", () => ({
   transformConfigWithPendingPluginInstalls: vi.fn(),
 }));
-// mock-isolation: Installed-plugin inventory is a fixture, not the developer's current install.
+// mock-isolation: Do not inspect the developer's plugin inventory.
 vi.mock("../../plugins/plugin-metadata-snapshot.js", () => ({
   resolvePluginMetadataSnapshot: () => ({ index: { plugins: [] } }),
 }));
-// mock-isolation: Use only shipped native-catalog declarations, without scanning host plugins.
+// mock-isolation: Use shipped declarations without scanning host plugins.
 vi.mock("../../plugins/manifest-contract-eligibility.js", () => ({
   loadManifestMetadataSnapshot: () => ({ plugins: [] }),
 }));
-// mock-isolation: Automatic setup must not append audit events to the operator's database.
+// mock-isolation: Never append audit events to the operator's database.
 vi.mock("../../system-agent/audit.js", () => ({ appendSystemAgentAuditEntry: fixture.audit }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -117,10 +117,23 @@ function expectUnused(...mocks: unknown[]) {
   }
 }
 
-const runSetup = () => runGatewayAutomaticSetup(context(), () => {});
-
 function context(): GatewayRequestContext {
   return createWizardSessionTracker() as GatewayRequestContext;
+}
+const runSetup = () => runGatewayAutomaticSetup(context(), () => {});
+
+function pauseDiscovery() {
+  const started = createDeferred();
+  const discovered = createDeferred<SetupInferenceDetection>();
+  fixture.detect.mockImplementationOnce(() => {
+    started.resolve();
+    return discovered.promise;
+  });
+  return { started, discovered };
+}
+
+function expectActivationKinds(...kinds: string[]) {
+  expect(fixture.activate.mock.calls.map(([params]) => params.kind)).toEqual(kinds);
 }
 
 beforeEach(() => {
@@ -166,8 +179,7 @@ describe("Gateway automatic inference setup", () => {
         attempts: [{ kind: "codex-cli", label: "Codex", error }],
         alternatives: [{ kind: ollama.kind, modelRef: ollama.modelRef }],
       });
-      expect(fixture.activate).toHaveBeenCalledOnce();
-      expect(fixture.activate).toHaveBeenCalledWith(expect.objectContaining({ kind: "codex-cli" }));
+      expectActivationKinds("codex-cli");
       expectUnused(fixture.prepare, fixture.commit);
     },
   );
@@ -185,7 +197,6 @@ describe("Gateway automatic inference setup", () => {
         selected: { kind: ollama.kind, modelRef: ollama.modelRef },
         attempts: [{ kind: "codex-cli", error: "Model request failed." }],
       });
-      expect(fixture.activate).toHaveBeenCalledTimes(2);
       expect(fixture.prepare).not.toHaveBeenCalled();
     },
   );
@@ -207,28 +218,8 @@ describe("Gateway automatic inference setup", () => {
     expect(fixture.activate).toHaveBeenCalledOnce();
     expect(fixture.prepare).not.toHaveBeenCalled();
   });
-
-  it("returns an existing model and ranked alternatives without starting a write", async () => {
-    const current: SetupInferenceCandidate = {
-      ...codex,
-      kind: "existing-model",
-      label: "Current model",
-    };
-    fixture.detect.mockResolvedValue(detection([openai, current, codex], { setupComplete: true }));
-
-    expect(await runSetup()).toEqual({
-      status: "configured",
-      selected: { ...presentedCodex, kind: "existing-model", label: "Current model" },
-      alternatives: [presentedCodex, presentedOpenai],
-      attempts: [],
-      installedPlugins: [],
-    });
-    expect(fixture.readConfig).toHaveBeenCalledOnce();
-    expectUnused(fixture.activate, fixture.prepare, fixture.commit, fixture.audit);
-  });
-
   it.each(["user", "agent"] as const)(
-    "reports configured Codex sharing without a write (home scope: %s)",
+    "returns the configured model, ranked alternatives, and %s sharing without a write",
     async (homeScope) => {
       fixture.readConfig.mockResolvedValue({
         config: {
@@ -242,13 +233,22 @@ describe("Gateway automatic inference setup", () => {
         },
       });
       fixture.detect.mockResolvedValue(
-        detection([{ ...codex, kind: "existing-model" }], { setupComplete: true }),
+        detection([openai, { ...codex, kind: "existing-model" }, codex], { setupComplete: true }),
       );
       const result = await runSetup();
-      expect(result).toMatchObject({ status: "configured" });
-      expect(result.selected?.shared).toBe(homeScope === "user" ? true : undefined);
-      expect(result.separateSignIn).toEqual(homeScope === "user" ? separateSignIn : undefined);
-      expectUnused(fixture.activate, fixture.commit);
+      expect(result).toEqual({
+        status: "configured",
+        selected: {
+          ...presentedCodex,
+          kind: "existing-model",
+          ...(homeScope === "user" ? { shared: true } : {}),
+        },
+        ...(homeScope === "user" ? { separateSignIn } : {}),
+        alternatives: [presentedCodex, presentedOpenai],
+        attempts: [],
+        installedPlugins: [],
+      });
+      expectUnused(fixture.activate, fixture.prepare, fixture.commit, fixture.audit);
     },
   );
 
@@ -273,10 +273,7 @@ describe("Gateway automatic inference setup", () => {
       attempts: [{ kind: saved.kind, label: saved.label, error: "Saved sign-in expired." }],
       installedPlugins: ["codex"],
     });
-    expect(fixture.activate.mock.calls.map(([params]) => params.kind)).toEqual([
-      saved.kind,
-      "codex-cli",
-    ]);
+    expectActivationKinds(saved.kind, "codex-cli");
     expect(fixture.activate).toHaveBeenLastCalledWith(
       expect.objectContaining({
         kind: "codex-cli",
@@ -301,7 +298,7 @@ describe("Gateway automatic inference setup", () => {
 
     expect(await runSetup()).toEqual({
       status: "needs-sign-in",
-      signIn: { authOptionId: "openai-device-code", label: "ChatGPT" },
+      signIn: separateSignIn,
       alternatives: [],
       attempts: [
         ...["a", "b", "c"].map((id) => ({
@@ -313,29 +310,17 @@ describe("Gateway automatic inference setup", () => {
       ],
       installedPlugins: ["codex"],
     });
-    expect(fixture.activate).toHaveBeenCalledTimes(4);
-    expect(fixture.prepare).toHaveBeenCalledOnce();
   });
 
   it("joins concurrent callers before activation and holds admission against an independent context", async () => {
-    const started = createDeferred();
-    const discovered = createDeferred<SetupInferenceDetection>();
-    fixture.detect.mockImplementationOnce(() => {
-      started.resolve();
-      return discovered.promise;
-    });
+    const { started, discovered } = pauseDiscovery();
     const gateway = context();
     const first = runGatewayAutomaticSetup(gateway, () => {});
     try {
-      await awaitGateBeforeSettlement(
-        started.promise,
-        first,
-        "automatic setup ended before discovery",
-      );
+      await awaitGateBeforeSettlement(started.promise, first, "setup ended before discovery");
       const joined = runGatewayAutomaticSetup(gateway, () => {});
       expect(joined).toBe(first);
       await expect(runSetup()).rejects.toBeInstanceOf(SetupAdmissionBusyError);
-      expect(fixture.detect).toHaveBeenCalledOnce();
       expect(fixture.activate).not.toHaveBeenCalled();
       discovered.resolve(detection([codex]));
       expect(await joined).toMatchObject({ status: "activated", selected: presentedCodex });
@@ -347,12 +332,7 @@ describe("Gateway automatic inference setup", () => {
   });
 
   it("rejects revoked requester authority after discovery before any activation or preparation", async () => {
-    const started = createDeferred();
-    const discovered = createDeferred<SetupInferenceDetection>();
-    fixture.detect.mockImplementationOnce(() => {
-      started.resolve();
-      return discovered.promise;
-    });
+    const { started, discovered } = pauseDiscovery();
     let current = true;
     const run = runGatewayAutomaticSetup(context(), () => {
       if (!current) {

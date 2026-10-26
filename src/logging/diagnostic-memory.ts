@@ -276,6 +276,10 @@ function logMemoryPressure(pressure: MemoryPressure): void {
     ) +
     formatOptionalPressureMetric("workerCount", pressure.memory.workerCount) +
     formatOptionalPressureMetric("postgresBridgeCount", pressure.memory.postgresBridgeCount) +
+    formatOptionalPressureMetric(
+      "postgresPoolSelfRootCount",
+      pressure.memory.postgresPoolSelfRootCount,
+    ) +
     formatOptionalPressureMetric("workerHeapSampledCount", pressure.memory.workerHeapSampledCount) +
     formatOptionalPressureMetric(
       "workerArrayBuffersSampledCount",

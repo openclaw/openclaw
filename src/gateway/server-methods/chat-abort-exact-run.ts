@@ -2,6 +2,7 @@ import { createAgentRunDirectAbortError } from "../../agents/run-termination.js"
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
+import { getSessionControllerSourceIdentity } from "../../sessions/session-controller.identity.js";
 import {
   getRpcSourceForGateway,
   getRpcSourceIdentity,
@@ -21,6 +22,22 @@ type ExactClientRunStopResult = {
   failure?: { error: unknown };
 };
 
+/** Retain the physical source across asynchronous Stop metadata preparation. */
+export function captureSourceAssertion(input: RpcSourceRef["input"], assertCurrent?: () => void) {
+  const selected = getSessionControllerSourceIdentity(input);
+  return () => {
+    assertCurrent?.();
+    const current = getSessionControllerSourceIdentity(input);
+    if (
+      current.sessionKey !== selected.sessionKey ||
+      current.sessionId !== selected.sessionId ||
+      current.agentId !== selected.agentId
+    ) {
+      throw new Error("Run changed before cancellation; retry Stop.");
+    }
+  };
+}
+
 /**
  * Stops one exact Gateway RPC run through Stop source `client-run`: its source
  * input, its chat presentation, and that turn's controlled subagents.
@@ -30,6 +47,7 @@ export async function stopExactClientRun(params: {
   cfg: OpenClawConfig;
   runId: string;
   active: RpcSourceRef;
+  lifecycleRevision?: string;
   assertCurrent?: () => void;
   hookContext: Omit<SessionStopHookContext, "sessionKey" | "sessionId">;
   /** Runs once the parent cancellation result is known. */
@@ -44,6 +62,7 @@ export async function stopExactClientRun(params: {
   const capture = captureSessionControllerStop({ inputs: [active.input] });
   const { sessionKey, sessionId, agentId } = getRpcSourceIdentity(active);
   const result: ExactClientRunStopResult = { aborted: false };
+  const assertSource = captureSourceAssertion(active.input, params.assertCurrent);
   const markAborted = () => {
     if (!result.aborted) {
       result.aborted = true;
@@ -51,18 +70,10 @@ export async function stopExactClientRun(params: {
     }
   };
   const assertCurrent = () => {
-    params.assertCurrent?.();
+    assertSource();
     const replacement = getRpcSourceForGateway(runId, getGatewayContextResolver(active.input));
-    if (replacement) {
-      const identity = getRpcSourceIdentity(replacement);
-      if (
-        replacement !== active ||
-        identity.sessionKey !== sessionKey ||
-        identity.sessionId !== sessionId ||
-        identity.agentId !== agentId
-      ) {
-        throw new Error("Run changed before cancellation; retry Stop.");
-      }
+    if (replacement && replacement !== active) {
+      throw new Error("Run changed before cancellation; retry Stop.");
     }
   };
   try {
@@ -97,6 +108,7 @@ export async function stopExactClientRun(params: {
           agentId,
           requesterTurnRunId: runId,
           sessionId,
+          lifecycleRevision: params.lifecycleRevision,
           assertCurrent,
           beforeKill: applyParentStop,
           parentStopAccepted: () => result.aborted,

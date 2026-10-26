@@ -131,16 +131,31 @@ afterEach(() => {
 });
 
 describe("chat Details presentation", () => {
-  it("does not synchronously measure a closed desktop frame during mounting", async () => {
-    const measurement = vi.spyOn(Element.prototype, "getBoundingClientRect");
-    try {
-      const { frame, panel } = await fixture(props(), 600, false, "desktop");
-      expect(panel.hidden).toBe(true);
-      expect(measurement.mock.contexts.filter((target) => target === frame)).toHaveLength(0);
-    } finally {
-      measurement.mockRestore();
-    }
-  });
+  it.each([undefined, "desktop"] as const)(
+    "reserves automatic Details before the first resize delivery (presentation: %s)",
+    async (nativePresentation) => {
+      vi.stubGlobal("ResizeObserver", undefined);
+      try {
+        await page.viewport(1700, 900);
+        const { conversation, panel } = await fixture(
+          props(),
+          1320,
+          false,
+          nativePresentation,
+          true,
+        );
+        expect(panel.hidden).toBe(false);
+        expect(getComputedStyle(conversation).right).toBe(
+          nativePresentation === "desktop" ? "313px" : "300px",
+        );
+        if (nativePresentation === "desktop") {
+          expect(panel.querySelector(".chat-details-session")).toBeNull();
+        }
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    },
+  );
 
   it.each(["transcript paint", "explicit open"] as const)(
     "holds automatic content until %s and retains it through later hydration",
@@ -213,10 +228,12 @@ describe("chat Details presentation", () => {
     const metadata = session.querySelector(".chat-details-session")!;
     // A side panel consumes pane width even when the desktop stays wide.
     frame.style.width = "900px";
-    await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
+    await expect
+      .poll(() => trigger.getAttribute("aria-expanded"), { timeout: 5_000 })
+      .toBe("false");
     expect(conversation.getBoundingClientRect().width).toBe(900);
     frame.style.width = "1320px";
-    await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
+    await expect.poll(() => trigger.getAttribute("aria-expanded"), { timeout: 5_000 }).toBe("true");
     expect(session.querySelector(".chat-details-session")).toBe(metadata);
     expect(metadata.querySelector(":scope > summary")).toBeNull();
     trigger.click();
@@ -301,11 +318,17 @@ describe("chat Details presentation", () => {
       { container: panel },
     );
     flush();
+    // The Environment body loads lazily; capture its controls only after it renders.
+    await expect
+      .poll(() => panel.querySelector(".chat-environment__branch-controls button.chat-pr__diff"))
+      .not.toBeNull();
     const heading = panel.querySelector(".chat-details-desktop-section__heading")!;
     const navigation = panel.querySelector<HTMLButtonElement>(
       ".chat-environment__branch-controls button.chat-pr__diff",
     )!;
     const branchLabel = panel.querySelector(".chat-environment__branch-name")!;
+    // The scroll owner applies its initial gutter measurement before the first paint.
+    await new Promise(requestAnimationFrame);
     expect(navigation.getAttribute("aria-label")).toBe("Show session changes");
     expect(navigation.textContent).toContain("+3");
     expect(navigation.textContent).toContain("−1");

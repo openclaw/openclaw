@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { mediaTicketPayload } from "../test-helpers/control-ui-attachment-fixtures.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -34,11 +35,7 @@ suite.define(() => {
                 retry && denied
                   ? { status: denialStatus, json: { error: "Attachment unavailable" } }
                   : {
-                      json: {
-                        available: true,
-                        mediaTicket: "upload-ticket-" + metadataRequests,
-                        mediaTicketExpiresAt: new Date(Date.now() + 300_000).toISOString(),
-                      },
+                      json: mediaTicketPayload("upload-ticket-" + metadataRequests, 300_000),
                     },
               );
             }

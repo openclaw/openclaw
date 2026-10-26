@@ -1,4 +1,6 @@
 // Own synthetic state only. Run with node --import ./scripts/tsx.mjs.
+// --worker-census observes native worker births/tasks and RSS/CPU/allocation in per-thread
+// JSONL beside the result. Compare fresh fixtures and alternate already-built revisions.
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash, generateKeyPairSync, randomUUID } from "node:crypto";
 import { createWriteStream, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -23,7 +25,11 @@ import {
 import { readBody } from "../e2e/lib/mock-openai-http.mjs";
 import { stopChild } from "../lib/gateway-bench-child.ts";
 import { GATEWAY_GC_TRACE_MARKER, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
-import { buildGatewayBenchChildArgs, createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
+import {
+  buildGatewayBenchChildArgs,
+  createGatewayBenchEnv,
+  writeGatewayAuthorityCountsPreload,
+} from "../lib/gateway-bench-runtime.ts";
 import { createGatewayWsClient } from "../lib/gateway-ws-client.ts";
 import {
   inspectManagedProcessGroup,
@@ -44,6 +50,8 @@ const { values } = parseArgs({
     "request-start-owner": { type: "string" },
     "row-refresh-owner": { type: "string" },
     "trace-gc": { type: "boolean", default: false },
+    "authority-counts": { type: "boolean", default: false },
+    "authority-source-preload": { type: "string" },
     "reconnect-count": { type: "string" },
     waves: { type: "string", default: "10" },
     "start-at": { type: "string" },
@@ -55,6 +63,7 @@ const { values } = parseArgs({
     "cheap-handlers": { type: "boolean", default: false },
     "transcript-reads": { type: "boolean", default: false },
     "sqlite-queues": { type: "boolean", default: false },
+    "worker-census": { type: "boolean", default: false },
   },
 });
 if (!values["state-dir"]) {
@@ -135,6 +144,27 @@ if (
 ) {
   throw new Error("--reconnect-waves requires at least two clients and no restart workload flags");
 }
+if (
+  values["authority-counts"] &&
+  (path.resolve(values.entry) !== path.resolve("src/entry.ts") ||
+    reconnectWaves ||
+    coldRowReads ||
+    values["trace-gc"])
+) {
+  throw new Error("--authority-counts requires source-entry restart mode without GC tracing");
+}
+if (
+  values["authority-source-preload"] &&
+  path.resolve(values.entry) !== path.resolve("src/entry.ts")
+) {
+  throw new Error("--authority-source-preload requires --entry src/entry.ts");
+}
+const authoritySourcePreload = values["authority-source-preload"]
+  ? path.resolve(values["authority-source-preload"])
+  : undefined;
+const authoritySourcePreloadSha256 = authoritySourcePreload
+  ? createHash("sha256").update(readFileSync(authoritySourcePreload)).digest("hex")
+  : undefined;
 const runCount = integer(values.runs, "--runs");
 const durationMs = integer(values.seconds, "--seconds") * 1000;
 const pollMs = integer(values["poll-ms"], "--poll-ms");
@@ -171,6 +201,12 @@ if (values["worktree-churn"] && !worktreeProjectId) {
 }
 const output = path.join(root, `post-restart-burst-${Date.now()}`);
 mkdirSync(output);
+const authorityPreload = path.join(output, "authority-counts-preload.mjs");
+if (values["authority-counts"]) {
+  writeGatewayAuthorityCountsPreload(authorityPreload, true, false);
+}
+let recoveryAuthorityCounts: Record<string, unknown> | undefined;
+let recoveryArrivalsAtSnapshot = 0;
 const cfg = JSON.parse(readFileSync(path.join(root, "openclaw.json"), "utf8"));
 const token = "synthetic-post-restart-burst-token";
 cfg.gateway = { ...cfg.gateway, auth: { mode: "token", token } };
@@ -569,8 +605,13 @@ if (isMainThread) {
   };
   process.on('message', (message) => {
     if (message?.channel === 'post-restart-burst-snapshot') {
+      const authority = globalThis[Symbol.for('openclaw.benchmark.authorityCounts')];
+      if (authority) authority.active = false;
       process.send?.({ channel: 'post-restart-burst-tasks', pid: process.pid,
-        taskCounts: Object.fromEntries(taskCounts) });
+        taskCounts: Object.fromEntries(taskCounts),
+        authorityCounts: authority ? { counts: authority.counts, installed: authority.installed,
+          startedAtEpochMs: authority.startedAtEpochMs, finishedAtEpochMs: Date.now(),
+          sourceOverlay: globalThis[Symbol.for('openclaw.benchmark.sourceOverlay')] } : undefined });
     }
   });
   let before = performance.eventLoopUtilization();
@@ -671,9 +712,13 @@ const env = {
 const cohort = randomUUID();
 const message = (index: number) =>
   `Reply with benchmark stream ${index}. Post-restart cohort ${cohort}.`;
+const primaryMessageIndexes = new Map<string, number>(
+  Array.from({ length: runCount }, (_, index) => [message(index + 1), index + 1]),
+);
 const initialArrivals = new Set<number>();
 const heldResponses = new Map<number, ServerResponse>();
 const recoveryArrivals = new Set<number>();
+let allRecoveryPrimaryArrivalsMs: number | undefined;
 let crashExpected = false;
 let activePrimaryHoldsAtCrash: number;
 let recovering = false;
@@ -720,8 +765,33 @@ const mock = createServer((req, res) => {
     res.end("ok");
     return;
   }
+  if (req.method === "GET" && (req.url === "/v1/models" || req.url === "/models")) {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(
+      JSON.stringify({
+        object: "list",
+        data: [{ id: "gpt-4.1", object: "model", owned_by: "synthetic" }],
+      }),
+    );
+    return;
+  }
+  if (req.method !== "POST") {
+    res.writeHead(404);
+    res.end();
+    return;
+  }
   void (async () => {
-    const body: unknown = JSON.parse(await readBody(req));
+    let body: unknown;
+    try {
+      body = JSON.parse(await readBody(req));
+    } catch {
+      console.warn(
+        `Mock refused malformed JSON: ${req.method} ${(req.url ?? "").split("?")[0]?.slice(0, 160)}`,
+      );
+      res.writeHead(400);
+      res.end("Invalid JSON");
+      return;
+    }
     const facts = summarizeMockInferenceRequest(body);
     const input = isRecord(body) ? (body.input ?? body.messages) : undefined;
     const lastUser = Array.isArray(input)
@@ -730,21 +800,41 @@ const mock = createServer((req, res) => {
           .map(readMockUserText)
           .find((text) => text !== undefined)
       : undefined;
-    const index = facts.turnIndex;
+    // Restart appends a continuation user message after the original cohort marker.
+    // Utility prompts can quote that history, so retain the shared purpose exclusions.
+    const recoveryIndex =
+      recovering &&
+      facts.purpose !== "activity-recap" &&
+      facts.purpose !== "session-observer" &&
+      Array.isArray(input)
+        ? input
+            .map(readMockUserText)
+            .map((text) =>
+              text === undefined
+                ? undefined
+                : primaryMessageIndexes.get(stripInboundMetadata(text).trim()),
+            )
+            .find((index) => index !== undefined)
+        : undefined;
+    const index = recovering ? recoveryIndex : facts.turnIndex;
     const primary =
-      facts.purpose === "benchmark-turn" &&
-      !facts.hasToolOutput &&
       index !== undefined &&
       index >= 1 &&
       index <= runCount &&
-      lastUser !== undefined &&
-      stripInboundMetadata(lastUser).trim() === message(index);
+      (recovering ||
+        (facts.purpose === "benchmark-turn" &&
+          !facts.hasToolOutput &&
+          lastUser !== undefined &&
+          stripInboundMetadata(lastUser).trim() === message(index)));
     if (primary) {
       const arrivals = recovering ? recoveryArrivals : initialArrivals;
       if (!recovering && arrivals.has(index)) {
         throw new Error(`duplicate initial primary model request ${index}`);
       }
       arrivals.add(index);
+      if (recovering && arrivals.size === runCount && allRecoveryPrimaryArrivalsMs === undefined) {
+        allRecoveryPrimaryArrivalsMs = performance.now() - restartAt;
+      }
     }
     res.writeHead(200, { "content-type": "text/event-stream" });
     if (primary && !recovering) {
@@ -834,8 +924,17 @@ async function assertPortAvailable(targetPort: number) {
 }
 function launch(name: string) {
   const log = createWriteStream(path.join(output, `${name}.log`));
+  const censusDirectory = path.join(output, `${name}-workers`);
+  if (values["worker-census"]) {
+    mkdirSync(censusDirectory);
+  }
   const args = buildGatewayBenchChildArgs(values.entry, port, [
+    ...(values["worker-census"]
+      ? ["--import", path.resolve("scripts/perf/transcript-boot-preload.mjs")]
+      : []),
     ...(values["trace-gc"] ? ["--expose-gc", "--trace-gc-nvp"] : []),
+    ...(authoritySourcePreload ? ["--import", authoritySourcePreload] : []),
+    ...(recovering && values["authority-counts"] ? ["--import", authorityPreload] : []),
     "--import",
     "./scripts/tsx.mjs",
     "--import",
@@ -863,6 +962,7 @@ function launch(name: string) {
     env: {
       ...env,
       ...queueClock,
+      ...(values["worker-census"] ? { OPENCLAW_BENCH_TRANSCRIPT_BOOT_DIR: censusDirectory } : {}),
       OPENCLAW_BENCH_CAPTURE_DEADLINE_MS: String(Date.now() + Math.min(durationMs, 120_000)),
     },
     detached: true,
@@ -951,6 +1051,10 @@ function launch(name: string) {
           throw new Error("Invalid transcript task count");
         }
         counts[kind] = count;
+      }
+      if (values["authority-counts"] && isRecord(sample.authorityCounts)) {
+        recoveryAuthorityCounts = sample.authorityCounts;
+        recoveryArrivalsAtSnapshot = recoveryArrivals.size;
       }
       transcriptSnapshot.resolve(counts);
       return;
@@ -2297,6 +2401,17 @@ async function measureRestartBurst(
   const transcriptMetrics = delay(
     Math.max(0, Math.min(durationMs, 120_000) - (performance.now() - restartAt)),
   ).then(async () => {
+    if (values["authority-counts"]) {
+      while (recoveryArrivals.size !== runCount) {
+        assertAlive();
+        if (performance.now() >= restartAt + durationMs) {
+          throw new Error(
+            `Recovery count window ended with ${recoveryArrivals.size}/${runCount} arrivals`,
+          );
+        }
+        await delay(25);
+      }
+    }
     restarted.send({ channel: "post-restart-burst-snapshot" });
     return await Promise.race([
       transcriptSnapshot.promise,
@@ -2388,6 +2503,21 @@ async function measureRestartBurst(
     initialPrimaryArrivals: initialArrivals.size,
     activePrimaryHoldsAtCrash,
     recoveryPrimaryArrivals: recoveryArrivals.size,
+    allRecoveryPrimaryArrivalsMs,
+    recoveryAuthority: values["authority-counts"]
+      ? {
+          ...recoveryAuthorityCounts,
+          sourcePreloadSha256: authoritySourcePreloadSha256,
+          windowMs:
+            typeof recoveryAuthorityCounts?.startedAtEpochMs === "number" &&
+            typeof recoveryAuthorityCounts?.finishedAtEpochMs === "number"
+              ? recoveryAuthorityCounts.finishedAtEpochMs - recoveryAuthorityCounts.startedAtEpochMs
+              : undefined,
+          primaryArrivalsAtSnapshot: recoveryArrivalsAtSnapshot,
+          scope:
+            "restarted main isolate including startup; nested authority calls, not distinct decisions; counting-only timings are not acceptance evidence",
+        }
+      : undefined,
     ownerProfileIds: [...ownerProfileIds],
     catalogFixture:
       "synthetic provider consumes Gateway sessionEntries metadata; no real provider scan or network latency",
@@ -2452,6 +2582,10 @@ async function measureRestartBurst(
     ),
   );
   if (
+    (values["authority-counts"] &&
+      (recoveryArrivalsAtSnapshot !== runCount ||
+        !isRecord(recoveryAuthorityCounts?.counts) ||
+        !(Number(recoveryAuthorityCounts.counts["operator-run-recovery.assertPolicy"]) > 0))) ||
     connectedClients.size < clientCount ||
     shapes.some(({ method }) => !timings.some((row) => row.method === method && !row.error)) ||
     (values["cheap-handlers"] && githubFixtureRequests === 0) ||

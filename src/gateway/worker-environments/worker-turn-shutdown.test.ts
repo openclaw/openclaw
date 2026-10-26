@@ -12,6 +12,7 @@ import {
 } from "../../process/gateway-work-admission.js";
 import { getSessionControllerOperation } from "../../sessions/session-controller.js";
 import { waitForSessionRunEnd } from "../../sessions/session-controller.native-runtime.js";
+import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { createPlacementRecoveryActions } from "./placement-dispatch-recovery.js";
 import { projectWorkerSessionTurnClaim } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
@@ -69,14 +70,10 @@ it("accepts an interrupted worker's completed edit before a fresh turn reuses it
     ).appendMessageAsync(makeTextToolResult("sleep", "exec", "slept-ok", false, 1));
     edited.resolve();
     await finish.promise;
-    return {
-      stdout: "",
+    return createCommandResult({
       stderr: "worker admission deadline exceeded: Unexpected server response: 503",
       code: 1,
-      signal: null,
-      killed: false,
-      termination: "exit",
-    };
+    });
   });
   const tunnel = fixture.createWorkerTurnTunnel({
     launchTurn,

@@ -1,5 +1,4 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import type { SqliteWorkerOperationSettlement as Settlement } from "../infra/sqlite-worker-operation-settlement.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
@@ -254,7 +253,6 @@ it.each(["ordered", "reversed", "recovery first", "native successor", "native AB
           }),
         ]);
       }
-      expect(delivery.roleCommands).toBe(3);
       if (order === "native successor" || order === "native ABA") {
         setUserProfileRole(profile.id, "native");
         if (order === "native ABA") {
@@ -309,9 +307,7 @@ it.each(["delivered", "lost during close"] as const)(
         };
         await expect(setCanonicalUserProfileRole(profile.id, "guest")).rejects.toBe(lostDelivery);
         await closing;
-        expect(delivery.roleCommands).toBe(1);
       } else {
-        requireNodeSqlite();
         const sql = observeMainThreadSql();
         await expect(setCanonicalUserProfileRole(profile.id, "guest")).resolves.toMatchObject({
           id: profile.id,

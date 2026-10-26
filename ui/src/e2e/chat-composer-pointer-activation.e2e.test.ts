@@ -36,7 +36,7 @@ async function withComposer(
         ...(deferred ? { deferredMethods: ["chat.send"] } : {}),
       });
       await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       if (!wide) {
         const protocol = await context.newCDPSession(page);
         await protocol.send("Emulation.setSafeAreaInsetsOverride", { insets: { bottom: 34 } });

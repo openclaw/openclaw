@@ -21,12 +21,14 @@ import {
 registerModelControlsEnglish();
 
 type ChatModelSelectStateInput = {
-  activeSession?: GatewaySessionRow;
+  activeSession?: Pick<GatewaySessionRow, "model" | "modelProvider" | "modelOverrideSource">;
   agentDefaultModel?: string;
   chatModelCatalog: ModelCatalogEntry[];
   modelOverrides: Readonly<Record<string, string | null | undefined>>;
   sessionKey: string;
-  sessionsResult: SessionsListResult | null;
+  sessionsResult: {
+    defaults: Partial<Pick<SessionsListResult["defaults"], "model" | "modelProvider">>;
+  } | null;
   modelSelectionPolicy?: ModelCatalogResult["modelSelectionPolicy"];
   catalogRetired?: boolean;
   catalogInitialized?: boolean;
@@ -58,6 +60,11 @@ export type ChatFastModeSelectState = {
   /** True: offered; false: model-restricted; undefined: capability not confirmed. */
   ultrafastSupported?: boolean;
 };
+
+export type ChatFastModePresentation = Pick<
+  ChatFastModeSelectState,
+  "active" | "currentOverride" | "label" | "supported"
+>;
 
 export type ChatFastModeTarget = Pick<
   GatewaySessionRow,
@@ -191,21 +198,23 @@ export function resolveChatModelUnavailableReason(
 ): ModelCatalogEntry["unavailableReason"] {
   const value = resolvePreferredServerChatModelValue(model, provider, catalog);
   const key = normalizeChatModelAvailabilityKey(value);
-  const matches = catalog.filter((entry) => catalogModelAvailabilityKey(entry) === key);
-  if (
-    !matches.length ||
-    matches.some((entry) => entry.available !== false || !entry.unavailableReason)
-  ) {
-    return undefined;
+  let reason: ModelCatalogEntry["unavailableReason"];
+  for (const entry of catalog) {
+    if (catalogModelAvailabilityKey(entry) !== key) {
+      continue;
+    }
+    if (entry.available !== false || !entry.unavailableReason) {
+      return undefined;
+    }
+    // Any recovering route can still serve the selection. Do not let an alias's
+    // permanent auth failure turn a transient catalog snapshot into a send gate.
+    if (!reason || entry.unavailableReason === "cooldown") {
+      reason = entry.unavailableReason;
+    } else if (reason !== "cooldown" && entry.unavailableReason === "auth-failed") {
+      reason = "auth-failed";
+    }
   }
-  // Any recovering route can still serve the selection. Do not let an alias's
-  // permanent auth failure turn a transient catalog snapshot into a send gate.
-  if (matches.some((entry) => entry.unavailableReason === "cooldown")) {
-    return "cooldown";
-  }
-  return matches.some((entry) => entry.unavailableReason === "auth-failed")
-    ? "auth-failed"
-    : "missing-auth";
+  return reason;
 }
 
 export function hasChatModelCatalogSelection(
@@ -379,10 +388,14 @@ export function resolveChatFastModeSelectState(input: {
   catalog: ModelCatalogEntry[];
   connected: boolean;
   currentModelOverride: string;
-  fastModeTarget?: ChatFastModeTarget;
+  fastModeTarget?: Omit<ChatFastModeTarget, "agentRuntime"> & {
+    agentRuntime?: Pick<NonNullable<ChatFastModeTarget["agentRuntime"]>, "id">;
+  };
   gatewayAvailable: boolean;
   loading: boolean;
-  sessionsResult: SessionsListResult | null;
+  sessionsResult: {
+    defaults: Partial<Pick<SessionsListResult["defaults"], "model" | "modelProvider">>;
+  } | null;
 }): ChatFastModeSelectState {
   const activeRow = input.fastModeTarget;
   const activeProvider = normalizeChatModelProviderId(activeRow?.modelProvider ?? "") || null;

@@ -3,6 +3,7 @@ import { extractQueryTerms } from "../../../../src/shared/usage-query.js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Menu } from "../../components/solid/menu.tsx";
 import { ProviderUsagePanel } from "../../components/solid/provider-usage.tsx";
+import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import {
   SettingsSection,
   SettingsPage,
@@ -308,21 +309,22 @@ function UsageView(props: UsageProps & { loading: boolean; read: UsageRead }) {
                     onChange={(endDate) => props.callbacks.filters.onDatesChange({ endDate })}
                   />
                 </div>
-                <select
+                <SettingsSelect
                   class="usage-select"
                   title={t("usage.filters.timeZone")}
                   aria-label={t("usage.filters.timeZone")}
                   value={props.filters.timeZone}
+                  options={[
+                    { value: "local", label: t("usage.filters.timeZoneLocal") },
+                    { value: "utc", label: t("usage.filters.timeZoneUtc") },
+                  ]}
                   onChange={(event) => {
                     const timeZone = event.currentTarget.value;
                     if (timeZone === "local" || timeZone === "utc") {
                       props.callbacks.filters.onScopeChange({ timeZone });
                     }
                   }}
-                >
-                  <option value="local">{t("usage.filters.timeZoneLocal")}</option>
-                  <option value="utc">{t("usage.filters.timeZoneUtc")}</option>
-                </select>
+                />
               </div>
               <div class="usage-view-options">
                 <UsageCreatorFilter

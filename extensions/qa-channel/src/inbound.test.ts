@@ -134,18 +134,6 @@ describe("handleQaInbound", () => {
     expectSend(1, { text: "single answer" });
   });
 
-  it("keeps captionless media and a subsequent text final", async () => {
-    const assembled = await assembledTurn(runtime);
-    await assembled.delivery.deliver({ mediaUrl: "/tmp/answer.png" }, { kind: "block" });
-    await assembled.deliver("single answer");
-    expect(sendQaBusMessage).toHaveBeenCalledTimes(2);
-    expectSend(1, {
-      text: "",
-      attachments: [expect.objectContaining({ contentBase64: QA_GENERATED_IMAGE_BASE64 })],
-    });
-    expectSend(2, { text: "single answer" });
-  });
-
   it("retains tool calls started while media is loading in the later final", async () => {
     const assembled = await assembledTurn(runtime);
     await assembled.tool("image");

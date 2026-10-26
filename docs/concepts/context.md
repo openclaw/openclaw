@@ -57,7 +57,7 @@ such as two `AGENTS.md` files. Reports without source metadata show neutral file
 groups rather than guessing their role.
 
 **Tool schemas** groups tools in the direct tool surface by source and MCP server.
-The secondary **On-demand tools** section lists catalog entries outside that
+The secondary **Tools loaded on use** section lists catalog entries outside that
 surface; their potential schema sizes are not added to current usage. Discovery descriptions and schemas retrieved into
 the conversation still consume context. Native-harness reports may cover only
 OpenClaw-provided tools, and unmeasured sizes remain unverified rather than zero.
@@ -150,7 +150,7 @@ OpenClaw pins the complete system prompt for the session. Changed sections,
 including skills, workspace memory, and temporal context, arrive as instruction
 messages after the current user turn. Existing skill and memory refresh rules
 still apply. Changing the route or selected personal profile, resetting, or
-compacting history starts a new series; ordinary turn teardown and Gateway restarts restore the saved series.
+compacting history starts a new series; internal turns continuing the same session keep the series, and ordinary turn teardown and Gateway restarts restore the saved series.
 
 ## Injected workspace files (Project Context)
 

@@ -40,6 +40,15 @@ const runPowerShell = (args: string[]) =>
   spawnSync(powershell, [...powershellArgs, ...args], { encoding: "utf8" });
 const probe = spawnSync(powershell, ["-NoLogo", "-NoProfile", "-Command", "exit 0"]);
 const runWithPowerShell = probe.status === 0 ? it : it.skip;
+runWithPowerShell("runs the piped installer and validates optional Node versions", () => {
+  const result = runPowerShell([
+    "-File",
+    "test/scripts/install-ps1-entrypoint.ps1",
+    "-InstallerPath",
+    join(process.cwd(), SCRIPT_PATH),
+  ]);
+  expect(result.status, result.stdout + result.stderr).toBe(0);
+});
 runWithPowerShell.each(["file", "streamed"] as const)(
   "preserves handled failure and caller lifetime through the %s installer entrypoint",
   (mode) => {

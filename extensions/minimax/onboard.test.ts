@@ -4,6 +4,7 @@ import {
   expectProviderOnboardPreservesPrimary,
 } from "openclaw/plugin-sdk/provider-test-contracts";
 import { describe, expect, it } from "vitest";
+import { createModelProviderConfig } from "../test-support/model-provider-config.test-support.js";
 import { buildMinimaxApiModelDefinition } from "./model-definitions.js";
 import {
   applyMinimaxApiConfig,
@@ -39,19 +40,17 @@ describe.each([
   });
 
   it("drops placeholder apiKey while preserving provider timeout", () => {
-    const cfg = applyConfig({
-      models: {
-        providers: {
-          minimax: {
-            baseUrl: "https://api.minimax.io/anthropic",
-            apiKey: "minimax",
-            api: "anthropic-messages",
-            timeoutSeconds: 900,
-            models: [buildMinimaxApiModelDefinition("MiniMax-M2.7")],
-          },
+    const cfg = applyConfig(
+      createModelProviderConfig({
+        minimax: {
+          baseUrl: "https://api.minimax.io/anthropic",
+          apiKey: "minimax",
+          api: "anthropic-messages",
+          timeoutSeconds: 900,
+          models: [buildMinimaxApiModelDefinition("MiniMax-M2.7")],
         },
-      },
-    });
+      }),
+    );
 
     expect(cfg.models?.providers?.minimax?.apiKey).toBeUndefined();
     expect(cfg.models?.providers?.minimax?.timeoutSeconds).toBe(900);

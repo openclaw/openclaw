@@ -930,6 +930,7 @@
   margin: 0;
   border: 0;
   border-radius: 50%;
+  outline: 0;
   box-shadow: none;
 }
 
@@ -1099,14 +1100,13 @@
   color: var(--link-hover);
 }
 
-/* Code surfaces must lift off the host bubble in every theme. --secondary equals
-   --card on every dark palette, so chips painted with it vanished inside user
-   bubbles; --bg-muted/--border-strong separate in both modes without an override. */
+/* Inline-code overrides let palettes separate chips from their host without
+   changing the muted surfaces and strong borders of other components. */
 .chat-text :where(:not(pre, a.markdown-file-link) > code) {
-  background: var(--bg-muted);
+  background: var(--inline-code-bg, var(--bg-muted));
   padding: 0.1em 0.2em;
   border-radius: var(--radius-sm);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--inline-code-border, var(--border-strong));
   overflow-wrap: anywhere;
   word-break: break-word;
 }

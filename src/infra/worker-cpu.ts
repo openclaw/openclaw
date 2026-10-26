@@ -23,6 +23,7 @@ import type { WorkerPoolClass } from "./worker-pool-sizing.js";
 import {
   collectPostgresBridgeCounters,
   countPostgresBridges,
+  countPostgresPoolSelfRoots,
   readPostgresBridgeCounters,
   type PostgresBridgeCounter,
 } from "./worker-postgres-bridge-census.js";
@@ -77,8 +78,11 @@ const trackedWorkers = resolveGlobalSingleton(Symbol.for("openclaw.workerCpuSour
       | ((samples: GcSample[], thread: string, workerSlot?: number) => void)
       | undefined,
     postgresBridgeCount: new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT)),
+    postgresPoolSelfRootCount: new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT)),
     postgresBridgeObservers: new Set<() => void>(),
     revision: 0,
+    // SAFETY: Starts empty; only registry-owned snapshots are assigned below.
+    cpuSources: undefined as ReturnType<typeof getTrackedWorkerCpuSources> | undefined,
     nextPoolId: 0,
     poolIds: new WeakMap<object, number>(),
     workers: new Map<WorkerCpuHandle, WorkerSource>(),
@@ -136,7 +140,13 @@ export function getTrackedPostgresBridgeCounters(): PostgresBridgeCounter[] {
   return collectPostgresBridgeCounters(
     trackedWorkers.postgresBridgeCount,
     trackedWorkers.workers.values(),
+    trackedWorkers.postgresPoolSelfRootCount,
   );
+}
+
+/** Count once per thread, including a pool restarted after explicit cleanup. */
+export function recordPostgresPoolSelfRoot(): boolean {
+  return Atomics.compareExchange(trackedWorkers.postgresPoolSelfRootCount, 0, 0, 1) === 0;
 }
 
 export function observeTrackedPostgresBridgeCounters(observer: () => void): () => void {
@@ -164,8 +174,12 @@ function receivePostgresBridgeCounters(source: WorkerSource, value: unknown): vo
   publishPostgresBridgeCounters();
 }
 
-function getTrackedPostgresBridgeCount(): number {
-  return countPostgresBridges(getTrackedPostgresBridgeCounters());
+function getTrackedPostgresPoolCounts() {
+  const counters = getTrackedPostgresBridgeCounters();
+  return {
+    postgresBridgeCount: countPostgresBridges(counters),
+    postgresPoolSelfRootCount: countPostgresPoolSelfRoots(counters),
+  };
 }
 
 /** Pool identity follows its live Workers without retaining the pool itself. */
@@ -225,7 +239,7 @@ export function getTrackedWorkerPoolSnapshot() {
   }
   return {
     workerCount: trackedWorkers.workers.size,
-    postgresBridgeCount: getTrackedPostgresBridgeCount(),
+    ...getTrackedPostgresPoolCounts(),
     workerPoolCount: pools.size,
     workerPools: [...pools.values()]
       .toSorted((a, b) => b.workerCount - a.workerCount || a.poolId - b.poolId)
@@ -247,10 +261,11 @@ function forgetWorker(worker: WorkerCpuHandle): void {
   source.memoryFlush?.resolve();
   source.memoryPort?.close();
   trackedWorkers.workers.delete(worker);
+  trackedWorkers.revision++;
+  trackedWorkers.cpuSources = undefined;
   if (source.postgresBridgeCounters) {
     publishPostgresBridgeCounters();
   }
-  trackedWorkers.revision++;
 }
 
 function countWorkerStart(source: WorkerSource) {
@@ -369,21 +384,25 @@ function trackWorker(worker: WorkerCpuHandle): void {
     };
   }
   let pending = false;
+  // Reuse reactions instead of allocating an async frame for every sample.
+  const finishCpuUsage = (usage: NodeJS.CpuUsage | undefined) => {
+    pending = false;
+    return usage;
+  };
+  const failCpuUsage = () => finishCpuUsage(undefined);
   const source: WorkerSource = {
     script: "other",
-    async cpuUsage() {
+    cpuUsage() {
       // Worker.cpuUsage cannot cancel an interrupt blocked in native work. Keep
       // at most one outstanding request even across sampler resets/restarts.
       if (pending) {
-        return undefined;
+        return Promise.resolve(undefined);
       }
       pending = true;
       try {
-        return await worker.cpuUsage();
+        return worker.cpuUsage().then(finishCpuUsage, failCpuUsage);
       } catch {
-        return undefined;
-      } finally {
-        pending = false;
+        return Promise.resolve(failCpuUsage());
       }
     },
   };
@@ -391,6 +410,7 @@ function trackWorker(worker: WorkerCpuHandle): void {
   // Node emits "worker" inside the constructor, before the wrapper assigns its script.
   queueMicrotask(() => countWorkerStart(source));
   trackedWorkers.revision++;
+  trackedWorkers.cpuSources = undefined;
   worker.once("exit", () => forgetWorker(worker));
 }
 
@@ -404,15 +424,17 @@ function pruneExitedWorkers(): void {
 }
 
 export function getTrackedWorkerCpuSources(): {
-  revision: number;
-  currentRevision: () => number;
-  workers: { cpuUsage: () => Promise<NodeJS.CpuUsage | undefined> }[];
+  readonly revision: number;
+  readonly currentRevision: () => number;
+  readonly workers: readonly { cpuUsage: () => Promise<NodeJS.CpuUsage | undefined> }[];
 } {
-  return {
-    revision: getTrackedWorkerCpuRevision(),
+  // Pruning may invalidate membership when a consumer removed its exit listener.
+  const revision = getTrackedWorkerCpuRevision();
+  return (trackedWorkers.cpuSources ??= {
+    revision,
     currentRevision: getTrackedWorkerCpuRevision,
     workers: [...trackedWorkers.workers.values()],
-  };
+  });
 }
 
 function getTrackedWorkerCpuRevision(): number {
@@ -647,7 +669,7 @@ export function getTrackedWorkerLifecycleSnapshot() {
   pruneExitedWorkers();
   return {
     workerCount: trackedWorkers.workers.size,
-    postgresBridgeCount: getTrackedPostgresBridgeCount(),
+    ...getTrackedPostgresPoolCounts(),
     workerLifecycle: [...trackedWorkers.lifecycle].map(([script, counts]) => ({
       script,
       started: counts.started,
@@ -668,8 +690,8 @@ export function getTrackedWorkerLifecycleSnapshot() {
   };
 }
 
-/** Read completed samples without blocking the heartbeat on a busy native isolate. */
-export function sampleTrackedWorkerMemory() {
+/** Read completed samples; only the heartbeat requests the next native samples. */
+export function sampleTrackedWorkerMemory(options?: { refresh?: boolean }) {
   const workerHeaps: NonNullable<DiagnosticMemoryUsage["workerHeaps"]> = [];
   const workerMemoryMissing: NonNullable<DiagnosticMemoryUsage["workerMemoryMissing"]> = [];
   const memory = {
@@ -709,6 +731,9 @@ export function sampleTrackedWorkerMemory() {
         threadId: worker.threadId,
         reason: source.heap ? "stale" : source.memoryUnavailable ? "unavailable" : "pending",
       });
+    }
+    if (options?.refresh === false) {
+      continue;
     }
     // Native heap interrupts cannot be canceled. Never queue another behind a stall.
     if (source.memoryPort) {

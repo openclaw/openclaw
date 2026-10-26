@@ -16,6 +16,7 @@ function generationValidPrivateFieldsForSameSession(
   }
   const state: Partial<InternalSessionEntry> = {
     ...(existingEntry.priorWorkspace ? { priorWorkspace: existingEntry.priorWorkspace } : {}),
+    ...(existingEntry.titleRefinement ? { titleRefinement: existingEntry.titleRefinement } : {}),
     ...(existingEntry.cliHistoryBoundary
       ? { cliHistoryBoundary: existingEntry.cliHistoryBoundary }
       : {}),

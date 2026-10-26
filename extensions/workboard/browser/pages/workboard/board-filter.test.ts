@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createWorkboardCard } from "../../lib/workboard/test/index-helpers.ts";
 import type { WorkboardBoardSummary, WorkboardCard } from "../../lib/workboard/types.ts";
 import {
   buildBoardFilterOptions,
@@ -7,17 +8,12 @@ import {
 } from "./board-filter.ts";
 
 function card(boardId?: string): WorkboardCard {
-  return {
+  return createWorkboardCard({
     id: boardId ?? "default-card",
     title: boardId ?? "Default card",
-    status: "todo",
-    priority: "normal",
-    labels: [],
     position: 1,
-    createdAt: 1,
-    updatedAt: 1,
     ...(boardId ? { metadata: { automation: { boardId } } } : {}),
-  };
+  });
 }
 
 function board(overrides: Partial<WorkboardBoardSummary> & Pick<WorkboardBoardSummary, "id">) {

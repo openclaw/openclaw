@@ -904,7 +904,7 @@ const startupEnglish = {
     agentPendingOne: "{count} pending approval",
     agentPending: "{count} pending approvals",
 
-    reviewOnly: "Review only. Sign in with approval access to record a decision.",
+    reviewOnly: "You don’t have permission to approve.",
 
     labels: {},
   },
@@ -1564,6 +1564,7 @@ const startupEnglish = {
       retryingIn: "Retrying in {seconds}s",
       tryingFallback: "Trying fallback model…",
       failedTitle: "Unable to finish this reply",
+      failedRepeatCount: "{count} times",
       failedHelp: "Automatic recovery has stopped. Check any completed work before trying again.",
       tryAgain: "Try again",
       continuePrompt:
@@ -1586,12 +1587,9 @@ const startupEnglish = {
     waitingForApproval: "Waiting for approval…",
     waitingOnSubagents: "Waiting on subagents",
     waitingForMessage: "Waiting for a message",
-    turnElapsed: "Total time since your message, including subagent waits",
     waitingOnSubagent: "Waiting on {name}",
     subagentsRunning: "{count} subagents running",
     subagentsRunningOne: "1 subagent running",
-    bubbleTaskOne: "1 task",
-    bubbleTasks: "{count} tasks",
     startupStatus: {
       preparingWorkspace: "Preparing workspace…",
       namingWorktree: "Naming worktree…",

@@ -349,14 +349,17 @@ export function resolveCliRuntimeExecutionProvider(
     modelId?: string;
     authProfileId?: string;
   },
+  configuredRuntimePolicy?: ReturnType<typeof resolveModelRuntimePolicy>,
 ): string | undefined {
   const provider = normalizeProviderId(params.provider);
-  const { policy, matchedProvider } = resolveModelRuntimePolicy({
-    config: params.cfg,
-    provider,
-    modelId: params.modelId,
-    agentId: params.agentId,
-  });
+  const { policy, matchedProvider } =
+    configuredRuntimePolicy ??
+    resolveModelRuntimePolicy({
+      config: params.cfg,
+      provider,
+      modelId: params.modelId,
+      agentId: params.agentId,
+    });
   const runtime = policy?.id?.trim() || undefined;
   if (runtime === "openclaw") {
     return undefined;

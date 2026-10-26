@@ -27,6 +27,7 @@ import { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import {
+  createExternalRequesterSessionEntry,
   getAgentResultsForChildSession,
   settleYieldedCliTurn,
   type LifecycleData,
@@ -92,12 +93,16 @@ const loadConfigMock = vi.mocked(getRuntimeConfig);
 vi.mock("../../../config/config.js", { spy: true });
 vi.mock("../../../gateway/call.js", { spy: true });
 vi.mock("../../../infra/agent-events.js", { spy: true });
+// mock-isolation: Retry tests supply registry handles without discovering installed plugins.
 vi.mock("../../runtime-plugins.js", async () => {
   const { createEmptyPluginRegistry } = await import("../../../plugins/registry-empty.js");
+  const loadRegistry = vi.fn<
+    typeof import("../../runtime-plugins.js").loadAgentRuntimePluginRegistryHandle
+  >(() => createEmptyPluginRegistry());
   return {
-    loadAgentRuntimePluginRegistryHandle: vi.fn<
-      typeof import("../../runtime-plugins.js").loadAgentRuntimePluginRegistryHandle
-    >(() => createEmptyPluginRegistry()),
+    loadAgentRuntimePluginRegistryHandle: loadRegistry,
+    loadAgentRuntimePluginRegistryHandleAsync: async (...args: Parameters<typeof loadRegistry>) =>
+      loadRegistry(...args),
   };
 });
 
@@ -159,16 +164,7 @@ beforeEach(async () => {
   chatHistoryBySessionKey = new Map();
   transcriptEventsBySessionKey = new Map();
   sessionStore = {
-    "agent:main:main": {
-      sessionId: "sess-main",
-      updatedAt: 1,
-      delivery: {
-        kind: "external",
-        route: { channel: "discord", accountId: "default", target: { to: "user-1" } },
-        context: { channel: "discord", to: "user-1", accountId: "default" },
-        origin: { provider: "discord", to: "user-1", accountId: "default" },
-      },
-    },
+    "agent:main:main": createExternalRequesterSessionEntry(),
   };
   await replaceSessionEntry(
     { storePath: sessionStorePath, sessionKey: REQUESTER },

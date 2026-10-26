@@ -11,8 +11,8 @@ import {
 import { hashStableJson } from "../plugins/installed-plugin-index-hash.js";
 import { parseInstalledPluginIndex } from "../plugins/installed-plugin-index-store.js";
 import {
-  withPluginLifecycleLease,
-  type PluginLifecycleLeaseContext,
+  withPluginLifecycleLeaseAsync,
+  type PluginMetadataLeaseContext,
 } from "../plugins/plugin-lifecycle-lease.js";
 import { readPluginMetadataStateRow } from "../plugins/plugin-metadata-state-worker.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
@@ -48,15 +48,15 @@ export function assertClawPluginRequirementsEnabled(
 
 export async function snapshotClawPluginInstallOwners(
   pluginIds: readonly string[],
-  lease: Pick<PluginLifecycleLeaseContext, "databasePath" | "assertOwned">,
+  lease: Pick<PluginMetadataLeaseContext, "databasePath" | "assertOwned">,
 ): Promise<ReadonlyMap<string, string>> {
   const owners = new Map<string, string>();
   if (pluginIds.length === 0) {
     return owners;
   }
-  lease.assertOwned();
+  await lease.assertOwned();
   const row = await readPluginMetadataStateRow("installed-index", { path: lease.databasePath });
-  lease.assertOwned();
+  await lease.assertOwned();
   if (!row) {
     throw new Error("Claw plugin installed index is unavailable after requirement staging");
   }
@@ -71,13 +71,13 @@ export async function snapshotClawPluginInstallOwners(
     }
     owners.set(pluginId, hashStableJson(record));
   }
-  lease.assertOwned();
+  await lease.assertOwned();
   return owners;
 }
 
 export async function assertClawPluginInstallOwnersCurrent(
   expected: ReadonlyMap<string, string>,
-  lease: Pick<PluginLifecycleLeaseContext, "databasePath" | "assertOwned">,
+  lease: Pick<PluginMetadataLeaseContext, "databasePath" | "assertOwned">,
 ): Promise<void> {
   const actual = await snapshotClawPluginInstallOwners([...expected.keys()], lease);
   for (const [pluginId, hash] of expected) {
@@ -99,7 +99,7 @@ export async function runClawPluginBatch<T>(
     );
   }
   if (!options.reloadPlugins || options.runtimeBatch) {
-    return await withPluginLifecycleLease(options, () => run(options.runtimeBatch));
+    return await withPluginLifecycleLeaseAsync(options, () => run(options.runtimeBatch));
   }
   const batch = new PluginInstallRuntimeBatch(options, async (targets) => {
     options.assertForwardCurrent?.();
@@ -109,7 +109,7 @@ export async function runClawPluginBatch<T>(
     );
   });
   let completed: Result<T, unknown> | undefined;
-  const operation = await withPluginLifecycleLease(options, async (lease) => {
+  const operation = await withPluginLifecycleLeaseAsync(options, async (lease) => {
     let result: Result<T, unknown>;
     try {
       result = ok(await run(batch));

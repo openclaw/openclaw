@@ -232,7 +232,7 @@ The terminal producer prepares the reply once and records whether it is visible 
 
 Conversation policy still controls admission and default reply expectations:
 
-- Direct and accepted group/channel requests normally receive answers. An explicit token-only `NO_REPLY` can end either silently.
+- Direct and accepted group/channel requests normally receive answers. An explicit token-only `NO_REPLY` can end either silently. The legacy `HEARTBEAT_OK` marker does not request silence: presentation removes it, so it cannot satisfy a required reply.
 - Mention and access gates still decide which messages reach the agent. `silentReply.group: "allow"` permits optional handling of unaddressed group requests; it is not needed to honor an explicit `NO_REPLY`.
 - [Ambient room events](/channels/ambient-room-events) can remain silent. In `message_tool` visible-reply mode, visible output uses `message(action=send)`. Private subagent completions record the parent's reviewed outcome internally.
 

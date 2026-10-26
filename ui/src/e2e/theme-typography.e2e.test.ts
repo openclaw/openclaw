@@ -1,5 +1,6 @@
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   defaultControlUiFeatureMethods,
   waitForControlUiRoute,
@@ -318,10 +319,7 @@ suite.define(() => {
   it("publishes a runtime palette only when its colors are ready and ignores superseded loads", async () => {
     const { page, gateway } = await openThemedChat("knot", "light");
     await page.setViewportSize({ width: 720, height: 900 });
-    let releasePalette!: () => void;
-    const paletteGate = new Promise<void>((resolve) => {
-      releasePalette = resolve;
-    });
+    const { promise: paletteGate, resolve: releasePalette } = createDeferred();
     const tidePaletteUrl = /\/themes\/tide\.css(?:\?|$)/u;
     await page.route(tidePaletteUrl, async (route) => {
       await paletteGate;
@@ -420,6 +418,6 @@ suite.define(() => {
     const paletteUrl = new URL(paletteHref ?? "", suite.server.baseUrl);
     expect(paletteUrl.pathname).toBe(`${basePath}/themes/absolutely.css`);
     expect(paletteUrl.searchParams.get("v")).toBe(buildId);
-    expect(await cssToken(page, "--bg")).toBe("#1c1c1a");
+    expect(await cssToken(page, "--bg-content")).toBe("#1b1b1a");
   });
 });

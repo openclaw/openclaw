@@ -18,7 +18,6 @@ import {
   runProcessDiscordMessage,
   registerDiscordProcessTestLifecycle,
   createNonTerminalToolWarningPayload,
-  runInPartialStreamMode,
 } from "./message-handler.process.test-harness.js";
 import type { DispatchInboundParams } from "./message-handler.process.test-harness.js";
 import {
@@ -42,41 +41,26 @@ const progressStreaming = { mode: "progress", progress: { toolProgress: true } }
 async function runDraft(overrides: Parameters<typeof createAutomaticDraftContext>[0] = {}) {
   await runProcessDiscordMessage(await createAutomaticDraftContext(overrides));
 }
-async function startPreparedTool(
-  params: DispatchInboundParams | undefined,
-  toolCallId = "exec-1",
-  name = "exec",
-) {
-  const tool = { toolCallId, name, phase: "start" as const };
+async function startPreparedTool(params: DispatchInboundParams | undefined) {
+  const tool = { toolCallId: "exec-1", name: "exec", phase: "start" as const };
   await params?.replyOptions?.onItemEvent?.(projectAgentToolActivity(tool));
   await params?.replyOptions?.onToolStart?.(tool);
-}
-
-function registerHooks(...hooks: string[]) {
-  const registered = new Set(hooks);
-  getGlobalHookRunner.mockReturnValue({
-    hasHooks: vi.fn((hookName: string) => registered.has(hookName)),
-  });
 }
 
 function mockFinalReply(payload: FinalReplyPayload, waitForIdle = false) {
   mockDispatch((params) => sendFinal(params, payload, waitForIdle));
 }
 
-async function runHookSafetyFinalReply(mode: "partial" | "progress") {
-  mockFinalReply({ text: "final answer" }, true);
-  await runDraft({ discordConfig: { streaming: { mode } } });
-}
-
 describe("processDiscordMessage provider preview hook safety", () => {
   it.each(["reply_payload_sending", "message_sending"])(
     "suppresses previews for %s hooks",
     async (hookName) => {
-      registerHooks(hookName);
+      getGlobalHookRunner.mockReturnValue({ hasHooks: vi.fn((name) => name === hookName) });
       if (hookName === "message_sending") {
         deliverDiscordReply.mockResolvedValueOnce({ visibleReplySent: false });
       }
-      await runHookSafetyFinalReply("partial");
+      mockFinalReply({ text: "final answer" }, true);
+      await runDraft({ discordConfig: { streaming: { mode: "partial" } } });
       expect(createDiscordDraftStream).not.toHaveBeenCalled();
       expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
     },
@@ -84,17 +68,15 @@ describe("processDiscordMessage provider preview hook safety", () => {
 });
 
 describe("processDiscordMessage draft streaming final delivery", () => {
-  it("replaces a raw trailing-token preview with the prepared final answer", async () => {
+  it("ignores reasoning-only previews and replaces trailing tokens with the prepared final", async () => {
     const draftStream = createMockDraftStreamForTest();
     mockDispatch(async (params) => {
+      await params?.replyOptions?.onPartialReply?.({ text: "Reasoning:\nPrivate planning" });
+      expect(draftStream.update).not.toHaveBeenCalled();
       await params?.replyOptions?.onPartialReply?.({ text: "answer\n\nNO_REPLY" });
       await params?.dispatcher.sendFinalReply({ text: "answer" });
     });
-    const ctx = await createAutomaticDraftContext({
-      discordConfig: { streaming: { mode: "partial" } },
-    });
-
-    await runProcessDiscordMessage(ctx);
+    await runDraft({ discordConfig: { streaming: { mode: "partial" } } });
 
     expect(draftStream.update).toHaveBeenCalledWith("answer\n\nNO_REPLY");
     expectFreshFinalText("answer");
@@ -164,8 +146,11 @@ describe("processDiscordMessage draft streaming final delivery", () => {
   it("renders narration updates into the Discord progress draft", async () => {
     vi.useFakeTimers();
     const draftStream = createMockDraftStreamForTest();
+    const beginTurn = vi.fn();
+    const stopTurn = vi.fn();
 
     mockDispatch(async (params) => {
+      params?.replyOptions?.onProgressNarratorLifecycle?.({ beginTurn, stopTurn });
       await startPreparedTool(params);
       expect(params?.replyOptions?.isProgressDraftVisible?.()).toBe(false);
       await params?.replyOptions?.onNarrationUpdate?.({
@@ -176,6 +161,9 @@ describe("processDiscordMessage draft streaming final delivery", () => {
       expect(params?.replyOptions?.isProgressDraftVisible?.()).toBe(true);
       await params?.dispatcher.sendFinalReply({ text: "done" });
       expect(params?.replyOptions?.isProgressDraftVisible?.()).toBe(false);
+      expect(stopTurn).toHaveBeenCalled();
+      await params?.replyOptions?.onAssistantMessageStart?.();
+      expect(beginTurn).toHaveBeenCalledOnce();
     });
 
     await runDraft({
@@ -190,25 +178,6 @@ describe("processDiscordMessage draft streaming final delivery", () => {
       "Reading the gateway config and restarting agents.\n\n🛠️ Exec: running",
     );
     expectFreshFinalText("done");
-  });
-
-  it("stops narration at final and resets it for a queued turn", async () => {
-    createMockDraftStreamForTest();
-    const beginTurn = vi.fn();
-    const stopTurn = vi.fn();
-
-    mockDispatch(async (params) => {
-      params?.replyOptions?.onProgressNarratorLifecycle?.({ beginTurn, stopTurn });
-      await params?.dispatcher.sendFinalReply({ text: "primary" });
-      expect(stopTurn).toHaveBeenCalled();
-
-      await params?.replyOptions?.onAssistantMessageStart?.();
-      expect(beginTurn).toHaveBeenCalledOnce();
-    });
-
-    await runDraft({
-      discordConfig: { streaming: progressStreaming },
-    });
   });
 
   it("retires coding-profile guild progress only after a confirmed message-tool reply", async () => {
@@ -471,33 +440,6 @@ describe("processDiscordMessage draft streaming progress", () => {
     expect(deliverDiscordReply).not.toHaveBeenCalled();
   });
 
-  it("keeps quiet progress empty while yielding commentary and narration to the durable verbose owner", async () => {
-    const elapseProgressDraftStartDelay = useProgressDraftStartDelay();
-    const draftStream = createMockDraftStreamForTest();
-
-    mockDispatch(async (params) => {
-      const options = params?.replyOptions;
-      expect(options?.progressRequiresReply).toBe(true);
-      expect(options?.commentaryPayloadsEnabled).toBe(true);
-      expect(options?.onVerboseProgressVisibilityAsync).toBeTypeOf("function");
-      await options?.onVerboseProgressVisibilityAsync?.(async () => true);
-      expect(options?.shouldDeliverCommentaryPayloads?.()).toBe(true);
-      await options?.onItemEvent?.({
-        itemId: "preamble-1",
-        kind: "preamble",
-        progressText: "Checking the current weather source before summarizing.",
-      });
-      await options?.onNarrationUpdate?.({ text: "Narration belongs to the same verbose owner." });
-      await startToolProgress(params);
-      await elapseProgressDraftStartDelay();
-      return createNoQueuedDispatchResult();
-    });
-
-    await runProgressScenario({ toolProgress: false, label: false, commentary: true });
-
-    expect(draftStream.update).not.toHaveBeenCalled();
-  });
-
   it("re-arms progress collapse for a queued assistant turn", async () => {
     const elapseProgressDraftStartDelay = useProgressDraftStartDelay();
     const draftStream = createMockDraftStreamForTest();
@@ -558,7 +500,7 @@ describe("processDiscordMessage draft streaming progress", () => {
 });
 
 describe("processDiscordMessage draft streaming reasoning", () => {
-  it("hides opt-in reasoning while session reasoning streaming is off", async () => {
+  it("hides gated reasoning and replaces public reasoning snapshots", async () => {
     const elapseProgressDraftStartDelay = useProgressDraftStartDelay();
     const draftStream = createMockDraftStreamForTest();
 
@@ -570,24 +512,9 @@ describe("processDiscordMessage draft streaming reasoning", () => {
       });
       await params?.replyOptions?.onItemEvent?.({ progressText: "done" });
       await elapseProgressDraftStartDelay();
-      return createNoQueuedDispatchResult();
-    });
-
-    await runProgressScenario({ toolProgress: true, label: "Clawing..." });
-
-    expect(draftStream.update).toHaveBeenCalledWith("Clawing...\n\n🛠️ Exec: running\n• done", {
-      complete: true,
-    });
-    expect(draftStream.update.mock.calls.map((call) => call[0]).join("\n")).not.toContain(
-      "Private planning",
-    );
-  });
-
-  it("replaces reasoning snapshots instead of appending duplicates", async () => {
-    const elapseProgressDraftStartDelay = useProgressDraftStartDelay();
-    const draftStream = createMockDraftStreamForTest();
-    mockDispatch(async (params) => {
-      await startPreparedTool(params);
+      expect(draftStream.update).toHaveBeenCalledWith("Clawing...\n\n🛠️ Exec: running\n• done", {
+        complete: true,
+      });
       await params?.replyOptions?.onReasoningStream?.({
         text: "Checking ",
         isReasoningSnapshot: true,
@@ -604,29 +531,17 @@ describe("processDiscordMessage draft streaming reasoning", () => {
     expect(draftStream.update.mock.calls.at(-1)?.[0]).toContain("_Reading Checking_");
     const updates = draftStream.update.mock.calls.map((call) => call[0]);
     expect(updates.join("\n")).not.toContain("_Checking Reading");
-  });
-
-  it("skips pure-reasoning partial updates without updating draft", async () => {
-    const draftStream = createMockDraftStreamForTest();
-
-    mockDispatch(async (params) => {
-      await params?.replyOptions?.onPartialReply?.({
-        text: "Reasoning:\nThe user asked about X so I need to consider Y",
-      });
-      return createNoQueuedDispatchResult();
-    });
-
-    await runInPartialStreamMode();
-
-    expect(draftStream.update).not.toHaveBeenCalled();
+    expect(updates.join("\n")).not.toContain("Private planning");
   });
 });
 
 describe("Discord durable commentary delivery", () => {
-  it("delivers admitted commentary once without exposing ordinary progress blocks", async () => {
+  it("yields quiet progress to durable commentary without exposing ordinary progress blocks", async () => {
+    const elapseProgressDraftStartDelay = useProgressDraftStartDelay();
     const draftStream = createMockDraftStreamForTest();
     mockDispatch(async (params) => {
-      expect(params?.replyOptions?.onVerboseProgressVisibilityAsync).toBeTypeOf("function");
+      expect(params?.replyOptions?.progressRequiresReply).toBe(true);
+      expect(params?.replyOptions?.commentaryPayloadsEnabled).toBe(true);
       await params?.replyOptions?.onVerboseProgressVisibilityAsync?.(async () => true);
       expect(params?.replyOptions?.shouldDeliverCommentaryPayloads?.()).toBe(true);
       await params?.replyOptions?.onItemEvent?.({
@@ -635,6 +550,11 @@ describe("Discord durable commentary delivery", () => {
         phase: "end",
         progressText: "Checking the source before asking.",
       });
+      await params?.replyOptions?.onNarrationUpdate?.({
+        text: "Narration belongs to the verbose owner.",
+      });
+      await startToolProgress(params);
+      await elapseProgressDraftStartDelay();
       await params?.dispatcher.sendBlockReply({ text: "ordinary interim text" });
       await params?.dispatcher.sendBlockReply({
         text: "Checking the source before asking.",
@@ -643,11 +563,7 @@ describe("Discord durable commentary delivery", () => {
       await params?.dispatcher.sendFinalReply({ text: "done" });
       return { queuedFinal: true, counts: { final: 1, tool: 0, block: 1 } };
     });
-    await runDraft({
-      discordConfig: {
-        streaming: { mode: "progress", progress: { toolProgress: false, commentary: true } },
-      },
-    });
+    await runProgressScenario({ toolProgress: false, label: false, commentary: true });
 
     expect(deliverDiscordReply).toHaveBeenCalledTimes(2);
     expect(deliverDiscordReply).toHaveBeenCalledWith(

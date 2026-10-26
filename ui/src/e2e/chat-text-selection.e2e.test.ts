@@ -7,6 +7,7 @@ import {
   controlUiSessionUrl,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import { chatMessage } from "./chat-flow.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -23,7 +24,7 @@ suite.define(() => {
       async ({ page }) => {
         const gateway = await installMockGateway(page, {
           historyMessages: [
-            { role: "assistant", content: [{ type: "text", text: first }] },
+            chatMessage("assistant", first),
             {
               role: "user",
               content: [
@@ -36,21 +37,15 @@ suite.define(() => {
                 },
               ],
             },
-            {
-              role: "assistant",
-              content: [
-                {
-                  type: "text",
-                  text:
-                    "A paragraph with **bold text**, a [link](https://example.com), and selectable code.\n\n- A selectable list item\n\n" +
-                    last,
-                },
-              ],
-            },
+            chatMessage(
+              "assistant",
+              "A paragraph with **bold text**, a [link](https://example.com), and selectable code.\n\n- A selectable list item\n\n" +
+                last,
+            ),
           ],
         });
         await page.goto(suite.server.baseUrl + "chat");
-        await gateway.waitForRequest("chat.startup");
+        await gateway.waitForRequest("sessions.messages.subscribe");
         const thread = page.locator(".chat-thread");
         const start = page.getByText(first, { exact: true });
         const end = page.getByText(last, { exact: true });
@@ -160,7 +155,7 @@ suite.define(() => {
           sessions: [{ key: sessionKey, kind: "direct", reasoningLevel: "on" }],
           historyMessages: [
             { role: "assistant", content: [{ type: "thinking", thinking: reasoningText }] },
-            { role: "assistant", content: [{ type: "text", text: answerText }] },
+            chatMessage("assistant", answerText),
           ],
         });
         await page.route("**/control-ui-config.json", (route) =>

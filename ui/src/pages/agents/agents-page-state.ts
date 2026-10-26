@@ -335,9 +335,7 @@ export function createAgentsPageState(
     if (!state.connected || !state.client || !routeDataInitialized || !routeData) {
       return;
     }
-    if (!context.runtimeConfig.state.configSnapshot && !context.runtimeConfig.state.configLoading) {
-      void context.runtimeConfig.ensureLoaded();
-    }
+    void context.runtimeConfig.ensureLoaded();
     if (!state.agentsList && !context.agents.state.agentsLoading) {
       void refreshAgents("ensure");
       return;
@@ -572,7 +570,9 @@ export function createAgentsPageState(
         onModelCatalogOpen: () => modelCatalog.ensure({ refresh: true }),
       },
       agentSkills: {
-        filter: skillsFilter(),
+        get filter() {
+          return skillsFilter();
+        },
         onFilterChange: (next: string) => {
           setSkillsFilter(next);
         },

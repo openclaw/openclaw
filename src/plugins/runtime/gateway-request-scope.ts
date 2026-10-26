@@ -6,10 +6,6 @@ import type {
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { withAgentDatabasePreparationContext } from "../../state/agent-database-preparation-context.js";
 import {
-  enterAgentInputRecoveryContext,
-  getAgentInputRecoveryContext,
-} from "../../state/agent-input-recovery-context.js";
-import {
   getPluginExecutionFrame,
   runWithPluginExecutionFrame,
 } from "../plugin-instance-invocation.js";
@@ -51,16 +47,19 @@ function runWithPluginGatewayScope<T>(
   if (
     runtime?.gatewayScope === gatewayScope &&
     runtime.invocation === call &&
-    getAgentInputRecoveryContext() === gatewayScope
+    runtime.inputRecoveryContext === gatewayScope
   ) {
     return run();
   }
   return runWithPluginExecutionFrame(
-    new PluginRuntimeExecutionFrame(current ?? {}, gatewayScope, runtime?.generationRegistry, call),
-    () => {
-      enterAgentInputRecoveryContext(gatewayScope);
-      return run();
-    },
+    new PluginRuntimeExecutionFrame(
+      current ?? {},
+      gatewayScope,
+      runtime?.generationRegistry,
+      call,
+      gatewayScope,
+    ),
+    run,
   );
 }
 
@@ -125,8 +124,13 @@ function copyGatewayScope(
     return scoped;
   }
   // Copy enumerable values like spread, but do not read a registry that the caller replaces.
-  for (const key of Reflect.ownKeys(current)) {
-    if (key !== "pluginRegistry" && Object.prototype.propertyIsEnumerable.call(current, key)) {
+  for (const key of Object.keys(current)) {
+    if (key !== "pluginRegistry") {
+      Reflect.set(scoped, key, Reflect.get(current, key));
+    }
+  }
+  for (const key of Object.getOwnPropertySymbols(current)) {
+    if (Object.prototype.propertyIsEnumerable.call(current, key)) {
       Reflect.set(scoped, key, Reflect.get(current, key));
     }
   }

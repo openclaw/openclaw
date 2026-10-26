@@ -8,8 +8,6 @@ import {
   type SlackSystemEventTestOverrides,
 } from "./system-event-test-harness.js";
 
-const SLACK_INGRESS_LIFECYCLE_CONTEXT_KEY = "openclawIngressLifecycle";
-
 const { messageQueueMock, messageAllowMock, inboundInfoSpy, noteConversationMessageMock } =
   vi.hoisted(() => ({
     messageQueueMock: vi.fn(),
@@ -95,13 +93,15 @@ function createHandlers(eventName: RegisteredEventName, overrides?: SlackSystemE
   };
 }
 
+const enterpriseIdentity = {
+  kind: "enterprise",
+  apiAppId: "A_TEST",
+  enterpriseId: "E_TEST",
+} as const;
+
 function createEnterpriseHandlers(eventName: RegisteredEventName) {
   const handlers = createHandlers(eventName);
-  handlers.ctx.installationIdentity = {
-    kind: "enterprise",
-    apiAppId: "A_TEST",
-    enterpriseId: "E_TEST",
-  };
+  handlers.ctx.installationIdentity = enterpriseIdentity;
   return handlers;
 }
 
@@ -206,7 +206,7 @@ describe("registerSlackMessageEvents", () => {
           ts: "123.456",
         },
         body: {},
-        context: { [SLACK_INGRESS_LIFECYCLE_CONTEXT_KEY]: turnAdoptionLifecycle },
+        context: { openclawIngressLifecycle: turnAdoptionLifecycle },
       }),
     ).rejects.toBe(dispatchError);
 
@@ -386,11 +386,7 @@ describe("registerSlackMessageEvents", () => {
       harness.ctx.cfg = { channels: { slack: { enabled: true } } };
       harness.ctx.channelsConfigKeys = [];
       if (enterprise) {
-        harness.ctx.installationIdentity = {
-          kind: "enterprise",
-          apiAppId: "A_TEST",
-          enterpriseId: "E_TEST",
-        };
+        harness.ctx.installationIdentity = enterpriseIdentity;
       }
       harness.ctx.resolveSlackSystemEventRoute = createSlackSystemEventRouteResolver({
         cfg: harness.ctx.cfg,
@@ -426,14 +422,13 @@ describe("registerSlackMessageEvents", () => {
             }
           : { deleted_ts: nestedMessage.ts }),
       };
-      const listenerClient = {} as App["client"];
       await requireMessageHandler(harness.getHandler("message") as MessageHandler | null)({
         event,
         body: { api_app_id: "A_TEST", event_id: `Ev-${channelType}-${subtype}` },
         ...(enterprise
           ? {
               context: { isEnterpriseInstall: true, enterpriseId: "E_TEST", teamId: "T_GRID" },
-              client: listenerClient,
+              client: {},
             }
           : {}),
       });

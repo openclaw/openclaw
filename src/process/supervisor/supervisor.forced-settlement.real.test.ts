@@ -3,11 +3,8 @@
 import crypto from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
-import { afterAll, afterEach, beforeAll, expect, it } from "vitest";
-import {
-  openFixtureReceiptChannel,
-  type FixtureReceiptChannel,
-} from "../../../test/helpers/fixture-receipts.js";
+import { expect, it, onTestFinished } from "vitest";
+import { openFixtureReceiptChannel } from "../../../test/helpers/fixture-receipts.js";
 import { isProcessAlive } from "../../../test/helpers/process-wait.js";
 import { withinTest } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -22,18 +19,6 @@ import type { ManagedRun } from "./types.js";
 
 const LATE_OUTPUT_OBSERVATION_MS = 500;
 
-const activePids = new Set<number>();
-const activePidFiles = new Set<string>();
-const activeRuns = new Set<ManagedRun>();
-const tempDirs = createTempDirTracker();
-let receipts: FixtureReceiptChannel;
-beforeAll(async () => {
-  receipts = await openFixtureReceiptChannel();
-});
-afterAll(async () => {
-  await receipts.close();
-});
-
 async function waitForFixtureExit(pid: number, signal: AbortSignal) {
   // The escaped pipe holder deliberately has no product-owned extinction promise.
   while (isProcessAlive(pid)) {
@@ -42,29 +27,6 @@ async function waitForFixtureExit(pid: number, signal: AbortSignal) {
     });
   }
 }
-
-afterEach(async ({ signal }) => {
-  try {
-    for (const run of activeRuns) {
-      run.cancel();
-    }
-    await Promise.allSettled([...activeRuns].map((run) => run.wait()));
-    for (const pidFile of activePidFiles) {
-      if (existsSync(pidFile)) {
-        activePids.add(Number(readFileSync(pidFile, "utf8")));
-      }
-    }
-    for (const pid of activePids) {
-      killPidIfAlive(pid);
-    }
-    await Promise.all([...activePids].map((pid) => waitForFixtureExit(pid, signal)));
-  } finally {
-    activeRuns.clear();
-    activePidFiles.clear();
-    activePids.clear();
-    tempDirs.cleanup();
-  }
-});
 
 function readTickCount(tickPath: string): number {
   try {
@@ -77,11 +39,32 @@ function readTickCount(tickPath: string): number {
 it.skipIf(process.platform === "win32")(
   "delivers nothing after forced settlement with inherited pipes held by a descendant",
   async ({ signal }) => {
-    const { cwd, rootPath, leakPidPath, leakTickPath, leakReadyPath } = await createLeakedPipeScope(
+    const tempDirs = createTempDirTracker();
+    const receipts = await openFixtureReceiptChannel();
+    const owned: { run?: ManagedRun; leakPidPath?: string } = {};
+    onTestFinished(async ({ signal: cleanupSignal }) => {
+      const { run, leakPidPath } = owned;
+      try {
+        run?.cancel();
+        await run?.wait().catch(() => undefined);
+        const pids = [
+          run?.pid,
+          leakPidPath && existsSync(leakPidPath)
+            ? Number(readFileSync(leakPidPath, "utf8"))
+            : undefined,
+        ].filter((pid): pid is number => typeof pid === "number");
+        pids.forEach(killPidIfAlive);
+        await Promise.all(pids.map((pid) => waitForFixtureExit(pid, cleanupSignal)));
+      } finally {
+        await receipts.close().finally(tempDirs.cleanup);
+      }
+    });
+    const fixture = await createLeakedPipeScope(
       tempDirs.make("openclaw-forced-settlement-"),
       receipts.endpoint,
     );
-    activePidFiles.add(leakPidPath);
+    const { cwd, rootPath, leakPidPath, leakTickPath, leakReadyPath } = fixture;
+    owned.leakPidPath = leakPidPath;
     const stdoutHash = crypto.createHash("sha256");
     const stderrHash = crypto.createHash("sha256");
     const delivered: string[] = [];
@@ -109,11 +92,7 @@ it.skipIf(process.platform === "win32")(
       onStdoutRaw: (raw) => delivered.push(`stdout-raw:${raw.toString("utf8").trim()}`),
       onStderrRaw: (raw) => delivered.push(`stderr-raw:${raw.toString("utf8").trim()}`),
     });
-    activeRuns.add(run);
-    if (run.pid !== undefined) {
-      activePids.add(run.pid);
-    }
-
+    owned.run = run;
     await waitForFixtureReceipt(
       receipts,
       leakReadyPath,
@@ -121,9 +100,6 @@ it.skipIf(process.platform === "win32")(
       signal,
       `timeout waiting for pid in ${leakPidPath}`,
     );
-    const leakedPid = Number(readFileSync(leakPidPath, "utf8"));
-    activePidFiles.delete(leakPidPath);
-    activePids.add(leakedPid);
     run.cancel("manual-cancel");
 
     const exit = await withinTest(run.wait(), signal);
@@ -145,7 +121,6 @@ it.skipIf(process.platform === "win32")(
     expect(delivered).toEqual(settledDelivered);
     expect(run.activity.lastOutputAtMs).toBe(settledOutputAtMs);
     // The terminal result must retain its own failed cleanup join for callers.
-    expect(run.waitForExtinction).toBeTypeOf("function");
     await expect(run.waitForExtinction!()).rejects.toThrow("cleanup could not be confirmed");
     await expect(supervisor.shutdown()).rejects.toThrow("cleanup could not be confirmed");
   },

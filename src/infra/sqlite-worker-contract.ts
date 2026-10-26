@@ -2,13 +2,14 @@ import type { MessagePort } from "node:worker_threads";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { OpenClawStateWorkerErrorPayload } from "../state/openclaw-state-worker-error.js";
 import type { DiagnosticWorkerRequestFields } from "./diagnostic-process-types.js";
+import type { PostgresPoolEndpoints } from "./postgres-sync/pool.js";
 import type { SqliteDatabaseAdmissions } from "./sqlite-database-admission.js";
 import {
   SQLITE_WORKER_SOURCE_FENCE,
   type SqliteSourceFence,
 } from "./sqlite-source-fence-contract.js";
 import type { SqliteWalCheckpointSnapshot } from "./sqlite-wal-checkpoint.js";
-import type { DatabasePathIdentity } from "./sqlite-worker-identity.js";
+import type { DatabaseFileIdentity, DatabasePathIdentity } from "./sqlite-worker-identity.js";
 import type { SqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
 import type { SqliteWorkerTransferHandle } from "./sqlite-worker-transfer.js";
 
@@ -103,12 +104,15 @@ export type SqliteWorkerStore<Operations extends SqliteWorkerOperations> = {
 export type SqliteWorkerRequest = {
   id: number;
   actor: number;
+  postgresPool?: PostgresPoolEndpoints;
   stateContext?: SqliteWorkerStateContext;
   operationAdmission?: MessagePort;
   databaseAdmissionDeadlineAtMs?: number;
   operationAttachment?: { value: unknown };
   requestCustody?: SqliteWorkerRequestCustodyDescriptor;
   executionAuthority?: SqliteWorkerExecutionAuthority;
+  /** A borrowed client retains its original locator and physical identity across actor reuse. */
+  databaseIdentity?: DatabaseFileIdentity & { databasePath: string };
   stateDatabasePath?: string;
   databaseAdmissions?: SqliteDatabaseAdmissions;
   timing?: DiagnosticWorkerRequestFields["timing"];

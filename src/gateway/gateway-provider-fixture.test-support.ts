@@ -1,25 +1,10 @@
 import { randomUUID } from "node:crypto";
-import type { IncomingMessage, Server, ServerResponse } from "node:http";
+import type { Server, ServerResponse } from "node:http";
+import { listenLoopback } from "../../test/helpers/gateway-integration-fixtures.js";
 import { writeOpenAiResponsesSse } from "../../test/helpers/openai-responses-sse.js";
 
-export async function readProviderBody(request: IncomingMessage): Promise<string> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of request) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks).toString("utf8");
-}
-
 export async function listenProvider(server: Server): Promise<string> {
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("fixture provider did not bind a loopback port");
-  }
-  return `http://127.0.0.1:${address.port}/v1`;
+  return `${await listenLoopback(server)}/v1`;
 }
 
 export async function closeProvider(server: Server): Promise<void> {

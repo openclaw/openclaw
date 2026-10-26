@@ -18,7 +18,6 @@ import { disposeAllCodeModeRuns, waitForPendingBridgeSettlement } from "./code-m
 import { createSubscribedCodeModeHarness as subscribeHarness } from "./code-mode.bridge.lifecycle.test-support.js";
 import { applyCodeModeCatalog } from "./code-mode.js";
 import {
-  fakeTool,
   pluginToolWithExecute as tool,
   resetCodeModeTestState,
   resultDetails,
@@ -29,6 +28,7 @@ import { countActiveToolExecutions } from "./embedded-agent-subscribe.handlers.t
 import { attachInternalToolExecutionPreparer } from "./runtime/internal-hooks.js";
 import { SessionManager } from "./sessions/session-manager.js";
 import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
+import { fakeTool } from "./test-helpers/fake-tool.js";
 import { addClientToolsToToolCatalog } from "./tool-search-catalog.js";
 import { ToolSearchRuntime } from "./tool-search-runtime.js";
 import { clearToolSearchCatalog } from "./tool-search.js";
@@ -645,7 +645,7 @@ describe("Code Mode subscribed bridge lifecycle", () => {
             : wait.execute(`code-wait-${close}`, { runId: suspended.runId });
 
         if (close === "expire") {
-          parked.expiresAt = Date.now() - 1;
+          parked.expiresAt = performance.now() - 1;
           testing.removeExpiredRuns();
         } else {
           await disposeAllCodeModeRuns();

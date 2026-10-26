@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { resolveOpenClawCliInvocation } from "../../cli-invocation.mjs";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { CLI_NAME } from "../cli/cli-name.js";
@@ -19,6 +19,7 @@ import {
 } from "../cli/completion-runtime.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
+import { resolveExternalPackageRuntimeEntrypointUrl } from "../infra/runtime-process-url.js";
 import { resolveRuntimeArgs } from "../infra/runtime-worker-url.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
@@ -70,7 +71,7 @@ async function generateCompletionCache(
     return false;
   }
 
-  const binPath = path.join(root, "openclaw.mjs");
+  const binPath = fileURLToPath(resolveExternalPackageRuntimeEntrypointUrl("cliLauncher", root));
   const args = ["completion", "--write-state"];
   if (options.shell) {
     args.push("--shell", options.shell);

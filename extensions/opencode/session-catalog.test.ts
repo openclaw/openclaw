@@ -13,35 +13,7 @@ type ResolveAcpSessionAvailability =
 type RunCommandBuffered =
   (typeof import("openclaw/plugin-sdk/process-runtime"))["runCommandBuffered"];
 type RegisteredSessionCatalogProvider = Parameters<OpenClawPluginApi["registerSessionCatalog"]>[0];
-type OptionalCatalogAgent<T extends { agentId?: string }> = Omit<T, "agentId"> & {
-  agentId?: string;
-};
-type SessionCatalogProvider = Omit<
-  RegisteredSessionCatalogProvider,
-  "list" | "read" | "continueSession" | "archive" | "openTerminal"
-> & {
-  list: (
-    params: OptionalCatalogAgent<Parameters<RegisteredSessionCatalogProvider["list"]>[0]>,
-  ) => ReturnType<RegisteredSessionCatalogProvider["list"]>;
-  read: (
-    params: OptionalCatalogAgent<Parameters<RegisteredSessionCatalogProvider["read"]>[0]>,
-  ) => ReturnType<RegisteredSessionCatalogProvider["read"]>;
-  continueSession?: (
-    params: OptionalCatalogAgent<
-      Parameters<NonNullable<RegisteredSessionCatalogProvider["continueSession"]>>[0]
-    >,
-  ) => ReturnType<NonNullable<RegisteredSessionCatalogProvider["continueSession"]>>;
-  archive?: (
-    params: OptionalCatalogAgent<
-      Parameters<NonNullable<RegisteredSessionCatalogProvider["archive"]>>[0]
-    >,
-  ) => ReturnType<NonNullable<RegisteredSessionCatalogProvider["archive"]>>;
-  openTerminal?: (
-    params: OptionalCatalogAgent<
-      Parameters<NonNullable<RegisteredSessionCatalogProvider["openTerminal"]>>[0]
-    >,
-  ) => ReturnType<NonNullable<RegisteredSessionCatalogProvider["openTerminal"]>>;
-};
+type SessionCatalogProvider = RegisteredSessionCatalogProvider;
 type NodeHostCommand = Parameters<OpenClawPluginApi["registerNodeHostCommand"]>[0];
 type NodeInvokePolicy = Parameters<OpenClawPluginApi["registerNodeInvokePolicy"]>[0];
 type CatalogListParams = Parameters<SessionCatalogProvider["list"]>[0];
@@ -529,12 +501,12 @@ describe("OpenCode session catalog", () => {
     const hosts = await provider!.list({ limitPerHost: 1 });
     expect(hosts[0]?.sessions.map((session) => session.threadId)).toEqual(["ses_test"]);
 
-    const now = Date.now();
-    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+    const now = performance.now();
+    const perfSpy = vi.spyOn(performance, "now").mockReturnValue(now);
     const run = processRuntimeMocks.runCommandBuffered.getMockImplementation()!;
     processRuntimeMocks.runCommandBuffered.mockImplementationOnce(async (...args) => {
       const result = await run(...args);
-      nowSpy.mockReturnValue(now + 30_001);
+      perfSpy.mockReturnValue(now + 30_001);
       return result;
     });
     try {
@@ -542,7 +514,36 @@ describe("OpenCode session catalog", () => {
         listLocalOpenCodeSessionPage({ limit: 1 }, { forceRefresh: true }),
       ).rejects.toThrow("OpenCode session scan exceeded the time limit");
     } finally {
+      perfSpy.mockRestore();
+    }
+  });
+
+  itWithCli("bounds per-page CLI budgets when the wall clock runs backwards", async () => {
+    await installFakeOpenCode("hi", "Catalog session", {}, 2, true);
+    const { provider } = captureOpenCodeSessionRegistrations();
+    const wallNow = Date.now();
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(wallNow);
+    const captured: number[] = [];
+    const run = processRuntimeMocks.runCommandBuffered.getMockImplementation()!;
+    processRuntimeMocks.runCommandBuffered.mockImplementation(async (...args) => {
+      const [argv, opts] = args;
+      if (argv.includes("session.list") && typeof opts?.timeoutMs === "number") {
+        captured.push(opts.timeoutMs);
+      }
+      const result = await run(...args);
+      if (captured.length === 1) {
+        nowSpy.mockReturnValue(wallNow - 60_000);
+      }
+      return result;
+    });
+    try {
+      const hosts = await provider!.list({ limitPerHost: 1 });
+      expect(hosts[0]?.sessions.map((session) => session.threadId)).toEqual(["ses_test"]);
+      expect(captured).toHaveLength(2);
+      expect(captured[1]!).toBeLessThanOrEqual(captured[0]!);
+    } finally {
       nowSpy.mockRestore();
+      processRuntimeMocks.runCommandBuffered.mockImplementation(run);
     }
   });
 
@@ -683,6 +684,7 @@ describe("OpenCode session catalog", () => {
     ]);
     expect(transcriptMocks.messages[0]?.["__openclaw"]).toEqual({
       mirrorOrigin: "opencode-catalog-import",
+      catalogDisplay: { type: "userMessage" },
     });
   });
 
@@ -976,10 +978,7 @@ describe("OpenCode session catalog", () => {
   });
 
   it("fans out paired-node listing instead of blocking later hosts", async () => {
-    let releaseSlow: ((value: unknown) => void) | undefined;
-    const slow = new Promise<unknown>((resolve) => {
-      releaseSlow = resolve;
-    });
+    const { promise: slow, resolve: releaseSlow } = Promise.withResolvers<unknown>();
     const page = (threadId: string) => pairedNodeSessionPage(pairedNodeSession({ threadId }));
     const invoke = vi.fn(({ nodeId }: { nodeId: string }) =>
       nodeId === "node-a" ? slow : Promise.resolve(page("session-b")),

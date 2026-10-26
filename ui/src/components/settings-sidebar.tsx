@@ -16,7 +16,6 @@ import type { AgentSelectionCapability } from "../app/agent-selection.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
 import type { NativeDeviceSettingsCapability } from "../app/native-device-settings.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
-import { currentThemeBranding, subscribeThemeBranding } from "../app/theme-branding.ts";
 import { registerRouteSubtitlesEnglish } from "../i18n/locales/en-route-subtitles.ts";
 import { registerSettingsEnglish } from "../i18n/locales/en-settings.ts";
 import { listSelectableAgents, normalizeAgentLabel } from "../lib/agents/display.ts";
@@ -27,7 +26,8 @@ import { handleNavigationClick } from "../lib/navigation-click.ts";
 import { projectAgentSelection } from "../lib/reactive/application.ts";
 import { i18nRevision, t } from "../lib/reactive/i18n.ts";
 import { liveValue } from "../lib/reactive/live-value.ts";
-import { projectOwner, projectSource } from "../lib/reactive/projection.ts";
+import { projectOwner } from "../lib/reactive/projection.ts";
+import { themeBrandingProjection } from "../lib/reactive/theme-branding.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import {
   settingsNavigationLabelForRoute,
@@ -293,11 +293,7 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
   const query = createMemo(() => props.searchQuery);
   let searchInput: HTMLInputElement | undefined;
   function SettingsNavigation() {
-    const branding = projectSource(null, {
-      read: currentThemeBranding,
-      subscribe: (_source, notify) => subscribeThemeBranding(notify),
-      equality: Object.is,
-    });
+    const branding = themeBrandingProjection;
     const groups = createMemo<readonly SettingsNavigationGroupView[]>(() => {
       i18nRevision();
       branding.read();

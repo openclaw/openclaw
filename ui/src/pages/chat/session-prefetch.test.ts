@@ -1,10 +1,7 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import {
-  createTestGatewayClient,
-  type GatewayRequestHandler,
-} from "../../test-helpers/gateway-client.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { MAX_CACHED_CHAT_SESSIONS } from "./session-cache.ts";
 import {
   appendChatMessageToCache,
@@ -16,6 +13,9 @@ import {
 } from "./session-message-cache.ts";
 import {
   createSessionPrefetchFixture,
+  prefetchState,
+  prefetchHistoryRequest as historyRequest,
+  advanceSessionPrefetch as advancePrefetch,
   PREFETCH_TEST_NOW as NOW,
   prefetchSnapshotHost as snapshotHost,
   prefetchSessionRow as row,
@@ -37,31 +37,6 @@ function historySnapshot(message: string, sessionId = `session-${message}`): Cha
   };
 }
 
-function prefetchState(
-  request: GatewayRequestHandler,
-  rows: SessionPrefetchUpdate["rows"],
-  overrides: Partial<SessionPrefetchUpdate> = {},
-): SessionPrefetchUpdate {
-  return {
-    client: createTestGatewayClient(request),
-    listRevision: 1,
-    openSessionKeys: ["agent:main:foreground"],
-    rows,
-    ...overrides,
-  };
-}
-
-function historyRequest() {
-  return vi.fn(async (_method: string, params: unknown) =>
-    historyResult((params as { sessionKey: string }).sessionKey),
-  );
-}
-
-async function advancePrefetch(milliseconds: number) {
-  await vi.advanceTimersByTimeAsync(milliseconds);
-  await settlePromises();
-}
-
 describe("session navigation intent prefetch", () => {
   let fixture: ReturnType<typeof createSessionPrefetchFixture>;
   let cache: ChatMessageCache;
@@ -75,20 +50,13 @@ describe("session navigation intent prefetch", () => {
   });
   afterEach(async () => fixture.dispose());
 
-  function intend(sessionKey: string): void {
-    const target = document.createElement("a");
-    target.dataset.sessionKey = sessionKey;
-    fixture.shell.append(target);
-    target.dispatchEvent(new Event("pointerover", { bubbles: true }));
-  }
-
   it("does not repopulate a removed session from an in-flight prefetch before the next list revision", async () => {
     const key = "agent:main:deleted";
     const response = createDeferred<ReturnType<typeof historyResult>>();
     const request = vi.fn(() => response.promise);
     const snapshot = prefetchState(request, [row(key, NOW - 1)]);
     updatePrefetch(snapshot);
-    intend(key);
+    fixture.intend(key);
     await advancePrefetch(300);
     expect(request).toHaveBeenCalledOnce();
     updatePrefetch({ ...snapshot, rows: [] });
@@ -112,7 +80,7 @@ describe("session navigation intent prefetch", () => {
       openSessionKeys: [otherKey],
     });
     updatePrefetch(snapshot);
-    intend(key);
+    fixture.intend(key);
     await advancePrefetch(300);
     expect(request).toHaveBeenCalledOnce();
 
@@ -140,7 +108,7 @@ describe("session navigation intent prefetch", () => {
     const original = { ...row(key, NOW - 1), sessionId: "original" };
     const snapshot = prefetchState(request, [original]);
     updatePrefetch(snapshot);
-    intend(key);
+    fixture.intend(key);
     await advancePrefetch(300);
     expect(request).toHaveBeenCalledOnce();
 
@@ -168,7 +136,7 @@ describe("session navigation intent prefetch", () => {
     const request = vi.fn(() => response.promise);
     const snapshot = prefetchState(request, [row(key, NOW - 1)]);
     updatePrefetch(snapshot);
-    intend(key);
+    fixture.intend(key);
     await advancePrefetch(300);
     expect(request).toHaveBeenCalledOnce();
 
@@ -215,7 +183,7 @@ describe("session navigation intent prefetch", () => {
           : page.promise,
       );
       updatePrefetch(prefetchState(request, [row(key, NOW + 1)]));
-      intend(key);
+      fixture.intend(key);
       await advancePrefetch(300);
       expect(
         request.mock.calls.map(([, params]) => (params as { cursor?: string }).cursor),
@@ -274,7 +242,7 @@ describe("session navigation intent prefetch", () => {
           },
         ),
       );
-      intend(sessionKey);
+      fixture.intend(sessionKey);
       await advancePrefetch(300);
 
       expect(request).not.toHaveBeenCalled();
@@ -303,13 +271,13 @@ describe("session navigation intent prefetch", () => {
       ],
     };
     updatePrefetch(state);
-    intend("agent:main:recent-1");
+    fixture.intend("agent:main:recent-1");
     await advancePrefetch(300);
     expect(request.mock.calls.map(sessionKeyFromCall)).toEqual(["agent:main:recent-1"]);
 
     // The user opens another session while the first warm-up is in flight.
     updatePrefetch({ ...state, loadingSessionKeys: ["agent:main:main"] });
-    intend("agent:main:recent-2");
+    fixture.intend("agent:main:recent-2");
     pending.shift()?.resolve(historyResult("agent:main:recent-1"));
     await settlePromises();
     expect(request.mock.calls.map(sessionKeyFromCall)).toEqual(["agent:main:recent-1"]);
@@ -340,7 +308,7 @@ describe("session navigation intent prefetch", () => {
       { openSessionKeys: ["agent:main:main"] },
     );
     updatePrefetch(state);
-    intend(sessionKey);
+    fixture.intend(sessionKey);
     await advancePrefetch(300);
     expect(readSpy).toHaveBeenCalledWith(cacheKey(sessionKey));
     expect(request).not.toHaveBeenCalled();
@@ -390,7 +358,7 @@ describe("session navigation intent prefetch", () => {
 
     updatePrefetch({ client, listRevision: 1, openSessionKeys: [presentedSessionKey], rows });
     for (const { key } of backgroundRows) {
-      intend(key);
+      fixture.intend(key);
       await advancePrefetch(1_000);
       await store.flush();
     }
@@ -418,7 +386,7 @@ describe("session navigation intent prefetch", () => {
       openSessionKeys: ["agent:main:foreground"],
     };
     updatePrefetch({ ...base, listRevision: 1, rows: [row("agent:main:warm", NOW - 1)] });
-    intend("agent:main:warm");
+    fixture.intend("agent:main:warm");
     await advancePrefetch(2_000);
     expect(request).toHaveBeenCalledTimes(1);
 
@@ -452,7 +420,7 @@ describe("session navigation intent prefetch", () => {
     });
     const state = prefetchState(request, [row(warm, NOW - 1), row(intended, NOW - 2)]);
     updatePrefetch(state);
-    intend(warm);
+    fixture.intend(warm);
     await advancePrefetch(300);
     expect(request.mock.calls.map(sessionKeyFromCall)).toEqual([warm]);
     await advancePrefetch(4_700);
@@ -466,14 +434,14 @@ describe("session navigation intent prefetch", () => {
     await advancePrefetch(1_000);
     expect(request).toHaveBeenCalledOnce();
 
-    intend(intended);
+    fixture.intend(intended);
     await advancePrefetch(74);
     expect(request).toHaveBeenCalledOnce();
     await advancePrefetch(1);
     expect(request.mock.calls.map(sessionKeyFromCall)).toEqual([warm, intended]);
 
     await advancePrefetch(20_000);
-    intend(warm);
+    fixture.intend(warm);
     await advancePrefetch(75);
     expect(request).toHaveBeenCalledTimes(2);
     await advancePrefetch(firstRequestAt + 30_000 - Date.now() - 1);
@@ -486,7 +454,7 @@ describe("session navigation intent prefetch", () => {
     const request = historyRequest();
     const state = prefetchState(request, [row("agent:main:recent", NOW - 1)]);
     updatePrefetch(state);
-    intend("agent:main:recent");
+    fixture.intend("agent:main:recent");
     await advancePrefetch(30);
     updatePrefetch({ ...state, listRevision: 2 });
     await advancePrefetch(44);
@@ -528,7 +496,7 @@ describe("session navigation intent prefetch", () => {
     const rows = [row(first, NOW - 1)];
     const state = prefetchState(request, rows);
     updatePrefetch(state);
-    intend(first);
+    fixture.intend(first);
     await advancePrefetch(300);
     updatePrefetch({ ...state, listRevision: 2, rows: [...rows, row(intended, NOW - 2)] });
     const target = document.createElement("a");
@@ -601,7 +569,7 @@ describe("session navigation intent prefetch", () => {
     }));
 
     updatePrefetch(prefetchState(request, [row(sessionKey, NOW + 1)]));
-    intend(sessionKey);
+    fixture.intend(sessionKey);
     await advancePrefetch(2_000);
 
     expect(request).toHaveBeenCalledWith(
@@ -667,7 +635,7 @@ describe("session navigation intent prefetch", () => {
     }));
 
     updatePrefetch(prefetchState(request, [row(sessionKey, NOW + 1)]));
-    intend(sessionKey);
+    fixture.intend(sessionKey);
     await advancePrefetch(2_000);
 
     expect(readChatSessionSnapshot(cache, snapshotHost, { sessionKey })?.deltaCursor).toBe(
@@ -678,7 +646,7 @@ describe("session navigation intent prefetch", () => {
   it("pauses intent while hidden and resumes when the tab becomes visible", async () => {
     const request = historyRequest();
     updatePrefetch(prefetchState(request, [row("agent:main:hidden", NOW - 1)]));
-    intend("agent:main:hidden");
+    fixture.intend("agent:main:hidden");
     fixture.setVisibility("hidden");
     await advancePrefetch(300);
 
@@ -705,10 +673,10 @@ describe("session navigation intent prefetch", () => {
       ]),
     );
 
-    intend("agent:main:failed");
+    fixture.intend("agent:main:failed");
     await advancePrefetch(300);
     expect(request.mock.calls.map(sessionKeyFromCall)).toEqual(["agent:main:failed"]);
-    intend("agent:main:succeeded");
+    fixture.intend("agent:main:succeeded");
     await advancePrefetch(300);
 
     expect(request.mock.calls.map(sessionKeyFromCall)).toEqual([

@@ -3,14 +3,13 @@ import { listAuditEvents } from "../../audit/audit-event-store.js";
 import { readAllClawCronRefsInDatabase } from "../../claws/cron-records.js";
 import { writeRepairJournal } from "../../commands/doctor-session-incognito-key-repair-state.js";
 import { repairReservedIncognitoSessionKeys } from "../../commands/doctor-session-incognito-key-repair.js";
-import type { DB } from "../../state/openclaw-state-db.generated.js";
+import { sessionSqlFixture } from "../../commands/doctor-session-sqlite.sql.test-support.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { executeOpenClawStateWorker } from "../../state/openclaw-state-worker-store.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../kysely-sync.js";
 import { installDatabaseProcessRole, withEngineStoreAdmission } from "./admission-scope.js";
 import { mixedAgentConnection, useMixedAgentPair } from "./mixed-agent.conformance.test-support.js";
 
@@ -68,23 +67,9 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
       };
       withEngineStoreAdmission(() =>
         runOpenClawStateWriteTransaction(({ db }) => {
-          executeSqliteQuerySync(
-            db,
-            getNodeSqliteKysely<DB>(db)
-              .insertInto("claw_cron_refs")
-              .values({
-                agent_id: "main",
-                manifest_id: "synthetic-claw",
-                declaration_key: "synthetic-declaration",
-                schema_version: "openclaw.clawCronRef.v1",
-                scheduler_job_id: "synthetic-scheduler",
-                status: "complete",
-                job_json: JSON.stringify(job),
-                error: null,
-                created_at_ms: 10,
-                updated_at_ms: 20,
-              }),
-          );
+          sessionSqlFixture(db)`INSERT INTO claw_cron_refs
+            (agent_id, manifest_id, declaration_key, schema_version, scheduler_job_id, status, job_json, error, created_at_ms, updated_at_ms)
+            VALUES ('main', 'synthetic-claw', 'synthetic-declaration', 'openclaw.clawCronRef.v1', 'synthetic-scheduler', 'complete', ${JSON.stringify(job)}, NULL, 10, 20)`.run();
         }),
       );
       expect(
@@ -111,25 +96,11 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
       withEngineStoreAdmission(() =>
         runOpenClawStateWriteTransaction((database) => {
           writeRepairJournal(database.db, [{ from: oldKey, to: newKey }]);
-          const db = getNodeSqliteKysely<DB>(database.db);
-          executeSqliteQuerySync(
-            database.db,
-            db.insertInto("operator_approvals").values({
-              cursor_id: 1,
-              approval_id: "synthetic-approval",
-              resolution_ref: "a".repeat(43),
-              kind: "exec",
-              status: "pending",
-              presentation_json: "{}",
-              reviewer_device_ids_json: "[]",
-              source_session_key: oldKey,
-              audience_session_keys_json: JSON.stringify([oldKey, "unchanged-key"]),
-              runtime_epoch: "synthetic-epoch",
-              created_at_ms: 1,
-              expires_at_ms: 2,
-              updated_at_ms: 1,
-            }),
-          );
+          sessionSqlFixture(database.db)`INSERT INTO operator_approvals
+            (cursor_id, approval_id, resolution_ref, kind, status, presentation_json, reviewer_device_ids_json,
+             source_session_key, audience_session_keys_json, runtime_epoch, created_at_ms, expires_at_ms, updated_at_ms)
+            VALUES (1, 'synthetic-approval', ${"a".repeat(43)}, 'exec', 'pending', '{}', '[]',
+              ${oldKey}, ${JSON.stringify([oldKey, "unchanged-key"])}, 'synthetic-epoch', 1, 2, 1)`.run();
         }),
       );
       installDatabaseProcessRole("cli-oneshot");
@@ -142,15 +113,9 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
         }),
       ).resolves.toEqual({ found: 1, repaired: 1 });
       const row = withEngineStoreAdmission(() =>
-        runOpenClawStateWriteTransaction(
-          ({ db }) =>
-            executeSqliteQuerySync(
-              db,
-              getNodeSqliteKysely<DB>(db)
-                .selectFrom("operator_approvals")
-                .select(["source_session_key", "audience_session_keys_json"])
-                .where("approval_id", "=", "synthetic-approval"),
-            ).rows[0],
+        runOpenClawStateWriteTransaction(({ db }) =>
+          sessionSqlFixture(db)`SELECT source_session_key, audience_session_keys_json
+            FROM operator_approvals WHERE approval_id = 'synthetic-approval'`.get(),
         ),
       );
       expect(row).toEqual({

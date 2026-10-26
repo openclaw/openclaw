@@ -11,6 +11,7 @@ import {
   computeInlineScriptHashes,
 } from "../../../src/gateway/control-ui-csp.js";
 import { createDeferredCore } from "../../../src/shared/deferred.ts";
+import { createBoardWidget } from "../lib/board/widget.test-support.ts";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { clickBoardWidgetControl } from "../test-helpers/control-ui-e2e-widget.ts";
 import {
@@ -21,6 +22,7 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { useCanvasSandboxFixture } from "./canvas-sandbox.test-support.ts";
 import { textMessage, timedText } from "./chat-flow-fixtures.test-support.ts";
+import { board as createBoardSnapshot } from "./chat-layout-fixtures.test-support.ts";
 import {
   installWidgetPromptDiagnostics,
   retainWidgetPromptFailure,
@@ -175,30 +177,20 @@ suite.define(() => {
     const html = widgetDocument();
     const { sandboxUrl, sandboxPort } = sandboxDocument(html);
     const proxy = await startProtectedSource(html);
-    const snapshot = {
-      sessionKey,
-      revision: 1,
-      tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
-      widgets: [
-        {
-          name: widgetName,
-          tabId: "main",
-          title: "Community pulse",
-          contentKind: "html",
-          sizeW: 12,
-          sizeH: 5,
-          position: 0,
-          grantState: "none",
-          revision: 1,
-          frameUrl: `${new URL(proxy.baseUrl).origin}${boardPath}?bt=ticket`,
-          viewTicket: "ticket",
-          viewTicketTtlMs: 1_200_000,
-          viewGeneration: "0123456789abcdef0123456789abcdef",
-          sandboxUrl,
-          sandboxPort,
-        },
-      ],
-    };
+    const snapshot = createBoardSnapshot(sessionKey, [
+      createBoardWidget({
+        name: widgetName,
+        title: "Community pulse",
+        sizeW: 12,
+        sizeH: 5,
+        frameUrl: `${new URL(proxy.baseUrl).origin}${boardPath}?bt=ticket`,
+        viewTicket: "ticket",
+        viewTicketTtlMs: 1_200_000,
+        viewGeneration: "0123456789abcdef0123456789abcdef",
+        sandboxUrl,
+        sandboxPort,
+      }),
+    ]);
     try {
       const unauthenticated = await fetch(new URL(documentPath, proxy.baseUrl), {
         redirect: "manual",

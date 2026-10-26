@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { openChatDetails } from "./chat-details.test-support.ts";
 import { chatSessionListResponse } from "./chat-flow.test-support.ts";
 import { swarmSnapshot } from "./chat-swarm.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -70,10 +71,18 @@ suite.define(() => {
         ],
       });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, parentKey));
-      const widget = page.locator('[data-test-id="chat-delegation"]');
-      const tasks = widget.locator(".chat-delegation__task");
-      const taskNames = widget.locator(".chat-delegation__name");
-      await widget.locator(".chat-delegation__summary").click();
+      const details = await openChatDetails(page);
+      const group = details.locator('[data-details-group="subagents"]');
+      const summary = group.locator(":scope > summary");
+      if ((await summary.getAttribute("aria-expanded")) !== "true") {
+        await summary.click();
+      }
+      const tasks = group.locator(".chat-details-subagents__row[data-subagent-session-key]");
+      const taskNames = tasks.locator(".chat-details-subagents__name");
+      const doneCount = async () =>
+        (await tasks.locator(".chat-details-subagents__status").allTextContents()).filter(
+          (status) => status === "Done",
+        ).length;
       await expect.poll(() => tasks.count()).toBe(4);
       await gateway.waitForRequest("sessions.list", {
         match: { spawnedBy: parentKey, limit: 10_000 },
@@ -98,9 +107,7 @@ suite.define(() => {
         });
         await expect.poll(() => taskNames.allTextContents()).toContain(child.label);
         await expect
-          .poll(() =>
-            widget.locator(".chat-delegation__tasks .chat-delegation__icon--done").count(),
-          )
+          .poll(doneCount)
           .toBe(children.filter((entry) => entry.status === "done").length);
       };
       for (let step = 1; step <= 12; step += 1) {
@@ -110,19 +117,21 @@ suite.define(() => {
         children = children.map((entry, offset) => (offset === index ? child : entry));
         await publish(child, step, "run");
       }
-      await expect
-        .poll(() => widget.locator(".chat-delegation__summary").textContent())
-        .toContain("Completed");
+      await expect.poll(doneCount).toBe(4);
       const updateDescribes =
         (await gateway.getRequests("sessions.describe")).length - initialDescribes;
       expect.soft(updateDescribes).toBe(0);
       expect(await tasks.count()).toBe(4);
 
-      // A roster-only arrival must not be silently assigned to this earlier launch.
+      // Details owns the complete child roster, including later launches.
       const added = childRow(4, "Worker 5, unrelated launch", 13);
       children = [...children, added];
       const beforeMember = (await gateway.getRequests("sessions.describe")).length;
       const parent = parentRow(startedAt + 13);
+      await gateway.setMethodResponse(
+        "sessions.list",
+        chatSessionListResponse([parent, ...children]),
+      );
       await gateway.emitGatewayEvent("sessions.changed", {
         sessionKey: added.key,
         agentId: "main",
@@ -132,10 +141,9 @@ suite.define(() => {
         session: added,
         ancestorSessions: [parent],
       });
-      await expect.poll(() => tasks.count()).toBe(4);
-      expect((await taskNames.allTextContents()).some((name) => name.includes("unrelated"))).toBe(
-        false,
-      );
+      await expect.poll(() => tasks.count()).toBe(5);
+      await expect.poll(() => taskNames.allTextContents()).toContain(added.label);
+      expect(await page.locator('[data-test-id="chat-delegation"]').count()).toBe(0);
       expect(
         (await gateway.getRequests("sessions.describe")).length - beforeMember,
       ).toBeLessThanOrEqual(1);

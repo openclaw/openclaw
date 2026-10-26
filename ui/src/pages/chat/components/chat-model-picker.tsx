@@ -41,6 +41,10 @@ export type ChatModelPickerParams = {
   providerAuth?: ReadonlyMap<string, ModelProviderAuthLabel>;
   accountSection?: ChatModelAccountSection;
   contextWindow?: ChatContextWindowControlParams;
+  accessProgramRecovery?: {
+    disabled: boolean;
+    onClear: (sessionKey: string) => unknown;
+  };
   disabled: boolean;
   disabledReason?: string;
   modelCatalogState?: ModelCatalogState;
@@ -72,41 +76,6 @@ export type ChatModelPickerParams = {
   onTargetRetry?: (groupId: string) => unknown;
   onTargetSelect?: (groupId: string, value: string) => unknown;
 };
-
-function prepareChatModelPicker(params: ChatModelPickerParams) {
-  const activeModelOption = params.modelOptions.find((option) =>
-    isModelPickerOptionSelected(option, params.selectedModelValue, params.selectedAgentRuntime),
-  );
-  const triggerModelValue = params.triggerModelValue;
-  const triggerModelOption =
-    triggerModelValue === undefined
-      ? activeModelOption
-      : triggerModelValue === ""
-        ? undefined
-        : params.modelOptions.find((option) =>
-            isModelPickerOptionSelected(option, triggerModelValue, params.selectedAgentRuntime),
-          );
-  const modelToolsUnavailable = triggerModelOption?.supportsTools === false;
-  const selectedContextWindowOption = params.contextWindow?.options.find(
-    (option) => option.id === params.contextWindow?.selected,
-  );
-  const showContextWindowBadge =
-    selectedContextWindowOption !== undefined &&
-    params.contextWindow?.selected !== params.contextWindow?.defaultId;
-  const triggerTitle = [
-    params.triggerStatusLabel ?? params.triggerModelLabel,
-    modelToolsUnavailable ? t("chat.modelControls.chatOnly") : "",
-  ]
-    .filter(Boolean)
-    .join(" · ");
-  return {
-    triggerModelOption,
-    modelToolsUnavailable,
-    selectedContextWindowOption,
-    showContextWindowBadge,
-    triggerTitle,
-  };
-}
 
 export function ChatModelPicker(params: ChatModelPickerParams) {
   const search = createChatModelSearch();
@@ -147,7 +116,40 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
     pendingSearchFocus = target.ownerDocument.activeElement;
     requestAnimationFrame(focusSearch);
   });
-  const state = createMemo(() => prepareChatModelPicker(params));
+  const state = createMemo(() => {
+    const activeModelOption = params.modelOptions.find((option) =>
+      isModelPickerOptionSelected(option, params.selectedModelValue, params.selectedAgentRuntime),
+    );
+    const triggerModelValue = params.triggerModelValue;
+    const triggerModelOption =
+      triggerModelValue === undefined
+        ? activeModelOption
+        : triggerModelValue === ""
+          ? undefined
+          : params.modelOptions.find((option) =>
+              isModelPickerOptionSelected(option, triggerModelValue, params.selectedAgentRuntime),
+            );
+    const modelToolsUnavailable = triggerModelOption?.supportsTools === false;
+    const selectedContextWindowOption = params.contextWindow?.options.find(
+      (option) => option.id === params.contextWindow?.selected,
+    );
+    const showContextWindowBadge =
+      selectedContextWindowOption !== undefined &&
+      params.contextWindow?.selected !== params.contextWindow?.defaultId;
+    const triggerTitle = [
+      params.triggerStatusLabel ?? params.triggerModelLabel,
+      modelToolsUnavailable ? t("chat.modelControls.chatOnly") : "",
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    return {
+      triggerModelOption,
+      modelToolsUnavailable,
+      selectedContextWindowOption,
+      showContextWindowBadge,
+      triggerTitle,
+    };
+  });
   const closeModelPickerAfterSelection = (event: MouseEvent) => {
     // Option buttons live inside the picker overlay; its summary lives outside it.
     if (event.currentTarget instanceof Element) {

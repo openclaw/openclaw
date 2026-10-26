@@ -122,7 +122,8 @@ describe("openclaw-board-view", () => {
     });
     const frame = view.querySelector("iframe")!;
     const source = frame.src;
-    const reload = vi.spyOn(frame, "src", "set");
+    // Browser navigation keeps the WindowProxy; jsdom replaces it when src is assigned.
+    const reload = vi.spyOn(frame, "src", "set").mockImplementation(() => {});
     await vi.advanceTimersByTimeAsync(10_000);
     await settleCells(view);
     expect(view.querySelector('.board-widget__notice[role="status"]')).not.toBeNull();

@@ -2,14 +2,21 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveUpdateBuildManager } from "./update-package-manager.js";
 
-type PackageManagerCommandRunner = Parameters<typeof resolveUpdateBuildManager>[0];
+type Runner = Parameters<typeof resolveUpdateBuildManager>[0];
 const roots = useAutoCleanupTempDirTracker(afterEach);
+const output = (stdout = "", code = 0) => ({ stdout, stderr: "", code });
+const rootKeys = [
+  "NPM_CONFIG_WORKSPACE_DIR",
+  "npm_config_workspace_dir",
+  "PNPM_CONFIG_LOCKFILE_DIR",
+  "pnpm_config_lockfile_dir",
+];
 
-async function checkout(version: string) {
+async function checkout(version = "12.0.0") {
   const root = roots.make("openclaw-update-manager-test-");
   await fs.writeFile(
     path.join(root, "package.json"),
@@ -18,184 +25,136 @@ async function checkout(version: string) {
   await fs.writeFile(path.join(root, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
   return root;
 }
+const readJson = async (file: string): Promise<unknown> =>
+  JSON.parse(await fs.readFile(file, "utf8"));
 
-it("returns a package-manager failure when the probe directory cannot be allocated", async () => {
-  const root = await checkout("12.0.0");
+it("reports failure when the probe directory cannot be allocated", async () => {
+  const root = await checkout();
   const tmpdir = vi.spyOn(os, "tmpdir").mockReturnValue(path.join(root, "missing"));
-  const runCommand = vi.fn<PackageManagerCommandRunner>();
+  const run = vi.fn<Runner>();
   try {
-    await expect(resolveUpdateBuildManager(runCommand, root, 5_000)).resolves.toEqual({
+    await expect(resolveUpdateBuildManager(run, root, 5_000)).resolves.toEqual({
       kind: "missing-required",
       preferred: "pnpm",
       reason: "pnpm-corepack-missing",
     });
-    expect(runCommand).not.toHaveBeenCalled();
+    expect(run).not.toHaveBeenCalled();
   } finally {
     tmpdir.mockRestore();
   }
 });
 
-describe.each(["corepack", "npm"])("%s bootstrap deadlines", (installer) => {
-  it.each([
-    ["legacy caller", undefined, 5_000],
-    ["unbounded update work", {}, undefined],
-    ["explicit update deadline", { timeoutMs: 9_000 }, 9_000],
-  ] as const)("separates work/probe deadlines: %s", async (_label, work, expected) => {
-    const root = await checkout("12.0.0");
-    let installed = false;
-    const runCommand: PackageManagerCommandRunner = async (argv, options) => {
-      const verb = installer === "npm" ? "install" : "enable";
-      if (argv[0] === installer && argv[1] === verb) {
-        expect(options.timeoutMs).toBe(expected);
-        installed = true;
-        return { code: 0, stdout: "installed", stderr: "" };
-      }
-      expect(options.timeoutMs).toBe(5_000);
-      if ((installer === "npm" && argv[0] === "corepack") || (argv[0] === "pnpm" && !installed)) {
-        throw new Error("not installed");
-      }
-      return { code: 0, stdout: "12.0.0", stderr: "" };
-    };
-    const result = await resolveUpdateBuildManager(runCommand, root, 5_000, undefined, work);
-    assert(result.kind === "resolved");
-    expect(installed).toBe(true);
-    await result.cleanup?.();
-  });
-});
-
 it.each([
-  ["11.22.0", undefined],
-  ["12.0.0", undefined],
-  ["12.0.0", "install"],
-  ["12.0.0", "verify"],
-] as const)("bootstraps pinned pnpm %s (failure: %s)", async (version, failure) => {
-  const root = await checkout(version);
-  const lockPath = path.join(root, "pnpm-lock.yaml");
-  const lockBefore = await fs.readFile(lockPath);
-  const manifestBefore = await fs.readFile(path.join(root, "package.json"));
-  const calls: string[][] = [];
-  let prefix = "";
-  const baseEnv = Object.freeze({
-    Path: "synthetic-bin",
-    PATH: undefined,
-    EMPTY: "",
-    KEEP: "value",
-  });
-  const runCommand: PackageManagerCommandRunner = async (argv, options) => {
-    calls.push(argv);
-    const key = argv.join(" ");
-    if (key === "corepack --version" || (failure && key === "pnpm --version")) {
-      throw new Error("missing tool");
-    }
-    if (key === "pnpm --version") {
-      const envPath = options.env?.PATH ?? options.env?.Path ?? "";
-      const expectedBin = path.join(prefix, "node_modules", ".bin");
-      const local = prefix && envPath.split(path.delimiter)[0] === expectedBin;
-      if (local) {
-        assert(options.env);
-        expect(options.env).toMatchObject({ EMPTY: "", KEEP: "value" });
-        expect(Object.hasOwn(options.env, "PATH")).toBe(false);
-        expect(options.env).not.toBe(baseEnv);
-      }
-      if (!local) {
-        assert(options.cwd);
-        const manifest = JSON.parse(
-          await fs.readFile(path.join(options.cwd, "package.json"), "utf8"),
-        );
-        if (manifest.packageManager) {
-          // Older pnpm resolves/writes its launcher before reporting the pinned version.
-          await fs.appendFile(lockPath, "packageManagerDependencies: ['@pnpm/exe']\n");
-          return { stdout: version, stderr: "", code: 0 };
-        }
-        expect(await fs.readFile(path.join(options.cwd, "pnpm-workspace.yaml"), "utf8")).toBe(
-          "packages: []\n",
-        );
-      }
-      return { stdout: local ? version : "10.0.0", stderr: "", code: 0 };
-    }
-    if (key === "npm --version") {
-      return { stdout: "10.0.0", stderr: "", code: 0 };
-    }
-    if (key.startsWith("npm install --prefix ")) {
-      prefix = argv[3] ?? "";
-      expect(argv[4]).toBe(`pnpm@${version}`);
-      expect(JSON.parse(await fs.readFile(path.join(prefix, "package.json"), "utf8"))).toEqual({
-        private: true,
-        allowScripts: { [`pnpm@${version}`]: true },
-      });
-      return { stdout: "added pnpm", stderr: "", code: failure === "install" ? 1 : 0 };
-    }
-    throw new Error(`Unexpected command ${key}`);
-  };
-  const result = await resolveUpdateBuildManager(runCommand, root, 5000, baseEnv);
-  expect(await fs.readFile(lockPath)).toEqual(lockBefore);
-  expect(await fs.readFile(path.join(root, "package.json"))).toEqual(manifestBefore);
-  if (failure) {
-    expect(result).toEqual({
-      kind: "missing-required",
-      preferred: "pnpm",
-      reason: "pnpm-npm-bootstrap-failed",
+  ["npm", "11.22.0", undefined, 5_000, undefined],
+  ["npm", "12.0.0", {}, undefined, undefined],
+  ["npm", "12.0.0", { timeoutMs: 9_000 }, 9_000, undefined],
+  ["npm", "12.0.0", undefined, 5_000, "install"],
+  ["npm", "12.0.0", undefined, 5_000, "verify"],
+  ["corepack", "12.0.0", undefined, 5_000, undefined],
+  ["corepack", "12.0.0", {}, undefined, undefined],
+  ["corepack", "12.0.0", { timeoutMs: 9_000 }, 9_000, undefined],
+] as const)(
+  "bootstraps %s pnpm %s (work=%j, timeout=%s, failure=%s)",
+  async (installer, version, work, timeout, failure) => {
+    const root = await checkout(version);
+    const manifest = path.join(root, "package.json");
+    const lock = path.join(root, "pnpm-lock.yaml");
+    const before = await Promise.all([fs.readFile(manifest), fs.readFile(lock)]);
+    const pathKey = installer === "npm" ? "Path" : "PATH";
+    const baseEnv = Object.freeze({
+      PATH: undefined,
+      [pathKey]: "/ambient/bin",
+      EMPTY: "",
+      KEEP: "value",
+      COREPACK_ENABLE_PROJECT_SPEC: "0",
+      ...Object.fromEntries(rootKeys.map((key) => [key, "/other-checkout"])),
     });
-  } else {
-    assert(result.kind === "resolved" && result.manager === "pnpm");
-    expect(calls).toContainEqual(["npm", "install", "--prefix", prefix, `pnpm@${version}`]);
-    await expect(fs.stat(prefix)).resolves.toBeDefined();
-    await result.cleanup?.();
-  }
-  await expect(fs.stat(prefix)).rejects.toMatchObject({ code: "ENOENT" });
-});
-
-it("uses a scoped Corepack shim for the checkout pin when npm is unavailable", async () => {
-  const root = await checkout("12.0.0");
-  const lockBefore = await fs.readFile(path.join(root, "pnpm-lock.yaml"));
-  const rootKeys = [
-    "NPM_CONFIG_WORKSPACE_DIR",
-    "npm_config_workspace_dir",
-    "PNPM_CONFIG_LOCKFILE_DIR",
-    "pnpm_config_lockfile_dir",
-  ];
-  const baseEnv = Object.freeze({
-    PATH: "/ambient/bin",
-    COREPACK_ENABLE_PROJECT_SPEC: "0",
-    ...Object.fromEntries(rootKeys.map((key) => [key, "/other-checkout"])),
-  });
-  let shimDir = "";
-  const runCommand: PackageManagerCommandRunner = async (argv, options) => {
-    if (argv[0] === "pnpm") {
-      const fromOwnedShim = shimDir && options.env?.PATH?.split(path.delimiter)[0] === shimDir;
-      if (!fromOwnedShim) {
-        return { stdout: "11.15.1", stderr: "", code: 0 };
+    let prefix = "";
+    let probeFiles: unknown;
+    let installManifest: unknown;
+    let verified: Parameters<Runner>[1] | undefined;
+    let installArgs: string[] = [];
+    const bin = () => (installer === "npm" ? path.join(prefix, "node_modules", ".bin") : prefix);
+    const verb = installer === "npm" ? "install" : "enable";
+    const run = vi.fn<Runner>(async (argv, options) => {
+      assert(options.cwd);
+      if (argv[0] === "pnpm") {
+        const owned = prefix && options.env?.[pathKey]?.split(path.delimiter)[0] === bin();
+        if (owned) {
+          verified = options;
+          if (failure === "verify") {
+            throw new Error("missing tool");
+          }
+          return output(version);
+        }
+        probeFiles = [
+          await readJson(path.join(options.cwd, "package.json")),
+          await fs.readFile(path.join(options.cwd, "pnpm-workspace.yaml"), "utf8"),
+        ];
+        if (failure) {
+          throw new Error("missing tool");
+        }
+        return output("10.0.0");
       }
-      expect(options.cwd).toBe(root);
-      expect(JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8"))).toEqual({
-        packageManager: "pnpm@12.0.0+sha512.test",
+      if (argv[0] !== installer) {
+        throw new Error("missing tool");
+      }
+      if (argv[1] === "--version") {
+        return output("0.35.0");
+      }
+      const flag = installer === "npm" ? "--prefix" : "--install-directory";
+      const pin = installer === "npm" ? `pnpm@${version}` : "pnpm";
+      if (argv[1] !== verb || argv[2] !== flag || !argv[3] || argv[4] !== pin) {
+        throw new Error(`Unexpected command ${argv.join(" ")}`);
+      }
+      installArgs = argv;
+      prefix = argv[3] ?? "";
+      installManifest = await readJson(path.join(prefix, "package.json"));
+      return output("", failure === "install" ? 1 : 0);
+    });
+    const result = await resolveUpdateBuildManager(run, root, 5_000, baseEnv, work);
+    expect(await Promise.all([fs.readFile(manifest), fs.readFile(lock)])).toEqual(before);
+    expect(probeFiles).toEqual([{ private: true }, "packages: []\n"]);
+    expect(installArgs).toEqual(
+      installer === "npm"
+        ? ["npm", "install", "--prefix", prefix, `pnpm@${version}`]
+        : ["corepack", "enable", "--install-directory", prefix, "pnpm"],
+    );
+    expect(prefix).not.toBe(root);
+    expect(installManifest).toEqual(
+      installer === "npm"
+        ? { private: true, allowScripts: { [`pnpm@${version}`]: true } }
+        : { private: true },
+    );
+    for (const [argv, options] of run.mock.calls) {
+      expect(options.timeoutMs).toBe(argv[1] === verb ? timeout : 5_000);
+    }
+    if (failure) {
+      expect(result).toEqual({
+        kind: "missing-required",
+        preferred: "pnpm",
+        reason: "pnpm-npm-bootstrap-failed",
       });
-      for (const key of rootKeys) {
-        expect(options.env?.[key]).toBe(root);
+    } else {
+      assert(result.kind === "resolved" && result.manager === "pnpm");
+      assert(verified?.env);
+      const owner = installer === "npm" ? prefix : root;
+      expect(verified.cwd).toBe(owner);
+      expect(verified.env).toMatchObject({
+        EMPTY: "",
+        KEEP: "value",
+        COREPACK_ENABLE_PROJECT_SPEC: "1",
+        COREPACK_DEFAULT_TO_LATEST: "0",
+        ...Object.fromEntries(rootKeys.map((key) => [key, owner])),
+      });
+      expect(result.env?.[pathKey]).toBe(`${bin()}${path.delimiter}/ambient/bin`);
+      expect(result.env).not.toBe(baseEnv);
+      if (installer === "npm") {
+        expect(Object.hasOwn(verified.env, "PATH")).toBe(false);
       }
-      expect(options.env?.COREPACK_ENABLE_PROJECT_SPEC).toBe("1");
-      expect(options.env?.COREPACK_DEFAULT_TO_LATEST).toBe("0");
-      return { stdout: "12.0.0", stderr: "", code: 0 };
+      await expect(fs.stat(prefix)).resolves.toBeDefined();
+      await result.cleanup?.();
     }
-    if (argv.join(" ") === "corepack --version") {
-      return { stdout: "0.35.0", stderr: "", code: 0 };
-    }
-    if (argv[0] === "corepack" && argv[1] === "enable") {
-      if (argv[2] !== "--install-directory" || !argv[3] || argv[4] !== "pnpm") {
-        return { stdout: "", stderr: "global toolchain is read-only", code: 1 };
-      }
-      shimDir = argv[3];
-      expect(shimDir).not.toBe(root);
-      await fs.access(shimDir);
-      return { stdout: "", stderr: "", code: 0 };
-    }
-    throw new Error(`Unavailable command ${argv.join(" ")}`);
-  };
-  const result = await resolveUpdateBuildManager(runCommand, root, 5_000, baseEnv);
-  assert(result.kind === "resolved");
-  expect(result.env?.PATH).toBe(`${shimDir}${path.delimiter}/ambient/bin`);
-  await expect(fs.stat(shimDir)).resolves.toBeDefined();
-  expect(await fs.readFile(path.join(root, "pnpm-lock.yaml"))).toEqual(lockBefore);
-  await result.cleanup?.();
-  await expect(fs.stat(shimDir)).rejects.toMatchObject({ code: "ENOENT" });
-});
+    await expect(fs.stat(prefix)).rejects.toMatchObject({ code: "ENOENT" });
+  },
+);

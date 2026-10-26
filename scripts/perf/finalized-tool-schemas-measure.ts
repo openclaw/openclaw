@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import type { HeapProfiler, Profiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
+import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import { projectAnthropicTools } from "../../packages/ai/src/providers/anthropic-tool-projection.js";
@@ -13,6 +14,7 @@ import { expectDefined } from "../../packages/normalization-core/src/expect.js";
 import { finalizeAgentTools } from "../../src/agents/agent-tools.finalize.js";
 import type { AnyAgentTool } from "../../src/agents/agent-tools.types.js";
 import { createMessageTool } from "../../src/agents/tools/message-tool-execution.js";
+import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { clearPluginMetadataLifecycleCaches } from "../../src/plugins/plugin-metadata-lifecycle.js";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.js";
 
@@ -29,7 +31,7 @@ const { values } = parseArgs({
 const integer = (raw: string, label: string, min: number) =>
   parseStrictIntegerOption({ raw, label, min, fallback: min });
 const sessions = integer(values.sessions, "sessions", 1);
-const samples = integer(values.samples, "samples", 5);
+const samples = integer(values.samples, "samples", 1);
 const samplingInterval = integer(values["sampling-interval"], "sampling-interval", 1);
 // Include the warm session within the finalizer's 64 retained snapshots.
 assert.ok(sessions <= 63, "--sessions must be <= 63 to avoid warm-snapshot eviction");
@@ -40,7 +42,24 @@ const factories: Record<string, () => AnyAgentTool[]> = {
   message: () => [createMessageTool()],
   "message-configured": () => [createMessageTool({ config: configured })],
 };
-const factory = expectDefined(factories[values.factory], `Unknown --factory: ${values.factory}`);
+const assembly =
+  values.factory === "assembly"
+    ? (await import("../../src/agents/agent-tools.js")).createOpenClawCodingToolsInternalAsync
+    : undefined;
+const factory = assembly
+  ? undefined
+  : expectDefined(factories[values.factory], `Unknown --factory: ${values.factory}`);
+const assemblyConfig: OpenClawConfig = {
+  agents: {
+    entries: { main: {} },
+    defaults: { mediaModels: { video: { primary: "qwen/wan2.6-t2v" } } },
+  },
+  tools: { codeMode: false, toolSearch: false },
+  plugins: {
+    allow: ["memory-core", "qwen"],
+    entries: { "memory-core": { enabled: true }, qwen: { enabled: true } },
+  },
+};
 const hash = (text: string) => createHash("sha256").update(text).digest("hex");
 const definitionJson = (tools: AnyAgentTool[]) =>
   JSON.stringify(
@@ -52,17 +71,33 @@ const definitionJson = (tools: AnyAgentTool[]) =>
     })),
   );
 
-async function finalize(tools: AnyAgentTool[], sessionId: string, run = "first") {
+async function construct(sessionId: string, run = "first", sourceTools?: AnyAgentTool[]) {
   const cleanups: Array<(reason: string) => Promise<void>> = [];
-  const result = finalizeAgentTools({
-    tools,
+  const options = {
     modelProvider: "openai",
     modelId: "schema-probe",
     modelApi: "openai-responses",
-    hookContext: { sessionId, runId: `${sessionId}-${run}` },
     wrapBeforeToolCallHook: false,
-    registerRunCleanup: (cleanup) => cleanups.push(cleanup),
-  });
+    registerRunCleanup: (cleanup: (reason: string) => Promise<void>) => cleanups.push(cleanup),
+  };
+  const runId = `${sessionId}-${run}`;
+  const result = assembly
+    ? await assembly({
+        ...options,
+        config: assemblyConfig,
+        workspaceDir: process.cwd(),
+        agentDir: path.join(expectDefined(process.env.HOME, "Set an isolated HOME"), "agent"),
+        agentId: "main",
+        sessionId,
+        sessionKey: "agent:main:main",
+        runId,
+        modelHasVision: true,
+      })
+    : finalizeAgentTools({
+        ...options,
+        tools: sourceTools ?? expectDefined(factory, "Expected a tool factory")(),
+        hookContext: { sessionId, runId },
+      });
   for (const cleanup of cleanups) {
     await cleanup("finished");
   }
@@ -71,7 +106,7 @@ async function finalize(tools: AnyAgentTool[], sessionId: string, run = "first")
 
 async function prepare() {
   clearPluginMetadataLifecycleCaches();
-  await finalize(factory(), "schema-probe-warm");
+  await construct("schema-probe-warm");
   await collectGarbage();
 }
 
@@ -83,7 +118,7 @@ async function collectGarbage() {
 
 async function workload() {
   for (let index = 0; index < sessions; index++) {
-    await finalize(factory(), `schema-probe-${index}`);
+    await construct(`schema-probe-${index}`);
   }
 }
 
@@ -91,45 +126,87 @@ async function attribution() {
   await prepare();
   const byTool = new Map<
     string,
-    { sources: Set<object>; contents: Set<string>; published: Set<object> }
+    {
+      sources: Set<object>;
+      contents: Set<string>;
+      published: Set<object>;
+      returned: Set<object>;
+      publicationMisses: number;
+      repeatPublicationMisses: number;
+      outputPublicationMisses: number;
+    }
   >();
   const definitions = new Set<string>();
   for (let index = 0; index < sessions; index++) {
-    const tools = factory();
+    const sourceTools = factory?.();
     const sessionId = `schema-probe-${index}`;
-    const finalized = await finalize(tools, sessionId);
+    const finalized = await construct(sessionId, "first", sourceTools);
     definitions.add(definitionJson(finalized));
-    // Read the owner's settled publication without replacing this run's source object.
-    const published = await finalize(tools, sessionId, "read-publication");
-    for (const [position, tool] of tools.entries()) {
-      const parameters = published[position]?.parameters;
-      assert.ok(parameters && typeof parameters === "object");
-      assert.ok(getPublishedRuntimeToolInputSchema(parameters), `${tool.name} was not published`);
+    // Direct factories can read the settled publication using the exact source objects.
+    // Assembly instead constructs a fresh run, exercising both same-session and cross-session reuse.
+    const repeated = await construct(sessionId, "repeat", sourceTools);
+    definitions.add(definitionJson(repeated));
+    for (const [position, tool] of finalized.entries()) {
+      const next = repeated[position];
+      assert.ok(next && next.name === tool.name, "Tool order changed across equal runs");
       const row = byTool.get(tool.name) ?? {
         sources: new Set<object>(),
         contents: new Set<string>(),
         published: new Set<object>(),
+        returned: new Set<object>(),
+        publicationMisses: 0,
+        repeatPublicationMisses: 0,
+        outputPublicationMisses: 0,
       };
-      row.sources.add(tool.parameters);
+      const source = sourceTools?.[position];
+      if (source) {
+        row.sources.add(source.parameters);
+      }
       row.contents.add(JSON.stringify(tool.parameters));
-      row.published.add(parameters);
+      row.returned.add(tool.parameters);
+      if (getPublishedRuntimeToolInputSchema(tool.parameters)) {
+        row.published.add(tool.parameters);
+      } else {
+        row.publicationMisses++;
+      }
+      if (getPublishedRuntimeToolInputSchema(next.parameters)) {
+        row.published.add(next.parameters);
+      } else {
+        row.repeatPublicationMisses++;
+      }
+      if (tool.outputSchema && !getPublishedRuntimeToolInputSchema(tool.outputSchema)) {
+        row.outputPublicationMisses++;
+      }
+      if (!assembly) {
+        assert.ok(
+          getPublishedRuntimeToolInputSchema(next.parameters),
+          `${tool.name} was not published`,
+        );
+      }
       byTool.set(tool.name, row);
     }
   }
-  assert.equal(definitions.size, 1, "Provider-facing definitions changed across equal sessions");
+  assert.equal(definitions.size, 1, "Provider-facing definitions changed across equal runs");
   const firstDefinition = [...definitions][0];
   assert.ok(firstDefinition);
   return {
     sessions,
+    runsPerSession: 2,
+    identityBoundary: assembly ? "returned normalized parameters" : "factory source parameters",
+    publicationMissDefinition: "Returned parameters lack the owner's published-schema marker",
     definitionBytes: Buffer.byteLength(firstDefinition),
     definitionSha256: hash(firstDefinition),
     tools: Object.fromEntries(
       [...byTool].map(([name, row]) => [
         name,
         {
-          distinctSourceObjects: row.sources.size,
+          ...(!assembly ? { distinctSourceObjects: row.sources.size } : {}),
+          distinctReturnedParameterObjects: row.returned.size,
           distinctSchemaContents: row.contents.size,
           distinctPublishedSchemas: row.published.size,
+          firstRunPublicationMisses: row.publicationMisses,
+          sameSessionRepeatPublicationMisses: row.repeatPublicationMisses,
+          firstRunOutputPublicationMisses: row.outputPublicationMisses,
         },
       ]),
     ),
@@ -237,9 +314,9 @@ async function sampleUntraced() {
 }
 
 const attributionResult = await attribution();
-const goldenTools = factory();
-await finalize(goldenTools, "schema-probe-golden");
-const publishedTools = await finalize(goldenTools, "schema-probe-golden", "read-publication");
+const goldenTools = factory?.();
+await construct("schema-probe-golden", "first", goldenTools);
+const publishedTools = await construct("schema-probe-golden", "repeat", goldenTools);
 const goldens = {
   responsesLoose: JSON.stringify(convertResponsesToolPayload(publishedTools, { strict: false })),
   responsesStrict: JSON.stringify(convertResponsesToolPayload(publishedTools, { strict: true })),
@@ -270,7 +347,9 @@ try {
   clearPluginMetadataLifecycleCaches();
 }
 const report = {
-  boundary: "Tool factory, finalization, and settlement only; no Gateway or whole-turn claim",
+  boundary: assembly
+    ? "Real coding-tool assembly, finalization, and settlement; no Gateway or whole-turn claim"
+    : "Tool factory, finalization, and settlement only; no Gateway or whole-turn claim",
   retention: "Forced-GC contextual retained bytes; not natural GC cost, pause, or promotion proof",
   node: process.version,
   factory: values.factory,

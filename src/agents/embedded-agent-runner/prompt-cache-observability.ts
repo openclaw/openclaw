@@ -6,6 +6,7 @@ import {
 import { getPublishedRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
 import { stableStringify } from "@openclaw/normalization-core";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
+import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import type { ContextEnginePromptCacheObservationChange as PromptCacheChange } from "../../context-engine/types.js";
 import { createDedupeCache } from "../../infra/dedupe.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
@@ -45,11 +46,37 @@ const PROMPT_SECTION_NAMES = [
   "Model Aliases",
   "Other",
 ] as const;
-type PromptSectionName = (typeof PROMPT_SECTION_NAMES)[number];
-type PromptSectionDigests = Partial<Record<PromptSectionName, string>>;
-const promptSectionHeadings = new Map<string, PromptSectionName>(
+// Known sections keep short names; any other heading is keyed by its own sanitized
+// line so a warning names the section that moved. Bodies are only ever hashed.
+type PromptSectionDigests = Record<string, string>;
+const promptSectionHeadings = new Map<string, string>(
   PROMPT_SECTION_NAMES.map((name) => [`${name === "Project Context" ? "#" : "##"} ${name}`, name]),
 );
+const MAX_PROMPT_SECTION_KEYS = 48;
+const MAX_PROMPT_SECTION_HEADING_CHARS = 80;
+const MAX_NAMED_SECTION_CHANGES = 8;
+
+function resolvePromptSectionKey(heading: string, sections: PromptSectionDigests): string {
+  const line = heading.trimEnd();
+  const known = promptSectionHeadings.get(line);
+  if (known) {
+    return known;
+  }
+  const key = sanitizeForLog(line).slice(0, MAX_PROMPT_SECTION_HEADING_CHARS);
+  return key in sections || Object.keys(sections).length < MAX_PROMPT_SECTION_KEYS ? key : "Other";
+}
+
+function formatChangedPromptSections(before?: PromptSectionDigests, after?: PromptSectionDigests) {
+  const changed = [...new Set([...Object.keys(after ?? {}), ...Object.keys(before ?? {})])].filter(
+    (key) => before?.[key] !== after?.[key],
+  );
+  if (changed.length === 0) {
+    return "Other";
+  }
+  const named = changed.slice(0, MAX_NAMED_SECTION_CHANGES).join(", ");
+  const hidden = changed.length - MAX_NAMED_SECTION_CHANGES;
+  return hidden > 0 ? `${named}, +${hidden} more` : named;
+}
 
 type PromptCacheSnapshot = {
   provider: string;
@@ -372,7 +399,7 @@ function fingerprintPromptSections(
     return undefined;
   }
   const sections: PromptSectionDigests = {};
-  let name: PromptSectionName = "Other";
+  let name = "Other";
   let start = 0;
   const append = (end: number) => {
     if (end > start) {
@@ -382,7 +409,7 @@ function fingerprintPromptSections(
   for (const heading of prompt.matchAll(/^#{1,2} [^\n]*(?:\n|$)/gm)) {
     append(heading.index);
     start = heading.index;
-    name = promptSectionHeadings.get(heading[0].trimEnd()) ?? "Other";
+    name = resolvePromptSectionKey(heading[0], sections);
     // Injected files own the rest of the stable prefix, including their headings.
     if (name === "Project Context") {
       break;
@@ -426,12 +453,11 @@ function diffSnapshots(
     if (previous[`${code}Digest`] !== next[`${code}Digest`]) {
       const before = previous[`${code}Sections`];
       const after = next[`${code}Sections`];
-      const changed = PROMPT_SECTION_NAMES.filter((name) => before?.[name] !== after?.[name]);
       changes.push({
         code,
         detail:
           before || after
-            ? `${detail} (sections: ${changed.length ? changed.join(", ") : "Other"})`
+            ? `${detail} (sections: ${formatChangedPromptSections(before, after)})`
             : detail,
       });
     }

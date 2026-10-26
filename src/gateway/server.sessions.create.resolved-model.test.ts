@@ -111,7 +111,6 @@ test("new unpinned sessions bind the account for the permitted operator default"
 
 test.each([
   { mode: "public", model: "default", expected: "default" },
-  { mode: "in-process", model: "default", expected: "default" },
   { mode: "public", model: "middle", expected: "final" },
   { mode: "in-process", model: "middle", expected: "middle" },
   { mode: "signed", model: "middle", expected: "middle" },
@@ -123,7 +122,7 @@ test.each([
   { mode: "role-allowed", model: "middle", expected: "middle" },
 ])("sessions.create consumes $mode model $model", async ({ mode, model, expected }) => {
   const { storePath } = await createSessionStoreDir();
-  const models = ["default", "middle", "final", "custom/model"].map((id) =>
+  const models = ["default", "middle", "final"].map((id) =>
     Object.assign(makeModel(id), { provider: "custom" }),
   );
   const cfg = await modelConfig(

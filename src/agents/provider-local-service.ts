@@ -27,18 +27,19 @@ import { shouldDetachChildForProcessTree } from "../process/child-process-tree.j
 import { prepareOomScoreAdjustedSpawnPreservingExecEnv as prepareLocalServiceSpawn } from "../process/linux-oom-score.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import {
-  appendLocalServiceOutputTail,
+  captureLocalServiceOutput,
+  createLocalServiceLease,
   formatLocalServiceDiagnosticTail,
   formatLocalServiceExit,
   type LocalServiceDiagnostics,
   type LocalServiceExit,
 } from "./provider-local-service-diagnostics.js";
 import {
-  drainLocalServiceOutput,
   forceStopLocalServiceProcess,
   hasLocalServiceProcessExited,
   stopLocalServiceProcess,
   trackLocalServiceProcess,
+  unrefLocalServiceOutput,
   type ManagedLocalServiceProcess,
 } from "./provider-local-service-process.js";
 import { getModelProviderLocalServiceReconciler } from "./provider-local-service-reconcile.js";
@@ -219,7 +220,7 @@ async function acquireProviderLocalService(
         !managed.processStop &&
         !hasLocalServiceProcessExited(currentProcess.child)
       ) {
-        return { release };
+        return createLocalServiceLease(release, managed.diagnostics, healthHeaders);
       }
       if (!managed.starting) {
         ownsStartup = true;
@@ -250,7 +251,13 @@ async function acquireProviderLocalService(
       ownsStartup = false;
       assertCurrentServiceAcquisition(key, managed, signal);
       assertAuthCurrent?.();
-      return { release };
+      return createLocalServiceLease(
+        release,
+        managed.process && !hasLocalServiceProcessExited(managed.process.child)
+          ? managed.diagnostics
+          : undefined,
+        healthHeaders,
+      );
     } finally {
       target.onReadinessWait?.(false);
     }
@@ -433,17 +440,7 @@ async function startAndWaitForLocalService(params: {
   diagnostics.pid = child.pid;
   managed.lastExit = undefined;
   child.stdout?.resume();
-  child.stderr?.setEncoding("utf8");
-  child.stderr?.on("data", (chunk: string) => {
-    diagnostics.stderrTail = appendLocalServiceOutputTail(
-      diagnostics.stderrTail,
-      chunk,
-      service.env,
-      process.env,
-      service.args,
-      healthHeaders,
-    );
-  });
+  captureLocalServiceOutput(child, diagnostics, service, healthHeaders);
   child.unref();
   child.once("exit", (code, signalLocal) => {
     const exit = { code, signal: signalLocal };
@@ -466,13 +463,16 @@ async function startAndWaitForLocalService(params: {
     service.readyTimeoutMs,
     DEFAULT_READY_TIMEOUT_MS,
   );
-  const deadline = Date.now() + readyTimeoutMs;
+  // The readiness budget is consumed by real health probes and sleepWithAbort
+  // intervals on the monotonic clock; the deadline must live there too, or a
+  // wall-clock step (NTP correction, VM resume) keeps spawning probes past the
+  // configured readiness bound. Spawn/ready timestamps stay wall-clock facts.
+  const deadline = performance.now() + readyTimeoutMs;
   for (;;) {
     if (await probeHealth(healthUrl, healthHeaders, signal, assertAuthCurrent)) {
       diagnostics.readyAt = Date.now();
-      // Drain readiness diagnostics so pipes cannot pin one-shot hosts.
-      diagnostics.stderrTail = "";
-      drainLocalServiceOutput(child);
+      // Retain bounded stderr without letting diagnostic pipes pin one-shot hosts.
+      unrefLocalServiceOutput(child);
       log.info(
         `${provider} local service ready: pid=${diagnostics.pid ?? "unknown"} spawnMs=${diagnostics.spawnedAt - startedAt} readyMs=${diagnostics.readyAt - startedAt}`,
       );
@@ -485,7 +485,7 @@ async function startAndWaitForLocalService(params: {
         )}${formatLocalServiceDiagnosticTail(diagnostics)}`,
       );
     }
-    if (Date.now() >= deadline) {
+    if (performance.now() >= deadline) {
       throw new Error(`${provider} local service did not become ready at ${healthUrl}`);
     }
     await sleepWithAbort(PROBE_INTERVAL_MS, signal, { ref: false });
@@ -528,7 +528,7 @@ function scheduleIdleStop(
       }
     }, idleStopMs),
   );
-  managed.idleTimer.unref?.();
+  managed.idleTimer.unref();
 }
 
 function clearIdleTimer(managed: ManagedLocalService) {
