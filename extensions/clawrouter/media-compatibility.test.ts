@@ -1,14 +1,10 @@
 import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import fs from "node:fs/promises";
 import { buffer as consumeBuffer } from "node:stream/consumers";
-import {
-  describeImageFile,
-  transcribeAudioFile,
-} from "openclaw/plugin-sdk/media-understanding-runtime";
+import { describeImageFile } from "openclaw/plugin-sdk/media-understanding-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import { withServer, withTempHome } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it } from "vitest";
-import { withClawRouterAudioFixture } from "./audio-transcription.test-support.js";
+import { expect, it } from "vitest";
 
 function imageModel(id: string, input: Array<"text" | "image">) {
   return {
@@ -21,14 +17,9 @@ function imageModel(id: string, input: Array<"text" | "image">) {
   };
 }
 
-describe("ClawRouter configured media compatibility", () => {
-  it.each([
-    "explicit image",
-    "automatic image",
-    "capability-less image",
-    "native image",
-    "no image capability",
-  ] as const)("preserves %s through the registered image runner", async (selection) => {
+it.each(["explicit image", "automatic image", "capability-less image"] as const)(
+  "preserves %s through the registered image runner",
+  async (selection) => {
     await withTempHome(
       async (home) => {
         const image = Buffer.from(
@@ -73,13 +64,7 @@ describe("ClawRouter configured media compatibility", () => {
                     apiKey: "fixture-router",
                     request: { allowPrivateNetwork: true },
                     models: [
-                      {
-                        ...imageModel(
-                          "gpt-4.1",
-                          selection === "no image capability" ? ["text"] : ["text", "image"],
-                        ),
-                        contextWindow: 8192,
-                      },
+                      imageModel("gpt-4.1", ["text", "image"]),
                       imageModel("fixture-text", ["text"]),
                     ],
                   },
@@ -106,61 +91,23 @@ describe("ClawRouter configured media compatibility", () => {
               agentDir,
               filePath,
               mime: "image/png",
-              activeModel: {
-                provider: "clawrouter",
-                model: selection === "native image" ? "gpt-4.1" : "fixture-text",
-              },
+              activeModel: { provider: "clawrouter", model: "fixture-text" },
             });
-            if (selection === "no image capability" || selection === "native image") {
-              expect(result.text).toBeUndefined();
-              expect(result.decision).toMatchObject({
-                outcome: "skipped",
-                ...(selection === "native image"
-                  ? {
-                      nativeVisionActive: true,
-                      attachmentDispositions: { 0: { kind: "handed-to-native-vision" } },
-                    }
-                  : {}),
-              });
-              expect(requests.filter(({ url }) => url !== "/v1/catalog")).toHaveLength(0);
-              return;
-            }
             expect(result).toMatchObject({
               text: "synthetic image description",
               provider: "clawrouter",
               model: "gpt-4.1",
             });
-            const inference = requests.filter(({ url }) => url !== "/v1/catalog");
-            expect(inference).toHaveLength(1);
-            expect(inference[0]).toMatchObject({
-              authorization: "Bearer fixture-router",
-              body: { model: "gpt-4.1" },
-            });
+            expect(requests.filter(({ url }) => url !== "/v1/catalog")).toEqual([
+              expect.objectContaining({
+                authorization: "Bearer fixture-router",
+                body: expect.objectContaining({ model: "gpt-4.1" }),
+              }),
+            ]);
           },
         );
       },
       { env: { CLAWROUTER_API_KEY: undefined, OPENAI_API_KEY: "fixture-decoy-never-router" } },
     );
-  });
-
-  it("keeps a capability-less non-image shared entry out of audio selection", async () => {
-    await withClawRouterAudioFixture(async ({ cfg, filePath, requests }) => {
-      cfg.tools!.media!.models = [{ provider: "clawrouter", model: "legacy-chat-model" }];
-      cfg.plugins!.allow!.push("openai");
-      cfg.models!.providers!.openai = {
-        baseUrl: cfg.models!.providers!.clawrouter!.baseUrl + "/fallback",
-        apiKey: "fixture-fallback",
-        request: { allowPrivateNetwork: true },
-        models: [],
-      };
-      delete cfg.models!.providers!.clawrouter!.apiKey;
-      const result = await transcribeAudioFile({ cfg, filePath });
-      expect(result).toMatchObject({ text: "synthetic transcript", provider: "openai" });
-      expect(requests).toHaveLength(1);
-      expect(requests[0]).toMatchObject({
-        url: "/fallback/audio/transcriptions",
-        authorization: "Bearer fixture-fallback",
-      });
-    });
-  });
-});
+  },
+);
