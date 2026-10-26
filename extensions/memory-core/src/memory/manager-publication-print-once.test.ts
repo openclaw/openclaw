@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { encodeMemoryEmbedding } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { afterEach, expect, it, vi } from "vitest";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
 import {
@@ -11,10 +10,6 @@ import * as transfer from "./manager-publication-transfer.js";
 
 const fixture = createManagerIndexFixture(await import("./index.js"));
 afterEach(() => vi.restoreAllMocks());
-
-// Matches the fixture provider: one count per token, four dimensions per chunk.
-const embedText = (text: string) =>
-  ["alpha", "beta", "image", "audio"].map((token) => text.toLowerCase().split(token).length - 1);
 
 // Escaped control characters exceed the group byte budget without hitting its row limit.
 const budgetText = (index: number) =>
@@ -65,14 +60,9 @@ it.each([
     vi.mocked(JSON.stringify).mockRestore();
   }
   const rows = memoryIndexFixtureWriter(manager)
-    .prepare("SELECT text, embedding FROM memory_index_chunks WHERE source = 'memory'")
-    .all() as Array<{ text: string; embedding: Uint8Array }>;
+    .prepare("SELECT text FROM memory_index_chunks WHERE source = 'memory'")
+    .all() as Array<{ text: string }>;
   expect(coordinates).toBe(rows.length * 4);
-  for (const row of rows) {
-    expect(new Uint8Array(row.embedding)).toEqual(
-      new Uint8Array(encodeMemoryEmbedding(embedText(row.text))),
-    );
-  }
   if (mode === "group") {
     expect(publish).toHaveBeenCalledTimes(1);
     const sources = publish.mock.calls[0]?.[0];

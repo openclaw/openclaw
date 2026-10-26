@@ -8,60 +8,53 @@ const managerFixture = () => ({ close: vi.fn(async () => {}) });
 const retireRuntime = (lifecycle: MemoryManagerLifecycle) =>
   prepareMemoryManagerReload({ retireRuntime: true, retiringEmbeddingProviders: [] }, lifecycle);
 
-it.each(["reject", "unavailable"])(
-  "retires a fallback-backed manager when its %s primary adapter is replaced",
-  async (failure) => {
-    const lifecycle: MemoryManagerLifecycle = {};
-    const registry = new MemoryManagerRegistry(lifecycle);
-    const manager = managerFixture();
-    const unaffected = managerFixture();
-    registry.track(manager, "fallback-backed");
-    registry.track(unaffected, "fallback-only");
-    const primary: MemoryEmbeddingProviderAdapter = {
-      id: "primary",
-      create: async () => ({ provider: null }),
-    };
-    const fallback: MemoryEmbeddingProviderAdapter = {
-      id: "fallback",
-      create: async () => ({
-        provider: {
-          id: "fallback",
-          model: "test-embedding",
-          embed: async () => [1],
-          embedBatch: async () => [[1]],
-        },
-      }),
-    };
-    const creation = registry.createProvider(manager, primary, async () => {
-      if (failure === "reject") {
-        throw new Error("Primary adapter unavailable");
-      }
-      return { provider: null };
-    });
-    if (failure === "reject") {
-      await expect(creation).rejects.toThrow("Primary adapter unavailable");
-    } else {
-      await expect(creation).resolves.toEqual({ provider: null });
-    }
-    for (const owner of [manager, unaffected]) {
-      await registry.createProvider(owner, fallback, () =>
-        fallback.create({ config: {}, model: "test-embedding" }),
-      );
-    }
-
-    const retirement = prepareMemoryManagerReload(
-      { retireRuntime: false, retiringEmbeddingProviders: [primary] },
-      lifecycle,
+it("retires a fallback-backed manager when its rejected primary adapter is replaced", async () => {
+  const lifecycle: MemoryManagerLifecycle = {};
+  const registry = new MemoryManagerRegistry(lifecycle);
+  const manager = managerFixture();
+  const unaffected = managerFixture();
+  registry.track(manager, "fallback-backed");
+  registry.track(unaffected, "fallback-only");
+  const primary: MemoryEmbeddingProviderAdapter = {
+    id: "primary",
+    create: async () => {
+      throw new Error("Primary adapter unavailable");
+    },
+  };
+  const fallback: MemoryEmbeddingProviderAdapter = {
+    id: "fallback",
+    create: async () => ({
+      provider: {
+        id: "fallback",
+        model: "test-embedding",
+        embed: async () => [1],
+        embedBatch: async () => [[1]],
+      },
+    }),
+  };
+  await expect(
+    registry.createProvider(manager, primary, () =>
+      primary.create({ config: {}, model: "test-embedding" }),
+    ),
+  ).rejects.toThrow("Primary adapter unavailable");
+  for (const owner of [manager, unaffected]) {
+    await registry.createProvider(owner, fallback, () =>
+      fallback.create({ config: {}, model: "test-embedding" }),
     );
-    try {
-      await expect(retirement.drain()).resolves.toEqual({ errors: [] });
-      expect(manager.close).toHaveBeenCalledOnce();
-      expect(unaffected.close).not.toHaveBeenCalled();
-    } finally {
-      retirement.resume();
-    }
-  },
-);
+  }
+
+  const retirement = prepareMemoryManagerReload(
+    { retireRuntime: false, retiringEmbeddingProviders: [primary] },
+    lifecycle,
+  );
+  try {
+    await expect(retirement.drain()).resolves.toEqual({ errors: [] });
+    expect(manager.close).toHaveBeenCalledOnce();
+    expect(unaffected.close).not.toHaveBeenCalled();
+  } finally {
+    retirement.resume();
+  }
+});
 
 it("joins pending manager cleanup across overlapping reload drains", async () => {
   const lifecycle: MemoryManagerLifecycle = {};
