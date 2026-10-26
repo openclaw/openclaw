@@ -26,7 +26,8 @@ export function toolResultTaintsTurn(message: ToolResultMessage): boolean {
 }
 
 export function isActiveTurnTainted(messages: readonly AgentMessage[]): boolean {
-  for (const message of messages.toReversed()) {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index]!;
     if (message.role === "user") {
       return false;
     }
