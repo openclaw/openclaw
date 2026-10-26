@@ -18,36 +18,20 @@ import {
 } from "./provider-catalog.js";
 
 const root = "https://opencode.ai/inference/go";
-const families = [
-  {
-    id: "opaque-chat",
-    api: "openai-completions",
-    npm: "@ai-sdk/openai-compatible",
-    baseUrl: root + "/openai/v1",
-    suffix: "/chat/completions",
-  },
-  {
-    id: "opaque-responses",
-    api: "openai-responses",
-    npm: "@ai-sdk/openai",
-    baseUrl: root + "/openai/v1",
-    suffix: "/responses",
-  },
-  {
-    id: "opaque-anthropic",
-    api: "anthropic-messages",
-    npm: "@ai-sdk/anthropic",
-    baseUrl: root + "/anthropic",
-    suffix: "/v1/messages",
-  },
-  {
-    id: "opaque-google",
-    api: "google-generative-ai",
-    npm: "@ai-sdk/google",
-    baseUrl: root + "/google/v1beta",
-    suffix: "/models/opaque-google:streamGenerateContent?alt=sse",
-  },
-] as const;
+const families = (
+  [
+    ["openai-completions", "openai-compatible", "/openai/v1", "/chat/completions"],
+    ["openai-responses", "openai", "/openai/v1", "/responses"],
+    ["anthropic-messages", "anthropic", "/anthropic", "/v1/messages"],
+    ["google-generative-ai", "google", "/google/v1beta", ":streamGenerateContent?alt=sse"],
+  ] as const
+).map(([api, sdk, path, suffix]) => ({
+  id: "opaque-" + sdk,
+  api,
+  npm: "@ai-sdk/" + sdk,
+  baseUrl: root + path,
+  suffix: sdk === "google" ? "/models/opaque-google" + suffix : suffix,
+}));
 type Protocol = (typeof families)[number]["api"];
 
 function wireResponse(api: Protocol, id: string): Response {
@@ -80,27 +64,23 @@ afterEach(() => vi.unstubAllGlobals());
 
 it.each(families)(
   "routes discovered and saved $api models to the correct family endpoint",
-  async (family) => {
+  async ({ id, api, npm, baseUrl, suffix }) => {
     const acquisitionUrls: string[] = [];
     const metadata = {
       "opencode-go": {
         id: "opencode-go",
         api: root + "/openai/v1",
         npm: "@ai-sdk/openai-compatible",
-        models: Object.fromEntries(
-          families.map(({ id, npm, api, baseUrl }) => [
+        models: {
+          [id]: {
             id,
-            {
-              id,
-              name: id,
-              limit: { context: 128000, output: 8192 },
-              provider: { npm, api: api === "anthropic-messages" ? baseUrl + "/v1" : baseUrl },
-            },
-          ]),
-        ),
+            name: id,
+            limit: { context: 128000, output: 8192 },
+            provider: { npm, api: api === "anthropic-messages" ? baseUrl + "/v1" : baseUrl },
+          },
+        },
       },
     };
-    const listing = { data: families.map(({ id }) => ({ id, object: "model" })) };
     const catalog = await buildOpencodeGoLiveProviderConfig({
       discoveryApiKey: "synthetic-key",
       fetchGuard: async ({ url }) => {
@@ -109,13 +89,15 @@ it.each(families)(
           finalUrl: url,
           release: async () => {},
           response: Response.json(
-            url === "https://models.opencode.ai/api.json" ? metadata : listing,
+            url === "https://models.opencode.ai/api.json"
+              ? metadata
+              : { data: [{ id, object: "model" }] },
           ),
         };
       },
     });
-    const row = catalog.models.find(({ id }) => id === family.id);
-    expect(row).toMatchObject({ id: family.id, api: family.api, baseUrl: family.baseUrl });
+    const row = catalog.models.find((model) => model.id === id);
+    expect(row).toMatchObject({ id, api, baseUrl });
     if (!row || !row.api || !row.contextWindow || !row.maxTokens) {
       throw new Error("Expected a complete discovered model");
     }
@@ -138,7 +120,7 @@ it.each(families)(
     const requests: Request[] = [];
     const captureFetch: typeof fetch = async (input, init) => {
       requests.push(new Request(input, init));
-      return wireResponse(family.api, family.id);
+      return wireResponse(api, id);
     };
     vi.stubGlobal("fetch", captureFetch);
     const host = createAiTransportHost({ buildModelFetch: () => captureFetch });
@@ -151,12 +133,12 @@ it.each(families)(
       sessionId: "routing-fixture",
       cacheRetention: "none" as const,
     };
-    for (const baseUrl of [model.baseUrl, "https://opencode.ai/zen/go/v1"]) {
-      const saved = { ...model, baseUrl };
+    for (const savedBaseUrl of [model.baseUrl, "https://opencode.ai/zen/go/v1"]) {
+      const saved = { ...model, baseUrl: savedBaseUrl };
       const resolved: Model = { ...saved, ...normalize(saved) };
-      expect(resolved).toMatchObject({ api: family.api, baseUrl: family.baseUrl });
+      expect(resolved).toMatchObject({ api, baseUrl });
       const result = await runWithAiTransportHost(host, async () => {
-        if (family.api === "google-generative-ai") {
+        if (api === "google-generative-ai") {
           return runtime.completeSimple(resolved, context, options);
         }
         const stream = createBoundaryAwareStreamFnForModel(resolved);
@@ -168,10 +150,7 @@ it.each(families)(
       expect(result.stopReason, result.errorMessage).toBe("stop");
       expect(result.content).toEqual([expect.objectContaining({ type: "text", text: "ok" })]);
     }
-    expect(requests.map(({ url }) => url)).toEqual([
-      family.baseUrl + family.suffix,
-      family.baseUrl + family.suffix,
-    ]);
+    expect(requests.map(({ url }) => url)).toEqual([baseUrl + suffix, baseUrl + suffix]);
     expect(acquisitionUrls).toContain(root + "/v1/models");
     const proxy = { ...model, baseUrl: "https://proxy.example/v1" };
     expect(normalize(proxy)?.baseUrl ?? proxy.baseUrl).toBe(proxy.baseUrl);
@@ -179,8 +158,7 @@ it.each(families)(
 );
 
 it("keeps offline starter and dynamic fallback routes family-specific", () => {
-  const catalog = buildStaticOpencodeGoProviderConfig();
-  expect(catalog.baseUrl).toBe(root + "/openai/v1");
+  expect(buildStaticOpencodeGoProviderConfig().baseUrl).toBe(root + "/openai/v1");
   expect(resolveOpencodeGoModel("gpt-5.6-luna")).toMatchObject({
     api: "openai-responses",
     baseUrl: root + "/openai/v1",
