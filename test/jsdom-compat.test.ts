@@ -1,5 +1,4 @@
 /* @vitest-environment jsdom */
-import { resolveObjectURL } from "node:buffer";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -22,6 +21,7 @@ describe("jsdom native API boundary", () => {
         "--eval",
         `
           import assert from "node:assert/strict";
+          import { resolveObjectURL } from "node:buffer";
           import { createRequire } from "node:module";
           const require = createRequire(process.argv[1]);
           const { builtinEnvironments } = require("vitest/runtime");
@@ -40,12 +40,14 @@ describe("jsdom native API boundary", () => {
           }
           const environment = await builtinEnvironments.jsdom.setup(globalThis, {});
           try {
-            const url = URL.createObjectURL(new Blob(["complete asset"], { type: "image/png" }));
+            const url = URL.createObjectURL(new Blob([new Uint8Array([0, 1, 127, 128, 255])], { type: "image/png" }));
             try {
-              process.stdout.write(await (await fetch(url)).text());
+              assert.equal(resolveObjectURL(url)?.type, "image/png");
+              process.stdout.write(Buffer.from(await (await fetch(url)).arrayBuffer()).toString("hex"));
             } finally {
               URL.revokeObjectURL(url);
             }
+            await assert.rejects(fetch(url));
           } finally {
             await environment.teardown(globalThis);
           }
@@ -59,7 +61,7 @@ describe("jsdom native API boundary", () => {
     );
     expect(result.error).toBeUndefined();
     expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toBe("complete asset");
+    expect(result.stdout).toBe("00017f80ff");
   });
 
   it("keeps event identity in nested iframe windows", () => {
@@ -82,19 +84,6 @@ describe("jsdom native API boundary", () => {
     } finally {
       frame.remove();
     }
-  });
-
-  it("preserves Blob bytes through object URLs and revocation", async () => {
-    const bytes = new Uint8Array([0, 1, 127, 128, 255]);
-    const url = URL.createObjectURL(new Blob([bytes], { type: "application/octet-stream" }));
-    try {
-      expect(resolveObjectURL(url)?.type).toBe("application/octet-stream");
-      const response = await fetch(url);
-      expect(new Uint8Array(await response.arrayBuffer())).toEqual(bytes);
-    } finally {
-      URL.revokeObjectURL(url);
-    }
-    await expect(fetch(url)).rejects.toThrow();
   });
 
   it("preserves Blob and multipart file bytes, names, and types in Request", async () => {

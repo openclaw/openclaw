@@ -81,6 +81,13 @@ it("owns distinct nested and subsequent generations and restores the caller's st
   const outerDatabase = openOpenClawStateDatabase();
   expect(resolveOpenClawStateSqlitePath()).toBe(outer.databasePath);
   expect(openOpenClawStateDatabase()).toBe(outerDatabase);
+  const nestedHome = makeTempDir(tempDirs, "nested-home-", sandbox);
+  withPathResolutionEnv(nestedHome, {}, () => {
+    expect(resolveOpenClawStateSqlitePath()).toBe(
+      path.join(nestedHome, ".openclaw", "state", "openclaw.sqlite"),
+    );
+  });
+  expect(resolveOpenClawStateSqlitePath()).toBe(outer.databasePath);
 
   const inner = installOwnedEnv();
   expect(inner.databasePath).not.toBe(outer.databasePath);
@@ -98,17 +105,6 @@ it("owns distinct nested and subsequent generations and restores the caller's st
   const next = installOwnedEnv();
   expect([outer.databasePath, inner.databasePath]).not.toContain(next.databasePath);
   expect(fs.readFileSync(path.join(callerState, "keep"), "utf8")).toBe("caller-owned");
-});
-
-it("follows a nested HOME scope without pinning it to the enclosing test home", () => {
-  const outer = installOwnedEnv();
-  const nestedHome = makeTempDir(tempDirs, "nested-home-", sandbox);
-  withPathResolutionEnv(nestedHome, {}, () => {
-    expect(resolveOpenClawStateSqlitePath()).toBe(
-      path.join(nestedHome, ".openclaw", "state", "openclaw.sqlite"),
-    );
-  });
-  expect(resolveOpenClawStateSqlitePath()).toBe(outer.databasePath);
 });
 
 it("shares the owned path across module reloads, inherited workers, and subprocesses", async () => {

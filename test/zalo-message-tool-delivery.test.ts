@@ -9,6 +9,7 @@ import { setActivePluginRegistry } from "../src/plugins/runtime.js";
 import { createTestRegistry } from "../src/test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../src/test-utils/openclaw-test-state.js";
 import { reserveTestPortListener } from "../src/test-utils/port-claims.js";
+import { respondJson } from "./helpers/gateway-integration-fixtures.js";
 
 const { resolvePhotoHost } = vi.hoisted(() => ({ resolvePhotoHost: vi.fn() }));
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
@@ -54,13 +55,11 @@ it.each([false, true])(
         createListener: () =>
           createServer(async (request, response) => {
             requests.push({ path: request.url, body: await text(request) });
-            response.writeHead(200, { "content-type": "application/json" });
-            response.end(
-              JSON.stringify(
-                fail
-                  ? { ok: false, description: "fixture provider unavailable" }
-                  : { ok: true, result: { message_id: "z-msg-with-blank-media" } },
-              ),
+            respondJson(
+              response,
+              fail
+                ? { ok: false, description: "fixture provider unavailable" }
+                : { ok: true, result: { message_id: "z-msg-with-blank-media" } },
             );
           }),
       });

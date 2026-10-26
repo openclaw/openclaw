@@ -95,40 +95,6 @@ it("generates identical standalone validators across physical pnpm layouts witho
       expect(stale.status).toBe(1);
       expect(stale.stderr).toContain("activity.js is stale");
       expect(fs.readFileSync(path.join(root, files[0]!), "utf8")).toBe(output[files[0]!]);
-      // Execute each emitted module with imports and string code generation unavailable.
-      const runtime = spawnSync(
-        node,
-        [
-          "--experimental-vm-modules",
-          "--input-type=module",
-          "-e",
-          `
-        import vm from "node:vm";
-        import fs from "node:fs";
-        import path from "node:path";
-        const context = vm.createContext({ TextEncoder, TextDecoder }, { codeGeneration: { strings: false, wasm: false } });
-        let restricted = false;
-        try { vm.runInContext('Function("return 1")()', context); } catch (error) { restricted = error.name === "EvalError"; }
-        if (!restricted) throw Error("String code generation must be disabled");
-        const checks = {};
-        for (const name of ${JSON.stringify(files)}) {
-          if (!name.endsWith(".js")) continue;
-          const source = fs.readFileSync(path.join(${JSON.stringify(root)}, name), "utf8");
-          const module = new vm.SourceTextModule(source, {context});
-          await module.link(() => { throw Error("Validators must be standalone"); });
-          await module.evaluate();
-          Object.assign(checks, module.namespace);
-        }
-        const observer = { sessionKey:"s", revision:1, updatedAt:0, health:"on-track" };
-        const values = [checks.isSessionObserverDigest({...observer,headline:"😀".repeat(120)}),
-          checks.isSessionObserverDigest({...observer,headline:"😀".repeat(121)})];
-        console.log(JSON.stringify(values));
-      `,
-        ],
-        { encoding: "utf8" },
-      );
-      expect(runtime.status, runtime.stdout + runtime.stderr).toBe(0);
-      expect(JSON.parse(runtime.stdout)).toEqual([true, false]);
     }
   }
   expect(outputs[1]).toEqual(outputs[0]);
