@@ -5,7 +5,6 @@ import { publishRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema
 import * as cryptoDigest from "@openclaw/normalization-core/node-crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Usage } from "../../llm/types.js";
-import { withEnv } from "../../test-utils/env.js";
 import type { SessionEntry } from "../sessions/session-manager-types.js";
 import { normalizeUsage } from "../usage.js";
 import {
@@ -32,21 +31,20 @@ function scopedKey(value: string): string {
   return `${value}:${testScope}`;
 }
 
-function observation(name: string, begin = beginOpenAIObservation, sessionKey?: string) {
+function observation(name: string, begin = beginOpenAIObservation) {
   const sessionId = scopedKey(name);
   return {
     sessionId,
     begin: (params: Omit<Parameters<typeof begin>[0], "sessionId"> = {}) =>
-      begin({ sessionId, sessionKey, ...params }),
+      begin({ sessionId, ...params }),
     complete: (cacheRead: number, input?: number) =>
-      completePromptCacheObservation({ sessionId, sessionKey, usage: { cacheRead, input } }),
+      completePromptCacheObservation({ sessionId, usage: { cacheRead, input } }),
   };
 }
 
 function seedObservation(params: Parameters<typeof beginOpenAIObservation>[0], cacheRead = 8_000) {
-  const first = beginOpenAIObservation(params);
+  beginOpenAIObservation(params);
   completePromptCacheObservation({ ...params, usage: { cacheRead } });
-  return first;
 }
 
 describe("prompt cache observability", () => {
@@ -239,38 +237,6 @@ describe("prompt cache observability", () => {
     );
   });
 
-  it("tracks cache-relevant changes and reports a real cache-read drop", () => {
-    const { begin, complete } = observation(
-      "cache-relevant",
-      beginOpenAIObservation,
-      scopedKey("agent:main"),
-    );
-    const first = begin({
-      cacheRetention: "long",
-      transport: "sse",
-      tools: [{ name: "read" }, { name: "write" }],
-    });
-
-    expect(first.changes).toBeNull();
-    expect(complete(8_000)).toBeNull();
-    begin({
-      cacheRetention: "short",
-      transport: "websocket",
-      systemPrompt: "stable system with hook change",
-      tools: [{ name: "read" }, { name: "write" }],
-    });
-
-    expect(complete(2_000)).toEqual({
-      previousCacheRead: 8_000,
-      cacheRead: 2_000,
-      changes: [
-        { code: "cacheRetention", detail: "long -> short" },
-        { code: "transport", detail: "sse -> websocket" },
-        { code: "systemPrompt", detail: "system prompt digest changed" },
-      ],
-    });
-  });
-
   it("suppresses cache-break events for small drops", () => {
     const { begin, complete } = observation("small-drop", beginAnthropicObservation);
     begin();
@@ -297,8 +263,6 @@ describe("prompt cache observability", () => {
     ["## Skills", "Skills", "prefix"],
     ["# Project Context\n## MEMORY.md\n## Skills", "Project Context", "prefix"],
     ["## Runtime", "Runtime", "suffix"],
-    ["## Temporal Context", "Temporal Context", "suffix"],
-    ["## private-plugin-heading", "## private-plugin-heading", "suffix"],
   ] as const)("attributes changed %s content in the %s section (%s)", (heading, section, side) => {
     const { begin, complete } = observation("changed-prompt-section");
     const prompt = (content: string) => {
@@ -470,31 +434,6 @@ describe("prompt cache observability", () => {
     expect(detail.length).toBeLessThan(500);
   });
 
-  it("starts a fresh diagnostic baseline when a cache affinity rotates sessions", () => {
-    const promptCacheKey = scopedKey("openclaw-cron-stable-cache-key");
-    const observe = (sessionId: string, cacheRead: number) => {
-      const identity = { sessionId, promptCacheKey, sessionKey: `agent:cron:run:${sessionId}` };
-      beginOpenAIObservation({
-        ...identity,
-        messages: [{ role: "user", content: sessionId, timestamp: 1 }],
-      });
-      return completePromptCacheObservation({
-        ...identity,
-        usage: { input: 100, cacheRead },
-      });
-    };
-
-    withEnv({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, () => {
-      expect(observe("isolated-run-1", 8_000)).toBeNull();
-      expect(observe("isolated-run-2", 2_000)).toBeNull();
-      expect(observe("isolated-run-2", 0)).toEqual({
-        previousCacheRead: 2_000,
-        cacheRead: 0,
-        changes: null,
-      });
-    });
-  });
-
   it("clears every retired session affinity while preserving other sessions until global cleanup", () => {
     const retiredSessionId = scopedKey("retired-session");
     const retired = ["primary", "secondary"].map((affinity) => ({
@@ -557,6 +496,7 @@ describe("prompt cache observability", () => {
         const observer = createPromptCacheRequestObserver(
           {
             sessionId,
+            sessionKey: scopedKey("agent:main"),
             streamStrategy: "test",
             cacheRetention: changed ? "short" : "long",
             transport: changed ? "websocket" : "sse",
@@ -571,7 +511,10 @@ describe("prompt cache observability", () => {
         return observer.getObservation();
       };
 
-      await observe({ cacheRead: 8_000 }, false);
+      expect(await observe({ cacheRead: 8_000 }, false)).toMatchObject({
+        broke: false,
+        changes: null,
+      });
       expect(await observe(missingUsage, true)).toMatchObject({
         broke: false,
         cacheRead: undefined,

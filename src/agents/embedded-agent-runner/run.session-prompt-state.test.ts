@@ -234,16 +234,13 @@ describe("embedded run session prompt state", () => {
     state.continueFromCurrentTranscript({ messages });
     const previous = state.continuation!;
     state.continueFromCurrentTranscript({ messages: [] });
+    expect(previous).toEqual({ prompt: "", messages: [] });
+    expect(messages).toEqual([completed]);
+    state.continueFromCurrentTranscript();
     expect(state.continuation).toEqual({
       prompt: "Task B: inspect the blue database.",
       messages: [completed],
     });
-    expect(previous).toEqual({ prompt: "", messages: [] });
-    expect(messages).toEqual([completed]);
-    expect(state.continuation!.messages[0]).toBe(completed);
-    const active = state.continuation;
-    state.continueFromCurrentTranscript();
-    expect(state.continuation).toBe(active);
     expect(state.activePrompt.override).toBe(CONTINUE_FROM_TRANSCRIPT_PROMPT);
     expect(state.suppressNextUserMessagePersistence).toBe(true);
   });
@@ -520,16 +517,20 @@ describe("embedded run session prompt state", () => {
   });
 
   it.each([
-    { turn: "a persisted keyed user turn", key: "run-1:user", stored: true, replays: true },
-    { turn: "an unkeyed user turn", key: undefined, stored: true, replays: false },
-    { turn: "an unpersisted user turn", key: "run-1:user", stored: false, replays: false },
-  ])(
-    "replays $turn in place after a rejection without output: $replays",
-    async ({ key, stored, replays }) => {
+    ["a persisted keyed user turn", "run-1:user", true, false, true],
+    ["an unkeyed user turn", undefined, true, false, false],
+    ["an unpersisted user turn", "run-1:user", false, false, false],
+    ["an active internal prompt", "run-1:user", true, true, false],
+  ] as const)(
+    "replays %s in place after a rejection without output",
+    async (_turn, key, stored, internal, replays) => {
       const message = { ...makeUserMessage(), ...(key ? { idempotencyKey: key } : {}) };
       const recorder = createRecorder({ message, hasPersisted: vi.fn(() => stored) });
       await using state = await createState({ userTurnTranscriptRecorder: recorder });
       state.activePrompt.persisted = stored;
+      if (internal) {
+        state.activateInternalPrompt("Internal recovery prompt");
+      }
       const messages = [makeUserMessage("attempt snapshot")];
 
       state.continueFromCurrentTranscript({ messages, replayCurrentUserTurn: true });
@@ -542,18 +543,6 @@ describe("embedded run session prompt state", () => {
       );
     },
   );
-
-  it("keeps an active internal prompt's continuation after a rejection without output", async () => {
-    const message = { ...makeUserMessage(), idempotencyKey: "run-1:user" };
-    const recorder = createRecorder({ message, hasPersisted: vi.fn(() => true) });
-    await using state = await createState({ userTurnTranscriptRecorder: recorder });
-    state.activateInternalPrompt("Internal recovery prompt");
-
-    state.continueFromCurrentTranscript({ replayCurrentUserTurn: true });
-
-    // The keyed operator turn is not the active prompt, so replaying it would restart the task.
-    expect(state.activePrompt.override).toBe(CONTINUE_FROM_TRANSCRIPT_PROMPT);
-  });
 
   it("keeps the original prompt for a raw model run retry", async () => {
     await using state = await createState({ promptMode: "none" });

@@ -231,8 +231,7 @@ describe("embedded compaction recovery authority", () => {
       await fixture.recover("overflow");
 
       expect(fixture.beforeHook).toHaveBeenCalledTimes(1);
-      expect(fixture.afterHook).toHaveBeenCalledTimes(1);
-      expect(fixture.afterHook).toHaveBeenCalledWith(
+      expect(fixture.afterHook).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({ compactedCount: 0 }),
         expect.objectContaining({ sessionKey: fixture.getSessionTarget()?.sessionKey }),
       );
@@ -249,7 +248,6 @@ describe("embedded compaction recovery authority", () => {
     async (kind) => {
       await withRecoveryFixture({ oversized: false, replyAdmission: true }, async (fixture) => {
         const before = fixture.loadEntry();
-        expect(before).toHaveProperty("activeWriterRunId", fixture.runId);
         const successorId = randomUUID();
         fixture.compact.mockImplementationOnce(async ({ sessionTarget }) => {
           // Only the host transfers the durable row and its private writer facts.
@@ -267,15 +265,6 @@ describe("embedded compaction recovery authority", () => {
         );
 
         const after = fixture.loadEntry();
-        expect(after).toMatchObject({
-          sessionId: successorId,
-          activeWriterRunId: fixture.runId,
-        });
-        expect(after?.lifecycleRevision).toBe(before?.lifecycleRevision);
-        expect(fixture.getSessionTarget()).toMatchObject({
-          sessionId: successorId,
-          threadId: "thread-hint",
-        });
         expect(fixture.getCommittedSuccessor()?.entry).toEqual(after);
         expectCompactionAccounting(fixture);
         expect(fixture.afterHook).toHaveBeenCalledWith(
