@@ -11,7 +11,6 @@ function overview() {
   const base = createSystemAgentOverviewFixture();
   return {
     ...base,
-    config: { path: "/tmp/openclaw.json", exists: true, valid: true, issues: [], hash: "hash" },
     agents: [
       {
         id: "main",
@@ -24,10 +23,9 @@ function overview() {
     defaultModel: "openai/gpt-5.5",
     tools: {
       ...base.tools,
-      codex: { command: "codex", found: true, version: "codex 1.0.0" },
+      codex: { command: "codex", found: true },
       apiKeys: { openai: true, anthropic: false },
     },
-    gateway: { url: "ws://127.0.0.1:14567", source: "local loopback", reachable: false },
     references: {
       ...base.references,
       docsPath: "/tmp/openclaw/docs",

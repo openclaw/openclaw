@@ -12,16 +12,6 @@ afterEach(() => vi.restoreAllMocks());
 const runtime = {} as RuntimeEnv;
 const unavailable = { ok: false, status: "unavailable", error: "down" } as const;
 const success = (modelRef: string) => ({ ok: true, modelRef, latencyMs: 1, binding: {} }) as never;
-const config: OpenClawConfig = {
-  agents: {
-    defaults: { model: { primary: "zeta/model" }, systemAgent: { agentId: "requester" } },
-    entries: {
-      requester: { model: "zeta/model" },
-      beta: { model: "beta/model" },
-      alpha: { model: "alpha/model" },
-    },
-  },
-};
 function roster(ids: string[], systemAgent?: { agentId: string }): OpenClawConfig {
   return {
     agents: {
@@ -79,7 +69,7 @@ async function exercise(scenario: Scenario) {
   const result = await verifySystemAgentInferenceWithFallback({
     requestingAgentId: "requester",
     runtime,
-    config: scenario.config ?? config,
+    config: scenario.config ?? roster(["requester", "beta", "alpha"], { agentId: "requester" }),
   });
   expect(attempts).toEqual(scenario.attempts);
   if (scenario.checkSuccess !== false) {

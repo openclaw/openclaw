@@ -11,6 +11,7 @@ import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js"
 import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
 import * as probes from "./probes.js";
 import { activateSetupInference } from "./setup-inference-activate.js";
+import { createSystemAgentTestRuntime } from "./system-agent.runtime.test-support.js";
 
 // mock-isolation: Setup probes replace model I/O without loading the embedded runtime.
 vi.mock("../agents/embedded-agent.js", () => ({ runEmbeddedAgent: vi.fn() }));
@@ -21,26 +22,11 @@ let configPath: string;
 const nativeReadSnapshot = readConfigFileSnapshot;
 const readSnapshot = () => nativeReadSnapshot({ observe: false, pluginValidation: "core-only" });
 
-async function routeFor(
-  primary: string,
-  provider: string,
-  models?: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["models"],
-) {
-  const config = {
-    agents: { defaults: { model: { primary }, ...(models ? { models } : {}) } },
-    models: { providers: { [provider]: { apiKey: `synthetic-${provider}-key` } } },
-  };
+async function saveConfig(config: OpenClawConfig) {
   await fs.writeFile(configPath, JSON.stringify(config));
   const snapshot = await readSnapshot();
   expect(snapshot.valid, JSON.stringify(snapshot.issues)).toBe(true);
-  const route = await resolveSystemAgentConfiguredRouteFromConfig(
-    snapshot.runtimeConfig,
-    undefined,
-    {},
-    snapshot,
-  );
-  expect(route).not.toBeNull();
-  return route!.modelLabel;
+  return snapshot;
 }
 
 beforeEach(async () => {
@@ -64,37 +50,32 @@ it.each([
 ] as const)(
   "resolves %s to its canonical route label",
   async (primary, provider, expected, models) => {
-    expect(await routeFor(primary, provider, models)).toBe(expected);
+    const snapshot = await saveConfig({
+      agents: { defaults: { model: { primary }, ...(models ? { models } : {}) } },
+      models: { providers: { [provider]: { apiKey: `synthetic-${provider}-key` } } },
+    });
+    const route = await resolveSystemAgentConfiguredRouteFromConfig(
+      snapshot.runtimeConfig,
+      undefined,
+      {},
+      snapshot,
+    );
+    expect(route?.modelLabel).toBe(expected);
   },
 );
 
 it.each([
-  {
-    name: "a saved openrouter/auto primary",
-    primary: "openrouter/auto",
-    expected: "openrouter/auto",
-  },
-  {
-    name: "a saved primary with its auth-profile suffix",
-    primary: "openrouter/auto@openrouter:default",
-    expected: "openrouter/auto",
-  },
-  {
-    name: "a literal Fusion catalog namespace",
-    primary: "openrouter/openrouter/fusion",
-    expected: "openrouter/openrouter/fusion",
-  },
+  ["openrouter/auto", "openrouter/auto"],
+  ["openrouter/auto@openrouter:default", "openrouter/auto"],
+  ["openrouter/openrouter/fusion", "openrouter/openrouter/fusion"],
 ])(
-  "activates the discovered Current model for $name without a changed-model rejection",
-  async ({ primary, expected }) => {
+  "activates the discovered Current model for %s without a changed-model rejection",
+  async (primary, expected) => {
     // Discovery and activation must agree, including literal catalog namespaces.
-    const config = {
+    const snapshot = await saveConfig({
       agents: { defaults: { model: { primary } }, entries: { main: {} } },
       models: { providers: { openrouter: { apiKey: "synthetic-openrouter-key" } } },
-    };
-    await fs.writeFile(configPath, JSON.stringify(config));
-    const snapshot = await readSnapshot();
-    expect(snapshot.valid, JSON.stringify(snapshot.issues)).toBe(true);
+    });
 
     vi.spyOn(probes, "probeLocalCommand").mockImplementation(async (command) => ({
       found: false,
@@ -129,13 +110,7 @@ it.each([
       kind: "existing-model",
       modelRef: discovered?.modelRef,
       surface: "gateway",
-      runtime: {
-        log() {},
-        error() {},
-        exit() {
-          throw new Error("Unexpected exit");
-        },
-      },
+      runtime: createSystemAgentTestRuntime().runtime,
     });
     if (!result.ok) {
       expect(result.error).not.toContain("configured default model changed");

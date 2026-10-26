@@ -139,31 +139,23 @@ describe("classifySystemAgentApprovalIntent", () => {
     expect(deps.complete).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    ["no usable model", () => ({ error: "no model" })],
+    ["different auth owner", () => preparedModel(sharedVerifiedInference, "openai:p1")],
+    [
+      "rotated credential",
+      () => preparedModel(sharedVerifiedInference, "openai:p2", "different-p2-owner"),
+    ],
+  ] as const)("rejects preparation with %s before completion", async (_name, prepare) => {
+    const deps = completionDeps();
+    deps.acquire.mockResolvedValueOnce(prepare());
+    await expect(classify()).resolves.toBe("other");
+    expect(deps.complete).not.toHaveBeenCalled();
+  });
+
   it("fails closed to other on unexpected model output", async () => {
     completionDeps("I think the user probably agrees");
     await expect(classify(sharedVerifiedInference, "hmm alright I guess?")).resolves.toBe("other");
-  });
-
-  it("fails closed to other when no model is usable", async () => {
-    const deps = completionDeps();
-    deps.acquire.mockResolvedValueOnce({ error: "no model" });
-    await expect(classify(sharedVerifiedInference)).resolves.toBe("other");
-  });
-
-  it("rejects a prepared auth owner that differs from the verified profile", async () => {
-    const deps = completionDeps();
-    deps.acquire.mockResolvedValueOnce(preparedModel(sharedVerifiedInference, "openai:p1"));
-    await expect(classify()).resolves.toBe("other");
-    expect(deps.complete).not.toHaveBeenCalled();
-  });
-
-  it("rejects a same-profile credential rotation during preparation", async () => {
-    const deps = completionDeps();
-    deps.acquire.mockResolvedValueOnce(
-      preparedModel(sharedVerifiedInference, "openai:p2", "different-p2-owner"),
-    );
-    await expect(classify()).resolves.toBe("other");
-    expect(deps.complete).not.toHaveBeenCalled();
   });
 
   it("keeps ambiguous CLI approvals on the exact-text path", async () => {
