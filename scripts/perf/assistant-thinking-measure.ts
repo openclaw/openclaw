@@ -8,6 +8,7 @@
  * embedded-agent-subscribe.* filenames, plus embedded-agent-utils.ts.
  * Omit it for the checkout's owners.
  * --single-block also checks the previously optimized one-block stream.
+ * --serialize consumes every cumulative event as JSON, including rope flattening.
  * Imports and warmup are excluded; subscription/fixture setup is included.
  * A win reduces owner
  * allocation/CPU with identical emitted summaries/deltas and untouched content.
@@ -29,6 +30,7 @@ const { values } = parseArgs({
   options: {
     "owner-dir": { type: "string" },
     "single-block": { type: "boolean", default: false },
+    serialize: { type: "boolean", default: false },
     ready: { type: "string" },
     start: { type: "string" },
     mode: { type: "string", default: "timing" },
@@ -74,6 +76,7 @@ const summaries = values["single-block"]
 const prefix = summaries.length ? summaries.join("\n") + "\n" : "";
 const expected = prefix + delta.repeat(chunks);
 let observedEvents = 0;
+let serializedBytes = 0;
 async function round(count = chunks) {
   let emit: ((event: AgentSessionEvent) => void) | undefined;
   const session = {
@@ -106,6 +109,9 @@ async function round(count = chunks) {
   const off = onAgentEventForRun(runId, (event) => {
     if (event.stream !== "thinking") {
       return;
+    }
+    if (values.serialize) {
+      serializedBytes += JSON.stringify(event.data).length;
     }
     finalText = event.data.text;
     const emittedDelta = event.data.delta;
@@ -144,6 +150,7 @@ async function round(count = chunks) {
   }
 }
 await round(64);
+serializedBytes = 0;
 globalThis.gc?.();
 if (values.ready && values.start) {
   writeFileSync(values.ready, "ready");
@@ -217,6 +224,7 @@ console.log(
   JSON.stringify({
     mode: values.mode,
     singleBlock: values["single-block"],
+    serializedBytes,
     sourceHash: createHash("sha256")
       .update(owners.map((owner) => owner.source).join("\n"))
       .digest("hex"),
