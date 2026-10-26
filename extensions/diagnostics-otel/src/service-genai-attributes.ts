@@ -118,7 +118,10 @@ function assignModelUsageAttrs(
     ["openclaw.model_call.usage.output_tokens", usage.output],
     ["openclaw.model_call.usage.cache_read_input_tokens", usage.cacheRead],
     ["openclaw.model_call.usage.cache_creation_input_tokens", usage.cacheWrite],
-    // Generic consumers add usage buckets, so TTL subsets stay OpenClaw-specific.
+    // Reported TTL buckets export verbatim on both usage vocabularies: the
+    // OpenClaw keys keep vendor-neutral tooling complete, and the generic
+    // flat keys let usage-type-pricing consumers price each bucket at its own
+    // rate. Both are decompositions of the blended total, never additive.
     ["openclaw.model_call.usage.cache_creation_input_tokens_1h", usage.cacheWrite1h],
     ["openclaw.model_call.usage.cache_creation_input_tokens_5m", usage.cacheWrite5m],
     ["openclaw.model_call.usage.reasoning_output_tokens", usage.reasoningTokens],
@@ -128,6 +131,8 @@ function assignModelUsageAttrs(
     ["gen_ai.usage.output_tokens", usage.output],
     ["gen_ai.usage.cache_read.input_tokens", usage.cacheRead],
     ["gen_ai.usage.cache_creation.input_tokens", usage.cacheWrite],
+    ["gen_ai.usage.input_cache_creation_1h", usage.cacheWrite1h],
+    ["gen_ai.usage.input_cache_creation_5m", usage.cacheWrite5m],
   ] as const) {
     const normalized = asNonNegativeFiniteNumber(value);
     if (normalized !== undefined) {
