@@ -1,18 +1,19 @@
 import assert from "node:assert/strict";
-import { createServer, type RequestListener, type Server } from "node:http";
+import { createServer, type RequestListener, type Server, type ServerResponse } from "node:http";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { createSearxngWebSearchProvider } from "./searxng-search-provider.js";
 
 let server: Server, baseUrl: string, requests: number, respond: RequestListener;
+const makeResult = (id: string | number) => ({ title: "Result", url: `https://example.com/${id}` });
+function sendResults(response: ServerResponse, ids: (string | number)[] = [requests]) {
+  response.writeHead(200, { "Content-Type": "application/json" });
+  response.end(JSON.stringify({ results: ids.map(makeResult) }));
+}
 beforeEach(async () => {
   requests = 0;
-  respond = (_request, response) => {
-    const results = [{ title: "Result", url: `https://example.com/${requests}` }];
-    response.writeHead(200, { "Content-Type": "application/json" });
-    response.end(JSON.stringify({ results }));
-  };
+  respond = (_request, response) => sendResults(response);
   server = createServer((request, response) => {
     requests++;
     respond(request, response);
@@ -91,17 +92,7 @@ it("aborts a provider's stalled response body and closes the request", async () 
 });
 
 it("keeps configured and explicit result counts separate in the cache", async () => {
-  respond = (_request, response) => {
-    response.setHeader("Content-Type", "application/json");
-    response.end(
-      JSON.stringify({
-        results: [1, 2, 3, 4].map((id) => ({
-          title: `Result ${id}`,
-          url: `https://example.com/${id}`,
-        })),
-      }),
-    );
-  };
+  respond = (_request, response) => sendResults(response, [1, 2, 3, 4]);
   const args = { query: "configured count" };
   const one = await createTool(15, { maxResults: 1 }).execute(args);
   expect(one.results).toHaveLength(1);
@@ -120,12 +111,7 @@ it("aborts at the configured deadline but permits a longer configured timeout", 
   const closed = Promise.withResolvers<void>();
   respond = (_request, response) => {
     // Exercise the native HTTP/AbortSignal deadline; fake timers do not drive socket I/O.
-    const timer = setTimeout(() => {
-      response.setHeader("Content-Type", "application/json");
-      response.end(
-        JSON.stringify({ results: [{ title: "Result", url: "https://example.com/ok" }] }),
-      );
-    }, 2_000);
+    const timer = setTimeout(() => sendResults(response, ["ok"]), 2_000);
     response.once("close", () => {
       clearTimeout(timer);
       closed.resolve();

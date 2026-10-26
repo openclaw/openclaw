@@ -39,6 +39,10 @@ function row(path: string, fields: Record<string, unknown> = {}) {
   return { title: path, url: `https://example.com/${path}`, ...fields };
 }
 
+function envConfig(provider = "default") {
+  return searchConfig({ source: "env", provider, id: "SEARXNG_BASE_URL" });
+}
+
 it("builds the request URL from plugin config", async () => {
   const fetch = mockFetch([]);
   await search({ config: searchConfig(`${baseUrl}/search/`, "general,news", "en") });
@@ -47,26 +51,17 @@ it("builds the request URL from plugin config", async () => {
 });
 
 it.each([
-  {
-    source: "allowed env ref",
-    endpoint: "http://localhost:8888/",
-    target: "http://localhost:8888",
+  ["allowed env ref", "http://localhost:8888/", "http://localhost:8888", envConfig()],
+  ["ambient env", "https://search.local/searxng///", "https://search.local/searxng", {}],
+] as const)(
+  "normalizes the %s endpoint in the request",
+  async (_source, endpoint, target, config) => {
+    vi.stubEnv("SEARXNG_BASE_URL", endpoint);
+    const fetch = mockFetch([]);
+    await search({ config });
+    expectRequests(fetch, `${target}/search?q=openclaw&format=json`);
   },
-  {
-    source: "ambient env",
-    endpoint: "https://search.local/searxng///",
-    target: "https://search.local/searxng",
-  },
-])("normalizes the $source endpoint in the request", async ({ source, endpoint, target }) => {
-  vi.stubEnv("SEARXNG_BASE_URL", endpoint);
-  const fetch = mockFetch([]);
-  const config =
-    source === "allowed env ref"
-      ? searchConfig({ source: "env", provider: "default", id: "SEARXNG_BASE_URL" })
-      : {};
-  await search({ config });
-  expectRequests(fetch, `${target}/search?q=openclaw&format=json`);
-});
+);
 
 it.each(["missing endpoint", "blocked explicit ref"])(
   "rejects %s before requesting",
@@ -76,7 +71,7 @@ it.each(["missing endpoint", "blocked explicit ref"])(
       source === "missing endpoint"
         ? {}
         : {
-            ...searchConfig({ source: "env", provider: "restricted", id: "SEARXNG_BASE_URL" }),
+            ...envConfig("restricted"),
             secrets: { providers: { restricted: { source: "env", allowlist: [] } } },
           };
     const fetch = mockFetch([]);
