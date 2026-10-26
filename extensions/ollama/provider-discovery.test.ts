@@ -33,7 +33,7 @@ describe("Ollama provider", () => {
       .map(([, init]) => new Headers(init?.headers).get("authorization"));
 
   async function runOllamaCatalog({ provider, env: overrides, ...context }: CatalogOptions) {
-    const env = { ...process.env, VITEST: "1", NODE_ENV: "test", ...overrides };
+    const env: NodeJS.ProcessEnv = { ...process.env, VITEST: "1", NODE_ENV: "test", ...overrides };
     const apiKey = env.OLLAMA_API_KEY?.trim() ? env.OLLAMA_API_KEY : undefined;
     const result = await ollamaProviderDiscovery.catalog.run({
       config: provider ? { models: { providers: { ollama: provider } } } : {},

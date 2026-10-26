@@ -1,12 +1,16 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import * as approvals from "./page-operations.ts";
 
 const request = vi.fn<(method: string, params?: unknown) => Promise<unknown>>();
 let state: ReturnType<typeof approvals.createInitialDevicesState>;
 beforeEach(() => {
   request.mockReset();
-  state = approvals.createInitialDevicesState({ client: { request }, connected: true });
+  state = approvals.createInitialDevicesState({
+    client: createTestGatewayClient(request),
+    connected: true,
+  });
 });
 const snapshot = (file: unknown = {}, hash = "original", path = "/synthetic/approvals") => ({
   path,

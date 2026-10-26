@@ -33,7 +33,7 @@ function installRuntime(
           channelId: "imessage",
           stateDir: options?.stateDir ?? env.OPENCLAW_STATE_DIR,
         }),
-      openKeyedStoreV2: <T>(options) => {
+      openKeyedStoreV2: <T>(options: Parameters<PluginRuntime["state"]["openKeyedStoreV2"]>[0]) => {
         if (failStores) {
           return failStore();
         }
