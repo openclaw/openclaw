@@ -4,12 +4,12 @@ import type {
   SessionActorOperations,
 } from "./session-actor-contract.js";
 
-/** Admission carries authority and receipt identity, not the resident transcript indexes. */
+/** Admission carries entry policy and its target; replica revisions stay in commands and receipts. */
 export function projectSessionActorAuthority(
   state: SessionActorAuthorityFacts,
 ): SessionActorAuthorityFacts {
-  const { target, version, writeToken, dependencySessionIds, entry } = state;
-  return { target, version, writeToken, dependencySessionIds, entry };
+  const { target, entry } = state;
+  return { target, entry };
 }
 
 export function isSessionActorCommand(command: {

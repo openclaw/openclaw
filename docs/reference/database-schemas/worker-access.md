@@ -2198,8 +2198,9 @@ facts from the actor's replica. Message payload hydration, admitted-user role
 validation, and cold or off-path history retain bounded reads; transcript metadata
 does not stand in for message contents.
 
-Host admission carries the session entry and physical/version identity rather
-than transcript indexes, retry keys, or context membership. Mutable policy callbacks
+Worker admission carries the session entry and physical/session target. Expected-version
+checks stay in commands; replica versions, write tokens, and dependency IDs remain in
+read results and committed receipts. Mutable policy callbacks
 receive their own copy; full snapshots stay in read results and committed receipts.
 An append shares the actor's transaction admission and final commit grant. Explicit
 fresh-message and pending-input checks retain their effect boundaries; the final
