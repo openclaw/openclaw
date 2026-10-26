@@ -215,6 +215,7 @@ const repositoryScriptEntries = [
   "scripts/perf/codex-inference-terminal-measure.ts!",
   "scripts/perf/codex-inference-upload-measure.ts!",
   "scripts/perf/codex-tool-report-measure.ts!",
+  "scripts/perf/codex-config-parse-measure.ts!",
   "scripts/perf/failed-placement-recovery-bench.ts!",
   "scripts/perf/provider-prompt-state-worker-measure.mjs!",
   "scripts/perf/session-diff-metadata-measure.ts!",
