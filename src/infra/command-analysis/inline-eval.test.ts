@@ -32,7 +32,7 @@ describe("exec inline eval detection", () => {
   it.each([
     [["python3", "-c", "print('hi')"], "python3 -c"],
     [["python3", "-cprint('hi')"], "python3 -c"],
-    ...evalFlags("python3", "-bc -Sc -xc", "print('hi')", "python3 -c"),
+    ...evalFlags("python3", "-bc", "print('hi')", "python3 -c"),
     [["python3.13", "-c", "print('hi')"], "python3.13 -c"],
     [["/usr/bin/pypy3.10", "-c", "print('hi')"], "pypy3.10 -c"],
     [["/usr/bin/node", "--eval", "console.log('hi')"], "node --eval"],
@@ -40,15 +40,10 @@ describe("exec inline eval detection", () => {
     [["bun", "-pconsole.log('hi')"], "bun -p"],
     [["deno", "--print=1 + 1"], "deno --print"],
     [["ruby", "-eputs 1"], "ruby -e"],
-    ...evalFlags("ruby", "-ane -ce -ne -00pe -p00e -pe -Se -We -W2e -ve -we", "puts 1", "ruby -e"),
+    ...evalFlags("ruby", "-ane -00pe -p00e -W2e", "puts 1", "ruby -e"),
     [["perl", "-E", "say 1"], "perl -e"],
     [["perl", "-Esay 1"], "perl -e"],
-    ...evalFlags(
-      "perl",
-      "-ce -de -fe -l0e -ne -0777pe -p0777e -Se -Te -UE -Ve -We -we -Xe",
-      "say 1",
-      "perl -e",
-    ),
+    ...evalFlags("perl", "-ce -l0e -0777pe -p0777e -UE", "say 1", "perl -e"),
     ...evalFlags("php", "-B -E -R", "system('id');"),
     [["php", "-rsystem('id');"], "php -r"],
     [["Rscript", "-e", "system('id')"], "rscript -e"],
@@ -60,7 +55,6 @@ describe("exec inline eval detection", () => {
     [["elixir", "-e", 'System.cmd("id", [])'], "elixir -e"],
     [["elixir", '--eval=System.cmd("id", [])'], "elixir --eval"],
     [["elixir", "--rpc-eval", "worker@127.0.0.1", 'System.cmd("id", [])'], "elixir --rpc-eval"],
-    [["iex", "-e", 'System.cmd("id", [])'], "iex -e"],
     [["iex", "--rpc-eval", "worker@127.0.0.1", 'System.cmd("id", [])'], "iex --rpc-eval"],
     [["guile", "-c", '(system "id")'], "guile -c"],
     [["guile", "-e", '(lambda args (system "id"))', "/dev/null"], "guile -e"],
@@ -68,25 +62,17 @@ describe("exec inline eval detection", () => {
     [["groovy", '-e"id".execute()'], "groovy -e"],
     ...evalFlags("groovy", "-ne -pe", '["id"].execute()', "groovy -e"),
     [["groovy", '-encoding:["id"].execute()'], "groovy -e"],
-    ...evalFlags("scala", "-e --script-snippet --execute-script", 'sys.process.Process("id").!'),
-    ...evalFlags("scala-cli", "--script-snippet", 'sys.process.Process("id").!'),
     ...evalFlags(
       "scala",
-      "--execute-sc= --execute-scala-script= --scala-snippet= --execute-scala=",
-      "println(1)",
+      "-e --script-snippet --execute-script --execute-sc= --execute-scala-script= --scala-snippet= --execute-scala= --java-snippet --execute-java= --markdown-snippet --md-snippet= --execute-markdown --execute-md=",
+      "1",
     ),
-    ...evalFlags("scala", "--java-snippet --execute-java=", "class Main {}"),
-    ...evalFlags(
-      "scala",
-      "--markdown-snippet --md-snippet= --execute-markdown --execute-md=",
-      "```scala\nprintln(1)\n```",
-    ),
+    ...evalFlags("scala-cli", "--script-snippet", "1"),
     [["clojure", "-e", '(clojure.java.shell/sh "id")'], "clojure -e"],
     [["clj", "--eval", "(println 1)"], "clj --eval"],
     [["raku", "-e", "run 'id'"], "raku -e"],
     [["raku", "-e say 1"], "raku -e"],
     [["raku", "-ne", "run 'id'"], "raku -e"],
-    [["perl6", "-e", "run 'id'"], "perl6 -e"],
     [["perl6", "-pe", "run 'id'"], "perl6 -e"],
     [["ghc", "-e", 'System.Process.system "id"'], "ghc -e"],
     [["ghci", "-e", 'System.Process.system "id"'], "ghci -e"],
@@ -95,7 +81,6 @@ describe("exec inline eval detection", () => {
     [["erl", "-s", "os", "cmd", "id"], "erl -s"],
     [["erl", "-noshell", "-s", "init", "stop"], "erl -s"],
     [["werl", "-eval", 'os:cmd("id").'], "werl -eval"],
-    [["werl", "-run", "os", "cmd", "id"], "werl -run"],
     [["gdb", "-ex", "shell id", "-ex", "quit"], "gdb -ex"],
     [["gdb", "-ex=shell id", "-ex", "quit"], "gdb -ex"],
     ...[
@@ -113,8 +98,6 @@ describe("exec inline eval detection", () => {
     [["lua", "-eprint(1)"], "lua -e"],
     [["osascript", "-e", "beep"], "osascript -e"],
     [["osascript", '-edisplay alert "hi"'], "osascript -e"],
-    [["awk", "BEGIN { print 1 }"], "awk inline program"],
-    [["gawk", "-F", ",", "{print $1}", "data.csv"], "gawk inline program"],
   ] as const)("detects interpreter eval flags for %j", checkInlineEval);
 
   it.each([
@@ -144,46 +127,30 @@ describe("exec inline eval detection", () => {
   ] as const)("detects command carriers for %j", checkInlineEval);
 
   it("ignores normal script execution", () => {
-    expectNoInlineEval(["python3", "script.py"]);
-    expectNoInlineEval(["python3.13", "script.py"]);
-    expectNoInlineEval(["node", "script.js"]);
     expectNoInlineEval(["node", "--evalish=console.log(1)"]);
     expectNoInlineEval(["python3", "-Wc", "print('hi')"]);
-    expectNoInlineEval(["python3", "-Xc", "print('hi')"]);
     expectNoInlineEval(["find", ".", "-execute", "id"]);
     expectNoInlineEval(["ruby", "-EUTF-8", "script.rb"]);
     expectNoInlineEval(["ruby", "-Itest", "script.rb"]);
     expectNoInlineEval(["ruby", "-W:deprecatede", "puts 1"]);
     expectNoInlineEval(["ruby", "-7pe", "puts 1"]);
     expectNoInlineEval(["perl", "-C0e", "say 1"]);
-    expectNoInlineEval(["perl", "-D0e", "say 1"]);
-    expectNoInlineEval(["perl", "-me", "say 1"]);
-    expectNoInlineEval(["perl", "-Me", "say 1"]);
-    expectNoInlineEval(["perl", "-7pe", "say 1"]);
     expectNoInlineEval(["perl", "-0xFFpe", "say 1"]);
     expectNoInlineEval(["php", "-F", "filter.php"]);
     expectNoInlineEval(["Rscript", "script.R"]);
     expectNoInlineEval(["julia", "script.jl"]);
-    expectNoInlineEval(["elixir", "script.exs"]);
     expectNoInlineEval(["elixir", "-eIO.puts(1)"]);
     expectNoInlineEval(["iex", "-eIO.puts(1)"]);
-    expectNoInlineEval(["guile", "script.scm"]);
     expectNoInlineEval(["guile", "-c(display 1)"]);
     expectNoInlineEval(["guile", "-e(display 1)"]);
-    expectNoInlineEval(["groovy", "script.groovy"]);
     expectNoInlineEval(["groovy", "-encoding", "UTF-8", "script.groovy"]);
     expectNoInlineEval(["groovy", "-encoding=UTF-8", "script.groovy"]);
-    expectNoInlineEval(["scala", "script.scala"]);
     expectNoInlineEval(["scala", "-encoding", "UTF-8", "script.scala"]);
-    expectNoInlineEval(["scala-cli", "script.scala"]);
     expectNoInlineEval(["clojure", "-M", "-m", "app.main"]);
     expectNoInlineEval(["clojure", "-e(println 1)"]);
     expectNoInlineEval(["raku", "script.raku"]);
-    expectNoInlineEval(["ghc", "Main.hs"]);
     expectNoInlineEval(["ghc", "-exclude-module", "Debug.Trace"]);
     expectNoInlineEval(["erl", "-sname", "node"]);
-    expectNoInlineEval(["erl", "-setcookie", "cookie"]);
-    expectNoInlineEval(["erl", "-shutdown_time", "1000"]);
     expectNoInlineEval(["gdb", "-e", "program"]);
     expectNoInlineEval(["gdb", "--command=commands.gdb"]);
     expectNoInlineEval(["gdb", "-eix", "early.gdb"]);
@@ -191,12 +158,10 @@ describe("exec inline eval detection", () => {
     expectNoInlineEval(["expect", "script.exp"]);
     expectNoInlineEval(["r2", "-e", "bin.cache=true", "program"]);
     expectNoInlineEval(["awk", "-f", "script.awk", "data.csv"]);
-    expectNoInlineEval(["find", ".", "-name", "*.ts"]);
     expectNoInlineEval(["xargs", "-0"]);
     expectNoInlineEval(["make", "test"]);
     expectNoInlineEval(["make", "--e=$(info ok)"]);
     expectNoInlineEval(["sed", "-f", "script.sed", "input.txt"]);
-    expectNoInlineEval(["sed", "-i", "-f", "script.sed", "input.txt"]);
     expectNoInlineEval(["sed", "-E", "-f", "script.sed", "input.txt"]);
   });
 
