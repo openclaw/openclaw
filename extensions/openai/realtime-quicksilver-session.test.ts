@@ -25,10 +25,10 @@ import {
 const OPAQUE_REALTIME_MODEL = "gpt-live-test-canary";
 const emptyCounts = { pending: 0, inFlight: 0, active: 0, reservations: 0 };
 const oauth = { type: "oauth", token: "synthetic-oauth", accountId: "synthetic-account" } as const;
-function delegation(id: string, text: string) {
+function delegation(id: string, text: string, target = "client") {
   return {
     type: "delegation.created",
-    item: { type: "delegation", target: "client", id, content: [{ type: "input_text", text }] },
+    item: { type: "delegation", target, id, content: [{ type: "input_text", text }] },
   };
 }
 type SessionRequest = Parameters<Broker["broker"]["createBrowserSession"]>[0];
@@ -243,23 +243,13 @@ describe("GPT-Live offer broker", () => {
       socketFactory: () => {
         const socket = new FakeSocket("manual");
         queueMicrotask(() => {
-          emitSideband(socket, {
-            type: "delegation.created",
-            item: { type: "delegation", target: "server", id: "server", content: [] },
-          });
-          emitSideband(socket, {
-            type: "delegation.created",
-            item: {
-              type: "delegation",
-              target: "client",
-              id: "early-delegation",
-              content: [
-                { type: "input_text", text: "early " },
-                { type: "output_text", text: "ignored" },
-                { type: "input_text", text: "task" },
-              ],
-            },
-          });
+          emitSideband(socket, delegation("server", "ignored", "server"));
+          const early = delegation("early-delegation", "early ");
+          early.item.content.push(
+            { type: "output_text", text: "ignored" },
+            { type: "input_text", text: "task" },
+          );
+          emitSideband(socket, early);
           socket.readyState = 1;
           socket.emit("open");
         });
