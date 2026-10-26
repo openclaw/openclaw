@@ -795,6 +795,11 @@ memory, so do not add those values together. Other direct workers use native hea
 statistics and leave ArrayBuffer bytes unavailable. Nested workers are outside
 the parent registry's coverage.
 
+Worker script labels come from the runtime entrypoint manifest. Source and sealed
+entrypoints use their canonical built names; unknown dependency workers and eval
+sources remain `other`. Knowledge registry and storage workers participate in the
+same census, labeled `registry-worker.js` and `storage-worker.js`.
+
 The prepared-model catalog worker also reports `workerHeaps[].retainedData`: bounded, size-only
 censuses with fixed structure labels, entry counts, approximate bytes, and
 aggregate generation, provider, and account counts where applicable. They never
