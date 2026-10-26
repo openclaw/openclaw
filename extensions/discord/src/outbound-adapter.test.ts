@@ -716,3 +716,20 @@ it("uses a single implicit reply for chunked approval payload fallbacks", async 
     sendMessage.mock.calls.map((call) => (call[2] as { reply?: unknown } | undefined)?.reply),
   ).toEqual([{ messageId: "reply-1", scope: "first" }, undefined]);
 });
+
+it("forwards the delivery abort signal to text, media and voice sends", async () => {
+  const signal = new AbortController().signal;
+
+  await outbound.sendText?.({ ...sendContext(), text: "hello", signal });
+  await outbound.sendMedia?.({ ...sendContext(), mediaUrl: "./pic.png", signal });
+  await outbound.sendMedia?.({
+    ...sendContext(),
+    mediaUrl: "./voice.ogg",
+    audioAsVoice: true,
+    signal,
+  });
+
+  expect(mockObjectArg(sendMessage, 0).signal).toBe(signal);
+  expect(mockObjectArg(sendMessage, 1).signal).toBe(signal);
+  expect(mockObjectArg(sendVoice).signal).toBe(signal);
+});

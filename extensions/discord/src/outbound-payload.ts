@@ -79,6 +79,7 @@ async function createDiscordOutboundSendContext(ctx: DiscordOutboundContext) {
   const common = {
     accountId: ctx.accountId ?? undefined,
     silent: ctx.silent ?? undefined,
+    signal: ctx.signal,
     cfg: ctx.cfg,
     onPlatformSendDispatch: delivery.onPlatformSendDispatch,
     assertPlatformSendAuthorized: delivery.assertPlatformSendAuthorized,
