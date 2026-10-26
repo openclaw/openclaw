@@ -46,6 +46,8 @@ const authResult = (apiKey?: string, headers?: Record<string, string | null>) =>
   apiKey,
   headers,
 });
+const apiKeyAuth = (provider: string, key: string) =>
+  AuthStorage.inMemory({ [provider]: { type: "api_key", key } });
 const capturedRegistry = (
   providers: Record<string, unknown> | null,
   auth = AuthStorage.inMemory(),
@@ -343,7 +345,7 @@ describe("ModelRegistry", () => {
     const registry = createRegistry(
       modelsPath,
       { pluginMetadataSnapshot: ownerSnapshot("fixture") },
-      AuthStorage.inMemory({ fixture: { type: "api_key", key: "fixture-key" } }),
+      apiKeyAuth("fixture", "fixture-key"),
     );
     expect(registry.find("fixture", "mixed")?.input).toEqual(["text", "image"]);
     expect(registry.find("fixture", "unsupported")).toBeUndefined();
@@ -385,11 +387,7 @@ describe("ModelRegistry", () => {
       pluginRelativePath: join("plugins", "zai", PLUGIN_MODEL_CATALOG_FILE),
       pluginCatalog: generated ? catalog({ zai }) : { providers: { zai } },
     });
-    const registry = createRegistry(
-      modelsPath,
-      options,
-      AuthStorage.inMemory({ zai: { type: "api_key", key: "sk-test" } }),
-    );
+    const registry = createRegistry(modelsPath, options, apiKeyAuth("zai", "sk-test"));
 
     expect(registry.getError()).toBeUndefined();
     expect(registry.find("zai", "glm-5.1")).toBeUndefined();
@@ -806,8 +804,7 @@ describe("ModelRegistry source composition", () => {
       maxTokens: 4096,
       maxTokensSource: "discovered",
     });
-    const fork = (key: string) =>
-      registry.fork(AuthStorage.inMemory({ [provider]: { type: "api_key", key } }));
+    const fork = (key: string) => registry.fork(apiKeyAuth(provider, key));
     const first = fork("first-request-key");
     const second = fork("second-request-key");
     first.refresh();
@@ -833,9 +830,9 @@ describe("ModelRegistry no-auth", () => {
     inlineKey?: boolean;
     authorization?: string;
   }) {
-    const authStorage = AuthStorage.inMemory(
-      params.storedKey ? { custom: { type: "api_key", key: "stored-key" } } : {},
-    );
+    const authStorage = params.storedKey
+      ? apiKeyAuth("custom", "stored-key")
+      : AuthStorage.inMemory();
     const getApiKey = vi.spyOn(authStorage, "getApiKey");
     const provider = providerConfig(
       [

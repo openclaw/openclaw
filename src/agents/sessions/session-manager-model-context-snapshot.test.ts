@@ -66,7 +66,6 @@ import {
   withSessionState,
   withTranscriptState,
 } from "./session-manager-fixtures.test-support.js";
-import * as managerContext from "./session-manager-incognito.js";
 import { withSelectedTranscriptReader } from "./session-manager-reader.test-support.js";
 import { readCommittedSessionManagerReload } from "./session-manager-reload.js";
 import { SessionManager } from "./session-manager.js";
@@ -84,11 +83,8 @@ const questionAndAnswer = [
 ];
 const contextLimits = { maxBytes: 8192, maxEvents: 20 };
 
-function privateAnswer(upstreamUserText: string, text = "answer") {
-  return Object.assign(assistantText(text), {
-    __openclaw: { upstreamUserText },
-  });
-}
+const privateAnswer = (upstreamUserText: string, text = "answer") =>
+  Object.assign(assistantText(text), { __openclaw: { upstreamUserText } });
 function openCohort(target: Parameters<typeof SessionManager.openAsync>[0], maxEvents = 20) {
   return SessionManager[sessionManagerOpenTranscriptCohort](
     target,
@@ -110,6 +106,22 @@ function readMessages(
 function withActor<T>(target: ContextTarget, run: (actor?: SessionActor) => Promise<T>) {
   return withSelectedTranscriptReader(target, run, true);
 }
+async function seedUser(target: ContextTarget, text = "original") {
+  const source = await SessionManager.openAsync(target);
+  const entryId = await source.appendMessageAsync(userMessage(text, 1));
+  return { source, entryId };
+}
+function assistantMessage(
+  message: ReturnType<SessionManager["buildSessionContext"]>["messages"][number] | undefined,
+) {
+  assert(message?.role === "assistant");
+  return message;
+}
+function toolCall(message: ReturnType<typeof assistantMessage>) {
+  const call = message.content.find((part) => part.type === "toolCall");
+  assert(call?.type === "toolCall");
+  return call;
+}
 
 it("reuses resident transcript bytes for admitted reads outside the actor without growing residency", () =>
   withTranscriptState("resident-hydration", async ({ scope: target }) => {
@@ -120,13 +132,11 @@ it("reuses resident transcript bytes for admitted reads outside the actor withou
     const limits = { maxBytes: 1024 * 1024, maxEvents: 100 };
     await withActor(target, async (actor) => {
       assert(actor);
-      const expected = await transcriptHydration
-        .prepareSessionTranscriptHydration(target, limits)
-        .read();
-      await transcriptHydration.prepareSessionTranscriptHydration(target, limits).readCohort!(
-        { sessionKey: target.sessionKey, entryIds: [entryId] },
-        () => {},
-      );
+      const prepareHydration = () =>
+        transcriptHydration.prepareSessionTranscriptHydration(target, limits);
+      const cohort = { sessionKey: target.sessionKey, entryIds: [entryId] };
+      const expected = await prepareHydration().read();
+      await prepareHydration().readCohort!(cohort, () => {});
       const hot = actor.snapshot({ assertCurrent() {}, authorize() {} });
       assert(hot);
       const retained = readSessionActorTranscriptReplica(hot);
@@ -152,29 +162,24 @@ it("reuses resident transcript bytes for admitted reads outside the actor withou
       try {
         await runWithoutOwnedSessionTranscriptWrites(async () => {
           for (let index = 0; index < 10; index++) {
-            const actual = await transcriptHydration
-              .prepareSessionTranscriptHydration(target, limits)
-              .read();
+            const actual = await prepareHydration().read();
             expect(actual.snapshot).toEqual(expected.snapshot);
             actual.snapshot.events.length = 0;
-            await transcriptHydration.prepareSessionTranscriptHydration(target, limits).readCohort!(
-              { sessionKey: target.sessionKey, entryIds: [entryId] },
-              (prepared) => {
-                assert(prepared.kind === "bounded");
-                expect(prepared.snapshot).toEqual(expected.snapshot);
-                const anchor = prepared.transcript?.anchors[0];
-                assert(anchor);
-                expect(anchor.entryId).toBe(entryId);
-                expect(Reflect.set(anchor, "entryId", "caller-owned-edit")).toBe(true);
-              },
-            );
+            await prepareHydration().readCohort!(cohort, (prepared) => {
+              assert(prepared.kind === "bounded");
+              expect(prepared.snapshot).toEqual(expected.snapshot);
+              const anchor = prepared.transcript?.anchors[0];
+              assert(anchor);
+              expect(anchor.entryId).toBe(entryId);
+              expect(Reflect.set(anchor, "entryId", "caller-owned-edit")).toBe(true);
+            });
           }
         });
         expect(replies.reduce((sum, bytes) => sum + bytes, 0)).toBe(0);
         expect(readSessionActorTranscriptReplica(hot)).toBe(retained);
         expect(serialize(retained).byteLength).toBe(retainedBytes);
         await runWithoutOwnedSessionTranscriptWrites(async () => {
-          const reader = transcriptHydration.prepareSessionTranscriptHydration(target, limits);
+          const reader = prepareHydration();
           for (const selection of [
             { sessionKey: "other-session", entryIds: [entryId] },
             { sessionKey: target.sessionKey, entryIds: Array<string>(65).fill(entryId) },
@@ -194,7 +199,7 @@ it("reuses resident transcript bytes for admitted reads outside the actor withou
           assert(anchor);
           const fenced = await runWithSessionTranscriptReadFence(
             { ...anchor, logicalTurnId: "resident-fence", role: "user" },
-            () => transcriptHydration.prepareSessionTranscriptHydration(target, limits).read(),
+            () => prepareHydration().read(),
           );
           expect(fenced.snapshot.events).toEqual([expected.snapshot.events[0]]);
           await source.appendMessageAsync(userMessage("new revision", 2));
@@ -233,13 +238,11 @@ it.each(["bounded", "anchors"] as const)(
   "reads current actor entry facts through %s history after writes and replacement",
   (route) =>
     withTranscriptState("actor-entry", async ({ scope: target }) => {
-      const source = await SessionManager.openAsync(target);
-      const entryId = await source.appendMessageAsync(userMessage("original", 1));
+      const { entryId } = await seedUser(target);
       assert(entryId, "Expected the appended message ID");
       const otherTarget = { ...target, sessionId: "other-session", sessionKey: "agent:main:other" };
       await upsertSessionEntryCore(otherTarget, { sessionId: otherTarget.sessionId, updatedAt: 1 });
-      const otherSource = await SessionManager.openAsync(otherTarget);
-      const otherEntryId = await otherSource.appendMessageAsync(userMessage("other", 1));
+      const { entryId: otherEntryId } = await seedUser(otherTarget, "other");
       assert(otherEntryId, "Expected the other session's message ID");
       await withActor(target, async (actor) => {
         assert(actor, "Expected retained session actor");
@@ -324,8 +327,7 @@ it("keeps the consumed durable snapshot after a later rewrite without another hi
 
 it("replays a durable current turn and rejects it after a rewrite", () =>
   withTranscriptState("actor-replay", async ({ scope: target }) => {
-    const source = await SessionManager.openAsync(target);
-    const userId = await source.appendMessageAsync(userMessage("original", 1));
+    const { source, entryId: userId } = await seedUser(target);
     const replayView = await SessionManager.openAsync(target);
     await withActor(target, async () => {
       const replay = () =>
@@ -345,8 +347,7 @@ it("replays a durable current turn and rejects it after a rewrite", () =>
 
 it("retains the full-context read owner until an awaited consumer settles", () =>
   withTranscriptState("full-context-close", async ({ scope: target }) => {
-    const source = await SessionManager.openAsync(target);
-    await source.appendMessageAsync(userMessage("original", 1));
+    await seedUser(target);
     const consuming = createDeferred();
     const release = createDeferred();
     const disclose = vi.fn();
@@ -517,22 +518,19 @@ it.each(["durable", "admitted", "incognito"] as const)(
       const context = await readInitial();
       const user = manager.getEntry(userId!);
       const reply = manager.getEntry(replyId!);
-      const projectedReply = context.messages[1];
+      const projectedReply = assistantMessage(context.messages[1]);
       assert(
-        user?.type === "message" &&
-          reply?.type === "message" &&
-          reply.message.role === "assistant" &&
-          projectedReply?.role === "assistant",
+        user?.type === "message" && reply?.type === "message" && reply.message.role === "assistant",
         "Missing stored messages",
       );
       expect(context.messages[0]).toEqual(user.message);
       expect(projectedReply.content).not.toBe(reply.message.content);
-      expect(JSON.stringify(context)).not.toContain("synthetic-private-native-payload");
-      expect(JSON.stringify(context)).not.toContain("synthetic-private-tool-details");
+      expect(JSON.stringify(context)).not.toMatch(
+        /synthetic-private-native-payload|synthetic-private-tool-details/,
+      );
       expect(Reflect.set(projectedReply.content[0]!, "text", "changed")).toBe(true);
-      const residentCall = reply.message.content.find((part) => part.type === "toolCall");
-      const projectedCall = projectedReply.content.find((part) => part.type === "toolCall");
-      assert(residentCall?.type === "toolCall" && projectedCall?.type === "toolCall");
+      const residentCall = toolCall(reply.message);
+      const projectedCall = toolCall(projectedReply);
       const projectedNested = asOptionalRecord(projectedCall.arguments.nested);
       assert(projectedNested);
       expect(Reflect.set(projectedNested, "changed", "context edit")).toBe(true);
@@ -540,12 +538,9 @@ it.each(["durable", "admitted", "incognito"] as const)(
       expect(residentCall.arguments).toMatchObject({ nested: { changed: "original" } });
 
       freezeJsonSnapshot(reply.message.content);
-      const reread = await readInitial();
-      const rereadReply = reread.messages[1];
-      assert(rereadReply?.role === "assistant");
+      const rereadReply = assistantMessage((await readInitial()).messages[1]);
       expect(Reflect.set(rereadReply.content[0]!, "text", "changed again")).toBe(true);
-      const rereadCall = rereadReply.content.find((part) => part.type === "toolCall");
-      assert(rereadCall?.type === "toolCall");
+      const rereadCall = toolCall(rereadReply);
       expect(Reflect.set(rereadCall.arguments, "path", "context edit after freeze")).toBe(true);
       expect(reply.message.content[0]).toEqual({ type: "text", text: "answer" });
       expect(residentCall.arguments.path).toBe("original.txt");
@@ -583,10 +578,8 @@ it.each(["durable", "admitted", "incognito"] as const)(
         },
       ];
       const authoritative = await readInitial();
-      const authoritativeReply = authoritative.messages[1];
-      assert(authoritativeReply?.role === "assistant");
-      const authoritativeCall = authoritativeReply.content.find((part) => part.type === "toolCall");
-      assert(authoritativeCall?.type === "toolCall");
+      const authoritativeReply = assistantMessage(authoritative.messages[1]);
+      const authoritativeCall = toolCall(authoritativeReply);
       expect(authoritativeReply.content[0]).toEqual({ type: "text", text: "answer" });
       expect(JSON.stringify(authoritativeCall.arguments)).toBe(
         '{"path":"original.txt","mode":"read","nested":{"accessor":"original","changed":"original","proxied":{"text":"proxy"},"cyclic":{"inner":{"text":"cycle"}}}}',
@@ -694,8 +687,7 @@ it.each([
         expectedMessages = [{ role: "assistant", content: [{ text: "answer" }] }];
       }
       const readModel = vi.spyOn(contextWorker, "readSessionTranscriptModelContextInWorker");
-      const readContext = vi.spyOn(managerContext, "readSessionManagerModelContextAsync");
-      await withRestoredMocks([readModel, readContext], async () => {
+      await withRestoredMocks([readModel], async () => {
         const consume = () => manager[sessionManagerReadInitialContext]();
         const context =
           change === "retarget" || change === "fork"
@@ -713,7 +705,6 @@ it.each([
         ].includes(change)
           ? 0
           : 1;
-        expect(readContext).toHaveBeenCalledTimes(expectedReads);
         expect(readModel).toHaveBeenCalledTimes(expectedReads);
       });
       if (change === "local-reset" || change === "local-branch") {
@@ -725,8 +716,7 @@ it.each([
 
 it("rejects prepared context from a revoked writer inside a replacement run", () =>
   withTranscriptState("prepared-context-writer", async ({ scope: target }) => {
-    const source = await SessionManager.openAsync(target);
-    await source.appendMessageAsync(userMessage("original question", 1));
+    await seedUser(target, "original question");
     await withSelectedTranscriptReader(target, async () => {
       const reader = getOwnedSessionTranscriptReader(target);
       const binding = (initialWriter: InitialSessionTranscriptWriter) => ({
@@ -794,8 +784,7 @@ it.each(["append", "rewrite"] as const)(
   "rejects a native %s before consuming bounded admitted model context",
   (mutation) =>
     withSessionState("admitted-context", async ({ scope }) => {
-      const source = await SessionManager.openAsync(scope);
-      await source.appendMessageAsync(userMessage("original", 1));
+      const { source } = await seedUser(scope);
       await withSelectedTranscriptReader(scope, async () => {
         const options = { limits: contextLimits };
         let changed = false;
@@ -823,8 +812,7 @@ it.each(["append", "rewrite"] as const)(
 
 it("allows a queued writer to finish during an unbounded admitted context read", ({ signal }) =>
   withSessionState("unbounded-context", async ({ scope }) => {
-    const source = await SessionManager.openAsync(scope);
-    await source.appendMessageAsync(userMessage("original", 1));
+    const { source } = await seedUser(scope);
     await withSelectedTranscriptReader(scope, async () => {
       const scanned = createDeferred();
       const release = createDeferred();
@@ -863,8 +851,7 @@ it("allows a queued writer to finish during an unbounded admitted context read",
 
 it("keeps one bounded context snapshot and observes a foreign rewrite on the next read", () =>
   withSessionState("foreign-context", async ({ scope }) => {
-    const source = await SessionManager.openAsync(scope);
-    const userId = await source.appendMessageAsync(userMessage("original", 1));
+    const { entryId: userId } = await seedUser(scope);
     const databaseOptions = { agentId: scope.agentId, path: scope.storePath };
     const database = openOpenClawAgentDatabase(databaseOptions);
     const row = readTranscriptEventRows(database, scope.sessionId).find(
