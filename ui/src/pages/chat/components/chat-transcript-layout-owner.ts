@@ -126,8 +126,13 @@ export class TranscriptLayoutOwner {
         this.rowLayout?.writeRows(
           Object.fromEntries(
             [...instance.elementsCache].flatMap(([id, element]) => {
-              // Native disclosure toggles do not change the row revision.
-              if (!element.isConnected || element.matches(":has(details[open])")) {
+              // Local disclosure state is not restored on reload.
+              if (
+                !element.isConnected ||
+                element.matches(
+                  ":has(details[open], .code-block-wrapper:is(.is-expanded, .is-wrapped, .is-json-raw))",
+                )
+              ) {
                 return [];
               }
               const key = this.rowLayoutKey(instance.indexFromElement(element));

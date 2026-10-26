@@ -3,6 +3,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { Virtualizer } from "@tanstack/virtual-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import {
+  handleMarkdownCodeBlockClick,
+  renderMarkdownCodeBlock,
+} from "../../../components/markdown-code-blocks.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { createInitializationContext } from "../chat-application-context.test-support.ts";
 import { createTestTranscript, stubAnimationFrames } from "../chat-view.test-helpers.ts";
@@ -127,9 +131,9 @@ it("reserves only the matching width and appearance, including text scale, width
   expect(reserve(2)).toBe(0);
 });
 
-it.each(["chat-bubble-activity", ""])(
-  "batches restorable footprints without persisting open native disclosures (%s)",
-  (className) => {
+it.each(["chat-bubble-activity", "", "code-block-expand", "code-block-wrap"])(
+  "batches restorable footprints without persisting local disclosures (%s)",
+  (control) => {
     const frames: FrameRequestCallback[] = [];
     const idle: IdleRequestCallback[] = [];
     vi.stubGlobal(
@@ -141,7 +145,20 @@ it.each(["chat-bubble-activity", ""])(
       vi.fn((callback: IdleRequestCallback) => idle.push(callback)),
     );
     const container = transcriptContainer();
-    container.innerHTML = `<div data-index="0" data-virtual-row-key="row"><details class="${className}"><summary>Details</summary>Synthetic details</details></div>`;
+    const code = control.startsWith("code-block-");
+    const content = code
+      ? renderMarkdownCodeBlock(
+          control === "code-block-wrap"
+            ? `const value = "${"synthetic code ".repeat(60)}";`
+            : "const value = 1;\n".repeat(40),
+          "ts",
+          {
+            codeBlockInteraction: "interactive",
+          },
+          { highlight: false },
+        )
+      : `<details class="${control}"><summary>Details</summary>Synthetic details</details>`;
+    container.innerHTML = `<div data-index="0" data-virtual-row-key="row">${content}</div>`;
     const row = container.firstElementChild as HTMLElement;
     const host = { assistantAgentId: "main" };
     const target = { sessionKey: "agent:main:footprints" };
@@ -195,14 +212,22 @@ it.each(["chat-bubble-activity", ""])(
       idle.shift()!({ didTimeout: false, timeRemaining: () => 50 });
       expect(write).toHaveBeenCalledTimes(1);
       expect(Object.values(write.mock.calls[0]![1].widgetHeights)).toEqual([100]);
-      const disclosure = row.firstElementChild as HTMLDetailsElement;
-      disclosure.open = true;
+      const disclosure = requireElement(row, code ? ".code-block-wrapper" : "details");
+      if (code) {
+        row.addEventListener("click", handleMarkdownCodeBlockClick);
+        requireElement(row, `.${control}`).click();
+      } else if (disclosure instanceof HTMLDetailsElement) {
+        disclosure.open = true;
+      }
       emitTranscriptResize(row, 768, 300);
       layout.persistRows(virtualizer);
       frames.shift()!(0);
       idle.shift()!({ didTimeout: false, timeRemaining: () => 50 });
       expect(write).toHaveBeenCalledTimes(1);
-      disclosure.open = false;
+      if (disclosure instanceof HTMLDetailsElement) {
+        disclosure.open = false;
+      }
+      disclosure.classList.remove("is-expanded", "is-wrapped");
       emitTranscriptResize(row, 768, 100);
       const savedKey = Object.keys(write.mock.calls[0]![1].widgetHeights)[0]!;
       expect(createChatWidgetLayout()(cache, host, target).read(savedKey)).toBe(100);
