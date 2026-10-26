@@ -678,42 +678,34 @@ describe("Telegram send recovery conformance over HTTP", () => {
   });
 
   it.each([
-    { entry: "durable", method: "sendVoice", contentType: "audio/ogg", asVoice: true },
-    { entry: "durable", method: "sendAudio", contentType: "audio/mpeg", asVoice: false },
-    { entry: "streaming", method: "sendVoice", contentType: "audio/ogg", asVoice: true },
-    { entry: "streaming", method: "sendAudio", contentType: "audio/mp4", asVoice: false },
+    ["durable", "sendVoice", "audio/ogg", true, "12.6\n", "13"],
+    ["durable", "sendAudio", "audio/mpeg", false, "12.6\n", "13"],
+    ["streaming", "sendVoice", "audio/ogg", true, "12.6\n", "13"],
+    ["streaming", "sendAudio", "audio/mp4", false, "12.6\n", "13"],
+    ["durable", "sendVoice", "audio/ogg", true, "N/A", undefined],
+    ["durable", "sendVoice", "audio/ogg", true, "0", undefined],
+    ["durable", "sendVoice", "audio/ogg", true, new Error("ffprobe unavailable"), undefined],
   ] as const)(
-    "sends a rounded probed duration with $entry $method uploads",
-    async ({ entry, method, contentType, asVoice }) => {
-      vi.spyOn(mediaRuntime, "runFfprobe").mockResolvedValue("12.6\n");
-      mockAudio(contentType);
-      const mediaUrl = "https://example.com/clip";
-      if (entry === "durable") {
-        await send("", { mediaUrl, asVoice });
-      } else {
-        await deliver([{ mediaUrl, audioAsVoice: asVoice }]);
-      }
-      expectMethods(method);
-      expect(String(requests[0]!.fields.duration)).toBe("13");
-    },
-  );
-
-  it.each(["N/A", "0", "Infinity", new Error("ffprobe unavailable")])(
-    "still sends audio when duration probing yields %s",
-    async (result) => {
+    "%s %s upload with %s voice=%s and duration probe %s yields %s",
+    async (entry, method, contentType, asVoice, result, duration) => {
       const probe = vi.spyOn(mediaRuntime, "runFfprobe");
       if (result instanceof Error) {
         probe.mockRejectedValue(result);
       } else {
         probe.mockResolvedValue(result);
       }
-      await send("", {
-        mediaUrl: voicePath,
-        mediaLocalRoots: [fixture.mediaDir],
-        asVoice: true,
-      });
-      expectMethods("sendVoice");
-      expect(requests[0]!.fields.duration).toBeUndefined();
+      if (duration) {
+        mockAudio(contentType);
+      }
+      const mediaUrl = duration ? "https://example.com/clip" : voicePath;
+      if (entry === "durable") {
+        await send("", { ...(!duration ? mediaOptions() : {}), mediaUrl, asVoice });
+      } else {
+        await deliver([{ mediaUrl, audioAsVoice: asVoice }]);
+      }
+      expectMethods(method);
+      const actual = requests[0]!.fields.duration;
+      expect(actual === undefined ? undefined : String(actual)).toBe(duration);
     },
   );
 

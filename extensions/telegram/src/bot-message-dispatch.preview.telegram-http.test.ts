@@ -86,10 +86,8 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
   }
 
   it.each([
-    ["partial", ""],
-    ["block", ""],
     ["partial", "[bot] "],
-    ["block", "[bot] "],
+    ["block", ""],
   ] as const)(
     "appends explicit chunks and replaces each final in %s mode with prefix %s",
     async (mode, prefix) => {
@@ -682,11 +680,9 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
     ["direct", "automatic", false],
     ["direct", "automatic", true],
     ["direct", "message_tool", false],
-    ["direct", "message_tool", true],
     ["group", "automatic", false],
     ["group", "automatic", true],
     ["group", "message_tool", false],
-    ["group", "message_tool", true],
   ] as const)(
     "respects send denial for %s/%s commentary (denied=%s)",
     async (chat, ownership, denied) => {

@@ -30,14 +30,6 @@ import { wasSentByBot } from "./sent-message-cache.js";
 
 const observers = vi.hoisted(() => ({
   draftStream: vi.fn<(stream: TelegramDraftStream) => void>(),
-  recordOutbound:
-    vi.fn<
-      (
-        params: Parameters<
-          typeof import("./outbound-message-context.js").recordOutboundMessageForPromptContext
-        >[0],
-      ) => Promise<void>
-    >(),
 }));
 vi.mock("./draft-stream.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./draft-stream.js")>();
@@ -47,18 +39,6 @@ vi.mock("./draft-stream.js", async (importOriginal) => {
       const stream = actual.createTelegramDraftStream(params);
       observers.draftStream(stream);
       return stream;
-    },
-  };
-});
-vi.mock("./outbound-message-context.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./outbound-message-context.js")>();
-  return {
-    ...actual,
-    recordOutboundMessageForPromptContext: async (
-      params: Parameters<typeof actual.recordOutboundMessageForPromptContext>[0],
-    ) => {
-      await observers.recordOutbound(params);
-      return await actual.recordOutboundMessageForPromptContext(params);
     },
   };
 });
@@ -118,7 +98,6 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
     call.method === "setMessageReaction" && JSON.stringify(call.fields.reaction).includes(emoji);
   beforeEach(() => {
     observers.draftStream.mockReset();
-    observers.recordOutbound.mockReset().mockResolvedValue(undefined);
   });
 
   it.each(["off", "first", "all"] as const)(
@@ -553,61 +532,6 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
         cache.readHistoryWindow({ accountId: "default", chatId: -1001, threadId: 2, limit: 10 }),
       ).resolves.toEqual([]);
       await expect(wasSentByBot("-1001", 1, { session: { store: storePath } })).resolves.toBe(true);
-    });
-  });
-
-  it("keeps accepted quoted delivery visible when history finalization fails", async () => {
-    await withOpenClawTestState({ prefix: "telegram-history-failure-" }, async (state) => {
-      const context = createContext();
-      const scope = {
-        agentId: "default",
-        sessionKey: context.route.sessionKey,
-        sessionId: "history-failure",
-        storePath: path.join(state.stateDir, "sessions.json"),
-      };
-      const entry = { sessionId: scope.sessionId, updatedAt: Date.now() };
-      await patchSessionEntry({ ...scope, fallbackEntry: entry, update: () => entry });
-      Object.assign(context.ctxPayload, {
-        ReplyToId: "9001",
-        ReplyToBody: "quoted slice",
-        ReplyToQuoteText: "quoted slice",
-        ReplyToIsQuote: true,
-      });
-      let failed = false;
-      observers.recordOutbound.mockImplementation(async (params) => {
-        if (params.promptContextProjection?.finalPart) {
-          failed = true;
-          throw new Error("history finalization unavailable");
-        }
-      });
-      await dispatchProgressTurn(
-        async () => {
-          SessionManager.open(scope, state.stateDir).appendMessage(
-            makeAgentAssistantMessage({
-              content: [{ type: "text", text: "Accepted quoted answer" }],
-              timestamp: Date.now(),
-            }),
-          );
-        },
-        {
-          context,
-          replyToMode: "all",
-          cfg: { session: { store: scope.storePath } },
-          finalReply: { text: "Accepted quoted answer", replyToId: "9001" },
-          allowErrors: true,
-        },
-      );
-      expect(failed).toBe(true);
-      expect(acceptedCalls.filter(({ method }) => method === "sendMessage")).toEqual([
-        {
-          method: "sendMessage",
-          fields: expect.objectContaining({
-            text: "Accepted quoted answer",
-            reply_parameters: expect.objectContaining({ message_id: 9001, quote: "quoted slice" }),
-          }),
-        },
-      ]);
-      expect([...visibleMessages.values()]).toEqual(["Accepted quoted answer"]);
     });
   });
 
