@@ -112,7 +112,8 @@ function launchTurn(
   handle: Awaited<ReturnType<ReturnType<typeof createTunnelManager>["start"]>>,
   overrides: Partial<Parameters<typeof handle.launchTurn>[0]> = {},
 ) {
-  return handle.launchTurn({ plan: plan(), turnClaim: turnClaim(), ...overrides });
+  const launchPlan = overrides.plan ?? plan();
+  return handle.launchTurn({ plan: launchPlan, turnClaim: turnClaim(launchPlan), ...overrides });
 }
 
 function workspaceTransport(
@@ -135,13 +136,17 @@ function workspaceTransport(
   } satisfies NodeWorkerSupervisorTransport;
 }
 
-function turnClaim() {
+function turnClaim(launchPlan = plan()) {
   return {
-    sessionId: "session-1",
+    sessionId: launchPlan.admission.sessionId,
     claimId: "claim-1",
-    runId: "run-1",
+    runId: launchPlan.assignment.runId,
     placementGeneration: 4,
-    owner: { kind: "worker" as const, environmentId: "environment-1", ownerEpoch: 2 },
+    owner: {
+      kind: "worker" as const,
+      environmentId: launchPlan.admission.environmentId,
+      ownerEpoch: launchPlan.admission.ownerEpoch,
+    },
   };
 }
 
@@ -336,28 +341,17 @@ describe("node worker tunnel lifetime", () => {
         const launchPlan = plan();
         launchPlan.admission.environmentId = currentEnvironment.environmentId;
         launchPlan.admission.sessionId = sessionId;
+        launchPlan.admission.ownerEpoch = currentEnvironment.ownerEpoch;
         launchPlan.assignment.turnId = `turn-${index + 1}`;
         launchPlan.assignment.runId = `run-${index + 1}`;
         launches.push(
-          handle
-            .launchTurn({
-              plan: launchPlan,
-              turnClaim: {
-                ...turnClaim(),
-                sessionId,
-                runId: launchPlan.assignment.runId,
-                owner: {
-                  kind: "worker",
-                  environmentId: currentEnvironment.environmentId,
-                  ownerEpoch: currentEnvironment.ownerEpoch,
-                },
-              },
-              signal: controllers[index]!.signal,
-            })
-            .then(launchSettled, (error: unknown) => {
+          launchTurn(handle, { plan: launchPlan, signal: controllers[index]!.signal }).then(
+            launchSettled,
+            (error: unknown) => {
               launchSettled();
               return error;
-            }),
+            },
+          ),
         );
       }
       await statusesEntered.promise;
