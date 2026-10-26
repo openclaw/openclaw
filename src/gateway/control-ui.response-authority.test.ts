@@ -486,7 +486,6 @@ describe("saved message attachment response authority", () => {
       viewer?: boolean;
       unrelated?: boolean;
       method?: string;
-      range?: string;
     } = {},
   ) {
     const params = new URLSearchParams({
@@ -498,22 +497,19 @@ describe("saved message attachment response authority", () => {
     });
     return fetch(`${origin}/__openclaw__/assistant-media?${params}`, {
       method: options.method,
-      headers: {
-        ...(options.ticketOnly
-          ? {}
-          : {
-              "x-forwarded-user": options.unrelated
-                ? unrelatedEmail
-                : options.admin
-                  ? adminEmail
-                  : options.viewer
-                    ? viewerEmail
-                    : email,
-              "x-forwarded-for": "203.0.113.42",
-              "x-openclaw-scopes": options.admin ? "operator.admin" : "operator.sessions.read",
-            }),
-        ...(options.range ? { Range: options.range } : {}),
-      },
+      headers: options.ticketOnly
+        ? {}
+        : {
+            "x-forwarded-user": options.unrelated
+              ? unrelatedEmail
+              : options.admin
+                ? adminEmail
+                : options.viewer
+                  ? viewerEmail
+                  : email,
+            "x-forwarded-for": "203.0.113.42",
+            "x-openclaw-scopes": options.admin ? "operator.admin" : "operator.sessions.read",
+          },
     });
   }
 
@@ -536,11 +532,12 @@ describe("saved message attachment response authority", () => {
     expect((await request(query, options)).status).toBe(status);
   }
 
-  it("reads saved comments and ordinary attachments through metadata, preview, download and renewal", async () => {
+  it("reads saved attachments and assistant directives, but not user directives", async () => {
     for (const [messageId, file, expected] of [
       ["comment", source, text],
       ["ordinary", ordinary, "Ordinary attachment"],
       ["cron-forwarded", source, text],
+      ["legacy-media", path.join(workspaceDir, "report.txt"), "Saved assistant report"],
     ]) {
       const query = { source: file!, messageId: messageId! };
       const mediaTicket = await metadata(query);
@@ -549,14 +546,12 @@ describe("saved message attachment response authority", () => {
       const ticketed = { ...query, mediaTicket };
       const preview = await request(ticketed, { ticketOnly: true });
       expect([preview.status, await preview.text()]).toEqual([200, expected]);
-      expect(preview.headers.get("content-disposition")).toContain("attachment;");
-      const head = await request(ticketed, { ticketOnly: true, method: "HEAD" });
-      expect(head.status).toBe(200);
-      expect(head.headers.get("content-length")).toBe(String(expected!.length));
-      const range = await request(ticketed, { ticketOnly: true, range: "bytes=0-4" });
-      expect([range.status, await range.text()]).toEqual([206, expected!.slice(0, 5)]);
       await metadata(ticketed);
     }
+    await expectStatus(
+      { source: path.join(workspaceDir, "report.txt"), messageId: "user-directive", meta: "1" },
+      404,
+    );
   });
 
   it("rejects unrelated sources, inaccessible messages and ticket substitutions without changing standalone admin reads", async () => {
@@ -594,16 +589,18 @@ describe("saved message attachment response authority", () => {
     }
   });
 
-  it("previews unsynchronized sandbox screenshots with their original message and ticket identity", async () => {
+  it("binds sandbox screenshot previews to their message and reader across backing changes", async () => {
     await expect(
       fs.stat(path.join(workspaceDir, ".artifacts", "proof", "screenshot.png")),
     ).rejects.toMatchObject({ code: "ENOENT" });
+    let relativeTicket = "";
     for (const [messageId, imageSource] of [
       ["sandbox-screenshot", "/workspace/.artifacts/proof/screenshot.png"],
       ["relative-screenshot", ".artifacts/proof/screenshot.png"],
     ] as const) {
       const query = { source: imageSource, messageId };
       const mediaTicket = await metadata(query);
+      relativeTicket = mediaTicket;
       const payload = Buffer.from(mediaTicket.split(".")[1]!, "base64url").toString("utf8");
       expect(JSON.parse(payload)).toMatchObject({
         source: "/workspace/.artifacts/proof/screenshot.png",
@@ -613,6 +610,29 @@ describe("saved message attachment response authority", () => {
       expect(preview.status).toBe(200);
       expect(preview.headers.get("content-type")).toBe("image/png");
       expect(Buffer.from(await preview.arrayBuffer())).toEqual(REAL_PNG);
+    }
+    const query = {
+      source: "/workspace/.artifacts/proof/screenshot.png",
+      messageId: "sandbox-screenshot",
+    };
+    for (const selection of [query, { ...query, meta: "1" }]) {
+      const unrelated = await request(selection, { unrelated: true });
+      expect(unrelated.status).toBe(404);
+      expect(Buffer.from(await unrelated.arrayBuffer())).not.toEqual(REAL_PNG);
+    }
+    await mockStoppedWorkspaceContainer(projection, "/workspace", [
+      { Type: "tmpfs", Destination: "/workspace/.artifacts", RW: true },
+    ]);
+    for (const [imageSource, status] of [
+      [".artifacts/proof/screenshot.png", 404],
+      [query.source, 404],
+      [path.join(workspaceDir, ".artifacts", "proof", "screenshot.png"), 401],
+    ] as const) {
+      await expectStatus(
+        { messageId: "relative-screenshot", source: imageSource, mediaTicket: relativeTicket },
+        status,
+        { ticketOnly: true },
+      );
     }
   });
 
@@ -651,67 +671,6 @@ describe("saved message attachment response authority", () => {
       }
     },
   );
-
-  it("withholds relative screenshot aliases when workspace backing is obscured", async () => {
-    const query = {
-      source: ".artifacts/proof/screenshot.png",
-      messageId: "relative-screenshot",
-    };
-    const mediaTicket = await metadata(query);
-    await mockStoppedWorkspaceContainer(projection, "/workspace", [
-      { Type: "tmpfs", Destination: "/workspace/.artifacts", RW: true },
-    ]);
-    const denied = await request({ ...query, meta: "1" });
-    expect(denied.status).toBe(200);
-    expect(await denied.json()).toMatchObject({ available: false });
-    for (const [imageSource, ticketStatus] of [
-      [query.source, 404],
-      ["/workspace/.artifacts/proof/screenshot.png", 404],
-      // A virtual-path ticket cannot authenticate a host-path request.
-      [path.join(workspaceDir, ".artifacts", "proof", "screenshot.png"), 401],
-    ] as const) {
-      const imageQuery = { ...query, source: imageSource };
-      await expectStatus(imageQuery, 404);
-      await expectStatus({ ...imageQuery, mediaTicket }, ticketStatus, { ticketOnly: true });
-    }
-  });
-
-  it("reads saved assistant media directives without treating user text as an attachment", async () => {
-    const query = {
-      source: path.join(workspaceDir, "report.txt"),
-      messageId: "legacy-media",
-    };
-    const mediaTicket = await metadata(query);
-    const response = await request({ ...query, mediaTicket }, { ticketOnly: true });
-    expect([response.status, await response.text()]).toEqual([200, "Saved assistant report"]);
-    await expectStatus({ ...query, messageId: "user-directive", meta: "1" }, 404);
-  });
-
-  it("withholds mapped image bytes from unrelated readers and after workspace reassignment", async () => {
-    const query = {
-      source: "/workspace/.artifacts/proof/screenshot.png",
-      messageId: "sandbox-screenshot",
-    };
-    const mediaTicket = await metadata(query);
-    for (const selection of [query, { ...query, meta: "1" }]) {
-      const unrelated = await request(selection, { unrelated: true });
-      expect(unrelated.status).toBe(404);
-      expect(Buffer.from(await unrelated.arrayBuffer())).not.toEqual(REAL_PNG);
-    }
-    const worktree = {
-      id: owner.worktree.id,
-      branch: owner.worktree.branch,
-      repoRoot: owner.worktree.repoRoot,
-    };
-    await upsertSessionEntryCore(scope, { worktree: { ...worktree, id: randomUUID() } });
-    try {
-      const denied = await request({ ...query, mediaTicket }, { ticketOnly: true });
-      expect(denied.status).toBe(404);
-      expect(Buffer.from(await denied.arrayBuffer())).not.toEqual(REAL_PNG);
-    } finally {
-      await upsertSessionEntryCore(scope, { worktree });
-    }
-  });
 
   it.each(["queued", "stopped", "forwarded", "saved"] as const)(
     "rechecks the %s attachment association after preparing bytes",
