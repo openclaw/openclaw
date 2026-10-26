@@ -89,6 +89,17 @@ async function runFastAutoProgressCase(params: {
 }
 
 describe("executeFollowupTurn", () => {
+  it("restores the queued native chat identity for plugin tool context", async () => {
+    const turn = createTurn();
+    turn.queued.originatingChatId = "-1001234567890";
+
+    await executeTestTurn({ turn });
+
+    expect(state.execute.mock.calls[0]?.[0]?.sessionCtx).toMatchObject({
+      NativeChannelId: "-1001234567890",
+    });
+  });
+
   it("retains the queued turn's restart restrictions over later runner defaults", async () => {
     const turn = createTurn();
     turn.queued.forceRestartSafeTools = true;
