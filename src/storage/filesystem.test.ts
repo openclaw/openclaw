@@ -13,7 +13,9 @@ const test = it.extend<{ store: [backend: StorageBackend, dir: string] }>({
       const dir = path.join(parent, "mounted");
       await fs.mkdir(dir);
       const backend = await openBackend(dir);
-      await use([backend, dir]).finally(() => backend.close?.());
+      await use([backend, dir]).finally(async () => {
+        await backend.close?.();
+      });
     }),
 });
 

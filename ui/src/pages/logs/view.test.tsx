@@ -55,7 +55,7 @@ it("formats only new rows until the locale or effective timezone changes", async
   // Model an OS timezone change while retaining native Intl timestamp formatting.
   vi.spyOn(Intl, "DateTimeFormat").mockImplementation(function (locales, options) {
     const formatter = new NativeDateTimeFormat(locales, { ...options, timeZone });
-    const format = vi.fn(formatter.format);
+    const format = vi.fn(formatter.format.bind(formatter));
     formatCalls.push(format);
     Object.defineProperty(formatter, "format", { value: format });
     return formatter;

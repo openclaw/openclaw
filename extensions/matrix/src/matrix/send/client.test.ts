@@ -64,7 +64,8 @@ describe("matrix send client helpers", () => {
   });
 
   it("does not borrow or stop explicitly injected clients", async () => {
-    const injected = createMockMatrixClient();
+    const start = vi.fn(async () => undefined);
+    const injected = Object.assign(createMockMatrixClient(), { start });
 
     await withResolvedMatrixSendClient({ client: injected }, async (client) => {
       expect(client).toBe(injected);
@@ -73,7 +74,7 @@ describe("matrix send client helpers", () => {
       expect(client).toBe(injected);
     });
 
-    expect(injected.start).not.toHaveBeenCalled();
+    expect(start).not.toHaveBeenCalled();
     expect(acquireSharedMatrixClientMock).not.toHaveBeenCalled();
     expect(sharedLeaseReleaseMock).not.toHaveBeenCalled();
   });
