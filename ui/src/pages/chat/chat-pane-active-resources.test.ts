@@ -1,6 +1,6 @@
 import type { EnvironmentsListResult } from "@openclaw/gateway-protocol";
 import { createEffect, createRoot, createSignal, flush } from "solid-js";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
@@ -68,17 +68,16 @@ function fixture() {
       return { status: "current", row: observed };
     },
   };
+  const describedSession = () => ({
+    ...session,
+    sessionId: owner.sessionId,
+    placement: owner.placement,
+    execNode: owner.execNode,
+    archived: owner.archived,
+  });
   const request = vi.fn<(method: string, params?: unknown) => Promise<unknown>>(async (method) => {
     if (method === "sessions.describe") {
-      return {
-        session: {
-          ...session,
-          sessionId: owner.sessionId,
-          placement: owner.placement,
-          execNode: owner.execNode,
-          archived: owner.archived,
-        },
-      };
+      return { session: describedSession() };
     }
     if (method === "environments.status") {
       return environment;
@@ -109,8 +108,14 @@ function fixture() {
     request,
     commit,
     controller,
-    sync: async () => {
-      controller.sync(owner);
+    describedSession,
+    holdDescriptor: () => {
+      const pending = createDeferred<unknown>();
+      request.mockImplementationOnce(() => pending.promise);
+      return pending;
+    },
+    sync: async (next = owner) => {
+      controller.sync(next);
       await settle();
     },
     desktopSource: () =>
@@ -126,8 +131,12 @@ function fixture() {
 }
 
 describe("session active resource discovery", () => {
+  let f: ReturnType<typeof fixture>;
+  beforeEach(() => {
+    f = fixture();
+  });
+
   it("projects verified desktop changes and releases the view on disposal", async () => {
-    const f = fixture();
     const sources: Array<string | null | undefined> = [];
     let refreshBinding: () => void = () => {};
     const dispose = createRoot((release) => {
@@ -158,11 +167,10 @@ describe("session active resource discovery", () => {
       refreshBinding();
       flush();
       expect(sources).toEqual([undefined, "worker-1", null]);
-      f.controller.sync({
+      await f.sync({
         ...f.owner,
         observation: { ...f.owner.observation, isCurrent: () => true },
       });
-      await settle();
       flush();
       expect(sources).toEqual([undefined, "worker-1", null, "worker-1"]);
 
@@ -181,11 +189,10 @@ describe("session active resource discovery", () => {
       dispose();
       f.request.mockImplementation(respond);
       f.controller.invalidate();
-      f.controller.sync({
+      await f.sync({
         ...f.owner,
         observation: { ...f.owner.observation, isCurrent: () => true },
       });
-      await settle();
       flush();
       expect(f.desktopSource()).toBe("worker-1");
       expect(sources).toEqual([undefined, "worker-1", null, "worker-1", null]);
@@ -195,7 +202,6 @@ describe("session active resource discovery", () => {
   });
 
   it("retains a visible verified Desktop when another resource is dismissed", async () => {
-    const f = fixture();
     await f.sync();
     f.setLayout({
       ...closeSlot(promoteSidebarPanel(f.owner.layout(), "desktop"), "browser"),
@@ -207,16 +213,13 @@ describe("session active resource discovery", () => {
   });
 
   it("discovers resources after the binding identity changes", async () => {
-    const f = fixture();
-    const pending = createDeferred<unknown>();
-    f.request.mockImplementationOnce(async () => pending.promise);
+    const pending = f.holdDescriptor();
     await f.sync();
     f.owner.observation.isCurrent = () => false;
-    f.controller.sync({
+    await f.sync({
       ...f.owner,
       observation: { ...f.owner.observation, isCurrent: () => true },
     });
-    await settle();
     expect(f.slots()).toEqual(["desktop"]);
     pending.resolve({ session });
     await settle();
@@ -227,7 +230,6 @@ describe("session active resource discovery", () => {
   it.each(["after-resource-swap", "focused-workspace"])(
     "discovers resources while preserving the %s layout",
     async (kind) => {
-      const f = fixture();
       const workspace = kind.endsWith("workspace");
       let layout = workspace
         ? openSlot(f.owner.layout(), "workspace")
@@ -256,7 +258,6 @@ describe("session active resource discovery", () => {
   it.each(["environment", "reclaimed", "session instance"])(
     "fences a published desktop immediately when its %s changes",
     async (change) => {
-      const f = fixture();
       f.owner.placement = activePlacement;
       f.owner.sessionId = "session-id";
       const source = f.desktopSource;
@@ -264,8 +265,7 @@ describe("session active resource discovery", () => {
       expect(source()).toBe("worker-1");
       f.owner.placement = { ...activePlacement, updatedAtMs: 99, lastTranscriptAckCursor: 10 };
       expect(source()).toBe("worker-1");
-      const pending = createDeferred<unknown>();
-      f.request.mockImplementationOnce(async () => pending.promise);
+      const pending = f.holdDescriptor();
       if (change === "session instance") {
         f.owner.sessionId = "replacement-session";
       } else if (change === "reclaimed") {
@@ -284,7 +284,6 @@ describe("session active resource discovery", () => {
   );
 
   it("keeps metadata-only placement updates out of discovery while the descriptor is pending and after completion", async () => {
-    const f = fixture();
     f.owner.placement = activePlacement;
     const pending = createDeferred<unknown>();
     const respond = f.request.getMockImplementation()!;
@@ -320,20 +319,12 @@ describe("session active resource discovery", () => {
   });
 
   it("does not reveal an unconfirmed desktop when its device changes during discovery", async () => {
-    const f = fixture();
     f.owner.placement = {
       ...activePlacement,
       runner: { kind: "device", deviceId: "node-1", status: "available" },
     };
-    const pending = createDeferred<unknown>();
-    const described = {
-      ...session,
-      sessionId: f.owner.sessionId,
-      execNode: f.owner.execNode,
-      placement: f.owner.placement,
-      archived: f.owner.archived,
-    };
-    f.request.mockImplementationOnce(async () => pending.promise);
+    const pending = f.holdDescriptor();
+    const described = f.describedSession();
     f.controller.sync(f.owner);
     f.owner.placement = {
       ...activePlacement,
@@ -348,7 +339,6 @@ describe("session active resource discovery", () => {
   });
 
   it("reveals the existing desktop once without provisioning", async () => {
-    const f = fixture();
     await f.sync();
     expect(f.slots().toSorted()).toEqual(["desktop"]);
     const selected = sidebarActivePanel(f.owner.layout())?.slot;
@@ -366,7 +356,6 @@ describe("session active resource discovery", () => {
   });
 
   it("respects an older minimized dock even when the newly discovered resource has no tab", async () => {
-    const f = fixture();
     f.setLayout({ ...openSlot(f.owner.layout(), "terminal"), open: false });
     await f.sync();
     expect(f.request).not.toHaveBeenCalled();
@@ -374,7 +363,6 @@ describe("session active resource discovery", () => {
   });
 
   it("clears a discovered desktop source without falling back to a stale roster or global source", async () => {
-    const f = fixture();
     await f.sync();
     expect(f.desktopSource()).toBe("worker-1");
     f.owner.placement = { ...activePlacement, state: "local" };
@@ -387,7 +375,6 @@ describe("session active resource discovery", () => {
   it.each(["before discovery", "during discovery"])(
     "leaves a manual desktop opened %s with its presentation owner",
     async (when) => {
-      const f = fixture();
       if (when === "before discovery") {
         f.setLayout(openSlot(openSlot(f.owner.layout(), "desktop"), "workspace"));
         await f.sync();
@@ -396,8 +383,7 @@ describe("session active resource discovery", () => {
         expect(f.request).not.toHaveBeenCalled();
         expect(sidebarActivePanel(f.owner.layout())?.slot).toBe("workspace");
       } else {
-        const pending = createDeferred<unknown>();
-        f.request.mockImplementationOnce(async () => pending.promise);
+        const pending = f.holdDescriptor();
         f.controller.sync(f.owner);
         f.setLayout(openSlot(f.owner.layout(), "desktop"));
         pending.resolve({ session });
@@ -409,7 +395,6 @@ describe("session active resource discovery", () => {
   );
 
   it("respects persisted dismissal on reentry and during a pending target-status read", async () => {
-    const f = fixture();
     const pending = createDeferred<unknown>();
     f.request.mockImplementation(async () => pending.promise);
     f.controller.sync(f.owner);
@@ -424,7 +409,6 @@ describe("session active resource discovery", () => {
   });
 
   it("rejects stale async responses after leaving", async () => {
-    const f = fixture();
     const pending = createDeferred<unknown>();
     f.request.mockImplementation(async () => pending.promise);
     f.controller.sync(f.owner);
@@ -449,7 +433,6 @@ describe("session active resource discovery", () => {
       },
     },
   ])("ignores $name", async ({ name, row, env }) => {
-    const f = fixture();
     f.request.mockImplementation(async (method) =>
       method === "sessions.describe" ? { session: row } : (env ?? environment),
     );
@@ -461,7 +444,6 @@ describe("session active resource discovery", () => {
   });
 
   it("discovers a newly active desktop on invalidation without repeated render probes", async () => {
-    const f = fixture();
     f.request.mockResolvedValueOnce({
       session: { ...session, placement: { state: "local" } },
     });

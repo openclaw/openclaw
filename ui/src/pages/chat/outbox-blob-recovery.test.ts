@@ -83,6 +83,11 @@ async function prepare(
     ),
   };
 }
+async function fixture(id: string, sessionKey = "global", version = 3) {
+  const host = hostFor();
+  const item = await prepare(host, id, sessionKey);
+  return { host, item, source: seed([item], sessionKey, version) };
+}
 function seed(items: ChatQueueItem[], sessionKey = "global", version = 3) {
   const key = `openclaw.control.chatComposer.v${version}:${encodeURIComponent(gatewayUrl)}`;
   const raw = JSON.stringify({
@@ -221,9 +226,7 @@ it("hydrates queued attachment bytes after offline reload before a new hello", a
 it.each(["agent:main:topic", "global"])(
   "restores landed v3 %s into another conversation without retiring its exact Blob",
   async (sessionKey) => {
-    const host = hostFor();
-    const item = await prepare(host, "legacy", sessionKey);
-    const source = seed([item], sessionKey);
+    const { host, item, source } = await fixture("legacy", sessionKey);
     const cleanup = vi.spyOn(payloadStore, "removeOutboxPayloads");
     const migrated = readStore(sessionStorage, target);
     expect(sessionStorage.getItem(source.key)).toBeNull();
@@ -239,8 +242,7 @@ it.each(["agent:main:topic", "global"])(
     });
     expect(listOutboxes(host)).toEqual([]);
     const entry = expectDefined(readRecovery(host).entries[0], "owned recovery");
-    const destination = destinationFor(host);
-    expect(restoreRecovery(host, entry, destination)).toBe("restored");
+    expect(restoreRecovery(host, entry, destinationFor(host))).toBe("restored");
     const restored = expectDefined(listOutboxes(host)[0]?.queue[0], "restored input");
     expect(restored).toMatchObject({
       id: item.id,
@@ -261,9 +263,7 @@ it.each(["agent:main:topic", "global"])(
 );
 
 it("keeps source Blob bytes across quota migration and explicit transfer failures", async () => {
-  const host = hostFor();
-  const item = await prepare(host, "retained");
-  const source = seed([item]);
+  const { host, item, source } = await fixture("retained");
   const cleanup = vi.spyOn(payloadStore, "removeOutboxPayloads");
   const fail = () => {
     throw new DOMException("quota", "QuotaExceededError");
@@ -349,8 +349,7 @@ it.each(["failed-write", "failed-remove"])(
     await expectUnavailable(host, unrelated, "missing");
     expectEmptyRecovery(foreign);
     expect(listOutboxes(foreign)).toEqual([]);
-    const foreignDestination = destinationFor(foreign, scope);
-    expect(restoreRecovery(foreign, entry, foreignDestination)).toBe("conflict");
+    expect(restoreRecovery(foreign, entry, destinationFor(foreign, scope))).toBe("conflict");
 
     // Another failed recovery/deletion must preserve the same source bytes too.
     expect(restoreRecovery(host, entry, capture())).toBe("storage-failed");
@@ -397,12 +396,12 @@ it("partitions a mixed-principal v3 bucket while retaining foreign recovery acro
   expect(restoreRecovery(b, ownedA, destination)).toBe("conflict");
   expect(restoreRecovery(a, ownedA, destination)).toBe("restored");
   clearOutbox(a);
-  expect(cleanup).toHaveBeenCalledWith([first.attachmentPayload]);
-  expect(cleanup).toHaveBeenCalledTimes(1);
+  expect(cleanup).toHaveBeenCalledExactlyOnceWith([first.attachmentPayload]);
   await expectBytes(b, second);
   expect(readRecovery(b).entries).toEqual(entriesB);
-  const client = expectDefined(b.client, "B client");
-  const ready = vi.spyOn(client, "recoveryScopeReady", "get").mockReturnValue(false);
+  const ready = vi
+    .spyOn(expectDefined(b.client, "connected client"), "recoveryScopeReady", "get")
+    .mockReturnValue(false);
   expect(() => readRecovery(b)).toThrow("Offline account recovery is unavailable");
   expect(captureDestination(b, { sessionKey: b.sessionKey, agentId: "main" })).toBeNull();
   b.connected = false;
@@ -413,9 +412,7 @@ it("partitions a mixed-principal v3 bucket while retaining foreign recovery acro
 it.each(["failed-remove", "deferred-legacy", "unreadable-legacy"])(
   "retains bytes when %s cannot establish complete retirement",
   async (failure) => {
-    const host = hostFor();
-    const item = await prepare(host, "retire", "agent:main:topic");
-    seed([item], "agent:main:topic");
+    const { host, item } = await fixture("retire", "agent:main:topic");
     const store = readStore(sessionStorage, target);
     // Exercise removal rather than receipt-bearing writes as well as deferred sources.
     delete store.legacyReceipts;

@@ -66,6 +66,26 @@ async function renderPendingInputs(overrides: Parameters<typeof renderChatView>[
   return container;
 }
 
+async function queueText(host: Parameters<typeof loadChatHistory>[0]) {
+  const container = await renderPendingInputs({
+    historyState: host,
+    sessionKey,
+    messages: host.chatMessages,
+  });
+  return Array.from(container.querySelectorAll(".chat-queue__text"), (row) => row.textContent);
+}
+
+function expectPage(
+  host: Parameters<typeof getChatPendingInputs>[0],
+  expected: ChatPendingInputsPage,
+  before?: number,
+) {
+  const view = getChatPendingInputs(host);
+  expect(view?.page).toEqual(expected);
+  expect(view?.before).toBe(before);
+  expect(view?.loading).toBe(false);
+}
+
 describe("server-owned pending input pagination", () => {
   it.each(["empty-queue", "complete-page", "partial-page-receipts"] as const)(
     "retires consumed server queue chips outside the transcript window using %s",
@@ -92,24 +112,13 @@ describe("server-owned pending input pagination", () => {
           }),
         },
       });
-      const queueText = async () =>
-        Array.from(
-          (
-            await renderPendingInputs({
-              historyState: host,
-              sessionKey,
-              messages: host.chatMessages,
-            })
-          ).querySelectorAll(".chat-queue__text"),
-          (row) => row.textContent,
-        );
       await loadChatHistory(host);
-      expect(await queueText()).toEqual([consumed.message.content, retained.message.content]);
+      expect(await queueText(host)).toEqual([consumed.message.content, retained.message.content]);
 
       // A partial page alone cannot retire either previously observed input.
       pendingInputs = { items: [], total: 21, nextBefore: 21, queuedCount: 2 };
       await loadChatHistory(host);
-      expect(await queueText()).toEqual([consumed.message.content, retained.message.content]);
+      expect(await queueText(host)).toEqual([consumed.message.content, retained.message.content]);
 
       pendingInputs =
         source === "empty-queue"
@@ -128,7 +137,7 @@ describe("server-owned pending input pagination", () => {
           : undefined;
       await loadChatHistory(host);
 
-      expect(await queueText()).toEqual(
+      expect(await queueText(host)).toEqual(
         source === "empty-queue"
           ? []
           : source === "complete-page"
@@ -142,12 +151,7 @@ describe("server-owned pending input pagination", () => {
 
   it("refreshes every live queued input across receipt batches without reordering the shelf", async () => {
     const inputs = Array.from({ length: 51 }, (_, index) => ({
-      ...input,
-      id: `queued-${index}`,
-      runId: `queued-${index}`,
-      acceptedAt: index,
-      state: "queued" as const,
-      queued: true as const,
+      ...queuedInput(`queued-${index}`, index),
       message: { role: "user", content: `Queued message ${index}` },
     }));
     const host = makeChatHost({
@@ -183,19 +187,12 @@ describe("server-owned pending input pagination", () => {
     for (let offset = 0; offset < inputs.length; offset += 20) {
       applyChatPendingInputs(host, { items: inputs.slice(offset, offset + 20), total: 71 });
     }
-    const queueText = async () =>
-      Array.from(
-        (await renderPendingInputs({ historyState: host, sessionKey })).querySelectorAll(
-          ".chat-queue__text",
-        ),
-        (row) => row.textContent,
-      );
     await loadChatHistory(host);
-    expect((await queueText()).slice(0, inputs.length)).toEqual(
+    expect((await queueText(host)).slice(0, inputs.length)).toEqual(
       inputs.map((item) => item.message.content),
     );
     await loadChatHistory(host);
-    expect(await queueText()).toEqual(inputs.slice(0, 50).map((item) => item.message.content));
+    expect(await queueText(host)).toEqual(inputs.slice(0, 50).map((item) => item.message.content));
     expect(host.chatQueue).toEqual([]);
   });
 
@@ -219,8 +216,7 @@ describe("server-owned pending input pagination", () => {
     });
     applyChatPendingInputs(host, { items: [], total: 0 });
     await loadChatPendingInputs(host);
-    expect(getChatPendingInputs(host)?.page).toEqual(latestPage);
-    expect(getChatPendingInputs(host)?.before).toBeUndefined();
+    expectPage(host, latestPage);
     expect(
       getChatPendingInputs(host)
         ?.queuedInputs.map((item) => item.runId)
@@ -271,11 +267,7 @@ describe("server-owned pending input pagination", () => {
       "chat.history",
       expect.objectContaining({ inputRunIds: [input.runId] }),
     );
-    expect(
-      (await renderPendingInputs({ historyState: host, sessionKey })).querySelector(
-        ".chat-queue__text",
-      )?.textContent,
-    ).toBe("Keep my accepted input");
+    expect(await queueText(host)).toEqual(["Keep my accepted input"]);
     queued = false;
     await loadChatHistory(host);
     expect(
@@ -302,11 +294,8 @@ describe("server-owned pending input pagination", () => {
       const latestPage: ChatPendingInputsPage = {
         items: [
           {
-            ...input,
-            id: "latest-input",
+            ...queuedInput("latest-input", input.acceptedAt),
             runId: "latest-run",
-            queued: true,
-            state: "queued",
             message: {
               role: "user",
               content: "Newest retained input",
@@ -441,8 +430,7 @@ describe("server-owned pending input pagination", () => {
       expect(host.chatMessages).toEqual([canonical]);
       expect(host.chatQueue).toEqual([]);
       expect(listStoredChatOutboxes(host)).toEqual([]);
-      expect(host.chatRunId).toBe("active-run");
-      expect(host.chatStream).toBe("Live output");
+      expect(host).toMatchObject({ chatRunId: "active-run", chatStream: "Live output" });
       expect(host.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
       const container = await renderPendingInputs({
         historyState: host,
@@ -522,9 +510,7 @@ describe("server-owned pending input pagination", () => {
         await settleRefresh();
       }
 
-      expect(getChatPendingInputs(host)?.page).toEqual(latestPage);
-      expect(getChatPendingInputs(host)?.before).toBeUndefined();
-      expect(getChatPendingInputs(host)?.loading).toBe(false);
+      expectPage(host, latestPage);
       expect(host.chatQueue.some((item) => item.id === "retained-source")).toBe(false);
       expect(olderReads).toBe(2);
     },
@@ -567,9 +553,7 @@ describe("server-owned pending input pagination", () => {
       if (change === "session") {
         expect(getChatPendingInputs(host)).toBeUndefined();
       } else {
-        expect(getChatPendingInputs(host)?.page).toEqual(page);
-        expect(getChatPendingInputs(host)?.before).toBeUndefined();
-        expect(getChatPendingInputs(host)?.loading).toBe(false);
+        expectPage(host, page);
       }
       expect(host.request).toHaveBeenCalledTimes(1);
     },
@@ -593,10 +577,8 @@ describe("server-owned pending input pagination", () => {
     response.reject(new Error("Could not load latest messages"));
     await paging;
 
-    expect(getChatPendingInputs(host)?.page).toEqual(olderPage);
-    expect(getChatPendingInputs(host)?.before).toBe(2);
+    expectPage(host, olderPage, 2);
     expect(getChatPendingInputs(host)?.error).toContain("Could not load latest messages");
-    expect(getChatPendingInputs(host)?.loading).toBe(false);
     expect(host.request).toHaveBeenCalledTimes(2);
   });
 });

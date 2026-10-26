@@ -21,6 +21,7 @@ import { admitHostQueueItems } from "./chat-outbox-recovery.test-support.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import { keepVolatileQueuedMessage } from "./chat-queue.ts";
 import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
+import type { ChatHost } from "./chat-send-contract.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
 import * as chatSendSupport from "./chat-send-support.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.test-support.ts";
@@ -35,6 +36,27 @@ type DeliveredTurnRetirement = Awaited<
   ReturnType<typeof chatSendSupport.retireDeliveredQueuedUserTurn>
 >;
 const requireRecord = createRequireRecord("object", "expected-label");
+const consumedReceipt = (runId: string) => ({
+  runId,
+  state: "consumed" as const,
+  consumedByEventId: "attachment-user",
+});
+const expectOneSend = (request: ReturnType<typeof makeRequestMock>) =>
+  expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
+const cachedMessages = (host: ChatHost, key: string) =>
+  readChatMessagesFromCache(host.chatMessagesBySession ?? new Map(), host, { sessionKey: key });
+function cacheEmptySession(host: ChatHost, key: string, sessionId: string) {
+  cacheChatSessionSnapshot(
+    expectDefined(host.chatMessagesBySession, "message cache"),
+    host,
+    { sessionKey: key },
+    {
+      messages: [],
+      sessionId,
+      pagination: { hasMore: false, completeSnapshot: true },
+    },
+  );
+}
 
 function idleChatHistory(sessionKey: string) {
   return {
@@ -100,25 +122,14 @@ it.each(["visible", "inactive"])(
       const runId = await started.promise;
       expect(listStoredChatOutboxes(source)).toHaveLength(1);
       if (view === "inactive") {
-        cacheChatSessionSnapshot(
-          source.chatMessagesBySession,
-          source,
-          { sessionKey },
-          {
-            messages: [],
-            sessionId: "ack-attachment-session",
-            pagination: { hasMore: false, completeSnapshot: true },
-          },
-        );
+        cacheEmptySession(source, sessionKey, "ack-attachment-session");
         source.sessionKey = "agent:main:other";
       }
       acknowledgment.resolve({ runId, status: "started" });
       await sending;
       expect(listStoredChatOutboxes(source)).toEqual([]);
       const messages =
-        view === "visible"
-          ? source.chatMessages
-          : readChatMessagesFromCache(source.chatMessagesBySession, source, { sessionKey });
+        view === "visible" ? source.chatMessages : cachedMessages(source, sessionKey);
       expect(messages.map(extractText)).toContain("Keep the accepted attachments");
       expect(deliveredAttachmentUrls(messages[0])).toEqual(dataUrls);
       reloadChatDocumentStorage(attachments);
@@ -189,7 +200,7 @@ it.each(
         committed ? 0 : 1,
       );
       expect(host.chatMessages.map(extractText)).toContain("Latest visible reply");
-      expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
+      expectOneSend(host.request);
     } finally {
       stop();
     }
@@ -206,17 +217,15 @@ describe("chat attachment terminal retirement", () => {
     "consumed-before-read",
     "consumed-after-read",
   ])("pins lost-ACK attachment turns to durable data across split panes (%s)", async (handoff) => {
+    const sessionKey = "agent:main:visible";
     const consumesDuringHydration = handoff.startsWith("consumed-");
     const { attachments, dataUrls } = createDeliveryAttachmentBatch();
-    const sessionKey = "agent:main:visible";
     const history = createDeferred<unknown>();
     let holdHistory = false;
     let consumedRunId: string | undefined;
     const consumedHistory = () => ({
       messages: [],
-      inputReceipts: consumedRunId
-        ? [{ runId: consumedRunId, state: "consumed", consumedByEventId: "attachment-user" }]
-        : [],
+      inputReceipts: consumedRunId ? [consumedReceipt(consumedRunId)] : [],
     });
     const request = makeRequestMock({
       "chat.history": () =>
@@ -287,16 +296,7 @@ describe("chat attachment terminal retirement", () => {
           pendingSessionMessageReloadSessionKey: null,
         });
       }
-      cacheChatSessionSnapshot(
-        expectDefined(inactive.chatMessagesBySession, "inactive message cache"),
-        inactive,
-        { sessionKey },
-        {
-          messages: [],
-          pagination: { hasMore: false, completeSnapshot: true },
-          sessionId: "cached-session",
-        },
-      );
+      cacheEmptySession(inactive, sessionKey, "cached-session");
       const readPayload = outboxPayloadStore.readOutboxPayload;
       const read = vi
         .spyOn(outboxPayloadStore, "readOutboxPayload")
@@ -321,13 +321,10 @@ describe("chat attachment terminal retirement", () => {
       const cleanup = vi
         .spyOn(outboxPayloadStore, "removeOutboxPayloads")
         .mockImplementation(async (refs) => {
-          const cached = readChatMessagesFromCache(
-            inactive.chatMessagesBySession ?? new Map(),
-            inactive,
-            { sessionKey },
-          );
           if (!consumesDuringHydration) {
-            expect(deliveredAttachmentUrls(cached[0])).toEqual(dataUrls);
+            expect(deliveredAttachmentUrls(cachedMessages(inactive, sessionKey)[0])).toEqual(
+              dataUrls,
+            );
           }
           await removePayloads(refs);
         });
@@ -402,11 +399,7 @@ describe("chat attachment terminal retirement", () => {
         applyChatPendingInputs(
           visible,
           { items: [], total: 0 },
-          {
-            receipts: [
-              { runId: item.sendRunId!, state: "consumed", consumedByEventId: "attachment-user" },
-            ],
-          },
+          { receipts: [consumedReceipt(item.sendRunId!)] },
         );
         expect(listStoredChatOutboxes(visible)).toStrictEqual([]);
       }
@@ -417,7 +410,7 @@ describe("chat attachment terminal retirement", () => {
         expect(visible.chatRunId).toBeNull();
         expect(visible.chatStream).toBeNull();
         expect(visible.chatMessages.map(extractText)).toContain("terminal reply");
-        expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
+        expectOneSend(request);
         return;
       }
       if (handoff === "new-credentials" || handoff === "new-attempt") {
@@ -428,7 +421,7 @@ describe("chat attachment terminal retirement", () => {
           sendRunId: handoff === "new-attempt" ? "replacement-attempt" : item.sendRunId,
         });
         expect(visible.chatMessages).toEqual([]);
-        expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
+        expectOneSend(request);
         return;
       }
 
@@ -440,11 +433,7 @@ describe("chat attachment terminal retirement", () => {
         expect(visible.chatRunId).toBe("newer-run");
         expect(visible.chatStream).toBe("newer run is still streaming");
       }
-      const inactiveCached = readChatMessagesFromCache(
-        inactive.chatMessagesBySession ?? new Map(),
-        inactive,
-        { sessionKey },
-      );
+      const inactiveCached = cachedMessages(inactive, sessionKey);
       expect(deliveredAttachmentUrls(inactiveCached[0])).toEqual(dataUrls);
       expect(listStoredChatOutboxes(visible)[0]?.queue[0]).toMatchObject({
         id: item.id,
@@ -458,7 +447,7 @@ describe("chat attachment terminal retirement", () => {
 
       expect(listStoredChatOutboxes(visible)).toStrictEqual([]);
       expect(cleanup).toHaveBeenCalledWith([item.attachmentPayload]);
-      expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
+      expectOneSend(request);
     } finally {
       hydration.resolve();
       history.resolve(idleChatHistory(sessionKey));

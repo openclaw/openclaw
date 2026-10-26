@@ -152,14 +152,11 @@ describe("chat pane read markers", () => {
     state.sessionsResult = sessionsResult(
       [
         row,
-        {
+        unreadRow({
           key: "agent:main:subagent:background",
-          kind: "direct",
           spawnedBy: row.key,
           status: "done",
-          unread: true,
-          updatedAt: 20,
-        },
+        }),
       ],
       20,
     );
@@ -179,15 +176,9 @@ describe("chat pane read markers", () => {
   it("marks an unread failure read even when its regular unread flag is false", () => {
     const { pane, patch } = createReadMarkerPane();
 
-    pane.markSessionRead({
-      key: "agent:main:current",
-      kind: "direct",
-      label: "Failed run",
-      updatedAt: 20,
-      endedAt: 20,
-      status: "failed",
-      unread: false,
-    });
+    pane.markSessionRead(
+      unreadRow({ label: "Failed run", endedAt: 20, status: "failed", unread: false }),
+    );
 
     expectRead(patch);
   });
@@ -437,8 +428,7 @@ describe("chat pane read markers", () => {
     );
 
     it("retries a hidden run after a transient UNAVAILABLE failure", async () => {
-      const clock = vi.spyOn(Date, "now").mockReturnValue(0);
-      onTestFinished(() => clock.mockRestore());
+      const clock = mockClock();
       const { pane, patch } = createParentPane([run("done")]);
       patch.mockRejectedValueOnce(
         new GatewayRequestError({ code: ErrorCodes.UNAVAILABLE, message: "ack failed" }),

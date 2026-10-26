@@ -5,6 +5,7 @@ import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { GatewayPendingRequests } from "../../../../packages/gateway-client/src/pending-request.js";
 import type { RequestFrame } from "../../../../packages/gateway-protocol/src/schema/frames.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
+import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
 import { useFakeClock } from "../../test-helpers/fake-clock.ts";
 import { createTestGatewayClient as clientWithRequest } from "../../test-helpers/gateway-client.ts";
@@ -34,6 +35,32 @@ function unavailable(message = "History is temporarily unavailable") {
 function requestTimeout(method: string) {
   return new GatewayProtocolRequestTimeoutError({ method, timeoutMs: 30_000, requestSent: true });
 }
+function failStorage() {
+  vi.spyOn(sessionStorage, "setItem").mockImplementation(() => {
+    throw new Error("quota");
+  });
+}
+function started(params: unknown) {
+  return {
+    runId: requireRecord(params, "send payload").idempotencyKey,
+    status: "started",
+    messageSeq: 1,
+  };
+}
+function waitingInput(id: string, text: string, sendRunId: string): ChatQueueItem {
+  return {
+    id,
+    text,
+    sendRunId,
+    createdAt: 1,
+    sendState: "waiting-reconnect",
+    sessionKey: "agent:main",
+  };
+}
+function expectDrained(host: ReturnType<typeof makeChatHost>) {
+  expect(host.chatQueue).toEqual([]);
+  expect(listStoredChatOutboxes(host)).toStrictEqual([]);
+}
 
 describe("transient outbox delivery recovery", () => {
   it.each([undefined, "steer"] as const)(
@@ -44,11 +71,7 @@ describe("transient outbox delivery recovery", () => {
         ...(queueMode ? { chatRunId: "active-run", chatFollowUpMode: queueMode } : {}),
         requestHandlers: {
           "chat.history": idleChatHistory(),
-          "chat.send": (params: unknown) => ({
-            runId: requireRecord(params, "resumed payload").idempotencyKey,
-            status: "started",
-            messageSeq: 1,
-          }),
+          "chat.send": started,
         },
       });
       host.gatewayWorkPaused = true;
@@ -76,9 +99,7 @@ describe("transient outbox delivery recovery", () => {
       const volatile = mode !== "durable";
       useFakeClock();
       if (volatile) {
-        vi.spyOn(sessionStorage, "setItem").mockImplementation(() => {
-          throw new Error("quota");
-        });
+        failStorage();
       }
       const sends: unknown[] = [];
       const host = makeChatHost({
@@ -238,8 +259,7 @@ describe("transient outbox delivery recovery", () => {
           sendError: "Synthetic rejection",
         });
       } else {
-        expect(host.chatQueue).toEqual([]);
-        expect(listStoredChatOutboxes(host)).toEqual([]);
+        expectDrained(host);
       }
     },
   );
@@ -255,21 +275,16 @@ describe("transient outbox delivery recovery", () => {
     "retries a retryable send rejection after %s (volatile=%s)",
     async (trigger, volatile) => {
       if (volatile) {
-        vi.spyOn(sessionStorage, "setItem").mockImplementation(() => {
-          throw new Error("quota");
-        });
+        failStorage();
       }
       const sendRunIds: string[] = [];
-      let sendAttempts = 0;
-
       const host = makeChatHost({
         requestHandlers: {
           "chat.history": idleChatHistory(),
           "chat.send": (params: unknown) => {
             const payload = requireRecord(params, "retryable send payload");
             sendRunIds.push(String(payload.idempotencyKey));
-            sendAttempts += 1;
-            if (sendAttempts === 1) {
+            if (sendRunIds.length === 1) {
               throw trigger === "suspension"
                 ? new GatewayRequestError({
                     code: "UNAVAILABLE",
@@ -289,19 +304,18 @@ describe("transient outbox delivery recovery", () => {
       useFakeClock();
       await handleSendChat(host);
 
-      expect(host.connected).toBe(true);
-      expect(host.chatMessage).toBe("");
-      expect(host.chatQueue[0]).toMatchObject({
-        sendAttempts: 0,
-        sendState: "waiting-reconnect",
+      expect(host).toMatchObject({
+        connected: true,
+        chatMessage: "",
+        chatQueue: [expect.objectContaining({ sendAttempts: 0, sendState: "waiting-reconnect" })],
       });
-      expect(sendAttempts).toBe(1);
+      expect(sendRunIds).toHaveLength(1);
       if (trigger === "suspension") {
         expect(host.chatQueue[0]?.sendError).toBeUndefined();
         expect(host.chatError).toBeNull();
         host.gatewayWorkPaused = true;
         await vi.advanceTimersByTimeAsync(100);
-        expect(sendAttempts).toBe(1);
+        expect(sendRunIds).toHaveLength(1);
         host.gatewayWorkPaused = false;
         await resumeStoredChatOutboxes(host);
       } else if (trigger === "reconnect") {
@@ -311,13 +325,12 @@ describe("transient outbox delivery recovery", () => {
         await vi.advanceTimersByTimeAsync(100);
         // The timer starts a fire-and-forget drain; join its observable outcome.
         await waitForFast(() => {
-          expect(sendAttempts).toBe(2);
+          expect(sendRunIds).toHaveLength(2);
           expect(listStoredChatOutboxes(host)).toStrictEqual([]);
         });
       }
-      expect(sendAttempts).toBe(2);
-      expect(host.chatQueue).toEqual([]);
-      expect(listStoredChatOutboxes(host)).toStrictEqual([]);
+      expect(sendRunIds).toHaveLength(2);
+      expectDrained(host);
       expect(sendRunIds[1]).toBe(sendRunIds[0]);
     },
   );
@@ -346,8 +359,7 @@ describe("transient outbox delivery recovery", () => {
         },
         "chat.send": (params: unknown) => {
           sendAttempts += 1;
-          const payload = requireRecord(params, "history retry send payload");
-          return { runId: payload.idempotencyKey, status: "started", messageSeq: 1 };
+          return started(params);
         },
       });
       host.client = clientWithRequest(request);
@@ -375,16 +387,7 @@ describe("transient outbox delivery recovery", () => {
     const sends: unknown[] = [];
     let historyReads = 0;
     const host = makeChatHost({
-      chatQueue: [
-        {
-          id: "edited-during-readiness",
-          text: "Original draft",
-          createdAt: 1,
-          sendRunId: "original-submission",
-          sendState: "waiting-reconnect",
-          sessionKey: "agent:main",
-        },
-      ],
+      chatQueue: [waitingInput("edited-during-readiness", "Original draft", "original-submission")],
       requestHandlers: {
         "chat.history": () => {
           if (++historyReads === 1) {
@@ -395,11 +398,7 @@ describe("transient outbox delivery recovery", () => {
         },
         "chat.send": (params: unknown) => {
           sends.push(params);
-          return {
-            runId: requireRecord(params, "edited input").idempotencyKey,
-            status: "started",
-            messageSeq: 1,
-          };
+          return started(params);
         },
       },
     });
@@ -445,16 +444,7 @@ describe("transient outbox delivery recovery", () => {
           throw unavailable();
         },
       },
-      chatQueue: [
-        {
-          id: "shared-retry",
-          text: "wait for backoff",
-          createdAt: 1,
-          sendRunId: "shared-retry-run",
-          sendState: "waiting-reconnect",
-          sessionKey: "agent:main",
-        },
-      ],
+      chatQueue: [waitingInput("shared-retry", "wait for backoff", "shared-retry-run")],
     });
     admitHostQueueItems(owner);
     const sibling = makeChatHost({

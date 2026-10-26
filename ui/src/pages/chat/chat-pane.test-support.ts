@@ -1,14 +1,6 @@
 import { createComponent, createSignal, flush, merge, Show } from "solid-js";
 import { onTestFinished, vi } from "vitest";
 import type {
-  SessionSuggestion,
-  SessionSuggestionEvent,
-  SessionTypingEvent,
-  SessionCatalogTranscriptItem,
-  TaskSuggestion,
-  TaskSuggestionEvent,
-} from "../../../../packages/gateway-protocol/src/index.js";
-import type {
   ControlUiSessionBranch,
   ControlUiSessionPullRequest,
 } from "../../../../src/gateway/control-ui-contract.js";
@@ -28,10 +20,8 @@ import {
   handleQuestionPromptEvent,
 } from "../../app/question-prompt.ts";
 import { loadSettings } from "../../app/settings.ts";
-import type { SidebarSessionMutationResult } from "../../components/app-sidebar-session-types.ts";
 import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
 import { createAgentCapability } from "../../lib/agents/index.ts";
-import type { CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { createSessionCapability, type SessionCapability } from "../../lib/sessions/index.ts";
 import { ControlUiPluginRuntime } from "../../plugins/control-ui-runtime.ts";
 import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
@@ -61,12 +51,7 @@ import type { ChatPageHost } from "./chat-state-host.ts";
 import { createPageState } from "./chat-state-page.ts";
 import type { ChatTypingActorState } from "./chat-typing-presence.ts";
 import type { ChatProps } from "./chat-view.tsx";
-import type { HeaderMenuAction } from "./components/chat-header-session-menu.ts";
 import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
-import type {
-  ChatTaskSuggestionTrayProps,
-  TaskSuggestionStartMode,
-} from "./components/chat-task-suggestions.tsx";
 import type { ChatTranscript } from "./components/chat-transcript-controller.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
 import type { SessionSnapshotStore } from "./session-snapshot-store.ts";
@@ -153,71 +138,48 @@ export interface TestChatPane extends HTMLElement, PaneTestLifecycle {
   connectedCallback: () => void;
   connectionGeneration: number;
   catalogLoadGeneration: number;
-  continueCatalogSession: (key: CatalogSessionKey) => Promise<void>;
+  continueCatalogSession: ChatPaneRuntime["continueCatalogSession"];
   forkFromMessage: (entryId: string) => Promise<void>;
   createSession: () => Promise<boolean>;
   recoverSession: () => Promise<boolean>;
-  restartRecoveryComposerBanner: () =>
-    | {
-        text: string;
-        actionLabel: string;
-        actionStyle?: "primary";
-        busy?: boolean;
-        busyLabel?: string;
-        onAction: () => void;
-      }
-    | undefined;
+  restartRecoveryComposerBanner: ChatPaneRuntime["restartRecoveryComposerBanner"];
   prepareForEviction: () => void;
   restoreArchivedSession: (sessionKey: string, expectedSessionId: string) => Promise<void>;
   disconnectedCallback: () => void;
   discardStagedAttachments?: () => void;
   resumeStagedAttachments?: () => void;
-  resolveTaskSuggestion: (
-    suggestion: TaskSuggestion,
-    action: "accept" | "dismiss",
-    mode?: TaskSuggestionStartMode,
-  ) => Promise<void>;
-  copyTaskSuggestionPrompt: (suggestion: TaskSuggestion) => Promise<void>;
+  resolveTaskSuggestion: ChatPaneRuntime["resolveTaskSuggestion"];
+  copyTaskSuggestionPrompt: ChatPaneRuntime["copyTaskSuggestionPrompt"];
   handleDocumentKeydown: (event: KeyboardEvent) => void;
-  handleTaskSuggestionEvent: (event: TaskSuggestionEvent) => void;
+  handleTaskSuggestionEvent: ChatPaneRuntime["handleTaskSuggestionEvent"];
   refreshTaskSuggestions: () => Promise<void>;
   refreshSessionPullRequests: (options?: { refresh?: boolean; automatic?: boolean }) => boolean;
   sessionPullRequests: ControlUiSessionPullRequest[];
   sessionPullRequestsBranch: ControlUiSessionBranch | undefined;
-  suggestionChatProps: (
-    connected: boolean,
-    archived: boolean,
-    multiIdentity: boolean,
-  ) => ChatTaskSuggestionTrayProps;
+  suggestionChatProps: ChatPaneRuntime["suggestionChatProps"];
   addCurrentSessionSuggestion: () => Promise<void>;
   resetSessionSuggestions: () => void;
   sessionSuggestionsRequestVersion: number;
   sessionSuggestionsRefreshPromise: Promise<void> | undefined;
   sessionSuggestionTargetSignature: string;
   syncSessionSuggestionTarget: (agentId: string, session: GatewaySessionRow | undefined) => void;
-  handleSessionSuggestionEvent: (event: SessionSuggestionEvent) => void;
-  handleSessionTypingEvent: (event: SessionTypingEvent) => void;
+  handleSessionSuggestionEvent: ChatPaneRuntime["handleSessionSuggestionEvent"];
+  handleSessionTypingEvent: ChatPaneRuntime["handleSessionTypingEvent"];
   clearTypingActorForSessionMessage: (payload: unknown) => void;
   pruneTypingActors: () => void;
   typingActors: Map<string, ChatTypingActorState>;
   clearTypingActors: () => void;
   sendTypingState: (typing: boolean, preview?: string, cursor?: number) => void;
   refreshSessionSuggestions: () => Promise<void>;
-  resolveCurrentSessionSuggestion: (
-    suggestion: SessionSuggestion,
-    resolution: "send" | "queue" | "edit" | "dismiss",
-  ) => Promise<void>;
+  resolveCurrentSessionSuggestion: ChatPaneRuntime["resolveCurrentSessionSuggestion"];
   onPaneSessionChange?: (paneId: string, sessionKey: string) => void;
   onSessionDeleted: ChatPaneRuntime["onSessionDeleted"];
   paneId: string;
   sessionKey: string;
   performUpdate: () => void;
-  deferSessionHydrationUntilTranscript: (
-    sessionKey: string,
-    transcriptLoad: Promise<boolean>,
-  ) => void;
+  deferSessionHydrationUntilTranscript: ChatPaneRuntime["deferSessionHydrationUntilTranscript"];
   paneLabel: string | undefined;
-  catalogItemMessage: (item: SessionCatalogTranscriptItem) => Record<string, unknown> | null;
+  catalogItemMessage: ChatPaneRuntime["catalogItemMessage"];
   handleTranscriptScroll: (event: Event) => void;
   handleTranscriptHistoryIntent: (event: Event) => void;
   historyAutoLoadBlocked: boolean;
@@ -225,7 +187,7 @@ export interface TestChatPane extends HTMLElement, PaneTestLifecycle {
   historySentinel: HTMLElement | null;
   transcriptScrollTop: number | null;
   syncHistoryObserver: () => void;
-  loadCatalogSession: (key: CatalogSessionKey, older: boolean) => Promise<boolean>;
+  loadCatalogSession: ChatPaneRuntime["loadCatalogSession"];
   prependUniqueCatalogMessages: (messages: unknown[]) => unknown[];
   loadOlderMessages: (readerIntent?: boolean) => Promise<boolean>;
   resetOlderMessagesViewport: () => void;
@@ -233,28 +195,13 @@ export interface TestChatPane extends HTMLElement, PaneTestLifecycle {
   hasOlderMessages: () => boolean;
   olderCursorsSeen: Set<string>;
   beginHeaderRename: (row: GatewaySessionRow) => void;
-  handleHeaderSessionAction: (
-    action: HeaderMenuAction,
-    row: GatewaySessionRow,
-  ) => Promise<SidebarSessionMutationResult | void>;
+  handleHeaderSessionAction: ChatPaneRuntime["handleHeaderSessionAction"];
   onboarding: boolean;
   cancelHeaderRename: () => void;
   commitHeaderRename: () => void;
-  handleHeaderMenuAction: (
-    action: "reveal" | "copy-path" | "copy-branch",
-    row: GatewaySessionRow,
-    workspaceRoot: string | null,
-    branch: string | null,
-  ) => void;
-  loadHeaderMenuData: (
-    row: GatewaySessionRow,
-    agentWorkspace: string | undefined,
-    workspaceGit: boolean,
-  ) => Promise<void>;
-  changeHeaderPlacement: (
-    row: GatewaySessionRow,
-    mode: "move" | "recover" | "reclaim",
-  ) => Promise<void>;
+  handleHeaderMenuAction: ChatPaneRuntime["handleHeaderMenuAction"];
+  loadHeaderMenuData: ChatPaneRuntime["loadHeaderMenuData"];
+  changeHeaderPlacement: ChatPaneRuntime["changeHeaderPlacement"];
   markSessionRead: (row: GatewaySessionRow | undefined) => void;
   applySessionsState: (stateValue: ApplicationContext["sessions"]["state"]) => void;
   renderPaneHeader: ChatPaneRuntime["renderPaneHeader"];
