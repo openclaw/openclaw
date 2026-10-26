@@ -56,6 +56,7 @@ export function UsageQueryFilter(props: {
   return (
     <Menu
       id={`usage-filter-${props.filterKey}`}
+      lazy
       label={`${props.label} ${selected().length > 0 ? selected().length : t("usage.filters.all")}`}
       class="usage-filter-select"
       triggerClass="usage-filter-trigger"
