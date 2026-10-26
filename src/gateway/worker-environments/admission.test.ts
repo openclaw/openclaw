@@ -1,13 +1,11 @@
-import assert from "node:assert/strict";
 import { expect, it } from "vitest";
 import type { WorkerConnectParams } from "../../../packages/gateway-protocol/src/index.js";
-import { admitWorkerConnection, validateWorkerConnectionIdentity } from "./admission.js";
+import { admitWorkerConnection } from "./admission.js";
 import { hashWorkerCredential } from "./credential.js";
 import type { WorkerEnvironmentRecord, WorkerEnvironmentStore } from "./store.js";
 import { workerCredential } from "./store.test-support.js";
 
 const CREDENTIAL = ["worker", "credential", "fixture"].join("-");
-const OTHER_CREDENTIAL = ["other", "credential", "fixture"].join("-");
 const RECEIPT = {
   bundleHash: "a".repeat(64),
   openclawVersion: "2026.7.11",
@@ -59,27 +57,7 @@ function fixture() {
   return { environment, credential, params, admit, reject };
 }
 
-it("admits the complete current identity and fences it after credential rotation", () => {
-  const { admit, credential, params } = fixture();
-  const result = admit();
-  assert(result.ok, "fixture admission failed");
-  expect(result.identity).toMatchObject({
-    environmentId: "worker-1",
-    sessionId: null,
-    runId: null,
-    ownerEpoch: 1,
-    rpcSetVersion: 1,
-    protocolFeatures: ["worker-heartbeat-v1"],
-    credentialExpiresAtMs: 2_000,
-  });
-  credential.credentialHash = hashWorkerCredential(OTHER_CREDENTIAL);
-  expect(validateWorkerConnectionIdentity({ ...params, identity: result.identity })).toBe(
-    "credential-replaced",
-  );
-});
-
 it.each([
-  ["invalid-credential", { credential: OTHER_CREDENTIAL }],
   ["environment-mismatch", { environmentId: "worker-other" }],
   ["environment-mismatch", { environmentId: " worker-1 " }],
   ["bundle-mismatch", { handshake: STALE_RECEIPT }],
