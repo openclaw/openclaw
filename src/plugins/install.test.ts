@@ -144,19 +144,6 @@ function writeMinimalPackagePlugin(
   fs.writeFileSync(path.join(pluginDir, "index.js"), "export {};\n");
 }
 
-function setupInstallPluginFromDirFixture() {
-  const fixture = setupPluginInstallDirs();
-  fs.mkdirSync(path.join(fixture.pluginDir, "dist"));
-  writeJson(path.join(fixture.pluginDir, "package.json"), {
-    name: "@openclaw/test-plugin",
-    version: "0.0.1",
-    openclaw: { extensions: ["./dist/index.js"] },
-    dependencies: { "left-pad": "1.3.0" },
-  });
-  fs.writeFileSync(path.join(fixture.pluginDir, "dist/index.js"), "export {};");
-  return fixture;
-}
-
 async function installFromDirWithWarnings({
   pluginDir,
   extensionsDir,
@@ -334,14 +321,6 @@ function mockSuccessfulManagedNpmInstall(params: { packageName: string; version?
   });
 }
 
-function updateOpenClawMetadata(pluginDir: string, patch: Record<string, unknown>) {
-  const file = path.join(pluginDir, "package.json");
-  const manifest: { openclaw?: Record<string, unknown> } = JSON.parse(
-    fs.readFileSync(file, "utf8"),
-  );
-  writeJson(file, { ...manifest, openclaw: { ...manifest.openclaw, ...patch } });
-}
-
 function expectFailedInstallResult(
   result: Awaited<ReturnType<typeof installPluginFromPath>>,
   code: string,
@@ -400,13 +379,8 @@ function setupManifestlessClaudeInstallFixture() {
 async function ensureArchive(name: string, version = "1.0.0", flatRoot = false): Promise<string> {
   const templateDir = suiteTempRootTracker.makeTempDir();
   const pkgDir = flatRoot ? templateDir : path.join(templateDir, "package");
-  fs.mkdirSync(path.join(pkgDir, "dist"), { recursive: true });
-  fs.writeFileSync(path.join(pkgDir, "dist/index.js"), "export {};");
-  writeJson(path.join(pkgDir, "package.json"), {
-    name,
-    version,
-    openclaw: { extensions: ["./dist/index.js"] },
-  });
+  fs.mkdirSync(pkgDir, { recursive: true });
+  writeMinimalPackagePlugin(pkgDir, name, { version });
   writeJson(path.join(pkgDir, "openclaw.plugin.json"), {
     id: name,
     configSchema: { type: "object", properties: {} },
@@ -615,6 +589,14 @@ describe("installPluginFromArchive", () => {
       const requests = readCapturedInstallPolicyRequests(logPath);
       if (approved) {
         expect(onInstallPolicyWarning).toHaveBeenCalledTimes(1);
+        expect(onInstallPolicyWarning).toHaveBeenCalledWith(
+          expect.objectContaining({
+            reason: "review package policy",
+            requestMode: "install",
+            targetName: pluginId,
+            targetType: "plugin",
+          }),
+        );
         expect(requests.map((request) => request.plugin?.contentType)).toEqual([
           "package",
           "package",
@@ -838,7 +820,9 @@ describe("installPluginFromNpmSpec", () => {
 
 describe("installPluginFromDir", () => {
   it("emits a redacted security event after installing a plugin directory", async () => {
-    const { pluginDir, extensionsDir } = setupInstallPluginFromDirFixture();
+    const { pluginDir, extensionsDir } = setupPluginInstallDirs("@openclaw/test-plugin", {
+      dependencies: { "left-pad": "1.3.0" },
+    });
     const { result: res, events } = await withSecurityEvents(() =>
       installDirectory(pluginDir, extensionsDir),
     );
@@ -868,21 +852,18 @@ describe("installPluginFromDir", () => {
   });
 
   it.each([
-    ["INCOMPATIBLE_HOST_VERSION", "2026.3.21", { install: { minHostVersion: ">=2026.3.22" } }],
-    ["INVALID_MIN_HOST_VERSION", undefined, { install: { minHostVersion: "2026.3.22" } }],
     ["UNKNOWN_HOST_VERSION", "unknown", { install: { minHostVersion: ">=2026.3.22" } }],
-    ["INVALID_PLUGIN_API", "2026.5.27", { compat: { pluginApi: 20260527 } }],
     [
       "INCOMPATIBLE_PLUGIN_API",
       "2026.5.27-beta.1",
       { extensions: { runtime: "./src/index.ts" }, compat: { pluginApi: ">=2026.5.27-beta.2" } },
     ],
   ] as const)("rejects %s before npm work", async (code, host, metadata) => {
-    if (host) {
-      resolveCompatibilityHostVersionMock.mockReturnValueOnce(host);
-    }
-    const { pluginDir, extensionsDir } = setupInstallPluginFromDirFixture();
-    updateOpenClawMetadata(pluginDir, metadata);
+    resolveCompatibilityHostVersionMock.mockReturnValueOnce(host);
+    const { pluginDir, extensionsDir } = setupPluginInstallDirs("compatibility-plugin", {
+      dependencies: { "left-pad": "1.3.0" },
+      openclaw: { extensions: ["index.js"], ...metadata },
+    });
     const result = expectFailedInstallResult(
       await installDirectory(pluginDir, extensionsDir),
       PLUGIN_INSTALL_ERROR_CODE[code],

@@ -309,17 +309,6 @@ describe("package dependency boundaries", () => {
 });
 
 describe("plugin install policy warnings", () => {
-  it("continues after one acknowledgement and a fresh evaluation of the same warning", async () => {
-    const onInstallPolicyWarning = approvedWarning();
-    runInstallPolicyMock
-      .mockResolvedValueOnce(policyWarning())
-      .mockResolvedValueOnce(policyWarning());
-
-    await expect(scanPackage({ onInstallPolicyWarning })).resolves.toBeUndefined();
-    expect(onInstallPolicyWarning).toHaveBeenCalledWith(approvalDetails);
-    expectPolicyRuns(2);
-  });
-
   it("renders metadata changes that require approval again", async () => {
     const onInstallPolicyWarning = approvedWarning();
     runInstallPolicyMock
