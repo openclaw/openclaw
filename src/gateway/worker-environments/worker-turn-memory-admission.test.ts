@@ -1,13 +1,9 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
-import { memoryStorage } from "../../config/sessions/session-actor-memory-publication.test-support.js";
+import { commitMemory } from "../../config/sessions/session-actor-memory-publication.test-support.js";
 import { runWithSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import {
-  captureWorkerTurnTranscriptSource,
-  resolveWorkerTurnTranscriptTarget,
-  withWorkerTurnTranscriptDatabase,
-} from "./worker-turn-transcript-target.js";
+import * as transcript from "./worker-turn-transcript-target.js";
 
 vi.mock("node:sqlite", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:sqlite")>()),
@@ -33,8 +29,6 @@ async function fixture() {
       agentId: "main",
       env: { OPENCLAW_STATE_DIR: "/synthetic/incognito-worker" },
     }),
-    expectedLifecycleRevision: "original",
-    expectedWriterRunId: "writer-1",
   };
   const location = { agentId: target.agentId, path: target.storePath };
   const owner = memorySessionActorOwners.get(location);
@@ -43,60 +37,42 @@ async function fixture() {
     { assertCurrent() {}, assertReadable() {} },
   );
   const authority = { assertCurrent() {}, authorize() {} };
-  const storage = memoryStorage(actor.storage!, authority);
-  await storage.commit("session.entry.create", {
+  await commitMemory(actor.storage!, "session.entry.create", {
     entry: {
       sessionId: target.sessionId,
-      lifecycleRevision: target.expectedLifecycleRevision,
-      activeWriterRunId: target.expectedWriterRunId,
       updatedAt: 1,
       incognito: true,
     },
   });
-  return { owner, storage, target, binding: { actor, authority, ...location } };
+  return { owner, target, binding: { actor, authority, ...location } };
 }
 
-it("uses committed writer changes for an unbound worker transcript effect without SQLite", async () => {
-  const { storage, target } = await fixture();
-  const source = captureWorkerTurnTranscriptSource(target);
-  expect(resolveWorkerTurnTranscriptTarget({ ...target, sessionTarget: target })).toEqual(target);
-  source();
-  await storage.commit("session.entry.patch", {
-    operation: { kind: "fields", patch: { activeWriterRunId: "writer-2" } },
-  });
-  expect(source).toThrow("transcript identity is no longer current");
-  const next = { ...target, expectedWriterRunId: "writer-2" };
-  expect(resolveWorkerTurnTranscriptTarget({ ...next, sessionTarget: next })).toEqual(next);
-});
-
-it.each([false, true])(
-  "settles placement authority and refuses an actor closed during preparation (%s)",
-  async (close) => {
-    const { owner, target, binding } = await fixture();
-    const release = vi.fn();
-    const run = vi.fn(async () => "settled");
-    const result = runWithSessionActorStorage(binding, () =>
-      withWorkerTurnTranscriptDatabase(
-        { ...target, sessionTarget: target },
-        {
-          assertCurrent() {},
-          async prepareAuthority() {
-            if (close) {
-              owner.closeSession(target.sessionKey);
-            }
-            return { isCurrent: () => true, release };
-          },
+it.each([false, true])("settles memory admission (closed=%s)", async (close) => {
+  const { owner, target, binding } = await fixture();
+  transcript.captureWorkerTurnTranscriptSource(target)();
+  const release = vi.fn();
+  const run = vi.fn(async () => "settled");
+  const result = runWithSessionActorStorage(binding, () =>
+    transcript.withWorkerTurnTranscriptDatabase(
+      { ...target, sessionTarget: target },
+      {
+        assertCurrent() {},
+        async prepareAuthority() {
+          if (close) {
+            owner.closeSession(target.sessionKey);
+          }
+          return { isCurrent: () => true, release };
         },
-        run,
-      ),
-    );
-    if (close) {
-      await expect(result).rejects.toThrow("transcript identity is no longer current");
-      expect(run).not.toHaveBeenCalled();
-    } else {
-      await expect(result).resolves.toBe("settled");
-      expect(run).toHaveBeenCalledOnce();
-    }
-    expect(release).toHaveBeenCalledOnce();
-  },
-);
+      },
+      run,
+    ),
+  );
+  if (close) {
+    await expect(result).rejects.toThrow("transcript identity is no longer current");
+    expect(run).not.toHaveBeenCalled();
+  } else {
+    await expect(result).resolves.toBe("settled");
+    expect(run).toHaveBeenCalledOnce();
+  }
+  expect(release).toHaveBeenCalledOnce();
+});

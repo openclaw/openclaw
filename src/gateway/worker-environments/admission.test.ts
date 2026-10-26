@@ -2,15 +2,13 @@ import { expect, it } from "vitest";
 import type { WorkerConnectParams } from "../../../packages/gateway-protocol/src/index.js";
 import { admitWorkerConnection } from "./admission.js";
 import { hashWorkerCredential } from "./credential.js";
+import { createDispatchEnvironmentFixtures } from "./placement-dispatch-test-fixtures.js";
 import type { WorkerEnvironmentRecord, WorkerEnvironmentStore } from "./store.js";
 import { workerCredential } from "./store.test-support.js";
 
 const CREDENTIAL = ["worker", "credential", "fixture"].join("-");
-const RECEIPT = {
-  bundleHash: "a".repeat(64),
-  openclawVersion: "2026.7.11",
-  protocolFeatures: ["worker-heartbeat-v1"],
-};
+const { ready } = createDispatchEnvironmentFixtures();
+const RECEIPT = ready.bootstrapReceipt;
 const STALE_RECEIPT = { ...RECEIPT, bundleHash: "b".repeat(64) };
 type Admission = WorkerConnectParams["admission"];
 type AdmissionOverrides = Partial<Omit<Admission, "sessionId" | "runId">> &
@@ -18,17 +16,11 @@ type AdmissionOverrides = Partial<Omit<Admission, "sessionId" | "runId">> &
 
 function fixture() {
   const owner = { environmentId: "worker-1", ownerEpoch: 1 };
-  const environment = {
-    ...owner,
-    state: "ready",
-    destroyRequestedAtMs: null,
-    bootstrapReceipt: RECEIPT,
-  } as WorkerEnvironmentRecord;
+  const environment: WorkerEnvironmentRecord = { ...ready, ...owner };
   const credential = {
     ...owner,
     ...workerCredential(hashWorkerCredential(CREDENTIAL)),
     bundleHash: RECEIPT.bundleHash,
-    deliveredAtMs: null,
   };
   const store = {
     get: (id: string) => (id.trim() === environment.environmentId ? environment : undefined),

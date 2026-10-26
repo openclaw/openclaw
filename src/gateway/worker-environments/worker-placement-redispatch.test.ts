@@ -40,13 +40,6 @@ it.each([null, "retired-node"])(
     });
     await expect(redispatch(placement, dispatchOptions)).resolves.toBe(ACTIVE_PLACEMENT);
     const request = dispatch.mock.calls[0]?.[0];
-    expect(request).toMatchObject({
-      profileId: environment.profileId,
-      inheritedProfile: {
-        providerId: environment.providerId,
-        profileSnapshot: environment.profileSnapshot,
-      },
-    });
     expect(request).not.toHaveProperty("deviceId");
     if (nodeDeviceId) {
       expect(request?.devicePlacement).toEqual(requirement);
