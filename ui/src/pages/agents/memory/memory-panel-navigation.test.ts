@@ -37,7 +37,7 @@ it.each(["maintenance", "confirmation", "config"] as const)(
   async (operation) => {
     const pathname = "/systems";
     const destinationLabel = `Dreaming destination: ${pathname}`;
-    const pending = deferred<void>();
+    const pending = deferred();
     const method = "doctor.memory.backfillDreamDiary";
     const request = requestFor({
       [method]: () => pending.promise,
