@@ -9,32 +9,28 @@ import { makeQaSuiteTestScenario as makeScenario } from "./suite-test-helpers.js
 
 const mockLane = { providerMode: "mock-openai", primaryModel: "mock-openai/gpt-5.6-luna" } as const;
 const liveLane = { providerMode: "live-frontier", primaryModel: "openai/gpt-5.6-luna" } as const;
-type Lane = Parameters<typeof describeQaProviderLaneMismatches>[0];
-const mismatches = (scenario: Lane["scenario"], overrides: Partial<Lane> = {}) =>
-  expect(describeQaProviderLaneMismatches({ ...mockLane, scenario, ...overrides }));
 
 it("excludes a mock-pinned Matrix scenario from a live profile execution", () => {
   const scenario = readQaScenarioById("matrix-room-block-streaming");
-  expect(
-    resolveQaRunProfileExecutionSelection({
-      scenarios: [scenario],
-      ...liveLane,
-      channelDriver: "live",
-      channel: "matrix",
-      resolveModuleFlowSupport: () => true,
-    }),
-  ).toEqual({
+  const selection = resolveQaRunProfileExecutionSelection({
+    scenarios: [scenario],
+    ...liveLane,
+    channelDriver: "live",
+    channel: "matrix",
+    resolveModuleFlowSupport: () => true,
+  });
+  expect(selection).toEqual({
     selectedScenarios: [],
     excludedScenarios: [{ scenario, reasons: ["providerMode=mock-openai"] }],
   });
 });
 
 it("reports every declared mismatch in one decision", () => {
-  mismatches(
-    makeScenario("strict-live-lane", {
+  const reasons = describeQaProviderLaneMismatches({
+    ...mockLane,
+    scenario: makeScenario("strict-live-lane", {
       channel: "matrix",
       flowKind: "module",
-      runtimePairLane: "core",
       config: {
         requiredProviderMode: "live-frontier",
         requiredChannelDriver: "live",
@@ -43,8 +39,11 @@ it("reports every declared mismatch in one decision", () => {
         authMode: "subscription",
       },
     }),
-    { channelDriver: "crabline", channel: "telegram", claudeCliAuthMode: "api-key" },
-  ).toEqual([
+    channelDriver: "crabline",
+    channel: "telegram",
+    claudeCliAuthMode: "api-key",
+  });
+  expect(reasons).toEqual([
     "providerMode=live-frontier",
     "channelDriver=live",
     "channel=matrix",

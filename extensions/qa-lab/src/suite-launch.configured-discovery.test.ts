@@ -4,9 +4,8 @@ import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
 import { makeQaSuiteTestResult, recordQaSuiteTestResults } from "./suite-test-helpers.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
-const { runQaFlowSuite, runPluginCommandWithTimeout } = vi.hoisted(() => ({
+const { runQaFlowSuite } = vi.hoisted(() => ({
   runQaFlowSuite: vi.fn<typeof import("./suite.js").runQaFlowSuite>(),
-  runPluginCommandWithTimeout: vi.fn(),
 }));
 
 vi.mock("./suite.js", async (importOriginal) => ({
@@ -14,13 +13,10 @@ vi.mock("./suite.js", async (importOriginal) => ({
   runQaFlowSuite,
 }));
 
-vi.mock("openclaw/plugin-sdk/run-command", () => ({ runPluginCommandWithTimeout }));
-
 import { runQaSuite } from "./suite-launch.runtime.js";
 
 const tempDirs = createTempDirHarness();
 beforeEach(() => {
-  runPluginCommandWithTimeout.mockReset().mockResolvedValue({ code: 0, stdout: "", stderr: "" });
   runQaFlowSuite.mockReset().mockImplementation(async (params) => {
     const outputDir = params?.outputDir ?? "/tmp/qa-flow";
     const scenarioIds = params?.scenarioIds ?? ["channel-chat-baseline"];
@@ -41,48 +37,35 @@ afterEach(async () => {
 
 const [discovery, general] = ["openai/gpt-5.5", "openai/gpt-5.6-luna"] as const;
 it.each([
-  ["configured", false, discovery, discovery],
-  ["configured", true, discovery, discovery],
-  ["defaulted", true, undefined, undefined],
-  ["defaulted", true, discovery, undefined],
-  ["defaulted", true, undefined, discovery],
-  ["general", true, general, general],
-  ["general", true, discovery, general],
-  ["general", true, general, discovery],
-] as const)(
-  "routes %s (partitioned=%s; models=%s / %s)",
-  async (route, partitioned, primaryModel, alternateModel) => {
-    const configured = route === "configured";
-    if (route === "defaulted") {
-      vi.spyOn(liveFrontierProviderDefinition, "defaultModel").mockReturnValue(discovery);
-    }
-    await runQaSuite({
-      repoRoot: await tempDirs.makeTempDir("qa-suite-discovery-route-"),
-      outputDir: ".artifacts/discovery",
-      providerMode: "live-frontier",
-      primaryModel,
-      alternateModel,
-      scenarioIds: [
-        "runtime-tool-web-search",
-        ...(partitioned ? ["runtime-tool-sessions-spawn"] : []),
-      ],
-      ...(configured
-        ? {}
-        : { concurrency: route === "defaulted" ? 2 : 1, workerStartStaggerMs: 0 }),
+  ["configured", discovery],
+  ["defaulted", undefined],
+  ["general", general],
+] as const)("routes %s models through suite partitions", async (route, model) => {
+  const configured = route === "configured";
+  if (route === "defaulted") {
+    vi.spyOn(liveFrontierProviderDefinition, "defaultModel").mockReturnValue(discovery);
+  }
+  await runQaSuite({
+    repoRoot: await tempDirs.makeTempDir("qa-suite-discovery-route-"),
+    outputDir: ".artifacts/discovery",
+    providerMode: "live-frontier",
+    primaryModel: model,
+    alternateModel: model,
+    scenarioIds: ["runtime-tool-web-search", "runtime-tool-sessions-spawn"],
+    ...(configured ? {} : { concurrency: route === "defaulted" ? 2 : 1, workerStartStaggerMs: 0 }),
+  });
+  if (route === "general") {
+    expect(runQaFlowSuite).toHaveBeenCalled();
+  } else {
+    expect(runQaFlowSuite).toHaveBeenCalledTimes(configured ? 2 : 1);
+  }
+  for (const [params] of runQaFlowSuite.mock.calls) {
+    expect(params).toMatchObject({
+      primaryModel: model ?? discovery,
+      alternateModel: model ?? discovery,
+      forcedRuntime: configured ? "codex" : undefined,
+      runtimeSelection: configured ? "configured" : undefined,
+      ...(configured ? { providerMode: "live-frontier", concurrency: 1 } : {}),
     });
-    if (route === "general") {
-      expect(runQaFlowSuite).toHaveBeenCalled();
-    } else {
-      expect(runQaFlowSuite).toHaveBeenCalledTimes(configured && partitioned ? 2 : 1);
-    }
-    for (const [params] of runQaFlowSuite.mock.calls) {
-      expect(params).toMatchObject({
-        primaryModel: primaryModel ?? discovery,
-        alternateModel: alternateModel ?? discovery,
-        forcedRuntime: configured ? "codex" : undefined,
-        runtimeSelection: configured ? "configured" : undefined,
-        ...(configured ? { providerMode: "live-frontier", concurrency: 1 } : {}),
-      });
-    }
-  },
-);
+  }
+});

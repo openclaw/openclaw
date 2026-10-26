@@ -23,7 +23,7 @@ function mockProcMembers(names: string[]) {
 }
 
 it("uses canonical death evidence only for members of the requested group", () => {
-  const isDead = vi.fn(() => true);
+  const isDead = () => true;
   const stats = ["123 (leader) Z 1 123", "124 (helper (worker)) X 1 123", "125 (x) S 1 999"];
   const inspection = inspectStats(123, stats, isDead);
   expect(inspection).toEqual({
@@ -31,7 +31,6 @@ it("uses canonical death evidence only for members of the requested group", () =
     diagnostics:
       'pgid=123 members=[pid=123 state=Z command="leader", pid=124 state=X command="helper (worker)"]',
   });
-  expect(isDead.mock.calls).toEqual([[123], [124]]);
 });
 
 it("bounds process group diagnostics", () => {

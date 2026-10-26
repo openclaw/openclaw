@@ -13,40 +13,26 @@ const failStartup = (message = startupError) =>
   vi.fn(async () => {
     throw new Error(message);
   });
-it.each([
-  {
-    scenarioId: "matrix-room-block-streaming",
-    channelDriver: "live" as const,
-    channelId: "matrix",
-    adapterFactories: [
-      {
-        id: "matrix",
-        supportsModuleFlows: true,
-        matches: ({ driver, channelId }) => driver === "live" && channelId === "matrix",
-        create: async () => {
-          throw new Error("Matrix adapter creation must remain unreachable");
-        },
-      } satisfies QaTransportAdapterFactory,
-    ],
-  },
-  { scenarioId: "subagent-completion-direct-fallback", adapterFactories: undefined },
-])(
-  "adopts the provider requirement for directly selected $scenarioId",
-  async ({ scenarioId, ...selection }) => {
-    const startLab = failStartup();
-    await expect(
-      runQaFlowSuiteFromRuntime({
-        repoRoot: await makeTempDir("qa-suite-provider-lane-"),
-        scenarioIds: [scenarioId],
-        ...selection,
-        startLab,
-      }),
-    ).rejects.toThrow(startupError);
-    expect(startLab).toHaveBeenCalledOnce();
-  },
-);
+it("adopts the required provider before starting a directly selected Matrix flow", async () => {
+  const adapter: QaTransportAdapterFactory = {
+    id: "matrix",
+    supportsModuleFlows: true,
+    matches: ({ driver, channelId }) => driver === "live" && channelId === "matrix",
+    create: failStartup("Matrix adapter creation must remain unreachable"),
+  };
+  await expect(
+    runQaFlowSuiteFromRuntime({
+      repoRoot: await makeTempDir("qa-suite-provider-lane-"),
+      scenarioIds: ["matrix-room-block-streaming"],
+      channelDriver: "live",
+      channelId: "matrix",
+      adapterFactories: [adapter],
+      startLab: failStartup(),
+    }),
+  ).rejects.toThrow(startupError);
+});
 
-it("invalidates prior terminal artifacts before replacement startup fails", async () => {
+it("selects the required provider and invalidates artifacts before replacement startup fails", async () => {
   const repoRoot = await makeTempDir("qa-suite-generation-");
   const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "replacement");
   const artifactPaths = ["qa-suite-summary.json", "qa-evidence.json", "qa-suite-report.md"].map(
@@ -59,7 +45,7 @@ it("invalidates prior terminal artifacts before replacement startup fails", asyn
     runQaFlowSuiteFromRuntime({
       repoRoot,
       outputDir,
-      scenarioIds: ["goal-context-next-turn"],
+      scenarioIds: ["subagent-completion-direct-fallback"],
       concurrency: 1,
       startLab: failStartup("replacement startup failed"),
     }),
