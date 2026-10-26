@@ -7,7 +7,9 @@ import {
   CodeModeOutputState,
   toCodeModeJsonSafe,
 } from "./code-mode-json.js";
+import { estimateToolResultTextChars } from "./embedded-agent-runner/tool-result-text-budget.js";
 import { toolResultFitsBudget } from "./tool-result-limits.js";
+import { serializeToolSearchControlResult } from "./tool-search-control-result.js";
 
 describe("Code Mode JSON normalization", () => {
   it.each(["output", "error"])("bounds serialization work for oversized %s", (channel) => {
@@ -41,6 +43,108 @@ describe("Code Mode JSON normalization", () => {
     // Trials measure captured JSON and changed prefix intervals, not whole envelopes.
     expect(serializedChars).toBeLessThan(210_000);
     expect(serializations).toBeLessThanOrEqual(5);
+  });
+
+  it("matches fully serialized budgets for every randomized projection probe", () => {
+    let seed = 0x77c0de;
+    const next = (bound: number) => {
+      seed ^= seed << 13;
+      seed ^= seed >>> 17;
+      seed ^= seed << 5;
+      return (seed >>> 0) % bound;
+    };
+    const alphabet = [
+      "a",
+      '"',
+      "\\",
+      "\n",
+      "\r",
+      "\b",
+      "\f",
+      "\t",
+      "\0",
+      "é",
+      "中",
+      "🌍",
+      "\ud800",
+      "\udfff",
+      "·",
+      "꜀",
+      "ˇ",
+      "𝍠",
+      "𠀀",
+      "\u2028",
+    ];
+    for (let fixture = 0; fixture < 64; fixture++) {
+      const text = Array.from({ length: 1 + next(128) }, () => alphabet[next(alphabet.length)]!)
+        .join("")
+        .repeat(1 + next(32));
+      const maxBytes = 128 + next(8_192);
+      const state = new CodeModeOutputState(maxBytes);
+      if (fixture % 3) {
+        state.append(captureCodeModeOutput([{ text }, text], maxBytes));
+      }
+      const params = {
+        ...(fixture % 4 ? { value: captureCodeModeValue({ text }, maxBytes) } : {}),
+        ...(fixture % 5 ? { error: text } : {}),
+        valueGuidance: text.slice(0, next(64)),
+        ...(fixture % 7 === 0
+          ? {
+              reference: {
+                id: "result_synthetic",
+                bytes: Buffer.byteLength(text),
+                count: 1,
+                shape: "object",
+                preview: text.slice(0, next(128)),
+                previewTruncated: true,
+              },
+            }
+          : {}),
+      };
+      const metadata = {
+        status: "completed",
+        [text.slice(0, 8)]: { detail: text.slice(0, next(128)) },
+        output: "overwritten",
+        value: "metadata value",
+        error: "metadata error",
+      };
+      // Exercise the production projector directly, without a test-only budget API.
+      const project = state["createProjector"](params, metadata);
+      const assertProbe = (limit: number) => {
+        const measured = project(limit, "budget");
+        const json = serializeToolSearchControlResult(
+          { ...metadata, ...project(limit).channels },
+          true,
+        );
+        expect(measured, `fixture=${fixture}, limit=${limit}`).toEqual({
+          chars: estimateToolResultTextChars(json),
+          contextChars: estimateToolResultTextChars(json, { minimumRawWeight: 2 }),
+        });
+        return measured;
+      };
+      // Arbitrary order exercises both directions of the retained interval measurement.
+      for (const limit of [
+        maxBytes,
+        0,
+        1,
+        maxBytes - 1,
+        ...Array.from({ length: 20 }, () => next(maxBytes + 1)),
+      ]) {
+        assertProbe(limit);
+      }
+      const budget = { maxChars: 128 + next(maxBytes), maxContextChars: 256 + next(maxBytes * 2) };
+      let low = 0;
+      let high = maxBytes;
+      while (low <= high) {
+        const middle = Math.floor((low + high) / 2);
+        const measured = assertProbe(middle);
+        if (measured.chars <= budget.maxChars && measured.contextChars <= budget.maxContextChars) {
+          low = middle + 1;
+        } else {
+          high = middle - 1;
+        }
+      }
+    }
   });
 
   it.each([

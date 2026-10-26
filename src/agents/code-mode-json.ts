@@ -245,32 +245,16 @@ export class CodeModeOutputState {
     retainValue?: (source: CodeModeJsonSource) => CodeModeValueRetention,
   ): T & DeliveredChannels {
     const fit = (channels: TerminalChannels) => {
-      const project = this.createProjector(channels);
-      let envelopeBudget: ReturnType<typeof jsonBudget> | undefined;
+      const project = this.createProjector(channels, metadata);
       const fitsTrial = (limit: number) => {
         // Network content needs the sanitizer's complete rendered text.
         if (networkContent || !this.modelBudget) {
           return fits(project(limit));
         }
-        if (!envelopeBudget) {
-          const placeholders = {
-            output: null,
-            ...(channels.value === undefined ? {} : { value: null }),
-            ...(channels.error === undefined ? {} : { error: null }),
-          };
-          const measured = jsonBudget(
-            serializeToolSearchControlResult({ ...metadata, ...placeholders }, true),
-          );
-          const nullChars = Object.keys(placeholders).length * 4;
-          envelopeBudget = {
-            chars: measured.chars - nullChars,
-            contextChars: measured.contextChars - nullChars * 2,
-          };
-        }
         const measured = project(limit, "budget");
         return (
-          envelopeBudget.chars + measured.chars <= this.modelBudget.maxChars &&
-          envelopeBudget.contextChars + measured.contextChars <= this.modelBudget.maxContextChars
+          measured.chars <= this.modelBudget.maxChars &&
+          measured.contextChars <= this.modelBudget.maxContextChars
         );
       };
       const fits = (candidate: ReturnType<typeof project>) => {
@@ -354,7 +338,7 @@ export class CodeModeOutputState {
     return { ...metadata, ...channels, output };
   }
 
-  private createProjector(params: TerminalChannels) {
+  private createProjector(params: TerminalChannels, metadata: object) {
     const { count, source } = this.source;
     const { value, error: fullError, reference } = params;
     const outputBytes = count === 0 ? 0 : sourceBytes(source);
@@ -374,6 +358,7 @@ export class CodeModeOutputState {
     // Reuse decoded channels only within this fit; later deliveries need fresh objects.
     let completeOutput: unknown[] | undefined;
     let completeValue: { value: unknown } | undefined;
+    let envelopeBudget: ReturnType<typeof jsonBudget> | undefined;
     let completeOutputBudget: ReturnType<typeof jsonBudget> | undefined;
     let completeValueBudget: ReturnType<typeof jsonBudget> | undefined;
     let completeErrorBudget: ReturnType<typeof jsonBudget> | undefined;
@@ -430,6 +415,21 @@ export class CodeModeOutputState {
             )
           : undefined;
       if (mode === "budget") {
+        if (!envelopeBudget) {
+          const placeholders = {
+            output: null,
+            ...(params.value === undefined ? {} : { value: null }),
+            ...(params.error === undefined ? {} : { error: null }),
+          };
+          const measured = jsonBudget(
+            serializeToolSearchControlResult({ ...metadata, ...placeholders }, true),
+          );
+          const nullChars = Object.keys(placeholders).length * 4;
+          envelopeBudget = {
+            chars: measured.chars - nullChars,
+            contextChars: measured.contextChars - nullChars * 2,
+          };
+        }
         const outputBudget =
           fittedOutput?.budget() ?? (completeOutputBudget ??= jsonBudget(source.json));
         const valueBudget =
@@ -445,11 +445,13 @@ export class CodeModeOutputState {
               (completeErrorBudget ??= jsonBudget(JSON.stringify(fullError))));
         return {
           chars:
+            envelopeBudget.chars +
             outputBudget.chars +
             (fittedOutput ? 2 : 0) +
             (valueBudget?.chars ?? 0) +
             (errorBudget?.chars ?? 0),
           contextChars:
+            envelopeBudget.contextChars +
             outputBudget.contextChars +
             (fittedOutput ? 4 : 0) +
             (valueBudget?.contextChars ?? 0) +
