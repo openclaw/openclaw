@@ -11,7 +11,7 @@ import {
   getSharedCodexAppServerClient,
   retireSharedCodexAppServerClientIfCurrent,
 } from "./shared-client.js";
-import { createClientHarness } from "./test-support.js";
+import { createClientHarness, createCodexTestOAuthProfile } from "./test-support.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 /** Reuses the shared-client suite's auth fixtures and lifecycle cleanup. */
@@ -50,11 +50,7 @@ export function registerSharedClientUsageTests() {
         .mockResolvedValueOnce(isolated.client);
       const profileId = "openai:usage";
       const credential = {
-        type: "oauth" as const,
-        provider: "openai",
-        accountId: "account-usage",
-        access: "synthetic-access",
-        refresh: "synthetic-refresh",
+        ...createCodexTestOAuthProfile("account-usage"),
         expires: 999_999_999,
       };
       const store = {

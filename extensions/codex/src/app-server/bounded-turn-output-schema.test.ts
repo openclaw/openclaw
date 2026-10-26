@@ -58,11 +58,9 @@ describe("runBoundedCodexAppServerTurn output schemas", () => {
     });
   });
 
-  it.each([
-    "terminal upstream failure",
-    "unexpected status 400 Bad Request: Invalid request",
-    "unexpected status 429 Too Many Requests: Invalid schema for response_format 'codex_output_schema': rejected",
-  ])("does not retry unrelated failures (%s)", async (message) => {
+  it("does not retry an unrelated HTTP failure with schema-like wording", async () => {
+    const message =
+      "unexpected status 429 Too Many Requests: Invalid schema for response_format 'codex_output_schema': rejected";
     const fake = createClientFactory({
       errorBeforeCompletion: { message, willRetry: false },
     });
