@@ -1585,7 +1585,6 @@ const config = {
     "ui/src/components/terminal/terminal-panel.ts": ["types"],
     "ui/src/pages/chat/components/chat-attachment-card-solid.tsx": ["exports"],
     "ui/src/pages/chat/components/chat-camera-capture.tsx": ["types"],
-    "ui/src/pages/chat/components/chat-child-attention.tsx": ["types"],
     "ui/src/pages/chat/components/chat-ci-automation-control.tsx": ["types"],
     "ui/src/pages/chat/components/chat-ci-details.tsx": ["types"],
     "ui/src/pages/chat/components/chat-clawhub-card.tsx": ["exports"],
