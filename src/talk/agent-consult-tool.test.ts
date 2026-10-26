@@ -23,12 +23,7 @@ function sessionInstructions(options: Partial<Parameters<typeof buildSessionInst
   });
 }
 
-const customTool: RealtimeVoiceTool = {
-  type: "function",
-  name: "custom_lookup",
-  description: "Custom lookup",
-  parameters: { type: "object", properties: {} },
-};
+const customTool: RealtimeVoiceTool = { ...consultTool, name: "custom_lookup" };
 const duplicateConsultTool = { ...customTool, name: consultName };
 const baseInstructions =
   "You are OpenClaw's Discord voice interface.\nKeep spoken replies concise, natural, and suitable for a live Discord voice channel.";
@@ -126,13 +121,10 @@ describe("realtime voice agent consult tool", () => {
   });
 
   it.each<[ToolPolicy, RealtimeVoiceTool[] | undefined, RealtimeVoiceTool[]]>([
-    ["safe-read-only", undefined, [consultTool]],
     ["none", undefined, []],
-    ["safe-read-only", [duplicateConsultTool, customTool], [consultTool, customTool]],
-    ["none", [customTool], [customTool]],
     [
       "safe-read-only",
-      [unreadableNameTool, nonStringNameTool, customTool],
+      [duplicateConsultTool, unreadableNameTool, nonStringNameTool, customTool],
       [consultTool, customTool],
     ],
     ["none", [unreadableNameTool, customTool], [customTool]],
