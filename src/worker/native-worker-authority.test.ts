@@ -1,5 +1,4 @@
 import { afterEach, expect, it, vi } from "vitest";
-import type { WorkerHelloOk } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { prepareCoreToolPolicy } from "../agents/prepared-tool-surface.js";
 import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
@@ -12,6 +11,7 @@ import { parseWorkerLaunchDescriptor, buildWorkerConnectParams } from "./launch-
 import type { NativeInferenceStartup } from "./native-inference-startup.js";
 import * as connections from "./worker-connection.js";
 import type { WorkerConnectionState } from "./worker-connection.js";
+import { createWorkerHelloForTest } from "./worker-tool-surface.test-support.js";
 import { runWorkerDescriptor } from "./worker.runtime.js";
 
 const embedded = await vi.hoisted(async () => {
@@ -79,20 +79,13 @@ function fixture(native = true, steps: Step[] = ["ready"]) {
           : { kind: step[0], attempt: step[1] };
     listeners.forEach((listener) => listener(state));
   };
-  const hello: WorkerHelloOk = {
-    type: "worker-hello-ok",
-    environmentId: descriptor.admission.environmentId,
-    sessionId: descriptor.admission.sessionId,
-    ownerEpoch: descriptor.admission.ownerEpoch,
-    rpcSetVersion: descriptor.admission.rpcSetVersion,
-    protocolFeatures: descriptor.admission.handshake.protocolFeatures,
-    toolSurface: {
+  const hello = {
+    ...createWorkerHelloForTest(descriptor.admission, {
       generation: "authority-fixture",
       presentation: createToolSurfacePresentationForTest(),
       tools: [],
       policy: prepareCoreToolPolicy({}),
-    },
-    credentialExpiresAtMs: Date.now() + 60000,
+    }),
     policy: { heartbeatIntervalMs: 60000, maxPayload: 1024 * 1024 },
   };
   vi.spyOn(connection, "start").mockImplementation(async () => {
