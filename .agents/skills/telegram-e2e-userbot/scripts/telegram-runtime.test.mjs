@@ -29,6 +29,11 @@ describe("Telegram runtime", { concurrency: true }, () => {
       },
       async (context) => {
         const children = new Set();
+        const execute = async (command, args, options) => {
+          const result = await run(context, children, command, args, options);
+          assert.equal(result.status, 0, result.stderr);
+          return result.stdout.trim();
+        };
         const temporary = useAutoCleanupTempDirTracker((cleanup) =>
           context.after(async () => {
             await stopChildren(children);
@@ -42,12 +47,10 @@ describe("Telegram runtime", { concurrency: true }, () => {
         const managed = path.join(host, ".local/share/uv/python");
         // Real uv discovery with no compatible interpreter on PATH. The installed
         // executable is real Python 3.12; only its managed-install location is a fixture.
-        const version = (
-          await run(context, children, python, [
-            "-c",
-            "import platform; print(platform.python_version())",
-          ])
-        ).stdout.trim();
+        const version = await execute(python, [
+          "-c",
+          "import platform; print(platform.python_version())",
+        ]);
         const installation = path.join(
           managed,
           `cpython-${version}-macos-${process.arch === "arm64" ? "aarch64" : "x86_64"}-none`,
@@ -62,22 +65,6 @@ describe("Telegram runtime", { concurrency: true }, () => {
           fs.symlinkSync(python, path.join(bin, "python3"));
         }
         const env = { HOME: host, PATH: bin, UV_OFFLINE: "1", UV_PYTHON_DOWNLOADS: "never" };
-        const approved = await run(
-          context,
-          children,
-          uv,
-          [
-            "python",
-            "find",
-            "--no-project",
-            "--no-config",
-            "--offline",
-            "--no-python-downloads",
-            "3.12",
-          ],
-          { env: { ...env, UV_CACHE_DIR: path.join(state, "preflight-cache") } },
-        );
-        assert.equal(approved.status, 0, approved.stderr);
         const driver = path.join(import.meta.dirname, "user-driver.py");
         const loader = `import importlib.util, pathlib, sys
 spec = importlib.util.spec_from_file_location("driver", ${JSON.stringify(driver)})
@@ -86,9 +73,7 @@ spec.loader.exec_module(driver)
 `;
         // Populate the driver's existing pinned extraction layout without a network
         // request or native Telegram client. Cache selection, not binary ABI, is under test.
-        const cache = await run(
-          context,
-          children,
+        const cached = await execute(
           python,
           [
             "-B",
@@ -102,8 +87,6 @@ print(p)`,
           ],
           { env },
         );
-        assert.equal(cache.status, 0, cache.stderr);
-        const cached = cache.stdout.trim();
         const script = path.join(root, "readiness.py");
         fs.writeFileSync(
           script,
@@ -118,43 +101,35 @@ print(p)`,
           `(version 1)\n(allow default)\n(deny network*)\n(deny file-write*)\n(allow file-write* (subpath ${JSON.stringify(state)}))\n`,
         );
         const startupWrite = path.join(host, "unexpected-startup-write");
-        const userSite = (
-          await run(
-            context,
-            children,
-            python,
-            ["-I", "-S", "-c", "import site; print(site.getusersitepackages())"],
-            { env },
-          )
-        ).stdout.trim();
+        const userSite = await execute(
+          python,
+          ["-I", "-S", "-c", "import site; print(site.getusersitepackages())"],
+          { env },
+        );
         fs.mkdirSync(userSite, { recursive: true });
         fs.writeFileSync(
           path.join(userSite, "usercustomize.py"),
           `from pathlib import Path\nPath(${JSON.stringify(startupWrite)}).write_text("host startup ran")\n`,
         );
         // Discovery runs synchronous probes, so call it from a child the timeout can kill.
-        const discovery = await run(context, children, process.execPath, [
+        const discovery = await execute(process.execPath, [
           "--input-type=module",
           "--eval",
           `import { createTelegramRuntimeEnvironment } from ${JSON.stringify(new URL("./telegram-runtime.mjs", import.meta.url).href)};
 process.stdout.write(JSON.stringify(createTelegramRuntimeEnvironment(${JSON.stringify(state)}, ${JSON.stringify(env)})));`,
         ]);
-        assert.equal(discovery.status, 0, discovery.stderr);
-        const runtime = JSON.parse(discovery.stdout);
+        const runtime = JSON.parse(discovery);
         assert.equal(
           fs.existsSync(startupWrite),
           false,
           "read-only discovery ran host Python startup code",
         );
-        const result = await run(
-          context,
-          children,
+        const result = await execute(
           "/usr/bin/sandbox-exec",
           ["-f", policy, uv, ...telegramPythonArgs(runtime, script)],
           { env: { ...env, ...runtime } },
         );
-        assert.equal(result.status, 0, result.stderr);
-        assert.equal(result.stdout.trim(), cachedTdlib ? cached : "python-3.12-ready");
+        assert.equal(result, cachedTdlib ? cached : "python-3.12-ready");
         assert.equal(fs.readFileSync(cached, "utf8"), "already-verified-cache-fixture");
       },
     );
