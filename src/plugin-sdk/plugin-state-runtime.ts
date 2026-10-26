@@ -86,8 +86,8 @@ export async function preparePluginStateGuard<T>(
   key: string,
   assertValueCurrent: (value: T | undefined) => void,
 ): Promise<{ assertCurrent: () => void; release: () => void } | undefined> {
-  // SAFETY: The namespace's JSON type is store-owned; predicates must validate its domain shape.
   const facts = await preparePluginStateEntry(store, key, (value) =>
+    // SAFETY: The namespace's JSON type is store-owned; predicates must validate its domain shape.
     assertValueCurrent(value as T | undefined),
   );
   return (
