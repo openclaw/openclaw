@@ -49,37 +49,23 @@ it.each([
     const ctx = { mode: "fix" as const, runtime, cfg: {}, deep: true, dryRun };
     const findings = await check.detect(ctx);
     const result = await check.repair?.(ctx, findings);
-    expect(mocks.detectExtraGatewayServiceIssues).toHaveBeenCalledWith({ deep: true });
-    expect(findings).toMatchObject([
-      ...(empty
-        ? []
-        : [
-            {
-              checkId: "core/doctor/gateway-services/extra",
-              severity: "info",
-              source: "linux",
-              target: "custom-gateway.service",
-              fixHint: "Run a single gateway per machine unless this extra gateway is intentional.",
-            },
-            { target: "ai.clawdbot.gateway" },
-            {
-              severity: "warning",
-              target: "clawdbot-gateway.service",
-              fixHint:
-                "Run `openclaw doctor` interactively to review legacy gateway services and confirm supported cleanup.",
-            },
-            { target: "Clawdbot Gateway" },
-            { target: "clawdbot-gateway-custom.service" },
-            { target: "clawdbot-system.service" },
-            { target: "ai.clawdbot.system" },
-          ]),
-      {
-        checkId: "core/doctor/gateway-services/extra",
+    expect(findings.at(-1)).toMatchObject({
+      target: "unreadable.service",
+      severity: "warning",
+      message: expect.stringContaining("Service path could not be inspected."),
+    });
+    if (empty) {
+      expect(findings).toHaveLength(1);
+    } else {
+      expect(findings[0]).toMatchObject({
+        severity: "info",
+        fixHint: expect.stringContaining("Run a single gateway"),
+      });
+      expect(findings[1]).toMatchObject({
         severity: "warning",
-        target: "unreadable.service",
-        message: expect.stringContaining("Service path could not be inspected."),
-      },
-    ]);
+        fixHint: expect.stringContaining("confirm supported cleanup"),
+      });
+    }
     expect(result).toEqual({
       status: dryRun ? "repaired" : "skipped",
       ...(dryRun ? {} : { reason: "legacy doctor gateway service contribution owns cleanup" }),

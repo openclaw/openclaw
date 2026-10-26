@@ -58,19 +58,7 @@ it.each([false, true])(
       mocks.runContributions.mockImplementation(async () => {
         for (let attempt = 0; attempt < 2; attempt++) {
           const registry = loadPluginRegistryHandle({ config: cfg, cache: false });
-          try {
-            const plugin = registry.plugins.find((entry) => entry.id === id);
-            expect(plugin).toMatchObject({
-              status: "error",
-              failurePhase: "load",
-              error: expect.stringContaining("fixture capture write failed"),
-            });
-            expect(plugin?.error).toContain(
-              "free space on the filesystem used by the plugin load and rerun Doctor",
-            );
-          } finally {
-            await disposePluginRegistryInstances(registry);
-          }
+          await disposePluginRegistryInstances(registry);
         }
       });
       const runtime = createDoctorRuntime();

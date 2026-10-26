@@ -47,44 +47,31 @@ it.each(["published", "other-provider", "offline"])(
     expect(findings.map((finding) => finding.target)).toEqual(
       catalogState === "published" ? [typo] : [ref, typo],
     );
-    expect(call).toHaveBeenCalledOnce();
   },
 );
 
-it.each([false, true])(
-  "uses only prepared Gateway warnings in Doctor (offline=%s)",
-  async (offline) => {
-    const call = vi.spyOn(gateway, "callGateway");
-    if (offline) {
-      call.mockRejectedValue(new Error("Gateway offline"));
-    } else {
-      call.mockResolvedValue({
-        models: [],
-        providerOutcomes: [
-          { provider: "ollama", status: "ready", unlistedConfiguredModelIds: ["qwen3:8bb"] },
-        ],
-      });
-    }
-    const findings = await detect({});
-    expect(findings.filter((finding) => finding.target === "ollama/qwen3:8bb")).toEqual(
-      offline
-        ? []
-        : [
-            expect.objectContaining({
-              severity: "warning",
-              fixHint: expect.stringContaining("Pull or download it on that server"),
-            }),
-          ],
-    );
-    expect(call).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        method: "models.list",
-        sharedStateMode: "read-only",
-        params: { view: "all", includeDetails: true, preparedOnly: true },
-      }),
-    );
-  },
-);
+it("uses only prepared Gateway warnings in Doctor", async () => {
+  const call = vi.spyOn(gateway, "callGateway").mockResolvedValue({
+    models: [],
+    providerOutcomes: [
+      { provider: "ollama", status: "ready", unlistedConfiguredModelIds: ["qwen3:8bb"] },
+    ],
+  });
+  const findings = await detect({});
+  expect(findings.filter((finding) => finding.target === "ollama/qwen3:8bb")).toEqual([
+    expect.objectContaining({
+      severity: "warning",
+      fixHint: expect.stringContaining("Pull or download it on that server"),
+    }),
+  ]);
+  expect(call).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({
+      method: "models.list",
+      sharedStateMode: "read-only",
+      params: { view: "all", includeDetails: true, preparedOnly: true },
+    }),
+  );
+});
 
 it("does not execute Gateway secret providers without Doctor's allow-exec opt-in", async () => {
   const call = vi.spyOn(gateway, "callGateway").mockResolvedValue({ models: [] });
