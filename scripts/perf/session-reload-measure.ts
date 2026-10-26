@@ -76,8 +76,9 @@ registerHooks({
   },
 });
 const { SessionManager } = await import("../../src/agents/sessions/session-manager.js");
-const { sessionManagerReadInitialContext } =
-  await import("../../src/agents/sessions/session-manager-current-turn.js");
+const sessionManagerReadInitialContext: typeof import("../../src/agents/sessions/session-manager-current-turn.js").sessionManagerReadInitialContext =
+  (await import("../../src/agents/sessions/session-manager-current-turn.js"))
+    .sessionManagerReadInitialContext;
 const { closeOpenClawAgentDatabaseByPathAsync } =
   await import("../../src/state/openclaw-agent-db.js");
 const target = {
