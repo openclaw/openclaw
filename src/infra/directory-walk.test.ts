@@ -60,25 +60,14 @@ describe.each([
     expect(entries.map(({ dirent }) => dirent.isFile())).toEqual([true, false, true, false]);
   });
 
-  it.each([
-    [{ maxEntries: 1 }, "maxEntries", 1],
-    [{ maxDepth: 1 }, "maxDepth", 1],
-  ] as const)(
-    "throws a typed error rather than truncating at %j",
-    async (options, limit, maximum) => {
-      const root = tree("nested/file");
-      const result = run(root, options);
-      await expect(result).rejects.toMatchObject(limitError(limit, maximum));
-      await expect(result).rejects.toBeInstanceOf(DirectoryWalkLimitError);
-      expect(await walk(root, { maxEntries: 2, maxDepth: 2 })).toHaveLength(2);
-    },
-  );
-
   it("accepts an empty directory exactly at the depth limit", async () => {
     const root = tree("leaf/");
     expect(paths(await walk(root, { maxDepth: 1 }))).toEqual(["leaf"]);
     fs.writeFileSync(path.join(root, "leaf/over-limit"), "child");
-    await expect(run(root, { maxDepth: 1 })).rejects.toMatchObject(limitError("maxDepth", 1));
+    const overLimit = run(root, { maxDepth: 1 });
+    await expect(overLimit).rejects.toMatchObject(limitError("maxDepth", 1));
+    await expect(overLimit).rejects.toBeInstanceOf(DirectoryWalkLimitError);
+    expect(await walk(root, { maxEntries: 2, maxDepth: 2 })).toHaveLength(2);
   });
 
   it("bounds a wide directory before accumulating the entire inventory", async () => {

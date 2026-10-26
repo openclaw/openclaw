@@ -12,9 +12,7 @@ import { ensureTerminalUploadCleanup, stageTerminalUpload } from "./terminal-fil
 const [resource, rootArgument] = process.argv.slice(2);
 assert.ok(rootArgument, "The retention fixture requires its owned temporary directory");
 const root = rootArgument;
-const context = new AsyncLocalStorage<QueueTimerCaller>();
-
-type QueueTimerCaller = { label: string | undefined; prompt: Buffer };
+const context = new AsyncLocalStorage<{ label: string | undefined; prompt: Buffer }>();
 
 async function completedCaller(run: () => unknown) {
   const caller = { label: resource, prompt: Buffer.alloc(1024 * 1024, 1) };
@@ -23,27 +21,30 @@ async function completedCaller(run: () => unknown) {
   return references;
 }
 
-type Fixture = {
-  references: WeakRef<object>[];
-  assertAlive: () => void;
-  reuse: () => Promise<void>;
-  close: () => Promise<void>;
-};
+async function assertCollected(references: WeakRef<object>[], assertAlive: () => void) {
+  await collectForRetentionCheck(`queue-${resource}`);
+  assertAlive();
+  assert.equal(
+    references.filter((reference) => reference.deref()).length,
+    0,
+    `The live ${resource} owner retained a completed caller`,
+  );
+}
 
-async function queueFixture(): Promise<Fixture> {
+async function checkQueue() {
   const queue = new BoundedSerialQueue({ maxPendingCount: 2, maxPendingWeight: 2 });
   const stores = new Map<string, StoreWriterQueue>();
   const lane = "retention:queue";
-  const run = async (fn: () => Promise<void>) => {
+  const run = (fn: () => Promise<void>) => {
     if (resource === "store-drain") {
-      await runQueuedStoreWrite({ queues: stores, storePath: root, label: resource, fn });
-    } else if (resource === "command-drain") {
-      await enqueueCommandInLane(lane, fn);
-    } else {
-      const accepted = queue.enqueue(fn);
-      assert.ok(accepted.accepted);
-      await accepted.completion;
+      return runQueuedStoreWrite({ queues: stores, storePath: root, label: resource, fn });
     }
+    if (resource === "command-drain") {
+      return enqueueCommandInLane(lane, fn);
+    }
+    const accepted = queue.enqueue(fn);
+    assert.ok(accepted.accepted);
+    return accepted.completion;
   };
   const firstGate = createDeferredCore();
   const secondGate = createDeferredCore();
@@ -66,9 +67,8 @@ async function queueFixture(): Promise<Fixture> {
     secondGate.resolve();
     await second;
   };
-  return {
-    references,
-    assertAlive: () => {
+  try {
+    await assertCollected(references, () => {
       if (resource === "store-drain") {
         assert.ok(stores.get(root)?.drainPromise, "The same store drain must remain active");
       } else if (resource === "command-drain") {
@@ -76,16 +76,16 @@ async function queueFixture(): Promise<Fixture> {
       } else {
         assert.equal(queue.isIdle, false);
       }
-    },
-    reuse: async () => {
-      await finish();
-      await run(async () => assert.equal(context.getStore(), undefined));
-    },
-    close: finish,
-  };
+    });
+    await finish();
+    await run(async () => assert.equal(context.getStore(), undefined));
+    return references.length;
+  } finally {
+    await finish();
+  }
 }
 
-async function timerFixture(): Promise<Fixture> {
+async function checkTimer() {
   const timers: WeakRef<object>[] = [];
   const hook = createHook({
     init(_id, type, _trigger, value) {
@@ -94,7 +94,6 @@ async function timerFixture(): Promise<Fixture> {
       }
     },
   });
-  assert.equal(resource, "terminal");
   let uploadedPath = "";
   hook.enable();
   let references: WeakRef<object>[];
@@ -113,38 +112,22 @@ async function timerFixture(): Promise<Fixture> {
   } finally {
     hook.disable();
   }
-  return {
-    references,
-    assertAlive: () =>
+  try {
+    await assertCollected(references, () =>
       assert.ok(
         timers.some((timer) => timer.deref()),
         "A real native timeout must remain alive",
       ),
-    reuse: async () => {
-      assert.equal(await readFile(uploadedPath, "utf8"), "retention fixture");
-      await ensureTerminalUploadCleanup({ tempRoot: root });
-      assert.equal(await readFile(uploadedPath, "utf8"), "retention fixture");
-    },
-    close: async () => {
-      await rm(path.dirname(uploadedPath), { recursive: true, force: true });
-      await ensureTerminalUploadCleanup({ tempRoot: root });
-    },
-  };
+    );
+    assert.equal(await readFile(uploadedPath, "utf8"), "retention fixture");
+    await ensureTerminalUploadCleanup({ tempRoot: root });
+    assert.equal(await readFile(uploadedPath, "utf8"), "retention fixture");
+    return references.length;
+  } finally {
+    await rm(path.dirname(uploadedPath), { recursive: true, force: true });
+    await ensureTerminalUploadCleanup({ tempRoot: root });
+  }
 }
 
-const fixture = resource === "terminal" ? await timerFixture() : await queueFixture();
-try {
-  await collectForRetentionCheck(`queue-${resource}`);
-  fixture.assertAlive();
-  assert.equal(
-    fixture.references.filter((reference) => reference.deref()).length,
-    0,
-    `The live ${resource} owner retained a completed caller`,
-  );
-  await fixture.reuse();
-  process.stdout.write(
-    JSON.stringify({ resource, collected: fixture.references.length, reused: true }),
-  );
-} finally {
-  await fixture.close();
-}
+const collected = resource === "terminal" ? await checkTimer() : await checkQueue();
+process.stdout.write(JSON.stringify({ resource, collected, reused: true }));
