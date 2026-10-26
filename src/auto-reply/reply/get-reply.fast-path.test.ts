@@ -6,6 +6,7 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { FAST_RESET_LINEAGE_FIXTURE } from "../../config/sessions/session-lineage.test-support.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target-paths.js";
+import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createEmptyPluginSetupRegistry } from "../../plugins/setup-registry.test-support.js";
@@ -394,9 +395,30 @@ describe("getReplyFromConfig fast test bootstrap", () => {
   });
 
   it("does not persist a retired top-level channel field on a native /status fast bootstrap", async () => {
+    // Issue #183856: `/status` right after `/new` wrote `channel` next to the
+    // canonical `delivery` block, and doctor reported a legacy delivery row
+    // after every `doctor --fix`. Seed the post-`/new` session that owns the
+    // canonical delivery state and bootstrap `/status` over it.
+    const canonicalDelivery = {
+      kind: "external" as const,
+      route: { channel: "telegram", target: { to: "123" } },
+      context: { channel: "telegram", to: "123" },
+      origin: { provider: "telegram", to: "123" },
+    };
+    await seedSession({
+      sessionId: "existing-telegram-session",
+      delivery: canonicalDelivery,
+      updatedAt: 1,
+    });
     const result = await bootstrap(nativeCtx("/status"));
-    // `channel` is a retired SessionEntry slot key; the canonical `delivery` block
-    // owns channel identity. Doctor flags any durable row that carries it.
+    // `channel` is a retired SessionEntry slot key; the canonical `delivery`
+    // block owns channel identity. Doctor flags any durable row that carries it.
     expect(result.sessionEntry).not.toHaveProperty("channel");
+    // The reused canonical delivery must survive the bootstrap untouched.
+    expect(result.sessionEntry).toMatchObject({ delivery: canonicalDelivery });
+    // The entry is a no-op for Doctor's legacy-delivery normalizer: no legacy
+    // fields to strip and the canonical delivery block is already present, so a
+    // persisted row is not reported as needing repair.
+    expect(normalizeLegacySessionEntryDelivery(result.sessionEntry)).toEqual(result.sessionEntry);
   });
 });
