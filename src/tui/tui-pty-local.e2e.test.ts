@@ -20,6 +20,7 @@ import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { buildOpenAiResponsesTestModel } from "../gateway/test-openai-responses-model.js";
 import { listUsageCountedTranscriptStats } from "../infra/session-cost-usage-collection.test-support.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { withEnv, withEnvAsync } from "../test-utils/env.js";
@@ -244,16 +245,7 @@ function buildMockModelProvider(baseUrl: string, modelIds: string[]): ModelProvi
     apiKey: "test",
     api: "openai-responses",
     request: { allowPrivateNetwork: true },
-    models: modelIds.map((id) => ({
-      id,
-      name: id,
-      api: "openai-responses",
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 128000,
-      maxTokens: 4096,
-    })),
+    models: modelIds.map((id) => buildOpenAiResponsesTestModel(id)),
   };
 }
 

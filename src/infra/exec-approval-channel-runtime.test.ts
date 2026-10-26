@@ -1,9 +1,10 @@
-// Covers gateway-backed approval channel runtime behavior.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { GatewayClient } from "../gateway/client.js";
 import { withGatewayNativeApprovalRuntime } from "./approval-gateway-runtime-context.js";
 import type { GatewayNativeApprovalRuntime } from "./approval-gateway-runtime.types.js";
+// Covers gateway-backed approval channel runtime behavior.
+import { createSystemAgentChangeRequest } from "./approval-handler.test-helpers.js";
 import type { ApprovalRequestInput } from "./approval-types.js";
 import type { ExecApprovalChannelRuntimeAdapterAsync } from "./exec-approval-channel-runtime.js";
 import type { ExecApprovalRequest, ExecApprovalResolved } from "./exec-approvals.js";
@@ -340,14 +341,7 @@ describe("createExecApprovalChannelRuntime", () => {
 
     await runtime.handleRequested({
       id: "system-agent:expired",
-      request: {
-        title: "OpenClaw change",
-        description: "restart the Gateway",
-        command: "restart the Gateway",
-        proposalHash: "a".repeat(64),
-        allowedDecisions: ["allow-once", "deny"],
-        sessionId: "session-1",
-      },
+      request: createSystemAgentChangeRequest("session-1"),
       createdAtMs: 1000,
       expiresAtMs: 2000,
     });

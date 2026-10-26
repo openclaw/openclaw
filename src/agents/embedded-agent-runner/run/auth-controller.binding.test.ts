@@ -1,5 +1,6 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import type { Model } from "../../../llm/types.js";
+import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import { createEmbeddedRunAuthController, type EmbeddedRunAuthState } from "./auth-controller.js";
 
 const mocks = vi.hoisted(() => ({ resolveCredential: vi.fn(), exchangeCredential: vi.fn() }));
@@ -18,18 +19,14 @@ it.each([false, true])(
   "observes canonical ownership after credential resolution (replaced: %s)",
   async (replaced) => {
     const events: string[] = [];
-    const model: Model = {
+    const model: Model = makeProviderModelFixture({
       id: "gpt-4.1",
       name: "Synthetic admission",
       provider: "openai",
       api: "openai-responses",
       baseUrl: "https://api.openai.com/v1",
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 16_000,
       maxTokens: 1024,
-    };
+    });
     const state: EmbeddedRunAuthState = {
       models: { runtime: model, effective: model },
       apiKeyInfo: null,

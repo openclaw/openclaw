@@ -79,10 +79,7 @@ it.each([
     ctx: { From: reefPeer, OriginatingTo: "reef:self", NativeDirectUserId: "peer-a" },
     expected: {
       nativeDirectUserId: "peer-a",
-      conversationRef: stored({
-        deliveryContext: route("reef", reefPeer),
-        origin: { provider: "reef", accountId: "default", nativeDirectUserId: "peer-b" },
-      })?.conversationRef,
+      conversationRef: "conv_2a52ef1ffbd704d8b49729e7527e331c",
     },
   },
   {

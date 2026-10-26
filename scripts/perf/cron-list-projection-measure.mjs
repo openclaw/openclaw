@@ -10,6 +10,10 @@
  * --mode counts reports new row identities after warmup, outside timing passes.
  * --workload list-page rechecks the unchanged scheduler snapshot owner; counts
  * reports its clone/hash calls. No Gateway, timer, model, or SQLite write starts.
+ * --workload list-page-refresh uses 200 jobs and publishes one changed runtime
+ * row before each 200-row read, measuring snapshot freezing after invalidation.
+ * Run five counterbalanced base/candidate pairs, timing and allocation separately;
+ * accept identical wire hashes/immutability with less CPU or allocation per read.
  */
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
@@ -34,7 +38,8 @@ const { values } = parseArgs({
   },
 });
 assert(["timing", "allocation", "counts"].includes(values.mode));
-assert(["projection", "list-page"].includes(values.workload));
+assert(["projection", "list-page", "list-page-refresh"].includes(values.workload));
+const listWorkload = values.workload !== "projection";
 assert(values.output, "--output is required");
 assert(global.gc, "Run with --expose-gc");
 assert(!process.execArgv.some((arg) => arg.startsWith("--trace-gc")), "Use untraced timing");
@@ -60,7 +65,7 @@ process.env = {
 const ownerUrl = values.owner
   ? pathToFileURL(path.resolve(values.owner))
   : new URL(
-      values.workload === "list-page"
+      listWorkload
         ? "../../src/cron/service/ops-read.ts"
         : "../../src/gateway/server-methods/cron-list-projection.ts",
       import.meta.url,
@@ -72,25 +77,30 @@ const ownerSha256 = crypto
 const { projectCronListJobs, listPage } = await import(ownerUrl.href);
 const { freezeJsonSnapshot } = await import("../../src/shared/immutable-data.ts");
 const cron = { getDefaultAgentId: () => "main" };
-const jobs = Array.from({ length: 10_000 }, (_, index) => ({
-  id: `synthetic-${index}`,
-  name: `Synthetic report ${index}`,
-  description: "Synthetic scheduled report. ".repeat(4),
-  enabled: index % 5 !== 0,
-  agentId: index % 3 === 0 ? "ops" : undefined,
-  createdAtMs: 1_800_000_000_000,
-  updatedAtMs: 1_800_000_000_000,
-  schedule: { kind: "every", everyMs: 60_000, anchorMs: 1_800_000_000_000 },
-  sessionTarget: "isolated",
-  wakeMode: "next-heartbeat",
-  payload: { kind: "agentTurn", message: "Synthetic owner benchmark message. ".repeat(16) },
-  delivery: { mode: "none" },
-  state: { nextRunAtMs: 1_800_000_060_000 + index, lastStatus: "ok", lastDurationMs: 12 },
-}));
+const jobs = Array.from(
+  { length: values.workload === "list-page-refresh" ? 200 : 10_000 },
+  (_, index) => ({
+    id: `synthetic-${index}`,
+    name: `Synthetic report ${index}`,
+    description: "Synthetic scheduled report. ".repeat(4),
+    enabled: index % 5 !== 0,
+    agentId: index % 3 === 0 ? "ops" : undefined,
+    createdAtMs: 1_800_000_000_000,
+    updatedAtMs: 1_800_000_000_000,
+    schedule: { kind: "every", everyMs: 60_000, anchorMs: 1_800_000_000_000 },
+    sessionTarget: "isolated",
+    wakeMode: "next-heartbeat",
+    payload: { kind: "agentTurn", message: "Synthetic owner benchmark message. ".repeat(16) },
+    delivery: { mode: "none" },
+    state: { nextRunAtMs: 1_800_000_060_000 + index, lastStatus: "ok", lastDurationMs: 12 },
+  }),
+);
 let state;
 let readPage;
-if (values.workload === "list-page") {
+if (listWorkload) {
   const { createCronServiceState } = await import("../../src/cron/service/state.ts");
+  const { applyCronRuntimeRowsToState } =
+    await import("../../src/cron/service/runtime-publication.ts");
   const { GatewayScheduler } = await import("../../src/infra/gateway-scheduler.ts");
   state = createCronServiceState({
     scheduler: new GatewayScheduler(),
@@ -105,15 +115,22 @@ if (values.workload === "list-page") {
   state.store = { version: 1, jobs };
   state.storeLoadedAtMs = state.deps.nowMs();
   state.schedulerStarted = true;
-  readPage = async (index) =>
-    (
+  readPage = async (index) => {
+    if (values.workload === "list-page-refresh") {
+      const job = state.store.jobs[index % jobs.length];
+      applyCronRuntimeRowsToState(state, [
+        { ...job, state: { ...job.state, lastRunAtMs: 1_800_000_000_000 + index } },
+      ]);
+    }
+    return (
       await listPage(state, {
         includeDisabled: true,
         limit: 200,
-        offset: (index % 2) * 100,
+        offset: values.workload === "list-page-refresh" ? 0 : (index % 2) * 100,
         sortBy: "name",
       })
     ).jobs;
+  };
 }
 const frozen = jobs.map((job) => freezeJsonSnapshot(structuredClone(job)));
 const pages = Array.from({ length: 100 }, (_, index) => {

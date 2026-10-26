@@ -1,4 +1,5 @@
 import { afterAll, afterEach, expect, it } from "vitest";
+import { model as makeCatalogModel } from "../agents/model-catalog-fixtures.test-support.js";
 import {
   attachModelProviderRequestRouteFacts,
   getModelProviderRequestRouteFacts,
@@ -33,16 +34,7 @@ it.each([
           baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
           api: "openai-completions",
           apiKey: "synthetic-not-a-real-key",
-          models: [
-            {
-              id: "qwen3.8",
-              name: "Fixture",
-              reasoning: true,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              maxTokens: 1000,
-            },
-          ],
+          models: [makeCatalogModel("qwen3.8", "Fixture", { reasoning: true, maxTokens: 1000 })],
         },
       },
     },

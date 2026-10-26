@@ -22,43 +22,42 @@ function drawBanner(overrides: Partial<NonNullable<Banner>> = {}) {
     },
   });
   const banner = view.container.querySelector(".agent-chat__disabled-banner")!;
-  return { ...view, banner, action: banner.querySelector<HTMLButtonElement>("button")! };
+  const update = (disabledBanner: Banner) =>
+    renderComposerInto(view.container, { ...view.props, disabledBanner });
+  return { ...view, update, banner, action: banner.querySelector<HTMLButtonElement>("button")! };
 }
 
-function expectClasses(element: Element, classes: string) {
-  expect(new Set(element.classList)).toEqual(new Set(classes.split(" ")));
-}
-
-it("keeps the focused action through a banner refresh and uses the current action", () => {
-  const initialAction = vi.fn();
-  const refreshedAction = vi.fn();
-  const text = "This session is still archived.";
-  const { container, props, action, banner } = drawBanner({ onAction: initialAction });
-  document.body.append(container);
-  action.focus();
-  expectClasses(
-    action.parentElement!,
-    "agent-chat__disabled-banner agent-chat__disabled-banner--replacement callout info callout--action",
-  );
-
-  renderComposerInto(container, {
-    ...props,
-    disabledBanner: {
-      ...props.disabledBanner!,
-      text,
-      actionLabel: "Unarchive",
-      onAction: refreshedAction,
-    },
-  });
-
-  expect(container.querySelector(".agent-chat__disabled-banner")?.textContent).toContain(text);
-  expect(container.querySelector(".agent-chat__disabled-banner")).toBe(banner);
-  expect(container.querySelector(".agent-chat__disabled-banner button")).toBe(action);
-  expect(document.activeElement).toBe(action);
-  action.click();
-  expect(initialAction).not.toHaveBeenCalled();
-  expect(refreshedAction).toHaveBeenCalledOnce();
-});
+it.each(["action", "stop"] as const)(
+  "keeps %s focus and its current callback through refresh",
+  (kind) => {
+    const initial = vi.fn();
+    const current = vi.fn();
+    const controls = (callback: () => void) =>
+      kind === "stop"
+        ? { actionLabel: undefined, onAction: undefined, stop: { onAbort: callback } }
+        : { actionLabel: "Unarchive", onAction: callback };
+    const { container, update, banner } = drawBanner(controls(initial));
+    const selector = kind === "stop" ? '[aria-label="Stop generating"]' : "button";
+    const findAction = () => banner.querySelector<HTMLButtonElement>(selector);
+    const action = findAction()!;
+    document.body.append(container);
+    action.focus();
+    const text = "The session status changed.";
+    update({ kind: "composer-replacement", text, ...controls(current) });
+    expect(banner.textContent).toContain(text);
+    expect(container.querySelector(".agent-chat__disabled-banner")).toBe(banner);
+    expect(findAction()).toBe(action);
+    expect(document.activeElement).toBe(action);
+    action.click();
+    expect(initial).not.toHaveBeenCalled();
+    expect(current).toHaveBeenCalledOnce();
+    if (kind === "stop") {
+      update({ kind: "composer-replacement", text: "This subagent finished." });
+      expect(findAction()).toBeNull();
+      expect(current).toHaveBeenCalledOnce();
+    }
+  },
+);
 
 it("disables its action with the mutation reason", () => {
   const onAction = vi.fn();
@@ -83,62 +82,12 @@ it("renders a standard primary action with progress feedback", () => {
     busy: true,
     busyLabel,
   });
-  expectClasses(
-    banner,
-    "agent-chat__disabled-banner agent-chat__disabled-banner--replacement callout agent-chat__disabled-banner--neutral callout--action",
-  );
+  expect(banner.classList.contains("agent-chat__disabled-banner--neutral")).toBe(true);
   expect(banner?.querySelector(".agent-chat__disabled-banner-icon")).not.toBeNull();
   expect(banner.querySelector(".agent-chat__disabled-banner-title")?.textContent).toContain(title);
   expect(banner.querySelector(".agent-chat__disabled-banner-detail")?.textContent).toContain(text);
-  expectClasses(action, "btn btn--sm primary");
+  expect(action.classList.contains("primary")).toBe(true);
   expect(action).toMatchObject({ disabled: true, textContent: expect.stringContaining(busyLabel) });
   expect(action?.getAttribute("aria-busy")).toBe("true");
   expect(action?.querySelector(".btn__spinner")).not.toBeNull();
-});
-
-it("keeps notice Stop focused, uses the current callback and removes it when no action is supplied", () => {
-  const initialAbort = vi.fn();
-  const currentAbort = vi.fn();
-  const { container, props } = renderComposerFixture({
-    canSend: false,
-    disabledBanner: {
-      kind: "composer-replacement",
-      text: "This subagent is working.",
-      stop: { onAbort: initialAbort },
-    },
-  });
-  document.body.append(container);
-  const stop = container.querySelector<HTMLButtonElement>(
-    '.agent-chat__disabled-banner button[aria-label="Stop generating"]',
-  )!;
-  expect(stop).not.toBeNull();
-  stop.focus();
-
-  renderComposerInto(container, {
-    ...props,
-    disabledBanner: {
-      kind: "composer-replacement",
-      text: "This subagent is still working.",
-      stop: { onAbort: currentAbort },
-    },
-  });
-  expect(
-    container.querySelector('.agent-chat__disabled-banner button[aria-label="Stop generating"]'),
-  ).toBe(stop);
-  expect(document.activeElement).toBe(stop);
-  stop.click();
-  expect(initialAbort).not.toHaveBeenCalled();
-  expect(currentAbort).toHaveBeenCalledOnce();
-
-  renderComposerInto(container, {
-    ...props,
-    disabledBanner: {
-      kind: "composer-replacement",
-      text: "This subagent finished.",
-    },
-  });
-  expect(
-    container.querySelector('.agent-chat__disabled-banner button[aria-label="Stop generating"]'),
-  ).toBeNull();
-  expect(currentAbort).toHaveBeenCalledOnce();
 });

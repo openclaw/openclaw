@@ -434,39 +434,40 @@ export function prepareProjectedSessionPresentation(
         index: rowContext.projectedAgentRuns,
       });
       const temporal = runState(record.key, record.materialized.source);
-      facts.length = 0;
-      facts.push(
-        record.fallbackModel,
-        liveModel?.provider,
-        liveModel?.model,
-        liveModel === null,
-        childOwnerSessionKeys,
-        temporal.subagentRun?.model,
-        temporal.subagentOwner,
-        temporal.fields.status,
-        temporal.fields.lastRunError,
-        temporal.fields.suppressErrorNotice,
-        temporal.fields.subagentRunState,
-        temporal.fields.hasActiveSubagentRun,
-        temporal.fields.startedAt,
-        temporal.fields.endedAt,
-        temporal.fields.runtimeMs,
-        // Transient owners can cycle without publishing a row; retire the earlier sample.
-        run?.active,
-        run?.status,
-        preparedFacts,
+      // Overwrite before truncating: clearing length first discards V8's backing storage.
+      facts[0] = record.fallbackModel;
+      facts[1] = liveModel?.provider;
+      facts[2] = liveModel?.model;
+      facts[3] = liveModel === null;
+      facts[4] = childOwnerSessionKeys;
+      facts[5] = temporal.subagentRun?.model;
+      facts[6] = temporal.subagentOwner;
+      facts[7] = temporal.fields.status;
+      facts[8] = temporal.fields.lastRunError;
+      facts[9] = temporal.fields.suppressErrorNotice;
+      facts[10] = temporal.fields.subagentRunState;
+      facts[11] = temporal.fields.hasActiveSubagentRun;
+      facts[12] = temporal.fields.startedAt;
+      facts[13] = temporal.fields.endedAt;
+      facts[14] = temporal.fields.runtimeMs;
+      // Transient owners can cycle without publishing a row; retire the earlier sample.
+      facts[15] = run?.active;
+      facts[16] = run?.status;
+      facts[17] = preparedFacts;
+      facts[18] =
         sessionTitleRequests.get({
           storePath: record.storeTarget.storePath,
           sessionKey: record.key,
           sessionId: record.entry.sessionId,
-        }) !== undefined,
-        resolveActiveSessionAgentStatus(record.entry.agentStatus, now),
-        // Active budgeted goals can stamp budgetLimitedAt from enriched usage at this clock.
+        }) !== undefined;
+      facts[19] = resolveActiveSessionAgentStatus(record.entry.agentStatus, now);
+      // Active budgeted goals can stamp budgetLimitedAt from enriched usage at this clock.
+      facts[20] =
         record.entry.goal?.status === "active" && record.entry.goal.tokenBudget !== undefined
           ? now
-          : undefined,
-        run?.runIds?.length,
-      );
+          : undefined;
+      facts[21] = run?.runIds?.length;
+      facts.length = 22;
       if (run?.runIds) {
         for (const id of run.runIds) {
           facts.push(id);
@@ -504,16 +505,14 @@ export function prepareProjectedSessionPresentation(
           }) && !sharing.authorizeTarget(value, recipientView?.sharingRole)
         : undefined;
     const signature = views && optionKey(options);
-    recipientFacts.length = 0;
-    recipientFacts.push(
-      recipientView?.visibility,
-      recipientView?.hiddenFromInvolvingMe,
-      recipientView?.sharingRole,
-      recipientView?.sendDisabledReason,
-      canEnsure,
-      excludedChildKeys?.size ?? 0,
-      excludedSwarmKeys?.size ?? 0,
-    );
+    recipientFacts[0] = recipientView?.visibility;
+    recipientFacts[1] = recipientView?.hiddenFromInvolvingMe;
+    recipientFacts[2] = recipientView?.sharingRole;
+    recipientFacts[3] = recipientView?.sendDisabledReason;
+    recipientFacts[4] = canEnsure;
+    recipientFacts[5] = excludedChildKeys?.size ?? 0;
+    recipientFacts[6] = excludedSwarmKeys?.size ?? 0;
+    recipientFacts.length = 7;
     if (excludedChildKeys) {
       for (const key of excludedChildKeys) {
         recipientFacts.push(key);

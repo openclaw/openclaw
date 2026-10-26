@@ -1,3 +1,5 @@
+import path from "node:path";
+
 // Gateway startup rewrites these process-wide values. Manual in-process test
 // owners must snapshot them so later files never inherit a closed server or stale PATH.
 export const GATEWAY_STARTUP_MUTATED_ENV_KEYS = [
@@ -79,4 +81,20 @@ export function createAuthorityGatewayTestEnv() {
 /** Captures values that in-process Gateway startup can mutate. */
 export function snapshotGatewayStartupEnv(): Record<string, string | undefined> {
   return Object.fromEntries(GATEWAY_STARTUP_MUTATED_ENV_KEYS.map((key) => [key, process.env[key]]));
+}
+
+export function createGatewayArtifactTestEnv(root: string, state: string, configPath: string) {
+  return {
+    OPENCLAW_HOME: root,
+    OPENCLAW_STATE_DIR: state,
+    OPENCLAW_CONFIG_PATH: configPath,
+    OPENCLAW_SKIP_CHANNELS: "1",
+    OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+    OPENCLAW_SKIP_CRON: "1",
+    OPENCLAW_SKIP_CANVAS_HOST: "1",
+    OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+    OPENCLAW_SKIP_PROVIDERS: "1",
+    OPENCLAW_DISABLE_BUNDLED_PLUGINS: "0",
+    OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("dist/extensions"),
+  };
 }

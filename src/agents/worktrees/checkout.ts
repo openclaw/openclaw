@@ -526,6 +526,7 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
     const markerPath = path.join(options.destination, ".git");
     const marker = await fs.readFile(markerPath);
     let destinationRemoved = false;
+    let promptPublished = false;
     try {
       assertOwned(options);
       await fs.unlink(markerPath);
@@ -545,18 +546,28 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
       await fs.unlink(markerPath);
       assertOwned(options);
       await fs.writeFile(markerPath, marker);
+      if (!options.deferGitCheckout && options.onPromptReady) {
+        // Cloning completed every prompt file; index preparation can overlap inference.
+        // Once published, failures must cancel preparation rather than replace its files.
+        promptPublished = true;
+        assertOwned(options);
+        await options.onPromptReady(commit);
+        assertOwned(options);
+      }
       let copied = false;
       if (template.backend.id === "apfs") {
         const { copyApfsCloneIndex } = await import("./checkout-apfs.js");
-        copied = await copyApfsCloneIndex(
-          template.record.path,
-          options.destination,
-          template.sourceIndex,
-          destinationIndex,
-          {
-            ...options,
-            cloneCompletedAtMs,
-          },
+        copied = await timeWorktreePreparationPhase("indexCopy", () =>
+          copyApfsCloneIndex(
+            template.record.path,
+            options.destination,
+            template.sourceIndex,
+            destinationIndex,
+            {
+              ...options,
+              cloneCompletedAtMs,
+            },
+          ),
         );
       }
       if (!copied) {
@@ -595,7 +606,7 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
         ),
       );
     } catch (error) {
-      if (hasWorktreeUnknownOutcome(error)) {
+      if (promptPublished || hasWorktreeUnknownOutcome(error)) {
         throw error;
       }
       rollbackGuard();

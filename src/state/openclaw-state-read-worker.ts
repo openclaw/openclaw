@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { getDatabaseProcessRole } from "../infra/database-engine/admission-scope.js";
 import { getPostgresPool } from "../infra/postgres-sync/pool.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { captureRuntimeWorkerSource } from "../infra/runtime-worker-generation.js";
@@ -165,8 +166,9 @@ function readPool(state: ReadRuntime, admitted: boolean, awaitedOnly: boolean) {
   if ((state.sealed && !admitted) || state.closing) {
     throw new WorkerTaskError("Shared-state readers are closing", "unavailable");
   }
-  // Reuse an existing serviceable worker; cold promise-only reads need no native supervisor.
-  const retained = !awaitedOnly || state.pool !== undefined;
+  // Long-lived hosts reuse their boot readers; one-shot inspection avoids a native supervisor.
+  const retained =
+    !awaitedOnly || state.pool !== undefined || getDatabaseProcessRole() === "gateway";
   const key = retained ? "pool" : "awaitedPool";
   if (!state[key]) {
     state[key] = createStateReadPool(state.workerUrl, retained ? state.nativeSource : undefined);

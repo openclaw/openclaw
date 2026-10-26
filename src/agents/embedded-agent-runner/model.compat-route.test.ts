@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { extractModelCompat } from "../../plugins/provider-model-compat.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
+import { model as makeCatalogModel } from "../model-catalog-fixtures.test-support.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.types.js";
 import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
 import { resolveAgentToolSurfacePlan } from "../tool-surface-plan.js";
@@ -26,14 +27,9 @@ const catalogRoute = { api: "openai-responses", baseUrl: "https://catalog.exampl
 const anthropicRoute = { api: "anthropic-messages", baseUrl: "https://catalog.example" } as const;
 const customRoute = { ...catalogRoute, baseUrl: "https://custom.example/v1" };
 const catalogCompat: ModelCompatConfig = { codeMode: "preferred", supportsTemperature: false };
-const configuredModel: ModelDefinitionConfig = {
-  id: "model",
-  name: "Configured model",
-  reasoning: false,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+const configuredModel: ModelDefinitionConfig = makeCatalogModel("model", "Configured model", {
   maxTokens: 4096,
-};
+});
 
 function providerConfig(
   route: Pick<ModelProviderConfig, "api" | "baseUrl">,

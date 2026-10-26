@@ -516,15 +516,12 @@ export function createSessionRowLookup(owner: {
     },
     capture(query: records.Lookup) {
       const row = owner.lookup(query);
+      // Published entries need no acquisition state; pending categories keep their identity.
+      if (!row || row.entry || row.storedEntry === undefined || row.unresolvedDatabaseFacts) {
+        return row;
+      }
       const state = owner.state();
-      // Capture retains published identity while category facts wait for reconciliation.
-      return row &&
-        row.unresolvedDatabaseFacts !== "category" &&
-        !state.topologyDirty &&
-        !row.entry &&
-        row.storedEntry !== undefined &&
-        row.unresolvedDatabaseFacts !== true &&
-        state.registryPrepared
+      return !state.topologyDirty && state.registryPrepared
         ? (owner.acquireEntry(row, row.storedEntry) ?? row)
         : row;
     },

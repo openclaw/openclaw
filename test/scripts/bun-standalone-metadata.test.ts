@@ -64,13 +64,15 @@ function ownerSource(relative: string, functionName?: string, typed = false): st
         statement.type === "ExportNamedDeclaration" ? statement.declaration : statement;
       if (
         ((declaration?.type === "FunctionDeclaration" ||
+          declaration?.type === "ClassDeclaration" ||
           declaration?.type === "TSTypeAliasDeclaration") &&
           (!functionName || declaration.id?.name === functionName)) ||
         (functionName &&
-          declaration?.type === "VariableDeclaration" &&
-          declaration.declarations.some(
-            (entry) => entry.id.type === "Identifier" && entry.id.name === functionName,
-          ))
+          ((declaration?.type === "ClassDeclaration" && declaration.id?.name === functionName) ||
+            (declaration?.type === "VariableDeclaration" &&
+              declaration.declarations.some(
+                (entry) => entry.id.type === "Identifier" && entry.id.name === functionName,
+              ))))
       ) {
         if (declaration.start == null || declaration.end == null) {
           throw new Error("Parsed owner declaration has no source offsets");
@@ -285,6 +287,9 @@ function fixture({
     ["cli-invocation.mjs", "isEmbeddedStandaloneModule"],
     ["src/infra/runtime-process-package-url.ts", "resolvePackageRuntimeProcessEntrypointUrl"],
     ["src/infra/runtime-process-dependency-url.ts", "resolvePluginRuntimeProcessAssetUrl"],
+    ["src/plugins/plugin-cache-files.ts", "CachedFileType"],
+    ["src/plugins/plugin-cache-files.ts", "CachedStat"],
+    ["src/plugins/plugin-cache-files.ts", "CachedDirectoryEntry"],
     ["src/plugins/plugin-cache-files.ts", undefined],
     ["src/plugins/plugin-registry-snapshot.ts", "fileContentMatches"],
     ["src/infra/openclaw-root.ts", "candidateDirsFromArgv1"],
@@ -1058,7 +1063,10 @@ describe("standalone image metadata", () => {
           ? "loadLegacySessionSurface"
           : "resolveBundledEntryModulePath";
     if (owner === "runtime") {
-      vm.runInContext(ownerSource(ownerFile, "prepareRuntimePluginConfig"), context);
+      vm.runInContext(
+        ownerSource("src/plugins/loader-shared.ts", "prepareRuntimePluginConfig"),
+        context,
+      );
     }
     const source = ownerSource(ownerFile, ownerName).replaceAll(
       "import.meta.url",

@@ -361,14 +361,14 @@ export async function streamAgentResponse(
             case "toolcall_end":
               if (partialMessage) {
                 // Only updates assembled here prove appends; provider snapshots can correct text.
-                const priorBlock = partialMessage.content[event.contentIndex];
-                const append =
-                  repetitionGuard && event.type === "text_delta" && event.partial === undefined
-                    ? {
-                        offset: priorBlock?.type === "text" ? priorBlock.text.length : 0,
-                        delta: event.delta,
-                      }
-                    : undefined;
+                let append: { offset: number; delta: string } | undefined;
+                if (repetitionGuard && event.type === "text_delta" && event.partial === undefined) {
+                  const priorBlock = partialMessage.content[event.contentIndex];
+                  append = {
+                    offset: priorBlock?.type === "text" ? priorBlock.text.length : 0,
+                    delta: event.delta,
+                  };
+                }
                 let message: AssistantMessage = partialMessage;
                 if ("partial" in event && event.partial) {
                   message = event.partial;
@@ -404,8 +404,10 @@ export async function streamAgentResponse(
                 const fragmentEvent = {
                   ...event,
                   contentIndex: event.contentIndex - committedContentCount,
-                  ...("partial" in event ? { partial: fragment } : {}),
                 };
+                if ("partial" in event) {
+                  fragmentEvent.partial = fragment;
+                }
                 await emit({
                   type: "message_update",
                   assistantMessageEvent: fragmentEvent,
@@ -419,23 +421,21 @@ export async function streamAgentResponse(
                     .slice(committedContentCount, event.contentIndex)
                     .every((item) => item.type !== "toolCall" || item.async === true)
                 ) {
-                  const prefix = prepareAssistantMessage(
-                    ensureToolTurnIdentity({
-                      // Persistence takes ownership and freezes nested values. Detach the
-                      // completed prefix from the provider's still-mutable stream, after
-                      // replay checkpoints have been reindexed using original block identity.
-                      ...structuredClone(
-                        replaceCompactionReplayOwnerContent(
-                          message,
-                          message.content.slice(committedContentCount, event.contentIndex + 1),
-                        ),
-                      ),
-                      ...(streamedTurnId ? { turnId: streamedTurnId } : {}),
-                      stopReason: "toolUse",
-                      // Usage belongs to the terminal fragment, once per provider response.
-                      usage: createEmptyTransportUsage(),
-                    }),
+                  // Persistence takes ownership and freezes nested values. Detach the
+                  // completed prefix after reindexing checkpoints using original block identity.
+                  let prefix = structuredClone(
+                    replaceCompactionReplayOwnerContent(
+                      message,
+                      message.content.slice(committedContentCount, event.contentIndex + 1),
+                    ),
                   );
+                  if (streamedTurnId) {
+                    prefix.turnId = streamedTurnId;
+                  }
+                  prefix.stopReason = "toolUse";
+                  // Usage belongs to the terminal fragment, once per provider response.
+                  prefix.usage = createEmptyTransportUsage();
+                  prefix = prepareAssistantMessage(ensureToolTurnIdentity(prefix));
                   streamedTurnId ??= prefix.turnId;
                   // Await transcript persistence before admitting side effects. The model
                   // may keep sampling, but every executed call has a durable owner.

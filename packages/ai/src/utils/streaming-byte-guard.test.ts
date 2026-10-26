@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { makeStallingStream } from "../providers/provider-stream.test-support.js";
 import { createSseByteGuard } from "./streaming-byte-guard.js";
 
 async function settleWithin<T>(promise: Promise<T>, label: string): Promise<T> {
@@ -18,14 +19,9 @@ async function settleWithin<T>(promise: Promise<T>, label: string): Promise<T> {
 describe("createSseByteGuard cancellation", () => {
   it("reports overflow without waiting for upstream cancellation", async () => {
     let cancelStarted = false;
-    const body = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(new Uint8Array(2));
-      },
-      cancel() {
-        cancelStarted = true;
-        return new Promise<void>(() => {});
-      },
+    const body = makeStallingStream([new Uint8Array(2)], () => {
+      cancelStarted = true;
+      return new Promise<void>(() => {});
     });
     const guard = createSseByteGuard(body.getReader(), { maxBytes: 1 });
 
@@ -38,11 +34,9 @@ describe("createSseByteGuard cancellation", () => {
 
   it("finishes explicit cancellation after handing cleanup upstream", async () => {
     let cancelStarted = false;
-    const body = new ReadableStream<Uint8Array>({
-      cancel() {
-        cancelStarted = true;
-        return new Promise<void>(() => {});
-      },
+    const body = makeStallingStream([], () => {
+      cancelStarted = true;
+      return new Promise<void>(() => {});
     });
     const guard = createSseByteGuard(body.getReader(), { maxBytes: 1 });
 
