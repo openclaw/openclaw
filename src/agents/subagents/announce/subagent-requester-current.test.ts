@@ -24,6 +24,11 @@ it("keeps requester identity through metadata publication but retires it on life
     const sessionKey = "agent:main:main";
     const storePath = resolveOpenClawAgentSqlitePath({ agentId });
     const scope = { agentId, sessionKey, storePath };
+    const entry = (lifecycleRevision: string, updatedAt = 2) => ({
+      sessionId: "requester",
+      lifecycleRevision,
+      updatedAt,
+    });
     const config = vi
       .spyOn(configRuntime, "getRuntimeConfig")
       .mockReturnValue({ session: { store: storePath } });
@@ -36,11 +41,7 @@ it("keeps requester identity through metadata publication but retires it on life
     try {
       missing = await captureRequesterSessionEntryCurrent(sessionKey, agentId);
       expect(missing.readCurrent()).toBeUndefined();
-      await replaceSessionEntry(scope, {
-        sessionId: "requester",
-        lifecycleRevision: "first",
-        updatedAt: 1,
-      });
+      await replaceSessionEntry(scope, entry("first", 1));
       current = await captureRequesterSessionEntryCurrent(sessionKey, agentId);
       expect(current.readCurrent()?.lifecycleRevision).toBe("first");
       expect(missing.readCurrent()).toBeUndefined();
@@ -54,12 +55,7 @@ it("keeps requester identity through metadata publication but retires it on life
           replacements: [
             {
               sessionKey,
-              entry: {
-                sessionId: "requester",
-                lifecycleRevision: "first",
-                lifecycleRunId: "active-run",
-                updatedAt: 2,
-              },
+              entry: { ...entry("first"), lifecycleRunId: "active-run" },
             },
           ],
         }),
@@ -79,11 +75,7 @@ it("keeps requester identity through metadata publication but retires it on life
       publicationGate.release();
       await withinTest(metadata, signal);
       delivery.afterResult = undefined;
-      await replaceSessionEntry(scope, {
-        sessionId: "requester",
-        lifecycleRevision: "replacement",
-        updatedAt: 2,
-      });
+      await replaceSessionEntry(scope, entry("replacement"));
       expect(current.readCurrent()).toBeUndefined();
       expect((await loadRequesterSessionEntry(sessionKey, agentId)).entry?.lifecycleRevision).toBe(
         "replacement",

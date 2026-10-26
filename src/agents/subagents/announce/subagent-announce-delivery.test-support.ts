@@ -31,8 +31,10 @@ export function registerDescendantWakeCurrencyTests({
   it.each(["current", "changed", "unavailable"] as const)(
     "settles descendant wakes under restrictive gateway roles with %s currency",
     async (currency) => {
+      const runId = "descendant-wake-run";
+      const childSessionKey = "agent:main:subagent:nested-parent";
       const { cfg, dispatchGatewayMethodInProcess } = createRoleRestrictedInProcessGatewayMock({
-        runId: "descendant-wake-run",
+        runId,
       });
       const resolveGatewayContext: GatewayContextResolver = () => undefined;
       const signal = new AbortController().signal;
@@ -45,10 +47,7 @@ export function registerDescendantWakeCurrencyTests({
         accepted = true;
         return response;
       });
-      const callGateway = createGatewayMock({
-        aborted: true,
-        runIds: ["descendant-wake-run"],
-      });
+      const callGateway = createGatewayMock({ aborted: true, runIds: [runId] });
       testing.setDepsForTest({
         callGateway,
         dispatchGatewayMethodInProcess,
@@ -58,7 +57,7 @@ export function registerDescendantWakeCurrencyTests({
 
       const woke = await runDescendantWake({
         runId: "nested-parent-run",
-        childSessionKey: "agent:main:subagent:nested-parent",
+        childSessionKey,
         taskLabel: "collect descendant findings",
         findings: "The descendant completed successfully.",
         announceId: "descendant-completion",
@@ -85,7 +84,7 @@ export function registerDescendantWakeCurrencyTests({
         expect(replaceSubagentRunAfterSteer).toHaveBeenCalledWith(
           expect.objectContaining({
             previousRunId: "nested-parent-run",
-            nextRunId: "descendant-wake-run",
+            nextRunId: runId,
           }),
         );
       } else {
@@ -93,10 +92,7 @@ export function registerDescendantWakeCurrencyTests({
         expect(callGateway).toHaveBeenCalledWith(
           expect.objectContaining({
             method: "chat.abort",
-            params: {
-              sessionKey: "agent:main:subagent:nested-parent",
-              runId: "descendant-wake-run",
-            },
+            params: { sessionKey: childSessionKey, runId },
           }),
         );
       }
