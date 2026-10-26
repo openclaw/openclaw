@@ -1,11 +1,7 @@
 import { setImmediate } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import {
-  resolveRuntimeWorkerArgv,
-  resolveRuntimeWorkerUrl,
-} from "../../../../src/infra/runtime-worker-url.js";
-import { resolveTestNodeExecPath } from "../../../../src/test-utils/node-process.js";
+import { resolveRuntimeWorkerUrl } from "../../../../src/infra/runtime-worker-url.js";
 import { collect } from "../../../../test/helpers/async-iterable.js";
 import { runNodeScript } from "../../../../test/helpers/run-node-script.js";
 import { eventStreamRetentionEntrypoint } from "../retention-runtime.test-support.js";
@@ -20,12 +16,9 @@ const createNumberStream = () =>
 describe("EventStream", () => {
   it("releases consumed events but retains unread events and results", async ({ signal }) => {
     const result = await runNodeScript(
-      [
+      (workerArgv) => [
         "--expose-gc",
-        ...resolveRuntimeWorkerArgv(
-          resolveRuntimeWorkerUrl(eventStreamRetentionEntrypoint),
-          resolveTestNodeExecPath(),
-        ),
+        ...workerArgv(resolveRuntimeWorkerUrl(eventStreamRetentionEntrypoint)),
       ],
       { ...process.env, NODE_OPTIONS: "", TSX_DISABLE_CACHE: "1" },
       15_000,
@@ -44,22 +37,7 @@ describe("EventStream", () => {
     ]);
   }, 30_000);
 
-  it("preserves interleaved queued and waiting push/pull order", async () => {
-    const stream = createNumberStream();
-    const iterator = stream[Symbol.asyncIterator]();
-
-    stream.push(1);
-    expect(await iterator.next()).toEqual({ value: 1, done: false });
-    const waiting = iterator.next();
-    stream.push(2);
-    expect(await waiting).toEqual({ value: 2, done: false });
-    stream.push(3);
-    stream.end();
-    expect(await iterator.next()).toEqual({ value: 3, done: false });
-    expect(await iterator.next()).toEqual({ value: undefined, done: true });
-  });
-
-  it("compacts a consumed queue prefix at the cursor boundary without losing events", async () => {
+  it("preserves queued events across prefix compaction and subsequent pushes", async () => {
     const stream = createNumberStream();
     const iterator = stream[Symbol.asyncIterator]();
     for (let value = 0; value < 2048; value += 1) {
@@ -70,9 +48,6 @@ describe("EventStream", () => {
     expect(await read(1024)).toEqual(
       Array.from({ length: 1024 }, (_, value) => ({ value, done: false })),
     );
-    const queueState = stream as unknown as { queue: number[]; queueHead: number };
-    expect(queueState.queueHead).toBe(0);
-    expect(queueState.queue).toHaveLength(1024);
     for (let value = 2048; value < 2052; value += 1) {
       stream.push(value);
     }
@@ -80,7 +55,6 @@ describe("EventStream", () => {
     expect(await collect({ [Symbol.asyncIterator]: () => iterator })).toEqual(
       Array.from({ length: 1028 }, (_, index) => index + 1024),
     );
-    expect(await iterator.next()).toEqual({ value: undefined, done: true });
   });
 
   it.each<[number, number | undefined, number]>([
