@@ -207,6 +207,7 @@ const { values } = parseArgs({
     operations: { type: "string" },
     "warmup-operations": { type: "string" },
     "heap-sampling-interval": { type: "string" },
+    "http-continuation": { type: "boolean", default: false },
     "rpc-concurrency": { type: "string", default: "1" },
     "reconnect-stagger-ms": { type: "string", default: "125" },
     limit: { type: "string", default: "100" },
@@ -1220,6 +1221,11 @@ applyMockOpenAiModelConfig(cfg, {
   modelRef: "openai/gpt-4.1",
   ...(scenario === "sessions.patch" ? { utilityModelRef: "openai/gpt-4.1-mini" } : {}),
 });
+if (values["http-continuation"]) {
+  for (const model of cfg.models.providers.openai.models) {
+    model.compat = { ...model.compat, supportsResponsesContinuation: true };
+  }
+}
 if (verifyHistoryReplay) {
   for (const model of cfg.models.providers.openai.models) {
     // The synthetic provider must fit the seed plus turns accumulated across restarts.
