@@ -7,6 +7,7 @@ const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn<(request: GuardedRequest) => Promise<GuardedResponse>>(),
 }));
 
+// mock-isolation: Inject the HTTP guard without loading the plugin-entry and TTS runtime barrel.
 vi.mock("../../../api.js", () => ({ fetchWithSsrFGuard: fetchWithSsrFGuardMock }));
 
 import { resolveTwilioApiBaseUrl } from "../twilio-region.js";
