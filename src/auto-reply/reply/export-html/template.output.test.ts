@@ -17,8 +17,8 @@ function render(messages: unknown[]) {
   });
 }
 
-function element(root: ParentNode, selector: string): Element {
-  return html.requireElement(root.querySelector(selector), `missing ${selector}`);
+function element<T extends Element = Element>(root: ParentNode, selector: string): T {
+  return html.requireElement(root.querySelector<T>(selector), `missing ${selector}`);
 }
 
 function tool(name: string, args: Record<string, unknown>, id = name) {
@@ -57,37 +57,33 @@ it.each([
         ? `<p>line ${index} & text</p>\tend`
         : `const value${index} = "<&>";\t// line`,
     );
-    if (lineCount > maxLines && name !== "bash") {
+    const expanded = lineCount > maxLines;
+    if (expanded && name !== "bash") {
       lines[lineCount - 1] = "";
     }
     const text = lines.join("\n");
-    const call = tool(name, { command: "echo output", path: filePath, content: text });
-    const messages =
+    const args = { command: "echo output", path: filePath, content: text };
+    const { document } = await render(
       name === "bashExecution"
-        ? [{ role: name, command: "echo output", output: text, exitCode: 0 }]
+        ? [{ role: name, command: args.command, output: text, exitCode: 0 }]
         : [
-            { role: "assistant", content: [call] },
+            { role: "assistant", content: [tool(name, args)] },
             { role: "toolResult", toolCallId: name, content: name === "write" ? "" : text },
-          ];
-    const { document } = await render(messages);
+          ],
+    );
     if (name !== "bashExecution") {
       expect(document.querySelector('.tree-node[data-id="0"]')).toBeNull();
     }
-    const outputs = document.querySelectorAll(".tool-execution > .tool-output");
-    const output = html.requireElement(outputs.item(outputs.length - 1), "tool output missing");
-    const expanded = lineCount > maxLines;
+    const output = element(document, ".tool-execution > .tool-output:last-child");
     expect(output.classList.contains("expandable")).toBe(expanded);
     const full = expanded ? element(output, ".output-full") : output;
     const assertLines = (node: Element, expected: string[]) => {
-      if (filePath) {
-        expect(element(node, "code.hljs").textContent).toBe(expected.join("\n"));
-      } else {
-        const children = Array.from(node.children).filter(
-          (c) => !c.classList.contains("expand-hint"),
-        );
-        expect(children.map((child) => child.textContent)).toEqual(expected);
-      }
-      expect(node.querySelector("p")).toBeNull();
+      const actual = filePath
+        ? element(node, "code.hljs").textContent?.split("\n")
+        : Array.from(node.children)
+            .filter((child) => !child.classList.contains("expand-hint"))
+            .map((child) => child.textContent);
+      expect(actual).toEqual(expected);
     };
     const expected = lines.map((line) => line.replace(/\t/g, "   "));
     assertLines(full, expected);
@@ -110,10 +106,7 @@ it("restores all tree rows when Escape clears a search", async () => {
   ]);
   const treeIds = () =>
     Array.from(document.querySelectorAll(".tree-node"), (node) => node.getAttribute("data-id"));
-  const search = html.requireElement(
-    document.querySelector<HTMLInputElement>("#tree-search"),
-    "search input missing",
-  );
+  const search = element<HTMLInputElement>(document, "#tree-search");
   expect(treeIds()).toEqual(["0", "1", "2"]);
   search.value = "search-me";
   const input = document.createEvent("Event");
