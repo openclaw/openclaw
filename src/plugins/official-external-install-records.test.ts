@@ -121,6 +121,8 @@ describe("trusted official npm install records", () => {
   it("preserves canonical official updates for resolved-spec-only evidence", () => {
     const record: PluginInstallRecord = { source: "npm", resolvedSpec: "@openclaw/acpx@2026.7.2" };
     expect(resolveNpm({ pluginId: "acpx", record })?.npmSpec).toBe("@openclaw/acpx");
+    record.resolvedSpec = "@synthetic/unrelated@1.0.0";
+    expect(resolveNpm({ pluginId: "acpx", record })).toBeUndefined();
   });
 
   it("returns a replacement only for a catalog-declared legacy id", () => {
