@@ -2,14 +2,16 @@
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   fixtureReceiptClientSource,
   openFixtureReceiptChannel,
 } from "../../test/helpers/fixture-receipts.js";
 import { withinTest } from "../../test/helpers/promise.js";
-import { isProcessAlive as alive } from "../../test/scripts/live-process-fixture.test-support.js";
+import {
+  isProcessAlive as alive,
+  waitForProcessExit,
+} from "../../test/scripts/live-process-fixture.test-support.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { startGmailWatcher, stopGmailWatcher } from "./gmail-watcher.js";
 import { createGmailConfig } from "./gmail.test-support.js";
@@ -91,11 +93,7 @@ describePosix("gmail-watcher process-tree shutdown (integration)", () => {
     await withinTest(stopGmailWatcher(), signal);
 
     // The watcher joins its leader and escalation, but exposes no descendant reap receipt.
-    while (pids.some(alive)) {
-      await delay(25, undefined, { signal }).catch((error: unknown) => {
-        throw new Error(`Gmail watcher tree ${pids.join("/")} stayed alive`, { cause: error });
-      });
-    }
+    await Promise.all(pids.map((pid) => waitForProcessExit(pid, signal)));
     expect(pids.map(alive)).toEqual([false, false]);
   }, 15_000);
 });

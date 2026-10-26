@@ -25,9 +25,7 @@ describe("loaded hook import freshness", () => {
     hooks: { internal: { enabled: true, entries: { "reload-hook": { enabled: true } } } },
   };
   const source = (value: string) =>
-    "export default async function(event) { event.messages.push(" +
-    JSON.stringify(value) +
-    "); }\n";
+    `export default async function(event) { event.messages.push(${JSON.stringify(value)}); }\n`;
 
   beforeEach(() => {
     clearInternalHooks();
@@ -67,9 +65,7 @@ describe("loaded hook import freshness", () => {
   }
 
   it("reloads a same-size workspace handler whose mtime was restored", async () => {
-    const initialSource = source("before");
     const editedSource = source("after!");
-    expect(Buffer.byteLength(editedSource)).toBe(Buffer.byteLength(initialSource));
     const cleanTime = new Date(Math.floor(Date.now() / 1000) * 1000);
     fs.utimesSync(handlerPath, cleanTime, cleanTime);
     const initialStat = fs.statSync(handlerPath);
@@ -84,8 +80,7 @@ describe("loaded hook import freshness", () => {
       { interval: 1, timeout: 1_000 },
     );
     const editedStat = fs.statSync(handlerPath);
-    expect(editedStat.size).toBe(initialStat.size);
-    expect(editedStat.mtimeMs).toBe(initialStat.mtimeMs);
+    expect(editedStat).toMatchObject({ size: initialStat.size, mtimeMs: initialStat.mtimeMs });
     await loadAndExpect("after!");
   });
 
