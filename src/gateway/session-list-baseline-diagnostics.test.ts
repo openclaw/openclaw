@@ -88,7 +88,8 @@ it.each([1, 2])("accounts for %s promoted rows and releases all encodings", asyn
       count === 1
         ? 0
         : rows.reduce((bytes, row) => bytes + JSON.stringify({ label: row.label }).length * 2, 0);
-    expect(await flush()).toBe(legacyBytes + packedBytes + factBytes);
+    const currentRowReferenceBytes = count * 8;
+    expect(await flush()).toBe(legacyBytes + packedBytes + factBytes + currentRowReferenceBytes);
     const promoted = [...publication.lists.values()].find((view) => view.conditional)!;
     expect(promoted.rowHistory).toBeUndefined();
     present().list(
