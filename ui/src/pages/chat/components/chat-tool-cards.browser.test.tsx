@@ -56,65 +56,58 @@ describe.runIf("__vitest_browser__" in globalThis)("tool activity layout", () =>
       }
     };
     window.addEventListener("error", recordError);
-    let redraw!: () => void;
+    onTestFinished(() => window.removeEventListener("error", recordError));
+    const [options, setOptions] = createSignal({ rawText: "Widget details" });
     mountSolid(
-      () => {
-        const [options, setOptions] = createSignal({ rawText: "Widget details" });
-        redraw = () => setOptions({ rawText: "Widget details" });
-        return (
-          <ToolPreview
-            preview={{
-              kind: "canvas",
-              surface: "assistant_message",
-              render: "url",
-              url: "about:blank",
-              sandbox: "strict",
-            }}
-            surface="chat_message"
-            options={options()}
-          />
-        );
-      },
+      () => (
+        <ToolPreview
+          preview={{
+            kind: "canvas",
+            surface: "assistant_message",
+            render: "url",
+            url: "about:blank",
+            sandbox: "strict",
+          }}
+          surface="chat_message"
+          options={options()}
+        />
+      ),
       { container },
     );
     const draw = () => {
-      redraw();
+      setOptions({ rawText: "Widget details" });
       flush();
     };
-    let rerenderObserver: ResizeObserver | undefined;
-    try {
-      draw();
-      const preview = container.querySelector<HTMLElement>(".chat-tool-card__preview")!;
-      preview.style.width = "400px";
-      const actions = preview.querySelector<HTMLElement>("[data-widget-actions]")!;
-      const expectPlacement = async (edge: "top" | "right") => {
-        await vi.waitFor(() => {
-          const actual = actions.getBoundingClientRect()[edge === "top" ? "bottom" : "left"];
-          expect(actual).toBe(preview.getBoundingClientRect()[edge]);
-        });
-        expect(errors).toEqual([]);
-      };
-      await expectPlacement("top");
-
-      let rerendered = false;
-      rerenderObserver = new ResizeObserver(() => {
-        rerenderObserver?.disconnect();
-        draw();
-        rerendered = true;
+    draw();
+    const preview = container.querySelector<HTMLElement>(".chat-tool-card__preview")!;
+    preview.style.width = "400px";
+    const actions = preview.querySelector<HTMLElement>("[data-widget-actions]")!;
+    const expectPlacement = async (edge: "top" | "right") => {
+      await vi.waitFor(() => {
+        const actual = actions.getBoundingClientRect()[edge === "top" ? "bottom" : "left"];
+        expect(actual).toBe(preview.getBoundingClientRect()[edge]);
       });
-      rerenderObserver.observe(preview);
-      await vi.waitFor(() => expect(rerendered).toBe(true));
-      expect(errors).toEqual([]);
+    };
+    await expectPlacement("top");
 
-      // Resize the observed ancestor after delivery; doing it in the callback creates a loop.
-      container.style.width = "480px";
-      await expectPlacement("right");
+    let rerendered = false;
+    const rerenderObserver = new ResizeObserver(() => {
+      rerenderObserver.disconnect();
+      draw();
+      rerendered = true;
+    });
+    onTestFinished(() => rerenderObserver.disconnect());
+    rerenderObserver.observe(preview);
+    await vi.waitFor(() => expect(rerendered).toBe(true));
 
-      container.style.width = "420px";
-      await expectPlacement("top");
-    } finally {
-      rerenderObserver?.disconnect();
-      window.removeEventListener("error", recordError);
+    // Resize the observed ancestor after delivery; doing it in the callback creates a loop.
+    for (const [width, edge] of [
+      [480, "right"],
+      [420, "top"],
+    ] as const) {
+      container.style.width = `${width}px`;
+      await expectPlacement(edge);
     }
+    expect(errors).toEqual([]);
   });
 });

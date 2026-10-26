@@ -83,18 +83,10 @@ it("renders transcript video URLs with encoded extensions as cards", async () =>
 
 it("deduplicates one SVG represented by structured and persisted media facts", async () => {
   const source = "https://cdn.example/duplicate.svg";
+  const media = { path: source, contentType: "image/svg+xml", sizeBytes: 300_000 };
   await renderMessage(
     createAssistantMessage([{ type: "image_url", image_url: { url: source } }], {
-      __openclaw: {
-        media: [
-          {
-            path: source,
-            contentType: "image/svg+xml",
-            fileName: "duplicate.svg",
-            sizeBytes: 300_000,
-          },
-        ],
-      },
+      __openclaw: { media: [media] },
     }),
   );
 

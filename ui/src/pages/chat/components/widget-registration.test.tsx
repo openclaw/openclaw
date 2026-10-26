@@ -38,7 +38,6 @@ function mountWidget(kind: "canvas" | "mcp") {
         surface: "assistant_message",
         render: "url",
         sandbox: "scripts",
-        title: "Synthetic widget",
         viewId: "synthetic-widget",
         url: "/__openclaw__/canvas/documents/synthetic-widget/index.html",
         ...(kind === "mcp" ? { mcpApp: { viewId: "synthetic-app" } } : {}),
@@ -49,17 +48,15 @@ function mountWidget(kind: "canvas" | "mcp") {
   ));
 }
 
-const actionButton = (container: HTMLElement) =>
-  container.querySelector<HTMLButtonElement>('button[aria-label="Widget actions"]');
-
 it.each(["canvas", "mcp"] as const)(
   "keeps actions through %s loading, including Canvas failure and retry",
   async (kind) => {
-    const mounted = mountWidget(kind);
-    const { container } = mounted;
+    const { container, unmount } = mountWidget(kind);
+    const actionButton = () =>
+      container.querySelector<HTMLButtonElement>('button[aria-label="Widget actions"]');
     const host = kind === "canvas" ? "openclaw-canvas-widget-view" : "mcp-app-view";
     try {
-      const actions = actionButton(container);
+      const actions = actionButton();
       expect(actions).toMatchObject({ disabled: false });
       expect(container.querySelector(host)).toBeNull();
       modules[kind].resolve();
@@ -69,17 +66,17 @@ it.each(["canvas", "mcp"] as const)(
             "Synthetic widget renderer failed",
           ),
         );
-        expect(actionButton(container)).toBe(actions);
-        expect(actions?.disabled).toBe(false);
+        expect(actionButton()).toBe(actions);
+        expect(actions).toMatchObject({ disabled: false });
         modules.canvasError = false;
         container.querySelector<HTMLButtonElement>('[role="alert"] button')!.click();
       }
       await waitForSolid(() => expect(container.querySelector(host)).not.toBeNull());
       expect(container.querySelector('[role="alert"]')).toBeNull();
-      expect(actionButton(container)).toBe(actions);
+      expect(actionButton()).toBe(actions);
     } finally {
       modules[kind].resolve();
-      mounted.unmount();
+      unmount();
     }
   },
 );

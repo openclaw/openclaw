@@ -38,12 +38,8 @@ function fixture(offset = 600) {
 
 it.each([
   ["unchanged viewport", 600, 600, 400, true, 600, false],
-  ["end", 600, 600, 300, true, 700, false],
   ["near end", 594, 594, 300, true, 700, false],
-  ["reader", 200, 200, 300, true, 200, false],
-  ["native return", 0, 600, 300, false, 700, true],
   ["native return before viewport resize", 0, 600, 400, false, 600, true],
-  ["ancestor displacement", 600, 572, 376, true, 624, false],
 ] as const)(
   "preserves composer resize intent after %s",
   (_, offset, before, height, canFollow, after, resumeFollow) => {

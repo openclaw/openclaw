@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 import { afterEach, expect, it, vi } from "vitest";
-import { createDeferredCore } from "../../../../../src/shared/deferred.ts";
 import type { SessionFileDownload } from "../../../api/session-file-download.ts";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
@@ -15,7 +14,7 @@ afterEach(async () => {
 });
 
 async function startHeldTransfer() {
-  const held = createDeferredCore<SessionFileDownload | null>();
+  const held = Promise.withResolvers<SessionFileDownload | null>();
   const fetcher = vi.fn(async () => new Response("Synthetic file bytes"));
   vi.stubGlobal("fetch", fetcher);
   const attachments: ChatAttachment[] = [];
@@ -52,14 +51,14 @@ async function startHeldTransfer() {
     expect(panel.querySelector('[aria-label="More file actions"]')).not.toBeNull(),
   );
   panel.querySelector<HTMLButtonElement>('[aria-label="More file actions"]')!.click();
-  let attach: HTMLElement | undefined;
-  await waitForSolid(() => {
-    attach = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]')).find((item) =>
-      item.textContent?.includes("Attach to session"),
+  const attach = await waitForSolid(() => {
+    const action = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]')).find(
+      (item) => item.textContent?.includes("Attach to session"),
     );
-    expect(attach).toBeDefined();
+    expect(action).toBeDefined();
+    return action!;
   });
-  attach!.click();
+  attach.click();
   expect(observation.balance).toBe(1);
   const finish = () =>
     held.resolve({
@@ -79,8 +78,7 @@ it.each(["content", "destination"] as const)(
     } else {
       panel.attachmentChat = { ...chat, sessionKey: "agent:main:replacement" };
     }
-    expect(observation.signal?.aborted).toBe(true);
-    expect(observation.balance).toBe(0);
+    expect(observation).toMatchObject({ signal: { aborted: true }, balance: 0 });
     await panel.updateComplete;
     finish();
     await held.promise;
@@ -98,8 +96,7 @@ it("keeps a held native transfer when the detail panel is reparented within the 
   container.append(destination);
   destination.append(panel);
   await panel.updateComplete;
-  expect(observation.signal?.aborted).toBe(false);
-  expect(observation.balance).toBe(1);
+  expect(observation).toMatchObject({ signal: { aborted: false }, balance: 1 });
 
   finish();
   await waitForSolid(() => {
