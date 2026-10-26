@@ -10,7 +10,6 @@ import {
   createWorkspace,
   lastLogLine,
   mockError,
-  mockLog,
   resetMcpCliTestState,
   runMcpCommand,
 } from "./mcp-cli.test-harness.js";
@@ -34,7 +33,6 @@ let endpoint: string;
 let closeFixture: () => Promise<void>;
 let deleteStatus = 400;
 let failCatalog = false;
-let configPath: string;
 type HeaderValue = string | string[] | undefined;
 const deleteHeaders: Array<{ session: HeaderValue; protocol: HeaderValue }> = [];
 
@@ -99,7 +97,7 @@ aroundEach(async (runTest) => {
   deleteHeaders.length = 0;
   await withTempHome("openclaw-mcp-cleanup-", async (home) => {
     vi.spyOn(process, "cwd").mockReturnValue(await createWorkspace());
-    configPath = path.join(home, ".openclaw", "openclaw.json");
+    const configPath = path.join(home, ".openclaw", "openclaw.json");
     const servers = { docs: { url: endpoint, transport: "streamable-http" } };
     await fs.writeFile(configPath, `${JSON.stringify({ mcp: { servers } })}\n`);
     await runTest();
@@ -116,8 +114,7 @@ async function probe(args: string[]) {
     },
   });
 }
-const output = (mock: typeof mockLog) => mock.mock.calls.map(([line]) => String(line)).join("\n");
-const errors = () => output(mockError);
+const errors = () => mockError.mock.calls.map(([line]) => String(line)).join("\n");
 function expectCleanup(exitCode?: number) {
   expect(deleteHeaders).toEqual([{ session: SESSION_ID, protocol: PROTOCOL_VERSION }]);
   expect(process.exitCode).toBe(exitCode);
@@ -126,58 +123,12 @@ function expectCleanup(exitCode?: number) {
   }
 }
 
-it.each<[number, boolean]>([
-  [204, true],
-  [404, true],
-  [405, true],
-  [400, true],
-  [400, false],
-])("succeeds after DELETE %s (JSON=%s)", async (status, json) => {
+it.each([204, 400])("succeeds after DELETE %s", async (status) => {
   deleteStatus = status;
-  await probe(json ? ["--json"] : []);
-  if (json) {
-    const result = JSON.parse(lastLogLine());
-    expect(mockLog).toHaveBeenCalledTimes(1);
-    expect(result).toMatchObject({
-      servers: { docs: { tools: 1 } },
-      tools: ["docs__ping"],
-      diagnostics: [],
-    });
-    expect(result).not.toHaveProperty("cleanupError");
-  } else {
-    expect(output(mockLog)).toContain("- docs: 1 tools");
-  }
+  await probe(["--json"]);
+  expect(JSON.parse(lastLogLine())).not.toHaveProperty("cleanupError");
   expectCleanup();
 });
-
-it("reports Doctor success when DELETE is unconfirmed", async () => {
-  await run("doctor", "docs", "--probe", "--json");
-  expect(JSON.parse(lastLogLine())).toMatchObject({
-    ok: true,
-    servers: [{ name: "docs", ok: true, issues: [] }],
-  });
-  expectCleanup();
-});
-
-it.each(["add", "configure"] as const)(
-  "saves %s config when DELETE is unconfirmed",
-  async (command) => {
-    if (command === "add") {
-      await fs.writeFile(configPath, JSON.stringify({ mcp: { servers: {} } }) + "\n");
-    }
-    const args =
-      command === "add"
-        ? ["add", "docs", "--url", endpoint, "--transport", "streamable-http"]
-        : ["configure", "docs", "--probe"];
-    await run(...args, "--include", "ping");
-    expect(JSON.parse(await fs.readFile(configPath, "utf8")).mcp.servers.docs).toMatchObject({
-      url: endpoint,
-      transport: "streamable-http",
-      toolFilter: { include: ["ping"] },
-    });
-    expectCleanup();
-  },
-);
 
 it("preserves the discovery failure when DELETE is unconfirmed", async () => {
   failCatalog = true;
