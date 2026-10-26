@@ -42,17 +42,21 @@ async function createSessionFixture(prefix: string) {
 function createSqliteFixture(namespace: string, rejectNew = false) {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-binding-state-"));
   stateDirs.push(stateDir);
-  const state = createSqliteState({
+  const state = sqliteState(namespace, stateDir, rejectNew);
+  return { state, store: createBindingStore(state) };
+}
+
+function sqliteState(namespace: string, stateDir: string, rejectNew = false) {
+  return createSqliteState({
     namespace,
     maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
     ...(rejectNew ? { overflowPolicy: "reject-new" as const } : {}),
     env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
   });
-  return { state, store: createBindingStore(state) };
 }
 
-function makeSessionIdentity(sessionId: string) {
-  return { kind: "session" as const, agentId: "main", sessionId };
+function makeSessionIdentity(sessionId: string, agentId = "main") {
+  return { kind: "session" as const, agentId, sessionId };
 }
 
 function makeStableSessionIdentity(sessionId: string, sessionKey: string) {
@@ -75,10 +79,12 @@ function setBinding(store: BindingStore, identity: Identity, binding: ThreadBind
   return store.mutate(identity, { kind: "set", binding });
 }
 
+function thread(threadId: string, fields: Partial<ThreadBinding> = {}): ThreadBinding {
+  return { threadId, cwd: "/repo", ...fields };
+}
+
 function nativeBinding(threadId: string, supervision: boolean): ThreadBinding {
-  return {
-    threadId,
-    cwd: "/repo",
+  return thread(threadId, {
     model: "gpt-5.6-luna",
     modelProvider: "openai",
     ...(supervision
@@ -89,7 +95,36 @@ function nativeBinding(threadId: string, supervision: boolean): ThreadBinding {
           preserveNativeModel: true as const,
         }
       : {}),
-  };
+  });
+}
+
+function reclaim(
+  store: BindingStore,
+  identity: ReturnType<typeof makeStableSessionIdentity>,
+  storePath: string,
+) {
+  return reclaimGeneration({
+    bindingStore: store,
+    identity,
+    config: { session: { store: storePath } },
+  });
+}
+
+function recordSession(
+  identity: ReturnType<typeof makeStableSessionIdentity>,
+  storePath: string,
+  previousSessionId?: string,
+) {
+  return upsertSessionEntry({
+    agentId: identity.agentId,
+    sessionKey: identity.sessionKey,
+    storePath,
+    entry: {
+      sessionId: identity.sessionId,
+      ...(previousSessionId ? { previousSessionId } : {}),
+      updatedAt: 1,
+    },
+  });
 }
 
 async function createGenerationFixture(threadId = "thread-old", cwd = "/old") {
@@ -166,11 +201,7 @@ describe("Codex app-server binding store", () => {
     const state = createMemoryState();
     const store = createLazyCodexAppServerBindingStore(state);
     const identity = { kind: "conversation" as const, bindingId: "pending-resume" };
-    const binding = {
-      threadId: "thread-pending",
-      cwd: "/repo",
-      pendingResumeConfiguration: true as const,
-    };
+    const binding = thread("thread-pending", { pendingResumeConfiguration: true });
     await store.mutate(identity, { kind: "set", binding });
     let current = true;
     const writing = store.mutate(
@@ -192,25 +223,23 @@ describe("Codex app-server binding store", () => {
   });
 
   it.each<[string, string, ThreadBinding, boolean]>([
-    ["stale owner", "thread-stale", { threadId: "thread-new", cwd: "/repo" }, false],
-    ["current owner", "thread-old", { threadId: "thread-new", cwd: "/repo" }, true],
-    ["same thread", "thread-old", { threadId: "thread-old", cwd: "/repo" }, false],
+    ["stale owner", "thread-stale", thread("thread-new"), false],
+    ["current owner", "thread-old", thread("thread-new"), true],
+    ["same thread", "thread-old", thread("thread-old"), false],
     [
       "supervision",
       "thread-old",
-      {
-        threadId: "thread-private",
-        cwd: "/repo",
+      thread("thread-private", {
         connectionScope: "supervision",
         supervisionSourceThreadId: "thread-private",
         preserveNativeModel: true,
-      },
+      }),
       false,
     ],
   ])("replaces only an exact ordinary owner: %s", async (_, expectedThreadId, binding, applied) => {
     const { store } = createBindingFixture();
     const identity = makeSessionIdentity("session-cas");
-    const original = { threadId: "thread-old", cwd: "/repo" };
+    const original = thread("thread-old");
     await setBinding(store, identity, original);
     await expectMutation(store, identity, applied, {
       kind: "replace-thread",
@@ -230,7 +259,7 @@ describe("Codex app-server binding store", () => {
     [{ kind: "conversation", bindingId: "other" }, makeSessionIdentity("current"), true],
   ])("scans thread owners: stored %j, current %j", async (stored, current, otherOwner) => {
     const { store } = createBindingFixture();
-    await setBinding(store, stored, { threadId: "thread-owned", cwd: "/repo" });
+    await setBinding(store, stored, thread("thread-owned"));
     await expect(store.hasOtherThreadOwner("thread-owned", current)).resolves.toBe(otherOwner);
   });
 
@@ -242,7 +271,7 @@ describe("Codex app-server binding store", () => {
       values.set(storeKey(current), {
         version: 1,
         state: "active",
-        binding: { threadId: "thread-owned", cwd: "/repo" },
+        binding: thread("thread-owned"),
         ...(sessionId ? { sessionId } : {}),
       });
       await expect(store.hasOtherThreadOwner("thread-owned", current)).resolves.toBe(true);
@@ -261,9 +290,9 @@ describe("Codex app-server binding store", () => {
               version: 1,
               state: "cleared",
               retired: true,
-              binding: { threadId: "thread-unowned", cwd: "/repo" },
+              binding: thread("thread-unowned"),
             }
-          : { version: 1, state: "active", binding: { threadId: "", cwd: "/repo" } }) as never,
+          : { version: 1, state: "active", binding: thread("") }) as never,
       );
       const scan = expect(
         store.hasOtherThreadOwner("thread-unowned", makeSessionIdentity("current")),
@@ -422,19 +451,8 @@ describe("Codex app-server binding store", () => {
 
   it("retains restricted creation attestation and readable legacy rows after SQLite reopen", async () => {
     const { root } = await createSessionFixture("codex-restricted-binding-reopen-");
-    const openStore = () =>
-      createBindingStore(
-        createSqliteState({
-          namespace: "restricted-reopen",
-          maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
-          env: { ...process.env, OPENCLAW_STATE_DIR: root },
-        }),
-      );
-    const legacy = {
-      threadId: "restricted-legacy",
-      cwd: "/repo",
-      nativeToolPolicyRestricted: true as const,
-    };
+    const openStore = () => createBindingStore(sqliteState("restricted-reopen", root));
+    const legacy = thread("restricted-legacy", { nativeToolPolicyRestricted: true });
     const attested = {
       ...legacy,
       threadId: "restricted-attested",
@@ -443,8 +461,8 @@ describe("Codex app-server binding store", () => {
     const legacyIdentity = { kind: "conversation" as const, bindingId: "restricted-legacy" };
     const attestedIdentity = { kind: "conversation" as const, bindingId: "restricted-attested" };
     const store = openStore();
-    await store.mutate(legacyIdentity, { kind: "set", binding: legacy });
-    await store.mutate(attestedIdentity, { kind: "set", binding: attested });
+    await setBinding(store, legacyIdentity, legacy);
+    await setBinding(store, attestedIdentity, attested);
     await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     const reopened = openStore();
@@ -458,10 +476,7 @@ describe("Codex app-server binding store", () => {
     const normal = { kind: "conversation" as const, bindingId: "normal" };
     const legacy = { kind: "conversation" as const, bindingId: "legacy-source" };
     for (const identity of [normal, legacy]) {
-      await setBinding(store, identity, {
-        threadId: `thread-${identity.bindingId}`,
-        cwd: "/repo",
-      });
+      await setBinding(store, identity, thread(`thread-${identity.bindingId}`));
       await store.mutate(identity, { kind: "clear" });
     }
 
@@ -473,8 +488,8 @@ describe("Codex app-server binding store", () => {
 
   it("isolates identical session ids owned by different agents", async () => {
     const { store } = createBindingFixture();
-    const first = { kind: "session" as const, agentId: "first", sessionId: "shared" };
-    const second = { kind: "session" as const, agentId: "second", sessionId: "shared" };
+    const first = makeSessionIdentity("shared", "first");
+    const second = makeSessionIdentity("shared", "second");
 
     await setBinding(store, first, { threadId: "thread-first", cwd: "/first" });
     await setBinding(store, second, { threadId: "thread-second", cwd: "/second" });
@@ -557,38 +572,22 @@ describe("Codex app-server binding store", () => {
         ...nativeBinding("native-thread-before-compaction", ownership === "supervision"),
         dynamicToolsFingerprint: hashFingerprint("native-tools"),
       };
-      const openStore = () => {
-        const state = createSqliteState({
-          namespace: "predecessor-reopen",
-          maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
-          overflowPolicy: "reject-new",
-          env: { ...process.env, OPENCLAW_STATE_DIR: root },
-        });
-        return { state, store: createLazyCodexAppServerBindingStore(state) };
-      };
+      const openStore = () =>
+        createLazyCodexAppServerBindingStore(sqliteState("predecessor-reopen", root, true));
 
-      await upsertSessionEntry({
-        ...sessionScope,
-        entry: { sessionId: previous.sessionId, updatedAt: 1 },
-      });
-      await openStore().store.mutate(previous, { kind: "set", binding });
+      await recordSession(previous, storePath);
+      await setBinding(openStore(), previous, binding);
       await patchSessionEntry({
         ...sessionScope,
         update: () => ({ sessionId: current.sessionId }),
       });
       await closeOpenClawStateDatabaseAsync();
       resetPluginStateStoreForTests();
-      const { store } = openStore();
+      const store = openStore();
       expect(store.read(current)).toBeUndefined();
 
       for (let attempt = 0; attempt < 2; attempt++) {
-        await expect(
-          reclaimGeneration({
-            bindingStore: store,
-            identity: current,
-            config: { session: { store: storePath } },
-          }),
-        ).resolves.toBe(true);
+        await expect(reclaim(store, current, storePath)).resolves.toBe(true);
         expect(store.read(current)).toEqual(binding);
       }
       await expect(store.mutate(previous, { kind: "clear" })).resolves.toBe(false);
@@ -613,17 +612,8 @@ describe("Codex app-server binding store", () => {
       };
       const binding = nativeBinding("native-thread-foreign-generation", supervision);
 
-      await upsertSessionEntry({
-        agentId: current.agentId,
-        sessionKey: current.sessionKey,
-        storePath,
-        entry: {
-          sessionId: current.sessionId,
-          previousSessionId: "session-previous",
-          updatedAt: 1,
-        },
-      });
-      await store.mutate(previous, { kind: "set", binding });
+      await recordSession(current, storePath, "session-previous");
+      await setBinding(store, previous, binding);
 
       const resolved = await resolveBinding({
         bindingStore: store,
@@ -633,13 +623,9 @@ describe("Codex app-server binding store", () => {
       using _ = { [Symbol.dispose]: resolved.release };
       expect(resolved.binding).toBeUndefined();
       expect(store.read(previous)).toEqual(binding);
-      await expect(
-        reclaimGeneration({
-          bindingStore: store,
-          identity: current,
-          config: { session: { store: storePath } },
-        }),
-      ).resolves.toBe(mismatch !== "two generations behind" || !supervision);
+      await expect(reclaim(store, current, storePath)).resolves.toBe(
+        mismatch !== "two generations behind" || !supervision,
+      );
       expect(store.read(current)).toBeUndefined();
       expect(store.read(previous)).toEqual(
         mismatch === "two generations behind" && !supervision ? undefined : binding,
@@ -651,8 +637,8 @@ describe("Codex app-server binding store", () => {
     const state = createMemoryState();
     const previous = makeStableSessionIdentity("session-previous", "agent:main:compaction");
     const current = { ...previous, sessionId: "session-current" };
-    const binding = { threadId: "native-thread", cwd: "/repo" };
-    await createBindingStore(state).mutate(previous, { kind: "set", binding });
+    const binding = thread("native-thread");
+    await setBinding(createBindingStore(state), previous, binding);
     const store = createLazyCodexAppServerBindingStore(state);
     let active = true;
     const adopting = store.adoptSessionGeneration(current, previous.sessionId, () => {
@@ -686,7 +672,7 @@ describe("Codex app-server binding store", () => {
   });
 
   it("falls back to physical session identity when no stable session key exists", () => {
-    const first = { kind: "session" as const, agentId: "main", sessionId: "session-1" };
+    const first = makeSessionIdentity("session-1");
     const second = { ...first, sessionId: "session-2" };
 
     expect(storeKey(first)).not.toBe(storeKey(second));
@@ -712,10 +698,7 @@ describe("Codex app-server binding store", () => {
       sessionKey: "agent:main:telegram:chat-1",
     };
     for (const identity of [physical, stable]) {
-      await setBinding(store, identity, {
-        threadId: `thread-${identity.sessionId}`,
-        cwd: "/repo",
-      });
+      await setBinding(store, identity, thread(`thread-${identity.sessionId}`));
       await expect(store.retireSessionGeneration(identity)).resolves.toBe("applied");
     }
 
@@ -823,22 +806,11 @@ describe("Codex app-server binding store", () => {
     const { store } = createBindingFixture();
     const identity = makeStableSessionIdentity("session-current", "agent:main:telegram:direct:123");
 
-    await upsertSessionEntry({
-      agentId: identity.agentId,
-      sessionKey: identity.sessionKey,
-      storePath,
-      entry: { sessionId: identity.sessionId, updatedAt: 1 },
-    });
-    await setBinding(store, identity, { threadId: "thread-before-reset", cwd: "/repo" });
+    await recordSession(identity, storePath);
+    await setBinding(store, identity, thread("thread-before-reset"));
     await store.retireSessionGeneration(identity);
 
-    await expect(
-      reclaimGeneration({
-        bindingStore: store,
-        identity,
-        config: { session: { store: storePath } },
-      }),
-    ).resolves.toBe(true);
+    await expect(reclaim(store, identity, storePath)).resolves.toBe(true);
     await expectSet(store, identity, true, "thread-after-reset", "/repo");
   });
 

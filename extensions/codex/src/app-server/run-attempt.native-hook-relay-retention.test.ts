@@ -22,11 +22,10 @@ import {
   createRuntime,
   createNativeModelSourceFixture,
   childTurnCompletedNotification,
+  collabItem,
   directSpawnItem,
   itemNotification as parentItemNotification,
   notifyChildStarted,
-  successfulSendInputOutput,
-  turnStartedNotification,
   threadRead,
 } from "./native-subagent-monitor.test-support.js";
 import type { CodexServerNotification, JsonObject } from "./protocol.js";
@@ -221,10 +220,8 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
     });
     first.bindTurn("parent-a");
     await notifyChildStarted(client);
-    await client.notify(turnStartedNotification("child-a"));
-    await client.notify(
-      parentItemNotification(directSpawnItem("v1", "parent-thread", "child-thread"), "parent-a"),
-    );
+    await client.startTurn("child-a");
+    await client.spawn("child-thread", "parent-a", "v1");
     const second = await codexNativeSubagentMonitorRuntime.register({
       client: client.client,
       parentThreadId: "parent-thread",
@@ -326,13 +323,11 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
       await client.notify(inputRejected("same-active-followup", "Input declined"));
 
       await invoke("parent-a", "initial-same-source-steer");
-      await client.notify(
-        successfulSendInputOutput({
-          turnId: "parent-a",
-          callId: "initial-same-source-steer",
-          submissionId: "initial-opaque-steer",
-        }),
-      );
+      await client.sendInputOutput({
+        turnId: "parent-a",
+        callId: "initial-same-source-steer",
+        submissionId: "initial-opaque-steer",
+      });
 
       // The accepted opaque receipt plus unresolved writes share the capacity
       // reserved before native input. Failed calls release their reservations.
@@ -346,47 +341,32 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
         await client.notify(inputRejected(`pending-${index}`, "Input rejected"));
       }
       await expect(invoke("parent-a", "same-source-steer")).resolves.toEqual(relaySuccess);
-      await client.notify(
-        successfulSendInputOutput({
-          turnId: "parent-a",
-          callId: "same-source-steer",
-          submissionId: "opaque-same-turn-receipt",
-        }),
-      );
+      await client.sendInputOutput({
+        turnId: "parent-a",
+        callId: "same-source-steer",
+        submissionId: "opaque-same-turn-receipt",
+      });
       expect(() => capture.assertCurrent()).not.toThrow();
 
       // A stock V1 successful steer reports an opaque submission ID while the
       // receiver keeps its old native turn and lineage, including after a hook race.
-      await client.notify(
-        parentItemNotification(
-          {
-            type: "collabAgentToolCall",
-            tool: "sendInput",
-            status: "completed",
-            id: "accepted-steer",
-            senderThreadId: "parent-thread",
-            receiverThreadIds: ["child-thread"],
-          },
-          "parent-b",
-        ),
+      await client.item(
+        collabItem("sendInput", ["child-thread"], { id: "accepted-steer" }),
+        "parent-b",
       );
       await expect(codexNativeSubagentMonitorRuntime.captureModelSource(request)).rejects.toThrow(
         "same admitted model source",
       );
-      await client.notify(
-        successfulSendInputOutput({
-          turnId: "parent-b",
-          callId: "accepted-steer",
-          submissionId: "opaque-foreign-receipt",
-        }),
-      );
+      await client.sendInputOutput({
+        turnId: "parent-b",
+        callId: "accepted-steer",
+        submissionId: "opaque-foreign-receipt",
+      });
       expect(() => capture.assertCurrent()).toThrow("execution was cancelled");
       await expect(codexNativeSubagentMonitorRuntime.captureModelSource(request)).rejects.toThrow(
         "execution was cancelled",
       );
-      await client.notify(
-        childTurnCompletedNotification({ turnId: "child-a", status: "interrupted" }),
-      );
+      await client.completeTurn({ turnId: "child-a", status: "interrupted" });
       const coldTarget = threadRead({ threadStatus: "notLoaded" });
       coldTarget.thread.modelProvider = "unqualified-provider";
       client.setThreadRead("child-thread", coldTarget);
@@ -424,19 +404,17 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
       await expect(followup("parent-a", "incompatible-pending")).rejects.toThrow(
         "same admitted model source",
       );
-      await client.notify(
-        parentItemNotification(
-          {
-            type: "subAgentActivity",
-            kind: "interacted",
-            id: "followup-after-a",
-            agentThreadId: "child-thread",
-            agentPath: "/root/child-thread",
-          },
-          "parent-b",
-        ),
+      await client.item(
+        {
+          type: "subAgentActivity",
+          kind: "interacted",
+          id: "followup-after-a",
+          agentThreadId: "child-thread",
+          agentPath: "/root/child-thread",
+        },
+        "parent-b",
       );
-      await client.notify(turnStartedNotification("child-b"));
+      await client.startTurn("child-b");
       const next = await codexNativeSubagentMonitorRuntime.captureModelSource({
         ...request,
         turnId: "child-b",

@@ -27,6 +27,23 @@ function finalHistory(turnId: string, result: string) {
 
 type Inventory = Awaited<ReturnType<typeof fixture>>;
 type Client = ReturnType<typeof createClient>;
+type Parent = Awaited<ReturnType<Inventory["register"]>>;
+
+async function closeAssignment(parent: Parent, client: Client) {
+  await parent.unregister();
+  client.close();
+}
+
+function changeOwner(owner: ReturnType<Inventory["historyOwner"]>, scenario: string) {
+  if (scenario === "connection") {
+    owner.connectionFingerprint = "f".repeat(64);
+  } else if (scenario === "lifecycle") {
+    owner.lifecycleRevision = "replacement";
+  } else if (scenario === "session") {
+    owner.sessionId = "replacement";
+  }
+  return owner;
+}
 
 function interceptMutation(
   f: Inventory,
@@ -65,8 +82,7 @@ async function startAssignment(
 
 async function detachedAssignment(observeTurn = true) {
   const { f, client, parent } = await startAssignment(observeTurn);
-  await parent.unregister();
-  client.close();
+  await closeAssignment(parent, client);
   return f;
 }
 
@@ -164,8 +180,7 @@ describe("native pending assignment inventory through registered monitor admissi
     async (scenario) => {
       const { f, client, parent } = await startNestedAssignment();
       await completeInForeground(client);
-      await parent.unregister();
-      client.close();
+      await closeAssignment(parent, client);
       const saved = await f.assignments();
       expect(saved).toMatchObject([{ childThreadId: "grandchild" }]);
       const recoveredClient = createClient();
@@ -279,8 +294,7 @@ describe("native pending assignment inventory through registered monitor admissi
       expect(await f.assignments()).toMatchObject(assignments);
     } finally {
       releaseWrite.resolve();
-      await parent.unregister();
-      client.close();
+      await closeAssignment(parent, client);
     }
   });
 
@@ -334,8 +348,7 @@ describe("native pending assignment inventory through registered monitor admissi
       } else {
         await expect(capture).rejects.toBeInstanceOf(Error);
       }
-      await parent.unregister();
-      client.close();
+      await closeAssignment(parent, client);
     },
   );
 
@@ -431,14 +444,7 @@ describe("native pending assignment inventory through registered monitor admissi
     "does not adopt pending native work under %s history ownership",
     async (scenario) => {
       const f = await detachedAssignment();
-      let owner = f.historyOwner();
-      if (scenario === "connection") {
-        owner = { ...owner, connectionFingerprint: "f".repeat(64) };
-      } else if (scenario === "lifecycle") {
-        owner = { ...owner, lifecycleRevision: "replacement" };
-      } else if (scenario === "session") {
-        owner = { ...owner, sessionId: "replacement" };
-      }
+      const owner = changeOwner(f.historyOwner(), scenario);
       const client = createClient();
       const history = threadRead({
         turnId: "child-turn",
@@ -502,14 +508,7 @@ describe("native pending assignment inventory through registered monitor admissi
       await first.unregister();
       expect(f.deliver).toHaveBeenCalledOnce();
       await f.rotate("rotated-parent");
-      const owner = f.historyOwner("rotated-parent");
-      if (scenario === "session") {
-        owner.sessionId = "other-session";
-      } else if (scenario === "lifecycle") {
-        owner.lifecycleRevision = "other-lifecycle";
-      } else if (scenario === "connection") {
-        owner.connectionFingerprint = "f".repeat(64);
-      }
+      const owner = changeOwner(f.historyOwner("rotated-parent"), scenario);
       client.setThreadRead("child-thread", history);
       const source = createNativeModelSourceFixture(["model-b"]);
       const replacement = await f.register(client, owner, source, {
@@ -530,8 +529,7 @@ describe("native pending assignment inventory through registered monitor admissi
       const input = prepareInput(client, "rotated-parent", "rotated-turn", "child-thread");
       if (scenario === "session" || scenario === "lifecycle" || scenario === "connection") {
         await expect(input).rejects.toThrow("outside the sender's admitted tree");
-        await replacement.unregister();
-        client.close();
+        await closeAssignment(replacement, client);
         return;
       }
       await entered.promise;
@@ -545,8 +543,7 @@ describe("native pending assignment inventory through registered monitor admissi
       read.resolve(metadata);
       if (scenario !== "current") {
         await expect(input).rejects.toThrow();
-        await replacement.unregister();
-        client.close();
+        await closeAssignment(replacement, client);
         return;
       }
       await input;
@@ -648,7 +645,7 @@ describe("native pending assignment inventory through registered monitor admissi
         return { delivered: true, path: "direct" };
       });
       const recoveredClient = createClient();
-      const history = threadRead({ turnId, result: "Pending result", resultPhase: "final_answer" });
+      const history = finalHistory(turnId, "Pending result");
       if (assignment === "followup") {
         prependHistory(history, threadRead({ turnId: "child-turn", result: "Native result" }));
       }
@@ -812,8 +809,7 @@ describe("native pending assignment inventory through registered monitor admissi
       } finally {
         history.resolve(recovered);
         await parent.ready;
-        await parent.unregister();
-        client.close();
+        await closeAssignment(parent, client);
       }
     },
   );
@@ -827,9 +823,7 @@ describe("native pending assignment inventory through registered monitor admissi
     await vi.advanceTimersByTimeAsync(600_000);
     expect(await f.assignments()).toEqual([]);
     const attempts = f.deliver.mock.calls.length;
-    history.resolve(
-      threadRead({ turnId: "child-turn", result: "Result", resultPhase: "final_answer" }),
-    );
+    history.resolve(finalHistory("child-turn", "Result"));
     await replacement.ready;
     await replacement.unregister();
     expect(f.deliver).toHaveBeenCalledTimes(attempts);
