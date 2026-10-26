@@ -109,7 +109,7 @@ export function installControlUiReactiveGraph(
     let source: string | null = null;
     let current: LiveNode | null | undefined = node;
     while (current) {
-      const { _loc: location, _parent: parent } = current;
+      const { _loc: location, _parent: parent }: LiveNode = current;
       if (location) {
         source = location;
         break;
