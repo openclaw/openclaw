@@ -35,19 +35,11 @@ vi.mock("../state/openclaw-state-worker-context.js", () =>
 vi.mock("../state/openclaw-state-worker-store.js", () =>
   queries.forbid("executeOpenClawStateWorker"),
 );
-vi.mock("./kysely-sync.js", async () => {
-  const { Kysely, SqliteDialect } = await import("kysely");
-  const dialect = new SqliteDialect({
-    database: async () => {
-      throw new Error("APNs kernel tests compile queries but never execute a Kysely driver");
-    },
-  });
-  return {
-    getNodeSqliteKysely: <Database>() => new Kysely<Database>({ dialect }),
-    executeSqliteQueryTakeFirstSync: queries.forbidden,
-    executeSqliteQuerySync: queries.all,
-  };
-});
+vi.mock("./kysely-sync.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./kysely-sync.js")>()),
+  executeSqliteQueryTakeFirstSync: queries.forbidden,
+  executeSqliteQuerySync: queries.all,
+}));
 
 const database = new DatabaseSync("inert-apns-kernel");
 const token = "abcd1234".repeat(4);
