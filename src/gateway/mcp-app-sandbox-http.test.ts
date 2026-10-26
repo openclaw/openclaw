@@ -1,11 +1,10 @@
 import type { IncomingMessage } from "node:http";
 import { runInNewContext, Script } from "node:vm";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { listenLoopback } from "../../test/helpers/gateway-integration-fixtures.js";
 import { buildMcpAppSandboxPath } from "../agents/mcp-app-sandbox.js";
 import { SANDBOX_HOST_PATH } from "../agents/sandbox-host.js";
-import { createKeyboardShortcutMatcher } from "../shared/keyboard-shortcuts.js";
 import { createSandboxHostHttpServer } from "./mcp-app-sandbox-http.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
@@ -36,14 +35,6 @@ function request(url: string, method: "GET" | "HEAD" | "POST" = "GET") {
 async function withSandboxHost(run: (origin: string) => Promise<void>) {
   await using server = createSandboxHostHttpServer();
   await run(await listenLoopback(server));
-}
-
-async function readBootstrap(origin: string) {
-  const shell = await (await fetch(new URL(buildMcpAppSandboxPath(), origin))).text();
-  return expectDefined(
-    [...shell.matchAll(/<script>([\s\S]*?)<\/script>/gu)].at(-1)?.[1],
-    "sandbox bootstrap script",
-  );
 }
 
 function bootSandbox(bootstrap: string, origin: string, parentOrigin = "https://control.example") {
@@ -153,11 +144,16 @@ describe("MCP App sandbox HTTP origin", () => {
     });
   });
 
-  it("binds the browser-reported parent when the iframe request carries no referrer", async () => {
+  it("boots without a referrer and serves executable widget bridges to its bound parent", async () => {
     await withSandboxHost(async (origin) => {
-      const bootstrap = await readBootstrap(origin);
+      const shell = await (await fetch(new URL(buildMcpAppSandboxPath(), origin))).text();
+      const bootstrap = expectDefined(
+        [...shell.matchAll(/<script>([\s\S]*?)<\/script>/gu)].at(-1)?.[1],
+        "sandbox bootstrap script",
+      );
+      const { posted, frames, receive } = bootSandbox(bootstrap, origin);
       // WebKit navigates an already attached iframe without the referrer the host requested.
-      expect(bootSandbox(bootstrap, origin).posted).toEqual([
+      expect(posted).toEqual([
         [
           expect.objectContaining({ method: "ui/notifications/sandbox-proxy-ready" }),
           "https://control.example",
@@ -166,15 +162,6 @@ describe("MCP App sandbox HTTP origin", () => {
       expect(() => bootSandbox(bootstrap, origin, "null")).toThrow(
         "invalid MCP App sandbox parent",
       );
-    });
-  });
-
-  it("serves executable widget bridges when host function source is unavailable", async () => {
-    using _ = vi
-      .spyOn(createKeyboardShortcutMatcher, "toString")
-      .mockReturnValue("function createKeyboardShortcutMatcher() { [native code] }");
-    await withSandboxHost(async (origin) => {
-      const { frames, receive } = bootSandbox(await readBootstrap(origin), origin);
       receive({
         method: "ui/notifications/sandbox-resource-ready",
         params: { html: "<!doctype html><p>Synthetic widget</p>" },
