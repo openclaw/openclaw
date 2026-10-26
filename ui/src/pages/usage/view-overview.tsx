@@ -257,17 +257,18 @@ function renderCostWindowComparison(
       <div class="usage-summary-strip usage-summary-strip--windows">
         <For each={comparisons}>
           {({ index, summary, columns }) => {
-            const label =
+            const label = createMemo(() =>
               index === 0
                 ? t("usage.costWindows.selectedRange")
                 : summary.days === 1
                   ? summary.endDate === today
                     ? t("usage.presets.today")
                     : formatDayLabel(summary.endDate)
-                  : t("usage.costWindows.lastDays", { count: String(summary.days) });
+                  : t("usage.costWindows.lastDays", { count: String(summary.days) }),
+            );
             return (
               <div class={["cost-window", { "cost-window--range": index === 0 }]}>
-                <div class="cost-window__label">{label}</div>
+                <div class="cost-window__label">{label()}</div>
                 <div class="cost-window__value">
                   {formatAnalysisCost(summary.totals.totalCost, summary.totals.usageReport)}
                 </div>
@@ -278,7 +279,7 @@ function renderCostWindowComparison(
                     ? ` · ${formatAnalysisCost(summary.totals.totalCost / summary.days, summary.totals.usageReport)} ${t("usage.costWindows.perDay")}`
                     : undefined}
                 </div>
-                {columns ? <CostColumns days={columns} label={label} /> : undefined}
+                {columns ? <CostColumns days={columns} label={label()} /> : undefined}
               </div>
             );
           }}
