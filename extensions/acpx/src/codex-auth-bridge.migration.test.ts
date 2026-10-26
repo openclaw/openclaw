@@ -21,21 +21,17 @@ const baseFixture = useAuthBridgeFixture((codexBin) =>
 );
 
 function fixture() {
-  const { root, stateDir, config, prepare, sourceConfig } = baseFixture();
+  const base = baseFixture();
+  const { stateDir, config, prepare } = base;
   return {
-    root,
-    stateDir,
-    config,
-    sourceConfig,
+    ...base,
     configPath: (dir = stateDir) => path.join(dir, "acpx", "codex-home", "config.toml"),
     wrapperPath: (agent = "codex") => path.join(stateDir, "acpx", `${agent}-acp-wrapper.mjs`),
-    prepare: (pluginConfig = config(), dir = stateDir, bin?: string) =>
-      prepare({ pluginConfig, stateDir: dir }, bin),
+    prepare: async (pluginConfig = config(), dir = stateDir, bin?: string) => {
+      const resolved = await prepare({ pluginConfig, stateDir: dir }, bin);
+      return splitCommandParts(resolved.agents.codex ?? "");
+    },
   };
-}
-
-function expectWrapperCommand(command: AcpxAgentCommand | undefined, wrapperPath: string): void {
-  expect(command).toEqual(expect.arrayContaining([process.execPath, wrapperPath]));
 }
 
 async function writeAdapter(root: string) {
@@ -73,10 +69,11 @@ describe("prepareAcpxCodexAuthConfig command migration", () => {
     const pluginConfig = config(
       'npx @zed-industries/codex-acp@0.12.0 -c=model=\'"gpt-5.4"\' -cmodel_reasoning_effort=\'"high"\' --config=\'mcp_servers."foo.bar"={ command = "node", args = ["server.js"] }\'',
     );
-    const resolved = await prepare(pluginConfig, undefined, await writeAdapter(root));
+    const command = await prepare(pluginConfig, undefined, await writeAdapter(root));
 
-    expectWrapperCommand(resolved.agents.codex, wrapperPath());
-    expect(splitCommandParts(resolved.agents.codex ?? "").slice(2)).toEqual([
+    expect(command).toEqual([
+      process.execPath,
+      wrapperPath(),
       OPENCLAW_CODEX_CONFIG_ARG,
       JSON.stringify({
         model: "gpt-5.4",
@@ -90,7 +87,7 @@ describe("prepareAcpxCodexAuthConfig command migration", () => {
     expect(isolatedConfig).not.toContain("notify");
     expect(isolatedConfig).not.toContain("SkyComputerUseClient");
     expect(await fs.readFile(wrapperPath(), "utf8")).not.toContain(sourceCodexHome);
-    const launched = await launch(resolved.agents.codex, root);
+    const launched = await launch(command, root);
     expect(launched.argv).toStrictEqual([]);
     expect(JSON.parse(String(launched.codexConfig))).toEqual({
       model: "gpt-5.6-sol",
@@ -104,11 +101,11 @@ describe("prepareAcpxCodexAuthConfig command migration", () => {
     const pluginConfig = config(
       "npx @agentclientprotocol/codex-acp@1.1.2 cli -c 'model=\"gpt-5.6-sol\"' --config 'model_reasoning_effort=\"low\"'",
     );
-    const resolved = await prepare(pluginConfig, undefined, await writeAdapter(root));
+    const command = await prepare(pluginConfig, undefined, await writeAdapter(root));
 
-    expectWrapperCommand(resolved.agents.codex, wrapperPath());
-    const commandParts = splitCommandParts(resolved.agents.codex ?? "");
-    expect(commandParts.slice(2)).toStrictEqual([
+    expect(command).toStrictEqual([
+      process.execPath,
+      wrapperPath(),
       "cli",
       "-c",
       'model="gpt-5.6-sol"',
@@ -116,11 +113,11 @@ describe("prepareAcpxCodexAuthConfig command migration", () => {
       'model_reasoning_effort="low"',
     ]);
 
-    const launched = await launch(resolved.agents.codex, root, {
+    const launched = await launch(command, root, {
       ...process.env,
       CODEX_CONFIG: "",
     });
-    expect(launched.argv).toStrictEqual(commandParts.slice(2));
+    expect(launched.argv).toStrictEqual(command.slice(2));
     expect(JSON.parse(String(launched.codexConfig))).toEqual({
       model: "gpt-5.6-sol",
       model_reasoning_effort: "medium",
@@ -147,14 +144,15 @@ describe("prepareAcpxCodexAuthConfig command migration", () => {
 
   it("migrates config flags from a bare Codex ACP executable", async () => {
     const { root, config, wrapperPath, prepare } = fixture();
-    const resolved = await prepare(
+    const command = await prepare(
       config("codex-acp -cmodel='\"gpt-5.4\"'"),
       undefined,
       path.join(root, "codex-acp.js"),
     );
 
-    expectWrapperCommand(resolved.agents.codex, wrapperPath());
-    expect(splitCommandParts(resolved.agents.codex ?? "").slice(2)).toEqual([
+    expect(command).toEqual([
+      process.execPath,
+      wrapperPath(),
       OPENCLAW_CODEX_CONFIG_ARG,
       JSON.stringify({ model: "gpt-5.4" }),
     ]);
