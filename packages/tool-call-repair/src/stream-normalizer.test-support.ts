@@ -19,19 +19,13 @@ type NormalizeOptions = Parameters<typeof normalizePlainTextToolCallStreamEvents
 
 export function resolveTestFenceRanges(text: string): Array<{ end: number; start: number }> {
   const ranges: Array<{ end: number; start: number }> = [];
-  let cursor = 0;
-  while (cursor < text.length) {
-    const backtick = text.indexOf("```", cursor);
-    const tilde = text.indexOf("~~~", cursor);
-    const start = backtick === -1 ? tilde : tilde === -1 ? backtick : Math.min(backtick, tilde);
-    if (start === -1) {
-      break;
-    }
-    const marker = text.slice(start, start + 3);
-    const close = text.indexOf(marker, start + marker.length);
-    const end = close === -1 ? text.length : close + marker.length;
+  const fences = /```|~~~/g;
+  for (let match = fences.exec(text); match; match = fences.exec(text)) {
+    const start = match.index;
+    const close = text.indexOf(match[0], start + 3);
+    const end = close === -1 ? text.length : close + 3;
     ranges.push({ start, end });
-    cursor = end;
+    fences.lastIndex = end;
   }
   return ranges;
 }
@@ -78,13 +72,10 @@ export async function collectNormalizedEvents(
   async function* source() {
     yield* events;
   }
-  const normalized: Events = [];
-  for await (const event of normalizePlainTextToolCallStreamEvents(source(), options)) {
-    if (event && typeof event === "object") {
-      normalized.push(event as Event);
-    }
-  }
-  return normalized;
+  const normalized = await Array.fromAsync(
+    normalizePlainTextToolCallStreamEvents(source(), options),
+  );
+  return normalized.filter((event): event is Event => event !== null && typeof event === "object");
 }
 
 export async function normalize(

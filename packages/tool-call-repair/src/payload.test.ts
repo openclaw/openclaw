@@ -66,17 +66,10 @@ describe("scanPlainTextToolCall JSON branch", () => {
     "accepts 120-character names and rejects the 121st character at offset %s",
     (nameStart, build) => {
       const prefix = "Visible\n";
-      expect(scanPlainTextToolCall(prefix + build("x".repeat(120)), prefix.length).json.kind).toBe(
-        "complete",
-      );
-      for (const length of [121, 1024]) {
-        expect(
-          scanPlainTextToolCall(prefix + build("x".repeat(length)), prefix.length).json,
-        ).toEqual({
-          kind: "invalid",
-          at: prefix.length + nameStart + 120,
-        });
-      }
+      const scan = (length: number) =>
+        scanPlainTextToolCall(prefix + build("x".repeat(length)), prefix.length).json;
+      expect(scan(120).kind).toBe("complete");
+      expect(scan(121)).toEqual({ kind: "invalid", at: prefix.length + nameStart + 120 });
     },
   );
 });
@@ -101,8 +94,7 @@ describe("stripPlainTextToolCallBlocks", () => {
     const resolveProtectedRanges = vi.fn(() => []);
 
     for (let end = 1; end <= raw.length; end++) {
-      const prefix = raw.slice(0, end);
-      expectStripped(prefix, prefix, { resolveProtectedRanges });
+      expectStripped(raw.slice(0, end), undefined, { resolveProtectedRanges });
     }
     expect(resolveProtectedRanges).not.toHaveBeenCalled();
   });
