@@ -36,6 +36,10 @@ function readJsonEntry(entries: Record<string, string>, name: string): unknown {
   return JSON.parse(entries[name] ?? "{}");
 }
 
+function logLine(msg: string, fields: Record<string, unknown> = {}) {
+  return JSON.stringify({ level: "info", ...fields, msg });
+}
+
 function writeJson(file: string, value: unknown) {
   fs.writeFileSync(file, JSON.stringify(value, null, 2), "utf8");
 }
@@ -138,12 +142,10 @@ describe("diagnostic support export", () => {
       vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
       vi.stubEnv("OPENCLAW_CONFIG_PATH", privatePath);
       vi.mocked(logTailModule.readConfiguredLogTail).mockResolvedValue({
-        file: privatePath,
+        ...emptyLogTail(privatePath),
         cursor: 1,
         size: 1,
         lines: [JSON.stringify({ msg: marker })],
-        truncated: false,
-        reset: false,
       });
       const files = await exportEntries({ stabilityBundle: privatePath });
       expect(Object.values(files).join("\n")).not.toContain(marker);
@@ -304,21 +306,17 @@ describe("diagnostic support export", () => {
     expect(bundle.status).toBe("written");
 
     const logTail: LogTailPayload = {
-      file: path.join(tempDir, "logs", "openclaw.log"),
+      ...emptyLogTail(path.join(tempDir, "logs", "openclaw.log")),
       cursor: 200,
       size: 200,
-      truncated: false,
-      reset: false,
       lines: [
-        JSON.stringify({
+        logLine(`gateway websocket listening at ${credentialUrl}`, {
           time: "2026-04-22T12:00:00.000Z",
-          level: "info",
           subsystem: "gateway",
           component: "gateway/server",
           channel: "telegram",
           sessionId: "gateway-session-15555551212",
           sessionKey: "matrix:!supportRoom:matrix.example.com:$supportEventSecret",
-          msg: `gateway websocket listening at ${credentialUrl}`,
           hostname: "support-host",
           message: privateChat,
           body: webhookBody,
@@ -336,15 +334,10 @@ describe("diagnostic support export", () => {
             }),
           },
         }),
-        JSON.stringify({
-          level: "info",
-          component: "gateway/server",
-          msg: "user said structured secret payload",
-        }),
-        JSON.stringify({
+        logLine("user said structured secret payload", { component: "gateway/server" }),
+        logLine(`stuck session: lastAssistant="${privateAssistantReply}"`, {
           level: "warn",
           subsystem: "diagnostic",
-          msg: `stuck session: lastAssistant="${privateAssistantReply}"`,
         }),
         JSON.stringify({
           "0": `stalled session: lastAssistant="${privateLogTapeAssistantReply}"`,
@@ -588,22 +581,16 @@ describe("diagnostic support export", () => {
       const configPath = path.join(tempDir, "openclaw.json");
       writeJson(configPath, { discovery: { mdns: { mode: "minimal" } } });
       vi.mocked(logTailModule.readConfiguredLogTail).mockResolvedValue({
-        file: path.join(tempDir, "logs", "openclaw.log"),
-        cursor: 0,
-        size: 0,
-        truncated: false,
-        reset: false,
+        ...emptyLogTail(path.join(tempDir, "logs", "openclaw.log")),
         lines: [
-          JSON.stringify({
+          logLine("bonjour: suppressing ciao interface assertion: AssertionError", {
             time: "2026-04-22T12:00:00.000Z",
             level: "warn",
             subsystem: "gateway/discovery/bonjour",
-            msg: "bonjour: suppressing ciao interface assertion: AssertionError",
           }),
-          JSON.stringify({
+          logLine("bonjour: disabling advertiser after 3 failed restarts", {
             time: "2026-04-22T12:00:00.500Z",
             level: "warn",
-            msg: "bonjour: disabling advertiser after 3 failed restarts",
           }),
         ],
       });

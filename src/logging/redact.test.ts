@@ -479,21 +479,20 @@ describe("redactSensitiveText", () => {
   });
 
   it("masks structured uppercase env-style field values by key", () => {
-    expect(redactSensitiveFieldValue("GITHUB_TOKEN", "abcdefghijklmnopqrstuvwx1234567890")).toBe(
-      "abcdef…7890",
-    );
-    expect(redactSensitiveFieldValue("DISCORD_BOT_TOKEN", "${DISCORD_BOT_TOKEN:-}")).toBe(
-      "${DISCORD_BOT_TOKEN:-}",
-    );
-    expect(redactSensitiveFieldValue("apiKey", "${OPENAI_API_KEY:-}")).toBe("${OPEN…Y:-}");
-    expect(redactSensitiveFieldValue("password", "$SUPERSECRET123")).toBe("***");
-    expect(
-      redactSensitiveFieldValue(
+    for (const [key, input, expected] of [
+      ["GITHUB_TOKEN", "abcdefghijklmnopqrstuvwx1234567890", "abcdef…7890"],
+      ["DISCORD_BOT_TOKEN", "${DISCORD_BOT_TOKEN:-}", "${DISCORD_BOT_TOKEN:-}"],
+      ["apiKey", "${OPENAI_API_KEY:-}", "${OPEN…Y:-}"],
+      ["password", "$SUPERSECRET123", "***"],
+      [
         "DISCORD_BOT_TOKEN",
         "${DISCORD_BOT_TOKEN:-discordliteral1234567890}",
-      ),
-    ).toBe("${DISCORD_BOT_TOKEN:-disco…890}");
-    expect(redactSensitiveFieldValue("MONKEY", "banana")).toBe("banana");
+        "${DISCORD_BOT_TOKEN:-disco…890}",
+      ],
+      ["MONKEY", "banana", "banana"],
+    ]) {
+      expect(redactSensitiveFieldValue(key, input)).toBe(expected);
+    }
   });
 
   it("keeps Unicode token hints on valid UTF-16 boundaries", () => {
@@ -694,34 +693,25 @@ describe("redactSecrets", () => {
   });
 
   it("preserves known transport codes only in object cause chains", () => {
-    const cases: { input: unknown; expected: unknown }[] = [
-      {
-        input: { cause: { code: "EAI_AGAIN", cause: { code: "EAI_AGAIN" } } },
-        expected: { cause: { code: "EAI_AGAIN", cause: { code: "EAI_AGAIN" } } },
-      },
-      { input: { Cause: { CODE: "EAI_AGAIN" } }, expected: { Cause: { CODE: "EAI_AGAIN" } } },
-      { input: { cause: { code: "p4Q6x7J9" } }, expected: { cause: { code: "***" } } },
-      {
-        input: { cause: { code: "CERT_REVOKED-secret" } },
-        expected: { cause: { code: "CERT_R…cret" } },
-      },
-      { input: { cause: { code: "cert_revoked" } }, expected: { cause: { code: "***" } } },
-      {
-        input: { oauth: { cause: { code: "CERT_REVOKED" } } },
-        expected: { oauth: { cause: { code: "***" } } },
-      },
-      { input: { cause: { code: 123456 } }, expected: { cause: { code: "***" } } },
-      { input: { cause: { code: true } }, expected: { cause: { code: "***" } } },
-      { input: { cause: { code: 123456n } }, expected: { cause: { code: "***" } } },
-      {
-        input: { oauth: { cause: { code: "EAI_AGAIN" } } },
-        expected: { oauth: { cause: { code: "***" } } },
-      },
-      { input: { cause: [{ code: "EAI_AGAIN" }] }, expected: { cause: [{ code: "***" }] } },
-      { input: { cause: { code: ["EAI_AGAIN"] } }, expected: { cause: { code: ["***"] } } },
-      { input: [{ cause: { code: "EAI_AGAIN" } }], expected: [{ cause: { code: "***" } }] },
-    ];
-    for (const { input, expected } of cases) {
+    const cause = (code: unknown) => ({ cause: { code } });
+    for (const [input, expected] of [
+      [
+        { cause: { code: "EAI_AGAIN", ...cause("EAI_AGAIN") } },
+        { cause: { code: "EAI_AGAIN", ...cause("EAI_AGAIN") } },
+      ],
+      [{ Cause: { CODE: "EAI_AGAIN" } }, { Cause: { CODE: "EAI_AGAIN" } }],
+      [cause("p4Q6x7J9"), cause("***")],
+      [cause("CERT_REVOKED-secret"), cause("CERT_R…cret")],
+      [cause("cert_revoked"), cause("***")],
+      [{ oauth: cause("CERT_REVOKED") }, { oauth: cause("***") }],
+      [cause(123456), cause("***")],
+      [cause(true), cause("***")],
+      [cause(123456n), cause("***")],
+      [{ oauth: cause("EAI_AGAIN") }, { oauth: cause("***") }],
+      [{ cause: [{ code: "EAI_AGAIN" }] }, { cause: [{ code: "***" }] }],
+      [cause(["EAI_AGAIN"]), cause(["***"])],
+      [[cause("EAI_AGAIN")], [cause("***")]],
+    ]) {
       expect(redactSecrets(input)).toEqual(expected);
     }
   });
@@ -734,7 +724,7 @@ describe("redactSecrets", () => {
   });
 
   it("preserves diagnostic codes and source paths while masking authorization fields", () => {
-    const output = redactSecrets({
+    const publicFields = {
       manifest: {
         sourceFiles: { session: "$WORKSPACE_DIR/session.jsonl" },
         warnings: [{ code: "invalid-runtime-event" }],
@@ -742,19 +732,16 @@ describe("redactSecrets", () => {
       status: { code: "SYSTEM_RUN_DENIED" },
       nodeError: { code: "NOT_PAIRED" },
       error: { code: "ERR_ROOTOPAQUECODE1234567890" },
+    };
+    const output = redactSecrets({
+      ...publicFields,
       provider: { code: "provider-code-value-1234567890" },
       providerNestedError: { error: { code: "ERR_PROVIDEROPAQUECODE1234567890" } },
       bearerToken: "bearer-token-value-1234567890",
       numericSecrets: { cardNumber: 4111111111111111, cvc: 123, token: 1234567890, amount: 4200 },
     });
     expect(output).toEqual({
-      manifest: {
-        sourceFiles: { session: "$WORKSPACE_DIR/session.jsonl" },
-        warnings: [{ code: "invalid-runtime-event" }],
-      },
-      status: { code: "SYSTEM_RUN_DENIED" },
-      nodeError: { code: "NOT_PAIRED" },
-      error: { code: "ERR_ROOTOPAQUECODE1234567890" },
+      ...publicFields,
       provider: { code: "provid…7890" },
       providerNestedError: { error: { code: "ERR_PROVIDEROPAQUECODE1234567890" } },
       bearerToken: "bearer…7890",
