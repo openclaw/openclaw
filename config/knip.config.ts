@@ -307,6 +307,8 @@ const repositoryScriptEntries = [
   "scripts/perf/plugin-state-polling.mts!",
   "scripts/perf/private-array-copies-measure.mjs!",
   "scripts/perf/process-output-pool-retention.ts!",
+  "scripts/perf/queued-input-retention.ts!",
+  "scripts/perf/queued-input-retention-preload.mjs!",
   "scripts/perf/pty-session-scan-measure.mjs!",
   "scripts/perf/publication-spawn-measure.ts!",
   "scripts/perf/replay-history-measure.ts!",
