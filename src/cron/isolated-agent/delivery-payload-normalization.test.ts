@@ -43,6 +43,22 @@ beforeEach(async ({ onTestFinished }) => {
   installSpeechProviders([createMockSpeechProvider()]);
 });
 
+it("preserves prepared literal text and direct-delivery ownership", () => {
+  const text = "NO_REPLY";
+  const metadata = {
+    tts: { tagged: true as const, text: "The report is complete." },
+    channelReplyTransformOwner: {},
+    sourceReplyTranscriptMirror: { sessionKey: "agent:main:source" },
+  };
+  const source = setReplyPayloadMetadata({ text }, metadata);
+  const normalized = normalizeDirectCronDeliveryPayloads({ deliveryPayloads: [source] });
+
+  assert(normalized.kind === "deliver", "expected visible report after normalization");
+  expect(normalized.payload).toEqual([{ text }]);
+  expect(getReplyPayloadMetadata(normalized.payload[0]!)).toEqual(metadata);
+  expect(source.text).toBe(text);
+});
+
 it.each(["whatsapp", "telegram", "slack"] as const)(
   "preserves authored speech for %s",
   async (channel) => {
@@ -57,24 +73,14 @@ it.each(["whatsapp", "telegram", "slack"] as const)(
         openclawDelivery: { tts: { tagged: true, text: spokenText } },
       } as AssistantMessage,
     });
-    const prepared = resolveCronPayloadOutcome({
-      payloads,
-      finalAssistantVisibleText: visibleText,
-      preferFinalAssistantVisibleText: channel !== "whatsapp",
-    });
-    const source = prepared.deliveryPayloads[0]!;
-    source.text = "NO_REPLY";
-    const metadata = {
-      ...getReplyPayloadMetadata(source),
-      channelReplyTransformOwner: {},
-      sourceReplyTranscriptMirror: { sessionKey: "agent:main:source" },
-    };
-    setReplyPayloadMetadata(source, metadata);
-    const normalized = normalizeDirectCronDeliveryPayloads(prepared);
+    const normalized = normalizeDirectCronDeliveryPayloads(
+      resolveCronPayloadOutcome({
+        payloads,
+        finalAssistantVisibleText: visibleText,
+        preferFinalAssistantVisibleText: channel !== "whatsapp",
+      }),
+    );
     assert(normalized.kind === "deliver", "expected deliverable canonical reply");
-    expect(normalized.payload).toEqual([{ text: "NO_REPLY" }]);
-    expect(getReplyPayloadMetadata(normalized.payload[0]!)).toEqual(metadata);
-    expect(source.text).toBe("NO_REPLY");
 
     const result = await maybeApplyTtsToCronPayloads({
       cfg: createTtsConfig(`openclaw-cron-speech-${randomUUID()}`),
@@ -84,9 +90,10 @@ it.each(["whatsapp", "telegram", "slack"] as const)(
       ttsAuto: channel === "telegram" ? "always" : "tagged",
     });
 
+    expect(synthesizeMock).toHaveBeenCalledTimes(1);
     expect(synthesizeMock.mock.calls[0]?.[0].text).toBe(spokenText);
     expect(result).toMatchObject([
-      { text: "NO_REPLY", spokenText, mediaUrl: "/tmp/cron-speech-proof.ogg" },
+      { text: visibleText, spokenText, mediaUrl: "/tmp/cron-speech-proof.ogg" },
     ]);
     expect(getReplyPayloadMetadata(payloads[0]!)?.tts?.text).toBe(spokenText);
   },
