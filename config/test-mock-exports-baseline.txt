@@ -6257,7 +6257,6 @@
 ["src/shared/freebsd-process-identity.test.ts","./freebsd-process-identity-native.ts","658f6be0ed40d7a2db4fe1039610dd9a2f781d39ab255a4dcf910cddc591181a",1]
 ["src/shared/pid-alive.test.ts","./freebsd-process-identity.ts","9f84b303fc5f147000308f7919ecd3cdc461ec427149094bc94980680a70b135",1]
 ["src/skills/discovery/chat-commands.test.ts","../runtime/remote.js","77ac38a054f432e435f9508e1eb81892ec0008d2d10438bce827fa9f91e59c07",1]
-["src/skills/discovery/chat-commands.test.ts","./command-specs.js","74b2a08860d5a712833139882a8bfff29ccce7eef2b637796471186aa9694c44",1]
 ["src/skills/discovery/status-bundled-warning.test.ts","../loading/bundled-dir.js","6006f24bc8bf8c9adc7d3454df15bcf9050b3af077c4c44c90d13fd25e780c40",1]
 ["src/skills/lifecycle/clawhub.test-support.ts","../../infra/install-flow.js","52d92d3710bda2c105a8dd7eba7b13c3570b45a864a0f915408e345161140da4",1]
 ["src/skills/lifecycle/install-cache-freshness.test.ts","../../plugins/install-security-scan.js","38b080b15e00737ceec475720c8ccda1c8f0559c72ded374c6696fe7330604cb",1]
