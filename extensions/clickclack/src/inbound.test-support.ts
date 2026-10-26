@@ -3,6 +3,7 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { buildAgentSessionKey, resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { vi } from "vitest";
+import { resolveClickClackAccount } from "./accounts.js";
 import type { ClickClackDiscussionBinding } from "./discussions/binding-store.js";
 import {
   asyncDiscussionTestStore,
@@ -36,9 +37,8 @@ export function createInboundRuntime(includeExecution: boolean): PluginRuntime {
     audit: { caller: { kind: "plugin", id: "clickclack" } },
   });
   runtime.state.openKeyedStoreV2 = <T>(
-    options: Parameters<PluginRuntime["state"]["openKeyedStoreV2"]>[0],
-    authority?: Parameters<PluginRuntime["state"]["openKeyedStoreV2"]>[1],
-  ) => asyncDiscussionTestStore<T>(runtime.state.openSyncKeyedStore, options, authority);
+    ...args: Parameters<PluginRuntime["state"]["openKeyedStoreV2"]>
+  ) => asyncDiscussionTestStore<T>(runtime.state.openSyncKeyedStore, ...args);
   return runtime;
 }
 
@@ -91,26 +91,14 @@ export const createInboundDiscussionConfig = (): CoreConfig => ({
 export const createInboundAgentAccount = (
   overrides: Partial<ResolvedClickClackAccount> = {},
 ): ResolvedClickClackAccount => ({
-  ...location,
-  accountId: "default",
-  enabled: true,
-  configured: true,
-  apiEndpoint: "http://127.0.0.1:8080",
-  token: "test-token-placeholder",
-  replyMode: "agent",
-  toolsAllow: [],
-  defaultTo: "channel:general",
-  allowFrom: ["*"],
+  ...resolveClickClackAccount({
+    cfg: {
+      channels: { clickclack: { ...location, token: "test-token-placeholder", toolsAllow: [] } },
+    },
+    env: {},
+  }),
   botUserId: "usr_receiver",
   botHandle: "blackbird",
-  allowBots: false,
-  reconnectMs: 1_500,
-  agentActivity: false,
-  commandMenu: true,
-  discussions: { enabled: false, workspace: "wsp_1", section: "Sessions" },
-  requireMention: false,
-  mentionPatterns: [],
-  groups: {},
   ...overrides,
   config: { ...location, allowFrom: ["*"], ...overrides.config },
 });
