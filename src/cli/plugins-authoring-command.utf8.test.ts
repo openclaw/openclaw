@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   collectPluginsValidationResult,
@@ -27,11 +27,7 @@ async function createProject() {
     `import { defineToolPlugin } from "openclaw/plugin-sdk/tool-plugin";
 export default defineToolPlugin({
   id: "utf8-test", name: "UTF-8 test", description: "Synthetic test plugin.",
-  tools: tool => [tool({
-    name: "echo", description: "Echo input.",
-    parameters: { type: "object", properties: {} },
-    execute: async () => ({ ok: true }),
-  })],
+  tools: () => [],
 });`,
   );
   await runPluginsBuildCommand({ root });
@@ -40,55 +36,49 @@ export default defineToolPlugin({
 
 const files = ["package.json", "openclaw.plugin.json"] as const;
 
-describe("plugin authoring JSON encoding", () => {
-  it.skipIf(process.platform === "win32").each([
-    ["device", "package.json"],
-    ["FIFO", "package.json"],
-    ["FIFO", "openclaw.plugin.json"],
-  ] as const)("rejects a %s %s without rewriting metadata", async (kind, file) => {
-    const { root, filePath, read } = await createProject();
-    const target = filePath(file);
-    const other = file === files[0] ? files[1] : files[0];
-    const before = read(other);
-    fs.unlinkSync(target);
-    if (kind === "device") {
-      fs.symlinkSync("/dev/null", target);
-    } else {
-      execFileSync("mkfifo", [target]);
-    }
+it.skipIf(process.platform === "win32").each([
+  ["device", "package.json"],
+  ["FIFO", "package.json"],
+  ["FIFO", "openclaw.plugin.json"],
+] as const)("rejects a %s %s without rewriting metadata", async (kind, file) => {
+  const { root, filePath, read } = await createProject();
+  const target = filePath(file);
+  const other = file === files[0] ? files[1] : files[0];
+  const before = read(other);
+  fs.unlinkSync(target);
+  if (kind === "device") {
+    fs.symlinkSync("/dev/null", target);
+  } else {
+    execFileSync("mkfifo", [target]);
+  }
 
-    await expect(runPluginsBuildCommand({ root })).rejects.toThrow(/regular file/);
-    const stat = fs.lstatSync(target);
-    expect(kind === "device" ? stat.isSymbolicLink() : stat.isFIFO()).toBe(true);
-    expect(read(other)).toEqual(before);
-  });
+  await expect(runPluginsBuildCommand({ root })).rejects.toThrow(/regular file/);
+  const stat = fs.lstatSync(target);
+  expect(kind === "device" ? stat.isSymbolicLink() : stat.isFIFO()).toBe(true);
+  expect(read(other)).toEqual(before);
+});
 
-  it.each(files)("rejects malformed UTF-8 in %s without rewriting metadata", async (file) => {
-    const { root, filePath, read, snapshot } = await createProject();
-    // Keep otherwise-valid metadata so decoding, not JSON parsing, rejects the file.
-    const raw = JSON.stringify(JSON.parse(read(file).toString("utf8")));
-    fs.writeFileSync(
-      filePath(file),
-      Buffer.concat([Buffer.from(raw.slice(0, -1)), Buffer.from(',"proofText":"\xff"}', "latin1")]),
-    );
-    const before = snapshot();
+it.each(files)("rejects malformed %s unchanged, then preserves repaired Unicode", async (file) => {
+  const { root, filePath, read, snapshot } = await createProject();
+  // Keep otherwise-valid metadata so decoding, not JSON parsing, rejects the file.
+  const raw = JSON.stringify(JSON.parse(read(file).toString("utf8")));
+  fs.writeFileSync(
+    filePath(file),
+    Buffer.concat([Buffer.from(raw.slice(0, -1)), Buffer.from(',"proofText":"\xff"}', "latin1")]),
+  );
+  const before = snapshot();
 
-    await expect(runPluginsBuildCommand({ root })).rejects.toThrow("must be valid UTF-8");
-    expect(snapshot()).toEqual(before);
-    await expect(collectPluginsValidationResult({ root })).rejects.toThrow("must be valid UTF-8");
-    expect(snapshot()).toEqual(before);
-  });
+  await expect(runPluginsBuildCommand({ root })).rejects.toThrow("must be valid UTF-8");
+  expect(snapshot()).toEqual(before);
+  await expect(collectPluginsValidationResult({ root })).rejects.toThrow("must be valid UTF-8");
+  expect(snapshot()).toEqual(before);
+  const document = JSON.parse(raw);
+  fs.writeFileSync(
+    filePath(file),
+    JSON.stringify({ ...document, proofText: "合法 � 😀" }) + "\r\n",
+  );
 
-  it.each(files)("preserves valid Unicode metadata in %s", async (file) => {
-    const { root, filePath, read } = await createProject();
-    const document = JSON.parse(read(file).toString("utf8"));
-    fs.writeFileSync(
-      filePath(file),
-      JSON.stringify({ ...document, proofText: "合法 � 😀" }) + "\r\n",
-    );
-
-    await runPluginsBuildCommand({ root });
-    expect(JSON.parse(read(file).toString("utf8")).proofText).toBe("合法 � 😀");
-    expect(await collectPluginsValidationResult({ root })).toMatchObject({ valid: true });
-  });
+  await runPluginsBuildCommand({ root });
+  expect(JSON.parse(read(file).toString("utf8")).proofText).toBe("合法 � 😀");
+  expect(await collectPluginsValidationResult({ root })).toMatchObject({ valid: true });
 });
