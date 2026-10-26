@@ -32,9 +32,6 @@ function createAgentRuntime(
   options?: { blockReplyPayloads?: ReplyPayload[] },
 ) {
   const sessionStore: Record<string, TestSessionEntry> = {};
-  const getSessionEntryAsync = vi.fn(
-    async (params: { sessionKey: string }) => sessionStore[params.sessionKey],
-  );
   const prepareSessionEntryPatch = vi.fn(
     async (params: Parameters<AgentRuntime["session"]["prepareSessionEntryPatch"]>[0]) => {
       const stored = sessionStore[params.sessionKey];
@@ -85,11 +82,12 @@ function createAgentRuntime(
     session: {
       resolveStorePath: (_store: string | undefined, params: { agentId?: string }) =>
         `/tmp/openclaw/${params.agentId ?? "main"}/sessions.json`,
-      getSessionEntryAsync,
+      getSessionEntryAsync: async (params: { sessionKey: string }) =>
+        sessionStore[params.sessionKey],
       prepareSessionEntryPatch,
       runWithWorkAdmission,
     },
-  } as unknown as OpenClawPluginApi["runtime"]["agent"];
+  } as unknown as AgentRuntime;
 
   return {
     runtime,
@@ -427,12 +425,13 @@ describe("generateVoiceResponse", () => {
   it("rejects responseModel for a model-locked session without running the embedded agent", async () => {
     const { runtime, runEmbeddedAgent, prepareSessionEntryPatch, sessionStore } =
       createAgentRuntime([]);
-    sessionStore[defaultSessionKey] = sessionEntry({
+    const lockedEntry = sessionEntry({
       sessionId: "locked-session",
       model: "gpt-5.5",
       modelProvider: "openai",
       modelSelectionLocked: true,
     });
+    sessionStore[defaultSessionKey] = { ...lockedEntry };
 
     const { result } = await runGenerateVoiceResponse([], {
       voiceConfig: voiceConfig({ responseModel: "openai/gpt-4.1-nano" }),
@@ -446,11 +445,7 @@ describe("generateVoiceResponse", () => {
     });
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
     expect(prepareSessionEntryPatch).not.toHaveBeenCalled();
-    expect(sessionStore[defaultSessionKey]).toMatchObject({
-      model: "gpt-5.5",
-      modelProvider: "openai",
-      modelSelectionLocked: true,
-    });
+    expect(sessionStore[defaultSessionKey]).toEqual(lockedEntry);
     expect(sessionStore[defaultSessionKey]?.modelOverride).toBeUndefined();
   });
 

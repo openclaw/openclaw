@@ -3,7 +3,7 @@ import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { resetPluginRuntimeStateForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { VoiceCallConfig } from "./config.js";
 import {
   createMockSessionRuntime,
@@ -511,25 +511,41 @@ describe("createVoiceCallRuntime lifecycle", () => {
     expect(mocks.realtimeHandlerRegisterToolHandler).not.toHaveBeenCalled();
   });
 
-  it("rejects a realtime consult whose lifecycle owner already aborted", async () => {
-    const config = createRealtimeConfig();
-    const runEmbeddedAgent = vi.fn();
-    const agentRuntime = createConsultRuntime(runEmbeddedAgent);
-    setConsultCall({ callId: "call-aborted" });
-
-    const handler = await startConsult(config, agentRuntime);
-
-    const controller = new AbortController();
-    controller.abort(new Error("voice session replaced"));
-
-    await expect(
-      handler({ question: "Check the deployment." }, "call-aborted", {
-        abortSignal: controller.signal,
-      }),
-    ).rejects.toThrow("voice session replaced");
-    expect(mocks.resolveRealtimeFastContextConsult).not.toHaveBeenCalled();
-    expect(runEmbeddedAgent).not.toHaveBeenCalled();
-  });
+  it.each(["aborted", "model-locked"] as const)(
+    "rejects %s consults before context or dispatch",
+    async (state) => {
+      const runEmbeddedAgent = vi.fn();
+      const sessionStore: Record<string, unknown> = {};
+      if (state === "model-locked") {
+        sessionStore["agent:main:voice:15550001234"] = {
+          sessionId: "locked-codex-session",
+          updatedAt: 1,
+          agentHarnessId: "codex",
+          modelSelectionLocked: true,
+        };
+      }
+      setConsultCall();
+      const handler = await startConsult(
+        createRealtimeConfig(),
+        createConsultRuntime(runEmbeddedAgent, sessionStore),
+      );
+      const controller = new AbortController();
+      if (state === "aborted") {
+        controller.abort(new Error("voice session replaced"));
+      }
+      await expect(
+        handler({ question: "Check the deployment." }, "call-1", {
+          abortSignal: controller.signal,
+        }),
+      ).rejects.toThrow(
+        state === "aborted"
+          ? "voice session replaced"
+          : "Model selection is locked for this session.",
+      );
+      expect(mocks.resolveRealtimeFastContextConsult).not.toHaveBeenCalled();
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    },
+  );
 
   it("canonicalizes restored legacy per-call keys for realtime consults", async () => {
     const config = createRealtimeConfig(
@@ -549,84 +565,42 @@ describe("createVoiceCallRuntime lifecycle", () => {
     expect(consultParamsFrom(runEmbeddedAgent).sessionKey).toBe("agent:main:voice:call:call-1");
   });
 
-  it("blocks locked Codex realtime consults before fast context or model dispatch", async () => {
-    const config = createRealtimeConfig();
-    const sessionStore: Record<string, unknown> = {
-      "agent:main:voice:15550001234": {
-        sessionId: "locked-codex-session",
-        updatedAt: 1,
-        agentHarnessId: "codex",
-        modelSelectionLocked: true,
-      },
-    };
-    const runEmbeddedAgent = vi.fn();
-    const agentRuntime = createConsultRuntime(runEmbeddedAgent, sessionStore);
-    setConsultCall({ callId: "call-locked" });
-
-    const handler = await startConsult(config, agentRuntime);
-
-    await expect(
-      handler({ question: "Continue this session." }, "call-locked", {}),
-    ).rejects.toThrow("Model selection is locked for this session.");
-    expect(mocks.resolveRealtimeFastContextConsult).not.toHaveBeenCalled();
-    expect(runEmbeddedAgent).not.toHaveBeenCalled();
-  });
-
-  describe("fast memory context through the selected memory provider", () => {
-    afterEach(() => {
-      resetPluginRuntimeStateForTest();
-    });
-
-    async function createFastContextHandler() {
-      const config = createRealtimeConfig({ fastContext: fastContextConfig(1_000) });
+  it.each(["live", "consult-aborted", "call-ended"])(
+    "keeps selected memory-provider lookup bound to call and consult: %s",
+    async (state) => {
+      onTestFinished(() => resetPluginRuntimeStateForTest());
       const { open, search } = registerFastContextMemoryProvider();
       mocks.resolveRealtimeFastContextConsult.mockImplementation(
         expectDefined(mocks.actualRealtimeFastContextConsult, "actual fast context consult"),
       );
       setConsultCall({ state: "active" });
       const runEmbeddedAgent = vi.fn();
-      await createRuntime({
-        config,
-        agentRuntime: { session: createMockSessionRuntime({}), runEmbeddedAgent } as never,
-      });
-      return { handler: requireRealtimeConsultToolHandler(), open, search, runEmbeddedAgent };
-    }
-
-    it("answers from the provider while the call and consult are live", async () => {
-      const { handler, open, search, runEmbeddedAgent } = await createFastContextHandler();
-      const result = await handler({ question: "Are the lights on?" }, "call-1", {
-        abortSignal: new AbortController().signal,
-      });
-      expect(result).toMatchObject({ text: expect.stringContaining("Lights are on.") });
-      expect(open).toHaveBeenCalledOnce();
-      expect(search).toHaveBeenCalledOnce();
-      expect(runEmbeddedAgent).not.toHaveBeenCalled();
-    });
-
-    it("rejects a consult aborted during lookup before provider I/O", async () => {
-      const { handler, open } = await createFastContextHandler();
+      const handler = await startConsult(
+        createRealtimeConfig({ fastContext: fastContextConfig(1_000) }),
+        { session: createMockSessionRuntime({}), runEmbeddedAgent } as never,
+      );
       const consult = new AbortController();
       const pending = handler({ question: "Are the lights on?" }, "call-1", {
         abortSignal: consult.signal,
       });
-      consult.abort(new Error("consult cancelled"));
-      await expect(pending).rejects.toThrow("consult cancelled");
-      expect(open).not.toHaveBeenCalled();
-    });
-
-    it("rejects a call that ends during lookup before provider I/O", async () => {
-      const { handler, open } = await createFastContextHandler();
-      const pending = handler({ question: "Are the lights on?" }, "call-1", {
-        abortSignal: new AbortController().signal,
-      });
-      mocks.managerGetCall.mockReturnValue(undefined);
-      const result = await pending;
-      expect(result).toMatchObject({
-        text: expect.stringContaining(
-          "No relevant OpenClaw memory or session context was found quickly",
-        ),
-      });
-      expect(open).not.toHaveBeenCalled();
-    });
-  });
+      if (state === "consult-aborted") {
+        consult.abort(new Error("consult cancelled"));
+        await expect(pending).rejects.toThrow("consult cancelled");
+      } else {
+        if (state === "call-ended") {
+          mocks.managerGetCall.mockReturnValue(undefined);
+        }
+        expect(await pending).toMatchObject({
+          text: expect.stringContaining(
+            state === "live"
+              ? "Lights are on."
+              : "No relevant OpenClaw memory or session context was found quickly",
+          ),
+        });
+      }
+      expect(open).toHaveBeenCalledTimes(state === "live" ? 1 : 0);
+      expect(search).toHaveBeenCalledTimes(state === "live" ? 1 : 0);
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    },
+  );
 });
