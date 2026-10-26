@@ -102,7 +102,7 @@ it.each(process.platform === "win32" ? [false] : [false, true])(
           ref: {
             source: "exec",
             provider: "onepassword",
-            id: "op://openclaw/OpenRouter/credential",
+            id: "openclaw/OpenRouter/credential",
           },
         },
         { providerId: "xai" },
