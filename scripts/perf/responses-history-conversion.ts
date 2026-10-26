@@ -3,12 +3,17 @@
  * Run against each revision (no Gateway or provider calls):
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/responses-history-conversion.ts
  * Use --allocation for a separate sampled allocation pass; --iterations N defaults to 2000.
+ * --retained measures post-GC growth with 20 live 500-KiB images and discarded requests.
+ * Add --normalize-mime to test MIME-only normalization. The snapshot counts large
+ * image strings separately from small cache metadata and unrelated heap noise.
  * Compare wireSha256 across revisions before interpreting CPU/allocated bytes per request.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { getHeapSnapshot } from "node:v8";
 import { buildOpenAIResponsesParams } from "../../packages/ai/src/transports/openai-responses-params-internal.js";
 import { sanitizeResponsesImagePayload } from "../../packages/ai/src/transports/responses-image-payload-sanitizer.js";
 import type { Context, Model } from "../../packages/llm-core/src/types.js";
@@ -27,6 +32,98 @@ const model: Model = {
   maxTokens: 1024,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 };
+
+if (process.argv.includes("--retained")) {
+  assert(globalThis.gc, "--retained requires --expose-gc");
+  const gc = globalThis.gc;
+  const mimeType = process.argv.includes("--normalize-mime") ? "image/jpeg" : "image/png";
+  const fixture = (bytes: number): Context => ({
+    messages: Array.from({ length: 20 }, (_, index) => {
+      const image = Buffer.alloc(bytes, index);
+      Buffer.from("89504e470d0a1a0a", "hex").copy(image);
+      // Model history is decoded from JSON; keep distinct flat source strings live.
+      const data: string = JSON.parse(`"${image.toString("base64")}"`);
+      return {
+        role: "user",
+        timestamp: index,
+        content: [{ type: "image", mimeType, data }],
+      };
+    }),
+  });
+  const send = (history: Context) =>
+    createHash("sha256")
+      .update(
+        JSON.stringify(
+          sanitizeResponsesImagePayload(buildOpenAIResponsesParams(model, history, undefined)),
+        ),
+      )
+      .digest("hex");
+  const warm = fixture(128);
+  for (let i = 0; i < 100; i++) {
+    send(warm);
+  }
+  const samples = [];
+  let retainedImageStrings: { count: number; bytes: number } | undefined;
+  for (let sample = 0; sample < 5; sample++) {
+    const history = fixture(500 * 1024);
+    await nextTurn();
+    gc();
+    gc();
+    const before = process.memoryUsage();
+    const digest = send(history);
+    for (let i = 0; i < 4; i++) {
+      assert.equal(send(history), digest);
+    }
+    await nextTurn();
+    gc();
+    gc();
+    const after = process.memoryUsage();
+    // Read the source after GC so the history cannot become dead before measurement.
+    assert.equal(history.messages.length, 20);
+    samples.push({
+      sample,
+      wireSha256: digest,
+      retainedHeapBytes: after.heapUsed - before.heapUsed,
+      retainedExternalBytes: after.external - before.external,
+    });
+    if (sample === 4) {
+      const chunks: Buffer[] = [];
+      for await (const chunk of getHeapSnapshot()) {
+        chunks.push(chunk);
+      }
+      const snapshot = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
+        snapshot: { meta: { node_fields: string[] } };
+        nodes: number[];
+        strings: string[];
+      };
+      const fields = snapshot.snapshot.meta.node_fields;
+      const name = fields.indexOf("name");
+      const size = fields.indexOf("self_size");
+      retainedImageStrings = { count: 0, bytes: 0 };
+      for (let index = 0; index < snapshot.nodes.length; index += fields.length) {
+        const value = snapshot.strings[snapshot.nodes[index + name]];
+        const bytes = snapshot.nodes[index + size];
+        if (bytes > 500 * 1024 && /^(?:data:image\/[^,]+,)?iVBORw0KGgo/.test(value)) {
+          retainedImageStrings.count++;
+          retainedImageStrings.bytes += bytes;
+        }
+      }
+      assert(retainedImageStrings.count >= 20, "snapshot must include all live image payloads");
+      assert.equal(history.messages.length, 20);
+    }
+  }
+  console.log(
+    JSON.stringify({
+      mode: "retained",
+      images: 20,
+      imageBytes: 500 * 1024,
+      mimeType,
+      retainedImageStrings,
+      samples,
+    }),
+  );
+  process.exit(0);
+}
 const imageBytes = Buffer.alloc(16 * 1024, 0x61);
 Buffer.from("89504e470d0a1a0a", "hex").copy(imageBytes);
 const messages: Context["messages"] = [];
