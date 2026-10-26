@@ -99,7 +99,7 @@ it("stopping the service ends maintenance: a pass in flight neither re-arms nor 
   await pass;
   expect(scheduler.jobs.size, "no job is armed on the stopped scheduler").toBe(0);
   expect(
-    warnings.filter((m) => /schedule was not recorded/.test(m)),
+    warnings.filter((m) => m.includes("schedule was not recorded")),
     "the stopped service records no maintenance state",
   ).toStrictEqual([]);
 });
