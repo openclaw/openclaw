@@ -1,7 +1,11 @@
 import { spawn } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { chromium, type Page } from "playwright";
+import { chromium, type CDPSession, type Page } from "playwright";
+import type {
+  TalkSessionCancelOutputParams,
+  TalkSessionCancelOutputResult,
+} from "../../packages/gateway-protocol/src/index.js";
 import {
   resolvePlaywrightChromiumExecutablePath,
   type MockGatewayWindow,
@@ -137,14 +141,23 @@ type PcmOutputRecord = {
   natural?: boolean;
 };
 type PcmUiRecord = { status: string | null; level: string | null };
+type PcmCancellationRecord = {
+  atMs: number;
+  turnId?: string;
+  reason?: string;
+  status: NonNullable<TalkSessionCancelOutputResult["status"]>;
+  observing: boolean;
+};
 type TalkBenchProof = {
   recordPcmAppend(params: { audioBase64: string; timestamp: number; sessionId: string }): void;
   settlePcmAppends(): Promise<void>;
+  cancelOutput(params: TalkSessionCancelOutputParams): TalkSessionCancelOutputResult;
   readPcm(): {
     startMs: number;
     endMs: number;
     input: PcmInputRecord[];
     output: PcmOutputRecord[];
+    cancellations: PcmCancellationRecord[];
     unmatchedAppends: number;
     uiAtStart?: PcmUiRecord;
     uiAtEnd?: PcmUiRecord;
@@ -248,6 +261,7 @@ export async function installTalkPerfFixture(
       let activeOutput: PcmOutputRecord | undefined;
       let pcmInput: PcmInputRecord[] = [],
         pcmOutput: PcmOutputRecord[] = [];
+      const cancellations: PcmCancellationRecord[] = [];
       let pcmUiAtStart: PcmUiRecord | undefined, pcmUiAtEnd: PcmUiRecord | undefined;
       const readPcmUi = (): PcmUiRecord => {
         const activity = document.querySelector(".agent-chat__voice-activity");
@@ -298,12 +312,15 @@ export async function installTalkPerfFixture(
           new MessageEvent("message", { data: JSON.stringify(event) }),
         );
       };
-      const finishResponding = () => {
+      const finishResponding = (cancelled = false) => {
         if (respondingId === undefined) {
           return;
         }
         if (transport === "gateway-relay") {
-          sendRelay({ type: "clear", talkEvent: { turnId: respondingId } });
+          sendRelay({
+            type: "clear",
+            talkEvent: { turnId: respondingId, ...(cancelled ? { type: "turn.cancelled" } : {}) },
+          });
           respondingId = undefined;
           return;
         }
@@ -352,11 +369,30 @@ export async function installTalkPerfFixture(
             };
           });
         },
+        cancelOutput({ turnId, reason }) {
+          const status = !respondingId
+            ? "idle"
+            : turnId && turnId !== respondingId
+              ? "stale"
+              : "applied";
+          cancellations.push({ atMs: performance.now(), turnId, reason, status, observing });
+          if (status !== "applied") {
+            return { ok: true, status };
+          }
+          const cancelledTurn = respondingId;
+          if (timer !== undefined) {
+            clearTimeout(timer);
+            timer = undefined;
+          }
+          finishResponding(true);
+          return { ok: true, status, turnId: cancelledTurn };
+        },
         readPcm: () => ({
           startMs: pcmStartMs,
           endMs: pcmEndMs,
           input: pcmInput,
           output: pcmOutput,
+          cancellations,
           unmatchedAppends,
           uiAtStart: pcmUiAtStart,
           uiAtEnd: pcmUiAtEnd,
@@ -970,7 +1006,26 @@ export async function installTalkPerfFixture(
     route.fulfill({ status: 200, contentType: "application/sdp", body: "answer-sdp" }),
   );
 }
-export async function saveTalkFailure(page: Page, prefix: string, error: unknown) {
+export async function saveTalkFailure(page: Page, prefix: string, error: unknown, cdp: CDPSession) {
   await writeFile(`${prefix}.error.txt`, String(error));
+  const browser = await page
+    .evaluate(() => ({
+      visibility: document.visibilityState,
+      documentHidden: document.hidden,
+      documentFocused: document.hasFocus(),
+      nativeAudio: window.openclawTalkBench?.readNativeAudioState(),
+      pcm: window.openclawTalkBench?.readPcm(),
+      cleanup: window.openclawTalkBench?.readPcmCleanup(),
+      activity: [...document.querySelectorAll(".agent-chat__voice-activity")].map((element) => ({
+        status: element.getAttribute("data-status"),
+        level: element.getAttribute("data-level"),
+      })),
+    }))
+    .catch((captureError: unknown) => ({ captureError: String(captureError) }));
+  const nativeWindow = await cdp
+    .send("Browser.getWindowForTarget")
+    .then(({ windowId }) => cdp.send("Browser.getWindowBounds", { windowId }))
+    .catch((captureError: unknown) => ({ captureError: String(captureError) }));
+  await writeFile(`${prefix}.failure.json`, JSON.stringify({ browser, nativeWindow }, null, 2));
   await page.screenshot({ path: `${prefix}.failure.png` }).catch(() => undefined);
 }

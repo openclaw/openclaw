@@ -108,6 +108,11 @@ service-worker precache/network quiet before each measurement. `--trace`,
 PCM observations retain native input-callback/append timing, output scheduling
 and completion, and UI status/level endpoints. After Stop, the probe requires
 closed contexts, ended tracks, and stable callback/append/playback counts.
+Before PCM responding starts, the probe waits for silent input to reach level
+zero. Cancellation retires matching synthetic output and records its reason;
+an applied cancellation during measurement fails the observation. Failure
+artifacts include document visibility, native window bounds, audio context
+states, and the captured PCM activity.
 
 Use identical harness sources and flags for both sides. The synthetic PCM
 provider and native observers add measurement overhead. Callback-to-append and

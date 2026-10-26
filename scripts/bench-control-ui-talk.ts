@@ -580,12 +580,12 @@ try {
     headless: !values.headed,
     workloadVersion:
       transport === "gateway-relay"
-        ? "precache-settled-v4-native-play-attribution-pcm-observed-ui-endpoints"
+        ? "precache-settled-v5-native-play-attribution-pcm-cancellation"
         : "precache-settled-v4-native-play-attribution",
     transport: transport === "gateway-relay" ? transport : undefined,
     pcmContract:
       transport === "gateway-relay"
-        ? "Production relay with native audio nodes and callbacks, observed in a declared browser performance.now window enclosing the CPU-metric interval. Cadence bounds (60–140% plus two upper endpoint frames) prove sustained route delivery, not latency acceptance. Native audioprocess entry pairs with mock append receipt; output events pair only with their synchronous native source.start, retaining requested audio time, currentTime, state, sample rate/length and natural completion. Responding means native PCM playback while the UI remains listening, not animated WebRTC responding. Actual DOM status and level are recorded at observation start/end, outside the CPU-metric interval; listening status and valid levels are required. No hardware, acoustic, provider or network latency claim. Post-Stop requires ended tracks, closed contexts and no new owned callbacks/appends/starts over two input block periods. Native instrumentation and synthetic 10 Hz output add disclosed diagnostic overhead."
+        ? "Production relay with native audio nodes and callbacks, observed in a declared browser performance.now window enclosing the CPU-metric interval. Cadence bounds (60–140% plus two upper endpoint frames) prove sustained route delivery, not latency acceptance. Native audioprocess entry pairs with mock append receipt; output events pair only with their synchronous native source.start, retaining requested audio time, currentTime, state, sample rate/length and natural completion. Responding means native PCM playback while the UI remains listening, not animated WebRTC responding. Actual DOM status and level are recorded at observation start/end, outside the CPU-metric interval; listening status and valid levels are required. No hardware, acoustic, provider or network latency claim. Post-Stop requires ended tracks, closed contexts and no new owned callbacks/appends/starts over two input block periods. Native instrumentation and synthetic 10 Hz output add disclosed diagnostic overhead. Responding begins only after silent input reaches level zero. Cancellation requests retire matching synthetic output, preserve idle/stale results, and record reason/status; applied cancellations during observation fail the run."
         : undefined,
     networkContract:
       "Production service workers remain enabled. Before measurement, wait for activation, issue the existing version/precache probe, await the worker's existing preparation promises through its inspector, and verify every boot/deferred inventory URL in its current cache. No worker code or production API is changed. Then wait for 1.5 seconds of browser-context network quiet (70 seconds maximum), including worker and failed/aborted requests. Quiet-window timers end before measurement. Asset GET counters conservatively bracket both Performance.getMetrics endpoint calls. In-flight or new asset GETs invalidate the sample and fail the run; failed samples remain in artifacts.",
@@ -727,6 +727,16 @@ try {
               if (transport === "gateway-relay") {
                 await page.evaluate(() => {
                   const mockGateway = (window as MockGatewayWindow).openclawControlUiE2eGateway!;
+                  mockGateway.setRequestHandler(
+                    "talk.session.cancelOutput",
+                    ({ params, respond }) => {
+                      respond(
+                        window.openclawTalkBench.cancelOutput(
+                          params as Parameters<Window["openclawTalkBench"]["cancelOutput"]>[0],
+                        ),
+                      );
+                    },
+                  );
                   mockGateway.setRequestHandler(
                     "talk.session.appendAudio",
                     ({ params, respond }) => {
@@ -1114,7 +1124,13 @@ try {
                   await page.evaluate(
                     ({ phase, externalTranscripts: external }) =>
                       window.openclawTalkBench.setState(phase, external),
-                    { phase: state, externalTranscripts },
+                    {
+                      phase:
+                        transport === "gateway-relay" && state === "responding"
+                          ? "listening"
+                          : state,
+                      externalTranscripts,
+                    },
                   );
                   if (externalTranscripts) {
                     // Establish a row before hiding so reveal also proves identity retention.
@@ -1160,6 +1176,9 @@ try {
                           .querySelector(".agent-chat__voice-activity")
                           ?.getAttribute("data-level") === "0",
                     );
+                  }
+                  if (state === "responding" && transport === "gateway-relay") {
+                    await page.evaluate(() => window.openclawTalkBench.setState("responding"));
                   }
                   if (state === "responding" && transport === "webrtc") {
                     await page
@@ -1543,6 +1562,14 @@ try {
                         })
                       : undefined;
                   if (pcm) {
+                    row.pcmCancellations = pcm.cancellations;
+                    if (
+                      pcm.cancellations.some(
+                        (record) => record.observing && record.status === "applied",
+                      )
+                    ) {
+                      throw new Error("Synthetic PCM output was cancelled during observation");
+                    }
                     row.pcmUi = {
                       label: state === "responding" ? "Native PCM playback (UI listening)" : state,
                       expectedStatus: "listening",
@@ -1792,7 +1819,7 @@ try {
                 } catch (error) {
                   row.status = "failed";
                   row.error = String(error);
-                  await saveTalkFailure(page, prefix, error);
+                  await saveTalkFailure(page, prefix, error, cdp);
                   throw error;
                 } finally {
                   await transcriptRow?.dispose();
