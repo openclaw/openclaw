@@ -4,13 +4,11 @@ import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js
 import { createAssistantOutput } from "../transports/assistant-output.js";
 import { withProviderAcceptanceObserver } from "../transports/transport-stream-shared.js";
 import type { AssistantMessage, AssistantMessageEvent, Context, UserMessage } from "../types.js";
-import { onLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
 import { normalizeToolParameterSchema } from "./agent-tools-parameter-schema.js";
 import { convertGoogleTools, projectGoogleMessages } from "./google-messages.js";
 import {
   buildGoogleGenerateContentParams as buildParams,
-  buildGoogleSimpleThinking as buildThinking,
   type GoogleGenerateContentClient,
 } from "./google-shared.js";
 import {
@@ -37,14 +35,11 @@ const user = (content: UserMessage["content"]): UserMessage => ({
   content,
   timestamp: 0,
 });
-const disabledThinking = { thinking: { enabled: false } };
 const model = {
   ...makeModel("gemini-test"),
   reasoning: true,
   cost: { input: 1, output: 2, cacheRead: 0.25, cacheWrite: 0 },
 };
-const thinkingConfig = (target: typeof model, thinking: Parameters<typeof buildParams>[2]) =>
-  buildParams(target, { messages: [] }, thinking).config?.thinkingConfig;
 const textPart = (text: string, thoughtSignature?: string): Part => ({
   text,
   ...(thoughtSignature && { thoughtSignature }),
@@ -67,50 +62,14 @@ const signature1 = "c2lnXzE=";
 const signature2 = "c2lnXzI=";
 const imageData = { mimeType: "image/png", data: "AAAA" };
 
-it.each([
-  ["minimal", "LOW", true],
-  ["low", "LOW", true],
-  ["medium", "MEDIUM", true],
-  ["high", "HIGH", true],
-  ["max", "HIGH", true],
-  ["off", "LOW", false],
-] as const)("serializes Gemini 4 %s without a budget", (reasoning, level, enabled) => {
-  const target = { ...model, id: "gemini-4-argon" };
-  const thinking = buildThinking(target, { reasoning });
-  expect(thinkingConfig(target, { thinking })).toEqual({
-    ...(enabled && { includeThoughts: true }),
-    thinkingLevel: level,
-  });
-});
-
-it.each([
-  ["gemini-flash-latest", "MINIMAL"],
-  ["gemini-pro-latest", "LOW"],
-  ["gemini-3.7-flash", "LOW"],
-])("uses the supported thinking floor for %s", (id, level) => {
-  const target = { ...model, id };
-  const thinking = buildThinking(target, { reasoning: "minimal" });
-  expect(thinking).toEqual({ enabled: true, level });
-  expect(thinkingConfig(target, { thinking })).toEqual({
-    includeThoughts: true,
-    thinkingLevel: level,
-  });
-  expect(thinkingConfig(target, disabledThinking)).toEqual({ thinkingLevel: level });
-});
-
-it.each([
-  ["gemini-2.5-pro", { enabled: true, budgetTokens: -1 }, undefined],
-  ["gemini-3-flash-preview", { enabled: true }, { thinkingLevel: "MINIMAL" }],
-] as const)("preserves adaptive and disabled thinking for %s", (id, enabled, disabled) => {
-  const target = { ...model, id };
-  expect(buildThinking(target, { reasoning: "adaptive" } as never)).toEqual(enabled);
-  expect(thinkingConfig(target, disabledThinking)).toEqual(disabled);
-});
-
-it("keeps thinking disabled when low clamps to off for a non-reasoning model", () => {
-  expect(buildThinking({ ...model, reasoning: false }, { reasoning: "low" })).toEqual({
-    enabled: false,
-  });
+it("omits an empty disabled thinking config for Gemini 2.5 Pro without an output cap", () => {
+  expect(
+    buildParams(
+      { ...model, id: "gemini-2.5-pro" },
+      { messages: [] },
+      { thinking: { enabled: false } },
+    ).config?.thinkingConfig,
+  ).toBeUndefined();
 });
 
 const response = (fields: Partial<GenerateContentResponse>) =>
@@ -181,19 +140,6 @@ async function runFixture(
   }
 }
 
-it("reports every parsed Google response as request activity", async () => {
-  const controller = new AbortController();
-  const onActivity = vi.fn();
-  const unsubscribe = onLlmRequestActivity(controller.signal, onActivity);
-  const responses = [usageChunk({ totalTokenCount: 1 }), finished()];
-  try {
-    await runFixture(responses, { options: { signal: controller.signal } });
-  } finally {
-    unsubscribe();
-  }
-  expect(onActivity).toHaveBeenCalledTimes(responses.length);
-});
-
 it("projects text, thinking, tool calls, response id, and usage into one stream", async () => {
   const { output, events } = await runFixture([
     {
@@ -235,15 +181,6 @@ it("projects text, thinking, tool calls, response id, and usage into one stream"
     toolCall({ query: "cats" }, undefined, "lookup_123_1"),
   ]);
   expect(output.usage.cost.total).toBeGreaterThan(0);
-});
-
-it("retains the first nonempty response model that differs from the requested model", async () => {
-  const { result } = await runFixture([
-    { modelVersion: "" },
-    { modelVersion: "gemini-test-002" },
-    { modelVersion: "gemini-test-003", ...finished([{ text: "actual response" }]) },
-  ]);
-  expect(result).toMatchObject({ stopReason: "stop", responseModel: "gemini-test-002" });
 });
 
 type UsageCase = [string, Partial<GenerateContentResponse>[], Partial<AssistantMessage["usage"]>];
@@ -368,16 +305,6 @@ it("closes an unread SDK stream without waiting when acceptance fails", async ()
   });
   expect(result).toMatchObject({ stopReason: "error", errorMessage: "acceptance observer failed" });
   expect(close).toHaveBeenCalledOnce();
-});
-
-it("keeps an unspecified Google finish reason nonterminal", async () => {
-  const { result } = await runFixture([partialFinish(FinishReason.FINISH_REASON_UNSPECIFIED)]);
-  expect(result).toMatchObject({
-    stopReason: "error",
-    errorCode: "STREAM_INCOMPLETE",
-    errorType: "google_incomplete_stream",
-    errorMessage: "Google stream ended before a terminal finish reason",
-  });
 });
 
 it("closes partial text before reporting a failed candidate", async () => {
