@@ -89,6 +89,9 @@ it(
     context.onTestFinished(async () => {
       await old.closeAndWait();
     });
+    // Two processes initializing a fresh CODEX_HOME race Codex's SQLite state setup.
+    await old.initialize();
+    expect(old.getServerVersion()).toBe(CODEX_APP_SERVER_VERSION);
     const successor = await createIsolatedCodexAppServerClient({
       startOptions: appServer.start,
       agentDir: path.join(root, "agent"),
@@ -99,8 +102,6 @@ it(
     const shared = getSharedCodexAppServerClientState();
     let releaseSibling: (() => void) | undefined;
     try {
-      await old.initialize();
-      expect(old.getServerVersion()).toBe(CODEX_APP_SERVER_VERSION);
       const params = {
         ...createParams(path.join(root, "session.jsonl"), native.cwd),
         agentId: "main",
