@@ -163,7 +163,7 @@ function resolveConfigRestartRequirement(params: {
  * offline write's outcomes. Stable Gateways close the request schema, so the connection
  * identity carries this rather than a request field.
  */
-export function isCliRoutedConfigPatch(
+function isCliRoutedConfigPatch(
   mode: string,
   client: Parameters<typeof resolveControlPlaneActor>[0],
 ): boolean {
