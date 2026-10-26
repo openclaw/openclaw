@@ -4,7 +4,7 @@ import type { ApplicationContext } from "../app/context.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { hasOperatorAdminAccess, hasOperatorReadAccess } from "../app/operator-access.ts";
 import { updateHumanMentions, type HumanMentionInput } from "../lib/chat/human-mentions.ts";
-import { isCronInventoryInvalidation } from "../lib/cron/inventory.ts";
+import { isCronInventoryInvalidation } from "../lib/cron/inventory-connection.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { GatewayPageBinding } from "../lib/gateway-page-binding.ts";
 import { modelCatalogEventInvalidation } from "../lib/model-catalog-cache.ts";

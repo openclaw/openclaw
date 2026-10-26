@@ -57,8 +57,8 @@ export function createAgentCronPresenter(deps: {
     return { scope, completion, append };
   }
 
-  async function loadJobs(scope: CronState, append = false, refresh = false) {
-    await loadCronJobsPage(scope, { append, tableFilters: true, refresh });
+  async function loadJobs(scope: CronState, append = false, force = false) {
+    await loadCronJobsPage(scope, { append, tableFilters: true, refresh: force });
     return scope.cronJobsError;
   }
 

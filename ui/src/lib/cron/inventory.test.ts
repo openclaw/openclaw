@@ -13,9 +13,9 @@ import {
 import {
   bindCronInventory,
   clearCronInventory,
-  readCronInventory,
   receiveCronInventoryEvent,
-} from "./inventory.ts";
+} from "./inventory-connection.ts";
+import { readCronInventory } from "./inventory.ts";
 import { loadCronJobsPage } from "./jobs-full.ts";
 import { createInitialCronState } from "./state.ts";
 

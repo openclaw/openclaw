@@ -9,7 +9,7 @@ import {
   bindCronInventory,
   clearCronInventory,
   receiveCronInventoryEvent,
-} from "../lib/cron/inventory.ts";
+} from "../lib/cron/inventory-connection.ts";
 import { invalidateModelAuthStatusRequests } from "../lib/model-auth-request-state.ts";
 import {
   clearModelCatalogCache,

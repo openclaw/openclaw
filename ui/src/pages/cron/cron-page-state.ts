@@ -26,7 +26,10 @@ import {
   toggleCronJob,
   updateCronJobsFilter,
 } from "../../lib/cron/index.ts";
-import { isCronInventoryInvalidation } from "../../lib/cron/inventory.ts";
+import {
+  hasCronInventoryEvents,
+  isCronInventoryInvalidation,
+} from "../../lib/cron/inventory-connection.ts";
 import { loadCronRuns, loadCronRunsForJob, updateCronRunsFilter } from "../../lib/cron/runs.ts";
 import type { CronFormState, CronState } from "../../lib/cron/types.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
@@ -208,7 +211,8 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
           active &&
           context() === currentContext &&
           (event.event === "cron" ||
-            isCronInventoryInvalidation(event, currentContext.gateway.snapshot))
+            (hasCronInventoryEvents(currentContext.gateway.snapshot) &&
+              isCronInventoryInvalidation(event, currentContext.gateway.snapshot)))
         ) {
           void refreshCron({
             coalesce: true,

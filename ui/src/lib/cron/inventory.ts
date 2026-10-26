@@ -6,154 +6,16 @@ import {
   readCanonicalCronListPage,
   resolveCronListPageNextOffset,
 } from "../../../../src/cron/service/list-page-validation.ts";
-import type { GatewayBrowserClient, GatewayEventFrame, GatewayHelloOk } from "../../api/gateway.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { CronCompactJob, CronJob, CronJobsListResult } from "../../api/types.ts";
 import { subscribeToSharedRequest } from "../shared-request-subscription.ts";
-
-const INVENTORY_CHANGED = "cron.inventory.changed";
-const inventories = new WeakMap<GatewayBrowserClient, Inventory>();
-type Runtime = {
-  revision: number;
-  jobId: string;
-  action: "started" | "finished" | "scheduled";
-  job: Pick<CronJob, "id" | "name" | "agentId" | "enabled" | "updatedAtMs" | "state">;
-  error?: string;
-  durationMs?: number;
-};
-type Subscriber = { canRead: () => boolean };
-type Entry<Row> = {
-  params: CronListParams;
-  version: number;
-  value?: CronJobsListResult<Row>;
-  pending?: {
-    promise: Promise<CronJobsListResult<Row>>;
-    controller: AbortController;
-    subscribers: Set<Subscriber>;
-  };
-};
-type Inventory = {
-  hello: GatewayHelloOk | null;
-  supported: boolean;
-  version: number;
-  compact: Map<string, Entry<CronCompactJob>>;
-  full: Map<string, Entry<CronJob>>;
-  runtime: Map<string, Runtime>;
-  runtimeRevision: number;
-  debounce?: { promise: Promise<void>; resolve: () => void; timer: ReturnType<typeof setTimeout> };
-};
-
-export function hasCronInventoryEvents(snapshot: { hello?: GatewayHelloOk | null }): boolean {
-  return snapshot.hello?.features?.events?.includes(INVENTORY_CHANGED) === true;
-}
-
-export function usesCronInventoryEvents(client: GatewayBrowserClient): boolean {
-  return inventories.get(client)?.supported === true;
-}
-
-export function isCronInventoryInvalidation(
-  event: GatewayEventFrame,
-  snapshot: { hello?: GatewayHelloOk | null },
-): boolean {
-  return (
-    event.event === INVENTORY_CHANGED ||
-    event.event === "config.changed" ||
-    (event.event === "sessions.changed" &&
-      isRecord(event.payload) &&
-      ["sharing", "profile-identity", "delete", "reset", "archive"].includes(
-        String(event.payload.reason),
-      )) ||
-    (event.event === "cron" && !hasCronInventoryEvents(snapshot))
-  );
-}
-
-/** Hello and disconnect publications retire data before any consumer can reuse it. */
-export function bindCronInventory(client: GatewayBrowserClient, hello: GatewayHelloOk | null) {
-  if (inventories.get(client)?.hello === hello) {
-    return;
-  }
-  clearCronInventory(client);
-  inventories.set(client, {
-    hello,
-    supported: hasCronInventoryEvents({ hello }),
-    version: 0,
-    compact: new Map(),
-    full: new Map(),
-    runtime: new Map(),
-    runtimeRevision: 0,
-  });
-}
-
-export function clearCronInventory(client: GatewayBrowserClient): void {
-  const owner = inventories.get(client);
-  inventories.delete(client);
-  if (owner?.debounce) {
-    clearTimeout(owner.debounce.timer);
-    owner.debounce.resolve();
-  }
-  for (const entry of [...(owner?.compact.values() ?? []), ...(owner?.full.values() ?? [])]) {
-    entry.pending?.controller.abort();
-  }
-}
-
-function invalidateCronInventory(client: GatewayBrowserClient): void {
-  const owner = inventories.get(client);
-  if (!owner) {
-    return;
-  }
-  owner.version += 1;
-  owner.runtime.clear();
-  if (owner.supported && !owner.debounce) {
-    const { promise, resolve } = Promise.withResolvers<void>();
-    const timer = setTimeout(() => {
-      owner.debounce = undefined;
-      resolve();
-    }, 50);
-    owner.debounce = { promise, resolve, timer };
-  }
-}
-
-/** Called once by the Gateway event owner, before events reach view subscribers. */
-export function receiveCronInventoryEvent(client: GatewayBrowserClient, event: GatewayEventFrame) {
-  const owner = inventories.get(client);
-  if (!owner) {
-    return;
-  }
-  if (isCronInventoryInvalidation(event, { hello: owner.hello })) {
-    invalidateCronInventory(client);
-  } else if (owner.supported && event.event === "cron") {
-    const payload = event.payload;
-    if (
-      !isRecord(payload) ||
-      !["started", "finished", "scheduled"].includes(String(payload.action)) ||
-      !isRecord(payload.job) ||
-      !isRecord(payload.job.state) ||
-      payload.jobId !== payload.job.id
-    ) {
-      return;
-    }
-    const runtime = {
-      // SAFETY: The authenticated cron publisher owns this bounded runtime projection.
-      ...(payload as Omit<Runtime, "revision">),
-      revision: ++owner.runtimeRevision,
-    };
-    owner.runtime.delete(runtime.jobId);
-    owner.runtime.set(runtime.jobId, runtime);
-    // Keep only recent run facts for responses crossing an event; definitions retire them.
-    if (owner.runtime.size > 512) {
-      owner.runtime.delete(owner.runtime.keys().next().value!);
-    }
-    for (const entry of owner.compact.values()) {
-      if (entry.value) {
-        entry.value = updateCompact(entry.value, runtime);
-      }
-    }
-    for (const entry of owner.full.values()) {
-      if (entry.value) {
-        entry.value = updateFull(entry.value, runtime, entry.params);
-      }
-    }
-  }
-}
+import {
+  getCronInventory,
+  isCurrentCronInventory,
+  type Entry,
+  type Inventory,
+  type Runtime,
+} from "./inventory-connection.ts";
 
 function updateFull(page: CronJobsListResult, event: Runtime, params: CronListParams) {
   const index = page.jobs.findIndex((job) => job.id === event.jobId);
@@ -245,11 +107,7 @@ export function readCronInventory(
   options: ReadOptions = {},
 ) {
   options.signal?.throwIfAborted();
-  let owner = inventories.get(client);
-  if (!owner) {
-    bindCronInventory(client, null);
-    owner = inventories.get(client)!;
-  }
+  const owner = getCronInventory(client);
   if (!owner.supported && !options.legacyCache) {
     return options.signal
       ? client.request<CronJobsListResult | CronJobsListResult<CronCompactJob>>(
@@ -310,54 +168,6 @@ export function readCronInventory(
       );
 }
 
-function inventoryQuery(params: CronListParams) {
-  return {
-    ...params,
-    compact: params.compact === true,
-    enabled: "all" as const,
-    includeDisabled: true,
-    includeDeliveryPreviews: params.compact ? false : (params.includeDeliveryPreviews ?? true),
-    query: params.query?.trim() || undefined,
-    scheduleKind: params.scheduleKind ?? "all",
-    trigger: params.trigger ?? "all",
-    sortBy: "name" as const,
-    sortDir: "asc" as const,
-    lastRunStatus: "all" as const,
-    limit: 200,
-    offset: 0,
-  };
-}
-
-function queryKey(params: CronListParams, complete: boolean) {
-  return JSON.stringify([
-    complete,
-    Object.keys(params)
-      .sort()
-      .filter((key) => Reflect.get(params, key) !== undefined)
-      .map((key) => [key, Reflect.get(params, key)]),
-  ]);
-}
-
-/** Runtime cannot introduce membership; the canonical scope includes every runtime-filter candidate. */
-export function cronInventoryHasJob(
-  client: GatewayBrowserClient,
-  params: CronListParams,
-  payload: unknown,
-): boolean {
-  if (
-    !isRecord(payload) ||
-    typeof payload.jobId !== "string" ||
-    !["started", "finished", "scheduled"].includes(String(payload.action))
-  ) {
-    return false;
-  }
-  const owner = inventories.get(client);
-  const source = inventoryQuery(params);
-  const key = queryKey(source, true);
-  const page = params.compact ? owner?.compact.get(key)?.value : owner?.full.get(key)?.value;
-  return page?.jobs.some((job) => job.id === payload.jobId) === true;
-}
-
 function selectPage<Row extends { enabled: boolean }>(
   page: CronJobsListResult<Row>,
   params: CronListParams,
@@ -403,7 +213,14 @@ function readRows<Row>(
   const key = queryKey(params, complete);
   let entry = entries.get(key);
   if (!entry) {
-    entry = { params, version: -1 };
+    entry = {
+      version: -1,
+      applyRuntime(runtime) {
+        if (this.value) {
+          this.value = update(this.value, runtime, params);
+        }
+      },
+    };
     entries.set(key, entry);
     if (entries.size > 128) {
       entries.delete(entries.keys().next().value!);
@@ -430,7 +247,7 @@ function readRows<Row>(
     const assertPresented = () => {
       pending.controller.signal.throwIfAborted();
       if (
-        inventories.get(client) !== owner ||
+        !isCurrentCronInventory(client, owner) ||
         ![...pending.subscribers].some((reader) => reader.canRead())
       ) {
         throw new DOMException("Cron inventory is no longer presented", "AbortError");
@@ -478,7 +295,7 @@ function readRows<Row>(
             response = { ...first, jobs, limit: jobs.length, hasMore: false, nextOffset: null };
           }
           pending.controller.signal.throwIfAborted();
-          if (inventories.get(client) !== owner) {
+          if (!isCurrentCronInventory(client, owner)) {
             throw new DOMException("Cron connection changed", "AbortError");
           }
           if (version !== owner.version) {
@@ -509,4 +326,52 @@ function readRows<Row>(
     })().then(resolve, reject);
     return subscribeToSharedRequest(pending, subscriber, options.signal);
   }
+}
+
+function inventoryQuery(params: CronListParams) {
+  return {
+    ...params,
+    compact: params.compact === true,
+    enabled: "all" as const,
+    includeDisabled: true,
+    includeDeliveryPreviews: params.compact ? false : (params.includeDeliveryPreviews ?? true),
+    query: params.query?.trim() || undefined,
+    scheduleKind: params.scheduleKind ?? "all",
+    trigger: params.trigger ?? "all",
+    sortBy: "name" as const,
+    sortDir: "asc" as const,
+    lastRunStatus: "all" as const,
+    limit: 200,
+    offset: 0,
+  };
+}
+
+function queryKey(params: CronListParams, complete: boolean) {
+  return JSON.stringify([
+    complete,
+    Object.keys(params)
+      .toSorted()
+      .filter((key) => Reflect.get(params, key) !== undefined)
+      .map((key) => [key, Reflect.get(params, key)]),
+  ]);
+}
+
+/** Runtime cannot introduce membership; the canonical scope includes every runtime-filter candidate. */
+export function cronInventoryHasJob(
+  client: GatewayBrowserClient,
+  params: CronListParams,
+  payload: unknown,
+): boolean {
+  if (
+    !isRecord(payload) ||
+    typeof payload.jobId !== "string" ||
+    !["started", "finished", "scheduled"].includes(String(payload.action))
+  ) {
+    return false;
+  }
+  const owner = getCronInventory(client);
+  const source = inventoryQuery(params);
+  const key = queryKey(source, true);
+  const page = params.compact ? owner?.compact.get(key)?.value : owner?.full.get(key)?.value;
+  return page?.jobs.some((job) => job.id === payload.jobId) === true;
 }

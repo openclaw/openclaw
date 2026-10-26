@@ -9,7 +9,8 @@ import {
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { CronCompactJob, CronJob, CronJobsListResult } from "../../api/types.ts";
 import { formatUiError } from "../format-error.ts";
-import { cronInventoryHasJob, readCronInventory, usesCronInventoryEvents } from "./inventory.ts";
+import { usesCronInventoryEvents } from "./inventory-connection.ts";
+import { cronInventoryHasJob, readCronInventory } from "./inventory.ts";
 import type { CronJobsState } from "./types.ts";
 
 function clearCronJobsSnapshot(state: CronJobsState<unknown>) {

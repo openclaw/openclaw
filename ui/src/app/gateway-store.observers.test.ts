@@ -5,7 +5,8 @@ import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/serv
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { buildBrowserGatewayConnectPlan } from "../api/gateway-connect-plan.ts";
 import { loadCommandPaletteCatalogItems } from "../components/command-palette-catalog-search.ts";
-import { readCronInventory, usesCronInventoryEvents } from "../lib/cron/inventory.ts";
+import { usesCronInventoryEvents } from "../lib/cron/inventory-connection.ts";
+import { readCronInventory } from "../lib/cron/inventory.ts";
 import { isGatewayConnectionAttemptPending } from "../lib/gateway-status.ts";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
 import { resolveAvatar } from "../lib/identity-avatar.ts";

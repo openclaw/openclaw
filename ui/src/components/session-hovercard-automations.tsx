@@ -3,7 +3,7 @@ import { createMemo, createSignal, Errored, For, isPending, latest, Loading, Sho
 import type { CronJob } from "../api/types.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { isCronJobRunning, resolveCronJobLastRunStatus } from "../lib/cron-status.ts";
-import { isCronInventoryInvalidation } from "../lib/cron/inventory.ts";
+import { isCronInventoryInvalidation } from "../lib/cron/inventory-connection.ts";
 import { loadCronJobsPage } from "../lib/cron/jobs-full.ts";
 import { createInitialCronState } from "../lib/cron/state.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";

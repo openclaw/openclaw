@@ -8,7 +8,7 @@ import { createWebPushCapability } from "../app/web-push.ts";
 import { createAgentIdentityCapability } from "../lib/agents/identity.ts";
 import { createAgentCapability } from "../lib/agents/index.ts";
 import { invalidateChatMetadataStore } from "../lib/chat/chat-metadata-cache.ts";
-import { clearCronInventory, receiveCronInventoryEvent } from "../lib/cron/inventory.ts";
+import { clearCronInventory, receiveCronInventoryEvent } from "../lib/cron/inventory-connection.ts";
 import { modelCatalogEventInvalidation } from "../lib/model-catalog-cache.ts";
 import { createApplicationGatewaySnapshot } from "../test-helpers/application-context-fixtures.ts";
 import {

@@ -9,7 +9,10 @@ import { setDefaultAgent } from "../../lib/agents/mutations.ts";
 import { DEFAULT_AGENT_PANEL, type AgentsPanel } from "../../lib/agents/panels.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { createInitialCronState } from "../../lib/cron/index.ts";
-import { hasCronInventoryEvents, isCronInventoryInvalidation } from "../../lib/cron/inventory.ts";
+import {
+  hasCronInventoryEvents,
+  isCronInventoryInvalidation,
+} from "../../lib/cron/inventory-connection.ts";
 import type { CronState } from "../../lib/cron/types.ts";
 import {
   canCallGatewayMethod,

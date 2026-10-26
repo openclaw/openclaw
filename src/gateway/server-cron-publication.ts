@@ -19,18 +19,17 @@ export function createGatewayCronPublisher(params: {
     // Retargeting can remove a reader from the detailed event's new audience.
     params.broadcast("cron.inventory.changed", undefined, { dropIfSlow: true });
     const cron = params.getCron();
-    const boundKeys = new Set<string>(
-      [previous, next].flatMap((job) =>
-        job
-          ? [
-              ...resolveCronJobBoundSessionKeys(job, {
-                cfg: getRuntimeConfig(),
-                defaultAgentId: cron.getDefaultAgentId(),
-              }),
-            ]
-          : [],
-      ),
-    );
+    const boundKeys = new Set<string>();
+    for (const job of [previous, next]) {
+      if (job) {
+        for (const key of resolveCronJobBoundSessionKeys(job, {
+          cfg: getRuntimeConfig(),
+          defaultAgentId: cron.getDefaultAgentId(),
+        })) {
+          boundKeys.add(key);
+        }
+      }
+    }
     // Badges consume refreshed session rows after their projection has settled.
     for (const sessionKey of boundKeys) {
       const context = params.resolveGatewayContext?.();

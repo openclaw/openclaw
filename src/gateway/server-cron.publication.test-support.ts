@@ -187,15 +187,15 @@ export function registerGatewayCronPublicationTests({
         expect(
           broadcast.mock.calls.filter(([event]) => event === "cron.inventory.changed"),
         ).toHaveLength(1);
+        const bindingEvents = broadcast.mock.calls.filter(
+          ([event, payload]) => event === "sessions.changed" && payload?.reason === "cron-binding",
+        );
+        expect(bindingEvents).toHaveLength(2);
         expect(
-          broadcast.mock.calls
-            .filter(
-              ([event, payload]) =>
-                event === "sessions.changed" && payload?.reason === "cron-binding",
-            )
-            .map(([, payload]) => requireRecord(payload, "run binding payload").sessionKey)
-            .toSorted(),
-        ).toEqual([`agent:main:cron:${job.id}`, "agent:main:probe"].toSorted());
+          bindingEvents.map(
+            ([, payload]) => requireRecord(payload, "run binding payload").sessionKey,
+          ),
+        ).toEqual(expect.arrayContaining([`agent:main:cron:${job.id}`, "agent:main:probe"]));
       },
       { broadcast },
     );
