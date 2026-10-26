@@ -7,6 +7,21 @@ import { createApplicationGateway } from "../../test-helpers/application-context
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import type { ChannelsProps } from "./view.types.ts";
 
+export function channelSnapshot(
+  channels: ChannelsStatusSnapshot["channels"] = {},
+  overrides: Partial<ChannelsStatusSnapshot> = {},
+): ChannelsStatusSnapshot {
+  return {
+    ts: 1,
+    channelOrder: Object.keys(channels),
+    channelLabels: Object.fromEntries(Object.keys(channels).map((id) => [id, id])),
+    channels,
+    channelAccounts: {},
+    channelDefaultAccountId: {},
+    ...overrides,
+  };
+}
+
 export type ChannelsViewTestOverrides = Partial<
   Omit<ChannelsProps, "channels" | "config" | "presentation" | "wizardHost">
 > & {
