@@ -19,15 +19,19 @@ vi.mock("@clack/prompts", () => ({
   log: { warn: vi.fn() },
 }));
 
+// mock-isolation: Interactive configuration reads a synthetic snapshot, never the operator's config.
 vi.mock("./config-io.js", () => ({ createSecretsConfigIO: mocks.io }));
+// mock-isolation: Providers-only cases must not read real persisted auth profiles.
 vi.mock("../agents/auth-profiles/persisted.js", () => ({
   loadPersistedAuthProfileStore: mocks.auth,
 }));
 
+// mock-isolation: Preset discovery uses only the fixture manifest registry.
 vi.mock("../plugins/manifest-registry.js", () => ({
   loadPluginManifestRegistryCore: mocks.plugins,
 }));
 
+// mock-isolation: Plan construction records apply options without writing config or executing providers.
 vi.mock("./apply.js", () => ({ runSecretsApply: mocks.apply }));
 
 const { runSecretsConfigureInteractive } = await import("./configure.js");

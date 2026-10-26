@@ -26,6 +26,7 @@ function sentText(messageId: string, text: string) {
   return { messageId, sentText: text, receipt: createTestIMessageReceipt(messageId) };
 }
 
+// mock-isolation: Delivery fixtures supply native send receipts without invoking the iMessage client.
 vi.mock("../send.js", () => ({
   sendMessageIMessage: sendMessageIMessageMock,
 }));

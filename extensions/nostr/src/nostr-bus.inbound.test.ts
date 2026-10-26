@@ -74,6 +74,7 @@ vi.mock("nostr-tools/nip04", () => ({
   decrypt: mocks.decrypt,
   encrypt: vi.fn(() => "ciphertext"),
 }));
+// mock-isolation: Ingress fixtures control cursor reads and write failures without persisted bus state.
 vi.mock("./nostr-state-store.js", () => ({
   readNostrBusState: mocks.readNostrBusState,
   writeNostrBusState: mocks.writeNostrBusState,
