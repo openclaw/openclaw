@@ -36,18 +36,16 @@ function billingFixture(primary: string, apiProfile: string, oauthProfile: strin
 type PrepareParams = Parameters<typeof prepareAgentRuntimeAuth>[0];
 function underAmbient(
   snapshot: Parameters<typeof withPluginMetadataSnapshotScope>[0],
-  params: Pick<PrepareParams, "provider" | "metadataSnapshot"> & Partial<PrepareParams>,
+  {
+    config = {},
+    ...input
+  }: Pick<PrepareParams, "provider" | "metadataSnapshot"> & Partial<PrepareParams>,
 ) {
-  const config = params.config ?? {};
-  const prepare = () =>
-    prepareAgentRuntimeAuth({
-      modelId: "model",
-      env: {},
-      authProfileStore: authStore({}),
-      ...params,
-      config,
-    });
-  return withPluginMetadataSnapshotScope(snapshot, prepare, { config, trustConfigIdentity: true });
+  const params = { modelId: "model", env: {}, authProfileStore: authStore({}), ...input, config };
+  return withPluginMetadataSnapshotScope(snapshot, () => prepareAgentRuntimeAuth(params), {
+    config,
+    trustConfigIdentity: true,
+  });
 }
 
 it.each([
@@ -63,18 +61,13 @@ it.each([
     config.agents!.defaults!.models = {
       "openai/gpt-5.5": { alias: "metered", agentRuntime: { id: runtime } },
     };
-    if (!profileMetadata) {
-      config.auth = undefined;
-    }
-    if (observedResponses) {
-      config.models = undefined;
-    }
+    config.auth = profileMetadata ? config.auth : undefined;
+    config.models = observedResponses ? undefined : config.models;
     const prepared = prepareAgentRuntimeAuth({
       ...fixture,
       agentId: "assistant",
-      ...(observedResponses
-        ? { modelApi: "openai-responses", modelBaseUrl: "https://api.openai.com/v1" }
-        : {}),
+      modelApi: observedResponses ? "openai-responses" : undefined,
+      modelBaseUrl: observedResponses ? "https://api.openai.com/v1" : undefined,
     });
     expect(prepared.plan).toMatchObject({
       forwardedAuthProfileId: "openai:platform",
@@ -168,14 +161,10 @@ it.each(["user-link", "binding", "empty"] as const)(
       metadataSnapshot: empty ? metadataSnapshot() : metadata("selected-auth"),
       authProfileStore: authStore({
         "fixture:ambient": apiKey("ambient-auth", "synthetic-ambient"),
-        [profileId]: apiKey(
-          empty ? "fixture-alias" : "selected-auth",
-          empty ? "synthetic-exact" : "synthetic-selected",
-        ),
+        [profileId]: apiKey(empty ? "fixture-alias" : "selected-auth", "synthetic-selected"),
       }),
-      ...(selection === "user-link"
-        ? { sessionAuthProfileId: "fixture:selected", sessionAuthProfileSource: selection }
-        : {}),
+      sessionAuthProfileId: selection === "user-link" ? profileId : undefined,
+      sessionAuthProfileSource: selection === "user-link" ? selection : undefined,
     });
 
     if (!empty) {

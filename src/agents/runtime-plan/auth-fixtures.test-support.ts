@@ -54,48 +54,40 @@ export const oauth = createOAuthRefreshCredential;
 export const openAIConfig = providerConfig.bind(null, "openai");
 export const apiRoute = { api: "openai-responses", authRequirement: "api-key" } as const;
 
-export function profilePlan(
+export const profilePlan = (
   profileId: string,
   overrides: Partial<AgentRuntimeAuthPlan> = {},
-): AgentRuntimeAuthPlan {
-  return {
-    ...authProvider,
-    forwardedAuthProfileId: profileId,
-    forwardedAuthProfileSource: "auto",
-    forwardedAuthProfileCandidateIds: [profileId],
-    ...overrides,
-  };
-}
+): AgentRuntimeAuthPlan => ({
+  ...authProvider,
+  forwardedAuthProfileId: profileId,
+  forwardedAuthProfileSource: "auto",
+  forwardedAuthProfileCandidateIds: [profileId],
+  ...overrides,
+});
 
-export function subscriptionPlan(
+export const subscriptionPlan = (
   overrides: Partial<AgentRuntimeAuthPlan> = {},
-): AgentRuntimeAuthPlan {
-  return {
-    ...authProvider,
-    forwardedAuthProfileId: "openai:subscription",
-    selectedAuthMode: "token",
-    modelRoute: { ...subscriptionRoute },
-    ...overrides,
-  };
-}
+): AgentRuntimeAuthPlan => ({
+  ...authProvider,
+  forwardedAuthProfileId: "openai:subscription",
+  selectedAuthMode: "token",
+  modelRoute: { ...subscriptionRoute },
+  ...overrides,
+});
 
-export function authStore(
+export const authStore = (
   profiles: AuthProfileStore["profiles"],
   order?: AuthProfileStore["order"],
-): AuthProfileStore {
-  return { version: 1, profiles, ...(order ? { order } : {}) };
-}
-export function oneProfile(id: string, credential: AuthProfileStore["profiles"][string]) {
-  return { [id]: credential };
-}
-export function token(value = "subscription-token", expires?: number) {
-  return {
-    type: "token" as const,
-    provider: "openai",
-    token: value,
-    ...(expires === undefined ? {} : { expires }),
-  };
-}
+): AuthProfileStore => ({ version: 1, profiles, ...(order ? { order } : {}) });
+export const oneProfile = (id: string, credential: AuthProfileStore["profiles"][string]) => ({
+  [id]: credential,
+});
+export const token = (value = "subscription-token", expires?: number) => ({
+  type: "token" as const,
+  provider: "openai",
+  token: value,
+  ...(expires === undefined ? {} : { expires }),
+});
 export function setProfileCooldown(
   store: AuthProfileStore,
   profileId: string,
