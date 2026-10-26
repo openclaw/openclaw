@@ -1,4 +1,3 @@
-import { setImmediate as nextTurn } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
@@ -7,6 +6,7 @@ import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createInternalAgentTurnFacade } from "./agent-turn/internal-facade.js";
 import { withLocalGatewayRequestScope } from "./local-request-context.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
+import { observeHeldGatewayWorkDrain } from "./server-held-work.test-support.js";
 import { dispatchGatewayRequestInProcessRaw } from "./server-in-process-dispatch.js";
 import { closeKernelFixture, createKernelFixture } from "./server-kernel.fixture-test-support.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
@@ -59,7 +59,6 @@ describe("in-process Gateway original execution ownership", () => {
     async (surface, { signal }) => {
       const fixture = await createKernelFixture(`gateway-${surface}-execution`);
       const release = createDeferred();
-      const drainEntered = createDeferred();
       const order: string[] = [];
       const originalCompletion = release.promise.then(() => {
         order.push("execution settled");
@@ -120,15 +119,11 @@ describe("in-process Gateway original execution ownership", () => {
             order.push("dependencies stopped");
           },
         });
-        const drain = kernel.connectionWork.drain.bind(kernel.connectionWork);
-        vi.spyOn(kernel.connectionWork, "drain").mockImplementationOnce(() => {
-          const operation = drain();
-          drainEntered.resolve();
-          return operation;
-        });
+        const expectHeldWork = await observeHeldGatewayWorkDrain(
+          () => kernel?.connectionWork.signal,
+        );
         closing = kernel.closeOnStartupFailure();
-        await drainEntered.promise;
-        await nextTurn();
+        await expectHeldWork(closing);
         expect(order).toEqual([]);
         unblock();
         await originalCompletion;
