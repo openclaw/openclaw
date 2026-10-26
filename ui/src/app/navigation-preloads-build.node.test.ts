@@ -87,6 +87,7 @@ it("describes the emitted static JS/CSS graph without importing optional dynamic
   expect(manifest.claws?.some((file) => file.endsWith(".css"))).toBe(true);
   expect(manifest.claws).not.toContain(dialog?.fileName);
   expect(manifest.claws).not.toContain("assets/plugin-island.js");
+  expect(manifest["claws-next"]).toEqual(manifest.claws);
   const chat = built.output.find(
     (file) =>
       file.type === "chunk" && file.facadeModuleId === "/fixture/ui/src/pages/chat/route-entry.ts",

@@ -731,10 +731,14 @@ async function readBuild(directory: string) {
     build,
     indexSha256: createHash("sha256").update(html).digest("hex"),
     nextPreloads: Object.fromEntries(
-      ["agents-next", "cron-next", "activity-next", "model-picker", "roster-next"].map((key) => [
-        key,
-        navigationPreloads[key] ?? [],
-      ]),
+      [
+        "agents-next",
+        "cron-next",
+        "activity-next",
+        "claws-next",
+        "model-picker",
+        "roster-next",
+      ].map((key) => [key, navigationPreloads[key] ?? []]),
     ),
   };
 }
