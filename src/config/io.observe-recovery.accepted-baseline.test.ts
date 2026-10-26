@@ -530,6 +530,33 @@ describe("config observe recovery accepted baselines", () => {
     });
   });
 
+  it("loadConfig restores a promoted accepted baseline when the backup cannot be read", async () => {
+    await withSuiteHome(async (home) => {
+      const { deps } = makeDeps(home);
+      const { io, configPath, warn } = createTestConfigIO(home);
+      const handAuthored = { update: { channel: "beta" }, gateway: { mode: "local" } };
+      await seedConfig(configPath, handAuthored);
+      io.loadConfig();
+      await promoteConfigSnapshotToLastKnownGoodCore({
+        deps,
+        snapshot: await makeSnapshot(configPath, handAuthored),
+        logger: deps.logger,
+      });
+      // A directory at the backup path makes reads fail with a non-ENOENT
+      // error. The independent, hash-verified .last-good source must still win.
+      await fsp.mkdir(`${configPath}.bak`);
+      await writeClobberedUpdateChannel(configPath);
+
+      const config = io.loadConfig();
+
+      expect(config.gateway?.mode).toBe("local");
+      expect(await fsp.readFile(configPath, "utf-8")).toBe(
+        `${JSON.stringify(handAuthored, null, 2)}\n`,
+      );
+      expectWarnContaining(warn, `Config auto-restored from last-good: ${configPath}`);
+    });
+  });
+
   it("loadConfig restores a promoted accepted baseline when the backup is unparsable", async () => {
     await withSuiteHome(async (home) => {
       const { deps } = makeDeps(home);

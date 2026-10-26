@@ -643,7 +643,7 @@ describe("config observe recovery", () => {
 
     const recovered = await maybeRecoverSuspiciousConfigRead(input);
 
-    expect(recovered.parsed).toEqual(backup);
+    expect(recovered).toEqual(clobbered);
   });
 
   it.each([

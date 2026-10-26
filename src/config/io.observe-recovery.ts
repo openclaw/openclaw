@@ -314,7 +314,21 @@ function* planSuspiciousConfigRead(
   if (!handAuthoredBaseline && (yield createConfigBackupMissingEffect(deps, backupPath))) {
     return null;
   }
-  backupRaw ??= (yield createConfigBackupReadEffect(deps, backupPath)) as string | null;
+  let backupReadFailed = false;
+  let backupReadError: unknown;
+  if (backupRaw === null) {
+    try {
+      backupRaw = (yield createConfigBackupReadEffect(deps, backupPath)) as string | null;
+    } catch (error) {
+      if (!handAuthoredBaseline) {
+        throw error;
+      }
+      // A promoted copy of the accepted hand-authored bytes is an independent
+      // recovery source. Preserve the backup error in case that copy is unusable.
+      backupReadFailed = true;
+      backupReadError = error;
+    }
+  }
   const backupParse = backupRaw ? parseBackupConfigRaw(deps, backupRaw) : null;
   // A metadata-free accepted baseline can only be hand-authored (product
   // writers always stamp `meta`), so a `.bak` holding different bytes predates
@@ -327,7 +341,10 @@ function* planSuspiciousConfigRead(
   // access to a verified `.last-good` payload promoted for these exact bytes.
   const preferLastGoodSource =
     handAuthoredBaseline &&
-    (!backupRaw || !backupParse || hashConfigRaw(backupRaw) !== baseline?.hash);
+    (backupReadFailed ||
+      !backupRaw ||
+      !backupParse ||
+      hashConfigRaw(backupRaw) !== baseline?.hash);
   let restoreSourceRaw: string;
   let restoreSourcePath: string;
   let restoreSourceContext: string;
@@ -344,6 +361,9 @@ function* planSuspiciousConfigRead(
       baselineHash: baseline.hash,
     });
     if (!lastGoodSource) {
+      if (backupReadFailed) {
+        throw backupReadError;
+      }
       deps.logger.warn(
         `Config auto-restore from backup skipped: ${configPath} (${suspicious.join(", ")}); accepted baseline is hand-authored and no verified last-good copy exists`,
       );
