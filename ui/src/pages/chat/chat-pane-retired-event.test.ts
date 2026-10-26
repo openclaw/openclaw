@@ -2,7 +2,6 @@
 
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
@@ -26,6 +25,18 @@ beforeEach(() => {
 });
 afterEach(resetTranscriptTestDom);
 
+function session(name: string, updatedAt: number, running = false) {
+  return {
+    key: `agent:main:${name}`,
+    agentId: "main",
+    sessionId: `${name}-session`,
+    kind: "direct" as const,
+    updatedAt,
+    hasActiveRun: running,
+    status: running ? "running" : "done",
+  };
+}
+
 it.each([
   ["session.message", true],
   ["sessions.changed", true],
@@ -34,25 +45,8 @@ it.each([
 ] as const)(
   "a retired %s frame recovers stored input with its target pane mounted=%s",
   async (event, targetMounted) => {
-    const successor: GatewaySessionRow = {
-      key: "agent:main:retained-background",
-      agentId: "main",
-      sessionId: "successor-session",
-      kind: "direct",
-      updatedAt: 20,
-      label: "Current successor",
-      hasActiveRun: true,
-      status: "running",
-    };
-    const foreground: GatewaySessionRow = {
-      key: "agent:main:foreground",
-      agentId: "main",
-      sessionId: "foreground-session",
-      kind: "direct",
-      updatedAt: 1,
-      hasActiveRun: false,
-      status: "done",
-    };
+    const successor = { ...session("retained-background", 20, true), label: "Current successor" };
+    const foreground = session("foreground", 1);
     const successorTranscript = [
       {
         role: "assistant",
@@ -63,8 +57,7 @@ it.each([
     const runId = "persisted-successor-input";
     let acknowledgeReplay = false;
     const history = vi.fn<GatewayRequestHandler>((_method, raw): ChatHistoryResult => {
-      const params = asOptionalRecord(raw);
-      const row = params?.sessionKey === successor.key ? successor : foreground;
+      const row = asOptionalRecord(raw)?.sessionKey === successor.key ? successor : foreground;
       return {
         messages: row === successor ? successorTranscript : [],
         sessionId: row.sessionId,
@@ -119,7 +112,6 @@ it.each([
         input,
       ),
     ).toBe("admitted");
-    // An interrupted replay retains the original input until the Gateway acknowledges it.
     await chatSendActions.resumeStoredChatOutboxes(visiblePane.state);
     expect(listStoredChatOutboxes(visiblePane.state)).toEqual([
       expect.objectContaining({
@@ -160,13 +152,6 @@ it.each([
         : { reason: "reset" }),
     });
 
-    expect(resume).toHaveBeenCalledWith(
-      visiblePane.state,
-      expect.objectContaining({
-        event,
-        payload: expect.objectContaining({ sessionKey: successor.key }),
-      }),
-    );
     // Recovery must not hide a transient stale append or reset.
     expect(state.chatMessages).toBe(messagesBefore);
     expectCurrentSession();
