@@ -1,10 +1,10 @@
 import type { Buffer } from "node:buffer";
 import {
   CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
+  SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
   type ControlUiSessionPullRequest,
 } from "../../../src/gateway/control-ui-contract.js";
 import type { AgentsListResult, GatewaySessionRow } from "../api/types.ts";
-import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 
 /** Visible facts absent from the original roster-only warm-reload fixture. */
 export function createTeamScaleSidebarPresentation(input: {
