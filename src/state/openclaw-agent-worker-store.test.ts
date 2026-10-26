@@ -571,22 +571,16 @@ it.for(["owner revocation", "crash", "exit", "resource revocation"] as const)(
   async (failure, { signal }) => {
     const db = proofDatabase();
     const authority = liveAuthority("V2 owner revoked");
-    const worker =
-      failure === "owner revocation"
-        ? await openV2Worker(
-            {
-              onAdmitted(request) {
-                if (request.stage === "transaction") {
-                  authority.revoke();
-                }
-              },
-            },
-            {
-              version: 2,
-              assertCurrent: authority.assertCurrent,
-            },
-          )
-        : await openV2Worker();
+    const worker = await openV2Worker(
+      {
+        onAdmitted(request) {
+          if (failure === "owner revocation" && request.stage === "transaction") {
+            authority.revoke();
+          }
+        },
+      },
+      { version: 2, assertCurrent: authority.assertCurrent },
+    );
     const terminal = observeTerminal(worker);
     if (failure === "owner revocation") {
       await expect(worker.execute(append("refused"), allow)).rejects.toThrow("V2 owner revoked");
@@ -661,12 +655,12 @@ it("attributes cold worker reservations to bounded commands and actual outer tra
             type: "database.domain.execute",
             input: { command: { type, input: { value } } },
           });
-        await execute("session.actor.appendTranscriptEvent", "synthetic-private-committed");
+        await execute("session.actor.appendTranscriptEvent", "private-committed");
         await expect(
-          execute("session.private-customer-command", "synthetic-private-rolled-back"),
+          execute("session.private-customer-command", "private-rolled-back"),
         ).rejects.toThrow("Fixture transaction rolled back");
         expect(await store.execute({ type: "read", input: undefined })).toEqual([
-          "synthetic-private-committed",
+          "private-committed",
         ]);
       } finally {
         await store.close();

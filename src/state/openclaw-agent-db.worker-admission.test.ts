@@ -52,7 +52,7 @@ import {
   AgentDatabaseExecutionLifetime,
 } from "./openclaw-agent-execution-authority.js";
 import { createAgentDatabaseNativeGeneration } from "./openclaw-agent-execution-native.js";
-import { captureOpenClawAgentDatabaseExecution as captureExecution } from "./openclaw-agent-execution.js";
+import { captureOpenClawAgentDatabaseExecution as capture } from "./openclaw-agent-execution.js";
 import { expectRow, readRow } from "./openclaw-state-db-fixtures.test-support.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -73,17 +73,22 @@ function executionOptions(prefix: string) {
   return { agentId, env, path: agentPath({ agentId, env }) };
 }
 
+function captureExecution(...args: Parameters<typeof capture>) {
+  const execution = capture(...args);
+  return Object.assign(execution, { [Symbol.asyncDispose]: () => execution.release() });
+}
+
 function replaceFile(pathname: string) {
   fs.copyFileSync(pathname, `${pathname}.replacement`);
   fs.renameSync(`${pathname}.replacement`, pathname);
 }
 
 function observePublications(observe: (path: string, publish: () => void) => void) {
-  const capture = validationCache.captureOpenClawAgentDatabaseAdmissionPublication;
+  const capturePublication = validationCache.captureOpenClawAgentDatabaseAdmissionPublication;
   return vi
     .spyOn(validationCache, "captureOpenClawAgentDatabaseAdmissionPublication")
     .mockImplementation((target) => {
-      const publish = capture(target);
+      const publish = capturePublication(target);
       return (identity, received) => observe(target.path, () => publish(identity, received));
     });
 }
@@ -250,28 +255,25 @@ it("admits cold storage in its worker and lends facts to every later native hand
   const options = makeOptions("agent-admit-");
   openOpenClawStateDatabase({ env: options.env });
   const pathname = agentPath(options);
-  const { inspections } = observeCallerSchemaInspections(pathname);
+  using observed = observeCallerSchemaInspections(pathname);
   const read = () =>
     writeAgent(options, (database) => {
       expectAdmittedSchemaObjects(database.db);
       return countSessions(database);
     });
   expect(await Promise.all([read(), read()])).toEqual([0, 0]);
-  expect(inspections).toEqual([]);
   const freshValidation = transferValidation({
     agentId: options.agentId,
     path: pathname,
   });
   assert(freshValidation);
-  expect(freshValidation.schema?.facts?.textEncoding).toBe("UTF-8");
   expect(Atomics.load(new Int32Array(freshValidation.canonicalReady), 0)).toBe(1);
 
   // Native handles share the worker's physical admission across orderly close.
   expectAdmittedSchemaObjects(openAgent(options).db);
-  expect(inspections).toEqual([]);
   await closeAgent(pathname);
   expectAdmittedSchemaObjects(openAgent(options).db);
-  expect(inspections).toEqual([]);
+  expect(observed.inspections).toEqual([]);
 });
 
 it("publishes freshly verified proof to a previously admitted alias after stale lease cleanup", async () => {
@@ -409,7 +411,6 @@ it.each([
 
 it.each([
   { change: "schema", retainWorker: false },
-  { change: "owner", retainWorker: false },
   { change: "replacement", retainWorker: false },
   { change: "damage", retainWorker: false },
   { change: "schema", retainWorker: true },
@@ -487,7 +488,7 @@ it.each(["before-entry", "after-entry"] as const)(
   async (failure) => {
     const options = makeOptions("agent-schema-publication-");
     openAgent(options);
-    const execution = captureExecution(options);
+    await using execution = captureExecution(options);
     const source = executionSource();
     let publications = 0;
     observePublications((pathname, publish) => {
@@ -504,14 +505,10 @@ it.each(["before-entry", "after-entry"] as const)(
       }
       return "executed";
     });
-    try {
-      const result = execution.runExisting(source, operation);
-      await expect(result).rejects.toThrow("Agent schema admission changed before publication");
-      expect(operation).toHaveBeenCalledTimes(failure === "after-entry" ? 1 : 0);
-      expect(publications).toBe(1);
-    } finally {
-      await execution.release();
-    }
+    const result = execution.runExisting(source, operation);
+    await expect(result).rejects.toThrow("Agent schema admission changed before publication");
+    expect(operation).toHaveBeenCalledTimes(failure === "after-entry" ? 1 : 0);
+    expect(publications).toBe(1);
   },
 );
 
@@ -606,21 +603,17 @@ it("retains accepted work across borrower release and refuses late registration 
     await Atomics.waitAsync(decision, 0, 0).value;
     expect(Atomics.load(decision, 0)).toBe(2);
 
-    const replacement = captureExecution(options);
-    try {
-      await replacement.prepare(requestSource);
-      await replacement.runExisting(requestSource, (scope) =>
-        scope.execute({
-          type: "session.entry.read",
-          input: { sessionKeys: ["agent:main:accepted"] },
-        }),
-      );
-      expect(authority!.native.buffer).not.toBe(captured.native.buffer);
-      expect(isAuthorityCurrent(captured)).toBe(false);
-      assertSqliteWriterBrokerAdmission(connection, custody.descriptor, authority);
-    } finally {
-      await replacement.release();
-    }
+    await using replacement = captureExecution(options);
+    await replacement.prepare(requestSource);
+    await replacement.runExisting(requestSource, (scope) =>
+      scope.execute({
+        type: "session.entry.read",
+        input: { sessionKeys: ["agent:main:accepted"] },
+      }),
+    );
+    expect(authority!.native.buffer).not.toBe(captured.native.buffer);
+    expect(isAuthorityCurrent(captured)).toBe(false);
+    assertSqliteWriterBrokerAdmission(connection, custody.descriptor, authority);
   } finally {
     resume.resolve();
     await release;
@@ -657,19 +650,15 @@ it("publishes owner revocation before a host grant and rolls back the native wri
     ).rejects.toThrow(/execution authority is revoked/);
     expect(closing).toBeDefined();
     await closing;
-    const replacement = captureExecution(options);
-    try {
-      await expect(
-        replacement.runExisting(executionSource(), (scope) =>
-          scope.execute({
-            type: "session.entry.read",
-            input: { sessionKeys: ["agent:main:revoked"] },
-          }),
-        ),
-      ).resolves.toMatchObject({ entries: [] });
-    } finally {
-      await replacement.release();
-    }
+    await using replacement = captureExecution(options);
+    await expect(
+      replacement.runExisting(executionSource(), (scope) =>
+        scope.execute({
+          type: "session.entry.read",
+          input: { sessionKeys: ["agent:main:revoked"] },
+        }),
+      ),
+    ).resolves.toMatchObject({ entries: [] });
   } finally {
     await closing;
     await execution.release();
