@@ -81,7 +81,6 @@ it.each([
       dispatchReplyWithBufferedBlockDispatcher: dispatch,
       delivery: { deliver, onDelivered, onError },
     });
-
   const first = await run();
   expectDispatched(first);
   expect(first.dispatchResult.settledReceipt).toMatchObject({
@@ -94,7 +93,6 @@ it.each([
   if (observerThrows) {
     expect(observerError).toMatchObject({ sentBeforeError: true, visibleReplySent: true });
   }
-
   // A fresh payload identity consults durable custody rather than the retained receipt.
   await run();
   once();
