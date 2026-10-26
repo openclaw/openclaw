@@ -321,6 +321,9 @@ describe("production lint suppressions", () => {
         "src/plugins/memory-state.ts|unicorn/no-array-sort|2",
         // Reflect.apply supplies the wrapped callable as Function.prototype.bind's receiver.
         "src/plugins/plugin-instance-bindings.ts|typescript/unbound-method|1",
+        // Iterator continuations supply the native Promise receiver and preserve exact plugin rejection values.
+        "src/plugins/plugin-instance-iterator.ts|typescript/prefer-promise-reject-errors|1",
+        "src/plugins/plugin-instance-iterator.ts|typescript/unbound-method|1",
         "src/plugins/plugin-instance-owned-values.ts|eslint/no-constructor-return|1",
         "src/plugins/plugin-instance-owned-values.ts|typescript/no-extraneous-class|1",
         "src/plugins/plugin-return-value.ts|typescript/prefer-promise-reject-errors|1",
