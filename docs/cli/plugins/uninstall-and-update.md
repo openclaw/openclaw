@@ -41,8 +41,9 @@ If a matching load-path reference is added again while the runtime drains, unins
 
 `uninstall` prints a preview of what will be removed. Multi-entry packages name the package owner and every affected child before prompting. Pass `--force` to skip the confirmation prompt (useful for scripts and non-interactive runs); without it, uninstall requires an interactive TTY. `--dry-run` prints the same preview and exits without prompting or changing anything.
 
-Manifest display names in the preview escape line breaks and strip terminal
-control sequences. The stored manifest and plugin selection keep their original values.
+Manifest display names and plugin ids in the preview escape line breaks and
+strip terminal control sequences. The stored manifest and plugin selection keep
+their original values.
 
 When several IDs are supplied, uninstall resolves the whole selection before
 removing anything. Repeated IDs and children of the same package select that
