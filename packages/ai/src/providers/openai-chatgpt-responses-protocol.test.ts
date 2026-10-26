@@ -6,9 +6,7 @@ import { makeStallingStream } from "./provider-stream.test-support.js";
 const completedEvent = { type: "response.completed", response: { id: "resp_parser" } };
 const parse = (body: BodyInit) => parseOpenAIChatGptResponsesSse(new Response(body));
 const serializedCompletedEvent = JSON.stringify(completedEvent);
-const multilineDataLines = JSON.stringify(completedEvent, null, 2)
-  .split("\n")
-  .map((line) => `data: ${line}`);
+const precedingEvent = { type: "response.output_item.done" };
 
 async function settleWithin<T>(promise: Promise<T>, label: string, ms = 250): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -25,17 +23,26 @@ async function settleWithin<T>(promise: Promise<T>, label: string, ms = 250): Pr
 }
 
 describe("ChatGPT Responses SSE frame boundaries", () => {
-  it("parses multiline mixed line endings SSE frame boundaries", async () => {
-    const frame = `event: response.completed\r\n${multilineDataLines
-      .map((line, index) => `${line}${index % 3 === 0 ? "\r\n" : index % 3 === 1 ? "\r" : "\n"}`)
-      .join("")}\r\n`;
+  it.each([
+    [
+      "multiline mixed line endings",
+      `event: response.completed\r\n${JSON.stringify(completedEvent, null, 2)
+        .split("\n")
+        .map((line, index) => `data: ${line}${["\r\n", "\r", "\n"][index % 3]}`)
+        .join("")}\r\n`,
+      [completedEvent],
+    ],
+    [
+      "final undelimited event",
+      `data: ${JSON.stringify(precedingEvent)}\n\ndata: ${serializedCompletedEvent}`,
+      [precedingEvent, completedEvent],
+    ],
+  ] as const)("parses %s", async (_name, body, expected) => {
     const events = [];
-
-    for await (const event of parse(frame)) {
+    for await (const event of parse(body)) {
       events.push(event);
     }
-
-    expect(events).toEqual([completedEvent]);
+    expect(events).toEqual(expected);
   });
 
   it("dispatches a chunk-split lone CR SSE frame before an open response closes", async () => {
@@ -70,17 +77,6 @@ describe("ChatGPT Responses SSE frame boundaries", () => {
     }
 
     expect(canceled).toBe(true);
-  });
-
-  it("keeps a final undelimited event after a delimited event", async () => {
-    const precedingEvent = { type: "response.output_item.done" };
-    const events = [];
-    for await (const event of parse(
-      `data: ${JSON.stringify(precedingEvent)}\n\ndata: ${serializedCompletedEvent}`,
-    )) {
-      events.push(event);
-    }
-    expect(events).toEqual([precedingEvent, completedEvent]);
   });
 
   it("rejects a malformed EOF frame after a valid event", async () => {
