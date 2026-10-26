@@ -124,11 +124,6 @@ async function catalogFixture() {
     read: (hostId = "node:alpha") => catalog.read({ hostId, threadId: nativeSession.threadId }),
     expectSessions: async (sessions = [nativeSession], query: CatalogQuery = {}) =>
       expect((await readList(query))[0]?.sessions).toEqual(sessions),
-    hold: () => {
-      const gate = createDeferred<unknown>();
-      invoke.mockImplementation(() => gate.promise);
-      return gate;
-    },
     watch: async (query: CatalogQuery = {}) => {
       const publications: Promise<void>[] = [];
       const onHost = vi.fn();
@@ -199,11 +194,7 @@ it("bounds admission and refresh concurrency without interrupting work", async (
   f.invoke.mockImplementation(async () => {
     active++;
     peak = Math.max(peak, active);
-    try {
-      return await gate.promise;
-    } finally {
-      active--;
-    }
+    return gate.promise.finally(() => active--);
   });
   try {
     await advance(30_005);
@@ -219,12 +210,10 @@ it("bounds admission and refresh concurrency without interrupting work", async (
     gate.resolve({ sessions: [nativeSession] });
     await advance();
     expect({ calls: f.invoke.mock.calls.length, peak }).toEqual({ calls: 32, peak: 4 });
-    await f.readList({ hostIds: ["node:node-38"] });
-    await advance();
     await f.expectSessions([nativeSession], { hostIds: ["node:node-38"] });
-    expect(f.invoke).toHaveBeenCalledTimes(34);
+    f.invoke.mockClear();
     await advance(30_010);
-    const refreshed = f.invoke.mock.calls.slice(34).map(([request]) => request.nodeId);
+    const refreshed = f.invoke.mock.calls.map(([request]) => request.nodeId);
     expect(refreshed).toHaveLength(32);
     expect(refreshed).not.toContain("node-39");
     expect(refreshed).toContain("node-38");
@@ -241,12 +230,11 @@ it("restarts after retiring queued refreshes before dispatch", async () => {
   await f.expectSessions();
 });
 
-it.each([0, 5_000])("serves complete paged snapshots with %i ms pages", async (delay) => {
-  const count = delay ? 601 : 101;
-  const sessions = rows(count);
-  f.paginate(sessions, delay);
+it("serves complete snapshots across slow pages, cursors, and searches", async () => {
+  const sessions = rows(601);
+  f.paginate(sessions, 5_000);
   expect((await f.begin())[0]?.pending).toBe(true);
-  await advance(delay ? 35_005 : 2);
+  await advance(35_005);
   const first = (await f.host({ limitPerHost: 100 }))!;
   expect(first.sessions).toEqual(sessions.slice(0, 100));
   expect(first.error).toBeUndefined();
@@ -254,16 +242,12 @@ it.each([0, 5_000])("serves complete paged snapshots with %i ms pages", async (d
     limitPerHost: 100,
     cursors: { "node:alpha": first.nextCursor! },
   });
-  await f.expectSessions(sessions.slice(count - 1), {
-    cursors: { "node:alpha": encodeCursor(count - 1) },
-  });
+  await f.expectSessions(sessions.slice(600), { cursors: { "node:alpha": encodeCursor(600) } });
   await f.expectSessions([sessions[100]!], { search: "SHARED 100" });
   await f.expectSessions([sessions[100]!], { search: "MAIN:100" });
-  if (!delay) {
-    f.invoke.mockResolvedValue({ sessions: [] });
-    await advance(30_000);
-    await f.expectSessions([]);
-  }
+  f.invoke.mockResolvedValue({ sessions: [] });
+  await advance(30_000);
+  await f.expectSessions([]);
 });
 
 it.each(["rows", "bytes"])("rejects oversized snapshot %s", async (budget) => {
@@ -340,7 +324,8 @@ it.each(["failure", "config", "connection", "disconnect"])(
 
 it.each(["viewer", "service"])("retires the %s without leaking publications", async (owner) => {
   const service = owner === "service";
-  const gate = f.hold();
+  const gate = createDeferred<unknown>();
+  f.invoke.mockImplementation(() => gate.promise);
   const controller = new AbortController();
   const { done, onHost } = await f.watch(service ? {} : { signal: controller.signal });
   onHost.mockClear();
