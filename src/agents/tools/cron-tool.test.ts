@@ -245,6 +245,16 @@ it("lists a sessionless caller's explicit agent and pagination", async () => {
   expect(expectSingleCall("cron.list")).toEqual({ ...input, compact: true });
 });
 
+it("lists within the authenticated caller's agent and session scope", async () => {
+  const identity = mockCaller({ jobs: [] });
+  await executeCron({ action: "list" }, channelCaller);
+  expect(expectSingleCall("cron.list")).toEqual({ includeDisabled: false, compact: true });
+  expect(identity()).toMatchObject({
+    agentId: "agent-123",
+    sessionKey: channelCaller.agentSessionKey,
+  });
+});
+
 it.each([
   {
     name: "infers the calling session and agent",

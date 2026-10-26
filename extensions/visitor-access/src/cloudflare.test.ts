@@ -40,11 +40,17 @@ describe("VisitorPolicyClient", () => {
     ["issuer", true],
   ] as const)("pins %s through renewal (after response: %s)", async (field, afterResponse) => {
     const policy = namedPolicy([42]);
-    respond([policy], policy);
+    respond([], policy, [policy], policy);
     const changed = { ...githubProvider, [field]: "changed" };
     fetcher.mockImplementationOnce(async () => {
       provider = changed;
       return cloudflareResponse(namedPolicy([42, 43]));
+    });
+    await expect(client.update(() => [42])).resolves.toEqual([42]);
+    expect(requestBody(1)).toEqual({
+      name: config.policyName,
+      decision: "allow",
+      include: [githubRule],
     });
     await expect(
       client.update(() => {
@@ -54,7 +60,7 @@ describe("VisitorPolicyClient", () => {
         return afterResponse ? [42, 43] : [42];
       }),
     ).rejects.toThrow("mapping changed");
-    expect(methods()).toEqual(afterResponse ? "GET GET PUT" : "GET GET");
+    expect(methods()).toEqual(afterResponse ? "GET POST GET GET PUT" : "GET POST GET GET");
   });
 
   it("rereads dashboard targets and preserves restrictions on update", async () => {

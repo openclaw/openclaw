@@ -733,6 +733,14 @@ describe("server-owned pending input display", () => {
         : undefined;
       if (reference && payloadOwner) {
         sessionStorage.setItem("openclaw.control.outboxTab.v1", reference.tabId);
+        const stored = await outboxPayloadStore.readOutboxPayload(payloadOwner, reference);
+        if (stored.status !== "ready") {
+          throw new Error(`Expected stored custody bytes: ${stored.reason}`);
+        }
+        expect(stored.value).toHaveLength(1);
+        expect(Buffer.from(await stored.value[0]!.blob.arrayBuffer())).toEqual(
+          Buffer.from(imageBase64, "base64"),
+        );
       }
       expect(
         admitQueuedMessageForSession(
