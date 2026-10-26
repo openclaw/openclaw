@@ -12,46 +12,48 @@ beforeAll(async () => {
 });
 afterAll(async () => browser?.close());
 
-async function collectProbe(mode: string, contents: string) {
-  const output = await build({
-    stdin: {
-      contents: `
+function probe(name: string, contents: string, value: unknown, collected?: string) {
+  it.each(["production", "development", "observe"])(`%s ${name}`, async (mode) => {
+    const output = await build({
+      stdin: {
+        contents: `
         let references;
         ${contents}
         window.retentionProbe = { retire, alive: () => references.map(ref => !!ref.deref()) };
       `,
-      resolveDir: new URL("../../ui", import.meta.url).pathname,
-      sourcefile: "dependency-retention-probe.js",
-    },
-    bundle: true,
-    write: false,
-    format: "iife",
-    platform: "browser",
-    conditions: ["browser", ...(mode === "production" ? [] : [mode])],
-    minify: mode === "production",
+        resolveDir: new URL("../../ui", import.meta.url).pathname,
+        sourcefile: "dependency-retention-probe.js",
+      },
+      bundle: true,
+      write: false,
+      format: "iife",
+      platform: "browser",
+      conditions: ["browser", ...(mode === "production" ? [] : [mode])],
+      minify: mode === "production",
+    });
+    // Fresh runtime per probe: warming the first-select hook hides its leak.
+    const page = await browser.newPage();
+    const cdp = await page.context().newCDPSession(page);
+    try {
+      await page.addScriptTag({ content: output.outputFiles[0]!.text });
+      const result: unknown = await page.evaluate("retentionProbe.retire()");
+      await cdp.send("HeapProfiler.collectGarbage");
+      await cdp.send("HeapProfiler.collectGarbage");
+      const alive: unknown = await page.evaluate("retentionProbe.alive()");
+      expect(result).toBe(value);
+      if (collected) {
+        expect(alive, collected).toEqual([false, false, false]);
+      }
+    } finally {
+      await cdp.detach();
+      await page.close();
+    }
   });
-  // Fresh runtime per probe: warming the first-select hook hides its leak.
-  const page = await browser.newPage();
-  const cdp = await page.context().newCDPSession(page);
-  try {
-    await page.addScriptTag({ content: output.outputFiles[0]!.text });
-    const value: unknown = await page.evaluate("retentionProbe.retire()");
-    await cdp.send("HeapProfiler.collectGarbage");
-    await cdp.send("HeapProfiler.collectGarbage");
-    const alive: unknown = await page.evaluate("retentionProbe.alive()");
-    return { value, alive };
-  } finally {
-    await cdp.detach();
-    await page.close();
-  }
 }
 
-it.each(["production", "development", "observe"])(
-  "%s releases the first value-bound select and its form",
-  async (mode) => {
-    const result = await collectProbe(
-      mode,
-      `
+probe(
+  "releases the first value-bound select and its form",
+  `
       import { render, setProperty, insert } from "@solidjs/web";
       async function retire() {
         const host = document.createElement("div");
@@ -72,18 +74,13 @@ it.each(["production", "development", "observe"])(
         return selected;
       }
     `,
-    );
-    expect(result.value, "late option selection").toBe("second");
-    expect(result.alive, "select, form, GC control").toEqual([false, false, false]);
-  },
+  "second",
+  "select, form, GC control",
 );
 
-it.each(["production", "development", "observe"])(
-  "%s releases an unobserved pending computation after root disposal while idle",
-  async (mode) => {
-    const result = await collectProbe(
-      mode,
-      `
+probe(
+  "releases an unobserved pending computation after root disposal while idle",
+  `
       import { createMemo, createRoot, getOwner } from "solid-js";
       function retire() {
         const payload = { pending: true };
@@ -101,18 +98,13 @@ it.each(["production", "development", "observe"])(
         return started;
       }
     `,
-    );
-    expect(result.value, "pending computation started").toBe(true);
-    expect(result.alive, "payload, root, GC control").toEqual([false, false, false]);
-  },
+  true,
+  "payload, root, GC control",
 );
 
-it.each(["production", "development", "observe"])(
-  "%s releases a reader queued by an idle rejection in another root",
-  async (mode) => {
-    const result = await collectProbe(
-      mode,
-      `
+probe(
+  "releases a reader queued by an idle rejection in another root",
+  `
       import { createMemo, createRoot, flush, getOwner } from "solid-js";
       const source = createRoot(dispose => {
         let reject;
@@ -135,18 +127,13 @@ it.each(["production", "development", "observe"])(
         return true;
       }
     `,
-    );
-    expect(result.value, "reader disposed after source rejection").toBe(true);
-    expect(result.alive, "payload, reader root, GC control").toEqual([false, false, false]);
-  },
+  true,
+  "payload, reader root, GC control",
 );
 
-it.each(["production", "development", "observe"])(
-  "%s cleans up the committed frame when its async replacement rejects",
-  async (mode) => {
-    const result = await collectProbe(
-      mode,
-      `
+probe(
+  "cleans up the committed frame when its async replacement rejects",
+  `
       import { createMemo, createRoot, createSignal, flush, onCleanup, resolve } from "solid-js";
       async function retire() {
         let cleanups = 0;
@@ -171,7 +158,5 @@ it.each(["production", "development", "observe"])(
         }
       }
     `,
-    );
-    expect(result.value, "previous committed run cleaned up at rejection").toBe(1);
-  },
+  1,
 );
