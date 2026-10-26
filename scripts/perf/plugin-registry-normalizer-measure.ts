@@ -38,7 +38,7 @@ const views = [0, 1].map(
     createPluginMetadataSnapshotFixture({
       plugins: ids.map((id, index) => ({
         id,
-        providers: [aliases[(index + offset) % ids.length]],
+        providers: [`alias-${(index + offset) % ids.length}`],
         channels: [`channel-${index}`],
         legacyPluginIds: [`legacy-${index}`],
       })),
