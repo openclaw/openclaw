@@ -13,25 +13,21 @@ import { resolveAcpCommandBindingContext } from "./context.js";
 
 const resolveCommandConversation =
   vi.fn<NonNullable<ChannelConfiguredBindingProvider["resolveCommandConversation"]>>();
-function commandParams(ctx: Parameters<typeof buildCommandTestParams>[2]) {
-  return buildCommandTestParams("/acp status", {}, ctx);
-}
-
-function resolveContext(ctx: Parameters<typeof commandParams>[0]) {
-  return resolveAcpCommandBindingContext(commandParams(ctx));
-}
+const commandParams = (ctx: Parameters<typeof buildCommandTestParams>[2]) =>
+  buildCommandTestParams("/acp status", {}, ctx);
+const resolveContext = (ctx: Parameters<typeof commandParams>[0]) =>
+  resolveAcpCommandBindingContext(commandParams(ctx));
 
 const plugin = {
   ...createChannelTestPluginBase({
     id: "test-acp",
     config: { listAccountIds: () => ["default", "work"], defaultAccountId: () => "work" },
   }),
-  bindings: { resolveCommandConversation, selfParentConversationByDefault: false },
+  bindings: { resolveCommandConversation, selfParentConversationByDefault: true },
 };
 
 beforeEach(() => {
   resolveCommandConversation.mockReset().mockReturnValue(null);
-  plugin.bindings.selfParentConversationByDefault = false;
   setActivePluginRegistry(createTestRegistry([{ pluginId: "test-acp", source: "test", plugin }]));
 });
 afterEach(() => resetPluginRuntimeStateForTest());
@@ -40,8 +36,6 @@ it("passes authoritative command and message facts to the plugin resolver", () =
   const conversation = { conversationId: "peer", parentConversationId: "parent" };
   resolveCommandConversation.mockReturnValue(conversation);
   const params = commandParams({
-    Provider: "discord",
-    Surface: "discord",
     OriginatingChannel: "test-acp",
     OriginatingTo: "origin-target",
     To: "fallback-target",
@@ -79,23 +73,14 @@ it("passes authoritative command and message facts to the plugin resolver", () =
   });
 });
 
-it("drops plugin self-parent defaults before ACP binding lookup", () => {
-  plugin.bindings.selfParentConversationByDefault = true;
-  resolveCommandConversation.mockReturnValue({ conversationId: "peer" });
-  expect(resolveContext({ OriginatingChannel: "test-acp" })).toEqual({
-    channel: "test-acp",
-    accountId: "work",
-    conversationId: "peer",
-  });
-});
-
 it.each([
-  { accountId: undefined, expected: "work" },
-  { accountId: "personal", expected: "personal" },
-])("keeps account $expected when no conversation can be resolved", ({ accountId, expected }) => {
+  [undefined, { conversationId: "peer" }, { accountId: "work", conversationId: "peer" }],
+  [undefined, null, { accountId: "work", threadId: undefined }],
+  ["personal", null, { accountId: "personal", threadId: undefined }],
+] as const)("resolves account %s / %j", (accountId, conversation, expected) => {
+  resolveCommandConversation.mockReturnValue(conversation);
   expect(resolveContext({ OriginatingChannel: "test-acp", AccountId: accountId })).toEqual({
     channel: "test-acp",
-    accountId: expected,
-    threadId: undefined,
+    ...expected,
   });
 });
