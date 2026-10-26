@@ -28,7 +28,6 @@ async function receiveRoomMessage(
     "!room:example.org",
     createMatrixTextMessageEvent({
       eventId: "$message",
-      sender: "@user:example.org",
       body,
       originServerTs: 123_456,
     }),
@@ -52,23 +51,17 @@ describe("Matrix inbound room identity", () => {
   });
 
   it("uses the resolved room identity for policy, not its display name", async () => {
-    const tools = { allow: ["exec"] };
-    const cfg = {
-      channels: {
-        matrix: {
-          groups: {
-            "#trusted:example.org": { requireMention: false, tools },
-            "*": { requireMention: true, tools: { deny: ["exec"] } },
-          },
-        },
-      },
+    const groups = {
+      "#trusted:example.org": { requireMention: false, tools: { allow: ["exec"] } },
+      "*": { requireMention: true, tools: { deny: ["exec"] } },
     };
+    const cfg = { channels: { matrix: { groups } } };
     vi.spyOn(matrixTargets, "resolveMatrixTargets").mockImplementation(async ({ inputs }) =>
       inputs.map((input) => ({ input, resolved: true, id: "!room:example.org" })),
     );
     const { roomsConfig } = await resolveMatrixMonitorConfig({
       cfg,
-      roomsConfig: cfg.channels.matrix.groups,
+      roomsConfig: groups,
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
     });
     const ctx = await receiveRoomMessage("hello", {
