@@ -10,6 +10,7 @@ import {
   hasRestartRecoveryTerminalRun,
 } from "../config/sessions/restart-recovery-state.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { captureCronJobContinuationLifetime } from "../cron/active-jobs.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import {
   hasAgentRunContextExecutionOwner,
@@ -305,8 +306,27 @@ export function prepareExecExitNotification(
   if (!owner) {
     return undefined;
   }
+  const caller = getGatewayToolCallerIdentity();
+  const cronJobId = isCronRunSessionKey(targetKey)
+    ? parseAgentSessionKey(targetKey)?.rest.split(":")[1]
+    : undefined;
+  const cronLifetime = cronJobId
+    ? captureCronJobContinuationLifetime(cronJobId, [
+        ...(caller?.operationalRunInstance ? [caller.operationalRunInstance.runId] : []),
+        ...(readExecRequestOwners(session) ?? []).flatMap((request) =>
+          Array.from(request.turnRunIds),
+        ),
+      ])
+    : undefined;
+  if (isCronRunSessionKey(targetKey) && !cronLifetime) {
+    session.notifyOnExit = false;
+    logWarn("exec: originating cron occurrence ended; inspect its retained process result.");
+    return undefined;
+  }
+  session.exitNotificationAbortSignal = cronLifetime?.signal;
   return captureSessionEventTarget(owner, targetKey, {
-    operatorAuthority: getGatewayToolCallerIdentity()?.operatorAuthority,
+    operatorAuthority: caller?.operatorAuthority,
+    assertCurrent: cronLifetime?.assertCurrent,
   }).then(
     (target) => {
       if (isCronRunSessionKey(targetKey)) {
@@ -346,6 +366,7 @@ export async function maybeNotifyOnExit(
     !session.backgrounded ||
     !session.notifyOnExit ||
     session.requestCancelled ||
+    session.exitNotificationAbortSignal?.aborted ||
     readExecRequestOwners(session)?.some((owner) => owner.signal.aborted) ||
     session.terminalPollObserved
   ) {
@@ -406,6 +427,7 @@ export async function maybeNotifyOnExit(
         {
           ...eventOptions,
           sourceRunId: session.originRunId,
+          abortSignal: session.exitNotificationAbortSignal,
           assertAcceptanceCurrent: session.assertExitNotificationAcceptanceCurrent,
           onAdopted: session.clearExitNotification,
         },

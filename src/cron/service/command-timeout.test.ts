@@ -24,6 +24,7 @@ import { CRON_AGENT_SETUP_WATCHDOG_MS, createCronAgentWatchdog } from "./agent-w
 import { preExecutionTimeoutErrorMessage } from "./execution-errors.js";
 import type { CronServiceDeps } from "./state.js";
 import { executeJobCoreWithTimeout } from "./timer-job-runner.js";
+import { applyJobResult } from "./timer-outcomes.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const expectDrained = () =>
@@ -58,7 +59,7 @@ function commandFixture(
 }
 
 describe("scheduled command timeouts", () => {
-  it.each(["deadline", "operator cancellation"] as const)(
+  it.each(["deadline", "no-output deadline", "operator cancellation"] as const)(
     "settles a real command after %s without late delivery",
     async (interruption) => {
       const { job, state, sendCronWebhook, started, settle } = commandFixture("command-timeout", [
@@ -66,7 +67,18 @@ describe("scheduled command timeouts", () => {
         "-e",
         "const fs = require('node:fs'); fs.writeSync(1, 'synthetic progress pid=' + process.pid + '\\n'); fs.writeSync(2, 'synthetic stderr\\n'); setInterval(() => {}, 1000)",
       ]);
-      job.delivery = { mode: "webhook", to: "https://example.com/automation" };
+      const scheduledAt = Date.now();
+      job.schedule = { kind: "every", everyMs: 24 * 60 * 60_000, anchorMs: scheduledAt };
+      if (job.payload.kind === "command" && interruption === "no-output deadline") {
+        job.payload.timeoutSeconds = 5;
+        job.payload.noOutputTimeoutSeconds = 1;
+      }
+      job.delivery =
+        interruption === "no-output deadline"
+          ? { mode: "none" }
+          : { mode: "webhook", to: "https://example.com/automation" };
+      state.store = { version: 1, jobs: [job] };
+      job.state.runningAtMs = scheduledAt;
       const activeJobMarker = markCronJobActive(job.id);
       try {
         const run = executeJobCoreWithTimeout(state, job, { runId: job.id, activeJobMarker });
@@ -90,10 +102,15 @@ describe("scheduled command timeouts", () => {
         }
         expect(result).toMatchObject({
           status: "error",
-          error: "command timed out",
+          error:
+            interruption === "no-output deadline"
+              ? "command produced no output before noOutputTimeoutSeconds"
+              : "command timed out",
           errorClassification: { kind: "reason", reason: "timeout" },
-          failureNotificationDetail: { kind: "command-timeout", mode: "wall-clock" },
-          delivered: false,
+          failureNotificationDetail: {
+            kind: "command-timeout",
+            mode: interruption === "no-output deadline" ? "no-output" : "wall-clock",
+          },
         });
         expect(result.diagnostics?.entries).toContainEqual(
           expect.objectContaining({ source: "exec", severity: "error" }),
@@ -103,6 +120,15 @@ describe("scheduled command timeouts", () => {
         const pid = Number(result.summary?.match(/pid=(\d+)/)?.[1]);
         expect(Number.isSafeInteger(pid)).toBe(true);
         expect(isPidAlive(pid)).toBe(false);
+        expect(result.delivered).not.toBe(true);
+        expect(sendCronWebhook).not.toHaveBeenCalled();
+        applyJobResult(
+          state,
+          job,
+          { ...result, startedAt: scheduledAt, endedAt: Date.now() },
+          { deferredNotifications: [] },
+        );
+        expect(job.state.nextRunAtMs).toBe(scheduledAt + 24 * 60 * 60_000);
       } finally {
         try {
           await settle();
@@ -114,7 +140,35 @@ describe("scheduled command timeouts", () => {
     },
   );
 
-  it.each(["timeout", "revoked"] as const)(
+  it.each([false, true])(
+    "uses native command admission for timeout recovery (started=%s)",
+    async (executionStarted) => {
+      const { job, state } = commandFixture("native-command-admission", ["unused"], async () => ({
+        status: "error",
+        error: "command timed out",
+        executionStarted,
+        errorClassification: { kind: "reason", reason: "timeout" },
+      }));
+      const scheduledAt = Date.now();
+      job.schedule = { kind: "every", everyMs: 24 * 60 * 60_000, anchorMs: scheduledAt };
+      job.delivery = { mode: "none" };
+      state.store = { version: 1, jobs: [job] };
+      const result = await executeJobCoreWithTimeout(state, job);
+      expect(result.executionStarted).toBe(executionStarted);
+      applyJobResult(
+        state,
+        job,
+        { ...result, startedAt: scheduledAt, endedAt: scheduledAt },
+        { deferredNotifications: [] },
+      );
+      expect(job.state.nextRunAtMs).toBe(
+        scheduledAt + (executionStarted ? 24 * 60 * 60_000 : 30_000),
+      );
+      await expectDrained();
+    },
+  );
+
+  it.each(["timeout", "no-output completion", "revoked"] as const)(
     "preserves command timeout and live authority through delayed preflight: %s",
     async (completion) => {
       vi.useFakeTimers();
@@ -138,6 +192,9 @@ describe("scheduled command timeouts", () => {
       });
       const { job, state } = commandFixture("stuck-command", ["unused"], runCommandJob);
       job.delivery = { mode: "none" };
+      const scheduledAt = Date.now();
+      job.schedule = { kind: "every", everyMs: 24 * 60 * 60_000, anchorMs: scheduledAt };
+      state.store = { version: 1, jobs: [job] };
       const activeJobMarker = markCronJobActive(job.id);
       let settled = false;
       const run = executeJobCoreWithTimeout(state, job, { activeJobMarker }).then((result) => {
@@ -174,12 +231,32 @@ describe("scheduled command timeouts", () => {
         await vi.advanceTimersByTimeAsync(1);
         expect(commandSignal?.aborted).toBe(true);
         expect(settled).toBe(false);
-        await vi.advanceTimersByTimeAsync(20_000);
-        expect(await run).toMatchObject({
+        if (completion === "no-output completion") {
+          command.resolve({
+            status: "error",
+            error: "command produced no output before noOutputTimeoutSeconds",
+            executionStarted: true,
+            errorClassification: { kind: "reason", reason: "timeout" },
+            failureNotificationDetail: { kind: "command-timeout", mode: "no-output" },
+          });
+        } else {
+          await vi.advanceTimersByTimeAsync(20_000);
+        }
+        const result = await run;
+        expect(result).toMatchObject({
           status: "error",
           error: "cron: job execution timed out",
         });
-        expect(getSuspensionVisibleCronTaskRunCount()).toBe(1);
+        applyJobResult(
+          state,
+          job,
+          { ...result, startedAt: scheduledAt, endedAt: Date.now() },
+          { deferredNotifications: [] },
+        );
+        expect(job.state.nextRunAtMs).toBe(scheduledAt + 24 * 60 * 60_000);
+        expect(getSuspensionVisibleCronTaskRunCount()).toBe(
+          completion === "no-output completion" ? 0 : 1,
+        );
         command.resolve({ status: "ok", summary: "late completion" });
         await expectDrained();
         expect(getSuspensionVisibleCronTaskRunCount()).toBe(0);

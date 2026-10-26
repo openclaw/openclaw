@@ -1,3 +1,7 @@
+/**
+ * Spawns host/sandbox processes, manages session updates/backgrounding,
+ * approval messaging constants, environment safety, and exit outcome shaping.
+ */
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
@@ -11,7 +15,6 @@ import {
   type ExecApprovalDecision,
 } from "../infra/exec-approvals.js";
 import {
-  execRequestAbortSignal,
   retainExecRequestProcess,
   withExecRequestOwners,
   type ExecRequestOwner,
@@ -29,10 +32,6 @@ import type {
   SecretEgressSentinelBinding,
 } from "../secrets/egress-proxy/proxy-server.js";
 import { registerSecretEgressProxyProcess } from "../secrets/egress-proxy/registry.js";
-/**
- * Spawns host/sandbox processes, manages session updates/backgrounding,
- * approval messaging constants, environment safety, and exit outcome shaping.
- */
 import { formatFencedCodeBlock } from "../shared/markdown-code.js";
 import {
   normalizeDeliveryContext,
@@ -55,7 +54,7 @@ import {
 } from "./bash-process-registry.js";
 import { emitExecProcessCompleted } from "./bash-tools.exec-diagnostics.js";
 import { prepareHostExecSpawn, resolveExecLaunchEnv } from "./bash-tools.exec-host-spawn.js";
-import { createExecLaunchLifecycle } from "./bash-tools.exec-launch.js";
+import { createExecLaunchLifecycle, prepareExecSignals } from "./bash-tools.exec-launch.js";
 import { maybeNotifyOnExit, prepareExecExitNotification } from "./bash-tools.exec-notify.js";
 import {
   buildExecExitOutcome,
@@ -250,11 +249,7 @@ export async function runExecProcess({
   initiateSpawn?: SpawnInitiation;
   releaseSpawn?: (reason?: "retry") => void;
 }): Promise<ExecProcessHandle> {
-  const requestSignal = execRequestAbortSignal(opts.requestOwners);
-  const startupSignal =
-    requestSignal && initialStartupSignal
-      ? AbortSignal.any([requestSignal, initialStartupSignal])
-      : (requestSignal ?? initialStartupSignal);
+  const { requestSignal, startupSignal } = prepareExecSignals(opts, initialStartupSignal);
   let assertSourceActive: SessionSourceAssertion | undefined =
     captureAgentToolSourceExecutionGuard(startupSignal);
   let operatorAuthority = getGatewayToolCallerIdentity()?.operatorAuthority;
