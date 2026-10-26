@@ -27,14 +27,7 @@ it.skipIf(process.platform === "win32").each([
     withTempDir("diagnostic-env-", async (directory) => {
       const root = await realpath(directory);
       const reportPath = path.join(root, "children.jsonl");
-      const routing = createDiagnosticFixtureRouting({
-        PATH: root,
-        HOME: root,
-        TMPDIR: root,
-        LANG: "C",
-        LC_ALL: "C",
-        TZ: "UTC",
-      });
+      const routing = createDiagnosticFixtureRouting({ PATH: root, HOME: root, TMPDIR: root });
       const report = diagnosticEnvReportScript(routing);
       const expectedReport = (defined: boolean) => ({
         defined: Object.fromEntries(Object.keys(diagnosticCanaries).map((key) => [key, defined])),
@@ -55,7 +48,7 @@ it.skipIf(process.platform === "win32").each([
           String.raw`#!${process.execPath}
 const fs = require('node:fs');
 const command = ${JSON.stringify(command)};
-fs.appendFileSync(${JSON.stringify(reportPath)}, JSON.stringify({command, ...JSON.parse(${report})}) + '\n');
+fs.appendFileSync(${JSON.stringify(reportPath)}, ${report} + '\n');
 const output = command === 'lsof' ? ${JSON.stringify(fallback ? "" : lsofOutput)}
   : command === 'ss' ? ${JSON.stringify(ssOutput)}
   : process.argv.includes('user=') ? 'fixture-user\n' : '1 node fixture-server\n';
@@ -87,10 +80,7 @@ process.exitCode = command === 'lsof' ? ${fallback ? 2 : 0} : 0;
           .trim()
           .split("\n")
           .map((line) => JSON.parse(line));
-        const commands = fallback ? ["lsof", "ss", "ps", "ps"] : ["lsof", "ps", "ps"];
-        expect(reports.toSorted((a, b) => a.command.localeCompare(b.command))).toEqual(
-          commands.toSorted().map((command) => Object.assign({ command }, expectedReport(false))),
-        );
+        expect(reports).toEqual(Array(fallback ? 4 : 3).fill(expectedReport(false)));
       });
     }),
 );

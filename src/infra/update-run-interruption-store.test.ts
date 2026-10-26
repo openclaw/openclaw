@@ -10,13 +10,8 @@ import {
   readInterruptedUpdateCandidateAsync,
 } from "./update-run-interruption-worker.js";
 
-it("publishes interrupted cleanup through workers only against its captured run revision", async ({
-  onTestFinished,
-}) => {
-  const state = await createOpenClawTestState({
-    prefix: "update-interruption-worker-",
-    applyEnv: true,
-  });
+it("fences interrupted cleanup by captured revision", async ({ onTestFinished }) => {
+  const state = await createOpenClawTestState({ prefix: "update-interruption-" });
   onTestFinished(async () => {
     await closeOpenClawStateDatabaseAsync();
     await state.cleanup();
@@ -65,12 +60,10 @@ it("publishes interrupted cleanup through workers only against its captured run 
     ]),
   });
   const missing = { ...options, path: state.statePath("missing.sqlite") };
+  const missingContext = captureOpenClawStateWorkerContext(missing);
   expect(await read(missing)).toBeUndefined();
   expect(
-    await publish(
-      { expected, detail: "Must not create state" },
-      captureOpenClawStateWorkerContext(missing),
-    ),
+    await publish({ expected, detail: "Must not create state" }, missingContext),
   ).toBeUndefined();
   expect(existsSync(missing.path)).toBe(false);
 });
