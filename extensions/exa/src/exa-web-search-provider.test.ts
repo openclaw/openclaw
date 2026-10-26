@@ -100,7 +100,18 @@ it.each(["before", "during"])("preserves cancellation %s transport", async (timi
     }
     signal.throwIfAborted();
     return new Promise<Response>((_resolve, reject) => {
-      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      signal.addEventListener(
+        "abort",
+        () => {
+          const abortReason: unknown = signal.reason;
+          reject(
+            abortReason instanceof Error
+              ? abortReason
+              : new Error("Exa request lost caller cancellation reason"),
+          );
+        },
+        { once: true },
+      );
       // Cancel at transport entry, after cold runtime loading has completed.
       controller.abort(reason);
     });

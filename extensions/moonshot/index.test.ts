@@ -1,5 +1,6 @@
 import { text } from "node:stream/consumers";
 import { createOpenAICompletionsTransportStreamFn } from "@openclaw/ai/transports";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { attachModelProviderRequestTransport } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
@@ -261,11 +262,14 @@ it("sends ordered video_url content through the real Chat Completions transport"
       );
       const streamFn: StreamFn = (_model, context, options) =>
         transport(transportModel, context, options);
-      const wrapped = provider.wrapStreamFn!({
-        ...route,
-        thinkingLevel: "off",
-        streamFn,
-      } as never);
+      const wrapped = expectDefined(
+        provider.wrapStreamFn!({
+          ...route,
+          thinkingLevel: "off",
+          streamFn,
+        } as never),
+        "Moonshot stream wrapper",
+      );
       const message: ProviderContext["messages"][number] = {
         role: "user",
         content: [

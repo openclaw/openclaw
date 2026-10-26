@@ -27,7 +27,9 @@ const start = (server: Server | null = null) =>
 const stop = (requestedBy: "server" | "service") =>
   control.stopBrowserControlRuntime({ requestedBy, onWarn: vi.fn() });
 
-beforeEach(() => stopRuntime.mockReset().mockImplementation(async (params) => params.clearState()));
+beforeEach(() => {
+  stopRuntime.mockReset().mockImplementation(async (params) => params.clearState());
+});
 afterEach(() => stop("server"));
 
 it("rejects new starts while ordinary shutdown is pending", async () => {

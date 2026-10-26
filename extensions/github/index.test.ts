@@ -296,7 +296,12 @@ it.each([undefined, 0])("shows closed issues with comment count %s", async (comm
 });
 
 it("forwards the host error envelope unchanged without an identity fallback", async () => {
-  const error = { code: "UNAVAILABLE", retryAfterMs: 60_000, details: { reason: "rate-limit" } };
+  const error = {
+    code: "UNAVAILABLE",
+    message: "Rate limited",
+    retryAfterMs: 60_000,
+    details: { reason: "rate-limit" },
+  };
   const payload = { status: "unavailable" };
   vi.mocked(dispatchGatewayMethod).mockResolvedValueOnce({ ok: false, payload, error, meta });
   const respond = await request("github.detail", { url: issueUrl, agentId: "alternate" });
