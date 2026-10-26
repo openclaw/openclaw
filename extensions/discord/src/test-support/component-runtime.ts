@@ -1,6 +1,4 @@
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
-import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
-import type { createReplyReferencePlanner } from "openclaw/plugin-sdk/reply-runtime";
 import { vi } from "vitest";
 import { setDiscordRuntime } from "../runtime.js";
 
@@ -83,30 +81,6 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => ({
 
 vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>()),
-  createReplyReferencePlanner: vi.fn(
-    (params: Partial<Parameters<typeof createReplyReferencePlanner>[0]>) => {
-      let hasReplied = params.hasReplied ?? false;
-      let nextId = params.existingId ?? params.startId;
-      return {
-        hasReplied: () => hasReplied,
-        markSent() {
-          hasReplied = true;
-        },
-        use() {
-          if (
-            params.replyToMode === "off" ||
-            (isSingleUseReplyToMode(params.replyToMode ?? "off") && hasReplied)
-          ) {
-            return undefined;
-          }
-          const value = nextId;
-          hasReplied = true;
-          nextId = undefined;
-          return value;
-        },
-      };
-    },
-  ),
   finalizeInboundContext: vi.fn((ctx) => ctx),
   resolveChunkMode: vi.fn(() => "sentences"),
   resolveTextChunkLimit: vi.fn(() => 2000),
@@ -133,6 +107,16 @@ vi.mock("../interactive-dispatch.js", async (importOriginal) => ({
 }));
 
 export function resetDiscordComponentRuntimeMocks() {
+  const plugin = {
+    pluginId: "openclaw-codex-app-server",
+    pluginName: "OpenClaw App Server",
+    pluginRoot: "/plugins/codex",
+  };
+  const conversation = {
+    channel: "discord",
+    accountId: "default",
+    conversationId: "user:123456789",
+  };
   setDiscordRuntime(createPluginRuntimeMock());
   dispatchPluginInteractiveHandlerMock.mockReset().mockResolvedValue({
     matched: false,
@@ -150,24 +134,14 @@ export function resetDiscordComponentRuntimeMocks() {
     status: "approved",
     binding: {
       bindingId: "binding-1",
-      pluginId: "openclaw-codex-app-server",
-      pluginName: "OpenClaw App Server",
-      pluginRoot: "/plugins/codex",
-      channel: "discord",
-      accountId: "default",
-      conversationId: "user:123456789",
+      ...plugin,
+      ...conversation,
       boundAt: Date.now(),
     },
     request: {
       id: "approval-1",
-      pluginId: "openclaw-codex-app-server",
-      pluginName: "OpenClaw App Server",
-      pluginRoot: "/plugins/codex",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "user:123456789",
-      },
+      ...plugin,
+      conversation,
     },
     decision: "allow-once",
   });
