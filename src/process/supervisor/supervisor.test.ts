@@ -1,4 +1,3 @@
-import * as fs from "node:fs";
 import { performance } from "node:perf_hooks";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -8,7 +7,14 @@ import { createProcessSupervisor } from "./supervisor.js";
 import { createStubChildAdapter, type StubChildAdapter } from "./supervisor.test-support.js";
 import type { SpawnInput } from "./types.js";
 
-const { child, pty } = vi.hoisted(() => ({ child: vi.fn(), pty: vi.fn() }));
+const { child, pty, readMemory } = vi.hoisted(() => ({
+  child: vi.fn(),
+  pty: vi.fn(),
+  readMemory:
+    vi.fn<
+      (path: string, encoding: string, callback: (error: null, text: string) => void) => void
+    >(),
+}));
 vi.mock("./adapters/child.js", () => ({
   createChildAdapter: async (
     ...args: Parameters<typeof import("./adapters/child.js").createChildAdapter>
@@ -20,7 +26,7 @@ vi.mock("./adapters/child.js", () => ({
 vi.mock("./adapters/pty.js", () => ({ createPtyAdapter: pty }));
 vi.mock("node:fs", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:fs")>()),
-  readFile: vi.fn(),
+  readFile: readMemory,
 }));
 
 let supervisor: ReturnType<typeof createProcessSupervisor>;
@@ -73,7 +79,7 @@ async function expectRejectedReplacement(input: SpawnInput, error: string, cance
 beforeEach(() => {
   child.mockReset();
   pty.mockReset();
-  vi.mocked(fs.readFile).mockReset();
+  readMemory.mockReset();
   supervisor = createProcessSupervisor();
 });
 afterEach(() => {
@@ -88,8 +94,8 @@ describe("process supervisor", () => {
     async (mode) => {
       vi.useFakeTimers();
       mockProcessPlatform("linux");
-      const read = vi.mocked(fs.readFile).mockImplementation((_path, _options, callback) => {
-        callback!(null, "VmRSS:\t256 kB\n");
+      const read = readMemory.mockImplementation((_path, _options, callback) => {
+        callback(null, "VmRSS:\t256 kB\n");
       });
       const adapter = terminating();
       adapter.memoryRootPid = 4321;
