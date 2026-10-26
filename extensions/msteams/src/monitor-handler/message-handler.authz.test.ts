@@ -14,6 +14,11 @@ import type { MSTeamsTurnContext } from "../sdk-types.js";
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import { getRuntimeApiMockState } from "./message-handler-mock-support.test-support.js";
+import {
+  keepConfiguredMSTeamsAllowlistActive,
+  projectStableMSTeamsGroupAllowlist,
+  projectStableMSTeamsTeamsConfig,
+} from "../resolve-allowlist.js";
 import { createMSTeamsMessageHandler } from "./message-handler.js";
 import {
   buildChannelActivity,
@@ -347,6 +352,59 @@ describe("msteams message authorization and supplemental context", () => {
     });
     await handle({ channelData: { team: { id: "team123" } } });
     expect(readAllowFromStore).not.toHaveBeenCalled();
+    expectBlocked(conversationStore);
+  });
+
+  it.each([
+    {
+      name: "name-keyed teams allowlist that did not resolve",
+      raw: {
+        groupPolicy: "open",
+        requireMention: false,
+        teams: { Engineering: {} },
+      } as MSTeamsConfig,
+    },
+    {
+      name: "name-only channels under a conversation-id team",
+      raw: {
+        groupPolicy: "open",
+        requireMention: false,
+        teams: { "19:product@thread.tacv2": { channels: { Roadmap: {} } } },
+      } as MSTeamsConfig,
+    },
+    {
+      name: "name-only channels under a wildcard team",
+      raw: {
+        groupPolicy: "open",
+        requireMention: false,
+        teams: { "*": { channels: { Roadmap: {} } } },
+      } as MSTeamsConfig,
+    },
+    {
+      name: "names-only groupAllowFrom with open DMs",
+      raw: {
+        dmPolicy: "open",
+        allowFrom: ["*"],
+        groupPolicy: "allowlist",
+        requireMention: false,
+        groupAllowFrom: ["Bob Builder"],
+      } as MSTeamsConfig,
+    },
+  ])("does not admit an unlisted channel for a $name", async ({ raw }) => {
+    // Same startup projection monitor.ts applies before the handler sees the config.
+    const projected: MSTeamsConfig = {
+      ...raw,
+      teams: projectStableMSTeamsTeamsConfig(raw.teams),
+      groupAllowFrom: keepConfiguredMSTeamsAllowlistActive(
+        raw.groupAllowFrom,
+        projectStableMSTeamsGroupAllowlist(raw.groupAllowFrom),
+      ),
+    };
+    const { handle, conversationStore } = setup(projected);
+    await handle({
+      conversation: { id: "19:outsider-random@thread.tacv2", conversationType: "channel" },
+      channelData: { team: { id: "19:outsider-general@thread.tacv2" } },
+    });
     expectBlocked(conversationStore);
   });
 

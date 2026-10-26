@@ -30,6 +30,7 @@ import {
 import { createNativeSsoProcessor, createSigninEvent } from "./monitor-sso.test-helpers.js";
 import { monitorMSTeamsProvider } from "./monitor.js";
 import { createMSTeamsPollStoreState, type MSTeamsPollStore } from "./polls.js";
+import { MSTEAMS_UNMATCHABLE_ALLOW_ENTRY } from "./resolve-allowlist.js";
 
 function runProvider(
   abort: AbortController,
@@ -509,6 +510,27 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     expect(runtime.error).toHaveBeenCalledWith(
       expect.stringContaining("mutable allowlist entries are disabled"),
     );
+  });
+
+  it("keeps unresolved name-only allowlists configured so they do not fall back or widen", async () => {
+    const cfg = createConfig();
+    updateMSTeamsConfig(cfg, {
+      dmPolicy: "open",
+      allowFrom: ["*"],
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["Bob Builder"],
+      teams: { Engineering: {} },
+    });
+    resolveAllowlistMocks.resolveMSTeamsTeamsConfig.mockRejectedValueOnce(
+      new Error("Graph unavailable"),
+    );
+
+    await startMonitor(cfg);
+
+    const registered = registeredDeps().cfg.channels?.msteams;
+    expect(registered?.groupAllowFrom).toEqual([MSTEAMS_UNMATCHABLE_ALLOW_ENTRY]);
+    expect(Object.keys(registered?.teams ?? {})).toHaveLength(1);
+    expect(Object.keys(registered?.teams ?? {})).not.toContain("*");
   });
 
   it("preserves Graph-resolved sender identities in the group fallback", async () => {
