@@ -15,6 +15,7 @@ const storageEnv = new Proxy(
 );
 type Readers = ReturnType<typeof createSessionHistoryWorkerReaders>;
 const storageInput = { env: storageEnv };
+const messagePresenceInput = { scope: { agentId: "main", sessionId: "synthetic-session" } };
 
 function summaryEntry(sessionKey: string): InternalSessionEntry {
   return {
@@ -187,6 +188,13 @@ const storageRequests: Array<[string, (readers: Readers) => Promise<unknown>]> =
         archived: { liveSessionKeys: [] },
       }),
   ],
+  [
+    "activity summary",
+    (readers) =>
+      readers.readActivitySummarySource({
+        scope: { agentId: "main", sessionId: "one", storePath: storagePath, env: storageEnv },
+      }),
+  ],
 ];
 
 it.each(storageRequests)("serializes Proxy environments for %s requests", async (_name, read) => {
@@ -194,21 +202,14 @@ it.each(storageRequests)("serializes Proxy environments for %s requests", async 
   const readers = createSessionHistoryWorkerReaders(async (prepare) => {
     // Exercise the actual producer without starting a Worker or opening a database.
     const request = structuredClone(prepare());
-    expect(request).toMatchObject({ env: { ...storageEnv } });
+    expect(request).toMatchObject(
+      _name === "activity summary"
+        ? { scope: { env: { ...storageEnv } } }
+        : { env: { ...storageEnv } },
+    );
     throw serialized;
   });
   await expect(read(readers)).rejects.toBe(serialized);
-});
-
-it("serializes the nested Proxy environment for activity summary reads", async () => {
-  const serialized = new Error("Stopped after serializing the worker request");
-  const readers = createSessionHistoryWorkerReaders(async (prepare) => {
-    const request = structuredClone(prepare());
-    expect(request).toMatchObject({ scope: { env: { ...storageEnv } } });
-    throw serialized;
-  });
-  const scope = { agentId: "main", sessionId: "one", storePath: storagePath, env: storageEnv };
-  await expect(readers.readActivitySummarySource({ scope })).rejects.toBe(serialized);
 });
 
 const transcriptInput = {
@@ -238,19 +239,30 @@ function readFrames(frames: unknown[], eventCount: number, rawSeq = 7, encoding 
   return readers.readTranscript(transcriptInput, signal);
 }
 
-it("preserves the direct read request, signal, and projected result", async () => {
-  const input = { scope: { agentId: "main", sessionId: "synthetic-session" } };
-  const signal = new AbortController().signal;
-  const readers = createSessionHistoryWorkerReaders(
-    createSessionHistoryWorkerRequestStub(async (prepare, inputBytes, receivedSignal) => {
-      expect(prepare()).toEqual({ kind: "transcript-message-presence", ...input });
-      expect(inputBytes).toBe(JSON.stringify(input).length * 2);
-      expect(receivedSignal).toBe(signal);
-      return { kind: "transcript-message-presence", present: true };
-    }),
-  );
-  await expect(readers.readMessagePresence(input, signal)).resolves.toBe(true);
-});
+it.each(["message presence", "cold metadata"] as const)(
+  "preserves the %s request, signal, and result",
+  async (kind) => {
+    const cold = kind === "cold metadata";
+    const input = cold ? { sessionId: "synthetic-cold-session", env: {} } : messagePresenceInput;
+    const expected = cold
+      ? { kind: "cold-metadata" as const, archive: undefined }
+      : { kind: "transcript-message-presence" as const, present: true };
+    const signal = new AbortController().signal;
+    const readers = createSessionHistoryWorkerReaders(
+      createSessionHistoryWorkerRequestStub(async (prepare, inputBytes, receivedSignal) => {
+        expect(prepare()).toEqual({ kind: expected.kind, ...input });
+        expect(inputBytes).toBe(JSON.stringify(input).length * 2);
+        expect(receivedSignal).toBe(signal);
+        return expected;
+      }),
+    );
+    await expect(
+      cold
+        ? readers.readColdMetadata({ sessionId: "synthetic-cold-session", env: {} }, signal)
+        : readers.readMessagePresence(messagePresenceInput, signal),
+    ).resolves.toEqual(cold ? expected : true);
+  },
+);
 
 it("keeps interleaved decorated readers on their own request runner", async () => {
   const first = Promise.withResolvers<boolean>();
@@ -264,9 +276,8 @@ it("keeps interleaved decorated readers on their own request runner", async () =
     ),
     assertCurrent() {},
   });
-  const input = { scope: { agentId: "main", sessionId: "synthetic-session" } };
-  const firstRead = create(first.promise).readMessagePresence(input);
-  const secondRead = create(second.promise).readMessagePresence(input);
+  const firstRead = create(first.promise).readMessagePresence(messagePresenceInput);
+  const secondRead = create(second.promise).readMessagePresence(messagePresenceInput);
   second.resolve(false);
   await expect(secondRead).resolves.toBe(false);
   first.resolve(true);
@@ -349,22 +360,6 @@ it.each(["archives", "corpus", "targets", "exact entries", "row facts"] as const
     }
   },
 );
-
-it("passes the cold metadata caller's signal to its reader task", async () => {
-  const input = { sessionId: "synthetic-cold-session", env: {} };
-  const signal = new AbortController().signal;
-  const readers = createSessionHistoryWorkerReaders(
-    createSessionHistoryWorkerRequestStub(async (prepare, _inputBytes, receivedSignal) => {
-      expect(prepare()).toEqual({ kind: "cold-metadata", ...input });
-      expect(receivedSignal).toBe(signal);
-      return { kind: "cold-metadata", archive: undefined };
-    }),
-  );
-  await expect(readers.readColdMetadata(input, signal)).resolves.toEqual({
-    kind: "cold-metadata",
-    archive: undefined,
-  });
-});
 
 it("decodes cross-realm Uint8Array transcript frames", async () => {
   const event = { type: "message", text: "hello 🦞" };

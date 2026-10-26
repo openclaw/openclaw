@@ -435,7 +435,7 @@ describe("SQLite transcript archive worker", () => {
       ]);
       appendSqliteTrajectoryRuntimeEvents(target, [trajectory(target.sessionId)]);
       await acp(target, "preserve ACP state", "failure-run");
-      const { query, rows } = databaseQueries();
+      const { db } = databaseQueries();
       const tables = [
         "acp_parent_stream_events",
         "session_transcript_fts",
@@ -445,23 +445,15 @@ describe("SQLite transcript archive worker", () => {
         "transcript_events",
         "session_windows",
       ] as const;
-      const counts = () => [
-        ...tables.map(
+      const counts = () =>
+        [...tables, "session_nodes"].map(
           (table) =>
-            rows(
-              query
-                .selectFrom(table)
-                .select(({ fn }) => fn.countAll<number>().as("count"))
-                .where("session_id", "=", target.sessionId),
-            )[0]?.count ?? 0,
-        ),
-        rows(
-          query
-            .selectFrom("session_nodes")
-            .select("current_session_id")
-            .where("current_session_id", "=", target.sessionId),
-        ).length,
-      ];
+            db.db
+              .prepare(
+                `SELECT COUNT(*) AS count FROM ${table} WHERE ${table === "session_nodes" ? "current_session_id" : "session_id"} = ?`,
+              )
+              .get(target.sessionId)?.count ?? 0,
+        );
       await waitForSessionTranscriptProjection(target);
       const before = counts();
       if (capture) {
