@@ -83,19 +83,15 @@ afterEach(async () => {
 
 it("keeps committed recap progress across stale requests and summarizes new activity once", async () => {
   await messages(1);
+  await ensure();
+  complete.mockClear();
+  const initialSummary = read()!.activitySummary!;
   await patchSessionEntryCore(scope, () => ({
     activitySummary: {
-      version: 1,
+      ...initialSummary,
       formatRevision: 1,
       text: "Earlier work.",
       updatedAt: 1,
-      sessionId: scope.sessionId,
-      lifecycleRevision: "lifecycle-1",
-      ...readSessionTranscriptWatermark(scope),
-      leafEntryId: "message-0",
-      coveredMessages: 1,
-      totalMessages: 1,
-      omittedContent: false,
     },
   }));
   // A batched ensure can retain this entry while another request finishes its recap.

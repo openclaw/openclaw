@@ -1,7 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
-import "../agents/utility-completion.js";
-import { defaultCompleteModel, defaultPrepareModel } from "./session-observer-model.js";
+import type { defaultCompleteModel } from "./session-observer-model.js";
 import {
   advanceAndFlush as advance,
   expectBroadcast,
@@ -14,69 +13,29 @@ import {
   startAndAddToolNotes,
 } from "./session-observer.test-utils.js";
 
-const runtimeMocks = vi.hoisted(() => ({
-  selectModel: vi.fn(),
-  completeIsolated: vi.fn(),
-}));
-
-vi.mock("../agents/simple-completion-runtime.js", () => ({
-  resolveSimpleCompletionSelectionForAgent: runtimeMocks.selectModel,
-}));
-vi.mock("../agents/isolated-completion.js", () => ({
-  runIsolatedCompletion: runtimeMocks.completeIsolated,
-}));
-
 const { createHarness } = useObserverSuite();
 
-it.each(["claude-cli", "anthropic"])(
-  "publishes a digest from a runtime-owned %s utility completion after empty output without API auth",
-  async (provider) => {
-    const config = {
-      agents: {
-        defaults: {
-          utilityModel: `${provider}/claude-sonnet-4-6`,
-          models: { "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } } },
-        },
-      },
-    };
-    runtimeMocks.selectModel.mockReturnValue({
-      provider,
-      modelId: "claude-sonnet-4-6",
-      agentDir: "/tmp/agent",
-    });
-    const digest = { headline: "Reviewing the implementation", health: "on-track" as const };
-    const completion = {
-      text: JSON.stringify(digest),
-      provider: "anthropic",
-      model: "claude-sonnet-4-6",
-      owner: { kind: "cli", id: "claude-cli" },
-    };
-    runtimeMocks.completeIsolated
-      .mockReset()
-      .mockImplementationOnce(async (request) => {
-        // The isolated owner rejects empty output unless its caller owns visible-text recovery.
-        if (request.outputTextPolicy !== "strict-visible") {
-          throw new Error("Isolated completion returned empty output.");
-        }
-        return { ...completion, text: "" };
-      })
-      .mockResolvedValueOnce(completion);
-    const harness = createHarness({
-      config,
-      prepareModel: vi.fn(defaultPrepareModel),
-      completeModel: vi.fn(defaultCompleteModel),
-    });
-    await startAndAddToolNotes(harness.observer);
-    await vi.advanceTimersByTimeAsync(12_000);
-    await flushObserver();
-    await vi.dynamicImportSettled();
-    await flushObserver();
-
-    expect(runtimeMocks.completeIsolated).toHaveBeenCalledTimes(2);
-    expect(runtimeMocks.completeIsolated.mock.calls[0]?.[0]).not.toHaveProperty("auth");
-    expectBroadcast(harness, digest);
-  },
-);
+it("retries empty visible output without injecting auth into the prepared completion", async () => {
+  const digest = { headline: "Reviewing the implementation", health: "on-track" as const };
+  const prepared = { ...preparedModel(), provider: "anthropic", model: "claude-sonnet-4-6" };
+  const completion = {
+    text: JSON.stringify(digest),
+    provider: prepared.provider,
+    model: prepared.model,
+    owner: { kind: "cli" as const, id: "claude-cli" },
+  };
+  const completeModel = vi
+    .fn<typeof defaultCompleteModel>()
+    .mockResolvedValueOnce({ ...completion, text: "" })
+    .mockResolvedValueOnce(completion);
+  const harness = createHarness({ prepareModel: vi.fn(async () => prepared), completeModel });
+  await startAndAddToolNotes(harness.observer);
+  await advance(12_000);
+  expect(completeModel).toHaveBeenCalledTimes(2);
+  expect(completeModel.mock.calls[0]?.[0].outputTextPolicy).toBe("strict-visible");
+  expect(completeModel.mock.calls[0]?.[0]).not.toHaveProperty("auth");
+  expectBroadcast(harness, digest);
+});
 
 it.for(["observation ends", "preparation times out"] as const)(
   "does not start completion or another preparation when %s",

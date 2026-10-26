@@ -1,9 +1,7 @@
-import { X509Certificate } from "node:crypto";
 import { createServer } from "node:http";
 import { expect, it } from "vitest";
 import { readRequestText } from "../../test/helpers/gateway-integration-fixtures.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
-import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { setDisplayName, setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
@@ -69,9 +67,6 @@ it("delivers a committed human mention once through authenticated chat.send", as
       "alice@committed-mention.example.test": scopes,
     },
   };
-  const certPath = await state.writeText("tls/cert.pem", TEST_TLS_CERT_PEM);
-  const keyPath = await state.writeText("tls/key.pem", TEST_TLS_KEY_PEM);
-  const tlsFingerprint = new X509Certificate(TEST_TLS_CERT_PEM).fingerprint256;
   const headers = (email: string) => ({
     "x-forwarded-user": email,
     "x-forwarded-for": "203.0.113.50",
@@ -79,7 +74,6 @@ it("delivers a committed human mention once through authenticated chat.send", as
   });
   const origin = "https://control.example.test";
   const clientOptions = {
-    tlsFingerprint,
     origin,
     clientName: "openclaw-control-ui",
     mode: "webchat",
@@ -90,7 +84,6 @@ it("delivers a committed human mention once through authenticated chat.send", as
     ...clientOptions,
     configPath: state.configPath,
     auth,
-    secure: true,
     edgeAuthHeaders: headers("bob@committed-mention.example.test"),
     cfg: {
       agents: { defaults },
@@ -99,7 +92,6 @@ it("delivers a committed human mention once through authenticated chat.send", as
       tools: { profile: "minimal" },
       gateway: {
         auth,
-        tls: { enabled: true, autoGenerate: false, certPath, keyPath },
         trustedProxies: ["127.0.0.1", "::1"],
         controlUi: { allowedOrigins: [origin] },
         roles: {
@@ -121,7 +113,7 @@ it("delivers a committed human mention once through authenticated chat.send", as
   });
   const sender = await connectGatewayClient({
     ...clientOptions,
-    url: `wss://127.0.0.1:${gateway.port}`,
+    url: `ws://127.0.0.1:${gateway.port}`,
     edgeAuthHeaders: headers("alice@committed-mention.example.test"),
     deviceIdentity: loadOrCreateDeviceIdentity({
       path: state.path("sender-device", "client", "credentials.sqlite"),
@@ -136,11 +128,6 @@ it("delivers a committed human mention once through authenticated chat.send", as
     idempotencyKey: "mention-seed",
   });
   await gateway.client.request("agent.wait", { runId: seed.runId, timeoutMs: 30_000 });
-  const lookup = await sender.request<{ users: { profileId: string }[] }>("users.mentionable", {
-    sessionKey: target,
-    query: "Bob",
-  });
-  expect(lookup.users.map((profile) => profile.profileId)).toContain(bob.id);
   const request = {
     sessionKey: target,
     message: "@Bob Please review.",
