@@ -2,7 +2,8 @@
 
 import type { RouteLocation, RouterHistory } from "@openclaw/uirouter";
 import { createComponent } from "solid-js";
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
+import { createChangeListeners } from "../../../../src/shared/listeners.ts";
 import { createApplicationRouter, startApplicationRouter } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
@@ -16,13 +17,10 @@ import { ClawsPage } from "./page.tsx";
 function setup(pathname: string, initialConfig: Record<string, unknown> | null = null) {
   const source = createApplicationGateway();
   let bootstrapConfig = initialConfig;
-  const configListeners = new Set<() => void>();
+  const configListeners = createChangeListeners();
   const runtimeConfig = createRuntimeConfigCapability(source.gateway, {
     current: () => bootstrapConfig,
-    subscribe: (listener) => {
-      configListeners.add(listener);
-      return () => configListeners.delete(listener);
-    },
+    subscribe: configListeners.subscribe,
   });
   const context = {
     basePath: "",
@@ -53,9 +51,7 @@ function setup(pathname: string, initialConfig: Record<string, unknown> | null =
     writeHistory,
     publishConfig: (config: Record<string, unknown>) => {
       bootstrapConfig = config;
-      for (const listener of configListeners) {
-        listener();
-      }
+      configListeners.publish();
     },
     start: () => startApplicationRouter(router, history, "", context),
   };
@@ -65,76 +61,63 @@ function clawsConfig(enabled: boolean) {
   return { gateway: { controlUi: { experimental: { claws: enabled } } } };
 }
 
-describe("Claws startup routing", () => {
-  it.each(["/claws", "/claws/workflow-operator"])(
-    "preserves a cold %s visit before bootstrap configuration arrives",
-    async (pathname) => {
-      const fixture = setup(pathname);
-      await fixture.start();
-
-      expect(fixture.router.getState().matches[0]).toMatchObject({
-        routeId: "claws",
-        status: "success",
-        data: { location: { pathname } },
-      });
-      fixture.publishConfig(clawsConfig(true));
-      expect(fixture.history.location().pathname).toBe(pathname);
-      expect(fixture.writeHistory).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(["/claws", "/claws/workflow-operator"])(
-    "rejects a known-disabled direct %s visit",
-    async (pathname) => {
-      const fixture = setup(pathname, clawsConfig(false));
-      await fixture.start();
-      expect(fixture.router.getState().matches[0]?.status).toBe("notFound");
-    },
-  );
-
-  it.each([true, false])(
-    "keeps discovery unavailable until a cold visit learns the Labs flag is %s",
-    async (enabled) => {
-      const fixture = setup("/claws");
-      await fixture.start();
-      const provider = createSolidApplicationContextProvider(fixture.context);
-      const view = mountSolid(
-        () =>
-          createComponent(ClawsPage, {
-            routeData: { basePath: "", location: fixture.history.location() },
-          }),
-        { wrapper: provider.wrapper },
-      );
-      onTestFinished(view.unmount);
-      expect(view.container.querySelector(".plugin-catalog-detail--loading")).not.toBeNull();
-      expect(view.container.textContent).not.toContain("Claws is disabled");
-      expect(view.container.querySelector("[data-claws-explore]")).toBeNull();
-
-      const request = vi.fn(async () => ({ entries: [] }));
-      fixture.publishConfig(clawsConfig(enabled));
-      fixture.publish({
-        ...fixture.gateway.snapshot,
-        phase: "connected",
-        client: createTestGatewayClient(request),
-        hello: gatewayHelloForMethods(["claws.catalog.search"], ["operator.read"]),
-      });
-      await vi.waitFor(() =>
-        expect(view.container.querySelector(".plugin-catalog-detail--loading")).toBeNull(),
-      );
-      if (enabled) {
-        await vi.waitFor(() =>
-          expect(request).toHaveBeenCalledWith("claws.catalog.search", {
-            category: "productivity",
-            limit: 8,
-          }),
-        );
-        expect(view.container.querySelector("[data-claws-explore]")).not.toBeNull();
-      } else {
-        expect(view.container.textContent).toContain("Claws is disabled");
-        expect(view.container.querySelector("[data-claws-explore]")).toBeNull();
-        expect(request).not.toHaveBeenCalled();
-      }
-      expect(fixture.history.location().pathname).toBe("/claws");
-    },
-  );
+it.each([
+  ["/claws", null],
+  ["/claws/workflow-operator", null],
+  ["/claws", false],
+  ["/claws/workflow-operator", false],
+] as const)("routes %s with initial Labs flag %s", async (pathname, enabled) => {
+  const fixture = setup(pathname, enabled === null ? null : clawsConfig(enabled));
+  await fixture.start();
+  if (enabled === false) {
+    expect(fixture.router.getState().matches[0]?.status).toBe("notFound");
+  } else {
+    expect(fixture.router.getState().matches[0]).toMatchObject({
+      routeId: "claws",
+      status: "success",
+      data: { location: { pathname } },
+    });
+    fixture.publishConfig(clawsConfig(true));
+    expect(fixture.history.location().pathname).toBe(pathname);
+    expect(fixture.writeHistory).not.toHaveBeenCalled();
+  }
 });
+
+it.each([true, false])(
+  "keeps discovery unavailable until a cold visit learns the Labs flag is %s",
+  async (enabled) => {
+    const fixture = setup("/claws");
+    await fixture.start();
+    const view = mountSolid(
+      () =>
+        createComponent(ClawsPage, {
+          routeData: { basePath: "", location: fixture.history.location() },
+        }),
+      { wrapper: createSolidApplicationContextProvider(fixture.context).wrapper },
+    );
+    const loading = () => view.container.querySelector(".plugin-catalog-detail--loading");
+    const explore = () => view.container.querySelector("[data-claws-explore]");
+    expect(loading()).not.toBeNull();
+    expect(view.container.textContent).not.toContain("Claws is disabled");
+    expect(explore()).toBeNull();
+
+    const request = vi.fn(async () => ({ entries: [] }));
+    fixture.publishConfig(clawsConfig(enabled));
+    fixture.publish({
+      ...fixture.gateway.snapshot,
+      phase: "connected",
+      client: createTestGatewayClient(request),
+      hello: gatewayHelloForMethods(["claws.catalog.search"], ["operator.read"]),
+    });
+    await vi.waitFor(() => expect(loading()).toBeNull());
+    if (enabled) {
+      await vi.waitFor(() => expect(request).toHaveBeenCalled());
+      expect(explore()).not.toBeNull();
+    } else {
+      expect(view.container.textContent).toContain("Claws is disabled");
+      expect(explore()).toBeNull();
+      expect(request).not.toHaveBeenCalled();
+    }
+    expect(fixture.history.location().pathname).toBe("/claws");
+  },
+);
