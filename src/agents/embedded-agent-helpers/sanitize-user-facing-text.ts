@@ -421,7 +421,7 @@ export function userFacingTextFilters(
       create: () =>
         createConditionalTextProjector(stripInboundMetadata, createInboundMetadataProbe()),
     },
-    minimaxToolCallTextFilter,
+    minimaxToolCallTextFilter(streaming),
     toolCallXmlTextFilter({ stripFunctionCallsXmlPayloads: true }),
     {
       transform: stripInternalPlaceholderLines,

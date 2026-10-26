@@ -298,8 +298,11 @@ client receipt. Their only label is `event`: a known protocol event name, such a
 `chat` or `sessions.changed`, or `other` for an unrecognized name. No payload,
 session, user, or connection identifiers are exported. The
 `openclaw_gateway_ws_operator_connections` gauge reports connected authenticated
-operator sockets without labels. These observations use the existing bounded
-diagnostic queue and shared exporter series cap. Event observations are batched
+operator sockets without labels. Event counters reach Prometheus directly at flush,
+without allocating diagnostic event snapshots. Explicit diagnostic subscribers,
+including OpenTelemetry metrics, still receive queued snapshots. Connection counts
+use the bounded diagnostic queue; all metrics share the exporter series cap.
+Event observations are batched
 by event name within one event-loop turn while preserving per-socket frame and
 byte totals. Connection counts update on
 connect/disconnect and refresh every 30 seconds so a late-starting exporter or

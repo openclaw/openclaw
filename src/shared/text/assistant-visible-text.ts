@@ -108,7 +108,7 @@ export function assistantVisibleTextFilters(
     return filters;
   }
   const filters: TextFilter[] = [
-    minimaxToolCallTextFilter,
+    minimaxToolCallTextFilter(streaming),
     modelSpecialTokensTextFilter,
     {
       transform: stripRelevantMemoriesTags,
@@ -135,10 +135,12 @@ export function assistantVisibleTextFilters(
 
 // Activation is a necessary condition only; the canonical parsers still own
 // syntax, code protection, and later corrections once a marker has appeared.
-export const minimaxToolCallTextFilter: TextFilter = {
-  transform: stripMinimaxToolCallXml,
-  activationTokens: ["minimax:tool_call", "<]minimax[>[<tool_call>"],
-};
+export function minimaxToolCallTextFilter(streaming = false): TextFilter {
+  return {
+    transform: (text) => stripMinimaxToolCallXml(text, { recoverUnclosed: !streaming }),
+    activationTokens: ["minimax:tool_call", "<]minimax[>[<tool_call>"],
+  };
+}
 
 export const legacyBracketToolCallTextFilter: TextFilter = {
   transform: stripLegacyBracketToolCallBlocks,

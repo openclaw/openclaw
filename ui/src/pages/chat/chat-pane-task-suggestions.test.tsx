@@ -112,7 +112,7 @@ function createTray(pane: ReturnType<typeof createChatPane>["pane"]) {
     draw: (connected = true) => {
       const props = pane.suggestionChatProps(connected, false, false);
       if (!setView) {
-        const [current, update] = createSignal(props);
+        const [current, update] = createSignal<ChatTaskSuggestionTrayProps>(props);
         mountSolid(() => <ChatTaskSuggestionTray view={current()} />, { container });
         setView = update;
       } else {
@@ -606,7 +606,7 @@ it.each(
     await pane.refreshTaskSuggestions();
     expect(pane.tasks.suggestions).toEqual([]);
     // Retained handlers cannot revive a retired operation after reconciliation removes it.
-    originalProps.onAcceptTaskSuggestion?.(suggestion, "local");
+    await originalProps.onAcceptTaskSuggestion?.(suggestion, "local");
     expect(navigate).not.toHaveBeenCalled();
     expect(acceptCalls(request)).toHaveLength(1);
     if (phase === "starting") {

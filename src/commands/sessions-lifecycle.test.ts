@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import { ExpectedCliError } from "../cli/failure-output.js";
+import { getMockCallOutput } from "../cli/test-runtime-capture.js";
 import { createNonExitingRuntimeEnv } from "../test-utils/plugin-runtime-env.js";
 import { sessionsCompactCommand } from "./sessions-compact.js";
 import { sessionsLifecycleCommand } from "./sessions-lifecycle.js";
@@ -84,11 +85,7 @@ describe("sessions lifecycle commands", () => {
     expect(runtime[channel]).toHaveBeenCalledWith(expect.stringContaining(text));
   const expectNoMessage = (text: string) =>
     expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining(text));
-  const joinedArgs = (channel: "log" | "error") =>
-    vi
-      .mocked(runtime[channel])
-      .mock.calls.map((call) => String(call[0]))
-      .join("\n");
+  const joinedArgs = (channel: "log" | "error") => getMockCallOutput(vi.mocked(runtime[channel]));
 
   afterEach(() => vi.unstubAllEnvs());
 

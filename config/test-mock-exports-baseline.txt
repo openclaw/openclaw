@@ -6385,7 +6385,6 @@
 ["src/skills/lifecycle/install-fallback.test.ts","../loading/workspace-skill-loader.js","c887b0b018806ff0ea10b038647084476812189f5db2412bbb6446ae892de928",1]
 ["src/skills/lifecycle/install.test.ts","../loading/plugin-skills.js","c8ccfb0a959d873a41923e11008c850ac8dfc1d3e0bfc10f26768714061567be",1]
 ["src/skills/loading/plugin-skills.test.ts","../../plugins/manifest-registry-installed.js","1dd748a414ce93059ee875b762e80577fa296473f3e84269b66d80ffad3cf635",1]
-["src/skills/loading/plugin-skills.test.ts","../../plugins/plugin-metadata-snapshot.js","a2cd739a038b76722922e9cfd16a93a50fd422d4cd0a445e04a5eed84570724c",1]
 ["src/skills/loading/plugin-skills.test.ts","../../plugins/plugin-registry.js","37d9ad6ffa0a0c449caab7e4834224e46224c6367fe803e3e9ac83bfb435e556",1]
 ["src/skills/loading/skill-path-containment.test.ts","./plugin-skills.js","c8ccfb0a959d873a41923e11008c850ac8dfc1d3e0bfc10f26768714061567be",1]
 ["src/skills/loading/workspace-precedence.test.ts","./plugin-skills.js","c8ccfb0a959d873a41923e11008c850ac8dfc1d3e0bfc10f26768714061567be",1]

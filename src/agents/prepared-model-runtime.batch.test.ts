@@ -16,6 +16,7 @@ import * as inlineProviderModels from "./embedded-agent-runner/model.inline-prov
 import * as legacyAuth from "./legacy-inherited-auth-dir.js";
 import { modelDefinition } from "./model-auth.fixtures.test-support.js";
 import * as configuredModels from "./model-selection-shared.js";
+import * as configuredScope from "./prepared-model-runtime.configured.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import {
   advancePreparedModelRuntimeConfig,
@@ -316,6 +317,7 @@ describe("prepared fleet batches", () => {
     };
     const inlineProjection = vi.spyOn(inlineProviderModels, "buildInlineProviderModels");
     const configuredProjection = vi.spyOn(configuredModels, "buildConfiguredModelCatalog");
+    const configuredRefs = vi.spyOn(configuredScope, "collectPreparedModelRuntimeConfiguredRefs");
     const captures: OpenClawConfig[] = [];
     mocks.prepareStaticCatalog.mockImplementation(async (options) => {
       captures.push((options as { config: OpenClawConfig }).config);
@@ -359,6 +361,7 @@ describe("prepared fleet batches", () => {
         ]);
       }
       expect(inlineProjection).toHaveBeenCalledOnce();
+      expect(configuredRefs).toHaveBeenCalledTimes(mocks.configuredAgentIds.length);
       expect(configuredProjection.mock.calls.filter(([params]) => !params.catalog)).toHaveLength(1);
 
       config.agents!.defaults!.model = "fixture/second";
@@ -370,6 +373,7 @@ describe("prepared fleet batches", () => {
       expect(captures[0]).not.toBe(first);
       expect(captures[0]?.agents?.defaults?.model).toBe("fixture/second");
       expect(inlineProjection).toHaveBeenCalledTimes(2);
+      expect(configuredRefs).toHaveBeenCalledTimes(mocks.configuredAgentIds.length * 2);
       expect(configuredProjection.mock.calls.filter(([params]) => !params.catalog)).toHaveLength(2);
       for (const [index, snapshot] of readSnapshots().entries()) {
         expect(snapshot?.inlineProviderModels[1]?.name).toBe("updated");
@@ -384,6 +388,7 @@ describe("prepared fleet batches", () => {
     } finally {
       inlineProjection.mockRestore();
       configuredProjection.mockRestore();
+      configuredRefs.mockRestore();
     }
   });
 

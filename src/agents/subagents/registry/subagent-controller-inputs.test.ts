@@ -330,3 +330,64 @@ it.for(["child", "descendant"] as const)(
     });
   },
 );
+
+it("restores a ready continuation without reserving an interrupted predecessor's delivery", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    setRuntimeConfigSnapshot({});
+    const sessionKey = "agent:main:main";
+    const logicalStore = path.join(state.sessionsDir(), "sessions.json");
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey, storePath: logicalStore },
+      { sessionId: "requester-session", updatedAt: 1 },
+    );
+    const interrupted = child({
+      runId: "interrupted-child",
+      generation: 1,
+      requesterSessionKey: sessionKey,
+      requesterStorePath: state.statePath("agents", "main", "agent", "openclaw-agent.sqlite"),
+      createdAt: 1,
+      terminalOwner: "interrupted-recovery",
+      execution: { status: "terminal", endedAt: 2, outcome: { status: "error" } },
+      delivery: { status: "pending" },
+      cleanupHandled: false,
+    });
+    const completed = child({
+      ...interrupted,
+      runId: "completed-child",
+      generation: 2,
+      createdAt: 3,
+      terminalOwner: undefined,
+      execution: { status: "terminal", endedAt: 4, outcome: { status: "ok" } },
+      delivery: { status: "delivered" },
+      cleanupHandled: true,
+      cleanupCompletedAt: 4,
+      requesterSettleWake: {
+        ...pendingWake(["completed-child"]),
+        requesterYieldBatch: true,
+      },
+    });
+    const rows = [interrupted, completed];
+    rows.forEach((entry) => subagentRuns.set(entry.runId, entry));
+    const restored = await reserveRestoredSubagentControllerSources(rows);
+    inputs.push(...restored);
+    expect(restored).toHaveLength(1);
+    const order: string[] = [];
+    const turn = {
+      sessionKey,
+      sessionId: "requester-session",
+      storePath: logicalStore,
+      agentId: "main",
+    };
+    await Promise.all([
+      withSessionTurn({ ...turn, controllerInput: restored[0] }, async () => {
+        order.push("completion");
+      }),
+      withSessionTurn(turn, async () => {
+        order.push("user");
+      }),
+    ]);
+    expect(order).toEqual(["completion", "user"]);
+    expect(interrupted.delivery).toEqual({ status: "pending" });
+    expect(subagentRuns.get(interrupted.runId)).toBe(interrupted);
+  });
+});

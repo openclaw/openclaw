@@ -311,6 +311,73 @@ describe("FRV immutable plan eligibility", () => {
     );
   });
 
+  it("waits for the immutable plan before recovering a terminal child", async () => {
+    const active = rootRun(1, null);
+    let reads = 0;
+    await withFastPolling(async () => {
+      await expect(
+        loadPlanForCommand(
+          {
+            command: "continue",
+            operationDeadline: Date.now() + 1_000,
+            repository: REPOSITORY,
+            runId: "77",
+            waitForSeal: true,
+          },
+          {
+            getRun: async () => structuredClone(active),
+            getAttemptJobs: async () => [
+              { ...job("normalCi"), conclusion: "failure" },
+              {
+                ...job("Seal release execution plan"),
+                conclusion: null,
+                status: "in_progress",
+              },
+            ],
+          },
+          async () => (++reads < 3 ? undefined : executionPlanArtifact()),
+        ),
+      ).resolves.toMatchObject({ plan: { parentRunId: "77" } });
+    });
+  });
+
+  it("does not accept a plan that appears after the seal wait deadline", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-23T20:00:00.000Z"));
+    const active = rootRun(1, null);
+    let reads = 0;
+    try {
+      const loaded = loadPlanForCommand(
+        {
+          command: "continue",
+          operationDeadline: Date.now() + 1_000,
+          repository: REPOSITORY,
+          runId: "77",
+          waitForSeal: true,
+        },
+        {
+          getRun: async () => structuredClone(active),
+          getAttemptJobs: async () => [
+            {
+              ...job("Seal release execution plan"),
+              conclusion: null,
+              status: "in_progress",
+            },
+          ],
+        },
+        async () => (++reads === 1 ? undefined : executionPlanArtifact()),
+      );
+      const rejected = expect(loaded).rejects.toThrow(
+        "timed out waiting for the immutable plan seal",
+      );
+      await vi.advanceTimersByTimeAsync(1_000);
+      await rejected;
+      expect(reads).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps a newly uploaded plan retryable while GitHub propagates its artifact", async () => {
     const active = rootRun(1, null);
     const upload = {
