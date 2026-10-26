@@ -62,19 +62,16 @@ function fixture() {
 it("admits the complete current identity and fences it after credential rotation", () => {
   const { admit, credential, params } = fixture();
   const result = admit();
-  expect(result).toMatchObject({
-    ok: true,
-    identity: {
-      environmentId: "worker-1",
-      sessionId: null,
-      runId: null,
-      ownerEpoch: 1,
-      rpcSetVersion: 1,
-      protocolFeatures: ["worker-heartbeat-v1"],
-      credentialExpiresAtMs: 2_000,
-    },
-  });
   assert(result.ok, "fixture admission failed");
+  expect(result.identity).toMatchObject({
+    environmentId: "worker-1",
+    sessionId: null,
+    runId: null,
+    ownerEpoch: 1,
+    rpcSetVersion: 1,
+    protocolFeatures: ["worker-heartbeat-v1"],
+    credentialExpiresAtMs: 2_000,
+  });
   credential.credentialHash = hashWorkerCredential(OTHER_CREDENTIAL);
   expect(validateWorkerConnectionIdentity({ ...params, identity: result.identity })).toBe(
     "credential-replaced",

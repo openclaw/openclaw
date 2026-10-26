@@ -36,7 +36,8 @@ async function fixture() {
     expectedLifecycleRevision: "original",
     expectedWriterRunId: "writer-1",
   };
-  const owner = memorySessionActorOwners.get({ agentId: target.agentId, path: target.storePath });
+  const location = { agentId: target.agentId, path: target.storePath };
+  const owner = memorySessionActorOwners.get(location);
   const actor = await owner.acquire(
     { database: owner.identity, sessionKey: target.sessionKey },
     { assertCurrent() {}, assertReadable() {} },
@@ -52,12 +53,7 @@ async function fixture() {
       incognito: true,
     },
   });
-  return {
-    owner,
-    storage,
-    target,
-    binding: { actor, authority, agentId: target.agentId, path: target.storePath },
-  };
+  return { owner, storage, target, binding: { actor, authority, ...location } };
 }
 
 it("uses committed writer changes for an unbound worker transcript effect without SQLite", async () => {

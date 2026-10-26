@@ -8,12 +8,10 @@ import type {
   WorkerPlacementMoveRequest,
 } from "./service-contract.js";
 
+type Recovery = DispatchService["resumeProvisioning"];
 export function admittedRecovery(
-  run: (
-    placement: Parameters<DispatchService["resumeProvisioning"]>[0],
-    core: Parameters<DispatchService["resumeProvisioning"]>[1],
-  ) => Promise<void>,
-): DispatchService["resumeProvisioning"] {
+  run: (placement: Parameters<Recovery>[0], core: Parameters<Recovery>[1]) => Promise<void>,
+): Recovery {
   return async (placement, core, _onTransition, admit) => {
     if (!admit) {
       throw new Error("Recovery fixture requires the coordinator admission owner");
