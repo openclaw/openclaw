@@ -351,7 +351,11 @@ it.each(["consumed", "pending", "disconnected"] as const)(
     host.sessions.reconcile(paused);
     expect(holdProviderReviewQueuedInputs(host)).toBe(true);
     expect(host.chatQueue[0]).toMatchObject({
-      ...inFlight,
+      id: inFlight?.id,
+      text: inFlight?.text,
+      createdAt: inFlight?.createdAt,
+      sessionKey: inFlight?.sessionKey,
+      sendRunId: inFlight?.sendRunId,
       sendAttempts: 1,
       sendState: "held",
       sendError: expect.any(String),
