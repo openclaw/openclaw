@@ -73,8 +73,8 @@ it("claims a matching path-mounted v1 endpoint without credentials using pinned 
         response.setHeader("Content-Type", "application/json");
         response.end(JSON.stringify(metadata({ api_base_url: baseUrl })));
       },
-      (error: Error) => {
-        response.destroy(error);
+      () => {
+        response.destroy();
       },
     );
   });
