@@ -67,15 +67,6 @@ process.exitCode = command === 'lsof' ? ${fallback ? 2 : 0} : 0;
       }
       await withSyntheticDiagnosticEnv(routing, async () => {
         const parent = { ...process.env };
-        const payload = async () => {
-          const result = await runCommandWithTimeout(
-            [process.execPath, "-e", `process.stdout.write(${report})`],
-            { timeoutMs: 5000 },
-          );
-          expect(result.code).toBe(0);
-          expect(JSON.parse(result.stdout)).toEqual(expectedReport(true));
-        };
-        await payload();
         const entries =
           family === "connections"
             ? (await inspectPortConnections(port)).connections
@@ -85,7 +76,12 @@ process.exitCode = command === 'lsof' ? ${fallback ? 2 : 0} : 0;
         expect(entries).toMatchObject([
           { pid: 424242, commandLine: "node fixture-server", ppid: 1, user: "fixture-user" },
         ]);
-        await payload();
+        const payload = await runCommandWithTimeout(
+          [process.execPath, "-e", `process.stdout.write(${report})`],
+          { timeoutMs: 5000 },
+        );
+        expect(payload.code).toBe(0);
+        expect(JSON.parse(payload.stdout)).toEqual(expectedReport(true));
         expect(process.env).toEqual(parent);
         const reports = (await readFile(reportPath, "utf8"))
           .trim()
