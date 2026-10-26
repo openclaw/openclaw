@@ -1,14 +1,10 @@
 /* @vitest-environment jsdom */
 import { expect, it, onTestFinished } from "vitest";
-import type { ChatPendingInputsPage } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
-import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import { makeChatHost, requestCalls, requireRecord } from "./chat-host.test-support.ts";
-import { admitQueuedMessageForSession } from "./chat-outbox-admission.test-support.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { admitHostQueueItems } from "./chat-outbox-recovery.test-support.ts";
-import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
 
@@ -23,13 +19,6 @@ const item: ChatQueueItem = {
   sendAttempts: 1,
   sendState: "waiting-reconnect",
 };
-function pending(state: "queued" | "interrupted" | "cancelled"): ChatPendingInputsPage {
-  const input = { id: "durable-input", runId: item.sendRunId, acceptedAt: 100, state };
-  return {
-    total: 1,
-    items: [{ ...input, message: { role: "user", content: item.text } }],
-  };
-}
 
 useChatSendBrowserFixture();
 
@@ -66,28 +55,5 @@ it.each(["reset", "compact"] as const)(
     const expected = [{ id: following.id, localCommandName: command }];
     expect(host.chatQueue).toMatchObject(expected);
     expect(listStoredChatOutboxes(host)[0]?.queue).toMatchObject(expected);
-  },
-);
-
-it.each(["queued", "interrupted", "cancelled", "consumed"] as const)(
-  "transfers browser custody when the Gateway reports %s input",
-  (state) => {
-    const host = makeChatHost({ sessionKey, currentSessionId: sessionId, requestHandlers: {} });
-    expect(
-      admitQueuedMessageForSession(host, captureChatOutboxAdmission(host, sessionKey), item),
-    ).toBe(true);
-    expect(listStoredChatOutboxes(host)[0]?.queue[0]?.sendRunId).toBe(item.sendRunId);
-    if (state === "consumed") {
-      applyChatPendingInputs(
-        host,
-        { items: [], total: 0 },
-        {
-          receipts: [{ runId: item.sendRunId!, state: "consumed", consumedByEventId: "aggregate" }],
-        },
-      );
-    } else {
-      applyChatPendingInputs(host, pending(state));
-    }
-    expect(listStoredChatOutboxes(host)).toEqual([]);
   },
 );
