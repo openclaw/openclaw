@@ -2,7 +2,10 @@ import { spawn } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Page } from "playwright";
-import { resolvePlaywrightChromiumExecutablePath } from "../../ui/src/test-helpers/control-ui-e2e.ts";
+import {
+  resolvePlaywrightChromiumExecutablePath,
+  type MockGatewayWindow,
+} from "../../ui/src/test-helpers/control-ui-e2e.ts";
 /** Own a fresh browser with native visibility; Playwright's default launch forces focus. */
 export async function launchTalkObservationBrowser(artifactDir: string, headed: boolean) {
   const profile = await mkdtemp(path.join(artifactDir, "browser-"));
@@ -106,7 +109,53 @@ type TalkNativeAudioState = {
   allLiveContextsSuspended: boolean;
   allAudioPaused: boolean;
 };
+type PcmInputRecord = {
+  id: number;
+  callbackAtMs: number;
+  audioTime: number;
+  state: AudioContextState;
+  length: number;
+  rate: number;
+  appendAtMs?: number;
+  timestamp?: number;
+  bytes?: number;
+  sessionId?: string;
+};
+type PcmOutputRecord = {
+  id: number;
+  eventAtMs: number;
+  startAtMs?: number;
+  when?: number;
+  audioTime?: number;
+  state?: AudioContextState;
+  length?: number;
+  rate?: number;
+  starts: number;
+  endedAtMs?: number;
+  endedAudioTime?: number;
+  stopped?: boolean;
+  natural?: boolean;
+};
+type PcmUiRecord = { status: string | null; level: string | null };
 type TalkBenchProof = {
+  recordPcmAppend(params: { audioBase64: string; timestamp: number; sessionId: string }): void;
+  settlePcmAppends(): Promise<void>;
+  readPcm(): {
+    startMs: number;
+    endMs: number;
+    input: PcmInputRecord[];
+    output: PcmOutputRecord[];
+    unmatchedAppends: number;
+    uiAtStart?: PcmUiRecord;
+    uiAtEnd?: PcmUiRecord;
+  };
+  readPcmCleanup(): {
+    contexts: AudioContextState[];
+    tracks: MediaStreamTrackState[];
+    callbacks: number;
+    appends: number;
+    starts: number;
+  };
   peer?: { channel: EventTarget; remoteDescription: RTCSessionDescriptionInit | null };
   analyserReads: number;
   meterStyleMutations: number;
@@ -162,15 +211,16 @@ export async function installTalkPerfFixture(
   page: Page,
   includeCounters: boolean,
   suspendNativeAudio: boolean,
+  transportMode: "webrtc" | "gateway-relay" = "webrtc",
 ) {
   await page.addInitScript(
-    ({ counters, suspendAudio }) => {
+    ({ counters, suspendAudio, transport }) => {
       const NativeMutationObserver = window.MutationObserver;
       const nativeRequestAnimationFrame = window.requestAnimationFrame.bind(window);
       const nativeCancelAnimationFrame = window.cancelAnimationFrame.bind(window);
       const nativeAudioContexts: AudioContext[] = [];
-      if (suspendAudio) {
-        // Counterfactual only: retain the native graph, connections, and JS meter timer.
+      if (suspendAudio || transport === "gateway-relay") {
+        // Retain native contexts for PCM observations and the suspension counterfactual.
         window.AudioContext = new Proxy(window.AudioContext, {
           construct(target, args, newTarget) {
             const created: AudioContext = Reflect.construct(target, args, newTarget);
@@ -186,6 +236,31 @@ export async function installTalkPerfFixture(
       let sequence = 0;
       let turn = 0;
       let respondingId: string | undefined;
+      let pcmStartMs = 0,
+        pcmEndMs = 0,
+        pcmSequence = 0;
+      let pcmCallbacks = 0,
+        pcmAppends = 0,
+        pcmStarts = 0,
+        unmatchedAppends = 0;
+      const pendingInputs: PcmInputRecord[] = [];
+      let settlePcmAppend: (() => void) | undefined;
+      let activeOutput: PcmOutputRecord | undefined;
+      let pcmInput: PcmInputRecord[] = [],
+        pcmOutput: PcmOutputRecord[] = [];
+      let pcmUiAtStart: PcmUiRecord | undefined, pcmUiAtEnd: PcmUiRecord | undefined;
+      const readPcmUi = (): PcmUiRecord => {
+        const activity = document.querySelector(".agent-chat__voice-activity");
+        return {
+          status: activity?.getAttribute("data-status") ?? null,
+          level: activity?.getAttribute("data-level") ?? null,
+        };
+      };
+      const silentPcm100ms = transport === "gateway-relay" ? btoa("\0".repeat(4_800)) : "";
+      const sendRelay = (payload: Record<string, unknown>) => {
+        const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway!;
+        gateway.emit("talk.event", { relaySessionId: "relay-bench", ...payload });
+      };
       let previousTranscriptId: string | null = null;
       let activeTranscript:
         | {
@@ -227,6 +302,11 @@ export async function installTalkPerfFixture(
         if (respondingId === undefined) {
           return;
         }
+        if (transport === "gateway-relay") {
+          sendRelay({ type: "clear", talkEvent: { turnId: respondingId } });
+          respondingId = undefined;
+          return;
+        }
         send({
           type: "response.done",
           response: { id: respondingId, status: "completed", output: [] },
@@ -234,6 +314,60 @@ export async function installTalkPerfFixture(
         respondingId = undefined;
       };
       const proof: TalkBenchProof = {
+        recordPcmAppend(params) {
+          pcmAppends++;
+          const record = pendingInputs.shift();
+          if (!record) {
+            if (observing) {
+              unmatchedAppends++;
+            }
+            return;
+          }
+          record.appendAtMs = performance.now();
+          record.timestamp = params.timestamp;
+          record.sessionId = params.sessionId;
+          const padding = params.audioBase64.endsWith("==")
+            ? 2
+            : params.audioBase64.endsWith("=")
+              ? 1
+              : 0;
+          record.bytes = (params.audioBase64.length * 3) / 4 - padding;
+          settlePcmAppend?.();
+        },
+        settlePcmAppends() {
+          if (pcmInput.every((record) => record.appendAtMs !== undefined)) {
+            return Promise.resolve();
+          }
+          return new Promise<void>((resolve, reject) => {
+            const timeout = setTimeout(() => {
+              settlePcmAppend = undefined;
+              reject(new Error("Observed PCM callbacks did not reach appendAudio"));
+            }, 1000);
+            settlePcmAppend = () => {
+              if (pcmInput.every((record) => record.appendAtMs !== undefined)) {
+                clearTimeout(timeout);
+                settlePcmAppend = undefined;
+                resolve();
+              }
+            };
+          });
+        },
+        readPcm: () => ({
+          startMs: pcmStartMs,
+          endMs: pcmEndMs,
+          input: pcmInput,
+          output: pcmOutput,
+          unmatchedAppends,
+          uiAtStart: pcmUiAtStart,
+          uiAtEnd: pcmUiAtEnd,
+        }),
+        readPcmCleanup: () => ({
+          contexts: nativeAudioContexts.map((ctx) => ctx.state),
+          tracks: stream?.getTracks().map((track) => track.readyState) ?? [],
+          callbacks: pcmCallbacks,
+          appends: pcmAppends,
+          starts: pcmStarts,
+        }),
         analyserReads: 0,
         meterStyleMutations: 0,
         meterDataMutations: 0,
@@ -353,6 +487,30 @@ export async function installTalkPerfFixture(
           if (modulationDepth) {
             modulationDepth.gain.value = state === "speaking" ? 0.1 : 0;
           }
+          if (transport === "gateway-relay") {
+            finishResponding();
+            if (state === "responding") {
+              respondingId = `bench-pcm-turn-${++turn}`;
+              const tick = () => {
+                activeOutput = { id: ++pcmSequence, eventAtMs: performance.now(), starts: 0 };
+                if (observing) {
+                  pcmOutput.push(activeOutput);
+                }
+                try {
+                  sendRelay({
+                    type: "audio",
+                    audioBase64: silentPcm100ms,
+                    talkEvent: { turnId: respondingId },
+                  });
+                } finally {
+                  activeOutput = undefined;
+                }
+                timer = setTimeout(tick, 100);
+              };
+              tick();
+            }
+            return;
+          }
           if (activeTranscript) {
             send({
               type: "response.output_audio_transcript.done",
@@ -429,6 +587,13 @@ export async function installTalkPerfFixture(
             proof.resizeObserverCallbacks =
             proof.intersectionObserverCallbacks =
               0;
+          pcmInput = [];
+          pcmOutput = [];
+          unmatchedAppends = 0;
+          pcmStartMs = performance.now();
+          pcmEndMs = 0;
+          pcmUiAtStart = transport === "gateway-relay" ? readPcmUi() : undefined;
+          pcmUiAtEnd = undefined;
           proof.transcriptChunks = 0;
           proof.transcriptDomMutations = 0;
           proof.meterStyleMutations = proof.meterDataMutations = 0;
@@ -529,6 +694,8 @@ export async function installTalkPerfFixture(
           }
         },
         stop() {
+          pcmEndMs = performance.now();
+          pcmUiAtEnd = transport === "gateway-relay" ? readPcmUi() : undefined;
           observing = false;
           clearRevealObservation();
           if (timer !== undefined) {
@@ -546,6 +713,78 @@ export async function installTalkPerfFixture(
         },
       };
       window.openclawTalkBench = proof;
+      if (transport === "gateway-relay") {
+        const outputRecords = new WeakMap<AudioBufferSourceNode, PcmOutputRecord>();
+        // Observe before the production property callback; preserve the native node and callback.
+        // oxlint-disable-next-line typescript/unbound-method
+        const createProcessor = AudioContext.prototype.createScriptProcessor;
+        AudioContext.prototype.createScriptProcessor = function (...args) {
+          const node = createProcessor.apply(this, args);
+          node.addEventListener("audioprocess", (event) => {
+            if (!node.onaudioprocess) {
+              return;
+            }
+            pcmCallbacks++;
+            const record: PcmInputRecord = {
+              id: ++pcmSequence,
+              callbackAtMs: performance.now(),
+              audioTime: this.currentTime,
+              state: this.state,
+              length: event.inputBuffer.length,
+              rate: event.inputBuffer.sampleRate,
+            };
+            pendingInputs.push(record);
+            if (observing) {
+              pcmInput.push(record);
+            }
+          });
+          return node;
+        };
+        // Only a source started synchronously by our current provider event belongs to this probe.
+        // oxlint-disable-next-line typescript/unbound-method
+        const start = AudioBufferSourceNode.prototype.start;
+        AudioBufferSourceNode.prototype.start = function (...args) {
+          const record = activeOutput;
+          start.apply(this, args);
+          if (!record || !this.buffer) {
+            return;
+          }
+          outputRecords.set(this, record);
+          pcmStarts++;
+          Object.assign(record, {
+            starts: record.starts + 1,
+            startAtMs: performance.now(),
+            when: args[0] ?? 0,
+            audioTime: this.context.currentTime,
+            state: this.context.state,
+            length: this.buffer.length,
+            rate: this.buffer.sampleRate,
+          });
+          this.addEventListener(
+            "ended",
+            () =>
+              Object.assign(record, {
+                endedAtMs: performance.now(),
+                endedAudioTime: this.context.currentTime,
+                natural:
+                  !record.stopped &&
+                  this.context.currentTime + 1 / record.rate! >=
+                    Math.max(record.when!, record.audioTime!) + record.length! / record.rate!,
+              }),
+            { once: true },
+          );
+        };
+        // An ended event can arrive late after explicit cancellation; do not call it completion.
+        // oxlint-disable-next-line typescript/unbound-method
+        const stop = AudioBufferSourceNode.prototype.stop;
+        AudioBufferSourceNode.prototype.stop = function (...args) {
+          stop.apply(this, args);
+          const record = outputRecords.get(this);
+          if (record && record.endedAtMs === undefined) {
+            record.stopped = true;
+          }
+        };
+      }
       // Preserve the native method; call() below supplies the audio element receiver.
       // oxlint-disable-next-line typescript/unbound-method
       const nativePlay = HTMLMediaElement.prototype.play;
@@ -725,7 +964,7 @@ export async function installTalkPerfFixture(
         value: FakePeerConnection,
       });
     },
-    { counters: includeCounters, suspendAudio: suspendNativeAudio },
+    { counters: includeCounters, suspendAudio: suspendNativeAudio, transport: transportMode },
   );
   await page.route("https://api.openai.com/v1/realtime/calls", (route) =>
     route.fulfill({ status: 200, contentType: "application/sdp", body: "answer-sdp" }),
