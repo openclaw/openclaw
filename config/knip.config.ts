@@ -252,6 +252,7 @@ const repositoryScriptEntries = [
   // Cold-load diagnostics invoked directly as documented in their headers.
   "scripts/perf/gateway-main-heap-preload.mjs!",
   "scripts/perf/headless-tools-cold-import.mjs!",
+  "scripts/perf/session-actor-append-measure.ts!",
   // scripts/perf/README.md invokes these measurement commands by path.
   "scripts/perf/cron-delivery-gateway-entry.ts!",
   "scripts/perf/plugin-policy-read-measure.mjs!",
