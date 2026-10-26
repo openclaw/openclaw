@@ -12,6 +12,7 @@ import { emulateOverlayMedia } from "../../../test-helpers/overlay-browser-media
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import "../../../styles/base.css";
 import "../../../styles/chat/composer.css";
+import type { ChatAccessProgramControlProps } from "./chat-access-program-control.tsx";
 import { focusComposerFromChrome } from "./chat-composer-dom.ts";
 import { ChatEffortPicker } from "./chat-effort-picker.tsx";
 import { installChatComposerPickerDismissal } from "./chat-picker-overlay.ts";
@@ -360,61 +361,43 @@ it("keeps keyboard changes on real effort levels when pointer input is continuou
   }
 });
 
-it("uses entitled Access segments with shared keyboard behavior and a separate default reset", async () => {
+it("restores the remembered permitted Daybreak choice and recovers an unavailable selection", async () => {
   const onSelect = vi.fn();
-  const accessProgram = {
+  const access = {
     sessionKey: "effort-preview",
     disabled: false,
     programs: ["standard", "daybreak_blue", "daybreak_red"] as const,
     onSelect,
   };
-  const render = async (access = accessProgram) =>
-    fixture(["low", "high"], "low", false, undefined, true, access);
-  await render();
-  const sectionBorders = () =>
-    Array.from(
-      host!.querySelector(".chat-controls__effort-menu")!.children,
-      (section) => getComputedStyle(section).borderTopWidth,
-    );
-  expect(sectionBorders()).toEqual(["0px", "1px"]);
-  const group = host!.querySelector<HTMLElement>("[data-chat-access-program]")!;
+  const draw = (extra: Partial<ChatAccessProgramControlProps>) =>
+    fixture(["low", "high"], "low", false, undefined, true, { ...access, ...extra });
+  const toggle = () => host!.querySelector<HTMLInputElement>(".chat-controls__access-head input")!;
   const option = (value: string) =>
-    group.querySelector<HTMLButtonElement>('[data-chat-access-option="' + value + '"]')!;
-  expect(group.getAttribute("role")).toBe("radiogroup");
-  expect(group.querySelector("select")).toBeNull();
-  expect(group.querySelectorAll('[aria-checked="true"]')).toHaveLength(0);
-  expect(option("standard").tabIndex).toBe(0);
-  await userEvent.click(option("daybreak_red"));
+    host!.querySelector<HTMLButtonElement>(`[data-chat-access-option="${value}"]`)!;
+  await draw({ requested: "standard", previous: "daybreak_red" });
+  await userEvent.click(toggle());
   expect(onSelect).toHaveBeenLastCalledWith("daybreak_red", "effort-preview");
-  await fixture(["low", "high"], "low", false, undefined, true, {
-    ...accessProgram,
-    requested: "daybreak_red",
-  });
-  option("daybreak_red").focus();
-  option("daybreak_red").dispatchEvent(
-    new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }),
-  );
-  expect(document.activeElement).toBe(option("daybreak_blue"));
+  await draw({ requested: "daybreak_red" });
+  expect(option("daybreak_red").getAttribute("aria-pressed")).toBe("true");
+  await userEvent.click(toggle());
+  expect(onSelect).toHaveBeenLastCalledWith("standard", "effort-preview", "daybreak_red");
+  await draw({ requested: "daybreak_red", programs: ["standard", "daybreak_blue"] });
+  expect(host!.textContent).toContain("Red (unavailable)");
+  await userEvent.click(option("daybreak_blue"));
   expect(onSelect).toHaveBeenLastCalledWith("daybreak_blue", "effort-preview");
-  await userEvent.click(host!.querySelector<HTMLButtonElement>("[data-chat-access-default]")!);
-  expect(onSelect).toHaveBeenLastCalledWith(null, "effort-preview");
-  await fixture(["low", "high"], "low", false, undefined, true, {
-    ...accessProgram,
-    requested: "daybreak_red",
-    disabled: true,
-  });
-  expect(option("daybreak_red").disabled).toBe(true);
-  const count = onSelect.mock.calls.length;
-  option("daybreak_blue").click();
-  expect(onSelect).toHaveBeenCalledTimes(count);
-  await fixture(["low", "high"], "low", false, undefined, true, {
-    ...accessProgram,
+  await draw({
+    requested: "standard",
+    previous: "daybreak_red",
     programs: ["standard", "daybreak_blue"],
   });
-  expect(group.querySelector('[data-chat-access-option="daybreak_red"]')).toBeNull();
-  for (const programs of [[], ["standard"]] as const) {
-    await fixture(["low", "high"], "low", false, undefined, true, { ...accessProgram, programs });
-    expect(host!.querySelector("[data-chat-access-program]")).toBeNull();
-    expect(sectionBorders()).toEqual(["0px"]);
-  }
+  await userEvent.click(toggle());
+  expect(onSelect).toHaveBeenLastCalledWith("daybreak_blue", "effort-preview");
+  await draw({ requested: "daybreak_red", programs: undefined });
+  expect(host!.textContent).not.toContain("unavailable");
+  expect(toggle().disabled).toBe(false);
+  await userEvent.click(toggle());
+  expect(onSelect).toHaveBeenLastCalledWith("standard", "effort-preview", "daybreak_red");
+  await draw({ requested: "daybreak_red", disabled: true });
+  expect(toggle().disabled).toBe(true);
+  expect(option("daybreak_blue").disabled).toBe(true);
 });

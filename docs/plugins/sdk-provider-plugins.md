@@ -432,7 +432,7 @@ not retain or close the shared pool; the Gateway owns its shutdown.
     that govern deprecated surfaces named on this page and its child pages.
 
     To read runtime auth profiles, await `loadAuthProfileStoreForRuntimeAsync`
-    from `openclaw/plugin-sdk/agent-runtime`. It reads persisted profiles in a
+    from `openclaw/plugin-sdk/provider-auth`. It reads persisted profiles in a
     database worker and preserves the optional third `env` argument for
     service-owned state directories. The synchronous `loadAuthProfileStoreForRuntime`
     is deprecated through 2026-12-31 and will be removed in the first January 2027 stable release.

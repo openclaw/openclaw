@@ -29,8 +29,9 @@ server rechecks the current policy on every read and write.
 
 Open **Settings → Profile → Personal instructions**, choose an agent in the
 Settings sidebar’s existing agent selector, and save your preferences. You can create or edit your own personal `USER.md` with an
-authenticated profile and `operator.read`; administrator or general write access
-is not required. The editor always uses the signed-in person, not the owner of
+authenticated profile and `operator.read` or `operator.sessions.read` (including
+their implied write/admin scopes); broader Gateway read access, administrator
+access, and general write access are not required. The editor always uses the signed-in person, not the owner of
 the currently open chat. It cannot edit another person’s file or shared defaults.
 
 You can also ask an agent in any authenticated Gateway chat session to update

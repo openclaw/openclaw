@@ -277,6 +277,7 @@ suite.define(() => {
       await page.goto(new URL(profilePath, suite.server.baseUrl).href);
       const chooser = page.locator(".identity-avatar-control > button");
       await expect(chooser).toHaveAccessibleName("Choose image");
+      await expect(chooser).toBeEnabled();
       await chooser.focus();
       await expect(chooser).toBeFocused();
       const [fileChooser] = await Promise.all([

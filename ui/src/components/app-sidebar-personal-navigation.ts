@@ -36,7 +36,10 @@ type PersonalNavigationHost = {
   readonly navigationCatalog: { readonly dashboards: SessionListSnapshot | null };
   getRouteSessionKey(): string;
   getSessionNavigationState(): SidebarSessionNavigationState;
-  findSidebarSessionByKey(key: string): SidebarRecentSession | undefined;
+  findSidebarSessionByKey(
+    key: string,
+    navigationState?: SidebarSessionNavigationState,
+  ): SidebarRecentSession | undefined;
   pluginNavigation(): Parameters<typeof buildReconciledSidebarZone>[0]["pluginNavigation"];
 };
 
@@ -198,25 +201,30 @@ export function createSidebarPinnedSessions(
 }
 
 export function personalSidebarZone(host: PersonalNavigationHost, rows: SidebarRecentSession[]) {
+  let navigationState: SidebarSessionNavigationState | undefined;
+  const livePins: SidebarRecentSession[] = [];
   const pins = (host.sidebarSnapshot ? [] : host.sidebarEntries).flatMap((value) => {
     const entry = parseSidebarEntry(value);
     if (entry?.type !== "session") {
       return [];
     }
-    const loaded = host.findSidebarSessionByKey(entry.key);
+    const navigation = (navigationState ??= host.getSessionNavigationState());
+    const loaded = host.findSidebarSessionByKey(entry.key, navigation);
     const catalog = loaded
       ? undefined
       : host.navigationCatalog.dashboards?.result?.sessions.find((row) => row.key === entry.key);
-    const live =
-      loaded ?? (catalog ? host.getSessionNavigationState().toSidebarSession(catalog) : undefined);
+    const live = loaded ?? (catalog ? navigation.toSidebarSession(catalog) : undefined);
     if (live) {
-      // A query replacement must not collapse a visible pin while its descriptor loads.
-      host.pinnedSessions.seed([live]);
+      livePins.push(live);
       return [live];
     }
     const snapshot = host.pinnedSessions.get(entry.key);
-    return snapshot ? [host.getSessionNavigationState().toSidebarSession(snapshot)] : [];
+    return snapshot ? [navigation.toSidebarSession(snapshot)] : [];
   });
+  if (livePins.length) {
+    // A query replacement must not collapse visible pins while their descriptors load.
+    host.pinnedSessions.seed(livePins);
+  }
   return buildReconciledSidebarZone({
     sidebarEntries: host.sidebarEntries,
     rows: [...pins, ...rows],
