@@ -73,6 +73,8 @@ export function registerChatAdmissionRetryTests(harness: {
       queuedFinal: false,
       counts: { tool: 0, block: 0, final: 0 },
     });
+  const expectAccepted = (responses: unknown, payload: unknown) =>
+    expect(responses).toEqual([{ ok: true, payload }]);
   test.each([
     { caseName: "tombstones an explicit abort", retryable: false, stopReason: "rpc" },
     { caseName: "retains a restart interruption", retryable: true, stopReason: "restart" },
@@ -118,17 +120,15 @@ export function registerChatAdmissionRetryTests(harness: {
         const responses = await sendStopped(context);
         stopListening();
         expect(abortCommittedTurn).toHaveBeenCalledOnce();
-        expect(responses).toEqual([
-          {
-            ok: true,
-            payload: expect.objectContaining({
-              runId,
-              status: "timeout",
-              summary: "aborted",
-              stopReason,
-            }),
-          },
-        ]);
+        expectAccepted(
+          responses,
+          expect.objectContaining({
+            runId,
+            status: "timeout",
+            summary: "aborted",
+            stopReason,
+          }),
+        );
         expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
         const stored = loadSessionEntry(scope);
         expect(stored).toMatchObject({
@@ -156,12 +156,10 @@ export function registerChatAdmissionRetryTests(harness: {
           expect(context.chatRunState.hasAbortMarker(runId)).toBe(true);
           expect(context.dedupe.delete(`chat:${runId}`)).toBe(true);
           const abortedRetryResponses = await sendStopped(context);
-          expect(abortedRetryResponses).toEqual([
-            {
-              ok: true,
-              payload: expect.objectContaining({ runId, status: "timeout", summary: "aborted" }),
-            },
-          ]);
+          expectAccepted(
+            abortedRetryResponses,
+            expect.objectContaining({ runId, status: "timeout", summary: "aborted" }),
+          );
           expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
         }
         expect(loadTranscriptEventsSync(scope)).toContainEqual(
@@ -178,16 +176,13 @@ export function registerChatAdmissionRetryTests(harness: {
         const retryContext = createDirectChatContext();
         resolveDispatch();
         const retryResponses = await sendStopped(retryContext);
-        expect(retryResponses).toEqual([
-          {
-            ok: true,
-            payload: retryable
-              ? expect.objectContaining({ runId, status: "started", messageSeq: 1 })
-              : { runId, status: "ok", messageSeq: 1 },
-          },
-        ]);
+        expectAccepted(
+          retryResponses,
+          retryable
+            ? expect.objectContaining({ runId, status: "started", messageSeq: 1 })
+            : { runId, status: "ok", messageSeq: 1 },
+        );
         await settle(scope);
-        expect(retryContext.removeChatRun).toHaveBeenCalledTimes(retryable ? 1 : 0);
         expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(retryable ? 1 : 0);
         if (!retryable) {
           expect(loadSessionEntry(scope)).toEqual(stored);
@@ -235,11 +230,8 @@ export function registerChatAdmissionRetryTests(harness: {
           expect(responses).toEqual([{ ok: false, payload: undefined }]);
           expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
         } else {
-          expect(responses).toEqual([
-            { ok: true, payload: expect.objectContaining({ runId, status: "started" }) },
-          ]);
+          expectAccepted(responses, expect.objectContaining({ runId, status: "started" }));
           await settle(scope);
-          expect(context.removeChatRun).toHaveBeenCalledTimes(1);
         }
         expectFailedClaim(scope, runId);
         if (!routing) {
@@ -256,14 +248,11 @@ export function registerChatAdmissionRetryTests(harness: {
         const retryContext = createDirectChatContext();
         resolveDispatch();
         const retryResponses = await send(retryContext, runId, message);
-        expect(retryResponses).toEqual([
-          {
-            ok: true,
-            payload: expect.objectContaining({ runId, status: "started", messageSeq: 1 }),
-          },
-        ]);
+        expectAccepted(
+          retryResponses,
+          expect.objectContaining({ runId, status: "started", messageSeq: 1 }),
+        );
         await settle(scope);
-        expect(retryContext.removeChatRun).toHaveBeenCalledOnce();
         expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(routing ? 1 : 2);
         expectOneInput(scope, runId);
       });

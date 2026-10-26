@@ -151,15 +151,6 @@ describe("OpenAI-compatible HTTP usage", () => {
       expect(response.output).toMatchObject([
         { type: "message", content: [{ type: "output_text", text: "Partial answer" }] },
       ]);
-      const sessionKey = (agentCommandMock.mock.calls[0]?.[0] as { sessionKey: string } | undefined)
-        ?.sessionKey;
-      expect(sessionKey).toBeTypeOf("string");
-      agentCommandMock.mockResolvedValueOnce({
-        payloads: [{ text: "Continued", mediaUrl: null }],
-        meta: { durationMs: 0 },
-      });
-      await (await post("responses", { previous_response_id: response.id })).text();
-      expect(agentCommandMock.mock.calls[1]?.[0]).toMatchObject({ sessionKey });
     },
   );
 

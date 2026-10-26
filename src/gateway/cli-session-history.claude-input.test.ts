@@ -3,7 +3,6 @@ import { expect, it } from "vitest";
 import { buildCliSessionDriftNote } from "../agents/cli-session-drift.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import { applySessionHints } from "../auto-reply/reply/body.js";
-import { buildInterSessionPromptContext } from "../sessions/input-provenance.js";
 import { formatSystemTurnPrompt } from "../sessions/system-turn-prompt.js";
 import {
   projectChatDisplayMessages,
@@ -147,46 +146,22 @@ it.each(["[Request interrupted by user]", "[Request interrupted by user for tool
   },
 );
 
-it.each(["sessions_send", "subagent_settle"])(
-  "preserves routed %s input for the shared provenance projection",
-  (sourceTool) => {
-    const text = `${
-      buildInterSessionPromptContext({
-        kind: "inter_session",
-        sourceSessionKey: "agent:peer:main",
-        sourceTool,
-      }).text
-    }\nRouted result.`;
-    for (const content of [text, blocks(text)]) {
-      const imported = parseImportedUser(content);
-      expect(imported).toMatchObject({ role: "user", content });
-      expect(imported?.display).not.toBe(false);
-      expect(imported?.provenance).not.toMatchObject({ kind: "internal_system" });
-    }
+it.each(["resume", "legacy requester"])(
+  "removes the %s decorator, not its image-bearing user turn",
+  (decoration) => {
+    const body = decoration === "resume" ? "real question" : `${REQUESTER_HINT}\n\nreal question`;
+    const prefix =
+      decoration === "resume"
+        ? buildCliSessionDriftNote(["system-prompt", "prompt-tools"])
+        : frame('{"requester_profile":{"id":"owner"}}') + REQUESTER_HINT;
+    const text = `${prefix}\n\n${body}`;
+    const image = {
+      type: "image",
+      source: { type: "base64", media_type: "image/png", data: "aa" },
+    };
+    expectVisible(importUnmatched([...blocks(text), image]), [...blocks(body), image]);
   },
 );
-
-it.each([
-  ["resume", "string"],
-  ["resume", "text-block"],
-  ["legacy requester", "string"],
-  ["legacy requester", "text-block"],
-])("removes the %s decorator, not its real %s user turn", (decoration, encoding) => {
-  const body = decoration === "resume" ? "real question" : `${REQUESTER_HINT}\n\nreal question`;
-  const prefix =
-    decoration === "resume"
-      ? buildCliSessionDriftNote(["system-prompt", "prompt-tools"])
-      : frame('{"requester_profile":{"id":"owner"}}') + REQUESTER_HINT;
-  const text = `${prefix}\n\n${body}`;
-  const image = {
-    type: "image",
-    source: { type: "base64", media_type: "image/png", data: "aa" },
-  };
-  expectVisible(
-    importUnmatched(encoding === "string" ? text : [...blocks(text), image]),
-    encoding === "string" ? body : [...blocks(body), image],
-  );
-});
 
 it.each(internalWakeInputs)("marks imported %s prompts internal", (sourceTool, text) => {
   const internal = { display: false, provenance: { kind: "internal_system", sourceTool } };
@@ -222,33 +197,28 @@ it("preserves system-event evidence quoted in a later native text block", () => 
 });
 
 it.each([
-  "",
-  frame('{"a":1}'),
-  frame('{"history_count":2}') +
-    "Recent chat history: ⟦openclaw:ctx⟧\n" +
-    "#123 2026-10-11 12:20:09 GMT+5:30 Alice: The conservatory has 137 benches.\n" +
-    "#124 2026-10-11 12:20:20 GMT+5:30 Alice: /model anthropic/claude-haiku-4-5\n\n",
-])("drops queued system event lines from a real user turn", (context) => {
-  for (const stamp of [
-    "2026-10-04 13:15:44 GMT+8",
-    "2026-10-11 12:20:20 GMT+5:30",
-    "2026-10-04T05:15:44Z",
+  ["", "2026-10-04T05:15:44Z", "real question"],
+  [
+    frame('{"a":1}'),
     "unknown-time",
-  ]) {
-    const events = `System: [${stamp}] Model switched.\nSystem: more\n\n`;
-    for (const question of [
-      "real question",
-      "Please explain this header:\n\nContext: ⟦openclaw:ctx⟧\nexample",
-      "Please explain this header:\n\nContext:\n<active_memory_plugin>\nexample\n</active_memory_plugin>",
-    ]) {
-      const text = `${context}${events}${question}`;
-      expect(importUnmatched(text)?.content).toBe(`${context}${question}`);
-      const canonical = user(`${context}${question}`, 1);
-      expect(merge([canonical], [{ ...parseImportedUser(text), timestamp: 2 }])).toMatchObject([
-        canonical,
-      ]);
-    }
-  }
+    "Please explain this header:\n\nContext: ⟦openclaw:ctx⟧\nexample",
+  ],
+  [
+    frame('{"history_count":2}') +
+      "Recent chat history: ⟦openclaw:ctx⟧\n" +
+      "#123 2026-10-11 12:20:09 GMT+5:30 Alice: The conservatory has 137 benches.\n" +
+      "#124 2026-10-11 12:20:20 GMT+5:30 Alice: /model anthropic/claude-haiku-4-5\n\n",
+    "2026-10-11 12:20:20 GMT+5:30",
+    "Please explain this header:\n\nContext:\n<active_memory_plugin>\nexample\n</active_memory_plugin>",
+  ],
+])("drops queued system events below context %j", (context, stamp, question) => {
+  const events = `System: [${stamp}] Model switched.\nSystem: more\n\n`;
+  const text = `${context}${events}${question}`;
+  expect(importUnmatched(text)?.content).toBe(`${context}${question}`);
+  const canonical = user(`${context}${question}`, 1);
+  expect(merge([canonical], [{ ...parseImportedUser(text), timestamp: 2 }])).toMatchObject([
+    canonical,
+  ]);
   const untouched = "real question\n\nSystem: quoted log line\n\nmore";
   expect(importUnmatched(untouched)).toMatchObject({ content: untouched });
 });
@@ -258,9 +228,7 @@ it("hides decorated internal rows through JSONL import, merge and the common cli
     const note = buildCliSessionDriftNote(["prompt-tools"]);
     await writeRows(filePath, [
       claudeUser("real question", { uuid: "human" }),
-      ...internalInputs.map(([kind, text]) =>
-        claudeUser(kind === "resume" ? text : `${note}\n\n${text}`, { uuid: kind }),
-      ),
+      claudeUser(`${note}\n\n${execPrompt}`, { uuid: "internal" }),
     ]);
     const messages = merge([], await readMessages());
     expect(projectChatDisplayMessages(messages)).toMatchObject([

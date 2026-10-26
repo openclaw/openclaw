@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { createServer } from "node:http";
 import path from "node:path";
+import { text } from "node:stream/consumers";
 import { expect, it } from "vitest";
 import { writeOpenAiResponsesSse } from "../../test/helpers/openai-responses-sse.js";
 import "../agents/ai-transport-runtime-host.js";
@@ -63,29 +64,21 @@ it("sends no request for another operator's session but lets its owner reach the
     const { claim, listener, releaseListener } = await reserveTestPortListener({
       offsets: [0],
       createListener: () =>
-        createServer((request, response) => {
+        createServer(async (request, response) => {
           const recorded: RecordedRequest = {
             url: request.url,
             authorization: request.headers.authorization,
-            body: undefined,
+            body: JSON.parse(await text(request)),
           };
           requests.push(recorded);
-          let body = "";
-          request.setEncoding("utf8");
-          request.on("data", (chunk: string) => {
-            body += chunk;
-          });
-          request.on("end", () => {
-            recorded.body = JSON.parse(body);
-            writeOpenAiResponsesSse(response, [
-              {
-                id: "fork-transport-response",
-                object: "chat.completion.chunk",
-                model: "fork-model",
-                choices: [{ index: 0, delta: { content: "fork-ok" }, finish_reason: "stop" }],
-              },
-            ]);
-          });
+          writeOpenAiResponsesSse(response, [
+            {
+              id: "fork-transport-response",
+              object: "chat.completion.chunk",
+              model: "fork-model",
+              choices: [{ index: 0, delta: { content: "fork-ok" }, finish_reason: "stop" }],
+            },
+          ]);
         }),
     });
     const lifetime = new AbortController();
@@ -237,6 +230,7 @@ it("sends no request for another operator's session but lets its owner reach the
             );
             expect(JSON.stringify(requests[0]?.body)).not.toContain("OUTSIDE_HISTORY_WINDOW_1672");
             expect(requests[0]?.body).not.toHaveProperty("prompt_cache_key");
+            const user = (content: unknown) => ({ role: "user", content });
             expect(requests[0]).toMatchObject({
               url: "/v1/chat/completions",
               authorization: `Bearer ${API_KEY}`,
@@ -244,20 +238,14 @@ it("sends no request for another operator's session but lets its owner reach the
                 model: "fork-model",
                 messages: [
                   { role: "system", content: "Stable parent instructions" },
-                  {
-                    role: "user",
-                    content: [
-                      {
-                        type: "text",
-                        text: "The conversation history before this point was compacted into the following summary:\n\n<summary>\nEarlier request summarized for review\n</summary>",
-                      },
-                    ],
-                  },
-                  {
-                    role: "user",
-                    content: expect.stringContaining("[Thu 1970-01-01 00:00 UTC] Parent question"),
-                  },
-                  { role: "user", content: "Review the parent" },
+                  user([
+                    {
+                      type: "text",
+                      text: "The conversation history before this point was compacted into the following summary:\n\n<summary>\nEarlier request summarized for review\n</summary>",
+                    },
+                  ]),
+                  user(expect.stringContaining("[Thu 1970-01-01 00:00 UTC] Parent question")),
+                  user("Review the parent"),
                 ],
               },
             });

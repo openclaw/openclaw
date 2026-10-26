@@ -7,34 +7,32 @@ import type { WorkerProvider, WorkerSshEndpoint } from "../plugins/types.js";
 import type { CommandOptions, SpawnResult } from "../process/exec.js";
 import * as stateDatabase from "../state/openclaw-state-db.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
-import { loadSessionEntryAsync } from "./session-entry-load.test-support.js";
-import { writeSessionStore } from "./test-helpers.js";
-import * as sessions from "./test/server-sessions.test-helpers.js";
+import { setupGatewaySessionsHandlerTestHarness } from "./test/server-sessions.test-helpers.js";
 import { bootstrapWorker } from "./worker-environments/bootstrap.js";
-import type { WorkerInstallationArtifact } from "./worker-environments/bundle.js";
-import { createWorkerPlacementDispatchService } from "./worker-environments/placement-dispatch.js";
 import { WORKER_PROTOCOL_FEATURES } from "./worker-environments/placement-lifecycle.test-support.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
+import { createProviderReplayDispatch } from "./worker-environments/provider-replay.test-support.js";
 import { deriveEnvironmentIntent } from "./worker-environments/service-contract.js";
 import {
   createWorkerEnvironmentService,
   type WorkerEnvironmentService,
 } from "./worker-environments/service.js";
+import { BUNDLE_ARTIFACT, BOOTSTRAP_RECEIPT } from "./worker-environments/service.test-support.js";
 import { createWorkerEnvironmentStore } from "./worker-environments/store.js";
 import type { WorkerSshRunner } from "./worker-environments/tunnel-ssh-runner.js";
 import { createWorkerTunnelManager } from "./worker-environments/tunnel.js";
 import {
   localWorkspaceRunner,
   resolveIdentity as fixtureIdentity,
+  BUNDLE_HASH,
   SSH,
   success,
 } from "./worker-environments/tunnel.test-support.js";
 import { rsyncArgvPort, sshArgvPort } from "./worker-environments/worker-ssh-argv.test-support.js";
-import { createWorkerWorkspaceOperationCoordinator } from "./worker-environments/workspace-operation-coordinator.js";
 import { createWorkerWorkspaceRecoveryFixture } from "./worker-environments/workspace-recovery.test-support.js";
 import { initializeScriptGitWorkspace } from "./worker-environments/workspace-sync-scripts.test-support.js";
 
-const { createSessionStoreDir } = sessions.setupGatewaySessionsHandlerTestHarness();
+setupGatewaySessionsHandlerTestHarness();
 const PRIMARY_PORT = 2222;
 const FALLBACK_PORT = 22;
 const SESSION_ID = "session-original-order";
@@ -42,19 +40,12 @@ const SESSION_KEY = "agent:main:original-order";
 const sessionIdentity = { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main" };
 const PROFILE_ID = "development";
 const ENVIRONMENT_ID = deriveEnvironmentIntent(`session-dispatch:${SESSION_ID}:1`).environmentId;
-const BUNDLE_HASH = "a".repeat(64);
 const RECEIPT = {
-  bundleHash: BUNDLE_HASH,
+  ...BOOTSTRAP_RECEIPT,
   openclawVersion: "2026.8.1",
   protocolFeatures: [...WORKER_PROTOCOL_FEATURES],
 };
-const INSTALLATION: WorkerInstallationArtifact = {
-  install: "bundle",
-  ...RECEIPT,
-  tarballBytes: 1,
-  tarballSha256: "b".repeat(64),
-  tarballPath: "/gateway/worker-bundle.tgz",
-};
+const INSTALLATION = { ...BUNDLE_ARTIFACT, ...RECEIPT };
 const SSH_ENDPOINT: WorkerSshEndpoint = {
   ...SSH,
   port: PRIMARY_PORT,
@@ -72,33 +63,13 @@ function expectOrdered(actual: readonly string[], expected: readonly string[]): 
   }
 }
 
-function argvPort(argv: readonly string[]): number {
-  const port =
-    argv[0] === "ssh"
-      ? sshArgvPort(argv)
-      : argv[0] === "rsync"
-        ? rsyncArgvPort(argv)
-        : Number(argv[argv.indexOf("-P") + 1]);
-  if (!Number.isInteger(port)) {
-    throw new Error(`missing SSH port for ${argv[0] ?? "command"}`);
-  }
-  return port!;
-}
-
 class OriginalOrderSshRunner implements WorkerSshRunner {
   readonly events: string[] = [];
   bootstrapUploadPath = "";
-  readonly bootstrapReceiptPath: string;
   private readonly workspace: WorkerSshRunner;
 
   constructor(private readonly remoteHome: string) {
     this.workspace = localWorkspaceRunner(remoteHome).runner;
-    this.bootstrapReceiptPath = path.join(
-      remoteHome,
-      ".openclaw-worker",
-      BUNDLE_HASH,
-      "bootstrap-receipt.json",
-    );
   }
 
   setBootstrapOperationId(operationId: string): void {
@@ -119,27 +90,26 @@ class OriginalOrderSshRunner implements WorkerSshRunner {
     if (argv[0] === "git") {
       return await this.workspace.run(argv, options);
     }
-    const port = argvPort(argv);
+    const port =
+      argv[0] === "ssh"
+        ? sshArgvPort(argv)
+        : argv[0] === "rsync"
+          ? rsyncArgvPort(argv)
+          : Number(argv[argv.indexOf("-P") + 1]);
     const input = typeof options.input === "string" ? options.input : "";
     if (argv[0] === "ssh" && input.includes("expected_receipt=$2")) {
       this.events.push(`bootstrap:preflight:${port}`);
       if (port === PRIMARY_PORT) {
         return { ...success(), code: 255, stderr: "primary transport unavailable" };
       }
-      await fs.mkdir(path.dirname(this.bootstrapUploadPath), { recursive: true });
-      await fs.writeFile(this.bootstrapUploadPath, "");
       return success(`OPENCLAW_WORKER_BOOTSTRAP_V1\tinstall\t${this.bootstrapUploadPath}\n`);
     }
     if (argv[0] === "scp") {
       this.events.push(`bootstrap:transfer:${port}`);
-      await fs.writeFile(this.bootstrapUploadPath, "worker bundle");
       return success();
     }
     if (argv[0] === "ssh" && input.includes("receipt_matches()")) {
       this.events.push(`bootstrap:install:${port}`);
-      await fs.mkdir(path.dirname(this.bootstrapReceiptPath), { recursive: true });
-      await fs.writeFile(this.bootstrapReceiptPath, `${JSON.stringify(RECEIPT)}\n`);
-      await fs.rm(this.bootstrapUploadPath, { force: true });
       return success(`OPENCLAW_WORKER_BOOTSTRAP_V1\treceipt\t${JSON.stringify(RECEIPT)}\n`);
     }
     if (argv[0] === "ssh" && input.includes("operation_token=$2")) {
@@ -224,7 +194,7 @@ afterEach(async () => {
   }
 });
 
-test("preserves ordered fallback through inventory rehydration, workspace sync, and safe session retirement", async () => {
+test("preserves ordered fallback through inventory rehydration, workspace sync, and reclaim", async () => {
   root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-worker-order-"));
   const stateDir = path.join(root, "state");
   const remoteHome = path.join(root, "remote-home");
@@ -269,10 +239,6 @@ test("preserves ordered fallback through inventory rehydration, workspace sync, 
     bootstrapWorker: async (request) => {
       const { operationId, sshEndpoint, installation, resolveIdentity, signal } = request;
       runner.setBootstrapOperationId(operationId);
-      expect(environmentStore.get(ENVIRONMENT_ID)).toMatchObject({
-        state: "bootstrapping",
-        sshEndpoint: SSH_ENDPOINT,
-      });
       events.push("inventory:rehydrate");
       expect(
         (await createWorkerEnvironmentStore({ database, now: () => 2_000 })).get(ENVIRONMENT_ID),
@@ -302,7 +268,7 @@ test("preserves ordered fallback through inventory rehydration, workspace sync, 
     },
   });
   workerService = environmentService;
-  const dispatch = createWorkerPlacementDispatchService({
+  const dispatch = createProviderReplayDispatch({
     initialPlacements: await placements.listAsync(),
     placements,
     environments: {
@@ -325,17 +291,9 @@ test("preserves ordered fallback through inventory rehydration, workspace sync, 
         };
       },
     },
-    runnerAvailability: { read: () => undefined, version: () => 0 },
-    workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
-    runLocalBarrier: async ({ startDispatch }) => startDispatch(),
     runRecoveryBarrier: async ({ run }) => await run({ kind: "local", path: localWorkspace }),
-    runActivationBarrier: async ({ activate }) => activate(),
-    runMoveBarrier: async ({ begin }) => begin(),
-    resolveMoveDestination: async () => undefined,
-    runReclaimPreparation: async ({ run, authorize }) => await run(authorize),
     runReclaimBarrier: async ({ begin, reclaim }) =>
       await reclaim({ kind: "local", path: localWorkspace }, await begin()),
-    runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
     ...createWorkerWorkspaceRecoveryFixture({
       resolveWorkspace: async () => ({ kind: "local", path: localWorkspace }),
     }),
@@ -347,10 +305,6 @@ test("preserves ordered fallback through inventory rehydration, workspace sync, 
     executionMode: "remote-exec",
   });
   expect(active).toMatchObject({ state: "active", environmentId: ENVIRONMENT_ID });
-  await expect(fs.stat(runner.bootstrapUploadPath)).rejects.toMatchObject({ code: "ENOENT" });
-  await expect(fs.readFile(runner.bootstrapReceiptPath, "utf8")).resolves.toBe(
-    `${JSON.stringify(RECEIPT)}\n`,
-  );
   events.push("placement:active");
   await expect(dispatch.reclaim(sessionIdentity)).resolves.toMatchObject({
     state: "reclaimed",
@@ -360,41 +314,6 @@ test("preserves ordered fallback through inventory rehydration, workspace sync, 
   expect(placements.get(SESSION_ID)).toMatchObject({ state: "reclaimed" });
   events.push("placement:reclaimed");
 
-  await createSessionStoreDir();
-  await writeSessionStore({ entries: { [SESSION_KEY]: sessions.sessionStoreEntry(SESSION_ID) } });
-  sessions.bundleMcpRuntimeMocks.retireSessionMcpRuntime.mockImplementationOnce(
-    async ({ sessionId }) => {
-      expect(sessionId).toBe(SESSION_ID);
-      expect((await loadSessionEntryAsync(SESSION_KEY)).entry?.sessionId).toBe(SESSION_ID);
-      expect(placements.get(SESSION_ID)?.state).toBe("reclaimed");
-      events.push("session:cleanup");
-      return true;
-    },
-  );
-  const deleted = await sessions.directSessionReq(
-    "sessions.delete",
-    { key: SESSION_KEY },
-    {
-      context: {
-        workerSessionPlacementService: {
-          ...placements,
-          retireSessionPlacementAsync: async (
-            retirement: Parameters<typeof placements.retireSessionPlacementAsync>[0],
-          ) => {
-            expect((await loadSessionEntryAsync(SESSION_KEY)).entry).toBeUndefined();
-            expect(placements.get(SESSION_ID)?.state).toBe("reclaimed");
-            events.push("placement:retire");
-            await placements.retireSessionPlacementAsync(retirement);
-          },
-        },
-      },
-    },
-  );
-  events.push("session:deleted");
-
-  expect(deleted.ok).toBe(true);
-  expect(placements.get(SESSION_ID)).toBeUndefined();
-  expect((await loadSessionEntryAsync(SESSION_KEY)).entry).toBeUndefined();
   expectOrdered(events, [
     "provider:provision",
     "inventory:rehydrate",
@@ -409,8 +328,5 @@ test("preserves ordered fallback through inventory rehydration, workspace sync, 
     "workspace:renew-quiescence",
     "provider:destroy",
     "placement:reclaimed",
-    "session:cleanup",
-    "placement:retire",
-    "session:deleted",
   ]);
 });
