@@ -1,4 +1,4 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => ({
   waitForEmbeddedAbortSettle: vi.fn(async () => undefined),
@@ -33,8 +33,6 @@ function createInput(overrides: Partial<PromptErrorInput> = {}): PromptErrorInpu
     ...overrides,
   } as PromptErrorInput;
 }
-
-beforeEach(() => vi.resetAllMocks());
 
 it.each([false, true])("routes prompt failures (mid-turn precheck: %s)", async (precheck) => {
   const request = {
