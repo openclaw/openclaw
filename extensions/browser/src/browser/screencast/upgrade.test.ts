@@ -19,9 +19,7 @@ describe("browser screencast WebSocket upgrade", () => {
   beforeEach(async () => {
     mocks.attach.mockReset();
     clients = [];
-    server = createServer().on("upgrade", (req, socket, head) => {
-      void handleBrowserScreencastUpgrade(req, socket, head);
-    });
+    server = createServer().on("upgrade", handleBrowserScreencastUpgrade);
     await once(server.listen(0, "127.0.0.1"), "listening");
     url = `ws://127.0.0.1:${(server.address() as AddressInfo).port}/browser/screencast`;
   });
@@ -54,7 +52,7 @@ describe("browser screencast WebSocket upgrade", () => {
     });
   }
 
-  it("accepts a minted token once and rejects invalid or reused tokens with HTTP 401", async () => {
+  it("accepts a one-use view-only token and rejects invalid or reused tokens with HTTP 401", async () => {
     expect(await rejected("invalid")).toBe(401);
     const params = screencastParams();
     const token = tokens.mintBrowserScreencastToken(params).token;
@@ -62,6 +60,9 @@ describe("browser screencast WebSocket upgrade", () => {
     await once(ws, "open");
     expect(mocks.attach).toHaveBeenCalledWith(params, expect.any(WebSocket), undefined);
     expect(await rejected(token)).toBe(401);
+    const closed = once(ws, "close");
+    ws.send(Buffer.from([1]));
+    expect(await closed).toEqual([1003, Buffer.from("view_only")]);
   });
 
   it.each(["abort", "invalidate"])("rejects a ticket on requester %s", async (mode) => {
@@ -73,6 +74,7 @@ describe("browser screencast WebSocket upgrade", () => {
         isRequesterCurrent: () => current,
       }),
     );
+    current = mode === "abort";
     if (mode === "abort") {
       const consume = tokens.consumeBrowserScreencastToken;
       vi.spyOn(tokens, "consumeBrowserScreencastToken").mockImplementationOnce((value) => {
@@ -80,9 +82,6 @@ describe("browser screencast WebSocket upgrade", () => {
         requester.abort();
         return params;
       });
-    } else {
-      current = false;
-      expect(requester.signal.aborted).toBe(false);
     }
     expect(await rejected(token)).toBe(401);
     if (mode === "invalidate") {
@@ -90,14 +89,6 @@ describe("browser screencast WebSocket upgrade", () => {
       expect(await rejected(token)).toBe(401);
     }
     expect(mocks.attach).not.toHaveBeenCalled();
-  });
-
-  it("rejects binary input on the view-only socket", async () => {
-    const ws = connect(tokens.mintBrowserScreencastToken(screencastParams()).token);
-    await once(ws, "open");
-    const closed = once(ws, "close");
-    ws.send(Buffer.from([1]));
-    expect(await closed).toEqual([1003, Buffer.from("view_only")]);
   });
 
   it("pings viewers and terminates a missed pong", async () => {
