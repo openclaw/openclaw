@@ -66,7 +66,7 @@ const remoteCatalog: ActiveRemoteModelCatalog = freezeJsonSnapshot({
       {
         api: "openai-completions",
         baseUrl: "https://fixture.invalid",
-        models: Array.from({ length: modelsPerProvider }, (model, index) => ({
+        models: Array.from({ length: modelsPerProvider }, (_model, index) => ({
           id: `model-${index}`,
           name: `Model ${index}`,
           contextWindow: 128000,
