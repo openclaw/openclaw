@@ -58,30 +58,33 @@ function setup(pendingTranscriptRepair?: SessionEntry["pendingTranscriptRepair"]
   };
 }
 
-function successfulAppend(messageId: string) {
-  return {
-    ok: true as const,
-    target: { agentId: "main", sessionId: "session-1", sessionKey, storePath },
-    messageId,
-  };
-}
+const appended = {
+  ok: true as const,
+  target: { agentId: "main", sessionId: "session-1", sessionKey, storePath },
+  messageId: "message-1",
+};
 
 function repair(text = "missing", id = "repair-1", createdAt = 10) {
   return { id, text, createdAt };
 }
 
-function expectedAppend(id: string, message: Record<string, unknown>) {
+function expectedAppend(item: ReturnType<typeof repair>, provider = "cli", model = "default") {
   return expect.objectContaining({
-    idempotencyKey: `transcript-repair:${id}`,
+    idempotencyKey: `transcript-repair:${item.id}`,
     expectedSessionId: "session-1",
     updateMode: "file-only",
-    message: expect.objectContaining(message),
+    message: expect.objectContaining({
+      provider,
+      model,
+      timestamp: item.createdAt,
+      content: [{ type: "text", text: item.text }],
+    }),
   });
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
-  append.mockResolvedValue(successfulAppend("message-1"));
+  append.mockResolvedValue(appended);
   persist.mockImplementation(async (params) => {
     if (params.shouldPersist?.(params.sessionStore[params.sessionKey]) !== false) {
       params.sessionStore[params.sessionKey] = params.entry;
@@ -92,7 +95,7 @@ beforeEach(() => {
 });
 
 it("appends a canonical record and fences it to the run-owned session", async () => {
-  const existingRepair = { id: "repair-1", text: "first", createdAt: 1 };
+  const existingRepair = repair("first", "repair-1", 1);
   const fixture = setup([existingRepair]);
   await fixture.record("second", { provider: " openai ", model: " gpt-5.5 " });
 
@@ -126,25 +129,11 @@ it("replays every missing final in order before clearing the backlog", async () 
     { ...repair("first"), provider: "openai", model: "gpt-5.5" },
     repair("second", "repair-2", 20),
   ]);
-  append
-    .mockResolvedValueOnce(successfulAppend("message-1"))
-    .mockResolvedValueOnce(successfulAppend("message-2"));
-
   await fixture.replay();
 
   expect(append.mock.calls.map(([params]) => params)).toEqual([
-    expectedAppend("repair-1", {
-      provider: "openai",
-      model: "gpt-5.5",
-      timestamp: 10,
-      content: [{ type: "text", text: "first" }],
-    }),
-    expectedAppend("repair-2", {
-      provider: "cli",
-      model: "default",
-      timestamp: 20,
-      content: [{ type: "text", text: "second" }],
-    }),
+    expectedAppend(repair("first"), "openai", "gpt-5.5"),
+    expectedAppend(repair("second", "repair-2", 20)),
   ]);
   expect(fixture.pending()).toBeUndefined();
 });
@@ -186,7 +175,7 @@ it("does not clear repair state from a replacement session", async () => {
   const fixture = setup([repair()]);
   append.mockImplementationOnce(async () => {
     fixture.sessionStore[sessionKey] = makeEntry({ sessionId: "replacement" });
-    return successfulAppend("message-1");
+    return appended;
   });
 
   await fixture.replay();

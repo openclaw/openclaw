@@ -30,28 +30,25 @@ function sandboxedCliConfig(params: { sandboxMode?: "all"; cliModel?: boolean })
   return { agents: { defaults: { models, ...sandbox } } };
 }
 
-/**
- * Drives the real command attempt owner: classification, the sandbox guard,
- * and dispatch selection all run unmocked; only the CLI runner (the host
- * process launch) and the embedded runner are observed.
- */
+// Keep classification, sandbox admission and dispatch real; stub only the runners.
 export function registerSandboxedDelegatedCliTests(harness: SandboxedCliHarness) {
   const { runStoredAttempt, seedSessionStore } = harness;
 
   async function attempt(params: {
     sessionKey: string;
-    entry: Partial<SessionEntry>;
-    cfg: OpenClawConfig;
+    entry?: Partial<SessionEntry>;
+    cfg?: OpenClawConfig;
     overrides?: Partial<Omit<RunAgentAttemptOverrides, "agentDir" | "storePath" | "workspaceDir">>;
   }) {
-    const sessionEntry = makeSessionEntry(`sandbox-cli-${params.sessionKey.split(":").at(-1)}`, {
-      ...params.entry,
-    });
+    const sessionEntry = makeSessionEntry(
+      `sandbox-cli-${params.sessionKey.split(":").at(-1)}`,
+      params.entry,
+    );
     const sessionStore = await seedSessionStore(params.sessionKey, sessionEntry);
     return runStoredAttempt({
       providerOverride: "anthropic",
       modelOverride: "claude-opus-4-7",
-      cfg: params.cfg,
+      cfg: params.cfg ?? sandboxedCliConfig({ sandboxMode: "all", cliModel: true }),
       sessionEntry,
       sessionKey: params.sessionKey,
       sessionStore,
@@ -71,28 +68,20 @@ export function registerSandboxedDelegatedCliTests(harness: SandboxedCliHarness)
       name: "hidden subagent child",
       sessionKey: "agent:main:subagent:sandbox-cli-hidden",
       entry: { spawnedBy: "agent:main:main" },
-      cfg: sandboxedCliConfig({ sandboxMode: "all", cliModel: true }),
-      overrides: {},
     },
     {
       name: "subagent-keyed child without a spawnedBy stamp",
       sessionKey: "agent:main:subagent:sandbox-cli-keyonly",
-      entry: {},
-      cfg: sandboxedCliConfig({ sandboxMode: "all", cliModel: true }),
-      overrides: {},
     },
     {
       name: "visible spawned child",
       sessionKey: "agent:main:dashboard:sandbox-cli-visible",
       entry: { parentSessionKey: "agent:main:main", spawnedBy: "agent:main:main" },
-      cfg: sandboxedCliConfig({ sandboxMode: "all", cliModel: true }),
-      overrides: {},
     },
     {
       name: "fallback candidate after an API primary",
       sessionKey: "agent:main:subagent:sandbox-cli-fallback",
       entry: { spawnedBy: "agent:main:main" },
-      cfg: sandboxedCliConfig({ sandboxMode: "all", cliModel: true }),
       overrides: { isFallbackRetry: true, originalProvider: "openai" },
     },
     {
@@ -107,7 +96,6 @@ export function registerSandboxedDelegatedCliTests(harness: SandboxedCliHarness)
       sessionKey: "agent:main:subagent:sandbox-cli-required",
       entry: { spawnedBy: "agent:main:main", sandbox: "required" as const },
       cfg: sandboxedCliConfig({ cliModel: true }),
-      overrides: {},
     },
   ])("refuses host CLI launch for a sandboxed $name", async (testCase) => {
     const run = attempt(testCase);
@@ -116,25 +104,23 @@ export function registerSandboxedDelegatedCliTests(harness: SandboxedCliHarness)
     expectNoDispatch();
   });
 
-  it("keeps CLI launch for an operator dashboard session parented to main", async () => {
-    harness.runCliAgentMock.mockResolvedValueOnce(makeCliResult("operator cli"));
-    await attempt({
+  it.each([
+    {
+      name: "an operator dashboard session parented to main",
       sessionKey: "agent:main:dashboard:sandbox-cli-operator",
       entry: { parentSessionKey: "agent:main:main" },
-      cfg: sandboxedCliConfig({ sandboxMode: "all", cliModel: true }),
-    });
-    expect(harness.runCliAgentMock).toHaveBeenCalledOnce();
-    expect(harness.runEmbeddedAgentMock).not.toHaveBeenCalled();
-  });
-
-  it("keeps CLI launch for an unsandboxed spawned child", async () => {
-    harness.runCliAgentMock.mockResolvedValueOnce(makeCliResult("unsandboxed cli"));
-    await attempt({
+    },
+    {
+      name: "an unsandboxed spawned child",
       sessionKey: "agent:main:subagent:sandbox-cli-unsandboxed",
       entry: { spawnedBy: "agent:main:main" },
       cfg: sandboxedCliConfig({ cliModel: true }),
-    });
+    },
+  ])("keeps CLI launch for $name", async (testCase) => {
+    harness.runCliAgentMock.mockResolvedValueOnce(makeCliResult("cli response"));
+    await attempt(testCase);
     expect(harness.runCliAgentMock).toHaveBeenCalledOnce();
+    expect(harness.runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
   it("keeps embedded execution for a sandboxed spawned child on an API model", async () => {
