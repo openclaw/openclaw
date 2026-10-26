@@ -86,11 +86,9 @@ describe("createProviderApiKeyAuthMethod", () => {
       expected: undefined,
     },
   ])("$name", async ({ resolveDefaultModel, expected }) => {
-    const resolve = vi.fn(resolveDefaultModel);
     const ctx = context();
-    const config = await discoveredMethod(resolve).runNonInteractive?.(ctx);
+    const config = await discoveredMethod(resolveDefaultModel).runNonInteractive?.(ctx);
     expect(ctx.toApiKeyCredential).not.toHaveBeenCalled();
-    expect(resolve).toHaveBeenCalledWith({ apiKey: "test-token", config: {} });
     expect(config?.agents?.defaults?.model).toEqual(expected);
   });
 

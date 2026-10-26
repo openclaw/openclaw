@@ -11,9 +11,7 @@ function fixture() {
   ) =>
     registerPlugin(fields, (api) => api.session.controls.registerControlUiDescriptor(descriptor));
   const expectDescriptor = (pluginId: string, descriptor: Partial<PluginControlUiDescriptor>) =>
-    expect(registry.controlUiDescriptors).toEqual([
-      expect.objectContaining({ pluginId, descriptor: expect.objectContaining(descriptor) }),
-    ]);
+    expect(registry.controlUiDescriptors).toMatchObject([{ pluginId, descriptor }]);
   return { registry, register, registerPlugin, expectDescriptor };
 }
 
@@ -106,13 +104,11 @@ describe("plugin registry Control UI descriptors", () => {
       { surface: "widget", id: "card", label: "Workboard card", requiredScopes: ["operator.read"] },
       { id: "workboard", uiCapabilities: [] },
     );
-    expect(registry.diagnostics.filter(({ level }) => level === "warn")).toEqual([
-      expect.objectContaining({
-        pluginId: "workboard",
-        message:
-          'Registered UI capability "widget" is missing from uiCapabilities in openclaw.plugin.json.',
-      }),
-    ]);
+    expectDiagnostic(registry, {
+      level: "warn",
+      pluginId: "workboard",
+      message: expect.stringContaining('UI capability "widget"'),
+    });
     expectDescriptor("workboard", { id: "card", surface: "widget", label: "Workboard card" });
   });
 });

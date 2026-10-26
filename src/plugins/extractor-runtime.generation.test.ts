@@ -19,35 +19,24 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-describe.each([
-  {
-    name: "web content",
-    artifact: "web-content-extractor.js",
-    factory: "createFixtureWebContentExtractor",
-    contract: "webContentExtractors",
-    extract: (config?: OpenClawConfig) =>
-      extractReadableContent({
-        html: "<p>fixture</p>",
-        url: "https://example.test/page",
-        extractMode: "text",
-        config,
-      }),
-  },
-  {
-    name: "document",
-    artifact: "document-extractor.js",
-    factory: "createFixtureDocumentExtractor",
-    contract: "documentExtractors",
-    extract: (config?: OpenClawConfig) =>
-      extractPdfContent({
-        buffer: Buffer.from("fixture"),
-        maxPages: 1,
-        maxPixels: 100,
-        minTextChars: 1,
-        config,
-      }),
-  },
-])("$name extraction metadata ownership", ({ artifact, factory, contract, extract }) => {
+describe.each(["web-content", "document"])("%s extraction metadata ownership", (kind) => {
+  const document = kind === "document";
+  const contract = document ? "documentExtractors" : "webContentExtractors";
+  const extract = (config?: OpenClawConfig) =>
+    document
+      ? extractPdfContent({
+          buffer: Buffer.from("fixture"),
+          maxPages: 1,
+          maxPixels: 100,
+          minTextChars: 1,
+          config,
+        })
+      : extractReadableContent({
+          html: "<p>fixture</p>",
+          url: "https://example.test/page",
+          extractMode: "text",
+          config,
+        });
   it.each([false, true])(
     "follows nested metadata views without re-evaluating the artifact with config=%s",
     async (hasConfig) => {
@@ -59,11 +48,11 @@ describe.each([
       fs.mkdirSync(pluginDir, { recursive: true });
       fs.writeFileSync(path.join(pluginDir, "package.json"), '{"type":"commonjs"}\n');
       fs.writeFileSync(
-        path.join(pluginDir, artifact),
+        path.join(pluginDir, `${kind}-extractor.js`),
         `const fs = require("node:fs");
 const events = ${JSON.stringify(events)};
 fs.appendFileSync(events, "evaluated\\n");
-exports.${factory} = () => ({
+exports.createFixture${document ? "Document" : "WebContent"}Extractor = () => ({
   id: "fixture-extractor",
   label: "Fixture extractor",
   mimeTypes: ["application/pdf"],
@@ -103,7 +92,7 @@ exports.${factory} = () => ({
       await inSnapshot(available, async () => {
         await expect(extract(config)).resolves.toMatchObject({ text: "fixture result" });
         await inSnapshot(empty, async () => {
-          if (contract === "documentExtractors") {
+          if (document) {
             await expect(extract(config)).rejects.toThrow("PDF extraction disabled or unavailable");
           } else {
             await expect(extract(config)).resolves.toBeNull();
