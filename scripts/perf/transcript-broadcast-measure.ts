@@ -168,6 +168,7 @@ const { values } = parseArgs({
     "worktree-tool-churn": { type: "boolean", default: false },
     "stress-tool-search": { type: "boolean", default: false },
     "attempt-setup-image": { type: "string" },
+    "sandbox-image": { type: "string" },
     "cold-session-rounds": { type: "string", default: "0" },
     "turn-start-phases": { type: "boolean", default: false },
     "turn-start-advance-origin": { type: "boolean", default: false },
@@ -1294,6 +1295,27 @@ cfg.tools = {
   codeMode: values["stress-tools"],
   ...(values["stress-tools"] ? { exec: { host: "gateway", mode: "full" } } : {}),
 };
+if (values["sandbox-image"]) {
+  if (!values["turn-start-phases"] || values["attempt-setup-image"]) {
+    throw new Error("--sandbox-image requires --turn-start-phases without --attempt-setup-image");
+  }
+  cfg.tools.exec = { host: "sandbox", mode: "full" };
+  cfg.tools.sandbox = { tools: { allow: ["*"] } };
+  cfg.agents.defaults.sandbox = {
+    mode: "all",
+    backend: "docker",
+    scope: "session",
+    workspaceAccess: "rw",
+    workspaceRoot: path.join(root, "sandboxes"),
+    docker: {
+      image: values["sandbox-image"],
+      containerPrefix: `bench-turn-${port}-`,
+      network: "none",
+      cpus: 1,
+      memory: "512m",
+    },
+  };
+}
 if (values["cron-operator-turn"]) {
   cfg.cron = { ...cfg.cron, enabled: true };
 }
@@ -1814,7 +1836,7 @@ if (trustedProxyScenario) {
   };
 }
 const toolPaths = Array.from({ length: retentionScenario ? 3 : 1 }, (_, index) => {
-  if (values["attempt-setup-image"]) {
+  if (values["attempt-setup-image"] || values["sandbox-image"]) {
     return "README.md";
   }
   const file = path.join(root, "workspace", `synthetic-tool-input-${index}.txt`);
@@ -2338,6 +2360,7 @@ const mock = createServer((req, res) => {
             typeof toolResult.output !== "string" ||
             !toolResult.output.includes(
               values["attempt-setup-image"] ||
+                values["sandbox-image"] ||
                 values["worktree-tool-churn"] ||
                 values["stress-worktree-fanout"]
                 ? "# Synthetic project "
@@ -2445,8 +2468,9 @@ const mock = createServer((req, res) => {
       let reasoningReplayKey = toolOutput?.call_id;
       if (primary && toolScenario && cohort) {
         const currentCohort = cohort;
-        const toolWorktree =
-          values["worktree-tool-churn"] || values["stress-worktree-fanout"]
+        const toolWorktree = values["sandbox-image"]
+          ? "/workspace"
+          : values["worktree-tool-churn"] || values["stress-worktree-fanout"]
             ? worktreeToolRoots.get(index)
             : stressWorktree;
         if ((values["worktree-tool-churn"] || values["stress-worktree-fanout"]) && !toolWorktree) {
@@ -4130,7 +4154,9 @@ async function runRound(
         })()
       : undefined;
   const providerTimeoutMs =
-    values["attempt-setup-image"] || values["stress-worktree-fanout"] ? 170_000 : 45_000;
+    values["attempt-setup-image"] || values["sandbox-image"] || values["stress-worktree-fanout"]
+      ? 170_000
+      : 45_000;
   const timeout = setTimeout(
     () =>
       current.reject(
@@ -5825,9 +5851,10 @@ try {
       startedHeapWorkers.push(worker);
     }
   }
-  const wholeSoakResourcesBefore = soakScenario
-    ? await readGatewayResources(gateway, { includeWorkers: true })
-    : undefined;
+  const wholeSoakResourcesBefore =
+    soakScenario || values["turn-start-phases"]
+      ? await readGatewayResources(gateway, { includeWorkers: true })
+      : undefined;
   const measurementStartedAt = Date.now();
   const wholeSoakCpuBefore = soakScenario ? await readGatewayCpuUsage(gateway) : undefined;
   const measuredGateway = gateway;
@@ -5994,7 +6021,7 @@ try {
       git(atOrigin("read-tree", "HEAD"));
       const blob = git(
         atOrigin("hash-object", "-w", "--stdin"),
-        `# Synthetic base revision ${port}-${round}\n`,
+        `# Synthetic project base revision ${port}-${round}\n`,
       );
       git(atOrigin("update-index", "--add", "--cacheinfo", `100644,${blob},README.md`));
       const tree = git(atOrigin("write-tree"));
@@ -6996,9 +7023,10 @@ try {
     // Keep equal work counts without shortening the continuous GC/allocation window.
     await delay(Math.max(0, durationMs - (Date.now() - measurementStartedAt)));
   }
-  const wholeSoakResourcesAfter = soakScenario
-    ? await readGatewayResources(gateway, { includeWorkers: true })
-    : undefined;
+  const wholeSoakResourcesAfter =
+    soakScenario || values["turn-start-phases"]
+      ? await readGatewayResources(gateway, { includeWorkers: true })
+      : undefined;
   const wholeWorkloadDiagnostics = await finishWholeWorkloadDiagnostics?.();
   const wholeSoakCpu = wholeSoakCpuBefore
     ? measureGatewayCpuUsage(wholeSoakCpuBefore, await readGatewayCpuUsage(gateway))
@@ -7485,6 +7513,9 @@ try {
     ...(scenario === "plugins.reload" ? { wholeReloadDiagnostics: wholeWorkloadDiagnostics } : {}),
     ...(wholeChatDiagnosticsEnabled
       ? { wholeChatDiagnostics: wholeWorkloadDiagnostics, wholeChatGc }
+      : {}),
+    ...(values["turn-start-phases"]
+      ? { turnStartResources: { before: wholeSoakResourcesBefore, after: wholeSoakResourcesAfter } }
       : {}),
     initialFullFrame,
     clientCount,
