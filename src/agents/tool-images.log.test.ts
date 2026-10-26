@@ -1,24 +1,30 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { imageResultFromFile } from "../plugin-sdk/channel-actions.js";
 
-const { infoMock, resizeToJpegMock } = vi.hoisted(() => ({
+const { infoMock, resizeToJpegMock, warnMock } = vi.hoisted(() => ({
   infoMock: vi.fn(),
   resizeToJpegMock: vi.fn(),
+  warnMock: vi.fn(),
 }));
 
-vi.mock("../logging/subsystem.js", async () => {
-  const { createMockSubsystemLogger } = await import("../../test/helpers/mock-subsystem-logger.js");
-  return {
-    createSubsystemLogger: () =>
-      createMockSubsystemLogger("agents/tool-images", {
-        isEnabled: () => true,
-        info: infoMock,
-      }),
-  };
+vi.mock("../logging/subsystem.js", () => {
+  const makeLogger = () => ({
+    subsystem: "agents/tool-images",
+    isEnabled: () => true,
+    trace: vi.fn(),
+    debug: vi.fn(),
+    info: infoMock,
+    warn: warnMock,
+    error: vi.fn(),
+    fatal: vi.fn(),
+    raw: vi.fn(),
+    child: () => makeLogger(),
+  });
+  return { createSubsystemLogger: () => makeLogger() };
 });
 
 vi.mock("../media/media-services.js", () => ({
@@ -35,11 +41,16 @@ import { sanitizeContentBlocksImages } from "./tool-images.js";
 
 describe("tool-images log context", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-  const png = createSolidPngBuffer(2001, 8, { r: 0x7f, g: 0x7f, b: 0x7f });
+  let png: Buffer;
+
+  beforeAll(() => {
+    png = createSolidPngBuffer(2001, 8, { r: 0x7f, g: 0x7f, b: 0x7f });
+  });
 
   beforeEach(() => {
     infoMock.mockClear();
     resizeToJpegMock.mockReset().mockResolvedValue(Buffer.alloc(100, 2));
+    warnMock.mockClear();
   });
 
   it.each([
@@ -61,32 +72,46 @@ describe("tool-images log context", () => {
         imageSanitization: { maxBytes },
       });
 
-      const error = `[sdk:image] omitted image payload: Error: Image could not be reduced below ${limit} (got ${actual})`;
       expect(result.content).toEqual([
         { type: "text", text: "image caption" },
-        { type: "text", text: error },
+        {
+          type: "text",
+          text: `[sdk:image] omitted image payload: Error: Image could not be reduced below ${limit} (got ${actual})`,
+        },
       ]);
       expect(result.details).toMatchObject({
         path: filePath,
         media: { outbound: false, mediaUrl: filePath },
       });
+      expect(warnMock).toHaveBeenLastCalledWith(
+        expect.any(String),
+        expect.objectContaining({ smallestCandidateBytes: minimumBytes }),
+      );
     },
   );
 
   it.each([
-    { sourceBytes: 200, outputBytes: 200, label: "0%" },
-    { sourceBytes: 200, outputBytes: 250, label: "+25%" },
-  ])("logs the signed byte delta for $label", async ({ sourceBytes, outputBytes, label }) => {
+    { sourceBytes: 200, outputBytes: 200, pct: 0, label: "0%" },
+    { sourceBytes: 200, outputBytes: 250, pct: -25, label: "+25%" },
+  ])("logs the signed byte delta for $label", async ({ sourceBytes, outputBytes, pct, label }) => {
     resizeToJpegMock.mockResolvedValue(Buffer.alloc(outputBytes, 2));
-    const data = Buffer.alloc(sourceBytes, 1).toString("base64");
-    await sanitizeContentBlocksImages(
-      [{ type: "image", data, mimeType: "image/png" }],
-      "read:/tmp/images/sample-diagram.png",
-    );
-    const [message] = infoMock.mock.calls.at(-1) ?? [];
-    expect(message).toContain(
-      `sample-diagram.png 2001x8px ${sourceBytes}B -> ${outputBytes}B (${label})`,
-    );
+    const blocks = [
+      {
+        type: "image" as const,
+        data: Buffer.alloc(sourceBytes, 1).toString("base64"),
+        mimeType: "image/png",
+      },
+    ];
+    await sanitizeContentBlocksImages(blocks, "read:/tmp/images/sample-diagram.png");
+    const [message, context] = infoMock.mock.calls.at(-1) ?? [];
+    expect(message).toContain(`sample-diagram.png 2001x8px`);
+    expect(message).toContain(`(${label})`);
     expect(message).not.toContain("(--");
+    expect(context).toMatchObject({
+      fileName: "sample-diagram.png",
+      sourceBytes,
+      outputBytes,
+      byteReductionPct: pct,
+    });
   });
 });
