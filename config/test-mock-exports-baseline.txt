@@ -4590,7 +4590,6 @@
 ["src/gateway/github-publication-requester-aliases.test.ts","./worker-environments/session-repository-checkpoints.js","c763d7bdf3c284be98fb183e4cc665e07c10d4f7ba2bb57fe47d7337ac521d35",1]
 ["src/gateway/github-publication-requester.test.ts","./worker-environments/session-repository-checkpoints.js","c763d7bdf3c284be98fb183e4cc665e07c10d4f7ba2bb57fe47d7337ac521d35",1]
 ["src/gateway/github-publication.test-support.ts","../agents/git-coauthor-attribution.js","de70ced0f2913c66602121bd83cc15d10b4846bf0b0720008a46e38026495ea6",1]
-["src/gateway/github-publication.test-support.ts","../agents/worktrees/service.js","a9c369c4a0f8bb340b519c2b28482585a52e0c8b5e4f7863ed4084243dbfde72",1]
 ["src/gateway/github-publication.test-support.ts","../secrets/runtime-state.js","e3fe92eb3cade41839934ecffd525e87b3c08de21c5fdee6e2f2be737f67f3db",1]
 ["src/gateway/github-publication.test-support.ts","./github-oauth-lifecycle.js","e93abe454fb939e2f0c6d68e8887b8357c78fb135aa34f3a6f990849d5b724e0",1]
 ["src/gateway/github-repository-publication-restart.test.ts","./worker-environments/session-repository-checkpoints.js","c763d7bdf3c284be98fb183e4cc665e07c10d4f7ba2bb57fe47d7337ac521d35",1]
