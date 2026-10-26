@@ -5,6 +5,7 @@ import { upsertSessionEntryCore } from "../../../config/sessions/session-accesso
 import { captureAgentTurnPrincipal } from "../../../gateway/agent-turn/principal.js";
 import * as operatorCapture from "../../../gateway/operator-run-authority.js";
 import * as operatorRecovery from "../../../gateway/operator-run-recovery.js";
+import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
 import { createContext } from "../../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { createMockGatewayRecoveryRuntime } from "../../../gateway/server-recovery-runtime.test-support.js";
 import {
@@ -120,7 +121,7 @@ export function registerRequesterCompletionCustodyTests({
         };
         const registerChild = (
           runId: string,
-          gateway: ReturnType<typeof makeGateway>,
+          gateway: GatewayRequestContext,
           overrides: Parameters<typeof registration>[1] = {},
         ) =>
           registerSubagentRun(
