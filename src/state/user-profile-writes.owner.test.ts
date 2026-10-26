@@ -1,6 +1,7 @@
 import { expect, it, vi } from "vitest";
 import type { UserProfile as UserProfileListItem } from "../../packages/gateway-protocol/src/schema/users.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
+import { expectCalls } from "./openclaw-state-db-fixtures.test-support.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -69,8 +70,7 @@ it("reuses committed email profiles and roster facts without writer admission ac
         githubIdentity,
         hasAvatar: false,
       });
-      expect(runWorker).not.toHaveBeenCalled();
-      expect(executeWorker).not.toHaveBeenCalled();
+      expectCalls(0, runWorker, executeWorker);
       sql.expectIdle();
     } finally {
       sql.restore();
@@ -122,8 +122,7 @@ it("serves the first owner ensure after catalog hydration and applies write rece
   await setName(owner.id, "Saved Owner");
   vi.mocked(runWorker).mockClear();
   expect((await ensureOwner(hostName)).displayName).toBe("Saved Owner");
-  expect(runWorker).not.toHaveBeenCalled();
-  expect(hostName).not.toHaveBeenCalled();
+  expectCalls(0, runWorker, hostName);
 
   await setName(owner.id, null);
   await ensureOwner(null);
