@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import type { Api } from "grammy";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, expect, it, vi, type Mock } from "vitest";
@@ -20,46 +21,34 @@ type RegistrationFixture = {
   path: string;
 };
 
-export function registerTelegramWebhookRegistrationTests({
-  gateway,
-  setWebhookSpy,
-  stopSpy,
-  transportCloseSpies,
-  startWebhookStartupFixture,
-  requireWebhookQueueScope,
-  token,
-  secret,
-  path,
-}: RegistrationFixture) {
+export function registerTelegramWebhookRegistrationTests(fixture: RegistrationFixture) {
+  const { gateway, setWebhookSpy, secret, path } = fixture;
   const webhookOptions = { secret, path };
-  let runtime: { log: Mock<(message: unknown) => void>; error: Mock; exit: Mock };
+  const runtime = { log() {}, error() {}, exit: vi.fn() };
+  const disconnected = { mode: "webhook", connected: false };
   let setStatus: Mock<(patch: { mode?: string; connected?: boolean }) => void>;
   beforeEach(() => {
-    runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
     setStatus = vi.fn();
   });
-  const start = () => startWebhookStartupFixture({ path, runtime, setStatus });
+  const status = (expected: Record<string, unknown>) => expectStatusCall(setStatus, expected);
+  const start = () => fixture.startWebhookStartupFixture({ path, runtime, setStatus });
   const apiError = (message: string, error_code: number) =>
     Object.assign(new Error(message), { error_code });
   const expectStopped = () => {
-    expect(stopSpy).toHaveBeenCalledTimes(1);
-    expect(transportCloseSpies[0]).toHaveBeenCalledTimes(1);
+    expect(fixture.stopSpy).toHaveBeenCalledTimes(1);
+    expect(fixture.transportCloseSpies[0]).toHaveBeenCalledTimes(1);
   };
   const expectBlocked = () => {
     expectStopped();
-    expectStatusCall(setStatus, {
-      lifecycle: "blocked",
-      terminalDisconnect: true,
-      lastError: "unauthorized",
-    });
+    status({ lifecycle: "blocked", terminalDisconnect: true, lastError: "unauthorized" });
   };
 
   it("waits for setWebhook before reporting ready while continuing durable webhook admission", async () => {
     const advertised = createDeferred<void>();
     const retryStarted = createDeferred<void>();
     const retryRegistration = createDeferred<void>();
-    runtime.log.mockImplementation((message) => {
-      if (typeof message === "string" && message.startsWith("webhook advertised to telegram on ")) {
+    setStatus.mockImplementation((patch) => {
+      if (patch.connected) {
         advertised.resolve();
       }
     });
@@ -81,7 +70,7 @@ export function registerTelegramWebhookRegistrationTests({
         });
         expect(response.status).toBe(200);
         expect(response.headers.get("x-openclaw-delivery-accepted")).toBe("durable");
-        expect(stopSpy).not.toHaveBeenCalled();
+        expect(fixture.stopSpy).not.toHaveBeenCalled();
         expect(setStatus).not.toHaveBeenCalledWith(expect.objectContaining({ lifecycle: "ready" }));
         expect(setStatus).not.toHaveBeenCalledWith(expect.objectContaining({ connected: true }));
         expect(setStatus).toHaveBeenCalledWith({ lastEventAt: expect.any(Number) });
@@ -91,36 +80,31 @@ export function registerTelegramWebhookRegistrationTests({
       await advertised.promise;
       expect(setWebhookSpy).toHaveBeenCalledTimes(2);
       expect(setStatus).toHaveBeenCalledWith({
-        mode: "webhook",
-        connected: false,
+        ...disconnected,
         lifecycle: "recovering",
         lastError: "fetch failed",
       });
-      expectStatusCall(setStatus, { mode: "webhook", connected: true, lastError: null });
+      status({ mode: "webhook", connected: true, lastError: null });
     });
   });
 
-  it("fails startup when setWebhook has a non-recoverable rejection", async () => {
-    setWebhookSpy.mockRejectedValueOnce(apiError("unauthorized", 401));
-    await expect(start()).rejects.toThrow("unauthorized");
-    expectBlocked();
-  });
-
-  it("does not mark a non-auth setWebhook rejection as blocked", async () => {
-    setWebhookSpy.mockRejectedValueOnce(apiError("bad webhook URL", 400));
-    await expect(start()).rejects.toThrow("bad webhook URL");
-    const failedStatus = expectStatusCall(setStatus, { lastError: "bad webhook URL" });
-    expect(failedStatus.lifecycle).toBeUndefined();
+  it.each([
+    [401, "unauthorized"],
+    [400, "bad webhook URL"],
+  ] as const)("rejects setWebhook %s: %s", async (code, message) => {
+    setWebhookSpy.mockRejectedValueOnce(apiError(message, code));
+    await expect(start()).rejects.toThrow(message);
+    if (code === 401) {
+      expectBlocked();
+    } else {
+      expect(status({ lastError: message }).lifecycle).toBeUndefined();
+    }
   });
 
   it("releases the Gateway route and stops the bot when retry loop encounters a non-recoverable error", async () => {
     const stopped = createDeferred<void>();
     setStatus.mockImplementation((patch) => {
-      if (
-        patch.mode === "webhook" &&
-        patch.connected === false &&
-        Object.keys(patch).length === 2
-      ) {
+      if (isDeepStrictEqual(patch, disconnected)) {
         stopped.resolve();
       }
     });
@@ -129,9 +113,9 @@ export function registerTelegramWebhookRegistrationTests({
       .mockRejectedValueOnce(apiError("unauthorized", 401));
 
     const started = await gateway.startWebhook({
-      token,
+      token: fixture.token,
       ...webhookOptions,
-      ...requireWebhookQueueScope(),
+      ...fixture.requireWebhookQueueScope(),
       runtime,
       setStatus,
     });
@@ -140,7 +124,7 @@ export function registerTelegramWebhookRegistrationTests({
       await stopped.promise;
       expect(gateway.registry.httpRoutes).toHaveLength(0);
       expectBlocked();
-      expect(setStatus).toHaveBeenLastCalledWith({ mode: "webhook", connected: false });
+      expect(setStatus).toHaveBeenLastCalledWith(disconnected);
 
       await started.stop();
       expectStopped();

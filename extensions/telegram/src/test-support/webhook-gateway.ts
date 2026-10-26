@@ -7,11 +7,11 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { canonicalizeWebhookRouteKey } from "openclaw/plugin-sdk/webhook-ingress";
 import { vi } from "vitest";
-import * as telegramIngressFactory from "../telegram-ingress-drain-factory.js";
+import * as ingressFactory from "../telegram-ingress-drain-factory.js";
 
 type StartWebhook = typeof import("../webhook.js").startTelegramWebhook;
 type StartWebhookOptions = Omit<Parameters<StartWebhook>[0], "token" | "abortSignal">;
-type Ingress = ReturnType<typeof telegramIngressFactory.createTelegramTransportIngressMonitor>;
+type Ingress = ReturnType<typeof ingressFactory.createTelegramTransportIngressMonitor>;
 
 export function getServerPort(server: Server): number {
   const address = server.address();
@@ -80,10 +80,7 @@ export function createTelegramWebhookTestGateway(options: {
       params: StartWebhookOptions,
       run: (ctx: { server: Server; port: number; ingress: Ingress }) => Promise<T>,
     ): Promise<T> => {
-      using createIngress = vi.spyOn(
-        telegramIngressFactory,
-        "createTelegramTransportIngressMonitor",
-      );
+      using createIngress = vi.spyOn(ingressFactory, "createTelegramTransportIngressMonitor");
       const abort = new AbortController();
       const started = await startWebhook({
         token: options.token,

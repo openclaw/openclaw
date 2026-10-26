@@ -7,12 +7,10 @@ export type TestTelegramMessageUpdate = Update & {
   message: NonNullable<Update["message"]> & { text: string };
 };
 
-export async function waitForWebhookState<T>(
+export const waitForWebhookState = <T>(
   assertion: () => T | Promise<T>,
   options: { timeout?: number; interval?: number } = {},
-): Promise<T> {
-  return await vi.waitFor(assertion, { interval: 1, ...options });
-}
+) => vi.waitFor(assertion, { interval: 1, ...options });
 
 export function telegramMessageUpdate(updateId: number, text: string): TestTelegramMessageUpdate {
   return {
@@ -83,10 +81,8 @@ export function createTelegramPrivateTopicCallback(updateId: number, botId: numb
 }
 
 export function expectWebhookBotScopesAborted(createTelegramBotSpy: unknown): void {
-  const botParams = requireRecord(
-    requireMockCall(createTelegramBotSpy, 0, "createTelegramBot")[0],
-    "createTelegramBot params",
-  );
+  const call = requireMockCall(createTelegramBotSpy, 0, "createTelegramBot")[0];
+  const botParams = requireRecord(call, "createTelegramBot params");
   for (const signal of [botParams.fetchAbortSignal, botParams.accountAbortSignal]) {
     assert(signal instanceof AbortSignal && signal.aborted, "expected an aborted AbortSignal");
   }
