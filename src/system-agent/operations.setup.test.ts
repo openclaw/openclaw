@@ -464,9 +464,8 @@ describe("model changes", () => {
     );
   });
   it("rejects a different model from the final commit-boundary probe", async () => {
-    const verify = vi.fn<Verify>(async () => ({ ...verified(), modelRef: "openai/gpt-5.4" }));
     await rejectsModel(
-      verify,
+      async () => ({ ...verified(), modelRef: "openai/gpt-5.4" }),
       "did not verify the exact model route at the config commit boundary",
     );
   });
