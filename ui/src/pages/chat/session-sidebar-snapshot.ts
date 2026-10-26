@@ -12,7 +12,7 @@ const sidebarRecordsSchema = json.array(
     {
       savedAt: json.refine(json.number, (value) => value >= 0),
       sessionKey: json.refine(json.text, (value) => value.length > 0),
-      projectionVersion: json.literal(3),
+      projectionVersion: json.number,
       model: json.unknown,
     },
     true,
@@ -52,6 +52,10 @@ export async function accessSidebarSnapshot<Model>(
     let count = 0;
     let result: Model | null = null;
     for (const record of retained.toSorted((a, b) => b.savedAt - a.savedAt)) {
+      if (record.projectionVersion !== 3) {
+        store.delete(record.sessionKey);
+        continue;
+      }
       // Decode the requested presentation only; envelopes bound the other scopes.
       const admitted = record.sessionKey === key ? validate(record.model) : undefined;
       if (admitted === null) {
