@@ -151,7 +151,8 @@ describe("SQLite transcript readers release the read snapshot before parsing", (
       const iterate = vi.spyOn(prototype, "iterate");
       let expandedPayloadBytes = 0;
       prototype.iterate = function* (this: StatementSync, ...params) {
-        for (const row of iterate.call(this, ...params)) {
+        const rows: ReturnType<StatementSync["iterate"]> = Reflect.apply(iterate, this, params);
+        for (const row of rows) {
           for (const value of Object.values(row)) {
             // Compressed fixture bodies must not round-trip through SQLite as expanded text.
             if (typeof value === "string" && value.includes(MARKER) && value.length > 1024) {
