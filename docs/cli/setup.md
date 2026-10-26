@@ -141,6 +141,9 @@ mode. For remote token SecretRefs, set `OPENCLAW_GATEWAY_TOKEN` and use
 
 ### Baseline mode
 
+Workspace and session-directory completion reports escape terminal control characters.
+The actual directory names and paths returned with `--json` retain their original values.
+
 `openclaw setup --baseline` preserves the older baseline-only behavior: it
 creates the config, workspace, and session directories, then exits without
 running onboarding. It accepts `--workspace`, `--skip-bootstrap`, and harmless output controls, but

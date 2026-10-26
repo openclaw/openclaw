@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { writeFixtureJson } from "../cli/cli-fixtures.test-support.js";
 import { replaceConfigFile } from "../config/mutate.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { setTestEnvValue } from "../test-utils/env.js";
 import { setupCommand } from "./setup.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -72,6 +73,41 @@ afterEach(() => {
 });
 
 describe("setupCommand", () => {
+  it.skipIf(process.platform === "win32")(
+    "escapes completion paths while preserving real directories and JSON paths",
+    async () => {
+      await withSetupHome(async (home, { runtime, writeConfig, readConfig }) => {
+        const name = "café\u001b[31m\noperator-forged\tend\rrow\u0007";
+        const displayName = "café\\noperator-forged\\tend\\rrow";
+        const stateDir = path.join(home, `state-${name}`);
+        const workspace = path.join(home, `workspace-${name}`);
+        setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+        const raw = await writeConfig({
+          agents: { defaults: { workspace, skipBootstrap: true }, entries: { main: {} } },
+          gateway: { mode: "local" },
+        });
+
+        await setupCommand(undefined, runtime);
+
+        expect(runtime.log).toHaveBeenCalledWith(`Workspace OK: ~/workspace-${displayName}`);
+        expect(runtime.log).toHaveBeenCalledWith(
+          `Sessions OK: ~/state-${displayName}/agents/main/sessions`,
+        );
+        const sessionsDir = path.join(stateDir, "agents", "main", "sessions");
+        expect((await fs.stat(workspace)).isDirectory()).toBe(true);
+        expect((await fs.stat(sessionsDir)).isDirectory()).toBe(true);
+        await setupCommand({ json: true }, runtime);
+        expect(JSON.parse(String(runtime.log.mock.calls.at(-1)?.[0]))).toMatchObject({
+          ok: true,
+          configStatus: "unchanged",
+          workspaceDir: workspace,
+          sessionsDir,
+        });
+        expect(await readConfig()).toBe(raw);
+      });
+    },
+  );
+
   it.each([false, true])("initializes local setup (json: %s)", async (json) => {
     await withSetupHome(async (home, { runtime, configPath }) => {
       const workspace = path.join(home, ".openclaw", "workspace");
