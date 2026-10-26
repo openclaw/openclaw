@@ -42,7 +42,7 @@ import {
   sessionTarget,
   setupWorkerTurnLauncherTest,
   turn,
-  unusedEnvironments,
+  workerTurnEnvironments,
 } from "./worker-turn-launcher.test-support.js";
 import { createWorkerTurnRpc } from "./worker-turn-rpc.js";
 
@@ -228,13 +228,10 @@ describe("worker-side before_agent_run admission", () => {
         launchTurn: launch,
         reconcileWorkspace: reconcileUnchangedLocalWorkspace,
       });
-      const environments = {
-        ...unusedEnvironments(),
+      const environments = workerTurnEnvironments(tunnel, {
         get: () => environment,
-        acquireTurnCredential: async () => credential(),
-        startTunnel: async () => tunnel,
         acknowledgeCredentialDelivery: async () => true,
-      };
+      });
       const provider = createWorkerSessionTurnPlacementProvider({ placements, environments });
       try {
         const execution = provider.executeTurn(
@@ -342,13 +339,10 @@ describe("worker-side before_agent_run admission", () => {
     });
     const provider = createWorkerSessionTurnPlacementProvider({
       placements,
-      environments: {
-        ...unusedEnvironments(),
+      environments: workerTurnEnvironments(tunnel, {
         get: () => environment,
-        acquireTurnCredential: async () => credential(),
-        startTunnel: async () => tunnel,
         acknowledgeCredentialDelivery: async () => true,
-      },
+      }),
     });
     try {
       await expect(
@@ -523,13 +517,10 @@ describe("worker-side before_agent_run admission", () => {
       placements,
       // The scrubbed terminal ACK hands recovery back to this external lifecycle owner.
       reconcileActivePlacement: async () => {},
-      environments: {
-        ...unusedEnvironments(),
+      environments: workerTurnEnvironments(tunnel, {
         get: () => environment,
-        acquireTurnCredential: async () => credential(),
-        startTunnel: async () => tunnel,
         acknowledgeCredentialDelivery: async () => true,
-      },
+      }),
     });
     try {
       await expect(
