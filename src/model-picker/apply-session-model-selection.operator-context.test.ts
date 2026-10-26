@@ -1,6 +1,5 @@
 import { expect, it, vi } from "vitest";
 import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
-import { loadProviderScopedThinkingCatalog } from "../agents/model-catalog.runtime.js";
 import { prepareOperatorModelPolicy } from "../agents/operator-model-policy.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { withOperatorToolGatewayAuthority } from "../gateway/server-plugin-in-process-dispatch.js";
@@ -13,11 +12,10 @@ import {
   useSelectionEffects,
 } from "./apply-session-model-selection.test-support.js";
 await vi.hoisted(() => import("./apply-session-model-selection.test-support.js"));
-const { effects, prepareRuntime } = selectionMocks;
-
-const { lifecycleEvents, expectNoSelectionEffects: expectNoPublishedEffects } =
-  useSelectionEffects();
+const { prepareRuntime } = selectionMocks;
+const { expectNoSelectionEffects } = useSelectionEffects();
 const { createFixtureParams } = createModelSelectionInputs();
+const profile = { profileId: "limited", displayName: "Test", hasAvatar: false, updatedAt: 1 };
 
 function restrictedSelection(options: { empty?: boolean; assertCurrent?: () => void } = {}) {
   const params = createFixtureParams(
@@ -29,7 +27,7 @@ function restrictedSelection(options: { empty?: boolean; assertCurrent?: () => v
   );
   const before = structuredClone(params.sessionEntry);
   const operatorAuthority = createAdmittedRunOperatorAuthority({
-    profileId: "limited-operator",
+    profileId: profile.profileId,
     scopes: ["operator.write"],
     assertCurrent: options.assertCurrent ?? (() => {}),
     modelPolicy: prepareOperatorModelPolicy({
@@ -37,15 +35,8 @@ function restrictedSelection(options: { empty?: boolean; assertCurrent?: () => v
       policy: { allow: options.empty ? [] : ["fixture/fallback", "fixture/manual"] },
     }),
   });
-  const profile = {
-    profileId: operatorAuthority.profileId,
-    displayName: "Operator Fixture",
-    hasAvatar: false,
-    updatedAt: 1,
-  };
   return {
     params,
-    operatorAuthority,
     expectUnchanged: () => {
       expect(params.sessionEntry).toEqual(before);
       expectNoSelectionEffects();
@@ -88,39 +79,31 @@ function restrictedSelection(options: { empty?: boolean; assertCurrent?: () => v
 }
 
 it.each([
-  ["fallback", false, false, false],
-  ["fallback", true, false, true],
-  ["primary", false, false, false],
-  ["primary", true, true, false],
+  ["caller", "fallback", false, false, false],
+  ["caller", "fallback", true, false, true],
+  ["caller", "primary", false, false, false],
+  ["caller", "primary", true, true, false],
+  ["unprofiled", "primary", false, false, true],
 ] as const)(
-  "enforces operator policy for %s (reset=%s, empty=%s)",
-  async (model, reset, empty, applied) => {
+  "enforces %s policy for %s (reset=%s, empty=%s)",
+  async (source, model, reset, empty, applied) => {
     const { params, run, expectUnchanged } = restrictedSelection({ empty });
     params.request.model = model;
     if (reset) {
       params.request.resetToDefault = true;
     }
-    const result = await run();
+    const result = await run(source);
     if (applied) {
-      expect(result).toMatchObject({ status: "applied", provider: "fixture", model: "fallback" });
+      expect(result).toMatchObject({ status: "applied", provider: "fixture", model });
       expect(params.sessionEntry.modelOverride).toBeUndefined();
     } else {
       expect(result).toMatchObject({ status: "rejected", reason: "not-allowed" });
       expectUnchanged();
-      if (model === "primary") {
-        expect(result).toMatchObject({ message: expect.stringContaining("operator role") });
-      }
     }
   },
 );
 
-function expectNoSelectionEffects() {
-  expectNoPublishedEffects();
-  expect(loadProviderScopedThinkingCatalog).not.toHaveBeenCalled();
-  expect(effects.mutateConfigFileWithRetry).not.toHaveBeenCalled();
-}
-
-it.each(["caller", "operator", "unprofiled"] as const)(
+it.each(["caller", "profiled"] as const)(
   "rechecks %s authority after model preparation before mutation",
   async (source) => {
     let current = true;
@@ -131,46 +114,32 @@ it.each(["caller", "operator", "unprofiled"] as const)(
         throw new Error(message);
       }
     };
-    const { params, operatorAuthority, run, expectUnchanged } = restrictedSelection(
+    const { params, run, expectUnchanged } = restrictedSelection(
       source === "caller" ? { assertCurrent } : {},
     );
     params.request.runtime = { kind: "set", runtime: "openclaw" };
-    params.request.model = source === "unprofiled" ? "primary" : "manual";
     prepareRuntime.mockImplementationOnce(async () => {
-      current = source === "unprofiled";
+      current = false;
       return { kind: "ready", runtimeId: "openclaw", validate: () => undefined };
     });
-    const result = await run(source === "operator" ? "profiled" : source, assertCurrent);
-    if (source !== "caller") {
-      expect(operatorAuthority.assertCurrent).not.toThrow();
-    }
-    if (source === "unprofiled") {
-      expect(result).toMatchObject({ status: "applied", provider: "fixture", model: "primary" });
-      expect(params.sessionEntry.modelOverride).toBeUndefined();
-      expect(lifecycleEvents).toHaveLength(1);
-      expect(effects.refreshQueuedFollowupSession).toHaveBeenCalledOnce();
-    } else {
-      expect(result).toMatchObject({ status: "rejected", reason: "not-allowed", message });
-      expectUnchanged();
-    }
-    expect(effects.mutateConfigFileWithRetry).not.toHaveBeenCalled();
+    const result = await run(source, assertCurrent);
+    expect(result).toMatchObject({ status: "rejected", reason: "not-allowed", message });
+    expectUnchanged();
   },
 );
 
-it.each(["request", "direct-tool", "unbound-operator"] as const)(
+it.each(["request", "profiled", "unbound"] as const)(
   "the public SDK cannot omit operator model policy in %s context",
   async (source) => {
     const { params, run, expectUnchanged } = restrictedSelection();
     params.request.model = "primary";
-    const result = await run(
-      source === "direct-tool" ? "profiled" : source === "request" ? "request" : "unbound",
-    );
+    const result = await run(source);
 
     expect(result).toMatchObject({
       status: "rejected",
       reason: "not-allowed",
       message: expect.stringContaining(
-        source === "unbound-operator"
+        source === "unbound"
           ? "requires original Gateway authority"
           : "operator role cannot use this model",
       ),

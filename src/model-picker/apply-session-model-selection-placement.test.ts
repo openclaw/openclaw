@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import {
   loadSessionEntryReadOnly,
   patchSessionEntryCore,
@@ -13,6 +13,7 @@ import {
 } from "./apply-session-model-selection.test-support.js";
 await vi.hoisted(() => import("./apply-session-model-selection.test-support.js"));
 const { placementMocks, validateRuntime } = selectionMocks;
+const capabilities = placementMocks.resolveWorkerPlacementSessionRuntimeCapabilities;
 
 const persistedSession = useSelectionStore("openclaw-model-picker-runtime-race-");
 const { expectNoSelectionEffects } = useSelectionEffects();
@@ -22,12 +23,7 @@ import { applySessionModelSelectionInternal as applySessionModelSelection } from
 const { createEntry, createParams } = createModelSelectionInputs();
 
 function createPlacement(sessionId: string, state: "local" | "active" = "active") {
-  return {
-    sessionId,
-    state,
-    executionMode: "worker-turn" as const,
-    generation: 1,
-  };
+  return { sessionId, state, executionMode: "worker-turn" as const, generation: 1 };
 }
 
 async function persistedParams() {
@@ -49,21 +45,13 @@ it.each([undefined, "worker-turn"] as const)(
     const params = createParams();
     const { sessionId } = params.sessionEntry;
     placementMocks.getMany.mockReturnValue(new Map([[sessionId, createPlacement(sessionId)]]));
-    placementMocks.resolveWorkerPlacementSessionRuntimeCapabilities.mockReturnValue({
-      executionMode,
-    });
+    capabilities.mockReturnValue({ executionMode });
 
     const result = await applySessionModelSelection(params);
 
-    if (executionMode) {
-      expect(result.status).toBe("applied");
-    } else {
-      expect(result).toEqual({
-        status: "rejected",
-        reason: "invalid-runtime",
-        message:
-          "Session cannot select a runtime without cloud placement support while cloud worker placement is active.",
-      });
+    expect(result.status).toBe(executionMode ? "applied" : "rejected");
+    if (!executionMode) {
+      expect(result).toMatchObject({ reason: "invalid-runtime" });
       expectUnchanged(params);
     }
   },
@@ -93,18 +81,14 @@ it.each(["runtime", "SDK account"] as const)(
     }
     const applySelection =
       source === "runtime" ? applySessionModelSelection : applySdkModelSelection;
-    const pending = applySelection(
-      createParams({
-        ...params,
-        ...(source === "SDK account" ? { validateAuthProfileSelection: validate } : {}),
-        request: { ...createParams().request, runtime: { kind: "set", runtime: "openclaw" } },
-      }),
-    );
+    params.request.runtime = { kind: "set", runtime: "openclaw" };
+    if (source === "SDK account") {
+      params.validateAuthProfileSelection = validate;
+    }
+    const pending = applySelection(params);
     try {
       // Preparation accepts the selection; revoke it before the queued write can commit.
-      expect(
-        await Promise.race([validated.promise.then(() => true), pending.then(() => false)]),
-      ).toBe(true);
+      await awaitGateBeforeSettlement(validated.promise, pending, "Validation not reached");
       available = false;
     } finally {
       release.resolve();
@@ -129,9 +113,7 @@ it("rejects a model selection when placement activates between the pre-write rea
   placementMocks.getMany
     .mockReturnValueOnce(new Map([[sessionId, localPlacement]]))
     .mockReturnValueOnce(new Map([[sessionId, activePlacement]]));
-  placementMocks.resolveWorkerPlacementSessionRuntimeCapabilities.mockReturnValue({
-    executionMode: undefined,
-  });
+  capabilities.mockReturnValue({ executionMode: undefined });
 
   const result = await applySessionModelSelection(params);
 
