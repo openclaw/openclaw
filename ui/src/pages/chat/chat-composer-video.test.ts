@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 import { createComponent } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
-import { Icon, type IconName } from "../../components/solid/icon.tsx";
+import { Icon } from "../../components/solid/icon.tsx";
 import { t } from "../../i18n/index.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import {
@@ -13,8 +13,6 @@ import {
 
 const shapes = (root: ParentNode) =>
   Array.from(root.querySelector("svg")?.children ?? [], (shape) => shape.outerHTML);
-const iconShapes = (name: IconName) =>
-  shapes(mountSolid(() => createComponent(Icon, { name })).container);
 const previewClass = "agent-chat__video-preview-mirrored";
 const switchLabel = () => t("chat.composer.switchCamera");
 function talk(overrides: Parameters<typeof renderComposer>[0] = {}) {
@@ -36,19 +34,20 @@ afterEach(() => resetComposerFixture());
 
 it("enables the camera only for a healthy video-capable talk session", () => {
   const onToggleRealtimeCamera = vi.fn();
-  const { container } = talk({ onToggleRealtimeCamera });
+  const { container, props } = talk({ onToggleRealtimeCamera });
   button(container, t("chat.composer.turnCameraOn")).click();
   expect(onToggleRealtimeCamera).toHaveBeenCalledOnce();
   expect(container.querySelector('[aria-label="Start video talk"]')).toBeNull();
+  props.realtimeTalkVideoStream = {} as MediaStream;
+  renderComposerInto(container, props);
+  expect(button(container, t("chat.composer.turnCameraOff")).getAttribute("aria-pressed")).toBe(
+    "true",
+  );
+  expect(shapes(button(container, t("chat.composer.turnCameraOff")))).toEqual(
+    shapes(mountSolid(() => createComponent(Icon, { name: "cameraOff" })).container),
+  );
   const failed = talk({ onToggleRealtimeCamera, realtimeTalkStatus: "error" });
   expect(button(failed.container, t("chat.composer.turnCameraOn")).disabled).toBe(true);
-});
-
-it("uses the camera-off glyph while the camera is enabled", () => {
-  const { container } = talk({ realtimeTalkVideoStream: {} as MediaStream });
-  const glyph = shapes(button(container, t("chat.composer.turnCameraOff")));
-  expect(glyph).toEqual(iconShapes("cameraOff"));
-  expect(glyph).not.toEqual(iconShapes("camera"));
 });
 
 it("switches multiple cameras and mirrors a user-facing preview", () => {
