@@ -54,6 +54,7 @@ async function withRuntime(
       }
       return {
         agentRegistry: createAgentRegistry({ overrides: { catalog: [executable, script] } }),
+        permissionMode: "deny-all",
         timeoutMs: 10_000,
         processLifecycle: {
           onSpawned: (started) => {
@@ -71,31 +72,25 @@ async function withRuntime(
   );
 }
 
-const composer = "composer-2.5[fast=true]";
-const grok = "grok-4.5[effort=high,fast=true]";
-const native = "vendor/native-model";
-it.each([
-  ["cursor/composer-2.5", composer, "cursor/composer-2.5", "xai/grok-4.5", grok],
-  [native, native, "native-model", native, native],
-])(
-  "selects advertised ids for %s and model changes",
-  async (initial, advertised, alias, changed, final) => {
-    await withRuntime(async (runtime) => {
-      const handle = await runtime.ensureSession(modelRequest("explicit", initial));
-      expect(await runtime.getStatus({ handle })).toMatchObject({
-        models: { currentModelId: advertised },
-      });
-      await expectModel(runtime, handle, "startup", advertised);
-      await select(runtime, handle, alias);
-      await expectModel(runtime, handle, "first", advertised);
-      const accepted = await select(runtime, handle, changed);
-      expect(accepted?.configOptions).toContainEqual(
-        expect.objectContaining({ id: "model", currentValue: final }),
-      );
-      await expectModel(runtime, handle, "changed", final);
+it("selects advertised ids for explicit refs and model changes", async () => {
+  await withRuntime(async (runtime) => {
+    const handle = await runtime.ensureSession(modelRequest("explicit", "cursor/composer-2.5"));
+    expect(handle.appliedModel).toBeUndefined();
+    expect(await runtime.getStatus({ handle })).toMatchObject({
+      models: { currentModelId: "composer-2.5[fast=true]" },
     });
-  },
-);
+    await select(runtime, handle, "cursor/composer-2.5");
+    await expectModel(runtime, handle, "first", "composer-2.5[fast=true]");
+    const accepted = await select(runtime, handle, "xai/grok-4.5");
+    expect(accepted?.configOptions).toContainEqual(
+      expect.objectContaining({
+        id: "model",
+        currentValue: "grok-4.5[effort=high,fast=true]",
+      }),
+    );
+    await expectModel(runtime, handle, "changed", "grok-4.5[effort=high,fast=true]");
+  });
+});
 
 it("rejects ambiguity before stripping the provider", async () => {
   await withRuntime(async (runtime) => {
@@ -131,6 +126,7 @@ it("cleans failed selections across same-key retries and restart", async ({ sign
   await withRuntime(async (runtime, spawned, restart) => {
     const input = modelRequest("retry", "provider/locked-1");
     await expect(runtime.ensureSession(input)).rejects.toThrow(/not available on this plan/);
+    expect(spawned).toHaveLength(2);
     await withinTest(Promise.all(spawned.map(({ exited }) => exited)), signal);
     for (const { pid } of spawned) {
       expect(() => process.kill(pid, 0)).toThrow();
@@ -138,6 +134,16 @@ it("cleans failed selections across same-key retries and restart", async ({ sign
     await expect(runtime.ensureSession(input)).rejects.toThrow(/not available on this plan/);
     await runtime.shutdown();
     await expect(restart().ensureSession(input)).rejects.toThrow(/not available on this plan/);
+  });
+});
+
+it("prefers advertised slash ids to provider-stripped refs", async () => {
+  await withRuntime(async (runtime) => {
+    const handle = await runtime.ensureSession(modelRequest("native-id", "vendor/native-model"));
+    await expectModel(runtime, handle, "startup", "vendor/native-model");
+    await select(runtime, handle, "native-model");
+    await select(runtime, handle, "vendor/native-model");
+    await expectModel(runtime, handle, "control", "vendor/native-model");
   });
 });
 

@@ -32,7 +32,10 @@ import { resolveBrowserConfig, resolveProfile } from "./config.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 beforeEach(() => {
   fixture.root = tempDirs.make("openclaw-headless-launch-");
-  vi.stubGlobal("fetch", async () => Response.json({ Browser: "Chrome/Test" }));
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => new Response(JSON.stringify({ Browser: "Chrome/Test" }))),
+  );
 });
 afterEach(() => {
   vi.unstubAllGlobals();
