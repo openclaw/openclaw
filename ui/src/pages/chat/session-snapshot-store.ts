@@ -49,16 +49,12 @@ import {
   loadChatHistoryStateValidator,
   peekPrewarmedChatSnapshot,
   prewarmedHistoryStateValidator,
+  readSharedPrewarm,
 } from "./session-snapshot-prewarm.ts";
 const CHAT_SNAPSHOT_PROJECTION_VERSION = 5;
 const CHAT_SNAPSHOT_MESSAGE_LIMIT = 80;
 const CHAT_SNAPSHOT_WRITE_DELAY_MS = 500;
 const CHAT_SNAPSHOT_IDLE_TIMEOUT_MS = 1000;
-type ParsedPrewarm = {
-  promise: Promise<ChatSessionSnapshot | null>;
-  snapshot?: ChatSessionSnapshot | null;
-};
-const parsedPrewarms = new WeakMap<object, ParsedPrewarm>();
 
 const nonnegative = json.refine(json.number, (value) => value >= 0);
 const sessionKeySchema = json.refine(json.text, (value) => value.length > 0);
@@ -225,24 +221,6 @@ async function readSnapshotRecord(
     await resetSessionSnapshotDatabase();
   }
   return record?.snapshot ?? null;
-}
-
-function readSharedPrewarm(
-  entry: object,
-  read: () => Promise<ChatSessionSnapshot | null>,
-): ParsedPrewarm {
-  let parsed = parsedPrewarms.get(entry);
-  if (!parsed) {
-    const prepared: ParsedPrewarm = {
-      promise: read().then((snapshot) => {
-        prepared.snapshot = snapshot;
-        return snapshot;
-      }),
-    };
-    parsedPrewarms.set(entry, prepared);
-    parsed = prepared;
-  }
-  return parsed;
 }
 
 export async function readPrewarmedChatSnapshot(
