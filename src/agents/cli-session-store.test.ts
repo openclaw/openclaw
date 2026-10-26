@@ -453,45 +453,38 @@ it.for(["present", "missing-before-run", "missing-after-run", "missing-cache"] a
 
 const unbound = makeSessionEntry();
 it.for([
-  ["empty binding", unbound, unbound, "stopped-first-session"],
-  ["bound meanwhile", unbound, boundEntry("bound-meanwhile"), "bound-meanwhile"],
-  ["reset session", unbound, makeSessionEntry({ sessionId: "reset" }), undefined],
+  ["empty binding", unbound, unbound, "stopped-first-session", false],
+  ["bound meanwhile", unbound, boundEntry("bound-meanwhile"), "bound-meanwhile", false],
+  ["reset session", unbound, makeSessionEntry({ sessionId: "reset" }), undefined, false],
   [
     "released writer",
     makeSessionEntry({ activeWriterRunId: "old" }),
     makeSessionEntry({ activeWriterRunId: "new" }),
     undefined,
+    false,
   ],
+  ["closed turn", unbound, unbound, undefined, true],
 ] as const)(
   "persists a stopped first CLI session: %s",
-  async ([_case, working, durable, expected], { f }) => {
+  async ([_case, working, durable, expected, closed], { f }) => {
     await f.seed({ ...working }, { ...durable });
-
-    await persistStoppedFirstCliSessionInStore({
+    const rejection = new Error("settlement closed");
+    const persistence = persistStoppedFirstCliSessionInStore({
       ...f.target,
       binding: { sessionId: "stopped-first-session", authEpochVersion: 7 },
       expectedSession: { ...working },
-      assertSettlementCurrent: () => {},
+      assertSettlementCurrent: () => {
+        if (closed) {
+          throw rejection;
+        }
+      },
     });
-
-    expect(getCliSessionBinding(f.read(), "claude-cli")?.sessionId).toBe(expected);
+    if (closed) {
+      await expect(persistence).rejects.toBe(rejection);
+      expect(getCliSessionBinding(f.read(), "claude-cli")).toBeUndefined();
+    } else {
+      await persistence;
+      expect(getCliSessionBinding(f.read(), "claude-cli")?.sessionId).toBe(expected);
+    }
   },
 );
-
-it("refuses a stopped first CLI session after its turn owner closed", async ({ f }) => {
-  const working = makeSessionEntry();
-  await f.seed({ ...working });
-  const closed = new Error("settlement closed");
-
-  await expect(
-    persistStoppedFirstCliSessionInStore({
-      ...f.target,
-      binding: { sessionId: "stopped-first-session" },
-      expectedSession: working,
-      assertSettlementCurrent: () => {
-        throw closed;
-      },
-    }),
-  ).rejects.toBe(closed);
-  expect(getCliSessionBinding(f.read(), "claude-cli")).toBeUndefined();
-});

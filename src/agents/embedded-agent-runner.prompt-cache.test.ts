@@ -49,16 +49,11 @@ import { buildSubagentPrivateCompletionInstruction } from "./subagents/completio
 import { startPromptCacheMcpServer } from "./test-helpers/prompt-cache-mcp.test-support.js";
 
 const cases = [
-  { api: "openai-responses", provider: "openai", model: "gpt-5.5", route: "responses" },
-  { api: "openai-completions", provider: "openai", model: "gpt-4o", route: "completions" },
-  {
-    api: "anthropic-messages",
-    provider: "anthropic",
-    model: "claude-sonnet-4-6",
-    route: "messages",
-  },
-  { api: "anthropic-messages", provider: "anthropic", model: "claude-opus-5", route: "in-history" },
-] satisfies Array<{ api: WireApi; provider: string; model: string; route: string }>;
+  ["openai-responses", "openai", "gpt-5.5", "responses"],
+  ["openai-completions", "openai", "gpt-4o", "completions"],
+  ["anthropic-messages", "anthropic", "claude-sonnet-4-6", "messages"],
+  ["anthropic-messages", "anthropic", "claude-opus-5", "in-history"],
+] satisfies Array<[WireApi, string, string, string]>;
 const PNG = createSolidPngBuffer(1, 1, { r: 12, g: 34, b: 56 }).toString("base64");
 const FAILED_ASSISTANT_TEXT = "partial assistant output before provider error";
 const FAILED_ASSISTANT_REPLAY_TEXT =
@@ -103,14 +98,12 @@ function rateLimitResponse(api: WireApi) {
   });
 }
 
-afterEach(async () => {
-  await clearActivePluginRegistry();
-});
+afterEach(() => clearActivePluginRegistry());
 
 it.for(cases)(
-  "preserves $route prefixes across tool loops, hooks, images, errors, rate-limit retries, refresh and reopen",
+  "preserves %j prefixes across tool loops, hooks, images, errors, rate-limit retries, refresh and reopen",
   { timeout: 120_000 },
-  async ({ api, provider, model, route }, { signal }) => {
+  async ([api, provider, model, route], { signal }) => {
     await withOpenClawTestState({ label: `prompt-cache-${route}` }, async (state) => {
       await bindSessionMcpRuntimeTestScheduler();
       const mcp = await startPromptCacheMcpServer(signal);
@@ -262,15 +255,12 @@ it.for(cases)(
                 expect(prefix.breakpoints.length, "legacy Messages cache boundary").toBeGreaterThan(
                   0,
                 );
-                const unsafeMarker = prefix.breakpoints.find(
-                  (point) => runtimeIndex >= 0 && point.index >= runtimeIndex,
-                );
-                if (unsafeMarker) {
-                  const segmentDigest = digest(prefix.history[runtimeIndex]!);
-                  throw new Error(
-                    `messages request ${requests.length + 1}, turn ${turn}: cacheBreakpoint covers transient segment=history[${runtimeIndex}] previous=absent next=${segmentDigest} marker=${unsafeMarker.index}`,
-                  );
-                }
+                expect(
+                  prefix.breakpoints.some(
+                    (point) => runtimeIndex >= 0 && point.index >= runtimeIndex,
+                  ),
+                  "Messages breakpoints exclude transient history",
+                ).toBe(false);
               }
               expect(prefix.tools, "advertised tool").toContain('"name":"cache_probe"');
               requests.push({ turn, payload, prefix, userEnvelopes });

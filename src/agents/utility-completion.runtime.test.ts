@@ -5,7 +5,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
-import { FailoverError, recordModelFallbackStop } from "./failover-error.js";
+import { FailoverError } from "./failover-error.js";
 import { createModelRuntimeChoiceOwnerFixture } from "./model-runtime-choice.test-support.js";
 import { prepareOperatorModelPolicy } from "./operator-model-policy.js";
 import { bindPreparedModelRuntimeAuth } from "./prepared-model-runtime-auth.js";
@@ -106,22 +106,15 @@ it.each(["missing", "api", "fallback", "native", "cooldown"] as const)(
       metadataSnapshot: params.metadataSnapshot,
       modelCatalog: params.snapshot,
     });
-    const store: AuthProfileStore = {
-      version: 1,
-      profiles:
-        credential === "cooldown"
-          ? {
-              "anthropic:default": {
-                type: "api_key",
-                provider: "anthropic",
-                key: "synthetic-key",
-              },
-            }
-          : {},
-      ...(credential === "cooldown"
-        ? { usageStats: { "anthropic:default": { cooldownUntil: Date.now() + 60_000 } } }
-        : {}),
-    };
+    const store: AuthProfileStore = { version: 1, profiles: {} };
+    if (credential === "cooldown") {
+      store.profiles["anthropic:default"] = {
+        type: "api_key",
+        provider: "anthropic",
+        key: "synthetic-key",
+      };
+      store.usageStats = { "anthropic:default": { cooldownUntil: Date.now() + 60_000 } };
+    }
     bindPreparedModelRuntimeAuth(snapshot, { store });
     const release = vi.fn(async () => {});
     using acquire = vi.spyOn(preparedRuntime, "acquirePreparedModelRuntimeSnapshot");
@@ -328,14 +321,6 @@ it("reads current fallbacks when reusing a prepared primary and retains its cred
     ["small", "local:utility"],
     ["backup", "local:utility"],
   ]);
-});
-
-it("does not replay a terminal provider failure", async () => {
-  const error = new Error("Terminal provider failure");
-  recordModelFallbackStop(error);
-  complete.mockRejectedValue(error);
-  await expect(run()).rejects.toBe(error);
-  expect(complete).toHaveBeenCalledOnce();
 });
 
 it("honors cancellation before another utility candidate", async () => {

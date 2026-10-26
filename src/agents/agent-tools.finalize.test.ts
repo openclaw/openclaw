@@ -178,36 +178,28 @@ describe("finalized tool descriptor snapshots", () => {
     },
   );
 
-  it("retains a prepared output schema when another descriptor changes", async () => {
-    const parameters = schema();
-    const outputSchema = schema();
-    const tools = () => [tool(parameters, { outputSchema }), tool(schema(), { name: "changing" })];
-    const warm = await published(tools);
-    const descriptor = warm.tool();
-    expect(getPublishedRuntimeToolInputSchema(descriptor.outputSchema)).toBeDefined();
-    await warm.settle();
-
-    const next = attempt(tools());
-    expect(next.tool().parameters).toBe(descriptor.parameters);
-    expect(next.tool().outputSchema).toBe(descriptor.outputSchema);
-    await next.settle();
-    expect(attempt(tools()).tool().outputSchema).toBe(descriptor.outputSchema);
-  });
-
-  it("isolates nested published schemas from source mutations", async () => {
+  it("retains isolated published schemas across source and sibling changes", async () => {
     const nestedSchema = () => ({
       type: "object",
       properties: { query: { type: "string", enum: ["first", "second"] } },
     });
     const parameters = nestedSchema();
     const outputSchema = nestedSchema();
-    await published(() => [tool(parameters, { outputSchema })]);
+    const tools = () => [tool(parameters, { outputSchema }), tool(schema(), { name: "changing" })];
+    const warm = await published(tools);
+    const descriptor = warm.tool();
+    expect(getPublishedRuntimeToolInputSchema(descriptor.outputSchema)).toBeDefined();
+    await warm.settle();
 
     parameters.properties.query.type = "number";
     outputSchema.properties.query.enum.push("source mutation");
-    const next = attempt([tool(parameters, { outputSchema })]).tool();
-    expect(next.parameters).toEqual(nestedSchema());
-    expect(next.outputSchema).toEqual(nestedSchema());
+    const next = attempt(tools());
+    expect(next.tool().parameters).toBe(descriptor.parameters);
+    expect(next.tool().outputSchema).toBe(descriptor.outputSchema);
+    expect(next.tool().parameters).toEqual(nestedSchema());
+    expect(next.tool().outputSchema).toEqual(nestedSchema());
+    await next.settle();
+    expect(attempt(tools()).tool().outputSchema).toBe(descriptor.outputSchema);
   });
 
   it.each([

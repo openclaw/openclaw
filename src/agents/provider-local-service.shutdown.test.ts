@@ -184,6 +184,13 @@ describe("provider local service shutdown", () => {
         1,
       );
       const pending: Promise<unknown>[] = [];
+      const settled = { stop: false, acquisition: false };
+      const track = <T>(job: Promise<T>, key: keyof typeof settled) => {
+        const tracked = job.finally(() => (settled[key] = true));
+        pending.push(tracked);
+        void tracked.catch(() => {});
+        return tracked;
+      };
 
       const capturePid = () => captureServicePid(healthUrl);
       await runQaGatewayFixture(
@@ -194,28 +201,19 @@ describe("provider local service shutdown", () => {
           await withTestTimeout(stopping.promise, 5_000, "Provider did not enter SIGTERM handler");
           expect(hasManagedProviderLocalServices()).toBe(true);
 
-          let stopSettled = false;
-          const stopped = stopManagedProviderLocalServices().finally(() => {
-            stopSettled = true;
-          });
-          pending.push(stopped);
-          void stopped.catch(() => {});
-          let acquisitionSettled = false;
-          const replacement = acquireService(target)
-            .then((nextLease) => {
+          const stopped = track(stopManagedProviderLocalServices(), "stop");
+          const replacement = track(
+            acquireService(target).then((nextLease) => {
               capturePid();
               return nextLease;
-            })
-            .finally(() => {
-              acquisitionSettled = true;
-            });
-          pending.push(replacement);
-          void replacement.catch(() => {});
+            }),
+            "acquisition",
+          );
 
           await nextEventLoopTurn();
-          expect({ stopSettled, acquisitionSettled, alive: isPidAlive(originalPid) }).toEqual({
-            stopSettled: false,
-            acquisitionSettled: false,
+          expect({ ...settled, alive: isPidAlive(originalPid) }).toEqual({
+            stop: false,
+            acquisition: false,
             alive: true,
           });
 
