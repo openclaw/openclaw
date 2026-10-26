@@ -68,6 +68,9 @@ export function createCodingToolsGatewayCaller(params: {
               ? (activeCaller.requesterOrigin ?? capabilityProfile.requesterOrigin)
               : capabilityProfile.requesterOrigin,
           sessionEventToolsAllow: params.sessionEventSourcePolicy?.toolsAllow,
+          ...(params.sessionEventSourcePolicy?.toolsAllowSessionScoped
+            ? { sessionEventToolsAllowSessionScoped: true as const }
+            : {}),
           sessionEventSettings: params.sessionEventSourcePolicy?.settings ?? {
             permissionMode: options.sessionPermissionPolicy?.mode,
           },

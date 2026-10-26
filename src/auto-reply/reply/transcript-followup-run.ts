@@ -67,6 +67,7 @@ export function expireSkillLibraryAuthoring(
       target: "personal",
       defaultTarget: "personal",
       multipleProfiles: grant.multipleProfiles,
+      expired: true,
       bind: () => {},
       invoke: async () => {
         throw new SkillLibraryError("AUTHORITY_EXPIRED", message);

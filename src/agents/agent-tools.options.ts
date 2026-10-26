@@ -70,6 +70,8 @@ export type OpenClawCodingToolsOptions = {
   emitBeforeToolCallDiagnostics?: boolean;
   /** Attempt-local authority to start or redirect delegated work. */
   delegationCapability?: DelegationCapability;
+  /** Host-resolved lifetime of this turn's tool policy; "conversation" adds no per-turn narrowing. */
+  toolPolicyScope?: "conversation" | "turn";
   /** Model API for the current provider (used for provider-native tool arbitration). */
   modelApi?: string;
   /** Resolved endpoint for provider-native tool eligibility. */

@@ -17,6 +17,7 @@ import { captureAgentPluginRuntimeRefresh } from "../../plugin-runtime-refresh.j
 import { resolveReplyExpectation } from "../../reply-completion.js";
 import { buildAgentRuntimePlan } from "../../runtime-plan/build.js";
 import { resolveSessionPermissionExecMode } from "../../session-permission-exec-mode.js";
+import { createStableSkillAuthoring } from "../../stable-skill-authoring.js";
 import { resolveLiveToolResultMaxChars } from "../../tool-result-limits.js";
 import { createToolTerminalObserver } from "../../tool-terminal-outcome.js";
 import { preparePluginHarnessWorkspace, resolveHarnessWorkspace } from "../../workspace-sandbox.js";
@@ -45,6 +46,9 @@ import { MAX_BEFORE_AGENT_FINALIZE_REVISIONS } from "./terminal-retry-state.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 /** Prepares the selected runtime and dispatches an attempt under its admitted lifecycle. */
+// Internal turns publish the session's last human skill authoring shape with an expired grant.
+const resolveStableEmbeddedSkillAuthoring = createStableSkillAuthoring();
+
 export async function prepareAndDispatchEmbeddedRunAttempt(
   input: PreparedEmbeddedAttemptDispatchInput,
   onSettledTurn?: EmbeddedRunAttemptParams["onSettledTurn"],
@@ -614,7 +618,10 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     streamParams: params.streamParams,
     modelRun: params.modelRun,
     disableTrajectory: params.disableTrajectory,
-    skillLibraryAuthoring: params.skillLibraryAuthoring,
+    skillLibraryAuthoring: resolveStableEmbeddedSkillAuthoring(
+      params.sessionKey,
+      params.skillLibraryAuthoring,
+    ),
     promptMode: params.promptMode,
     ownerNumbers: params.ownerNumbers,
     enforceFinalTag: params.enforceFinalTag,

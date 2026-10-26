@@ -912,3 +912,33 @@ it.for(Object.keys(ownerRequesterOutcomes) as Array<keyof typeof ownerRequesterO
     });
   },
 );
+
+it.for([
+  { producer: "agent:main:exec-owner", scoped: true, expected: undefined },
+  { producer: "agent:main:exec-owner", scoped: false, expected: ["read", "write"] },
+  { producer: "agent:main:other-owner", scoped: true, expected: ["read", "write"] },
+])(
+  "caps follow-ups from $producer (session-scoped: $scoped)",
+  async ({ producer, scoped, expected }, { onTestFinished }) => {
+    await runEventFixture("session-event-scoped-cap", onTestFinished, async (state) => {
+      await configureEventState(state);
+      const scope = { agentId: "main", sessionKey: "agent:main:exec-owner" };
+      await replaceSessionEntry(scope, {
+        sessionId: "exec-owner",
+        updatedAt: Date.now(),
+        sessionStartedAt: Date.now(),
+      });
+      const target = await withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: producer,
+          sessionEventToolsAllow: ["read", "write"],
+          ...(scoped ? { sessionEventToolsAllowSessionScoped: true as const } : {}),
+          receiptAuthority: () => true,
+        },
+        () => captureSessionEventTargetForHost(scope.agentId, scope.sessionKey),
+      );
+      expect(target.toolsAllow).toEqual(expected);
+    });
+  },
+);
