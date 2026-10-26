@@ -105,6 +105,73 @@ const invalidTarget: GatewayWebSocketTargetOptions = { tlsServerName: 42 };
       fs.rmSync(runtimeRoot, { recursive: true, force: true });
     }
   });
+
+  it("retains Playwright loader types when its CommonJS modules are source project roots", async () => {
+    const sourceRoot = path.resolve(import.meta.dirname, "../..");
+    const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "standalone-playwright-types-"));
+    try {
+      const filename = path.join(
+        sourceRoot,
+        "extensions/browser/src/browser/playwright-core.runtime.ts",
+      );
+      const playwrightRoot = fs.realpathSync(path.join(sourceRoot, "node_modules/playwright-core"));
+      const transforms = createStandaloneSourceTransforms({
+        sourceRoot,
+        runtimeRoot,
+        parse: createStandaloneSourceParser(),
+      });
+      const transformed = await transforms.transform({
+        filename,
+        contents: fs.readFileSync(filename, "utf8"),
+        config: { plugins: [createWorkerDeployBuildPlugin(sourceRoot)] },
+      });
+      fs.symlinkSync(
+        path.join(sourceRoot, "node_modules"),
+        path.join(runtimeRoot, "node_modules"),
+        "dir",
+      );
+      using session = createNativeTypeScriptProject({
+        cwd: runtimeRoot,
+        configFileName: "tsconfig.json",
+        files: {
+          "package.json": '{"type":"module"}',
+          "tsconfig.json": JSON.stringify({
+            compilerOptions: {
+              allowJs: true,
+              strict: true,
+              noEmit: true,
+              module: "nodenext",
+              target: "esnext",
+              lib: ["ES2023"],
+              types: ["node"],
+              skipLibCheck: true,
+            },
+            files: [
+              "consumer.ts",
+              path.join(playwrightRoot, "index.js"),
+              path.join(playwrightRoot, "lib/coreBundle.js"),
+            ],
+            include: [],
+          }),
+          "playwright.ts": transformed.contents,
+          "consumer.ts": `import { getPlaywrightCore, getPlaywrightUserAgent } from "./playwright.js";
+const core: typeof import("playwright-core") = getPlaywrightCore();
+const browser: Promise<import("playwright-core").Browser> = core.chromium.connectOverCDP("http://example.invalid");
+const userAgent: string = getPlaywrightUserAgent();
+// @ts-expect-error The loader must retain Playwright's connection argument type.
+getPlaywrightCore().chromium.connectOverCDP(42);
+// @ts-expect-error The loader's User-Agent remains a string.
+const invalidUserAgent: number = getPlaywrightUserAgent();
+void [browser, userAgent, invalidUserAgent];
+`,
+        },
+      });
+      expect(collectNativeTypeScriptDiagnostics(session.project)).toEqual([]);
+    } finally {
+      fs.rmSync(runtimeRoot, { recursive: true, force: true });
+    }
+  });
+
   it("retains contextual parameters when composing the Browser runtime", async () => {
     const sourceRoot = path.resolve(import.meta.dirname, "../..");
     const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "standalone-browser-types-"));
