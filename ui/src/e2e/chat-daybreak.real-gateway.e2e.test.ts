@@ -766,6 +766,9 @@ suite.define(() => {
             valueText: input.getAttribute("aria-valuetext"),
           }));
           await snapshot("both");
+          // Another session can have saved a different preferred program.
+          await choose("daybreak_blue");
+          await choose("standard");
           await toggle.focus();
           await toggle.press("Space");
           await expect.poll(async () => (await row()).cyberAccessProgram).toBe("daybreak_blue");
@@ -869,7 +872,8 @@ suite.define(() => {
           await expect.poll(() => toggle.isChecked()).toBe(true);
           expect((await row()).cyberAccessProgram).toBe("daybreak_blue");
           await snapshot("unknown");
-          await toggle.uncheck();
+          // Turning off the last stale selection removes this switch.
+          await toggle.press("Space");
           await expect.poll(async () => (await row()).cyberAccessProgram).toBe("standard");
           await expect.poll(() => toggle.count()).toBe(0);
           await snapshot("stale-selection");
