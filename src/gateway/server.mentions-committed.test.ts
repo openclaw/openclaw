@@ -10,6 +10,7 @@ import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { closeProvider, listenProvider } from "./gateway-provider-fixture.test-support.js";
 import type { OperatorScope } from "./operator-scopes.js";
+import { productModelConfig } from "./server.chat-product.test-support.js";
 import {
   connectGatewayClient,
   disconnectGatewayClient,
@@ -77,36 +78,23 @@ it("delivers a committed human mention once through authenticated chat.send", as
     "x-forwarded-proto": "https",
   });
   const origin = "https://control.example.test";
+  const clientOptions = {
+    tlsFingerprint,
+    origin,
+    clientName: "openclaw-control-ui",
+    mode: "webchat",
+    scopes,
+  } as const;
+  const { defaults, models } = productModelConfig(state.workspaceDir, model);
   const gateway = await startGatewayWithClient({
+    ...clientOptions,
     configPath: state.configPath,
     auth,
     secure: true,
-    tlsFingerprint,
-    origin,
     edgeAuthHeaders: headers("bob@committed-mention.example.test"),
-    clientName: "openclaw-control-ui",
-    mode: "webchat",
-    scopes: ["operator.admin"],
     cfg: {
-      agents: {
-        defaults: {
-          workspace: state.workspaceDir,
-          skipBootstrap: true,
-          model: { primary: model.modelRef },
-          models: {
-            [model.modelRef]: {
-              agentRuntime: { id: "openclaw" },
-              params: { transport: "sse", openaiWsWarmup: false },
-            },
-          },
-        },
-      },
-      models: {
-        mode: "replace",
-        providers: {
-          [model.providerId]: { ...model.config, request: { allowPrivateNetwork: true } },
-        },
-      },
+      agents: { defaults },
+      models,
       plugins: { slots: { memory: "none" } },
       tools: { profile: "minimal" },
       gateway: {
@@ -132,13 +120,9 @@ it("delivers a committed human mention once through authenticated chat.send", as
     await gateway.server.close({ reason: "committed mention cleanup" });
   });
   const sender = await connectGatewayClient({
+    ...clientOptions,
     url: `wss://127.0.0.1:${gateway.port}`,
-    tlsFingerprint,
-    origin,
     edgeAuthHeaders: headers("alice@committed-mention.example.test"),
-    clientName: "openclaw-control-ui",
-    mode: "webchat",
-    scopes: ["operator.admin"],
     deviceIdentity: loadOrCreateDeviceIdentity({
       path: state.path("sender-device", "client", "credentials.sqlite"),
     }),

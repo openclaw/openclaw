@@ -3,8 +3,10 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
-import type { SessionActorAuthority } from "../config/sessions/session-actor-contract.js";
-import { createMemorySessionActorOwner } from "../config/sessions/session-actor-memory.js";
+import {
+  authority,
+  memoryOwnerFixture,
+} from "../config/sessions/session-actor-memory-family.test-support.js";
 import { runWithSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
 import {
   captureSessionEntryMetadataRead,
@@ -33,34 +35,21 @@ vi.mock("node:worker_threads", async (importOriginal) => ({
   }),
 }));
 
-const authority: SessionActorAuthority = { assertCurrent() {}, authorize() {} };
 const sessionKey = "agent:main:dashboard:incognito-effects";
-const owners: ReturnType<typeof createMemorySessionActorOwner>[] = [];
 afterEach(() => {
   vi.restoreAllMocks();
   clearRuntimeConfigSnapshot();
-  for (const owner of owners.splice(0)) {
-    owner.close();
-  }
+});
+const acquireMemory = memoryOwnerFixture({
+  agentId: "main",
+  path: resolveIncognitoOpenClawAgentSqlitePath({
+    agentId: "main",
+    env: { OPENCLAW_STATE_DIR: "/synthetic" },
+  }),
 });
 
 async function fixture() {
-  const owner = createMemorySessionActorOwner({
-    agentId: "main",
-    path: resolveIncognitoOpenClawAgentSqlitePath({
-      agentId: "main",
-      env: { OPENCLAW_STATE_DIR: "/synthetic" },
-    }),
-  });
-  owners.push(owner);
-  const actor = await owner.acquire(
-    { database: owner.identity, sessionKey },
-    { assertCurrent() {}, assertReadable() {} },
-  );
-  if (!actor.storage) {
-    throw new Error("Memory actor has no storage capability");
-  }
-  const store = actor.storage;
+  const { owner, actor, store } = await acquireMemory(sessionKey);
   const mutate = async (operation: Parameters<typeof store.mutate>[0]) => {
     expect(await store.mutate(operation, authority)).toMatchObject({ kind: "committed" });
   };
