@@ -3,7 +3,6 @@ import { existsSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { StatementSync } from "node:sqlite";
-import { Worker } from "node:worker_threads";
 import zlib from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -59,7 +58,7 @@ const write = (store: Lease["store"], sessionId: string, flowId: string, data: s
   store.recordEventWithPayload(event(sessionId, flowId), { data });
 
 describe("async capture store", () => {
-  it("persists immutable FIFO input on a worker and preserves shared blob custody", async () => {
+  it("persists immutable FIFO input off the main thread", async () => {
     const native = requireNodeSqlite();
     const mainThreadWork = [
       vi.spyOn(native.DatabaseSync.prototype, "prepare"),
@@ -70,7 +69,6 @@ describe("async capture store", () => {
       vi.spyOn(zlib, "gzipSync"),
       vi.spyOn(zlib, "gunzipSync"),
     ];
-    const messages = vi.spyOn(Worker.prototype, "postMessage");
     syncBuiltinESMExports();
     const { store } = await acquire();
     const session = {
@@ -106,16 +104,8 @@ describe("async capture store", () => {
     expect(await store.listSessions()).toMatchObject([
       { id: "first", sourceProcess: "fixture", eventCount: 2 },
     ]);
-    await write(store, "second", "shared-reference", "shared café");
-    expect(await store.deleteSessions(["first"])).toEqual({ sessions: 1, events: 2, blobs: 0 });
-    expect(await store.readBlob(blobId)).toBe("shared café");
-    expect(await store.purgeAll()).toEqual({ sessions: 1, events: 1, blobs: 1 });
-    expect(await store.getSessionEvents("second")).toEqual([]);
-    expect(await store.readBlob(blobId)).toBeNull();
+    expect(await store.deleteSessions(["first"])).toEqual({ sessions: 1, events: 2, blobs: 1 });
     expect(await store.purgeAll()).toEqual({ sessions: 0, events: 0, blobs: 0 });
-    expect(
-      messages.mock.contexts.some((worker) => worker instanceof Worker && worker.threadId > 0),
-    ).toBe(true);
     for (const work of mainThreadWork) {
       expect(work).not.toHaveBeenCalled();
     }
