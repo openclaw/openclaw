@@ -28,7 +28,7 @@ export async function invokePluginArtifactInstallMock<
     params,
   );
   const reviewArtifact = params.onBeforePluginArtifactCommit;
-  const pluginId = result.pluginId;
+  const { pluginId, version } = result;
   if (
     !result.ok ||
     !pluginId ||
@@ -43,8 +43,8 @@ export async function invokePluginArtifactInstallMock<
     createColdPluginFixture({
       rootDir: stagedArtifactDir,
       pluginId,
-      ...(result.version ? { packageVersion: result.version } : {}),
-      ...(fixture?.manifest ? { manifest: fixture.manifest } : {}),
+      packageVersion: version || undefined,
+      manifest: fixture?.manifest,
     });
     await reviewArtifact({
       pluginId,
@@ -56,33 +56,30 @@ export async function invokePluginArtifactInstallMock<
 }
 
 export function createBundleInstallFixtureFactory(makeTempDir: () => string) {
-  return function setupBundleInstallFixture(params: BundleFixtureParams) {
-    const { bundleFormat: format, name } = params;
+  return ({ bundleFormat: format, name }: BundleFixtureParams) => {
     const caseDir = makeTempDir();
     const stateDir = path.join(caseDir, "state");
     const pluginDir = path.join(caseDir, "plugin-src");
     fs.mkdirSync(stateDir, { recursive: true });
-    const manifestPath = format === "agent" ? "plugin.json" : `.${format}-plugin/plugin.json`;
-    const skillPath = format === "agent" ? "skills/fixture/SKILL.md" : "skills/SKILL.md";
     writeFixtureFiles(pluginDir, {
-      [manifestPath]: {
-        ...(format === "agent"
-          ? { $schema: "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json" }
-          : {}),
+      [format === "agent" ? "plugin.json" : `.${format}-plugin/plugin.json`]: {
+        $schema:
+          format === "agent"
+            ? "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"
+            : undefined,
         name,
         description: `${format} bundle fixture`,
-        ...(format === "codex" ? { skills: "skills" } : {}),
+        skills: format === "codex" ? "skills" : undefined,
       },
       ...(format === "cursor" ? { ".cursor/commands/review.md": skillSource } : {}),
-      [skillPath]: skillSource,
+      [format === "agent" ? "skills/fixture/SKILL.md" : "skills/SKILL.md"]: skillSource,
     });
     return { pluginDir, extensionsDir: path.join(stateDir, "extensions") };
   };
 }
 
 export function createDualFormatInstallFixtureFactory(makeTempDir: () => string) {
-  return function setupDualFormatInstallFixture(params: { bundleFormat: "codex" | "claude" }) {
-    const { bundleFormat } = params;
+  return ({ bundleFormat }: { bundleFormat: "codex" | "claude" }) => {
     const caseDir = makeTempDir();
     const pluginDir = path.join(caseDir, "plugin-src");
     writeFixtureFiles(pluginDir, {
@@ -101,7 +98,7 @@ export function createDualFormatInstallFixtureFactory(makeTempDir: () => string)
       "skills/SKILL.md": skillSource,
       [`.${bundleFormat}-plugin/plugin.json`]: {
         name: "Bundle Fallback",
-        ...(bundleFormat === "codex" ? { skills: "skills" } : {}),
+        skills: bundleFormat === "codex" ? "skills" : undefined,
       },
     });
     return { pluginDir, extensionsDir: path.join(caseDir, "state", "extensions") };
