@@ -261,7 +261,9 @@ it("prepares isolated board metadata without HTML BLOBs or full-layout copies", 
   const clone = vi.spyOn(globalThis, "structuredClone");
 
   const prepared = readBoardSnapshotWithHtmlViewMetadata(database, sessionKey);
-  const layoutCopies = clone.mock.calls.filter(([value]) => value && "widgets" in value);
+  const layoutCopies = clone.mock.calls.filter(
+    ([value]) => value !== null && typeof value === "object" && "widgets" in value,
+  );
   clone.mockRestore();
 
   const widgetSelects = prepare.mock.calls
