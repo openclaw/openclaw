@@ -77,7 +77,7 @@ function connectionAuthority() {
     retire: () => {
       current = false;
     },
-    assertCurrent() {
+    assertCurrent(this: void) {
       if (!current) {
         throw failure;
       }
