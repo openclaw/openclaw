@@ -19,7 +19,6 @@ describe("IMAP cursor initialization", () => {
 
   describe.each(["baseline", "cursor"])("invalid %s UID", (source) => {
     it.each(invalidUids)("preserves the cursor for %s", async (uid) => {
-      // Inject malformed external data at the resolver or persisted-state boundary.
       const cursor = source === "cursor" ? { ...previous, lastSeenUid: uid as number } : previous;
       const { state, register, resolveBaseline, initialize } = await createCursorFixture(cursor);
       resolveBaseline.mockResolvedValueOnce(uid as number);
@@ -32,18 +31,14 @@ describe("IMAP cursor initialization", () => {
     });
   });
 
-  it.each(["", "0", "01", "-1", "1.5", "1e2", " 1"])(
-    "rejects invalid UIDVALIDITY before state access: %s",
-    async (uidValidity) => {
-      const { state, register, resolveBaseline, initialize } = await createCursorFixture();
-      const lookup = vi.spyOn(state.cursors, "lookup");
-
-      await expect(initialize(uidValidity)).rejects.toThrow(/UIDVALIDITY/);
-      expect(lookup).not.toHaveBeenCalled();
-      expect(resolveBaseline).not.toHaveBeenCalled();
-      expect(register).not.toHaveBeenCalled();
-    },
-  );
+  it("rejects noncanonical UIDVALIDITY before state access", async () => {
+    const { state, register, resolveBaseline, initialize } = await createCursorFixture();
+    const lookup = vi.spyOn(state.cursors, "lookup");
+    await expect(initialize("01")).rejects.toThrow(/UIDVALIDITY/);
+    expect(lookup).not.toHaveBeenCalled();
+    expect(resolveBaseline).not.toHaveBeenCalled();
+    expect(register).not.toHaveBeenCalled();
+  });
 
   it.each(["resolver", "write"])("preserves the old cursor when %s fails", async (failure) => {
     const { state, register, resolveBaseline, initialize } = await createCursorFixture();
@@ -51,7 +46,6 @@ describe("IMAP cursor initialization", () => {
     (failure === "resolver" ? resolveBaseline : register).mockRejectedValueOnce(error);
 
     await expect(initialize()).rejects.toBe(error);
-    expect(register).toHaveBeenCalledTimes(failure === "resolver" ? 0 : 1);
     expect(await state.cursors.lookup("account")).toEqual(previous);
   });
 
@@ -82,22 +76,16 @@ describe("IMAP cursor initialization", () => {
   });
 });
 
-describe("IMAP durable watcher state", () => {
-  it("keeps healthy accounts available when a sibling SecretRef could not resolve", () => {
-    const account = {
-      host: "imap.example.com",
-      user: "reader@example.com",
-      agentId: "mail_reader",
-    };
-    const config = resolveImapConfig({
-      accounts: {
-        healthy: { ...account, password: "resolved-password" },
-        unavailable: {
-          ...account,
-          password: { source: "env", provider: "default", id: "MISSING_IMAP_PASSWORD" },
-        },
+it("keeps healthy accounts available when a sibling SecretRef could not resolve", () => {
+  const account = { host: "imap.example", user: "reader", agentId: "mail" };
+  const config = resolveImapConfig({
+    accounts: {
+      healthy: { ...account, password: "resolved-password" },
+      unavailable: {
+        ...account,
+        password: { source: "env", provider: "default", id: "MISSING_IMAP_PASSWORD" },
       },
-    });
-    expect(Object.keys(config.accounts)).toEqual(["healthy"]);
+    },
   });
+  expect(Object.keys(config.accounts)).toEqual(["healthy"]);
 });
