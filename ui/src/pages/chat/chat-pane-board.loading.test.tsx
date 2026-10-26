@@ -133,15 +133,15 @@ it.each([false, true])(
     const store = await persistBoard(pane, snapshot, cleanup);
     const provider = pane.resolveBoardProvider();
     const reading = vi.spyOn(store, "read");
+    vi.useFakeTimers({
+      toFake: ["requestAnimationFrame", "cancelAnimationFrame", "setTimeout", "clearTimeout"],
+    });
     pane.hydrateStoredChatSnapshot(pane.state, sessionKey);
     const hydration = chatHistoryRequests(pane.state).initialSnapshotHydration!;
     await expectDefined(reading.mock.results[0], "snapshot read").value;
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
-    });
+    await vi.advanceTimersByTimeAsync(0);
     expect(pane.state.chatMessages).toEqual(transcript.messages);
     expect(provider.hasLoadedSnapshot).toBe(false);
-    vi.useFakeTimers();
     dispatch.resolve();
     await dispatch.promise;
     expect(provider.hasLoadedSnapshot).toBe(true);

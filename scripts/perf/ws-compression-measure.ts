@@ -1,9 +1,22 @@
+/**
+ * Real broadcast fanout, with byte-for-byte decoded output verification.
+ * node --import ./scripts/tsx.mjs scripts/perf/ws-compression-measure.ts \
+ *   --clients 60 --profiles 1 --batches 3000 --size 16384 --port 41649
+ * Repeat at 1/10/60 clients, alternating base/candidate order. --codec loads an
+ * alternate codec module; --allocations runs a separate sampled-allocation pass
+ * including collected objects. Timing/GC gates use untraced passes only.
+ * Accept reduced allocation/send CPU per broadcast with identical wire bytes;
+ * unique profiles (--profiles 60) bound the no-whole-frame-sharing overhead.
+ */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { writeFile } from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
+import type { HeapProfiler } from "node:inspector";
+import { Session } from "node:inspector/promises";
 import type { Socket } from "node:net";
+import { loadavg } from "node:os";
 import {
   constants,
   monitorEventLoopDelay,
@@ -36,12 +49,17 @@ const { values } = parseArgs({
     "warm-start-at": { type: "string" },
     "ready-file": { type: "string" },
     codec: { type: "string" },
+    allocations: { type: "boolean", default: false },
   },
 });
 const installCodec: typeof installGatewayDeflateCodec = values.codec
   ? (await import(pathToFileURL(values.codec).href)).installGatewayDeflateCodec
   : installGatewayDeflateCodec;
-function integer(label: keyof typeof values, fallback: number, min: number) {
+function integer(
+  label: Exclude<keyof typeof values, "allocations">,
+  fallback: number,
+  min: number,
+) {
   return parseStrictIntegerOption({ raw: values[label], fallback, label, min });
 }
 const batches = integer("batches", 3000, 1);
@@ -222,6 +240,16 @@ try {
   loop.enable();
   const latencies: number[] = [];
   await waitUntil(startAt, "measurement");
+  const inspector = new Session();
+  if (values.allocations) {
+    inspector.connect();
+    await inspector.post("HeapProfiler.startSampling", {
+      samplingInterval: 4096,
+      includeObjectsCollectedByMajorGC: true,
+      includeObjectsCollectedByMinorGC: true,
+    });
+  }
+  const hostLoadBefore = loadavg();
   loop.reset();
   const wireBefore = streams.reduce((sum, socket) => sum + socket.bytesWritten, 0);
   console.log("WS_COMPRESSION_MEASURE_START");
@@ -236,12 +264,22 @@ try {
   ended = performance.now();
   const threadCpu = process.threadCpuUsage(threadBefore);
   const cpu = process.cpuUsage(cpuBefore);
+  const hostLoadAfter = loadavg();
+  const memory = process.memoryUsage();
   const wireBytes = streams.reduce((sum, socket) => sum + socket.bytesWritten, 0) - wireBefore;
   loop.disable();
   console.log("WS_COMPRESSION_MEASURE_END");
   await delay(10);
   recordGc(observer.takeRecords());
   observer.disconnect();
+  let allocatedBytes: number | undefined;
+  if (values.allocations) {
+    const { profile } = await inspector.post("HeapProfiler.stopSampling");
+    const sum = (node: HeapProfiler.SamplingHeapProfileNode): number =>
+      node.selfSize + node.children.reduce((total, child) => total + sum(child), 0);
+    allocatedBytes = sum(profile.head);
+    inspector.disconnect();
+  }
   // Verify every decoded byte, sequence and recipient after timing. No parsing
   // or large expected-output generation is included in the measured work.
   const expectedHashes = Array.from({ length: profiles }, (_, profile) => {
@@ -264,6 +302,13 @@ try {
   console.log(
     JSON.stringify({
       workload: { batches, clients: clientCount, profiles, payloadSize, warmupBatches },
+      mode: values.allocations ? "allocation" : "timing",
+      allocatedBytes,
+      allocatedBytesPerBroadcast:
+        allocatedBytes === undefined ? undefined : allocatedBytes / batches,
+      hostLoadBefore,
+      hostLoadAfter,
+      memory,
       warmStartedAtEpochMs,
       startedAtEpochMs,
       processAgeAtStartMs,

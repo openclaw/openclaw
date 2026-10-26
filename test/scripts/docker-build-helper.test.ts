@@ -4158,6 +4158,7 @@ export async function sha256File(file) {
       "scripts/lib/docker-e2e-logs.sh",
       "scripts/lib/docker-e2e-container.sh",
       "scripts/lib/docker-e2e-watchdog.mjs",
+      "scripts/lib/direct-run.mjs",
       "scripts/lib/docker-e2e-resource-diagnostics.sh",
       PREPUBLISH_PLUGIN_REGISTRY_HELPER_PATH,
     ]) {

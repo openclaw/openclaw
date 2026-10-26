@@ -1,10 +1,8 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withUpdateCandidateIoBudget } from "./update-candidate-io.js";
 import { captureUpdateCandidateDeadline } from "./update-candidate-state.test-support.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
@@ -13,8 +11,8 @@ afterEach(() => {
 function pendingIo(options: Partial<Parameters<typeof withUpdateCandidateIoBudget>[0]> = {}) {
   const exit = createDeferred();
   const state: { signal?: AbortSignal; settled: boolean } = { settled: false };
-  const directory = options.directory ?? tempDirs.make("openclaw-io-");
-  const operation = withUpdateCandidateIoBudget({ bytes: 0, ...options, directory }, (signal) => {
+  const params = { directory: "unused", bytes: 0, ...options };
+  const operation = withUpdateCandidateIoBudget(params, (signal) => {
     state.signal = signal;
     return exit.promise;
   }).finally(() => {
@@ -58,11 +56,10 @@ it("expires the active snapshot after a completed inspection with a moving clock
   let now = Date.now();
   const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
   const expireDeadline = captureUpdateCandidateDeadline();
-  const directory = tempDirs.make("openclaw-io-active-deadline-");
-  await withUpdateCandidateIoBudget({ directory, bytes: 0 }, async () => undefined);
+  await withUpdateCandidateIoBudget({ directory: "unused", bytes: 0 }, async () => undefined);
   clock.mockImplementation(() => now++);
 
-  const pending = pendingIo({ directory, operation: "snapshot" });
+  const pending = pendingIo({ operation: "snapshot" });
   const operation = pending.operation.catch((error: unknown) => error);
   try {
     clock.mockReturnValue(now + 400_000);

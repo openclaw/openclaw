@@ -421,12 +421,19 @@ export async function switchChatModel(
       if (nextValue && nextValue !== currentValue && nextRuntime?.local !== true && hasHistory) {
         const { showConfirmDialog } = await import("../../components/confirm-dialog.ts");
         const displayLookup = buildCatalogDisplayLookup(host.chatModelCatalog);
+        const currentEntry = host.chatModelCatalog.find(
+          (entry) => buildQualifiedChatModelValue(entry.id, entry.provider) === currentValue,
+        );
         const confirmed = await showConfirmDialog({
           title: t("chat.modelControls.switchTitle", {
-            new: formatCatalogChatModelDisplayFromLookup(nextValue, displayLookup),
+            new:
+              nextEntry?.name.trim() ||
+              formatCatalogChatModelDisplayFromLookup(nextValue, displayLookup),
           }),
           message: t("chat.modelControls.switchWarning", {
-            current: formatCatalogChatModelDisplayFromLookup(currentValue, displayLookup),
+            current:
+              currentEntry?.name.trim() ||
+              formatCatalogChatModelDisplayFromLookup(currentValue, displayLookup),
           }),
           confirmLabel: t("chat.modelControls.switchConfirm"),
           skipPreference: {

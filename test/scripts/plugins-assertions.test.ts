@@ -1011,6 +1011,50 @@ fs.renameSync = (source, destination) => {
     },
   );
 
+  it.for(["2147483648", String(Number.MAX_SAFE_INTEGER)])(
+    "rejects overflowing ClawHub preflight timeout %s before making a request",
+    (timeoutMs, { signal }) =>
+      fixtures.run(async () => {
+        let requests = 0;
+        const result = await clawhubPreflight(
+          signal,
+          (_request, response) => {
+            requests += 1;
+            response.end("{}");
+          },
+          { OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_TIMEOUT_MS: timeoutMs },
+        );
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(
+          `invalid OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_TIMEOUT_MS: ${timeoutMs}`,
+        );
+        expect(result.stderr).not.toContain("TimeoutOverflowWarning");
+        expect(requests).toBe(0);
+      }),
+  );
+
+  it("accepts the maximum ClawHub preflight timeout for request and response body", ({ signal }) =>
+    fixtures.run(async () => {
+      const result = await clawhubPreflight(
+        signal,
+        (_request, response) => {
+          setImmediate(() => {
+            response.writeHead(200, { "content-type": "application/json" });
+            response.write('{"package":');
+            setImmediate(() => {
+              response.end(JSON.stringify({ family: "code-plugin", runtimeId: CLAWHUB_ID }) + "}");
+            });
+          });
+        },
+        { OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_TIMEOUT_MS: "2147483647" },
+      );
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain(
+        "Using ClawHub package @openclaw/kitchen-sink (code-plugin).",
+      );
+      expect(result.stderr).not.toContain("TimeoutOverflowWarning");
+    }));
+
   it.for(["request timeout", "body timeout", "body limit"])(
     "bounds ClawHub package preflight: %s",
     (mode, { signal }) =>

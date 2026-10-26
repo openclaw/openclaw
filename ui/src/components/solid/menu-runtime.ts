@@ -42,13 +42,15 @@ const normalizer: Parameters<typeof connect>[1] = {
   rect: normalize,
   style: normalizeProps.style,
 };
+type MenuNavigationItem = { value: string; disabled?: boolean; label?: string };
+
 export type MenuRuntime = {
   service: MenuService;
   read(): Api;
   start(): () => void;
   updateInputs(
     dir: "ltr" | "rtl",
-    catalog: readonly { value: string; disabled?: boolean }[] | undefined,
+    catalog: readonly MenuNavigationItem[] | undefined,
     selected: string | null | undefined,
   ): void;
   pointerDelta(x: number): number;
@@ -77,7 +79,9 @@ export type MenuNavigationOptions = {
   /** Searchable lists keep focus in their input while Zag moves the highlight. */
   focus?: "item" | "retain";
   pointerFocus?: () => "menu" | "trigger";
-  items?: () => readonly { value: string; disabled?: boolean }[];
+  items?: () => readonly MenuNavigationItem[];
+  /** Retained-focus listbox rows may be unmounted; navigate its catalog and let its scroll owner reveal. */
+  virtualized?: () => boolean;
   value?: () => string | null;
 };
 
@@ -88,6 +92,7 @@ export function createMenuRuntime(
   options: MenuNavigationOptions,
   items: (ordered?: boolean) => HTMLElement[],
   notify: () => void,
+  onSelect: (value: string) => void,
 ): MenuRuntime {
   let lastPointerX: number | undefined;
   let lastPointerY: number | undefined;
@@ -102,7 +107,7 @@ export function createMenuRuntime(
       ? overlay.surface.contains(target)
       : target.closest('[role="menu"]') === overlay.surface);
   const focusItem = (service: MenuService) => {
-    if (!overlay.open) {
+    if (!overlay.open || (options.focus === "retain" && options.virtualized?.())) {
       return;
     }
     const id = service.computed("highlightedId");
@@ -133,6 +138,23 @@ export function createMenuRuntime(
       node.focus({ preventScroll: true });
       node.scrollIntoView({ block: "nearest", inline: "nearest" });
     }
+  };
+  const virtualItems = () =>
+    options.surface === "listbox" && options.virtualized?.()
+      ? options.items?.().filter((item) => !item.disabled)
+      : undefined;
+  const highlightBoundary = (last: boolean, event: string, set: (value: string | null) => void) => {
+    queueMicrotask(() => {
+      const rows = virtualItems();
+      if (!overlay.open || !rows) {
+        return;
+      }
+      const selected =
+        event === (last ? "END" : "HOME")
+          ? undefined
+          : rows.find((row) => row.value === options.value?.());
+      set(selected?.value ?? (last ? rows.at(-1) : rows[0])?.value ?? null);
+    });
   };
   // SAFETY: The pinned menu machine defines its complete computed map.
   const computed = machine.computed!;
@@ -192,6 +214,12 @@ export function createMenuRuntime(
       actions: {
         ...machine.implementations?.actions,
         highlightFirstItem(params) {
+          if (virtualItems()) {
+            highlightBoundary(false, params.event.type, (value) =>
+              params.context.set("highlightedValue", value),
+            );
+            return;
+          }
           // Keep Zag's queued opening focus aligned with the overlay's initial row.
           if (options.surface !== "listbox" && params.event.type !== "HOME") {
             const initial = items().find(
@@ -206,6 +234,15 @@ export function createMenuRuntime(
             }
           }
           machine.implementations?.actions?.highlightFirstItem?.(params);
+        },
+        highlightLastItem(params) {
+          if (virtualItems()) {
+            highlightBoundary(true, params.event.type, (value) =>
+              params.context.set("highlightedValue", value),
+            );
+          } else {
+            machine.implementations?.actions?.highlightLastItem?.(params);
+          }
         },
         setHighlightedItem(params) {
           if (options.surface === "listbox") {
@@ -223,16 +260,93 @@ export function createMenuRuntime(
         // Zag treats an empty value as no active item. Its DOM navigation also
         // accepts an item ID, so preserve the valid empty choice by using its ID.
         highlightNextItem(params) {
+          const rows = virtualItems();
+          if (rows) {
+            const active = params.context.get("highlightedValue");
+            const index = rows.findIndex((row) => row.value === active);
+            const loop = params.event.loop ?? params.prop("loopFocus");
+            const next =
+              index < 0 || (loop && index === rows.length - 1)
+                ? 0
+                : Math.min(index + 1, rows.length - 1);
+            params.context.set("highlightedValue", rows[next]?.value ?? null);
+            return;
+          }
           if (options.surface === "listbox" && params.context.get("highlightedValue") === "") {
             params.context.set("highlightedValue", `${params.scope.id}:`);
           }
           machine.implementations?.actions?.highlightNextItem?.(params);
         },
         highlightPrevItem(params) {
+          const rows = virtualItems();
+          if (rows) {
+            const active = params.context.get("highlightedValue");
+            const index = rows.findIndex((row) => row.value === active);
+            const loop = params.event.loop ?? params.prop("loopFocus");
+            const previous =
+              index < 0 || (loop && index === 0) ? rows.length - 1 : Math.max(index - 1, 0);
+            params.context.set("highlightedValue", rows[previous]?.value ?? null);
+            return;
+          }
           if (options.surface === "listbox" && params.context.get("highlightedValue") === "") {
             params.context.set("highlightedValue", `${params.scope.id}:`);
           }
           machine.implementations?.actions?.highlightPrevItem?.(params);
+        },
+        highlightMatchedItem(params) {
+          const rows = virtualItems();
+          if (!rows) {
+            machine.implementations?.actions?.highlightMatchedItem?.(params);
+            return;
+          }
+          // Match pinned Zag getByTypeahead/getByText: shared buffer, repeat-key cycling,
+          // wrap from current, single-key exclusion, legacy Latin-1 sanitization and timeout.
+          const state = params.refs.get("typeaheadState");
+          const search = state.keysSoFar + params.event.key;
+          const repeated =
+            search.length > 1 && Array.from(search).every((char) => char === search[0]);
+          const query = repeated ? search[0]! : search;
+          const active = params.context.get("highlightedValue");
+          const index = rows.findIndex((row) => row.value === active);
+          const ordered = index < 0 ? rows : [...rows.slice(index), ...rows.slice(0, index)];
+          const match = ordered.find((row) => {
+            if (query.length === 1 && row.value === active) {
+              return false;
+            }
+            const text = (row.label ?? row.value)
+              .split("")
+              .map((char) => {
+                const code = char.charCodeAt(0);
+                return code > 0 && code < 128
+                  ? char
+                  : code >= 128 && code <= 255
+                    ? `\\x${code.toString(16)}`
+                    : "";
+              })
+              .join("")
+              .trim();
+            return text.toLowerCase().startsWith(query.toLowerCase());
+          });
+          clearTimeout(state.timer);
+          state.keysSoFar = search;
+          state.timer = window.setTimeout(() => {
+            state.keysSoFar = "";
+            state.timer = -1;
+          }, 350);
+          if (match) {
+            params.context.set("highlightedValue", match.value);
+          }
+        },
+        clickHighlightedItem(params) {
+          const rows = virtualItems();
+          if (rows) {
+            const value = params.context.get("highlightedValue");
+            if (value !== null && rows.some((row) => row.value === value)) {
+              onSelect(value);
+            }
+          } else {
+            machine.implementations?.actions?.clickHighlightedItem?.(params);
+          }
         },
         reposition() {},
         focusTrigger() {},
@@ -337,6 +451,7 @@ export function createMenuRuntime(
       unsubscribe();
       stopOpen();
       service.stop();
+      clearTimeout(service.service.refs.get("typeaheadState").timer);
       if (parent) {
         const children = { ...parent.refs.get("children") };
         delete children[overlay.id];
@@ -346,7 +461,7 @@ export function createMenuRuntime(
   };
   const updateInputs = (
     dir: "ltr" | "rtl",
-    catalog: readonly { value: string; disabled?: boolean }[] | undefined,
+    catalog: readonly MenuNavigationItem[] | undefined,
     selected: string | null | undefined,
   ) => {
     const api = read();

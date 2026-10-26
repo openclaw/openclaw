@@ -31,34 +31,77 @@ import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.
 /** Decodes frame boundaries; callers retain reader lifetime and protocol admission. */
 export async function* iterateSseFrames(
   read: () => Promise<ReadableStreamReadResult<Uint8Array>>,
-  assertWithinLimit?: (pending: string) => void,
+  limit?: { max: number; unit: "characters" | "bytes"; message: string },
 ): AsyncGenerator<{ frame: string; terminated: boolean }> {
   const decoder = new TextDecoder();
-  let buffer = "";
+  const parts: string[] = [];
+  let partsLength = 0;
+  let tail = "";
+  const lengthOf =
+    limit?.unit === "bytes"
+      ? (text: string) => Buffer.byteLength(text, "utf8")
+      : (text: string) => text.length;
+  const assertWithinLimit = (length: number) => {
+    if (limit && length > limit.max) {
+      throw new Error(limit.message);
+    }
+  };
   // CRLF remains one line ending even when the delimiter expression backtracks.
   const delimiter = /(?:\r\n|\r(?!\n)|\n)(?:\r\n|\r(?!\n)|\n)/g;
-  let scanOffset = 0;
   for (;;) {
     const { done, value } = await read();
-    buffer += decoder.decode(value, { stream: !done });
-    delimiter.lastIndex = scanOffset;
+    const buffer = tail + decoder.decode(value, { stream: !done });
+    let start = 0;
+    delimiter.lastIndex = 0;
     for (;;) {
       const boundary = delimiter.exec(buffer);
-      if (!boundary && (!done || !buffer)) {
+      if (!boundary && (!done || (!parts.length && start === buffer.length))) {
         break;
       }
       const frameEnd = boundary?.index ?? buffer.length;
-      const frame = buffer.slice(0, frameEnd);
-      assertWithinLimit?.(frame);
-      buffer = boundary ? buffer.slice(frameEnd + boundary[0].length) : "";
-      delimiter.lastIndex = 0;
+      let frame = buffer.slice(start, frameEnd);
+      if (limit) {
+        assertWithinLimit(partsLength + lengthOf(frame));
+      }
+      if (parts.length) {
+        parts.push(frame);
+        frame = parts.join("");
+        parts.length = 0;
+        partsLength = 0;
+      }
+      start = boundary ? frameEnd + boundary[0].length : buffer.length;
       yield { frame, terminated: boundary !== null };
+      if (!boundary) {
+        break;
+      }
     }
-    assertWithinLimit?.(buffer);
+    const pending = buffer.slice(start);
+    // Scan only new text plus the maximum delimiter overlap. Regex on an ever-growing
+    // concatenated string would flatten/copy the entire pending frame on every read.
+    // Keep only trailing newline characters, so UTF-8 length accounting never
+    // splits a surrogate pair between a retained fragment and the overlap.
+    let split = pending.length;
+    while (split > 0 && pending.length - split < 3) {
+      const last = pending.charCodeAt(split - 1);
+      if (last !== 10 && last !== 13) {
+        break;
+      }
+      split--;
+    }
+    if (split > 0) {
+      const part = pending.slice(0, split);
+      parts.push(part);
+      if (limit) {
+        partsLength += lengthOf(part);
+      }
+    }
+    tail = pending.slice(split);
+    if (limit) {
+      assertWithinLimit(partsLength + lengthOf(tail));
+    }
     if (done) {
       return;
     }
-    scanOffset = Math.max(0, buffer.length - 3);
   }
 }
 

@@ -4,6 +4,7 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
+import { persistColdLoadWarmState } from "../../../scripts/lib/control-ui-bench-warm-state.ts";
 import { appendTranscriptMessages } from "../../../src/config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
 import type { GatewayClient } from "../../../src/gateway/client.ts";
@@ -42,6 +43,8 @@ type RpcMetric = {
   messages?: number;
   historyBytes?: number;
   initialHistory?: boolean;
+  cursorPresent?: boolean;
+  historyKind?: "window" | "delta" | "reset";
   historyOk?: boolean;
   resolvedKey?: string;
   resolvedAgentId?: string;
@@ -255,9 +258,11 @@ suite.define(() => {
           // Measure short-link resolution, not cached-roster route recovery. Keep
           // restored Home preferences; clear identity admission in each new document
           // because the previous document can persist its boot record on pagehide.
-          for (const key of Object.keys(localStorage)) {
-            if (key.startsWith("openclaw.control.bootRecord.v1:")) {
-              localStorage.removeItem(key);
+          if (sessionStorage.getItem("loading-proof-warm-reload") !== "true") {
+            for (const key of Object.keys(localStorage)) {
+              if (key.startsWith("openclaw.control.bootRecord.v1:")) {
+                localStorage.removeItem(key);
+              }
             }
           }
           window.localStorage.setItem(
@@ -281,10 +286,10 @@ suite.define(() => {
               );
             })
             .toBe(true);
-        const waitForStartupCommit = async (sessionKey: string, pane: Locator) => {
+        const waitForStartupCommit = async (sessionKey: string, pane: Locator, after = 0) => {
           await expect
             .poll(() =>
-              selectStartupHistory(rpc, sessionKey).some(
+              selectStartupHistory(rpc.slice(after), sessionKey).some(
                 (metric) => metric.receivedMs !== undefined && metric.historyOk === true,
               ),
             )
@@ -325,6 +330,9 @@ suite.define(() => {
                   ? { sessionKey: params.key }
                   : {}),
               ...(initialHistory ? { initialHistory: true } : {}),
+              ...(initialHistory || ["chat.startup", "chat.history"].includes(frame.method)
+                ? { cursorPresent: typeof historyParams.cursor === "string" }
+                : {}),
               ...(typeof params.agentId === "string" ? { agentId: params.agentId } : {}),
               ...(typeof params.shortId === "string" ? { shortId: params.shortId } : {}),
               ...(typeof historyParams.limit === "number" ? { limit: historyParams.limit } : {}),
@@ -359,6 +367,11 @@ suite.define(() => {
                 : undefined
               : body;
             metric.historyOk = frame.ok === true && history !== undefined;
+            if (history?.kind === "delta" || history?.kind === "reset") {
+              metric.historyKind = history.kind;
+            } else if (Array.isArray(history?.messages)) {
+              metric.historyKind = "window";
+            }
             if (Array.isArray(history?.messages)) {
               metric.messages = history.messages.length;
               metric.historyBytes = Buffer.byteLength(JSON.stringify(history.messages));
@@ -548,6 +561,81 @@ suite.define(() => {
         ).toBe(true);
         expect(images.some((image) => image.width === 128 && image.height === 128)).toBe(true);
         expect(avatarRequests).toBe(1);
+
+        await selectedPane.getByRole("button", { name: "Scroll to latest", exact: true }).click();
+        await waitForTail();
+        await page.waitForFunction(() =>
+          Object.keys(localStorage).some((key) =>
+            key.startsWith("openclaw.control.bootRecord.v1:"),
+          ),
+        );
+        const warmInput: Parameters<typeof persistColdLoadWarmState>[0] = {
+          sessionKey: selectedKey,
+          sidebarView: "sessions",
+        };
+        const warmState = await page.evaluate(persistColdLoadWarmState, warmInput);
+        const storedSnapshot: unknown = warmState.storage.records.snapshots.find((record) =>
+          record.sessionKey.endsWith(`\u0000${selectedKey}`),
+        )?.snapshot;
+        const cacheBeforeReload = {
+          messages: warmState.messages,
+          cursorPresent: isRecord(storedSnapshot) && typeof storedSnapshot.deltaCursor === "string",
+          bootRecordPresent: warmState.storage.local.some(([key]) =>
+            key.startsWith("openclaw.control.bootRecord.v1:"),
+          ),
+        };
+        await page.evaluate(() => sessionStorage.setItem("loading-proof-warm-reload", "true"));
+        const warmStart = rpc.length;
+        pending.clear();
+        startedAt = Date.now();
+        measuring = true;
+        await page.reload();
+        await waitForControlUiGatewayReady(page);
+        await waitForTail();
+        await composer.waitFor();
+        await waitForStartupCommit(selectedKey, selectedPane, warmStart);
+        measuring = false;
+        const warmMessageNumbers = await selectedPane.evaluate((element) =>
+          (element as LoadingPane).state.chatMessages.map((message) =>
+            Number(JSON.stringify(message).match(/Synthetic loading proof message (\d+)\./u)?.[1]),
+          ),
+        );
+        expect(warmMessageNumbers.length).toBeGreaterThan(0);
+        expect(warmMessageNumbers.length).toBeLessThanOrEqual(transcriptLength);
+        expect(warmMessageNumbers).toEqual(
+          Array.from(
+            { length: warmMessageNumbers.length },
+            (_, index) => transcriptLength - warmMessageNumbers.length + index + 1,
+          ),
+        );
+        const warmHistory = selectStartupHistory(rpc.slice(warmStart), selectedKey);
+        await writeFile(
+          path.join(suite.artifactDir, "warm-history-payload.json"),
+          JSON.stringify(
+            {
+              transcriptLength,
+              shortLinkReload: selectStartupHistory(startupMetrics, selectedKey),
+              warmReload: {
+                pathname: new URL(page.url()).pathname,
+                cacheBeforeReload,
+                messages: warmMessageNumbers.length,
+                history: warmHistory,
+              },
+            },
+            null,
+            2,
+          ),
+        );
+        expect(warmHistory).toHaveLength(1);
+        expect(warmHistory[0]).toMatchObject({
+          cursorPresent: true,
+          historyKind: "delta",
+          messages: 0,
+        });
+        expect(warmHistory[0]?.responseBytes).toBeLessThan(
+          (selectedStartup?.responseBytes ?? 0) * 0.2,
+        );
+        expect(warmMessageNumbers).toHaveLength(cacheBeforeReload.messages);
       },
     );
   });

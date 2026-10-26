@@ -300,7 +300,7 @@ describe("standalone build interface", () => {
     const manifest = await createStandaloneManifest({
       outputRoot: root,
       mode: "jit",
-      bun: { version: "1.4.3", revision: "1.4.3+fixture", executableSha256: "a".repeat(64) },
+      bun: { version: "1.4.4", revision: "1.4.4+fixture", executableSha256: "a".repeat(64) },
       openclaw: { version: "2026.10.3", commit: "b".repeat(40) },
       embedded: { modules: 4, plugins: 1, workers: 2, inlineWorkers: 0 },
       plugins: { embedded: ["slack", "codex"], omitted: ["signal", "matrix"] },

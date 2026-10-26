@@ -598,7 +598,11 @@ export type SessionControllerMailbox = {
     sourceRefs: Map<FollowupRun, FollowupRun>;
   }>;
   lastRun?: FollowupRun["run"];
-  recentSources: Map<string, { input: SessionControllerInput; expires: number }>;
+  // Redelivery records outlive runs; retain only the exact input identity.
+  recentSources: Map<
+    string,
+    { inputInstance: SessionControllerInput["instance"]; expires: number }
+  >;
 };
 
 export type SessionControllerSourceAdapter = {

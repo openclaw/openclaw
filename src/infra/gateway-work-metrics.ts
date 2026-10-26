@@ -30,6 +30,8 @@ const rowSelections = resolveGlobalSingleton(
     const sampledFirstDifferences: Record<string, number> = {};
     return {
       counters: new Map<string, Map<SessionRowSelectionKind, SessionRowSelectionMetric>>(),
+      partitions: new Map<string, { task: string; hits: number; misses: number }>(),
+      partitionRevisions: new Map<string, number>(),
       resets: 0,
       materialization: {
         created: 0,
@@ -48,6 +50,8 @@ function selectionTask(task: string | undefined): string {
   switch (task) {
     case "gateway:rpc:sessions.list":
       return "sessions.list";
+    case "gateway:rpc:sessions.subscribe":
+      return "sessions.subscribe";
     case "gateway:rpc:sessions.catalog.list":
       return "sessions.catalog.list";
     case "gateway:rpc:sessions.resolve":
@@ -91,6 +95,34 @@ export function recordSessionRowSelectionReset(): void {
   rowSelections.resets++;
 }
 
+/** Aggregate once per selection, outside the partition filtering loop. */
+export function recordSessionRowPartitionCache(
+  hits: number,
+  misses: number,
+  task: string | undefined,
+): void {
+  const caller = selectionTask(task);
+  let counter = rowSelections.partitions.get(caller);
+  if (!counter) {
+    rowSelections.partitions.set(caller, (counter = { task: caller, hits: 0, misses: 0 }));
+  }
+  counter.hits += hits;
+  counter.misses += misses;
+}
+
+export function recordSessionRowPartitionRevision(scope?: string): void {
+  const reason =
+    scope === "session-entry"
+      ? "metadata"
+      : scope === "agent-runs" || scope === "subagent-runs" || scope === "runtime"
+        ? "run-state"
+        : scope === "automation" || scope === "transcript" || scope === "acp"
+          ? scope
+          : "other";
+  const counters = rowSelections.partitionRevisions;
+  counters.set(reason, (counters.get(reason) ?? 0) + 1);
+}
+
 /** Sample one in 64 rebuilds; diagnostic snapshots log field names, never row values. */
 export function recordSessionRowMaterialization(
   outcome: "created" | "reused" | "rebuilt" | "skipped",
@@ -113,6 +145,11 @@ export function getSessionRowSelectionMetrics() {
       [...kinds.values()].map((counter) => Object.assign({}, counter)),
     ),
     resets: rowSelections.resets,
+    partitions: Array.from(rowSelections.partitions.values(), (counter) => ({ ...counter })),
+    partitionRevisions: Array.from(rowSelections.partitionRevisions, ([reason, changes]) => ({
+      reason,
+      changes,
+    })),
     materialization: {
       ...rowSelections.materialization,
       sampledFirstDifferences: { ...rowSelections.materialization.sampledFirstDifferences },

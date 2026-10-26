@@ -3,6 +3,10 @@
  * node --import ./scripts/tsx.mjs scripts/perf/gateway-clone-measure.ts --workload tool
  * Use --workload history for queued actor reads; --allocation measures allocation separately.
  * --source-dir points to baseline files saved with their src/gateway-relative paths.
+ * --workload sharing measures sharing snapshots across 10k synthetic sessions with
+ * 40 plugin tool names. Its --source-dir contains session-accessor.sqlite-entry-cache.types.ts.
+ * Accept fewer copies/lower allocation with unchanged isolation; compare CPU in
+ * separate untraced passes, alternating baseline/candidate order for five pairs.
  * Run baseline/candidate in alternating order; this is not whole-Gateway stress evidence.
  */
 import assert from "node:assert/strict";
@@ -15,6 +19,7 @@ import { setImmediate } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import type { WorkerLiveEventParams } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import type { InternalSessionEntry } from "../../src/config/sessions/types.js";
 import { startGatewayBenchDiagnostics } from "../lib/gateway-bench-diagnostics.ts";
 
 const { values } = parseArgs({
@@ -27,14 +32,18 @@ const { values } = parseArgs({
 });
 const iterations = Number(values.iterations);
 assert(Number.isSafeInteger(iterations) && iterations > 0);
-assert(values.workload === "tool" || values.workload === "history");
-const gatewayRoot = new URL("../../src/gateway/", import.meta.url);
+assert(["tool", "history", "sharing"].includes(values.workload));
+const ownerRoot = new URL(
+  values.workload === "sharing" ? "../../src/config/sessions/" : "../../src/gateway/",
+  import.meta.url,
+);
 if (values["source-dir"]) {
   const sourceDir = path.resolve(values["source-dir"]);
   const replacements = new Map(
-    ["session-transcript-readers.ts", "worker-environments/live-event-projection.ts"].map(
-      (file) => [new URL(file, gatewayRoot).href, path.join(sourceDir, file)],
-    ),
+    (values.workload === "sharing"
+      ? ["session-accessor.sqlite-entry-cache.types.ts"]
+      : ["session-transcript-readers.ts", "worker-environments/live-event-projection.ts"]
+    ).map((file) => [new URL(file, ownerRoot).href, path.join(sourceDir, file)]),
   );
   registerHooks({
     load(url, context, nextLoad) {
@@ -53,7 +62,30 @@ if (values["source-dir"]) {
 let run: () => Promise<void>;
 let cleanup = () => {};
 let operationsPerIteration: number;
-if (values.workload === "tool") {
+if (values.workload === "sharing") {
+  const { projectSessionSharingEntry } =
+    await import("../../src/config/sessions/session-accessor.sqlite-entry-cache.types.js");
+  const entries: InternalSessionEntry[] = Array.from({ length: 10_000 }, (_, index) => ({
+    sessionId: `synthetic-${index}`,
+    updatedAt: index,
+    visibility: "shared",
+    archivedAt: index % 10 ? index + 1 : undefined,
+    parentSessionKey: "agent:main:dashboard:synthetic",
+    inheritedToolPolicyVersion: 1,
+    inheritedToolAllow: Array.from({ length: 40 }, (_tool, tool) => `plugin-${tool}.read`),
+    inheritedToolDeny: ["exec", "write", "browser", "process"],
+    owner: { actor: { type: "human", id: `synthetic-owner-${index % 8}` } },
+  }));
+  let cursor = 0;
+  operationsPerIteration = 1;
+  run = async () => {
+    const entry = entries[cursor++ % entries.length]!;
+    const snapshot = projectSessionSharingEntry(entry);
+    assert.equal(snapshot.sessionId, entry.sessionId);
+    assert.equal(snapshot.inheritedToolAllow?.length, 40);
+    assert.notEqual(snapshot.inheritedToolAllow, entry.inheritedToolAllow);
+  };
+} else if (values.workload === "tool") {
   const { prepareWorkerLiveEventData } =
     await import("../../src/gateway/worker-environments/live-event-projection.js");
   // A search/list result and a tool screenshot exercise payloads common to busy agent turns.
@@ -172,7 +204,7 @@ if (values.allocation) {
 const diagnostics = startGatewayBenchDiagnostics();
 const hostLoad = loadavg();
 const before = process.memoryUsage();
-const cpuBefore = process.cpuUsage();
+const cpuBefore = process.threadCpuUsage();
 const started = performance.now();
 for (let index = 0; index < iterations; index++) {
   await run();
@@ -181,7 +213,7 @@ for (let index = 0; index < iterations; index++) {
   }
 }
 const wallMs = performance.now() - started;
-const cpu = process.cpuUsage(cpuBefore);
+const cpu = process.threadCpuUsage(cpuBefore);
 await setImmediate();
 const metrics = diagnostics();
 let sampledBytes: number | undefined;
@@ -200,7 +232,7 @@ console.log(
     workload: values.workload,
     source: values["source-dir"] ? "baseline" : "candidate",
     node: process.version,
-    ownerRoot: fileURLToPath(gatewayRoot),
+    ownerRoot: fileURLToPath(ownerRoot),
     iterations,
     operations,
     allocation: values.allocation,
