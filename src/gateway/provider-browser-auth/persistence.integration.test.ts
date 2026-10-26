@@ -142,11 +142,7 @@ it.each(["complete", "cancel"] as const)("callback receipt: %s", async (outcome)
     expect(response.status).toBe(outcome === "complete" ? 200 : 410);
     expect(response.headers.get("set-cookie")).toBeNull();
     expect(response.headers.get("cache-control")).toBe("no-store");
-    const receipt = await response.text();
-    if (outcome === "complete") {
-      expect(receipt).toContain("Sign-in response received.");
-      expect(receipt).toContain("Return to OpenClaw for the sign-in result.");
-    }
+    await response.text();
     expect(loadPersistedAuthProfileStore()?.profiles).toEqual(retainedProfiles);
     const replay = await fetch(callbackUrl);
     expect(replay.status).toBe(410);

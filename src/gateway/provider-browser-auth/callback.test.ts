@@ -83,12 +83,12 @@ it.each([
   expect(new URL(url.searchParams.get("callback_url")!).origin).toBe(origin);
   const response = callback("state=login-state&code=secret-code");
   expect(response.res.statusCode).toBe(200);
-  expect(response.getBody()).toContain("Sign-in response received");
+  expect(response.getBody()).toContain("Sign-in response received.");
+  expect(response.getBody()).toContain("Return to OpenClaw for the sign-in result.");
   expect(response.getBody()).not.toMatch(/secret-code|login-state/);
   expect(response.setHeader).toHaveBeenCalledWith("Cache-Control", "no-store");
   expect(response.setHeader).toHaveBeenCalledWith("Referrer-Policy", "no-referrer");
   await expect(login.result).resolves.toEqual({ code: "secret-code", state: "login-state" });
-  expect(callback("state=login-state&code=secret-code").res.statusCode).toBe(410);
   const retained = login.session.authorize;
   login.session.close();
   await expect(retained(authorization)).rejects.toThrow("closed");
