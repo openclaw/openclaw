@@ -2,6 +2,7 @@ import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { afterEach, expect, it, vi } from "vitest";
 import { wrapLmstudioInferencePreload } from "./stream.js";
+import { listedModel, streamModel } from "./stream.test-support.js";
 
 // Keep stream, authentication, discovery, and loading real; replace only HTTP I/O.
 vi.mock("openclaw/plugin-sdk/provider-transport-runtime", async (importOriginal) => ({
@@ -36,16 +37,7 @@ function createScenario(name: string, failure: "credential" | "load" | false) {
       }
       return Response.json({ status: "loaded", instance_id: `prepared-${loads}` });
     }
-    return Response.json({
-      models: [
-        {
-          type: "llm",
-          key,
-          max_context_length: 262144,
-          loaded_instances: [{ id: key, config: { context_length: 4096 } }],
-        },
-      ],
-    });
+    return Response.json(listedModel(key, 262144));
   });
   const dispatched: Array<{ canonical: string; target: unknown }> = [];
   const streamFn: StreamFn = async (model, _context, options) => {
@@ -56,19 +48,7 @@ function createScenario(name: string, failure: "credential" | "load" | false) {
     stream.end();
     return stream;
   };
-  const model: Parameters<StreamFn>[0] = {
-    id: key,
-    name: "Qwen3.5 0.8B",
-    provider: "lmstudio",
-    api: "openai-completions",
-    baseUrl,
-    contextWindow: 262144,
-    contextTokens: 16384,
-    maxTokens: 8192,
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  };
+  const model = streamModel(baseUrl, { id: key });
   const wrap = (agentDir?: string) =>
     wrapLmstudioInferencePreload({
       provider: "lmstudio",

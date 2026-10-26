@@ -2,6 +2,7 @@ import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { afterEach, expect, it, vi } from "vitest";
 import { wrapLmstudioInferencePreload } from "./stream.js";
+import { listedModel, streamModel } from "./stream.test-support.js";
 
 const loads = vi.hoisted(() => [] as Array<[path: string, timeoutMs: number, body: unknown]>);
 
@@ -61,9 +62,7 @@ it.each([
       if (discoveryUnavailable) {
         throw new Error("discovery temporarily unavailable");
       }
-      return Response.json({
-        models: [{ type: "llm", key, max_context_length: 262144, loaded_instances }],
-      });
+      return Response.json(listedModel(key, 262144, loaded_instances));
     });
     const payload: Record<string, unknown> = { model: key };
     const streamFn = vi.fn<StreamFn>(async (model, _context, options) => {
@@ -82,19 +81,7 @@ it.each([
       config: { models: { providers: { lmstudio: { baseUrl, timeoutSeconds, models: [] } } } },
       streamFn,
     });
-    const model: Parameters<StreamFn>[0] = {
-      id: key,
-      name: "Qwen3.5 0.8B",
-      provider: "lmstudio",
-      api: "openai-completions",
-      baseUrl,
-      contextWindow: 262144,
-      contextTokens: 16384,
-      maxTokens: 8192,
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    };
+    const model = streamModel(baseUrl, { id: key });
     const onPayload = vi.fn(async () => (replace ? { model: key, temperature: 0.25 } : undefined));
     if (failure) {
       const now = Date.now();
