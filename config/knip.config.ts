@@ -956,6 +956,7 @@ const rootEntries = [
   // The runtime-script asset generator bundles these sources into checked-in production modules.
   "src/gateway/mcp-app-standalone-host.ts!",
   "src/gateway/worker-environments/repository-node-requirement.ts!",
+  "src/shared/keyboard-shortcuts.ts!",
   // Imported by scripts/tsdown-build.mts as the AI package build configuration.
   "tsdown.ai.config.ts!",
   // Maintainer-owned compatibility data referenced by release/docs workflows.
