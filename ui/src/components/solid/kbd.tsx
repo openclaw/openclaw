@@ -64,7 +64,7 @@ export function Kbd(props: KbdOptions & { keys: string | number | readonly strin
   return (
     <kbd
       class={["shortcut-kbd", props.class]}
-      style={props.inline ? { font: "inherit" } : undefined}
+      style={props.inline ? { "font-size": "inherit" } : undefined}
       slot={props.slot}
       aria-hidden={props.ariaHidden ? "true" : undefined}
       hidden={props.hidden}

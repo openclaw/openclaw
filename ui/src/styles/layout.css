@@ -2365,29 +2365,13 @@ openclaw-session-menu[popover] {
   color: var(--muted);
 }
 
-/* Keycap hint, not content: the app's quiet mono shortcut idiom, fixed-width so
-   letters and digits share one rail. Identity-menu chords use the system UI face
-   below because theme body fonts are not guaranteed to cover modifier glyphs. */
+/* Wrappers can contain multiple keycaps and an alias separator. The shared
+   keyboard stylesheet owns the badge skin, including modifier-glyph coverage. */
 .session-menu__shortcut,
-.side-panel-type-option__shortcut,
-.chat-controls__model-option-action kbd {
+.side-panel-type-option__shortcut {
   flex: 0 0 auto;
-  min-width: 12px;
-  color: var(--muted);
-  font-family: var(--mono);
   font-size: var(--control-ui-text-xs);
-  line-height: 1;
   text-align: center;
-}
-
-.session-menu__shortcut,
-.side-panel-type-option__shortcut {
-  text-align: end;
-}
-
-.sidebar-identity-menu .session-menu__shortcut,
-.side-panel-type-option__shortcut {
-  font-family: var(--font-shortcut);
 }
 
 /* Sidebar destinations act as app controls, but stay anchors for native

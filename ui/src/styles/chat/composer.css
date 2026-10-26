@@ -2217,19 +2217,6 @@ html[dir="rtl"] .chat-attachment-loading > span {
   line-height: 1.2;
 }
 
-.chat-controls__permission-shortcut {
-  display: inline-flex;
-  width: 16px;
-  height: 16px;
-  align-items: center;
-  justify-content: center;
-  color: var(--muted);
-  font-family: var(--mono);
-  font-size: 9px;
-  font-weight: 400;
-  line-height: 1;
-}
-
 .chat-controls__permission-option-description {
   font-size: 11px;
   line-height: 1.25;
