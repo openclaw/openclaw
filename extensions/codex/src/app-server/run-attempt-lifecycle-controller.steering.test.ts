@@ -6,9 +6,11 @@ import {
   createProjector,
   registerCodexEventProjectorTestLifecycle,
 } from "./event-projector.test-harness.js";
+import { CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE } from "./protocol.js";
 import {
   createTerminalReleaseHarness,
   dynamicToolResult,
+  rawCall,
   scope,
   terminalYieldResult,
 } from "./run-attempt-lifecycle-controller.test-harness.js";
@@ -105,6 +107,55 @@ describe("Codex steering terminal delivery", () => {
       expect(result.sourceReplyDelivered).toBe(true);
       expect(result.messagingToolSentTexts).toEqual(["ANSWER_A"]);
       expect(h.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
+    },
+  );
+
+  it.each([false, true])(
+    "keeps authored siblings from ending a steered final batch (independent yield: %s)",
+    async (withYield) => {
+      await using h = createTerminalReleaseHarness();
+      const consumed = h.steeringQueue.queue("Second question", { debounceMs: 0 });
+      await yieldImmediate();
+      await h.notifyRawItem(
+        rawCall("first-answer", "message", CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE),
+      );
+      await h.notifyRawItem(
+        rawCall("authored", "plugin_reply", CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE),
+      );
+      if (withYield) {
+        await h.notifyRawCall("call-yield", "sessions_yield");
+      }
+      await h.finishResponse();
+      const results = [
+        dynamicToolResult("first-answer", {
+          success: true,
+          terminate: true,
+          finalSourceReplyDelivered: true,
+        }),
+        dynamicToolResult("authored", {
+          success: true,
+          terminate: true,
+          toolAuthoredSourceReply: {
+            text: "AUTHORED_A",
+            toolAuthored: true,
+            sourceReplyFinal: true,
+          },
+        }),
+        ...(withYield ? [terminalYieldResult(true)] : []),
+      ];
+      for (const result of results) {
+        h.pendingOpenClawDynamicToolCompletionIds.add(result.call.callId);
+      }
+      for (const result of results) {
+        h.controller.recordDynamicToolResult(result);
+        h.pendingOpenClawDynamicToolCompletionIds.delete(result.call.callId);
+      }
+      expect(h.steeringQueue.confirmConsumed("openclaw:turn-1:steer:1")).toBe(true);
+      await consumed;
+      await yieldImmediate();
+      expect(h.state.completed).toBe(withYield);
+      expect(h.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(withYield);
+      expect(h.sourceReplies.map((reply) => reply.text)).toEqual(withYield ? ["AUTHORED_A"] : []);
     },
   );
 

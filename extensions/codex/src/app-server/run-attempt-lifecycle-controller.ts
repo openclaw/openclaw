@@ -58,7 +58,13 @@ export function createCodexAttemptLifecycleController(
     const payloads = results.flatMap((result) =>
       result.response.toolAuthoredSourceReply ? [result.response.toolAuthoredSourceReply] : [],
     );
-    const value = results[0];
+    // An authored sibling cannot restore a delivered reply's terminal authority
+    // after steering. An explicit yield still owns its independent release.
+    const value =
+      results.some(({ response }) => response.finalSourceReplyDelivered) &&
+      turnRuntime.steeringQueueRef.current?.hasSubmittedMessages()
+        ? independentTerminalRelease
+        : results[0];
     return value && payloads.length > 0 ? { value, payloads } : undefined;
   };
   const scheduleTerminalDynamicToolReleaseCheck = () => {

@@ -131,23 +131,21 @@ export async function finalizeCodexAttempt(
       }
     }
     const steeringMessages = turnRuntime.steeringQueueRef.current?.getAcceptedMessages();
-    const result = {
-      ...activeProjector.buildResult(toolBridge.telemetry, {
-        yieldDetected: toolState.yieldDetected,
-        readRetainedNativeCommands,
-        // The original transcript fence excludes steering accepted during this turn.
-        steeringMessages: params.pluginRuntimeRefreshPending?.() ? steeringMessages : undefined,
-      }),
-      // Delivery belongs to the latest consumed input even without a runtime refresh.
+    const result = activeProjector.buildResult(toolBridge.telemetry, {
+      yieldDetected: toolState.yieldDetected,
+      readRetainedNativeCommands,
+      // The original transcript fence excludes steering accepted during this turn.
+      steeringMessages: params.pluginRuntimeRefreshPending?.() ? steeringMessages : undefined,
+    });
+    if (steeringMessages?.length) {
+      // Keep the result identity that carries host-issued TTS delivery provenance.
       // Historical send receipts remain available for side-effect accounting.
-      ...(steeringMessages?.length
-        ? {
-            sourceReplyDeliveryState: toolBridge.telemetry.finalSourceReplyDelivered
-              ? ("delivered" as const)
-              : ("missing" as const),
-          }
-        : {}),
-    };
+      Object.assign(result, {
+        sourceReplyDeliveryState: toolBridge.telemetry.finalSourceReplyDelivered
+          ? ("delivered" as const)
+          : ("missing" as const),
+      });
+    }
     const terminalAssistantSource = result.messagesSnapshot.find(
       (message) => readMirrorIdentity(message) === `${activeTurnId}:assistant`,
     );
