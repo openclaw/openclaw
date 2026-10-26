@@ -227,29 +227,24 @@ function expectMachineCommand(args: string[], user: string, ...command: string[]
 const userCommand = (...command: string[]): ExecFileMock => userResult([null, "", ""], ...command);
 
 function machineCommand(user: string, ...command: string[]): ExecFileMock {
-  return (_cmd, args, _opts, cb) => {
-    expectMachineCommand(args, user, ...command);
-    cb(null, "", "");
-  };
-}
-
-function emptyResult(): ExecFileMock {
-  return (_cmd, _args, _opts, cb) => cb(null, "", "");
+  return nativeResult(["--machine", `${user}@`, "--user", ...command]);
 }
 
 type ExecFileResult = [error: ExecFileError | null, stdout: string, stderr: string];
 
-function versionCommand(result: ExecFileResult = [null, "", ""]): ExecFileMock {
-  return (_command, args, _options, done) => {
-    expect(args).toEqual(["--version"]);
-    done(...result);
-  };
+function userResult(result: ExecFileResult, ...command: string[]): ExecFileMock {
+  return nativeResult(["--user", ...command], ...result);
 }
 
-function userResult(result: ExecFileResult, ...command: string[]): ExecFileMock {
+function nativeResult(
+  command: string[],
+  error: ExecFileError | null = null,
+  stdout = "",
+  stderr = "",
+): ExecFileMock {
   return (_cmd, args, _opts, cb) => {
-    expectUserCommand(args, ...command);
-    cb(...result);
+    expect(args).toEqual(command);
+    cb(error, stdout, stderr);
   };
 }
 
@@ -601,10 +596,9 @@ describe("system-scope gateway unit detection (openclaw#87577)", () => {
   it("isSystemdServiceEnabled queries the marker-owned custom system unit name", async () => {
     mockUnitFileLayout({ system: false });
     mockSystemMarker();
-    execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
-      expect(args).toEqual(["is-enabled", "openclaw.service"]);
-      cb(null, "enabled\n", "");
-    });
+    execFileMock.mockImplementationOnce(
+      nativeResult(["is-enabled", "openclaw.service"], null, "enabled\n"),
+    );
     await expect(isSystemdServiceEnabled({ env: { HOME: MANAGED_HOME } })).resolves.toBe(true);
   });
 
@@ -616,10 +610,7 @@ describe("system-scope gateway unit detection (openclaw#87577)", () => {
     mockEffectiveUid(root ? 0 : 1000);
     if (root) {
       for (const action of ["reset-failed", "restart"]) {
-        execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
-          expect(args).toEqual([action, GATEWAY_SERVICE]);
-          cb(null, "", "");
-        });
+        execFileMock.mockImplementationOnce(nativeResult([action, GATEWAY_SERVICE]));
       }
     }
     const { stdout, write } = captureOutput();
@@ -1711,7 +1702,7 @@ describe("systemd service install and uninstall", () => {
 
   it("does not retry an interrupted restart reporting a missing unit (signal)", async () => {
     const { install } = await fixture("node");
-    execFileMock.mockImplementation(emptyResult());
+    execFileMock.mockImplementation(commandResult(null, "", ""));
     queueUserCommands(["status"], ["daemon-reload"], ["enable", NODE_SERVICE]);
     execFileMock.mockImplementationOnce(
       userResult(
@@ -1893,19 +1884,20 @@ describe("isSystemUnitActiveAndEnabled", () => {
   ] as const)(
     "authorizes system-unit adoption only with persistent availability: %s",
     async (_name, active, enabled, state) => {
-      execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
-        expect(args).toEqual(["is-active", "--quiet", GATEWAY_SERVICE]);
-        cb(
+      execFileMock.mockImplementationOnce(
+        nativeResult(
+          ["is-active", "--quiet", GATEWAY_SERVICE],
           active ? createExecFileError("inactive or interrupted", { code: active }) : null,
-          "",
-          "",
-        );
-      });
+        ),
+      );
       if (!active) {
-        execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
-          expect(args).toEqual(["is-enabled", GATEWAY_SERVICE]);
-          cb(enabled ? createExecFileError("disabled", { code: enabled }) : null, `${state}\n`, "");
-        });
+        execFileMock.mockImplementationOnce(
+          nativeResult(
+            ["is-enabled", GATEWAY_SERVICE],
+            enabled ? createExecFileError("disabled", { code: enabled }) : null,
+            `${state}\n`,
+          ),
+        );
       }
       await expect(isSystemUnitActiveAndEnabled({}, GATEWAY_SERVICE)).resolves.toBe(false);
       expect(execFileMock).toHaveBeenCalledTimes(active ? 1 : 2);
@@ -1991,7 +1983,7 @@ it.each(["absent", "reload-failed"] as const)(
       );
     }
     execFileMock
-      .mockImplementationOnce(versionCommand())
+      .mockImplementationOnce(nativeResult(["--version"]))
       .mockImplementationOnce(userCommand("disable", "--now", unitName));
     if (scenario === "reload-failed") {
       execFileMock.mockImplementationOnce(
@@ -2041,7 +2033,7 @@ describe("systemd service control", () => {
       throw Object.assign(new Error("missing"), { code: "ENOENT" });
     });
     systemOwnership.mockRejectedValueOnce(new Error("same-name system ownership"));
-    execFileMock.mockImplementationOnce(emptyResult());
+    execFileMock.mockImplementationOnce(commandResult(null, "", ""));
 
     await expect(
       startSystemdService({
@@ -2056,7 +2048,7 @@ describe("systemd service control", () => {
 
   it("reports the start mutation before output despite observer failure", async () => {
     const sequence: string[] = [];
-    execFileMock.mockImplementationOnce(emptyResult());
+    execFileMock.mockImplementationOnce(commandResult(null, "", ""));
     execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
       expectUserCommand(args, "reset-failed", GATEWAY_SERVICE);
       sequence.push(args[1] ?? "");
