@@ -21,6 +21,7 @@ import { loadavg } from "node:os";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import { compileFunction } from "node:vm";
+import { isRecord } from "../../packages/normalization-core/src/record-coerce.ts";
 
 const { values } = parseArgs({
   options: {
@@ -40,10 +41,11 @@ const start = source.indexOf("  const {\n    contextEngineLogicalTurnLease:");
 const end = source.indexOf("  let result: EmbeddedRunAttemptResult;", start);
 const helper = source.indexOf("function withoutInternalHarnessAuthority(");
 assert(start >= 0 && end > start && helper > end, "Owner source boundaries changed");
-const prepare: (input: Record<string, unknown>) => {
+type Handoff = {
   attemptParams: Record<string, unknown>;
   pluginAttempt: { params: Record<string, unknown> };
-} = compileFunction(
+};
+const compiled = compileFunction(
   `${stripTypeScriptTypes(`
     ${source.slice(helper)}
     const selection = { builtIn: true, ownerPluginId: undefined };
@@ -53,6 +55,19 @@ const prepare: (input: Record<string, unknown>) => {
   ["internalParams"],
   { filename: values.source },
 );
+function isHandoff(value: unknown): value is Handoff {
+  return (
+    isRecord(value) &&
+    isRecord(value.attemptParams) &&
+    isRecord(value.pluginAttempt) &&
+    isRecord(value.pluginAttempt.params)
+  );
+}
+function prepare(input: Record<string, unknown>): Handoff {
+  const value: unknown = compiled(input);
+  assert(isHandoff(value), "Compiled owner returned an invalid handoff");
+  return value;
+}
 const instance = { runId: "synthetic-run", instanceId: "synthetic-instance" };
 const input: Record<string, unknown> = {
   admittedRunContext: { operationalRunInstance: instance },
