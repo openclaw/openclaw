@@ -18,6 +18,7 @@ vi.mock("./send.js", async (importOriginal) => ({
   sendMessageZalouser: send,
   sendImageZalouser: image,
 }));
+// mock-isolation: Keep account lookup, login, and message transport inside the test fixture.
 vi.mock("./zalo-js.js", () => ({
   checkZaloAuthenticated: auth,
   getZaloUserInfo: me,

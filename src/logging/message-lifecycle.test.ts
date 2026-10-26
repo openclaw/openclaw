@@ -6,6 +6,7 @@ const diagnosticMocks = vi.hoisted(() => ({
   logSessionStateChange: vi.fn(),
 }));
 
+// mock-isolation: Capture lifecycle diagnostics without mutating process-wide diagnostic state.
 vi.mock("./diagnostic.js", () => diagnosticMocks);
 
 import { createDiagnosticMessageLifecycle } from "./message-lifecycle.js";
