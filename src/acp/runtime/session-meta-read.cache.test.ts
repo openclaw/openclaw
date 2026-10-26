@@ -94,17 +94,11 @@ it("reuses the prepared metadata key cohort across admission and later SQL batch
       entry: command.entries[0]!.entry,
     };
   });
-  const deduplicate = vi.spyOn(Set.prototype, "add");
-  let result: ReturnType<typeof read>;
-  let missingKeyInsertions: number;
-  try {
-    result = read({ type: "acpSessions.metadata", entries });
-    missingKeyInsertions = deduplicate.mock.calls.filter(
-      ([value]) => typeof value === "string" && value.startsWith("missing-"),
-    ).length;
-  } finally {
-    deduplicate.mockRestore();
-  }
+  using deduplicate = vi.spyOn(Set.prototype, "add");
+  const result = read({ type: "acpSessions.metadata", entries });
+  const missingKeyInsertions = deduplicate.mock.calls.filter(
+    ([value]) => typeof value === "string" && value.startsWith("missing-"),
+  ).length;
   expect(result.rows.slice(0, 500)).toEqual(Array.from({ length: 500 }, () => null));
   expectName(result.rows[500], "last-cohort");
   // One cohort traversal and one ordered result match, including keys beyond admission's batch.
@@ -175,12 +169,9 @@ it("publishes decoded set and clear postimages without rereading metadata after 
     runtimeOptions: { model: "fixture-model" },
     lastError: "synthetic error",
   });
-  const counter = trackSqliteStatementExecutions(writer, ["read", "write"], (sql) => {
-    if (!/\bacp_sessions\b/iu.test(sql)) {
-      return null;
-    }
-    return /^select\b/iu.test(sql) ? "read" : "write";
-  });
+  const counter = trackSqliteStatementExecutions(writer, ["read", "write"], (sql) =>
+    /\bacp_sessions\b/iu.test(sql) ? (/^select\b/iu.test(sql) ? "read" : "write") : null,
+  );
   restorers.push(counter.restore);
   const mutate = (decision: Parameters<typeof applyAcpSessionMutation>[1]["decision"]) =>
     applyAcpSessionMutation(writer, { ...input, decision });

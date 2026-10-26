@@ -38,12 +38,13 @@ async function listWithoutHostSql(scope: Parameters<typeof listAcpSessionEntries
   }
 }
 
-it("lists SQLite ACP rows while joining current session-store entries", () =>
-  withTestDir({ prefix: "openclaw-acp-meta-" }, async (dir) => {
-    const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
-    const storePath = path.join(dir, "agents", "codex", "sessions", "sessions.json");
-    const databasePath = path.join(dir, "state", "openclaw.sqlite");
-    const scope = { cfg: {}, env, databasePath };
+it("joins immutable current entries with explicit context and after a cold config reload", () =>
+  withOpenClawTestState({ label: "acp-list" }, async (state) => {
+    const cfg: OpenClawConfig = { agents: { ownership: "explicit", entries: { codex: {} } } };
+    await state.writeConfig(cfg);
+    setRuntimeConfigSnapshot(cfg);
+    const storePath = path.join(state.sessionsDir("codex"), "sessions.json");
+    const scope = { cfg, env: state.env, databasePath: state.statePath("openclaw.sqlite") };
     const sessionKey = "agent:codex:acp:s1";
     const saved = {
       sessionId: "sess-acp",
@@ -56,20 +57,9 @@ it("lists SQLite ACP rows while joining current session-store entries", () =>
     await closeOpenClawAgentDatabasesAsync();
     await closeOpenClawStateDatabaseAsync();
     const entries = await listWithoutHostSql(scope);
-    expect(entries).toMatchObject([
-      {
-        cfg: scope.cfg,
-        storePath,
-        sessionKey,
-        storeSessionKey: sessionKey,
-        entry: saved,
-        acp,
-      },
-    ]);
-    const snapshot = entries[0]?.entry?.skillsSnapshot;
-    if (!snapshot) {
-      throw new Error("Expected complete session metadata");
-    }
+    const expected = { cfg, storePath, sessionKey, storeSessionKey: sessionKey, entry: saved, acp };
+    expect(entries).toMatchObject([expected]);
+    const snapshot = entries[0]!.entry!.skillsSnapshot!;
     for (const value of [snapshot, snapshot.skills, snapshot.skills[0]]) {
       expect(Object.isFrozen(value)).toBe(true);
     }
@@ -81,35 +71,12 @@ it("lists SQLite ACP rows while joining current session-store entries", () =>
       sessionKey,
       mutate: (current) => current && { ...current, runtimeSessionName: "updated-runtime" },
     });
-    const fresh = await listAcpSessionEntries(scope);
-    expect(fresh[0]).toMatchObject({
-      entry: { skillsSnapshot: { skills: [{ name: "fixture-skill" }] } },
-      acp: { runtimeSessionName: "updated-runtime" },
-    });
-  }));
-
-it("loads cold runtime config and joins entries without main-thread SQL", () =>
-  withOpenClawTestState({ label: "acp-list-cold-config" }, async (state) => {
-    const cfg: OpenClawConfig = { agents: { ownership: "explicit", entries: { codex: {} } } };
-    await state.writeConfig(cfg);
-    setRuntimeConfigSnapshot(cfg);
-    const sessionKey = "agent:codex:acp:cold-config";
-    await seed(
-      { cfg, env: state.env },
-      sessionKey,
-      { sessionId: "cold-config", updatedAt: 100 },
-      meta("cold-config"),
-    );
+    const updated = { ...expected, acp: { ...acp, runtimeSessionName: "updated-runtime" } };
+    expect(await listWithoutHostSql(scope)).toMatchObject([updated]);
     await closeOpenClawAgentDatabasesAsync();
     await closeOpenClawStateDatabaseAsync();
     resetConfigRuntimeState();
-    expect(await listWithoutHostSql({})).toMatchObject([
-      {
-        sessionKey,
-        entry: { sessionId: "cold-config" },
-        acp: { runtimeSessionName: "cold-config" },
-      },
-    ]);
+    expect(await listWithoutHostSql({})).toMatchObject([updated]);
   }));
 
 it.each(["state", "agent"] as const)("does not create a missing %s store", (missing) =>

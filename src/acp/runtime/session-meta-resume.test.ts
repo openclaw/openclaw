@@ -67,24 +67,17 @@ it("matches migrated string identities using index searches, including malformed
   }
   migratePortableIdentityColumnsV22(db, 21);
   db.exec(schema);
-  let selectSql = "";
-  const prepare = db.prepare.bind(db);
-  const spy = vi.spyOn(db, "prepare").mockImplementation((query) => {
-    if (query.startsWith("select") && query.includes('from "acp_sessions"')) {
-      selectSql = query;
-    }
-    return prepare(query);
-  });
-  try {
-    for (const id of ["42", "first", "second", "last", "1", "nul\u0000tail", "absent"]) {
-      const expected = identities.flatMap(([, matches], index) =>
-        matches.includes(id) ? [{ sessionKey: `agent:coder:acp:${index}`, ...resultFields }] : [],
-      );
-      expect(resume(db, id, "fixture")).toEqual(expected);
-    }
-  } finally {
-    spy.mockRestore();
+  using spy = vi.spyOn(db, "prepare");
+  for (const id of ["42", "first", "second", "last", "1", "nul\u0000tail", "absent"]) {
+    const expected = identities.flatMap(([, matches], index) =>
+      matches.includes(id) ? [{ sessionKey: `agent:coder:acp:${index}`, ...resultFields }] : [],
+    );
+    expect(resume(db, id, "fixture")).toEqual(expected);
   }
+  const selectSql = spy.mock.calls.findLast(
+    ([sql]) => sql.startsWith("select") && sql.includes('from "acp_sessions"'),
+  )?.[0];
+  expect(selectSql).toBeDefined();
   const plan = db
     .prepare(`EXPLAIN QUERY PLAN ${selectSql}`)
     .all("absent", "absent")
