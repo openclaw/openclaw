@@ -127,7 +127,15 @@ export function attachLocalServiceDiagnostics(
   lease: ProviderLocalServiceLease | undefined,
 ): unknown {
   if (error instanceof Error && error.name !== "AbortError") {
-    error.message += getLocalServiceDiagnosticTail(lease);
+    const tail = getLocalServiceDiagnosticTail(lease);
+    if (tail) {
+      // DOMException has a getter-only message. Preserve the error and its metadata.
+      Object.defineProperty(error, "message", {
+        value: `${error.message}${tail}`,
+        configurable: true,
+        writable: true,
+      });
+    }
   }
   return error;
 }
