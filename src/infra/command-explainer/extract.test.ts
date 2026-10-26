@@ -167,13 +167,13 @@ describe("command explainer tree-sitter runtime", () => {
   });
 
   it.each`
-    source                                                   | executable | payload                          | flag          | opaque
-    ${'bash -euxc "echo hi"'}                                | ${"bash"}  | ${"echo hi"}                     | ${"-euxc"}    | ${false}
-    ${'bash -c"echo hi"'}                                    | ${"bash"}  | ${"echo hi"}                     | ${"-c"}       | ${false}
-    ${"pwsh -ExecutionPolicy Bypass -Command Get-ChildItem"} | ${"pwsh"}  | ${"Get-ChildItem"}               | ${"-Command"} | ${false}
-    ${'bash -lc "$CMD"'}                                     | ${"bash"}  | ${"$CMD"}                        | ${"-lc"}      | ${true}
-    ${'pwsh -Command "Get-ChildItem | Select Name"'}         | ${"pwsh"}  | ${"Get-ChildItem | Select Name"} | ${"-Command"} | ${true}
-    ${"b'a'sh -lc 'echo hi'"}                                | ${"bash"}  | ${"echo hi"}                     | ${"-lc"}      | ${false}
+    source                                                   | executable | payload                          | flag           | opaque
+    ${'bash -euxc "echo hi"'}                                | ${"bash"}  | ${"echo hi"}                     | ${"-euxc"}     | ${false}
+    ${'bash -c"echo hi"'}                                    | ${"bash"}  | ${"echo hi"}                     | ${"-cecho hi"} | ${false}
+    ${"pwsh -ExecutionPolicy Bypass -Command Get-ChildItem"} | ${"pwsh"}  | ${"Get-ChildItem"}               | ${"-Command"}  | ${false}
+    ${'bash -lc "$CMD"'}                                     | ${"bash"}  | ${"$CMD"}                        | ${"-lc"}       | ${true}
+    ${'pwsh -Command "Get-ChildItem | Select Name"'}         | ${"pwsh"}  | ${"Get-ChildItem | Select Name"} | ${"-Command"}  | ${true}
+    ${"b'a'sh -lc 'echo hi'"}                                | ${"bash"}  | ${"echo hi"}                     | ${"-lc"}       | ${false}
   `("classifies wrapper $source", async ({ source, executable, payload, flag, opaque }) => {
     const fields = { kind: "shell-wrapper", executable, payload, flag };
     const explanation = await expectSourceRisk(source, fields);

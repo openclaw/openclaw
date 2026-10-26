@@ -58,15 +58,17 @@ function readToolReplayContext(provider = "xiaomi", reasoning = true): Context {
     api: "openai-completions",
     provider,
     model: provider === "openai" ? "gpt-5.5" : "mimo-v2.5-pro",
-    content: [
-      ...(reasoning
-        ? [{ type: "thinking", thinking: "call reasoning", thinkingSignature: "reasoning_content" }]
-        : []),
-      { type: "toolCall", id: "call_1", name: "read", arguments: {} },
-    ],
+    content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
     stopReason: "toolUse",
     timestamp: 2,
   });
+  if (reasoning) {
+    assistantMessage.content.unshift({
+      type: "thinking",
+      thinking: "call reasoning",
+      thinkingSignature: "reasoning_content",
+    });
+  }
   return {
     messages: [assistantMessage, makeTextToolResult("call_1", "read", "ok", false, 3)],
     tools: [readTool],

@@ -146,7 +146,7 @@ describe("Volcengine speech provider", () => {
     );
 
     const body: { req_params?: { speed_ratio?: number } } = JSON.parse(
-      fetchWithSsrFGuardMock.mock.calls[0][0].init.body,
+      fetchWithSsrFGuardMock.mock.calls[0]![0].init.body,
     );
     expect(body.req_params).not.toHaveProperty("speed_ratio");
   });

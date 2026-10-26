@@ -88,20 +88,24 @@ it.each([
   expect(resolveReferenceImageCapabilityError(params)).toBe(error);
 });
 
-it.each<{
+type ProviderOrderCase = {
   name: string;
   providers: Parameters<typeof resolveCandidates>[0];
   primary: string;
   modelConfig: CandidateParams["modelConfig"];
   expected: ReturnType<typeof ref>[];
-}>`
+};
+it.each`
   name          | providers                                          | primary               | modelConfig    | expected
   ${"explicit"} | ${[google, openai, configuredProvider("minimax")]} | ${"openai/text"}      | ${imageModels} | ${[ref("google"), ref("fal", "fal-ai/flux/dev"), ref("openai"), ref("minimax")]}
   ${"alias"}    | ${[fal, { ...openai, aliases: ["media-alias"] }]}  | ${"media-alias/text"} | ${undefined}   | ${[ref("openai"), ref("fal", "fal-ai/flux/dev")]}
-`("orders provider defaults after $name", async ({ providers, expected, primary, modelConfig }) => {
-  const options = { cfg: { agents: { defaults: { model: { primary } } } }, modelConfig };
-  await expect(resolveCandidates(providers, options)).resolves.toEqual(expected);
-});
+`(
+  "orders provider defaults after $name",
+  async ({ providers, expected, primary, modelConfig }: ProviderOrderCase) => {
+    const options = { cfg: { agents: { defaults: { model: { primary } } } }, modelConfig };
+    await expect(resolveCandidates(providers, options)).resolves.toEqual(expected);
+  },
+);
 
 it("treats an explicit model override as exact-only", async () => {
   const options = { modelConfig: imageModels, modelOverride: "openai/openai-image" };
@@ -195,12 +199,13 @@ it.each([
   expect(requestTimeout({ timeoutMs, providerDefaultTimeoutMs })).toBe(expected);
 });
 
-it.each<{
+type GeometryCase = {
   name: string;
   normalize: (values: string[]) => string | undefined;
   values: string[];
   expected: string | undefined;
-}>`
+};
+it.each`
   name                  | normalize                                                                                                                 | values                                     | expected
   ${"unsafe size"}      | ${(supportedSizes: string[]) => resolveClosestSize({ requestedSize: "9007199254740993x3", supportedSizes })}              | ${["1024x1024", "1536x1024"]}              | ${undefined}
   ${"closest size"}     | ${(supportedSizes: string[]) => resolveClosestSize({ requestedSize: "1792x1024", supportedSizes })}                       | ${["1024x1024", "1024x1536", "1536x1024"]} | ${"1536x1024"}
@@ -208,11 +213,14 @@ it.each<{
   ${"ratio tie"}        | ${(supportedAspectRatios: string[]) => resolveClosestAspectRatio({ requestedAspectRatio: "3:3", supportedAspectRatios })} | ${["invalid", "2:2", "1:1"]}               | ${"1:1"}
   ${"size tie"}         | ${(supportedSizes: string[]) => resolveClosestSize({ requestedAspectRatio: "1:1", supportedSizes })}                      | ${["invalid", "128x128", "64x64"]}         | ${"64x64"}
   ${"resolution tie"}   | ${(supportedResolutions: string[]) => resolveClosestResolution({ requestedResolution: "480P", supportedResolutions })}    | ${["invalid", "360P", "600P"]}             | ${"600P"}
-`("normalizes $name independent of provider order", ({ normalize, values, expected }) => {
-  for (const ordered of [values, values.toReversed()]) {
-    expect(normalize(ordered)).toBe(expected);
-  }
-});
+`(
+  "normalizes $name independent of provider order",
+  ({ normalize, values, expected }: GeometryCase) => {
+    for (const ordered of [values, values.toReversed()]) {
+      expect(normalize(ordered)).toBe(expected);
+    }
+  },
+);
 
 it("clamps durations to the closest supported max", () => {
   expect(normalizeDurationToClosestMax(12, 8)).toBe(8);

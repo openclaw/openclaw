@@ -6,7 +6,7 @@ import type {
   QaBusMessage,
   QaBusOutboundMessageInput,
 } from "openclaw/plugin-sdk/qa-channel-protocol";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
 import type { BuzzInboundMessage } from "../message-event.js";
 import { parseBuzzQaCredentialPayload } from "./credentials.js";
 
@@ -226,7 +226,8 @@ it("closes relay observation before stopping and releasing the credential lease"
 
   const calls = [closeRelay, heartbeatStop, release].map((mock) => mock.mock.invocationCallOrder);
   expect(calls.map((order) => order.length)).toEqual([1, 1, 1]);
-  const [closed, stopped, released] = calls.map(([first]) => first!);
+  const [closed, stopped, released] = calls.map(([first]) => first);
+  assert(closed !== undefined && stopped !== undefined && released !== undefined);
   expect(closed).toBeLessThan(stopped);
   expect(stopped).toBeLessThan(released);
 });
