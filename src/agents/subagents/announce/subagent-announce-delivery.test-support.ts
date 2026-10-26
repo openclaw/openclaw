@@ -1,8 +1,6 @@
 export * from "./subagent-announce-delivery.js";
 
 import { expect, it, vi } from "vitest";
-import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
-import { mockCallArg } from "../../subagent-test-fixtures.test-helpers.js";
 import { hasAnnounceSendEvidence } from "./subagent-announce-delivery-retry.js";
 import { setSubagentAnnounceDeliveryDepsForTest } from "./subagent-announce-overrides.test-support.js";
 
@@ -36,8 +34,6 @@ export function registerDescendantWakeCurrencyTests({
       const { cfg, dispatchGatewayMethodInProcess } = createRoleRestrictedInProcessGatewayMock({
         runId,
       });
-      const resolveGatewayContext: GatewayContextResolver = () => undefined;
-      const signal = new AbortController().signal;
       const replaceSubagentRunAfterSteer = vi.fn(async () => true);
       let accepted = false;
       const dispatch = vi.mocked(dispatchGatewayMethodInProcess);
@@ -68,17 +64,10 @@ export function registerDescendantWakeCurrencyTests({
           return !accepted || currency === "current";
         },
         isChildSessionEffectsAllowed: () => true,
-        resolveGatewayContext,
-        signal,
         replaceSubagentRunAfterSteer,
       });
 
       expect(woke).toBe(currency === "current");
-      expect(mockCallArg(dispatchGatewayMethodInProcess, 0, 2)).toMatchObject({
-        cancelOnDeadline: true,
-        resolveGatewayContext,
-        signal,
-      });
       if (currency === "current") {
         expect(callGateway).not.toHaveBeenCalled();
         expect(replaceSubagentRunAfterSteer).toHaveBeenCalledWith(

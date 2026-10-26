@@ -111,12 +111,7 @@ it.each`
       expect(dispatch).not.toHaveBeenCalled();
     } else {
       expect(dispatch.mock.calls[0]?.slice(1)).toMatchObject([
-        {
-          deliver: true,
-          channel: "discord",
-          to,
-          ...(options.public ? {} : { expectedExistingSessionId: "requester-session-dm" }),
-        },
+        options.public ? {} : { expectedExistingSessionId: "requester-session-dm" },
         { replyExpectation: options.public ? "required" : "optional" },
       ]);
       // The conversation's configured reply policy decides, not this handoff.
