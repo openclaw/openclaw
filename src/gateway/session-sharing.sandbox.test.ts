@@ -62,25 +62,21 @@ describe("session sharing sandbox requirements", () => {
       const hostSessionKey = "agent:main:maintainer-host-session";
       const sandboxSessionKey = "agent:main:guest-sandbox-session";
 
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: hostSessionKey },
-        {
-          sessionId: "maintainer-host-session",
-          updatedAt: 1,
-          visibility: "shared",
-          createdActor: { type: "human", source: "profile", id: maintainerId },
-        },
-      );
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: sandboxSessionKey },
-        {
-          sessionId: "guest-sandbox-session",
-          updatedAt: 1,
-          visibility: "shared",
-          createdActor: { type: "human", source: "profile", id: guestId },
-          sandbox: "required",
-        },
-      );
+      for (const [sessionId, id, sandbox] of [
+        ["maintainer-host-session", maintainerId, undefined],
+        ["guest-sandbox-session", guestId, "required"],
+      ] as const) {
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey: `agent:main:${sessionId}` },
+          {
+            sessionId,
+            updatedAt: 1,
+            visibility: "shared",
+            ...(sandbox ? { sandbox } : {}),
+            createdActor: { type: "human", source: "profile", id },
+          },
+        );
+      }
       addSessionMember(
         { agentId: "main", sessionKey: hostSessionKey },
         {
@@ -95,9 +91,6 @@ describe("session sharing sandbox requirements", () => {
         sessionKey: hostSessionKey,
       });
       expect(hostTarget).not.toBeNull();
-      if (!hostTarget) {
-        throw new Error("expected persisted maintainer session");
-      }
       expect(
         await authorizeResolvedSessionMutationAsync({
           cfg,
@@ -108,6 +101,21 @@ describe("session sharing sandbox requirements", () => {
       ).toMatchObject({ code: "FORBIDDEN", message: expect.stringMatching(/sandbox/i) });
 
       const context = { getRuntimeConfig: () => cfg } as GatewayRequestContext;
+      const authorize = async (
+        client = guest,
+        method = "chat.send",
+        key = hostSessionKey,
+        requestContext = context,
+      ) => {
+        const result = await resolveSessionMutationAuthorizationAsync({
+          client,
+          method,
+          context: requestContext,
+          requestParams: method.startsWith("sessions.") ? { key } : { sessionKey: key },
+        });
+        authorizations.defer(() => result.authorization?.release?.());
+        return result;
+      };
       for (const method of [
         "agent",
         "chat.send",
@@ -122,49 +130,19 @@ describe("session sharing sandbox requirements", () => {
         "tools.invoke",
         "wake",
       ]) {
-        const requestParams = method.startsWith("sessions.")
-          ? { key: hostSessionKey }
-          : { sessionKey: hostSessionKey };
-        expect(
-          (
-            await resolveSessionMutationAuthorizationAsync({
-              client: guest,
-              method,
-              requestParams,
-              context,
-            })
-          ).error,
-          method,
-        ).toMatchObject({ code: "FORBIDDEN", message: expect.stringMatching(/sandbox/i) });
+        expect((await authorize(guest, method)).error, method).toMatchObject({
+          code: "FORBIDDEN",
+          message: expect.stringMatching(/sandbox/i),
+        });
       }
-      const patch = await resolveSessionMutationAuthorizationAsync({
-        client: guest,
-        method: "sessions.patch",
-        requestParams: { key: hostSessionKey },
-        context,
-      });
-      authorizations.defer(() => patch.authorization?.release?.());
-      expect(patch.error).toBeNull();
+      expect((await authorize(guest, "sessions.patch")).error).toBeNull();
 
       for (const participant of [guest, maintainer]) {
-        const sandboxRun = await resolveSessionMutationAuthorizationAsync({
-          client: participant,
-          method: "chat.send",
-          requestParams: { sessionKey: sandboxSessionKey },
-          context,
-        });
-        authorizations.defer(() => sandboxRun.authorization?.release?.());
-        expect(sandboxRun.error).toBeNull();
+        expect((await authorize(participant, "chat.send", sandboxSessionKey)).error).toBeNull();
       }
 
       cfg.gateway!.roles!.definitions.view!.sandbox = "inherit";
-      const admittedHostRun = await resolveSessionMutationAuthorizationAsync({
-        client: guest,
-        method: "chat.send",
-        requestParams: { sessionKey: hostSessionKey },
-        context,
-      });
-      authorizations.defer(() => admittedHostRun.authorization?.release?.());
+      const admittedHostRun = await authorize();
       expect(admittedHostRun.error).toBeNull();
       expect(admittedHostRun.authorization).toBeDefined();
       cfg.gateway!.roles!.definitions.view!.sandbox = "required";
@@ -172,13 +150,9 @@ describe("session sharing sandbox requirements", () => {
         SessionMutationAuthorizationChangedError,
       );
 
-      const unscoped = await resolveSessionMutationAuthorizationAsync({
-        client: guest,
-        method: "chat.send",
-        requestParams: { sessionKey: hostSessionKey },
-        context: { getRuntimeConfig: () => ({}) } as GatewayRequestContext,
-      });
-      authorizations.defer(() => unscoped.authorization?.release?.());
+      const unscoped = await authorize(guest, "chat.send", hostSessionKey, {
+        getRuntimeConfig: () => ({}),
+      } as GatewayRequestContext);
       expect(unscoped.error).toBeNull();
     });
   });

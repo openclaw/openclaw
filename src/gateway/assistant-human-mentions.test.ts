@@ -30,17 +30,21 @@ const contextFor = (f: Fixture) => ({
   mentionInbox: f.inbox,
 });
 
-function insert(f: Fixture, overrides: Record<string, unknown> = {}) {
+function insert(f: Fixture, overrides: Record<string, unknown> = {}, guard?: () => void) {
   const context = contextFor(f);
-  const result = injectAssistantMessageWithHumanMentions(context, {
-    sessionKey: SESSION_KEY,
-    agentId: "main",
-    text: TEXT,
-    mentions: [{ profileId: f.bob.id, start: 9, end: 13 }],
-    onBehalfOfProfileId: f.alice.id,
-    idempotencyKey: "welcome:invitation-1",
-    ...overrides,
-  });
+  const result = injectAssistantMessageWithHumanMentions(
+    context,
+    {
+      sessionKey: SESSION_KEY,
+      agentId: "main",
+      text: TEXT,
+      mentions: [{ profileId: f.bob.id, start: 9, end: 13 }],
+      onBehalfOfProfileId: f.alice.id,
+      idempotencyKey: "welcome:invitation-1",
+      ...overrides,
+    },
+    guard,
+  );
   return { context, result };
 }
 
@@ -54,7 +58,8 @@ async function assistantRows() {
 
 it("records one Inbox mention and involvement for a Gateway-authored assistant message", async () => {
   await withMentionInbox(async (f) => {
-    const first = insert(f);
+    const text = `${TEXT} Please test [[audio_as_voice]] replies.`;
+    const first = insert(f, { text });
     const inserted = await first.result;
     expect(inserted).toMatchObject({ ok: true, value: { messageId: expect.any(String) } });
     expect(first.context.broadcast).toHaveBeenCalledWith(
@@ -69,7 +74,7 @@ it("records one Inbox mention and involvement for a Gateway-authored assistant m
     expect(await assistantRows()).toMatchObject([
       {
         role: "assistant",
-        content: [{ type: "text", text: TEXT }],
+        content: [{ type: "text", text }],
         __openclaw: { humanMentions: [{ profileId: f.bob.id, start: 9, end: 13 }] },
       },
     ]);
@@ -79,7 +84,7 @@ it("records one Inbox mention and involvement for a Gateway-authored assistant m
         senderProfileId: f.alice.id,
         sessionKey: SESSION_KEY,
         messageId: inserted.ok ? inserted.value.messageId : "",
-        excerpt: TEXT,
+        excerpt: text,
       },
     ]);
     expect(loadSessionEntry(scope)?.profileInvolvement?.profiles[f.bob.id]).toMatchObject({
@@ -89,21 +94,12 @@ it("records one Inbox mention and involvement for a Gateway-authored assistant m
     expect(f.push).toHaveBeenCalledOnce();
 
     // A retry after success, or after an interrupted delivery, replays the same row.
-    const retry = insert(f);
+    const retry = insert(f, { text });
     expect(await retry.result).toMatchObject({ ok: true, value: { replayed: true } });
     expect(retry.context.broadcast).not.toHaveBeenCalled();
     expect(await assistantRows()).toHaveLength(1);
     expect(await f.items()).toEqual(items);
     expect(f.push).toHaveBeenCalledOnce();
-  });
-});
-
-it("keeps directive-like text literal so mention offsets still match", async () => {
-  await withMentionInbox(async (f) => {
-    const text = `${TEXT} Please test [[audio_as_voice]] replies.`;
-    expect(await insert(f, { text }).result).toMatchObject({ ok: true });
-    expect(await assistantRows()).toMatchObject([{ content: [{ type: "text", text }] }]);
-    expect(await f.items()).toMatchObject([{ excerpt: text }]);
   });
 });
 
@@ -116,18 +112,7 @@ it("rechecks caller authority at the transcript commit, after the append started
         throw new Error("Visitor access ended");
       }
     };
-    const result = await injectAssistantMessageWithHumanMentions(
-      contextFor(f),
-      {
-        sessionKey: SESSION_KEY,
-        agentId: "main",
-        text: TEXT,
-        mentions: [{ profileId: f.bob.id, start: 9, end: 13 }],
-        onBehalfOfProfileId: f.alice.id,
-        idempotencyKey: "welcome:invitation-1",
-      },
-      guard,
-    );
+    const result = await insert(f, {}, guard).result;
     expect(transcriptAppend.entered).toBe(true);
     expect(result.ok).toBe(false);
     expect(await assistantRows()).toEqual([]);

@@ -36,10 +36,7 @@ function speechProvider(
 
 async function setTalkConfig(talk: Record<string, unknown>) {
   const { setRuntimeConfigSnapshot } = await import("../config/config.js");
-  const config = {
-    commands: { ownerDisplaySecret: "openclaw-test-owner-display-secret" },
-    talk,
-  };
+  const config = { commands: { ownerDisplaySecret: "openclaw-test-owner-display-secret" }, talk };
   setRuntimeConfigSnapshot(config, config);
 }
 
@@ -97,7 +94,6 @@ describe("gateway talk runtime", () => {
   });
 
   it("resolves the prototype-named talk voice alias and forwards provider overrides", async () => {
-    const voiceId = "__PROTO__";
     await setTalkConfig({
       provider: "elevenlabs",
       providers: {
@@ -133,7 +129,7 @@ describe("gateway talk runtime", () => {
 
         const res = await invokeTalkSpeakDirect({
           text: "Hello from talk mode.",
-          voiceId,
+          voiceId: "__PROTO__",
           outputFormat: "pcm_44100",
           latencyTier: 3,
         });
@@ -167,10 +163,7 @@ describe("gateway talk runtime", () => {
     const res = await invokeTalkSpeakDirect({ text: "Hello from talk mode." });
     expect(res?.ok).toBe(false);
     expect(res?.error?.message).toContain("talk provider not configured");
-    expect(res?.error?.details).toEqual({
-      reason: "talk_unconfigured",
-      fallbackEligible: true,
-    });
+    expect(res?.error?.details).toEqual({ reason: "talk_unconfigured", fallbackEligible: true });
   });
 
   it.each([
