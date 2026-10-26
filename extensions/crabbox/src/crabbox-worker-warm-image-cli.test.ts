@@ -9,7 +9,6 @@ import {
   warmRecord,
 } from "./crabbox-warm-scenarios.test-support.js";
 import { registerCrabboxWarmImageCommands } from "./crabbox-worker-warm-image-cli.js";
-import type { WarmProfileRecord } from "./crabbox-worker-warm-image-store.js";
 import { tempDirs } from "./crabbox-worker-warm-image.test-support.js";
 
 const SELECTOR = "83eb5c1e-e408-4b64-9575-f8670287e294";
@@ -47,6 +46,10 @@ async function runCli(...args: string[]) {
 
 const recover = (selector = SELECTOR, ...args: string[]) =>
   runCli("--recover", selector, "--acknowledge-provider-cleanup", ...args);
+const retiring = warmRecord({
+  image: warmImage("chk_replacement"),
+  operation: { type: "retire", checkpointId: "chk_predecessor" },
+});
 
 it("prints cold-only guidance for unsupported capture without changing local state", async () => {
   const record = warmRecord({
@@ -65,8 +68,7 @@ it("prints cold-only guidance for unsupported capture without changing local sta
     [
       "Capture unsupported: Native capture is unsupported by this coordinator.",
       "use an existing compatible snapshot when one is available",
-      "capture attempts are skipped until warmImages.refreshAfter",
-      "has elapsed since the refusal",
+      "capture attempts are skipped until warmImages.refreshAfter has elapsed since the refusal",
       "settings.warmImage: false",
     ],
     ["--recover"],
@@ -93,11 +95,6 @@ it("recovers only the exact selected capture without clearing retained images or
   const record = pendingCapture();
   await expect(runCli("--acknowledge-provider-cleanup")).rejects.toThrow("requires --recover");
   expect(openWarmImageStore().lookup("profile")).toEqual(record);
-  const retiring: WarmProfileRecord = {
-    ...record,
-    image: { ...record.image, checkpointId: "chk_replacement" },
-    operation: { type: "retire", checkpointId: "chk_predecessor" },
-  };
   openWarmImageStore().register("other", retiring);
 
   await recover(SELECTOR, "--json");
@@ -118,10 +115,7 @@ it.each(["scrubbing", "uncertain"] as const)(
   "prints guidance for an old %s capture and pending deletion",
   async (phase) => {
     const record = pendingCapture(phase);
-    openWarmImageStore().register("retiring", {
-      ...record,
-      operation: { type: "retire", checkpointId: "chk_predecessor" },
-    });
+    openWarmImageStore().register("retiring", retiring);
 
     await runCli();
 

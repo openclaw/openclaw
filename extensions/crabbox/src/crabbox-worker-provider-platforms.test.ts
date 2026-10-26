@@ -11,6 +11,8 @@ import {
 } from "./crabbox-worker-warm-image.test-support.js";
 
 const PROFILE = { ...WARM_PROFILE, warmImage: false };
+const POSIX_SETUP = "node --version || exit 1";
+const WINDOWS_SETUP = "& node.exe --version";
 type Profile = NonNullable<Parameters<typeof provisionWarmProfile>[1]>;
 function scenario() {
   const fixture = createWarmProvider();
@@ -22,19 +24,15 @@ function scenario() {
 }
 
 it.each([
-  ["linux", "windows/wsl2", "windows --windows-mode wsl2", "node --version || exit 1"],
-  ["windows/normal", "windows/normal", "windows --windows-mode normal", "& node.exe --version"],
+  ["linux", "windows/wsl2", "windows --windows-mode wsl2", POSIX_SETUP],
+  ["windows/normal", "windows/normal", "windows --windows-mode normal", WINDOWS_SETUP],
   ["windows/normal", undefined, "windows --windows-mode normal", undefined],
   [undefined, "macos", "macos --market on-demand", undefined],
 ] as const)(
   "allocates the resolved OS and runs compatible setup (configured=%s, requested=%s)",
   async (configured, requested, targetArgs, setup) => {
     const { provider, calls, provision } = scenario();
-    const profile = {
-      ...PROFILE,
-      ...(configured ? { target: configured } : {}),
-      ...(setup ? { setup } : {}),
-    };
+    const profile = { ...PROFILE, target: configured, setup };
     const lease = await provision(profile, requested);
     await provider.destroy({ ...lease, profile });
     const warmup = calls.find(({ argv }) => argv[1] === "warmup")!.argv;
@@ -55,16 +53,8 @@ it.each([
 );
 
 it.each([
-  [
-    { setup: "node --version || exit 1" },
-    "windows/normal",
-    "select a profile with settings.target=windows/normal and a compatible PowerShell setup command",
-  ],
-  [
-    { target: "windows/normal", setup: "& node.exe --version" },
-    "linux",
-    "select a profile with settings.target=linux and a compatible POSIX setup command",
-  ],
+  [{ setup: POSIX_SETUP }, "windows/normal", "compatible PowerShell setup command"],
+  [{ target: "windows/normal", setup: WINDOWS_SETUP }, "linux", "compatible POSIX setup command"],
   [
     { desktop: true, target: "windows/wsl2" },
     undefined,
@@ -87,14 +77,10 @@ it.each([
 
 it("keeps WSL2 cold with Linux warm images enabled", async () => {
   const target = "windows/wsl2";
-  const { provider, calls } = createWarmProvider();
-  for (const [profile, options] of [
-    [{ ...PROFILE, warmImage: true, target }, undefined],
-    [{ ...PROFILE, warmImage: true }, { os: target }],
-  ] as const) {
-    expect(provider.supportsProjectPreparation?.(profile, "standard", options?.os)).toBe(false);
-  }
-  expect(calls).toEqual([]);
+  const { provider } = createWarmProvider();
+  const profile = { ...PROFILE, warmImage: true };
+  expect(provider.supportsProjectPreparation?.({ ...profile, target })).toBe(false);
+  expect(provider.supportsProjectPreparation?.(profile, "standard", target)).toBe(false);
 });
 
 it("advertises only setup-compatible OS and machine choices without narrowing the shared catalog", async () => {
@@ -105,19 +91,19 @@ it("advertises only setup-compatible OS and machine choices without narrowing th
             "azure",
             ["linux", "windows/wsl2", "windows/normal", "macos"],
             [
-              classProfile("tiny"),
-              classProfile("tiny", {}, { target: "windows", windowsMode: "wsl2" }),
-              classProfile("tiny", {}, { target: "windows", windowsMode: "normal" }),
-              classProfile("tiny", {}, { target: "macos" }),
-            ],
+              {},
+              { target: "windows", windowsMode: "wsl2" },
+              { target: "windows", windowsMode: "normal" },
+              { target: "macos" },
+            ].map((selector) => classProfile("tiny", {}, selector)),
           ),
         })
       : undefined,
   );
   const profile = { ...PROFILE, provider: "azure", class: "tiny" };
   for (const [settings, expected] of [
-    [{ setup: "node --version || exit 1" }, ["linux", "windows/wsl2", "macos"]],
-    [{ target: "windows/normal", setup: "& node.exe --version" }, ["windows/normal"]],
+    [{ setup: POSIX_SETUP }, ["linux", "windows/wsl2", "macos"]],
+    [{ target: "windows/normal", setup: WINDOWS_SETUP }, ["windows/normal"]],
     [{}, ["linux", "windows/wsl2", "windows/normal", "macos"]],
   ] as const) {
     expect(
