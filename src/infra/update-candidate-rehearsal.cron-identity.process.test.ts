@@ -1,13 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runCommandBuffered } from "../process/exec.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resolveRuntimeWorkerArgv } from "./runtime-worker-url.js";
 import { prepareUpdateCandidateRehearsal } from "./update-candidate-rehearsal.js";
 import { materializeUpdateCandidateStateWorker } from "./update-candidate-state.test-support.js";
@@ -16,24 +12,34 @@ import { UPDATE_REHEARSAL_CRON_IDENTITY_ENV } from "./update-rehearsal-paths.js"
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => closeOpenClawStateDatabaseForTest());
 
-function seedLegacyDatabase(databasePath: string, storeKeys: readonly string[]) {
-  using database = new DatabaseSync(databasePath);
-  database.exec(`DELETE FROM config_machine_state WHERE state_key IN
-      ('cron.defaultStoreKey', 'state.schema.contentVersion');
-    UPDATE schema_meta SET schema_version = 33;
-    PRAGMA user_version = 33;`);
-  const insert = database.prepare(`INSERT INTO cron_jobs
-    (store_key, job_id, name, enabled, payload_kind, job_json, state_json, updated_at)
-    VALUES (?, ?, 'Migration job', 0, 'agentTurn', '{}', '{}', 1)`);
-  storeKeys.forEach((storeKey, index) => insert.run(storeKey, `job-${index}`));
-}
-
 async function prepareSource(root: string, storeKeys: readonly string[]) {
   const stateDir = path.join(root, "source-state");
-  const state = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
-  const databasePath = state.path;
-  closeOpenClawStateDatabaseForTest();
-  seedLegacyDatabase(databasePath, storeKeys);
+  const worker = new URL(
+    "./update-candidate-rehearsal.cron-identity.test-support.ts",
+    import.meta.url,
+  );
+  const result = await runCommandBuffered(
+    [
+      process.execPath,
+      ...resolveRuntimeWorkerArgv(worker),
+      "seed",
+      JSON.stringify({ stateDir, storeKeys }),
+    ],
+    {
+      timeoutMs: 30_000,
+      killGraceMs: 500,
+      maxOutputBytes: { stdout: 20_000, stderr: 20_000 },
+    },
+  );
+  expect(result.code, result.stderr.toString("utf8")).toBe(0);
+  const line = result.stdout
+    .toString("utf8")
+    .split(/\r?\n/u)
+    .find((entry) => entry.startsWith("CRON_IDENTITY_SEED "));
+  expect(line).toBeDefined();
+  const { databasePath } = JSON.parse(line!.slice("CRON_IDENTITY_SEED ".length)) as {
+    databasePath: string;
+  };
   return { stateDir, databasePath };
 }
 
