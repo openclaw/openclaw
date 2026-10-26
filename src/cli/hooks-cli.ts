@@ -551,8 +551,8 @@ export function registerHooksCli(program: Command): void {
                 ? `${theme.success("✓")} Enabled hook:`
                 : theme.warn(decorativePrefix("⏸", "Disabled hook:"));
               const formattedName = selectedHook.emoji
-                ? `${selectedHook.emoji} ${theme.command(selectedHook.name)}`
-                : decorativePrefix("🔗", theme.command(selectedHook.name));
+                ? `${sanitizeTerminalText(selectedHook.emoji)} ${theme.command(sanitizeTerminalText(selectedHook.name))}`
+                : decorativePrefix("🔗", theme.command(sanitizeTerminalText(selectedHook.name)));
               defaultRuntime.log(`${prefix} ${formattedName}`);
             },
           });

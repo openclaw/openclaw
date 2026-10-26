@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
+import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import type { TransformConfigFileParams } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GatewayTransportError } from "../gateway/transport-error.js";
@@ -250,6 +251,37 @@ describe("hooks CLI metadata config keys", () => {
     mocks.foreignOwner = true;
     await expect(runHooks("enable", "display-name")).rejects.toThrow("stop the Gateway");
     expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { action: "enable", emoji: "🔗\u001b]0;untrusted-title\u0007\tbadge" },
+    { action: "disable", emoji: "🔗\u001b]0;untrusted-title\u0007\tbadge" },
+    { action: "enable", emoji: undefined },
+    { action: "disable", emoji: undefined },
+  ])("escapes hook toggle confirmations ($action, emoji=$emoji)", async ({ action, emoji }) => {
+    const name = "café\u001b[31m\r\noperator-forged\tend\u009f";
+    const selectedHook = { ...hook, name, emoji };
+    mocks.buildWorkspaceHookStatus.mockReturnValue({ ...report, hooks: [selectedHook] });
+
+    await runHooks(action, "metadata-key");
+
+    const output = capture.runtimeLogs.at(-1) ?? "";
+    expect(stripAnsi(output)).toContain(`${action === "enable" ? "Enabled" : "Disabled"} hook:`);
+    expect(stripAnsi(output)).toContain("café\\r\\noperator-forged\\tend");
+    expect(stripAnsi(output)).not.toMatch(/\p{Cc}/u);
+    expect(output).not.toContain("\u001b]0;untrusted-title");
+    if (emoji) {
+      expect(stripAnsi(output)).toContain("🔗\\tbadge");
+    }
+    expect(selectedHook).toEqual({ ...hook, name, emoji });
+    const nextConfig = structuredClone(sourceConfig);
+    Object.assign(nextConfig.hooks.internal.entries["metadata-key"], {
+      enabled: action === "enable",
+    });
+    expect(mocks.replaceConfigFile).toHaveBeenCalledExactlyOnceWith({
+      nextConfig,
+      baseHash: "config-hash",
+    });
   });
 
   it("rejects the ambiguous hook identifier shared-key without mutation", async () => {
