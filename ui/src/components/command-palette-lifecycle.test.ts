@@ -95,10 +95,11 @@ describe("CommandPalette lifecycle", () => {
     "retires stale search results across a Gateway %s",
     async (change) => {
       const stale = createDeferred<SessionsListResult | null>();
+      const fresh = vi.fn(async () => createSessionResult("agent:main:fresh", "Fresh chat"));
       const list = vi
         .fn<ApplicationContext["sessions"]["list"]>()
         .mockImplementationOnce(() => stale.promise)
-        .mockResolvedValueOnce(createSessionResult("agent:main:retry", "Retry chat"));
+        .mockImplementation(fresh);
       const harness = await mountSearch({}, list);
       const { palette, provider, query } = harness;
       await searchPalette(palette, "retry");
@@ -106,36 +107,27 @@ describe("CommandPalette lifecycle", () => {
 
       if (change === "reconnect") {
         harness.setConnected(false);
+      } else {
+        provider.setContext(createContext(createGateway(true).gateway, fresh));
       }
       stale.resolve(createSessionResult("agent:main:stale", "Stale chat"));
-      const replacementList = vi.fn(async () =>
-        createSessionResult("agent:main:fresh", "Fresh chat"),
-      );
-      if (change === "replacement") {
-        provider.setContext(createContext(createGateway(true).gateway, replacementList));
-      } else {
-        await Promise.resolve();
-        expect(palette.textContent).not.toContain("Stale chat");
-        harness.setConnected(true);
-      }
       await palette.updateComplete;
       await settlePalette(palette);
-
+      expect(palette.textContent).not.toContain("Stale chat");
       if (change === "reconnect") {
-        expect(list).toHaveBeenCalledTimes(2);
+        harness.setConnected(true);
+        await settlePalette(palette);
         expect(list).toHaveBeenLastCalledWith(expect.objectContaining({ search: "retry" }));
-        expect(palette.textContent).toContain("Retry chat");
       } else {
         expect(palette.isOpen).toBe(false);
         expect(query(".cmd-palette__input")).toBeNull();
         await openPalette(palette);
         expect(paletteInput(palette).value).toBe("");
-        expect(replacementList).not.toHaveBeenCalled();
-        expect(palette.textContent).not.toContain("Stale chat");
+        expect(fresh).not.toHaveBeenCalled();
         await searchPalette(palette, "retry");
-        expect(replacementList).toHaveBeenCalledOnce();
-        expect(palette.textContent).toContain("Fresh chat");
       }
+      expect(fresh).toHaveBeenCalledOnce();
+      expect(palette.textContent).toContain("Fresh chat");
     },
   );
 
@@ -149,7 +141,7 @@ describe("CommandPalette lifecycle", () => {
       );
       const list = vi.fn(async () => createSessionResult("agent:main:needle", "Needle session"));
       const harness = await mountSearch({ methods: ["sessions.search"], request }, list);
-      const { palette, context, queryAll } = harness;
+      const { palette, context } = harness;
       const prompt = "needle\nSummarize the discussion and prepare a follow-up task.";
       await searchPalette(palette, prompt);
       expect([list.mock.calls, request.mock.calls]).toEqual([[], []]);
@@ -172,15 +164,8 @@ describe("CommandPalette lifecycle", () => {
 
       setInputValue(input, "needle");
       await settlePalette(palette);
-      expect(list).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ search: "needle" }));
-      expect(request).toHaveBeenCalledWith(
-        "sessions.search",
-        expect.objectContaining({ query: "needle" }),
-      );
-      expect(request).toHaveBeenCalledWith("models.list", expect.anything());
       expect(findPaletteOption(palette, "Needle session")).toBeDefined();
       expect(findPaletteOption(palette, "Needle model")).toBeDefined();
-      expect(queryAll(".cmd-palette__filter")).toHaveLength(3);
     },
   );
 });

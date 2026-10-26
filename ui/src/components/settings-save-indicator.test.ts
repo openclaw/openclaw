@@ -83,34 +83,23 @@ describe("settings save indicator", () => {
     }
   });
 
-  it.each([
-    ["error", "permission denied", "Save failed"],
-    ["rejected", "logging.level: Invalid option", "Settings not applied"],
-  ] as const)("explains %s and retries", async (status, lastError, message) => {
-    const { onRetry } = await update({ status, lastError });
-    expect(feedback()?.textContent).toContain(message);
-    if (status === "error") {
-      expect(feedback()).toMatchObject({ title: lastError, ariaLabel: `${message}: ${lastError}` });
-    } else {
-      expect(indicator.textContent).toContain("Current settings are unchanged.");
-      expect(indicator.querySelector("details")?.textContent).toContain(lastError);
-      expect(indicator.querySelector(".settings-save-indicator--danger")).toBeNull();
-    }
+  it("explains rejected settings and retries", async () => {
+    const lastError = "logging.level: Invalid option";
+    const { onRetry } = await update({ status: "rejected", lastError });
+    expect(feedback()?.textContent).toContain("Settings not applied");
+    expect(indicator.textContent).toContain("Current settings are unchanged.");
+    expect(indicator.querySelector("details")?.textContent).toContain(lastError);
+    expect(indicator.querySelector(".settings-save-indicator--danger")).toBeNull();
     button("Retry")?.click();
     expect(onRetry).toHaveBeenCalledOnce();
   });
 
-  it.each([
-    ["conflict", "Reload", "onReload"],
-    ["paused", "Save", "onSave"],
-  ] as const)("offers %s recovery through %s, not Retry", async (status, label, handler) => {
-    const next = await update({ status });
-    if (status === "conflict") {
-      expect(indicator.textContent).toContain("Settings changed elsewhere");
-      expect(button("Retry")).toBeUndefined();
-    }
-    button(label)?.click();
-    expect(next[handler]).toHaveBeenCalledOnce();
+  it("offers conflict recovery through Reload, not Retry", async () => {
+    const next = await update({ status: "conflict" });
+    expect(indicator.textContent).toContain("Settings changed elsewhere");
+    expect(button("Retry")).toBeUndefined();
+    button("Reload")?.click();
+    expect(next.onReload).toHaveBeenCalledOnce();
     expect(next.onRetry).not.toHaveBeenCalled();
   });
 
@@ -118,6 +107,7 @@ describe("settings save indicator", () => {
     const lastError = "permission denied";
     await update({ status: "error", lastError });
     expect(indicator.textContent).toContain("Save failed");
+    expect(feedback()).toMatchObject({ title: lastError, ariaLabel: `Save failed: ${lastError}` });
     await update({ status: "error", saving: true, lastError: null });
     expect(indicator.textContent?.trim()).toBe("Saving…");
     expect(feedback()).toMatchObject({ title: "" });
@@ -141,11 +131,12 @@ describe("settings save indicator", () => {
   it("presents an admitted Save without inventing an accepted owner result", async () => {
     const held = createDeferred<boolean>();
     const onSave = vi.fn(() => held.promise);
-    await update({ status: "paused", onSave });
+    const { onRetry } = await update({ status: "paused", onSave });
     button("Save")!.click();
     await waitForSolid(() => expect(indicator.textContent).toContain("Saving…"));
     expect(indicator.querySelector('[aria-busy="true"]')).not.toBeNull();
     expect(onSave).toHaveBeenCalledOnce();
+    expect(onRetry).not.toHaveBeenCalled();
     held.resolve(false);
     await waitForSolid(() => expect(button("Save")?.disabled).toBe(false));
     expect(indicator.textContent).toContain("Autosave paused after reconnect");

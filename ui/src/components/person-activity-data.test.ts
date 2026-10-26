@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.ts";
-import { GatewayRequestError } from "../api/gateway.ts";
 import {
   createTestSessionCapability,
   sessionsResult,
@@ -12,8 +11,12 @@ import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { observePersonActivityData, registerPersonActivityData } from "./person-activity-data.ts";
 
 type Roster = SessionListSnapshot["result"];
-function snapshot(result: Roster, error: string | null = null): SessionListSnapshot {
-  return { result, error, agentId: null, loading: false, readSucceeded: true };
+function snapshot(
+  result: Roster,
+  error: string | null = null,
+  readSucceeded = true,
+): SessionListSnapshot {
+  return { result, error, agentId: null, loading: false, readSucceeded };
 }
 function setup(client = createTestGatewayClient(async () => ({}))) {
   const gateway = createGatewayHarness(client);
@@ -41,7 +44,8 @@ function fixture() {
     observe,
     changed,
     activity,
-    publish: (result: Roster, error?: string) => publish(snapshot(result, error)),
+    publish: (result: Roster, error?: string, readSucceeded = true) =>
+      publish(snapshot(result, error, readSucceeded)),
   };
 }
 
@@ -127,52 +131,14 @@ it.each(["close", "connection"] as const)(
   },
 );
 
-it.each(["gateway-suspending", "agent-database-inspection-pending"])(
-  "waits for fresh membership when the managed owner suppresses %s",
-  async (reason) => {
-    vi.useFakeTimers();
-    let phase = "initial";
-    const { sessions, context } = setup(
-      createTestGatewayClient(async (method) => {
-        if (method !== "sessions.list") {
-          return {};
-        }
-        if (phase === "unavailable") {
-          throw new GatewayRequestError({
-            code: "UNAVAILABLE",
-            message: "Temporarily unavailable",
-            retryable: true,
-            retryAfterMs: 7_000,
-            details:
-              reason === "gateway-suspending"
-                ? { reason, phase: "draining" }
-                : { code: reason, agentId: "main" },
-          });
-        }
-        return sessionsResult(
-          [{ key: "agent:main:" + phase, kind: "direct" }],
-          phase === "initial" ? 1 : 2,
-        );
-      }),
-    );
-    const observe = vi.spyOn(sessions, "observeList");
-    const loaded = createDeferred();
-    const first = observePersonActivityData(context, () => loaded.resolve());
-    await loaded.promise;
-    expect(first.data?.sessionsResult?.sessions[0]?.key).toBe("agent:main:initial");
-    phase = "unavailable";
-    const settled = createDeferred();
-    const reopened = observePersonActivityData(context, () => settled.resolve());
-    onTestFinished(() => {
-      first.dispose();
-      reopened.dispose();
-      sessions.dispose();
-      vi.useRealTimers();
-    });
-    await settled.promise;
-    expect(reopened.data?.sessionsResult).toBeNull();
-    phase = "recovered";
-    await observe.mock.results.at(-1)?.value.refresh();
-    expect(reopened.data?.sessionsResult?.sessions[0]?.key).toBe("agent:main:recovered");
-  },
-);
+it("requires a successful-read receipt even when the managed refresh resolves without an error", async () => {
+  const f = fixture();
+  onTestFinished(() => f.activity.dispose());
+  const result = sessionsResult([{ key: "agent:main:recovered", kind: "direct" }], 2);
+  f.publish(result, undefined, false);
+  f.refresh.resolve();
+  await f.refresh.promise;
+  expect(f.activity.data?.sessionsResult).toBeNull();
+  f.publish(result);
+  expect(f.activity.data?.sessionsResult).toBe(result);
+});

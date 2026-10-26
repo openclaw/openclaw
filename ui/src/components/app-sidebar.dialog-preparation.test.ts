@@ -96,25 +96,21 @@ it.each<[string, DialogAction]>([
     },
   };
   const failure = new Error("Synthetic dialog preparation failed");
-  const restore = failModalPreparation(failure);
-  try {
-    await expect(run(organizer, row)).resolves.toBeUndefined();
-    await vi.waitFor(() =>
-      expect(sidebar.querySelector('[role="alert"]')?.textContent).toContain(failure.message),
-    );
-    expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
-    expect(sessions.deleteSession).not.toHaveBeenCalled();
-    expect(sessions.deleteMany).not.toHaveBeenCalled();
-    expect(sessions.patch).not.toHaveBeenCalled();
-    expect(sessions.patchMany).not.toHaveBeenCalled();
-    expect(sessions.groupsDelete).not.toHaveBeenCalled();
-    expect(sessions.groupsPut).not.toHaveBeenCalled();
-    expect(sessions.groupsRename).not.toHaveBeenCalled();
-    expect(sessions.groupsUpdate).not.toHaveBeenCalled();
-    expect(request.mock.calls.some(([method]) => method === "sessions.reclaim")).toBe(false);
-  } finally {
-    restore();
-  }
+  failModalPreparation(failure);
+  await expect(run(organizer, row)).resolves.toBeUndefined();
+  await vi.waitFor(() =>
+    expect(sidebar.querySelector('[role="alert"]')?.textContent).toContain(failure.message),
+  );
+  expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
+  expect(sessions.deleteSession).not.toHaveBeenCalled();
+  expect(sessions.deleteMany).not.toHaveBeenCalled();
+  expect(sessions.patch).not.toHaveBeenCalled();
+  expect(sessions.patchMany).not.toHaveBeenCalled();
+  expect(sessions.groupsDelete).not.toHaveBeenCalled();
+  expect(sessions.groupsPut).not.toHaveBeenCalled();
+  expect(sessions.groupsRename).not.toHaveBeenCalled();
+  expect(sessions.groupsUpdate).not.toHaveBeenCalled();
+  expect(request.mock.calls.some(([method]) => method === "sessions.reclaim")).toBe(false);
 });
 
 it("reports agent-delete dialog preparation failure and permits a safe retry", async () => {
@@ -156,22 +152,18 @@ it("does not publish a retired group dialog preparation error to a replacement c
   await sidebar.updateComplete;
   const preparation = Promise.withResolvers<void>();
   const failure = new Error("Retired dialog preparation failed");
-  const restore = failModalPreparation(failure, preparation.promise);
-  try {
-    const pending = createSessionGroup(sidebar.sessionOrganizer);
-    await vi.waitFor(() =>
-      expect(lazyElements.ensureCustomElementDefined).toHaveBeenCalledWith(
-        "openclaw-modal-dialog",
-        expect.any(Function),
-      ),
-    );
-    gateway.publish({ client: createTestGatewayClient(createGatewayRequestMock()) });
-    await sidebar.updateComplete;
-    preparation.reject(failure);
-    await expect(pending).resolves.toBeUndefined();
-    expect(sidebar.querySelector('[role="alert"]')).toBeNull();
-    expect(sessions.groupsPut).not.toHaveBeenCalled();
-  } finally {
-    restore();
-  }
+  failModalPreparation(failure, preparation.promise);
+  const pending = createSessionGroup(sidebar.sessionOrganizer);
+  await vi.waitFor(() =>
+    expect(lazyElements.ensureCustomElementDefined).toHaveBeenCalledWith(
+      "openclaw-modal-dialog",
+      expect.any(Function),
+    ),
+  );
+  gateway.publish({ client: createTestGatewayClient(createGatewayRequestMock()) });
+  await sidebar.updateComplete;
+  preparation.reject(failure);
+  await expect(pending).resolves.toBeUndefined();
+  expect(sidebar.querySelector('[role="alert"]')).toBeNull();
+  expect(sessions.groupsPut).not.toHaveBeenCalled();
 });
