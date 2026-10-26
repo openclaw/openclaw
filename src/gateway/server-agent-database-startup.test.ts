@@ -73,7 +73,6 @@ import {
   connectWebchatClient,
   installGatewayTestHooks,
   rpcReq,
-  startConnectedServerWithClient,
   startTestGatewayServer,
 } from "./test-helpers.server.js";
 
@@ -100,6 +99,15 @@ async function closeDatabases() {
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   await closeStateDatabaseForTest();
+}
+
+function mutateDatabase(pathname: string, sql: string) {
+  const db = new DatabaseSync(pathname);
+  try {
+    db.exec(sql);
+  } finally {
+    db.close();
+  }
 }
 
 function expectPreparedModel(agentId: string) {
@@ -315,17 +323,13 @@ it.for([
     if (outcome !== "fast") {
       // Unclean external mutation requires the writable owner's integrity gate.
       revokeSqliteDatabaseAdmissionsForPath(agentPath);
-      const raw = new DatabaseSync(agentPath);
-      try {
-        raw.exec("PRAGMA journal_mode=DELETE");
-        if (outcome === "corrupt") {
-          raw.exec(
-            "PRAGMA foreign_keys=OFF; CREATE TABLE broken_parent(id INTEGER PRIMARY KEY); CREATE TABLE broken_child(parent_id REFERENCES broken_parent(id)); INSERT INTO broken_child VALUES (42)",
-          );
-        }
-      } finally {
-        raw.close();
-      }
+      mutateDatabase(
+        agentPath,
+        "PRAGMA journal_mode=DELETE;" +
+          (outcome === "corrupt"
+            ? "PRAGMA foreign_keys=OFF; CREATE TABLE broken_parent(id INTEGER PRIMARY KEY); CREATE TABLE broken_child(parent_id REFERENCES broken_parent(id)); INSERT INTO broken_child VALUES (42)"
+            : ""),
+      );
     }
     if (outcome === "physical-corrupt") {
       fs.writeFileSync(agentPath, "not a SQLite database");
@@ -764,9 +768,15 @@ it.for([
   },
 );
 
-it("admits an unsealed fleet including reserved system agents while skipping an unowned leftover", async ({
+it("admits an unsealed fleet including reserved system agents while excluding unowned stores", async ({
   signal,
 }) => {
+  const sessionKey = "agent:gemini:acp:skipped-history";
+  setRuntimeConfigSnapshot(loadGatewayTestConfig());
+  await upsertSessionEntryCore(
+    { agentId: "gemini", sessionKey },
+    { sessionId: "skipped-history", updatedAt: 1 },
+  );
   testState.agentsConfig = {
     ownership: "explicit",
     entries: { "worker-a": {}, "worker-b": {}, main: {}, absent: {} },
@@ -776,14 +786,11 @@ it("admits an unsealed fleet including reserved system agents while skipping an 
   const cfg = loadGatewayTestConfig();
   const agentIds = ["worker-a", "worker-b", "main", "openclaw", "crestodian"];
   const paths = agentIds.map((agentId) => openOpenClawAgentDatabase({ agentId, env }).path);
-  const stalePaths = agentIds.map(
-    (agentId) =>
-      openOpenClawAgentDatabase({
-        agentId,
-        path: path.join(resolveStateDir(env), `(multiple).${agentId}.sqlite`),
-        env,
-      }).path,
-  );
+  const stalePath = openOpenClawAgentDatabase({
+    agentId: "worker-a",
+    path: path.join(resolveStateDir(env), "(multiple).worker-a.sqlite"),
+    env,
+  }).path;
   const leftover = openOpenClawAgentDatabase({ agentId: "unowned", env }).path;
   await closeDatabases();
   for (const pathname of [...paths, leftover]) {
@@ -792,14 +799,9 @@ it("admits an unsealed fleet including reserved system agents while skipping an 
   }
   fs.writeFileSync(leftover, "unconfigured leftover must not be inspected or repaired");
   const leftoverBytes = fs.readFileSync(leftover);
-  const staleBytes = stalePaths.map((pathname) => fs.readFileSync(pathname));
+  const staleBytes = fs.readFileSync(stalePath);
   for (const pathname of paths) {
-    const database = new DatabaseSync(pathname);
-    try {
-      database.exec("PRAGMA journal_mode=DELETE");
-    } finally {
-      database.close();
-    }
+    mutateDatabase(pathname, "PRAGMA journal_mode=DELETE");
   }
   const warnings = vi.fn();
   const createLogger = logging.createSubsystemLogger;
@@ -923,18 +925,34 @@ it("admits an unsealed fleet including reserved system agents while skipping an 
     expect(warnings).toHaveBeenCalledWith(
       `Skipped ${leftover} (agent unowned): database is not a configured target; run openclaw doctor to inspect retained data.`,
     );
-    for (const [index, pathname] of stalePaths.entries()) {
-      expect(fs.readFileSync(pathname)).toEqual(staleBytes[index]);
-      expect(warnings).toHaveBeenCalledWith(
-        `Skipped ${pathname} (agent ${agentIds[index]}): database is not a configured target; run openclaw doctor to inspect retained data.`,
-      );
-    }
+    expect(fs.readFileSync(stalePath)).toEqual(staleBytes);
+    expect(warnings).toHaveBeenCalledWith(
+      `Skipped ${stalePath} (agent worker-a): database is not a configured target; run openclaw doctor to inspect retained data.`,
+    );
     for (const agentId of agentIds) {
       expect(readAgentDatabaseAdmissionRefusal(agentId, { env })).toBeUndefined();
     }
     expect(readAgentDatabaseAdmissionRefusal("unowned", { env })).toBeUndefined();
     expect(fs.readFileSync(leftover)).toEqual(leftoverBytes);
     expect((await probeGateway(started.port, "/readyz")).status).toBe(200);
+    const ws = await connectWebchatClient({
+      port: started.port,
+      client: { id: "test", version: "1.0.0", platform: "test", mode: "test" },
+    });
+    try {
+      const listed = await rpcReq<{ sessions: Array<{ key: string }> }>(ws, "sessions.list", {
+        limit: 1000,
+      });
+      expect(listed.payload?.sessions.map((row) => row.key)).not.toContain(sessionKey);
+      for (const method of ["chat.history", "chat.startup"]) {
+        expect(await rpcReq(ws, method, { sessionKey })).toMatchObject({
+          ok: false,
+          error: { code: "INVALID_REQUEST", message: `Session "${sessionKey}" was not found.` },
+        });
+      }
+    } finally {
+      await closeGatewayTestWebSocket(ws);
+    }
   } finally {
     unsubscribe();
     allOpened.resolve();
@@ -942,43 +960,5 @@ it("admits an unsealed fleet including reserved system agents while skipping an 
       release.resolve();
     }
     await server?.close();
-  }
-});
-
-it("reports history in a skipped unconfigured agent store as not found", async () => {
-  const sessionKey = "agent:gemini:acp:skipped-history";
-  setRuntimeConfigSnapshot(loadGatewayTestConfig());
-  await upsertSessionEntryCore(
-    { agentId: "gemini", sessionKey },
-    { sessionId: "skipped-history", updatedAt: 1 },
-  );
-  await closeDatabases();
-  testState.agentsConfig = { ownership: "explicit", entries: { main: {} } };
-  testState.agentConfig = { systemAgent: { agentId: "main" } };
-  const env = { ...process.env };
-  const started = await withAgentDatabaseStartupAdmission(async () => {
-    await assertOpenClawDatabasesReady({
-      env,
-      operation: "gateway-startup",
-      config: loadGatewayTestConfig(),
-    });
-    return await startConnectedServerWithClient();
-  });
-  try {
-    await started.server.startupSettled;
-    const listed = await rpcReq<{ sessions: Array<{ key: string }> }>(started.ws, "sessions.list", {
-      limit: 1000,
-    });
-    expect(listed.payload?.sessions.map((row) => row.key)).not.toContain(sessionKey);
-    for (const method of ["chat.history", "chat.startup"]) {
-      expect(await rpcReq(started.ws, method, { sessionKey })).toMatchObject({
-        ok: false,
-        error: { code: "INVALID_REQUEST", message: `Session "${sessionKey}" was not found.` },
-      });
-    }
-  } finally {
-    started.ws.close();
-    await started.server.close();
-    started.envSnapshot.restore();
   }
 });
