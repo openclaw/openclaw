@@ -126,12 +126,9 @@ it("keeps same-meeting tab navigation responsive while generating a summary", as
   const { page, unmount } = mount(request, "?selector=meeting");
   try {
     await waitForText(page, "Generating meeting summary");
-    button(page, "Transcript").click();
-    await waitForSolid(() =>
-      expect(page.querySelector("#transcript-reader-tab-text")?.getAttribute("aria-selected")).toBe(
-        "true",
-      ),
-    );
+    const transcript = button(page, "Transcript");
+    transcript.click();
+    await waitForSolid(() => expect(transcript.ariaSelected).toBe("true"));
     expect(page.textContent).toContain("Keep the reader quiet and readable.");
     button(page, "Summary").click();
     await waitForText(page, "Generating meeting summary");

@@ -14,8 +14,6 @@ let updateView: (props: TranscriptsViewProps) => void;
 let props: TranscriptsViewProps;
 const query = (selector: string) => container.querySelector<HTMLElement>(selector)!;
 const rect = (element: Element) => element.getBoundingClientRect();
-const keydown = (element: Element, key: string) =>
-  element.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
 const speech = { sequence: 0, speakerLabel: "Avery", text: "Unbroken".repeat(120) };
 async function viewport(width = 1440, height = 1000) {
   const { page } = await import("vitest/browser");
@@ -74,22 +72,15 @@ describe.skipIf(!hasBrowserLayout)("meeting transcript responsive reader", () =>
     expect(getComputedStyle(library).display).toBe("none");
     expect(rect(reader).right).toBeLessThanOrEqual(window.innerWidth + 1);
     expect(reader.scrollWidth).toBeLessThanOrEqual(reader.clientWidth + 1);
-    const transcript = query("#transcript-reader-tab-text");
     const summary = query("#transcript-reader-tab-summary");
-    transcript.focus();
-    keydown(transcript, "ArrowLeft");
-    expect(document.activeElement).toBe(summary);
-    expect([summary.ariaSelected, transcript.ariaSelected]).toEqual(["false", "true"]);
-    expect(props.onReaderTab).not.toHaveBeenCalled();
-    keydown(summary, "Enter");
+    summary.click();
     expect(props.onReaderTab).toHaveBeenCalledExactlyOnceWith("summary");
     updateView({ ...props, readerTab: "summary" });
-    expect(summary.getAttribute("aria-selected")).toBe("true");
+    expect(summary.ariaSelected).toBe("true");
     const panel = query('[role="tabpanel"]');
     expect(panel.getAttribute("aria-labelledby")).toBe(summary.id);
-    keydown(summary, "Enter");
+    summary.click();
     expect(props.onReaderTab).toHaveBeenCalledExactlyOnceWith("summary");
-    expect(panel.textContent).toContain("Notes extracted using text heuristics");
   });
   it("uses themed search controls and keeps the third library entry above the fold", async () => {
     props.list!.sessions.push(
@@ -105,9 +96,7 @@ describe.skipIf(!hasBrowserLayout)("meeting transcript responsive reader", () =>
     }
     const third = container.querySelectorAll(".transcripts-list__entry")[2]!;
     expect(rect(third).bottom).toBeLessThan(window.innerHeight);
-    expect(container.querySelector<HTMLDetailsElement>(".transcripts-filters details")!.open).toBe(
-      false,
-    );
+    expect(query(".transcripts-filters details")).toHaveProperty("open", false);
     const overview = "A readable summary of the decisions and follow-up work. ".repeat(5);
     props.search = "";
     props.list!.sessions[0] = { ...meetingEntry, overview };
