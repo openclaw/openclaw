@@ -49,9 +49,11 @@ async function openFixtureStream(chunks: readonly Uint8Array[], failure?: Error)
     logLevel: "off",
     fetch: async () => new Response(body, { headers: { "content-type": "text/event-stream" } }),
   });
-  const request = { model: "fixture", stream: true, input: "fixture" } satisfies Parameters<
-    typeof createResponsesStreamWithRecovery
-  >[0]["request"];
+  const request = {
+    model: "fixture",
+    stream: true,
+    input: [{ role: "user", content: "fixture" }],
+  } satisfies Parameters<typeof createResponsesStreamWithRecovery>[0]["request"];
   return createResponsesStreamWithRecovery({
     client,
     model,
