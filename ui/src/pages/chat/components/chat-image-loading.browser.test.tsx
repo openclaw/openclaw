@@ -444,6 +444,37 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
     },
   );
 
+  it("reserves the menu footprint before the next short panorama preview", async () => {
+    const { page } = await import("vitest/browser");
+    await page.viewport(800, 600);
+    const container = mount(500);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => svgResponse(1200, 30)),
+    );
+    drawImages(container, {
+      images: ["First panorama", "Second panorama"].map((alt) => ({
+        url: `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`,
+        alt,
+        width: 1200,
+        height: 30,
+      })),
+      role: "assistant",
+    });
+    await waitForFast(() => expect(container.querySelectorAll("img")).toHaveLength(2));
+    await Promise.all([...container.querySelectorAll("img")].map((image) => image.decode()));
+    const frames = [...container.querySelectorAll<HTMLElement>(".chat-image-frame")];
+    const first = frames[0]!;
+    const menu = first.querySelector<HTMLElement>(".chat-image-actions")!;
+    const surface = first.querySelector<HTMLElement>(".chat-image-surface")!;
+    const box = surface.getBoundingClientRect();
+    expect(box.width / box.height).toBeCloseTo(40, 0);
+    expect(menu.getBoundingClientRect().height).toBe(44);
+    expect(frames[1]!.getBoundingClientRect().top).toBeGreaterThanOrEqual(
+      menu.getBoundingClientRect().bottom,
+    );
+  });
+
   it.each(
     [1440, 390].flatMap((viewport) => ["ltr", "rtl"].map((direction) => ({ viewport, direction }))),
   )(

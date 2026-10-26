@@ -59,6 +59,7 @@ export function ImageFrame(props: {
         {
           "chat-image-frame--managed": props.model.managed,
           "chat-image-frame--small": smallPreview(),
+          "chat-image-frame--small-actions": smallPreview() && hasFileActions(),
           "chat-image-frame--compact": compact(),
           "chat-image-frame--compact-actions": compact() && hasFileActions(),
         },
