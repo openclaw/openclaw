@@ -24,17 +24,16 @@ const batch: DecisionBatch = {
 };
 const probabilities = { support: 0.8, sales: 0.19 };
 const choice = { type: "choice", choice: "support", probabilities, confidence: 0.61 };
+const score = { type: "score", score: 0.607, probabilities: [0.4, 0.6], confidence: 0.5 };
 const result = () => ({
   model: "subq-snap-preview",
   answers: {
     escalate: { type: "noul", noul: 0.92 },
     queue: structuredClone(choice),
     urgency: {
-      type: "score",
-      score: 0.607,
+      ...score,
       probabilities: { "0": 0.4, "1": 0.6 },
       legend: { "0": "Low", "1": { impact: "High" } },
-      confidence: 0.5,
     },
   },
   usage: { input_tokens: 477, output_tokens: 0 },
@@ -54,6 +53,8 @@ const withQuestions = (questions: DecisionBatch["questions"]): DecisionBatch => 
   ...batch,
   questions,
 });
+const entries = <const T>(count: number, value: T) =>
+  Object.fromEntries(Array.from({ length: count }, (_, i) => [String(i), value]));
 beforeEach(() => {
   vi.stubEnv("SUBQ_API_KEY", "synthetic-ambient");
   vi.mocked(getPreparedPluginSecretInput).mockReturnValue({
@@ -82,7 +83,7 @@ it("posts the documented typed contract and preserves fractional/rounded results
       answers: {
         escalate: { type: "boolean", probabilityTrue: 0.92 },
         queue: choice,
-        urgency: { type: "score", score: 0.607, probabilities: [0.4, 0.6], confidence: 0.5 },
+        urgency: score,
       },
       usage: { inputTokens: 477, outputTokens: 0 },
     },
@@ -130,16 +131,9 @@ it.each([
 it.each<DecisionBatch>([
   { ...batch, state: null },
   { ...batch, state: "x".repeat(1024 * 1024) },
-  withQuestions(
-    Object.fromEntries(Array.from({ length: 17 }, (_, i) => [String(i), { type: "boolean" }])),
-  ),
+  withQuestions(entries(17, { type: "boolean" })),
   withQuestions({ ["q".repeat(101)]: { type: "boolean" } }),
-  withQuestions({
-    q: {
-      type: "choice",
-      criteria: Object.fromEntries(Array.from({ length: 256 }, (_, i) => [String(i), null])),
-    },
-  }),
+  withQuestions({ q: { type: "choice", criteria: entries(256, null) } }),
   withQuestions({ q: { type: "score", criteria: Array(11).fill("level") } }),
 ])("rejects vendor-specific input bounds before buying a request", async (input) => {
   expect(await evaluate({}, input)).toEqual(unavailable("unsupported-input"));
