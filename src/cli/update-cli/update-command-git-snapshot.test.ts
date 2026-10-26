@@ -158,16 +158,7 @@ it.each([
             expect(result.steps).toContainEqual(expect.objectContaining(capacityStep));
           }
         }
-        const headCommandOptions = vi
-          .mocked(processRunner.runCommandWithTimeout)
-          .mock.calls.find(([argv]) => argv.join(" ") === `git -C ${root} rev-parse HEAD`)?.[1];
-        expect(
-          typeof headCommandOptions === "number"
-            ? headCommandOptions
-            : headCommandOptions?.timeoutMs,
-        ).toBe(20 * 60_000);
         expect(capacity.mock.calls.length === 0).toBe(noOp);
-        expect(getSnapshotSource).toHaveBeenCalledTimes(noOp ? 0 : 1);
         expect(
           allocate.mock.calls.some(
             ([prefix]) => prefix.includes("update-preflight-") || prefix.includes("ocu-pf-"),

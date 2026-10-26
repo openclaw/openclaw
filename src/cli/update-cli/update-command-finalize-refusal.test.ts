@@ -225,6 +225,8 @@ const pending = {
   requiresStateMigration: true as const,
 };
 
+const repairOptions = { json: true, yes: true, deferCompletionCache: true };
+
 beforeEach(async () => {
   const base = dirs.make("finalize-refusal-");
   vi.stubEnv("HOME", base);
@@ -282,9 +284,7 @@ it("keeps repair pending with a real state owner and unavailable systemd inspect
     },
   });
   try {
-    await expect(
-      updateRepairCommand({ json: true, yes: true, deferCompletionCache: true }),
-    ).rejects.toEqual(new ExitError(2));
+    await expect(updateRepairCommand(repairOptions)).rejects.toEqual(new ExitError(2));
     const output = [
       ...vi.mocked(defaultRuntime.error).mock.calls,
       ...vi.mocked(defaultRuntime.log).mock.calls,
@@ -313,9 +313,7 @@ it.each([true, false])(
       "Stop the Gateway through its service owner (`openclaw --profile repair-test gateway stop --force` for the managed service), stop other OpenClaw processes using this state, then rerun `openclaw --profile repair-test update repair`.";
     const old = createUpdateRun({ trigger: "cli" });
     const history = finishUpdateRun(old.runId, { status: "failed", reason: "abandoned" });
-    await expect(
-      updateRepairCommand({ json, yes: true, deferCompletionCache: true }),
-    ).rejects.toEqual(new ExitError(2));
+    await expect(updateRepairCommand({ ...repairOptions, json })).rejects.toEqual(new ExitError(2));
     expect(native.events).toEqual([
       "running-holder",
       "stop-verified",
@@ -381,14 +379,9 @@ it("reports retained update custody beside deferred Doctor maintenance", async (
     },
   };
 
-  await expect(
-    updateFinalizeCommand(
-      { json: true, yes: true, deferCompletionCache: true },
-      [],
-      undefined,
-      retained,
-    ),
-  ).rejects.toEqual(new ExitError(2));
+  await expect(updateFinalizeCommand(repairOptions, [], undefined, retained)).rejects.toEqual(
+    new ExitError(2),
+  );
 
   expect(defaultRuntime.writeJson).toHaveBeenCalledExactlyOnceWith(
     expect.objectContaining({
@@ -414,9 +407,7 @@ it.each(["coordinator-contention", "admission-unavailable"] as const)(
       }),
     );
 
-    await expect(
-      updateFinalizeCommand({ json: true, yes: true, deferCompletionCache: true }),
-    ).resolves.toBeUndefined();
+    await expect(updateFinalizeCommand(repairOptions)).resolves.toBeUndefined();
 
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
       expect.objectContaining({

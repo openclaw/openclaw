@@ -21,6 +21,10 @@ import {
 import { withUpdateCommandTerminalResult } from "./update-command-terminal.js";
 
 const fixture = useExecutorFixture("update-activation-", { splitRoots: true });
+function useActivationClock() {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  vi.spyOn(performance, "now").mockImplementation(() => Date.now());
+}
 afterEach(async () => {
   try {
     await state.closeOpenClawStateDatabaseAsync();
@@ -48,8 +52,7 @@ it.each([false, true])("keeps custody after timeout (retained: %s)", async (reta
   let childWork: Promise<unknown> | undefined;
   let assertCurrent: (() => void) | undefined;
   const budget = 10 * 60_000;
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-  vi.spyOn(performance, "now").mockImplementation(() => Date.now());
+  useActivationClock();
   const running = withUpdateCommandTerminalResult(
     async (registerRun) => {
       registerRun(run);
@@ -86,10 +89,7 @@ it.each([false, true])("keeps custody after timeout (retained: %s)", async (reta
       }),
     ).rejects.toMatchObject({ code: 1 });
     expect(output).toHaveBeenCalledWith(
-      expect.objectContaining({
-        reason: "update-activation-timeout",
-        status: "error",
-      }),
+      expect.objectContaining({ reason: "update-activation-timeout", status: "error" }),
     );
     expect(onResult).not.toHaveBeenCalled();
     expect(ledger.getUpdateRun(run.runId, { env })).toEqual(before);
@@ -124,8 +124,7 @@ it.each([false, true])("keeps custody after timeout (retained: %s)", async (reta
 
 it.each([false, true])("checks deadlines after synchronous work (%s)", async (expired) => {
   const { root } = fixture();
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-  vi.spyOn(performance, "now").mockImplementation(() => Date.now());
+  useActivationClock();
   const work = withUpdateCommandExecutor("clock-probe", async (executor) => {
     await executor.enter(root, { activationTimeoutMs: 60_000 });
     // Move the clock without dispatching timers, as a blocking native probe can.
@@ -156,8 +155,7 @@ it.each([undefined, 48 * 60 * 60_000])(
       env: { ...process.env, OPENCLAW_STATE_DIR: root },
     });
     const legacyBudget = Math.max(30 * 60_000, (callerTimeoutMs ?? 0) * 6);
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-    vi.spyOn(performance, "now").mockImplementation(() => Date.now());
+    useActivationClock();
     await expect(
       withUpdateCommandExecutor("measured-activation", async (executor) => {
         const fence = await executor.enter(root, { activationTimeoutMs: budget });
@@ -172,8 +170,7 @@ it.each([undefined, 48 * 60 * 60_000])(
 
 it("keeps preflight custody through activation expiry", async () => {
   const { root, serviceRoot } = fixture();
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-  vi.spyOn(performance, "now").mockImplementation(() => Date.now());
+  useActivationClock();
   await expect(
     withUpdateCommandExecutor("retained-preflight", async (executor) => {
       const preflight = await executor.enter(root, { preflight: true, serviceRoot });

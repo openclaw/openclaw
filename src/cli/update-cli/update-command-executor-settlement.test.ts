@@ -563,22 +563,16 @@ it("preserves activation timeout provenance without a cause cycle after uncertai
   visit(result);
 });
 
-it.each([
-  { kind: "direct", cleanupResult: "forced" },
-  { kind: "direct", cleanupResult: "uncertain" },
-  { kind: "delegated", cleanupResult: "forced" },
-  { kind: "delegated", cleanupResult: "uncertain" },
-] as const)(
+it.each(cleanupCases)(
   "joins $kind terminal preparation before release ($cleanupResult)",
   async ({ kind, cleanupResult }) => {
-    const entered = createDeferredCore();
-    const cleanup = createDeferredCore<"forced" | "uncertain">();
+    const state = settlement(cleanupResult);
+    const { admitted: entered, cleanup } = state;
     const operationJoined = createDeferredCore();
     const original = new Error("original update failure");
     const preparationFailure = new Error("report preparation failed");
     let calls = 0;
-    let finished = false;
-    const work = runWithExecutorFence(kind, async (fence) => {
+    const work = state.run(kind, async (fence) => {
       // A cleanup admitted by the operation must join before preparation starts.
       retainCommandProcessCleanup(operationJoined.promise);
       registerUpdateCommandTerminalPreparation(fence, "run", async (failure) => {
@@ -589,21 +583,14 @@ it.each([
         throw preparationFailure;
       });
       throw original;
-    })
-      .catch((error: unknown) => {
-        entered.reject(error);
-        return error;
-      })
-      .finally(() => {
-        finished = true;
-      });
+    });
     try {
       await setImmediate();
       expect(calls).toBe(0);
       operationJoined.resolve();
       await entered.promise;
       await setImmediate();
-      expect(finished).toBe(false);
+      expect(state.ended).toBe(false);
       expect(rows.has(root)).toBe(true);
     } finally {
       operationJoined.resolve();
