@@ -30,7 +30,6 @@ function sidebarProps(overrides: Partial<SidebarProps> = {}): SidebarProps {
     onRetryConnect: vi.fn(),
     onNavigate: vi.fn(),
     onSearchQueryChange: vi.fn(),
-    preloadTimers: new Map(),
     saveIndicator: saveIndicator(),
     ...overrides,
   };
@@ -373,7 +372,7 @@ describe("settings sidebar search", () => {
   });
 
   it.each(["sidebar", "embed-list", "embed-page"] as const)(
-    "preserves save feedback in web settings and native connection recovery in %s",
+    "preserves actionable save feedback in web settings and native connection recovery in %s",
     async (presentation) => {
       const onRetryConnect = vi.fn();
       const renderSidebar = (
@@ -390,7 +389,7 @@ describe("settings sidebar search", () => {
           lastError,
           gatewayVersion: "1.0.0",
           onRetryConnect,
-          saveIndicator: { ...saveIndicator(), status: "saving" },
+          saveIndicator: { ...saveIndicator(), status: "error", lastError: "Save failed" },
         });
 
       renderSidebar(null);
@@ -398,7 +397,7 @@ describe("settings sidebar search", () => {
       await vi.waitFor(() => {
         expect(
           container.querySelector<HTMLElement>(".settings-save-indicator")?.textContent,
-        ).toContain(t("configView.autoSaveSaving"));
+        ).toContain(t("configView.autoSaveFailed"));
       });
 
       renderSidebar(null);
@@ -439,7 +438,7 @@ describe("settings sidebar search", () => {
         expect(suspended?.hasAttribute("role")).toBe(false);
         expect(
           container.querySelector<HTMLElement>(".settings-save-indicator")?.textContent,
-        ).toContain(t("configView.autoSaveSaving"));
+        ).toContain(t("configView.autoSaveFailed"));
       }
 
       renderSidebar("offline", "connection refused?token=settings-secret");

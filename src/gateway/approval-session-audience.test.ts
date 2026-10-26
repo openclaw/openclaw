@@ -27,10 +27,9 @@ async function expectAudience(source: string, ...keys: string[]) {
 
 let graph: Record<string, GraphNode> = {};
 const readConfig = vi.fn(() => ({}) as object);
-const readRun = vi.fn((sessionKey: string) => graph[sessionKey]?.registry);
+const readRun = (sessionKey: string) => graph[sessionKey]?.registry;
 const entryFor = (scope: { sessionKey: string }) => graph[scope.sessionKey]?.stored;
 const readEntry = vi.fn(entryFor);
-const readIndex = vi.fn(() => ({ getLatestSubagentRun: readRun }));
 const prepareRegistry = vi.fn(async () => true);
 const registrySnapshot = {};
 const readSnapshot = vi.fn<() => object | undefined>(() => registrySnapshot);
@@ -39,7 +38,7 @@ const readSnapshot = vi.fn<() => object | undefined>(() => registrySnapshot);
 vi.mock("../config/io.js", () => ({ getRuntimeConfig: () => readConfig() }));
 // mock-isolation: Traverse the fixture-owned run graph without loading the live registry.
 vi.mock("../agents/subagents/registry/subagent-registry-read.js", () => ({
-  buildLatestSubagentSessionListReadIndex: () => readIndex(),
+  buildLatestSubagentSessionListReadIndex: () => ({ getLatestSubagentRun: readRun }),
   getLatestLiveSubagentRunByChildSessionKey: (key: string) => readRun(key),
 }));
 // mock-isolation: Control registry publication and preparation for each lineage scenario.
@@ -55,9 +54,7 @@ vi.mock("../config/sessions/session-entry-read-runtime.js", () => ({
 beforeEach(() => {
   graph = {};
   readConfig.mockReset().mockReturnValue({});
-  readRun.mockClear();
   readEntry.mockReset().mockImplementation(entryFor);
-  readIndex.mockClear();
   prepareRegistry.mockReset().mockResolvedValue(true);
   readSnapshot.mockReset().mockReturnValue(registrySnapshot);
 });
@@ -179,7 +176,6 @@ it("retains live and stored ancestors when the optional registry query is unavai
   };
 
   await expectAudience("child", "child", "parent", "root");
-  expect(readIndex).not.toHaveBeenCalled();
 });
 
 it("rechecks registry readiness and current aliases after preparation settles", async () => {

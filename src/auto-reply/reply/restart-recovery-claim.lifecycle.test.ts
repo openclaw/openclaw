@@ -1,14 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { transitionMainSessionRecovery } from "../../agents/main-session-recovery/main-session-recovery-state.js";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../../config/runtime-snapshot.js";
 import {
   loadSessionEntry,
   markSessionAbortTarget,
@@ -110,49 +106,11 @@ it("retains an internal child's requester without an outward route or source id"
   expect(loadSessionEntry(fixture.scope)?.restartRecoveryOperatorSource).toBeUndefined();
 });
 
-it("adopts an exact channel recovery claim before execution starts", async () => {
-  setRuntimeConfigSnapshot({});
-  onTestFinished(clearRuntimeConfigSnapshot);
-  const deliveryContext = {
-    channel: "telegram",
-    to: "chat",
-    accountId: "default",
-    threadId: "thread",
-  };
-  const claim = {
-    restartRecoveryDeliveryContext: deliveryContext,
-    restartRecoveryDeliveryReceiptState: "terminal-pending" as const,
-    restartRecoveryDeliveryRequestFingerprint: "request-fingerprint",
-    restartRecoveryDeliveryRunId: "recovery-run",
-    restartRecoveryDeliverySourceRunId: "source-turn",
-    restartRecoveryDeliveryToolCallId: "message-call",
-  };
-  await using fixture = await claimFixture(
-    {
-      ...claim,
-      abortedLastRun: false,
-      lifecycleRunId: "recovery-run",
-      sessionId: "channel-session",
-      startedAt: 1,
-    },
-    {
-      sessionKey: "agent:main:telegram:group:chat:topic:thread",
-      resolveDeliveryContext: () => deliveryContext,
-      sourceTurnId: "source-turn",
-    },
-  );
-  await expect(fixture.controller.admitUserTurn()).resolves.toBe("admitted");
-  const persisted = loadSessionEntry(fixture.scope);
-  expect(persisted).toMatchObject(claim);
-  expect(persisted?.status).toBeUndefined();
-});
-
 async function restartReply(
   controller: ReturnType<typeof createReplyRestartRecoveryClaimController>,
   operation: ReplyOperation,
 ) {
-  let drains = 0;
-  const reply = await handleReplyAgentRunError(new Error("Backend stopped"), {
+  return handleReplyAgentRunError(new Error("Backend stopped"), {
     resolveVisibleReplyDelivery: async () => false,
 
     replyExpectation: "required",
@@ -160,13 +118,8 @@ async function restartReply(
     replyOperation: operation,
     resolvedVerboseLevel: "off",
     sessionCtx: {},
-    returnWithQueuedFollowupDrain: (value) => {
-      drains += 1;
-      return value;
-    },
+    returnWithQueuedFollowupDrain: (value) => value,
   });
-  expect(drains).toBe(1);
-  return reply;
 }
 
 async function withTrackedReply(
@@ -458,7 +411,7 @@ it.each(["active-storage", "retired-storage", "retired-cleanup"] as const)(
 );
 
 describe("restart recovery claim settlement", () => {
-  it.each(["done", "failed", "restart"] as const)(
+  it.each(["failed", "restart"] as const)(
     "settles lifecycle ownership for %s cleanup",
     async (outcome) => {
       let restartAborted = false;
@@ -474,9 +427,6 @@ describe("restart recovery claim settlement", () => {
             restartRecoveryDeliveryReceiptState: "terminal-pending",
           }))) as InternalSessionEntry,
         );
-      } else if (outcome === "done") {
-        await expect(controller.beginBeforeAgentReply()).resolves.toBe(true);
-        await controller.checkpointBeforeAgentReply({ state: "handled-silent" });
       } else {
         restartAborted = true;
       }

@@ -100,6 +100,7 @@ async function expectReconciled(page: Page, texts: string[]) {
 async function openRun(runId: string, options: Parameters<typeof installMockGateway>[1]) {
   const page = await newChatPage(suite);
   const gateway = await installMockGateway(page, {
+    subscriptionInitialHistory: false,
     historyMessages: [],
     inFlightRun: activeRun(runId),
     sessionInfo: activeSession(runId),

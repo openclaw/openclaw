@@ -2,9 +2,13 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { MAX_WORKSPACE_MANIFEST_BYTES } from "../gateway/worker-environments/workspace-inventory-limits.js";
 import type { WorkerWorkspaceManifestEntry } from "../gateway/worker-environments/workspace-manifest.js";
-import { WorkerWorkspaceGitHistorySchema } from "../gateway/worker-environments/workspace-result-inventory.js";
+import {
+  WorkerWorkspaceGitHistorySchema,
+  type WorkerWorkspaceGitHistory,
+} from "../gateway/worker-environments/workspace-result-inventory.js";
+import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
+import { resolveRuntimeWorkerArgv } from "../infra/runtime-worker-url.js";
 import { runExec } from "../process/exec.js";
-import { NODE_WORKSPACE_GIT_HISTORY_SCRIPT } from "../worker/node-workspace-transfer-protocol.js";
 import {
   runWorkspaceCommand,
   TRANSFER_TIMEOUT_MS,
@@ -104,27 +108,43 @@ export async function prepareNodeWorkerGitResult(params: {
   if (params.resultVersion !== 2) {
     return undefined;
   }
-  const history = params.baseCommit
-    ? WorkerWorkspaceGitHistorySchema.parse(
-        JSON.parse(
-          await runWorkspaceCommand({
-            workspaceDir: params.workspaceDir,
-            homeDir: params.manifestHome,
-            argv: [
-              "node",
-              "-e",
-              NODE_WORKSPACE_GIT_HISTORY_SCRIPT,
-              params.workspaceDir,
-              params.baseCommit,
-              params.packPath,
-            ],
-            signal: params.signal,
-          }),
-        ),
-      )
-    : undefined;
+  let history: WorkerWorkspaceGitHistory | undefined;
+  try {
+    history = params.baseCommit
+      ? WorkerWorkspaceGitHistorySchema.parse(
+          JSON.parse(
+            await runWorkspaceCommand({
+              workspaceDir: params.workspaceDir,
+              homeDir: params.manifestHome,
+              argv: [
+                process.execPath,
+                ...resolveRuntimeWorkerArgv(
+                  resolveRuntimeProcessEntrypointUrl("nodeWorkspaceGitHistory"),
+                ),
+                params.workspaceDir,
+                params.baseCommit,
+                params.packPath,
+              ],
+              signal: params.signal,
+            }),
+          ),
+        )
+      : undefined;
+  } catch {
+    params.signal?.throwIfAborted();
+    if (params.baseCommit) {
+      history = {
+        baseCommit: params.baseCommit,
+        headCommit: params.baseCommit,
+        descendsFromBase: false,
+        unavailableReason: "worker Git history is unavailable",
+      };
+    }
+  }
   const packBytes =
-    history?.descendsFromBase && history.headCommit !== history.baseCommit
+    history?.descendsFromBase &&
+    !history.unavailableReason &&
+    history.headCommit !== history.baseCommit
       ? (await fsp.stat(params.packPath)).size
       : 0;
   const metadata = Buffer.from(JSON.stringify(history ?? null));

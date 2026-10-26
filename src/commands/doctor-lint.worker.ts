@@ -28,6 +28,8 @@ async function runDoctorLintWorker(): Promise<void> {
     withCliCommandCleanup(false, async (cleanup) => {
       let exitCode: number;
       try {
+        const { preparePostgresPoolForUpdate } = await import("../infra/postgres-sync/pool.js");
+        await preparePostgresPoolForUpdate("openclaw doctor --fix");
         const { runDoctorLintCliInProcess } = await import("./doctor-lint-runner.js");
         exitCode = await runDoctorLintCliInProcess(defaultRuntime, options, { commandStartedAtMs });
       } finally {

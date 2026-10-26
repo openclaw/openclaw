@@ -72,6 +72,40 @@ describe("security audit workspace skill path escape findings", () => {
     }
   });
 
+  it("audits nested escapes through a symlinked skills root without revisiting cycles", async () => {
+    const tmp = await fs.realpath(await tempCases.makeTmpDir("linked-skills-root"));
+    const workspaceDir = path.join(tmp, "workspace");
+    const skillsRoot = path.join(tmp, "shared-skills");
+    const outsideDir = path.join(tmp, "outside");
+    await fs.mkdir(workspaceDir);
+    await fs.mkdir(skillsRoot);
+    await fs.mkdir(outsideDir);
+    const outsideSkillPath = path.join(outsideDir, "SKILL.md");
+    await fs.writeFile(outsideSkillPath, "# outside\n");
+    const linkType = isWindows ? "junction" : "dir";
+    await fs.symlink(skillsRoot, path.join(workspaceDir, "skills"), linkType);
+    await fs.symlink(outsideDir, path.join(skillsRoot, "leak"), linkType);
+    await fs.symlink(skillsRoot, path.join(skillsRoot, "cycle"), linkType);
+
+    const findings = await audit(workspaceDir);
+    const finding = requireFinding(findings, "skills.workspace.symlink_escape");
+    expect(finding.severity).toBe("warn");
+    expect(finding.detail).toContain(outsideSkillPath);
+    expect(findings.map((entry) => entry.checkId)).not.toContain("skills.workspace.scan_truncated");
+  });
+
+  it("ignores a dangling skills root", async () => {
+    const tmp = await fs.realpath(await tempCases.makeTmpDir("dangling-skills-root"));
+    const workspaceDir = path.join(tmp, "workspace");
+    await fs.mkdir(workspaceDir);
+    await fs.symlink(
+      path.join(tmp, "missing"),
+      path.join(workspaceDir, "skills"),
+      isWindows ? "junction" : "dir",
+    );
+    expect(await audit(workspaceDir)).toEqual([]);
+  });
+
   it.runIf(!isWindows)(
     "audits every explicit workspace when malformed defaults prevent default resolution",
     async () => {

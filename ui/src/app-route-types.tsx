@@ -8,6 +8,7 @@ export type SolidRouteProps<Data = unknown> = {
   presented: boolean;
 };
 
+// The alias preserves Data inference between route loaders and page components.
 type ForwardedRouteProps<Data> = { routeData: Data | undefined; loaderPending: boolean };
 
 /** Keep simple page renderers behind their route's existing lazy boundary. */

@@ -15,7 +15,7 @@ import {
   withAgentQuestionAnswerAuthority,
 } from "../agents/harness/host-private-capabilities.js";
 import { compileStructuredInputForm } from "../agents/harness/structured-input.js";
-import { bindMcpClientElicitation } from "../agents/mcp-client-elicitation.js";
+import { bindMcpClientElicitation } from "../agents/mcp-client-elicitation.runtime.js";
 import { buildMcpClientCapabilities } from "../agents/mcp-metadata.js";
 import { toLegacyMcpCallToolResult } from "../agents/mcp-sdk-compatibility.js";
 import {
@@ -31,6 +31,23 @@ import * as sessionScopedRead from "./server-methods/session-scoped-read.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 
 const state = vi.hoisted(() => ({ root: "", current: true, uploads: true, apps: true }));
+
+function sessionFileFixture(params: { sessionKey: string; agentId?: string }, cfg: OpenClawConfig) {
+  const entry = { sessionId: "session-1", updatedAt: 0 };
+  return [
+    {
+      root: state.root,
+      canonicalKey: params.sessionKey,
+      agentId: params.agentId ?? "main",
+      storePath: state.root,
+      cfg,
+      entry,
+    },
+    () => {},
+    () => entry,
+  ] as const;
+}
+
 vi.mock("./operator-role-policy.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./operator-role-policy.js")>()),
   resolveGatewayOperatorRoleActor: () => undefined,
@@ -60,35 +77,10 @@ vi.mock("./question-session-access.js", () => ({
 vi.mock("./server-methods/sessions-files.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./server-methods/sessions-files.js")>()),
   withSessionFileRoot: async (
-    params: { sessionKey: string; agentId?: string },
+    params: Parameters<typeof sessionFileFixture>[0],
     cfg: OpenClawConfig,
-    consume: (
-      loaded: {
-        root: string;
-        canonicalKey: string;
-        agentId: string;
-        storePath: string;
-        cfg: OpenClawConfig;
-        entry: { sessionId: string; updatedAt: number };
-      },
-      assertCurrent: () => void,
-      readEntry: () => { sessionId: string; updatedAt: number },
-    ) => Promise<unknown>,
-  ) => {
-    const entry = { sessionId: "session-1", updatedAt: 0 };
-    return consume(
-      {
-        root: state.root,
-        canonicalKey: params.sessionKey,
-        agentId: params.agentId ?? "main",
-        storePath: state.root,
-        cfg,
-        entry,
-      },
-      () => {},
-      () => entry,
-    );
-  },
+    consume: (...args: ReturnType<typeof sessionFileFixture>) => Promise<unknown>,
+  ) => consume(...sessionFileFixture(params, cfg)),
 }));
 vi.mock("../agents/agent-bundle-mcp-manager-api.js", () => ({
   peekSessionMcpRuntime: () => undefined,
@@ -136,10 +128,7 @@ const assertCurrent = () => {
   }
 };
 beforeEach(() => {
-  state.root = dirs.make("mcp-form-");
-  state.current = true;
-  state.uploads = true;
-  state.apps = true;
+  Object.assign(state, { root: dirs.make("mcp-form-"), current: true, uploads: true, apps: true });
   manager = new QuestionManager(createTestGatewayScheduler());
 });
 afterEach(async () => {
@@ -329,7 +318,7 @@ async function fixture(
     prepareToolCall,
     runtime,
     controller,
-    compiled,
+    fields: compiled.plan.fields,
     questions,
     claim,
     snapshot,
@@ -611,13 +600,11 @@ describe("registered MCP form resource route", () => {
     const f = await fixture({ target: "mcp_app_tool" });
     const reply = await f.preview();
     expect(reply[0]).toBe(true);
-    expect(f.prepareToolCall).toHaveBeenCalledWith(
-      expect.objectContaining({
-        options: expect.objectContaining({ req: expect.objectContaining({ id: "current-rpc" }) }),
-        toolName: "inspect",
-        input: { id: "declared" },
-      }),
-    );
+    expect(f.prepareToolCall.mock.calls[0]?.[0]).toMatchObject({
+      options: { req: { id: "current-rpc" } },
+      toolName: "inspect",
+      input: { id: "declared" },
+    });
     expect(f.callTool).toHaveBeenCalledWith(
       "origin",
       "inspect",
@@ -647,9 +634,7 @@ describe("registered MCP form resource route", () => {
       expect(await readFile(file, "utf8")).toBe("solid part");
       expect(f.form.context.isUploadedResource("files", resource.uri)).toBe(true);
       expect(f.form.context.isUploadedResource("other", resource.uri)).toBe(false);
-      if (f.compiled.kind === "ready" && f.compiled.plan.kind === "form") {
-        expect(f.compiled.plan.fields[0]!.decode([resource.uri]).kind).toBe("present");
-      }
+      expect(f.fields[0]!.decode([resource.uri]).kind).toBe("present");
       f.form.dispose();
       expect(await readFile(file, "utf8")).toBe("solid part");
     },

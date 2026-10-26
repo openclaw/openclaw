@@ -7,6 +7,7 @@ import {
   captureGatewayDeviceRevocation,
   retainGatewayDeviceRevocation,
 } from "../device-revocation.js";
+import { gatewayConnect } from "../server/client-fixtures.test-support.js";
 import { catalogProvider as provider } from "./session-catalog.fixtures.test-support.js";
 import {
   hoisted,
@@ -46,12 +47,14 @@ it.each(["completion", "list"] as const)(
     const gateway = new AbortController();
     const drain = getGatewayRestartDrainSignal();
     const before = getEventListeners(drain, "abort").length;
-    let retainedProviders = 0;
-    let retainedPages = 0;
     try {
       for (let index = 0; index < 1_000; index++) {
         const connection = new AbortController();
-        const client = { connId: `reconnect-${index}`, connectionSignal: connection.signal };
+        const client = {
+          connId: `reconnect-${index}`,
+          connect: gatewayConnect([]),
+          connectionSignal: connection.signal,
+        };
         const pending = startCall("sessions.catalog.list", {}, config, client, {
           requestEntryLifetime: { signal: gateway.signal },
         });
@@ -67,25 +70,14 @@ it.each(["completion", "list"] as const)(
           gateway.signal,
           client as GatewayClient,
         );
-        retainedProviders = Math.max(retainedProviders, operations.providers.size);
-        retainedPages = Math.max(retainedPages, operations.pages.size);
+        expect(operations.providers.size).toBe(0);
+        expect(operations.pages.size).toBe(0);
       }
       await vi.advanceTimersByTimeAsync(60_000);
-      const counts = {
-        reconnects: 1_000,
+      expect({
         drainListeners: getEventListeners(drain, "abort").length - before,
         gatewayListeners: getEventListeners(gateway.signal, "abort").length,
-        retainedProviders,
-        retainedPages,
-      };
-      console.info("catalog reconnect retention", mode, counts);
-      expect(counts).toEqual({
-        reconnects: 1_000,
-        drainListeners: 0,
-        gatewayListeners: 0,
-        retainedProviders: 0,
-        retainedPages: 0,
-      });
+      }).toEqual({ drainListeners: 0, gatewayListeners: 0 });
     } finally {
       gateway.abort();
       release.resolve();

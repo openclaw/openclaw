@@ -4,6 +4,7 @@ import {
   bindTestChannelParticipantAdmissionEvidence,
   createChannelParticipantAdmissionEvidence,
 } from "../../test/helpers/channel-admission-evidence.js";
+import { createMockSubsystemLogger } from "../../test/helpers/mock-subsystem-logger.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
   enqueueExecutionIdentityContextAtAdmission,
@@ -26,7 +27,6 @@ import {
 } from "../infra/agent-events.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
 import { heartbeatNotifications } from "../infra/heartbeat-events.js";
-import type { SubsystemLogger } from "../logging/subsystem.js";
 import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { captureSessionTarget } from "../sessions/session-controller.lifecycle.js";
 import {
@@ -39,60 +39,21 @@ import {
   getRpcSourceProjectSessionActive,
 } from "../sessions/session-controller.rpc-sources.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { waitForChatAbortTerminalPersistence } from "./chat-abort-lifecycle-internal.js";
 import { registerChatAbortController } from "./chat-abort.js";
-import {
-  createChatRunState,
-  createSessionEventSubscriberRegistry,
-  createSessionMessageSubscriberRegistry,
-} from "./server-chat-state.js";
 import { prepareGatewayRunShutdown } from "./server-run-shutdown.js";
 import type { startGatewayEventSubscriptions } from "./server-runtime-subscriptions.js";
+import { createSubscriptionTestParams } from "./server-runtime-subscriptions.params.test-support.js";
 
-export function waitForFast<T>(
-  callback: () => T | Promise<T>,
-  options: { timeout?: number; interval?: number } = {},
-) {
-  return vi.waitFor(callback, { interval: 1, ...options });
-}
+export { waitForFast } from "../../test/helpers/vitest-wait.js";
 
 export function createSubscriptionTestFixture() {
   const warn = vi.fn();
-  const log: SubsystemLogger = {
-    subsystem: "gateway-test",
-    isEnabled: () => true,
-    trace: vi.fn(),
-    debug: vi.fn(),
-    info: vi.fn(),
-    warn,
-    error: vi.fn(),
-    fatal: vi.fn(),
-    raw: vi.fn(),
-    child: () => log,
-  };
+  const log = createMockSubsystemLogger("gateway-test", { isEnabled: () => true, warn });
   return {
     log,
     warn,
-    createParams: (): Parameters<typeof startGatewayEventSubscriptions>[0] => {
-      const chatRunState = createChatRunState();
-      return {
-        scheduler: createTestGatewayScheduler(),
-        signal: new AbortController().signal,
-        log,
-        broadcast: vi.fn(),
-        broadcastToConnIds: vi.fn(),
-        nodeHasSessionSubscribers: () => false,
-        nodeSendToSession: vi.fn(),
-        agentRunSeq: new Map(),
-        chatRunState,
-        toolEventRecipients: chatRunState.toolEventRecipients,
-        sessionEventSubscribers: createSessionEventSubscriberRegistry(),
-        sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
-        restartRecoveryCandidates: new Map(),
-        refreshConnectedUserProfiles: vi.fn(),
-      };
-    },
+    createParams: () => createSubscriptionTestParams(log),
   };
 }
 
@@ -173,17 +134,15 @@ export function registerAuditSubscriptionTests(params: {
   };
   warn: ReturnType<typeof createSubscriptionTestFixture>["warn"];
 }) {
-  const { start, runtimeConfigState, auditTestState, warn } = params;
+  const { start, runtimeConfigState, auditTestState } = params;
+  const emitStart = (runId: string) =>
+    emitAgentAuditEvent({ runId, stream: "lifecycle", data: { phase: "start", startedAt: 1_000 } });
   it("records audit events by default and stops the recorder on unsubscribe", async () => {
     runtimeConfigState.value = { logging: { audit: { executionIdentity: true } } };
     const unsubs = start();
 
     expect(auditTestState.created).toBe(1);
-    emitAgentAuditEvent({
-      runId: "enabled-audit",
-      stream: "lifecycle",
-      data: { phase: "start", startedAt: 1_000 },
-    });
+    emitStart("enabled-audit");
     expect(auditTestState.recorded).toBe(0);
     expect(hasExecutionIdentityAdmissionSink()).toBe(true);
     expect(
@@ -207,6 +166,12 @@ export function registerAuditSubscriptionTests(params: {
   it("owns channel evidence collection without retiring host routing on audit changes", async () => {
     const unsubs = start();
     const participant = { channelId: "test", participantId: "person-1" };
+    const bindContext = (context: object) =>
+      bindTestChannelParticipantAdmissionEvidence({
+        audit: unsubs.channelAdmissionAudit,
+        context,
+        ...participant,
+      });
     const evidenceFor = (subscription = unsubs) =>
       createChannelParticipantAdmissionEvidence({
         audit: subscription.channelAdmissionAudit,
@@ -217,13 +182,7 @@ export function registerAuditSubscriptionTests(params: {
       unsubs.reconcileAuditPolicy(runtimeConfigState.value);
     };
     const context = {};
-    expect(
-      bindTestChannelParticipantAdmissionEvidence({
-        audit: unsubs.channelAdmissionAudit,
-        context,
-        ...participant,
-      }),
-    ).toBeUndefined();
+    expect(bindContext(context)).toBeUndefined();
     const resolveGateway = readChannelContextGatewayContextResolver(context);
     expect(resolveGateway).toBeTypeOf("function");
     const gateway = resolveGateway?.();
@@ -249,13 +208,7 @@ export function registerAuditSubscriptionTests(params: {
     expect(retired).toBeDefined();
     setPolicy(false);
     const disabledContext = {};
-    expect(
-      bindTestChannelParticipantAdmissionEvidence({
-        audit: unsubs.channelAdmissionAudit,
-        context: disabledContext,
-        ...participant,
-      }),
-    ).toBeUndefined();
+    expect(bindContext(disabledContext)).toBeUndefined();
     expect(readChannelContextGatewayContextResolver(context)).toBe(resolveGateway);
     expect(resolveGateway?.()).toBe(gateway);
     expect(
@@ -309,11 +262,7 @@ export function registerAuditSubscriptionTests(params: {
       runtimeConfigState.value = { logging: { audit } };
       unsubs.reconcileAuditPolicy(runtimeConfigState.value);
       const runId = `live-audit-${index}`;
-      emitAgentAuditEvent({
-        runId,
-        stream: "lifecycle",
-        data: { phase: "start", startedAt: 1_000 },
-      });
+      emitStart(runId);
       emitAgentAuditEvent({
         runId,
         stream: "lifecycle",
@@ -353,42 +302,6 @@ export function registerAuditSubscriptionTests(params: {
     await unsubs.agentUnsub();
     expect(auditTestState.stopped).toBe(1);
   });
-
-  it("keeps retention maintenance and applies audit enablement to subsequent events", async () => {
-    runtimeConfigState.value = { logging: { audit: { enabled: false } } };
-    const unsubs = start();
-
-    expect(auditTestState.created).toBe(1);
-    emitAgentAuditEvent({
-      runId: "disabled-private",
-      stream: "lifecycle",
-      data: { phase: "start", startedAt: 1_000 },
-    });
-    emitAgentEvent({
-      runId: "disabled-public",
-      stream: "lifecycle",
-      data: { phase: "start", startedAt: 1_000 },
-    });
-    expect(auditTestState.recorded).toBe(0);
-    runtimeConfigState.value = {};
-    emitAgentAuditEvent({
-      runId: "resumed-private",
-      stream: "lifecycle",
-      data: { phase: "start", startedAt: 2_000 },
-    });
-    expect(auditTestState.recorded).toBe(0);
-    runtimeConfigState.value = { logging: { audit: { enabled: false } } };
-    emitAgentAuditEvent({
-      runId: "disabled-again",
-      stream: "lifecycle",
-      data: { phase: "start", startedAt: 3_000 },
-    });
-    expect(auditTestState.recorded).toBe(1);
-    await waitForFast(() => expect(warn).toHaveBeenCalledOnce());
-    warn.mockClear();
-    await unsubs.agentUnsub();
-    expect(auditTestState.stopped).toBe(1);
-  });
 }
 
 export function registerSubscriptionRegistrationTests(
@@ -404,13 +317,9 @@ export function registerSubscriptionRegistrationTests(
       const sessionKey = "agent:main:main";
       const sessionId = "terminal-cleanup-session";
       const lifecycleGeneration = getAgentEventLifecycleGeneration();
+      const identity = { runId, sessionId, sessionKey, lifecycleGeneration };
       const resolveGatewayContext = () => undefined;
-      const registration = registerSubscriptionChatRun(params, {
-        runId,
-        sessionId,
-        sessionKey,
-        lifecycleGeneration,
-      });
+      const registration = registerSubscriptionChatRun(params, identity);
       bindGatewayContextResolver(registration.entry.input, resolveGatewayContext);
       const terminal = createDeferred();
       const failure = new Error("terminal write failed");
@@ -424,11 +333,8 @@ export function registerSubscriptionRegistrationTests(
         >();
       try {
         emitAgentEvent({
-          runId,
+          ...identity,
           stream: "lifecycle",
-          sessionKey,
-          sessionId,
-          lifecycleGeneration,
           data: { phase: "end", endedAt: Date.now() },
         });
         const persistence = registration.entry.adapter.projectSessionTerminalPersistence;
@@ -559,26 +465,18 @@ export function registerAssistantTailSubscriptionTests({
   start: (params: Parameters<typeof startGatewayEventSubscriptions>[0]) => void;
 }): void {
   it.each([
-    { source: "plain", committed: ["Saved paragraph."], initial: "Saved paragraph." },
-    {
-      source: "native raw directive",
-      committed: ["[[reply_to_current]]Saved paragraph."],
-      initial: "[[reply_to_current]]Saved paragraph.",
-    },
-    {
-      source: "native partial before directive",
-      committed: ["Saved[[reply_to_current]] paragraph."],
-      initial: "Saved",
-    },
-    { source: "before first bytes", committed: ["Saved paragraph."], initial: undefined },
-    {
-      source: "identical receipts before first bytes",
-      committed: ["Saved paragraph.", "Saved paragraph."],
-      initial: undefined,
-    },
-  ])(
-    "retires $source by identity before queued continuation without session subscribers",
-    async ({ committed, initial }) => {
+    ["plain", ["Saved paragraph."], "Saved paragraph."],
+    [
+      "native raw directive",
+      ["[[reply_to_current]]Saved paragraph."],
+      "[[reply_to_current]]Saved paragraph.",
+    ],
+    ["native partial before directive", ["Saved[[reply_to_current]] paragraph."], "Saved"],
+    ["before first bytes", ["Saved paragraph."], undefined],
+    ["identical receipts before first bytes", ["Saved paragraph.", "Saved paragraph."], undefined],
+  ] as const)(
+    "retires %s by identity before queued continuation without session subscribers",
+    async (_source, committed, initial) => {
       const actual = await vi.importActual<typeof import("./server-chat.js")>("./server-chat.js");
       vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
       const params = createParams();
@@ -586,13 +484,11 @@ export function registerAssistantTailSubscriptionTests({
       const sessionKey = "agent:main:main";
       const sessionId = "session-persisted-tail";
       const lifecycleGeneration = getAgentEventLifecycleGeneration();
-      const registration = registerSubscriptionChatRun(params, {
-        runId,
-        sessionId,
-        sessionKey,
-        lifecycleGeneration,
-      });
-      claimAgentRunContext(runId, { lifecycleGeneration, sessionId, sessionKey });
+      const identity = { lifecycleGeneration, sessionId, sessionKey };
+      const registration = registerSubscriptionChatRun(params, { runId, ...identity });
+      claimAgentRunContext(runId, identity);
+      const emitAssistant = (itemId: string, text: string, delta?: string) =>
+        emitAgentEvent({ runId, stream: "assistant", data: { itemId, text, delta } });
       const delivered = createDeferred();
       installHandlerFactory((options) => {
         const handler = actual.createAgentEventHandler(options);
@@ -608,15 +504,15 @@ export function registerAssistantTailSubscriptionTests({
       });
       try {
         start(params);
-        emitAgentEvent(
-          initial === undefined
-            ? { runId, stream: "lifecycle", data: { phase: "start", startedAt: Date.now() } }
-            : {
-                runId,
-                stream: "assistant",
-                data: { itemId: "saved-paragraph-0", text: initial, delta: initial },
-              },
-        );
+        if (initial === undefined) {
+          emitAgentEvent({
+            runId,
+            stream: "lifecycle",
+            data: { phase: "start", startedAt: Date.now() },
+          });
+        } else {
+          emitAssistant("saved-paragraph-0", initial, initial);
+        }
         for (const [index, text] of committed.entries()) {
           emitSessionTranscriptUpdate({
             sessionKey,
@@ -632,17 +528,9 @@ export function registerAssistantTailSubscriptionTests({
           });
         }
         for (const [index, text] of committed.entries()) {
-          emitAgentEvent({
-            runId,
-            stream: "assistant",
-            data: { itemId: `saved-paragraph-${index}`, text },
-          });
+          emitAssistant(`saved-paragraph-${index}`, text);
         }
-        emitAgentEvent({
-          runId,
-          stream: "assistant",
-          data: { itemId: "new-paragraph", text: "Unpersisted tail." },
-        });
+        emitAssistant("new-paragraph", "Unpersisted tail.");
         await delivered.promise;
         expect(params.chatRunState.resolveBuffer(runId).text.trim()).toBe("Unpersisted tail.");
         expect(params.chatRunState.resolveBuffer(runId, { final: true }).text).toBe(

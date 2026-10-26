@@ -109,20 +109,6 @@ function storedRollup(sessionFile: string, agentId = "main") {
   );
 }
 
-async function withWarmedTranscript(
-  agentId: string,
-  records: string,
-  run: (sessionFile: string, probe: ReadProbe) => Promise<void>,
-) {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const sessionFile = state.path(`${agentId}.jsonl`);
-    await fs.writeFile(sessionFile, records);
-    await refreshUsage({ config: {}, agentId, sessionFiles: [sessionFile] });
-    const probe = await observeUsageWorkerReads(state.stateDir, [sessionFile]);
-    await probe.run(() => run(sessionFile, probe));
-  });
-}
-
 it("refuses unvalidated legacy session keys before assigning usage ownership", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     setRuntimeConfigSnapshot({});
@@ -407,13 +393,10 @@ if (!isMainThread) {
         expect(worker.threadId).toBe(-1);
         expect(scope.hasPendingWork).toBe(false);
       } finally {
-        try {
-          releaseNative();
-        } finally {
-          scope.beginClose(reason);
-          await outcome;
-          await scope.drain();
-        }
+        releaseNative();
+        scope.beginClose(reason);
+        await outcome;
+        await scope.drain();
       }
     });
   } finally {
@@ -488,7 +471,7 @@ it("increments from the durable byte offset and rebuilds after truncation", asyn
   });
 });
 
-it("loads multiple session summaries from one durable cache snapshot", async () => {
+it("loads multiple session summaries and fractional model costs from one durable cache snapshot", async () => {
   const root = tempDirs.make("openclaw-usage-worker-selection-");
   const sessionsDir = await sessionsDirectory(root);
   const sessions = await writeSessions(sessionsDir, ["sess-a", "sess-b"], (index) =>
@@ -498,6 +481,18 @@ it("loads multiple session summaries from one durable cache snapshot", async () 
       model: "unpriced-batch",
     }),
   );
+  const records = [
+    { timestamp: "2026-02-05T23:00:00Z", costs: [0.1, 0.9] },
+    { timestamp: "2026-02-05T23:15:00Z", costs: [0.2, 0.8] },
+    { timestamp: "2026-02-05T23:16:00Z", costs: [0.3, 0.7] },
+  ].flatMap(({ timestamp, costs }) =>
+    costs.map((cost, index) =>
+      JSON.stringify(
+        assistantEntry(1, { timestamp, provider: "test", model: `model-${index}`, cost }),
+      ),
+    ),
+  );
+  await fs.appendFile(sessions[0]!.sessionFile, records.join("\n") + "\n");
   const probe = await observeUsageWorkerReads(root, sessionPaths(sessions));
   await probe.run(async () => {
     const warmed = await loadCostUsageSummary({
@@ -547,6 +542,21 @@ it("loads multiple session summaries from one durable cache snapshot", async () 
     ).toEqual([sessions[0]!.sessionFile]);
     expect(readRows("main").some((row) => row.key.endsWith("unrequested.jsonl"))).toBe(true);
 
+    const fractional = await loadCached({
+      sessions: [sessions[0]!],
+      agentId: "main",
+      startMs: Date.UTC(2026, 1, 5, 23),
+      endMs: Date.UTC(2026, 1, 5, 23, 29, 59, 999),
+      dayBucket: utcBucket,
+      requestRefresh: false,
+    });
+    expect(fractional).toMatchObject({
+      cacheStatus: { status: "fresh" },
+      summaries: [{ totalTokens: 7, totalCost: 3 }],
+    });
+    const model = fractional.summaries[0]?.modelUsage?.find((entry) => entry.model === "model-0");
+    expect(model?.totals.totalCost).toBeCloseTo(0.6, 12);
+    await expectNoRead(probe);
     await probe.clear();
     const result = await loadCached({
       sessions,
@@ -560,7 +570,7 @@ it("loads multiple session summaries from one durable cache snapshot", async () 
     expect(result).toMatchObject({
       cacheStatus: { status: "fresh" },
       summaries: [
-        { totalTokens: 1, activityDates: ["2026-02-06"] },
+        { totalTokens: 7, totalCost: 3, activityDates: ["2026-02-06"] },
         { totalTokens: 2, activityDates: ["2026-02-06"] },
       ],
     });
@@ -583,38 +593,6 @@ it("loads multiple session summaries from one durable cache snapshot", async () 
     ).toEqual(sessionPaths(sessions).toSorted(comparePaths));
   });
 });
-it("uses committed aggregates for fractional model costs without replaying transcripts", async () => {
-  const agentId = "usage-model-rounding";
-  const records = [
-    { timestamp: "2026-09-18T00:00:00Z", costs: [0.1, 0.9] },
-    { timestamp: "2026-09-18T00:15:00Z", costs: [0.2, 0.8] },
-    { timestamp: "2026-09-18T00:16:00Z", costs: [0.3, 0.7] },
-  ].flatMap(({ timestamp, costs }) =>
-    costs.map((cost, index) =>
-      JSON.stringify(
-        assistantEntry(1, { timestamp, provider: "test", model: `model-${index}`, cost }),
-      ),
-    ),
-  );
-  await withWarmedTranscript(agentId, records.join("\n") + "\n", async (sessionFile, probe) => {
-    const request = {
-      config: {},
-      agentId,
-      sessions: [{ sessionFile }],
-      requestRefresh: false,
-      startMs: Date.UTC(2026, 8, 18),
-      endMs: Date.UTC(2026, 8, 18, 0, 29, 59, 999),
-      dayBucket: utcBucket,
-    };
-    const cached = await loadCached(request);
-    expect(cached.cacheStatus.status).toBe("fresh");
-    expect(cached.summaries[0]).toMatchObject({ totalTokens: 6, totalCost: 3 });
-    const model = cached.summaries[0]?.modelUsage?.find((entry) => entry.model === "model-0");
-    expect(model?.totals.totalCost).toBeCloseTo(0.6, 12);
-    await expectNoRead(probe);
-  });
-});
-
 it("defers oversized exact ranges without treating valid aggregates as corrupt", async () => {
   const agentId = "usage-replay-budget";
   const timestamp = Date.UTC(2026, 8, 18, 0, 1);
@@ -626,44 +604,50 @@ it("defers oversized exact ranges without treating valid aggregates as corrupt",
         cost: 0.1,
       }),
     ) + "\n";
-  await withWarmedTranscript(agentId, records, async (sessionFile, probe) => {
-    const prepared = prepareUsageCostWorker({ agentId, sessionFiles: [sessionFile] });
-    const rows = readRows(agentId);
-    const pricingFingerprint = JSON.parse(rows[0]!.valueJson).pricingFingerprint as string;
-    const exact = await runUsageCostWorker(prepared, {
-      kind: "sessions",
-      sessions: [{ sessionFile }],
-      pricingFingerprint,
-      startMs: timestamp,
-      endMs: timestamp + 1,
-      dayBucket: utcBucket,
-    });
-    expect(exact).toMatchObject({
-      kind: "sessions",
-      summaries: [null],
-      cacheStatus: { status: "partial", cachedFiles: 0, pendingFiles: 1, staleFiles: 0 },
-      staleSessionFiles: [],
-      invalidRows: [],
-    });
-    const computing = await loadCached({
-      agentId,
-      sessions: [{ sessionFile }],
-      startMs: timestamp,
-      endMs: timestamp + 1,
-    });
-    expect(computing).toMatchObject({
-      summaries: [null],
-      cacheStatus: { status: "partial", pendingFiles: 1, staleFiles: 0 },
-    });
-    await expectNoRead(probe);
-    const aligned = await loadCached({
-      agentId,
-      sessions: [{ sessionFile }],
-      requestRefresh: false,
-    });
-    expect(aligned).toMatchObject({
-      summaries: [{ totalTokens: 7 }],
-      cacheStatus: { status: "fresh" },
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const sessionFile = state.path(`${agentId}.jsonl`);
+    await fs.writeFile(sessionFile, records);
+    await refreshUsage({ config: {}, agentId, sessionFiles: [sessionFile] });
+    const probe = await observeUsageWorkerReads(state.stateDir, [sessionFile]);
+    await probe.run(async () => {
+      const prepared = prepareUsageCostWorker({ agentId, sessionFiles: [sessionFile] });
+      const rows = readRows(agentId);
+      const pricingFingerprint = JSON.parse(rows[0]!.valueJson).pricingFingerprint as string;
+      const exact = await runUsageCostWorker(prepared, {
+        kind: "sessions",
+        sessions: [{ sessionFile }],
+        pricingFingerprint,
+        startMs: timestamp,
+        endMs: timestamp + 1,
+        dayBucket: utcBucket,
+      });
+      expect(exact).toMatchObject({
+        kind: "sessions",
+        summaries: [null],
+        cacheStatus: { status: "partial", cachedFiles: 0, pendingFiles: 1, staleFiles: 0 },
+        staleSessionFiles: [],
+        invalidRows: [],
+      });
+      const computing = await loadCached({
+        agentId,
+        sessions: [{ sessionFile }],
+        startMs: timestamp,
+        endMs: timestamp + 1,
+      });
+      expect(computing).toMatchObject({
+        summaries: [null],
+        cacheStatus: { status: "partial", pendingFiles: 1, staleFiles: 0 },
+      });
+      await expectNoRead(probe);
+      const aligned = await loadCached({
+        agentId,
+        sessions: [{ sessionFile }],
+        requestRefresh: false,
+      });
+      expect(aligned).toMatchObject({
+        summaries: [{ totalTokens: 7 }],
+        cacheStatus: { status: "fresh" },
+      });
     });
   });
 });

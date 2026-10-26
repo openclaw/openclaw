@@ -23,7 +23,6 @@ import {
   type RuntimeConfig,
 } from "./config.js";
 import { EvaluationError, evaluationError } from "./errors.js";
-import { localInput, parseLocalResult } from "./local.js";
 import { MAX_JSON_BYTES, parseInput, parseResult } from "./schema.js";
 
 const API_BASE_URL = `${HOSTED_ORIGIN}/v1`;
@@ -86,7 +85,26 @@ export async function evaluate(
     throw new Error("TypeSafe API key is missing. Configure a SecretRef in plugin Settings.");
   }
   try {
-    const wireInput = hosted ? parsed : localInput(parsed);
+    let wireInput = parsed;
+    if (!hosted) {
+      const questions: typeof parsed.questions = {};
+      for (const [id, question] of Object.entries(parsed.questions)) {
+        const instructions = question.instructions ?? null;
+        if (question.type === "score") {
+          questions[id] = {
+            ...question,
+            instructions,
+            // Send explicit text so the returned legend can be verified without reproducing Kev's renderer.
+            criteria: question.criteria.map((level) =>
+              typeof level === "string" ? level : level === null ? "" : JSON.stringify(level),
+            ),
+          };
+        } else {
+          questions[id] = { ...question, instructions };
+        }
+      }
+      wireInput = { ...parsed, questions };
+    }
     const baseUrl = config.providerConfig
       ? providerBaseUrl(config.providerConfig.baseUrl)
       : localBaseUrl(config.baseUrl);
@@ -255,9 +273,33 @@ export async function evaluate(
       cleanup();
     }
     abortSignal?.throwIfAborted();
-    const evaluation = hosted
-      ? parseResult(responsePayload, parsed)
-      : parseLocalResult(responsePayload, wireInput, parsed);
+    if (!hosted) {
+      if (
+        !responsePayload ||
+        typeof responsePayload !== "object" ||
+        Array.isArray(responsePayload)
+      ) {
+        throw new Error("Invalid local System One response.");
+      }
+      if ("latency_ms" in responsePayload) {
+        const { latency_ms, ...payload } = responsePayload;
+        if (typeof latency_ms !== "number" || !Number.isFinite(latency_ms) || latency_ms < 0) {
+          throw new Error("Invalid local System One latency metadata.");
+        }
+        responsePayload = payload;
+      }
+    }
+    const evaluation = parseResult(responsePayload, wireInput);
+    if (!hosted) {
+      for (const [id, question] of Object.entries(parsed.questions)) {
+        const answer = evaluation.answers[id];
+        if (question.type === "score" && answer?.type === "score") {
+          answer.legend = Object.fromEntries(
+            question.criteria.map((level, index) => [String(index), level]),
+          );
+        }
+      }
+    }
     return { evaluation };
   } catch (error) {
     throw evaluationError(error, abortSignal?.aborted ?? false);

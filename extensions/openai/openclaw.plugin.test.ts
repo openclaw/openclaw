@@ -178,3 +178,11 @@ it.each([
     comparableProviderMetadata(createOpenAIProvider()),
   );
 });
+
+it.each(["gpt-daybreak-blue-latest", "gpt-daybreak-red-latest"])(
+  "deprecates %s without inventing an account-specific replacement",
+  (id) => {
+    expect(model(id)).toMatchObject({ status: "deprecated" });
+    expect(model(id)).not.toHaveProperty("replacedBy");
+  },
+);

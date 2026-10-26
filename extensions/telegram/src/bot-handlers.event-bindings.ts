@@ -121,21 +121,33 @@ export function createTelegramEventBindings({
       }
 
       const chatId = membership.chat.id;
+      const threadSpec = resolveTelegramThreadSpec({
+        isGroup: true,
+        isForum: membership.chat.is_forum === true,
+      });
       const currentCfg = getRuntimeConfig();
       const telegramCfg = resolveTelegramAccount({ cfg: currentCfg, accountId }).config;
-      const { groupConfig } = params.resolveTelegramGroupConfig(chatId, undefined, currentCfg);
+      const { groupConfig, topicConfig } = params.resolveTelegramGroupConfig(
+        chatId,
+        threadSpec.id,
+        currentCfg,
+      );
       const groupPolicyAccess = evaluateTelegramGroupPolicyAccess({
         isGroup: true,
         chatId,
         cfg: currentCfg,
         telegramCfg,
         groupConfig,
+        topicConfig,
         effectiveGroupAllow: normalizeAllowFrom(),
         resolveGroupPolicy: params.resolveGroupPolicy,
         enforceAllowlistAuthorization: false,
         allowEmptyAllowlistEntries: false,
       });
-      const roomAllowed = groupConfig?.enabled !== false && groupPolicyAccess.allowed;
+      const roomAllowed =
+        groupConfig?.enabled !== false &&
+        topicConfig?.enabled !== false &&
+        groupPolicyAccess.allowed;
       const inviter = membership.from;
       const inviterLabel =
         [inviter.first_name, inviter.last_name].filter(Boolean).join(" ") || inviter.username;
@@ -146,19 +158,21 @@ export function createTelegramEventBindings({
         return;
       }
       try {
-        await reportChannelRoomJoin({
+        const outcome = await reportChannelRoomJoin({
           cfg: currentCfg,
           channel: "telegram",
           accountId,
           conversationId: String(chatId),
           deliverTo: String(chatId),
+          threadId: threadSpec.id,
           route: (
             await resolveTelegramConversationRoute({
               cfg: currentCfg,
               accountId,
               chatId,
               isGroup: true,
-              threadSpec: resolveTelegramThreadSpec({ isGroup: true }),
+              threadSpec,
+              topicAgentId: topicConfig?.agentId,
             })
           ).route,
           inviterLabel,
@@ -174,6 +188,9 @@ export function createTelegramEventBindings({
             };
           },
         });
+        if (outcome.kind === "failed") {
+          throw new Error(outcome.reason);
+        }
         hold?.release("discard-pending");
         participant?.settle({ kind: "completed" });
       } catch (error) {

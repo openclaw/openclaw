@@ -9,6 +9,7 @@ import type {
 } from "../../../lib/chat/model-select-state.ts";
 import type { ChatThinkingSelectState } from "../../../lib/chat/thinking.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import type { ChatAccessProgramControlProps } from "./chat-access-program-control.tsx";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import { createChatPickerOverlay } from "./chat-picker-overlay.ts";
 
@@ -19,6 +20,7 @@ const ChatEffortPickerPanel = lazy(() => import("./chat-effort-picker-panel.tsx"
 });
 
 export type ChatEffortPickerParams = {
+  accessProgram?: ChatAccessProgramControlProps;
   disabled: boolean;
   disabledReason?: string;
   fastMode: ChatFastModeSelectState;
@@ -49,6 +51,7 @@ export function ChatEffortPicker(props: ChatEffortPickerParams) {
     const hasThinkingOverride = selection.source === "override";
     const sliderIndex = selection.kind === "anchored" ? selection.index : 0;
     const sliderUnanchored = selection.kind === "unanchored";
+    // A narrowed catalog's first stop must not paint a full maximum-effort track.
     // Binary providers can use a ranked wire value with the display label "On".
     const maximumIndex = sliderStops.findLastIndex(
       (stop) =>
@@ -56,7 +59,11 @@ export function ChatEffortPicker(props: ChatEffortPickerParams) {
         ["minimal", "low", "medium", "high", "xhigh", "max"].includes(stop.value),
     );
     const sliderBoost = (index: number) =>
-      sliderStops[index]?.value === "ultra" ? "ultra" : index === maximumIndex ? "max" : "";
+      sliderStops[index]?.value === "ultra"
+        ? "ultra"
+        : maximumIndex > 0 && index === maximumIndex
+          ? "max"
+          : "";
     const committedBoost = sliderUnanchored ? "" : sliderBoost(sliderIndex);
     const defaultLevelLabel = formatEffortLabel(props.thinking.inherited.displayLabel);
     const reasoningValueText = formatEffortLabel(selection.displayLabel);
@@ -106,9 +113,6 @@ export function ChatEffortPicker(props: ChatEffortPickerParams) {
           : props.fastMode.active
             ? "on"
             : "off";
-    const selectedSpeedIndex = speedOptions.findIndex(
-      (option) => option.value === selectedSpeed && !option.disabled,
-    );
     return {
       sliderStops,
       showReasoning,
@@ -127,15 +131,15 @@ export function ChatEffortPicker(props: ChatEffortPickerParams) {
       triggerTitle,
       speedOptions,
       selectedSpeed,
-      tabbableSpeedIndex:
-        selectedSpeedIndex >= 0
-          ? selectedSpeedIndex
-          : speedOptions.findIndex((option) => !option.disabled),
       onlyStop: sliderStops.length === 1 ? sliderStops[0] : undefined,
       onlyStopSelected: selection.kind === "anchored" && selection.index === 0,
     };
   });
-  const visible = () => props.reserved || view().showReasoning || props.fastMode.supported;
+  const visible = () =>
+    props.reserved ||
+    view().showReasoning ||
+    props.fastMode.supported ||
+    props.accessProgram !== undefined;
   return (
     <Show when={visible()}>
       {(_visible) => {
@@ -234,6 +238,7 @@ export function ChatEffortPicker(props: ChatEffortPickerParams) {
                 <ChatLazyBoundary>
                   <ChatEffortPickerPanel
                     view={view()}
+                    accessProgram={props.accessProgram}
                     fastMode={props.fastMode}
                     sessionKey={props.sessionKey}
                     thinkingDisabled={props.thinkingDisabled}

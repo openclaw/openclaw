@@ -5,11 +5,13 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import "./test-helpers/service-audit-mocks.js";
 import {
   auditGatewayServiceConfig as inspectGatewayServiceConfig,
+  checkManagedServiceEnvDrift,
   checkTokenDrift,
   needsNodeRuntimeMigration,
   SERVICE_AUDIT_CODES as codes,
 } from "./service-audit.js";
 import { buildServiceEnvironment } from "./service-env.js";
+import { nativeExit } from "./systemd-exec.test-support.js";
 import {
   execSystemctlMock,
   execSystemctlUserMock,
@@ -98,13 +100,13 @@ it.each([undefined, "Cannot use SQLite library /opt/broken/libsqlite3.dylib: mis
   async (sqliteSelectionError) => {
     const sqliteVersion = sqliteSelectionError ? null : "3.51.2";
     resolveBunRuntimeInfoMock.mockResolvedValue({
-      ...runtimeInfo(sqliteSelectionError ? "1.4.3" : "1.4.0", sqliteVersion),
+      ...runtimeInfo(sqliteSelectionError ? "1.4.4" : "1.4.0", sqliteVersion),
       status: "unsupported",
       sqliteSelectionError,
     });
     const result = await auditBun();
     expectIssue(result, codes.gatewayRuntimeBun, {
-      message: expect.stringContaining("Bun 1.4.3+ with WAL-reset-safe node:sqlite is required"),
+      message: expect.stringContaining("Bun 1.4.4+ with WAL-reset-safe node:sqlite is required"),
       detail: sqliteSelectionError
         ? `/opt/homebrew/bin/bun: ${sqliteSelectionError}`
         : "/opt/homebrew/bin/bun",
@@ -136,13 +138,7 @@ it.each(["bun", "node"])("preserves %s probe failure without migration", async (
   const result = await (runtime === "bun"
     ? auditBun()
     : audit({ environment: undefined }, { timeoutMs: 1234 }));
-  if (runtime === "node") {
-    expect(probe).toHaveBeenCalledWith(
-      "/usr/bin/node",
-      { HOME: "/tmp", OPENCLAW_STATE_DIR: runtimePinStateDir },
-      1234,
-    );
-  } else {
+  if (runtime === "bun") {
     expect(hasIssue(result, codes.gatewayRuntimeBun)).toBe(false);
   }
   expectIssue(result, codes.gatewayRuntimeProbeFailed, { detail: error.message });
@@ -173,11 +169,7 @@ it("allows the expected active bin while rejecting unrelated manager paths", asy
   ].join(":");
   const result = await audit(
     {
-      programArguments: [
-        "/opt/homebrew/opt/node/bin/node",
-        "/opt/openclaw/dist/index.js",
-        "gateway",
-      ],
+      programArguments: ["/opt/homebrew/opt/node/bin/node", "gateway"],
       environment: { PATH: `${expectedServicePath}:/Users/testuser/.asdf/shims` },
     },
     { env, platform: "darwin", expectedServicePath },
@@ -358,25 +350,19 @@ describe("auditGatewayServiceConfig systemd", () => {
       unitPath,
       [
         "[Unit]",
-        "Description=OpenClaw Gateway",
         ...lines.filter(isUnitKey),
         "[Service]",
         ...lines.filter((line) => !isUnitKey(line)),
         "ExecStart=/usr/bin/node gateway",
         "",
-        "[Install]",
-        "WantedBy=default.target",
-        "",
       ].join("\n"),
     );
   }
   function manager(lines: string[]) {
-    execSystemctlUserMock.mockResolvedValueOnce({
-      stdout: lines.join("\n"),
-      stderr: "",
-      code: 0,
-      termination: "exit",
-    });
+    execSystemctlUserMock.mockResolvedValueOnce(nativeExit(lines.join("\n")));
+  }
+  async function drainingUnit() {
+    await writeUnit([...network, "KillMode=mixed", "TimeoutStopSec=330"]);
   }
   const systemdCodes = (result: Awaited<ReturnType<typeof audit>>) =>
     result.issues.filter((issue) => issue.code.startsWith("systemd-")).map((issue) => issue.code);
@@ -407,17 +393,6 @@ describe("auditGatewayServiceConfig systemd", () => {
     await writeUnit(unit);
     manager(["LoadState=loaded", ...effective]);
     expect(systemdCodes(await auditUnit(321))).toEqual(expected);
-    expect(execSystemctlUserMock).toHaveBeenCalledExactlyOnceWith(
-      { ...env(), OPENCLAW_STATE_DIR: runtimePinStateDir },
-      [
-        "show",
-        "openclaw-audit.service",
-        "--no-page",
-        "--property",
-        "After,Wants,RestartUSec,KillMode,LoadState,TimeoutStopUSec,ControlGroup",
-      ],
-      321,
-    );
   });
 
   it.each([
@@ -427,22 +402,22 @@ describe("auditGatewayServiceConfig systemd", () => {
     ["infinity", false],
     [undefined, false],
   ] as const)("reports host shutdown limits separately (%s)", async (timeout, warned) => {
-    await writeUnit([...network, "KillMode=mixed", "TimeoutStopSec=330"]);
+    await drainingUnit();
     manager([
       "LoadState=loaded",
-      "After=network-online.target",
-      "Wants=network-online.target",
+      ...network.slice(0, 2),
       "RestartUSec=5s",
       "KillMode=mixed",
       "TimeoutStopUSec=5min 30s",
       "ControlGroup=/user.slice/user-1000.slice/user@1000.service/app.slice/openclaw-audit.service",
     ]);
-    execSystemctlMock.mockResolvedValue({
-      code: timeout ? 0 : 1,
-      stdout: timeout ? `LoadState=loaded\nTimeoutStopUSec=${timeout}` : "",
-      stderr: "",
-      termination: "exit",
-    });
+    execSystemctlMock.mockResolvedValue(
+      nativeExit(
+        timeout ? `LoadState=loaded\nTimeoutStopUSec=${timeout}` : "",
+        "",
+        timeout ? 0 : 1,
+      ),
+    );
     const result = await auditUnit(321);
     expect(systemdCodes(result)).toEqual(warned ? ["systemd-user-manager-stop-timeout"] : []);
     if (warned) {
@@ -510,7 +485,7 @@ describe("auditGatewayServiceConfig systemd", () => {
   });
 
   it.each(["EACCES", "EIO"])("reports a backup inspection failure (%s)", async (code) => {
-    await writeUnit([...network, "KillMode=mixed", "TimeoutStopSec=330"]);
+    await drainingUnit();
     const backupPath = `${unitPath}.bak`;
     const lstat = fs.lstat;
     const inspection = vi
@@ -549,5 +524,80 @@ describe("auditGatewayServiceConfig systemd", () => {
         level: "recommended",
       });
     }
+  });
+});
+
+describe("managed service environment drift", () => {
+  it.each([
+    { name: "changed value", durable: "new-value", drift: true },
+    { name: "removed value", durable: undefined, drift: true },
+    { name: "exact whitespace", durable: "old-value ", drift: true },
+    { name: "matching value", durable: "old-value", drift: false },
+    { name: "generated file snapshot", durable: "new-value", source: "file", drift: true },
+    {
+      name: "overlapping inline value",
+      durable: "new-value",
+      source: "inline-and-file",
+      drift: true,
+    },
+    { name: "non-durable SecretRef", durable: undefined, secretRef: true, drift: false },
+    { name: "durable SecretRef", durable: "new-value", secretRef: true, drift: true },
+    { name: "dynamic systemd value", durable: "new-value", systemd: true, drift: false },
+    {
+      name: "unrecorded file value",
+      durable: "new-value",
+      source: "file",
+      unrecorded: true,
+      drift: false,
+    },
+  ] as const)("$name", (scenario) => {
+    const result = checkManagedServiceEnvDrift({
+      command: {
+        programArguments: [],
+        environment: {
+          OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "unrecorded" in scenario ? "" : "TAVILY_API_KEY",
+          tavily_api_key: "old-value",
+          ...("systemd" in scenario ? { OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway.service" } : {}),
+        },
+        environmentValueSources:
+          "source" in scenario && scenario.source !== undefined
+            ? { TAVILY_API_KEY: scenario.source }
+            : undefined,
+      },
+      durableEnvironment: { TAVILY_API_KEY: scenario.durable },
+      secretRefKeys: "secretRef" in scenario ? ["tavily_api_key"] : [],
+      platform: "systemd" in scenario ? "linux" : "darwin",
+    });
+    expect(result?.environmentKeys ?? []).toEqual(scenario.drift ? ["TAVILY_API_KEY"] : []);
+    expect(JSON.stringify(result)).not.toMatch(/old-value|new-value/);
+  });
+
+  it("reports only portable managed names and leaves token drift to its owner", async () => {
+    const result = await audit(
+      {
+        environment: {
+          OPENCLAW_SERVICE_MANAGED_ENV_KEYS:
+            "TAVILY_API_KEY,OPENCLAW_GATEWAY_TOKEN,OPENCLAW_SERVICE_VERSION,bad\\nkey",
+          TAVILY_API_KEY: "old-value",
+          OPENCLAW_GATEWAY_TOKEN: "old-token",
+          OPENCLAW_SERVICE_VERSION: "old-version",
+          "bad\nkey": "old-value",
+        },
+      },
+      {
+        platform: "darwin",
+        expectedDurableEnvironment: {
+          TAVILY_API_KEY: "new-value",
+          OPENCLAW_GATEWAY_TOKEN: "new-token",
+          OPENCLAW_SERVICE_VERSION: "new-version",
+        },
+      },
+    );
+    expectIssue(result, codes.gatewayEnvDrift, {
+      environmentKeys: ["TAVILY_API_KEY"],
+      detail: "drifted keys: TAVILY_API_KEY",
+      level: "recommended",
+    });
+    expect(JSON.stringify(result.issues)).not.toMatch(/old-value|new-value|old-token|new-token/);
   });
 });

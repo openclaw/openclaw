@@ -79,7 +79,7 @@ Use explicit recovery to move that selected file out of synchronization without
 losing its bytes:
 
 ```bash
-openclaw sandbox recover --session agent:main:dashboard:example --path .openclaw/tmp/build/archive.tgz
+openclaw sandbox recover --session agent:main:dashboard:example --path artifacts/archive.tgz
 ```
 
 The command routes to the running Gateway with administrator authorization, or
@@ -93,6 +93,11 @@ files, excluded caches, Git metadata, symlinks, and hardlinks are refused. This
 command does not increase limits, change ignore rules, delete files, or reset the
 workspace. Remote-worker workspaces and already-staged reconciliation receipts
 are not supported by this recovery operation.
+
+The checkout-root `.openclaw/tmp/` scratch directory is excluded from workspace
+synchronization, including recovery of older pending results. Toolchains and
+temporary files there stay in the runtime that created them and do not need this
+command. Save files that must synchronize outside that scratch directory.
 
 Recovered files live under
 `<state-dir>/workspace-recovery/<worktree-id>/<recovery-id>/<original-path>`,
@@ -121,8 +126,9 @@ openclaw sandbox explain --agent work
 openclaw sandbox explain --json
 ```
 
-Unlike `recreate --session`, this accepts short session names (for example `main`) and expands them against the resolved agent.
+Unlike `recreate --session`, this accepts short session names (for example `main`) and channel-prefixed aliases (for example `telegram:slash:123`) and expands them against the resolved agent. The `main` alias uses the configured `session.mainKey`.
 An explicit `--agent` is sufficient for multi-agent fleets with no implicit owner; sandbox explanation does not require or guess a default first.
+Channel inference describes the applicable elevated-tool configuration; it does not establish sender authorization.
 
 ## Why recreate is needed
 

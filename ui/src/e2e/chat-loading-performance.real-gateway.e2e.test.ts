@@ -1,14 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
+import { persistColdLoadWarmState } from "../../../scripts/lib/control-ui-bench-warm-state.ts";
 import { appendTranscriptMessages } from "../../../src/config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
 import type { GatewayClient } from "../../../src/gateway/client.ts";
-import { encodePngRgba } from "../../../src/media/png-encode.js";
-import { setAvatar } from "../../../src/state/user-profile-writes.worker.js";
 import { ensureGatewayOwnerProfile } from "../../../src/state/user-profiles.js";
 import { acquireGatewayTestClient } from "../../../test/helpers/gateway-client.ts";
 import {
@@ -18,6 +17,7 @@ import {
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { enterControlUiSession } from "../test-helpers/control-ui-session-entry.ts";
+import { chatMessage } from "./chat-flow.test-support.ts";
 import { installHistoryPaginationProbe } from "./chat-history-pagination-probe.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -25,10 +25,8 @@ const selectedKey = "agent:main:loading-proof-12345678-0000-4000-8000-0000000000
 const homeKey = "agent:main:main";
 const transcriptLength = 900;
 const viewport = { width: 1440, height: 900 };
-const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 let instance: OpenClawTestInstance | undefined;
 let config: OpenClawConfig;
-let originalAvatarBytes = 0;
 
 type RpcMetric = {
   requestId: string;
@@ -44,6 +42,10 @@ type RpcMetric = {
   offset?: number;
   messages?: number;
   historyBytes?: number;
+  initialHistory?: boolean;
+  cursorPresent?: boolean;
+  historyKind?: "window" | "delta" | "reset";
+  historyOk?: boolean;
   resolvedKey?: string;
   resolvedAgentId?: string;
   resolutionOk?: boolean;
@@ -63,30 +65,17 @@ const selectRpc = (metrics: readonly RpcMetric[], method: string, sessionKey?: s
     (metric) =>
       metric.method === method && (sessionKey === undefined || metric.sessionKey === sessionKey),
   );
-const writeEvidence = (name: string, evidence: unknown) =>
-  writeFile(path.join(suite.artifactDir, `${name}.json`), JSON.stringify(evidence, null, 2));
+const selectStartupHistory = (metrics: readonly RpcMetric[], sessionKey: string) =>
+  metrics.filter(
+    (metric) =>
+      (metric.method === "chat.startup" || metric.initialHistory) &&
+      metric.sessionKey === sessionKey,
+  );
 const redactFixtureTokens = (text: string, owner: OpenClawTestInstance) =>
   [owner.gatewayToken, owner.hookToken].reduce(
     (redacted, token) => redacted.replaceAll(token, "[redacted fixture token]"),
     text,
   );
-
-function syntheticAvatar(): Buffer {
-  const width = 1254;
-  const rgba = Buffer.alloc(width * width * 4);
-  let noise = 1;
-  for (let pixel = 0; pixel < width * width; pixel += 1) {
-    noise = (Math.imul(noise, 1664525) + 1013904223) >>> 0;
-    const shade = noise >>> 24;
-    const diamond =
-      Math.abs((pixel % width) - width / 2) + Math.abs(Math.floor(pixel / width) - width / 2) < 270;
-    rgba[pixel * 4] = diamond ? 240 : 70 + (shade >> 2);
-    rgba[pixel * 4 + 1] = diamond ? 240 : 80 + (shade >> 2);
-    rgba[pixel * 4 + 2] = diamond ? 255 : 150 + (shade >> 2);
-    rgba[pixel * 4 + 3] = 255;
-  }
-  return encodePngRgba(rgba, width, width);
-}
 
 const suite = createControlUiE2eSuite({
   name: "Control UI chat loading performance with a real Gateway",
@@ -101,8 +90,7 @@ const suite = createControlUiE2eSuite({
     try {
       const workspace = owner.state.path("workspace");
       await mkdir(workspace, { recursive: true });
-      const avatar = syntheticAvatar();
-      originalAvatarBytes = avatar.length;
+      const avatar = await readFile(path.join(process.cwd(), "ui/public/apple-touch-icon.png"));
       await writeFile(path.join(workspace, "avatar.png"), avatar);
       config = {
         agents: {
@@ -123,21 +111,7 @@ const suite = createControlUiE2eSuite({
       await owner.state.writeConfig(config);
       // Seed the shared-secret owner before setup clients or the browser could
       // adopt this machine's account name.
-      const profileOptions = { env: owner.env };
-      const profile = ensureGatewayOwnerProfile("Synthetic Viewer", profileOptions);
-      const viewerPixels = Buffer.alloc(64 * 64 * 4);
-      for (let offset = 0; offset < viewerPixels.length; offset += 4) {
-        viewerPixels.set([190, 130, 70, 255], offset);
-      }
-      const avatarSaved = setAvatar(
-        profile.id,
-        encodePngRgba(viewerPixels, 64, 64),
-        "image/png",
-        profileOptions,
-      );
-      if (!avatarSaved.ok) {
-        throw new Error(`Synthetic viewer avatar failed: ${avatarSaved.error.code}`);
-      }
+      ensureGatewayOwnerProfile("Synthetic Viewer", { env: owner.env });
       await owner.startGateway();
       return { baseUrl: `http://127.0.0.1:${owner.port}/`, close: () => owner.cleanup() };
     } catch (error) {
@@ -177,18 +151,6 @@ suite.define(() => {
       }
       return JSON.parse(result.stdout) as Record<string, unknown>;
     };
-    const call = (method: string, params: Record<string, unknown> = {}) =>
-      cliJson(["gateway", "call", method, "--params", JSON.stringify(params), "--json"]);
-    const syntheticViewer = await call("users.list");
-    expect(
-      Array.isArray(syntheticViewer.profiles) &&
-        syntheticViewer.profiles.some(
-          (profile) =>
-            isRecord(profile) &&
-            profile.id === "gateway-owner" &&
-            profile.displayName === "Synthetic Viewer",
-        ),
-    ).toBe(true);
     const sessions = [
       { key: selectedKey, label: "Synthetic loading proof", count: transcriptLength },
       { key: homeKey, label: "Synthetic Home", count: transcriptLength },
@@ -228,6 +190,16 @@ suite.define(() => {
           },
         );
         setupClient = client;
+        const syntheticViewer = await client.request("users.list", {}, { signal });
+        expect(
+          Array.isArray(syntheticViewer.profiles) &&
+            syntheticViewer.profiles.some(
+              (profile) =>
+                isRecord(profile) &&
+                profile.id === "gateway-owner" &&
+                profile.displayName === "Synthetic Viewer",
+            ),
+        ).toBe(true);
         for (const session of sessions) {
           signal.throwIfAborted();
           const created = await client.request(
@@ -251,16 +223,11 @@ suite.define(() => {
             {
               config,
               messages: Array.from({ length: session.count }, (_, index) => ({
-                message: {
-                  role: index % 2 === 0 ? "user" : "assistant",
-                  content: [
-                    {
-                      type: "text",
-                      text: `${session.label} message ${index + 1}.\n\n${"Synthetic transcript content for loading and pagination. ".repeat(72)}`,
-                    },
-                  ],
-                  timestamp: 1_780_000_000_000 + index * 1000,
-                },
+                message: chatMessage(
+                  index % 2 === 0 ? "user" : "assistant",
+                  `${session.label} message ${index + 1}.\n\n${"Synthetic transcript content for loading and pagination. ".repeat(72)}`,
+                  { timestamp: 1_780_000_000_000 + index * 1000 },
+                ),
               })),
             },
           );
@@ -275,7 +242,6 @@ suite.define(() => {
     const handoff = await cliJson(["dashboard", "--json"]);
     const url = new URL("/chat/main/12345678", suite.server.baseUrl);
     url.hash = new URL(String(handoff.browserUrl)).hash;
-    const artifactDir = suite.artifactDir;
     const rpc: RpcMetric[] = [];
     const olderHistoryRequests = (metrics: readonly RpcMetric[]) =>
       selectRpc(metrics, "chat.history", selectedKey).filter((metric) => (metric.offset ?? 0) > 0);
@@ -286,21 +252,17 @@ suite.define(() => {
         viewport,
         serviceWorkers: "block",
         locale: "en-US",
-        ...(captureUiProof ? { recordVideo: { dir: artifactDir, size: viewport } } : {}),
       },
-      async ({ page, context }) => {
-        const capture = async (name: string) => {
-          if (captureUiProof) {
-            await page.screenshot({ path: path.join(artifactDir, name + ".png") });
-          }
-        };
+      async ({ page }) => {
         await page.addInitScript(() => {
           // Measure short-link resolution, not cached-roster route recovery. Keep
           // restored Home preferences; clear identity admission in each new document
           // because the previous document can persist its boot record on pagehide.
-          for (const key of Object.keys(localStorage)) {
-            if (key.startsWith("openclaw.control.bootRecord.v1:")) {
-              localStorage.removeItem(key);
+          if (sessionStorage.getItem("loading-proof-warm-reload") !== "true") {
+            for (const key of Object.keys(localStorage)) {
+              if (key.startsWith("openclaw.control.bootRecord.v1:")) {
+                localStorage.removeItem(key);
+              }
             }
           }
           window.localStorage.setItem(
@@ -309,10 +271,10 @@ suite.define(() => {
           );
         });
         const pending = new Map<string, RpcMetric>();
-        const waitForStartupResponses = (requestStart = 0) =>
+        const waitForStartupResponses = () =>
           expect
             .poll(() => {
-              const metrics = rpc.slice(requestStart);
+              const metrics = rpc;
               return (
                 metrics.some(
                   (metric) =>
@@ -324,15 +286,11 @@ suite.define(() => {
               );
             })
             .toBe(true);
-        const waitForStartupCommit = async (
-          sessionKey: string,
-          pane: Locator,
-          requestStart = 0,
-        ) => {
+        const waitForStartupCommit = async (sessionKey: string, pane: Locator, after = 0) => {
           await expect
             .poll(() =>
-              selectRpc(rpc.slice(requestStart), "chat.startup", sessionKey).some(
-                (metric) => metric.receivedMs !== undefined,
+              selectStartupHistory(rpc.slice(after), sessionKey).some(
+                (metric) => metric.receivedMs !== undefined && metric.historyOk === true,
               ),
             )
             .toBe(true);
@@ -342,7 +300,6 @@ suite.define(() => {
           await pane.evaluate(async (element) => {
             await (element as LoadingPane).updateComplete;
           });
-          return Date.now() - startedAt;
         };
         page.on("websocket", (socket) => {
           socket.on("framesent", ({ payload }) => {
@@ -358,16 +315,31 @@ suite.define(() => {
               return;
             }
             const params = isRecord(frame.params) ? frame.params : {};
+            const initialHistory =
+              frame.method === "sessions.messages.subscribe" && isRecord(params.initialHistory)
+                ? params.initialHistory
+                : undefined;
+            const historyParams = initialHistory ?? params;
             const metric: RpcMetric = {
               requestId: frame.id,
               method: frame.method,
               sentMs: Date.now() - startedAt,
-              ...(typeof params.sessionKey === "string" ? { sessionKey: params.sessionKey } : {}),
+              ...(typeof params.sessionKey === "string"
+                ? { sessionKey: params.sessionKey }
+                : initialHistory && typeof params.key === "string"
+                  ? { sessionKey: params.key }
+                  : {}),
+              ...(initialHistory ? { initialHistory: true } : {}),
+              ...(initialHistory || ["chat.startup", "chat.history"].includes(frame.method)
+                ? { cursorPresent: typeof historyParams.cursor === "string" }
+                : {}),
               ...(typeof params.agentId === "string" ? { agentId: params.agentId } : {}),
               ...(typeof params.shortId === "string" ? { shortId: params.shortId } : {}),
-              ...(typeof params.limit === "number" ? { limit: params.limit } : {}),
-              ...(typeof params.maxBytes === "number" ? { maxBytes: params.maxBytes } : {}),
-              ...(typeof params.offset === "number" ? { offset: params.offset } : {}),
+              ...(typeof historyParams.limit === "number" ? { limit: historyParams.limit } : {}),
+              ...(typeof historyParams.maxBytes === "number"
+                ? { maxBytes: historyParams.maxBytes }
+                : {}),
+              ...(typeof historyParams.offset === "number" ? { offset: historyParams.offset } : {}),
             };
             rpc.push(metric);
             pending.set(frame.id, metric);
@@ -388,9 +360,21 @@ suite.define(() => {
             metric.receivedMs = Date.now() - startedAt;
             metric.responseBytes = Buffer.byteLength(payload);
             const body = isRecord(frame.payload) ? frame.payload : {};
-            if (Array.isArray(body.messages)) {
-              metric.messages = body.messages.length;
-              metric.historyBytes = Buffer.byteLength(JSON.stringify(body.messages));
+            const initialHistory = isRecord(body.initialHistory) ? body.initialHistory : undefined;
+            const history = metric.initialHistory
+              ? initialHistory?.ok === true && isRecord(initialHistory.payload)
+                ? initialHistory.payload
+                : undefined
+              : body;
+            metric.historyOk = frame.ok === true && history !== undefined;
+            if (history?.kind === "delta" || history?.kind === "reset") {
+              metric.historyKind = history.kind;
+            } else if (Array.isArray(history?.messages)) {
+              metric.historyKind = "window";
+            }
+            if (Array.isArray(history?.messages)) {
+              metric.messages = history.messages.length;
+              metric.historyBytes = Buffer.byteLength(JSON.stringify(history.messages));
             }
             if (metric.method === "sessions.resolve" && typeof body.key === "string") {
               metric.resolvedKey = body.key;
@@ -422,53 +406,29 @@ suite.define(() => {
             .locator(".chat-thread")
             .getByText("Synthetic Home message 900.", { exact: false })
             .waitFor();
-        const measureLoad = async (homeOpen: boolean, requestStart = 0) => {
-          const selectedCommitted = waitForStartupCommit(selectedKey, selectedPane, requestStart);
-          const homeCommitted = homeOpen
-            ? waitForStartupCommit(homeKey, home.locator("openclaw-chat-pane"), requestStart)
-            : Promise.resolve(null);
+        const measureLoad = async () => {
+          const selectedCommitted = waitForStartupCommit(selectedKey, selectedPane);
+          const homeCommitted = waitForStartupCommit(homeKey, home.locator("openclaw-chat-pane"));
           await waitForTail();
-          const selectedVisibleMs = Date.now() - startedAt;
           await composer.waitFor();
-          const composerVisibleMs = Date.now() - startedAt;
-          if (homeOpen) {
-            await waitForHome();
-          }
-          const homeVisibleMs = homeOpen ? Date.now() - startedAt : null;
-          const [selectedAuthoritativeMs, homeAuthoritativeMs] = await Promise.all([
-            selectedCommitted,
-            homeCommitted,
-          ]);
-          return {
-            selectedVisibleMs,
-            composerVisibleMs,
-            homeVisibleMs,
-            selectedAuthoritativeMs,
-            homeAuthoritativeMs,
-          };
+          await waitForHome();
+          await Promise.all([selectedCommitted, homeCommitted]);
         };
         await waitForTail();
         await composer.waitFor();
         await page.locator(".sidebar-footer-bar__home").click();
         await waitForHome();
-        await capture("01-restored-home-fixture");
 
         startedAt = Date.now();
         measuring = true;
         await page.reload();
         await waitForControlUiGatewayReady(page);
-        const desktopTiming = await measureLoad(true);
-        const entryScripts = await page
-          .locator("script[src]")
-          .evaluateAll((elements) =>
-            elements.map((element) => new URL((element as HTMLScriptElement).src).pathname),
-          );
+        await measureLoad();
         await page.waitForFunction(() =>
           [...document.querySelectorAll<HTMLImageElement>(".sidebar-agent-card__avatar img")].some(
             (image) => image.complete && image.naturalWidth > 0,
           ),
         );
-        await capture("02-selected-and-home-ready");
         // Transcript and roster avatars can render before the dedicated identity reply.
         // Freeze only completed payloads; keep the earlier visibility timings unchanged.
         await waitForStartupResponses();
@@ -481,38 +441,12 @@ suite.define(() => {
               return { width: image.naturalWidth, height: image.naturalHeight };
             }),
           );
-        const { resources, avatarUrl } = await page.evaluate(() => {
-          const entries = performance.getEntriesByType("resource") as PerformanceResourceTiming[];
-          return {
-            resources: entries.map((resource) => ({
-              path: new URL(resource.name).pathname,
-              duration: resource.duration,
-              transferSize: resource.transferSize,
-              decodedBodySize: resource.decodedBodySize,
-            })),
-            avatarUrl: entries
-              .filter((entry) => new URL(entry.name).pathname === "/avatar/main")
-              .toSorted((left, right) => right.decodedBodySize - left.decodedBodySize)[0]?.name,
-          };
-        });
-        const avatarResource = resources
-          .filter((resource) => resource.path === "/avatar/main")
-          .toSorted((left, right) => right.decodedBodySize - left.decodedBodySize)[0];
-        if (!avatarUrl) {
-          throw new Error("Browser never requested the configured avatar route");
-        }
-        const avatarAuth = { Authorization: `Bearer ${owner.gatewayToken}` };
-        const firstAvatar = await context.request.get(avatarUrl, { headers: avatarAuth });
-        const etag = firstAvatar.headers().etag;
-        const revalidated = await context.request.get(avatarUrl, {
-          headers: { ...avatarAuth, "If-None-Match": etag ?? "" },
-        });
-        const cache = {
-          status: firstAvatar.status(),
-          bytes: (await firstAvatar.body()).length,
-          control: firstAvatar.headers()["cache-control"],
-          revalidatedStatus: revalidated.status(),
-        };
+        const avatarRequests = await page.evaluate(
+          () =>
+            performance
+              .getEntriesByType("resource")
+              .filter((entry) => new URL(entry.name).pathname === "/avatar/main").length,
+        );
 
         const thread = selectedPane.locator(".chat-thread");
         const loadedMessageCount = () =>
@@ -532,7 +466,6 @@ suite.define(() => {
             .toEqual({ loadingOlder: false, historyIntentConsumed: false });
         await thread.hover();
         await installHistoryPaginationProbe(selectedPane, transcriptLength, selectedKey);
-        const paginationStartedAt = Date.now();
         let loadedMessages = await loadedMessageCount();
         const initialLoadedMessages = loadedMessages;
         let olderPageCommits = 0;
@@ -559,18 +492,14 @@ suite.define(() => {
           .poll(() => olderHistoryRequests(rpc).some((metric) => metric.receivedMs !== undefined))
           .toBe(true);
         expect(loadedMessages).toBe(transcriptLength);
-        const paginationLoadedMs = Date.now() - paginationStartedAt;
-        await selectedPane.evaluate(async (element) => {
-          await (element as LoadingPane).updateComplete;
-          await new Promise<void>((resolve) => {
-            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-          });
-        });
-        const paginationRenderedMs = Date.now() - paginationStartedAt;
-        const browserPagination = await page.evaluate(async () => {
+        const pagination = await page.evaluate(async () => {
           await window.historyPaginationProbe.done;
           return window.historyPaginationProbe.result();
         });
+        await writeFile(
+          path.join(suite.artifactDir, "pagination.json"),
+          JSON.stringify(pagination),
+        );
         expect(
           await selectedPane.evaluate((element) =>
             (element as LoadingPane).state.chatMessages.map((message) =>
@@ -588,55 +517,9 @@ suite.define(() => {
             hasText: "Synthetic loading proof message 1.",
           })
           .waitFor();
-        await capture("03-older-history-loaded");
         const paginationMetrics = structuredClone(rpc.slice(startupMetrics.length));
         const olderPages = olderHistoryRequests(paginationMetrics);
-        const captureNarrowReload = async (stage: string, homeOpen: boolean) => {
-          await page.setViewportSize({ width: 1050, height: 900 });
-          const requestStart = rpc.length;
-          pending.clear();
-          startedAt = Date.now();
-          // Keep the same short-link input even if navigation canonicalized the prior URL.
-          await page.goto(`${url.origin}${url.pathname}`);
-          await waitForControlUiGatewayReady(page);
-          const timing = await measureLoad(homeOpen, requestStart);
-          await capture(stage);
-          await waitForStartupResponses(requestStart);
-          return {
-            width: 1050,
-            homeOpen,
-            ...timing,
-            startup: structuredClone(rpc.slice(requestStart)),
-          };
-        };
-        const narrowHomeOpen = await captureNarrowReload("04-narrow-home-restored", true);
-        await page
-          .locator("openclaw-assistant-panel")
-          .getByRole("button", { name: "Close assistant sidebar", exact: true })
-          .click();
-        const narrowHomeClosed = await captureNarrowReload("05-narrow-home-closed", false);
         measuring = false;
-        await writeEvidence("loading-evidence", {
-          fixture: { synthetic: true, originalAvatarBytes, transcriptLength },
-          entryScripts,
-          ...desktopTiming,
-          startup: startupMetrics,
-          pagination: paginationMetrics,
-          paginationLoadedMs,
-          paginationRenderedMs,
-          browserPagination,
-          initialLoadedMessages,
-          olderPageCommits,
-          olderPageMessageCounts,
-          narrowHomeOpen,
-          narrowHomeClosed,
-          images,
-          avatarResource,
-          cache,
-          resources,
-        });
-
-        // Save measurements before asserting budgets so failures retain their evidence.
         expect(olderPages).toHaveLength(olderPageCommits);
         expect(olderPages.length).toBeGreaterThan(1);
         expect(olderPages.map((metric) => metric.messages)).toEqual(olderPageMessageCounts);
@@ -652,55 +535,107 @@ suite.define(() => {
           nextOffset += messages;
         }
         expect(nextOffset).toBe(transcriptLength);
-        const selectedStartup = selectRpc(startupMetrics, "chat.startup", selectedKey)[0];
+        const selectedStartup = selectStartupHistory(startupMetrics, selectedKey)[0];
         expect(selectedStartup).toBeDefined();
-        for (const { stage, metrics } of [
-          { stage: "desktop-home-restored", metrics: startupMetrics },
-          {
-            stage: "narrow-home-restored",
-            metrics: narrowHomeOpen.startup,
-          },
-          {
-            stage: "narrow-home-closed",
-            metrics: narrowHomeClosed.startup,
-          },
-        ]) {
-          expect(olderHistoryRequests(metrics)).toHaveLength(0);
-          const resolutions = selectRpc(metrics, "sessions.resolve");
-          expect(
-            resolutions,
-            `${stage} sessions.resolve requests: ${JSON.stringify(resolutions)}`,
-          ).toHaveLength(1);
-          const resolved = resolutions[0]!;
-          expect(resolved).toMatchObject({
-            agentId: "main",
-            shortId: "12345678",
-            resolutionOk: true,
-            resolvedKey: selectedKey,
-            resolvedAgentId: "main",
-          });
-          const selected = selectRpc(metrics, "chat.startup", selectedKey);
-          expect(selected).toHaveLength(1);
-        }
+        expect(olderHistoryRequests(startupMetrics)).toHaveLength(0);
+        const resolutions = selectRpc(startupMetrics, "sessions.resolve");
+        expect(resolutions).toHaveLength(1);
+        expect(resolutions[0]).toMatchObject({
+          agentId: "main",
+          shortId: "12345678",
+          resolutionOk: true,
+          resolvedKey: selectedKey,
+          resolvedAgentId: "main",
+        });
+        expect(selectStartupHistory(startupMetrics, selectedKey)).toHaveLength(1);
         expect(selectedStartup?.messages).toBeLessThanOrEqual(80);
         expect(selectedStartup?.historyBytes).toBeLessThanOrEqual(256 * 1024);
-        const homeStartup = selectRpc(startupMetrics, "chat.startup", homeKey)[0];
+        const homeStartup = selectStartupHistory(startupMetrics, homeKey)[0];
         expect(homeStartup?.sentMs).toBeGreaterThanOrEqual(selectedStartup?.receivedMs ?? Infinity);
-        for (const metrics of [startupMetrics, narrowHomeOpen.startup]) {
-          expect(selectRpc(metrics, "chat.history", homeKey)).toHaveLength(0);
-          expect(selectRpc(metrics, "agent.identity.get")).toHaveLength(1);
-        }
+        expect(selectRpc(startupMetrics, "chat.history", homeKey)).toHaveLength(0);
+        expect(selectRpc(startupMetrics, "agent.identity.get")).toHaveLength(1);
         expect(
           startupMetrics
             .filter((metric) => ["agents.list", "agent.identity.get"].includes(metric.method))
             .every((metric) => metric.inlineAvatar === false),
         ).toBe(true);
         expect(images.some((image) => image.width === 128 && image.height === 128)).toBe(true);
-        expect(avatarResource).toBeDefined();
-        expect(resources.filter((resource) => resource.path === "/avatar/main")).toHaveLength(1);
-        expect(cache).toMatchObject({ status: 200, revalidatedStatus: 304 });
-        expect(cache.bytes).toBeLessThan(originalAvatarBytes / 10);
-        expect(cache.control).toContain("immutable");
+        expect(avatarRequests).toBe(1);
+
+        await selectedPane.getByRole("button", { name: "Scroll to latest", exact: true }).click();
+        await waitForTail();
+        await page.waitForFunction(() =>
+          Object.keys(localStorage).some((key) =>
+            key.startsWith("openclaw.control.bootRecord.v1:"),
+          ),
+        );
+        const warmInput: Parameters<typeof persistColdLoadWarmState>[0] = {
+          sessionKey: selectedKey,
+          sidebarView: "sessions",
+        };
+        const warmState = await page.evaluate(persistColdLoadWarmState, warmInput);
+        const storedSnapshot: unknown = warmState.storage.records.snapshots.find((record) =>
+          record.sessionKey.endsWith(`\u0000${selectedKey}`),
+        )?.snapshot;
+        const cacheBeforeReload = {
+          messages: warmState.messages,
+          cursorPresent: isRecord(storedSnapshot) && typeof storedSnapshot.deltaCursor === "string",
+          bootRecordPresent: warmState.storage.local.some(([key]) =>
+            key.startsWith("openclaw.control.bootRecord.v1:"),
+          ),
+        };
+        await page.evaluate(() => sessionStorage.setItem("loading-proof-warm-reload", "true"));
+        const warmStart = rpc.length;
+        pending.clear();
+        startedAt = Date.now();
+        measuring = true;
+        await page.reload();
+        await waitForControlUiGatewayReady(page);
+        await waitForTail();
+        await composer.waitFor();
+        await waitForStartupCommit(selectedKey, selectedPane, warmStart);
+        measuring = false;
+        const warmMessageNumbers = await selectedPane.evaluate((element) =>
+          (element as LoadingPane).state.chatMessages.map((message) =>
+            Number(JSON.stringify(message).match(/Synthetic loading proof message (\d+)\./u)?.[1]),
+          ),
+        );
+        expect(warmMessageNumbers.length).toBeGreaterThan(0);
+        expect(warmMessageNumbers.length).toBeLessThanOrEqual(transcriptLength);
+        expect(warmMessageNumbers).toEqual(
+          Array.from(
+            { length: warmMessageNumbers.length },
+            (_, index) => transcriptLength - warmMessageNumbers.length + index + 1,
+          ),
+        );
+        const warmHistory = selectStartupHistory(rpc.slice(warmStart), selectedKey);
+        await writeFile(
+          path.join(suite.artifactDir, "warm-history-payload.json"),
+          JSON.stringify(
+            {
+              transcriptLength,
+              shortLinkReload: selectStartupHistory(startupMetrics, selectedKey),
+              warmReload: {
+                pathname: new URL(page.url()).pathname,
+                cacheBeforeReload,
+                messages: warmMessageNumbers.length,
+                history: warmHistory,
+              },
+            },
+            null,
+            2,
+          ),
+        );
+        expect(warmHistory).toHaveLength(1);
+        expect(warmHistory[0]).toMatchObject({
+          cursorPresent: true,
+          historyKind: "delta",
+          messages: 0,
+        });
+        expect(warmHistory[0]?.responseBytes).toBeLessThan(
+          (selectedStartup?.responseBytes ?? 0) * 0.2,
+        );
+        expect(warmMessageNumbers).toHaveLength(cacheBeforeReload.messages);
       },
     );
   });

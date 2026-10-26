@@ -22,6 +22,7 @@ import {
 import type { MemoryManagerProviderFactory } from "./manager-registry.js";
 import { MemoryManagerReindexOps } from "./manager-reindex-ops.js";
 import {
+  canUpgradeMemoryIndexProviderKey,
   resolveConfiguredSourcesForMeta,
   resolveMemoryIndexIdentityState,
 } from "./manager-reindex-state.js";
@@ -99,6 +100,19 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerReindexOps {
       ...(this.acquireLocalService ? { acquireLocalService: this.acquireLocalService } : {}),
       ...request,
     });
+  }
+
+  protected resolveConfiguredFallbackProvider() {
+    const currentProviderId = resolveFallbackCurrentProviderId({
+      provider: this.provider,
+      lifecycle: this.providerLifecycle,
+    });
+    const fallbackRequest = resolveMemoryFallbackProviderRequest({
+      cfg: this.cfg,
+      settings: this.settings,
+      currentProviderId,
+    });
+    return { currentProviderId, fallbackRequest };
   }
 
   private createSyncProgress(
@@ -236,14 +250,11 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerReindexOps {
         ftsTokenizer: this.settings.store.fts.tokenizer,
       });
       if (
-        indexIdentity.status === "valid" &&
-        syncProvider &&
-        meta?.model === syncProvider.model &&
-        meta.providerKey &&
+        meta &&
         syncProviderKey &&
-        meta.providerKey !== syncProviderKey
+        canUpgradeMemoryIndexProviderKey(indexIdentity, meta, syncProviderIdentities)
       ) {
-        // Validate the full legacy identity before retiring its credential-dependent key.
+        // Retire the legacy cache namespace atomically before any chunking rebuild.
         const database = this.database;
         const upgraded = await database.updateIndexStructure(
           { type: "index.upgradeProviderKey", input: { meta, providerKey: syncProviderKey } },
@@ -409,7 +420,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerReindexOps {
       throw err;
     } finally {
       // Ordinary sync exits retain live cleanup, including preflight/no-op exits.
-      // Full rebuild failures (including forced preflight) leave the primary alone.
+      // Full rebuilds finalize their cache with the shadow; preflight failures have no shadow work.
       if (!needsFullReindex) {
         await this.pruneEmbeddingCacheIfNeeded();
       }
@@ -498,15 +509,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerReindexOps {
   }
 
   private async activateFallbackProviderOnce(reason: string): Promise<boolean> {
-    const currentProviderId = resolveFallbackCurrentProviderId({
-      provider: this.provider,
-      lifecycle: this.providerLifecycle,
-    });
-    const fallbackRequest = resolveMemoryFallbackProviderRequest({
-      cfg: this.cfg,
-      settings: this.settings,
-      currentProviderId,
-    });
+    const { currentProviderId, fallbackRequest } = this.resolveConfiguredFallbackProvider();
     if (!fallbackRequest || !currentProviderId) {
       return false;
     }

@@ -11,6 +11,7 @@ import { assertOutboundHandoffCurrent } from "../../infra/outbound/deliver-hando
 import type { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { handleGatewayRequest } from "../server-methods.js";
+import { gatewayConnect } from "../server/client-fixtures.test-support.js";
 import {
   agentRuntimeClientForTests as agentRuntimeClient,
   directCliClientForTests as directCliClient,
@@ -106,13 +107,7 @@ export function registerSendUploadPolicyTests({
             respond,
             context,
             client: {
-              connect: {
-                minProtocol: 1,
-                maxProtocol: 1,
-                role: "operator",
-                scopes: ["operator.admin"],
-                client: { id: "cli", mode: "cli", platform: "test", version: "test" },
-              },
+              connect: gatewayConnect(["operator.admin"], { id: "cli", mode: "cli" }),
             },
             isWebchatConnect: () => false,
           });

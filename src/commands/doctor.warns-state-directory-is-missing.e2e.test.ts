@@ -85,6 +85,16 @@ function hasCodexOAuthWarning(): boolean {
   return terminalNoteMock.mock.calls.some(([, title]) => title === "Codex OAuth");
 }
 
+const GATEWAY_EXEC_SECRET_REF_SKIP_NOTE =
+  "Gateway health checks skipped because gateway credentials use an exec SecretRef.";
+
+function hasGatewayExecSecretRefSkipNote(): boolean {
+  return terminalNoteMock.mock.calls.some(
+    ([message, title]) =>
+      title === "Gateway" && String(message).includes(GATEWAY_EXEC_SECRET_REF_SKIP_NOTE),
+  );
+}
+
 function requireTerminalNote(params: { title?: string; messageIncludes?: string }) {
   const note = terminalNoteMock.mock.calls.find(
     ([message, title]) =>
@@ -112,7 +122,7 @@ describe("doctor command", () => {
     terminalNoteMock.mockClear();
   });
 
-  it("reports when the state directory was missing at doctor start", async () => {
+  it("reports a missing state directory without initializing it", async () => {
     mockDoctorConfigSnapshot();
 
     const missingDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-missing-state-"));
@@ -121,10 +131,12 @@ describe("doctor command", () => {
       await runDoctorNonInteractive();
     });
 
-    requireTerminalNote({
+    const warning = requireTerminalNote({
       title: "State integrity",
-      messageIncludes: "State directory was missing at doctor start",
+      messageIncludes: "CRITICAL: state directory missing",
     });
+    expect(String(warning[0])).toContain(missingDir);
+    expect(fs.existsSync(missingDir)).toBe(false);
   });
 
   it("routes browser readiness through health contributions", async () => {
@@ -256,8 +268,7 @@ describe("doctor command", () => {
     expect(callGateway).not.toHaveBeenCalled();
     requireTerminalNote({
       title: "Gateway",
-      messageIncludes:
-        "Gateway health checks skipped because gateway credentials use an exec SecretRef.",
+      messageIncludes: GATEWAY_EXEC_SECRET_REF_SKIP_NOTE,
     });
   });
 
@@ -276,8 +287,7 @@ describe("doctor command", () => {
     expect(callGateway).not.toHaveBeenCalled();
     requireTerminalNote({
       title: "Gateway",
-      messageIncludes:
-        "Gateway health checks skipped because gateway credentials use an exec SecretRef.",
+      messageIncludes: GATEWAY_EXEC_SECRET_REF_SKIP_NOTE,
     });
   });
 
@@ -296,8 +306,7 @@ describe("doctor command", () => {
     expect(callGateway).not.toHaveBeenCalled();
     requireTerminalNote({
       title: "Gateway",
-      messageIncludes:
-        "Gateway health checks skipped because gateway credentials use an exec SecretRef.",
+      messageIncludes: GATEWAY_EXEC_SECRET_REF_SKIP_NOTE,
     });
   });
 
@@ -316,8 +325,7 @@ describe("doctor command", () => {
     expect(callGateway).not.toHaveBeenCalled();
     requireTerminalNote({
       title: "Gateway",
-      messageIncludes:
-        "Gateway health checks skipped because gateway credentials use an exec SecretRef.",
+      messageIncludes: GATEWAY_EXEC_SECRET_REF_SKIP_NOTE,
     });
   });
 
@@ -339,8 +347,7 @@ describe("doctor command", () => {
     expect(callGateway).not.toHaveBeenCalled();
     requireTerminalNote({
       title: "Gateway",
-      messageIncludes:
-        "Gateway health checks skipped because gateway credentials use an exec SecretRef.",
+      messageIncludes: GATEWAY_EXEC_SECRET_REF_SKIP_NOTE,
     });
   });
 
@@ -356,15 +363,7 @@ describe("doctor command", () => {
 
     await runDoctorNonInteractive();
 
-    const skippedGatewayHealth = terminalNoteMock.mock.calls.some(([message, title]) => {
-      return (
-        title === "Gateway" &&
-        String(message).includes(
-          "Gateway health checks skipped because gateway credentials use an exec SecretRef.",
-        )
-      );
-    });
-    expect(skippedGatewayHealth).toBe(false);
+    expect(hasGatewayExecSecretRefSkipNote()).toBe(false);
   });
 
   it("keeps gateway health probes when env token wins over an exec password ref", async () => {
@@ -377,15 +376,7 @@ describe("doctor command", () => {
 
     await withEnvAsync({ OPENCLAW_GATEWAY_TOKEN: "fallback-token" }, runDoctorNonInteractive);
 
-    const skippedGatewayHealth = terminalNoteMock.mock.calls.some(([message, title]) => {
-      return (
-        title === "Gateway" &&
-        String(message).includes(
-          "Gateway health checks skipped because gateway credentials use an exec SecretRef.",
-        )
-      );
-    });
-    expect(skippedGatewayHealth).toBe(false);
+    expect(hasGatewayExecSecretRefSkipNote()).toBe(false);
   });
 
   it("skips password-mode probes when configured password is an exec SecretRef", async () => {
@@ -403,8 +394,7 @@ describe("doctor command", () => {
     expect(callGateway).not.toHaveBeenCalled();
     requireTerminalNote({
       title: "Gateway",
-      messageIncludes:
-        "Gateway health checks skipped because gateway credentials use an exec SecretRef.",
+      messageIncludes: GATEWAY_EXEC_SECRET_REF_SKIP_NOTE,
     });
   });
 
@@ -422,15 +412,7 @@ describe("doctor command", () => {
 
     await withEnvAsync({ OPENCLAW_GATEWAY_TOKEN: "fallback-token" }, runDoctorNonInteractive);
 
-    const skippedGatewayHealth = terminalNoteMock.mock.calls.some(([message, title]) => {
-      return (
-        title === "Gateway" &&
-        String(message).includes(
-          "Gateway health checks skipped because gateway credentials use an exec SecretRef.",
-        )
-      );
-    });
-    expect(skippedGatewayHealth).toBe(false);
+    expect(hasGatewayExecSecretRefSkipNote()).toBe(false);
   });
 
   it("keeps remote gateway health probes when env password wins over an exec token ref", async () => {
@@ -447,15 +429,7 @@ describe("doctor command", () => {
 
     await withEnvAsync({ OPENCLAW_GATEWAY_PASSWORD: "fallback-password" }, runDoctorNonInteractive);
 
-    const skippedGatewayHealth = terminalNoteMock.mock.calls.some(([message, title]) => {
-      return (
-        title === "Gateway" &&
-        String(message).includes(
-          "Gateway health checks skipped because gateway credentials use an exec SecretRef.",
-        )
-      );
-    });
-    expect(skippedGatewayHealth).toBe(false);
+    expect(hasGatewayExecSecretRefSkipNote()).toBe(false);
   });
 
   it("keeps local gateway health probes when only dormant remote refs use exec", async () => {
@@ -473,14 +447,6 @@ describe("doctor command", () => {
 
     await runDoctorNonInteractive();
 
-    const skippedGatewayHealth = terminalNoteMock.mock.calls.some(([message, title]) => {
-      return (
-        title === "Gateway" &&
-        String(message).includes(
-          "Gateway health checks skipped because gateway credentials use an exec SecretRef.",
-        )
-      );
-    });
-    expect(skippedGatewayHealth).toBe(false);
+    expect(hasGatewayExecSecretRefSkipNote()).toBe(false);
   });
 });

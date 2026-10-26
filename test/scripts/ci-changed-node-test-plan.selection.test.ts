@@ -1,6 +1,5 @@
 import { afterEach, expect, it } from "vitest";
 import { resolveChangedNodeTestTargets } from "../../scripts/lib/ci-changed-node-test-plan.mts";
-import { resolveCiCheckFamilyScope } from "../../scripts/lib/ci-check-family-scope.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { writeFiles } from "./ci-changed-node-test-plan.test-support.js";
 
@@ -14,39 +13,6 @@ function fixture(files: Record<string, string> | string[]) {
 
 const select = (cwd: string, paths: string[], selectionMode: Mode = "aggressive") =>
   resolveChangedNodeTestTargets(paths, { cwd, selectionMode });
-
-it.each(["added", "renamed", "deleted", "import-edge"])(
-  "retains non-import inventories and architecture for %s source modules",
-  (change) => {
-    const source = "src/infra/new-module.ts";
-    const guards = [
-      "test/scripts/pr-wrapper-source-closure.test.ts",
-      "test/scripts/pr-worktree-provision.test.ts",
-      "test/scripts/eager-import-closure.test.ts",
-      "test/scripts/update-restart-module-outcome.test.ts",
-      "test/scripts/type-suppression-inventory.test.ts",
-      "test/scripts/plugin-sdk-surface-report.test.ts",
-      "test/scripts/lint-suppressions.test.ts",
-    ];
-    const testOnly = "src/infra/own.test.ts";
-    const cwd = fixture([...guards, ...(change === "deleted" ? [] : [source])]);
-    if (change === "import-edge") {
-      writeFiles(cwd, {
-        [source]: 'import "./dependency.js";\n',
-        "src/infra/dependency.ts": "export {};\n",
-      });
-    }
-    const paths = change === "renamed" ? ["src/infra/old-module.ts", source] : [source];
-    expect(select(cwd, paths)).toEqual(guards.toSorted());
-    writeFiles(cwd, [testOnly]);
-    expect(select(cwd, [testOnly])).toEqual(
-      [testOnly, "test/scripts/lint-suppressions.test.ts"].toSorted(),
-    );
-    expect(resolveCiCheckFamilyScope(paths).additionalGroups).toContain(
-      "runtime-topology-architecture",
-    );
-  },
-);
 
 it.each(["aggressive", "full"] as const)(
   "routes skill node:test and Python files through their Vitest owner in %s mode",

@@ -100,6 +100,7 @@ function createFixture() {
     );
   let kernel = createKernel();
   const transport: SessionActorTransport = {
+    agentId: options.agentId,
     run(operation, authorize) {
       return runOpenClawAgentWorkerWrite(options, async () => {
         async function execute<Key extends keyof SessionActorOperations>(command: {
@@ -225,7 +226,7 @@ function createFixture() {
       admissions,
       commands,
       fault,
-      seedTransferEntry: () => seedSessionActorOutcomeTransferEntry(fixture),
+      seedTransferEntry: (bytes?: number) => seedSessionActorOutcomeTransferEntry(fixture, bytes),
       readEntry: fixture.read,
       retireGeneration(this: void) {
         epoch += 1;

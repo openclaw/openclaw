@@ -1,4 +1,3 @@
-import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { settlesWithin } from "../shared/settle-within.js";
@@ -23,10 +22,6 @@ export type ChannelHealthMonitor = {
   waitForIdle: () => Promise<void>;
 };
 
-type RestartRecord = {
-  lastRestartAt: number;
-};
-
 export function startChannelHealthMonitor(params: {
   channelManager: ChannelManager;
   scheduler: GatewayScheduler;
@@ -34,7 +29,7 @@ export function startChannelHealthMonitor(params: {
   const { channelManager } = params;
   const scheduler = params.scheduler.scope();
   const cooldownMs = DEFAULT_COOLDOWN_CYCLES * DEFAULT_CHECK_INTERVAL_MS;
-  const restartRecords = new Map<string, RestartRecord>();
+  const lastRestartTimes = new Map<string, number>();
   const startedAt = scheduler.now();
   let stopped = false;
   let abandonInFlightRestart = false;
@@ -44,10 +39,7 @@ export function startChannelHealthMonitor(params: {
   async function runCheckWork() {
     try {
       const now = scheduler.now();
-      if (
-        !isFutureDateTimestampMs(startedAt, { nowMs: now }) &&
-        now - startedAt < DEFAULT_MONITOR_STARTUP_GRACE_MS
-      ) {
+      if (now - startedAt < DEFAULT_MONITOR_STARTUP_GRACE_MS) {
         return;
       }
 
@@ -117,14 +109,7 @@ export function startChannelHealthMonitor(params: {
             continue;
           }
 
-          const record = restartRecords.get(key) ?? {
-            lastRestartAt: 0,
-          };
-
-          if (
-            !isFutureDateTimestampMs(record.lastRestartAt, { nowMs: now }) &&
-            now - record.lastRestartAt <= cooldownMs
-          ) {
+          if (now - (lastRestartTimes.get(key) ?? 0) <= cooldownMs) {
             continue;
           }
 
@@ -132,8 +117,7 @@ export function startChannelHealthMonitor(params: {
 
           log.info(`[${channelId}:${accountId}] health-monitor: restarting (reason: ${reason})`);
 
-          record.lastRestartAt = now;
-          restartRecords.set(key, record);
+          lastRestartTimes.set(key, now);
 
           try {
             if (status.running) {

@@ -3,6 +3,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
 import { getAppSidebarOwner } from "../../components/app-sidebar.tsx";
+import { setSessionsShowPreview } from "../../components/session-organizer-menu.runtime.ts";
 import { rosterActivityStore } from "../../lib/agents/roster-activity-store.ts";
 import {
   createGateway,
@@ -256,7 +257,7 @@ describe("AppSidebar session attention", () => {
   it("shows an unflagged agent status note in the subtitle slot", async () => {
     const { sidebar, dom } = await mountAttention([deploymentRow()]);
 
-    sidebar.sessionOrganizer.setSessionsShowPreview(true);
+    setSessionsShowPreview(sidebar.sessionOrganizer, true);
     await settleLitElement(sidebar);
     expect(sidebar.textContent).toContain("Deploying to staging");
     expect(dom.query('[data-session-attention="agent"]')).toBeNull();

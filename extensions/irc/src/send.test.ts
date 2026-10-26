@@ -186,12 +186,8 @@ describe("IRC outbound and probing", () => {
       ["connect", "dispatch"].map((phase) => ({ kind, sendMessage, phase })),
     ),
   )("cancels $kind sends during $phase", async ({ sendMessage, phase }) => {
-    let resolveConnect!: (client: IrcClient) => void;
-    mocks.connectIrcClient.mockReturnValue(
-      new Promise<IrcClient>((resolve) => {
-        resolveConnect = resolve;
-      }),
-    );
+    const connecting = Promise.withResolvers<IrcClient>();
+    mocks.connectIrcClient.mockReturnValue(connecting.promise);
     mocks.buildIrcConnectOptions.mockImplementation((_account, overrides = {}) => overrides);
     const abort = new AbortController();
     const onPlatformSendDispatch = vi.fn(async () => {
@@ -209,7 +205,7 @@ describe("IRC outbound and probing", () => {
     if (phase === "connect") {
       abort.abort();
     }
-    resolveConnect(client);
+    connecting.resolve(client);
     await expect(pending).rejects.toMatchObject({ name: "AbortError" });
     expect(mocks.buildIrcConnectOptions).toHaveBeenCalledWith(
       expect.anything(),

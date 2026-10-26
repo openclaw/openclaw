@@ -17,6 +17,8 @@ export type ChatSendRetryComparison = {
   lifecycleRevision: string | undefined;
   clientRunId: string;
   submitted: Awaited<ReturnType<typeof readSessionSubmittedInput>>;
+  source?: "pending" | "transcript";
+  messageSeq?: number;
 };
 
 /** Submitted bytes compare input; the caller's current owner still decides replay. */
@@ -29,8 +31,19 @@ export function readChatSendRetryComparison(session: ComparisonSession) {
   return readSessionSubmittedInput(
     { agentId, storePath, sessionKey, sessionId },
     `${clientRunId}:user`,
+    { includeSource: true },
   ).then((submitted): ChatSendRetryComparison => {
-    return { agentId, storePath, sessionKey, sessionId, lifecycleRevision, clientRunId, submitted };
+    return {
+      agentId,
+      storePath,
+      sessionKey,
+      sessionId,
+      lifecycleRevision,
+      clientRunId,
+      submitted: submitted?.message,
+      source: submitted?.source,
+      messageSeq: submitted?.messageSeq,
+    };
   });
 }
 
@@ -68,6 +81,16 @@ export function compareChatSendSubmittedInput(
   // Pre-fingerprint transcripts retain their existing annotation comparison contract.
   const storedMentions = submitted["__openclaw"]?.humanMentions;
   const storedContext = submitted["__openclaw"]?.workContext;
+  const storedText =
+    extractTextFromChatContent(submitted.content, {
+      joinWith: "\n",
+      normalizeText: (text) => text,
+    }) ?? "";
+  // Legacy pending inputs have no raw-request fingerprint. A transformed legacy
+  // message is therefore unverifiable; only identical retained text can acknowledge it.
+  if (comparison?.source === "pending" && storedText !== request.rawMessage) {
+    return "unverifiable";
+  }
   if (
     !request.mentions?.length &&
     !storedMentions?.length &&
@@ -76,11 +99,6 @@ export function compareChatSendSubmittedInput(
   ) {
     return false;
   }
-  const storedText =
-    extractTextFromChatContent(submitted.content, {
-      joinWith: "\n",
-      normalizeText: (text) => text,
-    }) ?? "";
   return (
     storedText !== request.rawMessage ||
     !isDeepStrictEqual(storedMentions ?? [], request.mentions ?? []) ||

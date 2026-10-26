@@ -15,6 +15,8 @@ import {
 import { resolveCronFallbacksOverride } from "../../cron/isolated-agent/run-fallback-policy.js";
 import { resolveCronScheduledToolPolicy } from "../../cron/scheduled-tool-policy.js";
 import { resolveCronRunToolsAllow } from "../../cron/tools-allow.js";
+import { isExecCompletionInputProvenance } from "../../sessions/input-provenance.js";
+import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { AgentFallbackCandidateCommonParams } from "./agent-runner-fallback-cycle.types.js";
 import type { FollowupRun } from "./queue.js";
 import { resolveReplyRunTrigger } from "./reply-turn-kind.js";
@@ -146,6 +148,15 @@ export async function resolveRunModelHasVision(params: {
 /** Project prepared turn facts shared by the CLI and embedded runtime adapters. */
 export function buildFallbackCandidateTurnParams(params: AgentFallbackCandidateCommonParams) {
   const { turn } = params;
+  // Add guidance after queue summarization so overflow cannot discard it.
+  const prompt = isExecCompletionInputProvenance(turn.followupRun.run.inputProvenance)
+    ? `[OpenClaw exec completion]\n${turn.commandBody}\n\n` +
+      "Treat this completion as an internal continuation, not a new user request. " +
+      "Reconcile it with the conversation and continue any outstanding authorized work. " +
+      "Report requested results not yet delivered, meaningful outcome changes, or new unresolved failures, blockers, or decisions. " +
+      "Stay silent for routine output, duplicate or superseded results, and failures already recovered from; do not recap them or announce that nothing changed. " +
+      `If no user-facing update is needed, reply ${SILENT_REPLY_TOKEN} only.`
+    : turn.commandBody;
   return {
     preparedTtsPreferences: turn.opts?.preparedTtsPreferences,
     awaitSessionDiffBaseline: turn.opts?.awaitSessionDiffBaseline,
@@ -159,7 +170,7 @@ export function buildFallbackCandidateTurnParams(params: AgentFallbackCandidateC
     resolvedModelSelection: params.resolvedModelSelection,
     modelRoutingProvenance: params.modelRoutingProvenance,
     modelFallbacksOverride: params.modelFallbacksOverride,
-    prompt: turn.commandBody,
+    prompt,
     finalizePromptForResolvedTools:
       turn.followupRun.run.scheduledAutomation?.finalizePromptForResolvedTools,
     transcriptPrompt: turn.transcriptCommandBody,
@@ -170,6 +181,7 @@ export function buildFallbackCandidateTurnParams(params: AgentFallbackCandidateC
     currentInboundEventKind: turn.followupRun.currentInboundEventKind,
     currentInboundContext: turn.followupRun.currentInboundContext,
     extraSystemPrompt: turn.followupRun.run.extraSystemPrompt,
+    extraSystemPromptTurnContext: turn.followupRun.run.extraSystemPromptTurnContext,
     sourceReplyDeliveryMode: turn.followupRun.run.sourceReplyDeliveryMode,
     ...(turn.followupRun.run.scheduledAutomation ? { requireExplicitMessageTarget: true } : {}),
     cleanupBundleMcpOnRunEnd: turn.opts?.cleanupBundleMcpOnRunEnd,

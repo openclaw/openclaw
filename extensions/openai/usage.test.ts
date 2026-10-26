@@ -22,6 +22,16 @@ function usagePage(results: Record<string, unknown>[]) {
     has_more: false,
   });
 }
+const tokenTotals = (
+  requests: number,
+  inputTokens: number,
+  cacheReadTokens: number,
+  cacheWriteTokens: number,
+  outputTokens: number,
+  totalTokens: number,
+) => ({ requests, inputTokens, cacheReadTokens, cacheWriteTokens, outputTokens, totalTokens });
+const fetchUsage = (token: string, fetchFn: typeof fetch, env = {}) =>
+  fetchOpenAIUsage({ config: {}, env, provider: "openai", token, timeoutMs: 5_000, fetchFn });
 
 async function fetchAdminUsage(
   fetchFn: typeof fetch,
@@ -32,34 +42,45 @@ async function fetchAdminUsage(
   if (!("token" in auth) || !auth.token) {
     throw new Error("expected encoded OpenAI admin token");
   }
-  return await fetchOpenAIUsage({
-    config: {},
-    env: projectId ? { OPENAI_PROJECT_ID: projectId } : {},
-    provider: "openai",
-    token: auth.token,
-    timeoutMs: 5_000,
-    fetchFn,
-  });
+  return await fetchUsage(auth.token, fetchFn, projectId ? { OPENAI_PROJECT_ID: projectId } : {});
 }
 
 describe("OpenAI provider usage", () => {
-  it("does not offer token-sharing credentials to Codex usage or API-key fallback", async () => {
-    const resolveApiKeyFromConfigAndStore = vi.fn();
+  it.each([
+    [
+      "rejects token-sharing credentials",
+      undefined,
+      { token: "test-chatpass-token", authFlow: "chatgpt-token-sharing" },
+      { handled: true },
+    ],
+    [
+      "prefers an explicit admin key over OAuth",
+      "sk-admin-explicit",
+      { token: "oauth-token" },
+      { token: 'openclaw:openai-admin:v1:{"token":"sk-admin-explicit"}' },
+    ],
+    ["does not repurpose inference credentials", undefined, null, { handled: true }],
+  ] as const)("%s", async (_name, adminKey, oauth, expected) => {
+    const resolveApiKeyFromConfigAndStore = vi.fn(() => "sk-proj-inference");
+    const resolveCandidates = vi.fn(async () => ["sk-admin-secretref"]);
     const result = await resolveAuth({
+      config: {
+        models: { providers: { openai: { baseUrl: "https://proxy.example.test/v1", models: [] } } },
+      },
+      env: { OPENAI_ADMIN_KEY: adminKey },
       resolveApiKeyFromConfigAndStore,
-      resolveOAuthToken: async () => ({
-        token: "test-chatpass-token",
-        authFlow: "chatgpt-token-sharing",
-      }),
+      resolveApiKeyCandidatesFromConfigAndStore: resolveCandidates,
+      resolveOAuthToken: async () => oauth,
     });
-    expect(result).toEqual({ handled: true });
+    expect(result).toEqual(expected);
     expect(resolveApiKeyFromConfigAndStore).not.toHaveBeenCalled();
+    expect(resolveCandidates).not.toHaveBeenCalled();
   });
   it.each([
     {
       name: "project costs and cached tokens",
       usage: { input_tokens: 1_000, input_cached_tokens: 400, output_tokens: 250 },
-      expected: [8, 600, 400, 0, 250, 1_250] as const,
+      tokens: tokenTotals(8, 600, 400, 0, 250, 1_250),
       projectId: "proj_test",
     },
     {
@@ -82,7 +103,7 @@ describe("OpenAI provider usage", () => {
         input_cached_image_tokens: 50,
         output_image_tokens: 50,
       },
-      expected: [5, 500, 400, 100, 500, 1_500] as const,
+      tokens: tokenTotals(5, 500, 400, 100, 500, 1_500),
       projectId: undefined,
     },
     {
@@ -93,12 +114,11 @@ describe("OpenAI provider usage", () => {
         output_tokens: 300,
         output_audio_tokens: 300,
       },
-      expected: [5, 200, 0, 0, 300, 500] as const,
+      tokens: tokenTotals(5, 200, 0, 0, 300, 500),
       projectId: undefined,
     },
-  ])("aggregates $name without double-counting", async ({ usage, expected, projectId }) => {
-    const [requests, inputTokens, cacheReadTokens, cacheWriteTokens, outputTokens, totalTokens] =
-      expected;
+  ])("aggregates $name without double-counting", async ({ usage, tokens, projectId }) => {
+    const { requests, totalTokens } = tokens;
     const model = projectId ? "gpt-5.5" : "test-model";
     const costs = projectId
       ? [{ amount: { value: "12.34", currency: "usd" }, line_item: "Responses" }]
@@ -111,36 +131,24 @@ describe("OpenAI provider usage", () => {
         : usagePage([{ ...usage, num_model_requests: requests, model }]),
     );
     const result = await fetchAdminUsage(fetchFn, projectId);
-    const tokens = {
-      requests,
-      inputTokens,
-      cacheReadTokens,
-      cacheWriteTokens,
-      outputTokens,
-      totalTokens,
-    };
-    const history = {
-      daily: [{ date: "2026-07-06", amount: projectId ? 12.34 : 0, ...tokens }],
-      models: [{ name: model, ...tokens }],
-    };
     const summary = `${requests} requests · ${totalTokens.toLocaleString("en-US")} tokens`;
+    expect(result.costHistory?.daily).toEqual([
+      { date: "2026-07-06", amount: projectId ? 12.34 : 0, ...tokens },
+    ]);
+    expect(result.costHistory?.models).toEqual([{ name: model, ...tokens }]);
+    expect(result.summary).toBe(summary);
     if (projectId) {
-      expect(result).toEqual({
-        provider: "openai",
-        displayName: "OpenAI",
-        windows: [],
+      expect(result).toMatchObject({
         plan: "Admin API · proj_test",
         billing: [
           { type: "spend", label: "30-day API spend", amount: 12.34, unit: "USD", period: "30d" },
         ],
         costHistory: {
-          ...history,
           unit: "USD",
           periodDays: 30,
           scope: "Project proj_test",
           categories: [{ name: "Responses", amount: 12.34 }],
         },
-        summary,
       });
       expect(fetchFn).toHaveBeenCalledTimes(2);
       for (const [input, init] of fetchFn.mock.calls) {
@@ -149,10 +157,6 @@ describe("OpenAI provider usage", () => {
         expect(url.searchParams.get("bucket_width")).toBe("1d");
         expect(init?.headers).toMatchObject({ Authorization: "Bearer sk-admin-test" });
       }
-    } else {
-      expect(result.costHistory?.daily).toEqual(history.daily);
-      expect(result.costHistory?.models).toEqual(history.models);
-      expect(result.summary).toBe(summary);
     }
   });
 
@@ -165,20 +169,6 @@ describe("OpenAI provider usage", () => {
     expect(result.error).toBe("Admin API key required");
   });
 
-  it("prefers an explicit admin key over ChatGPT OAuth", async () => {
-    const result = await resolveAuth({
-      config: {
-        models: { providers: { openai: { baseUrl: "https://proxy.example.test/v1", models: [] } } },
-      },
-      env: { OPENAI_ADMIN_KEY: "sk-admin-explicit" },
-      resolveApiKeyFromConfigAndStore: () => "sk-proj-fallback",
-      resolveOAuthToken: async () => ({ token: "oauth-token" }),
-    });
-    expect(result).toEqual({
-      token: 'openclaw:openai-admin:v1:{"token":"sk-admin-explicit"}',
-    });
-  });
-
   it("attaches the ChatGPT account email from the access-token claims", async () => {
     // Assembled parts keep the fixture from reading as a real credential.
     const claims = Buffer.from(
@@ -186,31 +176,13 @@ describe("OpenAI provider usage", () => {
       "utf8",
     ).toString("base64url");
     const accessToken = ["fake-header", claims, "fake-sig"].join(".");
-    const snapshot = await fetchOpenAIUsage({
-      config: {},
-      env: {},
-      provider: "openai",
-      token: accessToken,
-      timeoutMs: 5_000,
-      fetchFn: async () =>
-        Response.json({
-          plan_type: "pro",
-          rate_limit: { primary_window: { limit_window_seconds: 18_000, used_percent: 12 } },
-        }),
-    });
+    const snapshot = await fetchUsage(accessToken, async () =>
+      Response.json({
+        plan_type: "pro",
+        rate_limit: { primary_window: { limit_window_seconds: 18_000, used_percent: 12 } },
+      }),
+    );
     expect(snapshot.accountEmail).toBe("codex@example.com");
     expect(snapshot.windows.length).toBeGreaterThan(0);
-  });
-
-  it("does not repurpose inference credentials for organization usage", async () => {
-    const resolveCandidates = vi.fn(async () => ["sk-admin-secretref"]);
-    const result = await resolveAuth({
-      resolveApiKeyFromConfigAndStore: () => "sk-proj-inference",
-      resolveApiKeyCandidatesFromConfigAndStore: resolveCandidates,
-      resolveOAuthToken: async () => null,
-    });
-
-    expect(result).toEqual({ handled: true });
-    expect(resolveCandidates).not.toHaveBeenCalled();
   });
 });

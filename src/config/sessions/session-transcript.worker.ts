@@ -29,9 +29,21 @@ import type {
   SessionTranscriptWorkerValues,
 } from "./session-transcript-worker.types.js";
 
-const startup: { databaseEngineSelection?: DatabaseEngineSelection } | undefined = workerData;
+const startup:
+  | { databaseEngineSelection?: DatabaseEngineSelection; prewarmHistory?: true }
+  | undefined = workerData;
 if (startup?.databaseEngineSelection) {
   installDatabaseEngineSelection(startup.databaseEngineSelection);
+}
+
+// Pool tasks can choose any idle worker, including one created first for a light read.
+if (startup?.prewarmHistory) {
+  await Promise.all([
+    import("../../gateway/session-history-worker-reader.js"),
+    import("../../gateway/chat-history-page-kernel.js"),
+    import("../../gateway/chat-history-response-page.js"),
+    import("../../gateway/session-history-snapshot.js"),
+  ]);
 }
 
 let releaseReadValidation:
@@ -162,15 +174,6 @@ serveOwnedWorkerTasks(
         };
       }
       if (request.kind === "prewarm") {
-        // Maintenance needs database admission, not a second resident chat presentation graph.
-        if (request.history) {
-          await Promise.all([
-            import("../../gateway/session-history-worker-reader.js"),
-            import("../../gateway/chat-history-page-kernel.js"),
-            import("../../gateway/chat-history-response-page.js"),
-            import("../../gateway/session-history-snapshot.js"),
-          ]);
-        }
         const { withOpenClawAgentDatabaseReadOnly } =
           await import("../../state/openclaw-agent-db-readonly.js");
         const opened = withOpenClawAgentDatabaseReadOnly(() => undefined, {
@@ -298,7 +301,7 @@ serveOwnedWorkerTasks(
           await import("./session-accessor.sqlite-archive-read.js");
         return {
           kind: "session-archive-presence" as const,
-          registered: readTranscriptArchivePresenceInWorker({
+          registered: await readTranscriptArchivePresenceInWorker({
             ...request,
             env: cloneEnvWithPlatformSemantics(request.env),
           }),
@@ -448,14 +451,10 @@ serveOwnedWorkerTasks(
       if (request.kind === "projection-status") {
         const { withOpenClawAgentDatabaseReadOnly } =
           await import("../../state/openclaw-agent-db-readonly.js");
-        const { runSqliteReadSnapshotSync } = await import("../../infra/sqlite-transaction.js");
         const { sessionTranscriptIndexNeedsReconcile } =
           await import("./session-transcript-index.js");
         const result = withOpenClawAgentDatabaseReadOnly(
-          ({ db }) =>
-            runSqliteReadSnapshotSync(db, () =>
-              sessionTranscriptIndexNeedsReconcile(db, request.sessionId),
-            ),
+          ({ db }) => sessionTranscriptIndexNeedsReconcile(db, request.sessionId),
           { ...request.database, env: request.env },
         );
         return result.found && result.value;

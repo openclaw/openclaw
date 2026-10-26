@@ -16,6 +16,12 @@ import {
 } from "./update-authority.test-support.js";
 import { updateNpmInstalledPlugins } from "./update-installed.js";
 
+const pluginId = "budget-fixture";
+const packageInfo = { name: pluginId, openclaw: { extensions: ["./index.js"] } };
+const manifest = { id: pluginId, configSchema: { type: "object" } };
+const readVersion = async (dir: string) =>
+  JSON.parse(await fs.readFile(path.join(dir, "package.json"), "utf8")).version;
+
 // The real command runner still owns timeout, termination and child settlement.
 const npmChildSource = String.raw`
 const fs = require('node:fs');
@@ -26,10 +32,8 @@ const delay = Number(process.argv[4]);
 const event = (kind) => fs.appendFileSync(proof, JSON.stringify({kind, pid: process.pid, command: argv[0], planning: argv.includes('--package-lock-only'), at: Date.now()}) + '\n');
 event('start');
 process.on('SIGTERM', () => { event('terminated'); process.exit(143); });
-const pkg = { name: 'budget-fixture', version: '2.0.0', openclaw: { extensions: ['./index.js'] } };
-if (argv[0] === 'view' && process.argv[5] === 'stall-metadata') {
-  setInterval(() => {}, 1000);
-} else if (argv[0] === 'view' && process.argv[5] === 'first-metadata-miss' && fs.readFileSync(proof, 'utf8').trim().split('\n').map(line => JSON.parse(line)).filter(e => e.kind === 'start' && e.command === 'view').length === 1) {
+const pkg = ${JSON.stringify({ ...packageInfo, version: "2.0.0" })};
+if (argv[0] === 'view' && process.argv[5] === 'first-metadata-miss' && fs.readFileSync(proof, 'utf8').trim().split('\n').map(line => JSON.parse(line)).filter(e => e.kind === 'start' && e.command === 'view').length === 1) {
   event('unavailable');
   process.stderr.write('E404 fixture metadata unavailable');
   process.exitCode = 1;
@@ -42,7 +46,7 @@ if (argv[0] === 'view' && process.argv[5] === 'stall-metadata') {
     fs.mkdirSync(dir, {recursive:true});
     fs.writeFileSync(path.join(process.cwd(), 'package-lock.json'), JSON.stringify({lockfileVersion:3, packages:{'':{dependencies:{'budget-fixture':'2.0.0'}},'node_modules/budget-fixture':{version:'2.0.0'}}}));
     fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify(pkg));
-    fs.writeFileSync(path.join(dir, 'openclaw.plugin.json'), JSON.stringify({id:'budget-fixture', configSchema:{type:'object'}}));
+    fs.writeFileSync(path.join(dir, 'openclaw.plugin.json'), ${JSON.stringify(JSON.stringify(manifest))});
     fs.writeFileSync(path.join(dir, 'index.js'), 'export default {};\n');
     event('complete');
   };
@@ -125,26 +129,19 @@ it.each([
     const larger = scenario.endsWith("larger-explicit");
     const report = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);
     vi.stubEnv("NPM_CONFIG_GLOBALCONFIG", await state.writeText("global-npmrc", ""));
-    const oldPath = state.statePath("extensions", "budget-fixture");
+    const oldPath = state.statePath("extensions", pluginId);
     await state.writeJson("extensions/budget-fixture/package.json", {
-      name: "budget-fixture",
+      ...packageInfo,
       version: "1.0.0",
-      openclaw: { extensions: ["./index.js"] },
     });
-    await state.writeJson("extensions/budget-fixture/openclaw.plugin.json", {
-      id: "budget-fixture",
-      configSchema: { type: "object" },
-    });
+    await state.writeJson("extensions/budget-fixture/openclaw.plugin.json", manifest);
     await state.writeText("extensions/budget-fixture/index.js", "export default {};\n");
     await state.writeJson(
       path.relative(state.stateDir, path.join(state.workspaceDir, "package.json")),
-      {
-        name: "openclaw",
-        version: "2026.9.4",
-      },
+      { name: "openclaw", version: "2026.9.4" },
     );
     const records = {
-      "budget-fixture": {
+      [pluginId]: {
         source: "npm" as const,
         spec: "budget-fixture@latest",
         version: "1.0.0",
@@ -154,8 +151,8 @@ it.each([
     const cfg = {
       plugins: {
         enabled: true,
-        allow: ["budget-fixture"],
-        entries: { "budget-fixture": { enabled: true } },
+        allow: [pluginId],
+        entries: { [pluginId]: { enabled: true } },
       },
     };
     await state.writeConfig(cfg);
@@ -231,14 +228,12 @@ event('complete');\n`,
     });
     const persisted = direct ? {} : await loadInstalledPluginIndexInstallRecords();
     const installedPath = direct
-      ? directResult?.config.plugins?.installs?.["budget-fixture"]?.installPath
-      : persisted["budget-fixture"]?.installPath;
-    const installedVersion = installedPath
-      ? JSON.parse(await fs.readFile(path.join(installedPath, "package.json"), "utf8")).version
-      : undefined;
+      ? directResult?.config.plugins?.installs?.[pluginId]?.installPath
+      : persisted[pluginId]?.installPath;
+    const installedVersion = installedPath ? await readVersion(installedPath) : undefined;
     expect(alive).toEqual([]);
     const expectedOutcome = expect.objectContaining({
-      pluginId: "budget-fixture",
+      pluginId,
       status: expires ? "error" : "updated",
       ...(expires ? { message: expect.stringContaining("timeout") } : {}),
     });
@@ -258,9 +253,7 @@ event('complete');\n`,
       events.some((e) => e.kind === "complete" && e.command === "install" && !e.planning),
     ).toBe(!expires);
     if (expires) {
-      expect(
-        JSON.parse(await fs.readFile(path.join(oldPath, "package.json"), "utf8")).version,
-      ).toBe("1.0.0");
+      expect(await readVersion(oldPath)).toBe("1.0.0");
     }
     const callsFor = (command: string) =>
       fixture.calls.filter(

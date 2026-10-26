@@ -147,6 +147,14 @@ type WorkerNodeBootstrapAccess = {
     tlsFingerprint?: string;
     /** Core-owned POSIX prerequisite script, applied only to Linux before invoking Node. */
     linuxToolchainSetup?: string;
+    /** Optional npm project lock for this exact archive; failure must retain unlocked installation. */
+    installLock?: {
+      url: string;
+      token: string;
+      sha256: string;
+      bytes: number;
+      tlsFingerprint?: string;
+    };
   };
   /** Runtime/enrollment closure, including shutdown; stop this work while preserving its allocation. */
   signal?: AbortSignal;
@@ -478,6 +486,8 @@ export type WorkerProvider = {
   destroy: (lease: {
     leaseId: string;
     profile: WorkerProfile;
+    /** Cancel commands, await their settlement, and reject while teardown remains unconfirmed. */
+    signal?: AbortSignal;
     /**
      * Optional notification that cleanup is accepted and no longer needs the session.
      * The host may reclaim the session, but retains this operation until its promise settles.

@@ -11,18 +11,12 @@ import {
   defaultCommandRunner,
 } from "./crabbox-runtime.js";
 import { runMantisDesktopBrowserSmoke } from "./desktop-browser-smoke.runtime.js";
+import { writeMantisArtifacts } from "./run.test-support.js";
 
-vi.mock("@openclaw/crabbox-provider/cli-runtime-api.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("@openclaw/crabbox-provider/cli-runtime-api.js")>();
-  return {
-    ...actual,
-    ensureManagedCrabboxBinary: vi.fn(async ({ binary }: { binary: string }) => ({
-      binary,
-      version: "999.0.0",
-    })),
-  };
-});
+// mock-isolation: Preserve actual module exports and create a fresh managed-binary mock per suite.
+vi.mock("@openclaw/crabbox-provider/cli-runtime-api.js", async () =>
+  (await import("./run.test-support.js")).mockManagedCrabboxBinary(),
+);
 
 const execFileAsync = promisify(execFile);
 const readText = (file: string) => fs.readFile(file, "utf8");
@@ -52,10 +46,7 @@ describe("mantis desktop browser smoke runtime", () => {
     if (!outputDir) {
       throw new Error("Missing artifact destination");
     }
-    await fs.mkdir(outputDir, { recursive: true });
-    for (const [name, content] of Object.entries(artifacts)) {
-      await fs.writeFile(path.join(outputDir, name), content);
-    }
+    await writeMantisArtifacts(outputDir, artifacts);
   }
 
   beforeEach(async () => {

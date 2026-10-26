@@ -65,6 +65,10 @@ export class MockWebSocket {
       handler({ data: payload });
     }
   }
+
+  emitConnectChallenge(payload: unknown) {
+    this.emitMessage({ type: "event", event: "connect.challenge", payload });
+  }
 }
 
 export function stubWindowGlobals(storage?: ReturnType<typeof createStorageMock>) {

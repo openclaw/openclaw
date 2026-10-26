@@ -670,6 +670,10 @@ it.each(["/openclaw/"])(
           : [`${mount}/assets/shared.js`, ...(route ? [`${mount}/assets/${route}.js`] : [])],
       );
       if (!pathname.startsWith("/share/")) {
+        const links = preloads.map((href) => `<${href}>; rel=modulepreload; crossorigin`);
+        expect(reply.headers.Link, pathname).toEqual(links);
+      }
+      if (!pathname.startsWith("/share/")) {
         expect(body, pathname).toContain(`<script>${script}</script>`);
         const csp = reply.headers["Content-Security-Policy"];
         const hash = createHash("sha256").update(script, "utf8").digest("base64");

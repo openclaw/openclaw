@@ -24,6 +24,7 @@ import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js"
 import * as sqliteWorkerStore from "../infra/sqlite-worker-store.js";
 import { assertAgentDatabaseAdmitted } from "./agent-database-admission.js";
 import { stateNativeProcessEntrypoints } from "./native-process-runtime.test-support.js";
+import { retainAgentDatabase } from "./openclaw-agent-db-borrower.js";
 import {
   createOpenClawAgentDatabaseClaim,
   type OpenClawAgentDatabaseClaim,
@@ -35,7 +36,6 @@ import {
 import {
   closeCachedOpenClawAgentDatabase,
   recordOpenClawAgentDatabaseOpenFailure,
-  retainAgentDatabase,
 } from "./openclaw-agent-db-lifecycle.js";
 import { prepareOpenClawAgentDatabaseRegistrySnapshotRead } from "./openclaw-agent-db-registry-listing.js";
 import {

@@ -225,7 +225,7 @@ openclaw-portals-page[embedded],
   height: var(--session-rail-icon, var(--rail-header-action-glyph-size));
 }
 
-.portals-page--embedded .portals-embedded__identity {
+.portals-page--embedded .portals-embedded__identity.session-panel-rail__identity {
   display: grid;
   gap: 3px;
 }

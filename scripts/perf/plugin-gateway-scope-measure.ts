@@ -129,7 +129,16 @@ const registrations = ["scope-one", "scope-two"].map((pluginId) => {
   assert(instance);
   return { entry, context, instance };
 });
-const gatewayScope = { isWebchatConnect: () => false, pluginRegistry: registry };
+// Match the request fields installed by Gateway method dispatch, including optional fields.
+const gatewayScope = {
+  context: undefined,
+  resolveGatewayContext: () => undefined,
+  client: undefined,
+  signal,
+  hasCurrentClientAuthority: () => true,
+  isWebchatConnect: () => false,
+  pluginRegistry: registry,
+};
 
 async function turn(index: number) {
   const { entry, context } = registrations[index % registrations.length]!;

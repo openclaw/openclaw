@@ -42,7 +42,7 @@ import { resolveCliSessionId } from "./cli-run-recovery.js";
 import { projectCliMessagingDeliveryEvidence } from "./delivery-evidence.js";
 import { hashCliReseedPrompt } from "./reseed-envelope.js";
 import type { ClaudeCliRunDiagnosticLifecycle } from "./run-diagnostics.js";
-import { resolveCliSourceReplyMirror, type PreparedCliRunTerminalReply } from "./terminal-reply.js";
+import { resolveCliSourceReplyMirror, type prepareCliRunTerminalReply } from "./terminal-reply.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./types.js";
 
 const log = createSubsystemLogger("agents/cli-runner");
@@ -83,7 +83,7 @@ export function buildCliReseedReceipt(params: {
 export function buildCliSessionBinding(
   context: PreparedCliRunContext,
   sessionId: string,
-  output: Pick<CliOutput, "resumeCheckpointId">,
+  output: Pick<CliOutput, "resumeCheckpointId" | "terminalInterruption">,
   reseedReceipt?: CliSessionBinding["reseedReceipt"],
 ): CliSessionBinding {
   return {
@@ -107,6 +107,14 @@ export function buildCliSessionBinding(
       ? { mcpResumeHash: context.preparedBackend.mcpResumeHash }
       : {}),
     ...(reseedReceipt ? { reseedReceipt } : {}),
+    ...(context.transcriptCursor && !output.terminalInterruption
+      ? {
+          transcriptCursor: {
+            ...context.transcriptCursor,
+            userEntryId: context.params.userTurnTranscriptRecorder?.getAdmissionReceipt()?.entryId,
+          },
+        }
+      : {}),
   };
 }
 
@@ -473,7 +481,7 @@ export function buildCliDeliveredFailure(params: {
 export function buildCliRunResult(params: {
   context: PreparedCliRunContext;
   output: CliOutput;
-  preparedReply: PreparedCliRunTerminalReply;
+  preparedReply: ReturnType<typeof prepareCliRunTerminalReply>;
   effectiveCliSessionId?: string;
   bindingFlushOk?: boolean;
   assistantTranscriptOwned?: boolean;

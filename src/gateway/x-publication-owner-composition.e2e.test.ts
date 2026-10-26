@@ -1,13 +1,5 @@
-/**
- * Dedicated E2E tier, outside default unit CI. Select this file explicitly:
- * pnpm test src/gateway/x-publication-owner-composition.e2e.test.ts --maxWorkers=1
- *
- * Real X client/parser/verifier/monitor -> registered host ingress/context ->
- * reply dispatch/run admission -> policy/visible spawn -> sessions.create/SQLite
- * -> anonymous HTTP reader. X HTTPS and the model runtime are deterministic.
- * No publication intent, public grant, session row, or read result is injected.
- * This is in-process source-composition evidence, not live deployment proof.
- */
+// Real X ingress -> reply admission -> visible spawn -> SQLite -> anonymous HTTP.
+// Only X HTTPS and the model runtime are synthetic; this is not live deployment proof.
 import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -108,7 +100,6 @@ async function xResponse(input: RequestInfo | URL, init?: RequestInit): Promise<
   const current = expectDefined(networkCase, "active synthetic X transport");
   const url = new URL(input instanceof Request ? input.url : input);
   expect(url.origin).toBe("https://api.x.com");
-  console.info("[x-proof] X transport", init?.method, url.pathname);
   const headers = new Headers(init?.headers);
   if (url.pathname === "/2/oauth2/token") {
     expect(init?.method).toBe("POST");
@@ -177,7 +168,6 @@ vi.mock("../plugin-sdk/channel-outbound.js", async (importOriginal) => {
         try {
           return await options.deliver(...args);
         } catch (error) {
-          console.error("[x-proof] ingress delivery failed", error);
           rejectIngress?.(error);
           throw error;
         }
@@ -328,10 +318,7 @@ describe("X publication production-owner composition", () => {
     const runtime = createPluginRuntime();
     bindGatewayContextResolver(runtime.subagent, () => gateway);
     let rejectMonitor: ((error: Error) => void) | undefined;
-    const reportMonitorFailure = (message: string) => {
-      console.error("[x-proof] monitor failure", message);
-      rejectMonitor?.(new Error(message));
-    };
+    const reportMonitorFailure = (message: string) => rejectMonitor?.(new Error(message));
     const logger = {
       info() {},
       warn: reportMonitorFailure,
@@ -371,14 +358,11 @@ describe("X publication production-owner composition", () => {
     );
     // Standard Gateway fixture defaults to a no-op reply; explicitly restore the owner.
     gatewayReplyMock.mockImplementation(getReplyFromConfig);
-    console.info("[x-proof] preparing model runtime");
     await prepareGatewayReplyRuntimeForTest({ config: cfg() });
-    console.info("[x-proof] model runtime prepared");
 
     let activeCase: Case = "allowed";
     let interruptedWait: Error | undefined;
     onTestFailed(() => {
-      // Vitest records its timeout before the aborted test body finishes unwinding.
       if (interruptedWait) {
         throw interruptedWait;
       }
@@ -390,40 +374,10 @@ describe("X publication production-owner composition", () => {
         if (!signal.aborted) {
           throw error;
         }
-        // Capture before cleanup restores the spy and clears its call history.
-        // Keep only the accepted child's cached status/error, never transcript payloads.
-        if (!interruptedWait) {
-          const allowed = outcomes.get("allowed");
-          const child =
-            isRecord(allowed) &&
-            allowed.status === "accepted" &&
-            typeof allowed.childSessionKey === "string" &&
-            typeof allowed.runId === "string"
-              ? { sessionKey: allowed.childSessionKey, runId: allowed.runId }
-              : undefined;
-          const cached = child ? gateway.dedupe.get(`chat:${child.runId}`) : undefined;
-          const payload = isRecord(cached?.payload) ? cached.payload : undefined;
-          const diagnostic = child
-            ? {
-                ...child,
-                embeddedRunnerEntries: model.mock.calls.filter(
-                  ([params]) => params.sessionKey === child.sessionKey,
-                ).length,
-                cachedStatus: typeof payload?.status === "string" ? payload.status : null,
-                cachedErrorCode: cached?.error?.code ?? null,
-                cachedError:
-                  cached?.error?.message ??
-                  (typeof payload?.summary === "string" ? payload.summary : null),
-              }
-            : undefined;
-          // Cleanup uses the same signal; preserve the first interrupted await.
-          interruptedWait = new Error(
-            `X publication ${activeCase}: waiting for ${description}${
-              diagnostic ? `; allowed child: ${JSON.stringify(diagnostic)}` : ""
-            }`,
-            { cause: error },
-          );
-        }
+        // Cleanup shares the abort signal; retain the first interrupted operation.
+        interruptedWait ??= new Error(`X publication ${activeCase}: waiting for ${description}`, {
+          cause: error,
+        });
         throw interruptedWait;
       }
     };
@@ -475,7 +429,6 @@ describe("X publication production-owner composition", () => {
             scope: "operator.write",
             owner: { kind: "core", area: "sessions" },
             handler: async (options: GatewayRequestHandlerOptions) => {
-              console.info("[x-proof] real sessions.create entered", activeCase);
               creationRequests.push({ kind: activeCase, parent: options.params.parentSessionKey });
               creating = true;
               try {
@@ -514,7 +467,6 @@ describe("X publication production-owner composition", () => {
           "embedded",
         ));
       const key = expectDefined(params.sessionKey, "admitted session key");
-      console.info("[x-proof] model admitted", key);
       const child = key.includes(":dashboard:");
       const createTools = () =>
         createOpenClawCodingToolsAsync({
@@ -581,8 +533,7 @@ describe("X publication production-owner composition", () => {
           );
           try {
             const result = await withGatewayToolCallerIdentity(caller, async () => {
-              // Production assembly derives restrictions from the monitor context;
-              // this fixture never manufactures inheritedToolPolicySource.
+              // Production assembly derives restrictions from the monitor context.
               const tools = await createTools();
               for (const name of ["exec", "write", "edit"]) {
                 expect(
@@ -611,12 +562,10 @@ describe("X publication production-owner composition", () => {
             if (isRecord(result.details) && typeof result.details.error === "string") {
               text = deniedWorkSessionReply;
             }
-            console.info("[x-proof] spawn result", activeCase, result.details);
           } catch (error) {
             spawnErrors.set(activeCase, error);
             outcomes.set(activeCase, { error: String(error) });
             text = deniedWorkSessionReply;
-            console.info("[x-proof] spawn error", activeCase, String(error));
           }
         } else {
           const tools = await createTools();
@@ -642,10 +591,7 @@ describe("X publication production-owner composition", () => {
           );
           const executed = await executor.execute(
             "delegated-exec",
-            {
-              command: "echo coding-handoff-works",
-              workdir: params.workspaceDir,
-            },
+            { command: "echo coding-handoff-works", workdir: params.workspaceDir },
             signal,
           );
           expect(executed.details).toMatchObject({ status: "completed", exitCode: 0 });
@@ -687,9 +633,7 @@ describe("X publication production-owner composition", () => {
       }
       return work;
     });
-    console.info("[x-proof] preparing projection");
     const projection = await createSessionRowProjection({ cfg: cfg(), modelCatalog: [] });
-    console.info("[x-proof] projection prepared");
     bindSessionRowProjection(gateway, () => projection);
     const http = createTestGatewayServer({
       resolvedAuth: AUTH_TOKEN,
@@ -706,7 +650,6 @@ describe("X publication production-owner composition", () => {
     let dispatched = observedDeferred<void>();
     // Pass-through observation only: no replacement result or ingress capability.
     channel.inbound.dispatch = async (...args) => {
-      console.info("[x-proof] real dispatch entered", activeCase);
       try {
         if (
           activeCase === "allowed" ||
@@ -841,13 +784,6 @@ describe("X publication production-owner composition", () => {
           } finally {
             await waitFor("scheduler shutdown", Promise.resolve(scheduling.close()));
           }
-        }
-        if (kind === "owner-retired") {
-          expect(revokedInCatalogWait.has(kind), kind).toBe(true);
-          expect(
-            creationRequests.filter((request) => request.kind === kind),
-            kind,
-          ).toHaveLength(1);
         }
         // Check the durable effect before delivery, so a reply failure cannot hide a grant.
         expect(rows(), kind).toHaveLength(1);

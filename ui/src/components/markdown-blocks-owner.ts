@@ -2,6 +2,7 @@
 import { t } from "../i18n/index.ts";
 import { registerCodeBlocksEnglish } from "../i18n/locales/en-code-blocks.ts";
 import { updateCodeBlockWidthOverflow } from "./markdown-code-blocks.ts";
+import { MarkdownCodeHighlights } from "./markdown-code-highlight.ts";
 import { enhanceMarkdownTables, releaseMarkdownTables } from "./markdown-tables.ts";
 
 registerCodeBlocksEnglish();
@@ -13,6 +14,7 @@ export class MarkdownBlocks {
   private scanPending = false;
   private active = true;
   private disposed = false;
+  private codeHighlights: MarkdownCodeHighlights | undefined;
 
   constructor(private readonly root: HTMLElement) {}
 
@@ -62,11 +64,13 @@ export class MarkdownBlocks {
         }
       }
     }
+    this.codeHighlights?.prune();
   }
 
   update(active: boolean): void {
     this.active = active;
     if (active) {
+      this.codeHighlights?.resume();
       this.scheduleScan();
     } else {
       this.release();
@@ -76,6 +80,7 @@ export class MarkdownBlocks {
   dispose(): void {
     this.disposed = true;
     this.release();
+    this.codeHighlights?.dispose();
   }
 
   private release(): void {
@@ -85,6 +90,7 @@ export class MarkdownBlocks {
     this.pendingBlocks.clear();
     this.resizeObserver.disconnect();
     this.observedNodes.clear();
+    this.codeHighlights?.pause();
     releaseMarkdownTables(this.root);
   }
 
@@ -148,6 +154,9 @@ export class MarkdownBlocks {
       const code = viewport?.querySelector<HTMLElement>("code");
       if (!viewport || !code) {
         continue;
+      }
+      if (code.hasAttribute("data-code-highlight")) {
+        (this.codeHighlights ??= new MarkdownCodeHighlights(root)).sync(wrapper, viewport, code);
       }
       // Short streaming fences gain an Expand control without replacing their
       // wrapper. Bind the control when it appears, not only on the first scan.

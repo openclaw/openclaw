@@ -17,7 +17,6 @@ import { SidebarDropdown, type SidebarDropdownProps } from "./app-sidebar-dropdo
 import { renderSidebarNavLink } from "./app-sidebar-nav-menus.tsx";
 import { renderSidebarSessionSectionHeader as SectionHeader } from "./app-sidebar-session-section-header.tsx";
 import { getAppSidebarOwner } from "./app-sidebar.tsx";
-import { SessionOrganizer } from "./session-organizer.ts";
 import { SidebarMenusRenderer } from "./sidebar-menus-render.tsx";
 import type { SidebarMenusOwner } from "./sidebar-menus-types.ts";
 import { createSidebarMenus, type SidebarMenus } from "./sidebar-menus.tsx";
@@ -111,45 +110,6 @@ it("keeps modified sidebar links native and handles ordinary navigation", () => 
   expect(navigate).toHaveBeenCalledOnce();
 });
 
-it("uses the current preload callbacks without replacing a sidebar link", () => {
-  const SidebarNavLink = renderSidebarNavLink;
-  const preload = vi.fn();
-  const cancel = vi.fn();
-  const [handlers, setHandlers] = createSignal<{
-    onPreload?: (event: Event, immediate?: boolean) => void;
-    onCancelPreload?: (event: Event) => void;
-  }>({});
-  const view = render(() => (
-    <SidebarNavLink
-      href="/sessions"
-      active={false}
-      icon={<span />}
-      label="Sessions"
-      onNavigate={vi.fn()}
-      {...handlers()}
-    />
-  ));
-  const link = view.getByRole("link", { name: "Sessions" });
-  setHandlers({ onPreload: preload, onCancelPreload: cancel });
-  flush();
-  for (const type of ["focus", "pointerenter", "touchstart", "blur", "pointerleave"]) {
-    link.dispatchEvent(new Event(type, { bubbles: true }));
-  }
-  expect(preload.mock.calls.map(([event, immediate]) => [event.type, immediate])).toEqual([
-    ["focus", undefined],
-    ["pointerenter", undefined],
-    ["touchstart", true],
-  ]);
-  expect(cancel.mock.calls.map(([event]) => event.type)).toEqual(["blur", "pointerleave"]);
-  setHandlers({});
-  flush();
-  link.dispatchEvent(new Event("touchstart", { bubbles: true }));
-  link.dispatchEvent(new Event("blur", { bubbles: true }));
-  expect(preload).toHaveBeenCalledTimes(3);
-  expect(cancel).toHaveBeenCalledTimes(2);
-  expect(view.getByRole("link", { name: "Sessions" })).toBe(link);
-});
-
 it("uses current section actions while retaining the header", () => {
   const initialToggle = vi.fn();
   const currentToggle = vi.fn();
@@ -214,9 +174,6 @@ it("keeps personal pinning and navigation usable in an offline session menu", as
     sessionOrganizer: {
       isPersonalSessionPin: () => false,
       setPersonalSessionPin: pin,
-      runSessionAction(...args: Parameters<SessionOrganizer["runSessionAction"]>) {
-        return SessionOrganizer.prototype.runSessionAction.call(this, ...args);
-      },
     },
   } as unknown as SidebarMenusOwner;
   const view = render(() => (

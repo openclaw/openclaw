@@ -295,8 +295,7 @@ export function createGatewayNarrationDelivery(params: {
         if (delay <= 0) {
           flush(client, state);
         } else if (!state.timer) {
-          state.timer = setTimeout(() => flush(client, state), delay);
-          state.timer.unref?.();
+          state.timer = setTimeout(() => flush(client, state), delay).unref();
         }
       }
       return delta;

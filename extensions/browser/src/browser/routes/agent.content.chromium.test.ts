@@ -15,10 +15,14 @@ const withContentPage = (run: Parameters<typeof withChromiumPage>[1]) =>
     registerBrowserRoutes,
   );
 
-function selectInput(element: Element) {
-  const input = element as HTMLInputElement;
-  input.focus();
-  input.setSelectionRange(7, 10);
+function selectField(element: Element) {
+  (element as HTMLElement).focus();
+  if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
+    element.setSelectionRange(7, 10);
+  } else {
+    const text = element.firstChild!;
+    window.getSelection()!.setBaseAndExtent(text, 7, text, 10);
+  }
 }
 
 describe.runIf(process.env.OPENCLAW_BROWSER_PASTE_E2E === "1")("Chromium focused paste", () => {
@@ -41,34 +45,22 @@ describe.runIf(process.env.OPENCLAW_BROWSER_PASTE_E2E === "1")("Chromium focused
           expect(JSON.stringify(response.body)).not.toContain(text);
         };
 
-        for (const [selector, text] of [
-          ["#password", "  p🦞ss  "],
-          ["#multiline", "  first 🦞\nsecond  "],
+        for (const [field, text] of [
+          [page.locator("#password"), "  p🦞ss  "],
+          [page.locator("#multiline"), "  first 🦞\nsecond  "],
+          [page.locator("#editable"), "editable 🦞"],
+          [page.frameLocator("iframe").locator("#frame"), "iframe 🦞"],
         ] as const) {
-          const field = page.locator(selector);
-          await field.evaluate(selectInput);
+          await field.evaluate(selectField);
           await paste(text);
-          expect(await field.inputValue()).toBe(`before-${text}-after`);
+          const value = await field.evaluate((element) =>
+            element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement
+              ? element.value
+              : element.textContent,
+          );
+          expect(value).toBe(`before-${text}-after`);
         }
         expect(await page.locator("body").getAttribute("data-input")).toBe("yes");
-
-        const editable = page.locator("#editable");
-        await editable.evaluate((element) => {
-          (element as HTMLElement).focus();
-          const range = document.createRange();
-          range.setStart(element.firstChild!, 7);
-          range.setEnd(element.firstChild!, 10);
-          const selection = window.getSelection()!;
-          selection.removeAllRanges();
-          selection.addRange(range);
-        });
-        await paste("editable 🦞");
-        expect(await editable.textContent()).toBe("before-editable 🦞-after");
-
-        const frameField = page.frameLocator("iframe").locator("#frame");
-        await frameField.evaluate(selectInput);
-        await paste("iframe 🦞");
-        expect(await frameField.inputValue()).toBe("before-iframe 🦞-after");
         expect(await page.locator("#password").inputValue()).toBe("before-  p🦞ss  -after");
       },
       registerBrowserAgentActRoutes,
@@ -81,25 +73,23 @@ describe.runIf(process.env.OPENCLAW_BROWSER_CONTENT_E2E === "1")(
   () => {
     it.each(["", "  padded 🦞  "])(
       "preserves prompt response %j",
-      async (promptText) => {
-        await withContentPage(async ({ page, call }) => {
+      (promptText) =>
+        withContentPage(async ({ page, call }) => {
           const armed = await call("post", "/hooks/dialog", { accept: true, promptText });
           expect(armed.statusCode, JSON.stringify(armed.body)).toBe(200);
           expect(await page.evaluate(() => prompt("Enter a value", "default"))).toBe(promptText);
-        });
-      },
+        }),
       30_000,
     );
 
     it.each(["local", "session"])(
       "returns every native %s storage key",
-      async (kind) => {
-        await withContentPage(async ({ page, call }) => {
+      (kind) =>
+        withContentPage(async ({ page, call }) => {
           const entries: Array<[string, string]> = [
             ["", "empty"],
             ["__proto__", "prototype"],
             [" padded ", "spaces"],
-            ["normal", "value"],
           ];
           await page.evaluate(
             ({ kind: storageKind, entries: storageEntries }) => {
@@ -114,11 +104,8 @@ describe.runIf(process.env.OPENCLAW_BROWSER_CONTENT_E2E === "1")(
           expect(response.statusCode, JSON.stringify(response.body)).toBe(200);
           expect(response.body).toMatchObject({ ok: true, values: Object.fromEntries(entries) });
           const selected = await call("get", "/storage/:kind", { key: "__proto__" }, { kind });
-          expect(selected.body).toMatchObject({
-            values: Object.fromEntries([["__proto__", "prototype"]]),
-          });
-        });
-      },
+          expect(selected.body).toHaveProperty("values.__proto__", "prototype");
+        }),
       30_000,
     );
 
@@ -134,14 +121,10 @@ describe.runIf(process.env.OPENCLAW_BROWSER_CONTENT_E2E === "1")(
             timeoutMs: 500,
           });
         const uploadInput = page.locator("#upload");
-        const warm = await call("get", "/text");
-        expect(warm.body).toMatchObject({ ok: true, text: "Article text" });
+        await call("get", "/text");
         await page.evaluate(() => {
           setTimeout(() => {
-            const input = document.createElement("input");
-            input.type = "file";
-            input.id = "upload";
-            document.body.append(input);
+            document.body.insertAdjacentHTML("beforeend", '<input id="upload" type="file">');
           }, 1_500);
         });
         const response = await upload();

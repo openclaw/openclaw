@@ -30,8 +30,7 @@ export async function readSessionCatalogJsonlActivity(params: {
     if (hasErrnoCode(error, "ENOENT")) {
       return { kind: "missing", sessionKey: probe.sessionKey };
     }
-    // An inaccessible transcript is not evidence that its upstream link was
-    // removed. Keep the probe retryable, but make the persistent failure visible.
+    // An inaccessible transcript must remain retryable without silently hiding the failure.
     log.warn(
       `failed to read session catalog transcript ${filePath}: ${String(error)}. ` +
         "Check that the transcript path exists and the Gateway can read it; the probe will retry automatically.",

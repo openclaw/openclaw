@@ -118,7 +118,7 @@ export class DraftGatewayState {
     }
     const request = new AbortController();
     this.gatewayNameRequest = request;
-    void readSystemInfo(gateway, request.signal, { fresh: true })
+    void readSystemInfo(gateway, request.signal)
       .then(({ value: result }) => {
         if (!request.signal.aborted) {
           this.gatewayNameValue =

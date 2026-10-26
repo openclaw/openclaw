@@ -225,28 +225,29 @@ async function readCatalogPageFromEntry(
       ]),
     )
     .digest("base64url");
-  const snapshot = await readCatalogHistoryPage(scope, {
+  let page = await readCatalogHistoryPage(scope, {
     offset: 0,
-    maxMessages: 1,
+    maxMessages: cursor ? 1 : params.limit + 1,
   });
+  const { totalMessages, displaySource } = page;
   if (
     cursor &&
     (cursor.scope !== scopeHash ||
-      cursor.source !== snapshot.displaySource ||
-      cursor.anchor.seq > snapshot.totalMessages ||
-      cursor.before > snapshot.totalMessages)
+      cursor.source !== displaySource ||
+      cursor.anchor.seq > totalMessages ||
+      cursor.before > totalMessages)
   ) {
     throw new Error(
       "Session transcript cursor no longer matches this session; reload the session.",
     );
   }
-  const tail = snapshot.events.at(-1);
+  const tail = page.events.at(-1);
   const anchor = cursor?.anchor ?? (tail ? { seq: tail.seq, eventSeq: tail.eventSeq } : undefined);
   // Appends retain this active-path anchor; leaf rewinds can preserve the rewrite
   // generation, so source hashes alone cannot fence a cursor onto its original branch.
   if (cursor) {
     const anchoredPage = await readCatalogHistoryPage(scope, {
-      offset: snapshot.totalMessages - cursor.anchor.seq,
+      offset: totalMessages - cursor.anchor.seq,
       maxMessages: 1,
     });
     if (anchoredPage.events[0]?.eventSeq !== cursor.anchor.eventSeq) {
@@ -256,7 +257,7 @@ async function readCatalogPageFromEntry(
     }
   }
   const limit = params.limit;
-  let before = cursor?.before ?? snapshot.totalMessages;
+  let before = cursor?.before ?? totalMessages;
   let skip = cursor?.skip ?? 0;
   let scanned = 0;
   const items: SessionCatalogTranscriptItem[] = [];
@@ -265,10 +266,12 @@ async function readCatalogPageFromEntry(
     Awaited<ReturnType<typeof prepareSessionCatalogSourceParticipantProjector>>
   >();
   while (before > 0 && items.length < limit && scanned < MAX_CATALOG_SCAN_MESSAGES) {
-    const page = await readCatalogHistoryPage(scope, {
-      offset: snapshot.totalMessages - before,
-      maxMessages: Math.min(before, limit + 1),
-    });
+    if (cursor || scanned > 0) {
+      page = await readCatalogHistoryPage(scope, {
+        offset: totalMessages - before,
+        maxMessages: Math.min(before, limit + 1),
+      });
+    }
     const projected = projectChatDisplayMessages(page.events.map(sqliteMessageEventWithSeq), {
       maxChars: MAX_CATALOG_TEXT_CHARS,
       // Catalog assistant items contain text/model facts, not forwarded sender labels.
@@ -330,7 +333,7 @@ async function readCatalogPageFromEntry(
           JSON.stringify({
             version: 1,
             scope: scopeHash,
-            source: snapshot.displaySource,
+            source: displaySource,
             anchor,
             before,
             skip,

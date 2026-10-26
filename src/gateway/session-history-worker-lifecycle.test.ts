@@ -21,7 +21,7 @@ import {
 import { prepareSessionEntryPresenceRead } from "../config/sessions/session-entry-presence-read.js";
 import { readSessionHistoryPageInWorker } from "../config/sessions/session-history-worker-runtime.js";
 import {
-  historyClearTimeout,
+  clearDatabaseWorkerIdleRetirement,
   historyLane,
   maintenanceLane,
   rotateDatabaseWorkers,
@@ -148,7 +148,7 @@ afterEach(async () => {
   observed.restoration = undefined;
   await Promise.all(
     [historyLane, maintenanceLane, targetDiscoveryLane].map(async (lane) => {
-      historyClearTimeout(lane.idleTimer);
+      clearDatabaseWorkerIdleRetirement(lane);
       await rotateDatabaseWorkers(lane);
     }),
   );

@@ -7,6 +7,7 @@ import { notifyBrowserAuthRestored } from "../../../app/browser-http.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import { registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
+import { mediaTicketPayload } from "../../../test-helpers/control-ui-attachment-fixtures.ts";
 import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { resolveAssistantAttachmentAvailability } from "./chat-message-attachment-availability.ts";
@@ -218,11 +219,7 @@ function abortableFetch() {
 }
 
 function ticketResponse(mediaTicket: string, expiresInMs = 90_000) {
-  return Response.json({
-    available: true,
-    mediaTicket,
-    mediaTicketExpiresAt: new Date(Date.now() + expiresInMs).toISOString(),
-  });
+  return Response.json(mediaTicketPayload(mediaTicket, expiresInMs));
 }
 
 function createAvailabilityPane(

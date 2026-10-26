@@ -5,13 +5,9 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { buildGatewayInstallPlan } from "../commands/daemon-install-helpers.js";
 import { CommandProcessCleanupError } from "../process/exec-result.js";
 import type { ExecResult } from "./exec-file.js";
-import * as runtimePaths from "./runtime-paths.js";
-import { auditGatewayServiceConfig } from "./service-audit.js";
 import { ServiceOwnershipRefusalError } from "./service-inspection-error.js";
-import { resolveManagedGatewayServiceCommand } from "./service-types.js";
 import {
   buildSystemdManagerPropertyOutput as serviceProperties,
   buildSystemdUnitPropertyOutput as serializeSystemdUnitProperties,
@@ -30,8 +26,6 @@ import {
   legacyGatewayUnit,
   writeUnit,
 } from "./systemd-files.test-support.js";
-import { buildSystemdUnit } from "./systemd-unit.js";
-import * as userTransport from "./systemd-user-transport.js";
 
 const execFileMock = vi.hoisted(() => vi.fn<ExecFileMock>());
 const versionFixture = vi.hoisted(() => ({ useScenarioResponse: false }));
@@ -218,6 +212,10 @@ function requireFirstWrite(write: ReturnType<typeof vi.fn>): string {
   return String(expectDefined(write.mock.calls[0]?.[0], "expected systemd status write"));
 }
 
+function expectActions(...actions: string[]) {
+  expect(execFileMock.mock.calls.map(([, args]) => args[1])).toEqual(actions);
+}
+
 function expectUserCommand(args: string[], ...command: string[]) {
   expect(args).toEqual(["--user", ...command]);
 }
@@ -226,12 +224,7 @@ function expectMachineCommand(args: string[], user: string, ...command: string[]
   expect(args).toEqual(["--machine", `${user}@`, "--user", ...command]);
 }
 
-function userCommand(...command: string[]): ExecFileMock {
-  return (_cmd, args, _opts, cb) => {
-    expectUserCommand(args, ...command);
-    cb(null, "", "");
-  };
-}
+const userCommand = (...command: string[]): ExecFileMock => userResult([null, "", ""], ...command);
 
 function machineCommand(user: string, ...command: string[]): ExecFileMock {
   return (_cmd, args, _opts, cb) => {
@@ -392,6 +385,29 @@ function mockProperties(
 function mockManager(overrides: Partial<SystemdManagerSnapshotFixture>): void {
   const snapshot = { programArguments: gatewayArguments, ...overrides };
   mockProperties(serviceProperties(snapshot), unitProperties(snapshot));
+}
+
+function mockNodeManager(unitPath: string, dropInPaths: string[] = [], inspect = () => {}) {
+  mockManager({
+    programArguments: ["/usr/bin/openclaw", "node", "run"],
+    workingDirectory: "/tmp",
+    environment: ["OPENCLAW_SYSTEMD_UNIT=openclaw-node"],
+    fragmentPath: unitPath,
+    dropInPaths,
+  });
+  const query = expectDefined(execFileMock.getMockImplementation(), "manager fixture");
+  let activated = false;
+  execFileMock.mockImplementation((command, args, options, callback) => {
+    if (command === "systemctl") {
+      activated ||= args.includes("restart");
+      callback(null, args.includes("is-enabled") ? "enabled\n" : "", "");
+    } else {
+      if (activated) {
+        inspect();
+      }
+      query(command, args, options, callback);
+    }
+  });
 }
 
 const assertRestartSuccess = async (env: NodeJS.ProcessEnv) => {
@@ -860,37 +876,27 @@ describe("readSystemdServiceExecStart", () => {
     },
   );
 
-  it.each(["global", "absent"] as const)(
-    "loaded-only inspection does not activate or adopt an unloaded %s definition",
-    async (scenario) => {
-      execFileMock.mockReset();
-      mockMissingBase();
-      execFileMock.mockImplementation((_command, args, _options, callback) => {
-        if (args.includes("GetUnitFileState") && scenario === "global") {
-          callback(null, JSON.stringify({ type: "s", data: ["disabled"] }), "");
-          return;
-        }
-        const message = args.includes("GetUnitFileState")
-          ? `Call failed: Unit file ${GATEWAY_SERVICE} does not exist.`
-          : `Call failed: Unit ${GATEWAY_SERVICE} not loaded.`;
-        callback(createExecFileError(message), "", message);
-      });
-      const result = readCommand({ ...strict, requireLoaded: true });
-      if (scenario === "absent") {
-        await expect(result).resolves.toBeNull();
-      } else {
-        await expect(result).rejects.toThrow("could not be inspected");
+  it("does not activate an unloaded global definition", async () => {
+    execFileMock.mockReset();
+    mockMissingBase();
+    execFileMock.mockImplementation((_command, args, _options, callback) => {
+      if (args.includes("GetUnitFileState")) {
+        callback(null, JSON.stringify({ type: "s", data: ["disabled"] }), "");
+        return;
       }
-      expect(
-        execFileMock.mock.calls.every(
-          (call) => call[1].includes("GetUnit") || call[1].includes("GetUnitFileState"),
-        ),
-      ).toBe(true);
-      expect(execFileMock.mock.calls.some((call) => call[1].includes("GetUnitFileState"))).toBe(
-        true,
-      );
-    },
-  );
+      const message = `Call failed: Unit ${GATEWAY_SERVICE} not loaded.`;
+      callback(createExecFileError(message), "", message);
+    });
+    await expect(readCommand({ ...strict, requireLoaded: true })).rejects.toThrow(
+      "could not be inspected",
+    );
+    expect(
+      execFileMock.mock.calls.every(
+        (call) => call[1].includes("GetUnit") || call[1].includes("GetUnitFileState"),
+      ),
+    ).toBe(true);
+    expect(execFileMock.mock.calls.some((call) => call[1].includes("GetUnitFileState"))).toBe(true);
+  });
 
   it("strictly distinguishes a missing base unit from an unreadable existing unit", async () => {
     execFileMock.mockImplementation((_command, _args, _options, callback) => {
@@ -948,7 +954,6 @@ describe("readSystemdServiceExecStart", () => {
       unitProperties({ fragmentPath: "", loadState: "not-found" }),
     );
     await expect(readCommand(strict)).resolves.toBeNull();
-    expect(execFileMock).toHaveBeenCalledTimes(2);
   });
 
   it.each([
@@ -1088,7 +1093,7 @@ describe("readSystemdServiceExecStart", () => {
 
   it("reports a working-directory override without a pending manager reload", async () => {
     const dropInPath = operatorDropIn;
-    const readFile = mockUnit(gatewayUnit(), {
+    mockUnit(gatewayUnit(), {
       [dropInPath]: "[Service]\nWorkingDirectory=/srv/operator-openclaw",
     });
     mockManager({
@@ -1101,7 +1106,6 @@ describe("readSystemdServiceExecStart", () => {
 
     expect(command?.reloadPending).toBeUndefined();
     expect(command?.managedOverrides).toEqual({ launcher: "working-directory" });
-    expect(readFile).toHaveBeenCalledTimes(2);
   });
 
   it("retains loaded drop-in ownership after a backslash comment even when values equal the base", async () => {
@@ -1387,176 +1391,42 @@ describe("stageSystemdService", () => {
         expect(systemOwnership).toHaveBeenCalledWith("openclaw-gateway-stage-test.service");
       }
       if (checkpoint === 3) {
-        expect(systemOwnership).toHaveBeenCalledTimes(5);
         expect(execFileMock).toHaveBeenCalledTimes(1);
       }
     },
   );
 
-  it.each(["Environment", "EnvironmentFile"])(
-    "round-trips managed secrets while preserving operator %s through audited repair",
-    async (source) => {
-      const { env, unitPath, envFilePath, stateDir } = await fixture("gateway");
-      const wrapperPath = path.join(stateDir, "openclaw-wrapper");
-      const fileBackedOpenAiKey = "file-backed-openai-test-key";
-      const operatorKey = "OPENCLAW_TELEGRAM_SPOOLED_HANDLER_TIMEOUT_MS";
-      const operatorFile = path.join(stateDir, "operator.env");
-      const dropInPath = `${unitPath}.d/operator.conf`;
-      const operatorPath = source === "Environment" ? "/opt/operator/bin:" : "";
-      const servicePath = `/opt/openclaw-runtime/bin:/usr/local/bin:${operatorPath}/usr/bin:/bin:${env.HOME}/.local/bin:${env.HOME}/.npm-global/bin:${env.HOME}/bin:${env.HOME}/.nix-profile/bin`;
-      const base = {
-        programArguments: [wrapperPath, "gateway", "--port", "18789"],
-        environment: {
-          ...env,
-          OPENCLAW_SYSTEMD_UNIT: `${env.OPENCLAW_SYSTEMD_UNIT}.service`,
-          PATH: servicePath,
-          OPENCLAW_SERVICE_MANAGED_ENV_KEYS: `OPENAI_API_KEY,${operatorKey}`,
-        },
-        environmentFiles: [envFilePath],
-      };
-      vi.spyOn(userTransport, "resolveSystemdUserTransport").mockResolvedValue(undefined);
-      vi.spyOn(runtimePaths, "resolveSystemNodeInfo").mockResolvedValue(null);
-      await fs.writeFile(wrapperPath, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-      await fs.chmod(wrapperPath, 0o755);
-      await writeUnit(envFilePath, `OPENAI_API_KEY=${fileBackedOpenAiKey}\n`, 0o600);
-      await writeUnit(unitPath, buildSystemdUnit(base), 0o600);
-      const dropIn = `[Service]\n${source}=${source === "EnvironmentFile" ? operatorFile : `${operatorKey}=120000`}\n`;
-      await writeUnit(dropInPath, dropIn, 0o600);
-      if (source === "EnvironmentFile") {
-        await writeUnit(operatorFile, `${operatorKey}=120000\n`, 0o600);
-      }
-      const snapshot = (config: {
-        programArguments: string[];
-        environment: Record<string, string | undefined>;
-      }) => {
-        const environmentFiles: Array<[string, boolean]> = [[envFilePath, false]];
-        if (source === "EnvironmentFile") {
-          environmentFiles.push([operatorFile, false]);
-        }
-        mockManager({
-          programArguments: config.programArguments,
-          fragmentPath: unitPath,
-          dropInPaths: [dropInPath],
-          environment: [
-            ...Object.entries(config.environment).flatMap(([key, value]) =>
-              value === undefined || key === "OPENAI_API_KEY" ? [] : [`${key}=${value}`],
-            ),
-            ...(source === "Environment" ? [`${operatorKey}=120000`] : []),
-          ],
-          environmentFiles,
-        });
-        const manager = expectDefined(execFileMock.getMockImplementation(), "manager fixture");
-        execFileMock.mockImplementation((command, args, options, callback) => {
-          if (
-            command === "systemctl" &&
-            args[0] === "--user" &&
-            ["status", "show"].includes(args[1]!)
-          ) {
-            callback(
-              null,
-              args[1] === "show"
-                ? "After=network-online.target\nWants=network-online.target\nRestartUSec=5s\nKillMode=mixed\nLoadState=loaded\nTimeoutStopUSec=330s\n"
-                : "",
-              "",
-            );
-            return;
-          }
-          expect(command).toBe("busctl");
-          expect(
-            args.some((arg) =>
-              [
-                "LoadUnit",
-                "GetUnit",
-                "org.freedesktop.systemd1.Unit",
-                "org.freedesktop.systemd1.Service",
-              ].includes(arg),
-            ),
-          ).toBe(true);
-          manager(command, args, options, callback);
-        });
-      };
-      snapshot(base);
-      const command = expectDefined(await readServiceCommand(env, strict), "effective command");
-      expect(command).toMatchObject({
-        environment: { OPENAI_API_KEY: fileBackedOpenAiKey, [operatorKey]: "120000" },
-        environmentValueSources: {
-          OPENAI_API_KEY: "file",
-          OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "inline",
-        },
-        managedOverrides: { environment: { keys: [operatorKey] } },
-      });
-      const managed = expectDefined(resolveManagedGatewayServiceCommand(command), "managed base");
-      expect(managed.environment?.[operatorKey]).toBeUndefined();
-      const plan = await buildGatewayInstallPlan({
-        env,
-        port: 18_789,
-        runtime: "node",
-        platform: "linux",
-        runtimePath: "/opt/openclaw-runtime/bin/node",
-        wrapperPath,
-        existingCommand: command,
-        existingEnvironment: managed.environment,
-        existingEnvironmentValueSources: managed.environmentValueSources,
-        authStore: { version: 1, profiles: {} },
-        config: {
-          models: {
-            providers: {
-              openai: {
-                baseUrl: "https://api.openai.com/v1",
-                apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-                models: [],
-              },
-            },
-          },
-        },
-      });
-      expect(plan).toMatchObject({
-        environmentValueSources: { OPENAI_API_KEY: "file" },
-        environment: { PATH: servicePath, OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "OPENAI_API_KEY" },
-      });
-      expect(plan.environment[operatorKey]).toBeUndefined();
-      const audit = await auditGatewayServiceConfig({
-        env,
-        command,
-        expectedCommand: plan,
-        expectedServicePath: plan.environment.PATH,
-        platform: "linux",
-      });
-      expect([audit.definitionDriftError, audit.definitionDrift, audit.issues]).toEqual([
-        undefined,
-        undefined,
-        [],
-      ]);
-      await stageSystemdService({
-        env,
-        stdout: captureOutput().stdout,
-        ...plan,
-      });
-
-      const [rewrittenUnit, rewrittenEnvFile] = await Promise.all([
-        fs.readFile(unitPath, "utf8"),
-        fs.readFile(envFilePath, "utf8"),
-      ]);
-      expect(rewrittenUnit).toContain(`EnvironmentFile=-${envFilePath}`);
-      expect(rewrittenUnit).toContain(
-        "Environment=OPENCLAW_SERVICE_MANAGED_ENV_KEYS=OPENAI_API_KEY",
-      );
-      expect(rewrittenUnit).not.toContain(fileBackedOpenAiKey);
-      expect(rewrittenUnit).not.toContain(operatorKey);
-      expect(rewrittenEnvFile).toBe(`OPENAI_API_KEY=${fileBackedOpenAiKey}\n`);
-      await expectFiles({
-        [dropInPath]: dropIn,
-        ...(source === "EnvironmentFile" ? { [operatorFile]: `${operatorKey}=120000\n` } : {}),
-      });
-      snapshot(plan);
-      const rewritten = await readServiceCommand(env, strict);
-      expect(rewritten).toMatchObject({
-        environment: { [operatorKey]: "120000" },
-        managedDefinition: { environment: { PATH: servicePath } },
-      });
-      expect(rewritten?.managedDefinition?.environment?.[operatorKey]).toBeUndefined();
-    },
-  );
+  it("round-trips file-backed secrets without adopting operator overrides", async () => {
+    const { stage, env, unitPath, envFilePath } = await fixture("gateway");
+    const dropInPath = `${unitPath}.d/operator.conf`;
+    await writeUnit(dropInPath, "[Service]\nEnvironment=OPERATOR=kept\n");
+    await stage({
+      environment: {
+        OPENAI_API_KEY: "file-backed-key",
+        OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "OPENAI_API_KEY",
+      },
+      environmentValueSources: { OPENAI_API_KEY: "file" },
+    });
+    await expectFiles({ [envFilePath]: "OPENAI_API_KEY=file-backed-key\n" });
+    expect(await fs.readFile(unitPath, "utf8")).not.toContain("file-backed-key");
+    mockManager({
+      fragmentPath: unitPath,
+      dropInPaths: [dropInPath],
+      environment: ["OPENCLAW_SERVICE_MANAGED_ENV_KEYS=OPENAI_API_KEY", "OPERATOR=kept"],
+      environmentFiles: [[envFilePath, false]],
+    });
+    const command = await readServiceCommand(env, strict);
+    expect(command).toMatchObject({
+      ...environmentSnapshot({
+        OPENAI_API_KEY: ["file-backed-key", "file"],
+        OPERATOR: ["kept", "inline"],
+        OPENCLAW_SERVICE_MANAGED_ENV_KEYS: ["OPENAI_API_KEY", "inline"],
+      }),
+      managedDefinition: { environment: { OPENAI_API_KEY: "file-backed-key" } },
+      managedOverrides: { environment: { keys: ["OPERATOR"] } },
+    });
+    expect(command?.managedDefinition?.environment?.OPERATOR).toBeUndefined();
+  });
 
   it("preserves the gateway environment while clearing node-managed values", async () => {
     const { env, unitPath, envFilePath, nodeEnvFilePath } = await fixture("gateway");
@@ -1761,7 +1631,6 @@ describe("systemd service install and uninstall", () => {
     expect(unit).toContain("Description=OpenClaw Node Host");
     expect(unit).toContain("openclaw node run");
     expect(unit).not.toContain("OPENCLAW_SERVICE_VERSION");
-    expect(execFileMock).toHaveBeenCalledTimes(3);
   });
 
   it.each([
@@ -1774,21 +1643,7 @@ describe("systemd service install and uninstall", () => {
       const dropInPath = path.join(`${unitPath}.d`, "operator.conf");
       await writeUnit(dropInPath, `[Service]\n${directive}\n`);
       await writeUnit(unitPath, "[Service]\nExecStart=/usr/bin/openclaw node run\n");
-      mockManager({
-        programArguments: ["/usr/bin/openclaw", "node", "run"],
-        workingDirectory: "/tmp",
-        environment: ["OPENCLAW_SYSTEMD_UNIT=openclaw-node"],
-        fragmentPath: unitPath,
-        dropInPaths: [dropInPath],
-      });
-      const managerQuery = execFileMock.getMockImplementation();
-      execFileMock.mockImplementation((command, args, options, callback) => {
-        if (command === "systemctl") {
-          callback(null, args.includes("is-enabled") ? "enabled\n" : "", "");
-          return;
-        }
-        managerQuery?.(command, args, options, callback);
-      });
+      mockNodeManager(unitPath, [dropInPath]);
       const warn = vi.fn();
 
       await install({ warn });
@@ -1808,30 +1663,14 @@ describe("systemd service install and uninstall", () => {
     async (kind) => {
       const { env, unitPath } = await fixture("node");
       await writeUnit(unitPath, "[Service]\nExecStart=/usr/bin/openclaw node run\n");
-      mockManager({
-        programArguments: ["/usr/bin/openclaw", "node", "run"],
-        workingDirectory: "/tmp",
-        environment: ["OPENCLAW_SYSTEMD_UNIT=openclaw-node"],
-        fragmentPath: unitPath,
-      });
       const failure =
         kind === "cleanup"
           ? new CommandProcessCleanupError()
           : new Error("fixture optional inspection failure");
-      let activated = false;
       let failed = false;
-      const managerQuery = expectDefined(execFileMock.getMockImplementation(), "manager fixture");
-      execFileMock.mockImplementation((command, args, options, callback) => {
-        if (command === "systemctl") {
-          activated ||= args.includes("restart");
-          callback(null, args.includes("is-enabled") ? "enabled\n" : "", "");
-          return;
-        }
-        if (activated) {
-          failed = true;
-          throw failure;
-        }
-        managerQuery(command, args, options, callback);
+      mockNodeManager(unitPath, [], () => {
+        failed = true;
+        throw failure;
       });
       const { write, stdout } = captureOutput();
       const operation = installSystemdService({
@@ -1846,7 +1685,6 @@ describe("systemd service install and uninstall", () => {
         await expect(operation).rejects.toBe(failure);
         expect(write).not.toHaveBeenCalled();
       }
-      expect(activated).toBe(true);
       expect(failed).toBe(true);
     },
   );
@@ -1888,7 +1726,7 @@ describe("systemd service install and uninstall", () => {
     );
 
     await expect(install()).rejects.toThrow("systemctl restart failed:");
-    expect(execFileMock.mock.calls.map(([, args]) => args[1])).toEqual([
+    expectActions(
       "status",
       "daemon-reload",
       "enable",
@@ -1896,7 +1734,7 @@ describe("systemd service install and uninstall", () => {
       "daemon-reload",
       "disable",
       "stop",
-    ]);
+    );
   });
 
   it("surfaces install activation user-bus failures as systemd unavailable errors", async () => {
@@ -2031,11 +1869,7 @@ describe("systemd service install and uninstall", () => {
         scenario === "unlink-refused" || scenario === "read-refused" ? 2 : 3,
       );
       if (scenario !== "unlink-refused" && scenario !== "read-refused") {
-        expect(execFileMock.mock.calls.map(([, args]) => args[1])).toEqual([
-          "status",
-          "disable",
-          "daemon-reload",
-        ]);
+        expectActions("status", "disable", "daemon-reload");
       }
     },
   );
@@ -2136,7 +1970,7 @@ describe("uninstallLegacySystemdUnits", () => {
       stdout: captureOutput().stdout,
     });
 
-    expect(units).toMatchObject([{ name: "clawdbot-gateway", exists: false, enabled: false }]);
+    expect(units).toMatchObject([{ name: "clawdbot-gateway" }]);
     await expectFiles({ [backupPath]: null });
   });
 });

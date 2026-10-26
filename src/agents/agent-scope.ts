@@ -51,6 +51,7 @@ export {
   toAgentEntriesRecord,
   resolveAgentConfig,
   resolveAgentContextLimits,
+  resolveAgentVerboseDefault,
   resolveAgentNativeModelPrimary,
   resolveNativeModelPrimary,
   resolveAgentDir,

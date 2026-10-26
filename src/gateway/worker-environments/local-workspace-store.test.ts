@@ -31,6 +31,10 @@ import * as stateRead from "../../state/openclaw-state-read-operation.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import * as stateWorker from "../../state/openclaw-state-worker-store.js";
 import {
+  executeLocalWorkspaceManifestRead,
+  readLocalWorkspaceManifestRows,
+} from "./local-workspace-manifest-scan.js";
+import {
   createLocalWorkspaceManifestTree,
   localWorkspaceManifestRootReference,
   updateLocalWorkspaceManifestTree,
@@ -204,6 +208,58 @@ it("cancels an accepted manifest read when the workspace lease ends", async () =
     completion.reject(reason);
     expect(await outcome).toMatchObject({ code: "OPENCLAW_STATE_LEASE_ABORTED" });
   }
+});
+
+it("releases encoded inventory at the read boundary and materializes after close", async () => {
+  const database = new DatabaseSync(":memory:");
+  const worktreeId = randomUUID();
+  const records = createLocalWorkspaceManifestTree([
+    { path: "entry.txt", type: "file", mode: 0o644, size: 1, sha256: "a".repeat(64) },
+  ]);
+  const action = { kind: "materialize" as const };
+  const snapshot = (() => {
+    try {
+      mutateProjection(database, worktreeId, {
+        kind: "create",
+        row: localWorkspaceProjectionFixture(worktreeId, root),
+      });
+      mutateProjection(database, worktreeId, {
+        kind: "update",
+        revision: 0,
+        patch: {},
+        manifest: {
+          previousRoot: null,
+          resultingRoot: localWorkspaceManifestRootReference(records, "a".repeat(40)),
+          records: [...records.values()],
+          removed: [],
+          replace: true,
+        },
+      });
+      return readLocalWorkspaceManifestRows(database, { id: worktreeId, revision: 1, action });
+    } finally {
+      database.close();
+    }
+  })();
+  const encoded = new Set([...records.values()].map((record) => JSON.stringify(record)));
+  // Count retained payloads independently of snapshot field names or collection layout.
+  const retainedBytes = (value: unknown): number => {
+    if (typeof value === "string") {
+      return encoded.has(value) ? Buffer.byteLength(value) : 0;
+    }
+    const values = value instanceof Map ? [...value.values()] : Object.values(value ?? {});
+    return values.reduce<number>((bytes, child) => bytes + retainedBytes(child), 0);
+  };
+  expect(retainedBytes(snapshot)).toBe(0);
+  // The read scope is closed: materialization must own all facts, not a live SQLite cursor.
+  const value = await executeLocalWorkspaceManifestRead(snapshot, action);
+  expect(value).toMatchObject({
+    kind: "materialize",
+    rawManifest: JSON.stringify({
+      version: 1,
+      baseCommit: "a".repeat(40),
+      entries: [{ path: "entry.txt", type: "file", mode: 0o644, size: 1, sha256: "a".repeat(64) }],
+    }),
+  });
 });
 
 it("accepts manifest nodes and checkpoint headers atomically and preserves them on rollback", async () => {

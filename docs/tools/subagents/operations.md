@@ -73,6 +73,11 @@ whichever is longer). These retained counts govern `/subagents list`,
 status summaries, descendant completion gating, and per-session concurrency
 checks; they are not proof that an executor is live.
 
+After execution ownership ends, the sweeper can reconcile the child's persisted
+terminal state even if routing metadata remains in memory. The completed result
+then follows normal completion delivery and retry; retained routing metadata does
+not keep the child running.
+
 During a graceful restart or Gateway suspension, lifecycle events from
 already-admitted runs remain tracked through restart preservation and completion
 processing. An already-admitted replacement run can finish refreshing a deferred
@@ -137,7 +142,7 @@ unavailable access policy, and failed settlement writes remain retryable.
 Visible and private requester-settle completions retain their processing outcome
 across restart. A replay of the same frozen child batch acknowledges an already
 completed requester turn without executing or delivering it again. Unfinished
-main-session turns continue through normal restart recovery with the original
+requester turns continue through normal session restart recovery with the original
 operator restrictions. If the original authority is unavailable, the task stays
 owed instead of running with broader permissions.
 
@@ -152,9 +157,15 @@ an already committed completion is reconciled without appending another notice.
 
 An already-admitted completion turn for a yielded nested requester is different
 from an orphaned child launch. Its frozen child-result batch retains the exact
-saved continuation across restart. Registry recovery waits for that owner instead
-of reporting interruption while the same continuation is being replayed. This
-does not authorize automatic relaunch of unrelated interrupted child work.
+saved continuation across restart. Session restart recovery resumes that admitted
+turn even on a sub-agent session, including after a hard crash without a shutdown
+marker. Registry recovery waits for that owner instead of reporting interruption
+while the same continuation is being replayed. Recovery reuses the saved input and
+processing receipt, preserving mailbox order without replaying consumed child
+results. The recovered turn's final reply settles the original registered wake
+and its parent completion, even when recovery uses a new execution ID. A missing
+final reply still records a failure. This does not authorize automatic relaunch
+of unrelated interrupted child work.
 
 Recovery retires superseded requester-transfer generations before restoring the
 remaining claim. The current generation keeps its completion custody; obsolete
@@ -202,8 +213,9 @@ summary. Those rows remain with registry recovery; the session-only orphan repai
 does not compete for their ownership. Ownership changes during a repair and failed
 ownership checks still produce warnings.
 
-Main-session restart recovery excludes sub-agent sessions before resolving their
-stores; retained child recovery stays with the sub-agent registry owner.
+Retained child task recovery stays with the sub-agent registry owner. An admitted
+requester-settle continuation carries its own session recovery claim and remains
+eligible for session restart recovery regardless of the requester's spawn depth.
 
 The parent can inspect a retained child transcript and use `sessions_send` to
 continue that session, or spawn a replacement after confirming the old execution

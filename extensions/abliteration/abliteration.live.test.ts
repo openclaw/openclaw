@@ -1,24 +1,28 @@
 // Abliteration live tests prove text generation and a complete tool-call round trip.
-import {
-  completeSimple,
-  type AssistantMessage,
-  type Model,
-  type Tool,
-} from "openclaw/plugin-sdk/llm";
+import { completeSimple, type Model } from "openclaw/plugin-sdk/llm";
 import { extractNonEmptyAssistantText, isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
-import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
-import { buildAbliterationProvider, ABLITERATION_DEFAULT_MODEL_ID } from "./models.js";
+import {
+  createLiveValueTool,
+  createLiveToolReplayContext,
+  requireLiveToolCall,
+} from "../test-support/live-value-tool.test-support.js";
+import { makeUserMessage } from "../test-support/message-fixtures.test-support.js";
+import { ABLITERATION_DEFAULT_MODEL_REF, buildAbliterationProvider } from "./models.js";
 
 const ABLITERATION_API_KEY = process.env.ABLITERATION_API_KEY?.trim() ?? "";
 const LIVE = isLiveTestEnabled(["ABLITERATION_LIVE_TEST"]) && ABLITERATION_API_KEY.length > 0;
 const describeLive = LIVE ? describe : describe.skip;
 
-function resolveLiveModel(modelId = ABLITERATION_DEFAULT_MODEL_ID): Model<"openai-completions"> {
+function resolveLiveModel(modelId?: string): Model<"openai-completions"> {
   const provider = buildAbliterationProvider();
-  const model = provider.models?.find((entry) => entry.id === modelId);
+  const model = provider.models?.find((entry) =>
+    modelId ? entry.id === modelId : ABLITERATION_DEFAULT_MODEL_REF === `abliteration/${entry.id}`,
+  );
   if (!model) {
-    throw new Error(`Abliteration catalog does not include ${modelId}`);
+    throw new Error(
+      `Abliteration catalog does not include ${modelId ?? ABLITERATION_DEFAULT_MODEL_REF}`,
+    );
   }
   return {
     provider: "abliteration",
@@ -28,31 +32,13 @@ function resolveLiveModel(modelId = ABLITERATION_DEFAULT_MODEL_ID): Model<"opena
   } as Model<"openai-completions">;
 }
 
-function liveEchoTool(): Tool {
-  return {
-    name: "live_echo",
-    description: "Return the supplied value.",
-    parameters: Type.Object(
-      {
-        value: Type.String(),
-      },
-      { additionalProperties: false },
-    ),
-  };
-}
-
-function requireToolCall(message: AssistantMessage) {
-  const toolCall = message.content.find((block) => block.type === "toolCall");
-  if (toolCall?.type !== "toolCall") {
-    throw new Error(`Abliteration live model did not call a tool: ${message.stopReason}`);
-  }
-  return toolCall;
-}
-
 describeLive("abliteration plugin live", () => {
-  it.each([ABLITERATION_DEFAULT_MODEL_ID, "abliterated-model-large-v2"])(
-    "completes a short text request with %s",
-    async (modelId) => {
+  it.each([
+    { label: ABLITERATION_DEFAULT_MODEL_REF, modelId: undefined },
+    { label: "abliterated-model-large-v2", modelId: "abliterated-model-large-v2" },
+  ])(
+    "completes a short text request with $label",
+    async ({ modelId }) => {
       const response = await completeSimple(
         resolveLiveModel(modelId),
         { messages: [{ role: "user", content: "Reply with exactly: ok", timestamp: Date.now() }] },
@@ -67,12 +53,11 @@ describeLive("abliteration plugin live", () => {
   );
   it("completes a tool-call round trip with the default model", async () => {
     const model = resolveLiveModel();
-    const tool = liveEchoTool();
-    const userPrompt = {
-      role: "user" as const,
-      content: "Call live_echo with value abliteration. Do not answer directly.",
-      timestamp: Date.now() - 3,
-    };
+    const tool = createLiveValueTool("live_echo");
+    const userPrompt = makeUserMessage(
+      "Call live_echo with value abliteration. Do not answer directly.",
+      Date.now() - 3,
+    );
     const first = await completeSimple(
       model,
       {
@@ -89,32 +74,13 @@ describeLive("abliteration plugin live", () => {
     if (first.stopReason === "error") {
       throw new Error(first.errorMessage || "Abliteration first turn returned an error");
     }
-    const toolCall = requireToolCall(first);
+    const toolCall = requireLiveToolCall(first, "Abliteration live model did not call a tool: ");
     expect(toolCall.name).toBe("live_echo");
     expect(toolCall.arguments).toEqual({ value: "abliteration" });
 
     const second = await completeSimple(
       model,
-      {
-        messages: [
-          userPrompt,
-          first,
-          {
-            role: "toolResult",
-            toolCallId: toolCall.id,
-            toolName: toolCall.name,
-            content: [{ type: "text", text: "ok" }],
-            isError: false,
-            timestamp: Date.now() - 1,
-          },
-          {
-            role: "user",
-            content: "Reply with exactly: ok",
-            timestamp: Date.now(),
-          },
-        ],
-        tools: [tool],
-      },
+      createLiveToolReplayContext(userPrompt, first, toolCall, tool),
       {
         apiKey: ABLITERATION_API_KEY,
         reasoning: "low",

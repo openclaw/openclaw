@@ -57,6 +57,7 @@ export type ChatDetailsViewProps = {
   nativePresentation?: "desktop" | "mobile";
   mobileHost?: ChatMobileHost;
   mobileBindings?: MobileDetailsBindings;
+  contentPending?: boolean;
   conversationVisible?: boolean;
   conversationMain?: boolean;
   externalTrigger?: boolean;
@@ -133,7 +134,12 @@ export function ChatDetails(props: ChatDetailsViewProps) {
     desktop() && opened() && props.chat?.outputs ? props.chat.retainOutputs : undefined,
   );
   // Load on first presentation, then retain disclosure state while closed.
-  const [sessionOpened] = createSignal<boolean>((previous) => previous === true || opened());
+  // Automatic content follows transcript paint; explicit opens bypass that wait.
+  // After first mount, retain disclosure state while closed or reconnecting.
+  const [sessionOpened] = createSignal<boolean>(
+    (previous) =>
+      previous || (opened() && (!props.contentPending || intent() === "open" || !desktop())),
+  );
   const docked = () => opened() && canDock();
   const surface = document.createElement("div");
   surface.style.display = "contents";
@@ -195,9 +201,6 @@ export function ChatDetails(props: ChatDetailsViewProps) {
     }
     const pane = elements?.pane;
     const frame = elements?.frame;
-    const footerBounds = conversationVisible
-      ? elements?.footer?.getBoundingClientRect()
-      : undefined;
     const bounds = (
       mobile ? (pane ?? frame) : conversationVisible ? frame : (pane ?? host)
     )?.getBoundingClientRect();
@@ -229,12 +232,15 @@ export function ChatDetails(props: ChatDetailsViewProps) {
       frame?.style.setProperty("--chat-details-frame-width", `${dockingWidth}px`);
     }
     setWideEnough(dockingWidth >= DETAILS_DOCK_MIN_WIDTH);
+    if (!open) {
+      return;
+    }
+    const footerBounds = conversationVisible
+      ? elements?.footer?.getBoundingClientRect()
+      : undefined;
     if (isDesktop) {
       // Measure the conversation owner, never the moving Details surface. Its
       // reservation changes the composer width, but not this frame's width.
-      if (!open) {
-        return;
-      }
       const composer = conversationVisible
         ? elements?.getComposerInput?.()?.getBoundingClientRect()
         : undefined;
@@ -504,6 +510,8 @@ export function ChatDetails(props: ChatDetailsViewProps) {
     if (pane && desktop()) {
       layout.observe(pane, { attributes: true, attributeFilter: ["class", "style"] });
     }
+    // Resolve automatic docking before paint, including adaptive panes whose
+    // first ResizeObserver delivery may be delayed in a background tab.
     reposition();
     const stop = [
       listen(window, "resize", reposition),

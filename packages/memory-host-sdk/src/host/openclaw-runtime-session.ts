@@ -26,10 +26,6 @@ export { readTranscriptExportSnapshotReadOnlySync };
 export { readRestoredSessionTranscript } from "../../../../src/config/sessions/session-cold-storage-read.js";
 export { readTranscriptStatsBatchReadOnlyAsync } from "../../../../src/config/sessions/session-transcript-stats-batch.js";
 export { SessionTranscriptColdError } from "../../../../src/config/sessions/session-cold-storage-state.js";
-export {
-  listSessionEntriesCore,
-  listSessionEntriesReadOnly,
-} from "../../../../src/config/sessions/session-accessor.js";
 export { cloneEnvWithPlatformSemantics };
 
 /** Synchronous SDK calls cannot open memory-only session storage. */
@@ -173,12 +169,7 @@ export const readSessionTranscriptCorpusInWorker = bindTranscriptInventory(
   (runtime) => runtime.readSessionTranscriptCorpusInWorker,
 );
 
-export { resolveSessionAgentId } from "../../../../src/agents/agent-scope.js";
-export { stripInternalRuntimeContext } from "../../../../src/agents/internal-runtime-context.js";
-export { isHeartbeatUserMessage } from "../../../../src/auto-reply/heartbeat-filter.js";
-export { HEARTBEAT_PROMPT } from "../../../../src/auto-reply/heartbeat.js";
-export { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
-export { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "../../../../src/auto-reply/tokens.js";
+export { SILENT_REPLY_TOKEN } from "../../../../src/auto-reply/tokens.js";
 export { getRuntimeConfig } from "../../../../src/config/config.js";
 export {
   isCompactionCheckpointTranscriptFileName,
@@ -187,19 +178,12 @@ export {
   parseUsageCountedSessionIdFromFileName,
 } from "../../../../src/config/sessions/artifacts.js";
 export { materializeSessionArchiveForRead } from "../../../../src/config/sessions/archive-compression.js";
-export { canonicalizeMainSessionAlias } from "../../../../src/config/sessions/main-session.js";
-export {
-  listSessionTranscriptArchivesReadOnly,
-  listSessionTranscriptInstances,
-} from "../../../../src/config/sessions/session-history-read.js";
 export { resolveSessionTranscriptsDirForAgent } from "../../../../src/config/sessions/paths.js";
-export type { CanonicalSessionReaderContinuation } from "../../../../src/config/sessions/session-canonical-key.js";
 export type { SessionEntry } from "../../../../src/config/sessions/types.js";
 export {
   parseSqliteSessionFileMarker,
   resolveStorePath,
 } from "../../../../src/plugin-sdk/session-store-runtime.js";
-export { hasInterSessionUserProvenance } from "../../../../src/sessions/input-provenance.js";
 export { onSessionTranscriptUpdate } from "../../../../src/sessions/transcript-events.js";
 export { prepareAssistantTranscriptText } from "../../../../src/shared/chat-message-content.js";
 
@@ -248,10 +232,7 @@ export function extractAgentIdFromSessionPath(absPath: string): string | null {
   }
 }
 
-export {
-  DREAMING_NARRATIVE_RUN_PREFIX,
-  isDreamingNarrativeSessionStoreKey,
-} from "./openclaw-runtime-paths.js";
+export { isDreamingNarrativeSessionStoreKey } from "./openclaw-runtime-paths.js";
 
 export const readSessionResetRecallCutoffInWorker = bindTranscriptRead(
   (runtime) => runtime.readSessionResetRecallCutoffInWorker,

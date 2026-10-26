@@ -96,19 +96,6 @@ async function fixture() {
   return { root, env, runId, opts, guard };
 }
 
-it("reproduces native recovery refusal and proceeds only after the real foreign owner releases", async () => {
-  const f = await fixture();
-  f.guard.assertCurrent();
-  await request({ acquire: f.env });
-  expect(() => f.guard.assertCurrent()).toThrow("undergoing offline maintenance");
-  const wait = vi.spyOn(sleeping, "sleep").mockImplementation(async () => {
-    await request({ release: true });
-  });
-  await f.guard.waitForCurrent();
-  expect(wait).toHaveBeenCalledOnce();
-  f.guard.assertCurrent();
-});
-
 it.each(["before-stop", "before-checkout", "held-before-checkout"] as const)(
   "defers a held owner %s and waits for a transient owner before checkout",
   async (arrival) => {

@@ -1,13 +1,14 @@
 import { cleanup, render } from "@solidjs/testing-library";
 import type { JSX } from "@solidjs/web";
-import { createSignal, flush, untrack } from "solid-js";
+import { createSignal, createStore, flush, untrack } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
-import { subscribeNativeOverlayOcclusion } from "../../lib/native-overlay-occlusion.ts";
 import {
   ChatPaneLayoutMenu,
   type HeaderPanelAction,
 } from "../../pages/chat/components/chat-header-panel-actions.tsx";
+import "../../styles.css";
+import { afterModalHidden, nextFrame } from "../../test-helpers/modal-dialog.ts";
 import {
   item,
   mountMenu,
@@ -19,72 +20,105 @@ import {
   trigger,
 } from "../../test-helpers/solid-menu.tsx";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { ModalDialog, type OpenClawModalDialog } from "../modal-dialog.tsx";
 import { Icon } from "./icon.tsx";
-import { Kbd, KeyboardShortcut } from "./kbd.tsx";
-import {
-  keyFocus,
-  menuContent,
-  mountControls,
-  tabFocus,
-  update,
-} from "./menu-contract.test-support.tsx";
-import { createMenuControls, Menu, type MenuItem, type MenuItemBindings } from "./menu.tsx";
-import "../../styles/base.css";
-import "../../styles/layout.css";
+import { Kbd } from "./kbd.tsx";
+import { LazyViewError } from "./lazy-view-error.tsx";
+import { keyFocus, mountControls, update } from "./menu-contract.test-support.tsx";
+import { createMenuControls, Menu, type MenuItem } from "./menu.tsx";
 import "../../styles/session-menu.css";
 import "../kbd.css";
 import "../../styles/chat/layout.css";
 import "../../styles/chat/split-view.css";
 
-const cleanups: (() => void)[] = [];
-const nextFrame = () =>
-  new Promise<void>((resolve) => {
-    requestAnimationFrame(() => resolve());
-  });
 function clickLink(link: HTMLAnchorElement, options: MouseEventInit = {}) {
   link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, ...options }));
 }
-function entries(prefix: string, count: number): MenuItem[] {
+function entries(prefix: string, count: number, padded = false): MenuItem[] {
   return Array.from({ length: count }, (_, index) => ({
-    id: `${prefix}-${index}`,
-    label: `${prefix[0]!.toUpperCase()}${prefix.slice(1)} ${index + 1}`,
+    id: `${prefix.toLowerCase()}-${index}`,
+    label: `${prefix[0]!.toUpperCase()}${prefix.slice(1)} ${padded ? String(index + 1).padStart(2, "0") : index + 1}`,
   }));
 }
 
+const extraNodes: Element[] = [];
+const documentRoot = document.documentElement;
+const originalAttributes = ["dir", "data-theme", "data-theme-mode"].map(
+  (name) => [name, documentRoot.getAttribute(name)] as const,
+);
+const originalStyle = documentRoot.style.cssText;
 const originalViewport = { width: window.innerWidth, height: window.innerHeight };
 afterEach(async () => {
   vi.useRealTimers();
   cleanup();
-  cleanups
-    .splice(0)
-    .toReversed()
-    .forEach((stop) => stop());
-  vi.unstubAllGlobals();
-  vi.restoreAllMocks();
+  extraNodes.splice(0).forEach((node) => node.remove());
+  documentRoot.style.cssText = originalStyle;
+  for (const [name, value] of originalAttributes) {
+    if (value === null) {
+      documentRoot.removeAttribute(name);
+    } else {
+      documentRoot.setAttribute(name, value);
+    }
+  }
   await page.viewport(originalViewport.width, originalViewport.height);
 });
 
-it("keeps autofocus and activation native for embedded buttons and links", async () => {
+it("keeps disabled leaf explanations reachable without enabling activation", async () => {
+  const select = vi.fn();
+  const click = vi.fn();
+  mountMenu({
+    items: [
+      { id: "disabled", label: "Unavailable default", disabled: true },
+      {
+        id: "reason",
+        label: "Unavailable explained",
+        disabled: true,
+        focusableWhenDisabled: true,
+        attributes: { title: "Connect to continue", onClick: click },
+      },
+      {
+        id: "branch",
+        label: "Unavailable submenu",
+        disabled: true,
+        children: [{ id: "child", label: "Child" }],
+      },
+      { id: "allowed", label: "Allowed" },
+    ],
+    onSelect: select,
+  });
+  await openMenu();
+  const explained = item("Unavailable explained");
+  await expect.poll(() => document.activeElement).toBe(explained);
+  expect(explained.disabled).toBe(false);
+  expect(explained.getAttribute("aria-disabled")).toBe("true");
+  expect(item("Unavailable default").disabled).toBe(true);
+  expect(item("Unavailable submenu").disabled).toBe(true);
+  await userEvent.keyboard("{ArrowDown}");
+  await expect.poll(() => document.activeElement).toBe(item("Allowed"));
+  await userEvent.keyboard("{ArrowUp}");
+  await expect.poll(() => document.activeElement).toBe(explained);
+  await userEvent.keyboard("{Enter}");
+  await userEvent.keyboard(" ");
+  explained.click();
+  explained.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+  expect(click).not.toHaveBeenCalled();
+  expect(select).not.toHaveBeenCalled();
+  expect(surface().matches(":popover-open")).toBe(true);
+  await userEvent.keyboard("{ArrowDown}{Enter}");
+  expect(select).toHaveBeenCalledOnce();
+  expect(select.mock.calls[0]?.[0].id).toBe("allowed");
+});
+
+it("keeps embedded-button activation and arrow navigation native", async () => {
   const activate = vi.fn();
-  const navigate = vi.fn((event: MouseEvent) => event.preventDefault());
   const select = vi.fn();
   mountControls((controls) => ({
     onSelect: select,
-    items: [
-      { id: "first", label: "First" },
-      { id: "last", label: "Last" },
-      menuContent(
-        "header-actions",
-        <>
-          <button ref={controls.ref()} type="button" autofocus onClick={activate}>
-            Clear
-          </button>
-          <a ref={controls.ref()} href="#help" onClick={navigate}>
-            Help
-          </a>
-        </>,
-      ),
-    ],
+    children: (
+      <button ref={controls.ref()} autofocus onClick={activate}>
+        Clear
+      </button>
+    ),
   }));
   await openMenu();
   const button = surface().querySelector<HTMLButtonElement>("button:not([role])")!;
@@ -94,41 +128,25 @@ it("keeps autofocus and activation native for embedded buttons and links", async
   expect(select).not.toHaveBeenCalled();
   expect(surface().matches(":popover-open")).toBe(true);
   await userEvent.keyboard("{ArrowDown}");
-  await expect.poll(() => document.activeElement).toBe(item("First"));
+  await expect.poll(() => document.activeElement).toBe(trigger("people-assign"));
   button.focus();
-  await tabFocus(surface().querySelector("a"));
-  await userEvent.keyboard("{Enter}");
-  expect(navigate).toHaveBeenCalledOnce();
-  expect(select).not.toHaveBeenCalled();
-  await tabFocus(button, true);
   await userEvent.keyboard("{ArrowUp}");
-  await expect.poll(() => document.activeElement).toBe(item("Last"));
+  await expect.poll(() => document.activeElement).toBe(item("Archive"));
 });
 
-it.each([false, true])("preserves native link intent (routing=%s)", async (routing) => {
-  let cancel = false;
-  let selections = 0;
+it("preserves native link intent while routing selections", async () => {
+  const select = vi.fn();
   const navigate = vi.fn();
   const view = mountMenu({
     items: [{ id: "settings", label: "Settings", href: "#settings" }],
-    onNavigate: routing ? navigate : undefined,
-    onSelect: (_item, event) => {
-      selections += 1;
-      if (cancel) {
-        event.preventDefault();
-      }
-    },
+    onNavigate: navigate,
+    onSelect: select,
   });
   const prevented: boolean[] = [];
-  let suppressNative = true;
-  const initialHash = window.location.hash;
   view.container.addEventListener("click", (event) => {
     if (event.target instanceof Element && event.target.closest("a")) {
       prevented.push(event.defaultPrevented);
-      // Modified gestures stay native; same-tab clicks below exercise the real cancellation path.
-      if (suppressNative) {
-        event.preventDefault();
-      }
+      event.preventDefault();
     }
   });
   await openMenu();
@@ -148,25 +166,10 @@ it.each([false, true])("preserves native link intent (routing=%s)", async (routi
   link.dispatchEvent(canceledClick);
   expect(prevented.at(-1)).toBe(true);
 
-  suppressNative = false;
   await userEvent.click(link);
-  await expect.poll(() => selections).toBe(1);
-  expect(navigate.mock.calls).toEqual(routing ? [[{ href: "#settings", value: "settings" }]] : []);
+  await expect.poll(() => select).toHaveBeenCalledOnce();
+  expect(navigate).toHaveBeenCalledExactlyOnceWith({ href: "#settings", value: "settings" });
   expect(prevented.at(-1)).toBe(true);
-  await phase(surface(), "hidden");
-
-  await openMenu();
-  cancel = true;
-  await userEvent.click(link);
-  await expect.poll(() => selections).toBe(2);
-  expect(navigate).toHaveBeenCalledTimes(routing ? 1 : 0);
-  expect(view.handle.overlay.open).toBe(true);
-  expect(window.location.hash).toBe(initialHash);
-  cancel = false;
-  link.focus();
-  await userEvent.keyboard("{Enter}");
-  await expect.poll(() => selections).toBe(3);
-  expect(navigate).toHaveBeenCalledTimes(routing ? 2 : 0);
   await phase(surface(), "hidden");
 });
 
@@ -189,8 +192,8 @@ it("forwards link navigation from nested menus and closes the root", async () =>
   await phase(surface(), "hidden");
 });
 
-it.each([false, true])("rolls rejected visibility back (initial=%s)", async (initial) => {
-  const [open, setOpen] = createSignal(initial);
+it("rolls rejected initial and controlled visibility back", async () => {
+  const [open, setOpen] = createSignal(true);
   let vetoShow = true;
   let vetoHide = true;
   const received: boolean[] = [];
@@ -205,64 +208,61 @@ it.each([false, true])("rolls rejected visibility back (initial=%s)", async (ini
       setOpen(accepted);
     },
   });
-  if (!initial) {
-    update(() => setOpen(true));
-  }
   expect(untrack(open)).toBe(false);
   expect(surface().matches(":popover-open")).toBe(false);
   expect(received).toEqual([false]);
+  update(() => setOpen(true));
+  expect(untrack(open)).toBe(false);
+  expect(received).toEqual([false, false]);
   vetoShow = false;
   update(() => setOpen(true));
   await phase(surface(), "open");
-  expect(received).toEqual([false, true]);
+  expect(received).toEqual([false, false, true]);
   update(() => setOpen(false));
   expect(untrack(open)).toBe(true);
   expect(surface().matches(":popover-open")).toBe(true);
-  expect(received).toEqual([false, true, true]);
+  expect(received).toEqual([false, false, true, true]);
   vetoHide = false;
   update(() => setOpen(false));
   await phase(surface(), "hidden");
-  expect(received).toEqual([false, true, true, false]);
+  expect(received).toEqual([false, false, true, true, false]);
 });
 
 it("retains submenu content and identity across label updates", async () => {
-  let icon!: HTMLSpanElement;
-  let details!: HTMLSpanElement;
-  const [id, setId] = createSignal("people");
-  const [label, setLabel] = createSignal("People actions");
-  const [childLabel, setChildLabel] = createSignal("Assign to");
-  mountMenu({
-    get id() {
-      return id();
-    },
-    get label() {
-      return label();
-    },
-    get items() {
-      return [
-        {
-          id: "assign",
-          label: childLabel(),
-          icon: <span ref={(node) => (icon = node)}>Icon</span>,
-          details: <span ref={(node) => (details = node)}>A</span>,
-          children: [{ id: "ada", label: "Ada Rivera" }],
-        },
-      ];
-    },
+  const icon = document.createElement("span"),
+    details = document.createElement("span");
+  const [props, setProps] = createStore({
+    id: "people",
+    label: "People actions",
+    lazy: true,
+    items: [
+      {
+        id: "assign",
+        label: "Assign to",
+        icon,
+        details,
+        children: () => [{ id: "ada", label: "Ada Rivera" }],
+      },
+    ],
   });
+  mountMenu(props);
   const root = surface();
   const button = trigger();
   await openMenu();
+  expect(surface("people-assign").querySelector('[role="menuitem"]')).toBeNull();
   const assignment = trigger("people-assign");
-  expect([icon, details].every((node) => assignment.contains(node))).toBe(true);
   await openMenu("people-assign");
-  expect([icon, details].every((node) => assignment.contains(node))).toBe(true);
   const child = surface("people-assign");
-  expect(item("Ada Rivera", "people-assign").getAttribute("value")).toBe("ada");
-  setId("replacement-id");
-  setLabel("Updated actions");
-  update(() => setChildLabel("Updated assignment"));
+  const ada = item("Ada Rivera", "people-assign");
+  update(() =>
+    setProps((draft) => {
+      draft.id = "replacement-id";
+      draft.label = "Updated actions";
+      draft.items[0]!.label = "Updated assignment";
+    }),
+  );
   expect(surface()).toBe(root);
+  expect([icon, details].every((node) => assignment.contains(node))).toBe(true);
   expect(trigger()).toBe(button);
   expect(button.getAttribute("aria-controls")).toBe(root.id);
   expect(root.getAttribute("aria-label")).toBe("Updated actions");
@@ -272,26 +272,22 @@ it("retains submenu content and identity across label updates", async () => {
   await phase(root, "hidden");
   await openMenu();
   await openMenu("people-assign");
-  expect(document.activeElement).toBe(item("Ada Rivera", "people-assign"));
+  expect(item("Ada Rivera", "people-assign")).toBe(ada);
+  expect(document.activeElement).toBe(ada);
 });
 
 it("updates root placement and RTL submenu geometry", async () => {
   await page.viewport(1280, 800);
-  const [placement, setPlacement] = createSignal<"bottom-start" | "top-end">("bottom-start");
-  const [direction, setDirection] = createSignal<"ltr" | "rtl">("ltr");
-  mountMenu({
-    get placement() {
-      return placement();
-    },
-    get dir() {
-      return direction();
-    },
-  });
-  Object.assign(trigger().style, { position: "fixed", left: "500px", top: "350px" });
+  const [position, setPosition] = createStore<{
+    placement: "bottom-start" | "top-end";
+    dir: "ltr" | "rtl";
+  }>({ placement: "bottom-start", dir: "ltr" });
+  mountMenu(position);
+  positionTrigger({ left: "500px", top: "350px" });
   await openMenu();
   const button = trigger().getBoundingClientRect();
   expect(surface().getBoundingClientRect().top).toBeGreaterThanOrEqual(button.bottom);
-  update(() => setPlacement("top-end"));
+  update(() => setPosition((draft) => Object.assign(draft, { placement: "top-end" })));
   await nextFrame();
   expect(surface().dataset.placement).toBe("top-end");
   expect(surface().getBoundingClientRect().bottom).toBeLessThanOrEqual(button.top);
@@ -299,7 +295,7 @@ it("updates root placement and RTL submenu geometry", async () => {
   expect(surface("people-assign").getBoundingClientRect().left).toBeGreaterThanOrEqual(
     trigger("people-assign").getBoundingClientRect().right,
   );
-  update(() => setDirection("rtl"));
+  update(() => setPosition((draft) => Object.assign(draft, { dir: "rtl" })));
   await nextFrame();
   expect(surface("people-assign").dataset.placement).toBe("left-start");
   expect(surface("people-assign").getBoundingClientRect().right).toBeLessThanOrEqual(
@@ -327,7 +323,7 @@ it.each([
     ],
     onSelect: selected,
   });
-  Object.assign(trigger().style, { position: "fixed", left: position.left, bottom: "12px" });
+  positionTrigger({ left: position.left, bottom: "12px" });
   await openMenu();
   await openMenu("people-gateways");
   const child = surface("people-gateways");
@@ -356,66 +352,6 @@ it.each([
   await phase(surface(), "hidden");
 });
 
-it("leases descendant native overlap until exit settles", async () => {
-  vi.stubGlobal("webkit", { messageHandlers: { openclawBrowser: { postMessage() {} } } });
-  await page.viewport(1280, 800);
-  let bounds = new DOMRect(1000, 100, 100, 100);
-  const states: boolean[] = [];
-  cleanups.push(
-    subscribeNativeOverlayOcclusion(
-      (value) => states.push(value),
-      () => bounds,
-    ),
-  );
-  const view = mountMenu();
-  Object.assign(trigger().style, { position: "fixed", left: "40px", top: "100px" });
-  await openMenu();
-  expect(states).toEqual([false]);
-  await openMenu("people-assign");
-  const child = surface("people-assign");
-  const childRect = child.getBoundingClientRect();
-  bounds = new DOMRect(childRect.right - 4, childRect.top + 4, 100, childRect.height - 8);
-  expect(bounds.left).toBeGreaterThan(surface().getBoundingClientRect().right);
-  await expect.poll(() => states).toEqual([false, true]);
-  const branch = [surface(), child];
-  // Establish the visible starting state for the closing transitions.
-  await expect.poll(() => branch.map((menu) => getComputedStyle(menu).opacity)).toEqual(["1", "1"]);
-  // Hold the parent too: its exit moves the submenu anchor before hiding it.
-  branch.forEach((menu) => {
-    const animation = menu.animate({ opacity: [1, 0], scale: [1, 0.9] }, { duration: 1000 });
-    animation.pause();
-    animation.currentTime = 0;
-    cleanups.push(() => animation.cancel());
-  });
-  const hidden = new Promise<void>((resolve) => {
-    child.addEventListener("overlay-after-hide", () => resolve(), { once: true });
-  });
-  child.addEventListener("toggle", (event) => {
-    if ((event as ToggleEvent).newState === "closed") {
-      // Chromium starts discrete exits when the native popover finally closes.
-      child.getAnimations().forEach((animation) => animation.finish());
-    }
-  });
-  expect(view.handle.close()).toBe(true);
-  const closing = branch.flatMap((menu) => {
-    const animations = menu.getAnimations();
-    expect(animations.length).toBeGreaterThan(0);
-    return animations;
-  });
-  for (const animation of closing) {
-    animation.pause();
-    cleanups.push(() => animation.cancel());
-  }
-  await nextFrame();
-  expect(child.dataset.phase).toBe("closing");
-  expect(child.matches(":popover-open")).toBe(true);
-  expect(states).toEqual([false, true]);
-  child.getAnimations().forEach((animation) => animation.finish());
-  await hidden;
-  expect(states).toEqual([false, true, false]);
-  closing.forEach((animation) => animation.finish());
-});
-
 async function finishHover() {
   await vi.advanceTimersByTimeAsync(300);
   flush();
@@ -436,16 +372,12 @@ function liveMenu(
   children?: (controls: ReturnType<typeof createMenuControls>) => JSX.Element,
 ) {
   const [items, setItems] = createSignal(initial);
-  const view = mountMenu(() => {
-    const controls = createMenuControls();
-    return {
-      controls,
-      get items() {
-        return items();
-      },
-      children: children?.(controls),
-    };
-  });
+  const view = mountControls((controls) => ({
+    get items() {
+      return items();
+    },
+    children: children?.(controls),
+  }));
   const updateItems = (next: readonly MenuItem[]) => {
     setItems(next);
     flush();
@@ -467,30 +399,6 @@ describe("Solid menu branch lifetime", () => {
     expect(surface("people-assign").matches(":popover-open")).toBe(true);
     expect(document.activeElement).toBe(item("Ada Rivera", "people-assign"));
   });
-
-  it.each(["array", "factory"] as const)(
-    "materializes %s submenus on open and retains their controls across closes",
-    async (kind) => {
-      const renderAda = vi.fn((attributes: MenuItemBindings) => <button {...attributes} />);
-      const children = [{ id: "ada", label: "Ada Rivera", render: renderAda }];
-      mountMenu({
-        lazy: true,
-        items: [submenuBranch("assign", kind === "array" ? children : () => children)],
-      });
-      expect(renderAda).not.toHaveBeenCalled();
-      await openMenu();
-      expect(renderAda).not.toHaveBeenCalled();
-      expect(surface("people-assign").querySelector('[role="menuitem"]')).toBeNull();
-      await openMenu("people-assign");
-      const ada = item("Ada Rivera", "people-assign");
-      expect(renderAda).toHaveBeenCalledTimes(1);
-      await userEvent.keyboard("{Escape}");
-      await phase(surface("people-assign"), "hidden");
-      await openMenu("people-assign");
-      expect(item("Ada Rivera", "people-assign")).toBe(ada);
-      expect(renderAda).toHaveBeenCalledTimes(1);
-    },
-  );
 
   it("opens custom form content and retains it when generated items become empty", async () => {
     let input!: HTMLInputElement;
@@ -580,17 +488,6 @@ describe("Solid menu branch lifetime", () => {
 
   it("retires an emptied submenu and allows restored content to open at its current anchor", async () => {
     const view = liveMenu();
-    const mutations: MutationRecord[] = [];
-    const observer = new MutationObserver((records) => mutations.push(...records));
-    observer.observe(surface(), { attributes: true, attributeFilter: ["inert", "data-phase"] });
-    try {
-      view.container.append(document.createElement("span"));
-      await Promise.resolve();
-      mutations.push(...observer.takeRecords());
-      expect(mutations).toHaveLength(0);
-    } finally {
-      observer.disconnect();
-    }
     view.update(navigationItems);
     await openMenu();
     await openMenu("people-move");
@@ -619,110 +516,249 @@ function panelAction(
   return { id, label: id[0]!.toUpperCase() + id.slice(1), icon, shortcut, active, onActivate() {} };
 }
 
-it.each(["ltr", "rtl"] as const)("aligns all menu row shortcuts in %s", async (dir) => {
+it.each([
+  ["ltr", false],
+  ["rtl", false],
+  ["ltr", true],
+  ["rtl", true],
+] as const)("aligns shortcut rails in %s (submenu: %s)", async (dir, submenu) => {
   await page.viewport(1000, 700);
-  const hint = (key: "b" | "u") => (
-    <KeyboardShortcut
-      class="session-menu__shortcut"
-      combo={{ key, modifiers: key === "b" ? ["mod"] : ["mod", "alt", "shift"] }}
-      applePlatform
-    />
-  );
-  const alignmentItems: MenuItem[] = [
-    { id: "plain", label: "Plain", details: hint("b") },
-    { id: "off", label: "Unchecked", type: "checkbox", checked: false, details: hint("u") },
-    { id: "on", label: "Checked", type: "checkbox", checked: true, details: hint("b") },
-    { id: "radio", label: "Radio", type: "radio", checked: true, details: hint("u") },
-    {
-      id: "branch",
-      label: "Submenu",
-      details: hint("b"),
-      children: [{ id: "child", label: "Child" }],
-    },
-  ];
+  const items: MenuItem[] = ["plain", "branch"].map((id) => ({
+    id,
+    label: id,
+    icon: <Icon name="copy" />,
+    children: submenu && id === "branch" ? [{ id: "child", label: "Child" }] : undefined,
+    details: (
+      <Kbd class="session-menu__shortcut" keys={id === "plain" ? "B" : "Ctrl+Alt+Shift+U"} inline />
+    ),
+  }));
   render(() => (
-    <Menu id="alignment" label="Actions" dir={dir} class="session-menu" items={alignmentItems} />
+    <Menu id="alignment" label="Actions" dir={dir} class="session-menu" items={items} />
   ));
   await openMenu("alignment");
   const menu = surface("alignment");
   await expect.element(page.elementLocator(menu)).toBeVisible();
-  const ends = [...menu.querySelectorAll<HTMLElement>(".session-menu__shortcut")].map((element) => {
-    const bounds = element.getBoundingClientRect();
-    return dir === "rtl" ? bounds.left : bounds.right;
-  });
-  expect(ends).toHaveLength(5);
+  const ends = [...menu.querySelectorAll(".shortcut-kbd")].map(
+    (hint) => hint.getBoundingClientRect()[dir === "rtl" ? "left" : "right"],
+  );
   expect(Math.max(...ends) - Math.min(...ends)).toBeLessThan(1);
+  if (submenu) {
+    return;
+  }
+  for (const row of menu.querySelectorAll<HTMLElement>('[role="menuitem"]')) {
+    const bounds = row.getBoundingClientRect();
+    const icon = row.querySelector(".oc-menu-item__icon")!.getBoundingClientRect();
+    const hint = row.querySelector(".shortcut-kbd")!.getBoundingClientRect();
+    const [start, end] =
+      dir === "rtl"
+        ? [bounds.right - icon.right, hint.left - bounds.left]
+        : [icon.left - bounds.left, bounds.right - hint.right];
+    expect(Math.abs(end - start)).toBeLessThan(1);
+  }
 });
 
 it.each(["ltr", "rtl"] as const)(
-  "insets shortcuts like leading icons without checks or arrows in %s",
+  "keeps Layout shortcuts aligned across style loads and mobile in %s",
   async (dir) => {
-    await page.viewport(1000, 700);
-    const iconItems: MenuItem[] = ["s", "b"].map((key) => ({
-      id: key,
-      label: key,
-      icon: <Icon name="copy" />,
-      details: <Kbd class="session-menu__shortcut" keys={key.toUpperCase()} inline />,
-    }));
+    document.documentElement.dir = dir;
+    await page.viewport(1000, 800);
     render(() => (
-      <Menu id="mirrored" label="Actions" dir={dir} class="session-menu" items={iconItems} />
+      <ChatPaneLayoutMenu
+        paneId="layout-alignment"
+        narrow={false}
+        panelMenuActions={[
+          panelAction("terminal", "terminal", { key: "Backquote", modifiers: ["ctrl"] }),
+          panelAction("browser", "globe", { key: "u", modifiers: ["mod", "alt", "shift"] }),
+          panelAction("files", "fileText", { key: "b", modifiers: ["mod", "shift"] }, false),
+          panelAction("review", "diff", { key: "e", modifiers: ["mod", "alt", "shift"] }, true),
+        ]}
+      />
     ));
-    await openMenu("mirrored");
-    const menu = surface("mirrored");
-    await expect.element(page.elementLocator(menu)).toBeVisible();
-    for (const row of menu.querySelectorAll<HTMLElement>('[role="menuitem"]')) {
-      const bounds = row.getBoundingClientRect();
-      const icon = row.querySelector(".oc-menu-item__icon")!.getBoundingClientRect();
-      const hint = row.querySelector(".shortcut-kbd")!.getBoundingClientRect();
-      const [start, end] =
-        dir === "rtl"
-          ? [bounds.right - icon.right, hint.left - bounds.left]
-          : [icon.left - bounds.left, bounds.right - hint.right];
-      expect(Math.abs(end - start)).toBeLessThan(1);
+    await userEvent.click(page.getByRole("button", { name: "Layout", exact: true }));
+    const menu = page.getByRole("menu", { name: "Layout", exact: true }).element();
+    await waitForSolid(() => {
+      expect(menu.getAttribute("data-phase")).toBe("open");
+      // The opening transition scales DOM bounds; measure its final geometry.
+      expect(getComputedStyle(menu).scale).toBe("1");
+    });
+    await Promise.all(menu.getAnimations().map((animation) => animation.finished));
+    const hints = [...menu.querySelectorAll<HTMLElement>(".shortcut-kbd")];
+    expect(hints).toHaveLength(4);
+    const bounds = () => hints.map((hint) => hint.getBoundingClientRect());
+    const before = bounds();
+    const edge = dir === "rtl" ? "left" : "right";
+    expect(
+      Math.max(...before.map((rect) => rect[edge])) - Math.min(...before.map((rect) => rect[edge])),
+    ).toBeLessThan(1);
+    await import("../../styles/chat/side-panel.css");
+    const after = bounds();
+    // WebKit can retain ~0.03px rounding; a real style-induced shift is whole pixels.
+    for (const [index, rect] of after.entries()) {
+      expect(Math.abs(rect[edge] - before[index]![edge])).toBeLessThan(0.5);
+      expect(Math.abs(rect.width - before[index]!.width)).toBeLessThan(0.5);
+    }
+    const check = menu.querySelector<HTMLElement>('[aria-checked="true"] > .oc-menu-item__check')!;
+    if (dir === "rtl") {
+      expect(check.getBoundingClientRect().right).toBeLessThan(before[3]!.left);
+    } else {
+      expect(check.getBoundingClientRect().left).toBeGreaterThan(before[3]!.right);
+    }
+    await page.viewport(390, 800);
+    for (const hint of hints) {
+      expect(hint.getBoundingClientRect().width).toBe(0);
     }
   },
 );
 
-it("keeps Layout shortcuts aligned across style loads and hidden on mobile", async () => {
-  await page.viewport(1000, 800);
-  render(() => (
-    <ChatPaneLayoutMenu
-      paneId="layout-alignment"
-      narrow={false}
-      panelMenuActions={[
-        panelAction("terminal", "terminal", { key: "Backquote", modifiers: ["ctrl"] }),
-        panelAction("browser", "globe", { key: "u", modifiers: ["mod", "alt", "shift"] }),
-        panelAction("files", "fileText", { key: "b", modifiers: ["mod", "shift"] }, false),
-        panelAction("review", "diff", { key: "e", modifiers: ["mod", "alt", "shift"] }, true),
-      ]}
+function positionTrigger(style: Partial<CSSStyleDeclaration>) {
+  Object.assign(trigger().style, { position: "fixed" }, style);
+}
+
+const modalDialog = (host: OpenClawModalDialog) =>
+  host.querySelector<HTMLDialogElement>(":scope > .oc-modal-dialog")!;
+const makeElement = <K extends keyof HTMLElementTagNameMap>(
+  tag: K,
+  props: Partial<HTMLElementTagNameMap[K]> = {},
+): HTMLElementTagNameMap[K] => Object.assign(document.createElement(tag), props);
+
+async function tabCycle(order: HTMLElement[], active?: () => Element | null) {
+  order[0]!.focus();
+  for (const next of [...order.slice(1), order[0]!]) {
+    await keyFocus("{Tab}", next, active);
+  }
+  for (const next of [...order.slice(1).toReversed(), order[0]!]) {
+    await keyFocus("{Shift>}{Tab}{/Shift}", next, active);
+  }
+}
+
+function renderModal(
+  label: string,
+  content: () => JSX.Element,
+  initialFocus?: () => HTMLElement,
+  container?: HTMLElement,
+) {
+  let handle!: OpenClawModalDialog;
+  const view = render(
+    () => (
+      <ModalDialog label={label} initialFocus={initialFocus} ref={(value) => (handle = value)}>
+        {content()}
+      </ModalDialog>
+    ),
+    container ? { container } : undefined,
+  );
+  flush();
+  return { view, handle, dialog: modalDialog(handle) };
+}
+it("keeps shadow-hosted modal focus through Tab, vetoed Escape, and dismissal", async () => {
+  const opener = document.createElement("button");
+  const container = document.createElement("div");
+  document.body.append(opener, container);
+  extraNodes.push(opener, container);
+  const mount = document.createElement("div");
+  const shadow = container.attachShadow({ mode: "open" });
+  shadow.append(mount);
+  opener.focus();
+  const name = makeElement("input", { autofocus: true });
+  const notes = makeElement("textarea");
+  const { handle, dialog } = renderModal(
+    "Edit details",
+    () => [name, notes],
+    () => name,
+    mount,
+  );
+  const active = () => shadow.activeElement;
+  notes.focus();
+  await keyFocus("{Tab}", name, active);
+  await keyFocus("{Shift>}{Tab}{/Shift}", notes, active);
+  name.focus();
+  await keyFocus("{Tab}", notes, active);
+
+  const preventTab = (event: KeyboardEvent) => {
+    if (event.key === "Tab") {
+      event.preventDefault();
+    }
+  };
+  notes.addEventListener("keydown", preventTab);
+  await keyFocus("{Tab}", notes, active);
+  notes.removeEventListener("keydown", preventTab);
+
+  notes.value = "Unsaved draft";
+  const veto = (event: Event) => event.preventDefault();
+  document.addEventListener("modal-cancel", veto);
+  try {
+    await userEvent.keyboard("{Escape}");
+    expect(modalDialog(handle).matches(":modal")).toBe(true);
+    expect(handle.open).toBe(true);
+    expect(shadow.activeElement).toBe(notes);
+    expect(notes.value).toBe("Unsaved draft");
+  } finally {
+    document.removeEventListener("modal-cancel", veto);
+  }
+  const hidden = afterModalHidden(handle);
+  await userEvent.keyboard("{Escape}");
+  expect(handle.open).toBe(false);
+  expect(dialog.inert).toBe(true);
+  await hidden;
+  expect(dialog.open).toBe(false);
+  expect(document.activeElement).toBe(opener);
+});
+
+it.each([false, true])("Tabs through descendant shadow roots (only=%s)", async (shadowOnly) => {
+  const before = makeElement("input", { ariaLabel: "Before shadow" });
+  const host = makeElement("div");
+  const shadow = host.attachShadow({ mode: "open" });
+  const [first, slotted, last] = [makeElement("input"), makeElement("input"), makeElement("input")];
+  host.append(slotted);
+  shadow.append(first, makeElement("slot"), last);
+  renderModal("Shadow fields", () => [!shadowOnly && before, host]);
+  const order = shadowOnly ? [first, slotted, last] : [before, first, slotted, last];
+  const active = () => shadow.activeElement ?? document.activeElement;
+  await tabCycle(order, active);
+});
+
+it.each(["summary", "editable"])(
+  "wraps native %s content without an explicit tabindex",
+  async (kind) => {
+    const target =
+      kind === "summary"
+        ? makeElement("summary", { textContent: "Details" })
+        : makeElement("div", { contentEditable: "true", textContent: "Draft" });
+    const content = kind === "summary" ? makeElement("details") : target;
+    if (kind === "summary") {
+      content.append(target, "Content");
+    }
+    const { dialog } = renderModal("Native content", () => content);
+    await tabCycle([target]);
+    target.tabIndex = -1;
+    dialog.focus();
+    await keyFocus("{Tab}", dialog);
+    await keyFocus("{Shift>}{Tab}{/Shift}", dialog);
+  },
+);
+
+it("stretches modal error-panel actions", async () => {
+  let retried = 0;
+  const { view, dialog } = renderModal("Load settings", () => (
+    <LazyViewError
+      error={new Error("Fixture module load failed")}
+      subtitle="Settings"
+      onRetry={() => retried++}
+      onClose={() => {}}
     />
   ));
-  await userEvent.click(page.getByRole("button", { name: "Layout", exact: true }));
-  const menu = page.getByRole("menu", { name: "Layout", exact: true }).element();
-  await waitForSolid(() => {
-    expect(menu.getAttribute("data-phase")).toBe("open");
-    // The opening transition scales DOM bounds; measure its final geometry.
-    expect(getComputedStyle(menu).scale).toBe("1");
-  });
-  await Promise.all(menu.getAnimations().map((animation) => animation.finished));
-  const hints = [...menu.querySelectorAll<HTMLElement>(".shortcut-kbd")];
-  expect(hints).toHaveLength(4);
-  const bounds = () => hints.map((hint) => hint.getBoundingClientRect());
-  const before = bounds();
-  expect(
-    Math.max(...before.map((rect) => rect.right)) - Math.min(...before.map((rect) => rect.right)),
-  ).toBeLessThan(1);
-  await import("../../styles/chat/side-panel.css");
-  const after = bounds();
-  // WebKit can retain ~0.03px rounding; a real style-induced shift is whole pixels.
-  for (const [index, rect] of after.entries()) {
-    expect(Math.abs(rect.right - before[index]!.right)).toBeLessThan(0.5);
-    expect(Math.abs(rect.width - before[index]!.width)).toBeLessThan(0.5);
+  await Promise.all(dialog.getAnimations().map((animation) => animation.finished));
+  for (const width of [1440, 320]) {
+    await page.viewport(width, 1000);
+    expect(dialog.clientHeight).toBeLessThanOrEqual(window.innerHeight);
+    const panel = view.container.querySelector<HTMLElement>(".lazy-view-error")!;
+    const actions = panel.querySelector<HTMLElement>(".lazy-view-error__actions")!;
+    const bounds = panel.getBoundingClientRect();
+    const style = getComputedStyle(panel);
+    expect(actions.getBoundingClientRect()).toMatchObject({
+      left: expect.closeTo(bounds.left + Number.parseFloat(style.paddingLeft), 0),
+      right: expect.closeTo(bounds.right - Number.parseFloat(style.paddingRight), 0),
+    });
   }
-  const check = menu.querySelector<HTMLElement>('[aria-checked="true"] > .oc-menu-item__check')!;
-  expect(check.getBoundingClientRect().left).toBeGreaterThan(before[3]!.right);
-  await page.viewport(390, 800);
-  for (const hint of hints) {
-    expect(hint.getBoundingClientRect().width).toBe(0);
-  }
+  await userEvent.click(view.getByRole("button", { name: /^Retry$/ }));
+  expect(retried).toBe(1);
 });

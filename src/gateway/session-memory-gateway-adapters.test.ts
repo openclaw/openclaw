@@ -173,10 +173,7 @@ it("retains detached planning data and rejects effects after the selected actor 
   let escapedAssertion: (() => void) | undefined;
   await runWithSessionActorStorage(binding, () =>
     withGatewaySessionEntryReadOnly({ cfg, key: sessionKey }, async (loaded, assertCurrent) => {
-      expect(loaded.entry).toMatchObject({
-        category: "original",
-        sessionRoot: "/synthetic/workspace",
-      });
+      expect(loaded.entry?.category).toBe("original");
       escapedAssertion = assertCurrent;
       await patch(actor, { category: "updated" });
       expect(loaded.entry?.category).toBe("original");

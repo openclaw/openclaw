@@ -1,6 +1,6 @@
 /** Focused HTTP coverage for hook admission feedback and pending replay behavior. */
 import fs from "node:fs/promises";
-import { Agent, request as httpRequest } from "node:http";
+import { Agent, request as httpRequest, type IncomingMessage } from "node:http";
 import path from "node:path";
 import { afterEach, assert, describe, expect, test, vi, type TestContext } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
@@ -47,6 +47,10 @@ const ROTATED_HOOK_TOKEN = "hook-secret-rotated";
 const fixtureLifetime = createFixtureLifetime();
 const enabledHooks = { enabled: true, token: HOOK_TOKEN };
 type HookReceipt = ReturnType<typeof sessionEventHandoff.enqueueSessionEventForHost>;
+const hookHeaders = (token = HOOK_TOKEN) => ({
+  Authorization: `Bearer ${token}`,
+  "Content-Type": "application/json",
+});
 
 function observeHookReceipts(
   onReceipt: (text: string, receipt: HookReceipt, source: string | undefined) => void,
@@ -135,11 +139,7 @@ async function postHook(
 ): Promise<Response> {
   return await fetch(`http://127.0.0.1:${port}${hookPath}`, {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-      "Idempotency-Key": idempotencyKey,
-    },
+    headers: { ...hookHeaders(token), "Idempotency-Key": idempotencyKey },
     body: JSON.stringify(body),
   });
 }
@@ -153,34 +153,27 @@ async function waitForCronIsolatedRuns(count: number): Promise<void> {
 async function writeReloadableHooksConfig(hooks: Record<string, unknown>): Promise<void> {
   const configPath = process.env.OPENCLAW_CONFIG_PATH;
   assert(configPath, "expected OPENCLAW_CONFIG_PATH");
-  await fs.writeFile(
-    configPath,
-    `${JSON.stringify(
-      {
-        gateway: { reload: { mode: "hybrid" } },
-        agents: {
-          defaults: {
-            skipBootstrap: true,
-            model: { primary: "openai/gpt-5.6-luna" },
-            models: { "openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } } },
-          },
-        },
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://openai.example.test/v1",
-              apiKey: "synthetic-fixture-key",
-              models: [{ id: "gpt-5.6-luna", name: "Hook fixture model" }],
-            },
-          },
-        },
-        hooks,
+  const config = {
+    gateway: { reload: { mode: "hybrid" } },
+    agents: {
+      defaults: {
+        skipBootstrap: true,
+        model: { primary: "openai/gpt-5.6-luna" },
+        models: { "openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } } },
       },
-      null,
-      2,
-    )}\n`,
-    "utf8",
-  );
+    },
+    models: {
+      providers: {
+        openai: {
+          baseUrl: "https://openai.example.test/v1",
+          apiKey: "synthetic-fixture-key",
+          models: [{ id: "gpt-5.6-luna", name: "Hook fixture model" }],
+        },
+      },
+    },
+    hooks,
+  };
+  await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
 }
 
 async function patchHooksConfig(
@@ -200,7 +193,6 @@ async function waitForHookStatus(params: {
   port: number;
   path: string;
   token: string;
-  body: string;
   status: number;
 }): Promise<void> {
   await expect
@@ -208,11 +200,8 @@ async function waitForHookStatus(params: {
       async () => {
         const response = await fetch(`http://127.0.0.1:${params.port}${params.path}`, {
           method: "POST",
-          headers: {
-            Authorization: `Bearer ${params.token}`,
-            "Content-Type": "application/json",
-          },
-          body: params.body,
+          headers: hookHeaders(params.token),
+          body: "{}",
         });
         await response.arrayBuffer();
         return response.status;
@@ -222,73 +211,49 @@ async function waitForHookStatus(params: {
     .toBe(params.status);
 }
 
-async function postOversizedChunkedHook(port: number): Promise<{
-  statusCode: number | undefined;
-  body: string;
-  connection: string | undefined;
-  events: string[];
-}> {
+async function postOversizedChunkedHook(port: number) {
   const agent = new Agent({ keepAlive: true });
   const events: string[] = [];
+  const response = createDeferred<IncomingMessage>();
+  const requestFailed = createDeferred<never>();
+  const req = httpRequest(
+    { agent, host: "127.0.0.1", port, path: "/hooks/wake", method: "POST", headers: hookHeaders() },
+    response.resolve,
+  );
+  const socketClosed = new Promise<void>((resolve) => {
+    req.once("socket", (socket) => socket.once("close", resolve));
+  });
+  req.on("error", requestFailed.reject);
+  req.setTimeout(5_000, () => req.destroy(new Error("chunked hook request timed out")));
   try {
-    return await new Promise((resolve, reject) => {
-      const req = httpRequest(
-        {
-          agent,
-          host: "127.0.0.1",
-          port,
-          path: "/hooks/wake",
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${HOOK_TOKEN}`,
-            "Content-Type": "application/json",
-          },
-        },
-        (res) => {
-          const chunks: Buffer[] = [];
-          res.on("data", (chunk: Buffer) => chunks.push(chunk));
-          res.on("error", reject);
-          res.on("end", () => {
-            events.push("response-end");
-            void socketClosed.then(() => {
-              events.push("socket-close");
-              resolve({
-                statusCode: res.statusCode,
-                body: Buffer.concat(chunks).toString("utf8"),
-                connection: res.headers.connection,
-                events,
-              });
-            }, reject);
-          });
-        },
-      );
-      const socketClosed = new Promise<void>((resolveClose) => {
-        req.once("socket", (socket) => socket.once("close", resolveClose));
-      });
-      req.on("error", reject);
-      req.setTimeout(5_000, () => req.destroy(new Error("chunked hook request timed out")));
-      req.write('{"text":"');
-      req.write("x".repeat(DEFAULT_WEBHOOK_MAX_BODY_BYTES + 1));
-      req.end('"}');
-    });
+    return await Promise.race([
+      requestFailed.promise,
+      (async () => {
+        req.write('{"text":"');
+        req.write("x".repeat(DEFAULT_WEBHOOK_MAX_BODY_BYTES + 1));
+        req.end('"}');
+        const res = await response.promise;
+        const chunks: Buffer[] = [];
+        for await (const chunk of res) {
+          chunks.push(chunk);
+        }
+        events.push("response-end");
+        await socketClosed;
+        events.push("socket-close");
+        return {
+          statusCode: res.statusCode,
+          body: Buffer.concat(chunks).toString("utf8"),
+          connection: res.headers.connection,
+          events,
+        };
+      })(),
+    ]);
   } finally {
     agent.destroy();
   }
 }
 
-async function writeHookTransformModule(moduleName: string, source: string): Promise<void> {
-  const configPath = process.env.OPENCLAW_CONFIG_PATH;
-  assert(configPath, "expected OPENCLAW_CONFIG_PATH");
-  const transformsDir = path.join(path.dirname(configPath), "hooks", "transforms");
-  await fs.mkdir(transformsDir, { recursive: true });
-  await fs.writeFile(path.join(transformsDir, moduleName), source, "utf8");
-}
-
-async function createBlockedHookTransform(moduleName: string): Promise<{
-  entered: Promise<void>;
-  release: () => void;
-  dispose: () => void;
-}> {
+async function createBlockedHookTransform(moduleName: string) {
   const configPath = process.env.OPENCLAW_CONFIG_PATH;
   assert(configPath, "expected OPENCLAW_CONFIG_PATH");
   const enteredEvent = `hook-transform:${configPath}:${moduleName}`;
@@ -298,12 +263,15 @@ async function createBlockedHookTransform(moduleName: string): Promise<{
     entered.resolve();
     void released.promise.then(complete);
   };
-  await writeHookTransformModule(
-    moduleName,
+  const transformsDir = path.join(path.dirname(configPath), "hooks", "transforms");
+  await fs.mkdir(transformsDir, { recursive: true });
+  await fs.writeFile(
+    path.join(transformsDir, moduleName),
     `export default async function transform() {
   await new Promise((resolve) => process.emit(${JSON.stringify(enteredEvent)}, resolve));
   return {};
 }`,
+    "utf8",
   );
   process.once(enteredEvent, onEntered);
   return {
@@ -388,7 +356,6 @@ function withRevokedHook(
                 port,
                 path: "/hooks/wake",
                 token: HOOK_TOKEN,
-                body: "{}",
                 status: mode === "disable" ? 404 : 401,
               });
               if (mode === "rotate") {
@@ -580,7 +547,6 @@ describe("gateway hook admission", () => {
         port,
         path: "/incoming/wake",
         token: ROTATED_HOOK_TOKEN,
-        body: "{}",
         status: 400,
       });
       const replayedRunId = await hookRunId(

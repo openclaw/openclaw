@@ -3,6 +3,7 @@ import {
   recordDeliveredCommandExchange,
   scopeCommandTranscriptId,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { runDetachedWebhookWork } from "openclaw/plugin-sdk/webhook-request-guards";
 import type { MattermostPost } from "./client.js";
 import type {
@@ -16,7 +17,6 @@ import {
   resolveMattermostModelPickerCurrentModel,
 } from "./model-picker.js";
 import { authorizeMattermostCommandInvocation } from "./monitor-auth.js";
-import { buildMattermostModelPickerSelectMessageSid } from "./monitor-context.js";
 import { buildMattermostEventPlan } from "./monitor-event-plan.js";
 import { dispatchMattermostInteractionReply } from "./monitor-interaction-dispatch.js";
 import type { MattermostMonitorContext } from "./monitor-types.js";
@@ -133,11 +133,7 @@ export function createMattermostModelPickerInteractionHandler(
       `${params.payload.post_id}:${params.payload.user_id}:${pickerCommandText}:${"page" in pickerState ? pickerState.page : 1}`;
     const messageSid =
       pickerState.action === "select"
-        ? buildMattermostModelPickerSelectMessageSid({
-            postId: params.payload.post_id,
-            provider: pickerState.provider,
-            model: pickerState.model,
-          })
+        ? `interaction:${params.payload.post_id}:select:${normalizeLowercaseStringOrEmpty(pickerState.provider)}/${normalizeLowercaseStringOrEmpty(pickerState.model)}`
         : interactionId;
     const commandId =
       pickerState.action === "select"

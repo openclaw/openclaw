@@ -1,13 +1,11 @@
-import { streamSubagentRegistryInWorker } from "../agents/subagents/registry/subagent-registry.store.worker.js";
 import type { WorkerTaskChannel } from "../infra/worker-task-server.js";
-import { streamTranscriptExportInWorker } from "../transcripts/store-export.worker.js";
 import type {
   OpenClawStateReadCommand,
   OpenClawStateReadReply,
   OpenClawStateReadRequest,
 } from "./openclaw-state-read.types.js";
 
-export async function readStateStream(
+export async function prepareStateStream(
   input: OpenClawStateReadRequest,
   command: Extract<
     OpenClawStateReadCommand,
@@ -15,16 +13,25 @@ export async function readStateStream(
   >,
   channel: WorkerTaskChannel | undefined,
   onAdmitted: () => void,
-): Promise<OpenClawStateReadReply> {
-  if (!channel) {
-    const operation =
-      command.type === "subagents.restore" ? "Subagent restore" : "Transcript export";
-    throw new Error(`${operation} requires a bounded receiver`);
-  }
+): Promise<() => Promise<OpenClawStateReadReply>> {
   if (command.type === "subagents.restore") {
-    const count = await streamSubagentRegistryInWorker(input, channel, onAdmitted);
-    return { ok: true, type: command.type, sourceAdmitted: true, count };
+    // A separate restore entry keeps mixed read/write adapters out of the lazy worker graph.
+    const { streamSubagentRegistryInWorker } =
+      await import("../agents/subagents/registry/subagent-registry.store.restore.worker.js");
+    return async () => {
+      if (!channel) {
+        throw new Error("Subagent restore requires a bounded receiver");
+      }
+      const count = await streamSubagentRegistryInWorker(input, channel, onAdmitted);
+      return { ok: true, type: command.type, sourceAdmitted: true, count };
+    };
   }
-  const result = await streamTranscriptExportInWorker(input, command, channel, onAdmitted);
-  return { ok: true, type: command.type, sourceAdmitted: true, result };
+  const { streamTranscriptExportInWorker } = await import("../transcripts/store-export.worker.js");
+  return async () => {
+    if (!channel) {
+      throw new Error("Transcript export requires a bounded receiver");
+    }
+    const result = await streamTranscriptExportInWorker(input, command, channel, onAdmitted);
+    return { ok: true, type: command.type, sourceAdmitted: true, result };
+  };
 }

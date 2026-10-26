@@ -12,6 +12,7 @@ import {
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { getChannelPlugin } from "../channels/plugins/registry.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
+import { resolveDoctorAgentMigrationTargets } from "../commands/doctor-relative-session-store-paths.js";
 import { createConfigRuntimeEnv } from "../config/config-env-vars.js";
 import { resolveSessionStoreCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
@@ -2505,13 +2506,11 @@ async function executeLegacyStateMigrations(
           params.cfg,
           stateEnv,
         );
-        // Preflight inspects custom session stores without binding their migration owners.
-        agentDatabaseTargets = hasCustomAgentDirOverride(env)
-          ? []
-          : resolveConfiguredAgentDatabaseTargets(params.cfg, {
-              env: stateEnv,
-              registeredDatabases: agentDatabaseMigrationDiscovery.registeredAgentDatabases,
-            });
+        agentDatabaseTargets = resolveDoctorAgentMigrationTargets(params.cfg, stateEnv, {
+          registeredDatabases: agentDatabaseMigrationDiscovery.registeredAgentDatabases,
+          mode,
+          skipConfigured: hasCustomAgentDirOverride(env),
+        });
         return { changes: [], warnings: [] };
       } catch (error) {
         if (mode === "automatic") {

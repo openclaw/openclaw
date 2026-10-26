@@ -17,11 +17,11 @@ export function resolveSharedGatewaySessionGeneration(
         mode: auth.mode,
         trustedProxy: {
           userHeader: auth.trustedProxy?.userHeader,
-          requiredHeaders: [...(auth.trustedProxy?.requiredHeaders ?? [])].toSorted(),
-          allowUsers: [...(auth.trustedProxy?.allowUsers ?? [])].toSorted(),
+          requiredHeaders: (auth.trustedProxy?.requiredHeaders ?? []).toSorted(),
+          allowUsers: (auth.trustedProxy?.allowUsers ?? []).toSorted(),
           allowLoopback: auth.trustedProxy?.allowLoopback,
         },
-        trustedProxies: [...(trustedProxies ?? [])].toSorted(),
+        trustedProxies: (trustedProxies ?? []).toSorted(),
       }),
     );
   }

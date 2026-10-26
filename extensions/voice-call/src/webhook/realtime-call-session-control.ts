@@ -184,7 +184,7 @@ export function createOutboundGreetingController(params: {
               triggerOpening();
             }
           }, params.holdOpeningMaxMs ?? DEFAULT_VOICEMAIL_HOLD_OPENING_MAX_MS);
-          timer.unref?.();
+          timer.unref();
         }
         return;
       }
@@ -197,7 +197,7 @@ export function createOutboundGreetingController(params: {
           session.triggerGreeting(params.instructions);
         }
       }, OUTBOUND_GREETING_FALLBACK_MS);
-      timer.unref?.();
+      timer.unref();
     },
   };
 }
@@ -234,8 +234,7 @@ export function createRealtimeCallActivityController(params: {
     ) {
       return;
     }
-    idleTimer = setTimeout(params.onIdle, params.idleHangupMs);
-    idleTimer.unref?.();
+    idleTimer = setTimeout(params.onIdle, params.idleHangupMs).unref();
   };
   return {
     beginConsult(this: void) {
@@ -261,10 +260,9 @@ export function createRealtimeCallActivityController(params: {
       clearMedia();
       mediaTimer = setTimeout(() => {
         params.onMediaWarning();
-        mediaTimer = setTimeout(params.onMediaTimeout, REALTIME_DISCONNECT_HANGUP_GRACE_MS);
-        mediaTimer.unref?.();
+        mediaTimer = setTimeout(params.onMediaTimeout, REALTIME_DISCONNECT_HANGUP_GRACE_MS).unref();
       }, REALTIME_MEDIA_INACTIVITY_TIMEOUT_MS);
-      mediaTimer.unref?.();
+      mediaTimer.unref();
     },
     noteSpeech: resetIdle,
     start() {

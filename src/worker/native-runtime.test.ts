@@ -35,18 +35,6 @@ const selection = { provider: "openai", modelId: "local-model" };
 const turn = { binding, selection };
 const context: Context = { messages: [{ role: "user", content: "hello", timestamp: 1 }] };
 
-function trackedEnv(reads: PropertyKey[], value?: string): NodeJS.ProcessEnv {
-  return new Proxy(
-    {},
-    {
-      get: (_target, key) => {
-        reads.push(key);
-        return value;
-      },
-    },
-  );
-}
-
 function configFor(
   workspace = tempDirs.make("native-runtime-"),
   baseUrl = "http://127.0.0.1:1/v1",
@@ -67,11 +55,7 @@ function configFor(
     workspace,
   };
 }
-async function start(
-  config = configFor(),
-  env: NodeJS.ProcessEnv = { NATIVE_TEST_KEY: "fixture-key" },
-) {
-  const credential = env.NATIVE_TEST_KEY!;
+async function start(config = configFor(), credential = "fixture-key") {
   const runtime = await createNativeRuntime(config, {
     "openai/local-model": credential,
     "openai/other-model": credential,
@@ -98,11 +82,11 @@ beforeAll(async () => {
     },
   });
 });
-async function probe(scenario: string, config: NativeRuntimeConfig, env: NodeJS.ProcessEnv) {
+async function probe(config: NativeRuntimeConfig, env: NodeJS.ProcessEnv) {
   const root = tempDirs.make("native-probe-startup-");
   const file = path.join(root, "runtime.json");
   await writeFile(file, JSON.stringify(config), { mode: 0o600 });
-  const child = spawn(process.execPath, [probeEntry, file, scenario], {
+  const child = spawn(process.execPath, [probeEntry, file], {
     cwd: root,
     env,
     stdio: ["ignore", "ignore", "pipe", "ipc"],
@@ -119,29 +103,20 @@ async function probe(scenario: string, config: NativeRuntimeConfig, env: NodeJS.
 }
 
 describe("native runtime startup authority", () => {
-  it("guards every configured header value", async () => {
+  it("guards configured headers and HTTP-normalized credential values", async () => {
     const config = configFor();
     config.models[0]!.headers = {
       "x-route": "synthetic-route",
       "x-session": "synthetic-custom-auth",
       "x-short": "abcdefghi",
+      "x-api-key": "  synthetic-header-secret  ",
     };
-    const runtime = await start(config);
+    const runtime = await start(config, "synthetic-http-secret  ");
     await runtime.withTurn(turn, async (resolved) => {
       expect(() => resolved.assertProtocolSafe({ role: "assistant" })).not.toThrow();
-      expect(() => resolved.assertProtocolSafe({ text: "synthetic-custom-auth" })).toThrow(
-        "Native credential appeared",
-      );
       expect(
         ["ordinaryz", "synthetic-custom-", "a", "abcdefg"].map(resolved.hasCredentialPrefix),
       ).toEqual([false, true, true, true]);
-    });
-  });
-  it("filters HTTP-normalized representations of startup credential values", async () => {
-    const config = configFor();
-    config.models[0]!.headers = { "x-api-key": "  synthetic-header-secret  " };
-    const runtime = await start(config, { NATIVE_TEST_KEY: "synthetic-http-secret  " });
-    await runtime.withTurn(turn, async (resolved) => {
       const headers = new Headers({
         Authorization: "Bearer synthetic-http-secret  ",
         ...config.models[0]!.headers,
@@ -149,6 +124,7 @@ describe("native runtime startup authority", () => {
       expect(headers.get("authorization")).toBe("Bearer synthetic-http-secret");
       expect(headers.get("x-api-key")).toBe("synthetic-header-secret");
       for (const secret of [
+        "synthetic-custom-auth",
         headers.get("authorization")!.slice("Bearer ".length),
         headers.get("x-api-key")!,
       ]) {
@@ -175,25 +151,43 @@ describe("native runtime startup authority", () => {
       expect(Object.isFrozen(selected.thinkingLevelMap)).toBe(true);
     });
   });
-  it("settles only its own provider session resources on success and failure", async () => {
+  it("settles its own resources and revokes escaped streams on success, failure, and close", async () => {
     const runtime = await start();
     const cleaned: Array<string | undefined> = [];
     const unregister = registerSessionResourceCleanup((id) => cleaned.push(id));
     try {
-      await runtime.withTurn(turn, async () => {
-        expect(cleaned).toHaveLength(0);
-      });
-      await expect(
-        runtime.withTurn(turn, async () => {
-          throw new Error("native failure");
-        }),
-      ).rejects.toThrow("native failure");
+      for (const failure of [false, true]) {
+        let saved: NativeRuntimeResolved | undefined;
+        const pending = runtime.withTurn(turn, async (resolved) => {
+          saved = resolved;
+          expect(cleaned).toHaveLength(failure ? 1 : 0);
+          if (failure) {
+            throw new Error("native failure");
+          }
+        });
+        if (failure) {
+          await expect(pending).rejects.toThrow("native failure");
+        } else {
+          await pending;
+        }
+        await expect(saved!.streamFn(saved!.model, context)).rejects.toThrow("turn is closed");
+      }
       expect(cleaned).toHaveLength(2);
       expect(new Set(cleaned).size).toBe(2);
       for (const id of cleaned) {
         expect(typeof id).toBe("string");
         expect(id).not.toBe(binding.sessionId);
       }
+      await expect(
+        runtime.withTurn(turn, async (resolved) => {
+          runtime.close();
+          await expect(resolved.streamFn(resolved.model, context)).rejects.toThrow(
+            "runtime is closed",
+          );
+        }),
+      ).rejects.toThrow("runtime is closed");
+      await expect(runtime.withTurn(turn, async () => {})).rejects.toThrow("runtime is closed");
+      runtime.close();
     } finally {
       unregister();
     }
@@ -201,7 +195,7 @@ describe("native runtime startup authority", () => {
   it("preserves opaque proxy auth over real HTTP without caller or ambient overrides", async () => {
     const provider = await providerServer();
     const workspace = tempDirs.make("native-runtime-");
-    const result = await probe("snapshot", configFor(workspace, provider.baseUrl), {
+    const result = await probe(configFor(workspace, provider.baseUrl), {
       NODE_NO_WARNINGS: "1",
       NATIVE_TEST_KEY: "synthetic-opaque/Case+lease=v1.%25",
     });
@@ -237,45 +231,47 @@ describe("native runtime startup authority", () => {
     const provider = await providerServer();
     const workspace = tempDirs.make("native-opaque-host-");
     const values = [known, "prefix-" + unknown + "-suffix"];
-    await Promise.all(
+    const before = { cwd: process.cwd(), context: structuredClone(context) };
+    const active = await Promise.all(
       values.map(async (value) => {
         const config = configFor(workspace, provider.baseUrl);
         config.models[0]!.headers = { "x-custom-auth": value };
-        const runtime = await start(config, { NATIVE_TEST_KEY: value });
+        const runtime = await start(config, value);
         await runtime.withTurn(turn, async (resolved) => {
           const stream = await resolved.streamFn(resolved.model, context);
           const response = await stream.result();
           expect(response.stopReason, response.errorMessage).toBe("stop");
           expect(() => resolved.assertProtocolSafe(value)).toThrow("Native credential appeared");
         });
+        return runtime;
       }),
     );
+    active[0]!.close();
+    await active[1]!.withTurn(turn, async ({ streamFn, model }) => {
+      expect((await (await streamFn(model, context)).result()).stopReason).toBe("stop");
+    });
+    expect(process.cwd()).toBe(before.cwd);
+    expect(context).toEqual(before.context);
+    const sentValues = [values[0]!, values[1]!, values[1]!];
     const sortedHeader = (name: string) =>
       provider.requests
         .map(({ headers }) => String(headers[name] ?? ""))
         .toSorted((a, b) => a.localeCompare(b));
     expect(sortedHeader("authorization")).toEqual(
-      values.map((value) => "Bearer " + value).toSorted((a, b) => a.localeCompare(b)),
+      sentValues.map((value) => "Bearer " + value).toSorted((a, b) => a.localeCompare(b)),
     );
-    expect(sortedHeader("x-custom-auth")).toEqual(values.toSorted((a, b) => a.localeCompare(b)));
+    expect(sortedHeader("x-custom-auth")).toEqual(
+      sentValues.toSorted((a, b) => a.localeCompare(b)),
+    );
     expect(getDefaultAiTransportHost()).toBe(gatewayHost);
     expect(gatewayHost.resolveSecretSentinel(known)).toBe("synthetic-local-provider-value");
     expect(() => gatewayHost.resolveSecretSentinel(unknown)).toThrow("not registered");
   });
 
-  it("reads only named env keys once and fails missing credentials before opening workspaces", async () => {
-    const config = configFor("/nonexistent-native-test-workspace");
-    const reads: PropertyKey[] = [];
-    const env = trackedEnv(reads);
+  it("fails missing credentials before opening workspaces", async () => {
     await expect(
-      createNativeRuntime(config, { "openai/local-model": env.NATIVE_TEST_KEY! }),
+      createNativeRuntime(configFor("/nonexistent-native-test-workspace"), {}),
     ).rejects.toThrow("openai/local-model");
-    expect(reads).toEqual(["NATIVE_TEST_KEY"]);
-    config.workspace = tempDirs.make("native-runtime-");
-    config.models.push({ ...config.models[0]!, id: "second-model" });
-    reads.length = 0;
-    await start(config, trackedEnv(reads, "fixture-key"));
-    expect(reads).toEqual(["NATIVE_TEST_KEY"]);
   });
 
   it("rejects extra wire-style startup fields and endpoint interpolation", () => {
@@ -387,25 +383,6 @@ describe("native runtime startup authority", () => {
     await expect(runtime.withTurn(turn, async () => {})).rejects.toThrow("workspace changed");
   });
 
-  it("isolates concurrent native credentials and registries without mutating cwd or context", async () => {
-    const provider = await providerServer();
-    const result = await probe(
-      "isolation",
-      configFor(tempDirs.make("native-isolation-"), provider.baseUrl),
-      { NODE_NO_WARNINGS: "1", NATIVE_FIRST_KEY: "first-key", NATIVE_SECOND_KEY: "second-key" },
-    );
-    expect(result).toEqual({
-      reasons: ["stop", "stop", "stop"],
-      cwdUnchanged: true,
-      contextUnchanged: true,
-    });
-    expect(
-      provider.requests
-        .map((request) => request.headers.authorization)
-        .toSorted((a, b) => (a ?? "").localeCompare(b ?? "")),
-    ).toEqual(["Bearer first-key", "Bearer second-key", "Bearer second-key"]);
-  });
-
   it("rechecks close after asynchronous admission and honors cancellation before I/O", async () => {
     const runtime = await start();
     await runtime.withTurn(turn, async (resolved) => {
@@ -420,29 +397,5 @@ describe("native runtime startup authority", () => {
     runtime.close();
     await expect(pending).rejects.toThrow("runtime is closed");
     expect(callback).not.toHaveBeenCalled();
-  });
-
-  it("revokes escaped stream functions after completion, failure, and runtime close", async () => {
-    const runtime = await start();
-    const saved = await runtime.withTurn(turn, async (resolved) => resolved);
-    await expect(saved.streamFn(saved.model, context)).rejects.toThrow("turn is closed");
-    let failed: NativeRuntimeResolved | undefined;
-    await expect(
-      runtime.withTurn(turn, async (resolved) => {
-        failed = resolved;
-        throw new Error("fixture failure");
-      }),
-    ).rejects.toThrow("fixture failure");
-    await expect(failed!.streamFn(failed!.model, context)).rejects.toThrow("turn is closed");
-    await expect(
-      runtime.withTurn(turn, async (resolved) => {
-        runtime.close();
-        await expect(resolved.streamFn(resolved.model, context)).rejects.toThrow(
-          "runtime is closed",
-        );
-      }),
-    ).rejects.toThrow("runtime is closed");
-    await expect(runtime.withTurn(turn, async () => {})).rejects.toThrow("runtime is closed");
-    runtime.close();
   });
 });

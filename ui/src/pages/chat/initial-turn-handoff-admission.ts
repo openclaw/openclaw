@@ -1,6 +1,6 @@
 import { sameQueuedDeliveryVersion } from "../../lib/chat/outbox-store-codec.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { visibleSessionMatches } from "../../lib/sessions/index.ts";
+import { visibleSessionMatches } from "../../lib/sessions/navigation.ts";
 import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import { setChatError } from "./chat-history-state.ts";
 import { getChatPendingInputs } from "./chat-pending-inputs.ts";
@@ -10,7 +10,6 @@ import {
   readQueuedMessageById,
 } from "./chat-queue.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
-import { waitForQueuedChatHistory } from "./chat-send-queue-state.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { reportChatComposerDraftStorageError } from "./composer-persistence-feedback.ts";
 import { admitChatSubmission } from "./history-merge.ts";
@@ -45,7 +44,10 @@ export function admitInitialTurnHandoff(host: ChatHost, sessionKey: string): boo
         const composerOwner = host.captureComposerRecoveryOwner?.();
         const canDispatch = () =>
           isCurrent() && ownsConnection() && composerOwner?.resolveOwner() === host;
-        const { retryQueuedChatMessage } = await import("./chat-send-actions.ts");
+        const [{ retryQueuedChatMessage }, { waitForQueuedChatHistory }] = await Promise.all([
+          import("./chat-send-actions.ts"),
+          import("./chat-send-queue-state.ts"),
+        ]);
         const current = readQueuedMessageById(host, item.id);
         if (
           !expected ||

@@ -16,6 +16,7 @@ import { assertCronStoreCanPersist } from "../../src/cron/store/row-codec.js";
 import { saveCronStoreInDatabase } from "../../src/cron/store/save.kernel.js";
 import type { CronStoredJob } from "../../src/cron/types.js";
 import { insertOperatorApprovalInDatabase } from "../../src/gateway/operator-approval-store.kernel.worker.js";
+import { ensureLocal } from "../../src/gateway/worker-environments/placement-row-codec.js";
 import { insertProjectRegistryInDatabase } from "../../src/projects/project-registry.kernel.js";
 import { runOpenClawAgentWriteTransaction } from "../../src/state/openclaw-agent-db.js";
 import { runOpenClawStateWriteTransaction } from "../../src/state/openclaw-state-db.js";
@@ -39,7 +40,9 @@ export type TeamShapeExtrasOptions = {
   cronJobs: number;
   cronAnnounceLast?: boolean;
   projects: number;
+  localPlacements?: number;
   worktreeFiles?: number;
+  worktreeLocalOrigin?: boolean;
   worktreeFileBytes?: number;
   worktreeInstallFailure?: boolean;
   worktreeColdCommits?: number;
@@ -240,6 +243,14 @@ async function seedProjects(options: TeamShapeExtrasOptions) {
         coldBaseRefs.push(ref);
       }
     }
+    if (options.worktreeLocalOrigin) {
+      // Keep the advertised default branch separate from the managed local refs.
+      const origin = path.join(options.stateDir, "fixture-remotes", `${projectId}.git`);
+      await fs.mkdir(path.dirname(origin), { recursive: true });
+      await git("clone", "--bare", "--local", repoRoot, origin);
+      await git("-C", origin, "symbolic-ref", "HEAD", "refs/heads/main");
+      await git("remote", "add", "origin", origin);
+    }
     const repository = await resolveRepositoryIdentity(repoRoot);
     const project = runOpenClawStateWriteTransaction(({ db }) => {
       const registered = insertProjectRegistryInDatabase(db, {
@@ -286,6 +297,13 @@ export async function seedTeamShapeExtras(options: TeamShapeExtrasOptions) {
     throw new Error("Retained runs require a parent and at least one child session");
   }
   const projectWorktrees = await seedProjects(options);
+  if (options.localPlacements) {
+    runOpenClawStateWriteTransaction(({ db }) => {
+      for (const session of options.sessions.slice(0, options.localPlacements)) {
+        ensureLocal(db, { ...session, agentId: "main" }, options.now);
+      }
+    });
+  }
   const records = Array.from({ length: options.retainedRuns }, (_, index) =>
     retainedRun(index, options),
   );
@@ -442,6 +460,7 @@ export async function seedTeamShapeExtras(options: TeamShapeExtrasOptions) {
     cronJobs: jobs.length,
     cronAnnounceLast: options.cronAnnounceLast ?? false,
     projects: projectWorktrees.length,
+    localPlacements: options.localPlacements ?? 0,
     githubOptionsConnected: options.githubOptionsConnected ?? false,
     worktreeFiles: options.worktreeFiles ?? 0,
     worktreeFileBytes: options.worktreeFileBytes ?? 0,

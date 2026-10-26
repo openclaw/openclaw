@@ -159,7 +159,7 @@ export function enqueueFollowupRun(
     }
     const front =
       options.position === "front" && (!deferOverflow || options.steerCandidate === true);
-    queue.lastEnqueuedAt = Date.now();
+    queue.lastEnqueuedAt = performance.now();
     queue.lastRun = run.run;
     run.queueAbortSignal = queue.abortController.signal;
     const queuedInput = run.controllerInput!;

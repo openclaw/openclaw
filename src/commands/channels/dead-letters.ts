@@ -70,7 +70,7 @@ export async function channelsDeadLettersResubmitCommand(
       defaultRuntime.writeJson({ channelId, accountId, eventId, result });
     } else {
       defaultRuntime.log(
-        `${theme.success("Resubmitted")} channel ingress event ${sanitizeTerminalText(eventId)} (${channelId}/${accountId}).`,
+        `${theme.success("Resubmitted")} channel ingress event ${sanitizeTerminalText(eventId)} (${channelId}/${accountId}). The running channel retries it within 5 minutes by default (longer if configured).`,
       );
     }
     return;

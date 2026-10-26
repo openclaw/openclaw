@@ -5,6 +5,10 @@ import {
 import { createMemo, Errored, For, isPending, latest, Loading, Show } from "solid-js";
 import { formatAgentRuntimeLabel } from "../../../../src/shared/agent-runtime-display.js";
 import { formatFastModeValue } from "../../../../src/shared/fast-mode.js";
+import {
+  formatGoalDetail,
+  formatGoalSummary,
+} from "../../../../src/shared/session-goal-display.js";
 import type { AgentIdentityResult, GatewaySessionRow, SessionRunStatus } from "../../api/types.ts";
 import { AgentRowChip } from "../../components/agent-row-chip.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -23,7 +27,6 @@ import { formatSessionTokens } from "../../lib/presenter.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { liveValue as createLiveValue } from "../../lib/reactive/live-value.ts";
 import { resolveSessionDisplayKind } from "../../lib/session-display.ts";
-import { formatGoalDetail, formatGoalSummary } from "../../lib/session-goal.ts";
 import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
 import { SESSION_DRAG_MIME } from "../../lib/sessions/drag.ts";
 import {
@@ -532,8 +535,15 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
               {(item) => (
                 <div class="session-detail-stat">
                   <div class="session-detail-stat__label">{t(item().key)}</div>
+                  {/* Values clip at the column width, so the tooltip is the only full value: it needs a focusable trigger carrying the value it names. */}
                   <openclaw-tooltip prop:content={item().value}>
-                    <div class="session-detail-stat__value">{item().value}</div>
+                    <div
+                      class="session-detail-stat__value"
+                      tabindex="0"
+                      aria-label={`${t(item().key)}: ${item().value}`}
+                    >
+                      {item().value}
+                    </div>
                   </openclaw-tooltip>
                 </div>
               )}

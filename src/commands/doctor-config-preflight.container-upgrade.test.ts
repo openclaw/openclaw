@@ -382,8 +382,9 @@ describe("container image replacement Doctor repair and startup readiness", () =
             outcome: "refused",
             refusal: { code: "step-refused", message: expect.any(String) },
             warnings: expect.arrayContaining([
-              expect.stringContaining(
-                `${databasePath} metadata schema version 18 does not match 19`,
+              expect.stringMatching(
+                // The cause precedes the location so path redaction cannot swallow it.
+                /metadata schema version 18 does not match 19\. Database: .*openclaw-agent\.sqlite$/u,
               ),
             ]),
           }),

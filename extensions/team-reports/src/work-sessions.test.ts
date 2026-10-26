@@ -41,15 +41,17 @@ it("requests owned sessions and projects only link metadata, excluding incognito
     includeDerivedTitles: true,
     includeLastMessage: false,
   });
-  expect(result).toMatchObject({
+  expect(result).toEqual({
     available: true,
     sessions: [
-      { key: "agent:writer:work", owner: { actor: { label: "Alice" } }, status: "running" },
+      {
+        key: "agent:writer:work",
+        owner: { actor: { type: "human", label: "Alice" } },
+        status: "running",
+      },
     ],
     nextOffset: 80,
   });
-  expect(JSON.stringify(result)).not.toContain("Not report evidence");
-  expect(JSON.stringify(result)).not.toContain("agent:writer:private");
 });
 
 it.each([false, true])("returns unavailable for failed discovery (throw=%s)", async (throws) => {
@@ -65,9 +67,7 @@ const profile = (id: string, login: string | null, mergedInto?: string | null, h
   mergedInto: mergedInto ?? null,
   githubIdentity: login ? { ...(host ? { host } : {}), login } : null,
 });
-const identities = (profiles: ReturnType<typeof profile>[]) => {
-  respond({ profiles });
-};
+const identities = (profiles: ReturnType<typeof profile>[]) => respond({ profiles });
 async function expectNoSessions(alias = "alice", reason?: string) {
   const sessions = vi.fn();
   expect(await createPersonWorkSessions(sessions)({ github: [alias] })).toEqual({

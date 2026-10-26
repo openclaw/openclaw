@@ -33,6 +33,7 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { readTranscriptMessageByScopedIdempotencyKey } from "./session-accessor.sqlite-transcript-identity.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
+import { resolveSessionTranscriptRuntimeTarget } from "./session-accessor.transcript-target.js";
 import {
   captureSessionActorStorageOwner,
   getSessionActorStorageBinding,
@@ -212,6 +213,26 @@ async function appendPreparedSessionTranscriptTurn(
   }
   if (memory || inputActor) {
     throw new Error("Actor transcript turns require preparation outside the transaction");
+  }
+  if (options.resolveRuntimeTarget) {
+    const runtimeTarget = await resolveSessionTranscriptRuntimeTarget(
+      { ...scope, ...resolved, storePath: resolved.path },
+      options.config,
+      { keyFormat: options.keyFormat },
+    );
+    const result = await appendPreparedSessionTranscriptTurn(
+      { ...scope, ...runtimeTarget },
+      {
+        ...options,
+        resolveRuntimeTarget: undefined,
+        selectedSessionId: runtimeTarget.selectedSessionId,
+        selectedLifecycleRevision: runtimeTarget.selectedLifecycleRevision,
+        sessionFile: runtimeTarget.sessionKey,
+      },
+      assertOwnedWrite,
+      nativeReservation,
+    );
+    return { ...result, runtimeTarget };
   }
   if (options.ownerSource?.checks.length) {
     throw new Error(

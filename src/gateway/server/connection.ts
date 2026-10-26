@@ -421,18 +421,6 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
       let disconnectedNodeHistory: Parameters<typeof recordPairedNodeDisconnection>[0] | undefined;
       if (client?.connect?.role === "node") {
         const nodeId = client.connect.device?.id ?? client.connect.client.id;
-        const nodeSession = context.nodeRegistry.get(nodeId);
-        if (nodeSession?.connId === connId && nodeSession.pairingGeneration) {
-          disconnectedNodeHistory = {
-            nodeId: nodeSession.nodeId,
-            connectedAtMs: nodeSession.connectedAtMs,
-            disconnectedAtMs: Date.now(),
-            expectedPairingGeneration: {
-              nodeId: nodeSession.nodeId,
-              key: nodeSession.pairingGeneration,
-            },
-          };
-        }
         // Retire I/O now, but retain revocation until admitted lifecycle work drains.
         retainClientUntilNodeDrain = true;
         retireTransport();
@@ -444,6 +432,19 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
                 `node lifecycle dispatch drain timed out after ${NODE_LIFECYCLE_DISPATCH_DRAIN_TIMEOUT_MS}ms conn=${connId}`,
               );
             }
+          }
+          const nodeSession = context.nodeRegistry.get(nodeId);
+          if (nodeSession?.connId === connId && nodeSession.pairingGeneration) {
+            disconnectedNodeHistory = {
+              nodeId: nodeSession.nodeId,
+              connectedAtMs: nodeSession.connectedAtMs,
+              disconnectedAtMs: Date.now(),
+              ...(nodeSession.hostStats ? { hostStats: nodeSession.hostStats } : {}),
+              expectedPairingGeneration: {
+                nodeId: nodeSession.nodeId,
+                key: nodeSession.pairingGeneration,
+              },
+            };
           }
           currentDisconnectedNodeId = context.nodeRegistry.unregister(connId);
         } finally {

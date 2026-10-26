@@ -689,9 +689,7 @@ export async function executePluginOwnedProcess(params: {
     params.onOutstandingWorkChange?.(false);
     // Permission callbacks can be retained by the plugin or its subprocess.
     // Closing the turn fences those capabilities before any outer cleanup runs.
-    if (!controller.signal.aborted) {
-      controller.abort(new Error("CLI plugin runtime turn is no longer active."));
-    }
+    controller.abort(new Error("CLI plugin runtime turn is no longer active."));
     detachReplyBackend?.();
     await closePluginIterator(iterator);
   }

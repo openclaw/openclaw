@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionsPatchMutation } from "../../../packages/gateway-protocol/src/schema/sessions-patch.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../api/gateway.ts";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
 import { loadSettings, patchSettings } from "../app/settings.ts";
 import { t } from "../i18n/index.ts";
 import {
@@ -44,6 +44,43 @@ import {
 vi.mock("../lib/toast.ts", () => ({ showToast: vi.fn() }));
 
 describe("patchSessionRows", () => {
+  it.each(["connected", "reconnecting"] as const)(
+    "preserves tree guards with queued work while %s",
+    async (phase) => {
+      const h = createHarness({ phase });
+      h.scope.gateway.snapshot.deferredIntentCount = 1;
+      const row = {
+        ...sessionRow(1),
+        archiveGuard: { expectedArchived: false },
+      };
+      const result = await patchSessionRows(h.host, [row], { archived: true }, h.scope, {
+        sessionScope: true,
+      });
+      expect(h.patch).not.toHaveBeenCalled();
+      if (phase === "connected") {
+        expect(result).toEqual([row]);
+        expect(h.request.mock.calls[0]?.[1]).toMatchObject({
+          targets: [{ ...sessionTarget(row), expectedArchived: false }],
+        });
+      } else {
+        expect(result).toBeNull();
+        expect(h.request).not.toHaveBeenCalled();
+        expect(h.publishSessionMutationError).toHaveBeenCalled();
+      }
+    },
+  );
+  it("queues offline bulk archive as one mutation per selected row", async () => {
+    const h = createHarness({ phase: "reconnecting" });
+    h.scope.allowDeferred = true;
+    h.scope.sessions.patch = vi.fn(async () => ({ queued: true as const }));
+    const rows = [sessionRow(0), sessionRow(1)];
+    await expect(
+      patchSessionRows(h.host, rows, { archived: true }, h.scope, { sessionScope: true }),
+    ).resolves.toEqual(rows);
+    expect(h.scope.sessions.patch).toHaveBeenCalledTimes(2);
+    expect(h.request).not.toHaveBeenCalled();
+    expect(h.publishSessionMutationError).not.toHaveBeenCalled();
+  });
   it.each([true, false])(
     "retires only a confirmed archive's personal pin (accepted: %s)",
     async (accepted) => {
@@ -621,6 +658,33 @@ describe("session organizer destructive confirmations", () => {
       deleteTranscript: true,
       expectedSessionId: row.sessionId,
     });
+  });
+
+  it("warns about bound automations even after the delete confirmation opt-out", async () => {
+    patchSettings({ sessionDeleteConfirm: false });
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    const h = createHarness(destructiveHarness);
+    const original = h.request.getMockImplementation()!;
+    h.request.mockImplementation(async (method, params, options) =>
+      method === "cron.list"
+        ? { jobs: [{ id: "job-1", name: "Nightly digest" }], total: 1 }
+        : original(method, params, options),
+    );
+    const row = makeRow(0, { hasAutomation: true });
+    const pending = h.remove(row, { offerSkip: true });
+    const actions = await waitForConfirmDialogActions();
+    expect(document.body.textContent).toContain('Deleting "Batch 0" pauses its automations.');
+    expect(document.body.textContent).toContain("Nightly digest (job-1)");
+    expect(document.body.querySelector(".exec-approval-skip")).toBeNull();
+    expect(actions.textContent).toContain("Delete anyway");
+    answerConfirmDialog(actions, "cancel");
+    await pending;
+    expect(h.deleteOne).not.toHaveBeenCalled();
+    expect(info.mock.calls.map(([message]) => message)).toEqual([
+      "[session-automation-confirm] delete shown",
+      "[session-automation-confirm] delete cancelled",
+    ]);
+    info.mockRestore();
   });
 
   it.each(["cloud worker stop", "preserved worktree removal"])(

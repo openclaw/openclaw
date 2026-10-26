@@ -4,14 +4,17 @@ import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { runNodeScript } from "../../../../test/helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import {
   resolveFileMutationQueueKey,
   withFileMutationQueueKeyResolution,
 } from "./file-mutation-queue.js";
+import { readRenderContext } from "./read-render.test-support.js";
 import { createReadTool, createReadToolDefinition, type ReadToolOptions } from "./read.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "./truncate.js";
 import { createWriteTool } from "./write.js";
@@ -120,6 +123,50 @@ function renderReadCall(args: { path: string; offset?: number; limit?: number })
 }
 
 describe("read tool", () => {
+  it("keeps terminal modules cold until rendering in a headless session", async () => {
+    const home = tempDirs.make("headless-read-");
+    const result = await runNodeScript(
+      [
+        "--import",
+        fileURLToPath(new URL("../../../../scripts/tsx.mjs", import.meta.url)),
+        "--input-type=module",
+        "--eval",
+        `import assert from "node:assert/strict";
+import { registerHooks } from "node:module";
+const terminalModules = new Set();
+registerHooks({ load(url, context, nextLoad) {
+  if (url.includes("/pi-tui/")) terminalModules.add(url);
+  return nextLoad(url, context);
+} });
+const { createReadToolDefinition } = await import(${JSON.stringify(new URL("./read.ts", import.meta.url).href)});
+await import(${JSON.stringify(new URL("../resource-loader.ts", import.meta.url).href)});
+await import(${JSON.stringify(new URL("../extensions/runner-defaults.ts", import.meta.url).href)});
+const tool = createReadToolDefinition("/synthetic", { operations: {
+  access: async () => {}, readFile: async () => Buffer.from("hello"),
+} });
+const result = await tool.execute("read", { path: "notes.txt" });
+assert.equal(result.content[0].text, "hello");
+assert.equal(terminalModules.size, 0, "Headless file reads must not load terminal UI modules");
+const component = tool.renderCall({ path: "notes.txt" }, {
+  fg: (_token, text) => text, bold: text => text,
+}, { cwd: "/synthetic" });
+assert.equal(component.render(80).join("\\n").trimEnd(), "read notes.txt");
+assert.ok(terminalModules.size > 0, "Terminal rendering must still load its real runtime");
+console.log("headless-read-ok");`,
+      ],
+      {
+        PATH: process.env.PATH,
+        SystemRoot: process.env.SystemRoot,
+        NODE_OPTIONS: "",
+        HOME: home,
+        OPENCLAW_STATE_DIR: path.join(home, "state"),
+      },
+      30_000,
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("headless-read-ok");
+  });
+
   beforeEach(() => {
     decodeWindowsTextFileBufferMock.mockReset();
     decodeWindowsTextFileBufferMock.mockImplementation(({ buffer }) => buffer.toString("utf8"));
@@ -400,20 +447,7 @@ describe("read tool", () => {
       },
       { expanded: true, isPartial: false },
       plainTheme,
-      {
-        args: { path: "notes.txt" },
-        toolCallId: "read-render",
-        invalidate: () => {},
-        lastComponent: undefined,
-        state: {},
-        cwd: "/workspace",
-        executionStarted: true,
-        argsComplete: true,
-        isPartial: false,
-        expanded: true,
-        showImages: false,
-        isError: false,
-      },
+      readRenderContext("notes.txt"),
     );
     expect(
       component

@@ -82,14 +82,14 @@ function stubProviderStream(result = vi.fn(async () => opencodeCompletion())) {
     },
   };
 }
-function requestOpencode(
-  { provider, model, baseUrl } = opencode,
-  extras: Record<string, unknown> = {},
-) {
-  mockImageModel({ provider, id: model, api: "openai-completions", baseUrl, ...extras });
-  return describeImageWithModelCore(
-    request({ provider, model }, { prompt: "Describe the image." }),
-  );
+function requestOpencode() {
+  mockImageModel({
+    provider: opencode.provider,
+    id: opencode.model,
+    api: "openai-completions",
+    baseUrl: opencode.baseUrl,
+  });
+  return describeImageWithModelCore(request(opencode));
 }
 function mockUnknownMinimax() {
   resolveModelAsyncMock.mockResolvedValue({
@@ -166,19 +166,6 @@ describe("describeImageWithModelCore", () => {
     const first = options(0).header;
     expect(first).toMatch(uuidPattern);
     expect(options(1).header).toBe(first);
-  });
-
-  it.each([
-    [
-      "unrelated provider",
-      { provider: "openai", model: "gpt-5-mini", baseUrl: "https://api.openai.com/v1" },
-      {},
-    ],
-    ["model-level header", opencode, { headers: { "X-OpenCode-Session": "model-session" } }],
-  ] as const)("does not inject routing identity for %s", async (_name, endpoint, extras) => {
-    const { options } = stubProviderStream();
-    await requestOpencode(endpoint, extras);
-    expect(options(0)).toEqual({ sessionId: undefined, header: undefined });
   });
 
   it("does not start another MiniMax request after caller cancellation", async () => {

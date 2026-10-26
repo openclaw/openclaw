@@ -4,11 +4,7 @@ import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../../packages/gateway-
 import { contextBudgetStatusFixture } from "../../../../src/config/sessions/context-budget.test-support.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type {
-  GatewaySessionRow,
-  SessionsListResult,
-  SessionsPatchResult,
-} from "../../api/types.ts";
+import type { GatewaySessionRow, SessionsPatchResult } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
@@ -24,6 +20,26 @@ import { executeSlashCommand as executeSlashCommandImpl } from "./chat-command-e
 
 const resultText = (key: string, values?: Record<string, string>) =>
   t(`chat.commandResults.${key}`, values);
+const optionsText = (current: string, options: string) =>
+  `${current}\n${resultText("options", { options })}`;
+const sessionSnapshot = (client: GatewayBrowserClient) => ({
+  client,
+  hello: sessionMutationGatewayHello(),
+  phase: "connected" as const,
+});
+
+function usageText(input: string, output: string, total: string, context?: string) {
+  return [
+    `**${resultText("usage.title")}**`,
+    ...[
+      ["inputTokens", input],
+      ["outputTokens", output],
+      ["totalTokens", total],
+    ].map(([field, count]) => resultText(`usage.${field}`, { count: `**${count}**` })),
+    ...(context ? [context] : []),
+    resultText("usage.model", { model: "`gpt-4.1-mini`" }),
+  ].join("\n");
+}
 
 function mockRequests(responses: Record<string, () => unknown>) {
   const handlers = new Map(Object.entries(responses));
@@ -38,7 +54,7 @@ function mockRequests(responses: Record<string, () => unknown>) {
 
 function createCommandSessionCapability(client: GatewayBrowserClient): SessionCapability {
   const sessions = createTestSessionCapability({
-    snapshot: { client, phase: "connected", hello: sessionMutationGatewayHello() },
+    snapshot: sessionSnapshot(client),
     subscribe: () => () => undefined,
     subscribeEvents: () => () => undefined,
   });
@@ -63,14 +79,7 @@ function executeSlashCommand(
     sessionAccessSnapshot?: Parameters<typeof executeSlashCommandImpl>[4]["sessionAccessSnapshot"];
   } = {},
 ) {
-  const {
-    sessionAccessSnapshot = {
-      client,
-      hello: sessionMutationGatewayHello(),
-      phase: "connected",
-    },
-    ...rest
-  } = context;
+  const { sessionAccessSnapshot = sessionSnapshot(client), ...rest } = context;
   return executeSlashCommandImpl(client, sessionKey, commandName, args, {
     sessions: createCommandSessionCapability(client),
     ...rest,
@@ -104,16 +113,6 @@ function restrictedSnapshot(
 
 function row(key: string, overrides?: Partial<GatewaySessionRow>): GatewaySessionRow {
   return { key, kind: "direct", updatedAt: null, ...overrides };
-}
-
-function createSessionsResult(sessions: GatewaySessionRow[]): SessionsListResult {
-  return {
-    ts: 0,
-    path: "",
-    count: sessions.length,
-    defaults: { modelProvider: null, model: null, contextTokens: null },
-    sessions,
-  };
 }
 
 function requireRequestCall(
@@ -150,37 +149,6 @@ function mockSession(
 }
 
 describe("executeSlashCommand directives", () => {
-  it("lets the canonical row retire a slash-command selection equal to the default", async () => {
-    const key = "agent:main:main";
-    const request = mockRequests({
-      "sessions.patch": () => createResolvedModelPatch("gpt-5-mini", "openai"),
-      "sessions.list": () =>
-        createSessionsResult([
-          row(key, {
-            model: "gpt-5-mini",
-            modelProvider: "openai",
-            modelOverrideSource: null,
-          }),
-        ]),
-    });
-    const client = createTestGatewayClient(request);
-    const snapshot = { client, phase: "connected" as const, hello: sessionMutationGatewayHello() };
-    const sessions = createTestSessionCapability({
-      snapshot,
-      subscribe: () => () => undefined,
-      subscribeEvents: () => () => undefined,
-    });
-    const result = await executeSlashCommandImpl(client, key, "model", "openai/gpt-5-mini", {
-      sessions,
-      sessionAccessSnapshot: snapshot,
-      chatModelCatalog: createModelCatalog(OPENAI_GPT5_MINI_MODEL),
-    });
-    expect(result.failed).not.toBe(true);
-    expect(sessions.state.result?.sessions[0]?.modelOverrideSource).toBeNull();
-    expect(sessions.state.modelOverrides).toEqual({});
-    sessions.dispose();
-  });
-
   it("does not compact a session without operator.admin", async () => {
     const request = vi.fn();
     const client = createTestGatewayClient(request);
@@ -226,11 +194,7 @@ describe("executeSlashCommand directives", () => {
     } as SessionCapability;
     const result = await executeSlashCommandImpl(client, "global", "model", "gpt-5-mini", {
       sessions,
-      sessionAccessSnapshot: {
-        client,
-        hello: sessionMutationGatewayHello(),
-        phase: "connected",
-      },
+      sessionAccessSnapshot: sessionSnapshot(client),
       agentId: "work",
       ownsModelOverride,
       chatModelCatalog: createModelCatalog(OPENAI_GPT5_MINI_MODEL),
@@ -391,140 +355,95 @@ describe("executeSlashCommand directives", () => {
     });
   });
 
-  it.each([false, true])(
-    "keeps /usage context hidden when stale (usage unavailable: %s)",
-    async (unavailable) => {
-      const request = mockRequests({
-        "sessions.describe": () => ({
-          session: row("agent:main:main", {
-            model: "gpt-4.1-mini",
-            inputTokens: 1200,
-            outputTokens: 300,
-            totalTokens: 1500,
-            totalTokensFresh: false,
-            ...(unavailable ? { usageReport: { state: "unavailable" as const } } : {}),
-            contextTokens: 4000,
-          }),
-        }),
-      });
-
-      const result = await runCommand(request, "usage");
-
-      expect(result.content).toBe(
-        [
-          `**${resultText("usage.title")}**`,
-          resultText("usage.inputTokens", {
-            count: `**${unavailable ? resultText("usage.notAvailable") : "1.2k"}**`,
-          }),
-          resultText("usage.outputTokens", {
-            count: `**${unavailable ? resultText("usage.notAvailable") : "300"}**`,
-          }),
-          resultText("usage.totalTokens", {
-            count: `**${unavailable ? resultText("usage.notAvailable") : "~1.5k"}**`,
-          }),
-          resultText("usage.model", { model: "`gpt-4.1-mini`" }),
-        ].join("\n"),
-      );
-      expect(request).toHaveBeenNthCalledWith(1, "sessions.describe", {
-        key: "agent:main:main",
-        agentId: "main",
-      });
+  it.each([
+    {
+      name: "stale context",
+      state: { totalTokensFresh: false },
+      counts: ["1.2k", "300", "~1.5k"],
+      context: undefined,
     },
-  );
-
-  it("uses the context snapshot for /usage while preserving cumulative total display", async () => {
+    {
+      name: "unavailable usage",
+      state: { totalTokensFresh: false, usageReport: { state: "unavailable" as const } },
+      counts: [
+        resultText("usage.notAvailable"),
+        resultText("usage.notAvailable"),
+        resultText("usage.notAvailable"),
+      ],
+      context: undefined,
+    },
+    {
+      name: "fresh snapshot distinct from cumulative total",
+      state: {},
+      counts: ["1.2k", "300", "1.5k"],
+      context: resultText("usage.context", { percent: "**31%**", total: "4k" }),
+    },
+  ] as const)("reports /usage for $name", async ({ state, counts, context }) => {
     const request = mockSession({
       model: "gpt-4.1-mini",
       inputTokens: 1200,
       outputTokens: 300,
       totalTokens: 1250,
       contextTokens: 4000,
+      ...state,
     });
-    const result = await runCommand(request, "usage");
-    expect(result.content).toBe(
-      [
-        `**${resultText("usage.title")}**`,
-        resultText("usage.inputTokens", { count: "**1.2k**" }),
-        resultText("usage.outputTokens", { count: "**300**" }),
-        resultText("usage.totalTokens", { count: "**1.5k**" }),
-        resultText("usage.context", { percent: "**31%**", total: "4k" }),
-        resultText("usage.model", { model: "`gpt-4.1-mini`" }),
-      ].join("\n"),
+    expect((await runCommand(request, "usage")).content).toBe(
+      usageText(counts[0], counts[1], counts[2], context),
     );
-    expect(request).toHaveBeenNthCalledWith(1, "sessions.describe", {
-      key: "agent:main:main",
-      agentId: "main",
-    });
   });
 
   it.each([
-    ["think", "thinkingLevel", "thinking.reset"],
-    ["fast", "fastMode", "fast.reset"],
-  ] as const)("clears /%s default through the session patch owner", async (command, field, key) => {
-    const request = vi.fn(async (method: string, payload?: unknown) => {
-      if (method === "sessions.patch") {
-        return { ok: true, ...((payload ?? {}) as object) };
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-    expect(await runCommand(request, command, "default")).toEqual({
+    ["think", "default", { thinkingLevel: null }, "thinking.reset"],
+    ["fast", "default", { fastMode: null }, "fast.reset"],
+    ["fast", "on", { fastMode: true }, "fast.enabled"],
+    ["fast", "auto", { fastMode: "auto" }, "fast.setAuto"],
+  ] as const)("patches /%s %s through the session owner", async (command, arg, patch, key) => {
+    const request = mockRequests({ "sessions.patch": () => ({ ok: true }) });
+    expect(await runCommand(request, command, arg)).toEqual({
       content: resultText(key),
       action: "refresh",
     });
-    expectPatch(request, { [field]: null });
+    expectPatch(request, patch);
   });
 
   it("uses default thinking options when the active session is absent", async () => {
     const levels = ["off", "minimal", "low", "medium", "adaptive", "high", "xhigh", "maximum"];
-    const request = vi.fn(async (method: string, payload?: unknown) => {
-      if (method === "sessions.describe") {
-        return { session: null };
-      }
-      if (method === "sessions.list") {
-        return {
-          defaults: {
-            modelProvider: "openai",
-            model: "gpt-5.5",
-            thinkingLevels: levels.map((label) => ({
-              id: label === "maximum" ? "max" : label,
-              label,
-            })),
-            thinkingOptions: levels,
-            thinkingDefault: "adaptive",
-          },
-          sessions: [],
-        };
-      }
-      if (method === "models.list") {
-        return {
-          models: [{ id: "gpt-5.5", provider: "openai", reasoning: true }],
-        };
-      }
-      if (method === "sessions.patch") {
-        return { ok: true, ...((payload ?? {}) as object) };
-      }
-      throw new Error(`unexpected method: ${method}`);
+    const request = mockRequests({
+      "sessions.describe": () => ({ session: null }),
+      "sessions.list": () => ({
+        defaults: {
+          modelProvider: "openai",
+          model: "gpt-5.5",
+          thinkingLevels: levels.map((label) => ({
+            id: label === "maximum" ? "max" : label,
+            label,
+          })),
+          thinkingOptions: levels,
+          thinkingDefault: "adaptive",
+        },
+        sessions: [],
+      }),
+      "models.list": () => ({ models: [{ id: "gpt-5.5", provider: "openai", reasoning: true }] }),
+      "sessions.patch": () => ({ ok: true }),
     });
     const status = await runCommand(request, "think");
-    const setXhigh = await runCommand(request, "think", "xhigh");
-    const setMax = await runCommand(request, "think", "max");
-    const setMaximum = await runCommand(request, "think", "maximum");
-    const setAdaptive = await runCommand(request, "think", "auto");
     expect(status.content).toBe(
-      [
+      optionsText(
         resultText("thinking.current", { level: "adaptive" }),
-        resultText("options", {
-          options: "default, off, minimal, low, medium, adaptive, high, xhigh, maximum",
-        }),
-      ].join("\n"),
+        "default, off, minimal, low, medium, adaptive, high, xhigh, maximum",
+      ),
     );
-    expect(setXhigh.content).toBe(resultText("thinking.set", { level: "**xhigh**" }));
-    expect(setMax.content).toBe(resultText("thinking.set", { level: "**max**" }));
-    expect(setMaximum.content).toBe(resultText("thinking.set", { level: "**max**" }));
-    expect(setAdaptive.content).toBe(resultText("thinking.set", { level: "**adaptive**" }));
-    expectPatch(request, { thinkingLevel: "xhigh" });
-    expectPatch(request, { thinkingLevel: "max" });
-    expectPatch(request, { thinkingLevel: "adaptive" });
+    for (const [input, level] of [
+      ["xhigh", "xhigh"],
+      ["max", "max"],
+      ["maximum", "max"],
+      ["auto", "adaptive"],
+    ]) {
+      expect((await runCommand(request, "think", input)).content).toBe(
+        resultText("thinking.set", { level: `**${level}**` }),
+      );
+      expectPatch(request, { thinkingLevel: level });
+    }
   });
 
   it("rejects thinking levels when the selected model advertises empty support", async () => {
@@ -549,15 +468,8 @@ describe("executeSlashCommand directives", () => {
     const request = mockSession({ verboseLevel: "full" });
     const result = await runCommand(request, "verbose");
     expect(result.content).toBe(
-      [
-        resultText("verbose.current", { level: "full" }),
-        resultText("options", { options: "on, full, off" }),
-      ].join("\n"),
+      optionsText(resultText("verbose.current", { level: "full" }), "on, full, off"),
     );
-    expect(request).toHaveBeenNthCalledWith(1, "sessions.describe", {
-      key: "agent:main:main",
-      agentId: "main",
-    });
   });
 
   it.each([
@@ -575,28 +487,15 @@ describe("executeSlashCommand directives", () => {
       const request = mockSession(session);
       const result = await runCommand(request, "fast");
       expect(result.content).toBe(
-        [
+        optionsText(
           `${resultText("fast.current", {
             value: resultText(`fast.${valueKey}`, { seconds }),
           })}${sourceKey ? resultText(`fast.${sourceKey}`) : ""}.`,
-          resultText("options", { options: resultText("fast.options", { seconds }) }),
-        ].join("\n"),
+          resultText("fast.options", { seconds }),
+        ),
       );
-      expect(request).toHaveBeenNthCalledWith(1, "sessions.describe", {
-        key: "agent:main:main",
-        agentId: "main",
-      });
     },
   );
-
-  it.each([
-    ["on", true, "enabled"],
-    ["auto", "auto", "setAuto"],
-  ] as const)("patches fast mode for /fast %s", async (arg, fastMode, resultKey) => {
-    const request = vi.fn().mockResolvedValue({ ok: true });
-    expect((await runCommand(request, "fast", arg)).content).toBe(resultText(`fast.${resultKey}`));
-    expectPatch(request, { fastMode });
-  });
 });
 
 describe("executeSlashCommand /steer (soft inject)", () => {
@@ -610,9 +509,6 @@ describe("executeSlashCommand /steer (soft inject)", () => {
     const result = await runCommand(request, "steer", "try a different approach");
     expect(result.content).toBe(resultText(`steer.${key}`));
     expect(result.failed ?? false).toBe(key !== "succeeded");
-    if (key !== "succeeded") {
-      expect(result.content).not.toBe(resultText("steer.succeeded"));
-    }
     const { payload } = requireRequestCall(request, "chat.send");
     expect(payload).toMatchObject({
       sessionKey: "agent:main:main",

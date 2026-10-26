@@ -30,6 +30,7 @@ import {
 } from "../../config/sessions/session-transcript-read-fence.js";
 import { startSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
 import type { TranscriptEntryAnchor } from "../../config/sessions/transcript-entry-anchor.js";
+import { cloneTranscriptView } from "../../config/sessions/transcript-snapshot.js";
 import {
   sameSessionTranscriptTargetBinding,
   captureSessionTranscriptTargetBinding,
@@ -48,7 +49,7 @@ import type { Message } from "../../llm/types.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import { SessionManagerBranching } from "./session-manager-branching.js";
-import { cloneSessionModelContextEntries } from "./session-manager-codec.js";
+import { buildInitialContext, cloneSessionModelContextEntries } from "./session-manager-codec.js";
 import {
   sessionManagerOpenCompaction,
   sessionManagerOpenTranscriptCohort,
@@ -65,7 +66,6 @@ import {
 } from "./session-manager-incognito.js";
 import { receiveSessionManagerCommit } from "./session-manager-persistence-error.js";
 import { openSessionManagerBoundedView } from "./session-manager-reload.js";
-import { cloneTranscriptView } from "./session-manager-snapshot.js";
 import type {
   SessionLeafControl,
   AppendPersistenceOptions,
@@ -181,7 +181,7 @@ export class SessionManager extends SessionManagerBranching {
     ) {
       throw new Error("Session manager changed during initial context read");
     }
-    return buildCoreSessionContext(context.getBranch());
+    return buildInitialContext(context.getBranch(), this.byId);
   }
 
   /** No buffered writes remain here; asynchronous metadata methods own their settlement. */
@@ -572,9 +572,8 @@ export class SessionManager extends SessionManagerBranching {
             sqliteSessionIdWriteScope(captured.sessionId),
           ]);
         if (writeToken && !manager.migrated && branch.length === context.totalEvents) {
-          const events = cloneSessionModelContextEntries(manager.getHeader(), branch);
           manager.preparedInitialContext = {
-            branch: events.filter((entry) => entry.type !== "session"),
+            branch: cloneSessionModelContextEntries(branch),
             writeToken,
             view: manager.captureTranscriptView(),
           };

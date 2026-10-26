@@ -1,7 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -15,6 +17,7 @@ import {
   hostedDiffsEntry,
   hostedFeedDiffsEntry,
   metadataSnapshot,
+  mockHostedOfficialCatalog,
 } from "./management-service.test-helpers.js";
 
 const mocks = vi.hoisted(() => ({
@@ -58,15 +61,6 @@ const {
   resolveManagedSetupCatalogIconUrl,
 } = await import("./management-service.js");
 
-function mockHostedOfficialCatalog(entries: unknown[]) {
-  mocks.officialCatalog.mockResolvedValue({
-    source: "hosted",
-    entries,
-    feed: { schemaVersion: 1, id: "test", generatedAt: "now", sequence: 1, entries: [] },
-    metadata: { url: "https://clawhub.ai/feed", status: 200, checksum: "hash" },
-  });
-}
-
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const listLocalPlugins = (config: OpenClawConfig = {}) =>
   listManagedPlugins({ config, env: {}, officialCatalog: { entries: [] } });
@@ -85,12 +79,12 @@ describe("managed plugin catalog", () => {
     mocks.providerAuthChoices.mockReturnValue([]);
     mocks.pluginVersionCategories.mockResolvedValue([]);
     mocks.recommendedInstalls.mockReturnValue([]);
-    mockHostedOfficialCatalog([]);
+    mockHostedOfficialCatalog(mocks.officialCatalog, []);
   });
 
   it("normalizes package-shaped hosted rows and deduplicates their runtime id", async () => {
     mocks.metadata.mockReturnValue(emptyMetadataSnapshot());
-    mockHostedOfficialCatalog([hostedFeedDiffsEntry]);
+    mockHostedOfficialCatalog(mocks.officialCatalog, [hostedFeedDiffsEntry]);
 
     const available = await listManagedPlugins({ config: {}, env: {} });
     expect(available.plugins).toEqual([
@@ -204,7 +198,7 @@ describe("managed plugin catalog", () => {
 
   it("does not transfer bundled endorsement to a package identity impostor", async () => {
     mocks.metadata.mockReturnValue(emptyMetadataSnapshot());
-    mockHostedOfficialCatalog([
+    mockHostedOfficialCatalog(mocks.officialCatalog, [
       {
         ...hostedDiffsEntry,
         name: "community/impostor",
@@ -337,6 +331,61 @@ describe("managed plugin catalog", () => {
     },
   );
 
+  it.each([false, true])(
+    "serves installed rows during category enrichment (offline: %s)",
+    async (offline) => {
+      mocks.metadata.mockReturnValue(
+        metadataSnapshot({
+          enabled: true,
+          id: "community-memory",
+          origin: "global",
+          installRecord: {
+            source: "clawhub",
+            clawhubPackage: "community/memory",
+            version: "4.5.6",
+          },
+        }),
+      );
+      const categories =
+        createDeferred<Array<{ name: string; version: string; categories: string[] }>>();
+      mocks.pluginVersionCategories.mockReturnValue(categories.promise);
+      const params = {
+        config: {},
+        env: {},
+        officialCatalog: { entries: [] },
+        cachedCatalogOnly: true,
+      };
+      const pending = listManagedPlugins(params);
+      try {
+        const first = await Promise.race([pending, nextTurn().then(() => undefined)]);
+        expect(first?.plugins).toContainEqual(
+          expect.objectContaining({ id: "community-memory", installed: true }),
+        );
+        expect(first?.diagnostics).toContainEqual(
+          expect.objectContaining({ message: expect.stringContaining("pending") }),
+        );
+      } finally {
+        if (offline) {
+          categories.reject(new Error("offline"));
+        } else {
+          categories.resolve([
+            { name: "community/memory", version: "4.5.6", categories: ["memory"] },
+          ]);
+        }
+        await pending;
+      }
+      const prepared = await listLocalPlugins();
+      expect(await listManagedPlugins(params)).toEqual(prepared);
+      expect(prepared.plugins[0]?.categories).toEqual(offline ? undefined : ["memory"]);
+      if (offline) {
+        expect(prepared.diagnostics).toContainEqual(
+          expect.objectContaining({ message: expect.stringContaining("unavailable") }),
+        );
+      }
+      expect(mocks.pluginVersionCategories).toHaveBeenCalledOnce();
+    },
+  );
+
   it("batch-enriches missing categories from the exact installed ClawHub version", async () => {
     mocks.metadata.mockReturnValue(
       metadataSnapshot({
@@ -377,53 +426,69 @@ describe("managed plugin catalog", () => {
     }
   });
 
-  it("keeps category enrichment scoped to the installed ClawHub registry", async () => {
-    const installedAt = (clawhubUrl: string) =>
-      metadataSnapshot({
-        enabled: true,
-        id: "community-memory",
-        name: "Community Memory",
-        origin: "global",
-        packageVersion: "4.5.6",
-        installRecord: {
-          source: "clawhub",
-          clawhubUrl,
-          clawhubPackage: "community/memory",
-          version: "4.5.6",
-        },
-      });
-    mocks.pluginVersionCategories.mockImplementation(async ({ baseUrl }: { baseUrl: string }) => [
-      {
-        name: "community/memory",
-        version: "4.5.6",
-        categories: [baseUrl.includes("private") ? "tools" : "memory"],
-      },
-    ]);
+  it.each(["registry", "version"])(
+    "keeps category enrichment scoped to the installed ClawHub %s",
+    async (scope) => {
+      const installedAt = (clawhubUrl: string, version = "4.5.6") =>
+        metadataSnapshot({
+          enabled: true,
+          id: "community-memory",
+          name: "Community Memory",
+          origin: "global",
+          packageVersion: "4.5.6",
+          installRecord: {
+            source: "clawhub",
+            clawhubUrl,
+            clawhubPackage: "community/memory",
+            version,
+          },
+        });
+      mocks.pluginVersionCategories.mockImplementation(
+        async ({
+          baseUrl,
+          packages,
+        }: {
+          baseUrl: string;
+          packages: Array<{ version: string }>;
+        }) => [
+          {
+            name: "community/memory",
+            version: packages[0]?.version,
+            categories: [
+              baseUrl.includes("private") && packages[0]?.version === "4.5.6" ? "tools" : "memory",
+            ],
+          },
+        ],
+      );
 
-    mocks.metadata.mockReturnValue(installedAt("https://private.example/clawhub/"));
-    const privateCatalog = await listLocalPlugins();
-    mocks.metadata.mockReturnValue(installedAt("https://public.example/"));
-    const publicCatalog = await listLocalPlugins();
+      mocks.metadata.mockReturnValue(installedAt("https://private.example/clawhub/"));
+      const privateCatalog = await listLocalPlugins();
+      const nextUrl =
+        scope === "registry" ? "https://public.example" : "https://private.example/clawhub";
+      const nextVersion = scope === "version" ? "7.8.9" : "4.5.6";
+      mocks.metadata.mockReturnValue(installedAt(nextUrl, nextVersion));
+      const publicCatalog = await listLocalPlugins();
 
-    expect(mocks.pluginVersionCategories.mock.calls).toEqual([
-      [
-        {
-          baseUrl: "https://private.example/clawhub",
-          skipAuth: true,
-          packages: [{ name: "community/memory", version: "4.5.6" }],
-        },
-      ],
-      [
-        {
-          baseUrl: "https://public.example",
-          skipAuth: true,
-          packages: [{ name: "community/memory", version: "4.5.6" }],
-        },
-      ],
-    ]);
-    expect(privateCatalog.plugins[0]?.categories).toEqual(["tools"]);
-    expect(publicCatalog.plugins[0]?.categories).toEqual(["memory"]);
-  });
+      expect(mocks.pluginVersionCategories.mock.calls).toEqual([
+        [
+          {
+            baseUrl: "https://private.example/clawhub",
+            skipAuth: true,
+            packages: [{ name: "community/memory", version: "4.5.6" }],
+          },
+        ],
+        [
+          {
+            baseUrl: nextUrl,
+            skipAuth: true,
+            packages: [{ name: "community/memory", version: nextVersion }],
+          },
+        ],
+      ]);
+      expect(privateCatalog.plugins[0]?.categories).toEqual(["tools"]);
+      expect(publicCatalog.plugins[0]?.categories).toEqual(["memory"]);
+    },
+  );
 
   it("keeps installed plugins uncategorized when ClawHub enrichment is unavailable", async () => {
     const packageRoot = tempDirs.make("managed-plugin-installed-");

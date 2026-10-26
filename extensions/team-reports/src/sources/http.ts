@@ -1,3 +1,4 @@
+import { readErrorName } from "openclaw/plugin-sdk/error-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { z } from "zod";
 import type { SourceStatus } from "../types.js";
@@ -13,12 +14,10 @@ export async function readApiResponse(
   headers: HeadersInit,
   status: SourceStatus,
 ): Promise<{ status: number; headers: Headers; data: unknown }> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 30_000);
   let release: (() => Promise<void>) | undefined;
   try {
     status.stats.apiCalls = Number(status.stats.apiCalls) + 1;
-    const init: RequestInit = { headers, signal: controller.signal, redirect: "error" };
+    const init: RequestInit = { headers, redirect: "error" };
     const result = await fetchWithSsrFGuard({
       url: String(url),
       init,
@@ -38,12 +37,12 @@ export async function readApiResponse(
     }
     return { status: response.status, headers: response.headers, data };
   } catch (error) {
-    if (controller.signal.aborted) {
+    const name = readErrorName(error);
+    if (name === "TimeoutError" || name === "AbortError") {
       throw new ApiResponseReadError("timeout");
     }
     throw error;
   } finally {
-    clearTimeout(timeout);
     await release?.().catch(() => {
       throw new ApiResponseReadError("release");
     });

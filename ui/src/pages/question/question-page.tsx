@@ -3,7 +3,7 @@ import { createMemo, createSignal, Errored, For, Loading, onSettled, Show } from
 import "../../styles/approval.css";
 import "../../styles/chat/question-card.css";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { canUseQuestionPrompts, requestQuestionGateway } from "../../app/question-prompt-client.ts";
 import {
   cancelQuestionPrompt,
@@ -46,11 +46,29 @@ type QuestionPageProps = { questionId: string };
 
 const questionIdHandlers = new WeakMap<HTMLElement, () => void>();
 
-function createQuestionPage(
-  context: ApplicationContext,
+function QuestionSummary(props: { prompt: QuestionPrompt }) {
+  return (
+    <div class="chat-question-summary" aria-label={t("chat.questions.summaryLabel")}>
+      <For each={props.prompt.questions} keyed={(question) => question.questionId}>
+        {(question) => (
+          <div class="chat-question-summary__item">
+            <div class="chat-question-summary__prompt">{question().question}</div>
+            <div class="chat-question-summary__line">
+              <strong>{question().header}:</strong>
+              <span>{terminalAnswer(props.prompt, question())}</span>
+            </div>
+          </div>
+        )}
+      </For>
+    </div>
+  );
+}
+
+function QuestionPageContent(
   props: QuestionPageProps,
   host: SolidBridgeElement<QuestionPageProps>,
 ) {
+  const context = useApplication();
   // The bridge owns this live value; callbacks must see changes before the next render.
   const questionId = () => host.questionId;
   let completion = Promise.withResolvers<QuestionPageRequestError>();
@@ -89,7 +107,7 @@ function createQuestionPage(
     },
     equality: "revision",
   });
-  const prompt = () => questions.read().find((candidate) => candidate.id === props.questionId);
+  const readPrompt = () => questions.read().find((candidate) => candidate.id === props.questionId);
   onSettled(() => {
     // Native receipts retire operations before another question can dispatch.
     questionIdHandlers.set(host, () => {
@@ -225,86 +243,50 @@ function createQuestionPage(
     );
   }
 
-  function pageTitle(
-    value: QuestionPrompt | undefined,
-    error: QuestionPageRequestError | "loading",
-  ): string {
-    if (error === "loading") {
-      return t("common.loading");
-    }
-    if (error) {
-      return t(
-        error === "connection"
-          ? "chat.questions.disconnected"
-          : error === "load"
-            ? "chat.questions.loadFailed"
-            : "chat.questions.unavailable",
-      );
-    }
-    return value && value.status !== "pending"
-      ? questionStatusLabel(value)
-      : t("chat.questions.eyebrow");
-  }
-
-  return {
-    request,
-    prompt,
-    pageTitle,
-    questionStatusLabel,
-    questionState,
-    refreshQuestions: () => questionState.onChange(),
-    setPanel: (element: HTMLElement) => {
-      questionPanel = element;
-    },
-    needsFocus: () => questionPanelHadFocus && !questionPanel?.isConnected,
-    retry: () => {
-      if (clientOwner) {
-        void loadQuestion(clientOwner);
-      }
-    },
+  const refreshQuestions = () => questionState.onChange();
+  const setPanel = (element: HTMLElement) => {
+    questionPanel = element;
   };
-}
-
-function QuestionSummary(props: { prompt: QuestionPrompt }) {
-  return (
-    <div class="chat-question-summary" aria-label={t("chat.questions.summaryLabel")}>
-      <For each={props.prompt.questions} keyed={(question) => question.questionId}>
-        {(question) => (
-          <div class="chat-question-summary__item">
-            <div class="chat-question-summary__prompt">{question().question}</div>
-            <div class="chat-question-summary__line">
-              <strong>{question().header}:</strong>
-              <span>{terminalAnswer(props.prompt, question())}</span>
-            </div>
-          </div>
-        )}
-      </For>
-    </div>
-  );
-}
-
-function QuestionPageContent(
-  props: QuestionPageProps,
-  host: SolidBridgeElement<QuestionPageProps>,
-) {
-  const context = useApplication();
-  const page = createQuestionPage(context, props, host);
+  const needsFocus = () => questionPanelHadFocus && !questionPanel?.isConnected;
+  const retry = () => {
+    if (clientOwner) {
+      void loadQuestion(clientOwner);
+    }
+  };
   const panelProps = () => {
-    const prompt = page.prompt();
+    const prompt = readPrompt();
     return prompt
       ? createGatewayQuestionPanelProps(prompt, {
-          onChange: page.refreshQuestions,
-          onSubmit: (answers) => submitQuestionPrompt(page.questionState, prompt.id, answers),
-          onSkip: () => cancelQuestionPrompt(page.questionState, prompt.id),
+          onChange: refreshQuestions,
+          onSubmit: (answers) => submitQuestionPrompt(questionState, prompt.id, answers),
+          onSkip: () => cancelQuestionPrompt(questionState, prompt.id),
         })
       : undefined;
   };
   function Frame(frameProps: { state: QuestionPageRequestError | "loading"; retry?: () => void }) {
     let heading: HTMLHeadingElement | undefined;
-    const title = () => page.pageTitle(page.prompt(), frameProps.state);
+    const title = (): string => {
+      const value = readPrompt();
+      const error = frameProps.state;
+      if (error === "loading") {
+        return t("common.loading");
+      }
+      if (error) {
+        return t(
+          error === "connection"
+            ? "chat.questions.disconnected"
+            : error === "load"
+              ? "chat.questions.loadFailed"
+              : "chat.questions.unavailable",
+        );
+      }
+      return value && value.status !== "pending"
+        ? questionStatusLabel(value)
+        : t("chat.questions.eyebrow");
+    };
     createDocumentTitle(() => `${title()} — ${t("approvalPage.brandName")}`);
     createPendingFocus(title, {
-      requested: page.needsFocus,
+      requested: needsFocus,
       focus: () => heading?.focus({ preventScroll: true }),
     });
     return (
@@ -312,11 +294,11 @@ function QuestionPageContent(
         class="approval-page question-page"
         aria-labelledby="question-page-title"
         aria-busy={frameProps.state === "loading" ? "true" : "false"}
-        data-state={page.prompt()?.status ?? frameProps.state ?? "loading"}
+        data-state={readPrompt()?.status ?? frameProps.state ?? "loading"}
       >
         <div class="approval-page__card approval-page__card--severity-info">
           <div class="approval-page__content">
-            <Show when={frameProps.state || !page.prompt() || page.prompt()?.status === "pending"}>
+            <Show when={frameProps.state || !readPrompt() || readPrompt()?.status === "pending"}>
               <h1
                 ref={(element) => {
                   heading = element;
@@ -334,21 +316,17 @@ function QuestionPageContent(
                 <div class="approval-page__state" role="status">
                   {title()}
                   <Show when={frameProps.state === "load"}>
-                    <button
-                      type="button"
-                      class="btn"
-                      onClick={() => (frameProps.retry ?? page.retry)()}
-                    >
+                    <button type="button" class="btn" onClick={() => (frameProps.retry ?? retry)()}>
                       {t("common.retry")}
                     </button>
                   </Show>
                 </div>
               }
             >
-              <Show when={page.prompt()}>
+              <Show when={readPrompt()}>
                 {(prompt) => (
                   <Show
-                    when={page.prompt()?.status === "pending"}
+                    when={readPrompt()?.status === "pending"}
                     fallback={
                       <div
                         class="approval-page__state"
@@ -362,13 +340,13 @@ function QuestionPageContent(
                           id="question-page-title"
                           tabindex="-1"
                         >
-                          {page.questionStatusLabel(prompt())}
+                          {questionStatusLabel(prompt())}
                         </h1>
                         <QuestionSummary prompt={prompt()} />
                       </div>
                     }
                   >
-                    <ChatQuestionCard ref={page.setPanel} props={panelProps()} />
+                    <ChatQuestionCard ref={setPanel} props={panelProps()} />
                   </Show>
                 )}
               </Show>
@@ -380,7 +358,7 @@ function QuestionPageContent(
   }
   function ReadyFrame() {
     const ready = createMemo(() =>
-      page.request().completion.then((error) => {
+      request().completion.then((error) => {
         if (error) {
           throw new QuestionReadError(error);
         }
@@ -394,7 +372,7 @@ function QuestionPageContent(
     );
   }
   return (
-    <Loading on={page.request()} fallback={<Frame state="loading" />}>
+    <Loading on={request()} fallback={<Frame state="loading" />}>
       <Errored
         fallback={(error, reset) => {
           const state = () => {
@@ -405,7 +383,7 @@ function QuestionPageContent(
             <Frame
               state={state()}
               retry={() => {
-                page.retry();
+                retry();
                 reset();
               }}
             />

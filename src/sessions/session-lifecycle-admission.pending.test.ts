@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
-import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import { withinTest } from "../../test/helpers/promise.js";
+import { createEnteredGate as gate } from "../agents/entered-gate.test-support.js";
 import {
   createAgentRunDirectAbortError,
   createAgentRunRestartAbortError,
@@ -29,18 +30,6 @@ function makeTarget<T extends string[]>(scope: string, ...identities: T) {
 }
 function ownedTarget(scope: string, ...identities: string[]) {
   return { ...makeTarget(scope, ...identities), owner: Symbol(scope), serializeOwner: true };
-}
-function gate() {
-  const entered = createDeferred();
-  const release = createDeferred();
-  return {
-    entered: entered.promise,
-    release: release.resolve,
-    wait: async () => {
-      entered.resolve();
-      await release.promise;
-    },
-  };
 }
 function admissionOutcome(pending: ReturnType<typeof beginAdmission>) {
   return pending.then(

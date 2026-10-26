@@ -524,6 +524,7 @@ describe("plugin session actions", () => {
             scopes,
             allowsAgent: expect.any(Function),
             isSharedGateway: expect.any(Function),
+            assertCurrent: expect.any(Function),
           },
         });
       }
@@ -556,6 +557,7 @@ describe("plugin session actions", () => {
           scopes: [APPROVALS_SCOPE],
           allowsAgent: expect.any(Function),
           isSharedGateway: expect.any(Function),
+          assertCurrent: expect.any(Function),
         },
       });
       const blankPluginId = await callPluginSessionActionForTest(

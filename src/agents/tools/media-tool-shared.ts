@@ -60,17 +60,15 @@ import {
   type ToolModelConfig,
 } from "./model-config.helpers.js";
 
-type TextToolAttempt = {
-  provider: string;
-  model: string;
-  error: string;
-};
-
 type TextToolResult = {
   text: string;
   provider: string;
   model: string;
-  attempts: TextToolAttempt[];
+  attempts: {
+    provider: string;
+    model: string;
+    error: string;
+  }[];
 };
 
 export const REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS = 120_000;
@@ -110,11 +108,6 @@ type CapabilityProviderSource =
   | readonly CapabilityProvider[]
   | (() => readonly CapabilityProvider[]);
 
-type GenerationCapabilityProviderKey =
-  | "imageGenerationProviders"
-  | "videoGenerationProviders"
-  | "musicGenerationProviders";
-
 /** @deprecated Only synchronous tool-constructor compatibility uses this path. */
 export function isCapabilityProviderConfigured<T extends CapabilityProvider>(params: {
   providers: readonly T[];
@@ -124,7 +117,6 @@ export function isCapabilityProviderConfigured<T extends CapabilityProvider>(par
   workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
-  authProfileStoreSource?: boolean;
 }): boolean {
   const provider =
     params.provider ??
@@ -154,7 +146,6 @@ export function isCapabilityProviderConfigured<T extends CapabilityProvider>(par
     workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
     authStore: params.authStore,
-    authProfileStoreSource: params.authProfileStoreSource,
   });
 }
 
@@ -286,10 +277,9 @@ export function hasGenerationToolAvailability(params: {
   agentDir?: string;
   workspaceDir?: string;
   authStore?: AuthProfileStore;
-  authProfileStoreSource?: boolean;
   modelConfig?: AgentModelConfig;
   providers?: CapabilityProviderSource;
-  providerKey: GenerationCapabilityProviderKey;
+  providerKey: "imageGenerationProviders" | "videoGenerationProviders" | "musicGenerationProviders";
 }): boolean {
   if (params.cfg?.plugins?.enabled === false) {
     return false;
@@ -333,7 +323,6 @@ export function hasGenerationToolAvailability(params: {
       workspaceDir: params.workspaceDir,
       agentDir: params.agentDir,
       authStore: params.authStore,
-      authProfileStoreSource: params.authProfileStoreSource,
       capability: capabilityAuthOperation(params.providerKey),
     }),
   );

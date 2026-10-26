@@ -12,6 +12,7 @@ import { requireNodeSqlite } from "./node-sqlite.js";
 import { encodeRun } from "./update-run-codec.js";
 import { readUpdateRunRecord } from "./update-run-read.kernel.js";
 import { toPublicUpdateRun, type UpdateRunRecord } from "./update-run-record.js";
+import { createUpdateRunRecordFixture } from "./update-run-record.test-support.js";
 import {
   mutateRunInTransaction,
   persistRun,
@@ -42,26 +43,13 @@ function db(): DatabaseSync {
   return database;
 }
 
-const record = (overrides: Partial<UpdateRunRecord> = {}): UpdateRunRecord => ({
-  runId,
-  createdAtMs: 1,
-  updatedAtMs: 2,
-  trigger: "cli",
-  phase: "finished",
-  status: "failed",
-  reason: "candidate failed",
-  origin: { driver: { host: "fixture", pid: 41, startIdentity: "1" } },
-  target: { kind: "package" },
-  before: {},
-  after: {},
-  steps: [],
-  verification: {},
-  repair: [],
-  confirmedAtMs: null,
-  finishedAtMs: 2,
-  downtimeMs: null,
-  ...overrides,
-});
+const record = (overrides: Partial<UpdateRunRecord> = {}): UpdateRunRecord =>
+  createUpdateRunRecordFixture(runId, {
+    reason: "candidate failed",
+    origin: { driver: { host: "fixture", pid: 41, startIdentity: "1" } },
+    target: { kind: "package" },
+    ...overrides,
+  });
 
 const receipt = () =>
   ({

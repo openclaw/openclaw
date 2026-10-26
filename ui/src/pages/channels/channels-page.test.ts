@@ -5,8 +5,9 @@ import type {
   ControlUiChannelSettingsSnapshot,
 } from "../../../../src/plugin-sdk/control-ui-settings.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import type { JsonSchema } from "../../components/config-form.shared.ts";
 import { ApplicationProvider } from "../../lib/reactive/context.ts";
 import type { ControlUiPluginDistribution } from "../../plugins/control-ui-distribution.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -38,21 +39,18 @@ vi.mock("../../plugins/control-ui-distribution.ts", async (importOriginal) => ({
 const mountedPages = new Map<HTMLElement, () => void>();
 
 function mountPage(context: ApplicationContext): HTMLElement {
-  const page = document.createElement("div");
-  document.body.append(page);
-  const mounted = mountSolid(
-    () =>
+  const mounted = mountSolid(() => createComponent(ChannelsPage, {}), {
+    wrapper: (props) =>
       createComponent(ApplicationProvider, {
         value: context,
         get children() {
-          return createComponent(ChannelsPage, {});
+          return props.children;
         },
       }),
-    { container: page },
-  );
-  mountedPages.set(page, mounted.unmount);
+  });
+  mountedPages.set(mounted.container, mounted.unmount);
   flush();
-  return page;
+  return mounted.container;
 }
 
 function disposePage(page: HTMLElement) {
@@ -66,6 +64,27 @@ async function settle() {
   await Promise.resolve();
   flush();
 }
+
+const findButton = (root: ParentNode, selector: string) =>
+  root.querySelector<HTMLButtonElement>(selector)!;
+const text = (root: ParentNode, selector: string) => root.querySelector(selector)?.textContent;
+async function closeDetail(page: HTMLElement) {
+  findButton(page, ".channels-detail__close").click();
+  await settle();
+}
+function expectUpdate(mount: PackagedChannel["mounts"][number], expected: object) {
+  expect(mount.update).toHaveBeenLastCalledWith(expect.objectContaining(expected));
+}
+function heldFetch() {
+  const pending = createDeferred<Response>();
+  const fetchMock = vi.fn<typeof fetch>().mockReturnValue(pending.promise);
+  vi.stubGlobal("fetch", fetchMock);
+  return { pending, fetchMock };
+}
+const objectSchema = (properties: Record<string, JsonSchema>): JsonSchema => ({
+  type: "object",
+  properties,
+});
 
 afterEach(() => {
   packaged.length = 0;
@@ -155,12 +174,12 @@ describe("ChannelsPage lifecycle", () => {
         expect(button.disabled).toBe(true);
         button.click();
       }
-      const browse = page.querySelector<HTMLButtonElement>("button.channels-item")!;
+      const browse = findButton(page, "button.channels-item");
       expect(browse.textContent).toContain("More channels");
       expect(browse.disabled).toBe(true);
       browse.click();
 
-      const details = page.querySelector<HTMLButtonElement>(".channels-item__detail")!;
+      const details = findButton(page, ".channels-item__detail");
       expect(details.disabled).toBe(false);
       details.click();
       await settle();
@@ -171,8 +190,7 @@ describe("ChannelsPage lifecycle", () => {
       await settle();
       expect(page.querySelector(".channels-wizard")).toBeNull();
       expect(request.mock.calls.filter(([method]) => method === "wizard.start")).toHaveLength(0);
-      page.querySelector<HTMLButtonElement>(".channels-detail__close")!.click();
-      await settle();
+      await closeDetail(page);
       expect(page.querySelector(".channels-detail")).toBeNull();
     }
 
@@ -181,9 +199,9 @@ describe("ChannelsPage lifecycle", () => {
     const setup = profileButton(page, "Set up");
     expect(setup.disabled).toBe(false);
     setup.click();
-    await waitForSolid(() => {
-      expect(page.querySelector("#channel-wizard-text-input")).not.toBeNull();
-    });
+    await waitForSolid(() =>
+      expect(page.querySelector("#channel-wizard-text-input")).not.toBeNull(),
+    );
     expect(request.mock.calls.filter(([method]) => method === "wizard.start")).toHaveLength(1);
     disposePage(page);
     await settle();
@@ -193,41 +211,34 @@ describe("ChannelsPage lifecycle", () => {
     });
   });
 
-  it.each([
-    { name: "exact icon over an earlier owning plugin", late: false },
-    { name: "icon after late channel status", late: true },
-  ])("loads $name", async ({ late }) => {
-    const id = late ? "mattermost" : "slack";
-    const label = late ? "Mattermost" : "Slack";
-    const plugins: object[] = [
-      {
-        ...plugin(id, label),
-        origin: "bundled",
-        enabled: late,
-        state: late ? "loaded" : "disabled",
+  it.each(["exact", "late", "shared"] as const)("loads the %s channel icon owner", async (kind) => {
+    const late = kind === "late";
+    const shared = kind === "shared";
+    const id = shared ? "agent-system-github" : late ? "mattermost" : "slack";
+    const label = shared ? "GitHub Notifications" : late ? "Mattermost" : "Slack";
+    const ownerId = shared ? "agent-system" : id;
+    const plugins = [
+      plugin(ownerId, label, {
+        origin: shared ? "global" : "bundled",
+        enabled: late || shared,
+        state: late || shared ? "enabled" : "disabled",
         description: `OpenClaw ${label} channel plugin.`,
-      },
+        ...(shared ? { channelIds: [id, "agent-system-chat"] } : {}),
+      }),
     ];
-    if (!late) {
-      plugins.unshift(plugin("slack-suite", "Suite", { channelIds: ["slack"] }));
-      plugins.push({
-        id: "firecrawl",
-        name: "FireCrawl",
-        origin: "global",
-        description: "Crawl websites.",
-        installed: false,
-        enabled: false,
-        state: "available",
-        hasIcon: true,
-      });
+    if (kind === "exact") {
+      plugins.unshift(plugin("slack-suite", "Suite", { channelIds: [id] }));
+      plugins.push(
+        plugin("firecrawl", "FireCrawl", {
+          installed: false,
+          enabled: false,
+          state: "not-installed",
+        }),
+      );
     }
+    const description = "Legacy channel subtitle";
     const snapshot = {
-      ...channelStatus(
-        id,
-        late ? label : "slack",
-        late,
-        late ? undefined : "Legacy channel subtitle",
-      ),
+      ...channelStatus(id, late || shared ? label : id, late, late ? undefined : description),
       ts: late ? 1 : 0,
     };
     const { source, request, refresh } = catalogFixture(
@@ -235,8 +246,9 @@ describe("ChannelsPage lifecycle", () => {
       late ? channelSnapshot() : snapshot,
       ["operator.admin", "operator.read"],
     );
-    const icon = `blob:${id}-plugin-icon`;
+    const icon = `blob:${ownerId}-plugin-icon`;
     const fetchMock = mockIcon(icon);
+    const revoke = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
     const page = mountPage(source.context);
     if (late) {
       await waitForSolid(() =>
@@ -246,84 +258,36 @@ describe("ChannelsPage lifecycle", () => {
       await refresh(snapshot);
     }
     await waitForSolid(() => {
-      expect(page.querySelector(".settings-row__title")?.textContent).toBe(label);
+      expect(text(page, ".settings-row__title")).toBe(label);
       expect(page.querySelector(".channels-item img")?.getAttribute("src")).toBe(icon);
-      if (!late) {
-        expect(page.querySelector(".settings-row__desc")?.textContent).toBe(
-          "OpenClaw Slack channel plugin.",
-        );
+      if (kind === "exact") {
+        expect(text(page, ".settings-row__desc")).toBe("OpenClaw Slack channel plugin.");
+      } else if (shared) {
+        expect(text(page, ".settings-row__desc")).toBe(description);
       }
     });
     expect(request).toHaveBeenCalledWith("plugins.list", {}, expect.any(Object));
-    expect(iconRequests(fetchMock)).toEqual([`/__openclaw__/plugin-icon/${id}`]);
-    if (late) {
+    expect(iconRequests(fetchMock)).toEqual([`/__openclaw__/plugin-icon/${ownerId}`]);
+    if (shared) {
+      await refresh(
+        channelSnapshot({
+          ts: 1,
+          channelOrder: [id, "agent-system-chat"],
+          channelLabels: { [id]: label, "agent-system-chat": "Project Chat" },
+          channels: { [id]: { configured: false }, "agent-system-chat": { configured: false } },
+        }),
+      );
+      await waitForSolid(() =>
+        expect(
+          [...page.querySelectorAll(".channels-item img")].map((img) => img.getAttribute("src")),
+        ).toEqual([icon, icon]),
+      );
+      disposePage(page);
+      expect(revoke.mock.calls).toEqual([[icon]]);
+    }
+    if (late || shared) {
       expect(fetchMock).toHaveBeenCalledOnce();
     }
-  });
-
-  it("loads a channel icon through its distinct owning plugin id", async () => {
-    const { source, refresh } = catalogFixture(
-      [
-        plugin("agent-system", "Agent System", {
-          description: "Manage agent workspaces.",
-          origin: "global",
-          channelIds: ["agent-system-github", "agent-system-chat"],
-        }),
-      ],
-      channelStatus(
-        "agent-system-github",
-        "GitHub Notifications",
-        false,
-        "GitHub notification channel",
-      ),
-      ["operator.admin", "operator.read"],
-    );
-    const fetchMock = mockIcon("blob:duplicate-plugin-icon");
-    vi.spyOn(URL, "createObjectURL").mockReturnValueOnce("blob:agent-system-plugin-icon");
-    const revoke = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
-    const page = mountPage(source.context);
-
-    await waitForSolid(() => {
-      expect(page.querySelector(".settings-row__title")?.textContent).toBe("GitHub Notifications");
-      expect(page.querySelector(".settings-row__desc")?.textContent).toBe(
-        "GitHub notification channel",
-      );
-      expect(page.querySelector(".channels-item img")?.getAttribute("src")).toBe(
-        "blob:agent-system-plugin-icon",
-      );
-    });
-    expect(iconRequests(fetchMock)).toEqual(["/__openclaw__/plugin-icon/agent-system"]);
-    await refresh(
-      channelSnapshot({
-        ts: 1,
-        channelOrder: ["agent-system-github", "agent-system-chat"],
-        channelLabels: {
-          "agent-system-github": "GitHub Notifications",
-          "agent-system-chat": "Project Chat",
-        },
-        channelDetailLabels: {
-          "agent-system-github": "GitHub notification channel",
-          "agent-system-chat": "Project conversations",
-        },
-        channels: {
-          "agent-system-github": { configured: false },
-          "agent-system-chat": { configured: false },
-        },
-      }),
-    );
-    await waitForSolid(() => {
-      expect(
-        ["GitHub Notifications", "Project Chat"].map((label) => {
-          const row = Array.from(page.querySelectorAll(".channels-item")).find(
-            (item) => item.querySelector(".settings-row__title")?.textContent === label,
-          );
-          return row?.querySelector("img")?.getAttribute("src");
-        }),
-      ).toEqual(["blob:agent-system-plugin-icon", "blob:agent-system-plugin-icon"]);
-    });
-    expect(fetchMock).toHaveBeenCalledOnce();
-    disposePage(page);
-    expect(revoke.mock.calls).toEqual([["blob:agent-system-plugin-icon"]]);
   });
 
   it.each(["disconnect", "timeout"])(
@@ -374,9 +338,9 @@ describe("ChannelsPage lifecycle", () => {
     const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
     const gateway = createGateway(["operator.pairing"]);
     const source = createContext(gateway);
-    const refreshPairing = vi.spyOn(source.channels, "refreshPairing").mockResolvedValue();
+    const refreshPairing = vi.spyOn(source.channels, "refreshPairing");
     const page = mountPage(source.context);
-    await settle();
+    await waitForSolid(() => expect(source.channels.state.pairingSnapshot).not.toBeNull());
     refreshPairing.mockClear();
 
     await vi.advanceTimersByTimeAsync(30_000);
@@ -410,12 +374,14 @@ describe("ChannelsPage lifecycle", () => {
     refreshPairing.mockClear();
     await choosePairingFilter(page, 0, "whatsapp");
     await choosePairingFilter(page, 1, "personal");
-    expect(
-      page.querySelectorAll(".channels-pairing-filters .picker-select__trigger")[0]?.textContent,
-    ).toContain("WhatsApp");
-    expect(
-      page.querySelectorAll(".channels-pairing-filters .picker-select__trigger")[1]?.textContent,
-    ).toContain("Personal");
+    const filters = () =>
+      [...page.querySelectorAll(".channels-pairing-filters .picker-select__trigger")].map(
+        (node) => node.textContent,
+      );
+    expect(filters()).toEqual([
+      expect.stringContaining("WhatsApp"),
+      expect.stringContaining("Personal"),
+    ]);
     profileButton(page, "Approve").click();
     await settle();
     expect(page.querySelector(".channels-pairing-dialog")).not.toBeNull();
@@ -428,9 +394,10 @@ describe("ChannelsPage lifecycle", () => {
     });
     await updatePickers(page);
     expect(page.querySelector(".channels-pairing-dialog")).toBeNull();
-    const filters = page.querySelectorAll(".channels-pairing-filters .picker-select__trigger");
-    expect(filters[0]?.textContent).toContain("All channels");
-    expect(filters[1]?.textContent).toContain("All accounts");
+    expect(filters()).toEqual([
+      expect.stringContaining("All channels"),
+      expect.stringContaining("All accounts"),
+    ]);
   });
 
   it.each(["cancel", "disconnect"] as const)(
@@ -449,7 +416,7 @@ describe("ChannelsPage lifecycle", () => {
       profileButton(page, "Dismiss").click();
       await settle();
       const dialog = page.querySelector(".channels-pairing-dialog")!;
-      const confirm = dialog.querySelector<HTMLButtonElement>("button.danger")!;
+      const confirm = findButton(dialog, "button.danger");
       confirm.click();
       await waitForSolid(() => expect(confirm.disabled).toBe(true));
       expect(page.querySelector(".channels-pairing-dialog")).toBe(dialog);
@@ -483,17 +450,10 @@ describe("ChannelsPage lifecycle", () => {
     });
     const source = createContext(gateway);
     const config = { channels: { whatsapp: { enabled: true } } };
-    const channel = {
-      configured: true,
-      linked: true,
-      running: true,
-      connected: true,
-      reconnectAttempts: 0,
-    };
     source.channels.state.channelsSnapshot = channelSnapshot({
       channelOrder: ["whatsapp"],
       channelLabels: { whatsapp: "WhatsApp" },
-      channels: { whatsapp: channel },
+      channels: { whatsapp: { configured: true, linked: true, running: true, connected: true } },
     });
     source.channels.state.pairingSnapshot = pairingSnapshot({
       accounts: [],
@@ -505,32 +465,24 @@ describe("ChannelsPage lifecycle", () => {
       configForm: structuredClone(config),
       configFormOriginal: structuredClone(config),
       configDraftBaseHash: "test",
-      configSchema: {
-        type: "object",
-        properties: {
-          channels: {
-            type: "object",
-            properties: {
-              whatsapp: {
-                type: "object",
-                properties: { enabled: { type: "boolean", title: "Enabled" } },
-              },
-            },
-          },
-        },
-      },
+      configSchema: objectSchema({
+        channels: objectSchema({
+          whatsapp: objectSchema({ enabled: { type: "boolean", title: "Enabled" } }),
+        }),
+      }),
       configUiHints: { "channels.whatsapp.enabled": { advanced: false } },
     });
+    await source.runtimeConfig.ensureLoaded();
     const refreshConfig = vi.spyOn(source.runtimeConfig, "refresh");
     const refreshChannels = vi.spyOn(source.channels, "refresh");
     const page = mountPage(source.context);
     await settle();
 
-    page.querySelector<HTMLButtonElement>(".channels-item")!.click();
+    findButton(page, ".channels-item").click();
     await settle();
     source.runtimeConfig.patchForm(["channels", "whatsapp", "enabled"], false);
     await settle();
-    const save = page.querySelector<HTMLButtonElement>(".channels-detail .btn.primary")!;
+    const save = findButton(page, ".channels-detail .btn.primary");
     expect(save.disabled).toBe(false);
     save.click();
     await waitForSolid(() => {
@@ -584,7 +536,7 @@ async function mountPackagedChannel(channelId = "custom-profile", scopes = ["ope
     auth: { role: "operator", scopes, deviceToken: "device-token" },
   };
   const source = createContext(gateway);
-  const refresh = vi.spyOn(source.channels, "refresh").mockResolvedValue();
+  vi.spyOn(source.channels, "refresh").mockResolvedValue();
   source.channels.state.channelsSnapshot = channelSnapshot({
     channelOrder: [channelId, "other"],
     channelLabels: { [channelId]: "Custom profile", other: "Other" },
@@ -596,7 +548,7 @@ async function mountPackagedChannel(channelId = "custom-profile", scopes = ["ope
     update: ReturnType<typeof vi.fn<(props: ControlUiChannelSettingsSnapshot) => void>>;
     dispose: ReturnType<typeof vi.fn>;
   }> = [];
-  // This synthetic view only records host lifetime/snapshot wiring; real plugin rendering is covered by its own tests and packaged E2E.
+  // Record host lifetime/snapshots without replacing the real presentation owner.
   Object.assign(source.context, {
     plugins: {
       loadSettingsView: vi.fn(async (_placement, signal: AbortSignal) => ({
@@ -634,7 +586,7 @@ async function mountPackagedChannel(channelId = "custom-profile", scopes = ["ope
   }
   await open();
   await waitForSolid(() => expect(mounts).toHaveLength(1));
-  return { gateway, source, refresh, page, mounts, open, context: mounts[0]!.context };
+  return { gateway, source, page, mounts, open, context: mounts[0]!.context };
 }
 const profileRequest = (signal = new AbortController().signal) => ({
   accountId: "main/account",
@@ -663,27 +615,23 @@ function retire(f: PackagedChannel, reason: "disconnect" | "client" | "admin" | 
 }
 
 it("retains a packaged editor and its pending request across detail close, another channel, and reopen", async () => {
-  const pending = createDeferred<Response>();
-  const fetchMock = vi.fn<typeof fetch>().mockReturnValue(pending.promise);
-  vi.stubGlobal("fetch", fetchMock);
+  const { pending } = heldFetch();
   const f = await mountPackagedChannel();
   const original = f.mounts[0]!;
   original.input.value = "Retained draft";
   const request = f.context.request(profileRequest());
-  f.page.querySelector<HTMLButtonElement>(".channels-detail__close")!.click();
-  await settle();
+  await closeDetail(f.page);
   expect(original.context.signal.aborted).toBe(false);
-  expect(original.update).toHaveBeenLastCalledWith(expect.objectContaining({ presented: false }));
+  expectUpdate(original, { presented: false });
   await f.open("Other");
-  f.page.querySelector<HTMLButtonElement>(".channels-detail__close")!.click();
-  await settle();
+  await closeDetail(f.page);
   pending.resolve(Response.json({ ok: true }));
   await expect(request).resolves.toMatchObject({ ok: true });
   await f.open();
   expect(f.mounts).toHaveLength(1);
   expect(f.page.querySelector("[data-plugin-draft]")).toBe(original.input);
   expect(original.input.value).toBe("Retained draft");
-  expect(original.update).toHaveBeenLastCalledWith(expect.objectContaining({ presented: true }));
+  expectUpdate(original, { presented: true });
 });
 
 it("retires a real host configuration slot and rejects mounting through its old context", async () => {
@@ -707,20 +655,18 @@ it("retains the editor across same-client reconnects and synchronously publishes
   const hello = f.gateway.snapshot.hello;
   f.gateway.emit({ phase: "reconnecting", hello: null });
   expect(original.context.signal.aborted).toBe(false);
-  expect(original.update).toHaveBeenLastCalledWith(expect.objectContaining({ connected: false }));
+  expectUpdate(original, { connected: false });
   f.gateway.emit({ phase: "connected", hello });
   await settle();
   expect(f.mounts).toHaveLength(1);
   expect(original.input.value).toBe("Draft");
-  expect(original.update).toHaveBeenLastCalledWith(expect.objectContaining({ connected: true }));
+  expectUpdate(original, { connected: true });
 });
 
 it.each(["disconnect", "client", "admin", "unmount", "caller"] as const)(
   "rejects retained HTTP callbacks and pending responses after %s retirement before another credential dispatch",
   async (retirement) => {
-    const pending = createDeferred<Response>();
-    const fetchMock = vi.fn<typeof fetch>().mockReturnValue(pending.promise);
-    vi.stubGlobal("fetch", fetchMock);
+    const { pending, fetchMock } = heldFetch();
     const f = await mountPackagedChannel();
     const caller = new AbortController();
     const request = f.context.request(profileRequest(caller.signal));
@@ -771,13 +717,12 @@ it("checks operation authority after consuming a successful response body", asyn
 });
 
 it.each([
-  [401, 200],
-  [401, 401],
-  [403, 200],
-  [401, 503],
+  [401, 401, "HTTP 401: Unauthorized"],
+  [403, 200, "HTTP 403: Forbidden"],
+  [401, 503, "HTTP 503"],
 ] as const)(
   "keeps captured credential fallback and sanitized HTTP details for %s then %s",
-  async (first, second) => {
+  async (first, second, errorMessage) => {
     const fetchMock = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(
@@ -787,11 +732,9 @@ it.each([
         ),
       )
       .mockResolvedValueOnce(
-        second === 200
-          ? Response.json({ ok: true, persisted: true })
-          : second === 503
-            ? new Response("gateway unavailable", { status: second })
-            : Response.json({ error: { message: "Unauthorized" } }, { status: second }),
+        second === 503
+          ? new Response("gateway unavailable", { status: second })
+          : Response.json({ error: { message: "Unauthorized" } }, { status: second }),
       );
     vi.stubGlobal("fetch", fetchMock);
     const f = await mountPackagedChannel();
@@ -802,16 +745,7 @@ it.each([
       first === 403 ? ["Bearer device-token"] : ["Bearer device-token", "Bearer saved-token"],
     );
     expect(fetchMock.mock.calls[0]![0]).toBe("/api/channels/custom-profile/main%2Faccount/profile");
-    expect(result.status).toBe(first === 403 ? 403 : second);
-    if (first === 403 || second !== 200) {
-      expect(result.errorMessage).toBe(
-        first === 403
-          ? "HTTP 403: Forbidden"
-          : second === 503
-            ? "HTTP 503"
-            : "HTTP 401: Unauthorized",
-      );
-    }
+    expect(result).toMatchObject({ status: first === 403 ? 403 : second, errorMessage });
   },
 );
 
@@ -902,20 +836,16 @@ it.each([
           ? login.wait()
           : login.captureLogout()!.logout();
     await waitForSolid(() =>
-      expect(f.mounts[0]!.update).toHaveBeenLastCalledWith(
-        expect.objectContaining({ login: expect.objectContaining({ busy: true }) }),
-      ),
+      expectUpdate(f.mounts[0]!, { login: expect.objectContaining({ busy: true }) }),
     );
     expect(request.mock.calls.some(([name]) => name === method)).toBe(true);
     expect(f.page.querySelector("[data-plugin-draft]")).toBe(f.mounts[0]!.input);
     pending.reject(new Error("Login unavailable"));
     await completion;
     await waitForSolid(() =>
-      expect(f.mounts[0]!.update).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          login: expect.objectContaining({ busy: false, message: "Login unavailable" }),
-        }),
-      ),
+      expectUpdate(f.mounts[0]!, {
+        login: expect.objectContaining({ busy: false, message: "Login unavailable" }),
+      }),
     );
     expect(f.page.querySelector("[data-plugin-draft]")).toBe(f.mounts[0]!.input);
   },
@@ -934,12 +864,10 @@ it("releases a plugin login presentation on disconnect before its admitted reque
   await waitForSolid(() => expect(f.source.channels.state.whatsappBusy).toBe(true));
   f.gateway.emit({ phase: "stopped" });
   await waitForSolid(() =>
-    expect(f.mounts[0]!.update).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        connected: false,
-        login: expect.objectContaining({ busy: false }),
-      }),
-    ),
+    expectUpdate(f.mounts[0]!, {
+      connected: false,
+      login: expect.objectContaining({ busy: false }),
+    }),
   );
   expect(completed).toBe(false);
   pending.resolve({ connected: true });

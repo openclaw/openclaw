@@ -172,6 +172,9 @@ directory, environment, or source still replaces it.
 Detached connection, cron, heartbeat, and hook callbacks retain that Gateway's
 read-only worker scope without inheriting startup or request authority. Shutdown
 refuses late callbacks before they can create another reader.
+Auth-file observation reuses the current Gateway's reader binding, including
+directories discovered later by temporary requests. Publications stop when those
+Gateway readers close; the next Gateway generation rebinds retained observers.
 Usage bookkeeping invalidates later cache reuse while admitted reads can finish
 their snapshots. Credential, selection, ownership, and lifecycle changes still
 invalidate in-flight preparation.
@@ -279,6 +282,21 @@ failures remain fail-closed. Where an owner already retains a rotated result for
 storage retry, it retries that storage operation, not the old token exchange.
 External tool homes retain their own refresh authority; this contract does not
 transfer their credentials into OpenClaw ownership.
+
+## Long-running custom transport requests
+
+The embedded run auth owner can supply a versioned, optional `requestAuth`
+capability to provider `createStreamFn` factories. A participating transport
+resolves it before each physical request, including private continuations, so a
+captured attempt bearer cannot hide canonical renewal or rotation. Resolution
+locks the original profile and account instead of trying another identity. Run
+closure, auth selection changes, automation revocation and cancellation refuse
+credentials, including after awaited preparation. Existing native OAuth owners
+still own refresh grants and independent durable settlement.
+
+Legacy hosts and entrypoints without this capability retain captured-key
+behavior; ordinary just-in-time refresh between separate runs does not imply
+renewal within one attempt. See [custom transport request credentials](/plugins/sdk-provider-plugins#per-request-credentials-in-custom-transports).
 
 ## Plugin SDK OAuth validation
 

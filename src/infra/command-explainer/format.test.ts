@@ -38,7 +38,6 @@ describe("formatCommandSpans", () => {
   it("ignores invalid executable spans", () => {
     const explanation: CommandExplanation = {
       ok: true,
-      source: "echo hi",
       shapes: [],
       topLevelCommands: [
         {

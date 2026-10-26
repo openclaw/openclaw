@@ -1,6 +1,5 @@
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveBrowserNavigationProxyMode } from "./browser-proxy-mode.js";
 import {
   assertChromeMcpCdpTransportAllowed,
   resolveCdpControlPolicy,
@@ -32,6 +31,7 @@ import {
   requiresInspectableBrowserNavigationRedirectsForUrl,
   withBrowserNavigationPolicy,
 } from "./navigation-guard.js";
+import { resolveBrowserNavigationPolicy } from "./navigation-policy.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
 import { getPwAiModule } from "./pw-ai-module.js";
 import {
@@ -130,37 +130,11 @@ async function readProfileTabLastUsedAt(profileName: string): Promise<Map<string
   return lastUsedByTarget;
 }
 
-/**
- * Orders eviction candidates for the managed tab cap. Chrome reports CDP
- * targets most-recently-activated first, so raw /json/list order is exactly
- * backwards for cleanup: slicing from the front closes the tabs other sessions
- * opened seconds ago while long-idle tabs survive. Untracked tabs (no recorded
- * session activity) evict first in reverse CDP order; tracked tabs follow in
- * ascending last-use order.
- */
-function orderManagedTabEvictionCandidates(
-  candidates: readonly BrowserTab[],
-  lastUsedByTarget: ReadonlyMap<string, number>,
-): BrowserTab[] {
-  return candidates
-    .toReversed()
-    .toSorted(
-      (left, right) =>
-        (lastUsedByTarget.get(left.targetId) ?? 0) - (lastUsedByTarget.get(right.targetId) ?? 0),
-    );
-}
-
 export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): ProfileTabOps {
   const cdpHttpBase = normalizeCdpHttpBaseForJsonEndpoints(profile.cdpUrl);
   const capabilities = getBrowserProfileCapabilities(profile);
   const getCdpControlPolicy = () => resolveCdpControlPolicy(profile, state().resolved.ssrfPolicy);
-  const getNavigationPolicy = () =>
-    withBrowserNavigationPolicy(state().resolved.ssrfPolicy, {
-      browserProxyMode: resolveBrowserNavigationProxyMode({
-        resolved: state().resolved,
-        profile,
-      }),
-    });
+  const getNavigationPolicy = () => resolveBrowserNavigationPolicy(state(), profile);
   const getRemoteCdpActionTimeouts = (): CdpActionTimeouts | undefined => {
     if (profile.cdpIsLoopback && !profile.attachOnly) {
       return undefined;
@@ -317,7 +291,20 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
     );
     const excessCount = pageTabs.length - MANAGED_BROWSER_PAGE_TAB_LIMIT;
     const lastUsedByTarget = await readProfileTabLastUsedAt(profile.name);
-    const evictionOrder = orderManagedTabEvictionCandidates(candidates, lastUsedByTarget);
+    /**
+     * Orders eviction candidates for the managed tab cap. Chrome reports CDP
+     * targets most-recently-activated first, so raw /json/list order is exactly
+     * backwards for cleanup: slicing from the front closes the tabs other sessions
+     * opened seconds ago while long-idle tabs survive. Untracked tabs (no recorded
+     * session activity) evict first in reverse CDP order; tracked tabs follow in
+     * ascending last-use order.
+     */
+    const evictionOrder = candidates
+      .toReversed()
+      .toSorted(
+        (left, right) =>
+          (lastUsedByTarget.get(left.targetId) ?? 0) - (lastUsedByTarget.get(right.targetId) ?? 0),
+      );
     for (const tab of evictionOrder.slice(0, excessCount)) {
       options?.signal?.throwIfAborted();
       await dispatchBrowserTabClose(
@@ -385,7 +372,7 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
   const openTab: ProfileTabOps["openTab"] = async (url, opts) => {
     opts?.signal?.throwIfAborted();
     const normalizedLabel = opts?.label === undefined ? undefined : normalizeTabLabel(opts.label);
-    const ssrfPolicyOpts = getNavigationPolicy();
+    let ssrfPolicyOpts = getNavigationPolicy();
     const cdpPolicy = getCdpControlPolicy();
     // Runtime shutdown fences state() before draining this operation's cleanup.
     const cleanupTimeoutMs = state().resolved.remoteCdpTimeoutMs;
@@ -415,7 +402,11 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
         (runtime.running?.headless ?? (await runtime.externalBrowserMode?.headless)) === true;
       opts?.signal?.throwIfAborted();
       // Playwright installs the context guard before creating or navigating the first page.
-      if (capabilities.usesPersistentPlaywright || headless) {
+      if (
+        capabilities.usesPersistentPlaywright ||
+        headless ||
+        ssrfPolicyOpts.assertNavigationCurrent
+      ) {
         const mod = await getPwAiModule({ mode: "strict" });
         if (mod) {
           const page = await mod.createPageViaPlaywright({
@@ -437,9 +428,15 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
             type: page.type,
           });
         }
+        if (ssrfPolicyOpts.assertNavigationCurrent) {
+          // Raw CDP cannot carry the automatic grant's final-effect authority fence.
+          ssrfPolicyOpts = withBrowserNavigationPolicy(state().resolved.ssrfPolicy, {
+            browserProxyMode: ssrfPolicyOpts.browserProxyMode,
+          });
+        }
       }
 
-      if (requiresInspectableBrowserNavigationRedirectsForUrl(url, state().resolved.ssrfPolicy)) {
+      if (requiresInspectableBrowserNavigationRedirectsForUrl(url, ssrfPolicyOpts.ssrfPolicy)) {
         throw new InvalidBrowserNavigationUrlError(
           "Navigation blocked: strict browser SSRF policy requires Playwright-backed redirect-hop inspection",
         );
