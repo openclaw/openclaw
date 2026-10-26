@@ -67,25 +67,20 @@ it("does not download partial history when an older page fails", async () => {
   expect(downloadTextFile).not.toHaveBeenCalled();
 });
 
-it.each(["session", "connection", "instance", "presentation"])(
+it.each(["session", "connection", "instance", "presentation"] as const)(
   "does not download after its %s changes",
   async (change) => {
     const pending = createDeferred<ChatHistoryResult>();
     const host = fixture(() => pending.promise);
     let presented = true;
     const exporting = exportCurrentChat(host, () => presented);
-    if (change === "session") {
-      host.sessionKey = "agent:main:other";
-    }
-    if (change === "connection") {
-      host.connectionEpoch += 1;
-    }
-    if (change === "instance") {
-      host.currentSessionId = "replacement";
-    }
-    if (change === "presentation") {
-      presented = false;
-    }
+    const invalidate = {
+      session: () => (host.sessionKey = "agent:main:other"),
+      connection: () => host.connectionEpoch++,
+      instance: () => (host.currentSessionId = "replacement"),
+      presentation: () => (presented = false),
+    };
+    invalidate[change]();
     pending.resolve(page([message(3)]));
     await expect(exporting).rejects.toThrow();
     expect(downloadTextFile).not.toHaveBeenCalled();
