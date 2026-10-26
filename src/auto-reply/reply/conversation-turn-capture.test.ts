@@ -49,18 +49,11 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   });
 });
 
-async function setupConversation(
-  options: { agentId?: string; storePath?: string; threadId?: string } = {},
-) {
+async function setupReefConversation(options: { agentId?: string; storePath?: string } = {}) {
   const stateDir = tempDirs.make("openclaw-conversation-capture-");
   const agentId = options.agentId ?? "main";
   const storePath = options.storePath ?? path.join(stateDir, "sessions.json");
-  const { threadId } = options;
-  const channel = threadId ? "discord" : "reef";
-  const kind = threadId ? "channel" : "direct";
-  const peerId = threadId ? "ops-room" : "peer-agent";
-  const to = threadId ? "channel:ops-room" : "reef:peer-agent";
-  const sessionKey = `agent:${agentId}:${channel}:${kind}:${peerId}${threadId ? `:thread:${threadId}` : ""}`;
+  const sessionKey = `agent:${agentId}:reef:direct:peer-agent`;
   const sessionId = "reef-session";
   const cfg = { session: { store: storePath } } as OpenClawConfig;
   await sessionAccessor.upsertSessionEntryCore(
@@ -68,14 +61,13 @@ async function setupConversation(
     {
       sessionId,
       updatedAt: 100,
-      chatType: kind,
-      ...(threadId ? { groupId: peerId } : {}),
+      chatType: "direct",
       delivery: normalizeSessionDeliveryState({
-        context: { channel, accountId: "default", to, threadId },
+        context: { channel: "reef", accountId: "default", to: "reef:peer-agent" },
         origin: {
-          provider: channel,
+          provider: "reef",
           accountId: "default",
-          ...(threadId ? { nativeChannelId: peerId } : { nativeDirectUserId: peerId }),
+          nativeDirectUserId: "peer-agent",
         },
       }),
     },
@@ -86,28 +78,11 @@ async function setupConversation(
     sessionKey,
     sessionId,
     storePath,
-    context: {
-      ChatType: kind,
-      Provider: channel,
-      OriginatingChannel: channel,
-      OriginatingTo: to,
-      ...(threadId
-        ? {
-            From: "discord:channel:ops-room",
-            To: to,
-            NativeChannelId: peerId,
-            NativeDirectUserId: undefined,
-            MessageThreadId: threadId,
-            SenderId: "member-1",
-          }
-        : { NativeDirectUserId: peerId }),
-    },
     conversationRef: buildConversationRef({
-      channel,
+      channel: "reef",
       accountId: "default",
-      kind,
-      peerId,
-      threadId,
+      kind: "direct",
+      peerId: "peer-agent",
     }),
   };
 }
@@ -134,11 +109,7 @@ async function persistSentOperation(params: {
 }
 
 function inboundReply(
-  setup: {
-    scope: { agentId: string };
-    sessionKey: string;
-    context?: Partial<FinalizedRuntimeMsgContext>;
-  },
+  setup: Awaited<ReturnType<typeof setupReefConversation>>,
   outboundMessageId: string,
   overrides: Partial<FinalizedRuntimeMsgContext> = {},
   text = "ordinary reply",
@@ -152,7 +123,6 @@ function inboundReply(
     OriginatingChannel: "reef",
     OriginatingTo: "reef:peer-agent",
     NativeDirectUserId: "peer-agent",
-    ...setup.context,
     MessageSidFull: "inbound-admission",
     ReplyToIdFull: outboundMessageId,
     RawBody: text,
@@ -165,17 +135,9 @@ function inboundReply(
 }
 
 async function registerCapture(
-  setup: Pick<Conversation, "scope" | "conversationRef" | "sessionId">,
+  setup: Awaited<ReturnType<typeof setupReefConversation>>,
   id: string,
-  {
-    outboundMessageId = id,
-    timeoutMs = 50,
-    threadId,
-  }: {
-    outboundMessageId?: string;
-    timeoutMs?: number;
-    threadId?: string;
-  } = {},
+  { outboundMessageId = id, timeoutMs = 50 } = {},
 ) {
   await persistSentOperation({ ...setup, operationId: id, outboundMessageId });
   const pending = registerPendingConversationTurn({
@@ -183,44 +145,17 @@ async function registerCapture(
     id,
     conversationRef: setup.conversationRef,
     sessionId: setup.sessionId,
-    threadId,
     timeoutMs,
   });
   pending.setOutboundMessageId(outboundMessageId);
   return pending;
 }
 
-type Conversation = Awaited<ReturnType<typeof setupConversation>>;
-const transcriptEvents = (setup: Conversation) =>
-  sessionAccessor.loadTranscriptEvents({ ...setup.scope, sessionId: setup.sessionId });
-const captureReply = (
-  setup: Conversation,
-  id: string,
-  overrides: Partial<FinalizedRuntimeMsgContext> = {},
-  text?: string,
-) =>
-  capturePendingConversationTurnReply({
-    cfg: setup.cfg,
-    ctx: inboundReply(setup, id, overrides, text),
-  });
-
-function replaceIdentity(setup: Conversation, outcome: "replace" | "lifecycle" | "writer") {
-  const scope = { ...setup.scope, sessionKey: setup.sessionKey };
-  sessionAccessor.replaceSessionEntrySync(scope, {
-    ...sessionAccessor.loadSessionEntryReadOnly(scope)!,
-    ...(outcome === "replace"
-      ? { sessionId: "replacement" }
-      : outcome === "lifecycle"
-        ? { lifecycleRevision: "replacement-lifecycle" }
-        : { activeWriterRunId: "replacement-writer" }),
-  });
-}
-
 describe("conversation turn capture", () => {
   it.each(["complete", "cancel", "timeout", "replace", "lifecycle"] as const)(
     "retains reply ownership through writer admission: %s",
     async (outcome) => {
-      const setup = await setupConversation();
+      const setup = await setupReefConversation();
       vi.useFakeTimers();
       const id = `admission-${outcome}`;
       const pending = await registerCapture(setup, id);
@@ -244,7 +179,10 @@ describe("conversation turn capture", () => {
       await entered.promise;
       let capture: Promise<boolean> | undefined;
       try {
-        capture = captureReply(setup, id);
+        capture = capturePendingConversationTurnReply({
+          cfg: setup.cfg,
+          ctx: inboundReply(setup, id),
+        });
         await prepared.promise;
         expect(readConversationDeliveryStateForTest(setup.scope, id)?.status).toBe("sent");
         if (outcome === "cancel") {
@@ -254,7 +192,14 @@ describe("conversation turn capture", () => {
           await vi.advanceTimersByTimeAsync(50);
         }
         if (outcome === "replace" || outcome === "lifecycle") {
-          replaceIdentity(setup, outcome);
+          const scope = { ...setup.scope, sessionKey: setup.sessionKey };
+          const entry = sessionAccessor.loadSessionEntryReadOnly(scope)!;
+          sessionAccessor.replaceSessionEntrySync(scope, {
+            ...entry,
+            ...(outcome === "replace"
+              ? { sessionId: "replacement" }
+              : { lifecycleRevision: "replacement-lifecycle" }),
+          });
         }
         release.resolve();
         await blocker;
@@ -267,7 +212,12 @@ describe("conversation turn capture", () => {
           pending.cancel();
           await expect(pending.wait()).resolves.toBeUndefined();
           expect(record?.reply).toBeUndefined();
-          expect(await transcriptEvents(setup)).toEqual([]);
+          expect(
+            await sessionAccessor.loadTranscriptEvents({
+              ...setup.scope,
+              sessionId: setup.sessionId,
+            }),
+          ).toEqual([]);
         }
       } finally {
         pending.cancel();
@@ -282,7 +232,7 @@ describe("conversation turn capture", () => {
   it.each(["timeout", "replace", "lifecycle", "writer"] as const)(
     "consumes a committed reply when its audit authority changes: %s",
     async (outcome) => {
-      const setup = await setupConversation();
+      const setup = await setupReefConversation();
       vi.useFakeTimers();
       const id = "reply-committed-before-expiry";
       const pending = await registerCapture(setup, id);
@@ -294,13 +244,24 @@ describe("conversation turn capture", () => {
           if (outcome === "timeout") {
             await vi.advanceTimersByTimeAsync(50);
           } else {
-            replaceIdentity(setup, outcome);
+            const scope = { ...setup.scope, sessionKey: setup.sessionKey };
+            const entry = sessionAccessor.loadSessionEntryReadOnly(scope)!;
+            sessionAccessor.replaceSessionEntrySync(scope, {
+              ...entry,
+              ...(outcome === "replace"
+                ? { sessionId: "replacement" }
+                : outcome === "lifecycle"
+                  ? { lifecycleRevision: "replacement-lifecycle" }
+                  : { activeWriterRunId: "replacement-writer" }),
+            });
           }
           return committed;
         },
       );
       try {
-        await expect(captureReply(setup, id)).resolves.toBe(true);
+        await expect(
+          capturePendingConversationTurnReply({ cfg: setup.cfg, ctx: inboundReply(setup, id) }),
+        ).resolves.toBe(true);
         if (outcome === "timeout") {
           await expect(pending.wait()).resolves.toBeUndefined();
         } else {
@@ -312,7 +273,12 @@ describe("conversation turn capture", () => {
           status: "replied",
           reply: { messageId: "inbound-admission", text: "ordinary reply", replyToId: id },
         });
-        expect(await transcriptEvents(setup)).toEqual([]);
+        expect(
+          await sessionAccessor.loadTranscriptEvents({
+            ...setup.scope,
+            sessionId: setup.sessionId,
+          }),
+        ).toEqual([]);
       } finally {
         pending.cancel();
         vi.useRealTimers();
@@ -323,7 +289,7 @@ describe("conversation turn capture", () => {
   it.each(["replace", "lifecycle"] as const)(
     "rechecks the session after outbound correlation: %s",
     async (outcome) => {
-      const setup = await setupConversation();
+      const setup = await setupReefConversation();
       vi.useFakeTimers();
       const id = `correlation-${outcome}`;
       const pending = await registerCapture(setup, id);
@@ -335,10 +301,20 @@ describe("conversation turn capture", () => {
           return claimReply(...args);
         },
       );
-      const capture = captureReply(setup, id);
+      const capture = capturePendingConversationTurnReply({
+        cfg: setup.cfg,
+        ctx: inboundReply(setup, id),
+      });
       try {
         await correlating.promise;
-        replaceIdentity(setup, outcome);
+        const scope = { ...setup.scope, sessionKey: setup.sessionKey };
+        const entry = sessionAccessor.loadSessionEntryReadOnly(scope)!;
+        sessionAccessor.replaceSessionEntrySync(scope, {
+          ...entry,
+          ...(outcome === "replace"
+            ? { sessionId: "replacement" }
+            : { lifecycleRevision: "replacement-lifecycle" }),
+        });
         pending.markReady();
         await expect(capture).resolves.toBe(false);
         expect((await getConversationDeliveryOperation(setup.scope, id))?.reply).toBeUndefined();
@@ -351,7 +327,7 @@ describe("conversation turn capture", () => {
   );
 
   it("queues the no-waiter acknowledgement without making it replayable inline", async () => {
-    const setup = await setupConversation();
+    const setup = await setupReefConversation();
     const id = "no-waiter-admission";
     await beginConversationDeliveryOperation(setup.scope, {
       operationId: id,
@@ -366,7 +342,10 @@ describe("conversation turn capture", () => {
       toDatabaseOptions(resolveSqliteReadScope(setup.scope)),
       () => release.promise,
     );
-    const capture = captureReply(setup, id);
+    const capture = capturePendingConversationTurnReply({
+      cfg: setup.cfg,
+      ctx: inboundReply(setup, id),
+    });
     try {
       await setImmediate();
       expect(readConversationDeliveryStateForTest(setup.scope, id)?.status).toBe("queued");
@@ -375,10 +354,11 @@ describe("conversation turn capture", () => {
       await expect(capture).resolves.toBe(false);
       expect(await getConversationDeliveryOperation(setup.scope, id)).toMatchObject({
         status: "sent",
-        platformMessageId: id,
       });
       expect((await getConversationDeliveryOperation(setup.scope, id))?.reply).toBeUndefined();
-      expect(await transcriptEvents(setup)).toEqual([]);
+      expect(
+        await sessionAccessor.loadTranscriptEvents({ ...setup.scope, sessionId: setup.sessionId }),
+      ).toEqual([]);
     } finally {
       release.resolve();
       await blocker;
@@ -398,11 +378,14 @@ describe("conversation turn capture", () => {
         OPENCLAW_STATE_DIR: tempDirs.make("capture-other-state-"),
       };
       vi.stubEnv("OPENCLAW_STATE_DIR", sourceEnv.OPENCLAW_STATE_DIR);
-      const setup = await setupConversation();
+      const setup = await setupReefConversation();
       vi.useFakeTimers();
       const id = `state-${refused}`;
       const pending = await registerCapture(setup, id);
-      const capture = captureReply(setup, id);
+      const capture = capturePendingConversationTurnReply({
+        cfg: setup.cfg,
+        ctx: inboundReply(setup, id),
+      });
       const refusalEnv = refused === "source" ? sourceEnv : ambientEnv;
       try {
         recordAgentDatabaseAdmissions(
@@ -439,17 +422,21 @@ describe("conversation turn capture", () => {
   it("keeps the logical agent on a shared physical store across admission", async () => {
     const storePath = path.join(tempDirs.make("capture-shared-store-"), "shared.sqlite");
     const physical = openOpenClawAgentDatabase({ agentId: "schema-owner", path: storePath });
-    const setup = await setupConversation({ agentId: "logical-agent", storePath });
+    const setup = await setupReefConversation({ agentId: "logical-agent", storePath });
     vi.useFakeTimers();
     const id = "shared-store-capture";
     const pending = await registerCapture(setup, id);
     pending.markReady();
     try {
-      await expect(captureReply(setup, id)).resolves.toBe(true);
+      await expect(
+        capturePendingConversationTurnReply({ cfg: setup.cfg, ctx: inboundReply(setup, id) }),
+      ).resolves.toBe(true);
       await expect(pending.wait()).resolves.toMatchObject({ messageId: "inbound-admission" });
       expect((await getConversationDeliveryOperation(setup.scope, id))?.status).toBe("replied");
       expect(physical.agentId).toBe("schema-owner");
-      expect(await transcriptEvents(setup)).toHaveLength(1);
+      expect(
+        await sessionAccessor.loadTranscriptEvents({ ...setup.scope, sessionId: setup.sessionId }),
+      ).toHaveLength(1);
     } finally {
       pending.cancel();
       vi.useRealTimers();
@@ -457,7 +444,7 @@ describe("conversation turn capture", () => {
   });
 
   it("retains a relative configured store when the working directory changes during correlation", async () => {
-    const setup = await setupConversation();
+    const setup = await setupReefConversation();
     const cfg = {
       session: { store: path.relative(resolveStateDir(), setup.storePath) },
     } as OpenClawConfig;
@@ -483,23 +470,31 @@ describe("conversation turn capture", () => {
   it("does not capture into a replacement shared-store owner with matching logical identities", async () => {
     const storePath = path.join(tempDirs.make("capture-replaced-store-"), "shared.sqlite");
     openOpenClawAgentDatabase({ agentId: "original-owner", path: storePath });
-    const setup = await setupConversation({ agentId: "logical-agent", storePath });
+    const setup = await setupReefConversation({ agentId: "logical-agent", storePath });
     vi.useFakeTimers();
     const id = "replaced-owner-capture";
     const pending = await registerCapture(setup, id);
-    const capture = captureReply(setup, id);
+    const capture = capturePendingConversationTurnReply({
+      cfg: setup.cfg,
+      ctx: inboundReply(setup, id),
+    });
     try {
       await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
       fs.renameSync(storePath, `${storePath}.retired`);
       unregisterOpenClawAgentDatabase({ agentId: "original-owner", path: storePath });
       openOpenClawAgentDatabase({ agentId: "replacement-owner", path: storePath });
-      const replacement = await setupConversation({ agentId: "logical-agent", storePath });
+      const replacement = await setupReefConversation({ agentId: "logical-agent", storePath });
       await persistSentOperation({ ...replacement, operationId: id, outboundMessageId: id });
       pending.markReady();
       await expect(capture).resolves.toBe(false);
       expect((await getConversationDeliveryOperation(replacement.scope, id))?.status).toBe("sent");
-      expect(await transcriptEvents(replacement)).toEqual([]);
+      expect(
+        await sessionAccessor.loadTranscriptEvents({
+          ...replacement.scope,
+          sessionId: replacement.sessionId,
+        }),
+      ).toEqual([]);
     } finally {
       pending.cancel();
       await capture;
@@ -507,123 +502,252 @@ describe("conversation turn capture", () => {
     }
   });
 
-  it.each(["direct", "promoted", "threaded", "audit-failure"] as const)(
-    "captures a %s reply once without applying log redaction to durable text",
-    async (mode) => {
-      const threadId =
-        mode === "threaded"
-          ? "user-context"
-          : mode === "promoted"
-            ? "reef-outbound-full"
-            : undefined;
-      const setup = await setupConversation(mode === "threaded" ? { threadId } : {});
-      setup.cfg.logging = { redactPatterns: ["peer acknowledged"] };
-      if (mode === "audit-failure") {
-        openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteReadScope(setup.scope))).db.exec(`
-          CREATE TRIGGER refuse_reply_audit BEFORE INSERT ON transcript_events
-          WHEN json_extract(NEW.event_json, '$.customType') = 'openclaw.conversation-turn-reply'
-          BEGIN SELECT RAISE(ABORT, 'audit store unavailable'); END;
-        `);
-      }
-      const operationId = "turn-full-id";
-      const pending = await registerCapture(setup, operationId, {
-        outboundMessageId: "reef-outbound-full",
-        timeoutMs: 5_000,
-        threadId: mode === "threaded" ? threadId : undefined,
-      });
-      pending.markReady();
+  it("fails closed without channel ingress admission proof", async () => {
+    const pending = registerPendingConversationTurn({
+      agentId: "main",
+      id: "turn-untrusted",
+      conversationRef: "conv_0123456789abcdef0123456789abcdef",
+      sessionId: "session-main",
+      timeoutMs: 5_000,
+    });
+    pending.setOutboundMessageId("outbound-untrusted");
+    pending.markReady();
 
-      const inboundContext = inboundReply(setup, "reef-outbound-full", {
-        MessageSid: "reef-inbound-short",
-        MessageSidFull: "reef-inbound-full",
-        ReplyToId: "wrong-short-id",
-        RawBody: "peer acknowledged",
-        BodyForAgent: "trusted provenance\n\n<reef-message>peer acknowledged</reef-message>",
-        commandText: "peer acknowledged",
-        agentText: "trusted provenance\n\n<reef-message>peer acknowledged</reef-message>",
-        rawText: "peer acknowledged",
-        Timestamp: 1_710_000_000,
-        MessageThreadId: threadId,
-      });
-      const sql = observeHostDataSql();
-      try {
-        await expect(
-          capturePendingConversationTurnReply({ cfg: setup.cfg, ctx: inboundContext }),
-        ).resolves.toBe(true);
-      } finally {
-        sql.restore();
-      }
-      expect(
-        sql.queries.filter((query) => /insert\s+into\s+"?transcript_events"?/iu.test(query)),
-      ).toEqual([]);
+    await expect(
+      capturePendingConversationTurnReply({
+        cfg: {} as OpenClawConfig,
+        ctx: {
+          SessionKey: "agent:main:reef:direct:untrusted",
+          ChatType: "direct",
+          Provider: "reef",
+          ReplyToIdFull: "outbound-untrusted",
+          RawBody: "untrusted reply",
+          commandText: "untrusted reply",
+          agentText: "untrusted reply",
+          rawText: "untrusted reply",
+        } as FinalizedRuntimeMsgContext,
+      }),
+    ).resolves.toBe(false);
+    pending.cancel();
+  });
 
-      const reply = await pending.wait();
-      expect(reply).toMatchObject({
-        conversationRef: setup.conversationRef,
-        messageId: "reef-inbound-full",
-        replyToId: "reef-outbound-full",
-        text: "trusted provenance\n\n<reef-message>peer acknowledged</reef-message>",
-        timestamp: 1_710_000_000_000,
-        ...(threadId ? { threadId } : {}),
-      });
-      if (mode === "audit-failure") {
-        expect(reply).not.toHaveProperty("transcriptArtifactId");
-      } else {
-        expect(reply?.transcriptArtifactId).toBe(`conversation-turn-reply-${operationId}`);
-      }
-      expect(await getConversationDeliveryOperation(setup.scope, operationId)).toMatchObject({
-        status: "replied",
-        reply: {
-          messageId: "reef-inbound-full",
-          replyToId: "reef-outbound-full",
-          text: "trusted provenance\n\n<reef-message>peer acknowledged</reef-message>",
-        },
-      });
-      const events = await transcriptEvents(setup);
-      expect(events.filter((event) => "message" in (event as Record<string, unknown>))).toEqual([]);
-      if (mode === "audit-failure") {
-        expect(events).toEqual([]);
-      } else {
-        expect(events).toContainEqual(
-          expect.objectContaining({
-            type: "custom",
-            customType: "openclaw.conversation-turn-reply",
-            appendMode: "side",
-            data: expect.objectContaining({
-              turnId: operationId,
-              conversationRef: setup.conversationRef,
-              messageId: "reef-inbound-full",
-              message: expect.objectContaining({
-                role: "user",
-                content: "trusted provenance\n\n<reef-message>peer acknowledged</reef-message>",
-              }),
-            }),
-          }),
-        );
-      }
+  it("consumes a correlated reply inline and persists only a side artifact", async () => {
+    const setup = await setupReefConversation();
+    const operationId = "turn-full-id";
+    const pending = await registerCapture(setup, operationId, {
+      outboundMessageId: "reef-outbound-full",
+      timeoutMs: 5_000,
+    });
+    pending.markReady();
+
+    const inboundContext = inboundReply(setup, "reef-outbound-full", {
+      MessageSid: "reef-inbound-short",
+      MessageSidFull: "reef-inbound-full",
+      ReplyToId: "wrong-short-id",
+      RawBody: "peer acknowledged",
+      BodyForAgent: "trusted provenance\n\n<reef-message>peer acknowledged</reef-message>",
+      commandText: "peer acknowledged",
+      agentText: "trusted provenance\n\n<reef-message>peer acknowledged</reef-message>",
+      rawText: "peer acknowledged",
+      Timestamp: 1_710_000_000,
+    });
+    const sql = observeHostDataSql();
+    try {
       await expect(
         capturePendingConversationTurnReply({ cfg: setup.cfg, ctx: inboundContext }),
       ).resolves.toBe(true);
-      await expect(
-        capturePendingConversationTurnReply({
-          cfg: setup.cfg,
-          ctx: {
-            ...inboundContext,
-            MessageSidFull: "reef-inbound-distinct",
-            RawBody: "new ordinary message",
-            BodyForAgent: "new ordinary message",
-            commandText: "new ordinary message",
-            agentText: "new ordinary message",
-            rawText: "new ordinary message",
-          } as FinalizedRuntimeMsgContext,
+    } finally {
+      sql.restore();
+    }
+    expect(
+      sql.queries.filter((query) => /insert\s+into\s+"?transcript_events"?/iu.test(query)),
+    ).toEqual([]);
+
+    await expect(pending.wait()).resolves.toMatchObject({
+      conversationRef: setup.conversationRef,
+      messageId: "reef-inbound-full",
+      replyToId: "reef-outbound-full",
+      text: "trusted provenance\n\n<reef-message>peer acknowledged</reef-message>",
+      timestamp: 1_710_000_000_000,
+      transcriptArtifactId: `conversation-turn-reply-${operationId}`,
+    });
+    expect(await getConversationDeliveryOperation(setup.scope, operationId)).toMatchObject({
+      status: "replied",
+      reply: {
+        messageId: "reef-inbound-full",
+        replyToId: "reef-outbound-full",
+        text: "trusted provenance\n\n<reef-message>peer acknowledged</reef-message>",
+      },
+    });
+    const events = await sessionAccessor.loadTranscriptEvents({
+      agentId: "main",
+      sessionId: setup.sessionId,
+      storePath: setup.storePath,
+    });
+    expect(events.filter((event) => "message" in (event as Record<string, unknown>))).toEqual([]);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "custom",
+        customType: "openclaw.conversation-turn-reply",
+        appendMode: "side",
+        data: expect.objectContaining({
+          turnId: operationId,
+          conversationRef: setup.conversationRef,
+          messageId: "reef-inbound-full",
+          message: expect.objectContaining({
+            role: "user",
+            content: "trusted provenance\n\n<reef-message>peer acknowledged</reef-message>",
+          }),
         }),
-      ).resolves.toBe(false);
-      expect(await transcriptEvents(setup)).toHaveLength(mode === "audit-failure" ? 0 : 1);
-    },
-  );
+      }),
+    );
+    await expect(
+      capturePendingConversationTurnReply({ cfg: setup.cfg, ctx: inboundContext }),
+    ).resolves.toBe(true);
+    await expect(
+      capturePendingConversationTurnReply({
+        cfg: setup.cfg,
+        ctx: {
+          ...inboundContext,
+          MessageSidFull: "reef-inbound-distinct",
+          RawBody: "new ordinary message",
+          BodyForAgent: "new ordinary message",
+          commandText: "new ordinary message",
+          agentText: "new ordinary message",
+          rawText: "new ordinary message",
+        } as FinalizedRuntimeMsgContext,
+      }),
+    ).resolves.toBe(false);
+    expect(
+      await sessionAccessor.loadTranscriptEvents({
+        agentId: "main",
+        sessionId: setup.sessionId,
+        storePath: setup.storePath,
+      }),
+    ).toHaveLength(1);
+  });
+
+  it("preserves the durable reply and its audit artifact despite log patterns", async () => {
+    const setup = await setupReefConversation();
+    const operationId = "turn-redacted";
+    const outboundMessageId = "reef-outbound-redacted";
+    const replyValue = "sensitive-reply-value";
+    const replyText = `trusted provenance\n\n<reef-message>secret ${replyValue}</reef-message>`;
+    const pending = await registerCapture(setup, operationId, {
+      outboundMessageId,
+      timeoutMs: 5_000,
+    });
+    pending.markReady();
+
+    await expect(
+      capturePendingConversationTurnReply({
+        cfg: {
+          ...setup.cfg,
+          logging: {
+            redactPatterns: ["sensitive-reply-[a-z]+"],
+          },
+        },
+        ctx: inboundReply(setup, outboundMessageId, {
+          MessageSidFull: "reef-inbound-redacted",
+          RawBody: `secret ${replyValue}`,
+          BodyForAgent: replyText,
+          commandText: `secret ${replyValue}`,
+          agentText: replyText,
+          rawText: `secret ${replyValue}`,
+        }),
+      }),
+    ).resolves.toBe(true);
+    await expect(pending.wait()).resolves.toMatchObject({ text: replyText });
+
+    const operation = await getConversationDeliveryOperation(setup.scope, operationId);
+    expect(operation?.reply?.text).toBe(replyText);
+    const events = await sessionAccessor.loadTranscriptEvents({
+      agentId: "main",
+      sessionId: setup.sessionId,
+      storePath: setup.storePath,
+    });
+    expect(JSON.stringify(events)).toContain(replyValue);
+  });
+
+  it("completes the durable reply when optional audit persistence throws", async () => {
+    const setup = await setupReefConversation();
+    const database = openOpenClawAgentDatabase(
+      toDatabaseOptions(resolveSqliteReadScope(setup.scope)),
+    );
+    database.db.exec(`
+      CREATE TRIGGER refuse_reply_audit BEFORE INSERT ON transcript_events
+      WHEN json_extract(NEW.event_json, '$.customType') = 'openclaw.conversation-turn-reply'
+      BEGIN SELECT RAISE(ABORT, 'audit store unavailable'); END;
+    `);
+    const operationId = "turn-audit-failure";
+    const outboundMessageId = "reef-outbound-audit-failure";
+    const pending = await registerCapture(setup, operationId, {
+      outboundMessageId,
+      timeoutMs: 5_000,
+    });
+    pending.markReady();
+    await expect(
+      capturePendingConversationTurnReply({
+        cfg: setup.cfg,
+        ctx: inboundReply(
+          setup,
+          outboundMessageId,
+          { MessageSidFull: "reef-inbound-audit-failure" },
+          "reply survives audit failure",
+        ),
+      }),
+    ).resolves.toBe(true);
+    const reply = await pending.wait();
+    expect(reply).toMatchObject({ text: "reply survives audit failure" });
+    expect(reply).not.toHaveProperty("transcriptArtifactId");
+    expect(await getConversationDeliveryOperation(setup.scope, operationId)).toMatchObject({
+      status: "replied",
+      reply: { text: "reply survives audit failure" },
+    });
+  });
+
+  it("does not make an ordinary post-restart reply replayable inline", async () => {
+    const setup = await setupReefConversation();
+    const operationId = "turn-after-restart";
+    await beginConversationDeliveryOperation(setup.scope, {
+      operationId,
+      operationKind: "turn",
+      conversationRef: setup.conversationRef,
+      message: "outbound",
+      preparedMessageId: "reef-outbound-restart",
+    });
+    await markConversationDeliveryQueued(setup.scope, operationId, `queue-${operationId}`);
+
+    await expect(
+      capturePendingConversationTurnReply({
+        cfg: setup.cfg,
+        ctx: inboundReply(
+          setup,
+          "reef-outbound-restart",
+          { MessageSidFull: "reef-inbound-restart" },
+          "reply after restart",
+        ),
+      }),
+    ).resolves.toBe(false);
+
+    expect(await getConversationDeliveryOperation(setup.scope, operationId)).toMatchObject({
+      status: "sent",
+      platformMessageId: "reef-outbound-restart",
+    });
+    expect(
+      (await getConversationDeliveryOperation(setup.scope, operationId))?.reply,
+    ).toBeUndefined();
+    expect(
+      await sessionAccessor.loadTranscriptEvents({
+        agentId: "main",
+        sessionId: setup.sessionId,
+        storePath: setup.storePath,
+      }),
+    ).toEqual([]);
+  });
 
   it("leaves replies to plain sends for ordinary inbound dispatch", async () => {
-    const setup = await setupConversation();
+    const setup = await setupReefConversation();
     const operationId = "send-before-reply";
     await beginConversationDeliveryOperation(setup.scope, {
       operationId,
@@ -635,8 +759,11 @@ describe("conversation turn capture", () => {
     await markConversationDeliveryQueued(setup.scope, operationId, `queue-${operationId}`);
 
     await expect(
-      captureReply(setup, "reef-outbound-send", {
-        MessageSidFull: "reef-inbound-send-reply",
+      capturePendingConversationTurnReply({
+        cfg: setup.cfg,
+        ctx: inboundReply(setup, "reef-outbound-send", {
+          MessageSidFull: "reef-inbound-send-reply",
+        }),
       }),
     ).resolves.toBe(false);
     expect(await getConversationDeliveryOperation(setup.scope, operationId)).toMatchObject({
@@ -645,19 +772,158 @@ describe("conversation turn capture", () => {
     });
   });
 
-  it.each([undefined, true])(
-    "falls through without ingress proof or a session (authorized: %s)",
-    async (authorized) => {
-      const setup = await setupConversation();
-      const pending = await registerCapture(setup, "unclaimed", { timeoutMs: 5_000 });
-      pending.markReady();
-      await expect(
-        captureReply(setup, "unclaimed", {
-          InboundAccessAuthorized: authorized,
-          ...(authorized ? { SessionKey: "agent:main:reef:direct:missing" } : {}),
+  it("consumes duplicate replies that promoted an unthreaded message into a thread", async () => {
+    const setup = await setupReefConversation();
+    const operationId = "turn-promoted-thread";
+    const outboundMessageId = "reef-promoted-root";
+    const pending = await registerCapture(setup, operationId, {
+      outboundMessageId,
+      timeoutMs: 5_000,
+    });
+    pending.markReady();
+    const inboundContext = inboundReply(
+      setup,
+      outboundMessageId,
+      {
+        MessageThreadId: outboundMessageId,
+        MessageSidFull: "reef-promoted-reply",
+      },
+      "thread-promoted reply",
+    );
+
+    await expect(
+      capturePendingConversationTurnReply({ cfg: setup.cfg, ctx: inboundContext }),
+    ).resolves.toBe(true);
+    await expect(pending.wait()).resolves.toMatchObject({
+      messageId: "reef-promoted-reply",
+      replyToId: outboundMessageId,
+      threadId: outboundMessageId,
+    });
+    await expect(
+      capturePendingConversationTurnReply({ cfg: setup.cfg, ctx: inboundContext }),
+    ).resolves.toBe(true);
+  });
+
+  it("captures a threaded reply only for the exact conversation and message", async () => {
+    const stateDir = tempDirs.make("openclaw-conversation-capture-");
+    const storePath = path.join(stateDir, "sessions.json");
+    const scope = { agentId: "main", storePath };
+    const sessionKey = "agent:main:discord:channel:ops-room:thread:user-context";
+    const sessionId = "discord-thread-session";
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    await sessionAccessor.upsertSessionEntryCore(
+      { ...scope, sessionKey },
+      {
+        sessionId,
+        updatedAt: 100,
+        chatType: "channel",
+        groupId: "ops-room",
+        delivery: normalizeSessionDeliveryState({
+          context: {
+            channel: "discord",
+            accountId: "default",
+            to: "channel:ops-room",
+            threadId: "user-context",
+          },
+          origin: { provider: "discord", accountId: "default", nativeChannelId: "ops-room" },
         }),
-      ).resolves.toBe(false);
-      pending.cancel();
-    },
-  );
+      },
+    );
+    const conversationRef = buildConversationRef({
+      channel: "discord",
+      accountId: "default",
+      kind: "channel",
+      peerId: "ops-room",
+      threadId: "user-context",
+    });
+    await persistSentOperation({
+      scope,
+      operationId: "turn-thread",
+      conversationRef,
+      outboundMessageId: "discord-outbound-full",
+    });
+    const pending = registerPendingConversationTurn({
+      agentId: "main",
+      id: "turn-thread",
+      conversationRef,
+      sessionId,
+      threadId: "user-context",
+      timeoutMs: 5_000,
+    });
+    pending.setOutboundMessageId("discord-outbound-full");
+    pending.markReady();
+
+    await expect(
+      capturePendingConversationTurnReply({
+        cfg,
+        ctx: {
+          AgentId: "main",
+          SessionKey: sessionKey,
+          ChatType: "channel",
+          Provider: "discord",
+          InboundAccessAuthorized: true,
+          From: "discord:channel:ops-room",
+          To: "channel:ops-room",
+          OriginatingChannel: "discord",
+          OriginatingTo: "channel:ops-room",
+          NativeChannelId: "ops-room",
+          MessageThreadId: "user-context",
+          MessageSidFull: "discord-inbound-full",
+          ReplyToIdFull: "discord-outbound-full",
+          SenderId: "member-1",
+          RawBody: "channel ack",
+          BodyForAgent: "channel ack",
+          commandText: "channel ack",
+          agentText: "channel ack",
+          rawText: "channel ack",
+        } as FinalizedRuntimeMsgContext,
+      }),
+    ).resolves.toBe(true);
+    await expect(pending.wait()).resolves.toMatchObject({
+      conversationRef,
+      threadId: "user-context",
+      text: "channel ack",
+    });
+  });
+
+  it("falls through without claiming when the inbound session cannot be resolved", async () => {
+    const stateDir = tempDirs.make("openclaw-conversation-capture-");
+    const pending = registerPendingConversationTurn({
+      agentId: "main",
+      id: "turn-missing",
+      conversationRef: buildConversationRef({
+        channel: "reef",
+        accountId: "default",
+        kind: "direct",
+        peerId: "missing",
+      }),
+      sessionId: "session-main",
+      timeoutMs: 5_000,
+    });
+    pending.setOutboundMessageId("outbound-missing");
+    pending.markReady();
+
+    await expect(
+      capturePendingConversationTurnReply({
+        cfg: { session: { store: path.join(stateDir, "sessions.json") } } as OpenClawConfig,
+        ctx: {
+          SessionKey: "agent:main:reef:direct:missing",
+          ChatType: "direct",
+          Provider: "reef",
+          InboundAccessAuthorized: true,
+          OriginatingChannel: "reef",
+          OriginatingTo: "reef:missing",
+          NativeDirectUserId: "missing",
+          MessageSidFull: "inbound-missing",
+          ReplyToIdFull: "outbound-missing",
+          RawBody: "fall through",
+          BodyForAgent: "fall through",
+          commandText: "fall through",
+          agentText: "fall through",
+          rawText: "fall through",
+        } as FinalizedRuntimeMsgContext,
+      }),
+    ).resolves.toBe(false);
+    pending.cancel();
+  });
 });

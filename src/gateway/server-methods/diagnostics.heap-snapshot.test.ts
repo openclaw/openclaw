@@ -151,10 +151,9 @@ describe("diagnostics.heapSnapshot", () => {
     { role: "operator", scopes: ["operator.write"] },
     { role: "node", scopes: ["operator.admin"] },
   ])("rejects $role/$scopes before native work", async (options) => {
-    const call = request(options);
-    await call.pending;
+    const respond = await request(options);
     expect(native.write).not.toHaveBeenCalled();
-    expect(call.respond).toHaveBeenCalledWith(
+    expect(respond).toHaveBeenCalledWith(
       false,
       undefined,
       expect.objectContaining({ code: options.role === "node" ? "INVALID_REQUEST" : "FORBIDDEN" }),

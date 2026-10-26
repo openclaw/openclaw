@@ -543,13 +543,14 @@ describe("Gateway catalog worker pool", () => {
       try {
         await work.entered(renewal, signal);
         const queued = work.track(fixture.snapshots[1]!.loadFullModelCatalog!({ refresh: true }));
-        const closing = work.track(
+        const closing =
           reason === "shutdown"
-            ? closePreparedModelRuntimeSnapshots()
-            : retirePluginCache(
-                getPluginMetadataSnapshotCache(fixture.snapshots[0]!.metadataSnapshot),
-              ),
-        );
+            ? work.track(closePreparedModelRuntimeSnapshots())
+            : work.track(
+                retirePluginCache(
+                  getPluginMetadataSnapshotCache(fixture.snapshots[0]!.metadataSnapshot),
+                ),
+              );
         work.release();
         await closing;
         await expect(renewal).rejects.toThrow();

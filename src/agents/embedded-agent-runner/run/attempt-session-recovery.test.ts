@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { assert, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { loadTranscriptEventsSync } from "../../../config/sessions/session-accessor.js";
 import {
@@ -28,6 +28,7 @@ vi.mock("node:worker_threads", async () =>
 const observer = useReconcileWorkerObserver();
 
 async function invalidateProjection(target: Parameters<typeof resolveSqliteTranscriptScope>[0]) {
+  assert(target.sessionId, "projection recovery requires a session ID");
   const options = toDatabaseOptions(resolveSqliteTranscriptScope(target));
   await waitForSessionTranscriptIndexReconcile(options);
   const database = openOpenClawAgentDatabase(options);

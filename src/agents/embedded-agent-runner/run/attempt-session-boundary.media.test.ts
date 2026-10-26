@@ -201,7 +201,10 @@ it("recomputes mutable projections, including shallow-frozen sources and replace
       role,
       customType: "note",
       display: false,
-      content: [{ type: "text" as const, text: "unchanged" }],
+      content: [
+        { type: "text" as const, text: "unchanged" },
+        { type: "text" as const, text: "second block" },
+      ],
       timestamp: 1,
     };
     const projected = normalizeMessagesForLlmBoundary([source], {

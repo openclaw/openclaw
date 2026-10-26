@@ -1,10 +1,11 @@
 import { createServer, ServerResponse } from "node:http";
 import { setImmediate } from "node:timers/promises";
 import { crc32 } from "node:zlib";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, assert, expect, it, vi } from "vitest";
 import { createNoisyPngBuffer, createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { createImageProcessor } from "../media/image-processor.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -34,8 +35,8 @@ afterEach(clearArtifactDownloads);
 
 const solidPng = (width: number, height: number, a = 255) =>
   createSolidPngBuffer(width, height, { r: 24, g: 64, b: 128, a });
-async function jpeg(source: Buffer) {
-  return (await createImageProcessor().encode(source, { format: "jpeg" })).data;
+async function jpeg(source: Buffer, quality?: number) {
+  return (await createImageProcessor().encode(source, { format: "jpeg", quality })).data;
 }
 async function expectWebp(bytes: Uint8Array, width: number, height: number) {
   expect(await createImageProcessor().probe(bytes)).toMatchObject({
@@ -103,12 +104,6 @@ function requestDownload(
   return { res, end, pending };
 }
 
-async function expectNotFound(response: ReturnType<typeof requestDownload>) {
-  expect(await response.pending).toBe(true);
-  expect(response.res.statusCode).toBe(404);
-  expect(response.end).toHaveBeenCalledExactlyOnceWith("Not Found");
-}
-
 function listen(client: GatewayClient, before?: (res: ServerResponse) => void) {
   return reserveTestPortListener({
     offsets: [0],
@@ -154,19 +149,22 @@ it.each(["source", "connection", "expiry"] as const)(
     const entered = createDeferredCore();
     const release = createDeferredCore();
     let sourceCurrent = true;
-    const grantOptions = {
+    const grantOptions: Parameters<typeof createArtifactDownload>[0] = {
+      client,
+      prepared: prepareArtifactDownload(artifact)!,
+      release: vi.fn(),
       assertCurrent() {
         if (!sourceCurrent) {
           throw new Error("Captured artifact authority retired");
         }
       },
-      async read(request: Parameters<typeof prepareArtifactDownloadResponse>[1]) {
+      async read(request) {
         entered.resolve();
         await release.promise;
         return prepareArtifactDownloadResponse(artifact, request);
       },
     };
-    const grant = grantFor(client, artifact, grantOptions);
+    const grant = createArtifactDownload(grantOptions);
     const response = requestDownload(client, grant.url);
     try {
       await entered.promise;
@@ -180,7 +178,9 @@ it.each(["source", "connection", "expiry"] as const)(
         clock.mockReturnValue(Date.parse(grant.expiresAt));
       }
       release.resolve();
-      await expectNotFound(response);
+      expect(await response.pending).toBe(true);
+      expect(response.res.statusCode).toBe(404);
+      expect(response.end).toHaveBeenCalledExactlyOnceWith("Not Found");
     } finally {
       release.resolve();
       await response.pending;
@@ -189,38 +189,72 @@ it.each(["source", "connection", "expiry"] as const)(
 );
 
 it.each([
-  ["invalid-image", () => Buffer.from("original"), "image/png"],
-  ["corrupt-png", corruptPng, "image/png"],
-  ["gif", () => ANIMATED_GIF_BYTES, "image/gif"],
-  ["apng", () => APNG_BYTES, "image/png"],
-  ["apng-metadata", apngWithLargeMetadata, "image/png"],
+  ["image", () => solidPng(1600, 800), "image/png", [960, 480]],
+  ["large", () => createNoisyPngBuffer(600, 300), "image/png", [600, 300]],
+  ["file", () => Buffer.from("original"), "text/plain", []],
+  ["invalid-image", () => Buffer.from("original"), "image/png", null],
+  ["corrupt-png", corruptPng, "image/png", null],
+  ["gif", () => ANIMATED_GIF_BYTES, "image/gif", null],
+  ["apng", () => APNG_BYTES, "image/png", null],
+  ["apng-metadata", apngWithLargeMetadata, "image/png", null],
+  ["compact", () => jpeg(createNoisyPngBuffer(32, 32), 10), "image/jpeg", [32, 32]],
 ] as const)(
-  "refuses an unsupported thumbnail without falling back to its original (%s)",
-  async (_kind, makeSource, mimeType) => {
+  "serves bounded HTTP thumbnails without falling back to original images (%s)",
+  async (kind, makeSource, mimeType, dimensions) => {
     const source = await makeSource();
+    const artifact = artifactFrom(source, {
+      type: kind === "file" ? "file" : "image",
+      mimeType,
+    });
     const client = createClient();
-    const grant = grantFor(client, artifactFrom(source, { mimeType }));
-    await expectNotFound(requestDownload(client, grant.url + "?variant=thumbnail"));
+    const grant = grantFor(client, artifact);
+    const fetch = async (query: string, method = "GET", headers?: Record<string, string>) => {
+      const response = requestDownload(client, `${grant.url}${query}`, method, headers);
+      expect(await response.pending).toBe(true);
+      return response;
+    };
+    for (const query of ["", "?variant=unknown"]) {
+      const full = await fetch(query);
+      expect(full.end).toHaveBeenCalledExactlyOnceWith(new Uint8Array(source));
+    }
+    const thumbnail = await fetch("?variant=thumbnail");
+    if (dimensions === null) {
+      expect(thumbnail.res.statusCode).toBe(404);
+      expect(thumbnail.end).toHaveBeenCalledExactlyOnceWith("Not Found");
+      return;
+    }
+    const bytes = thumbnail.end.mock.calls[0]?.[0];
+    assert.instanceOf(bytes, Uint8Array);
+    expect(thumbnail.res.statusCode).toBe(200);
+    expect(thumbnail.res.getHeaders()).toMatchObject({
+      "content-type": kind === "file" ? "text/plain" : "image/webp",
+      "content-security-policy": "default-src 'none'; sandbox",
+      "x-content-type-options": "nosniff",
+      "referrer-policy": "no-referrer",
+      "cache-control": "private, no-store",
+      "content-length": String(bytes.byteLength),
+      "content-disposition": expect.stringMatching(/^attachment;/),
+    });
+    if (dimensions.length) {
+      await expectWebp(bytes, dimensions[0]!, dimensions[1]!);
+    }
+    if (kind === "image") {
+      expect(bytes).not.toEqual(new Uint8Array(source));
+      expect(bytes.byteLength).toBeLessThan(source.byteLength);
+    } else if (kind === "large") {
+      expect(bytes.byteLength).toBeLessThanOrEqual(256 * 1024);
+      expect(bytes.byteLength).toBeLessThan(source.byteLength);
+    } else if (kind === "file") {
+      expect(Buffer.from(bytes).equals(source)).toBe(true);
+    }
+    const head = await fetch("?variant=thumbnail", "HEAD");
+    expect(head.end).toHaveBeenCalledExactlyOnceWith(undefined);
+    expect(head.res.getHeader("Content-Length")).toBe(String(bytes.byteLength));
+    const range = await fetch("?variant=thumbnail", "GET", { range: "bytes=0-7" });
+    expect(range.res.statusCode).toBe(206);
+    expect(range.end).toHaveBeenCalledExactlyOnceWith(bytes.subarray(0, 8));
   },
 );
-
-it("ignores image variants for files while retaining download security headers", async () => {
-  const client = createClient();
-  const grant = grantFor(client, fileArtifact("original"));
-  const response = requestDownload(client, grant.url + "?variant=thumbnail");
-  expect(await response.pending).toBe(true);
-  expect(response.res.statusCode).toBe(200);
-  expect(response.end).toHaveBeenCalledExactlyOnceWith(new Uint8Array(Buffer.from("original")));
-  expect(response.res.getHeaders()).toMatchObject({
-    "content-type": "text/plain",
-    "content-security-policy": "default-src 'none'; sandbox",
-    "x-content-type-options": "nosniff",
-    "referrer-policy": "no-referrer",
-    "cache-control": "private, no-store",
-    "content-length": "8",
-    "content-disposition": expect.stringMatching(/^attachment;/),
-  });
-});
 
 it.each(["missing", "stream", "body-and-stream"] as const)(
   "refuses unavailable thumbnail bytes without opening an original stream (%s)",
@@ -243,7 +277,9 @@ it.each(["missing", "stream", "body-and-stream"] as const)(
       },
     });
     const response = requestDownload(client, grant.url + "?variant=thumbnail");
-    await expectNotFound(response);
+    await response.pending;
+    expect(response.res.statusCode).toBe(404);
+    expect(response.end).toHaveBeenCalledExactlyOnceWith("Not Found");
     expect(stream).not.toHaveBeenCalled();
   },
 );
@@ -254,13 +290,22 @@ it("serves distinct fixed WebP renditions over HTTP with alpha, orientation, and
   const server = await listen(client);
   const grantImage = (source: Buffer, mimeType = "image/png") =>
     grantFor(client, artifactFrom(source, { title: "photo.png", mimeType })).url;
-  const fetchImage = async (url: string, method = "GET", headers?: Record<string, string>) => {
-    const response = await fetch(`http://127.0.0.1:${server.claim.port}${url}`, {
-      method,
-      headers,
-      redirect: "error",
+  const fetchImage = async (url: string) => {
+    const origin = "http://127.0.0.1:" + server.claim.port;
+    const target = new URL(url, origin);
+    if (target.origin !== origin) {
+      throw new Error("Image fixture requests must stay on the leased loopback origin");
+    }
+    const { response, release } = await fetchWithSsrFGuard({
+      url: target.href,
+      policy: { allowedOrigins: [origin] },
+      maxRedirects: 0,
     });
-    return { response, bytes: Buffer.from(await response.arrayBuffer()) };
+    try {
+      return { response, bytes: Buffer.from(await response.arrayBuffer()) };
+    } finally {
+      await release();
+    }
   };
   try {
     const source = solidPng(2400, 1200, 96);
@@ -287,17 +332,9 @@ it("serves distinct fixed WebP renditions over HTTP with alpha, orientation, and
       const { bytes } = await fetchImage(url + "?variant=thumbnail" + query);
       expect(bytes).toEqual(defaultBytes);
     }
-    for (const query of ["?width=480", "?variant=unknown"]) {
-      const original = await fetchImage(url + query);
-      expect(original.response.headers.get("content-type")).toBe("image/png");
-      expect(original.bytes).toEqual(source);
-    }
-    const head = await fetchImage(url + "?variant=thumbnail", "HEAD");
-    expect(head.bytes.length).toBe(0);
-    expect(head.response.headers.get("content-length")).toBe(String(defaultBytes!.length));
-    const range = await fetchImage(url + "?variant=thumbnail", "GET", { range: "bytes=0-7" });
-    expect(range.response.status).toBe(206);
-    expect(range.bytes).toEqual(defaultBytes!.subarray(0, 8));
+    const original = await fetchImage(url + "?width=480");
+    expect(original.response.headers.get("content-type")).toBe("image/png");
+    expect(original.bytes).toEqual(source);
 
     // Dense images may step down, but may not evade the selected rendition's byte ceiling.
     const denseUrl = grantImage(createNoisyPngBuffer(1600, 800));
@@ -317,6 +354,12 @@ it("serves distinct fixed WebP renditions over HTTP with alpha, orientation, and
     );
     const oriented = await fetchImage(orientedUrl + "?variant=thumbnail&width=1920");
     await expectWebp(oriented.bytes, 16, 32);
+
+    const invalid = await fetchImage(
+      grantImage(Buffer.from("not an image")) + "?variant=thumbnail&width=480",
+    );
+    expect(invalid.response.status).toBe(404);
+    expect(invalid.bytes.toString()).toBe("Not Found");
   } finally {
     await close(server);
   }

@@ -14,6 +14,7 @@ import { linkEmail, setUserProfileRole } from "../state/user-profile-writes.work
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
+import type { OperatorScope } from "./operator-scopes.js";
 import {
   libraryAuthority,
   type SkillLibraryRequestOwner,
@@ -39,12 +40,12 @@ const temps = useAutoCleanupTempDirTracker((cleanup) =>
 const content =
   "---\nname: ordinary\ndescription: An ordinary personal procedure\n---\n# Ordinary\nUse this procedure when asked.\n";
 const sessionKey = "agent:main:shared";
-const role = (scope: string) => ({
+const role = (scope: OperatorScope) => ({
   scopes: [scope],
   agents: "*" as const,
   sessions: { others: "view" as const },
 });
-const roles = (name: string, scope: string) => ({
+const roles = (name: string, scope: OperatorScope) => ({
   gateway: {
     roles: {
       default: name,

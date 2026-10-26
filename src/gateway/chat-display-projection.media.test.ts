@@ -1,8 +1,34 @@
+import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { createNoisyPngBuffer } from "../../test/helpers/image-fixtures.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { readTranscriptEventRows } from "../config/sessions/session-accessor.sqlite-read.js";
+import {
+  resolveSqliteTranscriptReadScope,
+  toDatabaseOptions,
+} from "../config/sessions/session-accessor.sqlite-scope.js";
+import {
+  appendAssistantMirrorMessageByIdentity,
+  appendSessionTranscriptMessageByIdentity,
+} from "../plugin-sdk/session-transcript-runtime.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import { projectChatDisplayMessages as project } from "./chat-display-projection.js";
+import { CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES } from "./chat-history-budget.js";
 import { SessionHistorySseState } from "./session-history-state.js";
 import { projectSessionMessagePayload } from "./session-transcript-message.js";
+import { readRecentSessionMessagesWithStatsAsync } from "./session-transcript-readers.js";
 
 const text = (value: string) => ({ type: "text", text: value });
 const phased = (value: string, phase: string, id?: string) => ({
@@ -48,14 +74,7 @@ const thinking = (value: string) => ({ type: "thinking", thinking: value });
 const user = (content: unknown) => ({ role: "user", content });
 
 it("correlates queued deliveries with earlier source rows rather than the adjacent reply", () => {
-  const firstThinking = thinking("Checking the current timetable.");
-  const first = assistant({
-    content: [firstThinking, phased("Checking", "commentary"), finalText(answer)],
-  });
-  const old = assistant({ __openclaw: { id: "old-answer" } });
-  const oldMirror = mirror({
-    openclawDeliveryMirror: { kind: "channel-final", sourceMessageId: "old-delivery" },
-  });
+  const first = assistant();
   const question = user("And the next train?");
   const second = assistant({
     __openclaw: { id: "second-answer" },
@@ -65,16 +84,8 @@ it("correlates queued deliveries with earlier source rows rather than the adjace
     content: second.content,
     openclawDeliveryMirror: { kind: "channel-final", sourceAssistantMessageId: "second-answer" },
   });
-  const raw = [old, oldMirror, first, question, second, mirror(), secondMirror];
-  const before = structuredClone(raw);
-  expect(project(raw)).toEqual([
-    old,
-    oldMirror,
-    { ...first, content: [firstThinking, text(answer)] },
-    question,
-    second,
-  ]);
-  expect(raw).toEqual(before);
+  const expected = [first, question, second];
+  expect(project([...expected, mirror(), secondMirror])).toEqual(expected);
 });
 it("caps commentary captions across an intervening image as one message", () => {
   const caption = (letter: string) => phased(letter.repeat(20), "commentary", "progress-caption");
@@ -227,6 +238,86 @@ it("withholds only relative directives from a mixed legacy batch with LF lines",
   expect(source).toEqual(before);
 });
 
+describe("correlated channel mirrors in Gateway history", () => {
+  let state: OpenClawTestState;
+  let scope: { agentId: string; sessionId: string; sessionKey: string; storePath: string };
+  beforeEach(async () => {
+    state = await createOpenClawTestState({ prefix: "openclaw-mirror-history-", applyEnv: false });
+    setRuntimeConfigSnapshot({});
+    scope = {
+      agentId: "main",
+      sessionId: "mirror-history-session",
+      sessionKey: "agent:main:mirror-history",
+      storePath: path.join(state.root, "sessions.json"),
+    };
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+  });
+  afterEach(async () => {
+    closeOpenClawAgentDatabasesForTest();
+    await state.cleanup();
+    clearRuntimeConfigSnapshot();
+  });
+  const append = (eventId: string, message: Record<string, unknown>) =>
+    appendSessionTranscriptMessageByIdentity({ ...scope, eventId, message });
+  const appendAssistant = (id: string, content: unknown[], timestamp: number) =>
+    append(id, { role: "assistant", content, timestamp });
+  const appendMirror = (id: string) =>
+    appendAssistantMirrorMessageByIdentity({
+      ...scope,
+      idempotencyKey: id,
+      deliveryMirror: { kind: "channel-final", sourceMessageId: id },
+      text: answer,
+      updateMode: "none",
+    });
+  const storedRows = () =>
+    readTranscriptEventRows(
+      openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteTranscriptReadScope(scope))),
+      scope.sessionId,
+    );
+
+  it("hides new correlated mirrors while preserving old bytes and distinct identical turns", async () => {
+    const oldThinking = thinking("Checking the old timetable.");
+    const currentThinking = thinking("Checking the current timetable.");
+    await appendAssistant("old-answer", [oldThinking, ...reply], 9000);
+    await append(
+      "old-mirror",
+      mirror({
+        timestamp: 1000,
+        idempotencyKey: "old-delivery",
+        openclawDeliveryMirror: { kind: "channel-final", sourceMessageId: "old-delivery" },
+      }),
+    );
+    const oldRows = storedRows();
+    const progress = phased("I will check the departure.", "commentary", "commentary");
+    await appendAssistant(
+      "first-new-answer",
+      [currentThinking, progress, phased(answer, "final_answer", "final")],
+      8000,
+    );
+    await appendMirror("first-new-delivery");
+    await append("second-question", { ...user("Please confirm that again."), timestamp: 500 });
+    await appendAssistant("second-new-answer", reply, 400);
+    await appendMirror("second-new-delivery");
+    const beforeRead = storedRows();
+    const history = await readRecentSessionMessagesWithStatsAsync(scope, { maxMessages: 20 });
+    const displayed = project(history.messages);
+    expect(history.messages).toHaveLength(7);
+    expect(displayed).toMatchObject([
+      { role: "assistant", __openclaw: { id: "old-answer" } },
+      { model: "delivery-mirror", __openclaw: { id: "old-mirror" } },
+      {
+        role: "assistant",
+        __openclaw: { id: "first-new-answer" },
+        content: [currentThinking, text(answer)],
+      },
+      { role: "user", __openclaw: { id: "second-question" } },
+      { role: "assistant", __openclaw: { id: "second-new-answer" } },
+    ]);
+    expect(storedRows()).toEqual(beforeRead);
+    expect(storedRows().slice(0, oldRows.length)).toEqual(oldRows);
+  });
+});
+
 describe("channel mirror display controls", () => {
   const attachedMirror = mirror({ openclawDisplayContent: [...reply, document] });
   const forwarded = {
@@ -284,6 +375,25 @@ describe("channel mirror display controls", () => {
 });
 
 describe("multimodal display privacy", () => {
+  it("keeps text while omitting native image data from display history", () => {
+    const png = createNoisyPngBuffer(320, 320);
+    const encoded = png.toString("base64");
+    const prefix = Object.freeze(text("keep prefix text"));
+    const suffix = Object.freeze(text("keep suffix text"));
+    const message = user([prefix, { type: "image", mimeType: "image/png", data: encoded }, suffix]);
+    const messages = project([message]);
+    expect(messages).toMatchObject([
+      {
+        role: "user",
+        content: [prefix, { type: "image", omitted: true, bytes: png.length }, suffix],
+      },
+    ]);
+    expect(JSON.stringify(messages)).not.toContain(encoded);
+    expect(Buffer.byteLength(JSON.stringify(messages))).toBeLessThan(
+      CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES,
+    );
+  });
+
   it("keeps sanitized legacy media in projection and incremental SSE", async () => {
     const data = Buffer.from("inline payload").toString("base64");
     const source = (type: string, url: string, fields: Record<string, unknown> = {}) => ({
@@ -295,40 +405,43 @@ describe("multimodal display privacy", () => {
       {
         type: "image",
         mimeType: "image/png",
-        url: "https://e.test/i",
+        url: "https://media.example/image.png",
         source: source("base64", "media://inbound/image-claim"),
       },
       {
         type: "audio",
         mimeType: "audio/wav",
         audio_url: "media://inbound/audio-claim",
-        source: source("url", "https://e.test/a", { omitted: true }),
+        source: source("url", "https://media.example/audio.wav", { omitted: true }),
       },
       {
         type: "video",
         mimeType: "video/mp4",
-        video_url: "https://e.test/v",
+        video_url: "https://media.example/video.mp4",
         source: source("url", "media://inbound/video-claim", { omitted: true }),
       },
     ];
     const privateFields = [
       {
         path: "/tmp/private-image.png",
-        url: "https://image-user@e.test/i?signature=image-secret#image-fragment",
+        url: "https://image-user@media.example/image.png?signature=image-secret#image-fragment",
         source: source("base64", "media://inbound/image-claim", { data, blob: data }),
       },
       {
         data,
         filePath: "C:\\private-audio.wav",
-        source: source("url", "https://audio-user@e.test/a?token=audio-secret#audio-fragment", {
-          data,
-        }),
+        source: source(
+          "url",
+          "https://audio-user@media.example/audio.wav?token=audio-secret#audio-fragment",
+          { data },
+        ),
       },
       {
         blob: data,
         localPath: "\\\\server\\share\\private-video.mp4",
         openclawReasoningReplay: { private: true },
-        video_url: "https://video-user@e.test/v?X-Amz-Signature=video-secret#video-fragment",
+        video_url:
+          "https://video-user@media.example/video.mp4?X-Amz-Signature=video-secret#video-fragment",
         source: source("url", "media://inbound/video-claim", { blob: data }),
       },
     ];

@@ -257,7 +257,7 @@ describe("ordinary session event execution", () => {
     "keeps scheduled credential authority through $runtime execution (revoked=$revoke)",
     async ({ runtime, revoke }) => {
       const automation = createScheduledAutomation();
-      const authRequirement = runtime === "cli" ? "subscription" : "api-key";
+      const authRequirement = runtime === "cli" ? ("subscription" as const) : ("api-key" as const);
       automation.job.inferenceBinding = {
         version: 1,
         provider: runtime === "cli" ? "claude-cli" : "anthropic",

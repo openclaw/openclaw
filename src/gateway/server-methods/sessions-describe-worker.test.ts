@@ -614,7 +614,7 @@ it.each(["executor", "reservation"] as const)(
     }),
 );
 
-it("returns no row for missing targets without provisioning storage", async () => {
+it("returns no row for missing or hidden targets without provisioning missing storage", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
     const context = requestContext(cfg);
@@ -629,5 +629,9 @@ it("returns no row for missing targets without provisioning storage", async () =
     } finally {
       getSessionRowProjection(context)?.dispose();
     }
+  });
+  await withFixture(async ({ describe }) => {
+    await upsertSessionEntryCore(targetScope, { visibility: "draft" });
+    expect(await describe()).toEqual({ session: null });
   });
 });

@@ -193,6 +193,16 @@ describe("finalized tool descriptor snapshots", () => {
 
     parameters.properties.query.type = "number";
     outputSchema.properties.query.enum.push("source mutation");
+    for (const immutable of [descriptor.parameters, descriptor.outputSchema]) {
+      assert.ok(immutable && "properties" in immutable);
+      const properties = immutable.properties;
+      assert.ok(properties && typeof properties === "object" && "query" in properties);
+      const query = properties.query;
+      assert.ok(query && typeof query === "object" && "enum" in query);
+      expect(Reflect.set(query, "type", "boolean")).toBe(false);
+      assert.ok(Array.isArray(query.enum));
+      expect(Reflect.set(query.enum, 0, "consumer mutation")).toBe(false);
+    }
     const next = attempt(tools());
     expect(next.tool().parameters).toBe(descriptor.parameters);
     expect(next.tool().outputSchema).toBe(descriptor.outputSchema);

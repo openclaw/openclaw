@@ -76,7 +76,7 @@ it.each(["direct", "buffered"] as const)(
       pipeline,
     });
     const { typing } = presentation;
-    const blockReplyHandler = expectDefined(presentation.blockReplyHandler);
+    const blockReplyHandler = expectDefined(presentation.blockReplyHandler, "block reply handler");
     try {
       const suppressed: ReplyPayload[] = [
         { text: "Private maintenance output." },
@@ -191,7 +191,7 @@ it.each([
     });
     const presentation = createPresentation({ onPreparedBlockReply: forwardPrepared, pipeline });
     const { typing } = presentation;
-    const handler = expectDefined(presentation.blockReplyHandler);
+    const handler = expectDefined(presentation.blockReplyHandler, "block reply handler");
     const middle = setReplyPayloadMetadata({ text }, silent ? { silentReply: true } : {});
     try {
       await handler({ text: "First." });

@@ -85,7 +85,7 @@ it.each([
   },
 );
 
-it("retries reconciliation once the source is released", async () => {
+it.each(["released", "expired"])("retries reconciliation once the source is %s", async (state) => {
   let sourceState = "running";
   const s = reconciliation({
     inspect: () => jsonResult({ id: leaseId, provider: "aws", state: sourceState }),
@@ -102,7 +102,7 @@ it("retries reconciliation once the source is released", async () => {
   expect(s.calls.every(({ argv }) => argv[1] === "inspect")).toBe(true);
   expect(s.warn).toHaveBeenCalledOnce();
 
-  sourceState = "released";
+  sourceState = state;
   await s.provider.maintain!(context());
 
   expect(s.store.lookup("profile")).toBeUndefined();
@@ -116,12 +116,16 @@ it.each([
   "shape",
   "identity",
   "alive",
+  "deleting",
+  "failed",
+  "cleanup",
+  "archived",
   "inspection",
   "deletion",
   "unclaimed",
   "terminal",
 ] as const)("retains interrupted capture after %s failure", async (failure) => {
-  const unconfirmed = failure === "alive";
+  const unconfirmed = ["alive", "deleting", "failed", "cleanup", "archived"].includes(failure);
   const s = reconciliation({
     inspect: () =>
       failure === "unclaimed"
@@ -129,7 +133,7 @@ it.each([
         : failure === "terminal"
           ? failed("DigitalOcean fixed lease is terminal", 4)
           : unconfirmed
-            ? jsonResult({ id: leaseId, state: "running" })
+            ? jsonResult({ id: leaseId, state: failure === "alive" ? "running" : failure })
             : failure === "inspection"
               ? failed("fixture inspection failed")
               : absent(),
