@@ -1,29 +1,23 @@
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { makeCronJob } from "../delivery.test-helpers.js";
 import * as normalization from "../normalize.js";
 import { makeCronStreamSandboxTarget } from "../stream-sandbox.test-support.js";
 import type { CronSchedule } from "../types.js";
 import { projectCronJobThroughStorageCodec as project, rowToCronJob } from "./row-codec.js";
 
-const stream = { kind: "stream", command: ["watch-source"] } as const;
+const stream: CronSchedule = {
+  kind: "stream",
+  command: ["node", "events.mjs"],
+  cwd: "/repo",
+  mode: "match",
+  match: "^ready:",
+  batchMs: 100,
+  maxBatchBytes: 2_048,
+};
 const operator = { profileId: "profile-ada", scopes: ["operator.write"], assignedRole: null };
 const target = makeCronStreamSandboxTarget();
 
-it("normalizes the isolated clone without copying its envelope again", () => {
-  const job = makeCronJob({});
-  const clone = vi.spyOn(globalThis, "structuredClone");
-  const normalize = vi.spyOn(normalization, "normalizeCronJobInput");
-  try {
-    const projected = project(job);
-    expect(normalize.mock.calls[0]?.[0]).toBe(clone.mock.results[0]?.value);
-    expect(normalize.mock.calls[0]?.[0]).not.toBe(job);
-    expect(projected.schedule).toEqual(job.schedule);
-    expect(projected.schedule).not.toBe(job.schedule);
-  } finally {
-    normalize.mockRestore();
-    clone.mockRestore();
-  }
-});
+afterEach(() => vi.restoreAllMocks());
 function decode(job: Record<string, unknown> & { id: string }) {
   return rowToCronJob(
     { job_id: job.id, state_json: "{}", updated_at: 1, runtime_updated_at_ms: 1 },
@@ -44,9 +38,9 @@ it.each([
 });
 
 it("requires the persisted sandbox discriminator and preserves the private target", () => {
-  const streamSandbox = makeCronStreamSandboxTarget();
+  const streamSandbox = target;
   const job = {
-    ...makeCronJob({ schedule: { ...stream, command: [...stream.command] } }),
+    ...makeCronJob({ schedule: structuredClone(stream) }),
     streamSandbox,
   };
   expect(decode(job)).toBeNull();
@@ -82,26 +76,21 @@ it("keeps private runtime authority out of job_json", () => {
   expect(malformed.runtimeAuthority).toBeUndefined();
 });
 
-it("round-trips a paced stream without aliasing input config or runtime state", () => {
-  const schedule: CronSchedule = {
-    kind: "stream",
-    command: ["node", "events.mjs"],
-    cwd: "/repo",
-    mode: "match",
-    match: "^ready:",
-    batchMs: 100,
-    maxBatchBytes: 2_048,
-  };
+it("round-trips a paced stream, normalizing its isolated clone without another envelope copy", () => {
   const triggerState = { cursor: { position: 7 }, items: ["first"] };
   const input = makeCronJob({
-    schedule,
+    schedule: structuredClone(stream),
     pacing: { min: "15m", max: "4h" },
     state: { lastStatus: "ok", triggerState, nextRunAtMs: 123_000 },
   });
   const before = structuredClone(input);
+  const clone = vi.spyOn(globalThis, "structuredClone");
+  const normalize = vi.spyOn(normalization, "normalizeCronJobInput");
   const projected = project(input);
 
-  expect(projected.schedule).toStrictEqual(schedule);
+  expect(normalize.mock.calls[0]?.[0]).toBe(clone.mock.results[0]?.value);
+  expect(normalize.mock.calls[0]?.[0]).not.toBe(input);
+  expect(projected.schedule).toStrictEqual(stream);
   expect(projected.pacing).toStrictEqual(input.pacing);
   expect(projected.state).toStrictEqual({ ...input.state, lastRunStatus: "ok" });
   expect(input).toStrictEqual(before);
