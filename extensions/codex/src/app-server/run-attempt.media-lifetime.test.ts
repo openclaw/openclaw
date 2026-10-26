@@ -64,9 +64,7 @@ it("delivers earlier accepted TTS but discards audio whose result timed out", as
         method: "item/tool/call",
         params: createDynamicToolCall("tts", args, callId),
       });
-    expect(await speak("earlier-tts", { text: "Earlier accepted audio." })).toMatchObject({
-      success: true,
-    });
+    expect(await speak("earlier-tts", { text: "Earlier." })).toMatchObject({ success: true });
     const response = speak("host-tts", { text: "Read this aloud.", timeoutMs: 1 });
     await Promise.race([
       entered.promise,

@@ -20,21 +20,15 @@ it.each([60_000, -60_000])(
       "turn/interrupt": {},
     };
     const peer = await createWebSocketPeer((request, respond, send) => {
-      if (Object.hasOwn(responses, request.method)) {
-        respond(responses[request.method]);
-      } else if (request.method !== "initialized") {
-        send({
-          id: request.id,
-          error: { code: -32601, message: `Unexpected method: ${request.method}` },
-        });
+      if (request.method === "initialized") {
+        return;
       }
+      expect(responses).toHaveProperty(request.method);
+      respond(responses[request.method]);
       if (request.method === "turn/interrupt") {
         send({
           method: "turn/completed",
-          params: {
-            threadId: thread.thread.id,
-            ...turnStartResult(turn.turn.id, "interrupted"),
-          },
+          params: { threadId: thread.thread.id, ...turnStartResult(turn.turn.id, "interrupted") },
         });
       }
     });
