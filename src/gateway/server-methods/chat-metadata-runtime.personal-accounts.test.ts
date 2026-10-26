@@ -31,6 +31,7 @@ import {
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { forbidMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { WITHOUT_OPENAI_ENV_AUTH } from "../test-helpers.env.js";
 import {
   connectChatMetadataAccount,
   createChatMetadataHarness,
@@ -38,7 +39,6 @@ import {
   createDraftChatMetadataScope,
   createPersonalChatMetadataFixture,
 } from "./chat-metadata-runtime.test-support.js";
-import { WITHOUT_OPENAI_ENV_AUTH } from "./models-list-result.openai-routes.test-support.js";
 
 describe("gateway chat metadata personal accounts", () => {
   test("stops serving a retained shared list once the requester connects a personal account", async () => {
@@ -136,38 +136,6 @@ describe("gateway chat metadata personal accounts", () => {
     });
   });
 
-  test("refuses a private account summary when its metadata requester changes during the read", async () => {
-    await withOpenClawTestState({ layout: "state-only", prepareProfileCatalog: true }, async () => {
-      const harness = createChatMetadataHarness();
-      const owner = ensureProfileForEmail("owner@example.test");
-      const viewer = ensureProfileForEmail("viewer@example.test");
-      const authProfileId = connectChatMetadataAccount(owner.id);
-      let requesterProfileId = owner.id;
-      const readSummary = accountOperations.readUserModelAccountSelectionAsync;
-      const summaryRead = vi
-        .spyOn(accountOperations, "readUserModelAccountSelectionAsync")
-        .mockImplementationOnce(async (...args) => {
-          const summary = await readSummary(...args);
-          requesterProfileId = viewer.id;
-          return summary;
-        });
-      try {
-        await harness.runtime.refresh();
-        await expect(
-          harness.runtime.read({
-            agentId: "main",
-            sessionEntry: { authProfileOverride: authProfileId, authProfileOverrideSource: "user" },
-            requesterProfileId: owner.id,
-            isCurrent: () => requesterProfileId === owner.id,
-          }),
-        ).rejects.toThrow("Chat metadata access changed while preparing its metadata");
-      } finally {
-        summaryRead.mockRestore();
-        await harness.runtime.stop();
-      }
-    });
-  });
-
   test("prepares cold, merged, missing and foreign-updated account labels without host SQL", async () => {
     await withOpenClawTestState({ layout: "state-only", prepareProfileCatalog: true }, async () => {
       const harness = createChatMetadataHarness();
@@ -221,7 +189,7 @@ describe("gateway chat metadata personal accounts", () => {
     });
   });
 
-  test.each(["display", "physical source"])(
+  test.each(["requester", "display", "physical source"])(
     "refuses a changed %s while its label reply is pending",
     async (change) => {
       await withOpenClawTestState(
@@ -230,13 +198,20 @@ describe("gateway chat metadata personal accounts", () => {
           const harness = createChatMetadataHarness();
           const owner = await ensureCanonicalUserProfileForEmail("stale-label@example.test");
           await setCanonicalUserProfileDisplayName(owner.id, "Before");
+          const authProfileId =
+            change === "requester"
+              ? connectChatMetadataAccount(owner.id)
+              : `personal:${owner.id}:${randomUUID()}`;
+          let requesterCurrent = true;
           const readSelection = accountOperations.readUserModelAccountSelectionAsync;
           let restoreSource: (() => void) | undefined;
           const selectionRead = vi
             .spyOn(accountOperations, "readUserModelAccountSelectionAsync")
             .mockImplementationOnce(async (...args) => {
               const selection = await readSelection(...args);
-              if (change === "display") {
+              if (change === "requester") {
+                requesterCurrent = false;
+              } else if (change === "display") {
                 await setCanonicalUserProfileDisplayName(owner.id, "After");
               } else {
                 const pathname = resolveOpenClawStateSqlitePath();
@@ -255,12 +230,23 @@ describe("gateway chat metadata personal accounts", () => {
             await expect(
               harness.runtime.read({
                 agentId: "main",
-                sessionEntry: { authProfileOverride: `personal:${owner.id}:${randomUUID()}` },
+                sessionEntry: {
+                  authProfileOverride: authProfileId,
+                  ...(change === "requester" ? { authProfileOverrideSource: "user" as const } : {}),
+                },
+                ...(change === "requester"
+                  ? {
+                      requesterProfileId: owner.id,
+                      isCurrent: () => requesterCurrent,
+                    }
+                  : {}),
               }),
             ).rejects.toThrow(
-              change === "display"
-                ? "Personal account changed while preparing its metadata"
-                : "SQLite database file identity changed",
+              change === "requester"
+                ? "Chat metadata access changed while preparing its metadata"
+                : change === "display"
+                  ? "Personal account changed while preparing its metadata"
+                  : "SQLite database file identity changed",
             );
           } finally {
             selectionRead.mockRestore();
@@ -285,9 +271,12 @@ describe("gateway chat metadata personal accounts", () => {
         const startup = await harness.runtime.readStartup({
           agentId: "main",
           sessionEntry: { authProfileOverride: authProfileId, authProfileOverrideSource: "user" },
-          readRequesterProfileId: () => owner.id,
         });
+        expect(startup?.metadata?.commands).toEqual(expect.any(Array));
         expect(startup?.metadata).not.toHaveProperty("accountSelection");
+        expect(startup?.sessionModelCatalog).toBeUndefined();
+        expect(startup?.defaultModelCatalog).toBeUndefined();
+        expect(harness.buildProjection).toHaveBeenCalledOnce();
         expect(summaryRead).not.toHaveBeenCalled();
       } finally {
         summaryRead.mockRestore();
@@ -307,6 +296,10 @@ describe("gateway chat metadata personal accounts", () => {
       async () => {
         const { harness, owner, alice, bob, aliceScope, bobScope } =
           await createPersonalChatMetadataFixture();
+        const config = { ...owner.config, auth: { order: { openai: ["openai:shared"] } } };
+        harness.setConfig(config);
+        harness.setOwner({ ...owner, config });
+        await harness.refresh();
         const readAliceDefaults = async () => {
           const sql = forbidMainThreadSql("personal defaults queried host SQLite");
           try {
@@ -348,6 +341,12 @@ describe("gateway chat metadata personal accounts", () => {
         };
         const viewerMetadata = await harness.runtime.read(pinned);
         expect(viewerMetadata).toMatchObject(available);
+        await expect(
+          harness.read({
+            ...pinned,
+            sessionEntry: { authProfileOverride: aliceAuthId, authProfileOverrideSource: "user" },
+          }),
+        ).resolves.toMatchObject(available);
         expect(viewerMetadata.accountSelection).toEqual({
           kind: "personal",
           label: "Alice's account",
@@ -391,42 +390,6 @@ describe("gateway chat metadata personal accounts", () => {
       },
     );
   });
-
-  test.each(["user", "user-link"] as const)(
-    "keeps a %s personal session pin available outside shared auth order",
-    async (source) => {
-      await withOpenClawTestState(
-        {
-          layout: "state-only",
-          prefix: "personal-pinned-metadata-",
-          env: WITHOUT_OPENAI_ENV_AUTH,
-          prepareProfileCatalog: true,
-        },
-        async () => {
-          const { harness, owner, alice, bobScope } = await createPersonalChatMetadataFixture();
-          const authProfileId = connectChatMetadataAccount(alice.id);
-          const config = { ...owner.config, auth: { order: { openai: ["openai:shared"] } } };
-          harness.setConfig(config);
-          harness.setOwner({ ...owner, config });
-          await harness.runtime.refresh();
-          const request = {
-            ...bobScope,
-            sessionEntry: {
-              authProfileOverride: authProfileId,
-              authProfileOverrideSource: source,
-            },
-          };
-          const available = {
-            models: expect.arrayContaining([
-              expect.objectContaining({ id: "gpt-5.6-luna", available: true }),
-            ]),
-          };
-          await expect(harness.runtime.read(request)).resolves.toMatchObject(available);
-          expect(harness.getPreparedAuthStore()?.profiles).toEqual({});
-        },
-      );
-    },
-  );
 });
 
 function createAuthHarnesses(authStore: AuthProfileStore, key: string) {
@@ -533,68 +496,42 @@ describe("gateway chat metadata auth deadlines", () => {
     }
   });
 
-  test.each([{ at: 20_000, available: false }])(
-    "reads a cached static token at $at without publication",
-    async ({ at, available }) => {
-      const clock = vi.spyOn(Date, "now").mockReturnValue(10_000);
-      const authStore: AuthProfileStore = {
-        version: 1,
-        profiles: {
-          "acme:primary": {
-            type: "token",
-            provider: "acme",
-            token: "synthetic-token",
-            expires: 20_000,
-          },
-        },
-      };
-      const { cached, fresh } = createAuthHarnesses(authStore, "synthetic-token");
-      try {
-        await cached.runtime.refresh();
-        await expect(cached.runtime.read({ agentId: "main" })).resolves.toMatchObject({
-          models: [{ id: "model", provider: "acme", available: true }],
-        });
-        clock.mockReturnValue(at);
-        await fresh.runtime.refresh();
-        const expected = await fresh.runtime.read({ agentId: "main" });
-        expect(expected).toMatchObject({
-          models: [{ id: "model", provider: "acme", available }],
-        });
-        expect(await cached.runtime.read({ agentId: "main" })).toEqual(expected);
-      } finally {
-        await Promise.all([cached.runtime.stop(), fresh.runtime.stop()]);
-        clock.mockRestore();
-      }
-    },
-  );
-
   test.each([
-    { name: "cooldown end", cooldownUntil: 20_000, at: 20_000, before: false, after: true },
+    { name: "token expiry", token: true, before: true, after: false },
+    { name: "cooldown end", token: false, before: false, after: true },
   ])(
     "keeps cached metadata current at $name without publication",
-    async ({ cooldownUntil, at, before, after }) => {
+    async ({ token, before, after }) => {
       const clock = vi.spyOn(Date, "now").mockReturnValue(10_000);
+      const credential = token
+        ? { type: "token" as const, token: "synthetic-token", expires: 20_000 }
+        : { type: "api_key" as const, key: "synthetic-key" };
       const authStore: AuthProfileStore = {
         version: 1,
-        profiles: { "acme:primary": { type: "api_key", provider: "acme", key: "synthetic-key" } },
-        usageStats: { "acme:primary": { cooldownUntil } },
+        profiles: { "acme:primary": { ...credential, provider: "acme" } },
+        ...(token ? {} : { usageStats: { "acme:primary": { cooldownUntil: 20_000 } } }),
       };
-      const { cached, fresh } = createAuthHarnesses(authStore, "synthetic-key");
+      const { cached, fresh } = createAuthHarnesses(
+        authStore,
+        token ? "synthetic-token" : "synthetic-key",
+      );
       try {
-        await cached.runtime.refresh();
-        await expect(cached.runtime.read({ agentId: "main" })).resolves.toMatchObject({
+        await cached.refresh();
+        await expect(cached.read()).resolves.toMatchObject({
           models: [{ id: "model", provider: "acme", available: before }],
         });
-        clock.mockReturnValue(at);
-        await fresh.runtime.refresh();
-        const expected = await fresh.runtime.read({ agentId: "main" });
+        clock.mockReturnValue(20_000);
+        await fresh.refresh();
+        const expected = await fresh.read();
         expect(expected).toMatchObject({
           models: [{ id: "model", provider: "acme", available: after }],
         });
         cached.getPreparedAuthStore.mockClear();
-        expect(await cached.runtime.read({ agentId: "main" })).toEqual(expected);
-        expect(cached.getPreparedAuthStore).not.toHaveBeenCalled();
-        expect(cached.buildCommands).toHaveBeenCalledTimes(2);
+        expect(await cached.read()).toEqual(expected);
+        if (!token) {
+          expect(cached.getPreparedAuthStore).not.toHaveBeenCalled();
+          expect(cached.buildCommands).toHaveBeenCalledTimes(2);
+        }
       } finally {
         await Promise.all([cached.runtime.stop(), fresh.runtime.stop()]);
         clock.mockRestore();

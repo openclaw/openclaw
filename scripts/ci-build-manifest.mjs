@@ -375,6 +375,10 @@ const supportsCurrentMacosSwiftCi =
   existsSync("scripts/install-swift-tools.sh") &&
   existsSync("scripts/lint-swift.sh") &&
   existsSync("scripts/format-swift.sh");
+const runMacosSwift =
+  runMacos &&
+  !npmQualification &&
+  (!frozenTarget || compatibilityTarget || supportsCurrentMacosSwiftCi);
 const supportsIosBuild = hasPackageScript("ios:build");
 const supportsCurrentIosCi = supportsIosBuild && supportsCurrentMacosSwiftCi;
 const iosBuildScope =
@@ -451,11 +455,11 @@ const includeReleaseOnlyUiTests =
     !isCanonicalRepository ||
     compatibilityTarget ||
     changedPaths === null);
-// Ordinary CI shares eight 16-class browser jobs; full inventories retain
-// twelve. Private source-server projects keep their own one-worker limit.
+// Match four observed CPUs per 16-class job while retaining 24 worker slots.
+// Private source-server projects remain serial.
 const compactUiE2e = supportsUiE2eProjects && !includeReleaseOnlyUiTests;
 let uiE2eJobCount = compactUiE2e
-  ? 9
+  ? 7
   : supportsUiE2eProjects
     ? 13
     : usesHostedRunnerProfile
@@ -721,6 +725,7 @@ const uiWebkitOwners = [
   "ui/src/pages/chat/components/chat-{composer*,picker-overlay*,model-picker*,effort-picker*}.{ts,tsx}",
   "ui/src/pages/chat/{chat-pane-header,components/chat-pane-header*,components/chat-pane-versions-menu*}.{ts,tsx}",
   "ui/src/lib/solid-bridge.ts",
+  "ui/src/lib/solid-bridge-view.tsx",
   "ui/src/lib/presentation.ts",
   "ui/src/pages/new-session/{composer*,draft-composer*}.{ts,tsx}",
   "ui/src/lib/native-overlay-occlusion.{ts,tsx}",
@@ -983,6 +988,7 @@ const runSqliteSessionLifecycle =
   (changedScopeHasSqliteSessionLifecycleImpact ||
     selectedOwnerTest("test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts"));
 const postgresConformancePaths = [
+  ".github/actions/postgres-conformance/**",
   "**/*.postgres.test.ts",
   "src/state/openclaw-agent-*",
   "src/config/sessions/**",
@@ -1080,6 +1086,7 @@ const runPostgresConformance =
         ))));
 const runBuildArtifacts =
   publishedDriverUpdate ||
+  (runMacosSwift && existsSync("apps/macos/Sources/OpenClaw/NativeExecPolicyOwner.swift")) ||
   (runNodeFull &&
     (changedScopeHasBuildImpact ||
       runSqliteSessionLifecycle ||
@@ -1088,6 +1095,17 @@ const runBuildArtifacts =
       runDiscordComponentProof ||
       runGatewayWatch ||
       selectedTuiPty));
+// Reuse only an already-selected public build; frozen and standalone browser plans
+// keep their local preparation without adding a serial build dependency.
+const reuseBrowserExtensionBuild =
+  runBrowserExtensionE2e && runBuildArtifacts && !frozenTarget && !compatibilityTarget;
+// Keep dispatch/frozen locale jobs separate for release diagnostics and historical tooling.
+const reuseControlUiI18nSetup =
+  runControlUiI18n &&
+  runBuildArtifacts &&
+  ["pull_request", "push", "schedule"].includes(workflowEventName) &&
+  !frozenTarget &&
+  !compatibilityTarget;
 const runControlUiPerformance =
   !releaseFastLane &&
   (runNodeFull || runUiTests) &&
@@ -1694,6 +1712,7 @@ const manifest = {
   run_docs_content: !(ordinaryPullRequest && docsOnly && rootProseOnly),
   run_format_check: runFormatCheck,
   run_control_ui_i18n: runControlUiI18n,
+  reuse_control_ui_i18n_setup: reuseControlUiI18nSetup,
   run_ui_tests: runUiTests,
   run_ui_webkit: runUiWebkit,
   ui_test_runtime_policy: uiTestRuntimePolicy,
@@ -1716,7 +1735,8 @@ const manifest = {
     ),
   ),
   run_control_ui_performance: runControlUiPerformance,
-  run_ui_e2e: runUiE2e,
+  run_ui_e2e: runControlUiE2e || (runBrowserExtensionE2e && !reuseBrowserExtensionBuild),
+  reuse_browser_extension_build: reuseBrowserExtensionBuild,
   run_ui_real_gateway: runUiRealGateway,
   ui_e2e_matrix: createMatrix(
     Array.from({ length: uiE2eJobCount }, (_, index) => {
@@ -1726,10 +1746,12 @@ const manifest = {
         shard_count: uiE2eJobCount,
         task: shard === uiE2eJobCount ? "browser-extension" : "control-ui",
         vitest_shard_count: uiE2eJobCount - 1,
-        vitest_max_workers: compactUiE2e ? 3 : 2,
+        vitest_max_workers: compactUiE2e ? 4 : 2,
       };
     }).filter((row) =>
-      row.task === "browser-extension" ? runBrowserExtensionE2e : runControlUiE2e,
+      row.task === "browser-extension"
+        ? runBrowserExtensionE2e && !reuseBrowserExtensionBuild
+        : runControlUiE2e,
     ),
   ),
   run_native_i18n: runNativeI18n,
@@ -1751,10 +1773,7 @@ const manifest = {
           [{ check_name: "macos-node", runtime: "node", task: "test" }]
       : [],
   ),
-  run_macos_swift:
-    runMacos &&
-    !npmQualification &&
-    (!frozenTarget || compatibilityTarget || supportsCurrentMacosSwiftCi),
+  run_macos_swift: runMacosSwift,
   run_openclawkit_tests: runMacos && !npmQualification && supportsOpenClawKitTests,
   run_ios_build: runIosBuild,
   run_ios_voice_cleanup_tests: iosSimulatorSelection.voice.selected,
@@ -1867,7 +1886,7 @@ if (hybridHostedEligible) {
     "control-ui-performance": count(manifest.run_control_ui_performance),
     "published-driver-update": count(manifest.run_published_driver_update),
     "native-i18n": count(manifest.run_native_i18n),
-    "control-ui-i18n": count(manifest.run_control_ui_i18n),
+    "control-ui-i18n": count(manifest.run_control_ui_i18n && !manifest.reuse_control_ui_i18n_setup),
     "checks-baseline-ratchets": count(hostedRatchets && manifest.run_baseline_ratchets),
     "checks-fast-core": count(
       manifest.run_checks_fast_core,

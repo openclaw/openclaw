@@ -12,14 +12,16 @@ import {
 } from "../../agents/bash-tools.exec-approval-output.js";
 import type { ExecElevatedDefaults } from "../../agents/bash-tools.exec-types.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
+import type { RuntimeContextFragment } from "../../agents/internal-runtime-context.js";
 import type { ReplyExpectation } from "../../agents/reply-completion.js";
 import {
   captureRequesterOrigin,
   resolveRequesterPrincipalKey,
   type RequesterOrigin,
 } from "../../agents/requester-origin.js";
+import { RESTART_RECOVERY_INTERRUPTION_NOTE } from "../../agents/restart-recovery-prompt.js";
 import { prepareCommandOwnerAuthority } from "../../auto-reply/command-auth.js";
-import type { SessionEntry } from "../../config/sessions.js";
+import type { InternalSessionEntry } from "../../config/sessions.js";
 import { readSessionSubmittedInput } from "../../config/sessions/session-accessor.pending-inputs.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { deleteMediaBuffer } from "../../media/store.js";
@@ -31,7 +33,10 @@ import {
   type InputProvenance,
 } from "../../sessions/input-provenance.js";
 import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
-import { readUserTurnRequesterOrigin } from "../../sessions/user-turn-transcript-admission.js";
+import {
+  getUserTurnTranscriptAdmissionOwner,
+  readUserTurnRequesterOrigin,
+} from "../../sessions/user-turn-transcript-admission.js";
 import { retainsUserTurnTranscriptMedia } from "../../sessions/user-turn-transcript-media.js";
 import { completeUserTurnProcessing } from "../../sessions/user-turn-transcript-processing.js";
 import {
@@ -57,10 +62,7 @@ import { resolveGatewayInputParticipant } from "../session-input-participant.js"
 import { readSessionSendDeliveryAdmission } from "../session-send-delivery.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import { formatForLog } from "../ws-log.js";
-import {
-  shouldSuppressAgentPromptPersistence,
-  type RestoredCronContinuation,
-} from "./agent-handler-helpers.js";
+import type { RestoredCronContinuation } from "./agent-handler-helpers.js";
 import type { RequesterSettleWakeReplay } from "./internal-facade.types.js";
 import type { AgentTurnContext, AgentTurnIo, AgentTurnPrincipal } from "./types.js";
 
@@ -73,6 +75,7 @@ export type PreparedAgentRunUserTurn = {
   execApprovalFollowupHandoffClaimId: string;
   execApprovalContinuationPromptRange?: ExecApprovalContinuationPromptRange;
   message: string;
+  runtimeContextFragments?: RuntimeContextFragment[];
   inputProvenance?: InputProvenance;
   recorder?: UserTurnTranscriptRecorder;
   requesterOrigin?: RequesterOrigin;
@@ -160,7 +163,7 @@ export async function prepareAgentRunUserTurn(params: {
   request: AgentRunRequest;
   cfg: OpenClawConfig;
   cfgForAgent?: OpenClawConfig;
-  sessionEntry?: SessionEntry;
+  sessionEntry?: InternalSessionEntry;
   /** Exact creation target carried only by the host-bound fresh-child admission. */
   freshChildStorePath?: string;
   resolvedSessionKey?: string;
@@ -232,6 +235,7 @@ export async function prepareAgentRunUserTurn(params: {
     }
 
     let message = params.message;
+    let runtimeContextFragments = params.client?.internal?.runtimeContextFragments;
     let effectiveTranscriptInputText = params.effectiveTranscriptInputText;
     let execApprovalContinuationPromptRange: ExecApprovalContinuationPromptRange | undefined;
     if (execApprovalFollowupRuntimeHandoff?.resultText !== undefined) {
@@ -272,12 +276,7 @@ export async function prepareAgentRunUserTurn(params: {
     }
     const trackRequesterCompletion = params.privateCompletion || settleWakeReplay !== undefined;
     const suppressPromptPersistence =
-      !params.privateCompletion &&
-      (params.requestedPromptPersistenceSuppression ||
-        shouldSuppressAgentPromptPersistence({
-          inputProvenance: params.inputProvenance,
-          internalEvents: params.request.internalEvents,
-        }));
+      !params.privateCompletion && params.requestedPromptPersistenceSuppression;
     if (
       params.resolvedSessionKey &&
       !params.suppressVisibleSessionEffects &&
@@ -453,6 +452,13 @@ export async function prepareAgentRunUserTurn(params: {
       // that exact provenance into execution, not only its transcript receipt.
       if (settleWakeReplay) {
         inputProvenance = normalizeInputProvenance(recorder.getPendingInputMessage?.()?.provenance);
+        if (getUserTurnTranscriptAdmissionOwner(recorder)?.pendingInput()?.interruptedByRestart) {
+          // A turn-local carrier survives replay of an already frozen model prompt.
+          runtimeContextFragments = [
+            ...(runtimeContextFragments ?? []),
+            { kind: "runtime-instruction", text: RESTART_RECOVERY_INTERRUPTION_NOTE },
+          ];
+        }
       }
       requesterOrigin = readUserTurnRequesterOrigin(recorder) ?? requesterOrigin;
     }
@@ -521,6 +527,7 @@ export async function prepareAgentRunUserTurn(params: {
       execApprovalFollowupHandoffClaimId,
       ...(execApprovalContinuationPromptRange ? { execApprovalContinuationPromptRange } : {}),
       message,
+      ...(runtimeContextFragments ? { runtimeContextFragments } : {}),
       inputProvenance,
       ...(recorder ? { recorder } : {}),
       senderIsOwner,

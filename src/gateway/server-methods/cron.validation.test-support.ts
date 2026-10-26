@@ -118,6 +118,7 @@ export function createCronTestContext(
       waitForManualRun: vi.fn(async () => false),
       getDefaultAgentId: vi.fn(() => "main"),
       getJob: vi.fn((id: string) => jobs.find((job) => job.id === id)),
+      getLoadedJobs: vi.fn(() => jobs),
       prepareWake: vi.fn(async () => undefined),
       wake: vi.fn(async (opts: Parameters<CronService["wake"]>[0]) => {
         opts.commitGuard?.();
@@ -183,6 +184,29 @@ export function createCronJob(overrides: Partial<CronJob> = {}): CronJob {
     state: {},
     ...overrides,
   };
+}
+
+export function cronAccountPolicy(ownerSessionKey: string, ownerAccountId = "default") {
+  return { version: 1, mode: "account", ownerSessionKey, ownerAccountId } as const;
+}
+
+export function expectCronReply(
+  respond: ReturnType<typeof vi.fn>,
+  payload: unknown,
+  call: "any" | "once" | "last" = "any",
+) {
+  const assertion = expect(respond);
+  if (call === "once") {
+    assertion.toHaveBeenCalledExactlyOnceWith(true, payload, undefined);
+  } else if (call === "last") {
+    assertion.toHaveBeenLastCalledWith(true, payload, undefined);
+  } else {
+    assertion.toHaveBeenCalledWith(true, payload, undefined);
+  }
+}
+
+export function expectCronFailure(respond: ReturnType<typeof vi.fn>, error: unknown) {
+  expect(respond).toHaveBeenCalledWith(false, undefined, error);
 }
 
 export function pluginEntries(...ids: string[]): OpenClawConfig["plugins"] {

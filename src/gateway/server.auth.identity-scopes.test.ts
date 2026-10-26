@@ -15,10 +15,11 @@ import {
   type UsersSelfResult,
 } from "../../packages/gateway-protocol/src/schema/users.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { writeConfigFile } from "../config/config.js";
 import type { GatewayAuthConfig, GatewayOperatorRolesConfig } from "../config/types.gateway.js";
-import { loadOriginDeviceToken } from "../infra/device-auth-store.js";
-import { seedOriginDeviceToken } from "../infra/device-auth-store.test-support.js";
+import {
+  loadOriginDeviceToken,
+  storeOriginDeviceToken as seedOriginDeviceToken,
+} from "../infra/device-auth-store.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { getPairedDevice, listDevicePairing } from "../infra/device-pairing.js";
 import { connectUserModelAccount } from "../state/user-model-accounts.js";
@@ -34,6 +35,10 @@ import type { OperatorScope } from "./operator-scopes.js";
 import type { GatewayServer } from "./server-public.js";
 import {
   connectReq,
+  BROWSER_ORIGIN,
+  TRUSTED_BROWSER_HEADERS as TRUSTED_PROXY_HEADERS,
+  browserProxyAuth,
+  configureBrowserAuth,
   CONTROL_UI_CLIENT,
   installGatewayTestHooks,
   NODE_CLIENT,
@@ -51,13 +56,6 @@ installGatewayTestHooks({ scope: "suite" });
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-const BROWSER_ORIGIN = "https://control.example.com";
-const TRUSTED_PROXY_HEADERS = {
-  origin: BROWSER_ORIGIN,
-  "x-forwarded-for": "203.0.113.50",
-  "x-forwarded-proto": "https",
-  "x-forwarded-user": "admin@example.com",
-};
 const NARROW_SCOPES: OperatorScope[] = ["operator.read", "operator.write", "operator.talk"];
 const READ_WRITE: OperatorScope[] = ["operator.read", "operator.write"];
 const ADMIN_GRANT = { "admin@example.com": ["operator.admin"] } satisfies NonNullable<
@@ -82,15 +80,7 @@ function deviceIdentityPath(label: string): string {
 }
 
 function proxyAuth(identityScopes?: GatewayAuthConfig["identityScopes"]): GatewayAuthConfig {
-  return {
-    mode: "trusted-proxy",
-    identityScopes,
-    trustedProxy: {
-      userHeader: "x-forwarded-user",
-      requiredHeaders: ["x-forwarded-proto"],
-      allowLoopback: true,
-    },
-  };
+  return browserProxyAuth({ identityScopes });
 }
 
 async function configureGatewayAuth(
@@ -98,16 +88,9 @@ async function configureGatewayAuth(
   roles?: GatewayOperatorRolesConfig,
   tailscale = false,
 ): Promise<void> {
-  testState.gatewayAuth = auth;
-  testState.gatewayControlUi = { allowedOrigins: [BROWSER_ORIGIN] };
-  await writeConfigFile({
-    gateway: {
-      auth,
-      trustedProxies: ["127.0.0.1"],
-      ...(tailscale ? { tailscale: { mode: "serve" } } : {}),
-      ...(roles ? { roles } : {}),
-      controlUi: { allowedOrigins: [BROWSER_ORIGIN] },
-    },
+  await configureBrowserAuth(auth, {
+    ...(tailscale ? { tailscale: { mode: "serve" } } : {}),
+    ...(roles ? { roles } : {}),
   });
 }
 
@@ -395,7 +378,7 @@ test.each([
         await expectWriteDenied(ws, "agent:main:denied");
       }
       expect(responseAuth(connected)?.deviceToken).toBe(undefined);
-      expect((await rpcReq(ws, "set-heartbeats", { enabled: false })).ok).toBe(false);
+      expect((await rpcReq(ws, "exec.approvals.get", {})).ok).toBe(false);
       if (!scenario.assignedRole) {
         const upgrade = await rpcReq(ws, "device.scopes.requestUpgrade", {
           scopes: ["operator.read", "operator.write", "operator.admin"],
@@ -431,7 +414,7 @@ test.each([
           payload: { status: "approved", scopes: [...UPGRADE_SCOPES, "operator.talk"].toSorted() },
         });
         expect(result.payload?.deviceToken).toBeTypeOf("string");
-        expect((await rpcReq(ws, "set-heartbeats", { enabled: false })).ok).toBe(false);
+        expect((await rpcReq(ws, "exec.approvals.get", {})).ok).toBe(false);
       }
     } finally {
       invalidateOperatorRolePolicy(profile.id);
@@ -535,7 +518,7 @@ test("adds a case-insensitive trusted-proxy email grant without changing pairing
         { ...TRUSTED_PROXY_HEADERS, "x-forwarded-user": "Admin@Example.com" },
       );
       expectScopes(connected, ["operator.write", "operator.admin"]);
-      expect((await rpcReq(ws, "set-heartbeats", { enabled: false })).ok).toBe(true);
+      expect((await rpcReq(ws, "exec.approvals.get", {})).ok).toBe(true);
       const browse = await rpcReq<{ path?: string }>(ws, "fs.listDir", {
         path: outsideWorkspace,
       });
@@ -593,7 +576,7 @@ test.each<[string, string | undefined, boolean]>([
     if (!initialAuth.deviceToken) {
       throw new Error("expected a Gateway-issued device token");
     }
-    seedOriginDeviceToken({
+    await seedOriginDeviceToken({
       ...cacheKey,
       token: initialAuth.deviceToken,
       scopes: initialAuth.scopes,

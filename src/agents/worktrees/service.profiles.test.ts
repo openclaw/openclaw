@@ -1,7 +1,5 @@
-import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as commandExec from "../../process/exec.js";
@@ -11,14 +9,11 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { resolveWorktreeSourceProfile } from "./checkout-profiles.js";
 import { addManagedWorktree } from "./checkout.js";
+import { git } from "./git-fixture.test-support.js";
 import { ManagedWorktreeService } from "./service.js";
 import { useManagedWorktreeTestRepository } from "./service.test-support.js";
 
-const execFileAsync = promisify(execFile);
 const realRunCommand = commandExec.runCommandWithTimeout;
-async function git(cwd: string, ...args: string[]) {
-  return (await execFileAsync("git", ["-C", cwd, ...args])).stdout.trim();
-}
 
 function read(root: string, file: string) {
   return fs.readFile(path.join(root, file), "utf8");

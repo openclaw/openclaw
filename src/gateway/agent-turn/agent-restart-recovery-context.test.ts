@@ -28,94 +28,74 @@ const matchingParams = {
   },
 } as const;
 
-const matchingUiParams = {
-  ...matchingParams,
-  sessionEntry: { ...matchingParams.sessionEntry, restartRecoverySourceIngress: "control-ui" },
-} as const;
-
-const matchingInternalParams = {
-  ...matchingParams,
-  resolvedSessionKey: "agent:main:dashboard:recovered-cli",
-  sessionEntry: {
-    ...matchingParams.sessionEntry,
-    restartRecoverySourceIngress: "internal",
-    restartRecoveryDeliveryContext: undefined,
-  },
-} as const;
-
-const ordinaryRun = (params: Parameters<typeof resolveContext>[0]) =>
-  resolveContext({ ...params, isRestartRecoveryResumeRun: false });
+type ContextParams = Parameters<typeof resolveContext>[0];
 const resolveEntry = (
-  entry: Partial<NonNullable<Parameters<typeof resolveContext>[0]["sessionEntry"]>>,
-  params: typeof matchingParams | typeof matchingInternalParams = matchingParams,
+  entry: Partial<NonNullable<ContextParams["sessionEntry"]>>,
+  params: Partial<ContextParams> = {},
 ) =>
   resolveContext({
+    ...matchingParams,
+    sessionEntry: { ...matchingParams.sessionEntry, ...entry },
     ...params,
-    sessionEntry: { ...params.sessionEntry, ...entry },
   });
 
-describe("resolveAgentRestartRecoveryContext", () => {
-  it.each([matchingParams, matchingUiParams, matchingInternalParams])(
-    "rejects mismatched recovery ownership",
-    (params) => {
-      for (const override of [
-        { canUseInternalRuntimeHandoff: false },
-        { expectedExistingSessionId: undefined },
-        { expectedExistingSessionId: "replacement-session" },
-        { resolvedSessionId: "replacement-session" },
-        { runId: "replacement-run" },
-        { sessionEntry: undefined },
-        { sessionEntry: { ...params.sessionEntry, sessionId: "replacement-session" } },
-        { sessionEntry: { ...params.sessionEntry, restartRecoveryDeliverySourceRunId: " " } },
-        { sessionEntry: { ...params.sessionEntry, restartRecoverySourceIngress: undefined } },
-      ]) {
-        expect(resolveContext({ ...params, ...override })).toBeUndefined();
-      }
-    },
+it("rejects mismatched recovery ownership before restoring ingress context", () => {
+  for (const override of [
+    { canUseInternalRuntimeHandoff: false },
+    { expectedExistingSessionId: undefined },
+    { expectedExistingSessionId: "replacement-session" },
+    { resolvedSessionId: "replacement-session" },
+    { runId: "replacement-run" },
+    { sessionEntry: undefined },
+    { sessionEntry: { ...matchingParams.sessionEntry, sessionId: "replacement-session" } },
+    { sessionEntry: { ...matchingParams.sessionEntry, restartRecoveryDeliverySourceRunId: " " } },
+    { sessionEntry: { ...matchingParams.sessionEntry, restartRecoverySourceIngress: undefined } },
+  ]) {
+    expect(resolveContext({ ...matchingParams, ...override })).toBeUndefined();
+  }
+});
+
+it.each(["internal", "control-ui"] as const)("restores only admitted %s recovery", (ingress) => {
+  const entry = {
+    restartRecoverySourceIngress: ingress,
+    restartRecoveryDeliveryContext:
+      ingress === "internal"
+        ? undefined
+        : matchingParams.sessionEntry.restartRecoveryDeliveryContext,
+  };
+  const params =
+    ingress === "internal" ? { resolvedSessionKey: "agent:main:dashboard:recovered-cli" } : {};
+  expect(resolveEntry(entry, params)).toEqual(
+    ingress === "internal"
+      ? { messageChannel: "webchat" }
+      : { messageChannel: "webchat", pinnedWidgetAuthoring: true },
   );
+  expect(resolveEntry(entry, { ...params, isRestartRecoveryResumeRun: false })).toBeUndefined();
+  if (ingress === "internal") {
+    expect(resolveEntry({ restartRecoverySourceIngress: ingress }, params)).toBeUndefined();
+  }
+});
 
-  it("does not restore an internal source for ordinary runs or external delivery claims", () => {
-    expect(ordinaryRun(matchingInternalParams)).toBeUndefined();
-    expect(
-      resolveEntry(
-        {
-          restartRecoveryDeliveryContext:
-            matchingParams.sessionEntry.restartRecoveryDeliveryContext,
-        },
-        matchingInternalParams,
-      ),
-    ).toBeUndefined();
+it("restores correlated channel delivery facts", () => {
+  expect(resolveContext(matchingParams)).toEqual({
+    messageChannel: "discord",
+    channel: {
+      channel: "discord",
+      currentChannelId: "discord:dm:123",
+      currentThreadTs: "thread-1",
+      sourceTurnId: "channel-user:v1:source-1",
+      requesterAccountId: "work",
+      requesterSenderId: "user-1",
+      sameChannelThreadRequired: true,
+    },
   });
+  expect(resolveEntry({ restartRecoveryDeliveryContext: undefined })).toBeUndefined();
+});
 
-  it("preserves WebChat policy context and pinned authoring for an admitted Control UI recovery", () => {
-    expect(resolveContext(matchingUiParams)).toEqual({
-      messageChannel: "webchat",
-      pinnedWidgetAuthoring: true,
-    });
-    expect(ordinaryRun(matchingUiParams)).toBeUndefined();
-  });
-
-  it("restores correlated channel delivery facts", () => {
-    expect(resolveContext(matchingParams)).toEqual({
-      messageChannel: "discord",
-      channel: {
-        channel: "discord",
-        currentChannelId: "discord:dm:123",
-        currentThreadTs: "thread-1",
-        sourceTurnId: "channel-user:v1:source-1",
-        requesterAccountId: "work",
-        requesterSenderId: "user-1",
-        sameChannelThreadRequired: true,
-      },
-    });
-    expect(resolveEntry({ restartRecoveryDeliveryContext: undefined })).toBeUndefined();
-  });
-
-  it("preserves the source provider without granting delivery authority for a blank target", () => {
-    expect(
-      resolveEntry({ restartRecoveryDeliveryContext: { channel: " Discord ", to: "   " } }),
-    ).toEqual({ messageChannel: "discord" });
-  });
+it("preserves the source provider without granting delivery authority for a blank target", () => {
+  expect(
+    resolveEntry({ restartRecoveryDeliveryContext: { channel: " Discord ", to: "   " } }),
+  ).toEqual({ messageChannel: "discord" });
 });
 
 describe("resolveAgentRestartRecoveryExecutionIdentityAdmission", () => {

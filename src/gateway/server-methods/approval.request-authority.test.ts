@@ -131,6 +131,53 @@ const unrelatedAgentConfig: OpenClawConfig = {
   },
 };
 
+it("acknowledges committed exec approval before follow-up session changes", async () => {
+  const state = expectDefined(sharedState, "shared approval test state");
+  const databaseOptions = { env: state.env };
+  const exec = new ExecApprovalManager<ExecApprovalRequestPayload>({
+    scheduler: createTestGatewayScheduler(),
+    persistence: { runtimeEpoch: "approval-committed-ack", databaseOptions },
+    resolveAllowedDecisions: resolveExecApprovalRequestAllowedDecisions,
+  });
+  const record = exec.create({ command: "echo committed" }, 600_000, "approval-committed-ack");
+  record.approvalReviewerDeviceIds = ["reviewer"];
+  const { decision } = await exec.register(record, 600_000);
+  const entered = createDeferred();
+  const release = createDeferred();
+  const handleResolved = vi.fn(async () => {
+    bumpGatewayAccessRevision();
+    entered.resolve();
+    await release.promise;
+  });
+  const invocation = createApprovalInvocation({
+    handlers: createExecApprovalHandlers(exec, { iosPushDelivery: { handleResolved } }),
+    method: "exec.approval.resolve",
+    body: { id: record.id, decision: "allow-once" },
+    client: createClient({ deviceId: "reviewer" }),
+  });
+  const resolution = invocation.invoke();
+  try {
+    await entered.promise;
+    expect(getOperatorApproval({ id: record.id, databaseOptions })).toMatchObject({
+      status: "allowed",
+      decision: "allow-once",
+    });
+    await expect(decision).resolves.toBe("allow-once");
+    expect(invocation.respond).toHaveBeenCalledExactlyOnceWith(true, { ok: true }, undefined);
+    release.resolve();
+    await expect(resolution).resolves.toMatchObject({ ok: true, result: { ok: true } });
+    expect(handleResolved).toHaveBeenCalledTimes(1);
+    expect(invocation.context.approvalEvents?.publishResolved).toHaveBeenCalledExactlyOnceWith(
+      "exec",
+      expect.objectContaining({ id: record.id, decision: "allow-once" }),
+    );
+  } finally {
+    release.resolve();
+    await Promise.allSettled([resolution]);
+    await exec.drain();
+  }
+});
+
 it.each([
   "lookup",
   "verdict",

@@ -391,6 +391,7 @@ async function handleInternalSourceReplySendAction(
       requesterSenderE164: input.requesterSenderE164 ?? undefined,
       mediaAccess,
       workspaceMediaAccess: input.workspaceMediaAccess,
+      htmlPublication: "explicit",
       sandboxRoot: input.sandboxRoot,
       sandboxContainerWorkdir: input.sandboxContainerWorkdir,
     })(sourceReplyPayload);
@@ -617,10 +618,10 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
           const preserveSendBuffer =
             action === "send" &&
             Boolean(gateway) &&
-            (channelPlugin?.actions?.resolveExecutionMode?.({
+            (channelPlugin.actions?.resolveExecutionMode?.({
               action: "send",
             }) === "gateway" ||
-              channelPlugin?.outbound?.deliveryMode === "gateway");
+              channelPlugin.outbound?.deliveryMode === "gateway");
 
           const hydrateActionAttachmentParams = () =>
             hydrateAttachmentParamsForAction({

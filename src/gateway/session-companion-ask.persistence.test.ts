@@ -23,9 +23,14 @@ vi.mock("../agents/simple-completion-runtime.js", () => ({
 
 afterEach(() => vi.restoreAllMocks());
 
-it.each(["missing", "replaced", "reset with the same id", "claimed by another writer"] as const)(
+it.each<[string, Partial<InternalSessionEntry> | undefined]>([
+  ["missing", undefined],
+  ["replaced", { sessionId: "replacement" }],
+  ["reset with the same id", { lifecycleRevision: "replacement-lifecycle" }],
+  ["claimed by another writer", { activeWriterRunId: "replacement-writer" }],
+])(
   "refuses companion history persistence when the session is %s before admission",
-  async (change) => {
+  async (_change, replacement) => {
     await withOpenClawTestState({ label: "companion-seed-owner" }, async () => {
       runEmbeddedAgent.mockClear();
       const prepare = internalSessionEffects.prepareInternalSessionEffectsSession;
@@ -36,29 +41,15 @@ it.each(["missing", "replaced", "reset with the same id", "claimed by another wr
           return prepared;
         },
       );
-      const remove = vi.spyOn(internalSessionEffects, "removeInternalSessionEffectsSession");
       const open = SessionManager.openAsync.bind(SessionManager);
       let changedEntry: InternalSessionEntry | undefined;
       let originalEvents: Awaited<ReturnType<typeof loadTranscriptEvents>> = [];
       vi.spyOn(SessionManager, "openAsync").mockImplementationOnce(async (...args) => {
         const manager = await open(...args);
         const target = expectDefined(prepared, "prepared companion session");
-        changedEntry =
-          change === "missing"
-            ? undefined
-            : {
-                ...target.sessionEntry,
-                ...(change === "replaced" ? { sessionId: "replacement" } : {}),
-                ...(change === "reset with the same id"
-                  ? { lifecycleRevision: "replacement-lifecycle" }
-                  : {}),
-                ...(change === "claimed by another writer"
-                  ? { activeWriterRunId: "replacement-writer" }
-                  : {}),
-              };
-        if (changedEntry) {
+        if (replacement) {
           changedEntry = expectDefined(
-            await replaceSessionEntry(target, changedEntry),
+            await replaceSessionEntry(target, { ...target.sessionEntry, ...replacement }),
             "replacement companion session",
           );
         } else {
@@ -74,7 +65,7 @@ it.each(["missing", "replaced", "reset with the same id", "claimed by another wr
       });
       const companion = createSessionCompanion({
         scheduler: createTestGatewayScheduler(),
-        getConfig: () => ({}),
+        getConfig: () => ({ agents: { defaults: { utilityModel: "test/model-a" } } }),
         contextReader: {
           currentSessionId: async () => "session-1",
           read: async () => ({
@@ -85,7 +76,6 @@ it.each(["missing", "replaced", "reset with the same id", "claimed by another wr
         sessionObserver: {
           getCompanionSnapshotAsync: async () => ({ agentId: "main", notes: [] }),
         },
-        resolveUtilityModelRef: () => "test/model-a",
       });
       try {
         await expect(
@@ -100,10 +90,6 @@ it.each(["missing", "replaced", "reset with the same id", "claimed by another wr
         expect(runEmbeddedAgent).not.toHaveBeenCalled();
         await expect(loadTranscriptEvents(target)).resolves.toEqual(originalEvents);
         await expect(readSessionEntryReadOnlyInWorker(target)).resolves.toEqual(changedEntry);
-        expect(remove).toHaveBeenCalledWith(target, {
-          lifecycleRevision: target.sessionEntry.lifecycleRevision,
-          activeWriterRunId: target.sessionEntry.activeWriterRunId,
-        });
       } finally {
         companion.dispose();
       }

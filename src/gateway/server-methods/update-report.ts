@@ -13,7 +13,10 @@ import {
   type UpdateFailureReportInput,
 } from "../../infra/update-failure-report.js";
 import { getUpdateRunStatusAsync } from "../../infra/update-run-reader.js";
-import { classifyUpdateOutcome, isReportableUpdateRun } from "../../shared/update-outcome.js";
+import {
+  classifyUpdateOutcome,
+  isReportableUpdateRun,
+} from "../../shared/update-outcome-classification.js";
 import { refreshLatestUpdateRestartSentinel } from "../server-update-sentinel.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";

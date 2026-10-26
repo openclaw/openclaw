@@ -94,21 +94,24 @@ it.runIf(openssl)(
     const csrPath = path.join(root, "leaf.csr");
     await fs.writeFile(keyPath, TEST_TLS_KEY_PEM, { mode: 0o600 });
     await fs.writeFile(caPath, TEST_TLS_CERT_PEM);
-    const run = (command: string[], flags: Record<string, string>) =>
-      promisify(execFile)(
-        openssl!,
-        [...command, ...Object.entries(flags).flatMap(([key, value]) => [`-${key}`, value])],
-        { timeout: 10_000 },
-      );
-    await run(["req", "-new"], { key: keyPath, subj: "/CN=gateway.test", out: csrPath });
-    await run(["x509", "-req"], {
-      in: csrPath,
-      CA: caPath,
-      CAkey: keyPath,
-      set_serial: "2",
-      days: "1",
-      out: certPath,
-    });
+    const run = (...args: string[]) => promisify(execFile)(openssl!, args, { timeout: 10_000 });
+    await run("req", "-new", "-key", keyPath, "-subj", "/CN=gateway.test", "-out", csrPath);
+    await run(
+      "x509",
+      "-req",
+      "-in",
+      csrPath,
+      "-CA",
+      caPath,
+      "-CAkey",
+      keyPath,
+      "-set_serial",
+      "2",
+      "-days",
+      "1",
+      "-out",
+      certPath,
+    );
     const cert = await fs.readFile(certPath, "utf8");
     await fs.unlink(keyPath);
     await fs.unlink(caPath);
@@ -183,27 +186,84 @@ it.each(["ready", "timeout", "immediate"])("handles preparing dashboards: %s", a
   expect(ready.release).toHaveBeenCalledTimes(outcome === "ready" ? 1 : 0);
 });
 
-it.each(["fails", "becomes HTML"])(
-  "keeps the HTTP failure when diagnostics %s",
-  async (outcome) => {
-    const head = guardedResponse(503, {});
-    const fetch = mockFetch().mockResolvedValueOnce(head);
-    if (outcome === "fails") {
-      fetch.mockRejectedValueOnce(new Error("diagnostic request failed"));
-    } else {
-      fetch.mockResolvedValueOnce(
-        guardedResponse(
-          200,
-          { "content-type": "text/html" },
-          "<html>private-looking UI content</html>",
-        ),
-      );
+it("retries a real document timeout and reports pending once", async () => {
+  let requests = 0;
+  const onPending = vi.fn();
+  const server = createHttpServer((_request, response) => {
+    requests++;
+    if (requests > 1) {
+      response.writeHead(200, { "content-type": "text/html" });
+      response.end();
     }
-    await expect(probe()).resolves.toEqual(unavailable);
-    expect(fetch.mock.calls.map(([request]) => request.init?.method)).toEqual(["HEAD", "GET"]);
-    expect(head.release).toHaveBeenCalledOnce();
+  });
+  await withEnvAsync({ no_proxy: "127.0.0.1" }, async () => {
+    await withLoopbackTestServer(server, async (port) => {
+      await expect(
+        waitForControlUiDocument({
+          url: `http://127.0.0.1:${port}/dashboard/`,
+          timeoutMs: 15_000,
+          onPending,
+        }),
+      ).resolves.toEqual({ ready: true });
+    });
+  });
+  expect(requests).toBe(2);
+  expect(onPending).toHaveBeenCalledOnce();
+}, 20_000);
+
+it.each(["timeout", "preparing"])(
+  "reports the latest pending state at the deadline: %s",
+  async (state) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const timeout = new Error("request timed out");
+    timeout.name = "TimeoutError";
+    const fetch = mockFetch().mockRejectedValueOnce(timeout);
+    if (state === "preparing") {
+      fetch.mockImplementation(async () => preparingResponse());
+    } else {
+      fetch.mockRejectedValue(timeout);
+    }
+    const onPending = vi.fn();
+    const pending = probe({ onPending, timeoutMs: 5_000 });
+    await vi.runAllTimersAsync();
+    await expect(pending).resolves.toEqual({
+      ready: false,
+      reason:
+        state === "timeout"
+          ? "Control UI dashboard is unavailable: request timed out"
+          : "Control UI assets did not finish preparing in time.",
+    });
+    expect(fetch.mock.calls.length).toBeGreaterThan(1);
+    expect(onPending).toHaveBeenCalledOnce();
   },
 );
+
+it("fails fast on a transient timeout when the caller skips pending waits", async () => {
+  const timeout = new Error("request timed out");
+  timeout.name = "TimeoutError";
+  const fetch = mockFetch().mockRejectedValueOnce(timeout);
+  await expect(probe({ timeoutMs: 5_000, waitForPending: false })).resolves.toEqual({
+    ready: false,
+    reason: "Control UI dashboard is unavailable: request timed out",
+  });
+  expect(fetch).toHaveBeenCalledOnce();
+});
+
+it.each(["fails", "becomes HTML"])("keeps HTTP failure: diagnostic %s", async (outcome) => {
+  const head = guardedResponse(503, {});
+  const fetch = mockFetch().mockResolvedValueOnce(head);
+  if (outcome === "fails") {
+    fetch.mockRejectedValueOnce(new Error("diagnostic request failed"));
+  } else {
+    fetch.mockResolvedValueOnce(
+      guardedResponse(200, { "content-type": "text/html" }, "private UI"),
+    );
+  }
+  await expect(probe()).resolves.toEqual(unavailable);
+  expect(fetch.mock.calls.map(([request]) => request.init?.method)).toEqual(["HEAD", "GET"]);
+  expect(head.release).toHaveBeenCalledOnce();
+});
 
 it.each(["complete", "broken"] as const)(
   "preserves a real HTTP failure with a %s diagnostic body",

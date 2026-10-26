@@ -29,10 +29,6 @@ type RuntimeInfoInput = Omit<SystemPromptRuntimeInfo, "chatType"> &
     chatType?: ChatType;
   };
 
-type SystemPromptRuntimeParams = {
-  runtimeInfo: RuntimeInfoInput;
-};
-
 export function buildSystemPromptParams(params: {
   config?: OpenClawConfig;
   agentId?: string;
@@ -43,7 +39,9 @@ export function buildSystemPromptParams(params: {
   preparedGitCoauthorPrompt?: string | null;
   preparedSessionEntry?: InternalSessionEntry;
   requesterProfileId?: string;
-}): SystemPromptRuntimeParams {
+}): {
+  runtimeInfo: RuntimeInfoInput;
+} {
   const repoRoot = Object.hasOwn(params, "preparedRepoRoot")
     ? (params.preparedRepoRoot ?? undefined)
     : resolveSystemPromptRepoRoot(params);

@@ -14,6 +14,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "pluginExtensionSlotKeys",
   "pluginNextTurnInjections",
   "sessionId",
+  "clientCapabilities",
   "lifecycleRevision",
   "providerReview",
   "updatedAt",
@@ -72,6 +73,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "swarmOutputSchema",
   "subagentRole",
   "subagentControlScope",
+  "blindPrompt",
   "inheritedToolPolicyVersion",
   "inheritedToolPolicySource",
   "inheritedToolDeny",
@@ -106,6 +108,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "contextWindow",
   "thinkingLevel",
   "cronRunContinuation",
+  "cyberAccessProgram",
   "fastMode",
   "toolOverrides",
   "verboseLevel",
@@ -160,6 +163,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "restartRecoveryRequesterSenderId",
   "restartRecoverySameChannelThreadRequired",
   "restartRecoverySourceIngress",
+  "restartRecoverySourceMessageChannel",
   "restartRecoverySourceReplyDeliveryMode",
   "restartRecoveryTerminalDeliveryEvidence",
   "restartRecoveryHarnessCompletion",
@@ -194,6 +198,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "boardFace",
   "boardPresentation",
   "displayName",
+  "titleRefinement",
   "delivery",
   "groupId",
   "subject",
@@ -212,6 +217,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "communication",
   "publicShare",
   "profileInvolvement",
+  "priorWorkspace",
 ] as const satisfies ReadonlyArray<
   keyof SessionEntry | "__proto__" | "constructor" | "prototype" | "sessionFile" | "transcriptPath"
 >;

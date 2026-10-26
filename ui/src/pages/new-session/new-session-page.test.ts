@@ -2,14 +2,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createOverlay } from "../../components/overlay-lifecycle.ts";
 import { registerModalSurface } from "../../components/overlay-registry.ts";
 import { t } from "../../i18n/index.ts";
+import { createFrameClock } from "../../test-helpers/animation-frame-clock.ts";
+import { createMediaQueryList } from "../../test-helpers/media-query.ts";
 import * as attachmentInputs from "../chat/components/chat-attachment-inputs.tsx";
-import type { ChatDetailPanel } from "../chat/components/chat-detail-panel.tsx";
-import { NewSessionDictationControl } from "./composer-dictation-control.ts";
+import type { ChatDetailPanel } from "../chat/components/chat-sidebar-view-types.ts";
+import { DirectDictationControl } from "../chat/composer-direct-dictation.ts";
 import { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import type { NewSessionRouteData } from "./location.ts";
+import "./new-session-page-entry.ts";
 import { NewSessionModelControl } from "./model-control.ts";
 import { NewSessionPageOwner } from "./new-session-page-owner.ts";
-import "./new-session-page-entry.ts";
 
 type NewSessionElement = HTMLElement & {
   data: NewSessionRouteData | undefined;
@@ -55,8 +57,10 @@ function message(page: NewSessionElement): string {
   return page.querySelector<HTMLTextAreaElement>(".new-session-page__message")?.value ?? "";
 }
 
-afterEach(() => {
+afterEach(async () => {
   document.querySelectorAll("openclaw-new-session-page").forEach((element) => element.remove());
+  // Keyboard intent prefetches custom elements; finish registration before the shared graph resets.
+  await vi.dynamicImportSettled();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   sessionStorage.clear();
@@ -87,9 +91,7 @@ describe("new session draft route ownership", () => {
   it("keeps retained attachment callbacks connected to live draft and lock state", async () => {
     const inputs = vi.spyOn(attachmentInputs, "ChatAttachmentInputs");
     let dictating = false;
-    vi.spyOn(NewSessionDictationControl.prototype, "active", "get").mockImplementation(
-      () => dictating,
-    );
+    vi.spyOn(DirectDictationControl.prototype, "active", "get").mockImplementation(() => dictating);
     const page = await mount(routeData("research"));
     await enterMessage(page, "initial draft");
     const retained = inputs.mock.calls.at(-1)?.[0];
@@ -106,31 +108,17 @@ describe("new session draft route ownership", () => {
   it.each([false, true])(
     "retires composer frames through detach and reattach (reduced motion: %s)",
     async (reducedMotion) => {
-      vi.stubGlobal("matchMedia", (media: string) => ({
-        media,
-        matches: reducedMotion && media === "(prefers-reduced-motion: reduce)",
-        onchange: null,
-        addListener() {},
-        removeListener() {},
-        addEventListener() {},
-        removeEventListener() {},
-        dispatchEvent: () => true,
-      }));
-      let nextFrame = 0;
-      const frames = new Map<number, FrameRequestCallback>();
-      vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
-        const id = ++nextFrame;
-        frames.set(id, callback);
-        return id;
-      });
-      vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
+      vi.stubGlobal("matchMedia", (media: string) =>
+        createMediaQueryList(media, reducedMotion && media === "(prefers-reduced-motion: reduce)"),
+      );
+
+      const framesClock = createFrameClock();
+      const frames = framesClock.frames;
+      vi.stubGlobal("requestAnimationFrame", framesClock.request);
+      vi.stubGlobal("cancelAnimationFrame", framesClock.cancel);
       const page = await mount(routeData("research"));
       const flushFrames = async (timestamp: number) => {
-        const callbacks = [...frames.values()];
-        frames.clear();
-        for (const callback of callbacks) {
-          callback(timestamp);
-        }
+        framesClock.flush(timestamp);
         await settle(page);
       };
       const placeholder = () => page.querySelector<HTMLTextAreaElement>("textarea")?.placeholder;
@@ -187,11 +175,12 @@ describe("new session draft route ownership", () => {
     async (transition) => {
       let dictating = false;
       if (transition === "finish dictation") {
-        vi.spyOn(NewSessionDictationControl.prototype, "active", "get").mockImplementation(
+        vi.spyOn(DirectDictationControl.prototype, "active", "get").mockImplementation(
           () => dictating,
         );
       }
       const page = await mount(routeData("research"));
+      await enterMessage(page, "Review the attachment");
       const original = "# Original pasted content\n  preserve indentation 漢字 😀\n".repeat(50);
       const fetchMock = vi
         .fn<typeof fetch>()
@@ -204,6 +193,7 @@ describe("new session draft route ownership", () => {
       page.querySelector("textarea")?.dispatchEvent(paste);
       expect(paste.defaultPrevented).toBe(true);
       await settle(page);
+      await vi.dynamicImportSettled();
       await expect
         .poll(() => page.querySelector("openclaw-chat-pasted-text .chat-attachment-file__open"))
         .not.toBeNull();

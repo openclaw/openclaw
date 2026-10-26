@@ -12,10 +12,7 @@ import { fromRow, getRequired } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
 import { publishPlacementWorkspaceResultState } from "./placement-turn-authority.js";
 import { clearWorkerWorkspaceReconciliation } from "./placement-workspace-journal.js";
-import {
-  matchesWorkspaceResultClaim,
-  isWorkerWorkspaceResultReconciling,
-} from "./placement-workspace-result-owner.js";
+import { matchesWorkspaceResultClaim } from "./placement-workspace-result-owner.js";
 import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.types.js";
 export {
   matchesWorkspaceResultClaim,
@@ -89,7 +86,6 @@ export function readWorkerWorkspaceReconciliationFacts(
   sessionIds: readonly string[],
 ): {
   placements: ReadonlyMap<string, WorkerSessionPlacementRecord>;
-  reconcilingSessionIds: ReadonlySet<string>;
   pendingResults: ReadonlyMap<string, WorkerWorkspacePendingResult>;
 } {
   const placements = new Map<string, WorkerSessionPlacementRecord>();
@@ -116,15 +112,8 @@ export function readWorkerWorkspaceReconciliationFacts(
       pendingResults.set(row.session_id, pendingResultFromRow(row));
     }
   }
-  const reconcilingSessionIds = new Set(
-    [...pendingResults.values()].flatMap((pending) => {
-      const placement = placements.get(pending.sessionId);
-      return isWorkerWorkspaceResultReconciling(placement, pending) ? [pending.sessionId] : [];
-    }),
-  );
   return {
     placements,
-    reconcilingSessionIds,
     pendingResults,
   };
 }

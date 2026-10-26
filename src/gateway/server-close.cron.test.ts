@@ -1,12 +1,6 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
-import assert from "node:assert/strict";
-import { DatabaseSync } from "node:sqlite";
-import { expect, it } from "vitest";
-import {
-  awaitGateBeforeSettlement,
-  createDeferred,
-  withinTest,
-} from "../../test/helpers/promise.js";
+import { expect, it, vi } from "vitest";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { saveCronStore } from "../cron/store.js";
 import {
   claimCronRunReceiptForTest,
@@ -16,11 +10,11 @@ import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-pr
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
+import { createTestGate, readClosedDatabase } from "./server-close.lifecycle.test-support.js";
 import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-support.js";
 
-it("joins accepted cron writes and receipt finalization before closing shared state", async ({
-  signal,
-}) => {
+it("joins cron writes and receipt finalization before close", async ({ signal }) => {
+  const gate = createTestGate(signal);
   const fixture = await createGatewayMetadataCloseFixture("gateway-cron-close");
   const saveCommitted = createDeferred();
   const finishCommitted = createDeferred();
@@ -31,14 +25,12 @@ it("joins accepted cron writes and receipt finalization before closing shared st
   let closing: Promise<void> | undefined;
   let restore: (() => void) | undefined;
   try {
-    const port = await fixture.reservePort();
-    const server = await fixture.start(port);
-    const kernel = fixture.kernels.get(port);
-    assert(kernel);
+    const { server, kernel } = await fixture.startServer();
     const storePath = fixture.state.statePath("cron", "close.json");
     const job = makeCronReceiptJob("accepted-before-close", "main");
     await saveCronStore(storePath, { version: 1, jobs: [job] });
     const handle = claimCronRunReceiptForTest(storePath, job, 1);
+    const notRequested: { status: "not-requested" } = { status: "not-requested" };
     const observation = probe.command(stateWorker, async (command, options, scope) => {
       const result = await scope.execute(command, options);
       if (command.type === "cron.save" || command.type === "cron.finalizeRuns") {
@@ -51,10 +43,7 @@ it("joins accepted cron writes and receipt finalization before closing shared st
     saving = kernel.connectionWork.track(() =>
       saveCronStore(storePath, { version: 1, jobs: [{ ...job, enabled: false }] }),
     );
-    await withinTest(
-      awaitGateBeforeSettlement(saveCommitted.promise, saving, "Cron save did not commit"),
-      signal,
-    );
+    await gate(saveCommitted.promise, saving, "Cron save did not commit");
     finishing = kernel.connectionWork.track(async () => {
       await stateWorker.runOpenClawStateWorkerOperation(
         captureOpenClawStateWorkerContext(),
@@ -72,11 +61,9 @@ it("joins accepted cron writes and receipt finalization before closing shared st
                     job,
                     runReceipt: handle,
                     status: "ok",
+                    errorReason: undefined,
                     completionStatus: "succeeded",
-                    deliveryState: {
-                      status: "not-requested",
-                      failureNotification: { status: "not-requested" },
-                    },
+                    deliveryState: { ...notRequested, failureNotification: notRequested },
                     startedAt: 1,
                     endedAt: 3,
                   },
@@ -86,50 +73,26 @@ it("joins accepted cron writes and receipt finalization before closing shared st
           }),
       );
     });
-    await withinTest(
-      awaitGateBeforeSettlement(
-        finishCommitted.promise,
-        finishing,
-        "Cron finalization did not commit",
-      ),
-      signal,
-    );
+    await gate(finishCommitted.promise, finishing, "Cron finalization did not commit");
     kernel.connectionWork.signal.addEventListener("abort", () => receivedWorkCancelled.resolve(), {
       once: true,
     });
-    let closed = false;
-    closing = server.close({ reason: "cron close regression" }).then(() => {
-      closed = true;
-    });
-    await withinTest(
-      awaitGateBeforeSettlement(
-        receivedWorkCancelled.promise,
-        closing,
-        "Gateway did not cancel received work",
-      ),
-      signal,
-    );
+    const closed = vi.fn<() => void>();
+    closing = server.close({ reason: "cron close regression" }).then(closed);
+    await gate(receivedWorkCancelled.promise, closing, "Gateway did not cancel received work");
     expect(kernel.connectionWork.signal.aborted).toBe(true);
-    expect(closed).toBe(false);
+    expect(closed).not.toHaveBeenCalled();
     releaseReplies.resolve();
     await withinTest(Promise.all([saving, finishing, closing]), signal);
-    const database = new DatabaseSync(resolveOpenClawStateSqlitePath(fixture.state.env), {
-      readOnly: true,
-    });
-    try {
-      expect(
-        database
-          .prepare("SELECT status, finished_at_ms FROM cron_run_receipts WHERE receipt_id = ?")
-          .get(handle.receiptId),
-      ).toEqual({ status: "ok", finished_at_ms: 3 });
-      expect(
-        database
-          .prepare("SELECT enabled FROM cron_jobs WHERE store_key = ? AND job_id = ?")
-          .get(handle.storeKey, job.id),
-      ).toEqual({ enabled: 0 });
-    } finally {
-      database.close();
-    }
+    const rows = readClosedDatabase(
+      resolveOpenClawStateSqlitePath(fixture.state.env),
+      `SELECT status, finished_at_ms, enabled FROM cron_run_receipts, cron_jobs
+       WHERE receipt_id = ? AND cron_jobs.store_key = ? AND cron_jobs.job_id = ?`,
+      handle.receiptId,
+      handle.storeKey,
+      job.id,
+    );
+    expect(rows).toEqual([{ status: "ok", finished_at_ms: 3, enabled: 0 }]);
   } finally {
     releaseReplies.resolve();
     await Promise.allSettled([saving, finishing, closing]);

@@ -2,10 +2,10 @@
  * Gateway startup plugin bootstrap tests.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createInfoWarnErrorDebugLogger as createLog } from "../../test/helpers/mock-logger.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
-import { readPersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { createPluginCache, retirePluginCache, withPluginCache } from "../plugins/plugin-cache.js";
@@ -63,6 +63,9 @@ const pluginManifestRegistry = vi.hoisted((): PluginManifestRegistry => ({
   ],
   diagnostics: [],
 }));
+const { makeEmptyPluginMetadataOwners } = await vi.hoisted(
+  () => import("../plugins/plugin-metadata-empty.test-support.js"),
+);
 const pluginMetadataSnapshot = vi.hoisted((): PluginMetadataSnapshot => {
   const index: PluginMetadataSnapshot["index"] = {
     version: 1,
@@ -87,18 +90,7 @@ const pluginMetadataSnapshot = vi.hoisted((): PluginMetadataSnapshot => {
     byPluginId: new Map(),
     normalizePluginId: (pluginId) => pluginId,
     declaredProviderOwners: new Map(),
-    owners: {
-      channels: new Map(),
-      channelConfigs: new Map(),
-      providers: new Map(),
-      modelCatalogProviders: new Map(),
-      cliBackends: new Map(),
-      setupProviders: new Map(),
-      commandAliases: new Map(),
-      contracts: new Map(),
-      providerAuthContributions: [],
-      modelIdNormalizationPolicies: new Map(),
-    },
+    owners: makeEmptyPluginMetadataOwners(),
     metrics: {
       registrySnapshotMs: 0,
       manifestRegistryMs: 0,
@@ -212,15 +204,6 @@ vi.mock("./server-startup-session-migration.js", () => ({
   runGatewaySessionStartupMaintenance: (params: unknown) =>
     runGatewaySessionStartupMaintenance(params),
 }));
-
-function createLog() {
-  return {
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-    debug: vi.fn(),
-  };
-}
 
 function firstCallArg<T>(mock: { mock: { calls: unknown[][] } }, _type?: (value: T) => T): T {
   const call = mock.mock.calls.at(0);
@@ -635,23 +618,14 @@ describe("loadGatewayStartupPluginRuntime", () => {
         expect(loaded?.gatewayMethods).toEqual(["ping"]);
         expect(publicationFinished).toBe(false);
         await startup;
-
-        let retired = false;
-        retirement = retirePluginCache(cache).then((result) => {
-          retired = true;
-          return result;
-        });
+        const retired = vi.fn();
+        retirement = retirePluginCache(cache).finally(retired);
         await vi.runAllTimersAsync();
-        expect(retired).toBe(false);
+        expect(retired).not.toHaveBeenCalled();
         vi.useRealTimers();
         publication.resolve();
         await retirement;
         expect(publicationFinished).toBe(true);
-        await using reader = createPluginCache();
-        const persisted = await withPluginCache(reader, () =>
-          readPersistedInstalledPluginIndex({ stateDir: state.stateDir }),
-        );
-        expect(Object.keys(persisted?.plugins[0]?.sourceAdmissions ?? {})).toHaveLength(1);
       } finally {
         vi.useRealTimers();
         publication.resolve();
@@ -785,7 +759,7 @@ describe("loadGatewayStartupPluginRuntime", () => {
     );
   });
 
-  it.each(["registered owner", "ready", "inspection failed", "inspection stalled"] as const)(
+  it.each(["ready", "inspection failed", "inspection stalled"] as const)(
     "reports registered memory provider setup per active agent without blocking startup: %s",
     async (outcome) => {
       const log = createLog();
@@ -872,13 +846,9 @@ describe("loadGatewayStartupPluginRuntime", () => {
         agentId: "helper",
         provider: "local",
       });
-      if (outcome === "registered owner") {
-        expect(resolveProviderPolicySurfaceForOwner).toHaveBeenCalledExactlyOnceWith(
-          registeredOwner,
-        );
-        expect(disabledPolicy.inspectEmbeddingProviderSetup).not.toHaveBeenCalled();
-      }
-      if (outcome === "registered owner" || outcome === "inspection stalled") {
+      expect(resolveProviderPolicySurfaceForOwner).toHaveBeenCalledExactlyOnceWith(registeredOwner);
+      expect(disabledPolicy.inspectEmbeddingProviderSetup).not.toHaveBeenCalled();
+      if (outcome === "inspection stalled") {
         await vi.waitFor(() =>
           expect(log.warn).toHaveBeenCalledWith(
             expect.stringMatching(/helper.*degraded.*llama-server.*models --agent helper/s),

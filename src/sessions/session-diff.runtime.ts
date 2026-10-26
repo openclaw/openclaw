@@ -161,7 +161,7 @@ async function collectUntrackedFiles(
   if (listing === null) {
     throw new Error("Unable to read untracked Git changes");
   }
-  const paths = listing.split("\0").filter(Boolean);
+  const paths = listing.split("\0", MAX_UNTRACKED_FILES + 1).filter(Boolean);
   const truncated = paths.length > MAX_UNTRACKED_FILES;
   const files: SessionDiffFile[] = [];
   const safePaths: string[] = [];
@@ -472,6 +472,9 @@ export async function collectCheckoutDiff(
   return params.sessionId
     ? await applySessionDiffBaseline({
         baseline: params.baseline,
+        checkout,
+        // Stored fingerprints use the default base, not an explicit managed review base.
+        defaultBase: params.baseCommit ? undefined : branchBase,
         diff,
         scope,
         sessionId: params.sessionId,
@@ -570,31 +573,34 @@ async function gitOutForBaseline(cwd: string, args: string[]): Promise<string | 
   return result.stdout.toString("utf8");
 }
 
-async function collectBaselineCandidates(params: {
-  cwd: string;
-}): Promise<{ candidates: BaselineCandidate[]; root: string; truncated: boolean } | undefined> {
-  const checkout = await loadCheckoutRevision(params.cwd);
-  if (!checkout) {
-    return undefined;
-  }
+async function collectBaselineCandidates(
+  checkout: NonNullable<Awaited<ReturnType<typeof loadCheckoutRevision>>>,
+  untrackedPaths?: string[],
+  defaultBase?: { base: string } | null,
+): Promise<{ candidates: BaselineCandidate[]; root: string; truncated: boolean }> {
   const { root, head, branch, objectFormat } = checkout;
-  const baseInfo = head
-    ? await resolveSessionDiffBase({ branch, gitOut, head, root })
-    : await resolveSessionDiffEmptyTree(root, objectFormat);
-  const [trackedText, untrackedText] = await Promise.all([
+  const baseInfo =
+    defaultBase !== undefined
+      ? defaultBase
+      : head
+        ? await resolveSessionDiffBase({ branch, gitOut, head, root })
+        : await resolveSessionDiffEmptyTree(root, objectFormat);
+  const [trackedText, untracked] = await Promise.all([
     baseInfo
       ? gitOutForBaseline(root, ["diff", "-M", baseInfo.base, "--name-status", "-z"])
       : Promise.resolve(""),
-    gitOutForBaseline(root, ["ls-files", "--others", "--exclude-standard", "-z"]),
+    untrackedPaths ??
+      gitOutForBaseline(root, ["ls-files", "--others", "--exclude-standard", "-z"]).then((text) =>
+        text === null ? null : text.split("\0").filter(Boolean),
+      ),
   ]);
-  if (trackedText === null || untrackedText === null) {
+  if (trackedText === null || untracked === null) {
     return { root, candidates: [], truncated: true };
   }
   const tracked = parseNameStatusZ(trackedText);
-  const untrackedPaths = untrackedText.split("\0").filter(Boolean);
   const candidates = [
     ...tracked.slice(0, MAX_FILES),
-    ...untrackedPaths.slice(0, MAX_UNTRACKED_FILES).map((path) => ({
+    ...untracked.slice(0, MAX_UNTRACKED_FILES).map((path) => ({
       path,
       status: "added" as const,
       untracked: true,
@@ -603,17 +609,18 @@ async function collectBaselineCandidates(params: {
   return {
     root,
     candidates,
-    truncated: tracked.length > MAX_FILES || untrackedPaths.length > MAX_UNTRACKED_FILES,
+    truncated: tracked.length > MAX_FILES || untracked.length > MAX_UNTRACKED_FILES,
   };
 }
 
 export async function collectCheckoutDiffBaseline(params: {
   cwd: string;
 }): Promise<GitReadOperations["checkout.baseline"]["output"]> {
-  const collected = await collectBaselineCandidates(params);
-  if (!collected) {
+  const checkout = await loadCheckoutRevision(params.cwd);
+  if (!checkout) {
     return undefined;
   }
+  const collected = await collectBaselineCandidates(checkout);
   const fingerprinted = await fingerprintBaselineCandidates(collected);
   return {
     version: 1,
@@ -649,6 +656,8 @@ async function fingerprintBaselineCandidates(params: {
 
 async function applySessionDiffBaseline(params: {
   baseline: SessionDiffBaseline | undefined;
+  checkout: NonNullable<Awaited<ReturnType<typeof loadCheckoutRevision>>>;
+  defaultBase: { base: string } | null | undefined;
   diff: CheckoutDiffResult;
   scope: NonNullable<GitCheckoutDiffInput["scope"]>;
   sessionId: string;
@@ -668,8 +677,15 @@ async function applySessionDiffBaseline(params: {
     return diff;
   }
   const candidates =
-    params.scope === "uncommitted"
-      ? ((await collectBaselineCandidates({ cwd: diff.root }))?.candidates ?? [])
+    params.scope === "uncommitted" &&
+    diff.files.some((file) => !file.untracked && fingerprints.has(file.path))
+      ? (
+          await collectBaselineCandidates(
+            params.checkout,
+            diff.files.filter((file) => file.untracked).map((file) => file.path),
+            params.defaultBase,
+          )
+        ).candidates
       : diff.files;
   const visiblePaths = new Set(diff.files.map((file) => file.path));
   // New paths cannot match the baseline; hashing them can exhaust the budget

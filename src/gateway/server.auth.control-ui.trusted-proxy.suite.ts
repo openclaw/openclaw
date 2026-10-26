@@ -146,7 +146,7 @@ export function registerControlUiTrustedProxySuite(): void {
         expect(payload?.auth?.scopes).toEqual([]);
         expect(payload?.auth?.deviceToken).toBeUndefined();
 
-        const admin = await rpcReq(ws, "set-heartbeats", { enabled: false });
+        const admin = await rpcReq(ws, "exec.approvals.get", {});
         expect(admin.ok).toBe(false);
         expect(admin.error?.message ?? "").toContain("missing scope");
       } finally {
@@ -195,7 +195,7 @@ export function registerControlUiTrustedProxySuite(): void {
         expect(payload?.auth?.scopes).toEqual(["operator.read"]);
         expect(payload?.auth?.deviceToken).toBeUndefined();
 
-        const admin = await rpcReq(ws, "set-heartbeats", { enabled: false });
+        const admin = await rpcReq(ws, "exec.approvals.get", {});
         expect(admin.ok).toBe(false);
         expect(admin.error?.message ?? "").toContain("missing scope");
 

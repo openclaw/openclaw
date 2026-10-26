@@ -12,7 +12,11 @@ import { checkGatewayWsBrowserOrigin } from "./origin-check.js";
 
 const policies = new WeakMap<
   OpenClawConfig,
-  { global: string; identities: Map<string, GatewayAuthPolicy> }
+  {
+    global: string;
+    identities: Map<string, GatewayAuthPolicy>;
+    captured: WeakMap<object, GatewayAuthPolicy>;
+  }
 >();
 
 /** Capture the grant principal together with its generation; null means no identity-derived scopes. */
@@ -23,6 +27,12 @@ export function captureGatewayAuthPolicy(
     "role" | "verifiedIdentity" | "authMethod" | "authModeOverride" | "browserOrigin"
   > | null,
 ): GatewayAuthPolicy {
+  let cached = policies.get(config);
+  // Only this config's issued, non-contextual policies can skip principal serialization.
+  const captured = principal && cached?.captured.get(principal);
+  if (captured) {
+    return captured;
+  }
   const verifiedIdentity = normalizeOptionalString(principal?.verifiedIdentity);
   const role = principal?.role;
   const authMethod = principal?.authMethod;
@@ -31,7 +41,6 @@ export function captureGatewayAuthPolicy(
   // Contextual grants carry live service closures. Never retain them in config's
   // process-lived principal cache or share authority between matching audiences.
   const contextualIngress = browserOrigin?.remoteControlUiIngress !== undefined;
-  let cached = policies.get(config);
   if (!cached) {
     const gateway = config.gateway;
     const trustedProxy = gateway?.auth?.trustedProxy;
@@ -48,6 +57,7 @@ export function captureGatewayAuthPolicy(
         },
       }),
       identities: new Map(),
+      captured: new WeakMap(),
     };
     policies.set(config, cached);
   }
@@ -114,6 +124,7 @@ export function captureGatewayAuthPolicy(
     });
     if (principalKey !== undefined) {
       cached.identities.set(principalKey, policy);
+      cached.captured.set(policy, policy);
     }
   }
   return policy;

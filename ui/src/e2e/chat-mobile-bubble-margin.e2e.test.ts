@@ -1,14 +1,22 @@
 import { readFile } from "node:fs/promises";
+import type { BrowserContext, Page } from "playwright";
 import { expect as expectBrowser } from "playwright/test";
-import { expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { createPlaybackMediaFixture } from "../../../test/fixtures/media-playback.js";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { captureControlUiE2eFailureDiagnostics } from "../test-helpers/control-ui-e2e-diagnostics.ts";
+import {
+  controlUiSessionUrl,
+  installMockGateway,
+  navigateToControlUiSession,
+} from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
   createMarginImage,
   marginCases,
   marginScenario,
   measureMargin,
   resizeMarginViewport,
+  type MarginCase,
 } from "./chat-mobile-bubble-margin.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -17,163 +25,225 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
 });
 
+type Margin = Awaited<ReturnType<typeof measureMargin>>;
+function expectMediaInside({ media }: Margin, label: string) {
+  expect(
+    media.filter((item) => item.width > 0 && !(Math.min(item.left, item.right) >= -1)),
+    `${label} media stays inside its surface`,
+  ).toEqual([]);
+}
+function expectActivityEdges(margin: Margin, label: string) {
+  expect(margin, label).toMatchObject({ closed: expect.closeTo(0, 0), open: expect.closeTo(0, 0) });
+}
+
 suite.define(() => {
+  // Retain four-case media isolation while sharing each app boot within the batch.
+  const casesPerPage = 4;
+  let context: BrowserContext;
+  let page: Page;
+  let pageBatch = -1;
+  let images: Map<number, Buffer>;
+  let video: Buffer;
+  const sessionKey = (testCase: MarginCase) => `agent:main:margin-${testCase.id}`;
+
+  beforeAll(async () => {
+    context = await suite.newBrowserContext({
+      viewport: { width: 1440, height: 1200 },
+      colorScheme: "light",
+      reducedMotion: "reduce",
+    });
+    page = await context.newPage();
+    images = new Map([
+      [320, await createMarginImage(page, { width: 320, height: 180 })],
+      [960, await createMarginImage(page)],
+    ]);
+    video = await readFile(new URL("./fixtures/video-poster.mp4", import.meta.url));
+  });
+
+  afterAll(async () => {
+    if (context) {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
+  afterEach(async ({ task, signal }) => {
+    // Capture before the next case can navigate or recycle the shared page.
+    const failure: unknown = signal.aborted ? signal.reason : task.result?.errors?.[0];
+    if (failure !== undefined && page) {
+      await captureControlUiE2eFailureDiagnostics(page, {
+        error: failure instanceof Error ? failure : Object.assign(new Error(task.name), failure),
+        label: task.name,
+      });
+    }
+  });
+
   it.each(marginCases)(
-    "preserves $id layout at 390 and 430 px in both themes and restores desktop geometry",
+    "preserves $id gutters across viewports and themes, restoring desktop geometry",
     async (testCase) => {
-      await suite.withPage(
-        { viewport: { width: 1440, height: 1200 }, colorScheme: "light", reducedMotion: "reduce" },
-        async ({ page }) => {
-          const imageSize = "imageSize" in testCase ? testCase.imageSize : undefined;
-          const image = await createMarginImage(page, imageSize);
-          const video = await readFile(new URL("./fixtures/video-poster.mp4", import.meta.url));
-          await page.route("https://media.example/**", (route) => {
-            if (route.request().url().endsWith("png")) {
-              return route.fulfill({ contentType: "image/png", body: image });
-            }
-            const isVideo = route.request().url().endsWith("mp4");
-            const start = Number(
-              route
-                .request()
-                .headers()
-                .range?.match(/bytes=(\d+)/)?.[1] ?? 0,
-            );
+      const batch = Math.floor(marginCases.indexOf(testCase) / casesPerPage);
+      await page.setViewportSize({ width: 1440, height: 1200 });
+      await page.emulateMedia({ colorScheme: "light", reducedMotion: "reduce" });
+      if (batch !== pageBatch) {
+        if (pageBatch !== -1) {
+          await page.close();
+          page = await context.newPage();
+        }
+        pageBatch = batch;
+        const cases = marginCases.slice(batch * casesPerPage, (batch + 1) * casesPerPage);
+        await installMockGateway(page, {
+          ...marginScenario(testCase),
+          sessions: cases.map((entry) => createControlUiSessionRow(sessionKey(entry), entry.id, 1)),
+          sessionTranscripts: Object.fromEntries(
+            cases.map((entry) => [sessionKey(entry), { messages: [...entry.messages] }]),
+          ),
+          sessionKey: sessionKey(testCase),
+        });
+        await page.route("https://media.example/**", (route) => {
+          const request = route.request();
+          if (request.url().endsWith("png")) {
+            const width = request.url().endsWith("preview-320.png") ? 320 : 960;
+            return route.fulfill({ contentType: "image/png", body: images.get(width)! });
+          }
+          if (!request.url().endsWith("mp4")) {
             return route.fulfill({
-              status: isVideo ? 206 : 200,
-              contentType: isVideo ? "video/mp4" : "audio/mpeg",
-              headers: {
-                "access-control-allow-origin": "*",
-                ...(isVideo
-                  ? {
-                      "accept-ranges": "bytes",
-                      "content-range": `bytes ${start}-${video.length - 1}/${video.length}`,
-                    }
-                  : {}),
-              },
-              body: isVideo ? video.subarray(start) : createPlaybackMediaFixture("mp3"),
+              contentType: "audio/mpeg",
+              headers: { "access-control-allow-origin": "*" },
+              body: createPlaybackMediaFixture("mp3"),
             });
+          }
+          const start = Number(request.headers().range?.match(/bytes=(\d+)/)?.[1] ?? 0);
+          return route.fulfill({
+            status: 206,
+            contentType: "video/mp4",
+            headers: {
+              "access-control-allow-origin": "*",
+              "accept-ranges": "bytes",
+              "content-range": `bytes ${start}-${video.length - 1}/${video.length}`,
+            },
+            body: video.subarray(start),
           });
-          await installMockGateway(page, marginScenario(testCase));
-          await page.bringToFront();
-          await page.goto(`${suite.server.baseUrl}chat/main`, { waitUntil: "domcontentloaded" });
-          // Reuse the rendered transcript; each theme starts with its own desktop baseline.
-          for (const theme of ["light", "dark"] as const) {
-            await page.emulateMedia({ colorScheme: theme });
-            await expectBrowser(page.locator("html")).toHaveAttribute("data-theme-mode", theme);
-            if (testCase.id === "user-video" || testCase.id === "user-mixed") {
-              await expectBrowser(page.locator(".chat-video-preview img")).toBeVisible();
-              await expect
-                .poll(() =>
-                  page
-                    .locator(".chat-video-preview img")
-                    .evaluate(
-                      (element) =>
-                        element instanceof HTMLImageElement &&
-                        element.complete &&
-                        element.naturalWidth > 0,
-                    ),
-                )
-                .toBe(true);
+        });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey(testCase)), {
+          waitUntil: "domcontentloaded",
+        });
+      } else {
+        await navigateToControlUiSession(page, sessionKey(testCase));
+      }
+      await page.mouse.move(0, 0);
+      const activePane = page.locator(".chat-pane-cache__pane--active");
+      await expectBrowser(activePane).toHaveJSProperty("sessionKey", sessionKey(testCase));
+      const measure = () => measureMargin(page, testCase);
+      const imageSize = "imageSize" in testCase ? testCase.imageSize : undefined;
+      await page.bringToFront();
+      if (testCase.id === "clawhub") {
+        await expectBrowser(activePane.locator(".chat-thread .chat-clawhub-card")).toHaveAttribute(
+          "aria-busy",
+          "false",
+        );
+      }
+      for (const theme of ["light", "dark"] as const) {
+        await page.emulateMedia({ colorScheme: theme });
+        await expectBrowser(page.locator("html")).toHaveAttribute("data-theme-mode", theme);
+        if (testCase.id === "user-video" || testCase.id === "user-mixed") {
+          const poster = activePane.locator(".chat-video-preview img");
+          await expectBrowser(poster).toBeVisible();
+          await expect
+            .poll(() =>
+              poster.evaluate(
+                (element) =>
+                  element instanceof HTMLImageElement &&
+                  element.complete &&
+                  element.naturalWidth > 0,
+              ),
+            )
+            .toBe(true);
+        }
+        if (testCase.id === "assistant-video") {
+          // Metadata replaces the video's initial 150px height with its intrinsic ratio.
+          const videoElement = activePane.locator(".chat-assistant-video-frame video");
+          await expectBrowser(videoElement).toBeVisible();
+          await expect
+            .poll(() =>
+              videoElement.evaluate(
+                (element) =>
+                  element instanceof HTMLVideoElement &&
+                  element.readyState >= HTMLMediaElement.HAVE_METADATA &&
+                  element.videoWidth > 0 &&
+                  element.videoHeight > 0,
+              ),
+            )
+            .toBe(true);
+        }
+        if (testCase.id === "clawhub") {
+          // Compare settled catalog content, not the transient loading card.
+          await expectBrowser(activePane.locator(".chat-clawhub-card")).toHaveAttribute(
+            "aria-busy",
+            "false",
+          );
+        }
+        const desktop = await measure();
+        for (const width of [390, 430]) {
+          const label = `${testCase.id} at ${width} px in ${theme}`;
+          const pollMargin = <T>(project: (margin: Margin) => T) =>
+            expect.poll(async () => project(await measure()), { message: label });
+          await resizeMarginViewport(page, width);
+          if (testCase.selector === ".chat-session-activity") {
+            const activity = activePane.locator(".chat-thread .chat-session-activity");
+            const chevron = activity.locator("summary .chat-session-activity__chevron");
+            await expectBrowser(activity.locator("summary"), label).toBeVisible();
+            await expectBrowser(activity.locator(".chat-bubble"), label).toHaveCount(0);
+            const collapsed = await measure();
+            expectActivityEdges(collapsed, label);
+            await chevron.click();
+            await expectBrowser(activity.locator(".chat-bubble"), label).toBeVisible();
+            await expectBrowser(
+              activity.locator(".chat-message-disclosure__toggle"),
+              label,
+            ).toHaveCount(0);
+            const expanded = await measure();
+            expectActivityEdges(expanded, label);
+            expect(expanded.height, label).toBeGreaterThan(collapsed.height);
+            expect(expanded.overflow, label).toBe(0);
+            expectMediaInside(expanded, label);
+            await chevron.click();
+            await expectBrowser(activity, label).toHaveJSProperty("open", false);
+            await expectBrowser(activity.locator(".chat-bubble"), label).toHaveCount(0);
+          } else if (!("excluded" in testCase)) {
+            const mobile = await vi.waitFor(
+              async () => {
+                const box = await measure();
+                expect(box.open - box.columnWidth * 0.1, label).toBeGreaterThanOrEqual(-1);
+                expect(box.closed, label).toBeCloseTo(testCase.id === "user-audio" ? 17 : 0, 0);
+                return box;
+              },
+              { interval: 100, timeout: 15_000 },
+            );
+            if (imageSize) {
+              const expectedWidth = Math.min(imageSize.width, mobile.columnWidth * 0.9);
+              expect(mobile, label).toMatchObject({
+                width: expect.closeTo(expectedWidth, 1),
+                height: expect.closeTo((expectedWidth * imageSize.height) / imageSize.width, 1),
+              });
             }
-            const desktop = await measureMargin(page, testCase);
-            // Each width starts from the verified desktop geometry in the same fixture.
-            for (const width of [390, 430]) {
-              const label = `${testCase.id} at ${width} px in ${theme}`;
-              await resizeMarginViewport(page, width);
-              if (testCase.selector === ".chat-session-activity") {
-                const activity = page.locator(".chat-thread .chat-session-activity");
-                const summary = activity.locator("summary");
-                // The expanded summary's source link navigates instead of toggling.
-                const chevron = summary.locator(".chat-session-activity__chevron");
-                await expectBrowser(summary, label).toBeVisible();
-                await expectBrowser(activity.locator(".chat-bubble"), label).toHaveCount(0);
-                const collapsed = await measureMargin(page, testCase);
-                expect(collapsed.closed, `${label} collapsed left edge`).toBeCloseTo(0, 0);
-                expect(collapsed.open, `${label} collapsed right edge`).toBeCloseTo(0, 0);
-                await chevron.click();
-                await expectBrowser(activity.locator(".chat-bubble"), label).toBeVisible();
-                await expectBrowser(
-                  activity.locator(".chat-message-disclosure__toggle"),
-                  `${label} originals need no second disclosure`,
-                ).toHaveCount(0);
-                const expanded = await measureMargin(page, testCase);
-                expect(expanded.closed, `${label} expanded left edge`).toBeCloseTo(0, 0);
-                expect(expanded.open, `${label} expanded right edge`).toBeCloseTo(0, 0);
-                expect(expanded.height, `${label} reveals original content`).toBeGreaterThan(
-                  collapsed.height,
-                );
-                expect(expanded.overflow, `${label} no horizontal overflow`).toBe(0);
-                for (const media of expanded.media.filter((item) => item.width > 0)) {
-                  expect(
-                    Math.min(media.left, media.right),
-                    `${label} media stays inside the activity`,
-                  ).toBeGreaterThanOrEqual(-1);
-                }
-                await chevron.click();
-                // A click that navigates away removes the row, which also satisfies the next count.
-                await expectBrowser(activity, label).toHaveJSProperty("open", false);
-                await expectBrowser(activity.locator(".chat-bubble"), label).toHaveCount(0);
-              } else if (!("excluded" in testCase)) {
-                await expect
-                  .poll(
-                    async () => {
-                      const box = await measureMargin(page, testCase);
-                      return box.open - box.columnWidth * 0.1;
-                    },
-                    { message: label },
-                  )
-                  .toBeGreaterThanOrEqual(-1);
-                await expect
-                  .poll(async () => (await measureMargin(page, testCase)).closed, {
-                    message: `${label} closed edge`,
-                  })
-                  .toBeCloseTo(testCase.id === "user-audio" ? 17 : 0, 0);
-                const mobile = await measureMargin(page, testCase);
-                if (imageSize) {
-                  const expectedWidth = Math.min(imageSize.width, mobile.columnWidth * 0.9);
-                  expect(mobile.width, `${label} fits the column once`).toBeCloseTo(
-                    expectedWidth,
-                    1,
-                  );
-                  expect(mobile.height, `${label} preserves its aspect ratio`).toBeCloseTo(
-                    expectedWidth * (imageSize.height / imageSize.width),
-                    1,
-                  );
-                }
-                for (const media of mobile.media.filter((item) => item.width > 0)) {
-                  expect(
-                    Math.min(media.left, media.right),
-                    `${label} media stays inside its surface`,
-                  ).toBeGreaterThanOrEqual(-1);
-                }
-                const toggle = page.locator(".chat-message-disclosure__toggle");
-                if (await toggle.count()) {
-                  await toggle.first().click();
-                  const expanded = await measureMargin(page, testCase);
-                  expect(expanded.open, `${label} expanded`).toBeGreaterThanOrEqual(
-                    expanded.columnWidth * 0.1 - 1,
-                  );
-                  await toggle.first().click();
-                }
-              }
-              await resizeMarginViewport(page, 1440);
-              await expect
-                .poll(
-                  async () => {
-                    const restored = await measureMargin(page, testCase);
-                    return Math.max(
-                      ...(["x", "y", "width", "height"] as const).map((key) =>
-                        Math.abs(restored[key] - desktop[key]),
-                      ),
-                    );
-                  },
-                  { message: `${label} desktop geometry` },
-                )
-                .toBeLessThanOrEqual(0.5);
+            expectMediaInside(mobile, label);
+            const toggle = activePane.locator(".chat-message-disclosure__toggle");
+            if (await toggle.count()) {
+              await toggle.first().click();
+              const expanded = await measure();
+              expect(expanded.open, label).toBeGreaterThanOrEqual(expanded.columnWidth * 0.1 - 1);
+              await toggle.first().click();
             }
           }
-        },
-      );
+          await resizeMarginViewport(page, 1440);
+          await pollMargin((restored) =>
+            Math.max(
+              ...(["x", "y", "width", "height"] as const).map((key) =>
+                Math.abs(restored[key] - desktop[key]),
+              ),
+            ),
+          ).toBeLessThanOrEqual(0.5);
+        }
+      }
     },
   );
 });

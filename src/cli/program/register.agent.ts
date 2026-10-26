@@ -43,39 +43,30 @@ export function registerAgentsCommands(program: Command): void {
       });
     });
 
-  agents
-    .command("bind")
-    .description("Add routing bindings for an agent")
-    .option("--agent <id>", "Agent id (defaults to current default agent)")
-    .option(
-      "--bind <channel[:accountId]>",
-      "Binding to add (repeatable). If omitted, accountId is resolved by channel defaults/hooks.",
-      collectOption,
-      [],
-    )
-    .option("--json", "Output JSON summary", false)
-    .action(async (opts): Promise<void> => {
+  for (const operation of ["bind", "unbind"] as const) {
+    const command = agents
+      .command(operation)
+      .description(`${operation === "bind" ? "Add" : "Remove"} routing bindings for an agent`)
+      .option("--agent <id>", "Agent id (defaults to current default agent)")
+      .option(
+        "--bind <channel[:accountId]>",
+        operation === "bind"
+          ? "Binding to add (repeatable). If omitted, accountId is resolved by channel defaults/hooks."
+          : "Binding to remove (repeatable)",
+        collectOption,
+        [],
+      );
+    if (operation === "unbind") {
+      command.option("--all", "Remove all bindings for this agent", false);
+    }
+    command.option("--json", "Output JSON summary", false).action(async (opts): Promise<void> => {
       await runAgentsCommandAction(async () => {
         const { agentsUpdateBindingsCommand } =
           await import("../../commands/agents.commands.bind.js");
-        await agentsUpdateBindingsCommand("bind", opts);
+        await agentsUpdateBindingsCommand(operation, opts);
       });
     });
-
-  agents
-    .command("unbind")
-    .description("Remove routing bindings for an agent")
-    .option("--agent <id>", "Agent id (defaults to current default agent)")
-    .option("--bind <channel[:accountId]>", "Binding to remove (repeatable)", collectOption, [])
-    .option("--all", "Remove all bindings for this agent", false)
-    .option("--json", "Output JSON summary", false)
-    .action(async (opts): Promise<void> => {
-      await runAgentsCommandAction(async () => {
-        const { agentsUpdateBindingsCommand } =
-          await import("../../commands/agents.commands.bind.js");
-        await agentsUpdateBindingsCommand("unbind", opts);
-      });
-    });
+  }
 
   agents
     .command("add [name]")

@@ -128,8 +128,7 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
       content: scenario.content ?? [{ type: "thinking", thinking: "checking the results" }],
       usage: scenario.usage ?? createMockUsage(0, 0),
     });
-  const provider = erroredAssistant.provider;
-  const modelId = erroredAssistant.model;
+  const { provider, model: modelId } = erroredAssistant;
   const messagesSnapshot = [
     ...(scenario.precedingMessages ?? []),
     { role: "user", content: "why is it unauthorized?" },
@@ -164,15 +163,13 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
       toolCallId,
       toolName: "exec",
       replaySafe: false,
-      ...(scenario.asyncStarted ? { asyncStarted: true } : {}),
-      ...(scenario.terminate ? { terminate: true } : {}),
-      ...(scenario.codeModeSuspended ? { codeModeSuspended: true } : {}),
+      asyncStarted: scenario.asyncStarted || undefined,
+      terminate: scenario.terminate || undefined,
+      codeModeSuspended: scenario.codeModeSuspended || undefined,
     })) as never,
     lastAssistant: erroredAssistant,
     currentAttemptAssistant: erroredAssistant,
-    ...(scenario.completedAssistant
-      ? { currentAttemptCompletedAssistant: scenario.completedAssistant }
-      : {}),
+    currentAttemptCompletedAssistant: scenario.completedAssistant,
     lastToolError: scenario.lastToolError,
     didSendDeterministicApprovalPrompt: scenario.didSendDeterministicApprovalPrompt,
     itemLifecycle: {
@@ -182,9 +179,7 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
     },
     ...(scenario.terminal ? { terminal: scenario.terminal } : {}),
     ...(scenario.yieldDetected ? { yieldDetected: true } : {}),
-    ...(scenario.providerRetryMaxDelayMs !== undefined
-      ? { providerRetryMaxDelayMs: scenario.providerRetryMaxDelayMs }
-      : {}),
+    providerRetryMaxDelayMs: scenario.providerRetryMaxDelayMs,
     ...(scenario.replaySafe
       ? { currentAttemptReplayMetadata: { replaySafe: true, hadPotentialSideEffects: false } }
       : {}),

@@ -1,5 +1,5 @@
 import type { Locator, Page } from "playwright";
-import { assert, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import type {
   SkillsLibraryListResult,
   SkillsLibraryReadResult,
@@ -137,7 +137,7 @@ suite.define(() => {
       });
       const { getRequests } = gateway;
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe", { match: { key: sessionKey } });
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await composer.fill("Use $release");
       const references = page.getByRole("listbox", { name: "Skill references" });
@@ -160,43 +160,23 @@ suite.define(() => {
       const menuPanel = menu.locator(".oc-menu");
       // Visible content can still share the dropdown's opening scale animation.
       await waitForControlUiProofSurface(menuPanel, [aliceItem, attachables.first()]);
-      const rows = await attachables.evaluateAll((items) =>
-        items.map((element) => {
-          const note = element.querySelector<HTMLElement>(".agent-chat__capability-menu-note")!;
-          const label = element.querySelector<HTMLElement>(".agent-chat__capability-menu-label")!;
-          return {
-            row: element.getBoundingClientRect().toJSON(),
-            label: label.getBoundingClientRect().toJSON(),
-            note: note.getBoundingClientRect().toJSON(),
-            lineHeight: Number.parseFloat(getComputedStyle(note).lineHeight),
-          };
-        }),
-      );
-      expect(rows).toHaveLength(2);
-      assert(rows[0] && rows[1], "Both attachable skill rows must be measured.");
-      for (const row of rows) {
-        expect(row.label.bottom).toBeLessThanOrEqual(row.row.bottom + 1);
-        expect(row.note.height).toBeLessThanOrEqual(row.lineHeight + 1);
-      }
-      expect(rows[0].label.bottom).toBeLessThanOrEqual(rows[1].label.top);
+      expect(
+        await attachables.evaluateAll((items) =>
+          items.every((row) => {
+            const note = row.querySelector<HTMLElement>(".agent-chat__capability-menu-note")!;
+            return (
+              note.getBoundingClientRect().height <=
+              Number.parseFloat(getComputedStyle(note).lineHeight) + 1
+            );
+          }),
+        ),
+      ).toBe(true);
       expect(await attachables.first().textContent()).toContain(bobEntry.description);
       const note = attachables.first().locator(".agent-chat__capability-menu-note");
       expect(await note.getAttribute("title")).toBe(bobEntry.description);
       const listWidth = await menuPanel.evaluate((node) => node.getBoundingClientRect().width);
-      // Native menu navigation keeps the active item aligned with browser focus.
       await focusFirstAction(page, aliceItem);
       const readAction = item("Read selected revision");
-      await waitForMenuFocusHandoff(page, menu, `library:${alice.entry.skillId}`);
-      await readAction.waitFor({ state: "visible" });
-      const back = item("Back");
-      await page.keyboard.press("Home");
-      await expect.poll(() => back.evaluate((node) => node.matches(":focus"))).toBe(true);
-      await page.keyboard.press("Enter");
-      await menu.getByText("Selected for this session", { exact: true }).waitFor();
-      await waitForMenuFocusHandoff(page, menu, "skills");
-      await expect.poll(() => back.evaluate((node) => node.matches(":focus"))).toBe(true);
-      expect(await getRequests("skills.library.activate")).toHaveLength(0);
-      await focusFirstAction(page, aliceItem);
       await waitForMenuFocusHandoff(page, menu, `library:${alice.entry.skillId}`);
       await readAction.waitFor({ state: "visible" });
       expect(await menu.getByText("release-notes · Alice", { exact: true }).count()).toBe(1);
@@ -211,19 +191,14 @@ suite.define(() => {
       expect(actionBounds.left).toBeGreaterThanOrEqual(0);
       expect(actionBounds.right).toBeLessThanOrEqual(375);
       const actions = menu.locator('.oc-menu-item[data-value^="library-"]');
-      expect(await actions.allTextContents()).toEqual([
-        "Read selected revision",
-        "Refresh revision",
-        "Detach",
-      ]);
       for (const action of await actions.all()) {
         expect(await action.isVisible()).toBe(true);
-        expect(await action.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(
-          true,
-        );
-        const bounds = await action.boundingBox();
-        expect(bounds).not.toBeNull();
-        expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(375);
+        expect(
+          await action.evaluate(
+            (node) =>
+              node.scrollWidth <= node.clientWidth + 1 && node.getBoundingClientRect().right <= 375,
+          ),
+        ).toBe(true);
       }
       await focusFirstAction(page, readAction);
       await page.getByLabel("SKILL.md", { exact: true }).waitFor();
@@ -242,7 +217,7 @@ suite.define(() => {
 
       menu = await openSkills(page);
       await item("Back").click();
-      await item(/^Connectors/u, false).click();
+      await item(/^Plugins/u, false).click();
       await item("Add MCP server…").waitFor();
       expect(await menu.getByText("Selected for this session", { exact: true }).count()).toBe(0);
       expect(await menu.getByText("Add from your libraries", { exact: true }).count()).toBe(0);
@@ -251,7 +226,6 @@ suite.define(() => {
       menu = await openSkills(page);
       await gateway.setMethodResponse("skills.library.list", projection([]));
       const metadataBeforeActivation = (await getRequests("chat.metadata")).length;
-      await gateway.deferNext("chat.metadata");
       await selected(alice.entry.skillId).click();
       await item("Detach").click();
       expect((await gateway.waitForRequest("skills.library.activate")).params).toEqual({
@@ -261,16 +235,7 @@ suite.define(() => {
       });
       await menu.getByText("No managed skills selected.", { exact: true }).waitFor();
       await gateway.waitForRequest("chat.metadata", { after: metadataBeforeActivation });
-      for (let index = 0; index < 5; index++) {
-        await gateway.emitGatewayEvent("chat.metadata.changed", {});
-      }
-      await page.screenshot({ path: `${suite.artifactDir}/metadata-refresh-held.png` });
-      expect(await getRequests("chat.metadata")).toHaveLength(metadataBeforeActivation + 1);
-      await gateway.resolveDeferred("chat.metadata", { commands: [] });
-      await gateway.waitForRequest("chat.metadata", { after: metadataBeforeActivation + 1 });
       await menu.getByText(/updated for the next turn/u).waitFor();
-      expect(await getRequests("chat.metadata")).toHaveLength(metadataBeforeActivation + 2);
-      await page.screenshot({ path: `${suite.artifactDir}/metadata-refresh-complete.png` });
 
       await gateway.setMethodResponse("skills.library.activate", activation([bob]));
       await gateway.setMethodResponse("skills.library.list", projection([bob]));

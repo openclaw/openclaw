@@ -25,6 +25,68 @@ const primary = "pin-alpha/exact-supported";
 const fallback = "pin-beta/exact-supported";
 const providerIds = ["pin-alpha", "pin-beta", "pin-unrelated"];
 
+function writeProvider(
+  state: OpenClawTestState,
+  id: string,
+  modelContexts: Record<string, number>,
+  options: {
+    aliases?: Record<string, string>;
+    runtimeAliases?: Record<string, string>;
+    checkCandidate?: boolean;
+  } = {},
+) {
+  const plugin = writePlugin({
+    id,
+    dir: state.path("plugins", id),
+    body: `
+const fs = require("node:fs");
+const id = ${JSON.stringify(id)};
+const modelContexts = ${JSON.stringify(modelContexts)};
+const runtimeAliases = ${JSON.stringify(options.runtimeAliases)};
+fs.writeFileSync(${JSON.stringify(state.path(`${id}.imported`))}, "loaded");
+module.exports = {
+  id,
+  register(api) {
+    ${options.checkCandidate ? `if (api.runtime.config.current().plugins.entries[id].enabled !== true) throw new Error("Model validation did not publish the candidate config");` : ""}
+    api.registerProvider({
+      id, label: id, auth: [],
+      ...(runtimeAliases ? { normalizeModelId({ modelId }) { return runtimeAliases[modelId]; } } : {}),
+      normalizeResolvedModel({ model }) {
+        fs.writeFileSync(${JSON.stringify(state.path(`${id}.resolved`))}, JSON.stringify({
+          provider: model.provider, id: model.id, contextWindow: model.contextWindow,
+        }));
+        return model;
+      },
+      resolveDynamicModel({ modelId }) {
+        if (modelId === "resolution-error") throw new Error("fixture dynamic resolution failed");
+        const contextWindow = modelContexts[modelId];
+        if (contextWindow === undefined) return undefined;
+        return {
+          id: modelId, name: modelId, provider: id, api: "openai-completions",
+          baseUrl: "https://provider.invalid/v1", reasoning: false, input: ["text"],
+          contextWindow, maxTokens: 4096,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        };
+      },
+    });
+  },
+};`,
+  });
+  fs.writeFileSync(
+    path.join(plugin.dir, "openclaw.plugin.json"),
+    JSON.stringify({
+      id,
+      configSchema: { type: "object", additionalProperties: false, properties: {} },
+      providers: [id],
+      modelCatalog: { providers: { [id]: { models: [{ id: "catalog-model" }] } } },
+      ...(options.aliases
+        ? { modelIdNormalization: { providers: { [id]: { aliases: options.aliases } } } }
+        : {}),
+    }),
+  );
+  return plugin;
+}
+
 async function clearRuntimeState() {
   await resetPreparedModelRuntimeSnapshotsForTest();
   clearPluginLoaderCache();
@@ -65,7 +127,7 @@ async function withProviderFixtures(
       const normalizationProvider = options.provider ?? "pin-alpha";
       const fixtureProviderIds = [normalizationProvider, "pin-beta", "pin-unrelated"];
       const plugins = fixtureProviderIds.map((id) => {
-        const modelContexts =
+        const modelContexts: Record<string, number> =
           id === normalizationProvider && (options.aliases || options.runtimeAliases)
             ? {
                 "exact-supported": 65536,
@@ -81,64 +143,7 @@ async function withProviderFixtures(
                   : {}),
               }
             : { "exact-supported": 32000 };
-        const plugin = writePlugin({
-          id,
-          dir: state.path("plugins", id),
-          body: `
-const fs = require("node:fs");
-const modelContexts = ${JSON.stringify(modelContexts)};
-const runtimeAliases = ${JSON.stringify(id === normalizationProvider ? options.runtimeAliases : undefined)};
-fs.writeFileSync(${JSON.stringify(state.path(`${id}.imported`))}, "loaded");
-module.exports = {
-  id: ${JSON.stringify(id)},
-  register(api) {
-    api.registerProvider({
-      id: ${JSON.stringify(id)},
-      label: ${JSON.stringify(id)},
-      auth: [],
-      ...(runtimeAliases ? { normalizeModelId({ modelId }) { return runtimeAliases[modelId]; } } : {}),
-      normalizeResolvedModel({ model }) {
-        fs.writeFileSync(${JSON.stringify(state.path(`${id}.resolved`))}, JSON.stringify({
-          provider: model.provider, id: model.id, contextWindow: model.contextWindow,
-        }));
-        return model;
-      },
-      resolveDynamicModel({ modelId }) {
-        if (modelId === "resolution-error") {
-          throw new Error("fixture dynamic resolution failed");
-        }
-        const contextWindow = modelContexts[modelId];
-        if (contextWindow === undefined) return undefined;
-        return {
-          id: modelId,
-          name: modelId,
-          provider: ${JSON.stringify(id)},
-          api: "openai-completions",
-          baseUrl: "https://provider.invalid/v1",
-          reasoning: false,
-          input: ["text"],
-          contextWindow,
-          maxTokens: 4096,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        };
-      },
-    });
-  },
-};`,
-        });
-        fs.writeFileSync(
-          path.join(plugin.dir, "openclaw.plugin.json"),
-          JSON.stringify({
-            id,
-            configSchema: { type: "object", additionalProperties: false, properties: {} },
-            providers: [id],
-            modelCatalog: { providers: { [id]: { models: [{ id: "catalog-model" }] } } },
-            ...(id === normalizationProvider && options.aliases
-              ? { modelIdNormalization: { providers: { [id]: { aliases: options.aliases } } } }
-              : {}),
-          }),
-        );
-        return plugin;
+        return writeProvider(state, id, modelContexts, id === normalizationProvider ? options : {});
       });
       const config: OpenClawConfig = {
         agents: {
@@ -326,6 +331,29 @@ describe("config model validation with provider runtime", () => {
       expect(config).toEqual(original);
       expect(imported("pin-unrelated")).toBe(false);
       expect(result).toEqual({ refsChecked: 4, refsTotal: 4, errors: [] });
+    });
+  });
+
+  it("publishes the candidate config before provider plugins register", async () => {
+    await withProviderFixtures(async ({ config, state }) => {
+      const id = "pin-config";
+      const plugin = writeProvider(
+        state,
+        id,
+        { "exact-supported": 32000 },
+        { checkCandidate: true },
+      );
+      config.plugins!.allow!.push(id);
+      config.plugins!.load!.paths!.push(plugin.file);
+      config.plugins!.entries![id] = { enabled: true };
+      config.agents!.defaults!.model = { primary: `${id}/exact-supported` };
+
+      const result = await checkTouchedTextModelRefs({
+        config,
+        touchedPaths: [["agents", "defaults", "model", "primary"]],
+      });
+
+      expect(result).toEqual({ refsChecked: 1, refsTotal: 1, errors: [] });
     });
   });
 

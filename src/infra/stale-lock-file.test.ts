@@ -1,5 +1,6 @@
 // Covers stale lock-file owner decisions.
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as pidAlive from "../shared/pid-alive.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import {
   inspectStaleLockOwner,
@@ -8,19 +9,20 @@ import {
 } from "./stale-lock-file.js";
 
 describe("stale lock file ownership", () => {
+  afterEach(() => vi.restoreAllMocks());
   it("records the deciding exited-owner facts without payload disclosure", () => {
     let startReads = 0;
     let deadReads = 0;
+    vi.spyOn(pidAlive, "getFileLockProcessStartTime").mockImplementation(() => {
+      startReads += 1;
+      return 111;
+    });
+    vi.spyOn(pidAlive, "isPidDefinitelyDead").mockImplementation(() => {
+      deadReads += 1;
+      return true;
+    });
     const observed = inspectStaleLockOwner({
       payload: { pid: 123, starttime: 111, privateField: "must-not-be-copied" },
-      getProcessStartTime: () => {
-        startReads += 1;
-        return 111;
-      },
-      isPidDefinitelyDead: () => {
-        deadReads += 1;
-        return true;
-      },
     });
     expect(observed).toEqual({
       reason: "owner-process-exited",
@@ -33,18 +35,20 @@ describe("stale lock file ownership", () => {
   });
 
   it("keeps expired locks when a pid owner is not definitely dead", () => {
+    vi.spyOn(pidAlive, "isPidDefinitelyDead").mockReturnValue(false);
     expect(
       isLockOwnerDefinitelyStale({
         payload: {
           pid: 123,
           createdAt: "2026-05-23T00:00:00.000Z",
         },
-        isPidDefinitelyDead: () => false,
       }),
     ).toBe(false);
   });
 
   it("classifies locks when the owner pid starttime changed", () => {
+    vi.spyOn(pidAlive, "isPidDefinitelyDead").mockReturnValue(false);
+    vi.spyOn(pidAlive, "getFileLockProcessStartTime").mockReturnValue(222);
     expect(
       isLockOwnerDefinitelyStale({
         payload: {
@@ -52,8 +56,6 @@ describe("stale lock file ownership", () => {
           createdAt: "2026-05-23T00:00:00.000Z",
           starttime: 111,
         },
-        isPidDefinitelyDead: () => false,
-        getProcessStartTime: () => 222,
       }),
     ).toBe(true);
   });
@@ -78,11 +80,11 @@ describe("stale lock file ownership", () => {
 
   it("accepts legacy Darwin microsecond start times", async () => {
     await withMockedPlatform("darwin", async () => {
+      vi.spyOn(pidAlive, "isPidDefinitelyDead").mockReturnValue(false);
+      vi.spyOn(pidAlive, "getFileLockProcessStartTime").mockReturnValue(1_752_000_000);
       expect(
         isLockOwnerDefinitelyStale({
           payload: { pid: 123, starttime: 1_752_000_000_123_456 },
-          isPidDefinitelyDead: () => false,
-          getProcessStartTime: () => 1_752_000_000,
         }),
       ).toBe(false);
     });

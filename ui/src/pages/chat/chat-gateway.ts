@@ -438,10 +438,6 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
           phase: "retrying" as const,
           seq: payload.seq,
           ...(payload.retry.retryAt === undefined ? {} : { retryAt: payload.retry.retryAt }),
-          message: t("chat.startupStatus.retrying", {
-            attempt: String(payload.retry.attempt),
-            maxAttempts: String(payload.retry.maxAttempts),
-          }),
         }
       : payload.phase && {
           phase: payload.phase,

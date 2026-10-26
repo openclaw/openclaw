@@ -197,16 +197,18 @@ export function writeUserPreferences(
     }
   }
   const db = getNodeSqliteKysely<UserPreferencesDatabase>(sqlite);
-  const currentKeys = readPreferenceKeys(sqlite, profileId);
-  const nextKeys = new Set(currentKeys);
-  deletionKeys.forEach((key) => nextKeys.delete(key));
-  serialized.forEach((entry) => nextKeys.add(entry.prefKey));
-  if (serialized.length > 0 && nextKeys.size > USER_PREFS_PROFILE_KEY_LIMIT) {
-    return err({
-      code: "profile-key-limit",
-      limit: USER_PREFS_PROFILE_KEY_LIMIT,
-      currentCount: currentKeys.size,
-    });
+  if (serialized.length > 0) {
+    const currentKeys = readPreferenceKeys(sqlite, profileId);
+    const nextKeys = new Set(currentKeys);
+    deletionKeys.forEach((key) => nextKeys.delete(key));
+    serialized.forEach((entry) => nextKeys.add(entry.prefKey));
+    if (nextKeys.size > USER_PREFS_PROFILE_KEY_LIMIT) {
+      return err({
+        code: "profile-key-limit",
+        limit: USER_PREFS_PROFILE_KEY_LIMIT,
+        currentCount: currentKeys.size,
+      });
+    }
   }
   if (deletionKeys.length > 0) {
     executeSqliteQuerySync(

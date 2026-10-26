@@ -42,8 +42,73 @@ function observeModelCallIterator<T>(
 ): AsyncIterableIterator<T> {
   const trackCleanup = captureAsyncWorkTracker();
   let started = false;
+  let closed = false;
   let returning: Promise<IteratorResult<T>> | undefined;
-  const observed = observe();
+  let pending: Promise<IteratorResult<T>> | undefined;
+  let queued = 0;
+  let advanceSource: AsyncIterator<T>["next"] | undefined;
+  const advance = () => enqueue(read);
+  const ignoreError = () => undefined;
+
+  // Usually there is no pending read. Only overlapping consumer operations need
+  // a promise chain; the provider and observer still see them in FIFO order.
+  function enqueue(operation: () => Promise<IteratorResult<T>>) {
+    queued++;
+    const result = pending ? pending.then(operation, operation) : operation();
+    if (queued) {
+      pending = result;
+    }
+    return result;
+  }
+  function settled() {
+    if (--queued === 0) {
+      pending = undefined;
+    }
+  }
+  function read(): Promise<IteratorResult<T>> {
+    if (closed) {
+      settled();
+      return Promise.resolve({ done: true, value: undefined });
+    }
+    started = true;
+    try {
+      advanceSource ??= iterator.next.bind(iterator);
+      return Promise.resolve(advanceSource()).then(observeNext, rejectRead);
+    } catch (error) {
+      return rejectRead(error);
+    }
+  }
+  async function rejectRead(error: unknown): Promise<never> {
+    try {
+      closed = true;
+      return throwModelCallError(lifecycle, error);
+    } finally {
+      settled();
+    }
+  }
+  function observeNext(next: IteratorResult<T>): IteratorResult<T> {
+    try {
+      if (!next.done) {
+        const chunk = next.value;
+        lifecycle.observeChunk(chunk);
+        return { done: false, value: chunk };
+      }
+      closed = true;
+      // EOF need not delay drain-only consumers, but result decorators retain
+      // their cleanup ownership and failures for explicit result() callers.
+      if (!lifecycle.observer.state.terminalError) {
+        void trackCleanup(observeSharedResult).catch(ignoreError);
+      } else {
+        lifecycle.emitCompleted();
+      }
+      return { done: true, value: undefined };
+    } catch (error) {
+      closed = true;
+      return throwModelCallError(lifecycle, error);
+    } finally {
+      settled();
+    }
+  }
   return {
     [Symbol.asyncIterator]() {
       return this;
@@ -52,67 +117,52 @@ function observeModelCallIterator<T>(
       if (returning) {
         return returning.then(() => ({ done: true as const, value: undefined }));
       }
-      started = true;
-      return lifecycle.runInTransportContext(() => observed.next());
+      return lifecycle.runInTransportContext(advance);
     },
     return(value) {
       returning ??= lifecycle.runInTransportContext(() =>
-        started
-          ? observed.return(value)
-          : Promise.resolve().then(async () => {
-              // An unopened async generator skips its finally block. Forward closure
-              // explicitly so inner stream owners can settle their admitted repairs.
+        enqueue(async () => {
+          try {
+            const result = started ? await value : value;
+            if (!closed) {
+              closed = true;
+              // Result observation can finish before an abandoned provider
+              // iterator. Its cleanup must still run exactly once.
               await safeReturnIterator(iterator, trackCleanup);
               lifecycle.emitCompleted();
-              return { done: true as const, value };
-            }),
+            }
+            return { done: true as const, value: result };
+          } catch (error) {
+            if (started && !closed) {
+              closed = true;
+              lifecycle.emitError(error);
+            }
+            throw error;
+          } finally {
+            settled();
+          }
+        }),
       );
       return returning;
     },
     throw(error) {
-      started = true;
-      return lifecycle.runInTransportContext(() => observed.throw(error));
+      return lifecycle.runInTransportContext(() =>
+        enqueue(async () => {
+          try {
+            const observeError = started && !closed;
+            started = true;
+            closed = true;
+            if (observeError) {
+              lifecycle.emitError(error);
+            }
+            throw error;
+          } finally {
+            settled();
+          }
+        }),
+      );
     },
   };
-
-  async function* observe(): AsyncGenerator<T> {
-    // Tracks whether the underlying iterator terminated on its own (done or threw).
-    // This is independent of state.terminalEventEmitted: result() can emit the
-    // terminal event first, but the abandoned iterator still needs return() cleanup.
-    let iteratorSettled = false;
-    try {
-      for (;;) {
-        const next = await iterator.next();
-        if (next.done) {
-          iteratorSettled = true;
-          break;
-        }
-        const chunk = next.value;
-        lifecycle.observeChunk(chunk);
-        yield chunk;
-      }
-      // EOF can precede result decorators' settlement. Retain that work through
-      // owner cleanup without delaying drain-only consumers or losing failures.
-      if (!lifecycle.observer.state.terminalError) {
-        void trackCleanup(observeSharedResult).catch(() => undefined);
-      } else {
-        lifecycle.emitCompleted();
-      }
-    } catch (err) {
-      iteratorSettled = true;
-      throwModelCallError(lifecycle, err);
-    } finally {
-      if (!iteratorSettled) {
-        // A consumer can stop reading before the provider emits done/error — e.g.
-        // the agent loop returns on the terminal event after awaiting result().
-        // Close the underlying iterator for provider cleanup (idle-timeout abort
-        // listeners, SSE readers) even when result() already emitted the terminal
-        // event; lifecycle completion self-dedupes via state.terminalEventEmitted.
-        await safeReturnIterator(iterator, trackCleanup);
-        lifecycle.emitCompleted();
-      }
-    }
-  }
 }
 
 function createSharedResultObserver(
@@ -181,14 +231,14 @@ export function wrapStreamFnWithDiagnosticModelCallEvents(
       ctx,
       options,
       requestTimeoutMs,
-      createObserver: (capturePromptStats) =>
+      createObserver: (capturePromptStats, captureByteStats) =>
         createModelObserver({
           diagnosticOwner: ctx.diagnosticOwner,
-          config: ctx.config,
           streamContext,
           contentCapture: ctx.contentCapture,
           suppressPluginHooks: ctx.suppressPluginHooks,
           capturePromptStats,
+          captureByteStats,
           measurePromptStats,
         }),
     });

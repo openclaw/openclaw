@@ -1,5 +1,8 @@
 import type { Worker } from "node:worker_threads";
-import { resolveWorkspaceWorkerArgv } from "openclaw/plugin-sdk/agent-workspace-runtime";
+import {
+  resolveWorkspaceWorkerExecArgv,
+  resolveWorkspaceWorkerUrl,
+} from "openclaw/plugin-sdk/agent-workspace-runtime";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
@@ -45,10 +48,9 @@ class MemoryWatchTransport {
   private startWorker(): void {
     let run: WorkerRun;
     try {
-      const argv = resolveWorkspaceWorkerArgv("memory");
       run = {
-        worker: createCpuTrackedWorker(argv.at(-1)!, {
-          execArgv: argv.slice(0, -1),
+        worker: createCpuTrackedWorker(resolveWorkspaceWorkerUrl("memory"), {
+          execArgv: resolveWorkspaceWorkerExecArgv("memory"),
           name: "memory-files",
         }),
         exited: createDeferred<void>(),

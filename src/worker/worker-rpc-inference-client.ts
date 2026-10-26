@@ -24,7 +24,7 @@ class WorkerInferenceProxyError extends Error {
 
 type WorkerInferenceHandlers = {
   onEvent?: (event: WorkerInferenceEventParams) => void;
-  onStreamGap?: (gap: { expectedSeq: number; receivedSeq: number }) => void;
+  onStreamGap?: () => void;
 };
 
 type InferenceOperation = {
@@ -183,10 +183,7 @@ export class WorkerInferenceProxyClient {
     // Catch callbacks here; the frame dispatcher otherwise swallows listener errors.
     try {
       if (payload.seq !== operation.lastSeq + 1) {
-        operation.handlers.onStreamGap?.({
-          expectedSeq: operation.lastSeq + 1,
-          receivedSeq: payload.seq,
-        });
+        operation.handlers.onStreamGap?.();
       }
       operation.lastSeq = payload.seq;
       if ("event" in payload) {

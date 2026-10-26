@@ -82,7 +82,6 @@ export async function resolveCodexBindingAppServerConnection(
   return {
     appServer,
     usesSupervisionConnection,
-    requestAuthProfileId: usesSupervisionConnection ? undefined : authProfileId,
     clientAuthProfileId:
       usesSupervisionConnection || appServer.start.homeScope === "user" ? null : authProfileId,
   };

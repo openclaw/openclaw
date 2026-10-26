@@ -1,4 +1,3 @@
-// Format Generated Module tests cover format generated module script behavior.
 import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -9,26 +8,30 @@ import {
 } from "../../scripts/lib/format-generated-module.mts";
 
 const repoRoot = path.resolve("formatter-fixture");
+const format = (spawnSync: NonNullable<Parameters<typeof formatGeneratedModule>[2]>["spawnSync"]) =>
+  formatGeneratedModule(
+    "export const value=1;",
+    { errorLabel: "test module", outputPath: "generated.ts", repoRoot },
+    { spawnSync },
+  );
+function failureMessage(spawnSync: Parameters<typeof format>[0]) {
+  try {
+    format(spawnSync);
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+  throw new Error("Expected formatter failure");
+}
 
 describe("formatGeneratedModule", () => {
   it("runs generated module formatting with bounded child execution", () => {
     const calls: unknown[] = [];
 
-    const formatted = formatGeneratedModule(
-      "export const value=1;",
-      {
-        errorLabel: "test module",
-        outputPath: "generated.ts",
-        repoRoot,
-      },
-      {
-        spawnSync: (command: string, args: string[], options: unknown) => {
-          calls.push({ args, command, options });
-          writeFileSync(args[2] ?? "", "export const value = 1;\n", "utf8");
-          return { status: 0, stderr: "", stdout: "" };
-        },
-      },
-    );
+    const formatted = format((command, args, options) => {
+      calls.push({ args, command, options });
+      writeFileSync(args[2] ?? "", "export const value = 1;\n", "utf8");
+      return { status: 0, stderr: "", stdout: "" };
+    });
 
     expect(formatted).toBe("export const value = 1;\n");
     expect(calls).toHaveLength(1);
@@ -54,28 +57,13 @@ describe("formatGeneratedModule", () => {
       code: "ETIMEDOUT",
     });
 
-    let message = "";
-    try {
-      formatGeneratedModule(
-        "export const value=1;",
-        {
-          errorLabel: "test module",
-          outputPath: "generated.ts",
-          repoRoot,
-        },
-        {
-          spawnSync: () => ({
-            error: timeoutError,
-            signal: "SIGTERM",
-            status: null,
-            stderr: `DO_NOT_DUMP_OLD_STDERR${"x".repeat(20 * 1024)}\nrecent stderr tail`,
-            stdout: `DO_NOT_DUMP_OLD_STDOUT${"x".repeat(20 * 1024)}\nrecent stdout tail`,
-          }),
-        },
-      );
-    } catch (error) {
-      message = error instanceof Error ? error.message : String(error);
-    }
+    const message = failureMessage(() => ({
+      error: timeoutError,
+      signal: "SIGTERM",
+      status: null,
+      stderr: `DO_NOT_DUMP_OLD_STDERR${"x".repeat(20 * 1024)}\nrecent stderr tail`,
+      stdout: `DO_NOT_DUMP_OLD_STDOUT${"x".repeat(20 * 1024)}\nrecent stdout tail`,
+    }));
     expect(message).toMatch(
       /formatter timed out after 30000ms[\s\S]*recent stderr tail[\s\S]*recent stdout tail/u,
     );
@@ -84,28 +72,11 @@ describe("formatGeneratedModule", () => {
   });
 
   it("keeps truncated formatter diagnostics UTF-8 safe", () => {
-    const splitBoundaryOutput = `你好${"x".repeat(16_380)}`;
-    let message = "";
-
-    try {
-      formatGeneratedModule(
-        "export const value=1;",
-        {
-          errorLabel: "test module",
-          outputPath: "generated.ts",
-          repoRoot,
-        },
-        {
-          spawnSync: () => ({
-            status: 1,
-            stderr: splitBoundaryOutput,
-            stdout: "",
-          }),
-        },
-      );
-    } catch (error) {
-      message = error instanceof Error ? error.message : String(error);
-    }
+    const message = failureMessage(() => ({
+      status: 1,
+      stderr: `你好${"x".repeat(16_380)}`,
+      stdout: "",
+    }));
     expect(message).toMatch(/stderr tail:\n好x/u);
     expect(message).not.toContain("�");
   });

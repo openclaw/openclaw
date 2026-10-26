@@ -2,7 +2,8 @@ import { For, Show, createMemo } from "solid-js";
 import { handleCopyButton } from "../../../components/copy-button-state.ts";
 import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import {
   visibleWorkspaceConflictPaths,
   workspaceConflictCount,
@@ -10,6 +11,8 @@ import {
   workspaceConflictPathForDisplay,
   type WorkspaceResultConflict,
 } from "../workspace-conflict.ts";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 function ConflictCopyAction(props: { text: string; label: string }) {
   return (

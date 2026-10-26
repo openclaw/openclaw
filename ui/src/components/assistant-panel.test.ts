@@ -1,5 +1,5 @@
+import type { SystemAgentChatHistoryResult } from "@openclaw/gateway-protocol";
 /* @vitest-environment jsdom */
-
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { AssistantDock } from "../app/assistant-dock.ts";
@@ -22,11 +22,12 @@ import {
   createPluginHelpRequest,
 } from "../pages/custodian/plugin-help.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
+import { sessionListResult } from "../test-helpers/chat-model.ts";
 import { domProbe } from "../test-helpers/dom-probe.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { CUSTODIAN_PANEL_TOGGLE_EVENT, HOME_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import "./assistant-panel-solid.tsx";
-import "./assistant-panel-content.ts";
+import "./assistant-panel-content-solid.tsx";
 
 type HomeProps = Parameters<typeof import("./home-session-solid.tsx").HomeSession>[0];
 type TestHome = HTMLElement & HomeProps;
@@ -46,16 +47,22 @@ type TestAssistantPanel = HTMLElementTagNameMap["openclaw-assistant-panel"];
 
 async function mountPanel({
   global,
+  history,
   ...options
-}: Partial<TestAssistantPanel> & { global?: boolean } = {}) {
-  const request = vi.fn().mockResolvedValue({
-    sessionId: "panel-session",
-    reply: "Ready.",
-    action: "none",
-  });
+}: Partial<TestAssistantPanel> & {
+  global?: boolean;
+  history?: SystemAgentChatHistoryResult;
+} = {}) {
+  const reply = { sessionId: "panel-session", reply: "Ready.", action: "none" };
+  const request = vi.fn().mockResolvedValue(reply);
+  if (history) {
+    request.mockImplementation(async (method: string) =>
+      method === "openclaw.chat.history" ? history : reply,
+    );
+  }
   const { context: baseContext, setGatewaySnapshot } = createContext(
     request,
-    ["openclaw.chat", "chat.history", "chat.send"],
+    ["openclaw.chat", "chat.history", "chat.send", ...(history ? ["openclaw.chat.history"] : [])],
     {
       agentsList: {
         defaultId: "main",
@@ -119,6 +126,9 @@ function session(
 ): GatewaySessionRow {
   return { key, agentId, kind: key === "global" ? "global" : "direct", updatedAt: 0, ...fields };
 }
+function openReview(dock: AssistantDock, agentId = "research") {
+  dock.openSession({ sessionKey: `agent:${agentId}:review`, agentId, label: "Review" }, {});
+}
 function deferHomeIntent() {
   let intent: SessionNavigationIntent | undefined;
   const receive = (event: Event) => {
@@ -140,10 +150,6 @@ async function restoreHomePanel() {
 function researchAgents(workspace: string) {
   return [{ id: "main" }, { id: "research", workspace }];
 }
-function message(id: number, role: "assistant" | "user", text: string) {
-  return { id, role, text, at: id, question: null, step: null };
-}
-
 describe("assistant panel", () => {
   beforeEach(() => {
     vi.stubGlobal("localStorage", createStorageMock());
@@ -348,14 +354,11 @@ describe("assistant panel", () => {
   });
 
   it("retains plugin intent across context replacement and retires it on element removal", async () => {
-    const { context, panel, provider } = await mountPanel();
-    panel.custodianSuppressed = false;
-    panel.pageRouteId = "plugin";
-    await panel.updateComplete;
-    context.assistantDock.openSession(
-      { sessionKey: "agent:research:review", agentId: "research", label: "Review" },
-      {},
-    );
+    const { context, panel, provider } = await mountPanel({
+      custodianSuppressed: false,
+      pageRouteId: "plugin",
+    });
+    openReview(context.assistantDock);
     await panel.updateComplete;
     const assistantDock = new AssistantDock();
     const replacementContext = { ...context, assistantDock };
@@ -381,24 +384,6 @@ describe("assistant panel", () => {
     expect(panel.assistantPanelOpen).toBe(false);
   });
 
-  it("keeps a closed plugin dock closed when automatic Ask help arrived while it was open", async () => {
-    vi.stubGlobal("innerWidth", 1342);
-    const { context, panel } = await mountPanel({
-      custodianSuppressed: false,
-      pageRouteId: "plugin-settings",
-    });
-    context.assistantDock.openSession(
-      { sessionKey: "agent:main:review", agentId: "main", label: "Review" },
-      {},
-    );
-    publishPluginHelpContext(context, {}, plugin("example"), { overview: true, installed: true });
-    await panel.updateComplete;
-    expect(context.assistantDock.openSessionKey).toBe("agent:main:review");
-    await click(panel, ".assistant-panel-actions button:last-child");
-    expect(panel.assistantPanelOpen).toBe(false);
-    expect(context.assistantDock.openSessionKey).toBeNull();
-  });
-
   it("opens for read-only viewers and distinguishes agents sharing a global session key", async () => {
     const { context, panel, setGatewaySnapshot } = await mountPanel({ global: true });
     const hello = context.gateway.snapshot.hello!;
@@ -417,10 +402,7 @@ describe("assistant panel", () => {
     );
     await vi.dynamicImportSettled();
     await panel.updateComplete;
-    expect(home(panel)).toMatchObject({
-      sessionKey: "global",
-      agentId: "research",
-    });
+    expect(home(panel)).toMatchObject({ sessionKey: "global", agentId: "research" });
     await update(panel, { pageAgentId: "research" });
     expect(panel.assistantPanelOpen).toBe(false);
     await update(panel, { pageAgentId: "main" });
@@ -431,20 +413,14 @@ describe("assistant panel", () => {
     const { context, panel, provider, request, setGatewaySnapshot } = await mountPanel({
       global: true,
     });
-    context.sessions.state.result = {
-      ts: 0,
-      path: "",
-      count: 2,
-      defaults: { modelProvider: null, model: null, contextTokens: null },
-      sessions: [
-        session("global", "main", { label: "Personal Home" }),
-        session("global", "research", {
-          label: "Parser work",
-          sessionId: "research-incarnation",
-          spawnedWorkspaceDir: "/worktrees/parser",
-        }),
-      ],
-    };
+    context.sessions.state.result = sessionListResult(0, [
+      session("global", "main", { label: "Personal Home" }),
+      session("global", "research", {
+        label: "Parser work",
+        sessionId: "research-incarnation",
+        spawnedWorkspaceDir: "/worktrees/parser",
+      }),
+    ]);
     panel.pageSessionKey = "global";
     panel.pageAgentId = "research";
     panel.homeAvailable = true;
@@ -641,11 +617,18 @@ describe("assistant panel", () => {
   );
 
   it("minimizes the existing onboarding conversation when available", async () => {
-    const { context, panel, request, store, dom } = await mountPanel();
-    store.connect(context, "onboarding");
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
     const userText = "Continue setup";
-    store.messages = [message(1, "assistant", "Set up your system"), message(2, "user", userText)];
+    const { context, panel, request, store, dom } = await mountPanel({
+      history: {
+        turns: [
+          { role: "assistant", text: "Set up your system", at: 1 },
+          { role: "user", text: userText, at: 2 },
+        ],
+      },
+    });
+    store.connect(context, "onboarding");
+    const chatRequests = () => request.mock.calls.filter(([method]) => method === "openclaw.chat");
+    await vi.waitFor(() => expect(chatRequests()).toHaveLength(1));
     await update(panel, {
       custodianAvailable: true,
       custodianSuppressed: false,
@@ -658,7 +641,7 @@ describe("assistant panel", () => {
     await surface?.updateComplete;
     expect(panel.assistantPanelOpen).toBe(true);
     expect(store.activeVariant).toBe("onboarding");
-    expect(request).toHaveBeenCalledOnce();
+    expect(chatRequests()).toHaveLength(1);
     expect(panel.textContent).toContain(userText);
     expect(reserveRight()).toBe("440px");
     await click(panel, ".assistant-panel-actions .assistant-panel-icon:last-child");
@@ -668,27 +651,18 @@ describe("assistant panel", () => {
     expect(panel.assistantPanelOpen).toBe(true);
   });
 
-  it("opens plugin help on request and limits automatic opening for installed plugins on desktop", async () => {
+  it("opens installed plugin help on desktop only when requested", async () => {
     vi.stubGlobal("innerWidth", 1342);
     const { context, panel, request } = await mountPanel({
       custodianSuppressed: false,
       pageRouteId: "plugin-settings",
     });
-    const owner = {};
-    const publishHelp = async (id: string, overview: boolean) => {
-      publishPluginHelpContext(context, owner, plugin(id), { overview, installed: true });
-      await panel.updateComplete;
-    };
-    await publishHelp("first", true);
-    expect(panel.assistantPanelOpen).toBe(true);
+    publishPluginHelpContext(context, {}, plugin("first"), { installed: true });
+    await panel.updateComplete;
+    expect(panel.assistantPanelOpen).toBe(false);
     await createPluginHelpRequest(context, plugin("first"))();
     await panel.updateComplete;
     expect(panel.assistantPanelOpen).toBe(true);
-    await toggle(panel, CUSTODIAN_PANEL_TOGGLE_EVENT, { open: false });
-    await publishHelp("second", true);
-    expect(panel.assistantPanelOpen).toBe(false);
-    await publishHelp("second", false);
-    expect(panel.assistantPanelOpen).toBe(false);
     expect(request.mock.calls.every((call) => call[1]?.message === undefined)).toBe(true);
   });
 
@@ -704,9 +678,7 @@ describe("assistant panel", () => {
 
     panel.remove();
     const { panel: restored, provider, context } = await mountPanel();
-    restored.custodianSuppressed = false;
-    restored.pageRouteId = "updates";
-    await restored.updateComplete;
+    await update(restored, { custodianSuppressed: false, pageRouteId: "updates" });
     expect(restored.assistantPanelOpen).toBe(false);
     provider.setContext({ ...context });
     await restored.updateComplete;
@@ -717,8 +689,7 @@ describe("assistant panel", () => {
     provider.setContext({ ...context });
     await restored.updateComplete;
     expect(restored.assistantPanelOpen).toBe(true);
-    restored.pageRouteId = "agents-home";
-    await restored.updateComplete;
+    await update(restored, { pageRouteId: "sessions" });
     expect(restored.assistantPanelOpen).toBe(true);
   });
 
@@ -795,10 +766,7 @@ describe("assistant panel", () => {
             {},
           ),
         ).toThrow("conversation dock is unavailable");
-        currentContext.assistantDock.openSession(
-          { sessionKey: "agent:research:review", agentId: "research", label: "Review" },
-          {},
-        );
+        openReview(currentContext.assistantDock);
         await panel.updateComplete;
         expect(home(panel)?.sessionKey).toBe("agent:research:review");
       }

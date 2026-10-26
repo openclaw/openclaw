@@ -3,6 +3,7 @@
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { sourceConfigSnapshot } from "../../lib/config/config-snapshot.test-support.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
@@ -21,14 +22,7 @@ function admissionFixture() {
   let hash = "hash-1";
   const request = vi.fn(async (method: string, params?: unknown) => {
     if (method === "config.get") {
-      return {
-        config,
-        sourceConfig: config,
-        raw: JSON.stringify(config),
-        hash,
-        valid: true,
-        issues: [],
-      };
+      return sourceConfigSnapshot(config, hash);
     }
     if (method === "config.set") {
       const result = await configWrite.promise;
@@ -69,7 +63,7 @@ it("restores and saves a main-agent draft after route teardown on the original G
     const firstPage = await queueIdentityBehindConfig(fixture);
     firstPage.dispose();
     const restoredPage = createAgentsPage(fixture.context);
-    expect(restoredPage.read().overview.identityDraft.name).toBe("Retained main-agent draft");
+    expect(restoredPage.read().readData().identityDraft.name).toBe("Retained main-agent draft");
 
     fixture.configWrite.resolve({});
     await waitForFast(() =>
@@ -94,13 +88,13 @@ it.each(["profile", "Gateway", "permission"] as const)(
         page.dispose();
         fixture.currentGateway.snapshot.selfUser = { id: "second-operator" };
         const secondPage = createAgentsPage(fixture.context);
-        expect(secondPage.read().overview.identityDraft.name).toBeNull();
+        expect(secondPage.read().readData().identityDraft.name).toBeNull();
       } else if (change === "Gateway") {
         page.dispose();
         const nextClient = { request: vi.fn() } as unknown as GatewayBrowserClient;
         emitGatewaySnapshot(fixture.currentGateway, snapshot(nextClient));
         const secondPage = createAgentsPage(fixture.context);
-        expect(secondPage.read().overview.identityDraft.name).toBeNull();
+        expect(secondPage.read().readData().identityDraft.name).toBeNull();
       } else {
         fixture.currentGateway.snapshot.hello = gatewayHelloForMethods(
           ["agents.update", "config.set"],

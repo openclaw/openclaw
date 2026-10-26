@@ -30,9 +30,11 @@ while best-effort delivery can complete successfully without claiming delivery.
 When `gateway.publicOrigin` is configured and the Control UI is enabled, chat
 notifications include an `Inspect` link into the Control UI. Command and script
 completion announcements open the automation run; isolated agent announcements
-open the run's session.
+open the run's session. Telegram and Discord show a compact **Inspect run**
+link instead of the full URL; other channels retain the plain `Inspect: <URL>`
+footer.
 
-With `announce`, the chat that receives the result owns it. The result is added to the conversation after the channel confirms delivery, using the content actually sent after channel transforms and hooks. OpenClaw writes one assistant message into that chat's transcript so the next reply can use it as context. The result records its job and run; retries do not duplicate it, and OpenClaw waits for active turns before committing it. Destination creation and remembered-route updates happen only after confirmed delivery; newly created destinations inherit the source session's required sandbox policy.
+With `announce`, the chat that receives the result owns it. The result is added to the conversation after the channel confirms delivery, using the content actually sent after channel transforms and hooks. OpenClaw writes one assistant message into that chat's transcript so the next reply can use it as context. The result records its job and run; retries do not duplicate it, and it can commit while a turn is running. Transcript writes remain ordered, and the running turn keeps ownership of its reply. Destination creation and remembered-route updates happen only after confirmed delivery; newly created destinations inherit the source session's required sandbox policy.
 
 A newly committed visible result refreshes the destination's idle freshness, so a reply within the idle window retains the scheduled question. Replaying the same result, silent runs, and failed or uncertain deliveries do not refresh it. Recurring visible results can keep the destination idle-fresh; daily reset still uses the session start time.
 
@@ -48,7 +50,7 @@ Channel-native payloads without a text projection are sent without a conversatio
 Execution context is separate: `isolated` starts without conversation history, `current` reads bounded creating-conversation context in a detached run, and `session:<key>` uses a persistent execution session. The private run transcript and tool history are not copied into the destination.
 When a persistent execution session is already the destination conversation, its final assistant message is the result; OpenClaw does not append a second copy.
 
-Editing explicit delivery coordinates moves future results to that chat or topic. The captured creating-conversation binding remains immutable; changing the public `sessionKey` does not redirect implicit delivery. For an explicit external destination, starting a new session or resetting the destination chat does not stop delivery: the result goes into that chat's current session. Implicit creator-bound delivery requires the captured creating conversation to exist and match its generation before resolving a remembered external route. Implicit agent-turn announcements retain that generation through sending and recovery; routeless WebChat results also require it at commit. If the creating conversation was deleted or reset, recreate the job or configure an explicit external destination. Command and script announcements keep an already resolved route without a source-generation check, matching their existing behavior. Cancellation does not interrupt the destination's active turn. A verified matching `message` tool send suppresses automatic resend, not the conversation result.
+Editing explicit delivery coordinates moves future results to that chat or topic. The captured creating-conversation binding remains immutable once recorded (an older job that names its conversation only by key records it when [bound](/cli/cron#binding-older-jobs-to-their-conversation)); changing the public `sessionKey` does not redirect implicit delivery. For an explicit external destination, starting a new session or resetting the destination chat does not stop delivery: the result goes into that chat's current session. Implicit creator-bound delivery requires the captured creating conversation to exist and match its generation before resolving a remembered external route. Implicit agent-turn announcements retain that generation through sending and recovery; routeless WebChat results also require it at commit. If the creating conversation was deleted or reset, recreate the job or configure an explicit external destination. Command and script announcements keep an already resolved route without a source-generation check, matching their existing behavior. Cancellation does not interrupt the destination's active turn. A verified matching `message` tool send suppresses automatic resend, not the conversation result.
 
 With no external route, the conversation commit itself completes delivery. WebChat receives the committed result immediately and returns the same message from `chat.history` after reconnect. Failed or uncertain external sends do not add a conversation result. Uncertain sends record a warning and are not blindly replayed. If the channel confirms delivery but the conversation write fails, delivery remains successful and the run records a warning that the result was not added to the conversation.
 
@@ -81,7 +83,7 @@ services. Leaving the policy unset keeps strict behavior.
 
 Use `--announce --channel telegram --to "-1001234567890"` for channel delivery. For Telegram forum topics, use `-1001234567890:topic:123`; OpenClaw also accepts the Telegram-owned `-1001234567890:123` shorthand. Direct RPC/config callers may pass `delivery.threadId` as a string or number. Slack/Discord/Mattermost targets use explicit prefixes (`channel:<id>`, `user:<id>`). Matrix room IDs are case-sensitive; use the exact room ID or `room:!room:server` form from Matrix.
 
-For announce delivery in the Control UI Automations editor, choose a channel and an explicit **Account ID** under **Advanced** to see configured conversation targets in the **To** field. Selecting a target preserves your chosen account and does not infer a topic. These configured suggestions apply only to the primary announce destination; failure-alert routing remains separate. You can still enter a target that is not in the suggestions.
+For announce delivery in the Control UI Automations editor, choose a channel and an explicit **Account ID** under **Advanced** to see configured conversation targets in the **To** field. Selecting a target preserves your chosen account and does not infer a topic. Changing the agent, delivery mode, channel, account, or recipient clears the previous topic when you save. These configured suggestions apply only to the primary announce destination; failure-alert routing remains separate. You can still enter a target that is not in the suggestions.
 
 On hosts with multiple configured channels, isolated announce jobs created with `automations add|create` or changed with `automations edit` must set `--channel <channel-plugin-id>` unless a provider-prefixed `--to` or a preserved session route selects the channel. Use `--best-effort-deliver` only when unresolved fallback delivery is acceptable; it does not choose a channel, and a delivery failure does not fail the job.
 
@@ -109,6 +111,35 @@ including current cancellation and tool-policy withdrawal.
 When an agent creates an isolated reminder from an active chat, OpenClaw stores the preserved live delivery target for the fallback announce route. If it must recover a saved route, it reads the selected agent’s session store—even when the session key is the unqualified `global` alias. Explicit delivery targets still take precedence. Internal session keys may be lowercase; provider delivery targets are not reconstructed from those keys when current chat context is available.
 
 Implicit announce delivery uses configured channel allowlists to validate and reroute stale targets. DM pairing-store approvals are not fallback automation recipients; set `delivery.to` or configure the channel `allowFrom` entry when a scheduled job should proactively send to a DM.
+
+### Owner delivery and direct messages
+
+Set `delivery.target: "owner"` (`--delivery-target owner`) when a job should
+resolve a positively identified owner DM at delivery time. This does not follow
+the last group conversation or guess a recipient when owner identity is
+ambiguous. `delivery.directPolicy: "block"` (`--direct-policy block`) blocks
+direct/DM delivery for that job; the default is `allow`.
+
+A missing owner route does not skip execution. The job still runs, and ordinary
+delivery settlement records the unavailable destination without falling back to
+the last conversation. An explicit DM block remains intentional non-delivery.
+
+```bash
+openclaw automations edit <job-id> \
+  --announce --channel telegram --delivery-target owner
+```
+
+These policies support agent-turn jobs in any supported session, including `main`, and
+non-main command or script jobs with chat delivery. Owner targeting cannot
+be combined with `--to`, `--thread-id`, or `--webhook`. Setting it on an existing
+job clears the previous explicit recipient and thread. Selecting a new explicit
+recipient replaces owner targeting. Use `--clear-delivery-target` or
+`--clear-direct-policy` to remove the stored policy.
+
+Use `payload.includeReasoning: true` (`--include-reasoning`) on an agent-turn
+job only when reasoning returned by the agent should accompany a meaningful result.
+Reasoning alone does not create a notification; omitting this setting keeps ordinary
+final-output delivery.
 
 ### Failure notifications
 
@@ -169,6 +200,10 @@ Script setup refreshes retired tools after a plugin reload before execution begi
 A provider rejection of an unsupported model records `model_not_found` in the job state and run history. The failure notice points to `openclaw doctor --fix` for provider-declared retirements, or changing/removing the automation's model override. Known retired automation model routes fail before another inference request. Doctor replaces an override with the provider's declared successor when the agent's model policy allows it. Without a declared successor, it clears the override so the job inherits the agent default. If a pinned override's successor is disallowed, Doctor retains the reference and reports the required policy change. A missing account catalog entry or a discovery outage alone does not authorize a migration.
 
 The scheduler also provides a safety backstop. A time-based recurring job is auto-disabled after 10 consecutive execution failures; a successful run resets that streak. On the terminal recurring failure, the auto-disable notice is sent directly through the job's failure route: the threshold, cooldown, and any pending repair request do not hold it back, and no repair turn or other model turn is involved, so it still arrives when the failing model provider is the cause. Only a job with no failure route hands the notice to its owning agent as a system event. Repeated schedule-computation failures auto-disable after 3 errors. Terminal one-shot execution failures also record `state.autoDisabled`, without adding a safety notice when a repair request or failure alert owns the notification. The job records `state.autoDisabled.reason` as `consecutive-failures` or `schedule-errors`, which `openclaw doctor` reports. Raw errors stay in automation history. After fixing the cause, run `openclaw automations enable <jobId>`; enabling clears the recorded reason and failure streaks. Because disabled jobs are hidden by the default list, use `openclaw automations list --all` to inspect them. Operator cancellations, restart retirements, and manual force-runs of paused `on-exit` jobs do not record an auto-disable.
+
+A job linked to the exact conversation that created it pauses when that conversation is gone. If the conversation was removed or archived, or its bound worktree no longer exists, the next occurrence runs nothing: no trigger script, payload, or session turn. The job is disabled, and its owning agent receives one notice that names the conversation and the `openclaw automations enable <jobId>` command. A failure-alert route that includes skipped runs does not send a second notification. The pause is not an auto-disable, so it records no `state.autoDisabled` reason; the skip reason stays in automation history. Re-enabling does not detach the job, so the next occurrence pauses again while the conversation is still gone. Resetting the conversation with `/new` does not pause the job, and command jobs never pause. Jobs without an exact conversation link are unaffected.
+
+`openclaw doctor` lists linked jobs before they change: jobs that will pause at their next run because the creating conversation was removed or archived or lost its worktree, jobs whose creator is no longer an owner and will lose owner-only tools, jobs linked only by conversation key or to a conversation that was since reset, jobs on a CLI backend whose owner-only tools will match embedded runs, and jobs whose creating conversation has no stored chat type and therefore gets no conversation memory. The review only reads stored jobs and sessions; it changes nothing, including with `--fix`.
 
 ### Output language
 

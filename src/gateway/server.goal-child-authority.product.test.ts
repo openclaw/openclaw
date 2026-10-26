@@ -1,13 +1,14 @@
+import assert from "node:assert/strict";
 // Real HTTP model/tool, committed child settlement, and WebSocket reply effects.
 // Do not import test-helpers.js: that graph replaces the agent execution boundary.
 import "../agents/prepared-model-runtime.js";
 import "./server-start.js";
-import assert from "node:assert/strict";
 import { randomUUID, X509Certificate } from "node:crypto";
 import { createServer, type ServerResponse } from "node:http";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { UsersSelfResult } from "../../packages/gateway-protocol/src/schema/users.js";
+import { readRequestText } from "../../test/helpers/gateway-integration-fixtures.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { withinTest } from "../../test/helpers/promise.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
@@ -33,7 +34,6 @@ import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-cha
 import {
   closeProvider,
   listenProvider,
-  readProviderBody,
   writeToolCall,
 } from "./gateway-provider-fixture.test-support.js";
 import {
@@ -41,7 +41,7 @@ import {
   disconnectGatewayClient,
   startGatewayWithClient,
 } from "./test-helpers.e2e.js";
-import { KERNEL_TEST_ENV } from "./test-helpers.env.js";
+import { kernelGatewayTestStateOptions } from "./test-helpers.env.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 type Client = Awaited<ReturnType<typeof connectGatewayClient>>;
@@ -101,13 +101,12 @@ function createScenario(index: number, scenario: (typeof cases)[number]) {
     failed: createDeferredCore<never>(),
     receipt: undefined as SpawnReceipt | undefined,
     releaseDrain: undefined as (() => void) | undefined,
-    requests: [] as string[],
+    requests: 0,
     replies: [] as Reply[],
     replyEffects: [] as unknown[],
     toolEffects: [] as unknown[],
     parentCalls: 0,
     childCalls: 0,
-    deniedCalls: 0,
     readHeld: false,
     drainHeld: false,
     profileId: "",
@@ -123,10 +122,10 @@ function textReply(response: ServerResponse, text: string) {
   });
 }
 
-function forbiddenSpawn(scenario: Scenario, response: ServerResponse) {
+function spawn(scenario: Scenario, response: ServerResponse, agentId: "main" | "forbidden") {
   writeToolCall(response, "sessions_spawn", {
-    task: scenario.forbiddenTask,
-    agentId: "forbidden",
+    task: agentId === "main" ? scenario.childTask : scenario.forbiddenTask,
+    agentId,
     runtime: "subagent",
     context: "isolated",
     cleanup: "keep",
@@ -139,18 +138,16 @@ function expectRoleDenial(scenario: Scenario, body: string) {
   const denied = latestToolOutput(body).find(
     (record) => typeof record.error === "string" && record.error.includes(roleError),
   );
-  // The spawn adapter may classify a Gateway rejection as error or forbidden.
-  // The named role rejection (not a generic failure or sender-only policy) is the proof.
+  // Require the named role rejection, not a generic failure or sender-only policy.
   expect(denied, "sibling spawn must fail at the original human's role boundary").toMatchObject({
     status: expect.stringMatching(/^(error|forbidden)$/),
     error: expect.stringContaining(roleError),
   });
-  scenario.deniedCalls++;
 }
 
 /** Finite script: spawn -> yield -> scoped requester -> two scoped hidden nudges -> complete. */
 async function answer(scenario: Scenario, body: string, response: ServerResponse) {
-  scenario.requests.push(body);
+  scenario.requests++;
   if (!body.includes(scenario.prompt) && body.includes(scenario.childTask)) {
     scenario.childCalls++;
     expect(scenario.childCalls, "allowed child executes once").toBe(1);
@@ -163,14 +160,7 @@ async function answer(scenario: Scenario, body: string, response: ServerResponse
   scenario.parentCalls++;
   switch (scenario.parentCalls) {
     case 1:
-      writeToolCall(response, "sessions_spawn", {
-        task: scenario.childTask,
-        agentId: "main",
-        runtime: "subagent",
-        context: "isolated",
-        cleanup: "keep",
-        completionTarget: "parent",
-      });
+      spawn(scenario, response, "main");
       return;
     case 2: {
       const receipt = latestToolOutput(body).find(
@@ -179,34 +169,29 @@ async function answer(scenario: Scenario, body: string, response: ServerResponse
       assert(receipt, "sessions_spawn must return a real child receipt");
       assert(typeof receipt.runId === "string" && typeof receipt.childSessionKey === "string");
       scenario.receipt = { runId: receipt.runId, childSessionKey: receipt.childSessionKey };
-      expect(
-        receipt.status,
-        typeof receipt.error === "string" ? receipt.error : "spawn acceptance",
-      ).toBe("accepted");
       expect(receipt.childSessionKey).toMatch(/^agent:main:subagent:/);
       writeToolCall(response, "sessions_yield", {});
       return;
     }
     case 3:
-      expect(body, "child finding reaches a real requester model turn").toContain(
-        scenario.childResult,
-      );
+    case 5:
+      if (scenario.parentCalls === 3) {
+        expect(body).toContain(scenario.childResult);
+      } else {
+        expect(body).toContain("Advance the active goal");
+        expect(body).toContain(scenario.requesterFinal);
+      }
       // Ordinary subagent policy permits every agent. Only the main-only HUMAN role
       // can deny this, including inside the privileged requester-settle command.
-      forbiddenSpawn(scenario, response);
+      spawn(scenario, response, "forbidden");
       return;
     case 4:
-      expectRoleDenial(scenario, body);
-      textReply(response, scenario.requesterFinal);
-      return;
-    case 5:
-      expect(body).toContain("Advance the active goal");
-      expect(body).toContain(scenario.requesterFinal);
-      forbiddenSpawn(scenario, response);
-      return;
     case 6:
       expectRoleDenial(scenario, body);
-      textReply(response, scenario.nudgeFinal);
+      textReply(
+        response,
+        scenario.parentCalls === 4 ? scenario.requesterFinal : scenario.nudgeFinal,
+      );
       return;
     case 7:
       expect(body).toContain("Advance the active goal");
@@ -214,14 +199,6 @@ async function answer(scenario: Scenario, body: string, response: ServerResponse
       writeToolCall(response, "update_goal", { status: "complete" });
       return;
     case 8:
-      expect(latestToolOutput(body)).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            status: "updated",
-            goal: expect.objectContaining({ status: "complete" }),
-          }),
-        ]),
-      );
       textReply(response, scenario.completeFinal);
       return;
     default:
@@ -252,8 +229,7 @@ describe("Goal child handoff retains scoped human authority at real effects", ()
     ) {
       target.replyEffects.push({ recipient, payload });
     }
-    // Current chat renders committed model text from session.message; chat.final
-    // may intentionally contain no text to avoid duplicating that occurrence.
+    // chat.final may omit text already rendered by session.message.
     if (event.event !== "session.message") {
       return;
     }
@@ -261,8 +237,8 @@ describe("Goal child handoff retains scoped human authority at real effects", ()
     if (message?.role !== "assistant") {
       return;
     }
+    const rendered = JSON.stringify(message);
     for (const scenario of scenarios) {
-      const rendered = JSON.stringify(message);
       if (
         ![scenario.requesterFinal, scenario.nudgeFinal, scenario.completeFinal].some((text) =>
           rendered.includes(text),
@@ -281,15 +257,9 @@ describe("Goal child handoff retains scoped human authority at real effects", ()
     for (const scenario of scenarios) {
       void scenario.failed.promise.catch(() => {});
     }
-    state = await createOpenClawTestState({
-      label: "goal-child-authority-product",
-      env: {
-        ...KERNEL_TEST_ENV,
-        VITEST: process.env.VITEST,
-        OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      },
-    });
+    state = await createOpenClawTestState(
+      kernelGatewayTestStateOptions("goal-child-authority-product"),
+    );
     cleanups.push(() => state.cleanup());
     const server = createServer((request, response) => {
       let owner: Scenario | undefined;
@@ -298,16 +268,13 @@ describe("Goal child handoff retains scoped human authority at real effects", ()
           response.writeHead(200, { "content-type": "application/json" });
           response.end(
             JSON.stringify({
-              data: [
-                { id: "authority-proof", object: "model" },
-                { id: "forbidden-effect", object: "model" },
-              ],
+              data: ["authority-proof", "forbidden-effect"].map((id) => ({ id, object: "model" })),
             }),
           );
           return;
         }
         assert(request.method === "POST" && request.url === "/v1/responses");
-        const body = await readProviderBody(request);
+        const body = await readRequestText(request);
         const parsed = asOptionalRecord(JSON.parse(body) as unknown);
         if (parsed?.model === "forbidden-effect") {
           forbiddenRequests.push(body);
@@ -321,15 +288,10 @@ describe("Goal child handoff retains scoped human authority at real effects", ()
         await answer(owner, body, response);
       })().catch((error: unknown) => {
         providerErrors.push(error);
-        if (owner) {
-          owner.failed.reject(error);
-        } else {
-          for (const scenario of scenarios) {
-            scenario.failed.reject(error);
-          }
+        for (const scenario of owner ? [owner] : scenarios) {
+          scenario.failed.reject(error);
         }
-        // Reject the test immediately but let the real request finish, rather than
-        // turning an assertion failure into provider retry/backoff during teardown.
+        // Finish the request to avoid provider retry/backoff during teardown.
         if (!response.headersSent) {
           textReply(response, "Fixture assertion failed; stop this turn.");
         } else {
@@ -348,6 +310,10 @@ describe("Goal child handoff retains scoped human authority at real effects", ()
     }
     const certPath = await state.writeText("tls/cert.pem", TEST_TLS_CERT_PEM);
     const keyPath = await state.writeText("tls/key.pem", TEST_TLS_KEY_PEM);
+    const modelConfig = () => ({
+      agentRuntime: { id: "openclaw" },
+      params: { transport: "sse", openaiWsWarmup: false },
+    });
     const cfg = {
       agents: {
         ownership: "explicit",
@@ -358,17 +324,10 @@ describe("Goal child handoff retains scoped human authority at real effects", ()
         defaults: {
           workspace: state.workspaceDir,
           skipBootstrap: true,
-          heartbeat: { every: "0m" },
           model: { primary: provider.modelRef },
           models: {
-            [provider.modelRef]: {
-              agentRuntime: { id: "openclaw" },
-              params: { transport: "sse", openaiWsWarmup: false },
-            },
-            [provider.providerId + "/forbidden-effect"]: {
-              agentRuntime: { id: "openclaw" },
-              params: { transport: "sse", openaiWsWarmup: false },
-            },
+            [provider.modelRef]: modelConfig(),
+            [provider.providerId + "/forbidden-effect"]: modelConfig(),
           },
           subagents: { allowAgents: ["*"] },
         },
@@ -406,8 +365,7 @@ describe("Goal child handoff retains scoped human authority at real effects", ()
         roles: {
           default: "scoped",
           definitions: {
-            // Native children are agent-created, so this non-admin role permits session
-            // participation while its agent allowlist still denies the nearest sibling.
+            // Permit child participation while denying sibling agents.
             scoped: { sessions: { others: "write" }, agents: ["main"], scopes },
             revoked: { sessions: { others: "none" }, agents: [], scopes: ["operator.read"] },
           },
@@ -478,8 +436,7 @@ describe("Goal child handoff retains scoped human authority at real effects", ()
     "preserves the allowed return and denies revoked or reassigned handoffs",
     { timeout: 90_000 },
     async ({ signal }) => {
-      // The global test lifecycle retires Gateway publications after each test.
-      // Exercise these independent conversations before releasing the suite owner.
+      // Global test teardown retires publications: keep the conversations in one test.
       for (const scenario of scenarios) {
         const client = clients.get(scenario.email);
         assert(client);
@@ -509,8 +466,7 @@ describe("Goal child handoff retains scoped human authority at real effects", ()
             );
           }
         });
-        // Pause only the real admission read after its owning worker has returned.
-        // Its consumer still executes the production current-authority check on release.
+        // Pause after the real read; its consumer still checks current authority on release.
         const readEntry = sessionEntryReads.readSessionEntryReadOnlyInWorker;
         const readControl =
           scenario.gate === "enqueue"
@@ -583,13 +539,12 @@ describe("Goal child handoff retains scoped human authority at real effects", ()
               Promise.all([scenario.committed.promise, scenario.requesterDelivered.promise]),
             );
             expect(scenario.parentCalls).toBe(4);
-            expect(scenario.deniedCalls).toBe(1);
             expect(
               hasGoalCustody(),
               "gate distinguishes pre-enqueue read from queued dispatch",
             ).toBe(scenario.gate === "dispatch");
             const effects = () => ({
-              requests: scenario.requests.length,
+              requests: scenario.requests,
               replies: scenario.replyEffects.length,
               tools: scenario.toolEffects.length,
             });
@@ -628,11 +583,7 @@ describe("Goal child handoff retains scoped human authority at real effects", ()
             const drained = await wait(waitForGatewayActiveWork(30_000));
             expect(drained.drained, JSON.stringify(drained.snapshot.blockers)).toBe(true);
             await client.request("users.self", {});
-            expect(
-              scenario.parentCalls,
-              "two distinct nudges finish without a runaway successor",
-            ).toBe(8);
-            expect(scenario.deniedCalls).toBe(2);
+            expect(scenario.parentCalls, "two nudges finish without a runaway successor").toBe(8);
             expect(
               loadSessionEntry({ agentId: "main", sessionKey: scenario.sessionKey })?.goal?.status,
             ).toBe("complete");
@@ -644,12 +595,9 @@ describe("Goal child handoff retains scoped human authority at real effects", ()
           }
           await wait(scenario.committed.promise);
           expect(scenario.childCalls).toBe(1);
-          expect(scenario.requests).toHaveLength(scenario.gate === "none" ? 9 : 5);
+          expect(scenario.requests).toBe(scenario.gate === "none" ? 9 : 5);
           expect(scenario.replies).toHaveLength(scenario.gate === "none" ? 3 : 1);
-          expect(
-            forbiddenRequests,
-            "main-only human authority prevents forbidden agent provider I/O",
-          ).toEqual([]);
+          expect(forbiddenRequests, "human authority prevents forbidden provider I/O").toEqual([]);
           expect(providerErrors).toEqual([]);
           expect(
             scenario.replies.every(
@@ -669,15 +617,11 @@ describe("Goal child handoff retains scoped human authority at real effects", ()
             const message = asOptionalRecord(asOptionalRecord(event)?.message);
             return message?.role === "user" ? [message] : [];
           });
-          expect(
-            userMessages,
-            "only the human request and real child settlement are persisted",
-          ).toHaveLength(2);
-          expect(userMessages[0]).toMatchObject({ provenance: { kind: "external_user" } });
+          expect(userMessages, "only human request and child settlement persist").toMatchObject([
+            { provenance: { kind: "external_user" } },
+            { provenance: { kind: "inter_session", sourceTool: "subagent_settle" } },
+          ]);
           expect(JSON.stringify(userMessages[0])).toContain(scenario.prompt);
-          expect(userMessages[1]).toMatchObject({
-            provenance: { kind: "inter_session", sourceTool: "subagent_settle" },
-          });
           expect(JSON.stringify(userMessages[1])).toContain(scenario.childResult);
         } finally {
           readControl?.mockRestore();

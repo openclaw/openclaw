@@ -5,7 +5,7 @@ import { isCronInvalidRequestError } from "./cron-error-classification.js";
 
 describe("isCronInvalidRequestError", () => {
   it.each([
-    { sessionTarget: "main", payload: { kind: "agentTurn" } },
+    { sessionTarget: "main", payload: { kind: "command" } },
     { sessionTarget: "isolated", payload: { kind: "systemEvent" } },
     { sessionTarget: "current", payload: { kind: "systemEvent" } },
     { sessionTarget: "session:agent:main:conversation", payload: { kind: "script" } },

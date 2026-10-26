@@ -33,7 +33,7 @@ import type {
   PreparedModelRuntimePluginGeneration,
   PreparedNativeModelSelection,
 } from "../prepared-model-runtime.types.js";
-import { resolveDefaultAgentWorkspaceDir } from "../workspace.js";
+import { resolveDefaultAgentWorkspaceDir } from "../workspace-default-path.js";
 import { resolveAgentHarnessPolicy } from "./policy.js";
 import { getRegisteredAgentHarness } from "./registry.js";
 import type { AgentHarnessModelCatalogParams, AgentHarnessModelCatalogResult } from "./types.js";

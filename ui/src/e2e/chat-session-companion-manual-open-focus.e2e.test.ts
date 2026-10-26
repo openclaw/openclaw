@@ -12,6 +12,8 @@ import {
   holdModuleResponse,
 } from "./control-ui-e2e-suite.test-support.ts";
 
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+
 const suite = createControlUiE2eSuite({ name: "Manual Side chat opening focus" });
 
 suite.define(() => {
@@ -61,7 +63,9 @@ suite.define(() => {
               true,
             );
           }
-          await page.screenshot({ path: path.join(artifacts, "before-rail-arrives.png") });
+          if (captureUiProof) {
+            await page.screenshot({ path: path.join(artifacts, "before-rail-arrives.png") });
+          }
           held.release();
           await side.waitFor();
           if (target === "side chat") {
@@ -88,7 +92,11 @@ suite.define(() => {
               (input) => input.inputValue(),
             ),
           );
-          await page.screenshot({ path: path.join(artifacts, "after-rail-and-continuation.png") });
+          if (captureUiProof) {
+            await page.screenshot({
+              path: path.join(artifacts, "after-rail-and-continuation.png"),
+            });
+          }
           const requests = (await gateway.getRequests()).map(({ method }) => method);
           await writeFile(
             path.join(artifacts, "receipt.json"),
@@ -197,7 +205,9 @@ suite.define(() => {
           expect(await editor.evaluate((element) => document.activeElement === element)).toBe(true);
           await page.keyboard.type(" changed");
           expect(await editor.inputValue()).toBe("Queued correction changed");
-          await page.screenshot({ path: path.join(artifacts, "before-rail-arrives.png") });
+          if (captureUiProof) {
+            await page.screenshot({ path: path.join(artifacts, "before-rail-arrives.png") });
+          }
           held.release();
           const side = page.getByRole("textbox", { name: "Ask in side chat", exact: true });
           await side.waitFor();
@@ -212,7 +222,11 @@ suite.define(() => {
             side: await side.inputValue(),
           };
           const requests = (await gateway.getRequests()).map(({ method }) => method);
-          await page.screenshot({ path: path.join(artifacts, "after-rail-and-continuation.png") });
+          if (captureUiProof) {
+            await page.screenshot({
+              path: path.join(artifacts, "after-rail-and-continuation.png"),
+            });
+          }
           await writeFile(
             path.join(artifacts, "receipt.json"),
             JSON.stringify({ intent, editorFocused, drafts, requests, pageErrors }, null, 2),

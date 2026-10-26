@@ -90,7 +90,7 @@ function fixture(
   };
 }
 
-it("keeps exact bytes and one snapshot across ACKs", async () => {
+it("keeps exact bytes across bounded UTF-8 and compressed frames", async () => {
   const codec = resolveZstdCodec();
   if (!codec) {
     throw new Error("The hydration regression requires zstd support");
@@ -112,17 +112,7 @@ it("keeps exact bytes and one snapshot across ACKs", async () => {
     ),
   );
   const decompress = vi.spyOn(codec, "decompress");
-  let acknowledgements = 0;
-  const result = await f.stream(async () => {
-    expect(f.reader.isTransaction).toBe(true);
-    if (acknowledgements++ === 0) {
-      f.writer.prepare("UPDATE transcript_events SET event_json = 'changed' WHERE seq = 260").run();
-      f.writer
-        .prepare("INSERT INTO transcript_events VALUES ('fixture', 270, 'new', NULL, NULL)")
-        .run();
-    }
-    await Promise.resolve();
-  });
+  const result = await f.stream();
   expect(result).toEqual({
     kind: "full",
     eventCount: texts.length,

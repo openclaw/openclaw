@@ -1,8 +1,8 @@
 import type { Question, QuestionResolveResult } from "@openclaw/gateway-protocol";
 import type { BrowserContext, Locator, Page } from "playwright";
 import { afterEach, expect, it } from "vitest";
+import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../../src/gateway/control-ui-contract.js";
 import type { SessionsListResult } from "../api/types.ts";
-import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import { CHAT_TRANSCRIPT_END_THRESHOLD_PX } from "../pages/chat/scroll.ts";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import {
@@ -10,6 +10,7 @@ import {
   installMockGateway,
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
+import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { chatThreadDistanceFromBottom, waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { defineQuestionFooterTests } from "./question-footer.test-support.ts";
@@ -149,8 +150,8 @@ async function openQuestionPage(viewport = { height: 900, width: 1440 }, hasTouc
     sessionKey: mainSessionKey,
   });
   await page.goto(controlUiSessionUrl(suite.server.baseUrl, questionSessionKey));
-  const startup = await gateway.waitForRequest("chat.startup");
-  expect(startup.params).toEqual(expect.objectContaining({ sessionKey: questionSessionKey }));
+  const subscription = await gateway.waitForRequest("sessions.messages.subscribe");
+  expect(subscription.params).toEqual(expect.objectContaining({ key: questionSessionKey }));
   const compactMobileViewport =
     viewport.width <= 768 ||
     (viewport.width <= 932 && viewport.height <= 500 && viewport.width > viewport.height);
@@ -246,7 +247,7 @@ suite.define(() => {
     const request = questionRecord("sidebar-touch-question", { isOther: false });
 
     await gateway.emitGatewayEvent("question.requested", request);
-    await page.locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible").first().tap();
+    await navigationDrawerToggle(page).tap();
     await expectQuestionAttention(page, request.questions[0]!.question);
     // The drawer's initial focus move must finish before opening the tooltip.
     await page.locator(".shell-nav:focus, .shell-nav :focus").waitFor();

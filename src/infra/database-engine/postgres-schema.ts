@@ -1,5 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { PostgresSqlConnection } from "../sql-connection.js";
+import {
+  getSqliteDatabaseAdmission,
+  publishSqliteDatabaseAdmission,
+  type SqliteDatabaseFactKey,
+} from "../sqlite-database-admission.js";
 import type { StoreSchema } from "./contract.js";
 import {
   postgresCatalogQuery,
@@ -7,6 +12,14 @@ import {
   type PostgresCatalogFact,
 } from "./postgres-catalog.js";
 import { postgresSearchSql } from "./postgres-search-schema.js";
+
+export function postgresStoreNamespace(
+  schemaPrefix: string,
+  store: string,
+  storeId: string,
+): string {
+  return `${schemaPrefix}_${store}_${storeId.replaceAll("-", "").slice(0, 16)}`;
+}
 
 export const postgresSchemaMetadataSql = `CREATE TABLE openclaw_schema_meta (
   store TEXT PRIMARY KEY, version BIGINT NOT NULL, store_id TEXT NOT NULL,
@@ -23,11 +36,18 @@ export type PostgresCapabilities = {
   clientEncoding: "UTF8";
 };
 const capabilities = new WeakMap<PostgresSqlConnection, PostgresCapabilities>();
-const admittedSchemas = new WeakMap<object, StoreSchema>();
+// Definitions follow physical admission across handles and worker isolates.
+const admittedSchemaKey: SqliteDatabaseFactKey<StoreSchema> = {
+  name: "database.postgres.schema",
+  schemaDependent: true,
+};
 export const getAdmittedPostgresSchema = (db: PostgresSqlConnection) =>
-  admittedSchemas.get(db.anchor);
-export const retainPostgresSchema = (db: PostgresSqlConnection, schema: StoreSchema) =>
-  admittedSchemas.set(db.anchor, schema);
+  getSqliteDatabaseAdmission(db, admittedSchemaKey);
+export const retainPostgresSchema = (db: PostgresSqlConnection, schema: StoreSchema) => {
+  // Upgrade recipes can contain backup callbacks; workers only need the current definition.
+  const { postgresMigrations: _migrations, ...definition } = schema;
+  publishSqliteDatabaseAdmission(db, admittedSchemaKey, definition);
+};
 
 export function admitPostgresCapabilities(db: PostgresSqlConnection): PostgresCapabilities {
   const retained = capabilities.get(db);
@@ -96,8 +116,14 @@ function postgresSchemaFingerprint(
     .map((fact) => JSON.stringify(fact))
     .toSorted()
     .join("\n");
-  // Only the random scratch namespace is renamed; live expressions and literals stay exact.
-  return hash(scratch ? text.replaceAll(scratch.from, scratch.to) : text);
+  if (!scratch) {
+    return hash(text);
+  }
+  // PostgreSQL quotes hyphenated namespaces such as team-reports, unlike the scratch name.
+  const from = JSON.stringify(scratch.from).slice(1, -1);
+  const quotedFrom = JSON.stringify(quote(scratch.from)).slice(1, -1);
+  const to = JSON.stringify(scratch.to).slice(1, -1);
+  return hash(text.replaceAll(`${quotedFrom}.`, `${from}.`).replaceAll(from, to));
 }
 
 export function postgresSchemaSql(
@@ -134,7 +160,13 @@ export function postgresSchemaSql(
   );
   const shared = { text: false, vector: false };
   const searchSql = search.map((definition) => {
-    const ddl = postgresSearchSql(definition, namespace, shared);
+    const ddl = postgresSearchSql(
+      definition,
+      namespace,
+      shared,
+      schema.postgresVectorDecoderVersion,
+      schema.postgresVectorSearchVersion,
+    );
     shared.text ||= Object.keys(definition.text ?? {}).length > 0;
     shared.vector ||=
       definition.mode !== "keyword-only" && Object.keys(definition.vector ?? {}).length > 0;
@@ -200,7 +232,10 @@ function verifyPostgresSchemaDefinition(
   schema: StoreSchema,
   snapshot: ReturnType<typeof readPostgresSchema>,
 ): void {
-  const fingerprint = postgresSchemaFingerprint(snapshot.catalog);
+  const fingerprint = postgresSchemaFingerprint(snapshot.catalog, {
+    from: namespace,
+    to: namespace,
+  });
   const scratch = `openclaw_check_${randomUUID().replaceAll("-", "")}`;
   db.exec(`CREATE SCHEMA ${quote(scratch)}`);
   try {

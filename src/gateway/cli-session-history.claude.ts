@@ -12,10 +12,11 @@ import {
   stripCliImageTurnContext,
 } from "../agents/cli-image-turn-correlation.js";
 import { hashCliReseedPrompt, parseCliReseedPrompt } from "../agents/cli-runner/reseed-envelope.js";
-import { stripCliSessionDriftNote } from "../agents/cli-session.js";
+import { stripCliSessionDriftNote } from "../agents/cli-session-drift.js";
 import { resolveClaudeCliProjectsDir } from "../agents/command/claude-cli-project-dir.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import { sanitizeTranscriptMessage } from "../agents/transcript-sanitize.js";
+import { isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
 import { HEARTBEAT_PROMPT, HEARTBEAT_RESPONSE_TOOL_PROMPT } from "../auto-reply/heartbeat.js";
 import { isToolCallBlock, isToolResultBlock, resolveToolUseId } from "../chat/tool-content.js";
 import type { CliSessionReseedReceipt, SessionEntry } from "../config/sessions.js";
@@ -29,7 +30,7 @@ import {
 } from "../sessions/input-provenance.js";
 import { formatSystemTurnPrompt } from "../sessions/system-turn-prompt.js";
 import { stripCliPromptDecorations } from "./cli-session-history.prompt-text.js";
-import { attachOpenClawTranscriptMeta } from "./session-transcript-readers.js";
+import { attachOpenClawTranscriptMeta } from "./session-transcript-entry-message.js";
 
 const CLAUDE_CLI_PROVIDER = "claude-cli";
 
@@ -225,15 +226,32 @@ export function appendCoalescedClaudeCliToolMessage(
   messages.push(message);
 }
 
-type ClaudeCliPromptTextCandidate = {
-  text: string;
-  blockIndex?: number;
-};
-
 // Claude keeps compact summaries and transcript-only rows as visible harness
 // context. isMeta rows are private injections and never reach this projection.
 function isClaudeCliVisibleHarnessContext(entry: ClaudeCliProjectEntry): boolean {
   return entry.isCompactSummary === true || entry.isVisibleInTranscriptOnly === true;
+}
+
+function isClaudeCliInterrupt(entry: ClaudeCliProjectEntry, content: string | unknown[]): boolean {
+  // Native interrupts have one text block and no prompt-origin fields. Human
+  // strings or attributed prompts with the same words must remain user turns.
+  if (
+    !Array.isArray(content) ||
+    content.length !== 1 ||
+    "promptSource" in entry ||
+    "turnOrigin" in entry ||
+    "turnPosition" in entry ||
+    "permissionMode" in entry
+  ) {
+    return false;
+  }
+  const block = content[0];
+  return (
+    isRecord(block) &&
+    block.type === "text" &&
+    (block.text === "[Request interrupted by user]" ||
+      block.text === "[Request interrupted by user for tool use]")
+  );
 }
 
 function isClaudeCliTaskNotification(
@@ -271,7 +289,7 @@ function readClaudeCliInterSessionProvenance(
 export function resolveClaudeCliPromptTextCandidates(
   entry: ClaudeCliProjectEntry,
   content: string | unknown[],
-): ClaudeCliPromptTextCandidate[] {
+): { text: string; blockIndex?: number }[] {
   if (entry.isMeta === true || isClaudeCliVisibleHarnessContext(entry)) {
     return [];
   }
@@ -365,7 +383,11 @@ function resolveClaudeCliInternalSourceTool(text: string): string | undefined {
     return "exec";
   }
   // Default prompts only; a configured heartbeat prompt is not recognized here.
-  if (body.startsWith(HEARTBEAT_PROMPT) || body.startsWith(HEARTBEAT_RESPONSE_TOOL_PROMPT)) {
+  if (
+    body.startsWith(HEARTBEAT_PROMPT) ||
+    body.startsWith(HEARTBEAT_RESPONSE_TOOL_PROMPT) ||
+    isHeartbeatUserMessage({ role: "user", content: body }, undefined, { claudeImport: true })
+  ) {
     return "heartbeat";
   }
   // Restart recovery only, by its full opening sentence behind the CLI timestamp envelope;
@@ -434,6 +456,11 @@ export function parseClaudeCliHistoryEntry(
   }
 
   if (type === "user") {
+    // Omit before reseed inspection and indexing: a harness marker must neither
+    // consume a canonical human duplicate nor occupy a visible-history page.
+    if (isClaudeCliInterrupt(entry, content)) {
+      return null;
+    }
     const reseedState = options.reseedState;
     const promptTextCandidates = resolveClaudeCliPromptTextCandidates(entry, content);
     if (

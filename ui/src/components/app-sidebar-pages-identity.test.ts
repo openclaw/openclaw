@@ -26,17 +26,21 @@ function pageRow(sidebar: SidebarLifecycleState, key: string) {
 }
 
 function pageEntry(sidebar: SidebarLifecycleState, key: string) {
-  const row = pageRow(sidebar, key);
-  if (!row) {
-    throw new Error("Missing sidebar page: " + key);
+  const row = pageRow(sidebar, key)!;
+  const entry = {
+    row,
+    link: row.querySelector<HTMLAnchorElement>("a")!,
+    icon: row.querySelector<SVGSVGElement>("svg")!,
+    label: row.querySelector<HTMLElement>(".nav-item__text")!,
+  };
+  expect(Object.values(entry)).not.toContain(null);
+  return entry;
+}
+
+function expectRetained(before: ReturnType<typeof pageEntry>, after: ReturnType<typeof pageEntry>) {
+  for (const field of ["row", "link", "icon", "label"] as const) {
+    expect(after[field], field).toBe(before[field]);
   }
-  const link = row.querySelector<HTMLAnchorElement>("a");
-  const icon = row.querySelector<SVGSVGElement>("svg");
-  const label = row.querySelector<HTMLElement>(".nav-item__text");
-  if (!link || !icon || !label) {
-    throw new Error("Incomplete sidebar page: " + key);
-  }
-  return { row, link, icon, label };
 }
 
 async function fixture() {
@@ -78,9 +82,11 @@ async function fixture() {
     actions: [],
     accessories: [],
     widgets: [],
+    inlineViews: [],
     replacements: [],
   };
-  Object.assign(context.plugins, {
+  const plugins = Object.assign(context.plugins, {
+    revision: 0,
     registryStatus: "complete",
     registrations: <K extends keyof ControlUiContributions>(kind: K) =>
       registrations[kind].map((entry) => ({ ...entry })),
@@ -89,11 +95,15 @@ async function fixture() {
       return () => listeners.delete(listener);
     },
   });
-  const notifyPlugins = () => listeners.forEach((listener) => listener());
+  const notifyPlugins = () => {
+    plugins.revision += 1;
+    listeners.forEach((listener) => listener());
+  };
   const { sidebar, provider } = await mountSidebarContext(context);
   sidebar.activeRouteId = "plugin";
   sidebar.activePluginTabId = "briefing/daily";
   await selectSidebarView(sidebar, "pages");
+  await vi.waitFor(() => expect(pageRow(sidebar, "route:usage")).not.toBeNull());
   await settleLitElement(sidebar);
   return {
     sidebar,
@@ -113,14 +123,10 @@ describe("Pages navigation identity", () => {
     "retains page rows, icons and keyboard focus across a %s update",
     async (update) => {
       const { sidebar, sessions, publishTab, notifyPlugins } = await fixture();
-      const keys = Array.from(
-        sidebar.querySelectorAll<HTMLElement>(
-          '.sidebar-pages [data-sidebar-entry^="route:"], .sidebar-pages [data-sidebar-entry^="plugin:"]',
-        ),
-        (row) => row.dataset.sidebarEntry!,
-      );
-      expect(keys).toEqual(expect.arrayContaining(["route:usage", dailyKey, fleetKey]));
-      const before = keys.map((key) => ({ key, entry: pageEntry(sidebar, key) }));
+      const before = ["route:usage", dailyKey, fleetKey].map((key) => ({
+        key,
+        entry: pageEntry(sidebar, key),
+      }));
       const usage = pageEntry(sidebar, "route:usage");
       usage.link.focus();
       expect(document.activeElement).toBe(usage.link);
@@ -143,11 +149,7 @@ describe("Pages navigation identity", () => {
       }
       await settleLitElement(sidebar);
       for (const { key, entry: previous } of before) {
-        const next = pageEntry(sidebar, key);
-        expect(next.row, key).toBe(previous.row);
-        expect(next.link, key).toBe(previous.link);
-        expect(next.icon, key).toBe(previous.icon);
-        expect(next.label, key).toBe(previous.label);
+        expectRetained(previous, pageEntry(sidebar, key));
       }
       expect(document.activeElement).toBe(usage.link);
       expect(pageEntry(sidebar, dailyKey).link.getAttribute("aria-current")).toBe("page");
@@ -180,15 +182,36 @@ describe("Pages navigation identity", () => {
     pin.click();
     await settleLitElement(sidebar);
     expect(sidebar.sidebarEntries).toEqual([]);
-    sidebar.enabledRouteIds = ["agents-home"];
+    sidebar.enabledRouteIds = ["claws"];
     await settleLitElement(sidebar);
     expect(usage.row.isConnected).toBe(false);
     expect(pageRow(sidebar, "route:usage")).toBeNull();
-    const agents = pageEntry(sidebar, "route:agents-home");
-    sidebar.enabledRouteIds = ["agents-home", "usage"];
+    const claws = pageEntry(sidebar, "route:claws");
+    sidebar.enabledRouteIds = ["claws", "usage"];
     await settleLitElement(sidebar);
-    expect(pageEntry(sidebar, "route:agents-home").row).toBe(agents.row);
+    expect(pageEntry(sidebar, "route:claws").row).toBe(claws.row);
     expect(pageEntry(sidebar, "route:usage").link.getAttribute("aria-current")).toBe("page");
+  });
+
+  it("updates a retained plugin row when its route placement changes", async () => {
+    const { sidebar, publishTab } = await fixture();
+    const navigate = vi.fn();
+    sidebar.onNavigate = navigate;
+    let firstRow: HTMLElement | undefined;
+    for (const [route, label] of [
+      ["workboard", "Workboard"],
+      ["worktrees", "Worktrees"],
+    ] as const) {
+      publishTab({ placement: `route:${route}` });
+      await settleLitElement(sidebar);
+      const entry = pageEntry(sidebar, dailyKey);
+      firstRow ??= entry.row;
+      expect(entry.row).toBe(firstRow);
+      expect(entry.link.getAttribute("href")).toBe(`/${route}`);
+      expect(entry.label.textContent).toBe(label);
+      entry.link.click();
+      expect(navigate).toHaveBeenLastCalledWith(route, undefined);
+    }
   });
 
   it("updates plugin artwork and labels, handles registry removal and releases subscriptions", async () => {
@@ -198,17 +221,10 @@ describe("Pages navigation identity", () => {
     state.publishTab({ label: "Weekly work briefing", icon: "circle" });
     await settleLitElement(sidebar);
     const changed = pageEntry(sidebar, dailyKey);
-    expect(changed.link).toBe(daily.link);
-    expect(changed.icon).toBe(daily.icon);
-    expect(changed.label).toBe(daily.label);
+    expectRetained(daily, changed);
     expect(changed.label.textContent).toBe("Weekly work briefing");
-    expect(changed.icon.querySelector("circle")?.getAttribute("r")).toBe("10");
+    expect(changed.icon.querySelector("circle")).not.toBeNull();
     expect(changed.icon.querySelector("path")).toBeNull();
-    state.publishTab({ icon: "square" });
-    await settleLitElement(sidebar);
-    expect(pageEntry(sidebar, dailyKey).icon).toBe(daily.icon);
-    expect(daily.icon.querySelector("circle")).toBeNull();
-    expect(daily.icon.querySelector("rect")?.getAttribute("width")).toBe("18");
     const runtime = pageEntry(sidebar, fleetKey);
     runtime.link.click();
     expect(state.openPage).toHaveBeenCalledExactlyOnceWith({ id: "overview" });

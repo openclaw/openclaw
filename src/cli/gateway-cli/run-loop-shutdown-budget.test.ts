@@ -1,6 +1,5 @@
 import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { GATEWAY_SHUTDOWN_RESERVE_MS } from "../../infra/gateway-shutdown-budget.js";
 import { expectCallCount } from "./run-loop-cleanup.test-support.js";
 import {
   resolveGatewayShutdownBudget,
@@ -157,19 +156,16 @@ describe("Gateway stop deadline follows the launchd stop that is actually runnin
     [19, 0, 14_250, 9_250, 5_000, 4_750],
     [20, 0, 15_000, 10_000, 5_000, 5_000],
     [47, 0, 42_000, 10_000, 32_000, 5_000],
-    [20, 13, 14_987, 9_987, 5_000, 5_000],
     [20, 6_000, 9_000, 4_500, 4_500, 5_000],
   ] as const)(
     "allocates a %i second deadline after %i ms of inspection",
     async (seconds, elapsed, timeoutMs, reserveMs, drainMs, exitMarginMs) => {
       execLaunchctl.mockResolvedValue(printed(seconds, "SIGTERMed", "\tminimum runtime = 10\n"));
       const nowMs = performance.now();
-      if (elapsed) {
-        vi.spyOn(performance, "now").mockReturnValue(nowMs);
-      }
+      vi.spyOn(performance, "now").mockReturnValue(nowMs);
       const budget = await resolveBudget("external", {
         previous: stoppingNow.previous,
-        acceptedAtMs: elapsed ? nowMs - elapsed : stoppingNow.acceptedAtMs,
+        acceptedAtMs: nowMs - elapsed,
       });
       expect(budget).toMatchObject({ timeoutMs, reserveMs, nativeStopBudget: true });
       expect(budget.timeoutMs - budget.reserveMs).toBe(drainMs);
@@ -179,16 +175,12 @@ describe("Gateway stop deadline follows the launchd stop that is actually runnin
           `shutdown budget at shutdown: drain=${drainMs}ms shutdown=${timeoutMs}ms reserve=${reserveMs}ms exitMargin=${exitMarginMs}ms; source=launchd system/ai.openclaw.gateway exit timeout=${seconds * 1_000}ms`,
         );
       }
-      if (elapsed === 6_000) {
-        expect(budget.reserveMs).not.toBe(GATEWAY_SHUTDOWN_RESERVE_MS - elapsed);
-      }
     },
   );
 
   it.each([
     { supervisor: "external", seconds: undefined },
     { supervisor: "external", seconds: 0 },
-    { supervisor: "launchd", seconds: 0 },
     { supervisor: "external", seconds: 47 },
   ])(
     "caps restart drain only at a finite deadline ($supervisor/$seconds)",

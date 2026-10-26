@@ -17,6 +17,7 @@ const enCommandPalette = {
     startSessionBackground: "Start new session in background",
     startingSession: "Starting…",
     promptRequired: "Write a prompt to start a session.",
+    attachmentPrompt: en.palette.attachmentPrompt,
     searchingSessions: "Searching sessions…",
     searchingCommands: "Searching commands…",
     clearSearch: "Clear search",
@@ -27,7 +28,7 @@ const enCommandPalette = {
     searchOffline: "Reconnect to search Gateway content.",
     modelSearchFailed: "Model search unavailable. Change your search to retry.",
     searchPartial: "Transcript search unavailable — showing chat titles and metadata",
-    searchIndexing: "Indexing older messages — search again shortly.",
+    searchIndexing: "Results may be incomplete — search again shortly.",
     categories: {
       search: "Search",
       navigation: en.palette.categories.navigation,
@@ -66,8 +67,7 @@ const enCommandPalette = {
     transcriptSearchSearching: "Searching transcripts…",
     transcriptSearchUnavailable: "Connect to the Gateway to search transcripts.",
     transcriptSearchError: "Transcript search failed",
-    transcriptSearchIndexing:
-      "The transcript index is still updating. Retry to include recent messages.",
+    transcriptSearchIndexing: "Results may be incomplete — search again shortly.",
     transcriptSearchArchivedExcluded:
       "{count} archived transcripts excluded; open a session to restore its searchable history.",
     transcriptSearchEmpty: "No transcript messages match that search.",
@@ -136,6 +136,9 @@ const enCommandPalette = {
         summarizeRecentSessions: "Summarize my recent sessions",
         configureChannel: "Help me configure a channel",
         checkSystemHealth: "Check system health",
+        exploreOpenClaw: "Tour OpenClaw's code and docs",
+        investigateInSandbox: "Investigate an issue in a sandbox",
+        openDraftPullRequest: "Fix a bug and open a draft PR",
       },
     },
     commands: {

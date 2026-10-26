@@ -4,7 +4,6 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi, type Mock } from "vitest";
 import { loadSessionEntry, loadTranscriptEventsSync } from "../config/sessions/session-accessor.js";
 import * as sessionIdentity from "../config/sessions/session-accessor.sqlite-identity.js";
-import { redactSensitiveText } from "../logging/redact.js";
 import { initializeGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { RespondFn } from "./server-methods/types.js";
 import { prepareGatewayReplyRuntimeForTest } from "./test-helpers.js";
@@ -28,18 +27,14 @@ export function createGoalChatStartRequest(
 }
 
 export function readGoalChatUserMessages(scope: GoalChatScope) {
-  const transcriptScope = {
+  return loadTranscriptEventsSync({
     ...scope,
     sessionId: loadSessionEntry(scope)?.sessionId ?? scope.sessionId,
-  };
-  return loadTranscriptEventsSync(transcriptScope).flatMap((event) => {
-    if (!event || typeof event !== "object" || !("message" in event)) {
+  }).flatMap((event) => {
+    if (!isRecord(event) || !isRecord(event.message)) {
       return [];
     }
-    const message = event.message;
-    return message && typeof message === "object" && "role" in message && message.role === "user"
-      ? [message]
-      : [];
+    return event.message.role === "user" ? [event.message] : [];
   });
 }
 
@@ -48,15 +43,11 @@ export function expectGoalChatRetryResponses(
   runId: string,
   goalId: string | undefined,
 ) {
-  expect(
-    responses.some((response) => {
-      const [ok, result] = response.mock.calls[0]!;
-      return ok && isRecord(result) && result.status === "started";
-    }),
-  ).toBe(true);
+  let started = false;
   for (const response of responses) {
     const [ok, result, error] = response.mock.calls[0]!;
     if (ok) {
+      started ||= isRecord(result) && result.status === "started";
       if (isRecord(result) && result.status === "in_flight") {
         expect(result).toEqual({ status: "in_flight", runId });
       } else {
@@ -66,6 +57,7 @@ export function expectGoalChatRetryResponses(
       expect(error).toMatchObject({ code: "UNAVAILABLE", retryable: true });
     }
   }
+  expect(started).toBe(true);
 }
 
 export function registerGoalChatRestartSettlementCase(fixture: {
@@ -97,20 +89,7 @@ export function registerGoalChatRestartSettlementCase(fixture: {
       });
     try {
       const response = await fixture.send(request);
-      const failureDiagnostic = rejected
-        ? undefined
-        : redactSensitiveText(
-            JSON.stringify({
-              publicationCount: notification.mock.calls.length,
-              responses: response.mock.calls.map(([ok, result, error]) => ({
-                ok,
-                status: isRecord(result) ? result.status : undefined,
-                error: error && { code: error.code, message: error.message },
-              })),
-            }),
-            { mode: "tools" },
-          ).slice(0, 4_000);
-      expect(rejected, failureDiagnostic).toBe(true);
+      expect(rejected, `Publication calls: ${notification.mock.calls.length}`).toBe(true);
       expect(response.mock.calls[0]?.[0]).toBe(false);
       fixture.assertNoModelRun();
       expect(loadSessionEntry(fixture.scope())).toMatchObject({
@@ -145,14 +124,7 @@ export function installReplyDispatchHook(eligibleDispatchKinds?: readonly ["acp"
   return handler;
 }
 
-export function registerGoalChatOperationCollisionCases({
-  scope,
-  goalStart,
-  rpc,
-  withHeldModel,
-  userMessages,
-  waitForModelRun,
-}: {
+export function registerGoalChatOperationCollisionCases(fixture: {
   scope: () => GoalChatScope;
   goalStart: (
     message: string,
@@ -166,17 +138,20 @@ export function registerGoalChatOperationCollisionCases({
   it.each(["objective", "issuedAtMs"] as const)(
     "rejects a concurrent operation ID collision on %s",
     async (collision) => {
-      const firstRequest = goalStart("Finish the release checklist", `goal-collision-${collision}`);
+      const firstRequest = fixture.goalStart(
+        "Finish the release checklist",
+        `goal-collision-${collision}`,
+      );
       const secondRequest = {
         ...firstRequest,
         ...(collision === "objective"
           ? { message: "Review the migration plan" }
           : { intent: { ...firstRequest.intent, issuedAtMs: firstRequest.intent.issuedAtMs + 1 } }),
       };
-      await withHeldModel(async () => {
+      await fixture.withHeldModel(async () => {
         const responses = await Promise.all([
-          rpc("chat.send", firstRequest),
-          rpc("chat.send", secondRequest),
+          fixture.rpc("chat.send", firstRequest),
+          fixture.rpc("chat.send", secondRequest),
         ]);
         const accepted = responses.flatMap((response, index) =>
           response.mock.calls[0]?.[0] ? [index] : [],
@@ -192,12 +167,27 @@ export function registerGoalChatOperationCollisionCases({
           }),
         ]);
         const acceptedRequest = [firstRequest, secondRequest][accepted[0]!];
-        expect(loadSessionEntry(scope())?.goal?.objective).toBe(acceptedRequest?.message);
-        expect(userMessages()).toEqual([
+        expect(loadSessionEntry(fixture.scope())?.goal?.objective).toBe(acceptedRequest?.message);
+        expect(fixture.userMessages()).toEqual([
           expect.objectContaining({ content: acceptedRequest?.message }),
         ]);
-        await waitForModelRun();
+        await fixture.waitForModelRun();
       });
     },
   );
+}
+
+export function goalAgentResult(sessionId: string, text: string) {
+  return {
+    payloads: [{ text }],
+    meta: {
+      durationMs: 0,
+      agentMeta: {
+        sessionId,
+        provider: "test",
+        model: "test",
+        usage: { input: 1, output: 1 },
+      },
+    },
+  };
 }

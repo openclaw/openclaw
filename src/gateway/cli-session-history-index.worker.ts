@@ -102,10 +102,11 @@ export class CliSessionHistoryIndex {
         })
         .onConflict((conflict) =>
           conflict.columns(["role", "text"]).doUpdateSet((eb) => ({
-            minimum_order: eb.fn<number>("max", [
-              eb.ref("floors.minimum_order"),
-              eb.ref("excluded.minimum_order"),
-            ]),
+            minimum_order:
+              /* pg-sqlite-only: This display index owns a private native SQLite database. */ eb.fn<number>(
+                "max",
+                [eb.ref("floors.minimum_order"), eb.ref("excluded.minimum_order")],
+              ),
           })),
         ),
     );

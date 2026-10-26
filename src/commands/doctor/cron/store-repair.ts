@@ -5,19 +5,27 @@ import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion"
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { tryResolveCronJobEffectiveAgentId } from "../../../cron/agent-id.js";
 import type { CronInferenceBinding } from "../../../cron/inference-binding.js";
+import { resolveCronOperatorExecutionRevision } from "../../../cron/service/jobs-tool-policy.js";
 import { noteCronJobsStoreCommit } from "../../../cron/store.js";
-import { cronStoreKey } from "../../../cron/store/key.js";
-import { inspectCronJobsReadOnly } from "../../../cron/store/read-only.js";
+import { resolveCronJobGrantDefinitionRevision } from "../../../cron/store/job-config-codec.js";
+import {
+  resolveCronStoreKeyInDatabase,
+  type CronStoreSelection,
+} from "../../../cron/store/paths.js";
+import {
+  inspectCronJobsReadOnly,
+  readCronJobOwnerRowsReadOnly,
+} from "../../../cron/store/read-only.js";
 import {
   deleteCronJobRowInDatabase,
   loadCronRows,
   resolveCronJobGrantDefinitionGenerationFloor,
-  resolveCronJobGrantDefinitionRevision,
   rowToCronJob,
   upsertCronJobRow,
 } from "../../../cron/store/row-codec.js";
 import { getCronStoreKysely } from "../../../cron/store/schema.js";
 import { migrateCronInferenceStandingGrantReferences } from "../../../gateway/operator-approval-standing-grants.worker.js";
+import { engineGreatest } from "../../../infra/database-engine/scalar.js";
 import { executeSqliteQuerySync } from "../../../infra/kysely-sync.js";
 import type { EngineConnection } from "../../../infra/sql-connection.js";
 import { deferSqlitePostCommitPublication } from "../../../infra/sqlite-post-commit.js";
@@ -29,8 +37,21 @@ import type {
   PluginDoctorCronJob,
 } from "../../../plugins/doctor-contract-module.js";
 import { normalizeAgentId } from "../../../routing/session-key.js";
+import {
+  capturePostgresBackup,
+  fingerprintPostgresBackup,
+} from "../../../snapshot/database-backup.js";
+import {
+  readCronDefaultStoreKeyInDatabase,
+  readCronStorePartitionInventoryInDatabase,
+  selectCronDefaultStoreIdentityInDatabase,
+} from "../../../state/openclaw-state-db-cron-identity-migration.js";
+import { isStatePostgres, stateEngineInput } from "../../../state/openclaw-state-db-engine.js";
 import { withMaintenanceOpenClawStateDatabaseReadOnly } from "../../../state/openclaw-state-db-readonly-reuse.js";
-import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync } from "../../../state/openclaw-state-db-readonly.js";
+import {
+  withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync,
+  withExistingOpenClawStateDatabaseReadOnly,
+} from "../../../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import { sanitizeOpenClawStateLeaseRows } from "../../../state/openclaw-state-snapshot-sanitizer.js";
@@ -39,9 +60,13 @@ import { inspectCronOwnerRowsForDoctor, inspectCronRowsForDoctor } from "./store
 type DoctorCronScope = { env: NodeJS.ProcessEnv };
 
 export async function inspectCronJobOwnersForDoctor(scope: DoctorCronScope, storePath: string) {
+  if (isStatePostgres()) {
+    return await readCronJobOwnerRowsReadOnly(storePath, scope.env);
+  }
   return (
     (await withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync(
-      ({ db }) => inspectCronOwnerRowsForDoctor(db, cronStoreKey(storePath)),
+      ({ db }) =>
+        inspectCronOwnerRowsForDoctor(db, resolveCronStoreKeyInDatabase(db, storePath, scope.env)),
       scope,
     )) ?? []
   );
@@ -82,9 +107,9 @@ export async function repairLegacyCronJobOwnersForDoctor(
   if (changes.length === 0) {
     return { changed: 0 };
   }
-  const storeKey = cronStoreKey(storePath);
   const backupPath = await commitCronDoctorRepair(scope, authority, {
     assertRowsUnchanged(db) {
+      const storeKey = resolveCronStoreKeyInDatabase(db, storePath, scope.env);
       if (!isDeepStrictEqual(inspectCronOwnerRowsForDoctor(db, storeKey), rows)) {
         throw new Error(
           "Cron ownership changed during Doctor repair; inspect again before retrying.",
@@ -92,6 +117,7 @@ export async function repairLegacyCronJobOwnersForDoctor(
       }
     },
     write(db) {
+      const storeKey = resolveCronStoreKeyInDatabase(db, storePath, scope.env);
       for (const change of changes) {
         const retainedGenerationFloor = resolveCronJobGrantDefinitionGenerationFloor(
           db,
@@ -105,7 +131,7 @@ export async function repairLegacyCronJobOwnersForDoctor(
               agent_id: change.agentId,
               job_json: change.definition,
               grant_definition_revision: null,
-              grant_definition_generation: eb.fn<number>("max", [
+              grant_definition_generation: engineGreatest(db, [
                 eb(eb.fn.coalesce("grant_definition_generation", eb.val(0)), "+", 1),
                 eb.val(retainedGenerationFloor),
               ]),
@@ -119,6 +145,29 @@ export async function repairLegacyCronJobOwnersForDoctor(
     },
   });
   return { changed: changes.length, backupPath };
+}
+
+/** Explicit selection changes only the binding, retaining every partition and receipt byte. */
+export async function repairCronDefaultStoreSelectionForDoctor(
+  scope: DoctorCronScope,
+  authority: PluginDoctorRepairAuthority,
+  selection: Extract<CronStoreSelection, { status: "unresolved" }>,
+  storeKey: string,
+): Promise<{ backupPath: string }> {
+  const backupPath = await commitCronDoctorRepair(scope, authority, {
+    assertRowsUnchanged(db) {
+      if (
+        readCronDefaultStoreKeyInDatabase(db) !== undefined ||
+        !isDeepStrictEqual(readCronStorePartitionInventoryInDatabase(db), selection.partitions)
+      ) {
+        throw new Error("Cron partitions changed during selection; rerun openclaw doctor --fix.");
+      }
+    },
+    write(db) {
+      selectCronDefaultStoreIdentityInDatabase(db, storeKey);
+    },
+  });
+  return { backupPath };
 }
 
 export async function inspectCronJobsForDoctor(
@@ -191,6 +240,15 @@ export async function repairCronInferenceBindingsForDoctor(
           throw new Error(`Cannot migrate cron inference account for ${job.id}.`);
         }
         const next = { ...previous, inferenceBinding: binding };
+        const source = previous.operatorSource;
+        // Offline adoption only restricts inference; keep the original authenticated
+        // source bound to that definition without reviving an already stale capture.
+        if (source?.executionRevision === resolveCronOperatorExecutionRevision(previous)) {
+          next.operatorSource = {
+            ...source,
+            executionRevision: resolveCronOperatorExecutionRevision(next),
+          };
+        }
         const validProjection =
           row.grant_definition_revision === resolveCronJobGrantDefinitionRevision(previous) &&
           row.grant_definition_updated_at === row.updated_at;
@@ -211,7 +269,11 @@ export async function repairCronInferenceBindingsForDoctor(
           getCronStoreKysely(db)
             .updateTable("cron_jobs")
             .set({
-              job_json: JSON.stringify({ ...job.definition, inferenceBinding: binding }),
+              job_json: JSON.stringify({
+                ...job.definition,
+                inferenceBinding: binding,
+                ...(next.operatorSource ? { operatorSource: next.operatorSource } : {}),
+              }),
               ...(validProjection
                 ? { grant_definition_revision: resolveCronJobGrantDefinitionRevision(next) }
                 : {}),
@@ -299,6 +361,38 @@ export async function backupCronStoreForDoctor(
   repair.assertCurrent();
   const sourcePath = resolveOpenClawStateSqlitePath(scope.env);
   const backupPath = `${sourcePath}.doctor-cron-${Date.now()}-${randomUUID()}.bak`;
+  const input = stateEngineInput();
+  if (input) {
+    const config = { database: { engine: "postgres" as const, postgres: input } };
+    const assertSource = () => {
+      repair.assertCurrent();
+      const present = withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
+        repair.assertRowsUnchanged(db);
+        return true;
+      }, scope);
+      if (!present) {
+        throw new Error("Cron state disappeared before the PostgreSQL repair backup.");
+      }
+    };
+    assertSource();
+    const before = await fingerprintPostgresBackup(sourcePath, config);
+    repair.assertCurrent();
+    await capturePostgresBackup({
+      sourcePath,
+      directory: backupPath,
+      profile: "exact",
+      config,
+      assertCurrent: repair.assertCurrent,
+    });
+    repair.assertCurrent();
+    const after = await fingerprintPostgresBackup(sourcePath, config);
+    repair.assertCurrent();
+    if (before !== after) {
+      throw new Error(`PostgreSQL changed during the cron repair backup: ${backupPath}`);
+    }
+    assertSource();
+    return backupPath;
+  }
   await createVerifiedSqliteSnapshot({
     sourcePath,
     targetPath: backupPath,

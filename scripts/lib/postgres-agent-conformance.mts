@@ -53,7 +53,12 @@ export async function checkAgentPostgresBehavior(client: Client): Promise<void> 
     assert.deepEqual(canonical, expected, `${label}: canonical SQLite behavior`);
     assert.deepEqual(actual, expected, `${label}: generated PostgreSQL behavior`);
   };
-  const reject = async (label: string, sql: string, values: SQLInputValue[]) => {
+  const reject = async (
+    label: string,
+    sql: string,
+    values: SQLInputValue[],
+    postgresError = /check constraint|unique constraint/i,
+  ) => {
     assert.throws(
       () => sqlite.prepare(sql).run(...values),
       /CHECK|UNIQUE constraint/i,
@@ -61,7 +66,7 @@ export async function checkAgentPostgresBehavior(client: Client): Promise<void> 
     );
     await assert.rejects(
       client.query(pgSql(sql), values),
-      /check constraint|unique constraint/i,
+      postgresError,
       `${label}: PostgreSQL accepted row`,
     );
   };
@@ -418,8 +423,14 @@ export async function checkAgentPostgresBehavior(client: Client): Promise<void> 
     ]) {
       await execute(navigationSql, [++seq, value]);
     }
+    // PostgreSQL 18 can reject malformed JSON before evaluating the CHECK.
+    await reject(
+      "malformed navigation JSON",
+      navigationSql,
+      [++seq, "{"],
+      /check constraint|invalid input syntax for type json/i,
+    );
     const invalidNavigation = [
-      "{",
       "null",
       "[]",
       "{}",

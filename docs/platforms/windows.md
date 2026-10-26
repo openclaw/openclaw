@@ -200,6 +200,10 @@ openclaw doctor
 openclaw gateway status --json
 ```
 
+Local `read`, `write`, and `edit` tools accept Git Bash (`/f/...`), Cygwin
+(`/cygdrive/f/...`), and WSL-style (`/mnt/f/...`) drive paths when the Gateway runs
+natively on Windows. These paths resolve to the corresponding Windows drive.
+
 **New workspace** also works with a native Windows Gateway. Install Git for
 Windows and make it available on `PATH`. Each empty workspace starts from a
 separate Git repository initialized without your global Git configuration.
@@ -217,6 +221,12 @@ S4U does not provide Windows network credentials or access to encrypted files;
 installations that need those capabilities can retain an operator-configured
 Password task. Reinstall refreshes its launcher files without replacing its
 account, credentials, action, or triggers.
+
+Agent exec prefers a native PowerShell 7 executable and falls back to Windows
+PowerShell 5.1. Inaccessible Microsoft Store app-execution aliases are skipped:
+they can fail with `spawn EPERM` under S4U while PowerShell is running in another
+logon session. Install PowerShell 7 with the MSI or ZIP distribution if you need
+PowerShell 7 syntax, such as `&&`, in unattended exec commands.
 
 The installer reports the selected startup mode. Node hosts retain per-user
 interactive tasks for desktop access. If the account cannot be identified or
@@ -259,6 +269,9 @@ running policy when ownership can still be verified. During an update, the
 updater retains recovery ownership. If recovery cannot be confirmed, inspect the
 reported Task Scheduler state before retrying.
 
+Scheduler takeover evidence and Startup login-item reprobes use elapsed-time budgets,
+so wall-clock corrections do not extend or prematurely expire those waits.
+
 Publication accepts filesystem timestamp changes when the launcher's identity,
 permissions, and contents still match. Reinstallation reports the retained
 `.task.xml.bak` and launcher `.bak` recovery files beside the task script.
@@ -270,7 +283,19 @@ or rewrite its pin; custom task directories remain operator-owned overrides.
 
 Gateway status and Doctor read the Scheduled Task's numeric current state, independently of the Windows display language or console code page. A previous task exit result does not prove whether it is running now. Queued or unknown tasks do not count as safely stopped for Doctor maintenance. Stop a queued task through its service owner; if inspection is inaccessible, restore Task Scheduler inspection permissions before retrying.
 
+Updates and service recovery change the task's enabled state through Task Scheduler's
+native API. Access-denied guidance uses its numeric HRESULT, not translated Windows
+error text. An uncertain disable still attempts to restore the previous enabled state;
+a confirmed permission denial leaves the task unchanged and requests elevation.
+Enabled-state changes allow up to 60 seconds for Windows PowerShell's cold startup.
+
 Strict maintenance inspection follows the task's registered CMD or VBS launcher, or a directly registered executable with literal arguments, and rechecks its captured definition before using the result. Runtime inspection uses that registered command rather than a default launcher. Direct executable inspection does not grant ownership to rewrite the executable or its task definition. Automatic update service management still reports these custom actions as unavailable and leaves them untouched because it cannot restore a managed launcher; environment expansion and ambiguous argument quoting remain uninspectable. Deep discovery identifies OpenClaw and legacy helpers from executable or launcher evidence; an unrelated task's display name alone does not identify a service. Standard and selected task names suppress extra-service findings only when the registered action is a modern Gateway; legacy and Node actions remain visible. Doctor reports incomplete inspection separately from services eligible for existing cleanup.
+
+For a rejected CMD launcher line, status and update warnings report the rejected
+rule and its physical line number, counting blank lines and comments.
+Diagnostics omit launcher text and environment values. Review that line and use
+literal values with a single Gateway command before retrying. Inspection leaves
+the launcher unchanged and does not grant permission to rewrite custom behavior.
 
 `openclaw gateway status --deep` and `openclaw doctor --deep` report sibling
 profiles from the current account's Startup folder. If its Scheduled Task is
@@ -300,7 +325,7 @@ Invoking it from an app without a console can briefly display a console window.
 Without an explicit caller deadline, each check allows up to 60 seconds for
 PowerShell's cold startup. Registration inspection uses the same native check
 and shares its budget with any Startup-folder checks. Explicit inspection
-budgets replace the default allowance. Direct lifecycle commands retain their
+budgets replace the default allowance. Other direct lifecycle commands retain their
 existing limits. Access-denied and timeout results remain inspection failures,
 not proof that a task is absent.
 If inspection fails, Doctor and update refusals include the underlying check

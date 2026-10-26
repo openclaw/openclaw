@@ -1,4 +1,4 @@
-import { createMemo, For, onCleanup, Show } from "solid-js";
+import { createMemo, For, onSettled, Show } from "solid-js";
 import { presenceUserKey } from "../../../src/shared/presence-user.ts";
 import { presenceActivityLabel, presenceViewerLabel } from "../lib/presence-users.ts";
 import { t } from "../lib/reactive/i18n.ts";
@@ -8,7 +8,10 @@ import type {
   SidebarSessionListHost,
   PersonHeaders,
 } from "./app-sidebar-session-render-types.ts";
-import { renderSessionTree as SessionTree } from "./app-sidebar-session-row-render.tsx";
+import {
+  renderPendingSessionCreateRow,
+  renderSessionTree as SessionTree,
+} from "./app-sidebar-session-row-render.tsx";
 import { renderSidebarSessionSectionHeader as SessionSectionHeader } from "./app-sidebar-session-section-header.tsx";
 import {
   rowDemandsVisibility,
@@ -16,6 +19,7 @@ import {
   SIDEBAR_SESSION_PAGE_SIZE,
   SIDEBAR_SESSION_SEE_LESS_THRESHOLD,
 } from "./app-sidebar-session-types.ts";
+import { createSidebarSessionWindow } from "./sidebar-session-window.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { renderNewSessionLink as NewSessionLink } from "./solid/new-session-link.tsx";
 export function renderSessionSection(params: {
@@ -26,8 +30,18 @@ export function renderSessionSection(params: {
   const host = createMemo(() => params.host),
     section = createMemo(() => params.section),
     personHeaders = createMemo(() => params.personHeaders);
+  const sessionWindow = createSidebarSessionWindow(
+    () => section().rows,
+    host,
+    () => !(section().renderHeader && host().collapsedSessionSections.has(section().id)),
+  );
   const totalRowCount = createMemo(() => section().totalRowCount);
   const group = createMemo(() => section().category);
+  // Created rows lead their section, so a create for this group takes that slot now.
+  const pendingCreate = createMemo(() => {
+    const pending = host().pendingSessionCreate();
+    return pending?.category && pending.category === group() ? pending : undefined;
+  });
   const personOwner = createMemo(() => section().personOwner);
   const personIdentity = createMemo(() => personOwner()?.identity);
   const presence = createMemo(() => {
@@ -61,8 +75,8 @@ export function renderSessionSection(params: {
       ? `sidebar-person-presence-${personIdentityValue.id}`
       : undefined;
   });
-  // Pinned rows render in the nav zone; renderHeader records whether this list
-  // section owns collapse UI or sits directly below the global toolbar.
+  // renderHeader records whether this list section owns collapse UI or sits
+  // directly below the global toolbar.
   const collapsed = createMemo(
     () => section().renderHeader && host().collapsedSessionSections.has(section().id),
   );
@@ -75,18 +89,20 @@ export function renderSessionSection(params: {
       ? personIdentityValue?.type === "profile"
         ? presenceViewerLabel({
             id: personIdentityValue.id,
-            name: personOwnerValue.label || personOwnerValue.id,
+            name: personOwnerValue.label?.trim() || undefined,
           })
         : personOwnerValue.label || personOwnerValue.id
-      : sectionValue.project
-        ? sectionValue.project.name
-        : sectionValue.groups
-          ? t("chat.sidebar.groups")
-          : sectionValue.work
-            ? t("chat.sidebar.coding")
-            : groupValue
-              ? groupValue
-              : t("chat.sidebar.otherSessions");
+      : sectionValue.id === "pinned"
+        ? t("chat.sidebar.pinned")
+        : sectionValue.project
+          ? sectionValue.project.name
+          : sectionValue.groups
+            ? t("chat.sidebar.groups")
+            : sectionValue.work
+              ? t("chat.sidebar.coding")
+              : groupValue
+                ? groupValue
+                : t("chat.sidebar.otherSessions");
   });
   const zone = createMemo(() => {
     const personOwnerValue = personOwner();
@@ -94,15 +110,17 @@ export function renderSessionSection(params: {
     const groupValue = group();
     return personOwnerValue
       ? "person"
-      : sectionValue.project
-        ? "project"
-        : sectionValue.groups
-          ? "groups"
-          : sectionValue.work
-            ? "coding"
-            : groupValue
-              ? "category"
-              : "threads";
+      : sectionValue.id === "pinned"
+        ? "pinned"
+        : sectionValue.project
+          ? "project"
+          : sectionValue.groups
+            ? "groups"
+            : sectionValue.work
+              ? "coding"
+              : groupValue
+                ? "category"
+                : "threads";
   });
   // Collapsed Coding still signals live runs so background work stays visible.
   const collapsedRunningDot = createMemo(
@@ -123,12 +141,17 @@ export function renderSessionSection(params: {
       requiredScope: "operator.write",
     }),
   );
+  // Pinned holds personal pins: it accepts session drops without group write
+  // access and is never reordered among the stored sections.
+  const pinned = createMemo(() => section().id === "pinned");
   // Person/project/agent sections are derived, not stored: dropping a session on
   // them cannot persist anything, so they take no drags at all.
   const derivedSection = createMemo(() =>
-    Boolean(personOwner() || section().project || section().id.startsWith("agent:")),
+    Boolean(pinned() || personOwner() || section().project || section().id.startsWith("agent:")),
   );
-  const sectionDropEnabled = createMemo(() => groupWriteAccess().allowed && !derivedSection());
+  const sectionDropEnabled = createMemo(
+    () => pinned() || (groupWriteAccess().allowed && !derivedSection()),
+  );
   const chevron = (
     <span class="sidebar-session-group-toggle__lead" aria-hidden="true">
       <span class="sidebar-session-group-toggle__icon">
@@ -196,7 +219,7 @@ export function renderSessionSection(params: {
     ) : undefined,
   );
   let personHeader: HTMLElement | undefined;
-  onCleanup(() => {
+  onSettled(() => () => {
     if (host().presencePeople?.get(section().id) === personHeader) {
       host().presencePeople?.delete(section().id);
     }
@@ -209,6 +232,10 @@ export function renderSessionSection(params: {
         host().sessionOrganizer.sidebarSectionDropTarget?.sectionId === section().id &&
           `sidebar-recent-sessions__group--section-drop-${host().sessionOrganizer.sidebarSectionDropTarget?.position}`,
         {
+          "sidebar-recent-sessions__group--headless": !section().renderHeader,
+          // Only a single selected owner's Person section renders without a header.
+          "sidebar-recent-sessions__group--inline-owner":
+            !section().renderHeader && section().id.startsWith("person:"),
           "sidebar-recent-sessions__group--collapsed": collapsed(),
           "sidebar-recent-sessions__group--dragging":
             host().sessionOrganizer.draggingSidebarSection === section().id,
@@ -251,15 +278,10 @@ export function renderSessionSection(params: {
           draggable={!derivedSection()}
           disabledReason={(() => {
             const access = groupWriteAccess();
-            return access.allowed ? undefined : access.reason;
+            return access.allowed || pinned() ? undefined : access.reason;
           })()}
           onStartDrag={(sectionId) => host().sessionOrganizer.startSidebarSectionDrag(sectionId)}
           onFinishDrag={() => host().sessionOrganizer.finishSidebarSectionDrag()}
-          reorder={{
-            label: label(),
-            onMove: (target: string, position: "before" | "after") =>
-              host().sessionOrganizer.reorderSidebarSection(section().id, target, position),
-          }}
           onContextMenu={(() => {
             const currentGroup = group();
             return currentGroup
@@ -340,9 +362,7 @@ export function renderSessionSection(params: {
                   <button
                     type="button"
                     class="sidebar-session-group-actions"
-                    title={t("sessionsView.groupMenu", {
-                      group: currentGroup(),
-                    })}
+                    title={t("sessionsView.groupOptions")}
                     aria-label={t("sessionsView.groupMenu", {
                       group: currentGroup(),
                     })}
@@ -374,11 +394,30 @@ export function renderSessionSection(params: {
       ) : undefined}
       {collapsed() ? undefined : (
         <>
-          {section().rows.length > 0 ? (
+          {section().rows.length > 0 || pendingCreate() ? (
             <div class="sidebar-recent-sessions__list" role="list" aria-label={label()}>
-              <For each={section().rows} keyed={(session) => session.key}>
-                {(session) => <SessionTree host={host()} session={session()} />}
-              </For>
+              {renderPendingSessionCreateRow(pendingCreate, true)}
+              <div
+                ref={sessionWindow.bind}
+                class="sidebar-session-window"
+                role="presentation"
+                style={{ position: "relative", height: sessionWindow.height() }}
+              >
+                <For each={sessionWindow.rows()} keyed={(session) => session.key}>
+                  {(session) => (
+                    <SessionTree
+                      host={host()}
+                      session={session()}
+                      pinReorder={pinned()}
+                      window={sessionWindow}
+                      listPosition={{
+                        index: section().rows.indexOf(session()),
+                        count: section().rows.length,
+                      }}
+                    />
+                  )}
+                </For>
+              </div>
             </div>
           ) : undefined}
           <SessionPagination host={host()} section={section()} />

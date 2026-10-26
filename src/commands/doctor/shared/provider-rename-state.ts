@@ -11,7 +11,6 @@ import type { ProviderRename } from "./provider-rename.js";
 export async function maybeRepairProviderRenameCronJobs(params: {
   renames: readonly ProviderRename[];
   env?: NodeJS.ProcessEnv;
-  shouldRepair: boolean;
 }): Promise<{ changes: string[]; warnings: string[] }> {
   if (params.renames.length === 0) {
     return { changes: [], warnings: [] };
@@ -38,15 +37,6 @@ export async function maybeRepairProviderRenameCronJobs(params: {
     }
     if (requested.length === 0) {
       return { changes: [], warnings: [] };
-    }
-    if (!params.shouldRepair) {
-      return {
-        changes: [],
-        warnings: [
-          `Provider renames affect ${requested.length} persisted cron job(s). Run "openclaw doctor --fix" to repair their model references.`,
-          ...referenceChanges.map((change) => change.replace(/^Upgraded /, "Would upgrade ")),
-        ],
-      };
     }
     const maintenance = getOpenClawDatabaseMaintenanceScope();
     if (!maintenance?.ownsSchemaMaintenance) {

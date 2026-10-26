@@ -1,140 +1,98 @@
 import fs from "node:fs/promises";
-import { createServer, type Server } from "node:http";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { saveResponseMedia } from "openclaw/plugin-sdk/media-runtime";
 import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
   createPluginRuntimeMediaMock,
   createPluginRuntimeMock,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { withServer } from "openclaw/plugin-sdk/test-env";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { resolveSmsAccount } from "./accounts.js";
 import { materializeSmsInboundMedia, tryHandleHostedSmsMediaRequest } from "./media.js";
 import { setSmsRuntime } from "./runtime.js";
 import { prepareSmsMediaAttempt } from "./send.js";
+import type { ResolvedSmsAccount, SmsChannelConfig } from "./types.js";
 
 const MB = 1024 * 1024;
 const ACCOUNT_SID = `AC${"a".repeat(32)}`;
 const MESSAGE_SID = `MM${"b".repeat(32)}`;
+const PDF = Buffer.from("%PDF-1.4\nmedia-limit-proof\n%%EOF");
+const capped = { mediaMaxMb: 1 / MB };
 const baseAccount = {
   accountSid: ACCOUNT_SID,
   authToken: "test-token",
   fromNumber: "+15555550100",
   publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
 };
+function accountFor(sms: SmsChannelConfig, agentLimit?: number, accountId?: string) {
+  const cfg = {
+    agents: agentLimit === undefined ? undefined : { defaults: { mediaMaxMb: agentLimit } },
+    channels: { sms: { ...baseAccount, ...sms } },
+  };
+  return resolveSmsAccount(cfg, accountId);
+}
 
 describe("SMS configured media limits", () => {
-  let stateDir: string;
   let state: OpenClawTestState;
-  let server: Server | undefined;
+  async function prepare(account: ResolvedSmsAccount, bytes = PDF, file = "attachment.pdf") {
+    const mediaUrl = path.join(state.stateDir, file);
+    await fs.writeFile(mediaUrl, bytes);
+    return prepareSmsMediaAttempt({
+      account,
+      text: "caption",
+      mediaUrl,
+      mediaLocalRoots: [state.stateDir],
+    });
+  }
 
   beforeEach(async () => {
     state = await createOpenClawTestState({ label: "sms-media-limit" });
-    stateDir = state.stateDir;
-    setSmsRuntime(
-      createPluginRuntimeMock({
-        state: {
-          openKeyedStore: (options) =>
-            createPluginStateKeyedStoreForTests("sms", {
-              ...options,
-              env: state.env,
-            }),
-        },
-      }),
-    );
+    const runtime = createPluginRuntimeMock();
+    runtime.state.openKeyedStore = (options) =>
+      createPluginStateKeyedStoreForTests("sms", { ...options, env: state.env });
+    setSmsRuntime(runtime);
   });
 
   afterEach(async () => {
-    if (server) {
-      const closingServer = server;
-      await new Promise<void>((resolve, reject) => {
-        closingServer.close((error) => (error ? reject(error) : resolve()));
-      });
-      server = undefined;
-    }
     await state.cleanup();
   });
 
-  it.each([
-    { name: "channel root", sms: { mediaMaxMb: 1 / MB }, accountId: undefined, agentLimit: 1 },
-    {
-      name: "normalized named account",
-      sms: { mediaMaxMb: 1, accounts: { Support: { mediaMaxMb: 1 / MB } } },
-      accountId: " SUPPORT ",
-      agentLimit: 1,
-    },
-    {
-      name: "configured default account",
-      sms: { defaultAccount: "support", accounts: { support: { mediaMaxMb: 1 / MB } } },
-      accountId: undefined,
-      agentLimit: 1,
-    },
-    {
-      name: "inherited root limit",
-      sms: { mediaMaxMb: 1 / MB, accounts: { support: { enabled: true } } },
-      accountId: "support",
-      agentLimit: 1,
-    },
-    { name: "agent default", sms: {}, accountId: undefined, agentLimit: 1 / MB },
+  it.each<[string, SmsChannelConfig, number?, string?]>([
+    ["channel root", capped],
+    ["normalized account", { mediaMaxMb: 1, accounts: { Support: capped } }, 1, " SUPPORT "],
+    ["default account", { defaultAccount: "support", accounts: { support: capped } }],
+    ["inherited root", { ...capped, accounts: { support: { enabled: true } } }, 1, "support"],
+    ["agent default", {}, 1 / MB],
   ])(
-    "rejects a local attachment above the $name cap before staging",
-    async ({ sms, accountId, agentLimit }) => {
-      const cfg: OpenClawConfig = {
-        agents: { defaults: { mediaMaxMb: agentLimit } },
-        channels: { sms: { ...baseAccount, ...sms } },
-      };
-      const filePath = path.join(stateDir, "attachment.pdf");
-      await fs.writeFile(filePath, "%PDF-1.4\nmedia-limit-proof\n%%EOF");
-
-      await expect(
-        prepareSmsMediaAttempt({
-          account: resolveSmsAccount(cfg, accountId),
-          text: "caption",
-          mediaUrl: filePath,
-          mediaLocalRoots: [stateDir],
-        }),
-      ).rejects.toThrow(/SMS media preparation failed before Twilio dispatch: Media exceeds/);
+    "rejects a local attachment above the %s cap before staging",
+    async (_name, sms, agentLimit, accountId) => {
+      await expect(prepare(accountFor(sms, agentLimit ?? 1, accountId))).rejects.toThrow(
+        /SMS media preparation failed before Twilio dispatch: Media exceeds/,
+      );
     },
   );
 
   it("serves exact below-cap bytes through the hosted HTTP route", async () => {
-    const bytes = Buffer.from("%PDF-1.4\nmedia-limit-proof\n%%EOF");
-    const filePath = path.join(stateDir, "attachment.pdf");
-    await fs.writeFile(filePath, bytes);
-    const account = resolveSmsAccount({
-      agents: { defaults: { mediaMaxMb: 1 / MB } },
-      channels: { sms: { ...baseAccount, mediaMaxMb: bytes.length / MB } },
-    });
-    const attempt = await prepareSmsMediaAttempt({
-      account,
-      text: "caption",
-      mediaUrl: filePath,
-      mediaLocalRoots: [stateDir],
-    });
-    const hostedServer = createServer((req, res) => {
-      void tryHandleHostedSmsMediaRequest(req, res, account.accountId).catch(() => {
-        res.statusCode = 500;
-        res.end();
-      });
-    });
-    server = hostedServer;
-    await new Promise<void>((resolve) => {
-      hostedServer.listen(0, "127.0.0.1", resolve);
-    });
-    const address = hostedServer.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected local HTTP listener");
-    }
-    const hosted = new URL(attempt.hostedMediaUrl);
-    const response = await fetch(
-      `http://127.0.0.1:${address.port}${hosted.pathname}${hosted.search}`,
+    const account = accountFor({ mediaMaxMb: PDF.length / MB }, 1 / MB);
+    const attempt = await prepare(account);
+    await withServer(
+      (req, res) => {
+        void tryHandleHostedSmsMediaRequest(req, res, account.accountId).catch(() => {
+          res.statusCode = 500;
+          res.end();
+        });
+      },
+      async (baseUrl) => {
+        const hosted = new URL(attempt.hostedMediaUrl);
+        const response = await fetch(`${baseUrl}${hosted.pathname}${hosted.search}`);
+        expect(response.status).toBe(200);
+        expect(response.headers.get("content-type")).toBe("application/pdf");
+        expect(Buffer.from(await response.arrayBuffer())).toEqual(PDF);
+        await attempt.cleanupHostedMedia();
+      },
     );
-    expect(response.status).toBe(200);
-    expect(response.headers.get("content-type")).toBe("application/pdf");
-    expect(Buffer.from(await response.arrayBuffer())).toEqual(bytes);
-    await attempt.cleanupHostedMedia();
   });
 
   it.each([
@@ -143,27 +101,14 @@ describe("SMS configured media limits", () => {
   ])(
     "retains Twilio's ceiling for $file when the configured cap is larger",
     async ({ file, magic, size, error }) => {
-      const filePath = path.join(stateDir, file);
       const bytes = Buffer.alloc(size);
       bytes.write(magic);
-      await fs.writeFile(filePath, bytes);
-      await expect(
-        prepareSmsMediaAttempt({
-          account: resolveSmsAccount({ channels: { sms: { ...baseAccount, mediaMaxMb: 10 } } }),
-          text: "caption",
-          mediaUrl: filePath,
-          mediaLocalRoots: [stateDir],
-        }),
-      ).rejects.toThrow(error);
+      await expect(prepare(accountFor({ mediaMaxMb: 10 }), bytes, file)).rejects.toThrow(error);
     },
   );
 
   it("applies the per-attachment cap without making it a shared inbound budget", async () => {
-    const account = resolveSmsAccount({
-      channels: { sms: { ...baseAccount, mediaMaxMb: 32 / MB } },
-    });
-    const bytes = Buffer.from("%PDF-1.4\nmedia-limit-proof\n%%EOF");
-    const bodies = [bytes, Buffer.alloc(33), bytes];
+    const bodies = [PDF, Buffer.alloc(33), PDF];
     const media = createPluginRuntimeMediaMock({
       saveRemoteMedia: async (options) => {
         const body = bodies.shift();
@@ -177,7 +122,7 @@ describe("SMS configured media limits", () => {
       },
     });
     const result = await materializeSmsInboundMedia({
-      account,
+      account: accountFor({ mediaMaxMb: 32 / MB }),
       msg: {
         accountSid: ACCOUNT_SID,
         messageSid: MESSAGE_SID,

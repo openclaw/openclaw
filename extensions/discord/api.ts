@@ -107,17 +107,15 @@ export {
 } from "./src/probe.js";
 export { normalizeExplicitDiscordSessionKey } from "./src/session-key-normalization.js";
 export {
-  parseDiscordTarget as parseDiscordSendTarget,
-  type DiscordTarget as SendDiscordTarget,
-} from "./src/target-parsing.js";
-export {
   parseDiscordTarget,
+  parseDiscordTarget as parseDiscordSendTarget,
   resolveDiscordChannelId,
-  resolveDiscordTarget,
   type DiscordTarget,
+  type DiscordTarget as SendDiscordTarget,
   type DiscordTargetKind,
   type DiscordTargetParseOptions,
-} from "./src/targets.js";
+} from "./src/target-parsing.js";
+export { resolveDiscordTarget } from "./src/target-resolver.js";
 export { collectDiscordSecurityAuditFindings } from "./src/security-audit.js";
 export {
   DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS,

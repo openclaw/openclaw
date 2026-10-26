@@ -3,27 +3,25 @@ import type { Component, OverlayHandle } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import { createOverlayHandlers } from "./tui-overlays.js";
 
-class DummyComponent implements Component {
-  render() {
-    return ["dummy"];
-  }
+const createComponent = (): Component => ({ render: () => ["dummy"], invalidate() {} });
 
-  invalidate() {}
+function createHandle(hide = vi.fn()) {
+  return {
+    hide,
+    setHidden: vi.fn(),
+    isHidden: vi.fn(() => false),
+    focus: vi.fn(),
+    unfocus: vi.fn(),
+    isFocused: vi.fn(() => false),
+    getBounds: () => undefined,
+  } satisfies OverlayHandle;
 }
 
 describe("createOverlayHandlers", () => {
   it("routes overlays through the TUI overlay stack", () => {
     const showOverlay = vi.fn();
     const setFocus = vi.fn();
-    const handle = {
-      hide: vi.fn(),
-      setHidden: vi.fn(),
-      isHidden: vi.fn(() => false),
-      focus: vi.fn(),
-      unfocus: vi.fn(),
-      isFocused: vi.fn(() => true),
-      getBounds: () => undefined,
-    } satisfies OverlayHandle;
+    const handle = createHandle();
     let open = false;
 
     const host = {
@@ -33,14 +31,12 @@ describe("createOverlayHandlers", () => {
         return handle;
       },
       hasOverlay: () => open,
+      hideOverlay: vi.fn(),
       setFocus,
     };
 
-    const { openOverlay, closeOverlay } = createOverlayHandlers(
-      host as unknown as Parameters<typeof createOverlayHandlers>[0],
-      new DummyComponent(),
-    );
-    const overlay = new DummyComponent();
+    const { openOverlay, closeOverlay } = createOverlayHandlers(host, createComponent());
+    const overlay = createComponent();
 
     expect(openOverlay(overlay)).toBe(handle);
     expect(showOverlay).toHaveBeenCalledWith(overlay);
@@ -48,55 +44,26 @@ describe("createOverlayHandlers", () => {
     closeOverlay(handle);
     expect(handle.hide).toHaveBeenCalledTimes(1);
     expect(setFocus).not.toHaveBeenCalled();
-  });
-
-  it("closes a specific overlay without popping the topmost overlay", () => {
-    const handle = {
-      hide: vi.fn(),
-      setHidden: vi.fn(),
-      isHidden: vi.fn(() => false),
-      focus: vi.fn(),
-      unfocus: vi.fn(),
-      isFocused: vi.fn(() => false),
-      getBounds: () => undefined,
-    } satisfies OverlayHandle;
-    const host = {
-      showOverlay: vi.fn(() => handle),
-      hideOverlay: vi.fn(),
-      hasOverlay: () => true,
-      setFocus: vi.fn(),
-    };
-    const { closeOverlay } = createOverlayHandlers(host, new DummyComponent());
-
-    closeOverlay(handle);
-
-    expect(handle.hide).toHaveBeenCalledTimes(1);
     expect(host.hideOverlay).not.toHaveBeenCalled();
   });
 
   it("restores fallback focus after nested handled overlays close", () => {
     let openCount = 2;
-    const createHandle = () =>
-      ({
-        hide: vi.fn(() => {
-          openCount -= 1;
-        }),
-        setHidden: vi.fn(),
-        isHidden: vi.fn(() => false),
-        focus: vi.fn(),
-        unfocus: vi.fn(),
-        isFocused: vi.fn(() => false),
-        getBounds: () => undefined,
-      }) satisfies OverlayHandle;
     const host = {
       showOverlay: vi.fn(),
       hideOverlay: vi.fn(),
       hasOverlay: () => openCount > 0,
       setFocus: vi.fn(),
     };
-    const fallback = new DummyComponent();
-    const lowerOverlay = createHandle();
-    const upperOverlay = createHandle();
+    const fallback = createComponent();
+    const makeClosingHandle = () =>
+      createHandle(
+        vi.fn(() => {
+          openCount -= 1;
+        }),
+      );
+    const lowerOverlay = makeClosingHandle();
+    const upperOverlay = makeClosingHandle();
     const { closeOverlay } = createOverlayHandlers(host, fallback);
 
     closeOverlay(lowerOverlay);

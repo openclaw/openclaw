@@ -21,6 +21,7 @@ import {
 } from "../../infra/update-doctor-result.js";
 import type { ManagedHandoffRepair } from "../../infra/update-managed-service-handoff-lease-types.js";
 import { POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV } from "../../infra/update-post-core-context.js";
+import { readUpdateResultPolicy } from "../../infra/update-result-telemetry.js";
 import { formatUpdateRunOwnership } from "../../infra/update-run-activity.js";
 import {
   acknowledgeAbandonedUpdateRun,
@@ -40,6 +41,7 @@ import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { retainCliProcessJobUntilExit } from "../runtime-cleanup-scope.js";
 import { refuseHostOwnedUpdate, reportHostOwnedUpdate } from "./host-owned.js";
 import {
+  parseUpdateChannel,
   parseUpdateTimeoutMs,
   readPackageVersion,
   resolveNodeRunner,
@@ -85,11 +87,19 @@ import {
   UpdateFinalizationLifecycle,
   type UpdateFinalizationPhase,
 } from "./update-finalization-lifecycle.js";
+import {
+  reportRetainedUpdateCustody,
+  type RetainedUpdateCustodyReport,
+} from "./update-retained-custody.js";
+
+export type UpdateCoreCompletion = "completed" | "pending";
 
 export async function updateFinalizeCommand(
   opts: UpdateFinalizeOptions,
   recoveryRunIds?: readonly string[],
   handoff?: ManagedHandoffRepair,
+  // Finalization can succeed while repair-retained custody still blocks the next update.
+  retained?: RetainedUpdateCustodyReport,
 ): Promise<void> {
   // Refuse retained recovery before discovery; preflight rechecks before state writes.
   await assertUpdateRecoveryAdmission({ env: process.env });
@@ -99,14 +109,7 @@ export async function updateFinalizeCommand(
   const invocationCwd = tryProcessCwd();
   suppressDeprecations();
   const timeoutMs = parseUpdateTimeoutMs(opts.timeout);
-  const requestedChannel = normalizeUpdateChannel(opts.channel);
-  if (opts.channel !== undefined && !requestedChannel) {
-    defaultRuntime.error(
-      `--channel must be "stable", "extended-stable", "beta", or "dev" (got "${opts.channel}")`,
-    );
-    defaultRuntime.exit(1);
-    return;
-  }
+  const requestedChannel = parseUpdateChannel(opts.channel);
 
   let exitCode: number | undefined;
   await withCommandProcessScope(async (stopChildren) => {
@@ -129,9 +132,13 @@ export async function updateFinalizeCommand(
                   recoverOrphanedSidecars: false,
                 });
                 await retainCliProcessJobUntilExit();
+                const reportResult = await readUpdateResultPolicy(process.env);
                 phase.assertCurrent();
                 // Public repair supplies a recovery selection, even when it is empty.
-                const admittedRunId = lifecycle.attachLedger(recoveryRunIds !== undefined);
+                const admittedRunId = lifecycle.attachLedger(
+                  recoveryRunIds !== undefined,
+                  reportResult,
+                );
                 const resolvedRoot = await resolveUpdateRoot();
                 const resolvedInstallKind = await resolveUpdateInstallKind(resolvedRoot, {
                   timeoutMs: lifecycle.budget("preflight"),
@@ -185,9 +192,13 @@ export async function updateFinalizeCommand(
                   recoveryRunIds ?? [],
                   runId,
                   recoveryRunIds !== undefined || lifecycle.ownsUpdateRun,
+                  retained,
                 );
               });
               await complete();
+              if (retained && recoveryRunIds !== undefined && lifecycle.ownsUpdateRun) {
+                exitCode = 2;
+              }
             } catch (error) {
               if (hasCommandProcessCleanupError(error)) {
                 throw error;
@@ -203,19 +214,35 @@ export async function updateFinalizeCommand(
                 ]);
                 lifecycle.recordWarnings(warnings);
                 defaultRuntime.error(warnings.join("\n"));
+                // An unfinished claim still stands in for cancelled custody until a
+                // later repair completes it; the rerun settles both.
+                const custody =
+                  retained ??
+                  (handoff?.cancelledCustody
+                    ? reportRetainedUpdateCustody({
+                        ...handoff.cancelledCustody,
+                        reason:
+                          "Doctor maintenance remains pending; this repair keeps its claim on the cancelled custody until a later repair completes.",
+                      })
+                    : undefined);
+                const reportedNextAction = custody
+                  ? `${nextAction} ${custody.nextAction}`
+                  : nextAction;
                 if (opts.json) {
                   defaultRuntime.writeJson({
                     status: "warning",
-                    nextAction,
+                    coreUpdate: "pending" satisfies UpdateCoreCompletion,
+                    nextAction: reportedNextAction,
                     mode: "finalize",
                     root,
                     restart: false,
                     phaseTimings: lifecycle.phaseTimings,
                     postUpdate: { doctor: { status: "warning", warnings } },
+                    ...(custody ? { retainedUpdateCustody: custody.retainedUpdateCustody } : {}),
                   });
                 } else {
                   defaultRuntime.log(
-                    theme.warn(`Doctor maintenance remains pending. ${nextAction}`),
+                    theme.warn(`Doctor maintenance remains pending. ${reportedNextAction}`),
                   );
                 }
                 lifecycle.complete(0, nextAction);
@@ -327,6 +354,7 @@ async function updateFinalizeCommandInternal(
   recoveryRunIds: readonly string[],
   invokingRunId: string,
   ownsMaintenance: boolean,
+  retained?: RetainedUpdateCustodyReport,
 ): Promise<() => Promise<void>> {
   const { root, nodeRunner, preFinalizeConfig, requestedChannel, channel } = prepared;
   let doctorWarnings: string[] = [];
@@ -367,16 +395,17 @@ async function updateFinalizeCommandInternal(
       await lifecycle.run("configSnapshot", () => createUpdateConfigSnapshot());
       await lifecycle.run(
         "doctor",
-        () =>
+        (phase) =>
           runUpdateFinalizationDoctorInFreshProcess({
             phase: "pre-plugin",
             ...doctorParams,
             workspaceSuggestions: true,
             timeoutMs: lifecycle.budget("doctor"),
+            serviceInspectionDeadlineAtMs: phase.deadlineAtMs,
           }),
         undefined,
         {
-          enter: async () => {
+          enter: async (serviceInspectionDeadlineAtMs) => {
             if (!ownsMaintenance) {
               return;
             }
@@ -386,6 +415,7 @@ async function updateFinalizeCommandInternal(
               runId: invokingRunId,
               options: { repair: true, nonInteractive: true, json: opts.json },
               runtime: { ...defaultRuntime, log: defaultRuntime.error },
+              serviceInspectionDeadlineAtMs,
             });
             lifecycle.serviceUpdateVerdict = maintenance?.serviceUpdateVerdict;
             // Fresh Doctor owns database fences; the parent retains service custody.
@@ -474,7 +504,7 @@ async function updateFinalizeCommandInternal(
       status:
         pluginUpdate.status === "error"
           ? "error"
-          : pluginUpdate.status === "warning" || doctorWarnings.length > 0
+          : pluginUpdate.status === "warning" || doctorWarnings.length > 0 || retained
             ? "warning"
             : "ok",
       mode: "finalize",
@@ -487,6 +517,7 @@ async function updateFinalizeCommandInternal(
         channel,
       restart: false,
       ...(recoveryRunIds.length ? { reconciledRuns } : {}),
+      ...retained,
       phaseTimings: lifecycle.phaseTimings,
       postUpdate: {
         doctor: {
@@ -530,9 +561,12 @@ async function updateFinalizeCommandInternal(
         if (!failure) {
           lifecycle.handoff?.complete(invokingRunId);
         }
+        // Exit status and advisories do not distinguish completed core work from deferred maintenance.
+        const coreUpdate: UpdateCoreCompletion = failure || retained ? "pending" : "completed";
         if (opts.json) {
           defaultRuntime.writeJson({
             ...result,
+            coreUpdate,
             ...(observed
               ? { recovery: observed.recovery, verification: observed.verification }
               : {}),
@@ -541,6 +575,9 @@ async function updateFinalizeCommandInternal(
           defaultRuntime.log(theme.muted("Update finalization completed."));
         } else if (result.status === "warning") {
           defaultRuntime.log(theme.warn("Update finalization completed with warnings."));
+          if (retained) {
+            defaultRuntime.log(theme.warn(retained.nextAction));
+          }
         } else {
           defaultRuntime.log(theme.error("Update finalization failed."));
         }

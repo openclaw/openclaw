@@ -1,7 +1,7 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { GatewaySessionRow } from "../api/types.ts";
-import type { NavigationRouteId } from "../app-navigation.ts";
+import type { NavigationRouteId, SidebarZoneEntry } from "../app-navigation.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "../app/context.ts";
 import type { CatalogOpenTarget } from "../app/settings.ts";
 import type { PresenceActivity } from "../lib/presence-users.ts";
@@ -24,7 +24,6 @@ import type {
   SidebarSessionProjection,
   SidebarVisibleSections,
 } from "./app-sidebar-session-projection.ts";
-import "./mcp-app-catalog.tsx";
 import "./menu-surface.ts";
 import type {
   SidebarRecentSession,
@@ -39,6 +38,7 @@ import type { ChannelAvatarProps } from "./solid/channel-avatar.tsx";
 import "./tooltip.ts";
 
 export interface SessionListHost {
+  loadMoreSidebarSessions(): Promise<void>;
   readonly presencePeople?: Map<string, HTMLElement>;
   readonly sidebarSnapshot?: import("./sidebar-snapshot-model.ts").SidebarSnapshotModel | null;
   readonly sidebarAgentsMode?: "chip" | "roster";
@@ -53,7 +53,10 @@ export interface SessionListHost {
   readonly sidebarNarrationLines: ReadonlyMap<string, string>;
   readonly sidebarTools: ReadonlyMap<string, SidebarToolActivity>;
   readonly sidebarObserverDigests: ReadonlyMap<string, SessionObserverDigest>;
-  readonly sessionProjection: Pick<SidebarSessionProjection, "resolveSubtitle" | "mountCatalogRow">;
+  readonly sessionProjection: Pick<
+    SidebarSessionProjection,
+    "resolveSubtitle" | "heldSubtitle" | "mountCatalogRow"
+  >;
   readonly selectedSessionKeys: ReadonlySet<string>;
   readonly connected: boolean;
   readonly sessionData: Pick<
@@ -82,19 +85,19 @@ export interface SessionListHost {
     | "handleSessionListDragLeave"
     | "handleSessionListDragOver"
     | "handleSessionListDrop"
+    | "handleSidebarZoneDragLeave"
+    | "sidebarZoneDropTarget"
     | "sectionDragLeave"
     | "sectionDragOver"
     | "sectionDrop"
     | "sessionDropTarget"
     | "sidebarSectionDropTarget"
     | "sessionListRemovalDrop"
-    | "setSessionsStatusFilter"
     | "startSessionDrag"
     | "startSidebarSectionDrag"
     | "archiveSessionWithUndo"
     | "patchSession"
     | "isPersonalSessionPin"
-    | "reorderSidebarSection"
     | "sectionHeaders"
   >;
   readonly sidebarMenus: Pick<
@@ -144,7 +147,11 @@ export interface SessionListHost {
   expandedAgentId(): string;
   /** Unadmitted New session handoff; presentation only, never a saved selection. */
   pendingSessionCreate():
-    | Readonly<{ creation: Readonly<{ sessionKey: string }>; displayName?: string }>
+    | Readonly<{
+        creation: Readonly<{ sessionKey: string }>;
+        displayName?: string;
+        category?: string;
+      }>
     | undefined;
   readNewSessionAccess(): SessionMethodAccess;
   readSessionMutationAccess(request: SessionMethodAccessRequest): SessionMethodAccess;
@@ -187,6 +194,10 @@ export type SidebarSessionListHost = SessionListHost & {
       | "loadingMoreSessionCatalogIds"
     >;
   projectHomeSession(row: GatewaySessionRow, agentId: string): SidebarRecentSession;
+  reconciledSidebarZone(): {
+    entries: readonly SidebarZoneEntry[];
+    sessionRows: ReadonlyMap<string, SidebarRecentSession>;
+  };
 };
 
 export type PersonHeaders = {
@@ -213,24 +224,12 @@ declare module "@solidjs/web" {
           "prop:onClose"?: HTMLElementTagNameMap["openclaw-catalog-session-menu"]["onClose"];
         };
       "openclaw-channel-avatar": BridgeAttributes<ChannelAvatarProps>;
-      "openclaw-mcp-app-catalog": HTMLAttributes<
-        HTMLElementTagNameMap["openclaw-mcp-app-catalog"]
-      > &
-        Properties<HTMLElementTagNameMap["openclaw-mcp-app-catalog"]> &
-        Partial<Pick<HTMLElementTagNameMap["openclaw-mcp-app-catalog"], "surface">>;
       "openclaw-menu-surface": HTMLAttributes<HTMLElementTagNameMap["openclaw-menu-surface"]> &
         Properties<HTMLElementTagNameMap["openclaw-menu-surface"]>;
       "openclaw-plugin-contributions": HTMLAttributes<ContributionsElement> &
         Properties<ContributionsElement> & {
           "prop:agentId"?: ContributionsElement["agentId"];
           "prop:navigationMenus"?: ContributionsElement["navigationMenus"];
-        };
-      "openclaw-theme-mode-toggle": HTMLAttributes<
-        HTMLElementTagNameMap["openclaw-theme-mode-toggle"]
-      > &
-        Properties<HTMLElementTagNameMap["openclaw-theme-mode-toggle"]> & {
-          "prop:menuAttributes"?: HTMLElementTagNameMap["openclaw-theme-mode-toggle"]["menuAttributes"];
-          "prop:onChange"?: HTMLElementTagNameMap["openclaw-theme-mode-toggle"]["onChange"];
         };
     }
   }

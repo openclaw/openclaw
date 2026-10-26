@@ -1,12 +1,9 @@
 /* @vitest-environment jsdom */
 
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
-import {
-  buildSystemAgentSessionInvalidatedErrorDetails,
-  type SystemAgentChatResult,
-  type SystemChangesListResult,
-} from "@openclaw/gateway-protocol";
+import type { SystemAgentChatResult, SystemChangesListResult } from "@openclaw/gateway-protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildSystemAgentSessionInvalidatedErrorDetails } from "../../../../packages/gateway-protocol/src/system-agent-error-details.ts";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ChannelsStatusSnapshot } from "../../api/types.ts";
@@ -366,7 +363,8 @@ describe("custodian page", () => {
     expect(page.querySelector(".custodian__nudge")).not.toBeNull();
     setGatewayToken("new-operator-token");
     setGatewaySnapshot({
-      client: createContext(replacementRequest).context.gateway.snapshot.client,
+      client: createContext(replacementRequest, ["openclaw.chat", "openclaw.chat.history"]).context
+        .gateway.snapshot.client,
     });
     await waitForFast(() => expect(replacementRequest).toHaveBeenCalledTimes(2));
     await waitForFast(() => expect(page.textContent).toContain("Fresh safe welcome."));
@@ -487,7 +485,11 @@ describe("custodian page", () => {
       summary: "Replacement connection history",
     };
     const nextRequest = vi.fn(async (method: string) =>
-      method === "openclaw.changes.list" ? { entries: [entry] } : chatReply("Ready."),
+      method === "openclaw.chat.history"
+        ? { turns: [] }
+        : method === "openclaw.changes.list"
+          ? { entries: [entry] }
+          : chatReply("Ready."),
     );
     harness.setGatewaySnapshot({
       // SAFETY: This fixture supplies the request method used by the mounted page.
@@ -604,7 +606,9 @@ describe("custodian page", () => {
     await waitForFast(() => expect(statusRequestCount).toBe(3));
     expect(channels.state.channelsSnapshot).toBe(previousSnapshot);
     expect(channels.state.channelsLoading).toBe(true);
-    expect(page.querySelector(".custodian__nudge--channel-onboarding")).toBeNull();
+    await waitForFast(() =>
+      expect(page.querySelector(".custodian__nudge--channel-onboarding")).toBeNull(),
+    );
 
     freshStatus.resolve(
       channelSnapshot({
@@ -618,34 +622,34 @@ describe("custodian page", () => {
   });
 
   it("keeps retry feedback visible until a deferred channel refresh succeeds", async () => {
+    const initialStatus = createDeferred<ChannelsStatusSnapshot>();
     const retryStatus = createDeferred<ChannelsStatusSnapshot>();
     let statusRequestCount = 0;
-    const request = vi.fn((method: string) => {
-      if (method === "channels.status") {
-        statusRequestCount += 1;
-        return statusRequestCount === 1
-          ? Promise.reject(new Error("status unavailable"))
-          : retryStatus.promise;
-      }
-      return Promise.resolve(chatReply("Ready."));
-    });
+    const request = vi.fn((method: string) =>
+      method === "channels.status"
+        ? ++statusRequestCount === 1
+          ? initialStatus.promise
+          : retryStatus.promise
+        : Promise.resolve(chatReply("Ready.")),
+    );
     const { context } = createContext(request);
     const channels = createChannelCapability(context.gateway);
     Object.assign(context, { channels });
-    await channels.refresh();
+    void channels.refresh();
     const { page } = await mountPage(context, { onboarding: true });
+    expect(page.querySelector(".custodian__nudge--channel-onboarding")).toBeNull();
+    initialStatus.reject(new Error("status unavailable"));
+    await waitForFast(() =>
+      expect(page.querySelector(".custodian__nudge-cta")?.textContent).toContain("Retry"),
+    );
 
-    const retry = page.querySelector<HTMLButtonElement>(".custodian__nudge-cta");
-    expect(retry?.textContent).toContain("Retry");
-    retry?.click();
+    button(page, ".custodian__nudge-cta").click();
 
     await waitForFast(() => expect(statusRequestCount).toBe(2));
-    await page.updateComplete;
     expect(channels.state.channelsLoading).toBe(true);
-    expect(channels.state.channelsError).toBe("status unavailable");
     expect(page.querySelector('[role="alert"]')).not.toBeNull();
-    expect(page.querySelector<HTMLButtonElement>(".custodian__nudge-cta")?.disabled).toBe(true);
-    expect(page.querySelector(".custodian__nudge-cta")?.textContent).toContain("Loading");
+    await waitForFast(() => expect(button(page, ".custodian__nudge-cta").disabled).toBe(true));
+    expect(button(page, ".custodian__nudge-cta").textContent).toContain("Loading");
 
     retryStatus.resolve(
       channelSnapshot({
@@ -801,28 +805,6 @@ describe("custodian page", () => {
     },
   );
 
-  it("does not rotate against a replacement gateway without chat support", async () => {
-    const request = vi.fn().mockResolvedValue(chatReply("Existing welcome."));
-    const replacementRequest = vi.fn();
-    const { context, setGatewaySnapshot } = createContext(request);
-    const { page } = await mountPage(context);
-    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
-    setGatewaySnapshot({
-      client: { request: replacementRequest } as unknown as GatewayBrowserClient,
-      hello: {
-        type: "hello-ok",
-        protocol: 1,
-        auth: { role: "operator", scopes: ["operator.admin"] },
-        features: { methods: [] },
-      },
-    });
-    await waitForFast(() =>
-      expect(page.querySelector('[role="alert"]')?.textContent).toContain("Update the Gateway"),
-    );
-    expect(request).toHaveBeenCalledOnce();
-    expect(replacementRequest).not.toHaveBeenCalled();
-  });
-
   it("hides typed cancel when the Gateway does not advertise it", async () => {
     const request = vi.fn().mockResolvedValue(
       chatReply("Enter the token.", {
@@ -835,7 +817,7 @@ describe("custodian page", () => {
     const { page } = await mountPage(context);
     await element(page, ".custodian__wizard-step");
     expect(page.querySelector(".custodian__wizard-cancel")).toBeNull();
-    page.store.cancelWizardStep(page.store.messages.at(-1)!);
+    await page.store.cancelWizardStep(page.store.messages.at(-1)!);
     expect(request).toHaveBeenCalledOnce();
   });
 

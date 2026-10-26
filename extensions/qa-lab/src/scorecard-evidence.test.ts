@@ -14,6 +14,7 @@ import {
   qaMaturityTaxonomyIdentity,
   type QaScorecardCategoryCoverageReport,
 } from "./scorecard-taxonomy.js";
+import { makeQaSuiteTestLaunch } from "./suite-test-helpers.js";
 
 function evidenceEntry(
   id: string,
@@ -134,14 +135,7 @@ describe("profile scorecard evidence", () => {
     const invocation = createQaEvidenceInvocation({
       scenarios: [{ id: "coverage-fixture", execution: { kind: "script" } }],
       channel: null,
-      launch: {
-        source: { ref: null, integrity: null },
-        runtime: { id: null, version: null },
-        package: null,
-        protocol: null,
-        accountRef: null,
-        proofClass: null,
-      },
+      launch: makeQaSuiteTestLaunch(),
     });
     const first = invocation.begin(0);
     invocation.complete(first, {

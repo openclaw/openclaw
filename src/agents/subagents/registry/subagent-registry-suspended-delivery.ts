@@ -85,7 +85,7 @@ export async function discardSuspendedPendingFinalDelivery(params: {
     skipRequesterSettleWake: true,
     stateContext,
     isCurrent,
-    finalizeDelivery: (draft) => params.discardTerminalDelivery(draft, now, "expired"),
+    finalizeDelivery: (draft) => params.discardTerminalDelivery(draft, now),
   });
   assertCurrent();
   resumedRuns.delete(resumeKey);

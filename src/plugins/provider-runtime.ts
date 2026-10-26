@@ -60,7 +60,6 @@ import {
   resolveUsageHookProviderPluginContracts,
 } from "./providers.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "./runtime-state.js";
-import { resolveRuntimeTextTransforms } from "./text-transforms.runtime.js";
 import type {
   ProviderAugmentModelCatalogContext,
   ProviderDeferSyntheticProfileAuthContext,
@@ -256,10 +255,7 @@ export function transformProviderSystemPrompt(
   },
 ): string {
   const plugin = ensureProviderRuntimePluginHandle(params).plugin;
-  const textTransforms = mergePluginTextTransforms(
-    resolveRuntimeTextTransforms(),
-    plugin?.textTransforms,
-  );
+  const textTransforms = mergePluginTextTransforms(plugin?.textTransforms);
   const transformed =
     plugin?.transformSystemPrompt?.(params.context) ?? params.context.systemPrompt;
   return applyPluginTextReplacements(transformed, textTransforms?.input);
@@ -271,7 +267,6 @@ export function resolveProviderTextTransforms(
   },
 ): PluginTextTransforms | undefined {
   return mergePluginTextTransforms(
-    resolveRuntimeTextTransforms(),
     ensureProviderRuntimePluginHandle(params).plugin?.textTransforms,
   );
 }

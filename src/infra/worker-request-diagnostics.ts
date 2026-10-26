@@ -1,15 +1,36 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { runWithAsyncStore } from "../shared/async-store.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { hasInternalDiagnosticEventInterest } from "./diagnostic-event-listener-presence.js";
-import { emitTrustedDiagnosticEvent } from "./diagnostic-events.js";
+import {
+  areDiagnosticsEnabledForProcess,
+  emitTrustedDiagnosticEvent,
+} from "./diagnostic-events.js";
 import { isDiagnosticFlagEnabled } from "./diagnostic-flags.js";
 import type { DiagnosticWorkerRequestFields } from "./diagnostic-process-types.js";
 import {
   classifySqliteWorkerExecute,
   sqliteWorkerRequestClasses,
 } from "./sqlite-worker-request-class.js";
+import { workerScriptName } from "./worker-diagnostic-script.js";
 import type { WorkerRequestKind } from "./worker-request-kind.js";
+
+const workerStarts = resolveGlobalSingleton(
+  Symbol.for("openclaw.workerStartObservation"),
+  () => new AsyncLocalStorage<(script: string) => void>(),
+);
+
+/** Startup observations inherit caller scope without changing worker lifetime ownership. */
+export function runWithWorkerStartObserver<T>(observer: (script: string) => void, run: () => T): T {
+  return workerStarts.run(observer, run);
+}
+
+/** Carry only the diagnostic callback across the pool's detached construction boundary. */
+export function captureWorkerStartObserver(url: URL): (() => void) | undefined {
+  const observer = workerStarts.getStore();
+  return observer ? () => observer(workerScriptName(url)) : undefined;
+}
 
 export type WorkerRequestObservation = {
   timing?: DiagnosticWorkerRequestFields["timing"];
@@ -17,6 +38,29 @@ export type WorkerRequestObservation = {
   started(this: void): void;
   completed(this: void): void;
 };
+
+export type WorkerRequestMetricsListener = (
+  kind: WorkerRequestKind,
+  requestClass: string,
+  phase: DiagnosticWorkerRequestFields["phase"],
+  queueDepth: number,
+  queueWaitMs: number | undefined,
+  durationMs: number | undefined,
+  timing: Readonly<DiagnosticWorkerRequestFields["timing"]>,
+) => void;
+
+const metricsListeners = resolveGlobalSingleton(
+  Symbol.for("openclaw.workerRequestMetricsListeners"),
+  () => new Set<WorkerRequestMetricsListener>(),
+);
+
+/** Trusted exporters consume borrowed timing fields synchronously, without event snapshots. */
+export function onWorkerRequestMetrics(listener: WorkerRequestMetricsListener): () => void {
+  metricsListeners.add(listener);
+  return () => {
+    metricsListeners.delete(listener);
+  };
+}
 
 export type SqliteWorkerReservationObservation = {
   operations: Set<string>;
@@ -32,7 +76,7 @@ export function withSqliteWorkerReservationObservation<T>(
   observation: SqliteWorkerReservationObservation,
   run: () => T,
 ): T {
-  return reservations.run(observation, run);
+  return runWithAsyncStore(reservations, observation, run);
 }
 
 const detailedTiming = isDiagnosticFlagEnabled("sqlite.worker-timing");
@@ -66,6 +110,7 @@ const coreCommands = new Set([
   "session.maintenance.size",
   "session.rowTranscript.backfill",
   "usageCache.writeRollup",
+  "usageCache.writeQuarters",
   "usageCache.prune",
   "trajectory.events.append",
   "trajectory.retention.begin",
@@ -167,15 +212,30 @@ export function trackWorkerRequest(
   const enqueuedAt = performance.now();
   const timing: DiagnosticWorkerRequestFields["timing"] =
     kind === "sqlite_writer" &&
-    (detailedTiming || hasInternalDiagnosticEventInterest("worker.request", true))
+    (detailedTiming ||
+      metricsListeners.size > 0 ||
+      hasInternalDiagnosticEventInterest("worker.request", true))
       ? { enqueued: enqueuedAt }
       : undefined;
   let startedAt: number | undefined;
   let completed = false;
   const emit = (
     phase: DiagnosticWorkerRequestFields["phase"],
-    durations: Pick<DiagnosticWorkerRequestFields, "queueWaitMs" | "durationMs"> = {},
+    queueWaitMs?: number,
+    durationMs?: number,
   ) => {
+    if (!areDiagnosticsEnabledForProcess()) {
+      return;
+    }
+    const queueDepth = queued.get(kind) ?? 0;
+    const completedTiming = phase === "completed" ? timing : undefined;
+    for (const listener of metricsListeners) {
+      try {
+        listener(kind, label, phase, queueDepth, queueWaitMs, durationMs, completedTiming);
+      } catch {
+        // An exporter cannot interrupt worker dispatch or settlement.
+      }
+    }
     if (!hasInternalDiagnosticEventInterest("worker.request", true)) {
       return;
     }
@@ -184,9 +244,10 @@ export function trackWorkerRequest(
       kind,
       requestClass: label,
       phase,
-      queueDepth: queued.get(kind) ?? 0,
-      ...durations,
-      ...(phase === "completed" && timing ? { timing } : {}),
+      queueDepth,
+      ...(queueWaitMs === undefined ? {} : { queueWaitMs }),
+      ...(durationMs === undefined ? {} : { durationMs }),
+      ...(completedTiming ? { timing: completedTiming } : {}),
     });
   };
   const dequeue = () => queued.set(kind, (queued.get(kind) ?? 0) - 1);
@@ -216,7 +277,7 @@ export function trackWorkerRequest(
       }
       queuedSignal?.removeEventListener("abort", observation.completed);
       dequeue();
-      emit("started", { queueWaitMs: startedAt - enqueuedAt });
+      emit("started", startedAt - enqueuedAt);
     },
     completed: () => {
       if (completed) {
@@ -229,7 +290,8 @@ export function trackWorkerRequest(
       }
       emit(
         "completed",
-        startedAt === undefined ? {} : { durationMs: performance.now() - startedAt },
+        undefined,
+        startedAt === undefined ? undefined : performance.now() - startedAt,
       );
     },
   };

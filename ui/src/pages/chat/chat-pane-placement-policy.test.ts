@@ -9,12 +9,9 @@ import {
   waitForConfirmDialogActions,
 } from "../../test-helpers/modal-dialog.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
-import {
-  activePlacementSession,
-  createGatewayBrowserClientFixture,
-  createSessionCapabilityFixture,
-  createTestChatPane,
-} from "./chat-pane.test-support.ts";
+import { createGatewayBrowserClientFixture } from "./chat-application-context.test-support.ts";
+import { activePlacementSession, createTestChatPane } from "./chat-pane.test-support.ts";
+import { createSessionCapabilityFixture } from "./chat-session-capability.test-support.ts";
 
 let dialogs: ReturnType<typeof createModalDialogTestFixture>;
 beforeEach(() => {
@@ -174,8 +171,7 @@ it.each(["dispatch", "move"] as const)(
     } else {
       expect(gateway).toBeNull();
     }
-    expect(document.querySelector('[data-value^="machine:"]')).toBeNull();
-    expect(document.querySelector('[data-value^="os:"]')).toBeNull();
+    expect(document.querySelector(".session-move__configuration")).toBeNull();
     submit();
     await operation;
     expect(request).toHaveBeenCalledWith(
@@ -199,8 +195,11 @@ it("revalidates a same-profile machine override when required policy appears dur
   });
   const operation = run();
   await chooseProfile();
-  document.querySelector<HTMLButtonElement>('[data-value="machine:fast"]')!.click();
-  flush();
+  expect(document.querySelector(".session-move__fixed-value")?.textContent).toContain("Fast");
+  expect(
+    document.querySelector<HTMLButtonElement>('openclaw-modal-dialog button[type="submit"]')!
+      .disabled,
+  ).toBe(false);
   requireProfile();
   submit();
   await operation;

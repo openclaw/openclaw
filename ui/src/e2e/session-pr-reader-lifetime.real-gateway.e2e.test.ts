@@ -4,10 +4,11 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
-import { createServer, type ViteDevServer } from "vite";
+import type { ViteDevServer } from "vite";
 import { expect, it, vi } from "vitest";
 import { replaceSessionEntrySync } from "../../../src/config/sessions/session-accessor.ts";
 import { GatewayClient, isGatewayProtocolResponseError } from "../../../src/gateway/client.ts";
+import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../../src/gateway/control-ui-contract.js";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.ts";
 import type { GatewayServer } from "../../../src/gateway/server-public.ts";
 import { racePromiseWithAbortSignal } from "../../../src/infra/abort-signal.ts";
@@ -22,11 +23,14 @@ import {
 } from "../../../src/test-utils/openclaw-test-state.ts";
 import { getFreePort } from "../../../src/test-utils/ports.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
-import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
-import { openDetailsPullRequests } from "./chat-details.test-support.ts";
+import {
+  openDesktopPullRequestPage,
+  openDetailsPullRequests,
+} from "./chat-details.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { createGatewayProxy, gatewayProxyRoute } from "./gateway-proxy.test-support.ts";
 
 const sessionKey = "agent:main:pr-reader-lifetime";
 const checksMethod = "controlUi.sessionPullRequests.checks";
@@ -266,14 +270,15 @@ suite.define(() => {
             return json([pullRequest(repository)]);
           }
           if (url.pathname.includes("/pulls/")) {
+            return json(pullRequest(repository));
+          }
+          if (url.pathname.endsWith("/check-runs")) {
+            // CI details read the admitted commit without fetching the mutable PR again.
             if (repository === replacement && holdChecks) {
               holdChecks = false;
               checksEntered.resolve();
               await releaseIdentityReads.promise;
             }
-            return json(pullRequest(repository));
-          }
-          if (url.pathname.endsWith("/check-runs")) {
             return json({
               total_count: 1,
               check_runs: [
@@ -298,35 +303,13 @@ suite.define(() => {
           controlUiEnabled: false,
           sidecarStartup: "defer",
         });
-        const forwarded = (email: string) => ({
-          "x-forwarded-for": "192.0.2.10",
-          "x-forwarded-proto": "http",
-          "x-forwarded-user": email,
-        });
         // Chromium does not consistently apply extraHTTPHeaders to WebSocket upgrades.
-        proxy = await createServer({
-          configFile: false,
-          envFile: false,
-          root: state.workspaceDir,
-          appType: "custom",
-          logLevel: "error",
-          server: {
-            host: "127.0.0.1",
-            port: 0,
-            proxy: {
-              "/retiring": {
-                target: `http://127.0.0.1:${port}`,
-                ws: true,
-                headers: forwarded(retiringEmail),
-                rewrite: () => "/",
-              },
-              "/": {
-                target: `http://127.0.0.1:${port}`,
-                ws: true,
-                headers: forwarded(viewerEmail),
-              },
-            },
+        proxy = await createGatewayProxy(state.workspaceDir, {
+          "/retiring": {
+            ...gatewayProxyRoute(port, retiringEmail),
+            rewrite: () => "/",
           },
+          "/": gatewayProxyRoute(port, viewerEmail),
         });
         await proxy.listen();
         const proxyUrl = proxy.resolvedUrls?.local[0];
@@ -442,18 +425,33 @@ suite.define(() => {
             const pane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
             await openDetailsPullRequests(pane);
             const chip = pane.locator(".chat-pr").first();
+            const prLink = (repository: Repository) =>
+              chip.getByRole("link", {
+                name: `Pull request synthetic/${repository.repo}#${repository.number}: ${repository.title ?? `Review ${repository.repo}`}`,
+                exact: true,
+              });
             const refreshRoster = async () => {
               await evaluateControlUiContext(page, async (context) => {
                 await context.sessions.refresh({ agentId: "main", force: true });
               });
               await expect
-                .poll(() => pane.locator(".chat-pane__workspace-chip").getAttribute("title"))
-                .toBe(replacement.root);
+                .poll(() =>
+                  pane
+                    .locator(".chat-pane__workspace-chip")
+                    .filter({ visible: true })
+                    .getAttribute("aria-label"),
+                )
+                .toBe("Workspace actions for replacement-workspace");
             };
-            await chip.locator(".chat-pr__number").filter({ hasText: "#101" }).waitFor();
-            await chip.locator(".chat-pr__checks-pill").click();
+            await expect
+              .poll(() => prLink(original).getAttribute("href"))
+              .toBe(`https://github.com/synthetic/${original.repo}/pull/${original.number}`);
+            await openDesktopPullRequestPage(chip, "checks");
             await pane.getByText("original-workspace check", { exact: true }).waitFor();
             await page.keyboard.press("Escape");
+            await chip.locator('.chat-pr-menu [data-value="checks"]').waitFor();
+            await page.keyboard.press("Escape");
+            await chip.locator(".chat-pr-menu").waitFor({ state: "hidden" });
             await pane.locator('.chat-details[role="dialog"]').waitFor();
             await subscribe();
             await expect.poll(() => retiredDeliveries.length).toBe(1);
@@ -482,19 +480,21 @@ suite.define(() => {
             await refreshRoster();
             // A new session incarnation resets the pane-local Details presentation.
             await openDetailsPullRequests(pane);
-            await chip
-              .locator(".chat-pr__number")
-              .filter({ hasText: `#${settled.number}` })
-              .waitFor();
+            await expect
+              .poll(() => prLink(replacement).getAttribute("href"))
+              .toBe(`https://github.com/synthetic/${settled.repo}/pull/${settled.number}`);
             expect(settled).toEqual(expectedDelivery(replacement));
             expect(retiredDeliveries).toHaveLength(retiredCount);
             expect(await chip.locator(".chat-pr__link").getAttribute("href")).toBe(
               `https://github.com/synthetic/${replacement.repo}/pull/${replacement.number}`,
             );
-            await chip.locator(".chat-pr__checks-pill").click();
+            await openDesktopPullRequestPage(chip, "checks");
             await pane.getByText("replacement-workspace check", { exact: true }).waitFor();
 
-            await chip.locator(".chat-pr__checks-pill").click();
+            await page.keyboard.press("Escape");
+            await chip.locator('.chat-pr-menu [data-value="checks"]').waitFor();
+            await page.keyboard.press("Escape");
+            await chip.locator(".chat-pr-menu").waitFor({ state: "hidden" });
             // A new PR keeps the details request cold while the real summary is already known.
             replacement.number = 203;
             replacement.checkName = "replacement-workspace current-reader check";
@@ -505,7 +505,9 @@ suite.define(() => {
             );
             // A later roster read must not dismiss Details for the already adopted incarnation.
             await refreshRoster();
-            await chip.locator(".chat-pr__number").filter({ hasText: "#203" }).waitFor();
+            await expect
+              .poll(() => prLink(replacement).getAttribute("href"))
+              .toBe(`https://github.com/synthetic/${replacement.repo}/pull/203`);
             await subscribe();
             await expect.poll(() => retiredDeliveries.at(-1)?.number).toBe(203);
             const beforeIdentityReassignment = retiredDeliveries.length;
@@ -560,7 +562,7 @@ suite.define(() => {
               });
             });
             await pendingChecks;
-            await chip.locator(".chat-pr__checks-pill").click();
+            await openDesktopPullRequestPage(chip, "checks");
             await pane.getByText(replacement.checkName, { exact: true }).waitFor();
             // The response drains earlier frames on this socket after the shared refresh settled.
             await subscribe([]);

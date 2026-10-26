@@ -1,4 +1,7 @@
-import type { EmbeddingInput } from "openclaw/plugin-sdk/embedding-providers";
+import type {
+  EmbeddingInput,
+  EmbeddingProviderCallOptions,
+} from "openclaw/plugin-sdk/embedding-providers";
 import {
   debugEmbeddingsLog,
   embeddingProviderOwnsDestination,
@@ -103,6 +106,8 @@ export function buildGeminiEmbeddingRequest(params: {
   input: EmbeddingInput;
   model: string;
   role: "query" | "document";
+  queryInstructionApplied?: boolean;
+  documentFormatApplied?: boolean;
   taskType: GeminiTaskType;
   outputDimensionality?: number;
   modelPath?: string;
@@ -117,7 +122,11 @@ export function buildGeminiEmbeddingRequest(params: {
   ) ?? [{ text: input.text }];
   const isStableEmbedding2 = normalizeGeminiModel(params.model) === "gemini-embedding-2";
   const request: GeminiEmbeddingRequest = { content: { parts } };
-  if (isStableEmbedding2 && parts.every((part) => "text" in part)) {
+  if (
+    isStableEmbedding2 &&
+    !(params.role === "query" ? params.queryInstructionApplied : params.documentFormatApplied) &&
+    parts.every((part) => "text" in part)
+  ) {
     const first = parts[0];
     if (first && "text" in first) {
       const taskType =
@@ -323,7 +332,7 @@ export async function createGeminiEmbeddingProvider(
 
   const embedQuery = async (
     text: string,
-    callOptions?: { signal?: AbortSignal },
+    callOptions?: EmbeddingProviderCallOptions,
   ): Promise<number[]> => {
     if (!text.trim()) {
       return [];
@@ -335,6 +344,7 @@ export async function createGeminiEmbeddingProvider(
         input: text,
         model: client.model,
         role: "query",
+        queryInstructionApplied: callOptions?.queryInstructionApplied,
         taskType: options.taskType ?? "RETRIEVAL_QUERY",
         outputDimensionality,
       }),
@@ -348,7 +358,7 @@ export async function createGeminiEmbeddingProvider(
 
   const embedDocuments = async (
     inputs: EmbeddingInput[],
-    callOptions?: { signal?: AbortSignal },
+    callOptions?: EmbeddingProviderCallOptions,
   ): Promise<number[][]> => {
     if (inputs.length === 0) {
       return [];
@@ -362,6 +372,7 @@ export async function createGeminiEmbeddingProvider(
             input,
             model: client.model,
             role: "document",
+            documentFormatApplied: callOptions?.documentFormatApplied,
             modelPath: client.modelPath,
             taskType: options.taskType ?? "RETRIEVAL_DOCUMENT",
             outputDimensionality,

@@ -6,11 +6,13 @@ import type {
 
 export type OpenClawStateLeaseContext = {
   signal: AbortSignal;
+  /** Check cancellation and, for native process-bound runtime scopes, confirmed expiry. */
+  assertCurrent(this: void): void;
   /** Renew before a blocking phase, carrying this caller's authority into timer renewal.
    * Renew again after a temporary authority scope ends to restore the caller's context. */
-  renew?(): void;
+  renew?(this: void): void;
   /** Verify that this exact owner holds a non-expired lease at this instant. */
-  assertOwned(): void;
+  assertOwned(this: void): void;
   /** Worker-heartbeat leases can verify durable ownership without blocking the caller. */
   assertOwnedAsync?(this: void): Promise<void>;
   /** Verify ownership using the caller's active write transaction. */
@@ -25,6 +27,8 @@ export type OpenClawStateLeaseContext = {
 /** Ordinary runtime leases whose durable checks and renewal are awaited. */
 export type OpenClawStateAsyncLeaseContext = {
   signal: AbortSignal;
+  /** Final live-owner guard after awaiting durable ownership at an effect boundary. */
+  assertCurrent(this: void): void;
   assertOwned(): Promise<void>;
   renew(): Promise<void>;
 };

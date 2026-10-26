@@ -1,20 +1,15 @@
 import type { EngineConnection } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import type { SqliteWorkerCommand } from "openclaw/plugin-sdk/sqlite-worker-runtime";
-import { hasMemorySessionTombstone } from "../memory-session-tombstones.js";
 import { loadMemoryEmbeddingCache } from "./manager-embedding-cache.js";
 import type { MemoryPublicationOperations } from "./manager-publication-task.js";
+import { loadMemoryRebuildEmbeddings } from "./manager-rebuild-embeddings.js";
 import { readMemoryDatabaseFacts } from "./manager-retrieval-read.js";
 import { readMemorySourceChunks, readMemorySourceHash } from "./manager-source-index-kernel.js";
 import { loadMemorySourceFileState } from "./manager-source-state.js";
 
 export type MemoryIndexReadOperations = Pick<
   MemoryPublicationOperations,
-  | "index.facts"
-  | "source.state"
-  | "source.hash"
-  | "source.chunks"
-  | "cache.read"
-  | "session.current"
+  "index.facts" | "source.state" | "source.hash" | "source.chunks" | "cache.read"
 >;
 export type MemoryIndexReadCommand = SqliteWorkerCommand<MemoryIndexReadOperations>;
 
@@ -35,15 +30,19 @@ export function readMemoryIndex(db: EngineConnection, command: MemoryIndexReadCo
         type: command.type,
         value: readMemorySourceChunks(db, command.input.source, command.input.path),
       };
-    case "cache.read":
-      return { type: command.type, value: loadMemoryEmbeddingCache({ ...command.input, db }) };
-    case "session.current":
-      return {
-        type: command.type,
-        value: hasMemorySessionTombstone(db, command.input.agentId, command.input.sessionId)
-          ? ("forgotten" as const)
-          : ("current" as const),
-      };
+    case "cache.read": {
+      const cached = loadMemoryEmbeddingCache({ ...command.input, db });
+      const identity = command.input.providerIdentities[0];
+      if (command.input.rebuild && identity) {
+        loadMemoryRebuildEmbeddings({
+          db,
+          identity,
+          query: command.input.rebuild,
+          cached,
+        });
+      }
+      return { type: command.type, value: cached };
+    }
   }
   const unreachable: never = command;
   return unreachable;

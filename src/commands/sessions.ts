@@ -18,10 +18,7 @@ import { findModelInCatalog } from "../agents/model-catalog-lookup.js";
 import { selectModelCatalogRuntimeEntry } from "../agents/model-catalog-view.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import { resolveModelContextWindowProfile } from "../agents/model-context-window.js";
-import {
-  prepareCliProviderClassifier,
-  type CliProviderClassifier,
-} from "../agents/model-selection.js";
+import { prepareCliProviderClassifier } from "../agents/model-selection.js";
 import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import { resolveRuntimePolicySessionKey } from "../auto-reply/reply/runtime-policy-session-key.js";
 import { normalizeChatType } from "../channels/chat-type.js";
@@ -31,8 +28,6 @@ import { resolveFreshSessionTotalTokens, resolveSessionTotalTokens } from "../co
 import { resolveProjectedSessionContextTokens } from "../config/sessions/context-token-provenance.js";
 import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
-import type { SessionEntry } from "../config/sessions/types.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveStoredSessionKeyForAgentStore } from "../gateway/session-store-key.js";
 import { info } from "../globals.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
@@ -56,8 +51,6 @@ import {
   toSessionDisplayRow,
 } from "./sessions-table.js";
 
-type SessionCandidate = { agentId: string; entry: SessionEntry; sessionKey: string };
-
 const DEFAULT_SESSIONS_LIMIT = 100;
 
 function toSessionCatalogEntry(
@@ -76,23 +69,6 @@ function toSessionCatalogEntry(
       ? { nativeRuntime: runtime.agentRuntime.id }
       : {}),
   };
-}
-
-/** True ACP sessions use the child runtime's model, not the configured fallback. */
-function applyAcpModelOverlayIfNeeded(
-  modelRef: { provider: string; model: string },
-  sessionKey: string,
-  acpRuntime: boolean,
-): { provider: string; model: string } {
-  if (!acpRuntime || !isAcpSessionKey(sessionKey)) {
-    return modelRef;
-  }
-  const agentId = parseAgentSessionKey(sessionKey)?.agentId ?? "acp";
-  return { provider: "acpx", model: `${agentId}-acp` };
-}
-
-function compareSessionRowsByUpdatedAt(a: SessionCandidate, b: SessionCandidate): number {
-  return (b.entry.updatedAt ?? 0) - (a.entry.updatedAt ?? 0);
 }
 
 function parseSessionsLimit(value: string | number | undefined): number | undefined | null {
@@ -161,24 +137,6 @@ const formatKindCell = (kind: SessionKind, rich: boolean) => {
   return colorize(rich, colors[kind], kind);
 };
 
-function resolveSessionRuntimeLabel(params: {
-  cfg: OpenClawConfig;
-  entry: SessionEntry;
-  agentRuntime: ReturnType<typeof resolveCurrentSessionAgentRuntimeMetadata>;
-  modelProvider: string;
-  classifyCliProvider: CliProviderClassifier;
-}): string {
-  const id = normalizeOptionalLowercaseString(params.agentRuntime.id);
-  const resolvedHarness = id && id !== "openclaw" && id !== "auto" ? id : undefined;
-  return resolveAgentRuntimeLabel({
-    config: params.cfg,
-    sessionEntry: params.entry,
-    resolvedHarness,
-    fallbackProvider: params.modelProvider,
-    classifyCliProvider: params.classifyCliProvider,
-  });
-}
-
 function resolveSessionStoreDisplayPath(target: { agentId: string; storePath: string }): string {
   return resolveSqliteTargetFromSessionStorePath(target.storePath, {
     agentId: target.agentId,
@@ -203,57 +161,6 @@ function stripChannelRecipientPrefix(
   // Topic suffixes are routing detail, not the peer id used by runtime-policy
   // session-key display.
   return topicMarkerIndex >= 0 ? stripped.slice(0, topicMarkerIndex) : stripped;
-}
-
-function resolveDisplayRuntimePolicySessionKey(params: {
-  agentId: string;
-  cfg: OpenClawConfig;
-  key: string;
-  entry: SessionEntry;
-}): string | undefined {
-  const { cfg, entry, key } = params;
-  const origin = sessionDeliveryOrigin(entry);
-  const deliveryContext = deliveryContextFromSession(entry);
-  const chatType = normalizeChatType(origin?.chatType ?? entry.chatType);
-  if (chatType !== "direct") {
-    return undefined;
-  }
-
-  const channel = normalizeOptionalString(
-    origin?.provider ?? deliveryContext?.channel ?? origin?.surface,
-  );
-  const to = normalizeOptionalString(origin?.to ?? deliveryContext?.to);
-  const from = normalizeOptionalString(origin?.from);
-  const nativeDirectUserId = normalizeOptionalString(origin?.nativeDirectUserId);
-  const peerId =
-    nativeDirectUserId ??
-    stripChannelRecipientPrefix(to, channel) ??
-    stripChannelRecipientPrefix(from, channel);
-
-  // Direct-message runtime policy can route by native user id, stripped
-  // recipient, or sender; expose the derived key when it differs from the row.
-  const runtimePolicySessionKey = resolveRuntimePolicySessionKey({
-    agentId: params.agentId,
-    cfg,
-    sessionKey: key,
-    ctx: {
-      SessionKey: key,
-      AgentId: params.agentId,
-      Provider: channel,
-      Surface: normalizeOptionalString(origin?.surface),
-      AccountId: normalizeOptionalString(origin?.accountId ?? deliveryContext?.accountId),
-      ChatType: chatType,
-      NativeDirectUserId: nativeDirectUserId,
-      SenderId: peerId,
-      OriginatingTo: to,
-      From: from,
-      To: to,
-    },
-  });
-
-  return runtimePolicySessionKey && runtimePolicySessionKey !== key
-    ? runtimePolicySessionKey
-    : undefined;
 }
 
 export async function sessionsCommand(
@@ -303,18 +210,20 @@ export async function sessionsCommand(
       .map(({ sessionKey, entry }) => ({ agentId: target.agentId, entry, sessionKey }));
   });
   const totalCount = allEntries.length;
-  const sessionEntries = sortAndLimitBy(allEntries, limit, compareSessionRowsByUpdatedAt).map(
-    ({ agentId: storeAgentId, entry, sessionKey }) => {
-      const row = toSessionDisplayRow(sessionKey, entry);
-      const agentId = parseAgentSessionKey(row.key)?.agentId ?? storeAgentId;
-      const acpSessionKey = resolveStoredSessionKeyForAgentStore({
-        cfg,
-        agentId,
-        sessionKey: row.key,
-      });
-      return { acpSessionKey, agentId, entry, row };
-    },
-  );
+  const sessionEntries = sortAndLimitBy(
+    allEntries,
+    limit,
+    (a, b) => (b.entry.updatedAt ?? 0) - (a.entry.updatedAt ?? 0),
+  ).map(({ agentId: storeAgentId, entry, sessionKey }) => {
+    const row = toSessionDisplayRow(sessionKey, entry);
+    const agentId = parseAgentSessionKey(row.key)?.agentId ?? storeAgentId;
+    const acpSessionKey = resolveStoredSessionKeyForAgentStore({
+      cfg,
+      agentId,
+      sessionKey: row.key,
+    });
+    return { acpSessionKey, agentId, entry, row };
+  });
   const acpSessionMetadata = await readAcpSessionMetaForEntries({
     cfg,
     entries: sessionEntries.map(({ acpSessionKey, agentId, entry }) => ({
@@ -348,11 +257,12 @@ export async function sessionsCommand(
       const acpRuntime = acpMeta != null;
       // ACP rows need stored-key metadata before model/runtime resolution so
       // bridge sessions and true ACP runtime sessions display differently.
-      const modelRef = applyAcpModelOverlayIfNeeded(
-        resolveSessionDisplayModelRef(cfg, row, classifyCliProvider, agentId),
-        acpSessionKey,
-        acpRuntime,
-      );
+      let modelRef = resolveSessionDisplayModelRef(cfg, row, classifyCliProvider, agentId);
+      /** True ACP sessions use the child runtime's model, not the configured fallback. */
+      if (acpRuntime && isAcpSessionKey(acpSessionKey)) {
+        const acpAgentId = parseAgentSessionKey(acpSessionKey)?.agentId ?? "acp";
+        modelRef = { provider: "acpx", model: `${acpAgentId}-acp` };
+      }
       const agentRuntime = resolveCurrentSessionAgentRuntimeMetadata({
         cfg,
         agentId,
@@ -454,28 +364,71 @@ export async function sessionsCommand(
         resolvedContextTokens: modelContext.contextTokens,
         authoredContextTokens: modelContext.authoredContextTokens,
       });
+      const kind = classifySessionKind(row.key, entry);
+      const key = row.key;
+      const origin = sessionDeliveryOrigin(entry);
+      const deliveryContext = deliveryContextFromSession(entry);
+      const chatType = normalizeChatType(origin?.chatType ?? entry.chatType);
+      let runtimePolicySessionKey: string | undefined;
+      if (chatType === "direct") {
+        const channel = normalizeOptionalString(
+          origin?.provider ?? deliveryContext?.channel ?? origin?.surface,
+        );
+        const to = normalizeOptionalString(origin?.to ?? deliveryContext?.to);
+        const from = normalizeOptionalString(origin?.from);
+        const nativeDirectUserId = normalizeOptionalString(origin?.nativeDirectUserId);
+        const peerId =
+          nativeDirectUserId ??
+          stripChannelRecipientPrefix(to, channel) ??
+          stripChannelRecipientPrefix(from, channel);
+
+        // Direct-message runtime policy can route by native user id, stripped
+        // recipient, or sender; expose the derived key when it differs from the row.
+        const resolvedPolicySessionKey = resolveRuntimePolicySessionKey({
+          agentId,
+          cfg,
+          sessionKey: key,
+          ctx: {
+            SessionKey: key,
+            AgentId: agentId,
+            Provider: channel,
+            Surface: normalizeOptionalString(origin?.surface),
+            AccountId: normalizeOptionalString(origin?.accountId ?? deliveryContext?.accountId),
+            ChatType: chatType,
+            NativeDirectUserId: nativeDirectUserId,
+            SenderId: peerId,
+            OriginatingTo: to,
+            From: from,
+            To: to,
+          },
+        });
+        runtimePolicySessionKey =
+          resolvedPolicySessionKey && resolvedPolicySessionKey !== key
+            ? resolvedPolicySessionKey
+            : undefined;
+      }
+      let runtimeLabel = "";
+      if (!opts.json) {
+        const modelProvider = modelRef.provider;
+        const id = normalizeOptionalLowercaseString(agentRuntime.id);
+        const resolvedHarness = id && id !== "openclaw" && id !== "auto" ? id : undefined;
+        runtimeLabel = resolveAgentRuntimeLabel({
+          config: cfg,
+          sessionEntry: entry,
+          resolvedHarness,
+          fallbackProvider: modelProvider,
+          classifyCliProvider,
+        });
+      }
       return Object.assign(row, {
         agentId,
         acpRuntime,
         agentRuntime,
         contextTokens,
         displayModelRef: modelRef,
-        kind: classifySessionKind(row.key, entry),
-        runtimePolicySessionKey: resolveDisplayRuntimePolicySessionKey({
-          agentId,
-          cfg,
-          key: row.key,
-          entry,
-        }),
-        runtimeLabel: opts.json
-          ? ""
-          : resolveSessionRuntimeLabel({
-              cfg,
-              entry,
-              agentRuntime,
-              modelProvider: modelRef.provider,
-              classifyCliProvider,
-            }),
+        kind,
+        runtimePolicySessionKey,
+        runtimeLabel,
       });
     }),
   );
@@ -514,7 +467,9 @@ export async function sessionsCommand(
 
   const primaryTarget = targets[0];
   if (primaryTarget && targets.length === 1 && !aggregateAgents) {
-    runtime.log(info(`Session store: ${resolveSessionStoreDisplayPath(primaryTarget)}`));
+    runtime.log(
+      info(`Session store: ${sanitizeTerminalText(resolveSessionStoreDisplayPath(primaryTarget))}`),
+    );
   } else {
     runtime.log(
       info(`Session stores: ${targets.length} (${targets.map((t) => t.agentId).join(", ")})`),

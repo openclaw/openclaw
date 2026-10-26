@@ -9,12 +9,62 @@ import type {
 } from "./session-actor-contract.js";
 import type { PendingInputMutationReceipt } from "./session-pending-input-operations.types.js";
 
+export type SessionActorCommittedWireOutcome<Value> = Extract<
+  SessionActorOutcome<Value>,
+  { kind: "committed" }
+> & { receipt: { entryReference?: string } };
+
+/** The command retains this exact preimage until native settlement completes. */
+export function projectSessionActorCommittedOutcome<Value>(
+  outcome: Extract<SessionActorOutcome<Value>, { kind: "committed" }>,
+  reference: SessionActorHotState | undefined,
+): SessionActorCommittedWireOutcome<Value> {
+  const { receipt } = outcome;
+  // Turn/initialization results can also expose the entry; preserve their graph aliases.
+  const append =
+    receipt.phase === "appendTranscriptEvent" ||
+    (receipt.phase === "appendToolResult" && receipt.transcript.append !== undefined);
+  if (
+    !append ||
+    receipt.transcript.append?.initialEntry ||
+    !reference ||
+    receipt.postimage.entry !== reference.entry
+  ) {
+    return outcome;
+  }
+  return {
+    ...outcome,
+    receipt: {
+      ...receipt,
+      entryReference: reference.writeToken,
+      postimage: { ...receipt.postimage, entry: undefined },
+    },
+  };
+}
+
+export function restoreSessionActorCommittedOutcome<Value>(
+  outcome: SessionActorCommittedWireOutcome<Value>,
+  reference: SessionActorHotState | undefined,
+): Extract<SessionActorOutcome<Value>, { kind: "committed" }> {
+  const { receipt } = outcome;
+  if (receipt.entryReference !== undefined) {
+    if (!reference || receipt.entryReference !== reference.writeToken) {
+      throw new Error("Session actor receipt entry reference is unavailable");
+    }
+    // The replica owns this deeply frozen entry; settlement and observers only read it.
+    receipt.postimage.entry = reference.entry;
+    delete receipt.entryReference;
+  }
+  return outcome;
+}
+
 function collectAppendedEvents(
   before: SessionActorHotState,
   after: SessionActorHotState,
   payloads: ReadonlyMap<number, { event: unknown; serializedBytes: number }> | undefined,
+  rewrittenGeneration = before.transcript.version.generation,
 ): SessionActorReceipt["transcript"]["appendedEvents"] {
-  if (!payloads || before.transcript.version.generation !== after.transcript.version.generation) {
+  if (!payloads || rewrittenGeneration !== after.transcript.version.generation) {
     return undefined;
   }
   const beforeSeq = before.transcript.version.rawSeq ?? -1;
@@ -48,6 +98,7 @@ export function createSessionActorCommittedOutcome<
   payloads?: ReadonlyMap<number, { event: unknown; serializedBytes: number }>;
   transcriptAuthority?: SessionActorReceipt["transcript"]["authorityReceipts"];
   conversationPublication?: SessionActorReceipt["conversationPublication"];
+  entryMetadata?: SessionActorReceipt["entryMetadata"];
   applied: {
     value: Value;
     pendingInputMutationReceipt?: PendingInputMutationReceipt;
@@ -84,7 +135,12 @@ export function createSessionActorCommittedOutcome<
         after: after.transcript.version,
         appendedMessages:
           turn?.result.appendedMessages ?? (appended && "messageId" in appended ? [appended] : []),
-        appendedEvents: collectAppendedEvents(before, after, params.payloads),
+        appendedEvents: collectAppendedEvents(
+          before,
+          after,
+          params.payloads,
+          append?.modelPromptProjection?.after.generation,
+        ),
         authorityReceipts: params.transcriptAuthority,
         append,
         projectionNeedsReconcile:
@@ -94,9 +150,9 @@ export function createSessionActorCommittedOutcome<
           Boolean(value && "projectionNeedsReconcile" in value && value.projectionNeedsReconcile),
       },
       conversationPublication: params.conversationPublication,
+      entryMetadata: params.entryMetadata,
       pendingInputReceipt: turn?.custody ?? append?.value.pendingInputReceipt,
       pendingInputMutationReceipt: applied.pendingInputMutationReceipt,
-      pendingFinalDelivery: structuredClone(after.entry?.pendingFinalDelivery),
       reducers: applied.reducers,
       postimage: after,
     },

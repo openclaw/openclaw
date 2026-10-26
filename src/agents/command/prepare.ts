@@ -20,6 +20,7 @@ import {
   isUnscopedSessionKeySentinel,
   normalizeAgentId,
   resolveAgentIdFromSessionKey,
+  scopeLegacySessionKeyToAgent,
 } from "../../routing/session-key.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import {
@@ -41,6 +42,7 @@ import {
   listAgentIds,
   resolveAgentDir,
   resolveSessionAgentId,
+  resolveSessionAgentIds,
   resolveAgentWorkspaceDir,
 } from "../agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
@@ -56,7 +58,6 @@ import { resolveEffectiveAgentRuntime } from "../thinking-runtime.js";
 import { resolveAgentTimeoutMs } from "../timeout.js";
 import { ensureAgentWorkspace } from "../workspace.js";
 import { acquireWorktreeRunLease, resolveWorktreeForPath } from "../worktrees/run-lease.js";
-import { resolveExplicitAgentCommandSessionKey } from "./explicit-session-key.js";
 import { loadAcpManagerRuntime } from "./runtime-loaders.js";
 import { resolveSession } from "./session.js";
 import type { AgentCommandOpts } from "./types.js";
@@ -132,14 +133,24 @@ export async function prepareAgentCommandExecution(
     classifySessionKeyShape(rawExplicitSessionKey) === "legacy_or_alias" &&
     !isUnscopedSessionKeySentinel(rawExplicitSessionKey),
   );
-  const explicitSessionKey =
-    toSessionKey ??
-    resolveExplicitAgentCommandSessionKey({
-      rawExplicitSessionKey,
-      agentIdOverride,
-      shouldScopeDefaultAgentKey,
-      cfg,
+  // Storage sentinels keep their logical key; resolveSession validates the separate owner.
+  let explicitSessionKey = toSessionKey ?? rawExplicitSessionKey;
+  if (toSessionKey === undefined && !isUnscopedSessionKeySentinel(rawExplicitSessionKey)) {
+    const unscopedOwnerAgentId =
+      classifySessionKeyShape(rawExplicitSessionKey) === "legacy_or_alias" &&
+      (agentIdOverride || shouldScopeDefaultAgentKey)
+        ? resolveSessionAgentIds({
+            config: cfg,
+            agentId: agentIdOverride,
+            sessionKey: rawExplicitSessionKey,
+          }).sessionAgentId
+        : undefined;
+    explicitSessionKey = scopeLegacySessionKeyToAgent({
+      agentId: unscopedOwnerAgentId ?? agentIdOverride,
+      sessionKey: rawExplicitSessionKey,
+      mainKey: cfg.session?.mainKey,
     });
+  }
   if (explicitSessionKey && classifySessionKeyShape(explicitSessionKey) === "malformed_agent") {
     throw new Error(
       `Invalid --session-key "${explicitSessionKey}". Agent-prefixed session keys must use agent:<agent-id>:<session-key>.`,
@@ -240,6 +251,7 @@ export async function prepareAgentCommandExecution(
     storePath,
     isNewSession,
     previousSessionId,
+    automaticReset,
     persistedThinking,
     persistedVerbose,
   } = sessionResolution;
@@ -336,7 +348,6 @@ export async function prepareAgentCommandExecution(
     ...(sessionEntryRaw &&
     isSyntheticSourceReplyTurn({
       inputProvenance: commandOpts.inputProvenance,
-      isHeartbeat: commandOpts.bootstrapContextRunKind === "heartbeat",
     })
       ? {
           // Direct Gateway wakes have no inbound dispatcher to apply effective reply policy.
@@ -464,6 +475,7 @@ export async function prepareAgentCommandExecution(
       storePath,
       isNewSession,
       previousSessionId,
+      ...(automaticReset ? { automaticReset } : {}),
       persistedThinking,
       persistedVerbose,
       sessionAgentId,

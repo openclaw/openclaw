@@ -138,7 +138,7 @@ describe("twilioApiRequest", () => {
     }
     expect(error.message).toContain("Twilio API error: 400 ");
     expect(error.message).toContain("... [truncated]");
-    expect(error.responseText.length).toBeLessThan(8_300);
+    expect(error.message.length).toBeLessThan(8_300);
     expect(tracked.wasCanceled()).toBe(true);
     expect(release).toHaveBeenCalledTimes(1);
   });
@@ -159,7 +159,6 @@ describe("twilioApiRequest", () => {
     await expect(request).rejects.toBeInstanceOf(TwilioApiError);
     await expect(request).rejects.toMatchObject({
       name: "TwilioApiError",
-      httpStatus: 400,
       twilioCode: 21220,
       message: "Twilio API error: 400 Call is not in-progress. Cannot redirect.",
     });

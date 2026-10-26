@@ -46,9 +46,6 @@ export const DEPRECATION_MARKING_COMPAT_RECORDS = [
       "TypeScript @deprecated annotations on the reader-backed ChannelSetupInput compatibility tier",
       "published-plugin artifact reader sweep required before field removal",
     ],
-    tests: ["src/plugin-sdk/channel-setup.test.ts", "src/plugins/compat/registry.test.ts"],
-    releaseNote:
-      "ChannelSetupInput keeps its reader-backed channel fields through the dated migration window while plugins move them into plugin-local input types.",
   },
   {
     code: "plugin-sdk-broad-runtime-barrels",
@@ -75,12 +72,6 @@ export const DEPRECATION_MARKING_COMPAT_RECORDS = [
       "TypeScript @deprecated annotations on broad plugin SDK barrels",
       "plugin boundary report compatibility inventory",
     ],
-    tests: [
-      "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
-      "src/plugins/compat/registry.test.ts",
-    ],
-    releaseNote:
-      "Broad agent, CLI, conversation, hook, media, plugin, and security runtime barrels remain available while bundled and external plugins migrate to focused subpaths.",
   },
   {
     code: "plugin-sdk-provider-owned-helper-shims",
@@ -114,12 +105,6 @@ export const DEPRECATION_MARKING_COMPAT_RECORDS = [
       "TypeScript @deprecated annotations naming provider-local replacements",
       "plugin boundary report compatibility inventory",
     ],
-    tests: [
-      "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
-      "src/plugins/compat/registry.test.ts",
-    ],
-    releaseNote:
-      "Provider-specific auth, model, replay, OAuth, and stream shortcuts remain as deprecated SDK shims while providers move to their local APIs.",
   },
   {
     code: "message-presentation-legacy-bridges",
@@ -154,13 +139,6 @@ export const DEPRECATION_MARKING_COMPAT_RECORDS = [
       "TypeScript @deprecated annotations naming MessagePresentation replacements",
       "plugin boundary report compatibility inventory",
     ],
-    tests: [
-      "src/interactive/payload.test.ts",
-      "src/plugin-sdk/reply-payload.test.ts",
-      "src/plugins/compat/registry.test.ts",
-    ],
-    releaseNote:
-      "Legacy interactive reply values and channel-specific rendering bridges remain available while producers migrate to MessagePresentation.",
   },
   {
     code: "plugin-sdk-focused-compat-aliases",
@@ -189,13 +167,6 @@ export const DEPRECATION_MARKING_COMPAT_RECORDS = [
       "TypeScript @deprecated annotations naming focused replacements",
       "plugin boundary report compatibility inventory",
     ],
-    tests: [
-      "src/plugin-sdk/channel-inbound.test.ts",
-      "src/plugin-sdk/ssrf-policy.test.ts",
-      "src/plugins/compat/registry.test.ts",
-    ],
-    releaseNote:
-      "Focused SDK compatibility aliases remain available through a dated window while callers adopt their annotated replacements.",
   },
   {
     code: "agent-harness-terminal-result-aliases",
@@ -220,12 +191,6 @@ export const DEPRECATION_MARKING_COMPAT_RECORDS = [
       "TypeScript @deprecated annotations on agent harness result and delivery defaults",
       "plugin boundary report compatibility inventory",
     ],
-    tests: [
-      "src/agents/harness/settled-turn-finalization-result.test.ts",
-      "src/plugins/compat/registry.test.ts",
-    ],
-    releaseNote:
-      "Agent harness result booleans and sourceVisibleReplies remain available while harnesses migrate to terminal outcomes and visibleReplies.",
   },
   {
     code: "official-plugin-export-aliases",
@@ -246,9 +211,6 @@ export const DEPRECATION_MARKING_COMPAT_RECORDS = [
       "TypeScript @deprecated annotations on published official-plugin exports",
       "plugin boundary report compatibility inventory",
     ],
-    tests: ["src/plugins/compat/registry.test.ts"],
-    releaseNote:
-      "Published channel presentation and Discord timeout aliases remain available while consumers move to their canonical exports and host-owned behavior.",
   },
   {
     code: "memory-host-compatibility-aliases",
@@ -273,6 +235,26 @@ export const DEPRECATION_MARKING_COMPAT_RECORDS = [
       "Memory-host table overrides remain available until supported artifact usage and legacy data preservation are verified.",
   },
   {
+    code: "plugin-runtime-api-unused-flat-aliases",
+    ...DEPRECATION_MARKING,
+    status: "removed",
+    owner: "plugin-execution",
+    replacement:
+      "api.agent.events.emitAgentEvent, api.runContext methods, api.session.controls.registerSessionAction, and api.session.workflow attachment and scheduling methods",
+    docsPath: "/plugins/sdk-overview/host-hooks",
+    surfaces: [
+      "OpenClawPluginApi.emitAgentEvent",
+      "OpenClawPluginApi.setRunContext",
+      "OpenClawPluginApi.getRunContext",
+      "OpenClawPluginApi.clearRunContext",
+      "OpenClawPluginApi.registerSessionAction",
+      "OpenClawPluginApi.sendSessionAttachment",
+      "OpenClawPluginApi.scheduleSessionTurn",
+      "OpenClawPluginApi.unscheduleSessionTurnsByTag",
+    ],
+    diagnostics: ["TypeScript reports removed flat members; use the grouped API namespaces"],
+  },
+  {
     code: "plugin-runtime-api-compat-aliases",
     ...DEPRECATION_MARKING,
     owner: "plugin-execution",
@@ -285,15 +267,7 @@ export const DEPRECATION_MARKING_COMPAT_RECORDS = [
       "OpenClawPluginApi.registerControlUiDescriptor",
       "OpenClawPluginApi.registerRuntimeLifecycle",
       "OpenClawPluginApi.registerAgentEventSubscription",
-      "OpenClawPluginApi.emitAgentEvent",
-      "OpenClawPluginApi.setRunContext",
-      "OpenClawPluginApi.getRunContext",
-      "OpenClawPluginApi.clearRunContext",
       "OpenClawPluginApi.registerSessionSchedulerJob",
-      "OpenClawPluginApi.registerSessionAction",
-      "OpenClawPluginApi.sendSessionAttachment",
-      "OpenClawPluginApi.scheduleSessionTurn",
-      "OpenClawPluginApi.unscheduleSessionTurnsByTag",
       "PluginHookContext.senderExternalId",
       "PluginAttachmentChannelHints.telegram",
       "PluginAttachmentChannelHints.slack",
@@ -307,19 +281,11 @@ export const DEPRECATION_MARKING_COMPAT_RECORDS = [
       "PluginRuntime.channel.session.recordInboundSession",
       "PluginRuntime.channel.inbound.runPreparedReply",
       "PluginRuntime.channel.turn",
-      "PluginRuntime.system.requestHeartbeatNow",
     ],
     diagnostics: [
       "TypeScript @deprecated annotations on plugin API and runtime aliases",
       "plugin boundary report compatibility inventory",
     ],
-    tests: [
-      "src/plugins/captured-registration.test.ts",
-      "src/plugins/runtime/index.test.ts",
-      "src/plugins/compat/registry.test.ts",
-    ],
-    releaseNote:
-      "Flat plugin registration and broad runtime aliases remain available while plugins migrate to namespaced APIs and focused runtime methods.",
   },
   {
     code: "plugin-provider-manifest-compat-aliases",
@@ -343,12 +309,5 @@ export const DEPRECATION_MARKING_COMPAT_RECORDS = [
       "TypeScript @deprecated annotations on plugin manifest and provider catalog aliases",
       "plugin boundary report compatibility inventory",
     ],
-    tests: [
-      "src/plugins/contracts/package-manifest.contract.test.ts",
-      "src/plugins/contracts/provider-catalog-deprecation.contract.test.ts",
-      "src/plugins/compat/registry.test.ts",
-    ],
-    releaseNote:
-      "Runtime plugin kind/setup metadata and provider catalog hooks remain available while plugins migrate ownership into manifests and catalog registrations.",
   },
 ] as const satisfies readonly PluginCompatRecord[];

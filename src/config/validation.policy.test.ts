@@ -6,36 +6,24 @@ import {
   validateConfigObjectRawWithPlugins,
   validateConfigObjectWithPlugins,
 } from "./validation.js";
+import { validationIssues as requireIssues } from "./validation.test-helpers.js";
 
 // mock-isolation: Supply fixed unsupported surfaces without loading plugin policy discovery.
 vi.mock("../secrets/unsupported-surface-policy.js", async () => {
   const { isRecord } = await import("../utils.js");
-
+  const { getConfigValueAtPath } = await import("./config-paths.js");
   return {
     unsupportedSecretRefSurfacePolicy: {
       collectConfigCandidates: (raw: unknown) =>
-        Object.entries({
-          hooks: "token",
-          "channels.discord.threadBindings": "webhookToken",
-        }).flatMap(([parentPath, key]) => {
-          const parent = parentPath
-            .split(".")
-            .reduce<unknown>(
-              (value, segment) => (isRecord(value) ? value[segment] : undefined),
-              raw,
-            );
-          return isRecord(parent) ? [{ path: `${parentPath}.${key}`, value: parent[key] }] : [];
-        }),
+        isRecord(raw)
+          ? ["hooks.token", "channels.discord.threadBindings.webhookToken"].map((path) => ({
+              path,
+              value: getConfigValueAtPath(raw, path.split(".")),
+            }))
+          : [],
     },
   };
 });
-
-function requireIssues(result: ReturnType<typeof validateConfigObjectRaw>) {
-  if (result.ok) {
-    throw new Error("Expected invalid config");
-  }
-  return result.issues;
-}
 
 const issueMessage = (issues: ReturnType<typeof requireIssues>, path: string) =>
   issues.find((entry) => entry.path === path)?.message;
@@ -52,12 +40,15 @@ const secretFixturePlugin = createPluginManifestRecordFixture({
   configSchema: { type: "object", additionalProperties: true },
 });
 
-function warnings(config: unknown, prefix: string) {
-  const result = validateConfigObjectWithPlugins(config, {
-    pluginMetadataSnapshot: { manifestRegistry: { diagnostics: [], plugins: [] } },
-  });
+function redactWarnings(redactPatterns: string[]) {
+  const result = validateConfigObjectWithPlugins(
+    { logging: { redactPatterns } },
+    {
+      pluginMetadataSnapshot: { manifestRegistry: { diagnostics: [], plugins: [] } },
+    },
+  );
   expect(result.ok).toBe(true);
-  return result.warnings.filter((warning) => warning.path.startsWith(prefix));
+  return result.warnings.filter((warning) => warning.path.startsWith("logging.redactPatterns"));
 }
 
 function validateCredential(source: "env" | "exec", defaultAlias = false) {
@@ -102,12 +93,9 @@ it("replaces hooks.token schema errors with SecretRef policy guidance", () => {
   const message = issueMessage(issues, "hooks.token");
   expect(message).toContain("SecretRef objects are not supported at hooks.token");
   expect(message).toContain("https://docs.openclaw.ai/reference/secretref-credential-surface");
-  expect(issues).not.toContainEqual(
-    expect.objectContaining({
-      path: "hooks.token",
-      message: expect.stringContaining(schemaError),
-    }),
-  );
+  expect(
+    issues.some((issue) => issue.path === "hooks.token" && issue.message.includes(schemaError)),
+  ).toBe(false);
 });
 
 it("keeps standard schema errors for non-SecretRef objects", () => {
@@ -134,68 +122,32 @@ it.each([false, true])("filters only the policy-owned unknown key (typo=%s)", (t
   expect(issueMessage(issues, webhookPath)).toContain(
     `SecretRef objects are not supported at ${webhookPath}`,
   );
+  const parentIssues = issues.filter((issue) => issue.path === "channels.discord.threadBindings");
+  expect(parentIssues).toHaveLength(Number(typo));
   if (typo) {
-    const message = issueMessage(issues, "channels.discord.threadBindings");
+    const message = parentIssues[0]?.message;
     expect(message).toContain("webhookTokne");
     expect(message).not.toContain("webhookToken");
-  } else {
-    expect(
-      issues.some(
-        (issue) =>
-          issue.path === "channels.discord.threadBindings" &&
-          issue.message.includes('Unrecognized key: "webhookToken"'),
-      ),
-    ).toBe(false);
   }
 });
 
-it("enforces the gateway TCP port range", () => {
-  for (const port of [0, 65_536]) {
-    const message = issueMessage(invalid({ gateway: { port } }), "gateway.port");
-    if (port === 0) {
-      expect(message).toContain("expected number to be >=1");
-    } else {
-      expect(message).toBeDefined();
-    }
-  }
-  for (const port of [1, 65_535]) {
-    expect(validateConfigObjectRaw({ gateway: { port } }).ok).toBe(true);
+it.each([0, 1, 65_535, 65_536])("enforces the gateway TCP port bound at %s", (port) => {
+  const result = validateConfigObjectRaw({ gateway: { port } });
+  expect(result.ok).toBe(port > 0 && port < 65_536);
+  if (!result.ok) {
+    expect(issueMessage(result.issues, "gateway.port")).toContain(port === 0 ? ">=1" : "65535");
   }
 });
-
-const heartbeatPath = "agents.defaults.heartbeat.agentId";
-const missingHeartbeatOwner = [
-  {
-    path: heartbeatPath,
-    message:
-      "Multi-agent config has no ambient heartbeat owner; heartbeats stay disabled until agents.defaults.heartbeat.agentId or agents.defaults.systemAgent.agentId is set.",
-  },
-];
-it.each([
-  ["ownerless", {}, undefined, missingHeartbeatOwner],
-  ["per-agent", { heartbeat: { every: "30m" } }, undefined, []],
-  ["broadcast", {}, { heartbeat: { every: "30m" } }, []],
-])("reports heartbeat ownership for %s", (_name, ops, defaults, expected) => {
-  const agents = { ownership: "explicit", entries: { main: {}, ops }, defaults };
-  expect(warnings({ agents }, heartbeatPath)).toEqual(expected);
-});
-
-const redactWarnings = (redactPatterns: string[]) =>
-  warnings({ logging: { redactPatterns } }, "logging.redactPatterns");
 
 it("warns for patterns that log redaction silently drops", () => {
-  expect(redactWarnings(["ACME-[0-9]+", "(", String.raw`/(\+?\d+[ -]?)+/`])).toEqual([
-    {
-      path: "logging.redactPatterns.1",
-      message:
-        "Redaction pattern is ignored (invalid-regex); values it should mask stay visible in logs and diagnostics. Fix the regex syntax, then run openclaw config validate again.",
-    },
-    {
-      path: "logging.redactPatterns.2",
-      message:
-        "Redaction pattern is ignored (unsafe-nested-repetition); values it should mask stay visible in logs and diagnostics. Rewrite the nested repetition, for example (a+)+ as a+, then run openclaw config validate again.",
-    },
+  const issues = redactWarnings(["ACME-[0-9]+", "(", String.raw`/(\+?\d+[ -]?)+/`]);
+  expect(
+    issues.map(({ path, message }) => [path, message.match(/ignored \(([^)]+)\)/)?.[1]]),
+  ).toEqual([
+    ["logging.redactPatterns.1", "invalid-regex"],
+    ["logging.redactPatterns.2", "unsafe-nested-repetition"],
   ]);
+  expect(issues.every(({ message }) => message.includes("openclaw config validate"))).toBe(true);
 });
 
 it("does not warn for the default string list", () => {

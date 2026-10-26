@@ -19,7 +19,7 @@ import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { collectNestedErrorCandidates } from "./error-graph-internal.js";
 import { SqliteWorkerError } from "./sqlite-worker-contract.js";
 import { validateUpdateCandidateCanary } from "./update-candidate-canary.js";
-import { stubHealthyGateway } from "./update-candidate-canary.test-support.js";
+import { holdCanaryProgress, stubHealthyGateway } from "./update-candidate-canary.test-support.js";
 import * as candidateIo from "./update-candidate-io.js";
 import { UpdateRequesterRevokedError } from "./update-requester-authority.js";
 import { createUpdateRun, getUpdateRunAsync } from "./update-run-ledger.js";
@@ -225,9 +225,14 @@ export function registerCanaryProgressWorkerTests(
         }
         if (outcome === "interrupted-after-acceptance") {
           await expect(pending).rejects.toBeInstanceOf(UpdateRequesterRevokedError);
-          expect(commits).toBeGreaterThanOrEqual(2);
+          expect(commits).toBe(2);
           const saved = await getUpdateRunAsync(run.runId, { env });
-          expect(saved?.steps).toContainEqual(expect.objectContaining(snapshotStep));
+          expect(saved?.steps).toContainEqual(
+            expect.objectContaining({
+              ...snapshotStep,
+              detail: expect.stringContaining("copying, attempt 1, 460222/920445 pages"),
+            }),
+          );
           expect(onStepComplete).toHaveBeenCalledWith(
             expect.objectContaining({
               name: "candidate-state-snapshot",
@@ -307,119 +312,97 @@ export function registerCanaryUncertainReceiptTests({
   canaryStateOptions: (timeoutMs?: number) => Parameters<typeof validateUpdateCandidateCanary>[0];
   setRuntimeError: (value: boolean) => void;
 }) {
-  it.each([
-    "operation-failed",
-    "cancelled",
-    "authority-revoked",
-    "earlier-progress-failed",
-  ] as const)("retains snapshot uncertainty after settled IO is %s", async (ordering) => {
-    const options = canaryStateOptions(3_000);
-    const receipt = createDeferredCore();
-    const earlierReceipt = createDeferredCore();
-    const operationSettled = createDeferredCore();
-    const caller = new AbortController();
-    const uncertain = new CommandProcessCleanupError();
-    const operationFailure = new Error("snapshot worker failed before progress settled");
-    const earlierFailure = new Error("earlier snapshot progress recording failed");
-    let current = true;
-    let retained: string | undefined;
-    const snapshot = mocks.snapshot.getMockImplementation()!;
-    mocks.snapshot.mockImplementation(async (command, commandOptions: SnapshotOptions) => {
-      const request: unknown = JSON.parse(commandOptions.input);
-      if (isRecord(request) && request.mode === "snapshot") {
-        if (typeof request.targetStateDir !== "string") {
-          throw new Error("Snapshot fixture requires its owned target directory");
-        }
-        retained = request.targetStateDir;
-        await fs.writeFile(path.join(retained, "pending-snapshot-copy"), "synthetic copy");
-        for (const status of ordering === "earlier-progress-failed"
-          ? ["copying", "completed"]
-          : ["copying"]) {
-          commandOptions.onOutputChunk?.(progressFrame(options.stateDir, status), "stderr");
-        }
-        if (ordering === "operation-failed") {
-          throw operationFailure;
-        }
-      }
-      return snapshot(command, commandOptions);
-    });
-    const runBudget = candidateIo.withUpdateCandidateIoBudget;
-    const budget = vi
-      .spyOn(candidateIo, "withUpdateCandidateIoBudget")
-      .mockImplementation(async (...args) => {
-        try {
-          return await runBudget(...args);
-        } finally {
-          if (retained) {
-            operationSettled.resolve();
+  it.each(["operation-failed", "cancelled", "authority-revoked"] as const)(
+    "retains snapshot uncertainty after settled IO is %s",
+    async (ordering) => {
+      const options = canaryStateOptions(3_000);
+      const { receipt, onProgress } = holdCanaryProgress(
+        (step) => step.step === "candidate-state-snapshot",
+      );
+      const operationSettled = createDeferredCore();
+      const caller = new AbortController();
+      const uncertain = new CommandProcessCleanupError();
+      const operationFailure = new Error("snapshot worker failed before progress settled");
+      let current = true;
+      let retained: string | undefined;
+      const snapshot = mocks.snapshot.getMockImplementation()!;
+      mocks.snapshot.mockImplementation(async (command, commandOptions: SnapshotOptions) => {
+        const request: unknown = JSON.parse(commandOptions.input);
+        if (isRecord(request) && request.mode === "snapshot") {
+          if (typeof request.targetStateDir !== "string") {
+            throw new Error("Snapshot fixture requires its owned target directory");
+          }
+          retained = request.targetStateDir;
+          await fs.writeFile(path.join(retained, "pending-snapshot-copy"), "synthetic copy");
+          commandOptions.onOutputChunk?.(progressFrame(options.stateDir, "copying"), "stderr");
+          if (ordering === "operation-failed") {
+            throw operationFailure;
           }
         }
+        return snapshot(command, commandOptions);
       });
-    const onStep = vi.fn();
-    const onProgress = vi
-      .fn((step: { step: string }) =>
-        step.step === "candidate-state-snapshot" ? receipt.promise : undefined,
-      )
-      .mockImplementationOnce(() => undefined);
-    if (ordering === "earlier-progress-failed") {
-      onProgress.mockImplementationOnce(() => earlierReceipt.promise);
-    }
-    const pending = validateUpdateCandidateCanary({
-      ...options,
-      signal: caller.signal,
-      assertCurrent: () => {
-        if (!current) {
-          throw new Error("snapshot authority revoked");
+      const runBudget = candidateIo.withUpdateCandidateIoBudget;
+      const budget = vi
+        .spyOn(candidateIo, "withUpdateCandidateIoBudget")
+        .mockImplementation(async (...args) => {
+          try {
+            return await runBudget(...args);
+          } finally {
+            if (retained) {
+              operationSettled.resolve();
+            }
+          }
+        });
+      const onStep = vi.fn();
+      onProgress.mockImplementationOnce(() => undefined);
+      const pending = validateUpdateCandidateCanary({
+        ...options,
+        signal: caller.signal,
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("snapshot authority revoked");
+          }
+        },
+        onStep,
+        onProgress,
+      });
+      const observed = pending.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      try {
+        await operationSettled.promise;
+        expect(onProgress).toHaveBeenCalledTimes(2);
+        expectNotCalled(onStep, mocks.spawn);
+        if (ordering === "cancelled") {
+          caller.abort(new Error("cancelled after snapshot IO settled"));
+        } else if (ordering === "authority-revoked") {
+          current = false;
         }
-      },
-      onStep,
-      onProgress,
-    });
-    const observed = pending.then(
-      () => undefined,
-      (error: unknown) => error,
-    );
-    try {
-      await operationSettled.promise;
-      expect(onProgress).toHaveBeenCalledTimes(ordering === "earlier-progress-failed" ? 3 : 2);
-      expectNotCalled(onStep, mocks.spawn);
-      if (ordering === "cancelled") {
-        caller.abort(new Error("cancelled after snapshot IO settled"));
-      } else if (ordering === "authority-revoked") {
-        current = false;
-      } else if (ordering === "earlier-progress-failed") {
-        earlierReceipt.reject(earlierFailure);
-        await earlierReceipt.promise.catch(() => undefined);
+        receipt.reject(uncertain);
+        const failure = await observed;
+        expect(hasCommandProcessCleanupError(failure)).toBe(true);
+        const errors = collectNestedErrorCandidates(failure);
+        expect(errors).toContain(uncertain);
+        const primary = ordering === "operation-failed" ? operationFailure : undefined;
+        if (primary) {
+          expect(errors).toContain(primary);
+          expect(errors).toContainEqual(
+            expect.objectContaining({ errors: [primary, uncertain], cause: primary }),
+          );
+        }
+        expectNotCalled(onStep, mocks.spawn);
+        await expect(
+          fs.readFile(path.join(retained!, "pending-snapshot-copy"), "utf8"),
+        ).resolves.toBe("synthetic copy");
+      } finally {
+        receipt.resolve();
+        await observed;
+        budget.mockRestore();
+        await removeDirectory(retained);
       }
-      receipt.reject(uncertain);
-      const failure = await observed;
-      expect(hasCommandProcessCleanupError(failure)).toBe(true);
-      const errors = collectNestedErrorCandidates(failure);
-      expect(errors).toContain(uncertain);
-      const primary =
-        ordering === "operation-failed"
-          ? operationFailure
-          : ordering === "earlier-progress-failed"
-            ? earlierFailure
-            : undefined;
-      if (primary) {
-        expect(errors).toContain(primary);
-        expect(errors).toContainEqual(
-          expect.objectContaining({ errors: [primary, uncertain], cause: primary }),
-        );
-      }
-      expectNotCalled(onStep, mocks.spawn);
-      await expect(
-        fs.readFile(path.join(retained!, "pending-snapshot-copy"), "utf8"),
-      ).resolves.toBe("synthetic copy");
-    } finally {
-      earlierReceipt.resolve();
-      receipt.resolve();
-      await observed;
-      budget.mockRestore();
-      await removeDirectory(retained);
-    }
-  });
+    },
+  );
 
   it.each(["completed-step", "failed-step"] as const)(
     "retains rehearsal artifacts when the %s write has an uncertain outcome",
@@ -455,24 +438,19 @@ export function registerCanaryUncertainReceiptTests({
 
   it("joins an uncertain cleanup progress receipt before retiring rehearsal artifacts", async () => {
     stubHealthyGateway();
-    const entered = createDeferredCore();
-    const receipt = createDeferredCore();
+    const { entered, receipt, onProgress } = holdCanaryProgress(
+      (step) => step.step === "candidate-state-cleanup" && step.status === "in_progress",
+    );
     const uncertain = new CommandProcessCleanupError();
     const remove = vi.spyOn(fs, "rm");
     const pending = validateUpdateCandidateCanary({
       ...canaryStateOptions(3_000),
-      onProgress: (step) => {
-        if (step.step === "candidate-state-cleanup" && step.status === "in_progress") {
-          entered.resolve();
-          return receipt.promise;
-        }
-        return undefined;
-      },
+      onProgress,
     });
     const rejected = expect(pending).rejects.toBe(uncertain);
     let targetStateDir: string | undefined;
     try {
-      await entered.promise;
+      await entered;
       targetStateDir = targetDirectory(mocks)!;
       expect(remove.mock.calls.some(([target]) => target === targetStateDir)).toBe(false);
       await fs.access(targetStateDir);

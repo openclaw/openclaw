@@ -5,6 +5,8 @@
  */
 import { resolveMergedModelProviderEntry } from "../config/model-provider-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ProviderSyntheticAuthResult } from "../plugins/provider-external-auth.types.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 
 const AWS_BEARER_ENV = "AWS_BEARER_TOKEN_BEDROCK";
@@ -19,6 +21,7 @@ export type ResolvedProviderAuth = {
   mode: "api-key" | "oauth" | "token" | "aws-sdk";
   /** Provider-owned OAuth grant family; distinct from credential renewal mode. */
   authFlow?: string;
+  nativeAuth?: ProviderSyntheticAuthResult["nativeAuth"];
 };
 
 export function resolveDirectProviderCredentialMode(params: {
@@ -37,6 +40,13 @@ export function resolveDirectProviderCredentialMode(params: {
 
 type ProviderAuthErrorCode = "missing-api-key" | "missing-provider-auth";
 
+// Native plugin chunks can load a second constructor. Only these constructors
+// brand instances; retain the original error rather than trusting its shape.
+const authErrorInstances = resolveGlobalSingleton(
+  Symbol.for("openclaw.providerAuthErrorInstances"),
+  () => ({ provider: new WeakSet<object>(), missing: new WeakSet<object>() }),
+);
+
 export class ProviderAuthError extends Error {
   readonly code: ProviderAuthErrorCode;
   readonly provider: string;
@@ -53,6 +63,21 @@ export class ProviderAuthError extends Error {
     this.code = code;
     this.provider = provider;
     this.providerGuidance = options?.providerGuidance === true;
+    authErrorInstances.provider.add(this);
+  }
+}
+
+/** Native login is availability evidence, never an HTTP credential. */
+export function assertProviderAuthSupportsHttp(
+  auth: { nativeAuth?: ProviderSyntheticAuthResult["nativeAuth"] },
+  provider: string,
+): void {
+  if (auth.nativeAuth) {
+    throw new ProviderAuthError(
+      "missing-provider-auth",
+      provider,
+      `Native authentication for provider "${provider}" belongs to the "${auth.nativeAuth.runtime}" runtime and cannot authorize an HTTP request. Select that runtime or configure an API key.`,
+    );
   }
 }
 
@@ -65,6 +90,7 @@ export class MissingProviderAuthError extends ProviderAuthError {
     this.name = "MissingProviderAuthError";
     this.mode = auth.mode;
     this.source = auth.source;
+    authErrorInstances.missing.add(this);
   }
 }
 
@@ -72,11 +98,15 @@ export function isProviderAuthError(
   err: unknown,
   code?: ProviderAuthErrorCode,
 ): err is ProviderAuthError {
-  return err instanceof ProviderAuthError && (!code || err.code === code);
+  return isProviderAuthErrorInstance(err) && (!code || err.code === code);
+}
+
+function isProviderAuthErrorInstance(err: unknown): err is ProviderAuthError {
+  return typeof err === "object" && err !== null && authErrorInstances.provider.has(err);
 }
 
 export function isMissingProviderAuthError(err: unknown): err is MissingProviderAuthError {
-  return err instanceof MissingProviderAuthError;
+  return typeof err === "object" && err !== null && authErrorInstances.missing.has(err);
 }
 
 export function resolveAwsSdkEnvVarName(env: NodeJS.ProcessEnv = process.env): string | undefined {
@@ -97,6 +127,7 @@ export function formatMissingAuthError(auth: ResolvedProviderAuth, provider: str
 }
 
 export function requireApiKey(auth: ResolvedProviderAuth, provider: string): string {
+  assertProviderAuthSupportsHttp(auth, provider);
   const key = normalizeSecretInput(auth.apiKey);
   if (key) {
     return key;

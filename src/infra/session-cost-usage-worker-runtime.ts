@@ -3,7 +3,6 @@ import {
   collectErrorGraphCandidates,
   toErrorObject,
 } from "@openclaw/normalization-core/error-coercion";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import {
@@ -237,6 +236,7 @@ type UsageCostWorkerRequest =
 export async function runUsageCostWorker(
   prepared: PreparedUsageCostWorker,
   operation: UsageCostWorkerRequest,
+  waitForRefresh = false,
 ): Promise<UsageCostWorkerResult | { kind: "busy" }> {
   if (prepared.memory) {
     const pricing =
@@ -251,14 +251,16 @@ export async function runUsageCostWorker(
       prepared.memory,
       request,
       createUsageCostResolver(prepared, pricing),
+      waitForRefresh,
     );
   }
-  return runPreparedUsageCostWorker(prepared, operation);
+  return runPreparedUsageCostWorker(prepared, operation, waitForRefresh);
 }
 
 async function runPreparedUsageCostWorker(
   prepared: PreparedUsageCostWorker,
   operation: UsageCostWorkerRequest,
+  waitForRefresh: boolean,
 ): Promise<UsageCostWorkerResult | { kind: "busy" }> {
   const { location, archiveStorePaths, stores } = prepared;
   const capturedOperation = structuredClone(operation);
@@ -295,7 +297,7 @@ async function runPreparedUsageCostWorker(
       return lock;
     };
     if (lock) {
-      if (!(await lock.acquire())) {
+      if (!(await lock.acquire(waitForRefresh))) {
         return { kind: "busy" };
       }
     }
@@ -347,9 +349,6 @@ async function runPreparedUsageCostWorker(
                 context.signal.throwIfAborted();
               };
               assertRequestCurrent();
-              if (!isRecord(value) || typeof value.kind !== "string") {
-                throw new Error("Invalid usage worker host request");
-              }
               // SAFETY: The paired worker constructs this union; host effects still check current authority.
               const request = value as UsageCostWorkerHostRequest;
               let output: UsageCostWorkerHostEffects[keyof UsageCostWorkerHostEffects]["output"] =
@@ -416,6 +415,12 @@ async function runPreparedUsageCostWorker(
                         logger.warn("Could not clear usage refresh failure fact", { error });
                       });
                   }
+                  break;
+                case "write-quarters":
+                  output = await requireLock("write cache rows").writeQuarters(
+                    request.input,
+                    context.signal,
+                  );
                   break;
                 default:
                   throw new Error("Unknown usage worker host request");

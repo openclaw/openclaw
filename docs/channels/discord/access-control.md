@@ -341,6 +341,8 @@ Pass `identifier` directly to `react`. Discord accepts Unicode emoji, custom `na
 
 The `event-create` action accepts an optional `image` parameter (URL or local file path) to set the scheduled event cover image.
 
+The `list-pins` action retrieves all pinned messages across Discord's paginated pin list. Pin actions are controlled by `channels.discord.actions.pins`.
+
 Action gates live under `channels.discord.actions.*`.
 
 Default gate behavior:

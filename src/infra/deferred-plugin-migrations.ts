@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { existsSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { openClawStateDatabaseCache } from "../state/openclaw-state-db-cache.js";
@@ -32,6 +33,11 @@ import { clearNodeSqliteKyselyCacheForDatabase } from "./kysely-sync-cache-state
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import type { EngineConnection } from "./sql-connection.js";
 import { setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
+import {
+  getOrLoadSqliteDatabaseAdmissionForPath,
+  publishSqliteDatabaseAdmission,
+  type SqliteDatabaseAdmissionKey,
+} from "./sqlite-database-admission.js";
 import { runWithSqliteCleanup, throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
 import { invalidateSuccessfulMigrationCheckpointsInTransaction } from "./startup-migration-checkpoint.js";
 import { withStateDatabaseSchemaMaintenance } from "./state-database-maintenance.js";
@@ -49,6 +55,16 @@ function invalidatePinnedMigrationReads(): void {
 }
 
 const RUN_PREFIX = "deferred-plugin-migration:";
+const migrationReceipt: SqliteDatabaseAdmissionKey<object> = {
+  name: "plugins.deferred-migrations",
+  lifetime: "process",
+  read: (value) => (isRecord(value) ? value : undefined),
+};
+
+/** Only committed migration writes retire readiness; ordinary state writes do not. */
+export function readDeferredPluginMigrationReceipt(databasePath: string): object {
+  return getOrLoadSqliteDatabaseAdmissionForPath(databasePath, migrationReceipt, () => ({})) ?? {};
+}
 
 type ConfigMigrationCompletion = {
   configPath: string;
@@ -512,6 +528,9 @@ export function recordDeferredPluginMigrationsInTransaction(
   }
   if (deferred.length > 0) {
     invalidateSuccessfulMigrationCheckpointsInTransaction(db);
+  }
+  if (deferred.length > 0 || resolved.length > 0) {
+    publishSqliteDatabaseAdmission(db, migrationReceipt, {});
   }
   return { deferred, resolved, pending: pendingMigrationRecords(readPendingMigrationRows(db)) };
 }

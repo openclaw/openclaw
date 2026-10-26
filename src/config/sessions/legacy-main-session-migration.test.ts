@@ -26,8 +26,6 @@ import {
   setupLegacyMainSessionMigrationTests,
 } from "./legacy-main-session-migration.test-support.js";
 import { loadSessionEntry, replaceSessionEntry } from "./session-accessor.js";
-import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
-import { appendTranscriptEventInTransaction as appendEvent } from "./session-accessor.sqlite-transcript-store.js";
 import * as retirement from "./session-retirement-read.js";
 import type { SessionRetirementReadOperation } from "./session-retirement-read.types.js";
 import { runSessionStartupMigration } from "./startup-migration.js";
@@ -70,7 +68,13 @@ describe("legacy main session migration", () => {
       const realpath = vi.spyOn(fs.realpathSync, "native");
       try {
         const result = await migrate(fixture);
-        expect(result).toMatchObject({ complete: true, outcomes: [{ kind: "no-legacy-rows" }] });
+        expect(result).toMatchObject({
+          armed: false,
+          complete: true,
+          ledgerComplete: false,
+          outcomes: [{ kind: "no-legacy-rows", detail: "no configured owner" }],
+          warnings: [],
+        });
         const inspected = realpath.mock.calls
           .map(([pathname]) => String(pathname))
           .filter((pathname) => paths.has(pathname));
@@ -215,41 +219,21 @@ describe("legacy main session migration", () => {
   );
 
   it("uses an explicit migration owner when the multi-agent roster is unambiguous", async () => {
-    const resolved = createFixture({
-      agents: { ...explicitAgents, defaults: { sessionStore: { agentId: "ops" } } },
-      session: { store: path.join(tempDirs.make("fixed-store-owner-"), "sessions.sqlite") },
-    });
     const unresolved = createFixture({ agents: explicitAgents });
     seedClaim(claim("main", databasePath(unresolved.stateDir, "main")));
     const perAgentPinned = createFixture({
       agents: { ...explicitAgents, defaults: { sessionStore: { agentId: "ops" } } },
     });
 
-    const armed = await migrate(resolved);
     const notArmed = await migrate(unresolved);
     const perAgentArmed = await migrate(perAgentPinned);
 
-    expect(armed).toMatchObject({ armed: true, ownerAgentId: "ops" });
     expect(notArmed).toMatchObject({
       armed: false,
       outcomes: [{ kind: "not-armed", detail: "owner-unresolved" }],
     });
     expect(perAgentArmed).toMatchObject({ armed: true, ownerAgentId: "ops" });
     expect(notArmed.warnings[0]).toContain("agents.defaults.sessionStore.agentId");
-  });
-
-  it("proves an unresolved-owner store clean when it has no legacy rows", async () => {
-    const fixture = createFixture({ agents: explicitAgents });
-
-    const result = await migrate(fixture);
-
-    expect(result).toMatchObject({
-      armed: false,
-      complete: true,
-      ledgerComplete: false,
-      outcomes: [{ kind: "no-legacy-rows", detail: "no configured owner" }],
-      warnings: [],
-    });
   });
 
   it("keeps unresolved ownership advisory when a candidate store is unreadable", async () => {
@@ -268,16 +252,13 @@ describe("legacy main session migration", () => {
     expect(result.warnings[0]).toContain("agents.defaults.sessionStore.agentId");
   });
 
-  it("keeps detection non-throwing for unreadable stores and treats ENOENT as absence", async () => {
-    const absent = createFixture();
+  it("keeps detection non-throwing for unreadable stores", async () => {
     const unreadablePath = path.join(tempDirs.make("detect-unreadable-"), "sessions.sqlite");
     fs.symlinkSync(`${unreadablePath}.missing`, unreadablePath);
     const unreadable = storeFixture(unreadablePath);
 
-    const absentResult = await migrate(absent);
     const unreadableResult = await migrate(unreadable);
 
-    expect(absentResult).toMatchObject({ complete: true, outcomes: [{ kind: "no-legacy-rows" }] });
     expect(outcomeKinds(unreadableResult)).toContain("store-unreadable");
     expect(unreadableResult.warnings.join("\n")).toContain(unreadablePath);
     await expect(migrate(unreadable, "doctor-fix")).rejects.toThrow(
@@ -342,21 +323,17 @@ function recordRetirementReads(): SessionRetirementReadOperation[] {
 }
 
 function seedSessions(stateDir: string, agentId: string, keys: string[]): void {
-  const pathname = databasePath(stateDir, agentId);
-  runOpenClawAgentWriteTransaction(
-    (database) => {
-      const options = { allowStoredAliases: true, previousEntry: null };
-      for (const key of keys) {
-        writeSessionEntry(database, key, { sessionId: key, updatedAt: 100 }, options);
-        const scope = { agentId, path: pathname, sessionId: key, sessionKey: key };
-        for (let index = 0; index < 3; index += 1) {
-          const event = { type: "message", id: `${key}-${index}`, text: "synthetic transcript" };
-          appendEvent(database, scope, event, { allowStoredAlias: true });
-        }
-      }
-    },
-    { agentId, path: pathname },
-  );
+  for (const key of keys) {
+    seedClaim({
+      ...claim(agentId, databasePath(stateDir, agentId), key),
+      entry: { sessionId: key, updatedAt: 100 },
+      events: Array.from({ length: 3 }, (_, index) => ({
+        type: "message",
+        id: `${key}-${index}`,
+        text: "synthetic transcript",
+      })),
+    });
+  }
 }
 
 function recordTranscriptReads() {

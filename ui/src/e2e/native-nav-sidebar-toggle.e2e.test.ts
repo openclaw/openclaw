@@ -4,7 +4,8 @@ import { beforeEach, expect, it } from "vitest";
 import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import type { ControlUiMockGatewayScenario } from "../test-helpers/control-ui-e2e.ts";
-import { chatSessionListResponse } from "./chat-flow.test-support.ts";
+import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
+import { textContent, chatSessionListResponse } from "./chat-flow.test-support.ts";
 import { focusChatSidePanel, openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -156,6 +157,142 @@ suite.define(() => {
     await page.keyboard.press("Escape");
   });
 
+  it.each([1280, 900])(
+    "animates sidebar clicks but settles shortcut toggles before the next frame at %ipx",
+    async (viewportWidth) => {
+      const page = await openPage({
+        nativeNav: false,
+        width: viewportWidth,
+        scenario: {
+          historyMessages: [
+            { role: "user", content: [{ type: "text", text: "Review the navigation changes." }] },
+            {
+              role: "assistant",
+              content: textContent(
+                "The sidebar is ready. Use its button or keyboard shortcut to open and close it.",
+              ),
+            },
+          ],
+          methodResponses: { "sessions.list": chatSessionListResponse() },
+        },
+      });
+      await page
+        .getByText(
+          "The sidebar is ready. Use its button or keyboard shortcut to open and close it.",
+          { exact: true },
+        )
+        .waitFor();
+      await page.locator(".chat-pane--history-loading").waitFor({ state: "hidden" });
+      await page.locator(".sidebar-connection-flag[data-open]").waitFor({ state: "hidden" });
+      let sampleIndex = 0;
+      const visibleWidth = () =>
+        page.locator(".shell-nav").evaluate((navigation) => {
+          const bounds = navigation.getBoundingClientRect();
+          if (navigation.closest(".shell--mobile-nav")) {
+            return bounds.right;
+          }
+          // Measure the painted/hit-testable edge, including a clipped fixed-width panel.
+          let left = 0;
+          let right = bounds.width;
+          while (right - left > 0.01) {
+            const middle = (left + right) / 2;
+            const hit = document.elementFromPoint(
+              bounds.left + middle,
+              bounds.top + bounds.height / 2,
+            );
+            if (hit && navigation.contains(hit)) {
+              left = middle;
+            } else {
+              right = middle;
+            }
+          }
+          return Math.round(left * 100) / 100;
+        });
+      const sampleToggle = async (input: "click" | "shortcut") => {
+        await page.locator(".shell").evaluate((shell) => {
+          for (const element of [
+            shell,
+            ...shell.querySelectorAll(".shell-nav, .shell-nav-backdrop"),
+          ]) {
+            for (const animation of element.getAnimations()) {
+              animation.finish();
+            }
+          }
+        });
+        const start = await visibleWidth();
+        const sampled = await page.evaluate(async (interaction) => {
+          const shell = document.querySelector<HTMLElement>(".shell")!;
+          const navigation = document.querySelector<HTMLElement>(".shell-nav")!;
+          const mobile = shell.classList.contains("shell--mobile-nav");
+          const backdrop = shell.querySelector<HTMLElement>(".shell-nav-backdrop")!;
+          const animations = () =>
+            [shell, navigation, backdrop].flatMap((element) => element.getAnimations());
+          if (interaction === "shortcut") {
+            const mac = navigator.platform.startsWith("Mac");
+            document.dispatchEvent(
+              new KeyboardEvent("keydown", {
+                key: "b",
+                code: "KeyB",
+                metaKey: mac,
+                ctrlKey: !mac,
+                bubbles: true,
+                cancelable: true,
+              }),
+            );
+          } else {
+            const toggle = mobile
+              ? shell.classList.contains("shell--nav-drawer-open")
+                ? backdrop
+                : [...document.querySelectorAll<HTMLElement>('[aria-label="Expand sidebar"]')].find(
+                    (element) => element.checkVisibility(),
+                  )!
+              : document.querySelector<HTMLElement>('[data-navigation-view="sessions"]')!;
+            toggle.click();
+          }
+          await new Promise<void>((resolve) => {
+            requestAnimationFrame(() => resolve());
+          });
+          const current = animations();
+          const moving = current.some((animation) => animation.playState === "running");
+          for (const animation of current) {
+            animation.pause();
+          }
+          return { moving };
+        }, input);
+        const firstFrame = await visibleWidth();
+        if (railProofDir) {
+          await page.screenshot({ path: path.join(railProofDir, `${sampleIndex++}-${input}.png`) });
+        }
+        await page.locator(".shell").evaluate((shell) => {
+          const navigation = shell.querySelector(".shell-nav")!;
+          const backdrop = shell.querySelector<HTMLElement>(".shell-nav-backdrop")!;
+          for (const element of [shell, navigation, backdrop]) {
+            for (const animation of element.getAnimations()) {
+              animation.finish();
+            }
+          }
+        });
+        return { ...sampled, start, firstFrame, end: await visibleWidth() };
+      };
+
+      for (const input of ["click", "shortcut", "shortcut", "click"] as const) {
+        const sample = await sampleToggle(input);
+        expect(Math.abs(sample.end - sample.start)).toBeGreaterThan(100);
+        if (input === "shortcut") {
+          expect.soft(sample.firstFrame).toBe(sample.end);
+          expect.soft(sample.moving).toBe(false);
+        } else {
+          expect(sample.moving).toBe(true);
+          expect(Math.abs(sample.firstFrame - sample.end)).toBeGreaterThan(1);
+        }
+      }
+      await page.emulateMedia({ reducedMotion: "reduce" });
+      const reduced = await sampleToggle("click");
+      expect(reduced.firstFrame).toBe(reduced.end);
+      expect(reduced.moving).toBe(false);
+    },
+  );
+
   it("keeps restored sidebar focus from opening its tooltip", async () => {
     const page = await openPage({ hasTouch: true, nativeNav: false });
     const toggle = page.locator('[data-navigation-view="sessions"]');
@@ -187,8 +324,10 @@ suite.define(() => {
     await page.keyboard.press("Tab");
     await page.keyboard.press("Shift+Tab");
     await expect
-      .poll(() => openTooltip.locator(".tooltip-content").textContent())
-      .toContain("Sessions · Expand sidebar");
+      .poll(() =>
+        openTooltip.evaluate((tooltip) => (tooltip as HTMLElement & { content: string }).content),
+      )
+      .toBe("Sessions");
     await page.keyboard.press("Enter");
     await visible(sidebarPanel);
     expect(await openTooltip.count()).toBe(0);
@@ -336,16 +475,19 @@ suite.define(() => {
     );
     const inbox = attention;
     await inbox.hover();
-    expect(await inbox.evaluate((button) => getComputedStyle(button).backgroundColor)).not.toBe(
-      "rgba(0, 0, 0, 0)",
-    );
+    await expect
+      .poll(() => inbox.evaluate((button) => getComputedStyle(button).backgroundColor))
+      .not.toBe("rgba(0, 0, 0, 0)");
     // Home is unavailable in this narrow feature catalog; enter Inbox from the profile button.
     await rail.locator(".sidebar-identity-card").focus();
     await page.keyboard.press("Shift+Tab");
     await expect
       .poll(() => inbox.evaluate((button) => button.matches(":focus-visible")))
       .toBe(true);
-    expect(await inbox.evaluate((button) => getComputedStyle(button).boxShadow)).not.toBe("none");
+    await expectStyles(inbox, { "outline-style": "solid", "outline-width": "2px" });
+    expect(await inbox.evaluate((button) => getComputedStyle(button).outlineColor)).not.toBe(
+      "rgba(0, 0, 0, 0)",
+    );
     await page.keyboard.press("Enter");
     await visible(page.locator("#sidebar-issues-panel"));
     await page.keyboard.press("Escape");
@@ -389,6 +531,7 @@ suite.define(() => {
               "chat.startup",
               "device.scopes.requestUpgrade",
               "device.scopes.waitUpgrade",
+              "sessions.companion.state",
               "sessions.create",
             ],
             methodResponses: { "sessions.list": chatSessionListResponse() },
@@ -405,7 +548,9 @@ suite.define(() => {
     const shellControls = page.locator(
       ".macos-titlebar-controls button:visible, .sidebar-rail__bottom button:visible",
     );
-    const panelControls = page.locator(".chat-pane__actions button:visible");
+    const panelControls = page.locator(
+      '[data-region-header="side"] .side-panel__actions button:visible',
+    );
     const shellBoxes = await boxes(shellControls);
     const panelBoxes = await boxes(panelControls);
     expect(shellBoxes.length).toBeGreaterThan(0);
@@ -447,7 +592,7 @@ suite.define(() => {
     });
     const navigation = page.locator(".shell-nav");
     const dialog = page.getByRole("dialog", { name: "Navigation" });
-    const trigger = page.locator(".chat-pane__nav-toggle").first();
+    const trigger = navigationDrawerToggle(page);
     const readFocusLocation = () =>
       page.evaluate(() => {
         // Native dialog tab order may hand focus to browser chrome, but not the inert page.
@@ -590,7 +735,7 @@ suite.define(() => {
       });
       const drawer = page.locator(".shell-nav.nav-drawer");
       const dialog = page.getByRole("dialog", { name: "Navigation" });
-      await page.locator(".chat-pane__nav-toggle").first().click();
+      await navigationDrawerToggle(page).click();
       await visible(dialog);
 
       const catalog = drawer.locator('[data-session-section="catalog:codex"]');
@@ -630,7 +775,14 @@ suite.define(() => {
       await attr(retainedHost, "data-toast-placement", "shell");
       const retainedToast = retainedHost.locator(".app-toast");
       await expect.poll(() => retainedToast.textContent()).toContain("Codex hidden");
-      await expectBelow(retainedToast, page.locator(".chat-pane__header:visible").first(), true);
+      const header = page
+        .locator(
+          finalLayout === "compact"
+            ? ".agent-chat__header--mobile:visible"
+            : ".chat-pane__header:visible",
+        )
+        .first();
+      await expectBelow(retainedToast, header, true);
       await expectBelow(page.locator(".agent-chat__composer-shell"), retainedToast, false);
       await capture(page, TOAST_PROOF_DIR, `handed-off-toast-${finalLayout}-${colorScheme}.png`);
       await retainedToast.getByRole("button", { name: "Dismiss" }).click();

@@ -1,184 +1,133 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { finalizeEvent, getPublicKey, type Event } from "nostr-tools";
 import { encrypt } from "nostr-tools/nip04";
+import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { afterEach, expect, it, vi } from "vitest";
 import { startNostrBus } from "./nostr-bus.js";
 import { createNostrRelayFixture } from "./nostr-relay.test-harness.js";
 import { setNostrRuntime } from "./runtime.js";
 import { TEST_HEX_PRIVATE_KEY, TEST_HEX_PRIVATE_KEY_BYTES } from "./test-fixtures.js";
 
-export function registerNostrAdmissionTests() {
-  const approved = new Uint8Array(32).fill(2);
-  const approvedPubkey = getPublicKey(approved);
-  const recipient = getPublicKey(TEST_HEX_PRIVATE_KEY_BYTES);
-  const errors: string[] = [];
-  let stateDir = "";
-  let relay: Awaited<ReturnType<typeof createNostrRelayFixture>>;
-  let bus: Awaited<ReturnType<typeof startNostrBus>> | undefined;
-  const enqueuedIds: string[] = [];
+const recipient = getPublicKey(TEST_HEX_PRIVATE_KEY_BYTES);
 
-  function dm(key: Uint8Array, text: string): Event {
-    return finalizeEvent(
-      {
-        kind: 4,
-        created_at: Math.floor(Date.now() / 1000),
-        tags: [["p", recipient]],
-        content: encrypt(key, recipient, text),
-      },
-      key,
-    );
-  }
-
-  beforeEach(async () => {
-    errors.length = 0;
-    stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "nostr-admission-"));
-    enqueuedIds.length = 0;
-    setNostrRuntime(
-      createPluginRuntimeMock({
-        state: {
-          openChannelIngressQueue<TPayload, TMetadata = unknown, TCompletedMetadata = unknown>() {
-            const queue = createChannelIngressQueueForTests<
-              TPayload,
-              TMetadata,
-              TCompletedMetadata
-            >({ channelId: "nostr", accountId: "default", stateDir });
-            const enqueue = queue.enqueue.bind(queue);
-            queue.enqueue = (...args) => {
-              enqueuedIds.push(args[0]);
-              return enqueue(...args);
-            };
-            return queue;
-          },
-        },
-      }),
-    );
-    relay = await createNostrRelayFixture();
-  });
-  afterEach(async () => {
-    try {
-      await bus?.close();
-    } finally {
-      bus = undefined;
-      await relay.close();
-      closeOpenClawStateDatabaseForTest();
-      await fs.rm(stateDir, { recursive: true, force: true });
-    }
-    expect(relay.errors).toEqual([]);
-  });
-
-  it.each([0, 200])(
-    "delivers approved DM after %i signed denied events without persisting them",
-    async (count) => {
-      const onMessage = vi.fn(async () => {});
-      const authorizeSender = vi.fn(
-        async ({ senderPubkey }: { senderPubkey: string }): Promise<"allow" | "block"> =>
-          senderPubkey === approvedPubkey ? "allow" : "block",
-      );
-      const tasks: Promise<void>[] = [];
-      const received = createDeferred<void>();
-      let seen = 0;
-      bus = await startNostrBus({
-        privateKey: TEST_HEX_PRIVATE_KEY,
-        onError: (error, context) => errors.push(context + ": " + error.message),
-        accountId: "default",
-        relays: [relay.url],
-        admissionPubkeys: [approvedPubkey],
-        onMessage,
-        authorizeSender,
-        trackIngressTask: (task) => {
-          tasks.push(task);
-          if (++seen === count + 1) {
-            received.resolve();
-          }
-        },
-      });
-      await relay.subscribed;
-      const denied = Array.from({ length: count }, (_, i) =>
-        dm(new Uint8Array(32).fill(3 + Math.floor(i / 20)), "denied-" + i),
-      );
-      const allowed = dm(approved, "approved");
-      // Re-signing with another key cannot claim the approved identity on the real transport.
-      const forged = { ...dm(new Uint8Array(32).fill(20), "forged"), pubkey: approvedPubkey };
-      relay.sendIncoming([...denied, forged, allowed]);
-      await received.promise;
-      await Promise.all(tasks);
-      expect(seen).toBe(count + 1);
-      expect(errors).toEqual([]);
-      expect(enqueuedIds).toEqual([allowed.id]);
-      expect(authorizeSender).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ senderPubkey: approvedPubkey }),
-      );
-      expect(onMessage).toHaveBeenCalledExactlyOnceWith(
-        approvedPubkey,
-        "approved",
-        expect.any(Function),
-        expect.objectContaining({ eventId: allowed.id }),
-        expect.any(Object),
-      );
-      expect(relay.subscriptions).toEqual([[{ kinds: [4], "#p": [recipient], since: 0 }]]);
-    },
+export function useNostrAdmissionFixture() {
+  const stops: Array<() => Promise<void>> = [];
+  const dirs = useAutoCleanupTempDirTracker((cleanup) =>
+    afterEach(async () => {
+      try {
+        const pending = stops
+          .splice(0)
+          .toReversed()
+          .map((stop) => stop());
+        const results = await Promise.allSettled(pending);
+        const failures = results.flatMap((r) => (r.status === "rejected" ? [r.reason] : []));
+        if (failures.length) {
+          throw new AggregateError(failures, "Nostr fixture cleanup failed");
+        }
+      } finally {
+        closeOpenClawStateDatabaseForTest();
+        cleanup();
+      }
+    }),
   );
-
-  it("does not grant authorization to a matching literal author", async () => {
-    const onMessage = vi.fn(async () => {});
-    const done = createDeferred<void>();
-    const authorizeSender = vi.fn(async () => "block" as const);
-    bus = await startNostrBus({
-      privateKey: TEST_HEX_PRIVATE_KEY,
-      onError: (error, context) => errors.push(context + ": " + error.message),
-      relays: [relay.url],
-      admissionPubkeys: [approvedPubkey],
-      onMessage,
-      authorizeSender,
-      trackIngressTask: (task) => {
-        void task.then(() => done.resolve());
+  const directory = () => dirs.make("nostr-admission-");
+  async function create(stateDir = directory()) {
+    const relay = await createNostrRelayFixture();
+    const ids: string[] = [],
+      errors: string[] = [];
+    const enqueued = createDeferred<void>();
+    let join = async () => {};
+    const stop = async () => {
+      try {
+        await join();
+      } finally {
+        await relay.close();
+      }
+      expect(relay.errors).toEqual([]);
+      expect(relay.endpoints()).toEqual({ listening: false, connections: 0, clients: 0 });
+    };
+    stops.push(stop);
+    const runtime = createPluginRuntimeMock({
+      state: {
+        openChannelIngressQueue<T, M = unknown, C = unknown>() {
+          const queue = createChannelIngressQueueForTests<T, M, C>({
+            channelId: "nostr",
+            accountId: "default",
+            stateDir,
+          });
+          const record = async <TResult>(id: string, work: Promise<TResult>) => {
+            const result = await work;
+            ids.push(id);
+            enqueued.resolve();
+            return result;
+          };
+          const enqueue = queue.enqueue.bind(queue);
+          queue.enqueue = (...args) => record(args[0], enqueue(...args));
+          const enqueueAndClaim = queue.enqueueAndClaim?.bind(queue);
+          if (enqueueAndClaim) {
+            queue.enqueueAndClaim = (...args) => record(args[0], enqueueAndClaim(...args));
+          }
+          return queue;
+        },
       },
+      channel: { inbound: { buildContext: buildChannelInboundEventContext } },
     });
-    await relay.subscribed;
-    relay.sendIncoming([dm(approved, "not authorized")]);
-    await done.promise;
-    expect(errors).toEqual([]);
-    expect(authorizeSender).toHaveBeenCalledOnce();
-    expect(onMessage).not.toHaveBeenCalled();
-  });
+    setNostrRuntime(runtime);
+    const onStop = (work: typeof join) => {
+      join = work;
+    };
+    return { relay, runtime, ids, errors, enqueued, stop, onStop };
+  }
+  return { create, directory };
+}
 
+export function createSignedNostrDm(key: Uint8Array, text: string): Event {
+  return finalizeEvent(
+    {
+      kind: 4,
+      created_at: Math.floor(Date.now() / 1000),
+      tags: [["p", recipient]],
+      content: encrypt(key, recipient, text),
+    },
+    key,
+  );
+}
+
+export function registerNostrAdmissionTests() {
+  const fixture = useNostrAdmissionFixture();
   it("retains the default 200-event allowed admission cap and resets after 60 seconds", async () => {
-    const keys = Array.from({ length: 11 }, (_, i) => new Uint8Array(32).fill(30 + i));
+    const h = await fixture.create();
     const onMessage = vi.fn(async () => {});
     let completed = createDeferred<void>();
+    const keys = Array.from({ length: 11 }, (_, i) => new Uint8Array(32).fill(30 + i));
     const now = Date.now();
     const clock = vi.spyOn(Date, "now").mockReturnValue(now);
     try {
-      bus = await startNostrBus({
+      const bus = await startNostrBus({
         privateKey: TEST_HEX_PRIVATE_KEY,
-        onError: (error, context) => errors.push(context + ": " + error.message),
         accountId: "default",
-        relays: [relay.url],
+        relays: [h.relay.url],
         admissionPubkeys: keys.map(getPublicKey),
         onMessage,
-        trackIngressTask: (task) => {
-          const completion = completed;
-          void task.then(() => completion.resolve());
-        },
+        trackIngressTask: (task) => void task.then(completed.resolve),
       });
-      await relay.subscribed;
+      h.onStop(() => bus.close());
+      await h.relay.subscribed;
       for (let i = 0; i < 201; i++) {
         completed = createDeferred<void>();
-        relay.sendIncoming([dm(keys[Math.floor(i / 20)]!, "allowed-" + i)]);
+        h.relay.sendIncoming([createSignedNostrDm(keys[Math.floor(i / 20)]!, "allowed-" + i)]);
         await completed.promise;
       }
       expect(onMessage).toHaveBeenCalledTimes(200);
       clock.mockReturnValue(now + 60_001);
       completed = createDeferred<void>();
-      relay.sendIncoming([dm(keys[10]!, "after rollover")]);
+      h.relay.sendIncoming([createSignedNostrDm(keys[10]!, "after rollover")]);
       await completed.promise;
       expect(onMessage).toHaveBeenCalledTimes(201);
     } finally {

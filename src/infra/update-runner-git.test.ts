@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -8,19 +9,38 @@ import { withUpdateCommandExecutor } from "../cli/update-cli/update-command-exec
 import { createUpdateRunProgress } from "../cli/update-cli/update-command-run.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
+import { writeFixtureTree } from "./fixture-tree.test-support.js";
 import * as tempRoot from "./tmp-openclaw-dir.js";
 import { DoctorMaintenanceRefusalError } from "./update-doctor-result.js";
 import { createUpdateRun } from "./update-run-ledger.js";
 import {
-  advanceFixtureRemote,
-  createGitFixtureCheckout,
+  createGitUpdateFixture,
   expectRuntime,
   runFixtureGit as git,
   expectCancelledGitCandidateCleanup,
-  writeRuntime,
+  expectStep,
+  type GitUpdateFixture,
 } from "./update-runner-git-candidate.test-support.js";
-import { updateGitCheckout } from "./update-runner-git.js";
+import { selectChannelTag } from "./update-runner-git-target.js";
 import type { CommandRunner, UpdateRunnerOptions } from "./update-runner-types.js";
+
+const extendedOnly = ["v2026.9.33", "v2026.9.34", "v2026.9.34-1"];
+it.each([
+  ["stable", extendedOnly, null],
+  ["beta", extendedOnly, null],
+  ["beta", ["v2026.9.34", "v2026.9.33-beta.1", "v2026.9.32"], "v2026.9.33-beta.1"],
+] as const)("selects %s release tag from %j as %s", (channel, tags, expected) => {
+  expect(selectChannelTag(tags, channel)).toBe(expected);
+});
+
+const reply = (code = 0, stderr = "", stdout = "") => ({ code, stderr, stdout });
+const doctorStep = (cwd: string, exitCode = 0) => ({
+  name: "openclaw doctor",
+  command: "CLI activation doctor",
+  cwd,
+  durationMs: 0,
+  exitCode,
+});
 
 describe("Git checkout execution", () => {
   const directories = useAutoCleanupTempDirTracker(afterEach);
@@ -29,35 +49,13 @@ describe("Git checkout execution", () => {
   let remote: string;
   let beforeSha: string;
   let events: string[];
-  let stopped: boolean;
+  let fixture: GitUpdateFixture;
   let runCommand: CommandRunner;
 
   beforeEach(async () => {
     directory = await fs.realpath(directories.make("openclaw-git-execution-"));
-    ({ root, remote, beforeSha } = await createGitFixtureCheckout(directory));
-    await writeRuntime(root, beforeSha, path.join(directory, "shared-store"), "node_modules/.pnpm");
-    events = [];
-    stopped = false;
-    runCommand = async (argv, options) => {
-      if (argv[0] === "git") {
-        return runCommandWithTimeout(argv, options);
-      }
-      if (argv[0] === "pnpm") {
-        if (argv[1] === "build") {
-          expect(stopped).toBe(false);
-          expect(options.cwd).not.toBe(root);
-          await writeRuntime(
-            options.cwd!,
-            await git(options.cwd!, "rev-parse", "HEAD"),
-            path.join(directory, "shared-store"),
-            "node_modules/.pnpm",
-          );
-          events.push("build");
-        }
-        return { code: 0, stdout: argv[1] === "--version" ? "12.0.0" : "", stderr: "" };
-      }
-      throw new Error(`Unexpected command: ${argv.join(" ")}`);
-    };
+    fixture = await createGitUpdateFixture(directory);
+    ({ root, remote, beforeSha, events, runCommand } = fixture);
   });
 
   afterEach(async () => {
@@ -65,55 +63,54 @@ describe("Git checkout execution", () => {
     vi.restoreAllMocks();
   });
 
-  const advanceRemote = () => advanceFixtureRemote(remote);
+  const advanceRemote = () => fixture.advanceRemote();
+  const head = () => git(root, "rev-parse", "HEAD");
+  const config = () => fs.readFile(path.join(root, ".git", "config"));
+  function intercept(
+    handler: (
+      ...args: Parameters<CommandRunner>
+    ) => ReturnType<CommandRunner> | Awaited<ReturnType<CommandRunner>> | undefined,
+  ) {
+    const execute = runCommand;
+    runCommand = (argv, options) =>
+      Promise.resolve(handler(argv, options) ?? execute(argv, options));
+  }
+  async function expectInstalled(sha = beforeSha, savedConfig?: Buffer) {
+    expect(await head()).toBe(sha);
+    if (savedConfig) {
+      expect(await config()).toEqual(savedConfig);
+    }
+    await expectRuntime(root, sha);
+  }
+  async function unrelatedBranch(contents = "unrelated branch content") {
+    await git(remote, "checkout", "-b", "unrelated", beforeSha);
+    await fs.writeFile(path.join(remote, "unrelated.txt"), contents);
+    await git(remote, "add", ".");
+    await git(remote, "commit", "-m", "unrelated remote work");
+    return git(remote, "rev-parse", "HEAD:unrelated.txt");
+  }
 
   function update(opts: Partial<Omit<UpdateRunnerOptions, "prepareGitExposure">> = {}) {
     const { runGitDoctor, ...overrides } = opts;
-    return updateGitCheckout({
-      gitRoot: root,
-      runCommand,
-      defaultCommandEnv: undefined,
-      timeoutMs: 5000,
-      startedAt: Date.now(),
-      opts: {
-        channel: "dev",
-        inspectGitTarget: async () => {},
-        runGitDoctor:
-          runGitDoctor ??
-          (async (doctorRoot, steps = []) => {
-            expect(stopped).toBe(true);
-            events.push("migrate");
-            const doctor = {
-              name: "openclaw doctor",
-              command: "CLI activation doctor",
-              cwd: doctorRoot,
-              durationMs: 0,
-              exitCode: 0,
-            };
-            steps.push(
-              {
-                ...doctor,
-                name: "database migration writes",
-                warnings: ["Automatic database restoration unavailable: unknown writer."],
-              },
-              doctor,
-            );
-            return doctor;
-          }),
-        validateCandidate: async (candidateRoot) => {
-          expect(stopped).toBe(false);
-          expect(await git(root, "rev-parse", "HEAD")).toBe(beforeSha);
-          expect(candidateRoot).not.toBe(root);
-          const candidateSha = await git(candidateRoot, "rev-parse", "HEAD");
-          await expectRuntime(candidateRoot, candidateSha);
-          events.push("validate");
-        },
-        beforeGitMutation: async () => {
-          stopped = true;
-          events.push("stop");
-        },
-        ...overrides,
-      },
+    fixture.runCommand = runCommand;
+    return fixture.update({
+      runGitDoctor:
+        runGitDoctor ??
+        (async (doctorRoot, steps = []) => {
+          expect(fixture.stopped).toBe(true);
+          events.push("migrate");
+          const doctor = doctorStep(doctorRoot);
+          steps.push(
+            {
+              ...doctor,
+              name: "database migration writes",
+              warnings: ["Automatic database restoration unavailable: unknown writer."],
+            },
+            doctor,
+          );
+          return doctor;
+        }),
+      ...overrides,
     });
   }
 
@@ -122,7 +119,7 @@ describe("Git checkout execution", () => {
     const target = await advanceRemote();
     await git(root, "remote", "rename", "origin", authority);
     await git(root, "remote", "add", "secondary", path.join(directory, "unavailable"));
-    const config = await fs.readFile(path.join(root, ".git", "config"));
+    const savedConfig = await config();
     const result = await update();
     expect(result).toMatchObject({ status: "ok", after: { sha: target } });
     expect(result.steps.filter((step) => step.name === "openclaw doctor")).toHaveLength(1);
@@ -135,8 +132,7 @@ describe("Git checkout execution", () => {
     expect(result.steps.flatMap((step) => step.warnings ?? [])).toContain(
       `Fetched only the update remote ${authority}; unrelated remotes were left untouched.`,
     );
-    expect(await fs.readFile(path.join(root, ".git", "config"))).toEqual(config);
-    await expectRuntime(root, target);
+    await expectInstalled(target, savedConfig);
   });
 
   it.each(["untracked-main", "missing-main", "missing-origin"] as const)(
@@ -149,6 +145,9 @@ describe("Git checkout execution", () => {
       } else {
         await git(root, "branch", "-D", "main");
       }
+      if (mode === "missing-main") {
+        await git(root, "update-ref", "-d", "refs/remotes/origin/main");
+      }
       // A lexically earlier, healthy fork must never take over the Dev default.
       const other = path.join(directory, "other");
       await git(directory, "clone", "--quiet", remote, other);
@@ -158,22 +157,24 @@ describe("Git checkout execution", () => {
         await git(root, "remote", "remove", "origin");
         await git(root, "remote", "add", "another-fork", remote);
       }
-      const config = await fs.readFile(path.join(root, ".git", "config"));
+      const savedConfig = await config();
       const result = await update();
       if (mode === "missing-origin") {
         expect(result.status).not.toBe("ok");
-        expect(stopped).toBe(false);
-        expect(await git(root, "rev-parse", "HEAD")).toBe(beforeSha);
-        expect(await fs.readFile(path.join(root, ".git", "config"))).toEqual(config);
-        await expectRuntime(root, beforeSha);
+        expect(fixture.stopped).toBe(false);
+        await expectInstalled(beforeSha, savedConfig);
       } else {
         expect(result).toMatchObject({ status: "ok", after: { sha: target } });
         await expectRuntime(root, target);
+        if (mode === "missing-main") {
+          expect(await git(root, "rev-parse", "main@{upstream}")).toBe(target);
+        }
       }
     },
   );
 
   it.each([
+    ["refs/heads/main", "refs/remotes/team/fork/main", "team/fork/main"],
     ["refs/heads/main", "refs/status/main", "refs/status/main"],
     ["main", "refs/status/main", "refs/status/main"],
     ["HEAD", "refs/status/main", "refs/status/main"],
@@ -192,21 +193,23 @@ describe("Git checkout execution", () => {
       }
       await git(root, "remote", "rename", "origin", "team/fork");
       await git(root, "config", "remote.team/fork.fetch", "+" + sourceRef + ":" + destination);
-      await git(root, "update-ref", "-d", "refs/remotes/team/fork/main");
-      await git(root, "checkout", "--detach", beforeSha);
-      await git(root, "branch", "-D", "main");
-      const other = path.join(directory, "other");
-      await git(directory, "clone", "--quiet", remote, other);
-      await git(other, "reset", "--hard", beforeSha);
-      await git(root, "remote", "add", "origin", other);
-      const config = await fs.readFile(path.join(root, ".git", "config"));
+      if (trackingRef !== "team/fork/main") {
+        await git(root, "update-ref", "-d", "refs/remotes/team/fork/main");
+        await git(root, "checkout", "--detach", beforeSha);
+        await git(root, "branch", "-D", "main");
+      }
+      // An unusable origin must not override the explicitly selected source.
+      await git(root, "remote", "add", "origin", path.join(directory, "unavailable"));
+      const savedConfig = await config();
       const result = await update({
         devTarget: { mode: "tracked", upstreamRef: trackingRef, upstreamSha: target },
       });
-      expect(result).toMatchObject({ status: "ok", after: { sha: target } });
+      expect(result).toMatchObject({
+        status: "ok",
+        after: { sha: target, upstreamRef: trackingRef },
+      });
       expect(await git(root, "rev-parse", "--abbrev-ref", "HEAD")).toBe("HEAD");
-      expect(await fs.readFile(path.join(root, ".git", "config"))).toEqual(config);
-      await expectRuntime(root, target);
+      await expectInstalled(target, savedConfig);
     },
   );
 
@@ -217,21 +220,16 @@ describe("Git checkout execution", () => {
         await git(root, "fetch", "--depth=1", "origin");
       }
       const target = await advanceRemote();
-      await git(remote, "checkout", "-b", "unrelated", beforeSha);
-      await fs.writeFile(path.join(remote, "unrelated.txt"), "unrelated branch content");
-      await git(remote, "add", ".");
-      await git(remote, "commit", "-m", "unrelated remote work");
-      const unrelated = await git(remote, "rev-parse", "HEAD:unrelated.txt");
-      const config = await fs.readFile(path.join(root, ".git", "config"));
+      const unrelated = await unrelatedBranch();
+      const savedConfig = await config();
       const resultRoots: string[] = [];
-      const execute = runCommand;
-      runCommand = (argv, options) => {
+      intercept((argv) => {
         const inspection = argv.find((arg) => arg.startsWith("--git-dir="));
         if (inspection) {
           resultRoots.push(inspection.slice("--git-dir=".length));
         }
-        return execute(argv, options);
-      };
+        return undefined;
+      });
       const result = await update({
         inspectGitTarget: async () => {
           const inspection = resultRoots.at(-1)!;
@@ -243,20 +241,15 @@ describe("Git checkout execution", () => {
         },
       });
       expect(result).toMatchObject({ status: "ok", after: { sha: target } });
-      expect(await fs.readFile(path.join(root, ".git", "config"))).toEqual(config);
-      await expectRuntime(root, target);
+      await expectInstalled(target, savedConfig);
     },
   );
 
   it("refuses an option-shaped upstream before downloading unrelated branches", async () => {
     await advanceRemote();
-    await git(remote, "checkout", "-b", "unrelated", beforeSha);
-    await fs.writeFile(path.join(remote, "unrelated.txt"), "unrelated branch content");
-    await git(remote, "add", ".");
-    await git(remote, "commit", "-m", "unrelated remote work");
-    const unrelated = await git(remote, "rev-parse", "HEAD:unrelated.txt");
+    const unrelated = await unrelatedBranch();
     await git(root, "config", "branch.main.merge", "--no-tags");
-    const config = await fs.readFile(path.join(root, ".git", "config"));
+    const savedConfig = await config();
     const observations: { code: number | null; stdout: string }[] = [];
     const execute = runCommand;
     runCommand = async (argv, options) => {
@@ -283,34 +276,71 @@ describe("Git checkout execution", () => {
     expect(
       result.steps.find((step) => step.name === "git-target-inspection-fetch")?.stderrTail,
     ).toContain("--no-tags");
-    expect(stopped).toBe(false);
+    expect(fixture.stopped).toBe(false);
     expect(events).toEqual([]);
-    expect(await fs.readFile(path.join(root, ".git", "config"))).toEqual(config);
-    await expectRuntime(root, beforeSha);
+    await expectInstalled(beforeSha, savedConfig);
   });
 
-  it("does not admit cached tracking data excluded from the source fetch", async () => {
-    await advanceRemote();
-    await git(root, "config", "--add", "remote.origin.fetch", "^refs/heads/main");
-    const config = await fs.readFile(path.join(root, ".git", "config"));
-    const result = await update();
-    expect(result).toMatchObject({ status: "error", reason: "fetch-failed" });
-    expect(stopped).toBe(false);
-    expect(events).toEqual([]);
-    expect(await fs.readFile(path.join(root, ".git", "config"))).toEqual(config);
-    await expectRuntime(root, beforeSha);
-  });
-
-  it("fails before activation when the authoritative remote is unavailable", async () => {
-    await advanceRemote();
-    await git(root, "remote", "add", "secondary", remote);
-    await git(root, "remote", "set-url", "origin", path.join(directory, "unavailable"));
-    const config = await fs.readFile(path.join(root, ".git", "config"));
-    const result = await update();
-    expect(result).toMatchObject({ status: "error", reason: "fetch-failed" });
-    expect(stopped).toBe(false);
-    expect(await fs.readFile(path.join(root, ".git", "config"))).toEqual(config);
-    await expectRuntime(root, beforeSha);
+  it.each([
+    ["excluded", "fetch-failed"],
+    ["unavailable", "fetch-failed"],
+    ["dirty", "dirty"],
+    ["unreadable", "clean-check-failed"],
+    ["install", "preflight-no-good-commit"],
+    ["build", "preflight-no-good-commit"],
+  ] as const)("preserves the serving checkout after %s failure", async (failure, reason) => {
+    const target = await advanceRemote();
+    const building = failure === "install" || failure === "build";
+    const beforeInspection = failure === "dirty" || failure === "unreadable";
+    const stale = path.join(
+      root,
+      "dist.openclaw-update-00000000-0000-0000-0000-000000000000.tmp",
+      "candidate",
+    );
+    const postbuild = path.join(root, "dist", ".runtime-postbuildstamp");
+    if (failure === "excluded") {
+      await git(root, "config", "--add", "remote.origin.fetch", "^refs/heads/main");
+    } else if (failure === "unavailable") {
+      await git(root, "remote", "add", "secondary", remote);
+      await git(root, "remote", "set-url", "origin", path.join(directory, "unavailable"));
+    } else if (failure === "dirty") {
+      await writeFixtureTree(root, { [path.relative(root, stale)]: "operator-owned" });
+    } else if (building) {
+      await git(remote, "tag", "v2026.9.2", target);
+      if (failure === "build") {
+        await fs.rm(postbuild);
+      }
+    }
+    const commands: string[][] = [];
+    intercept((argv) => {
+      commands.push(argv);
+      if (failure === "unreadable" && argv[2] === root && argv[3] === "status") {
+        return reply(128, "index unavailable");
+      }
+      if (building && argv[0] === "pnpm" && argv[1] === failure) {
+        return reply(1, "candidate command failed");
+      }
+      return undefined;
+    });
+    const savedConfig = await config();
+    expect(await update(building ? { channel: "stable" } : {})).toMatchObject({
+      status: "error",
+      reason,
+    });
+    expect(fixture.stopped).toBe(false);
+    if (!building) {
+      expect(events).toEqual([]);
+    }
+    if (beforeInspection) {
+      expect(commands.some((argv) => argv.includes("clone") || argv.includes("fetch"))).toBe(false);
+    }
+    await expectInstalled(beforeSha, savedConfig);
+    if (failure === "dirty") {
+      expect(await fs.readFile(stale, "utf8")).toBe("operator-owned");
+    }
+    if (failure === "build") {
+      await expect(fs.stat(postbuild)).rejects.toMatchObject({ code: "ENOENT" });
+    }
   });
 
   it.each(["exit", "signal"] as const)(
@@ -320,8 +350,7 @@ describe("Git checkout execution", () => {
       await git(remote, "tag", "requested", target);
       await git(root, "tag", "requested", beforeSha);
       await git(root, "remote", "add", "adead", path.join(directory, "unavailable"));
-      const execute = runCommand;
-      runCommand = (argv, options) =>
+      intercept((argv) =>
         failure !== "exit" && argv.includes("fetch") && argv.includes("adead")
           ? Promise.resolve({
               code: failure === "signal" ? 143 : 0,
@@ -330,57 +359,12 @@ describe("Git checkout execution", () => {
               killed: true,
               termination: "signal" as const,
             })
-          : execute(argv, options);
+          : undefined,
+      );
       const result = await update({ devTarget: { mode: "detached", ref: "refs/tags/requested" } });
       expect(result.status).toBe(failure === "signal" ? "error" : "ok");
-      expect(stopped).toBe(failure !== "signal");
+      expect(fixture.stopped).toBe(failure !== "signal");
       await expectRuntime(root, failure === "signal" ? beforeSha : target);
-    },
-  );
-
-  it.each(["dirty", "unreadable"] as const)(
-    "refuses a %s checkout before inspection or shutdown",
-    async (kind) => {
-      await advanceRemote();
-      const commands: string[][] = [];
-      const execute = runCommand;
-      if (kind === "dirty") {
-        await fs.writeFile(path.join(root, "operator.txt"), "keep me");
-      }
-      runCommand = (argv, options) => {
-        commands.push(argv);
-        if (kind === "unreadable" && argv[2] === root && argv[3] === "status") {
-          return Promise.resolve({ code: 128, stdout: "", stderr: "index unavailable" });
-        }
-        return execute(argv, options);
-      };
-      const result = await update();
-      expect(result).toMatchObject({
-        status: "error",
-        reason: kind === "dirty" ? "dirty" : "clean-check-failed",
-      });
-      expect(commands.some((argv) => argv.includes("clone") || argv.includes("fetch"))).toBe(false);
-      expect(events).toEqual([]);
-      expect(stopped).toBe(false);
-      await expectRuntime(root, beforeSha);
-    },
-  );
-
-  it.each(["install", "build"] as const)(
-    "preserves the installed runtime when candidate %s fails",
-    async (command) => {
-      const target = await advanceRemote();
-      await git(remote, "tag", "v2026.9.2", target);
-      const execute = runCommand;
-      runCommand = (argv, options) =>
-        argv[0] === "pnpm" && argv[1] === command
-          ? Promise.resolve({ code: 1, stdout: "", stderr: "candidate command failed" })
-          : execute(argv, options);
-      const result = await update({ channel: "stable" });
-      expect(result).toMatchObject({ status: "error", reason: "preflight-no-good-commit" });
-      expect(stopped).toBe(false);
-      expect(await git(root, "rev-parse", "HEAD")).toBe(beforeSha);
-      await expectRuntime(root, beforeSha);
     },
   );
 
@@ -394,18 +378,17 @@ describe("Git checkout execution", () => {
       });
       throw refusal;
     });
-    const execute = runCommand;
-    runCommand = (argv, options) =>
+    intercept((argv) =>
       argv.includes("show") && argv.at(-1) === `${target}:package.json`
-        ? Promise.resolve({ code: 0, stdout: "malformed manifest", stderr: "" })
-        : execute(argv, options);
+        ? Promise.resolve(reply(0, "", "malformed manifest"))
+        : undefined,
+    );
 
     await expect(update({ inspectGitTarget })).rejects.toBe(refusal);
     expect(inspectGitTarget).toHaveBeenCalledOnce();
     expect(events).toEqual([]);
-    expect(stopped).toBe(false);
-    expect(await git(root, "rev-parse", "HEAD")).toBe(beforeSha);
-    await expectRuntime(root, beforeSha);
+    expect(fixture.stopped).toBe(false);
+    await expectInstalled();
   });
 
   it("does not invent a remote fallback for an existing main without an upstream", async () => {
@@ -449,16 +432,13 @@ describe("Git checkout execution", () => {
       const result = await update();
 
       expect(result).toMatchObject({ status: "error", reason: "checkout-failed" });
-      expect(result.steps).toContainEqual(
-        expect.objectContaining({
-          name: "git-activation-branch-check",
-          stdoutTail: null,
-          stderrTail: expect.stringContaining("a Git worktree uses or reserves branch main"),
-        }),
-      );
-      expect(stopped).toBe(false);
-      expect(await git(root, "rev-parse", "HEAD")).toBe(beforeSha);
-      await expectRuntime(root, beforeSha);
+      expectStep(result.steps, {
+        name: "git-activation-branch-check",
+        stdoutTail: null,
+        stderrTail: expect.stringContaining("a Git worktree uses or reserves branch main"),
+      });
+      expect(fixture.stopped).toBe(false);
+      await expectInstalled();
     },
   );
 
@@ -469,8 +449,7 @@ describe("Git checkout execution", () => {
       const target = await advanceRemote();
       await git(root, "checkout", "-b", "feature");
       await git(root, "branch", "-D", "main");
-      const execute = runCommand;
-      runCommand = (argv, options) =>
+      intercept((argv) =>
         argv[2] === root && argv.includes("--set-upstream-to")
           ? Promise.resolve({
               code: failure === "signal" ? 143 : 1,
@@ -481,7 +460,8 @@ describe("Git checkout execution", () => {
                 : {}),
               ...(failure.startsWith("output-limit-") ? { outputLimitExceeded: true } : {}),
             })
-          : execute(argv, options);
+          : undefined,
+      );
       const result = await update();
       expect(result.status).toBe(interrupted ? "error" : "ok");
       const step = result.steps.find((candidate) => candidate.name === "git-set-upstream");
@@ -507,28 +487,26 @@ describe("Git checkout execution", () => {
       await fs.writeFile(path.join(remote, "latest.txt"), "latest");
       await git(remote, "add", ".");
       await git(remote, "commit", "-m", "latest");
-      const execute = runCommand;
       let failed = false;
-      runCommand = (argv, options) => {
+      intercept((argv) => {
         if (!failed && argv[0] === "pnpm" && argv[1] === "build") {
           failed = true;
-          return Promise.resolve({
-            code: 1,
-            stdout: "",
-            stderr: capacity
-              ? "Error: ENOSPC: no space left on device, write"
-              : "candidate build failed",
-          });
+          return Promise.resolve(
+            reply(
+              1,
+              capacity ? "Error: ENOSPC: no space left on device, write" : "candidate build failed",
+            ),
+          );
         }
-        return execute(argv, options);
-      };
+        return undefined;
+      });
       const result = await update();
       expect(result.status).toBe(capacity ? "error" : "ok");
       expect(result.reason).toBe(capacity ? "preflight-insufficient-space" : undefined);
       expect(result.steps.filter((step) => step.name === "preflight-checkout")).toHaveLength(
         capacity ? 1 : 2,
       );
-      expect(stopped).toBe(!capacity);
+      expect(fixture.stopped).toBe(!capacity);
       await expectRuntime(root, capacity ? beforeSha : older);
     },
   );
@@ -547,24 +525,18 @@ describe("Git checkout execution", () => {
           );
         }
         if (repair && argv[0] === "pnpm" && argv[1] === "ui:build") {
-          await fs.mkdir(path.join(options.cwd!, "dist", "control-ui", "assets"), {
-            recursive: true,
+          await writeFixtureTree(options.cwd!, {
+            "dist/control-ui/assets/missing.js": "export {};\n",
           });
-          await fs.writeFile(
-            path.join(options.cwd!, "dist", "control-ui", "assets", "missing.js"),
-            "export {};\n",
-          );
         }
         return result;
       };
       const result = await update({ devTarget: { mode: "detached", ref: target } });
       expect(result.status).toBe(repair ? "ok" : "error");
-      expect(stopped).toBe(repair);
+      expect(fixture.stopped).toBe(repair);
       expect(result.steps.some((step) => step.name === "preflight-ui-build")).toBe(true);
       if (!repair) {
-        expect(result.steps).toContainEqual(
-          expect.objectContaining({ name: "preflight-ui-assets-verify", exitCode: 1 }),
-        );
+        expectStep(result.steps, { name: "preflight-ui-assets-verify", exitCode: 1 });
       }
       await expectRuntime(root, repair ? target : beforeSha);
     },
@@ -574,15 +546,14 @@ describe("Git checkout execution", () => {
     "settles worktree cleanup without hiding warnings (repair: %s)",
     async (repair) => {
       await advanceRemote();
-      const execute = runCommand;
       let stage: string | undefined;
-      runCommand = async (argv, options) => {
+      intercept((argv, options) => {
         if (argv.includes("worktree") && argv.includes("remove")) {
           expect(options.timeoutMs).toBe(5000);
-          return { code: 1, stdout: "", stderr: "synthetic worktree removal denied" };
+          return reply(1, "synthetic worktree removal denied");
         }
-        return execute(argv, options);
-      };
+        return undefined;
+      });
       const remove = fs.rm.bind(fs);
       const deny = vi.spyOn(fs, "rm").mockImplementation((target, options) => {
         if (!repair && stage && String(target).startsWith(stage)) {
@@ -632,15 +603,14 @@ describe("Git checkout execution", () => {
       const artifactStat = await fs.stat(artifacts);
       const rootMode = (await fs.stat(root)).mode;
       const parentMode = (await fs.stat(directory)).mode;
-      const execute = runCommand;
       let stage: string | undefined;
       let buildCache: string | undefined;
-      runCommand = (argv, options) => {
+      intercept((argv, options) => {
         if (argv[0] === "pnpm" && argv[1] === "build") {
           buildCache = options.env?.BUILD_ALL_CACHE_ROOT;
         }
-        return execute(argv, options);
-      };
+        return undefined;
+      });
       try {
         await fs.chmod(directory, 0o555);
         const result = await update({
@@ -671,38 +641,115 @@ describe("Git checkout execution", () => {
     },
   );
 
-  it("detaches the checkout when activating a tracked target", async () => {
-    const targetSha = await advanceRemote();
-    await git(root, "remote", "rename", "origin", "upstream");
-    await git(root, "remote", "add", "origin", path.join(directory, "unavailable"));
-    const result = await update({
-      devTarget: { mode: "tracked", upstreamRef: "upstream/main", upstreamSha: targetSha },
-    });
-    expect(result).toMatchObject({
-      status: "ok",
-      after: { sha: targetSha, upstreamRef: "upstream/main" },
-    });
-    expect(await git(root, "rev-parse", "--abbrev-ref", "HEAD")).toBe("HEAD");
-    await expectRuntime(root, targetSha);
-  });
-
   it.each(["missing", "unrelated"])("refuses a tracked target with %s upstream", async (kind) => {
     const targetSha = await advanceRemote();
     if (kind === "unrelated") {
-      await git(remote, "checkout", "-b", "unrelated", beforeSha);
-      await fs.writeFile(path.join(remote, "unrelated.txt"), "unrelated");
-      await git(remote, "add", ".");
-      await git(remote, "commit", "-m", "unrelated target");
+      await unrelatedBranch("unrelated");
     }
     const result = await update({
       devTarget: { mode: "tracked", upstreamRef: "origin/" + kind, upstreamSha: targetSha },
     });
     expect(result).toMatchObject({ status: "error", reason: "tracked-upstream-invalid" });
-    expect(stopped).toBe(false);
+    expect(fixture.stopped).toBe(false);
     expect(events).toEqual([]);
-    expect(await git(root, "rev-parse", "HEAD")).toBe(beforeSha);
+    expect(await head()).toBe(beforeSha);
     expect(await git(root, "rev-parse", "--abbrev-ref", "@{upstream}")).toBe("origin/main");
   });
+
+  it.each([
+    ["upstream", "origin", true, "stable", "tracked"],
+    ["origin", "fork", false, "stable", "origin fallback"],
+    ["upstream", undefined, false, "stable", "sole remote"],
+    ["upstream", undefined, true, "beta", "extended tags"],
+    ["upstream", undefined, true, "stable", "conflicting refspec"],
+    ["upstream", "fork", false, "stable", "ambiguous"],
+  ] as const)(
+    "refreshes only release tags from %s with fork %s (tracked=%s, channel=%s, %s)",
+    async (releaseRemote, forkRemote, tracked, channel, scenario) => {
+      vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
+      vi.stubEnv("GIT_CONFIG_GLOBAL", os.devNull);
+      vi.stubEnv("LC_ALL", "C");
+      await git(remote, "tag", "v2026.9.1");
+      await git(root, "tag", "v2026.9.1");
+      const release = await advanceRemote();
+      await git(root, "fetch", "origin");
+      await git(root, "checkout", "--detach", release);
+      await fixture.writeRuntime(root, release);
+      if (releaseRemote !== "origin") {
+        await git(root, "remote", "rename", "origin", releaseRemote);
+      }
+      await git(root, "tag", "local-only", beforeSha);
+      if (forkRemote) {
+        const fork = path.join(directory, "fork.git");
+        await git(directory, "clone", "--bare", remote, fork);
+        await git(root, "remote", "add", forkRemote, fork);
+      }
+      // The corrected release is already installed; advancing main must not move it.
+      await git(remote, "tag", "-f", "v2026.9.1", release);
+      await git(remote, "commit", "--allow-empty", "-m", "next development commit");
+      if (channel === "beta") {
+        for (const tag of ["v2026.9.33", "v2026.9.34", "v2026.9.34-1"]) {
+          await git(remote, "tag", tag, beforeSha);
+        }
+      }
+      if (!tracked) {
+        await git(root, "config", "--unset", "branch.main.remote");
+      }
+      if (scenario === "conflicting refspec") {
+        await git(root, "branch", "protected", release);
+        await git(root, "config", "remote.upstream.fetch", "refs/heads/main:refs/heads/protected");
+        await git(remote, "reset", "--hard", beforeSha);
+      }
+      await git(root, "config", "fetch.prune", "true");
+      await git(root, "config", "fetch.pruneTags", "true");
+      const fetches: Array<{ code: number | null; refs: string[] }> = [];
+      const execute = runCommand;
+      runCommand = async (argv, options) => {
+        if (argv[0] !== "git") {
+          throw new Error(`Unexpected build command: ${argv[0]}`);
+        }
+        const result = await execute(argv, options);
+        const fetchIndex = argv.indexOf("fetch");
+        if (fetchIndex !== -1) {
+          const refs = [];
+          for (const ref of [
+            "refs/tags/v2026.9.1",
+            "refs/tags/local-only",
+            `refs/remotes/${releaseRemote}/main`,
+          ]) {
+            const read = await execute([...argv.slice(0, fetchIndex), "rev-parse", ref], options);
+            refs.push(read.code === 0 ? read.stdout.trim() : "");
+          }
+          fetches.push({ code: result.code, refs });
+        }
+        return result;
+      };
+      const forbidden = async () => {
+        throw new Error("A refused fetch or current release must not enter candidate activation");
+      };
+      const result = await update({
+        channel,
+        inspectGitTarget: forbidden,
+        validateCandidate: forbidden,
+        beforeGitMutation: forbidden,
+        runGitDoctor: forbidden,
+      });
+      if (scenario === "ambiguous") {
+        expect(result).toMatchObject({ status: "error", reason: "fetch-failed" });
+        expect(result.steps.at(-1)?.stderrTail).toContain("Set branch.main.remote");
+        expect(fetches).toEqual([]);
+      } else {
+        expect(result).toMatchObject({ status: "skipped", reason: "already-current" });
+        expect(fetches).toEqual([{ code: 0, refs: [release, beforeSha, release] }]);
+      }
+      if (scenario === "conflicting refspec") {
+        expect(await git(root, "rev-parse", "protected")).toBe(release);
+      }
+      expect(await git(root, "rev-parse", "v2026.9.1", "local-only", "HEAD")).toBe(
+        [beforeSha, beforeSha, release].join("\n"),
+      );
+    },
+  );
 
   it.each([
     "doctor-failed",
@@ -716,21 +763,20 @@ describe("Git checkout execution", () => {
     const stateFile = path.join(directory, "operator-state");
     await fs.writeFile(stateFile, "old state");
     let migrated = false;
-    const execute = runCommand;
-    runCommand = (argv, options) => {
+    intercept((argv) => {
       if (migrated && argv[2] === root && argv[3] === "rev-parse" && argv[4] === "HEAD") {
         if (failure === "head-error") {
-          return Promise.resolve({ code: 1, stdout: "", stderr: "HEAD unavailable" });
+          return Promise.resolve(reply(1, "HEAD unavailable"));
         }
         if (failure === "head-mismatch") {
-          return Promise.resolve({ code: 0, stdout: beforeSha, stderr: "" });
+          return Promise.resolve(reply(0, "", beforeSha));
         }
       }
-      return execute(argv, options);
-    };
+      return undefined;
+    });
     const result = await update({
       runGitDoctor: async (doctorRoot) => {
-        expect(stopped).toBe(true);
+        expect(fixture.stopped).toBe(true);
         await expectRuntime(doctorRoot, targetSha);
         migrated = true;
         await fs.writeFile(stateFile, "migrated state");
@@ -746,13 +792,7 @@ describe("Git checkout execution", () => {
         if (failure === "ui-missing") {
           await fs.rm(path.join(root, "dist", "control-ui"), { recursive: true });
         }
-        return {
-          name: "openclaw doctor",
-          command: "CLI activation doctor",
-          cwd: doctorRoot,
-          durationMs: 0,
-          exitCode: failure === "doctor-failed" ? 1 : 0,
-        };
+        return doctorStep(doctorRoot, failure === "doctor-failed" ? 1 : 0);
       },
     });
     expect(result).toMatchObject({
@@ -774,7 +814,7 @@ describe("Git checkout execution", () => {
     });
     expect(result.steps.some((step) => step.name.startsWith("git-rollback-"))).toBe(false);
     expect(await fs.readFile(stateFile, "utf8")).toBe("migrated state");
-    expect(await git(root, "rev-parse", "HEAD")).toBe(targetSha);
+    expect(await head()).toBe(targetSha);
     expect(
       JSON.parse(await fs.readFile(path.join(root, "dist", "build-info.json"), "utf8")),
     ).toMatchObject({ buildId: targetSha });

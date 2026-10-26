@@ -28,9 +28,9 @@ import type { SubagentRoster } from "../chat-spawned-subagent.ts";
 import { resetChatThreadState } from "../chat-thread.ts";
 import type { ChatTranscriptMetadata } from "../chat-transcript-metadata.ts";
 import type { ChatTypingActorView, ChatTypingOverflow } from "../chat-typing-presence.ts";
-import type { RealtimeTalkConversationEntry } from "../talk/conversation.ts";
+import type { RealtimeTalkConversationEntry } from "../talk/conversation-state.ts";
 import type { CompactionStatus, RunOutputUsage } from "../tool-stream-contract.ts";
-import type { AsyncQuestionDraft, AsyncQuestionPresentation } from "./chat-async-question.types.ts";
+import type { createAsyncQuestionPresentation } from "./chat-async-question.ts";
 import type { ChatCommentPinsHandle } from "./chat-comment-pins.tsx";
 import { resolveChatContextCopy, usesNativeContextMenu } from "./chat-context-copy.ts";
 import type { ChatHistoryBoundaryProps } from "./chat-history-boundary.tsx";
@@ -56,18 +56,9 @@ import type { ChatWelcomeIdentityProps } from "./chat-welcome.tsx";
 
 registerChatMessageMetadataEnglish();
 
-export type ChatThreadState = {
+export type ChatThreadState = Parameters<typeof createAsyncQuestionPresentation>[0] & {
   threadElement?: HTMLElement;
   commentPins?: ChatCommentPinsHandle;
-  asyncQuestionDrafts: Map<string, AsyncQuestionDraft>;
-  asyncQuestionSessions?: Map<
-    string,
-    import("./chat-async-question-draft.ts").AsyncQuestionDraftSession
-  >;
-  asyncQuestionRevision: number;
-  asyncQuestionScope?: string;
-  asyncQuestionGeneration?: number;
-  asyncQuestionPresentation?: AsyncQuestionPresentation;
   turnRecapWatch: TurnRecapWatch | null;
   search: TranscriptSearchState;
   transcriptRenderDependencies: readonly unknown[];
@@ -79,11 +70,6 @@ export type ChatThreadState = {
     onSetReply?: (target: MessageReplyTarget) => void;
     onOpenReply?: (replyToId: string) => void;
     onAsyncQuestionDiscard?: (item: ChatQueueItem) => void;
-    onAsyncQuestionSubmit?: (
-      message: string,
-      itemId?: string,
-      sourceMessageId?: string,
-    ) => Promise<boolean>;
   };
 };
 
@@ -111,6 +97,7 @@ export type ChatThreadProps = Omit<
   ChatSendStatusActions &
   SubagentRoster & {
     applicationContext?: ApplicationContext;
+    onScrollPortRef?: (element: HTMLElement) => void | (() => void);
     messageReactions?: ReadonlyMap<string, MessageReactionSummary[]>;
     onReact?: (messageId: string, emoji: string, remove: boolean) => void;
     branding?: ThemeBranding;
@@ -154,6 +141,7 @@ export type ChatThreadProps = Omit<
     retryAt?: number;
     onRetryRun?: (runId: string) => void;
     failureActionsRunId?: string;
+    onDismissPendingInput?: (inputId: string) => void;
     waitingApproval?: boolean;
     questionPrompts?: readonly QuestionPrompt[];
     sessions: SessionsListResult | null;
@@ -170,7 +158,8 @@ export type ChatThreadProps = Omit<
     loadFullAssistantMessage?: SidebarFullMessageLoader | null;
     mediaPolicyEpoch?: number;
     autoExpandToolCalls?: boolean;
-    realtimeTalkConversation?: RealtimeTalkConversationEntry[];
+    /** Live captions update their retained row independently of the pane frame. */
+    readRealtimeTalkConversation?: () => readonly RealtimeTalkConversationEntry[];
     typingActors?: readonly ChatTypingActorView[];
     typingOverflow?: ChatTypingOverflow;
     onOpenSidebar?: (content: SidebarContent) => void;
@@ -269,8 +258,6 @@ export function resetTranscriptSession(paneId: string, owner?: ParentNode): void
   }
   if (state) {
     state.asyncQuestionDrafts = new Map();
-    // Parked rows must commit fresh bindings on return even when visible props match.
-    state.transcriptRenderDependencies = [];
     // Search input belongs to the outgoing transcript; pane preferences survive.
     state.search.reset();
   }

@@ -1,14 +1,15 @@
 import { dynamic, type JSX } from "@solidjs/web";
-import { createEffect, createMemo, createSignal } from "solid-js";
+import { createDeferred as defer, createEffect, createMemo, createSignal } from "solid-js";
 
 export function Good(props: { name: string }) {
   const [count, setCount] = createSignal(0);
+  const name = defer(() => props.name);
   createEffect(count, (value) => {
     document.title = String(value);
   });
   return (
     <button onClick={() => setCount((value) => value + 1)}>
-      {props.name} {count()}
+      {name()} {count()}
     </button>
   );
 }

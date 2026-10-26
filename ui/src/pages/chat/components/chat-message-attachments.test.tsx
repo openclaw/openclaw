@@ -3,7 +3,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { createMemo, createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { makeStallingStream } from "../../../../../src/infra/http-body.test-support.js";
 import { normalizeAttachmentContentBlock } from "../../../lib/chat/message-normalizer-attachments.ts";
+import { mediaTicketPayload } from "../../../test-helpers/control-ui-attachment-fixtures.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { AssistantAttachments } from "./chat-message-attachments-solid.tsx";
@@ -127,23 +129,35 @@ const svgResponse = (body = '<svg xmlns="http://www.w3.org/2000/svg"></svg>') =>
 const subscribers = new Set<() => void>();
 
 function stubAttachmentIntersection(): () => Promise<void> {
-  const callbacks: IntersectionObserverCallback[] = [];
+  const callbacks: Array<() => void> = [];
   vi.stubGlobal(
     "IntersectionObserver",
     class {
-      constructor(callback: IntersectionObserverCallback) {
-        callbacks.push(callback);
+      private readonly targets = new Set<Element>();
+      constructor(private readonly callback: IntersectionObserverCallback) {}
+      observe(target: Element) {
+        this.targets.add(target);
+        callbacks.push(() => {
+          if (this.targets.has(target)) {
+            // SAFETY: The viewport owner reads only target and isIntersecting.
+            this.callback(
+              [{ target, isIntersecting: true } as IntersectionObserverEntry],
+              this as unknown as IntersectionObserver,
+            );
+          }
+        });
       }
-      observe() {}
-      disconnect() {}
+      unobserve(target: Element) {
+        this.targets.delete(target);
+      }
+      disconnect() {
+        this.targets.clear();
+      }
     },
   );
   return async () => {
     await vi.waitFor(() => expect(callbacks.length).toBeGreaterThan(0));
-    callbacks.shift()?.(
-      [{ isIntersecting: true } as IntersectionObserverEntry],
-      {} as IntersectionObserver,
-    );
+    callbacks.shift()?.();
   };
 }
 
@@ -345,11 +359,20 @@ describe("attachment sidebar source ownership", () => {
     );
     const lightboxItem = onOpenImage.mock.calls[0]?.[0] as { release?: () => void } | undefined;
     expect(lightboxItem?.release).toBeTypeOf("function");
+    container.querySelector<HTMLButtonElement>(".chat-message-image-button")?.click();
+    const secondLightboxItem = onOpenImage.mock.calls[1]?.[0] as
+      | { release?: () => void }
+      | undefined;
+    expect(secondLightboxItem?.release).toBeTypeOf("function");
     container.remove();
     await Promise.resolve();
     expect(revokeObjectURL).not.toHaveBeenCalledWith(objectUrl);
     lightboxItem?.release?.();
-    expect(revokeObjectURL).toHaveBeenCalledWith(objectUrl);
+    lightboxItem?.release?.();
+    expect(revokeObjectURL).not.toHaveBeenCalledWith(objectUrl);
+    secondLightboxItem?.release?.();
+    secondLightboxItem?.release?.();
+    expect(revokeObjectURL).toHaveBeenCalledExactlyOnceWith(objectUrl);
   });
 
   it("keeps a cross-origin SVG with an extensionless label compact under the image CSP", async () => {
@@ -406,15 +429,9 @@ describe("attachment sidebar source ownership", () => {
       if (failure === "chunk") {
         intersect = stubAttachmentIntersection();
         fetchMock.mockResolvedValue(
-          new Response(
-            new ReadableStream<Uint8Array>({
-              start(controller) {
-                controller.enqueue(new Uint8Array(256 * 1024 + 1));
-              },
-              cancel,
-            }),
-            { headers: { "Content-Type": "image/svg+xml" } },
-          ),
+          new Response(makeStallingStream([new Uint8Array(256 * 1024 + 1)], cancel), {
+            headers: { "Content-Type": "image/svg+xml" },
+          }),
         );
       } else if (failure === "timeout") {
         vi.useFakeTimers();
@@ -627,11 +644,7 @@ describe("attachment sidebar source ownership", () => {
     const source = "/tmp/openclaw/clip.mp3";
     const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       const token = new Headers(init?.headers).get("Authorization")?.replace("Bearer ", "") ?? "";
-      return Response.json({
-        available: true,
-        mediaTicket: `ticket-${token}`,
-        mediaTicketExpiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
-      });
+      return Response.json(mediaTicketPayload(`ticket-${token}`, 5 * 60_000));
     });
     vi.stubGlobal("fetch", fetchMock);
     let sidebarContent: AttachmentSidebarContent | undefined;

@@ -6,6 +6,7 @@ import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runCliProcessChild } from "../../cli/cli-process-child.test-helpers.js";
+import { listDirectoryTreeStrict } from "../../infra/directory-walk.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import {
   resolveRuntimeWorkerArgv,
@@ -22,6 +23,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { sdkStateOwnerFixtureEntrypoint } from "./sdk-state-owner-runtime.test-support.js";
+import type { SdkStateOwnerReply } from "./sdk-state-owner.child.test-support.js";
 
 const roots = useAutoCleanupTempDirTracker(afterAll);
 afterEach(() => vi.unstubAllEnvs());
@@ -31,7 +33,7 @@ const entrypoint = resolveRuntimeWorkerArgv(
 
 async function snapshot(root: string) {
   const rows: [string, string][] = [];
-  for (const entry of await fs.readdir(root, { recursive: true, withFileTypes: true })) {
+  for (const entry of (await listDirectoryTreeStrict(root)).map((walkEntry) => walkEntry.dirent)) {
     const file = path.join(entry.parentPath, entry.name);
     const bytes = entry.isFile() ? await fs.readFile(file) : undefined;
     // Read-only SQLite opens may rebuild SHM or create an empty WAL.
@@ -48,25 +50,6 @@ async function snapshot(root: string) {
   }
   return rows.toSorted(([left], [right]) => left.localeCompare(right));
 }
-
-type Outcome = {
-  api: string;
-  result?: {
-    enabled?: boolean;
-    sandboxed?: boolean;
-    backendId?: string;
-    workspaceAccess?: string;
-  } | null;
-  error?: { code: string; message: string };
-};
-type Reply = {
-  phase: string;
-  data: {
-    outcomes: Outcome[];
-    backendCalls: number;
-    entries?: Array<{ containerName: string }>;
-  };
-};
 
 function expectedOutcomes(sandboxed: boolean, workspaceAccess = "rw") {
   return [
@@ -103,9 +86,9 @@ it("SDK refuses foreign live-owner mutations while preserving disabled and stand
     acquireGatewayLock({ env, role, allowInTests: true, timeoutMs: 0 });
   let parentOwner = await acquire();
   expect(parentOwner).not.toBeNull();
-  const replies = new Map<string, ReturnType<typeof createDeferred<Reply>>>();
+  const replies = new Map<string, ReturnType<typeof createDeferred<SdkStateOwnerReply>>>();
   const waitFor = (phase: string) => {
-    const pending = replies.get(phase) ?? createDeferred<Reply>();
+    const pending = replies.get(phase) ?? createDeferred<SdkStateOwnerReply>();
     replies.set(phase, pending);
     return pending.promise;
   };
@@ -129,7 +112,7 @@ it("SDK refuses foreign live-owner mutations while preserving disabled and stand
           if (!line.startsWith("sdk-owner-proof:")) {
             continue;
           }
-          const reply: Reply = JSON.parse(line.slice("sdk-owner-proof:".length));
+          const reply: SdkStateOwnerReply = JSON.parse(line.slice("sdk-owner-proof:".length));
           void waitFor(reply.phase);
           replies.get(reply.phase)!.resolve(reply);
         }

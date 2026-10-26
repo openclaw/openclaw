@@ -1,6 +1,8 @@
 import { expect, it } from "vitest";
 import type { SessionGoal } from "../../../packages/gateway-protocol/src/schema/sessions-goal.ts";
+import { createSessionGoalFixture } from "../../../src/gateway/session-goal.test-support.js";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { closeChatDetails } from "./chat-details.test-support.ts";
 import { chatMessage, exactButton, requireRecord } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -9,18 +11,12 @@ const viewport = { width: 1440, height: 900 };
 const pageOptions = { viewport, colorScheme: "light" } as const;
 
 function goalFixture(now: number, id: string, overrides: Partial<SessionGoal> = {}): SessionGoal {
-  return {
-    schemaVersion: 1,
-    id,
-    objective: "Verify the sample deployment",
+  return createSessionGoalFixture(id, "Verify the sample deployment", {
     status: "paused",
     createdAt: now,
     updatedAt: now,
-    tokenStart: 0,
-    tokensUsed: 0,
-    continuationTurns: 0,
     ...overrides,
-  };
+  });
 }
 
 function goalSessions(
@@ -214,9 +210,14 @@ suite.define(() => {
         expect(await gateway.getRequests(method)).toHaveLength(action === "resume" ? 2 : 1);
         if (action === "resume") {
           await page.setViewportSize({ width: 390, height: 844 });
-          await page.locator(".agent-chat__goal-label").waitFor({ state: "visible" });
-          await checkOutcome.waitFor({ state: "visible" });
+          const goalEntry = page.locator('.chat-activity-pills [data-family="goal"]');
+          await goalEntry.waitFor({ state: "visible" });
+          await goalEntry.click();
+          const mobileGoal = page.locator('.chat-mobile-details-page[data-details-page="goal"]');
+          await mobileGoal.getByText(goal.objective, { exact: true }).waitFor();
+          await mobileGoal.getByRole("button", { name: "Retry resume", exact: true }).waitFor();
           expect(await checkOutcome.isVisible()).toBe(true);
+          await closeChatDetails(page);
           await page.setViewportSize(viewport);
         }
         await page.reload();
@@ -257,6 +258,7 @@ suite.define(() => {
       const now = Date.now();
       const method = "sessions.goal.update";
       const gateway = await installMockGateway(page, {
+        subscriptionInitialHistory: false,
         sessionKey: "agent:main:main",
         heldMethods: [method, "chat.startup"],
         historyMessages: [

@@ -1,13 +1,17 @@
 import { serialize } from "node:v8";
-import { runWithCliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  createCliHistoryOwnerProbe,
+  runWithCliHistoryWriter,
+} from "../../config/sessions/cli-history-boundary.js";
 import { persistCompactionBoundaryWithSessionEntryInWorker } from "../../config/sessions/session-accessor.sqlite-compaction.js";
 import { readStagedConversationPublications } from "../../config/sessions/session-accessor.sqlite-conversation-publication.js";
 import { ensureSessionEntryInTransaction } from "../../config/sessions/session-accessor.sqlite-initial-entry.js";
-import { readTranscriptMutationAtSync } from "../../config/sessions/session-accessor.sqlite-metadata-read.js";
 import {
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
+import { readTranscriptMutationAtSync } from "../../config/sessions/session-accessor.sqlite-transcript-admitted-read.js";
 import { assertCanonicalSessionKeyWrite } from "../../config/sessions/session-canonical-key.js";
 import {
   boundSessionEntryMetadataReceipts,
@@ -74,13 +78,41 @@ export function bindSqliteWorkerBackend(
   },
 ): Omit<SqliteWorkerBackend<SessionMetadataWorkerOperations>, "close"> & { close(): undefined } {
   let entryChanges: readonly SessionRowChange[] = [];
+  // The current command's owner probe. It rides on the single transaction admission, so the
+  // host answers before the transaction writes; an unanswered probe never confirms the owner.
+  let ownerProbe: ReturnType<typeof createCliHistoryOwnerProbe> | undefined;
+  const withOwnerProbe = (
+    stage: "transaction" | "commit",
+    restriction: AgentDatabaseAdmissionRestriction | undefined,
+  ): AgentDatabaseAdmissionRestriction | undefined => {
+    const probe = stage === "transaction" ? ownerProbe : undefined;
+    if (!probe) {
+      return restriction;
+    }
+    return (request, dispatch) => {
+      const attach = (restricted: typeof request) =>
+        dispatch({
+          ...restricted,
+          facts: {
+            ...(isRecord(restricted.facts) ? restricted.facts : {}),
+            cliHistoryOwnerProbe: probe.fact,
+          },
+        });
+      if (restriction) {
+        restriction(request, attach);
+      } else {
+        attach(request);
+      }
+    };
+  };
   const context = {
     ...nativeContext,
     checkMessage: (facts: unknown) =>
       withoutSqliteDatabaseWriteScope(nativeContext.database, () =>
         requestSqliteWorkerOperationAdmission({ stage: "prepare", facts }),
       ),
-    admit(stage: "transaction" | "commit", restriction?: AgentDatabaseAdmissionRestriction) {
+    admit(stage: "transaction" | "commit", domainRestriction?: AgentDatabaseAdmissionRestriction) {
+      const restriction = withOwnerProbe(stage, domainRestriction);
       const transcriptPublication =
         stage === "commit"
           ? (readStagedSessionTranscriptAuthority({ db: context.database }) ?? [])
@@ -284,10 +316,14 @@ export function bindSqliteWorkerBackend(
             command.type === "session.metadata.append"
               ? command.input.cliWriter
               : undefined;
+          // Coverage takes the host's live owner check from this command's transaction admission.
+          ownerProbe = cliWriter?.confirmOwner ? createCliHistoryOwnerProbe() : undefined;
+          const probe = ownerProbe;
           return runWithCliHistoryWriter(
             cliWriter
               ? {
                   ...cliWriter,
+                  ...(probe ? { confirmsOwner: probe.holds } : {}),
                   target: { ...command.input.scope, storePath: context.databasePath },
                   // Host liveness is composed into both transaction and commit grants.
                   assertCurrent: backend.assertOpen,
@@ -320,6 +356,8 @@ export function bindSqliteWorkerBackend(
             return { ok: false, refusal };
           }
           throw error;
+        } finally {
+          ownerProbe = undefined;
         }
       },
     });

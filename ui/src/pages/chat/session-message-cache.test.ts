@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
+import { cacheChatBoardSnapshotAfterHydration } from "./chat-board-snapshot.ts";
 import {
   appendChatMessageToCache,
   cacheChatSessionSnapshot,
@@ -47,6 +48,55 @@ const widgetSnapshot = (
 ): ChatSessionSnapshot => ({ messages, pagination: { hasMore: false }, sessionId, ...extras });
 
 describe("session message cache", () => {
+  it("retains reaction facts only across the same session incarnation", () => {
+    const { read, write } = createCacheContext();
+    const summaries = [{ emoji: "👍", count: 1, identities: [{ id: "peer" }] }];
+    write(widgetSnapshot(["first"], "session-1", { messageReactions: { reply: summaries } }));
+    write(widgetSnapshot(["new history"], "session-1"));
+    expect(read()?.messageReactions).toEqual({ reply: summaries });
+    write(widgetSnapshot(["replacement"], "session-2"));
+    expect(read()?.messageReactions).toBeUndefined();
+  });
+
+  it("retains composer display facts only for the same session incarnation", () => {
+    const { read, write } = createCacheContext();
+    const composer = {
+      id: "saved",
+      provider: "example",
+      name: "Saved",
+      permissionMode: "full" as const,
+    };
+    write(widgetSnapshot(["cached"], "session-1", { composer }));
+    write(widgetSnapshot(["live"], "session-1"));
+    expect(read()?.composer).toEqual(composer);
+    write(widgetSnapshot(["reset"], "session-2"));
+    expect(read()?.composer).toBeUndefined();
+  });
+  it("retains a scoped board through transcript replacement and clears it authoritatively", () => {
+    const cache: ChatMessageCache = new Map();
+    const host = {
+      chatMessagesBySession: cache,
+      assistantAgentId: "ops",
+      settings: { gatewayUrl: "wss://cache.example" },
+      client: { recoveryScope: "account-a" },
+    };
+    const target = { sessionKey: "dashboard" };
+    const board = { sessionKey: "agent:ops:dashboard", revision: 1, tabs: [], widgets: [] };
+    cacheChatBoardSnapshotAfterHydration(host, target, board, 100, () => true);
+    expect(readChatSessionSnapshot(cache, host, target)?.board).toEqual({
+      snapshot: board,
+      receivedAtMs: 100,
+    });
+    cacheChatSessionSnapshot(cache, host, target, widgetSnapshot(["new transcript"], "session-2"));
+    expect(readChatSessionSnapshot(cache, host, target)?.board?.snapshot).toEqual(board);
+    const foreign = { ...host, client: { recoveryScope: "account-b" } };
+    expect(readChatSessionSnapshot(cache, foreign, target)).toBeNull();
+    cacheChatBoardSnapshotAfterHydration(host, target, null, 100, () => true);
+    expect(readChatSessionSnapshot(cache, host, target)?.board).toBeNull();
+    cacheChatSessionSnapshot(cache, host, target, widgetSnapshot(["refreshed"], "session-2"));
+    expect(readChatSessionSnapshot(cache, host, target)?.board).toBeNull();
+  });
+
   it.each([
     {
       name: "Matrix room and thread IDs",

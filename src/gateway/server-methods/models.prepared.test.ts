@@ -2,6 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
+import { apiKey, harnessRegistry } from "../../agents/model-catalog-fixtures.test-support.js";
 import { bindPreparedModelRuntimeAuth } from "../../agents/prepared-model-runtime-auth.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -13,11 +14,13 @@ import * as providerPolicySurface from "../../plugins/provider-policy-surface.js
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import * as pluginScope from "../../plugins/runtime/gateway-request-scope.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { authorizationClient } from "../server-methods.authorization.test-support.js";
 import {
   readPreparedCatalog,
   registerGatewayModelCatalogPrivateAccess,
 } from "../server-model-catalog-auth.js";
 import * as sessionReads from "../session-utils-store.js";
+import { WITHOUT_OPENAI_ENV_AUTH } from "../test-helpers.env.js";
 import {
   createChatMetadataHarness,
   createChatMetadataOwner,
@@ -27,10 +30,24 @@ import {
   createModelsListTestContext,
   catalogEntry,
   providerCatalogEntry,
-  WITHOUT_OPENAI_ENV_AUTH,
+  requestModelsList,
 } from "./models-list-result.openai-routes.test-support.js";
-import { modelsHandlers } from "./models.js";
 import type { GatewayClient, GatewayRequestHandlerOptions } from "./types.js";
+
+function modelsReader(
+  context: GatewayRequestHandlerOptions["context"],
+  params: GatewayRequestHandlerOptions["params"],
+  client: GatewayClient | null = null,
+) {
+  return async () => {
+    const respond = await requestModelsList(context, params, client);
+    const call = respond.mock.calls[0];
+    if (call && !call[0]) {
+      throw new Error(JSON.stringify(call[2]));
+    }
+    return call?.[1] as ModelsListResult | undefined;
+  };
+}
 
 it("retains the model-list projection until its catalog facts change", async () => {
   await withOpenClawTestState(
@@ -57,17 +74,12 @@ it("retains the model-list projection until its catalog facts change", async () 
       let currentConfig = config;
       context.getRuntimeConfig = () => currentConfig;
       const params = { agentId: "main", view: "all" as const };
-      const client: GatewayClient = {
-        internal: { syntheticClient: true },
-        connect: {
-          minProtocol: 1,
-          maxProtocol: 1,
-          client: { id: "test", version: "1", platform: "test", mode: "test" },
-          role: "operator",
-          scopes: ["operator.read"],
-          caps: ["model-selection-policy"],
-        },
-      };
+      const client = authorizationClient(
+        "prepared",
+        ["operator.read"],
+        { internal: { syntheticClient: true } },
+        { caps: ["model-selection-policy"] },
+      );
       const expected = await modelsListResult.buildModelsListResult({
         source: { kind: "gateway", context },
         agentId: "main",
@@ -90,38 +102,30 @@ it("retains the model-list projection until its catalog facts change", async () 
         readPrepared: unpreparedRead,
         loadDeferred: unpreparedRead,
       });
-      const read = async () => {
-        let result: unknown;
-        await modelsHandlers["models.list"]!({
-          req: { type: "req", id: "prepared", method: "models.list", params },
-          params,
-          context,
-          client,
-          isWebchatConnect: () => false,
-          respond: (ok, value, error) => {
-            if (!ok) {
-              throw new Error(JSON.stringify(error));
-            }
-            result = value;
-          },
-        } satisfies GatewayRequestHandlerOptions);
-        return result;
+      const read = modelsReader(context, params, client);
+      const readCommands = () => harness.runtime.read({ agentId: "main", includeModels: false });
+      const publishConfig = async (next: OpenClawConfig) => {
+        currentConfig = next;
+        setRuntimeConfigSnapshot(next, next);
+        harness.setConfig(next);
+        harness.setOwner({ ...owner, config: next });
+        await harness.runtime.refresh();
       };
-      const prepareProjection = vi.spyOn(modelsListResult, "prepareModelsListResult");
       try {
+        using prepareProjection = vi.spyOn(modelsListResult, "prepareModelsListResult");
         await harness.runtime.refresh();
         expect(JSON.stringify(await read())).toBe(JSON.stringify(expected));
-        await expect(
-          harness.runtime.read({ agentId: "main", includeModels: false }),
-        ).resolves.toMatchObject({ commands: [{ name: "command-1-1" }] });
-        const enterPluginScope = vi.spyOn(pluginScope, "withPluginRuntimeRegistryScope");
-        const resolvePolicy = vi.spyOn(
-          providerPolicySurface,
-          "resolveDirectBundledProviderPolicySurface",
-        );
-        const prepareStatement = vi.spyOn(DatabaseSync.prototype, "prepare");
-        const executeStatement = vi.spyOn(DatabaseSync.prototype, "exec");
-        try {
+        await expect(readCommands()).resolves.toMatchObject({
+          commands: [{ name: "command-1-1" }],
+        });
+        {
+          using enterPluginScope = vi.spyOn(pluginScope, "withPluginRuntimeRegistryScope");
+          using resolvePolicy = vi.spyOn(
+            providerPolicySurface,
+            "resolveDirectBundledProviderPolicySurface",
+          );
+          using prepareStatement = vi.spyOn(DatabaseSync.prototype, "prepare");
+          using executeStatement = vi.spyOn(DatabaseSync.prototype, "exec");
           expect(await Promise.all(Array.from({ length: 10 }, read))).toEqual(
             Array.from({ length: 10 }, () => expected),
           );
@@ -131,25 +135,16 @@ it("retains the model-list projection until its catalog facts change", async () 
           expect(unpreparedRead).not.toHaveBeenCalled();
           // One provider lookup per read is sufficient; prepared rows retain their identities.
           expect(resolvePolicy.mock.calls.length).toBeLessThanOrEqual(10);
-        } finally {
-          enterPluginScope.mockRestore();
-          resolvePolicy.mockRestore();
-          prepareStatement.mockRestore();
-          executeStatement.mockRestore();
         }
-        currentConfig = {
+        harness.setSkillsVersion(2);
+        await publishConfig({
           ...config,
           ui: { seamColor: "#123456", prefs: { chatShowToolCalls: false } },
           meta: { lastTouchedVersion: "2026.10.11" },
-        };
-        setRuntimeConfigSnapshot(currentConfig, currentConfig);
-        harness.setConfig(currentConfig);
-        harness.setOwner({ ...owner, config: currentConfig });
-        harness.setSkillsVersion(2);
-        await harness.runtime.refresh();
-        await expect(
-          harness.runtime.read({ agentId: "main", includeModels: false }),
-        ).resolves.toMatchObject({ commands: [{ name: "command-2-1" }] });
+        });
+        await expect(readCommands()).resolves.toMatchObject({
+          commands: [{ name: "command-2-1" }],
+        });
         expect(harness.buildCommands).toHaveBeenCalledTimes(2);
         expect(await read()).toEqual(expected);
         expect(prepareProjection).toHaveBeenCalledOnce();
@@ -157,11 +152,7 @@ it("retains the model-list projection until its catalog facts change", async () 
         await harness.runtime.refresh();
         expect(await read()).toEqual(expected);
         expect(prepareProjection).toHaveBeenCalledOnce();
-        expect(await harness.runtime.read({ agentId: "main", includeModels: false })).toMatchObject(
-          {
-            commands: [{ name: "command-2-1" }],
-          },
-        );
+        expect(await readCommands()).toMatchObject({ commands: [{ name: "command-2-1" }] });
         owner.modelCatalog.pendingProviders = ["test"];
         expect(await read()).toMatchObject({ pendingProviders: ["test"] });
         owner.modelCatalog.pendingProviders = undefined;
@@ -169,7 +160,7 @@ it("retains the model-list projection until its catalog facts change", async () 
         expect(await read()).toMatchObject({ refreshFailed: true });
         expect(await read()).not.toHaveProperty("pendingProviders");
         expect(prepareProjection).toHaveBeenCalledOnce();
-        currentConfig = {
+        await publishConfig({
           ...currentConfig,
           agents: {
             ...currentConfig.agents,
@@ -178,11 +169,7 @@ it("retains the model-list projection until its catalog facts change", async () 
               modelPolicy: { allow: ["test/first"] },
             },
           },
-        };
-        setRuntimeConfigSnapshot(currentConfig, currentConfig);
-        harness.setConfig(currentConfig);
-        harness.setOwner({ ...owner, config: currentConfig });
-        await harness.runtime.refresh();
+        });
         expect(await read()).toMatchObject({
           models: expect.arrayContaining([
             expect.objectContaining({ id: "first", manualSelectionAllowed: true }),
@@ -208,7 +195,6 @@ it("retains the model-list projection until its catalog facts change", async () 
         expect(prepareProjection).toHaveBeenCalledTimes(3);
         expect(unpreparedRead).not.toHaveBeenCalled();
       } finally {
-        prepareProjection.mockRestore();
         await harness.runtime.stop();
         clearRuntimeConfigSnapshot();
       }
@@ -259,47 +245,29 @@ it("bounds saved-session reads while projecting configured models and runtime ch
       await state.writeConfig(config);
       setRuntimeConfigSnapshot(config);
       const sessionKey = "agent:main:catalog-reader";
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey },
-        {
-          sessionId: "catalog-reader",
-          updatedAt: 1,
-          authProfileOverride: "openai:fixture",
-          authProfileOverrideSource: "user",
-        },
-      );
       const siblingSessionKey = "agent:main:catalog-sibling";
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: siblingSessionKey },
-        {
-          sessionId: "catalog-sibling",
-          updatedAt: 1,
-          authProfileOverride: "openai:fixture",
-          authProfileOverrideSource: "user",
-        },
-      );
-      const pluginRegistry = createEmptyPluginRegistry();
-      const loadNativeCatalog = vi.fn(async () => catalog);
-      pluginRegistry.agentHarnesses.push({
-        pluginId: "codex",
-        source: "test",
-        harness: {
-          id: "codex",
-          label: "Catalog fixture",
-          authBootstrap: "harness",
-          supports: () => ({ supported: true }),
-          runAttempt: async () => {
-            throw new Error("Model listing must not run inference");
+      for (const id of ["catalog-reader", "catalog-sibling"]) {
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey: `agent:main:${id}` },
+          {
+            sessionId: id,
+            updatedAt: 1,
+            authProfileOverride: "openai:fixture",
+            authProfileOverrideSource: "user",
           },
-          loadModelCatalog: loadNativeCatalog,
-          readModelCatalogReadiness: () => ({ accountType: "apiKey", authMode: "api_key" }),
-        },
+        );
+      }
+      const loadNativeCatalog = vi.fn(async () => catalog);
+      const pluginRegistry = harnessRegistry("codex", {
+        authBootstrap: "harness",
+        loadModelCatalog: loadNativeCatalog,
+        readModelCatalogReadiness: () => ({ accountType: "apiKey", authMode: "api_key" }),
       });
       const authStore: AuthProfileStore = {
         version: 1,
         profiles: {
-          "openai:fixture": { type: "api_key", provider: "openai", key: "synthetic-test-key" },
-          "openai:alternate": { type: "api_key", provider: "openai", key: "synthetic-other-key" },
+          "openai:fixture": apiKey("openai", "synthetic-test-key"),
+          "openai:alternate": apiKey("openai", "synthetic-other-key"),
         },
       };
       const context = createModelsListTestContext({
@@ -333,77 +301,34 @@ it("bounds saved-session reads while projecting configured models and runtime ch
       harness.setAuthStore(authStore);
       context.readPreparedModelsList = harness.runtime.readModelsList;
       const params = { agentId: "main", sessionKey, view: "configured" as const };
-      const read = async () => {
-        let result: ModelsListResult | undefined;
-        await modelsHandlers["models.list"]!({
-          req: { type: "req", id: "session-models", method: "models.list", params },
-          params,
-          context,
-          client: null,
-          isWebchatConnect: () => false,
-          respond: (ok, value, error) => {
-            if (!ok) {
-              throw new Error(JSON.stringify(error));
-            }
-            result = value as ModelsListResult;
-          },
-        } satisfies GatewayRequestHandlerOptions);
-        return result;
-      };
-      const sessionRead = vi.spyOn(sessionReads, "withGatewaySessionEntry");
-      const prepareProjection = vi.spyOn(modelsListResult, "prepareModelsListResult");
+      const read = modelsReader(context, params);
       try {
+        using sessionRead = vi.spyOn(sessionReads, "withGatewaySessionEntry");
+        using prepareProjection = vi.spyOn(modelsListResult, "prepareModelsListResult");
         await harness.runtime.refresh();
         const result = await read();
-        expect(result?.models).toHaveLength(9);
-        expect(result?.models.every((model) => model.available)).toBe(true);
-        expect(result?.models.filter((model) => model.runtimeChoices?.length)).toHaveLength(3);
-        expect(result?.models.flatMap((model) => model.runtimeChoices ?? [])).toEqual(
-          Array.from({ length: 3 }, () =>
+        expect({
+          models: result?.models.length,
+          available: result?.models.every((model) => model.available),
+          withChoices: result?.models.filter((model) => model.runtimeChoices?.length).length,
+          choices: result?.models.flatMap((model) => model.runtimeChoices ?? []),
+          account: result?.accountSelection,
+        }).toMatchObject({
+          models: 9,
+          available: true,
+          withChoices: 3,
+          choices: Array.from({ length: 3 }, () =>
             expect.objectContaining({ agentRuntime: expect.objectContaining({ id: "codex" }) }),
           ),
-        );
-        const readsPerRequest = sessionRead.mock.calls.length;
-        expect(result?.accountSelection).toMatchObject({
-          kind: "shared",
-          authProfileId: "openai:fixture",
-          source: "user",
+          account: { kind: "shared", authProfileId: "openai:fixture", source: "user" },
         });
+        const readsPerRequest = sessionRead.mock.calls.length;
         sessionRead.mockClear();
         expect(await read()).toEqual(result);
         const warmReadsPerRequest = sessionRead.mock.calls.length;
         expect(await Promise.all(Array.from({ length: 6 }, read))).toEqual(
           Array.from({ length: 6 }, () => result),
         );
-        if (process.env.OPENCLAW_BENCH_MODELS_LIST === "1") {
-          for (let warmup = 0; warmup < 5; warmup++) {
-            await read();
-          }
-          sessionRead.mockClear();
-          const durations: number[] = [];
-          for (let batch = 0; batch < 20; batch++) {
-            await Promise.all(
-              Array.from({ length: 6 }, async () => {
-                const started = performance.now();
-                await read();
-                durations.push(performance.now() - started);
-              }),
-            );
-          }
-          durations.sort((left, right) => left - right);
-          console.log(
-            JSON.stringify({
-              benchmark: "models.list",
-              callers: 6,
-              requests: durations.length,
-              sessionReads: sessionRead.mock.calls.length,
-              readsPerRequest,
-              warmReadsPerRequest,
-              p50Ms: durations[Math.floor(durations.length * 0.5)],
-              p99Ms: durations[Math.ceil(durations.length * 0.99) - 1],
-            }),
-          );
-        }
         expect(loadNativeCatalog).not.toHaveBeenCalled();
         // Model/runtime cardinality must not multiply live session authority acquisitions.
         expect(readsPerRequest).toBeLessThanOrEqual(12);
@@ -450,8 +375,6 @@ it("bounds saved-session reads while projecting configured models and runtime ch
         });
         expect(prepareProjection).toHaveBeenCalledTimes(2);
       } finally {
-        sessionRead.mockRestore();
-        prepareProjection.mockRestore();
         await harness.runtime.stop();
       }
     },

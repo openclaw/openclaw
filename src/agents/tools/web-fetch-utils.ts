@@ -1,3 +1,4 @@
+import { stripInlineLinks } from "@openclaw/normalization-core/markdown-plain-text";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   RAW_TEXT_TAGS,
@@ -8,6 +9,7 @@ import {
   readRawTextBounds,
   skipRawTextElement,
 } from "../../../packages/markdown-core/src/html-scanner.js";
+import { findMarkdownCodeRegions } from "../../../packages/markdown-core/src/markdown-code-regions.js";
 import { stripInvisibleUnicode } from "../../infra/unicode-visibility.js";
 import { decodeHtmlEntities } from "../../shared/html-entities.js";
 import { readHtmlAttribute } from "./web-fetch-attributes.js";
@@ -22,21 +24,52 @@ const BLOCK_BREAK_TAGS = new Set([
   "article",
   "header",
   "footer",
+  "pre",
   "table",
   "tr",
   "ul",
   "ol",
+  "dl",
+  "dt",
+  "dd",
+  "address",
+  "aside",
+  "blockquote",
+  "caption",
+  "center",
+  "details",
+  "dialog",
+  "dir",
+  "fieldset",
+  "figcaption",
+  "figure",
+  "form",
+  "hgroup",
+  "legend",
+  "main",
+  "menu",
+  "nav",
+  "search",
+  "summary",
 ]);
 // Keep malformed nested markup from making end-of-document context unwind quadratic.
 // web_fetch favors bounded, auditable text over preserving deep broken HTML structure.
 const MAX_RENDER_CONTEXT_DEPTH = 32;
+const MAX_BLOCK_BREAK_LOOKBACK = 64;
 
 type RenderContext =
   | { kind: "root"; parts: string[] }
   | { kind: "title"; parts: string[] }
   | { kind: "anchor"; href: string | undefined; hasText: boolean; parts: string[] }
   | { kind: "heading"; level: number; parts: string[] }
-  | { kind: "list-item"; parts: string[] };
+  | { kind: "list-item"; parts: string[] }
+  | { kind: "pre"; parts: string[] };
+
+type RenderState = {
+  linksAsText?: boolean;
+  title?: string;
+  preBlocks: string[];
+};
 
 function decodeEntities(value: string): string {
   // Display extraction historically accepted mixed-case &nbsp; and treats non-breaking spaces as
@@ -49,19 +82,71 @@ function readAnchorHref(rawTag: string): string | undefined {
   return value === undefined ? undefined : decodeEntities(value);
 }
 
+function escapePreMarkerText(value: string): string {
+  // Internal pre markers use single NULs. Double NULs in fetched text so even
+  // entity-decoded marker-like prose cannot be mistaken for a placeholder.
+  return value.replaceAll("\u0000", "\u0000\u0000");
+}
+
 function appendText(stack: RenderContext[], value: string): void {
   const context = stack[stack.length - 1];
-  context?.parts.push(value);
+  context?.parts.push(context.kind === "pre" ? value : escapePreMarkerText(value));
   if (context?.kind === "anchor" && /\S/.test(value)) {
     context.hasText = true;
   }
 }
 
-function closeContext(
-  context: RenderContext,
-  parent: RenderContext,
-  state: { title?: string },
-): void {
+// A block that starts mid-line must not run into the text before it. The look-back over trailing
+// spaces is bounded so long whitespace runs cannot make every block start rescan them.
+function breakLineBeforeBlock(stack: RenderContext[]): void {
+  const parts = stack[stack.length - 1]?.parts ?? [];
+  let budget = MAX_BLOCK_BREAK_LOOKBACK;
+  for (let i = parts.length - 1; i >= 0 && budget > 0; i -= 1, budget -= 1) {
+    const part = parts[i]!;
+    for (let j = part.length - 1; j >= 0 && budget > 0; j -= 1, budget -= 1) {
+      if (part[j] !== " " && part[j] !== "\t") {
+        if (part[j] !== "\n") {
+          appendText(stack, "\n");
+        }
+        return;
+      }
+    }
+  }
+}
+
+function formatPreformattedMarkdown(value: string): string {
+  const code = value.replace(/\r\n?/g, "\n");
+  let longestBacktickRun = 0;
+  let currentBacktickRun = 0;
+  for (const character of code) {
+    if (character === "`") {
+      currentBacktickRun += 1;
+      longestBacktickRun = Math.max(longestBacktickRun, currentBacktickRun);
+    } else {
+      currentBacktickRun = 0;
+    }
+  }
+  const fence = "`".repeat(Math.max(3, longestBacktickRun + 1));
+  return `${fence}\n${code}${code.endsWith("\n") ? "" : "\n"}${fence}`;
+}
+
+function restorePreformattedMarkdown(value: string, state: RenderState): string {
+  return value.replace(/\0(?:\0|openclaw-pre-(\d+)\0)/g, (_match, index: string | undefined) =>
+    index === undefined ? "\0" : formatPreformattedMarkdown(state.preBlocks[Number(index)]!),
+  );
+}
+
+function closeContext(context: RenderContext, parent: RenderContext, state: RenderState): void {
+  if (context.kind === "pre") {
+    const code = context.parts.join("");
+    if (code.trim()) {
+      const index = state.preBlocks.push(code) - 1;
+      parent.parts.push(`\n\n\0openclaw-pre-${index}\0\n\n`);
+    } else {
+      parent.parts.push("\n");
+    }
+    return;
+  }
   const label = normalizeWhitespace(context.parts.join(""));
   if (!label && context.kind !== "title" && !(context.kind === "anchor" && context.href)) {
     return;
@@ -79,7 +164,9 @@ function closeContext(
       return;
     case "anchor":
       parent.parts.push(
-        context.href && label ? `[${label}](${context.href})` : label || context.href || "",
+        !state.linksAsText && context.href && label
+          ? `[${label}](${escapePreMarkerText(context.href)})`
+          : label || escapePreMarkerText(context.href || ""),
       );
       return;
     case "heading":
@@ -98,7 +185,7 @@ function closeContext(
   }
 }
 
-function closeTopContext(stack: RenderContext[], state: { title?: string }): void {
+function closeTopContext(stack: RenderContext[], state: RenderState): void {
   const context = stack.pop()!;
   closeContext(context, stack[stack.length - 1]!, state);
 }
@@ -106,7 +193,7 @@ function closeTopContext(stack: RenderContext[], state: { title?: string }): voi
 function closeThroughContext(
   stack: RenderContext[],
   kind: RenderContext["kind"],
-  state: { title?: string },
+  state: RenderState,
   requireAnchorText = false,
 ): boolean {
   for (let i = stack.length - 1; i > 0; i -= 1) {
@@ -127,7 +214,7 @@ function closeThroughContext(
 function pushContext(
   stack: RenderContext[],
   context: Exclude<RenderContext, { kind: "root" }>,
-  state: { title?: string },
+  state: RenderState,
 ): void {
   while (stack.length >= MAX_RENDER_CONTEXT_DEPTH) {
     closeTopContext(stack, state);
@@ -135,10 +222,14 @@ function pushContext(
   stack.push(context);
 }
 
-export function htmlToMarkdown(html: string): { text: string; title?: string } {
+export function htmlToMarkdown(
+  html: string,
+  options?: { linksAsText?: boolean },
+): { text: string; title?: string } {
   const root: RenderContext = { kind: "root", parts: [] };
   const stack: RenderContext[] = [root];
-  const state: { title?: string } = {};
+  const state: RenderState = { preBlocks: [], linksAsText: options?.linksAsText };
+  const tableRowCellCounts: number[] = [];
 
   for (let i = 0; i < html.length;) {
     const ch = html[i];
@@ -177,17 +268,29 @@ export function htmlToMarkdown(html: string): { text: string; title?: string } {
       continue;
     }
 
+    // Within pre, tags are presentation only; their text must stay literal.
+    if (stack[stack.length - 1]?.kind === "pre" && token.name !== "pre") {
+      if (token.name === "br" && !token.closing) {
+        appendText(stack, "\n");
+      }
+      continue;
+    }
     const kind =
       token.name === "title"
         ? "title"
-        : token.name === "a"
-          ? "anchor"
-          : /^h[1-6]$/.test(token.name)
-            ? "heading"
-            : token.name === "li"
-              ? "list-item"
-              : undefined;
+        : token.name === "pre"
+          ? "pre"
+          : token.name === "a"
+            ? "anchor"
+            : /^h[1-6]$/.test(token.name)
+              ? "heading"
+              : token.name === "li"
+                ? "list-item"
+                : undefined;
     if (token.closing) {
+      if (token.name === "tr") {
+        tableRowCellCounts.pop();
+      }
       if (kind) {
         closeThroughContext(stack, kind, state);
       } else if (BLOCK_BREAK_TAGS.has(token.name)) {
@@ -200,8 +303,28 @@ export function htmlToMarkdown(html: string): { text: string; title?: string } {
       i = readRawTextBounds(html, token.name, i).end;
       continue;
     }
-    if (BLOCK_BREAK_TAGS.has(token.name) && closeThroughContext(stack, "anchor", state, true)) {
-      appendText(stack, " ");
+    if (token.name === "tr" && !token.selfClosing) {
+      tableRowCellCounts.push(0);
+    }
+    if ((token.name === "td" || token.name === "th") && !token.selfClosing) {
+      const rowIndex = tableRowCellCounts.length - 1;
+      if (rowIndex >= 0) {
+        const cellCount = tableRowCellCounts[rowIndex] ?? 0;
+        if (cellCount > 0) {
+          appendText(stack, " | ");
+        }
+        tableRowCellCounts[rowIndex] = cellCount + 1;
+      }
+    }
+    if (BLOCK_BREAK_TAGS.has(token.name)) {
+      if (closeThroughContext(stack, "anchor", state, true)) {
+        appendText(stack, " ");
+      } else {
+        breakLineBeforeBlock(stack);
+      }
+    }
+    if (token.name === "pre") {
+      appendText(stack, "\n");
     }
     if (token.name === "br" || token.name === "hr") {
       appendText(stack, "\n");
@@ -227,8 +350,8 @@ export function htmlToMarkdown(html: string): { text: string; title?: string } {
   }
 
   return {
-    text: normalizeWhitespace(root.parts.join("")),
-    title: state.title,
+    text: restorePreformattedMarkdown(normalizeWhitespace(root.parts.join("")), state),
+    title: state.title ? restorePreformattedMarkdown(state.title, state) : state.title,
   };
 }
 
@@ -241,30 +364,138 @@ export function normalizeWhitespace(value: string): string {
     .trim();
 }
 
+function readBacktickRunEnd(value: string, start: number): number {
+  let end = start + 1;
+  while (value[end] === "`") {
+    end += 1;
+  }
+  return end;
+}
+
+/**
+ * Inline code ownership is decided on the original Markdown, not on the prose that is
+ * left after fenced blocks are removed. The shared parser knows that backticks inside a
+ * link or image destination are not code delimiters, that code inside an image label is
+ * alt text, and that a span wrapping a fence-looking run is still one literal span.
+ * Hiding those ranges up front keeps their content literal without nesting the
+ * placeholders that fenced blocks already own.
+ */
+function createInlineCodeHider(markdown: string, codeBlocks: string[]) {
+  const regions = findMarkdownCodeRegions(markdown).filter((region) => !region.block);
+  const insideInline = (index: number): boolean =>
+    regions.some((region) => index >= region.start && index < region.end);
+  const emit = (from: number, to: number): string => {
+    let out = "";
+    let cursor = from;
+    for (const region of regions) {
+      if (region.end <= from || region.start >= to) {
+        continue;
+      }
+      const start = Math.max(region.start, from);
+      const end = Math.min(region.end, to);
+      if (start > cursor) {
+        out += markdown.slice(cursor, start).replaceAll("\0", "\0\0");
+      }
+      if (start === region.start && end === region.end) {
+        const delimiter = readBacktickRunEnd(markdown, region.start) - region.start;
+        const literal = markdown.slice(region.start + delimiter, region.end - delimiter);
+        if (literal) {
+          out += `\0${codeBlocks.length}\0`;
+          codeBlocks.push(literal);
+        }
+      } else {
+        // Only a fence boundary can split a region; keep that slice verbatim.
+        out += markdown.slice(start, end).replaceAll("\0", "\0\0");
+      }
+      cursor = end;
+    }
+    if (cursor < to) {
+      out += markdown.slice(cursor, to).replaceAll("\0", "\0\0");
+    }
+    return out;
+  };
+  return { insideInline, emit };
+}
+
 export function markdownToText(markdown: string): string {
   const codeBlocks: string[] = [];
+  const inline = createInlineCodeHider(markdown, codeBlocks);
   let text = "";
+  const opener = /`{3,}|(?:^|\n) {0,3}(~{3,})/g;
   let pos = 0;
   while (pos < markdown.length) {
-    const open = markdown.indexOf("```", pos);
-    if (open === -1) {
-      text += markdown.slice(pos).replaceAll("\0", "\0\0");
+    // A fence-looking run inside an inline code span is literal content, not a fence.
+    let opening: RegExpExecArray | null = null;
+    let searchFrom = pos;
+    while (searchFrom < markdown.length) {
+      opener.lastIndex = searchFrom;
+      const candidate = opener.exec(markdown);
+      if (!candidate) {
+        break;
+      }
+      const candidateIsTilde = candidate[1] !== undefined;
+      const candidateOpen =
+        candidate.index + (candidateIsTilde && candidate[0].startsWith("\n") ? 1 : 0);
+      if (!inline.insideInline(candidateOpen)) {
+        opening = candidate;
+        break;
+      }
+      searchFrom = candidateOpen + 1;
+    }
+    if (!opening) {
+      text += inline.emit(pos, markdown.length);
       break;
     }
-    text += markdown.slice(pos, open).replaceAll("\0", "\0\0");
-    const afterOpen = open + 3;
-    const close = markdown.indexOf("```", afterOpen);
+    const isTilde = opening[1] !== undefined;
+    const open = opening.index + (isTilde && opening[0].startsWith("\n") ? 1 : 0);
+    text += inline.emit(pos, open);
+    const afterOpen = opening.index + opening[0].length;
+    const fenceLength = opening[1]?.length ?? afterOpen - open;
+    let close: { start: number; end: number } | undefined;
+    if (isTilde) {
+      // Tilde blocks require a line-owning close; retain the existing inline backtick behavior.
+      const closing = /(?:^|\n) {0,3}(~{3,})[ \t]*\r?(?=\n|$)/g;
+      closing.lastIndex = afterOpen;
+      for (let match = closing.exec(markdown); match; match = closing.exec(markdown)) {
+        if (match[1]!.length >= fenceLength) {
+          close = {
+            start: match.index + (match[0].startsWith("\n") ? 1 : 0),
+            end: match.index + match[0].length,
+          };
+          break;
+        }
+      }
+    } else {
+      let closingStart = afterOpen;
+      while (closingStart < markdown.length) {
+        const start = markdown.indexOf("`", closingStart);
+        if (start === -1) {
+          break;
+        }
+        const end = readBacktickRunEnd(markdown, start);
+        if (end - start >= fenceLength) {
+          // Consume only the matching run, preserving adjacent blocks.
+          close = { start, end: start + fenceLength };
+          break;
+        }
+        closingStart = end;
+      }
+    }
     const firstLineEnd = markdown.indexOf("\n", afterOpen);
-    if (close === -1) {
+    if (!close && !isTilde) {
       const lineStart = markdown.lastIndexOf("\n", open) + 1;
       if (firstLineEnd === -1 || !/^[ \t]*$/.test(markdown.slice(lineStart, open))) {
-        text += markdown.slice(open).replaceAll("\0", "\0\0");
+        text += inline.emit(open, markdown.length);
         break;
       }
     }
-    const contentEnd = close === -1 ? markdown.length : close;
+    const contentEnd = close?.start ?? markdown.length;
     const contentStart =
-      firstLineEnd === -1 || firstLineEnd > contentEnd ? afterOpen : firstLineEnd + 1;
+      isTilde && firstLineEnd === -1
+        ? markdown.length
+        : firstLineEnd === -1 || firstLineEnd > contentEnd
+          ? afterOpen
+          : firstLineEnd + 1;
     const code = markdown.slice(contentStart, contentEnd);
     // Keep the surrounding prose connected without interpreting the code as Markdown.
     // Preserve its final line boundary for heading/list markers after the closing fence.
@@ -275,10 +506,9 @@ export function markdownToText(markdown: string): string {
       codeBlocks.push(literal);
     }
     text += lineEnd;
-    pos = close === -1 ? markdown.length : close + 3;
+    pos = close?.end ?? markdown.length;
   }
-  text = text.replace(/!\[[^\]]*]\([^)]+\)/g, "");
-  text = text.replace(/\[([^\]]+)]\([^)]+\)/g, "$1");
+  text = stripInlineLinks(text, { images: "omit" });
   text = text.replace(/`([^`]+)`/g, "$1");
   text = text.replace(/^#{1,6}\s+/gm, "");
   text = text.replace(/^[^\S\n]*[-*+]\s+/gm, "");
@@ -307,7 +537,9 @@ export async function extractBasicHtmlContent(params: {
   extractMode: ExtractMode;
 }): Promise<{ text: string; title?: string } | null> {
   const cleanHtml = await sanitizeHtml(params.html);
-  const rendered = htmlToMarkdown(cleanHtml);
+  // HTML labels are literal text, not authored Markdown. Do not serialize destinations
+  // only to parse them back out in text mode. Keep Markdown rendering unchanged.
+  const rendered = htmlToMarkdown(cleanHtml, { linksAsText: params.extractMode === "text" });
   const text =
     stripInvisibleUnicode(
       params.extractMode === "text" ? markdownToText(rendered.text) : rendered.text,

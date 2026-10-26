@@ -1,16 +1,17 @@
 import assert from "node:assert/strict";
+import { once } from "node:events";
 import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
-import { parseErrorResponse, type FetchLike } from "@modelcontextprotocol/client";
+import type { Socket } from "node:net";
+import { parseErrorResponse } from "@modelcontextprotocol/client";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
-  buildMcpHttpFetch,
-  buildMcpOAuthHttpFetch,
-  withoutMcpAuthorizationHeader,
-  withSameOriginMcpHttpHeaders,
-} from "./mcp-http-fetch.js";
+  closeHttpServer,
+  listenLoopback,
+} from "../../test/helpers/gateway-integration-fixtures.js";
+import { buildMcpHttpFetch, buildMcpOAuthHttpFetch } from "./mcp-http-fetch.js";
 import { withMcpOAuthBearer } from "./mcp-oauth-fetch.js";
 import { operatorMcpOAuthIdentity } from "./mcp-oauth-identity.js";
+import { closeProviderTransportDispatcherPool } from "./provider-transport-dispatcher-pool.js";
 
 const testGlobal = globalThis as Record<string, unknown>;
 const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
@@ -61,22 +62,9 @@ async function hangingServer(stage: "headers" | "body"): Promise<string> {
       response.write('{"access_token":');
     }
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
-  const address = server.address() as AddressInfo;
-  onTestFinished(async () => {
-    const closed = new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
-    server.closeAllConnections();
-    await closed;
-  });
-  return `http://127.0.0.1:${address.port}`;
+  const url = await listenLoopback(server);
+  onTestFinished(() => closeHttpServer(server));
+  return url;
 }
 
 function expectBoundedTimeout(error: unknown, undiciCode: string): void {
@@ -104,8 +92,7 @@ describe("MCP HTTP fetch helpers", () => {
       vi.stubEnv(key, "");
       vi.stubEnv(key.toLowerCase(), "");
     }
-    lookupMock.mockReset();
-    lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+    lookupMock.mockReset().mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
     oauthResolveMock.mockReset();
     useFetch(async (_url, init) => {
       fetchCalls.push(init);
@@ -113,9 +100,56 @@ describe("MCP HTTP fetch helpers", () => {
     });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await closeProviderTransportDispatcherPool();
     vi.unstubAllEnvs();
     delete testGlobal[TEST_UNDICI_RUNTIME_DEPS_KEY];
+  });
+
+  it("reuses HTTP connections across MCP clients without sharing credentials or authority", async () => {
+    delete testGlobal[TEST_UNDICI_RUNTIME_DEPS_KEY];
+    const sockets = new Set<Socket>();
+    const closed: Promise<unknown>[] = [];
+    let requests = 0;
+    const server = createServer((request, response) => {
+      requests += 1;
+      if (!sockets.has(request.socket)) {
+        sockets.add(request.socket);
+        closed.push(once(request.socket, "close"));
+      }
+      request.resume();
+      response.end(request.headers.authorization);
+    });
+    const resourceUrl = await listenLoopback(server);
+    onTestFinished(async () => {
+      await closeProviderTransportDispatcherPool();
+      await closeHttpServer(server);
+    });
+    let admitted = true;
+    const createClient = () =>
+      buildMcpHttpFetch({
+        resourceUrl,
+        beforeRequest() {
+          if (!admitted) {
+            throw new Error("MCP authority retired");
+          }
+        },
+      });
+    for (let index = 0; index < 6; index += 1) {
+      const credential = `Bearer synthetic-client-${index % 2}`;
+      const response = await createClient()(resourceUrl, {
+        method: "POST",
+        headers: { authorization: credential },
+        body: '{"jsonrpc":"2.0","id":1,"method":"tools/list"}',
+      });
+      expect(await response.text()).toBe(credential);
+    }
+    admitted = false;
+    await expect(createClient()(resourceUrl)).rejects.toThrow("MCP authority retired");
+    expect(requests).toBe(6);
+    expect(sockets.size).toBeLessThan(requests);
+    await closeProviderTransportDispatcherPool();
+    await Promise.all(closed);
   });
 
   it("scopes TLS overrides to the MCP resource origin", async () => {
@@ -127,40 +161,8 @@ describe("MCP HTTP fetch helpers", () => {
     await fetch("https://mcp.example.com/token");
     await fetch("https://auth.example.com/token");
 
-    expect(connectOptions(fetchCalls[0])).toMatchObject({
-      rejectUnauthorized: false,
-    });
+    expect(connectOptions(fetchCalls[0])?.rejectUnauthorized).toBe(false);
     expect(connectOptions(fetchCalls[1])?.["rejectUnauthorized"]).toBeUndefined();
-  });
-
-  it("removes static Authorization headers for OAuth-backed runtime requests", () => {
-    expect(
-      withoutMcpAuthorizationHeader({
-        Authorization: "Bearer static",
-        "X-Tenant": "docs",
-      }),
-    ).toEqual({
-      "X-Tenant": "docs",
-    });
-  });
-
-  it("adds MCP headers only to same-origin OAuth requests", async () => {
-    const fetchFn = vi.fn<FetchLike>(async () => new Response("ok"));
-    const fetch = withSameOriginMcpHttpHeaders({
-      fetchFn,
-      resourceUrl: "https://mcp.example.com/mcp",
-      headers: { "X-Tenant": "docs" },
-    });
-
-    await fetch("https://mcp.example.com/.well-known/oauth-protected-resource", {
-      headers: { "MCP-Protocol-Version": "2025-06-18" },
-    });
-    await fetch("https://auth.example.com/token");
-
-    const headers = new Headers(fetchFn.mock.calls[0]?.[1]?.headers);
-    expect(headers.get("x-tenant")).toBe("docs");
-    expect(headers.get("mcp-protocol-version")).toBe("2025-06-18");
-    expect(fetchFn.mock.calls[1]?.[1]?.headers).toBeUndefined();
   });
 
   it("preserves POST bodies and bearer headers through the production OAuth fetch stack", async () => {
@@ -185,7 +187,7 @@ describe("MCP HTTP fetch helpers", () => {
       identity: operatorMcpOAuthIdentity("docs", resourceUrl),
     });
 
-    const response = await fetch(resourceUrl, {
+    const options = {
       method: "POST",
       headers: { "content-type": "application/json" },
       body,
@@ -193,7 +195,8 @@ describe("MCP HTTP fetch helpers", () => {
       credentials: "include",
       keepalive: true,
       mode: "cors",
-    });
+    } satisfies RequestInit;
+    const response = await fetch(resourceUrl, options);
 
     expect(await response.text()).toBe("ok");
     expect(bodies).toEqual([body, body]);
@@ -244,7 +247,6 @@ describe("MCP HTTP fetch helpers", () => {
       const fetch = buildMcpHttpFetch({ resourceUrl: `${baseUrl}/mcp`, timeoutMs: 500 });
       const pending = fetch(`${baseUrl}/token`, { method: "POST" });
       const error = await captureRejection(stage === "headers" ? pending : (await pending).json());
-      expect(error).toBeDefined();
       expectBoundedTimeout(
         error,
         stage === "headers" ? "UND_ERR_HEADERS_TIMEOUT" : "UND_ERR_BODY_TIMEOUT",

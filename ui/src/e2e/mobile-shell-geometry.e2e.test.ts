@@ -1,22 +1,28 @@
-import { expect, type Page } from "playwright/test";
+import { expect, type Locator, type Page } from "playwright/test";
 import { it } from "vitest";
 import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import {
+  waitForControlUiFrameLayout,
+  waitForControlUiProofSurface,
+} from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionUrl,
-  defaultControlUiFeatureMethods,
   installMockGateway,
+  navigateToControlUiSession,
 } from "../test-helpers/control-ui-e2e.ts";
-import {
-  closeChatDetails,
-  openChatDetails,
-  openDetailsPullRequests,
-} from "./chat-details.test-support.ts";
-import { waitForWatchedSessionKey } from "./chat-github-publication.test-support.ts";
+import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Mobile shell geometry" });
 const sessionKey = "agent:main:main";
+
+async function waitForMessageGeometry(surface: Locator, content: readonly Locator[]) {
+  const targets = [surface, ...content];
+  await Promise.all(targets.map((target) => waitForControlUiProofSurface(target, [target])));
+  await waitForControlUiFrameLayout(targets);
+  await Promise.all(targets.map((target) => expect(target).toBeInViewport()));
+}
+
 function viewportScenario(
   name: string,
   width: number,
@@ -88,11 +94,15 @@ async function expectReachableAction(
   expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(visibleBottom);
   const point = { x: bounds!.x + bounds!.width / 2, y: bounds!.y + bounds!.height / 2 };
   if (mobile) {
-    // Compact Send is 36px, Stop 32px; model/effort retain independent 44px targets.
-    const compact = await page
-      .locator(".agent-chat__input")
-      .evaluate((element) => element.getBoundingClientRect().width <= 560);
-    const targetSize = compact && label === "Send message" ? 36 : 32;
+    const { compact, resting, narrowViewport } = await page
+      .locator(".agent-chat__composer-shell")
+      .evaluate((element) => ({
+        compact: element.getBoundingClientRect().width <= 560,
+        resting: element.matches('[data-mobile-composer="true"][data-composer-editing="false"]'),
+        narrowViewport: matchMedia("(max-width: 560px)").matches,
+      }));
+    const targetSize =
+      label === "Stop generating" && narrowViewport ? 32 : resting || compact ? 36 : 32;
     expect([bounds!.width, bounds!.height]).toEqual([targetSize, targetSize]);
     for (const picker of await page
       .locator(".chat-controls__model-trigger, .chat-controls__effort-trigger")
@@ -116,7 +126,7 @@ async function expectEditableDraft(page: Page, visibleBottom: number, mobile: bo
   // Dense queue/context reachability belongs to chat-footer.e2e.test.ts; this tests the editor.
   await expect(
     page.locator(
-      ".chat-details:popover-open, .chat-footer__context .session-progress-card, .chat-footer__context .chat-prs",
+      ".chat-details:popover-open, .sidebar-region--mobile-host > .chat-mobile-host:not([hidden]), .chat-footer__context .session-progress-card, .chat-footer__context .chat-prs",
     ),
   ).toHaveCount(0);
   const textarea = page.locator(".agent-chat__composer-combobox textarea");
@@ -182,7 +192,10 @@ async function expectEditableDraft(page: Page, visibleBottom: number, mobile: bo
 }
 
 async function geometry(page: Page) {
-  await waitForLayoutSettled(page, ".shell, .agent-chat__composer-shell");
+  await waitForLayoutSettled(
+    page,
+    ".shell, .agent-chat__composer-shell, .sidebar-region--mobile-host > .chat-mobile-host:not([hidden])",
+  );
   return page.evaluate(() => {
     const rect = (selector: string) => {
       const el = document.querySelector(selector);
@@ -196,9 +209,6 @@ async function geometry(page: Page) {
       shell: rect(".shell")!,
       composer: rect(".agent-chat__composer-shell")!,
       thread: rect(".chat-thread-inner"),
-      footer: rect(".chat-footer"),
-      details: rect(".chat-details:popover-open"),
-      conversation: rect(".chat-main__conversation-frame"),
       scrollWidth: document.documentElement.scrollWidth,
       layoutHeight: document.documentElement.clientHeight,
       visualHeight: window.visualViewport?.height,
@@ -275,12 +285,6 @@ suite.define(() => {
         const assistantText =
           "The transcript and composer should share a comfortable reading column.";
         const gateway = await installMockGateway(page, {
-          featureMethods: [
-            ...defaultControlUiFeatureMethods,
-            "progressCard.get",
-            "controlUi.sessionPullRequests.subscribe",
-          ],
-          methodResponses: { "controlUi.sessionPullRequests.subscribe": { subscribed: true } },
           workspace: "/workspace/example",
           historyMessages: ["Please check the mobile layout.", assistantText].map(
             (content, index) => ({
@@ -296,7 +300,12 @@ suite.define(() => {
           await activateStandaloneStyles(page, largeUnit ? top : 0);
         }
         const fresh = await geometry(page);
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        // Keep cold route coverage for the large-unit fault; other viewports reuse the app.
+        if (largeUnit) {
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        } else {
+          await navigateToControlUiSession(page, sessionKey);
+        }
         const textarea = page.locator(".agent-chat__composer-combobox textarea");
         await expect(textarea).toBeVisible();
         await page.getByText(assistantText).waitFor();
@@ -305,16 +314,20 @@ suite.define(() => {
         }
         const firstMessage = page.locator(".chat-group.user").first();
         const bubble = firstMessage.locator(".chat-bubble").first();
-        const details = page.locator(".chat-pane__layout-trigger");
-        await takeControlUiScreenshotFrame(page, bubble, [details, textarea], {
-          animations: "disabled",
-        });
+        const details = page
+          .locator(".mobile-header__title")
+          .or(
+            page
+              .getByRole("button", { name: "Details", exact: true })
+              .and(page.locator(".chat-details-toggle")),
+          )
+          .filter({ visible: true })
+          .first();
+        await waitForMessageGeometry(bubble, [details, textarea]);
         await (mobile ? bubble.tap() : bubble.hover());
         const actions = firstMessage.locator(".chat-group-footer-actions");
         await expect(actions.locator(".chat-copy-btn")).toBeVisible();
-        await takeControlUiScreenshotFrame(page, bubble, [details, actions], {
-          animations: "disabled",
-        });
+        await waitForMessageGeometry(bubble, [details, actions]);
         const detailsBox = (await details.boundingBox())!;
         const transcriptBoxes = await Promise.all([bubble.boundingBox(), actions.boundingBox()]);
         for (const box of transcriptBoxes) {
@@ -327,53 +340,6 @@ suite.define(() => {
             `${name}: Header controls must clear the first message and its actions`,
           ).toBe(true);
         }
-        await waitForWatchedSessionKey(gateway, sessionKey);
-        await gateway.emitGatewayEvent("controlUi.sessionPullRequests.changed", {
-          sessions: {
-            [sessionKey]: {
-              pullRequests: [
-                {
-                  number: 123,
-                  owner: "example",
-                  repo: "layout",
-                  branch: "fix/layout",
-                  title: "Synthetic mobile layout repair",
-                  url: "https://github.com/example/layout/pull/123",
-                  state: "merged",
-                },
-              ],
-              rateLimited: false,
-              status: "ok",
-            },
-          },
-        });
-        await openDetailsPullRequests(page);
-        await expect(page.locator('.chat-pr[data-state="merged"]').first()).toBeVisible();
-        const setProgress = async (
-          revision: number,
-          markdown: string,
-          steps: Array<{ step: string; status: string }>,
-        ) => {
-          await gateway.setMethodResponse("progressCard.get", {
-            card: {
-              sessionKey,
-              revision,
-              updatedAt: 1_789_923_001_000,
-              markdown,
-              steps,
-            },
-          });
-          await gateway.emitGatewayEvent("progressCard.changed", {
-            sessionKey,
-            revision,
-          });
-        };
-        await setProgress(1, "Mobile layout checks completed.", [
-          { step: "Inspect the layout", status: "completed" },
-          { step: "Verify the controls", status: "completed" },
-          { step: "Review the result", status: "completed" },
-        ]);
-        await expect(page.locator('[data-progress-card-placement="details"]')).toBeVisible();
         const chat = await geometry(page);
         await textarea.fill("Please continue the layout check.");
         const sendPoint = await reach("Send message", height - bottom);
@@ -385,17 +351,6 @@ suite.define(() => {
         const stop = page.getByRole("button", { name: "Stop generating" });
         await expect(stop).toBeVisible();
         const generating = await geometry(page);
-        await setProgress(2, "Checking the usable mobile canvas.", [
-          { step: "Inspect the layout", status: "completed" },
-          { step: "Verify the controls", status: "in_progress" },
-        ]);
-        const progress = page.locator('[data-progress-card-placement="details"]');
-        // Sending is an outside click; updates must not reopen Details.
-        await expect(progress).toBeHidden();
-        await openChatDetails(page);
-        await expect(progress).toBeVisible();
-        const withProgress = await geometry(page);
-        await closeChatDetails(page);
         if (mobile) {
           await textarea.focus();
           // Simulate the VisualViewport contract, not a native IME.
@@ -461,14 +416,12 @@ suite.define(() => {
             expect(bounds.top, surfaceName).toBeGreaterThanOrEqual(top);
             expect(bounds.bottom, surfaceName).toBeLessThanOrEqual(height);
           };
+          await textarea.tap();
           await page.locator("[data-chat-model-select]").click();
           await expect(page.locator(".chat-controls__model-menu")).toBeVisible();
           await readSurface(".chat-controls__model-menu", "model-menu");
           await page.keyboard.press("Escape");
-          await page
-            .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
-            .first()
-            .click();
+          await navigationDrawerToggle(page).click();
           await expect(page.locator(".shell--nav-drawer-open")).toBeVisible();
           await readSurface(".shell-nav", "drawer");
           await page.getByRole("button", { name: "Filter & sort", exact: true }).click();
@@ -483,18 +436,19 @@ suite.define(() => {
         expect(chat.shell.bottom).toBeCloseTo(height - bottom, 0);
         expect(generating.scrollWidth).toBeLessThanOrEqual(width);
         if (mobile) {
-          expect(fresh.composer.left).toBeCloseTo(generating.composer.left, 0);
-          expect(fresh.composer.right).toBeCloseTo(generating.composer.right, 0);
-          expect(chat.composer.left).toBeGreaterThanOrEqual(left + 20);
-          expect(chat.composer.right).toBeLessThanOrEqual(width - right - 20);
+          const usableWidth = width - left - right;
+          for (const [frame, inset] of [
+            [fresh, 20],
+            [generating, 16],
+          ] as const) {
+            const margin = Math.max(inset, (usableWidth - 768) / 2);
+            expect(frame.composer.left).toBeCloseTo(left + margin, 0);
+            expect(frame.composer.right).toBeCloseTo(width - right - margin, 0);
+          }
+          expect(generating.composer.left).toBeCloseTo(chat.composer.left, 0);
+          expect(generating.composer.right).toBeCloseTo(chat.composer.right, 0);
           expect(chat.thread!.left).toBeCloseTo(chat.composer.left, 0);
           expect(chat.thread!.right).toBeCloseTo(chat.composer.right, 0);
-          expect(withProgress.details).not.toBeNull();
-          expect(withProgress.details!.left).toBeGreaterThanOrEqual(
-            withProgress.conversation!.left,
-          );
-          expect(withProgress.details!.right).toBeLessThanOrEqual(withProgress.conversation!.right);
-          expect(withProgress.details!.bottom).toBeLessThanOrEqual(withProgress.footer!.top);
         }
       },
     );

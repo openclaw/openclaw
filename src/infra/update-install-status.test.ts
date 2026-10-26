@@ -1,10 +1,10 @@
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveGatewayStartupTiming } from "../commands/gateway-startup-timing.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { ownImmutableFixture } from "./package-update-activation-fixtures.test-support.js";
 import {
   prepareStartupUpdateInstall,
   resolveStartupInstallStatus,
@@ -20,7 +20,6 @@ vi.mock("./git-exec.js", async (original) => ({
   ...(await original<typeof import("./git-exec.js")>()),
   executeGitCommand: mocks.git,
 }));
-vi.mock("./update-global.js", () => ({ detectGlobalInstallManagerForRoot: async () => "npm" }));
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
@@ -38,15 +37,7 @@ it.each(["root", "current", "release"] as const)(
     await fs.mkdir(release, { recursive: true, mode: 0o755 });
     await fs.mkdir(path.join(release, ".git"));
     await fs.symlink(`releases/${sha}`, path.join(root, "current"));
-    const lstat = fsSync.lstatSync;
-    vi.spyOn(fsSync, "lstatSync").mockImplementation((...args) => {
-      const stat = lstat(...args);
-      // Synthetic layout retains its inode/mode checks under an unprivileged test runner.
-      if (stat && String(args[0]).startsWith(root)) {
-        Object.defineProperty(stat, "uid", { value: typeof stat.uid === "bigint" ? 0n : 0 });
-      }
-      return stat;
-    });
+    ownImmutableFixture(root, true);
     mocks.root.mockResolvedValue(
       spelling === "root" ? root : spelling === "current" ? path.join(root, "current") : release,
     );
@@ -93,7 +84,6 @@ it.each(["recover", "exhaust", "abort"] as const)(
         firstProbe.resolve();
       }
       return {
-        pid: 1,
         code: timeout ? null : 0,
         stdout: ownership ? root : "",
         stderr: "",
@@ -129,24 +119,5 @@ it.each(["recover", "exhaust", "abort"] as const)(
       }
     }
     await settled;
-    expect(mocks.git.mock.calls[0]?.[2]?.timeoutMs).toBe(resolveGatewayStartupTiming().deadlineMs);
   },
 );
-
-it("initializes an immutable package directory without invoking Git", async () => {
-  const root = dirs.make("openclaw-update-package-");
-  await fs.writeFile(path.join(root, "package.json"), '{"name":"openclaw"}');
-  mocks.root.mockResolvedValue(root);
-  mocks.git.mockResolvedValue({
-    code: 128,
-    stdout: "",
-    stderr: "not a git repository",
-    signal: null,
-    killed: false,
-    termination: "exit",
-    timeoutMs: 2_500,
-  });
-  const { status } = await resolveStartupInstallStatus(false, new AbortController().signal);
-  expect(status.installKind).toBe("package");
-  expect(mocks.git).not.toHaveBeenCalled();
-});

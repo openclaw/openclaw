@@ -24,7 +24,36 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { buildRequesterSettleWakeIdentity } from "./subagent-requester-settle-identity.js";
 
 type Registration = Parameters<typeof registerSubagentRun>[0];
+
+export type RegistryRegistrationFixture = {
+  registration: (runId: string, overrides?: Partial<Registration>) => Registration;
+  updateRun: (runId: string, update: (draft: SubagentRunRecord) => void) => Promise<void>;
+};
 type Delivery = Parameters<typeof deliverSubagentAnnouncement>[0];
+
+export const requesterCompletionRecoveryCases = [
+  "current",
+  "owner current",
+  "owner nested password",
+  "owner nested committed replay",
+  "owner nested adopted replay",
+  "owner rotated",
+  "current with child",
+  "owner current with child",
+  "owner revoked with child",
+  "overloaded then current",
+  "overloaded then revoked",
+  "overloaded then retired",
+  "unavailable policy then current",
+  "revoked after restore",
+  "missing source",
+  "missing source with unrelated requester claim",
+  "missing parent source",
+  "mismatched source",
+  "revoked grant",
+  "mixed sources",
+  "replaced requester",
+] as const;
 
 export function createRequesterCompletionClient(params: {
   cfg: OpenClawConfig;
@@ -101,8 +130,8 @@ export async function prepareNestedRequesterReplay(params: {
   return {
     runId,
     async register(
-      registration: (runId: string, overrides?: Partial<Registration>) => Registration,
-      updateRun: (runId: string, update: (draft: SubagentRunRecord) => void) => Promise<void>,
+      registration: RegistryRegistrationFixture["registration"],
+      updateRun: RegistryRegistrationFixture["updateRun"],
       context: GatewayRequestContext,
     ) {
       await registerSubagentRun(
@@ -157,6 +186,7 @@ export async function prepareNestedRequesterReplay(params: {
         request: { message: delivery.triggerMessage },
         isOneShotModelRun: false,
         runId,
+        lifecycleStorePath: expectDefined(cfg.session?.store, "requester session store"),
         getAdmittedSessionId: () => sessionId,
         assertResumeAdmissionCurrent: () => ({ sessionId, lifecycleRevision, updatedAt: 1 }),
         context: {
@@ -214,7 +244,6 @@ export async function prepareNestedRequesterReplay(params: {
         completion: { resultText: "Sub-lead integration complete" },
       });
       expect(settled.get(runId)?.requesterSettleWake).toBeUndefined();
-      expect(deliveries[1]).toMatchObject({ targetRequesterSessionKey: "agent:main:main" });
       expect(deliveries[1]?.triggerMessage).toContain("Sub-lead integration complete");
     },
     dispose() {

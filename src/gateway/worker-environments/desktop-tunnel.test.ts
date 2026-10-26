@@ -36,19 +36,12 @@ const DESKTOP: WorkerDesktopEndpoint = {
   passwordFilePath: "/var/lib/crabbox/vnc.password",
 };
 const PLAIN_DESKTOP: WorkerDesktopEndpoint = { protocol: "rfb", port: 5900 };
-function fakeRunner(onRun?: Parameters<typeof createFakeRunner>[0]) {
-  return createFakeRunner(onRun, { defaultStdout: "vnc-secret\n", deferStop: true });
-}
-
-function readyRunner() {
-  const fake = fakeRunner();
-  const start = fake.runner.start.bind(fake.runner);
-  fake.runner.start = (argv, options) => {
-    const child = start(argv, options);
-    fake.starts.at(-1)!.process.becomeReady();
-    return child;
-  };
-  return fake;
+function fakeRunner(onRun?: Parameters<typeof createFakeRunner>[0], startReady = false) {
+  return createFakeRunner(onRun, {
+    defaultStdout: "vnc-secret\n",
+    deferStop: true,
+    ready: startReady,
+  });
 }
 
 const managers = new Set<ReturnType<typeof createWorkerDesktopTunnels>>();
@@ -67,7 +60,7 @@ async function ready(fake: ReturnType<typeof fakeRunner>, count = 1) {
 }
 
 async function connected(ownerEpoch = 1, options: Parameters<typeof setup>[1] = {}) {
-  const context = setup(readyRunner(), options);
+  const context = setup(fakeRunner(undefined, true), options);
   const result = await acquire(context.manager, ownerEpoch, PLAIN_DESKTOP);
   return { ...context, ...result };
 }

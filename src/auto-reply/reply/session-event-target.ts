@@ -281,6 +281,10 @@ export async function prepareSessionEventTargetForHost(
     return {
       ...retained,
       assertCurrent,
+      readSessionSettings: () => {
+        assertTargetCurrent();
+        return retained.readSessionSettings();
+      },
       bindCreation: (operation: Parameters<typeof retained.bindCreation>[0]) => {
         assertTargetCurrent();
         const assertCreationCurrent = retained.bindCreation(operation, (binding) => {

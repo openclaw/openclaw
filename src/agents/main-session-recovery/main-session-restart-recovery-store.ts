@@ -43,6 +43,7 @@ import {
 } from "./main-session-restart-recovery-delivery.js";
 import {
   skippedMainSessionRecoveryDecision,
+  logMainSessionRecoveryDecision,
   type MainSessionRecoveryDecision,
   type MainSessionRecoverySkipReason,
 } from "./main-session-restart-recovery-diagnostics.js";
@@ -50,6 +51,7 @@ import { loadExpectedRestartRecoveryTarget } from "./main-session-restart-recove
 import {
   prepareRequesterRestartRecovery,
   finishDelegatedRestartRecovery,
+  settleFailedWorkerRestartRecovery,
   tombstoneMainRestartRecoveryWithNotice,
 } from "./main-session-restart-recovery-failure.js";
 import {
@@ -62,6 +64,7 @@ import {
   type ExpectedRestartRecoveryTarget,
   mainSessionRecoveryLog,
   MAX_RECOVERY_RETRIES,
+  readInterruptedRunId,
 } from "./main-session-restart-recovery-shared.js";
 import { resolveRestartRecoveryDispatchTarget } from "./main-session-restart-recovery-target.js";
 
@@ -162,6 +165,16 @@ export async function recoverStore(params: {
       }
       const agentId = dispatchTarget.agentId;
       const target = { agentId, sessionKey, storePath: params.storePath };
+      const { getPrivateRequesterSettleRecoveryOwner } =
+        await import("../subagents/registry/subagent-registry.js");
+      const privateRecoveryOwner = await getPrivateRequesterSettleRecoveryOwner(
+        { ...target, canonicalKey: sessionKey, entry },
+        entry.restartRecoveryDeliverySourceRunId ?? readInterruptedRunId(entry),
+      );
+      if (privateRecoveryOwner === "owned") {
+        skip("already_handled");
+        continue;
+      }
       const workStartBlock = resolveSessionWorkStartBlock(
         sessionKey,
         entry,
@@ -312,6 +325,24 @@ export async function recoverStore(params: {
         }
         continue;
       }
+      const placementOutcome = await settleFailedWorkerRestartRecovery({
+        ...target,
+        cfg: params.cfg,
+        entry,
+        observation: recoveryView.observation,
+        gatewayRuntime: params.gatewayRuntime,
+        placementSessionKey: dispatchSessionKey,
+        shouldContinue: params.shouldContinue,
+      });
+      if (placementOutcome) {
+        result[placementOutcome]++;
+        decision = {
+          decision: placementOutcome === "settled" ? "settled" : "deferred",
+          reason: "failed_worker_placement",
+          nextOwner: placementOutcome === "settled" ? "none" : "main-session-recovery",
+        };
+        continue;
+      }
       const harnessCompletion = entry.restartRecoveryHarnessCompletion;
       let recoverableHarnessCompletion: boolean;
       try {
@@ -397,8 +428,8 @@ export async function recoverStore(params: {
       // historical inputs without it still need the cohort failure settlement.
       if (
         !harnessCompletion &&
-        !entry.restartRecoveryOperatorSource &&
-        !requesterOrigin &&
+        (privateRecoveryOwner === "unrestorable" ||
+          (!entry.restartRecoveryOperatorSource && !requesterOrigin)) &&
         entry.restartRecoverySourceIngress === "internal" &&
         expectedRecoverySourceRunId?.startsWith("announce:requester-settle:")
       ) {
@@ -483,7 +514,7 @@ export async function recoverStore(params: {
         !requesterOrigin &&
         source !== "cron" &&
         expectedRecoverySourceRunId &&
-        requiresDelegatedRecoverySource(entry, source)
+        requiresDelegatedRecoverySource(entry, source, sessionKey)
       ) {
         const { prepareConsumedSessionSendSource } =
           await import("../../gateway/session-send-recovery-source.js");
@@ -510,7 +541,7 @@ export async function recoverStore(params: {
         !recoverableHarnessCompletion &&
         !completionSource &&
         (source === "cron" || !requesterOrigin) &&
-        requiresDelegatedRecoverySource(entry, source)
+        requiresDelegatedRecoverySource(entry, source, sessionKey)
       ) {
         const outcome = await finishDelegatedRestartRecovery({
           ...target,
@@ -670,24 +701,15 @@ export async function recoverStore(params: {
     } finally {
       releaseCompletionSource?.();
       if (isRecoveryCandidate && isMainRestartRecoveryCandidate(loadedEntry, sessionKey)) {
-        mainSessionRecoveryLog.info(
-          `main-session restart recovery candidate ${JSON.stringify({
-            boot: lifecycleGeneration,
-            pass: passId,
-            agentId: params.storeAgentId?.slice(0, 256),
-            storePath: params.storePath.slice(0, 512),
-            sessionKey: sessionKey.slice(0, 256),
-            sessionId: loadedEntry.sessionId.slice(0, 256),
-            sourceRunId: (
-              loadedEntry.restartRecoveryDeliverySourceRunId ?? loadedEntry.lifecycleRunId
-            )?.slice(0, 256),
-            recoveryRunId: loadedEntry.restartRecoveryDeliveryRunId?.slice(0, 256),
-            interruptedRunIds: loadedEntry.restartRecoveryRuns
-              ?.slice(0, 8)
-              .map(({ runId }) => runId.slice(0, 256)),
-            ...decision,
-          })}`,
-        );
+        logMainSessionRecoveryDecision({
+          entry: loadedEntry,
+          sessionKey,
+          storePath: params.storePath,
+          agentId: params.storeAgentId,
+          lifecycleGeneration,
+          passId,
+          decision,
+        });
       }
     }
   }

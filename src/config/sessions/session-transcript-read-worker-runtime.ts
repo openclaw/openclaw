@@ -25,6 +25,7 @@ import { SESSION_TRANSCRIPT_WORKER_LIMITS } from "./session-transcript-read-pool
 import type {
   SessionEntryWorkerInput,
   SessionEntriesWorkerInput,
+  SessionEntriesWorkerResult,
   SessionResetRecallWorkerInput,
   SessionModelContextWorkerInput,
   SessionSqliteTargetWorkerInput,
@@ -32,7 +33,7 @@ import type {
 import {
   acquireSessionTranscriptReadResource,
   armDatabaseWorkerIdleRetirement,
-  historyClearTimeout,
+  clearDatabaseWorkerIdleRetirement,
   pruneHistoryDatabases,
   refreshDatabaseWorkerPressureSubscription,
   registerSessionTranscriptReaderLane,
@@ -77,7 +78,7 @@ export function createSessionTranscriptReadPool<Input extends SessionTranscriptW
     ) {
       // Register before admission yields; cleanup also owns reads waiting to dispatch.
       const resources = new Set<HistoryDatabaseResource>();
-      historyClearTimeout(lane.idleTimer);
+      clearDatabaseWorkerIdleRetirement(lane);
       lane.pending++;
       refreshDatabaseWorkerPressureSubscription();
       try {
@@ -227,6 +228,8 @@ export async function prepareSessionEntryInWorker(
 }
 
 export async function prepareSessionEntriesInWorker(entries: SessionEntriesWorkerInput["entries"]) {
+  const prepared: SessionEntriesWorkerResult["entries"] = [];
+  let received = 0;
   const result = unwrapSessionTranscriptWorkerReply<
     "session-entry" | "session-entries" | "session-reset-recall"
   >(
@@ -238,7 +241,29 @@ export async function prepareSessionEntriesInWorker(entries: SessionEntriesWorke
           return { ...entry, ...(receipt ? { admission: { ...receipt } } : {}) };
         }),
       },
-      { inputBytes: JSON.stringify(entries).length * 2 },
+      {
+        inputBytes: JSON.stringify(entries).length * 2,
+        onRequest: async (progress) => {
+          // SAFETY: The paired worker publishes one complete entry before reading its next batch.
+          const update = progress as {
+            kind: "session-entries";
+            index: number;
+            value: SessionEntriesWorkerResult["entries"][number];
+          };
+          if (
+            update.kind !== "session-entries" ||
+            !Number.isInteger(update.index) ||
+            update.index < 0 ||
+            update.index >= entries.length ||
+            update.index in prepared
+          ) {
+            throw new Error("Invalid session export delivery");
+          }
+          prepared[update.index] = update.value;
+          received++;
+          return { input: undefined, timeoutMs: 60_000 };
+        },
+      },
       {
         storePaths: entries.map(({ options }) => options.storePath),
         admissionPaths: [
@@ -255,7 +280,10 @@ export async function prepareSessionEntriesInWorker(entries: SessionEntriesWorke
   if (!("entries" in result)) {
     throw new Error("Session transcript worker returned a single export instead of a batch");
   }
-  return result.entries;
+  if (received !== entries.length) {
+    throw new Error("Session transcript worker returned an incomplete export batch");
+  }
+  return prepared;
 }
 
 export async function readSessionEntrySnapshotInWorker(

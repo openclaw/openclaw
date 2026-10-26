@@ -1,10 +1,9 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { resolveChatAttachmentMaxBytes } from "../gateway/chat-attachment-policy.js";
+import { resolveStagedInputMaxBytes } from "../media/configured-max-bytes.js";
 import { readLocalMediaFile } from "../media/local-media-access.js";
 import { resolveMediaReferenceLocalPath } from "../media/media-reference.js";
 import {
-  STAGED_INPUT_MAX_BYTES,
   ensureStagedInputDirectory,
   stagedInputDirectory,
   stagedInputFileName,
@@ -71,7 +70,7 @@ export async function prepareWorkspaceAttachments(
     }
     // Inbound store and channel remote-cache only, not arbitrary workspace files.
     const data = await readLocalMediaFile(source, [getMediaDir()], {
-      maxBytes: Math.max(STAGED_INPUT_MAX_BYTES, resolveChatAttachmentMaxBytes(turn.config ?? {})),
+      maxBytes: resolveStagedInputMaxBytes(turn.config ?? {}),
     });
     assertCurrent();
     const directory = stagedInputDirectory(createHash("sha256").update(source).digest("hex"));

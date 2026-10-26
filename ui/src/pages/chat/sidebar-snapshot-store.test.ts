@@ -1,7 +1,10 @@
 /* @vitest-environment jsdom */
 import { IDBFactory, IDBObjectStore } from "fake-indexeddb";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
 import { z } from "zod";
+import { projectSidebarSession } from "../../components/app-sidebar-session-navigation.test-support.ts";
+import { parseSidebarSnapshot, snapshotSessions } from "../../components/sidebar-snapshot-model.ts";
+import { sidebarSnapshot } from "../../components/sidebar-snapshot.test-support.ts";
 import { requestResult, transactionComplete } from "../../lib/chat/control-ui-database.runtime.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
@@ -56,6 +59,17 @@ async function seededStore() {
   return store;
 }
 
+async function putSidebar(value: unknown, savedAt: number, projectionVersion = 1) {
+  const database = await openSessionSnapshotDatabase();
+  assert(database, "expected snapshot database");
+  const transaction = database.transaction(SIDEBAR, "readwrite");
+  transaction
+    .objectStore(SIDEBAR)
+    .put({ sessionKey: key(scope), savedAt, projectionVersion, model: value });
+  await transactionComplete(transaction);
+  database.close();
+}
+
 beforeEach(() => {
   vi.stubGlobal("indexedDB", new IDBFactory());
   vi.stubGlobal("localStorage", createStorageMock());
@@ -70,7 +84,7 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-it("retires pre-rail-identity sidebars and unbounded transcripts", async () => {
+it("retires pre-rail-identity sidebars", async () => {
   const request = indexedDB.open(DB_NAME, 6);
   request.addEventListener("upgradeneeded", () => {
     for (const name of [CHAT, METADATA, SIDEBAR]) {
@@ -78,27 +92,17 @@ it("retires pre-rail-identity sidebars and unbounded transcripts", async () => {
     }
   });
   const database = await requestResult(request);
-  const transaction = database.transaction([SIDEBAR, CHAT], "readwrite");
+  const transaction = database.transaction(SIDEBAR, "readwrite");
   transaction.objectStore(SIDEBAR).put({
     sessionKey: key(scope),
     savedAt: Date.now(),
     projectionVersion: 1,
     model,
   });
-  const transcript = { sessionKey, snapshot: { messages: ["Retained conversation"] } };
-  transaction.objectStore(CHAT).put(transcript);
   await transactionComplete(transaction);
   database.close();
 
   expect(await read(createStore())).toBeNull();
-  const upgraded = await openSessionSnapshotDatabase();
-  if (!upgraded) {
-    throw new Error("expected snapshot database");
-  }
-  const readTransaction = upgraded.transaction(CHAT, "readonly");
-  expect(await requestResult(readTransaction.objectStore(CHAT).get(sessionKey))).toBeUndefined();
-  await transactionComplete(readTransaction);
-  upgraded.close();
 });
 
 it("restores the settled row order before a connection and isolates gateway, account and profile", async () => {
@@ -111,25 +115,41 @@ it("restores the settled row order before a connection and isolates gateway, acc
   expect(await read(reader)).toEqual(model);
   for (const other of [
     { ...scope, gatewayScope: "wss://other.example" },
-    { ...scope, recoveryScope: "account-b" },
-    profile("profile-b"),
+    otherAccount,
+    otherProfile,
   ]) {
     expect(await read(reader, other)).toBeNull();
-    await write(writer, model, other);
   }
-  await writer.delete(key(scope));
-  expect(await read(reader)).toBeNull();
-  expect(await read(reader, profile("profile-b"))).toEqual(model);
 });
 
-it("shares account and global invalidation with the transcript cache", async () => {
-  const store = await seededStore();
-  await clearStoredChatSnapshots(accountPrefix);
-  expect(await read(store)).toBeNull();
-  expect(await read(store, otherProfile)).toBeNull();
-  expect(await read(store, otherAccount)).toEqual(model);
-  await clearStoredChatSnapshots();
-  expect(await read(store, otherAccount)).toBeNull();
+it("retires a legacy hierarchy without evicting valid sidebars or transcripts", async () => {
+  vi.spyOn(Date, "now").mockReturnValue(1000);
+  const store = createStore();
+  const profiles = Array.from({ length: 8 }, (_, index) => profile(`retained-${index}`));
+  for (const current of profiles) {
+    await store.writeSidebar(key(current), sidebarSnapshot, parseSidebarSnapshot);
+  }
+  const transcript = {
+    messages: ["Retained conversation"],
+    pagination: { hasMore: false as const },
+    sessionId: "cedar",
+  };
+  store.write(sessionKey, transcript);
+  await store.flush();
+  const [parent, child] = snapshotSessions(
+    ["parent", "child"].map((name) =>
+      projectSidebarSession({ key: `agent:main:${name}`, label: name }),
+    ),
+  );
+  const legacy = { ...sidebarSnapshot, sessions: [{ ...parent!, children: [child!] }] };
+  expect(parseSidebarSnapshot(legacy)).toBeNull();
+  await putSidebar(legacy, 2000);
+
+  expect(await store.readSidebar(key(scope), parseSidebarSnapshot)).toBeNull();
+  for (const current of profiles) {
+    expect(await store.readSidebar(key(current), parseSidebarSnapshot)).toEqual(sidebarSnapshot);
+  }
+  expect(await store.read(sessionKey)).toMatchObject(transcript);
 });
 
 it("prunes oldest records by count, UTF-8 bytes, and age", async () => {
@@ -153,8 +173,7 @@ it("prunes oldest records by count, UTF-8 bytes, and age", async () => {
   expect(await read(store, profile("newer"))).toBeNull();
 });
 
-it("removes only the evicted transcript without invalidating sidebars", async () => {
-  const store = await seededStore();
+it("removes only the evicted transcript", async () => {
   const transcripts = new SessionSnapshotStore();
   const snapshot = {
     messages: ["synthetic"],
@@ -168,15 +187,12 @@ it("removes only the evicted transcript without invalidating sidebars", async ()
   await deleteStoredChatSnapshot(sessionKey, "cache-eviction");
   expect(await transcripts.read(sessionKey)).toBeNull();
   expect(await transcripts.read(retained)).toEqual(snapshot);
-  expect(await read(store)).toEqual(model);
-  expect(await read(store, otherProfile)).toEqual(model);
-  expect(await read(store, otherAccount)).toEqual(model);
 });
 
 it.each(["profile", "account", "session", "cache-eviction", "all"] as const)(
   "fences queued writes and already-read values across %s invalidation",
   async (kind) => {
-    const store = createStore();
+    const store = await seededStore();
     const invalidate = () =>
       kind === "profile"
         ? store.delete(key(scope))
@@ -186,6 +202,10 @@ it.each(["profile", "account", "session", "cache-eviction", "all"] as const)(
     await Promise.all([write(store), invalidate()]);
     const expected = kind === "cache-eviction" ? model : null;
     expect(await read(store)).toEqual(expected);
+    expect(await read(store, otherProfile)).toEqual(
+      kind === "profile" || kind === "cache-eviction" ? model : null,
+    );
+    expect(await read(store, otherAccount)).toEqual(kind === "all" ? null : model);
     await write(store);
     let invalidation: Promise<void> | undefined;
     const getAll = vi.spyOn(IDBObjectStore.prototype, "getAll");
@@ -207,15 +227,7 @@ it.each(["profile", "account", "session", "cache-eviction", "all"] as const)(
 it("resets a mismatched stored projection and rejects unadmitted display data", async () => {
   const store = createStore();
   await write(store);
-  const database = await openSessionSnapshotDatabase();
-  if (!database) {
-    throw new Error("expected snapshot database");
-  }
-  const transaction = database.transaction(SIDEBAR, "readwrite");
-  const objectStore = transaction.objectStore(SIDEBAR);
-  objectStore.put({ sessionKey: key(scope), projectionVersion: 99, savedAt: 1, model });
-  await transactionComplete(transaction);
-  database.close();
+  await putSidebar(model, 1, 99);
   expect(await read(store)).toBeNull();
   const unadmitted = { ...model, token: "synthetic-disallowed-field" };
   await write(store, unadmitted);

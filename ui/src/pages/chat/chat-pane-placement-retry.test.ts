@@ -13,12 +13,9 @@ import {
   createModalDialogTestFixture,
   waitForConfirmDialogActions,
 } from "../../test-helpers/modal-dialog.ts";
-import {
-  activePlacementSession,
-  createTestChatPane,
-  createGatewayBrowserClientFixture,
-  createSessionCapabilityFixture,
-} from "./chat-pane.test-support.ts";
+import { createGatewayBrowserClientFixture } from "./chat-application-context.test-support.ts";
+import { activePlacementSession, createTestChatPane } from "./chat-pane.test-support.ts";
+import { createSessionCapabilityFixture } from "./chat-session-capability.test-support.ts";
 
 let dialogs: ReturnType<typeof createModalDialogTestFixture>;
 beforeEach(() => {

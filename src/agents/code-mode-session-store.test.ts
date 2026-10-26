@@ -1,4 +1,3 @@
-import { Type } from "typebox";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import {
@@ -6,6 +5,7 @@ import {
   createCodeModeSessionStoreAccess,
 } from "./code-mode-session-store.js";
 import { SessionManager } from "./sessions/session-manager.js";
+import { fakeTool } from "./test-helpers/fake-tool.js";
 import { clearToolSearchCatalog, restrictToolSearchCatalog } from "./tool-search-catalog.js";
 import type { ToolSearchCatalogRef } from "./tool-search-types.js";
 
@@ -40,67 +40,6 @@ async function saveCell(owner: Pick<ReturnType<typeof run>, "cell">, key: string
   await cell.commit();
 }
 
-it("appends one hidden entry per cell and replays writes, deletes, and provenance in the next run", async () => {
-  const { manager, ...first } = run();
-  const cell = first.cell();
-  await cell.save("report", { title: "remote" }, true);
-  await cell.save("draft", 1, false);
-  await cell.save("draft", undefined, false);
-  await cell.commit();
-  expect(manager.getEntries()).toEqual([
-    expect.objectContaining({
-      type: "custom",
-      customType: "openclaw.code-mode-store",
-      data: {
-        set: { report: { title: "remote" } },
-        delete: ["draft"],
-        networkContent: { report: true },
-      },
-    }),
-  ]);
-  expect(manager.buildSessionContext().messages).toEqual([]);
-  first.close();
-  const second = run(manager);
-  await expect(second.cell().load("report")).resolves.toEqual({
-    value: { title: "remote" },
-    networkContent: true,
-  });
-  await expect(second.cell().load("draft")).resolves.toEqual({ networkContent: false });
-});
-
-it("replays only the selected branch, preserves earlier values through compaction, and forks that path", async () => {
-  const { manager, ...rootRun } = run();
-  await saveCell(rootRun, "inherited", "root");
-  const root = manager.getLeafId()!;
-  rootRun.close();
-
-  const branchA = run(manager);
-  await saveCell(branchA, "branch", "A");
-  const leafA = manager.getLeafId()!;
-  branchA.close();
-
-  await manager.branchAsync(root);
-  const branchB = run(manager);
-  await expect(branchB.cell().load("branch")).resolves.toEqual({ networkContent: false });
-  await saveCell(branchB, "branch", "B");
-  branchB.close();
-  const kept = await manager.appendMessageAsync({
-    role: "user",
-    content: "Keep this turn",
-    timestamp: 1,
-  });
-  await manager.appendCompactionAsync("Earlier conversation summarized", kept!, 100);
-
-  const compacted = run(manager);
-  await expect(compacted.cell().load("inherited")).resolves.toMatchObject({ value: "root" });
-  await expect(compacted.cell().load("branch")).resolves.toMatchObject({ value: "B" });
-  compacted.close();
-  await manager.createBranchedSession(leafA);
-  const fork = run(manager);
-  await expect(fork.cell().load("inherited")).resolves.toMatchObject({ value: "root" });
-  await expect(fork.cell().load("branch")).resolves.toMatchObject({ value: "A" });
-});
-
 it("keeps the projection unchanged after failed persistence and admits a later cell", async () => {
   const { manager, ...owner } = run();
   await saveCell(owner, "key", "original");
@@ -125,6 +64,7 @@ it("rechecks total capacity in commit order when cells buffered against the same
     await seed.save(key, value, false);
   }
   await seed.commit();
+  expect(manager.buildSessionContext().messages).toEqual([]);
   const first = owner.cell();
   const second = owner.cell();
   await first.save("d", value, false);
@@ -172,13 +112,7 @@ it("retires old accesses on catalog restriction while keeping the session availa
     name: "fixture",
     source: "openclaw",
     description: "Fixture tool",
-    tool: {
-      name: "fixture",
-      label: "Fixture",
-      description: "Fixture tool",
-      parameters: Type.Object({}),
-      execute: async () => ({ content: [], details: {} }),
-    },
+    tool: fakeTool("fixture", "Fixture tool"),
   });
   restrictToolSearchCatalog({ catalogRef: owner.catalogRef, allowedToolNames: new Set() });
   await expect(old.load("retained")).rejects.toThrow("active session-bound run");
@@ -190,4 +124,71 @@ it("retires old accesses on catalog restriction while keeping the session availa
   await next.commit();
   owner.close();
   await expect(owner.cell().load("new")).rejects.toThrow("active session-bound run");
+});
+
+it("replays overwrite history without rescanning every retained value per entry", async () => {
+  const manager = SessionManager.inMemory();
+  for (let index = 0; index < 100; index++) {
+    const key = `key-${index % 20}`;
+    await manager.appendCustomEntryAsync("openclaw.code-mode-store", {
+      set: { [key]: { index } },
+      delete: [],
+      networkContent: { [key]: index % 2 === 0 },
+    });
+  }
+  const owner = run(manager);
+  const scan = vi.spyOn(Map.prototype, "values");
+  const loaded = await owner.cell().load("key-19");
+  const scannedValues = scan.mock.contexts.reduce<number>(
+    (total, map) => total + (map instanceof Map ? map.size : 0),
+    0,
+  );
+  scan.mockRestore();
+  expect(loaded).toEqual({ value: { index: 99 }, networkContent: false });
+  expect(scannedValues).toBeLessThanOrEqual(100);
+});
+
+it.each(["value", "total"] as const)(
+  "rejects historical %s overflow even when a later entry deletes it",
+  async (kind) => {
+    const manager = SessionManager.inMemory();
+    const set =
+      kind === "value"
+        ? { a: "x".repeat(256 * 1024) }
+        : Object.fromEntries(
+            ["a", "b", "c", "d", "e"].map((key) => [key, "x".repeat(256 * 1024 - 2)]),
+          );
+    await manager.appendCustomEntryAsync("openclaw.code-mode-store", {
+      set,
+      delete: [],
+      networkContent: Object.fromEntries(Object.keys(set).map((key) => [key, false])),
+    });
+    await manager.appendCustomEntryAsync("openclaw.code-mode-store", {
+      set: {},
+      delete: Object.keys(set),
+      networkContent: {},
+    });
+    await expect(run(manager).cell().load("a")).rejects.toMatchObject({
+      message: "Code Mode session store replay failed; repair the session before using store/load.",
+      cause: expect.any(RangeError),
+    });
+  },
+);
+
+it("checks total replay capacity after the whole entry, including deletions", async () => {
+  const manager = SessionManager.inMemory();
+  const value = "x".repeat(256 * 1024 - 2);
+  await manager.appendCustomEntryAsync("openclaw.code-mode-store", {
+    set: { a: value, b: value, c: value, d: value },
+    delete: [],
+    networkContent: { a: false, b: false, c: false, d: false },
+  });
+  await manager.appendCustomEntryAsync("openclaw.code-mode-store", {
+    set: { e: value, a: value },
+    delete: ["a", "a", "missing"],
+    networkContent: { e: true, a: false },
+  });
+  const cell = run(manager).cell();
+  await expect(cell.load("e")).resolves.toEqual({ value, networkContent: true });
+  await expect(cell.load("a")).resolves.toEqual({ networkContent: false });
 });

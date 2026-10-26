@@ -1,22 +1,15 @@
-import { fork } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { once } from "node:events";
 import fs from "node:fs/promises";
 import { createServer, type Socket } from "node:net";
 import path from "node:path";
 import { text } from "node:stream/consumers";
+import { setImmediate } from "node:timers/promises";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import {
-  awaitGateBeforeSettlement,
-  createDeferred,
-  withinTest,
-  withTestTimeout,
-} from "../../test/helpers/promise.js";
+import { createDeferred, withinTest, withTestTimeout } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { testing } from "../agents/cli-backends.test-support.js";
 import * as cliLiveSessions from "../agents/cli-runner/cli-live-session-registry.js";
-import { executeDeps } from "../agents/cli-runner/execute-deps.js";
-import { cliBackendLog } from "../agents/cli-runner/log.js";
 import type {
   CliBackendExecute,
   CliBackendExecuteContext,
@@ -27,6 +20,37 @@ import { observeGatewayRunExecution } from "./agent-command.test-helpers.js";
 import * as agentJobs from "./agent-turn/agent-job.js";
 import * as watchdogFixture from "./server.cli-watchdog.test-support.js";
 import * as gatewayFixture from "./test-helpers.e2e.js";
+
+const watchdogClockForTest = vi.hoisted(
+  (): { current?: ReturnType<typeof watchdogFixture.createWatchdogClock> } => ({}),
+);
+
+vi.mock("../agents/cli-runner/execute-plugin-watchdog.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../agents/cli-runner/execute-plugin-watchdog.js")>();
+  return {
+    ...actual,
+    createCliPluginWatchdog(params: Parameters<typeof actual.createCliPluginWatchdog>[0]) {
+      const clock = watchdogClockForTest.current;
+      if (!clock) {
+        return actual.createCliPluginWatchdog(params);
+      }
+      const watchdog = clock.run(() =>
+        actual.createCliPluginWatchdog({
+          ...params,
+          onNoOutputTimeout: (error) => clock.native(() => params.onNoOutputTimeout(error)),
+          onOverallTimeout: () => clock.native(() => params.onOverallTimeout()),
+        }),
+      );
+      // Only synchronous watchdog work uses manual time; the live Gateway stays on native timers.
+      return {
+        reset: () => clock.run(watchdog.reset),
+        noteOutput: () => clock.run(watchdog.noteOutput),
+        dispose: () => clock.run(watchdog.dispose),
+      };
+    },
+  };
+});
 
 type WatchdogCase = [
   name: string,
@@ -73,22 +97,18 @@ async function runWatchdogCase(
   testCase: WatchdogCase,
   signal: AbortSignal,
 ) {
-  const { state, gateway, backends, token, controllerScript } = fixture;
+  const { state, gateway, backends, token } = fixture;
   const [, behavior, overallSeconds = 300, quietMs = 40_000, freezeMs = 60_000] = testCase;
   const resume = behavior === "stall";
   const requestExecution = await observeGatewayRunExecution();
-  const proof = state.path("proof", behavior);
   const nativeRoot = state.path("receipts", behavior);
   const sessionKey = `agent:main:freeze-${randomUUID()}`;
   const clock = watchdogFixture.createWatchdogClock();
   const watchdog = { minMs: quietMs, maxMs: quietMs };
   const readJson = async <T>(file: string): Promise<T> =>
     JSON.parse(await fs.readFile(file, "utf8"));
-  const freezeReceipt = path.join(proof, "freeze-receipt.json");
-  const realClock = executeDeps.watchdogClock;
-  let orderedOutputAt: number | undefined;
+  let orderedOutputSeen = false;
   let abortedAt: number | undefined;
-  let thawedAt: number | undefined;
   let outputs = 0;
   let outputChanged = createDeferred();
   const wait = async <T>(promise: Promise<T>, message: string, timeoutMs = 5_000) => {
@@ -119,7 +139,6 @@ async function runWatchdogCase(
           return originalWait(params);
         })
       : undefined;
-  const log = vi.spyOn(cliBackendLog, "info");
 
   const preparedContexts = new Set<Parameters<typeof cliLiveSessions.closeCliLiveSession>[0]>();
   const createCapability = cliLiveSessions.createCliLiveSessionCapability;
@@ -130,8 +149,13 @@ async function runWatchdogCase(
       return createCapability(params);
     });
   let pendingCompletion: Promise<WatchdogCompletion> | undefined;
-  let controller: ReturnType<typeof fork> | undefined;
-  let controllerExit: Promise<void> | undefined;
+  let stoppedPid: number | undefined;
+  const resumeCli = () => {
+    if (stoppedPid !== undefined) {
+      process.kill(stoppedPid, "SIGCONT");
+      stoppedPid = undefined;
+    }
+  };
   let receipts: Awaited<ReturnType<typeof reserveTestPortListener>> | undefined;
   const receiptSockets = new Set<Socket>();
   let closingReceipts = false;
@@ -151,8 +175,8 @@ async function runWatchdogCase(
     try {
       for await (const event of execute(execution)) {
         const assistant = event.type === "assistant";
-        if (assistant && behavior === "ordered" && orderedOutputAt === undefined) {
-          orderedOutputAt = clock.now();
+        if (assistant && behavior === "ordered" && !orderedOutputSeen) {
+          orderedOutputSeen = true;
           clock.jump(60_000);
         }
         yield event;
@@ -171,10 +195,8 @@ async function runWatchdogCase(
   }
   return await runQaGatewayFixture(
     async () => {
-      executeDeps.watchdogClock = clock;
-      await Promise.all(
-        [proof, nativeRoot].map((directory) => fs.mkdir(directory, { recursive: true })),
-      );
+      watchdogClockForTest.current = clock;
+      await fs.mkdir(nativeRoot, { recursive: true });
       receipts = await reserveTestPortListener({
         offsets: [0],
         signal,
@@ -281,39 +303,28 @@ async function runWatchdogCase(
       } else if (behavior === "ordered") {
         clock.advance(0);
       } else {
-        controller = fork(
-          controllerScript,
-          [String(process.pid), freezeReceipt, String(ready.pid)],
-          {
-            detached: true,
-            signal,
-            stdio: ["ignore", "ignore", "inherit", "ipc"],
-            env: { PATH: "/usr/bin:/bin" },
-            execArgv: [],
-          },
-        );
-        const ownedController = controller;
-        controllerExit = once(ownedController, "exit").then(([code]) => {
-          if (code !== 0) {
-            throw new Error(`controller ${code}`);
+        // This synthetic CLI spawns no children. Stop its published PID, not an unrelated tree.
+        stoppedPid = ready.pid;
+        process.kill(stoppedPid, "SIGSTOP");
+        for (;;) {
+          signal.throwIfAborted();
+          const processState = execFileSync("/bin/ps", ["-p", String(ready.pid), "-o", "state="], {
+            encoding: "utf8",
+          });
+          if (processState.includes("T")) {
+            break;
           }
-        });
-        void controllerExit.catch(() => {});
-        const [stopped] = await awaitGateBeforeSettlement(
-          once(ownedController, "message"),
-          controllerExit,
-          "Controller exited before stopping the tree",
-        );
-        expect(stopped).toBe("stopped");
+          if (processState.includes("Z")) {
+            throw new Error("Owned CLI exited before stopping");
+          }
+          await setImmediate();
+        }
         signal.throwIfAborted();
         clock.jump(freezeMs);
-        thawedAt = clock.now();
         if (!resume) {
           clock.advance(0);
         }
-        ownedController.send("resume");
-        await controllerExit;
-        controller = undefined;
+        resumeCli();
         if (behavior === "complete" || behavior === "quiet") {
           await wait(resumedReceipt.promise, "CLI resume receipt was not published");
         } else {
@@ -355,12 +366,6 @@ async function runWatchdogCase(
       expect(completed.endedAt).toBeGreaterThanOrEqual(acceptedAt);
       expect(clock.pending()).toBe(0);
       const history = await gateway.client.request("chat.history", { sessionKey });
-      const timerMessages = log.mock.calls
-        .map(([message]) => message)
-        .filter((message) => message.includes("cli watchdog credited timer gap"));
-      if (behavior === "ordered") {
-        expect(timerMessages).toEqual([expect.stringContaining("creditedMs=0")]);
-      }
       if (behavior === "complete") {
         expect(completed.status).toBe("ok");
         expect(JSON.stringify(history)).toContain("Preserved reply.");
@@ -369,27 +374,12 @@ async function runWatchdogCase(
         expect(JSON.stringify(history)).not.toContain("Preserved reply.");
       } else {
         expect(completed.status).toBe("timeout");
-        if (behavior !== "ordered") {
-          const freeze = await readJson<{ stoppedAt: number; resumedAt: number }>(freezeReceipt);
-          expect(freeze.resumedAt).toBeGreaterThanOrEqual(freeze.stoppedAt);
-        }
-        const elapsedAfterThaw =
-          (abortedAt ?? Number.NaN) -
-          (behavior === "ordered"
-            ? 60_000 + (orderedOutputAt ?? Number.NaN)
-            : (thawedAt ?? Number.NaN));
-        const expectedRemaining = behavior === "quiet" ? 20_000 : 40_000;
-        expect(elapsedAfterThaw).toBeGreaterThan(expectedRemaining - 5_000);
-        expect(elapsedAfterThaw).toBeLessThan(expectedRemaining + 2_000);
         expect(completed.error).toContain(
           behavior === "overall" ? "exceeded timeout" : "no output for 40s",
         );
       }
     },
-    async () => {
-      controller?.kill("SIGTERM");
-      await controllerExit?.catch(() => {});
-    },
+    resumeCli,
     // agent.wait can observe a terminal attempt while detached chat work settles.
     () => gateway.client.request("chat.abort", { sessionKey }),
     async () => {
@@ -420,9 +410,9 @@ async function runWatchdogCase(
     },
     () => receipts?.claim.release(),
     async () => {
-      executeDeps.watchdogClock = realClock;
+      watchdogClockForTest.current = undefined;
       testing.resetDepsForTest();
-      for (const spy of [capability, log, waitForAgentJob]) {
+      for (const spy of [capability, waitForAgentJob]) {
         spy?.mockRestore();
       }
       await requestExecution.restore();

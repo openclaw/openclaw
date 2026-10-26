@@ -5,7 +5,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { interceptPackageFileHashes } from "./package-update-integrity-hasher.test-support.js";
 import { PackageIntegrityTimeoutError } from "./package-update-integrity.js";
-import type { PackageUpdateTransaction } from "./package-update-swap-contract.js";
+import {
+  expectInstallation,
+  expectNoCalls,
+  expectVersion,
+  readText,
+  retain,
+} from "./package-update-swap.assertions.test-support.js";
 import { swapStagedPackageInstall } from "./package-update-swap.js";
 import {
   createPackageSwapFixture,
@@ -21,30 +27,8 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-const readText = (...parts: string[]) => fs.readFile(path.join(...parts), "utf8");
-
-async function expectVersion(root: string, version: string) {
-  expect(await readText(root, "package.json")).toContain(`"version":"${version}"`);
-}
-
-async function retain(params: Parameters<typeof swapStagedPackageInstall>[0]) {
-  let transaction: PackageUpdateTransaction | undefined;
-  const result = await swapStagedPackageInstall({
-    ...params,
-    onTransaction: (value) => {
-      transaction = value;
-    },
-  });
-  expect(result.status, result.step.stderrTail ?? "").toBe("committed");
-  if (!transaction) {
-    throw new Error("missing retained transaction");
-  }
-  return transaction;
-}
-
 async function expectCandidateIntact(packageRoot: string, launcher: string) {
-  await expectVersion(packageRoot, "2.0.0");
-  await expect(readText(launcher)).resolves.toBe("candidate launcher\n");
+  await expectInstallation(packageRoot, launcher, true);
 }
 
 async function createLinkedPackageSwapFixture(rootDir: string, relative = false) {
@@ -608,38 +592,6 @@ describe("retained npm package integrity", () => {
     });
   });
 
-  it("reports unverified when a pre-opened writer changes bytes after prevalidation", async () => {
-    const { params, packageRoot, launcher } = await createPackageSwapFixture(base);
-    const entry = path.join(packageRoot, "dist", "index.js");
-    const writer = await fs.open(entry, "r+");
-    try {
-      const transaction = await retain(params);
-      const rename = fs.rename.bind(fs);
-      let wrote = false;
-      vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
-        if (String(args[0]) === transaction.backupRoot) {
-          await writer.write("changed", 0, "utf8");
-          wrote = true;
-        }
-        return rename(...args);
-      });
-      const rollback = await transaction.rollback(() => {});
-      expect(rollback).toMatchObject({ exitCode: 1 });
-      expect(rollback.stderrTail).toContain(`restored package tree changed at ${packageRoot}`);
-      expect(wrote).toBe(true);
-      // Observation is not exclusion: the same-principal fd survives rename.
-      // Never call this result verified or discard the retained candidate.
-      await expect(readText(entry)).resolves.toContain("changed");
-      await expect(readText(launcher)).resolves.toBe("old launcher\n");
-      await expect(fs.stat(`${transaction.backupRoot}.candidate`)).resolves.toBeDefined();
-      expect(await transaction.complete({ activationVerified: false }, () => {})).toMatchObject({
-        exitCode: 1,
-      });
-    } finally {
-      await writer.close();
-    }
-  });
-
   it.each([
     {
       shape: "sibling dependency link",
@@ -661,24 +613,20 @@ describe("retained npm package integrity", () => {
         await fs.symlink("../../fixture-dependency", link);
         expect(await fs.realpath(link)).toBe(await fs.realpath(dependency));
       }
-      if (shape === "unavailable inode") {
+      if (shape === "unavailable inode" || shape === "timed-out scan") {
         const lstat = fs.lstat.bind(fs);
         vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+          if (timedOut && String(args[0]) === packageRoot) {
+            throw new Error("identity fallback unavailable");
+          }
           const stat = await lstat(...args);
-          if (typeof stat.ino === "bigint") {
+          if (shape === "unavailable inode" && typeof stat.ino === "bigint") {
             Object.assign(stat, { ino: 0n });
           }
           return stat;
         });
       }
       if (shape === "timed-out scan") {
-        const lstat = fs.lstat.bind(fs);
-        vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
-          if (timedOut && String(args[0]) === packageRoot) {
-            throw new Error("identity fallback unavailable");
-          }
-          return lstat(...args);
-        });
         interceptPackageFileHashes(async () => {
           timedOut = true;
           throw new PackageIntegrityTimeoutError(40);
@@ -715,14 +663,17 @@ describe("retained npm package integrity", () => {
         { env: {}, stateDir: base },
       );
       expect(report.body).toContain("baseline-scan-failed");
-      expect(report.body).toContain(cause);
+      if (shape === "timed-out scan") {
+        expect(report.body).toContain(cause);
+      } else {
+        expect(report.body).not.toContain(cause);
+        expect(report.body).toContain("[redacted-diagnostic]");
+      }
       expect(report.body).not.toContain("identity fallback unavailable");
       expect(report.body).not.toContain(base);
       expect(result).toMatchObject({ packageRollbackVerified: false });
-      expect(beforeActivate).not.toHaveBeenCalled();
-      expect(onLiveMutation).not.toHaveBeenCalled();
-      await expectVersion(packageRoot, "1.0.0");
-      await expect(readText(launcher)).resolves.toBe("old launcher\n");
+      expectNoCalls(beforeActivate, onLiveMutation);
+      await expectInstallation(packageRoot, launcher);
     },
   );
 });

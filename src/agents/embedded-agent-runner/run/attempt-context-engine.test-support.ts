@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 import type { ContextEngine } from "../../../context-engine/types.js";
@@ -24,20 +25,12 @@ export function createTestContextEngine(params: Partial<ContextEngine>): Context
   return {
     info: { ...contextEngineInfo },
     ingest: async () => ({ ingested: true }),
-    compact: async () => ({
-      ok: false,
-      compacted: false,
-      reason: "not used in this test",
-    }),
+    compact: async () => ({ ok: false, compacted: false, reason: "not used in this test" }),
     ...params,
   } as ContextEngine;
 }
 
-export type MockCallSource = {
-  mock: {
-    calls: ArrayLike<ReadonlyArray<unknown>>;
-  };
-};
+export type MockCallSource = { mock: { calls: ArrayLike<ReadonlyArray<unknown>> } };
 
 export const requireRecord = createRequireRecord("object", "expected-label");
 
@@ -46,35 +39,16 @@ export function requireRecords(value: unknown, label: string): Array<Record<stri
   return value as Array<Record<string, unknown>>;
 }
 
-export function findRecord(
-  records: Array<Record<string, unknown>>,
-  predicate: (record: Record<string, unknown>) => boolean,
-  label: string,
-) {
-  const record = records.find(predicate);
-  if (!record) {
-    throw new Error(`expected record: ${label}`);
-  }
-  return record;
-}
-
-export function runtimeContextMessage(messages: unknown) {
-  return findRecord(
-    requireRecords(messages, "seen messages"),
-    (message) => message.customType === "openclaw.runtime-context",
-    "runtime context message",
+export const runtimeContextMessage = (messages: unknown) =>
+  expectDefined(
+    requireRecords(messages, "seen messages").find(
+      (message) => message.customType === "openclaw.runtime-context",
+    ),
+    "expected record: runtime context message",
   );
-}
 
-export function mockParams(source: MockCallSource) {
-  return requireRecord(source.mock.calls[0]?.[0], "mock params");
-}
-
-export function expectFields(actual: Record<string, unknown>, expected: Record<string, unknown>) {
-  for (const [key, value] of Object.entries(expected)) {
-    expect(actual[key], key).toEqual(value);
-  }
-}
+export const mockParams = (source: MockCallSource) =>
+  requireRecord(source.mock.calls[0]?.[0], "mock params");
 
 export function completedStream(message: unknown) {
   return { result: async () => message, [Symbol.asyncIterator]: () => (async function* () {})() };
@@ -98,21 +72,13 @@ export function useContextEngineAttemptHarness(sessionKey: string) {
     await closeOpenClawAgentDatabasesAsync();
     await cleanupTempPaths(suiteTempPaths);
   });
-  beforeAll(async () => {
-    await preloadRunEmbeddedAttemptForTests();
-  });
-  return {
-    hoisted,
-    tempPaths,
-    runAttempt: (
-      options: Omit<ContextEngineAttemptOptions, "sessionKey" | "tempPaths" | "contextEngine"> &
-        Partial<Pick<ContextEngineAttemptOptions, "contextEngine" | "sessionKey">> = {},
-    ) =>
-      createContextEngineAttemptRunner({
-        sessionKey,
-        tempPaths,
-        contextEngine: createContextEngineBootstrapAndAssemble(),
-        ...options,
-      }),
-  };
+  beforeAll(preloadRunEmbeddedAttemptForTests);
+  const runAttempt = (options: Partial<Omit<ContextEngineAttemptOptions, "tempPaths">> = {}) =>
+    createContextEngineAttemptRunner({
+      sessionKey,
+      tempPaths,
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      ...options,
+    });
+  return { hoisted, tempPaths, runAttempt };
 }

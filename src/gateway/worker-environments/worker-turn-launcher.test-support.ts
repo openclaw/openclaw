@@ -1,17 +1,16 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { vi } from "vitest";
-import { WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
 } from "../../agents/admitted-run-context.js";
+import type { AgentRunTerminalReplySnapshot } from "../../agents/agent-run-terminal-reply.types.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { CORE_WORKER_LAUNCH_TOOL_NAMES } from "../../agents/tool-catalog.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
-import { captureRuntimeConfigAsyncReader } from "../../config/io.runtime.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { readTranscriptStorageRows } from "../../config/sessions/session-accessor.sqlite-read.js";
 import {
@@ -29,6 +28,7 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -73,6 +73,71 @@ export const ENVIRONMENT_ID = "environment-worker-turn";
 export const OWNER_EPOCH = 3;
 const BUNDLE_HASH = "a".repeat(64);
 export const MANIFEST_REF = `sha256:${"b".repeat(64)}`;
+
+export const workerTurnTerminalReplyCases: Array<{
+  name: string;
+  content: Parameters<typeof makeAgentAssistantMessage>[0]["content"];
+  visibleText?: string;
+  rawText?: string;
+  terminalReply?: AgentRunTerminalReplySnapshot;
+  costs?: { first: number; last: number; total: number };
+}> = [
+  {
+    name: "visible final answer",
+    costs: { first: 0.125, last: 0.25, total: 0.375 },
+    content: [
+      { type: "thinking", thinking: "Private reasoning" },
+      {
+        type: "text",
+        text: "Working...",
+        textSignature: JSON.stringify({ v: 1, id: "commentary", phase: "commentary" }),
+      },
+      {
+        type: "text",
+        text: "Usage reply",
+        textSignature: JSON.stringify({ v: 1, id: "final", phase: "final_answer" }),
+      },
+    ],
+    visibleText: "Usage reply",
+    rawText: "Usage reply",
+    terminalReply: { disposition: "visible", text: "Usage reply" },
+  },
+  {
+    name: "mixed-case explicit silence",
+    content: [{ type: "text", text: "No_Reply" }],
+    visibleText: "",
+    rawText: "No_Reply",
+    terminalReply: { disposition: "silent" },
+  },
+  ...(
+    [
+      ["<think>Private reasoning</think>Usage reply", "Usage reply"],
+      ["NO_REPLY.", "NO_REPLY."],
+      ['"NO_REPLY"', '"NO_REPLY"'],
+      ['{"reply":"NO_REPLY"}', '{"reply":"NO_REPLY"}'],
+      ["NO_REPLY\nNO_REPLY", "NO_REPLY"],
+      ["NO_REPLY\n<final></final>", ""],
+      ["[[reply_to_current]]", "", false],
+    ] satisfies Array<[string, string, boolean?]>
+  ).map(([rawText, visibleText, preservesRawText = true]) => ({
+    name: `prepared final ${JSON.stringify(rawText)}`,
+    content: [{ type: "text" as const, text: rawText }],
+    rawText: preservesRawText ? rawText : undefined,
+    visibleText,
+    terminalReply: visibleText
+      ? { disposition: "visible" as const, text: visibleText }
+      : { disposition: "empty" as const },
+  })),
+  {
+    name: "reasoning-only completion",
+    content: [{ type: "thinking", thinking: "Private reasoning" }],
+  },
+  {
+    name: "tool-only completion",
+    content: [{ type: "toolCall", id: "call-final", name: "read", arguments: {} }],
+  },
+  { name: "empty final answer", content: [] },
+];
 
 export const readLaunchToolNames: WorkerTurnTunnelHandle["readLaunchToolNames"] = async () =>
   CORE_WORKER_LAUNCH_TOOL_NAMES;
@@ -135,18 +200,13 @@ export async function acknowledgeCompletedWorkerTurn(
     transcriptSeq: 2,
     liveSeq: 1,
   });
-  return {
+  return createCommandResult({
     stdout: JSON.stringify({
       status: "completed",
       transcriptLeafId: leafId,
       transcriptNextSeq: (placements.get(SESSION_ID)?.lastTranscriptAckCursor ?? 0) + 1,
     }),
-    stderr: "",
-    code: 0,
-    signal: null,
-    killed: false,
-    termination: "exit",
-  };
+  });
 }
 
 let testState: OpenClawTestState;
@@ -163,7 +223,6 @@ export async function setupWorkerTurnLauncherTest(): Promise<void> {
     label: "worker-turn",
     layout: "state-only",
   });
-  await captureRuntimeConfigAsyncReader()();
   root = testState.root;
   database = openOpenClawStateDatabase({ env: testState.env });
   placements = createWorkerSessionPlacementStore({ database });
@@ -173,6 +232,7 @@ export async function setupWorkerTurnLauncherTest(): Promise<void> {
     sessionKey: SESSION_KEY,
     storePath: path.join(root, "sessions.json"),
   };
+  setRuntimeConfigSnapshot({ session: { store: sessionTarget.storePath } });
   const entry = {
     sessionId: SESSION_ID,
     updatedAt: Date.now(),
@@ -183,7 +243,6 @@ export async function setupWorkerTurnLauncherTest(): Promise<void> {
     skipMaintenance: true,
   });
   await SessionManager.openAsync(sessionTarget);
-  setRuntimeConfigSnapshot({ session: { store: sessionTarget.storePath } });
   sessionFile = SESSION_KEY;
 }
 
@@ -417,10 +476,6 @@ export function attachedEnvironment(): WorkerTurnEnvironmentRecord {
     leaseId: "lease-worker-turn",
     bootstrapReceipt: {
       ...attached.bootstrapReceipt,
-      protocolFeatures: [
-        ...attached.bootstrapReceipt.protocolFeatures,
-        WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE,
-      ],
       installKind: "bundle",
     },
     sshEndpoint: {

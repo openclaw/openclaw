@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { verifyAndroidReleaseSource } from "../../apps/android/scripts/build-release-artifacts.ts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -24,11 +24,7 @@ function run(args: string[], env: NodeJS.ProcessEnv = {}) {
 
 type ApkSignerFormat = "legacy" | "V1" | "V2" | "V3.0";
 
-function fakeApkSigner(
-  certificateSha256: string,
-  signerCount = 1,
-  format: ApkSignerFormat = "legacy",
-) {
+function verifyApk(certificateSha256: string, signerCount = 1, format: ApkSignerFormat = "legacy") {
   const tempRoot = tempRoots.make("openclaw-apksigner-");
   const buildToolsDir = path.join(tempRoot, "build-tools", "36.0.0");
   fs.mkdirSync(buildToolsDir, { recursive: true });
@@ -47,64 +43,39 @@ function fakeApkSigner(
   fs.chmodSync(apkSignerPath, 0o755);
   const apkPath = path.join(tempRoot, "OpenClaw-Android.apk");
   fs.writeFileSync(apkPath, "fake apk bytes");
-  return { apkPath, sdkRoot: tempRoot };
+  return run(["--verify-apk", apkPath], { ANDROID_HOME: tempRoot, ANDROID_SDK_ROOT: tempRoot });
 }
 
-describe("Android release artifacts", () => {
-  it("requires release metadata to match a clean checkout", () => {
-    const commit = "a".repeat(40);
-    const cleanGit = (args: string[]) => (args[0] === "rev-parse" ? `${commit}\n` : "");
+it("requires release metadata to match a clean checkout", () => {
+  const commit = "a".repeat(40);
+  const cleanGit = (args: string[]) => (args[0] === "rev-parse" ? `${commit}\n` : "");
 
-    expect(() => verifyAndroidReleaseSource(commit, { runGit: cleanGit })).not.toThrow();
-    expect(() => verifyAndroidReleaseSource("b".repeat(40), { runGit: cleanGit })).toThrow(
-      "Android release commit mismatch",
-    );
-    expect(() =>
-      verifyAndroidReleaseSource(commit, {
-        runGit: (args) => (args[0] === "rev-parse" ? `${commit}\n` : " M app/src/main.kt\n"),
-      }),
-    ).toThrow("Android release builds require a clean Git checkout");
-  });
-
-  it.each<ApkSignerFormat>(["legacy", "V1", "V2", "V3.0"])(
-    "accepts the pinned standalone APK signing certificate in %s output",
-    (format) => {
-      const { apkPath, sdkRoot } = fakeApkSigner(APK_CERTIFICATE_SHA256, 1, format);
-
-      const result = run(["--verify-apk", apkPath], {
-        ANDROID_HOME: sdkRoot,
-        ANDROID_SDK_ROOT: sdkRoot,
-      });
-
-      expect(result.status).toBe(0);
-      expect(result.stdout).toContain("Verified pinned APK signing certificate");
-    },
+  expect(() => verifyAndroidReleaseSource(commit, { runGit: cleanGit })).not.toThrow();
+  expect(() => verifyAndroidReleaseSource("b".repeat(40), { runGit: cleanGit })).toThrow(
+    "Android release commit mismatch",
   );
+  expect(() =>
+    verifyAndroidReleaseSource(commit, {
+      runGit: (args) => (args[0] === "rev-parse" ? `${commit}\n` : " M app/src/main.kt\n"),
+    }),
+  ).toThrow("Android release builds require a clean Git checkout");
+});
 
-  it.each<ApkSignerFormat>(["legacy", "V2"])(
-    "rejects another certificate in %s output",
-    (format) => {
-      const { apkPath, sdkRoot } = fakeApkSigner("a".repeat(64), 1, format);
-
-      const result = run(["--verify-apk", apkPath], {
-        ANDROID_HOME: sdkRoot,
-        ANDROID_SDK_ROOT: sdkRoot,
-      });
-
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain("APK signing certificate mismatch");
-    },
-  );
-
-  it.each<ApkSignerFormat>(["legacy", "V2"])("rejects multiple signers in %s output", (format) => {
-    const { apkPath, sdkRoot } = fakeApkSigner(APK_CERTIFICATE_SHA256, 2, format);
-
-    const result = run(["--verify-apk", apkPath], {
-      ANDROID_HOME: sdkRoot,
-      ANDROID_SDK_ROOT: sdkRoot,
-    });
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("Expected exactly one SHA-256 signing certificate");
-  });
+const accepted = "Verified pinned APK signing certificate";
+const mismatch = "APK signing certificate mismatch";
+const multiple = "Expected exactly one SHA-256 signing certificate";
+it.each([
+  ["legacy", true, 1, accepted],
+  ["V1", true, 1, accepted],
+  ["V2", true, 1, accepted],
+  ["V3.0", true, 1, accepted],
+  ["legacy", false, 1, mismatch],
+  ["V2", false, 1, mismatch],
+  ["legacy", true, 2, multiple],
+  ["V2", true, 2, multiple],
+] as const)("verifies %s output: pinned=%s signers=%s", (format, pinned, signers, message) => {
+  const result = verifyApk(pinned ? APK_CERTIFICATE_SHA256 : "a".repeat(64), signers, format);
+  const success = pinned && signers === 1;
+  expect(result.status).toBe(success ? 0 : 1);
+  expect(success ? result.stdout : result.stderr).toContain(message);
 });

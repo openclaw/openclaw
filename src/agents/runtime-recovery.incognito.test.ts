@@ -14,10 +14,11 @@ import {
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import type { GatewayRecoveryRuntime } from "../gateway/server-instance-runtime.types.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
-import { waitForSessionNativeAttemptEnd } from "../sessions/session-controller.native-runtime.js";
+import { waitForCapturedSessionNativeAttemptEnd } from "../sessions/session-controller.native-runtime.js";
 import { readSessionControllerOperationState } from "../sessions/session-controller.state.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import { getEmbeddedRunAttachment } from "./embedded-agent-runner/run-state.js";
 import { claimAgentSessionWriter } from "./embedded-agent-runner/run/session-bootstrap.js";
 import {
   abortAndDrainEmbeddedAgentRun,
@@ -35,6 +36,7 @@ import { resolveAgentRunSessionTarget } from "./run-session-target.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 const authority = { assertCurrent() {}, authorize() {} };
+const readAuthority = { assertCurrent() {}, assertReadable() {} };
 let stateDir: string;
 let actor: ReturnType<typeof memorySessionActorOwners.get>;
 let sibling: typeof actor;
@@ -86,10 +88,7 @@ async function create(name: string, patch: Partial<SessionEntry> = {}, owner = a
     incognito: true,
     ...patch,
   };
-  const handle = await owner.acquire(
-    { database: owner.identity, sessionKey },
-    { assertCurrent() {}, assertReadable() {} },
-  );
+  const handle = await owner.acquire({ database: owner.identity, sessionKey }, readAuthority);
   bindings.set(`${owner.path}\n${sessionKey}`, {
     actor: handle,
     authority,
@@ -113,6 +112,7 @@ function recoveryRuntime(
     throw new Error("Recovery must settle without redispatch");
   });
   return {
+    prepareFailedWorkerPlacement: async () => undefined,
     prepareRestartRecovery,
     dispatchAgent: unexpected,
     dispatchSessionMethod: unexpected,
@@ -242,10 +242,10 @@ it.each(["settle", "replacement", "incarnation"] as const)(
     );
     const otherBefore = { ...sibling.readSession(other.sessionKey, authority)?.entry };
     let rawSettled = false;
-    const rawSettlement = waitForSessionNativeAttemptEnd(
+    const rawSettlement = waitForCapturedSessionNativeAttemptEnd(
       target.sessionId,
       null,
-      native.handle,
+      getEmbeddedRunAttachment(native.handle),
     ).then(() => {
       rawSettled = true;
     });
@@ -295,8 +295,7 @@ it.each(["settle", "replacement", "incarnation"] as const)(
     expect(sibling.readSession(other.sessionKey, authority)?.entry).toEqual(otherBefore);
     if (outcome !== "settle") {
       expect(entry).toEqual(replacementEntry);
-      expect(entry?.status).toBeUndefined();
-      expect(entry?.abortedLastRun).toBeUndefined();
+      expect([entry?.status, entry?.abortedLastRun]).toEqual([undefined, undefined]);
       expect(replacementAbort).not.toHaveBeenCalled();
     } else {
       expect(entry).toMatchObject({
@@ -326,13 +325,12 @@ it("settles same-process recovery through its original actor after preparation y
   });
   const gate = createDeferredCore<number | undefined>();
   const entered = createDeferredCore();
-  const prepare = vi.fn(() => {
+  const prepare = () => {
     entered.resolve();
     return gate.promise;
-  });
+  };
   const recovering = recover(target, recoveryRuntime(prepare));
   await entered.promise;
-  expect(prepare).toHaveBeenCalledOnce();
   gate.resolve(undefined);
   await expect(recovering).resolves.toMatchObject({ settled: 1, failed: 0 });
   expect(readEntry(target)).toMatchObject({ status: "done", abortedLastRun: false });
@@ -375,7 +373,7 @@ it("refuses a replacement session after recovery preparation yields", async () =
     actor.closeSession(target.sessionKey);
     const replacement = await actor.acquire(
       { database: actor.identity, sessionKey: target.sessionKey },
-      { assertCurrent() {}, assertReadable() {} },
+      readAuthority,
     );
     try {
       await writeEntry(replacement, {
@@ -399,19 +397,17 @@ it("refuses a replacement session after recovery preparation yields", async () =
 });
 
 it("retains an owed completion when the exact admitted source input is absent", async () => {
-  const name = "completion-without-input";
-  const sessionKey = `agent:main:dashboard:incognito-${name}`;
   const claim = {
     taskId: "task",
     taskStatus: "succeeded" as const,
     taskRunId: "task-run",
     sourceRunId: "announce:task",
-    requesterSessionKey: sessionKey,
+    requesterSessionKey: "agent:main:dashboard:incognito-completion-without-input",
     requesterAgentId: "main",
-    sessionId: name,
+    sessionId: "completion-without-input",
     lifecycleRevision: "initial",
   };
-  const target = await create(name, {
+  const target = await create(claim.sessionId, {
     abortedLastRun: true,
     restartRecoveryDeliveryRunId: "recovery",
     restartRecoveryDeliverySourceRunId: claim.sourceRunId,

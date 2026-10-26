@@ -25,6 +25,35 @@ agent model: openai/gpt-6-astra (thinking=medium, fast=on)
 
 If a plugin reload supersedes startup plugin loading, the model line, loaded-plugin summary, and channel warnings use the replacement configuration and plugin metadata.
 
+Completed `startup phase:` lines include `rssMb` (resident memory for the whole
+process, including workers) and `heapUsedMb` (used JavaScript heap in the main
+isolate). Both values are in MiB and are sampled when the phase finishes, so
+service journals can attribute startup memory growth before readiness. They are
+point-in-time readings, not peak memory measurements.
+
+Before readiness, plugin load details are logged when loading and registration
+take at least 250 ms or start a pooled worker. `workersStarted` counts confirmed
+pool worker starts caused by that plugin's preparation, module evaluation, and registration;
+`workerScripts` breaks those starts down by script. Concurrent recovery work is
+excluded, as are unmanaged workers created directly by plugins. These are starts,
+not live-worker or retained-memory counts; background
+work that starts after the plugin's load detail is emitted is not included.
+`OPENCLAW_GATEWAY_STARTUP_TRACE=1` also logs the faster, worker-free plugin loads.
+
+Environment selection reports imports, config reading, recovery (including its
+config-health database read), guarding, and runtime-path pinning separately.
+These sub-phases appear during ordinary foreground Gateway startup without
+enabling full startup tracing. Parent timings include their nested sub-phases;
+do not add them together. Config-health timing includes any private database
+snapshot preparation and cleanup required by that read.
+
+The same lines include `workers` (live tracked worker isolates) and
+`workerHeapSamples` (sampled workers/live workers). When samples are available,
+`workerHeapMb` sums their total heap capacity in MiB; `workerHeapSource=cached`
+identifies the existing diagnostics samples, which may be up to 60 seconds old.
+Missing or stale samples are excluded, so partial coverage is not the total heap
+of all workers. Startup logging never requests new worker samples.
+
 ## File-based logger
 
 - Default rolling log files are under `/tmp/openclaw/` (one file per day), dated by the gateway host's local timezone. The default profile uses `openclaw-YYYY-MM-DD.log`. Named profiles use `openclaw-<profile>-YYYY-MM-DD.log` (for example, `openclaw-dev-YYYY-MM-DD.log`). If that directory is unsafe or unwritable (wrong owner, world-writable, a symlink), OpenClaw falls back to a user-scoped `os.tmpdir()/openclaw-<uid>` path instead. On Windows it always uses that OS-tmpdir fallback.
@@ -78,6 +107,14 @@ Plugin host cleanup failures during session reset or deletion emit one
 error. Check the reported cleanup error before retrying. Successful cleanup
 stays quiet, and failures remain best effort. Console diagnostics use the shared
 secret redactor; plain-text console fields are capped at 2,048 characters.
+
+Plugin replacement logs bounded retained-reference snapshots when work queues
+and warns when its drain deadline expires. Structured file records include the
+acquisition owner fields that were available when each reference was created:
+`agentId`, `sessionKey`, `runId`, and `serviceId`. These raw facts identify the
+work holding the previous generation; a missing owner stays `unknown`. Normal
+log egress applies secret redaction, and support bundles omit the nested owner
+details. Plain-text timeout warnings include the bounded structured fields.
 
 The Control UI Logs tab tails this file via the gateway (`logs.tail`). The CLI does the same:
 
@@ -260,7 +297,7 @@ credential-bearing URLs retain their masking.
 
 JSON console output and log tails preserve valid JSON while masking decoded values and serialized record context. Later rules see earlier masks. Structured credential fields use full masks; matched numbers, booleans, and null become the JSON string `"***"`. Log tails retain built-in credential patterns when custom patterns are configured.
 
-Diagnostics exports and captured provider/WebSocket console output retain redaction. `logging.redactPatterns` supplies deployment-specific patterns at these egress boundaries. Log IDs, sizes, and outcomes rather than message text, prompts, tool arguments, or tool results. WebSocket agent-event summaries contain character counts instead of assistant text or tool metadata.
+Formatted health failures, Doctor Gateway connection notes, diagnostics exports, and captured provider/WebSocket console output retain redaction. `logging.redactPatterns` supplies deployment-specific patterns at these egress boundaries. Log IDs, sizes, and outcomes rather than message text, prompts, tool arguments, or tool results. WebSocket agent-event summaries contain character counts instead of assistant text or tool metadata.
 
 ## Gateway WebSocket logs
 

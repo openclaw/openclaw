@@ -1,18 +1,12 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
-import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
-import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { modelsHandlers } from "../gateway/server-methods/models.js";
-import { registerGatewayModelCatalogPrivateAccess } from "../gateway/server-model-catalog-auth.js";
 import {
-  loadGatewayModelCatalogSnapshot,
-  loadPreparedGatewayModelCatalogSnapshot,
-  readPreparedGatewayModelCatalogOwnerSnapshot,
-} from "../gateway/server-model-catalog.js";
-import { createGatewayRequestContext } from "../gateway/server-request-context.js";
-import { makeContextParams } from "../gateway/server-request-context.test-support.js";
+  getPreparedModelRuntimeMocks,
+  usePreparedModelRuntimeHarness,
+} from "./prepared-model-runtime.test-harness.js";
+import { describe, expect, it, vi } from "vitest";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   bindPluginMetadataSnapshotCache,
   createPluginCache,
@@ -46,6 +40,7 @@ import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { AsyncWorkScope, isAsyncWorkScopeActiveHere } from "../shared/async-work-scope.js";
 import { prepareSharedAuthStoreOwnershipForNative } from "./auth-profiles/path-resolve.native.js";
 import type { RuntimeAuthProfileStore } from "./auth-profiles/types.js";
+import { createEnteredGate } from "./entered-gate.test-support.js";
 import { modelDefinition, providerConfig } from "./model-auth.fixtures.test-support.js";
 import { PreparedModelRuntimeAuthPublicationOwner } from "./prepared-model-runtime-auth-publication.js";
 import {
@@ -69,6 +64,17 @@ import {
 } from "./prepared-model-runtime.owner.js";
 import { retainPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
 import * as pluginLifetime from "./prepared-model-runtime.plugin-lifetime.js";
+
+vi.mock("../logging/subsystem.js", async (importOriginal) => {
+  const { createMockSubsystemLogger } = await import("../../test/helpers/mock-subsystem-logger.js");
+  return {
+    ...(await importOriginal<typeof import("../logging/subsystem.js")>()),
+    createSubsystemLogger: (subsystem: string) =>
+      createMockSubsystemLogger(subsystem, {
+        warn: (...args) => getPreparedModelRuntimeMocks().warn(...args),
+      }),
+  };
+});
 
 const fixture = usePreparedModelRuntimeHarness({ label: "auth-generation-recovery" });
 const { mocks } = fixture;
@@ -108,33 +114,6 @@ async function retiredGenerationFailure(snapshot: PreparedModelRuntimeSnapshot) 
     return error;
   }
   throw new Error("Fixture generation was not retired");
-}
-
-async function listModels(config: OpenClawConfig) {
-  const getConfig = () => config;
-  const loader = () => loadGatewayModelCatalogSnapshot({ getConfig });
-  registerGatewayModelCatalogPrivateAccess(loader, {
-    loadDeferred: (params) => loadPreparedGatewayModelCatalogSnapshot({ ...params, getConfig }),
-    readPrepared: (params) =>
-      readPreparedGatewayModelCatalogOwnerSnapshot({ ...params, getConfig }),
-  });
-  const respond = vi.fn();
-  const handler = modelsHandlers["models.list"]!;
-  await handler({
-    req: { type: "req", id: "auth-recovery", method: "models.list" },
-    params: { agentId: "default" },
-    client: null,
-    isWebchatConnect: () => false,
-    context: {
-      ...createGatewayRequestContext(
-        makeContextParams({ loadGatewayModelCatalogSnapshot: loader }),
-      ),
-      getRuntimeConfig: getConfig,
-      getCommittedRuntimeConfig: getConfig,
-    },
-    respond,
-  });
-  expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ models: [] }), undefined);
 }
 
 describe("configured plugin generation recovery", () => {
@@ -316,7 +295,6 @@ describe("configured plugin generation recovery", () => {
           expect(replacement.isCurrent()).toBe(true);
           expect(snapshot.isCurrent()).toBe(false);
           expect(replacement.config).toEqual(currentConfig);
-          await listModels(currentConfig);
           expect(mocks.warn).not.toHaveBeenCalled();
         }
       } finally {
@@ -367,7 +345,7 @@ describe("auth publication generation recovery", () => {
       mocks.pluginMetadataSnapshot = { ...metadataSnapshot };
       bindPluginMetadataSnapshotCache(mocks.pluginMetadataSnapshot, cache);
     }
-    const { config, input, snapshot, registry } = await publishOwner();
+    const { input, snapshot, registry } = await publishOwner();
     const currentRegistry = createEmptyPluginRegistry();
     mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation((params) => {
       if (params.reusableRegistry) {
@@ -412,7 +390,6 @@ describe("auth publication generation recovery", () => {
       const replacement = await prepare(input);
       expect(replacement.pluginRegistry).toBe(currentRegistry);
       expect(replacement.isCurrent()).toBe(true);
-      await listModels(config);
       expect(phases).toContain("published");
       expect(phases).not.toContain("failed");
       expect(mocks.warn).not.toHaveBeenCalled();
@@ -461,7 +438,6 @@ describe("auth publication generation recovery", () => {
         expect(published.pluginRegistry).toBe(currentRegistry);
         expect(published.isCurrent()).toBe(true);
       }
-      await listModels(config);
       expect(mocks.warn).not.toHaveBeenCalled();
     } finally {
       finish.resolve();
@@ -505,6 +481,67 @@ describe("auth publication generation recovery", () => {
       expect.stringContaining("after 1 fresh-generation retry"),
     );
   });
+
+  it.for([false, true])(
+    "joins a publication superseding the fresh auth retry (fails: %s)",
+    async (fails, { signal }) => {
+      const { snapshot, config } = await publishOwner();
+      const owner = resolvePreparedModelRuntimeOwnerBySnapshot(snapshot)!;
+      const retry = createEnteredGate();
+      const nextPublication = createEnteredGate();
+      const failure = new Error("successor credential acquisition failed");
+      mocks.resolveAmbientCredentials
+        .mockClear()
+        .mockImplementationOnce(() => {
+          throw new PluginInstanceUnavailableError("synthetic retired generation");
+        })
+        .mockImplementationOnce(async () => {
+          await retry.wait();
+          return {};
+        })
+        .mockImplementationOnce(async () => {
+          await nextPublication.wait();
+          if (fails) {
+            throw failure;
+          }
+          return {};
+        });
+      mocks.mutationListener?.({ agentDir: owner.input.agentDir, affectsInheritedStores: false });
+      const reader = prepare(owner.input);
+      const dispatch = loadDispatch();
+      void reader.catch(() => {});
+      void dispatch.catch(() => {});
+      let successor: ReturnType<typeof publish> | undefined;
+      try {
+        await withinTest(retry.entered, signal);
+        successor = publish(owner.input, {
+          force: true,
+          provenance: "configured",
+          catalogMode: "static",
+        });
+        void successor.catch(() => {});
+        retry.release();
+        await withinTest(nextPublication.entered, signal);
+        nextPublication.release();
+        if (fails) {
+          await expect(successor).rejects.toBe(failure);
+          await expect(reader).rejects.toThrow(failure.message);
+          await expect(dispatch).rejects.toThrow(failure.message);
+        } else {
+          const latest = await successor;
+          await expect(reader).resolves.toBe(latest);
+          await expect(dispatch).resolves.toMatchObject({ agentId: "default", config });
+          expect(latest.isCurrent()).toBe(true);
+          expect(mocks.warn).not.toHaveBeenCalled();
+        }
+        expect(mocks.resolveAmbientCredentials).toHaveBeenCalledTimes(3);
+      } finally {
+        retry.release();
+        nextPublication.release();
+        await Promise.allSettled([reader, dispatch, successor]);
+      }
+    },
+  );
 });
 
 describe("prepared model auth publication", () => {

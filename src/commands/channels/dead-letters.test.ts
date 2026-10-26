@@ -64,6 +64,9 @@ describe("channel dead-letter commands", () => {
       }
       await queue.fail(claim, { reason: "handler-error", failedAt: 20 });
       await channelsDeadLettersResubmitCommand("event-1", { channel: "line" });
+      expect(runtime.log).toHaveBeenCalledWith(
+        expect.stringContaining("within 5 minutes by default (longer if configured)"),
+      );
       const replay = await queue.claimNext({ ownerId: "replay-worker" });
       expect(replay).toMatchObject({ id: "event-1", payload: { text: "once" } });
       if (!replay) {

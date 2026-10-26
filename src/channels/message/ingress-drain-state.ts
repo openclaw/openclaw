@@ -1,5 +1,4 @@
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
-import { createDeferredCore } from "../../shared/deferred.js";
 import type { ChannelIngressQueueClaim, ChannelIngressQueueRecord } from "./ingress-queue.types.js";
 
 export class IngressAdoptionLostError extends Error {
@@ -66,13 +65,9 @@ export function createIngressSettleOwner<TPayload, TMetadata>(
       return;
     }
     if (settlePromise) {
-      await settlePromise;
-      return;
+      return settlePromise;
     }
-    const settlement = createDeferredCore();
-    settlePromise = settlement.promise;
-    state.settlement = settlePromise;
-    void (async () => {
+    settlePromise = Promise.resolve().then(async () => {
       try {
         // Only mark settled after the tombstone/fail/release write commits.
         // Write failure must keep heartbeat + in-memory ownership (wedged > duplicated).
@@ -86,7 +81,8 @@ export function createIngressSettleOwner<TPayload, TMetadata>(
       } finally {
         state.settlement = undefined;
       }
-    })().then(settlement.resolve, settlement.reject);
+    });
+    state.settlement = settlePromise;
     try {
       await settlePromise;
     } catch (err) {
@@ -126,8 +122,4 @@ export function resolveLaneKey<TPayload, TMetadata>(
   return reconcileStoredLaneKey(record, storedLaneKey, derivedLaneKey)
     ? derivedLaneKey
     : storedLaneKey;
-}
-
-export function sortedKeys(keys: Iterable<string>): string[] {
-  return [...keys].toSorted((a, b) => a.localeCompare(b));
 }

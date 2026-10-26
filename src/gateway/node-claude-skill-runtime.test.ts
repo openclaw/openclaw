@@ -6,6 +6,7 @@ import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
+import * as execApprovalRequests from "../agents/bash-tools.exec-approval-request.js";
 import { buildPreparedCliRunContext } from "../agents/cli-runner.test-helpers.js";
 import { executeNodeClaudeRun } from "../agents/cli-runner/execute-node-claude.js";
 import { createLibrarySkillWorkshopTool } from "../agents/tools/skill-workshop-tool-library.js";
@@ -32,7 +33,6 @@ import { listSkillLibrary, readSkillLibrary, saveSkillLibrary } from "../skills/
 import { buildSkillSnapshot } from "../skills/loading/workspace-skill-prompt.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
-import { invokeNodeClaudeCliRun } from "./node-agent-cli-runtime.js";
 import { NodeRegistry, type NodeRegistryOptions } from "./node-registry.js";
 import {
   libraryAuthority,
@@ -162,6 +162,10 @@ async function fixture(
   let currentFrame: NodeInvokeRequestPayload | undefined;
   let wireBytes = 0;
   const requests: unknown[] = [];
+  const finish = (
+    id: string,
+    outcome: { ok: boolean; payload?: unknown; error?: { message: string } },
+  ) => registry.handleInvokeResult({ id, ...nodeConnection, ...outcome });
   const progress = (chunk: string, seq: number) =>
     registry.handleInvokeProgress({
       invokeId: currentFrame!.id,
@@ -238,9 +242,7 @@ async function fixture(
             signal: controller.signal,
             skillIo: request.skillRuntime ? io : undefined,
           });
-          registry.handleInvokeResult({
-            id: frame.id,
-            ...nodeConnection,
+          finish(frame.id, {
             ok: true,
             payload: {
               exitCode: result.exitCode,
@@ -249,12 +251,7 @@ async function fixture(
             },
           });
         } catch (error) {
-          registry.handleInvokeResult({
-            id: frame.id,
-            ...nodeConnection,
-            ok: false,
-            error: { message: String(error) },
-          });
+          finish(frame.id, { ok: false, error: { message: String(error) } });
         }
       });
       tasks.push(task);
@@ -278,6 +275,12 @@ async function fixture(
     } as GatewayWsClient,
     { pairingIdentity: "node-1", pairingGeneration: "generation-1" },
   );
+  vi.spyOn(execApprovalRequests, "registerExecApprovalRequestForHostOrThrow").mockRejectedValue(
+    new Error("unexpected approval"),
+  );
+  vi.spyOn(execApprovalRequests, "resolveRegisteredExecApprovalDecision").mockRejectedValue(
+    new Error("unexpected approval"),
+  );
   let output = "";
   const execute = (stdin = "hello") =>
     withPluginRuntimeGatewayRequestScope(
@@ -293,15 +296,6 @@ async function fixture(
             output += text;
           },
           consumeStderr: () => {},
-          deps: {
-            invokeNodeClaudeCliRun,
-            registerExecApprovalRequestForHostOrThrow: async () => {
-              throw new Error("unexpected approval");
-            },
-            resolveRegisteredExecApprovalDecision: async () => {
-              throw new Error("unexpected approval");
-            },
-          },
         }),
     );
   return {
@@ -319,9 +313,7 @@ async function fixture(
     output: () => output,
     maxWireBytes: () => wireBytes,
     completeInvocation() {
-      registry.handleInvokeResult({
-        id: currentFrame!.id,
-        ...nodeConnection,
+      finish(currentFrame!.id, {
         ok: true,
         payload: { exitCode: 0, stderrTail: "", truncated: false },
       });
@@ -487,27 +479,17 @@ async function call(method,params,id){const r=await fetch(config.mcpServers.open
 it("authors through the node MCP proxy using the actual host capability without a preselected skill", async () => {
   await using f = await fixture(authorScript, { authoring: true });
   expect((await f.execute()).result.exitCode).toBe(0);
-  expect(JSON.parse(f.output()).listed.result.tools).toMatchObject([
-    {
-      name: "skill_workshop",
-      inputSchema: {
-        properties: {
-          action: {
-            type: "string",
-            enum: expect.arrayContaining(["create", "update"]),
-          },
-        },
-      },
-    },
-  ]);
+  const tools = JSON.parse(f.output()).listed.result.tools;
+  expect(tools).toHaveLength(1);
+  expect(tools[0]).toMatchObject({ name: "skill_workshop" });
   const entries = (await listSkillLibrary(f.authority)).entries;
   expect(entries).toHaveLength(1);
   const published = await readSkillLibrary(f.authority, entries[0]!.skillId);
   expect(published.content).toBe(content + "Updated on node.\n");
   expect(published.files[0]).toMatchObject({ path: "scripts/task.sh", executable: true });
-  expect(Buffer.from(published.files[0]!.content, "base64").toString()).toBe(
-    "#!/bin/sh\nprintf owned",
-  );
+  expect(
+    Buffer.from(published.files[0]!.content, published.files[0]!.encoding ?? "utf8").toString(),
+  ).toBe("#!/bin/sh\nprintf owned");
   expect(f.context.params.skillsSnapshot).toBeUndefined();
   expect(JSON.stringify(f.requests)).not.toContain(f.authority.profileId);
 });

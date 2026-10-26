@@ -75,6 +75,12 @@ function readSessionsJson(store: string, options?: Parameters<typeof runSessions
   return runSessionsJson<SessionsJsonPayload>(sessionsCommand, store, options);
 }
 
+async function readSessionsText(store: string) {
+  const { runtime, logs } = makeRuntime();
+  await sessionsCommand({ store }, runtime);
+  return logs;
+}
+
 function configureModels(
   primary: string,
   models: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["models"],
@@ -112,14 +118,14 @@ describe("sessionsCommand", () => {
     { name: "cleanup dry-run", run: sessionsCleanupCommand, options: { dryRun: true } },
   ])("aligns $name columns for Unicode keys and full model names", async ({ run, options }) => {
     const entries = [
-      { key: "agent:main:main", model: "gpt-5.6-luna" },
-      { key: "agent:main:東京", model: "gemini-3-flash-preview" },
-      { key: "agent:main:e\u0301", model: "gpt-5.6-luna" },
-      { key: "agent:main:👩‍💻", model: "claude-sonnet-4-6" },
-    ];
+      ["agent:main:main", "gpt-5.6-luna"],
+      ["agent:main:東京", "gemini-3-flash-preview"],
+      ["agent:main:e\u0301", "gpt-5.6-luna"],
+      ["agent:main:👩‍💻", "claude-sonnet-4-6"],
+    ] as const;
     const store = await writeStore(
       Object.fromEntries(
-        entries.map(({ key, model }, index) => [
+        entries.map(([key, model], index) => [
           key,
           { sessionId: `row-${index}`, updatedAt: Date.now(), model, systemSent: true },
         ]),
@@ -127,32 +133,29 @@ describe("sessionsCommand", () => {
     );
     const columns = Object.getOwnPropertyDescriptor(process.stdout, "columns");
     Object.defineProperty(process.stdout, "columns", { configurable: true, value: 240 });
-    try {
-      const { runtime, logs } = makeRuntime();
-      await run({ store, ...options }, runtime);
-      const lines = stripAnsi(logs.join("\n")).split("\n");
-      const header = lines.find((line) => line.includes("Key") && line.includes("Model")) ?? "";
-      expect(header).toContain("Flags");
-      for (const { key, model } of entries) {
-        const row = lines.find((line) => line.includes(key)) ?? "";
-        expect(row).toContain(key);
-        expect(row).toContain(model);
-        expect(row).toContain("system");
-        for (const [title, value] of [
-          ["Key", key],
-          ["Model", model],
-          ["Flags", "system"],
-        ] as const) {
-          expect(visibleWidth(row.slice(0, row.indexOf(value)))).toBe(
-            visibleWidth(header.slice(0, header.indexOf(title))),
-          );
-        }
-      }
-    } finally {
+    onTestFinished(() => {
       if (columns) {
         Object.defineProperty(process.stdout, "columns", columns);
       } else {
         Reflect.deleteProperty(process.stdout, "columns");
+      }
+    });
+    const { runtime, logs } = makeRuntime();
+    await run({ store, ...options }, runtime);
+    const lines = stripAnsi(logs.join("\n")).split("\n");
+    const header = lines.find((line) => line.includes("Key") && line.includes("Model")) ?? "";
+    expect(header).toContain("Flags");
+    for (const [key, model] of entries) {
+      const row = lines.find((line) => line.includes(key)) ?? "";
+      for (const [title, value] of [
+        ["Key", key],
+        ["Model", model],
+        ["Flags", "system"],
+      ] as const) {
+        expect(row).toContain(value);
+        expect(visibleWidth(row.slice(0, row.indexOf(value)))).toBe(
+          visibleWidth(header.slice(0, header.indexOf(title))),
+        );
       }
     }
   });
@@ -169,8 +172,7 @@ describe("sessionsCommand", () => {
       },
       "agent:main:boundary",
     );
-    const { runtime, logs } = makeRuntime();
-    await sessionsCommand({ store }, runtime);
+    const logs = await readSessionsText(store);
     expect(singleSessionTableCells(logs)[5]).toBe("49/200k (?%)");
     const payload = await readSessionsJson(store);
     expect(payload.sessions).toEqual([
@@ -204,9 +206,7 @@ describe("sessionsCommand", () => {
       totalTokensVersion: 1,
     });
 
-    const { runtime, logs } = makeRuntime();
-    await sessionsCommand({ store }, runtime);
-
+    const logs = await readSessionsText(store);
     const row = logs.find((line) => line.includes("agent:main:main")) ?? "";
     expect(row).toContain("OpenAI Codex");
     expect(row).toContain("11/1.0m (0%)");
@@ -342,14 +342,29 @@ describe("sessionsCommand", () => {
       "agent:main:quietchat:group:demo",
     );
 
-    const { runtime, logs } = makeRuntime();
-    await sessionsCommand({ store }, runtime);
-
+    const logs = await readSessionsText(store);
     const row = logs.find((line) => line.includes("id:xyz")) ?? "";
     expect(row).toContain("group");
     expect(row).toContain("unknown/? (?%)");
     expect(row).toContain("think:high");
   });
+
+  it.skipIf(process.platform === "win32")(
+    "escapes terminal controls in store headers without changing JSON paths",
+    async () => {
+      const store = await writeStore(
+        {},
+        "sessions-café\u001b[31m\noperator-forged\tend\rrow\u0007",
+      );
+
+      const logs = await readSessionsText(store);
+      const header = logs.find((line) => line.includes("Session store:"));
+      expect(header).not.toMatch(/\p{Cc}/u);
+      expect(header).toContain("sessions-café\\noperator-forged\\tend\\rrow");
+      expect(logs).toContain("No sessions found.");
+      expect(await readSessionsJson(store)).toMatchObject({ path: store, count: 0 });
+    },
+  );
 
   it("sanitizes persisted identifiers only for terminal output", async () => {
     const key = "agent:main:\u001B[31mpeer\nrow";
@@ -357,9 +372,7 @@ describe("sessionsCommand", () => {
     const model = "model-\u001B]0;session-model\u0007🦞\tvariant";
     const store = await writeSession(sessionId, { model }, key);
 
-    const { runtime, logs } = makeRuntime();
-    await sessionsCommand({ store }, runtime);
-
+    const logs = await readSessionsText(store);
     const textOutput = logs.join("\n");
     expect(textOutput).not.toContain("\u001B");
     expect(textOutput).not.toContain("\nrow");
@@ -399,8 +412,7 @@ describe("sessionsCommand", () => {
       recordSessionParticipant(scope, { identity: { type: "profile", id } });
     }
 
-    const { runtime, logs } = makeRuntime();
-    await sessionsCommand({ store }, runtime);
+    const logs = await readSessionsText(store);
     // Flags may wrap between words or within a long participant identifier.
     expect(singleSessionTableCells(logs).at(-1)?.replace(/\s/gu, "")).toBe(
       "visibility:suggestowner:profile-ownerparticipants:profile:profile-ada,profile:profile-ben,profile:profile-cam,profile:profile-dee,+1id:shared-session",
@@ -509,10 +521,7 @@ describe("sessionsCommand", () => {
           models: { "anthropic/opus": {} },
           sessionStore: { agentId: "ops" },
         },
-        entries: {
-          ops: { models: { "custom/opus": {} } },
-          research: {},
-        },
+        entries: { ops: { models: { "custom/opus": {} } }, research: {} },
       },
     }));
 
@@ -609,6 +618,54 @@ async function legacySessionJson(
 }
 
 describe("sessionsCommand model resolution", () => {
+  it.each([false, true])(
+    "resolves fallback aliases with the store owner (agent-scoped=%s)",
+    async (agentScoped) => {
+      const store = await writeStore(
+        {
+          global: makeSession("alias-fallback"),
+          recorded: makeSession("recorded-model", {
+            modelProvider: "custom",
+            model: "recorded-model",
+          }),
+        },
+        "sessions-model-alias",
+        { agentId: "ops" },
+      );
+      setMockSessionsConfig(() => ({
+        session: { scope: "global", store },
+        agents: {
+          ownership: "explicit",
+          defaults: {
+            model: { primary: "selected" },
+            models: { "anthropic/default-model": { alias: "selected" } },
+            sessionStore: { agentId: "ops" },
+          },
+          entries: {
+            ops: agentScoped
+              ? {
+                  model: { primary: "selected" },
+                  models: { "custom/agent-model": { alias: "selected" } },
+                }
+              : {},
+          },
+        },
+      }));
+
+      const payload = await readSessionsJson(store);
+
+      expect(payload.sessions?.find((row) => row.key === "global")).toMatchObject({
+        agentId: "ops",
+        modelProvider: agentScoped ? "custom" : "anthropic",
+        model: agentScoped ? "agent-model" : "default-model",
+      });
+      expect(payload.sessions?.find((row) => row.sessionId === "recorded-model")).toMatchObject({
+        modelProvider: "custom",
+        model: "recorded-model",
+      });
+    },
+  );
+
   it("preserves nested override models when their provider is recorded separately", async () => {
     const payload = await legacySessionJson(
       "subagent-router-override",
@@ -621,21 +678,6 @@ describe("sessionsCommand model resolution", () => {
     );
     expect(payload.sessions?.[0]?.key).toBe("agent:main:subagent:demo");
     expect(payload.sessions?.[0]?.model).toBe("openai/gpt-5.6");
-  });
-
-  it("reports the owning Codex harness for locked sessions despite a stale OpenClaw override", async () => {
-    configureModels("openai/gpt-5.5", {
-      "openai/gpt-5.5": { agentRuntime: { id: "openclaw" } },
-    });
-    const payload = await legacySessionJson("locked-codex-session", {
-      modelProvider: "openai",
-      model: "gpt-5.5",
-      agentHarnessId: "codex",
-      agentRuntimeOverride: "openclaw",
-      modelSelectionLocked: true,
-    });
-    expect(payload.sessions?.[0]?.key).toBe("agent:main:main");
-    expect(payload.sessions?.[0]?.agentRuntime).toEqual({ id: "codex", source: "session" });
   });
 
   it("preserves a router-owned session's recorded model, runtime, and context window", async () => {

@@ -12,7 +12,8 @@ import {
   markMcpLoopbackToolCallStarted,
   recordMcpLoopbackToolCallResult,
 } from "../gateway/mcp-http.loopback-runtime.js";
-import { invokeNodeClaudeCliRun } from "../gateway/node-agent-cli-runtime.js";
+import type { invokeNodeClaudeCliRun } from "../gateway/node-agent-cli-runtime.js";
+import * as nodeRuntime from "../gateway/node-agent-cli-runtime.js";
 import { onAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
 import {
   setDiagnosticsEnabledForProcess,
@@ -26,6 +27,7 @@ import type { CliBackendLiveSessionHandle } from "../plugins/cli-backend.types.j
 import type { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { RunExit } from "../process/supervisor/types.js";
 import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
+import * as execApprovalRequests from "./bash-tools.exec-approval-request.js";
 import {
   buildPreparedCliRunContext,
   captureModelCallDiagnostics,
@@ -42,11 +44,10 @@ import { executePreparedCliRun as executePreparedCliRunImpl } from "./cli-runner
 import {
   createManagedRun,
   createSuccessfulProcessExit,
-  setCliRunnerExecuteTestDeps,
   supervisorSpawnMock,
   wrapPreparedCliRunWithTestAdmission,
 } from "./cli-runner/execute.test-support.js";
-import { writeCliSystemPromptFile } from "./cli-runner/helpers.js";
+import * as cliHelpers from "./cli-runner/helpers.js";
 import { cliBackendLog } from "./cli-runner/log.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
 
@@ -63,16 +64,16 @@ beforeEach(() => {
   resetAgentEventsForTest();
   resetDiagnosticRunActivityForTest();
   startDiagnosticRunActivityTracking();
-  setCliRunnerExecuteTestDeps({
-    writeCliSystemPromptFile,
-    invokeNodeClaudeCliRun,
-    registerExecApprovalRequestForHostOrThrow: async () => {
+  vi.spyOn(execApprovalRequests, "registerExecApprovalRequestForHostOrThrow").mockImplementation(
+    async () => {
       throw new Error("unexpected exec approval registration");
     },
-    resolveRegisteredExecApprovalDecision: async () => {
+  );
+  vi.spyOn(execApprovalRequests, "resolveRegisteredExecApprovalDecision").mockImplementation(
+    async () => {
       throw new Error("unexpected exec approval resolution");
     },
-  });
+  );
   supervisorSpawnMock.mockClear();
 });
 
@@ -145,7 +146,7 @@ describe("runCliAgent spawn path", () => {
   it("streams a node-placed Claude resume through the normal JSONL parser", async ({
     onTestFinished,
   }) => {
-    const writeSystemPrompt = vi.fn(writeCliSystemPromptFile);
+    const writeSystemPrompt = vi.fn(cliHelpers.writeCliSystemPromptFile);
     let toolAvailability: unknown = "unset";
     const invokeNode = vi.fn(async (params: Parameters<typeof invokeNodeClaudeCliRun>[0]) => {
       const jsonl = [
@@ -161,10 +162,8 @@ describe("runCliAgent spawn path", () => {
       params.onProgress(jsonl.slice(40));
       return nodeExit();
     });
-    setCliRunnerExecuteTestDeps({
-      writeCliSystemPromptFile: writeSystemPrompt,
-      invokeNodeClaudeCliRun: invokeNode,
-    });
+    vi.spyOn(cliHelpers, "writeCliSystemPromptFile").mockImplementation(writeSystemPrompt);
+    vi.spyOn(nodeRuntime, "invokeNodeClaudeCliRun").mockImplementation(invokeNode);
     const baseArgs = [
       "-p",
       "--output-format",
@@ -277,7 +276,7 @@ describe("runCliAgent spawn path", () => {
       params.onProgress('{"type":"assistant","message":{"content":[{"type":"te');
       return nodeExit(true);
     });
-    setCliRunnerExecuteTestDeps({ invokeNodeClaudeCliRun: invokeNode });
+    vi.spyOn(nodeRuntime, "invokeNodeClaudeCliRun").mockImplementation(invokeNode);
     const context = buildNodeContext({
       prompt: "current turn",
       backend: {
@@ -312,7 +311,7 @@ describe("runCliAgent spawn path", () => {
           );
         }),
     );
-    setCliRunnerExecuteTestDeps({ invokeNodeClaudeCliRun: invokeNode });
+    vi.spyOn(nodeRuntime, "invokeNodeClaudeCliRun").mockImplementation(invokeNode);
     const context = buildNodeContext({
       runId: "run-node-abort",
     });
@@ -373,11 +372,13 @@ describe("runCliAgent spawn path", () => {
       });
       return "allow-once";
     });
-    setCliRunnerExecuteTestDeps({
-      invokeNodeClaudeCliRun: invokeNode,
-      registerExecApprovalRequestForHostOrThrow: registerApproval,
-      resolveRegisteredExecApprovalDecision: resolveApproval,
-    });
+    vi.spyOn(nodeRuntime, "invokeNodeClaudeCliRun").mockImplementation(invokeNode);
+    vi.spyOn(execApprovalRequests, "registerExecApprovalRequestForHostOrThrow").mockImplementation(
+      registerApproval,
+    );
+    vi.spyOn(execApprovalRequests, "resolveRegisteredExecApprovalDecision").mockImplementation(
+      resolveApproval,
+    );
     const context = buildNodeContext({
       runId: "run-node-approval",
       sessionKey: plan.sessionKey,
@@ -429,15 +430,20 @@ describe("runCliAgent spawn path", () => {
         }),
       }));
       const resolveApproval = vi.fn(async () => await new Promise<string | null>(() => {}));
-      setCliRunnerExecuteTestDeps({
-        invokeNodeClaudeCliRun: invokeNode,
-        registerExecApprovalRequestForHostOrThrow: vi.fn(async () =>
+      vi.spyOn(nodeRuntime, "invokeNodeClaudeCliRun").mockImplementation(invokeNode);
+      vi.spyOn(
+        execApprovalRequests,
+        "registerExecApprovalRequestForHostOrThrow",
+      ).mockImplementation(
+        vi.fn(async () =>
           phase === "registering"
             ? await new Promise<never>(() => {})
             : { id: "approval-timeout", expiresAtMs: Date.now() + 60_000 },
         ),
-        resolveRegisteredExecApprovalDecision: resolveApproval,
-      });
+      );
+      vi.spyOn(execApprovalRequests, "resolveRegisteredExecApprovalDecision").mockImplementation(
+        resolveApproval,
+      );
       const context = buildNodeContext({
         timeoutMs: 25,
       });
@@ -452,7 +458,7 @@ describe("runCliAgent spawn path", () => {
 
   it("rejects images before invoking a node-placed Claude session", async () => {
     const invokeNode = vi.fn();
-    setCliRunnerExecuteTestDeps({ invokeNodeClaudeCliRun: invokeNode });
+    vi.spyOn(nodeRuntime, "invokeNodeClaudeCliRun").mockImplementation(invokeNode);
     const context = buildNodeContext();
     context.params.images = [{ type: "image", data: "aGVsbG8=", mimeType: "image/png" }];
 
@@ -474,7 +480,7 @@ describe("runCliAgent spawn path", () => {
 
   it("rejects prepared offloaded images before invoking a node-placed Claude session", async () => {
     const invokeNode = vi.fn();
-    setCliRunnerExecuteTestDeps({ invokeNodeClaudeCliRun: invokeNode });
+    vi.spyOn(nodeRuntime, "invokeNodeClaudeCliRun").mockImplementation(invokeNode);
     const context = buildNodeContext({
       provider: "claude-cli",
       runId: "run-node-offloaded-media-facts",
@@ -532,12 +538,7 @@ describe("runCliAgent spawn path", () => {
           },
         }),
       ].join("\n") + "\n";
-    supervisorSpawnMock.mockResolvedValueOnce(
-      createManagedRun({
-        ...createSuccessfulProcessExit(),
-        stdout,
-      }),
-    );
+    mockSuccessfulCliRun(stdout);
     const diagnostics = captureModelCallDiagnostics("run-claude-model-call-metadata");
 
     try {
@@ -628,12 +629,7 @@ describe("runCliAgent spawn path", () => {
         }),
         JSON.stringify({ type: "result", result: "visible answer" }),
       ].join("\n") + "\n";
-    supervisorSpawnMock.mockResolvedValueOnce(
-      createManagedRun({
-        ...createSuccessfulProcessExit(),
-        stdout,
-      }),
-    );
+    mockSuccessfulCliRun(stdout);
     const diagnostics = captureModelCallDiagnostics("run-claude-model-call-content");
 
     try {
@@ -683,12 +679,7 @@ describe("runCliAgent spawn path", () => {
 
   it("emits one Claude model-call error for parse failure", async () => {
     const runId = "run-claude-model-call-parse-error";
-    supervisorSpawnMock.mockResolvedValueOnce(
-      createManagedRun({
-        ...createSuccessfulProcessExit(),
-        stdout: `${JSON.stringify({ type: "system", subtype: "unexpected" })}\n`,
-      }),
-    );
+    mockSuccessfulCliRun(`${JSON.stringify({ type: "system", subtype: "unexpected" })}\n`);
     const diagnostics = captureModelCallDiagnostics(runId);
 
     try {
@@ -742,9 +733,9 @@ describe("runCliAgent spawn path", () => {
       filePath: "/tmp/openclaw-soft-resume-system-prompt.md",
       cleanup: async () => {},
     }));
-    setCliRunnerExecuteTestDeps({
-      writeCliSystemPromptFile: writeSoftResumeSystemPromptFile,
-    });
+    vi.spyOn(cliHelpers, "writeCliSystemPromptFile").mockImplementation(
+      writeSoftResumeSystemPromptFile,
+    );
     supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
       const input = (args[0] ?? {}) as { argv?: string[] };
       expect(input.argv).toContain("resume");
@@ -988,32 +979,51 @@ describe("runCliAgent spawn path", () => {
     }
   });
 
-  it("injects skill env overrides into CLI child env and restores host env", async () => {
+  it.for([
+    {
+      name: "injects skill env overrides into CLI child env and restores host env",
+      compact: false,
+      expectedChildKey: "skill-secret",
+    },
+    {
+      name: "does not inject skill env overrides into control operations",
+      compact: true,
+      expectedChildKey: undefined,
+    },
+  ])("$name", async ({ compact, expectedChildKey }, { onTestFinished }) => {
     vi.stubEnv("CLI_SKILL_API_KEY", undefined);
+    onTestFinished(() => void vi.unstubAllEnvs());
     supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
       const input = (args[0] ?? {}) as { env?: Record<string, string> };
-      expect(input.env?.CLI_SKILL_API_KEY).toBe("skill-secret");
+      expect(input.env?.CLI_SKILL_API_KEY).toBe(expectedChildKey);
       return createManagedRun({
         ...createSuccessfulProcessExit(),
         stdout: CLAUDE_OK_JSONL,
       });
     });
 
-    await executePreparedCliRun(
-      buildPreparedCliRunContext({
-        config: {
-          skills: {
-            entries: {
-              envskill: { apiKey: "skill-secret" }, // pragma: allowlist secret
-            },
+    const context = buildPreparedCliRunContext({
+      config: {
+        skills: {
+          entries: {
+            envskill: { apiKey: "skill-secret" }, // pragma: allowlist secret
           },
         },
-        skillsSnapshot: {
-          prompt: "",
-          skills: [{ name: "envskill", primaryEnv: "CLI_SKILL_API_KEY" }],
-        },
-      }),
-    );
+      },
+      skillsSnapshot: {
+        prompt: "",
+        skills: [{ name: "envskill", primaryEnv: "CLI_SKILL_API_KEY" }],
+      },
+    });
+    if (compact) {
+      context.params.controlOperation = "compact";
+      context.backendResolved.manualCompaction = {
+        input: "arg",
+        buildPrompt: () => "/compact",
+        validateOutput: () => ({ ok: true }),
+      };
+    }
+    await executePreparedCliRun(context);
     expect(process.env.CLI_SKILL_API_KEY).toBeUndefined();
   });
 
@@ -1094,57 +1104,9 @@ describe("runCliAgent spawn path", () => {
     },
   );
 
-  it("does not inject skill env overrides into control operations", async () => {
-    const previousEnvValue = process.env.CLI_SKILL_API_KEY;
-    delete process.env.CLI_SKILL_API_KEY;
-    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
-      const input = (args[0] ?? {}) as { env?: Record<string, string> };
-      expect(input.env?.CLI_SKILL_API_KEY).toBeUndefined();
-      return createManagedRun({
-        ...createSuccessfulProcessExit(),
-        stdout: CLAUDE_OK_JSONL,
-      });
-    });
-
-    try {
-      const context = buildPreparedCliRunContext({
-        config: {
-          skills: {
-            entries: {
-              envskill: { apiKey: "skill-secret" }, // pragma: allowlist secret
-            },
-          },
-        },
-        skillsSnapshot: {
-          prompt: "",
-          skills: [{ name: "envskill", primaryEnv: "CLI_SKILL_API_KEY" }],
-        },
-      });
-      context.params.controlOperation = "compact";
-      context.backendResolved.manualCompaction = {
-        input: "arg",
-        buildPrompt: () => "/compact",
-        validateOutput: () => ({ ok: true }),
-      };
-      await executePreparedCliRun(context);
-      expect(process.env.CLI_SKILL_API_KEY).toBeUndefined();
-    } finally {
-      if (previousEnvValue === undefined) {
-        delete process.env.CLI_SKILL_API_KEY;
-      } else {
-        process.env.CLI_SKILL_API_KEY = previousEnvValue;
-      }
-    }
-  });
-
   it("runs CLI through supervisor and returns payload", async () => {
-    const logInfoSpy = vi.spyOn(cliBackendLog, "info").mockImplementation(() => undefined);
-    supervisorSpawnMock.mockResolvedValueOnce(
-      createManagedRun({
-        ...createSuccessfulProcessExit(),
-        stdout: "ok",
-      }),
-    );
+    using logInfoSpy = vi.spyOn(cliBackendLog, "info").mockImplementation(() => undefined);
+    mockSuccessfulCliRun();
 
     const context = buildPreparedCliRunContext({
       provider: "codex-cli",
@@ -1152,67 +1114,59 @@ describe("runCliAgent spawn path", () => {
     });
     context.reusableCliSession = { mode: "reuse", sessionId: "thread-123" };
 
-    try {
-      const result = await executePreparedCliRun(context, "thread-123");
+    const result = await executePreparedCliRun(context, "thread-123");
 
-      expect(result.text).toBe("ok");
-      const input = mockCallArg(supervisorSpawnMock) as {
-        argv?: string[];
-        mode?: string;
-        timeoutMs?: number;
-        noOutputTimeoutMs?: number;
-        replaceExistingScope?: boolean;
-        scopeKey?: string;
-      };
-      expect(input.mode).toBe("child");
-      expect(input.argv).toEqual([
-        "codex",
-        "exec",
-        "resume",
-        "thread-123",
-        "--skip-git-repo-check",
-        "--model",
-        "gpt-5.4",
-        "hi",
-      ]);
-      expect(input.timeoutMs).toBe(1_000);
-      expect(input.noOutputTimeoutMs).toBeGreaterThanOrEqual(1_000);
-      expect(input.replaceExistingScope).toBe(true);
-      expect(input.scopeKey).toContain("thread-123");
+    expect(result.text).toBe("ok");
+    const input = mockCallArg(supervisorSpawnMock) as {
+      argv?: string[];
+      mode?: string;
+      timeoutMs?: number;
+      noOutputTimeoutMs?: number;
+      replaceExistingScope?: boolean;
+      scopeKey?: string;
+    };
+    expect(input.mode).toBe("child");
+    expect(input.argv).toEqual([
+      "codex",
+      "exec",
+      "resume",
+      "thread-123",
+      "--skip-git-repo-check",
+      "--model",
+      "gpt-5.4",
+      "hi",
+    ]);
+    expect(input.timeoutMs).toBe(1_000);
+    expect(input.noOutputTimeoutMs).toBeGreaterThanOrEqual(1_000);
+    expect(input.replaceExistingScope).toBe(true);
+    expect(input.scopeKey).toContain("thread-123");
 
-      const turnLog = logInfoSpy.mock.calls
-        .map(([message]) => message)
-        .find((message) => message.startsWith("cli turn:"));
-      expect(turnLog).toContain("provider=codex-cli");
-      expect(turnLog).toContain("model=gpt-5.4");
-      expect(turnLog).toContain("outBytes=2 outHash=2689367b205c");
-      expect(turnLog).not.toContain("ok");
-    } finally {
-      logInfoSpy.mockRestore();
-    }
+    const turnLog = logInfoSpy.mock.calls
+      .map(([message]) => message)
+      .find((message) => message.startsWith("cli turn:"));
+    expect(turnLog).toContain("provider=codex-cli");
+    expect(turnLog).toContain("model=gpt-5.4");
+    expect(turnLog).toContain("outBytes=2 outHash=2689367b205c");
+    expect(turnLog).not.toContain("ok");
   });
 
   it("rejects Gemini stream-json error results emitted with a zero exit code", async () => {
-    supervisorSpawnMock.mockResolvedValueOnce(
-      createManagedRun({
-        ...createSuccessfulProcessExit(),
-        stdout:
-          [
-            JSON.stringify({
-              type: "message",
-              role: "assistant",
-              content: "partial text",
-              delta: true,
-            }),
-            JSON.stringify({
-              type: "result",
-              status: "error",
-              error: {
-                message: "Gemini stream failed",
-              },
-            }),
-          ].join("\n") + "\n",
-      }),
+    mockSuccessfulCliRun(
+      [
+        JSON.stringify({
+          type: "message",
+          role: "assistant",
+          content: "partial text",
+          delta: true,
+        }),
+        JSON.stringify({
+          type: "result",
+          status: "error",
+          error: {
+            message: "Gemini stream failed",
+          },
+        }),
+      ].join("\n") + "\n",
     );
 
     await expectRejectsWithFields(
@@ -1346,14 +1300,12 @@ describe("runCliAgent spawn path", () => {
   it("preserves completed output when system prompt cleanup fails after delivery", async () => {
     const cleanupError = new Error("system prompt cleanup failed");
     const logWarnSpy = vi.spyOn(cliBackendLog, "warn").mockImplementation(() => undefined);
-    setCliRunnerExecuteTestDeps({
-      writeCliSystemPromptFile: async () => ({
-        filePath: "/tmp/system-prompt.md",
-        cleanup: async () => {
-          throw cleanupError;
-        },
-      }),
-    });
+    vi.spyOn(cliHelpers, "writeCliSystemPromptFile").mockImplementation(async () => ({
+      filePath: "/tmp/system-prompt.md",
+      cleanup: async () => {
+        throw cleanupError;
+      },
+    }));
     supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
       const input = args[0] as Parameters<ReturnType<typeof getProcessSupervisor>["spawn"]>[0];
       const captureHandle = markMcpLoopbackToolCallStarted({
@@ -1382,7 +1334,6 @@ describe("runCliAgent spawn path", () => {
     });
 
     const result = await executePreparedCliRun(context);
-    setCliRunnerExecuteTestDeps({ writeCliSystemPromptFile });
 
     expect(result.text).toBe("done");
     expect(result.didSendViaMessagingTool).toBe(true);
@@ -1395,14 +1346,12 @@ describe("runCliAgent spawn path", () => {
     const runId = "run-claude-cleanup-failure";
     const diagnostics = captureModelCallDiagnostics(runId);
     const cleanupError = new Error("system prompt cleanup failed");
-    setCliRunnerExecuteTestDeps({
-      writeCliSystemPromptFile: async () => ({
-        filePath: "/tmp/system-prompt.md",
-        cleanup: async () => {
-          throw cleanupError;
-        },
-      }),
-    });
+    vi.spyOn(cliHelpers, "writeCliSystemPromptFile").mockImplementation(async () => ({
+      filePath: "/tmp/system-prompt.md",
+      cleanup: async () => {
+        throw cleanupError;
+      },
+    }));
     mockSuccessfulCliRun(CLAUDE_OK_JSONL);
 
     try {
@@ -1420,7 +1369,6 @@ describe("runCliAgent spawn path", () => {
       expect(diagnostics.events[1]?.event.callId).toBe(diagnostics.events[0]?.event.callId);
     } finally {
       diagnostics.stop();
-      setCliRunnerExecuteTestDeps({ writeCliSystemPromptFile });
     }
   });
 

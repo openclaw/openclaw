@@ -34,55 +34,78 @@ function utcDay(epochSeconds: number): string {
   return new Date(epochSeconds * 1000).toISOString().slice(0, 10);
 }
 
-async function fetchPages(params: {
-  baseUrl: string;
-  groupBy: "line_item" | "model";
-  apiKey: string;
-  projectId?: string;
-  startTime: number;
-  endTime: number;
-  periodDays: number;
-  timeoutMs: number;
-  fetchFn: typeof fetch;
-}): Promise<{ ok: true; data: unknown[] } | { ok: false; status?: number }> {
-  return await fetchProviderUsagePages({
-    responseLabel: "OpenAI usage",
-    responseMaxBytes: OPENAI_USAGE_RESPONSE_MAX_BYTES,
-    timeoutMs: params.timeoutMs,
-    fetchFn: params.fetchFn,
-    buildRequest: (page) => {
-      const url = new URL(params.baseUrl);
-      url.searchParams.set("start_time", String(params.startTime));
-      url.searchParams.set("end_time", String(params.endTime));
-      url.searchParams.set("bucket_width", "1d");
-      url.searchParams.set("limit", String(params.periodDays));
-      url.searchParams.set("group_by", params.groupBy);
-      if (params.projectId) {
-        url.searchParams.set("project_ids", params.projectId);
-      }
-      if (page) {
-        url.searchParams.set("page", page);
-      }
-      return {
-        url,
-        headers: {
-          Accept: "application/json",
-          Authorization: `Bearer ${params.apiKey}`,
-        },
-      };
-    },
+export async function fetchOpenAIUsage(
+  ctx: ProviderFetchUsageSnapshotContext,
+): Promise<ProviderUsageSnapshot> {
+  const adminKey = decodeProviderUsageAdminToken(OPENAI_ADMIN_TOKEN_PREFIX, ctx.token);
+  if (!adminKey) {
+    const snapshot = await fetchCodexUsage(ctx.token, ctx.accountId, ctx.timeoutMs, ctx.fetchFn);
+    if (snapshot.error) {
+      return snapshot;
+    }
+    // ChatGPT access tokens carry the account email as a JWT claim; the auth
+    // profile stores no email for these logins.
+    const { token: accessToken, email: profileEmail } = ctx;
+    const accountEmail =
+      resolveOpenAICodexAuthIdentity({ access: accessToken, email: profileEmail }).email ??
+      profileEmail;
+    return accountEmail ? { ...snapshot, accountEmail } : snapshot;
+  }
+  const projectId = cleanProviderUsageCredential(ctx.env.OPENAI_PROJECT_ID);
+  const period = resolveProviderUsageDailyPeriod({
+    now: Date.now(),
+    defaultPeriodDays: OPENAI_USAGE_HISTORY_DAYS,
   });
-}
-
-function aggregateHistory(params: {
-  costs: unknown[];
-  completions: unknown[];
-  periodDays: number;
-  projectId?: string;
-}): ProviderUsageSnapshot {
+  const periodStartTime = Math.floor(period.startMs / 1000);
+  const periodEndTime = Math.floor(period.endMs / 1000);
+  const fetchPages = (baseUrl: string, groupBy: "line_item" | "model") =>
+    fetchProviderUsagePages({
+      responseLabel: "OpenAI usage",
+      responseMaxBytes: OPENAI_USAGE_RESPONSE_MAX_BYTES,
+      timeoutMs: ctx.timeoutMs,
+      fetchFn: ctx.fetchFn,
+      buildRequest: (page) => {
+        const url = new URL(baseUrl);
+        url.searchParams.set("start_time", String(periodStartTime));
+        url.searchParams.set("end_time", String(periodEndTime));
+        url.searchParams.set("bucket_width", "1d");
+        url.searchParams.set("limit", String(period.periodDays));
+        url.searchParams.set("group_by", groupBy);
+        if (projectId) {
+          url.searchParams.set("project_ids", projectId);
+        }
+        if (page) {
+          url.searchParams.set("page", page);
+        }
+        return {
+          url,
+          headers: {
+            Accept: "application/json",
+            Authorization: `Bearer ${adminKey}`,
+          },
+        };
+      },
+    });
+  const [costs, completions] = await Promise.all([
+    fetchPages(OPENAI_COSTS_URL, "line_item"),
+    fetchPages(OPENAI_COMPLETIONS_USAGE_URL, "model"),
+  ]);
+  if (!costs.ok || !completions.ok) {
+    const failedStatus = !costs.ok
+      ? costs.status
+      : !completions.ok
+        ? completions.status
+        : undefined;
+    if (failedStatus === 401 || failedStatus === 403) {
+      return buildUsageErrorSnapshot("openai", "Admin API key required");
+    }
+    return failedStatus
+      ? buildUsageHttpErrorSnapshot({ provider: "openai", status: failedStatus })
+      : buildUsageErrorSnapshot("openai", "Usage unavailable");
+  }
   const daily = new Map<number, ReturnType<typeof createProviderUsageDailyAccumulator>>();
   for (const kind of ["costs", "completions"] as const) {
-    for (const rawBucket of params[kind]) {
+    for (const rawBucket of kind === "costs" ? costs.data : completions.data) {
       const bucket = asProviderUsageObject(rawBucket);
       const startTime = parseProviderUsageNumber(bucket?.start_time);
       if (startTime === undefined || !Array.isArray(bucket?.results)) {
@@ -142,60 +165,13 @@ function aggregateHistory(params: {
   return buildProviderUsageHistorySnapshot({
     provider: "openai",
     displayName: "OpenAI",
-    plan: params.projectId ? `Admin API · ${params.projectId}` : "Admin API",
-    periodDays: params.periodDays,
+    plan: projectId ? `Admin API · ${projectId}` : "Admin API",
+    periodDays: period.periodDays,
     unit: "USD",
-    ...(params.projectId ? { scope: `Project ${params.projectId}` } : {}),
+    ...(projectId ? { scope: `Project ${projectId}` } : {}),
     daily: daily.values(),
     formatSummary: ({ requests, totalTokens }) =>
       `${requests.toLocaleString("en-US")} requests · ${totalTokens.toLocaleString("en-US")} tokens`,
-  });
-}
-
-async function fetchOpenAIAdminUsage(params: {
-  apiKey: string;
-  projectId?: string;
-  timeoutMs: number;
-  fetchFn: typeof fetch;
-  now?: number;
-  periodDays?: number;
-}): Promise<ProviderUsageSnapshot> {
-  const period = resolveProviderUsageDailyPeriod({
-    now: params.now ?? Date.now(),
-    periodDays: params.periodDays,
-    defaultPeriodDays: OPENAI_USAGE_HISTORY_DAYS,
-  });
-  const common = {
-    apiKey: params.apiKey,
-    projectId: params.projectId,
-    startTime: Math.floor(period.startMs / 1000),
-    endTime: Math.floor(period.endMs / 1000),
-    periodDays: period.periodDays,
-    timeoutMs: params.timeoutMs,
-    fetchFn: params.fetchFn,
-  };
-  const [costs, completions] = await Promise.all([
-    fetchPages({ ...common, baseUrl: OPENAI_COSTS_URL, groupBy: "line_item" }),
-    fetchPages({ ...common, baseUrl: OPENAI_COMPLETIONS_USAGE_URL, groupBy: "model" }),
-  ]);
-  if (!costs.ok || !completions.ok) {
-    const failedStatus = !costs.ok
-      ? costs.status
-      : !completions.ok
-        ? completions.status
-        : undefined;
-    if (failedStatus === 401 || failedStatus === 403) {
-      return buildUsageErrorSnapshot("openai", "Admin API key required");
-    }
-    return failedStatus
-      ? buildUsageHttpErrorSnapshot({ provider: "openai", status: failedStatus })
-      : buildUsageErrorSnapshot("openai", "Usage unavailable");
-  }
-  return aggregateHistory({
-    costs: costs.data,
-    completions: completions.data,
-    periodDays: period.periodDays,
-    projectId: params.projectId,
   });
 }
 
@@ -217,29 +193,4 @@ export async function resolveOpenAIUsageAuth(
   // Inference keys may belong to custom, Azure, or agent-local endpoints. Only
   // the dedicated admin credential may cross to api.openai.com organization APIs.
   return { handled: true };
-}
-
-export async function fetchOpenAIUsage(
-  ctx: ProviderFetchUsageSnapshotContext,
-): Promise<ProviderUsageSnapshot> {
-  const adminKey = decodeProviderUsageAdminToken(OPENAI_ADMIN_TOKEN_PREFIX, ctx.token);
-  if (!adminKey) {
-    const snapshot = await fetchCodexUsage(ctx.token, ctx.accountId, ctx.timeoutMs, ctx.fetchFn);
-    if (snapshot.error) {
-      return snapshot;
-    }
-    // ChatGPT access tokens carry the account email as a JWT claim; the auth
-    // profile stores no email for these logins.
-    const { token: accessToken, email: profileEmail } = ctx;
-    const accountEmail =
-      resolveOpenAICodexAuthIdentity({ access: accessToken, email: profileEmail }).email ??
-      profileEmail;
-    return accountEmail ? { ...snapshot, accountEmail } : snapshot;
-  }
-  return await fetchOpenAIAdminUsage({
-    apiKey: adminKey,
-    projectId: cleanProviderUsageCredential(ctx.env.OPENAI_PROJECT_ID),
-    timeoutMs: ctx.timeoutMs,
-    fetchFn: ctx.fetchFn,
-  });
 }

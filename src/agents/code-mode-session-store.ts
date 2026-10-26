@@ -1,8 +1,9 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sameSessionTranscriptTargetBinding } from "../config/sessions/transcript-target-binding.js";
+import { captureOwnedTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
 import { stringifyCodeModeJsonSafe } from "./code-mode-json.js";
 import type { PendingBridgeRequest } from "./code-mode-worker-types.js";
-import type { SessionEntry, SessionManager } from "./sessions/session-manager.js";
+import type { SessionManager } from "./sessions/session-manager.js";
 import type { ToolSearchCatalogRef, ToolSearchToolContext } from "./tool-search-types.js";
 
 const CUSTOM_TYPE = "openclaw.code-mode-store";
@@ -96,10 +97,11 @@ function applyWrites(projection: Projection, writes: ReadonlyMap<string, StoredV
   return next;
 }
 
-function replay(entries: readonly SessionEntry[]): Projection {
-  let projection: Projection = new Map();
+function replay(entries: readonly unknown[]): Projection {
+  const projection: Projection = new Map();
+  let bytes = 0;
   for (const entry of entries) {
-    if (entry.type !== "custom" || entry.customType !== CUSTOM_TYPE) {
+    if (!isRecord(entry) || entry.type !== "custom" || entry.customType !== CUSTOM_TYPE) {
       continue;
     }
     const data = entry.data;
@@ -113,7 +115,6 @@ function replay(entries: readonly SessionEntry[]): Projection {
         "Code Mode session store contains an invalid transcript entry; repair the session before using store/load.",
       );
     }
-    const writes = new Map<string, StoredValue | null>();
     for (const [key, value] of Object.entries(data.set)) {
       const networkContent = data.networkContent[key];
       if (typeof networkContent !== "boolean") {
@@ -121,12 +122,23 @@ function replay(entries: readonly SessionEntry[]): Projection {
           "Code Mode session store contains invalid content provenance; repair the session before using store/load.",
         );
       }
-      writes.set(readKey(key), encode(value, networkContent));
+      const name = readKey(key);
+      const encoded = encode(value, networkContent);
+      bytes += encoded.bytes - (projection.get(name)?.bytes ?? 0);
+      projection.set(name, encoded);
     }
     for (const key of data.delete) {
-      writes.set(readKey(key), null);
+      const name = readKey(key);
+      bytes -= projection.get(name)?.bytes ?? 0;
+      projection.delete(name);
     }
-    projection = applyWrites(projection, writes);
+    // Replay owns this map. Preserve historical budget errors, but check the
+    // total only after the entry's deletes, just like a committed cell's writes.
+    if (bytes > MAX_TOTAL_BYTES) {
+      throw new RangeError(
+        "Code Mode store exceeds 1 MiB of serialized JSON; delete keys or store less data.",
+      );
+    }
   }
   return projection;
 }
@@ -202,7 +214,8 @@ export function createCodeModeSessionStoreAccess(ctx: ToolSearchToolContext, sig
     active.projection ??= (async () => {
       const manager = active.manager;
       if (target) {
-        const { SessionManager } = await import("./sessions/session-manager.js");
+        const { prepareSessionManagerHydration } =
+          await import("./sessions/session-manager-incognito.js");
         assertOwner();
         const replaySignal = ctx.abortSignal
           ? AbortSignal.any([ctx.abortSignal, active.controller.signal])
@@ -210,20 +223,24 @@ export function createCodeModeSessionStoreAccess(ctx: ToolSearchToolContext, sig
         return active.withOwnedTranscriptWrite(async () => {
           assertOwner();
           const leaf = manager.getLeafId();
-          const full = await SessionManager.openAsync(
-            target,
-            manager.getCwd(),
-            undefined,
-            replaySignal,
-          );
+          const reader = prepareSessionManagerHydration(target, { signal: replaySignal, manager });
+          const assertOwned = captureOwnedTranscriptWriteAssertion(reader.target);
+          assertOwned();
+          const { events } = await reader
+            .readMaintenance({
+              operation: "custom-branch",
+              leafEntryId: leaf,
+              customType: CUSTOM_TYPE,
+            })
+            .finally(assertOwned);
+          reader.assertCurrent();
           assertOwner();
-          if (manager.getLeafId() !== leaf || (leaf !== null && !full.getEntry(leaf))) {
+          if (manager.getLeafId() !== leaf || !events) {
             throw new Error(
               "Code Mode session store could not match the active transcript branch; retry in a new reply.",
             );
           }
-          const entries = leaf === null ? [] : full.getBranch(leaf);
-          return replay(entries);
+          return replay(events);
         });
       }
       return replay(manager.getBranch());

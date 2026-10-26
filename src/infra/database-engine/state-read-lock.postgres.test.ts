@@ -1,8 +1,9 @@
+import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { getEnvironmentData } from "node:worker_threads";
 import pg from "pg";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
@@ -10,6 +11,10 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import { readUserBackgroundCommand } from "../../state/user-background.kernel.js";
+import {
+  ensureUserBackgroundSchema,
+  writeUserBackgroundImage,
+} from "../../state/user-background.store.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { retireSqliteDatabaseAdmissionForPath } from "../sqlite-database-admission.js";
 import { runSqliteReadSnapshotSync } from "../sqlite-transaction.js";
@@ -23,8 +28,9 @@ const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.
 const connection = typeof configured === "string" ? configured : undefined;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-describe.skipIf(!connection)("PostgreSQL state read snapshots", () => {
-  it("reads backgrounds while a writer holds the store lock and joins enclosing snapshots", async () => {
+it.skipIf(!connection)(
+  "reads backgrounds while a writer holds the store lock and joins enclosing snapshots",
+  async () => {
     const directory = tempDirs.make("state-read-lock-");
     const pathname = path.join(directory, "state.sqlite");
     const options = { path: pathname, env: { ...process.env, OPENCLAW_STATE_DIR: directory } };
@@ -41,10 +47,16 @@ describe.skipIf(!connection)("PostgreSQL state read snapshots", () => {
         const secondProfile = ensureProfileForEmail("second@example.test", options);
         const opened = openOpenClawStateDatabase(options);
         const physical = getPostgresPhysicalFacts(opened.db);
-        if (!physical) {
-          throw new Error("Expected PostgreSQL state admission");
-        }
+        assert(physical, "Expected PostgreSQL state admission");
         opened.db.exec("SET lock_timeout = '100ms'");
+        ensureUserBackgroundSchema(options);
+        writeUserBackgroundImage(opened.db, {
+          profile_id: secondProfile.id,
+          asset_id: "target-background",
+          image: Buffer.from([255, 216, 255, 217]),
+          width: 1,
+          height: 1,
+        });
         return { database: opened, first: firstProfile, second: secondProfile, facts: physical };
       });
       namespace = facts.namespace;
@@ -53,25 +65,20 @@ describe.skipIf(!connection)("PostgreSQL state read snapshots", () => {
           type: "userBackground.snapshot",
           profileId: first.id,
         });
-        if (reply.type !== "userBackground.snapshot") {
-          throw new Error("Expected background snapshot");
-        }
+        assert(reply.type === "userBackground.snapshot", "Expected background snapshot");
         return reply;
       };
       await blocker.query("BEGIN");
       await blocker.query("SELECT pg_advisory_xact_lock($1::bigint)", [
         createHash("sha256").update(facts.storeId).digest().readBigInt64BE().toString(),
       ]);
-      expect(withEngineStoreAdmission(read)).toEqual({
-        type: "userBackground.snapshot",
-        profileId: first.id,
-        result: { status: "ok", asset: null, preference: null },
-      });
+      const empty = { status: "ok", asset: null, preference: null };
+      expect(withEngineStoreAdmission(read).result).toEqual(empty);
       await blocker.query("ROLLBACK");
 
       withEngineStoreAdmission(() => {
         runSqliteReadSnapshotSync(database.db, () => {
-          expect(read().profileId).toBe(first.id);
+          expect(read().result).toEqual(empty);
           expect(database.db.isTransaction).toBe(true);
           expect(
             database.db.prepare("SHOW transaction_read_only").get()?.transaction_read_only,
@@ -84,14 +91,24 @@ describe.skipIf(!connection)("PostgreSQL state read snapshots", () => {
                 second.id,
                 first.id,
               );
-              expect(read().profileId).toBe(second.id);
+              expect(read().result).toEqual({
+                status: "ok",
+                asset: {
+                  assetId: "target-background",
+                  width: 1,
+                  height: 1,
+                  mime: "image/jpeg",
+                  byteLength: 4,
+                },
+                preference: null,
+              });
               expect(db.isTransaction).toBe(true);
               throw new Error("rollback enclosing write");
             },
             { database },
           ),
         ).toThrow("rollback enclosing write");
-        expect(read().profileId).toBe(first.id);
+        expect(read().result).toEqual(empty);
       });
     } finally {
       await blocker.query("ROLLBACK");
@@ -106,5 +123,5 @@ describe.skipIf(!connection)("PostgreSQL state read snapshots", () => {
         await blocker.end();
       }
     }
-  });
-});
+  },
+);

@@ -42,7 +42,7 @@ export async function stageUserTurnPendingInput(
   try {
     return await stageSessionPendingInput(
       { ...target, ...runtimeTarget },
-      { ...stageOptions, config },
+      { ...stageOptions, assertFreshInputCurrent: recorder.assertOriginalInputCommit, config },
     );
   } catch (error) {
     return retainUncertainInputMedia(recorder, error);

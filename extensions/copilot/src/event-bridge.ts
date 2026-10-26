@@ -83,7 +83,7 @@ interface EventBridgeSnapshot {
   readonly completedCount: number;
   readonly startedCount: number;
   readonly streamError: Error | undefined;
-  readonly toolMetas: ReadonlyArray<AgentHarnessAttemptResult["toolMetas"][number]>;
+  readonly toolMetas: AgentHarnessAttemptResult["toolMetas"];
   readonly usage: AssistantUsageSnapshot | undefined;
 }
 

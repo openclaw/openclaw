@@ -36,6 +36,7 @@ import {
   hookMocks,
   messageAuditMocks,
   mocks,
+  mockSessionStorePath,
   runtimePluginMocks,
   sessionStoreMocks,
   transcriptMocks,
@@ -60,6 +61,16 @@ import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 import { buildChannelSourceTurnId } from "./source-turn-id.js";
 import { buildTestCtx } from "./test-ctx.js";
+
+function createSlackChannelCtx(fields: Partial<MsgContext>) {
+  return buildTestCtx({
+    Provider: "slack",
+    Surface: "slack",
+    OriginatingChannel: "slack",
+    OriginatingTo: "channel:C123",
+    ...fields,
+  });
+}
 
 beforeAll(dispatchHarness.globalBeforeAll0);
 
@@ -120,7 +131,7 @@ describe("dispatchReplyFromConfig", () => {
       sessionKey,
       sessionId,
       expectedSessionId: sessionId,
-      storePath: "/tmp/mock-sessions.json",
+      storePath: mockSessionStorePath,
       kind: "visible",
       resetTriggered: false,
       routeThreadId: "500.000",
@@ -376,135 +387,6 @@ describe("dispatchReplyFromConfig", () => {
     },
   );
 
-  it("skips a Telegram topic heartbeat turn while a reply operation is active", async () => {
-    setNoAbort();
-    const sessionKey = "agent:main:telegram:group:-1003774691294:topic:3731";
-    const activeOperation = createReplyOperation({
-      sessionKey,
-      sessionId: "user-session",
-      resetTriggered: false,
-    });
-    activeOperation.setPhase("running");
-    const dispatcher = createDispatcher();
-    const replyResolver = vi.fn(
-      async () => ({ text: "heartbeat should not run" }) satisfies ReplyPayload,
-    );
-
-    const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "telegram",
-        Surface: "telegram",
-        OriginatingChannel: "telegram",
-        SessionKey: sessionKey,
-        ChatType: "group",
-        IsForum: true,
-        MessageSid: "heartbeat",
-        MessageThreadId: 3731,
-        TransportThreadId: 3731,
-        To: "telegram:-1003774691294:topic:3731",
-        BodyForAgent: "[OpenClaw heartbeat poll]",
-      }),
-      cfg: automaticGroupReplyConfig,
-      dispatcher,
-      replyOptions: { isHeartbeat: true },
-      replyResolver,
-    });
-
-    expect(result).toMatchObject({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-    });
-    expect(replyResolver).not.toHaveBeenCalled();
-    expect(dispatchHarness.getSessionControllerOperation(sessionKey)).toBe(activeOperation);
-    expect(messageAuditMocks.emitTrustedMessageAuditEvent).toHaveBeenCalledOnce();
-    expect(messageAuditEvents()[0]).toEqual(
-      expect.objectContaining({
-        status: "blocked",
-        outcome: "skipped",
-        reasonCode: "reply_operation_active",
-      }),
-    );
-    activeOperation.complete();
-  });
-
-  it("lets a visible source supersede an active heartbeat before waiting for its mailbox claim", async ({
-    signal,
-  }) => {
-    setNoAbort();
-    const sessionKey = "agent:main:discord:direct:heartbeat-yield";
-    const heartbeat = createReplyOperation({
-      sessionKey,
-      sessionId: "heartbeat-session",
-      turnKind: "heartbeat",
-      resetTriggered: false,
-    });
-    const cancelled = createDeferred();
-    const releaseProducer = createDeferred();
-    const events: string[] = [];
-    const backend = {
-      kind: "embedded" as const,
-      cancel: vi.fn(() => {
-        events.push("heartbeat-cancelled");
-        cancelled.resolve();
-      }),
-    };
-    heartbeat.attachBackend(backend);
-    heartbeat.setPhase("running");
-    const producer = (async () => {
-      await releaseProducer.promise;
-      events.push("heartbeat-producer-settled");
-      heartbeat.detachBackend(backend);
-      heartbeat.complete();
-    })();
-    const dispatcher = createDispatcher();
-    const replyResolver = vi.fn(async () => {
-      events.push("visible-resolver-started");
-      return { text: "The visible request completed." } satisfies ReplyPayload;
-    });
-    const dispatch = dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "discord",
-        Surface: "discord",
-        SessionKey: sessionKey,
-        ChatType: "direct",
-        BodyForAgent: "Please answer the visible request.",
-      }),
-      cfg: automaticDirectReplyConfig,
-      dispatcher,
-      replyResolver,
-    });
-    try {
-      await withinTest(
-        awaitGateBeforeSettlement(
-          cancelled.promise,
-          dispatch,
-          "Visible dispatch completed without preempting its heartbeat",
-        ),
-        signal,
-      );
-      expect(backend.cancel).toHaveBeenCalledExactlyOnceWith("superseded");
-      expect(heartbeat.abortSignal.aborted).toBe(true);
-      expect(dispatchHarness.getSessionControllerOperation(sessionKey)).toBe(heartbeat);
-      expect(replyResolver).not.toHaveBeenCalled();
-      releaseProducer.resolve();
-      await producer;
-      await expect(dispatch).resolves.toMatchObject({ queuedFinal: true });
-      expect(events).toEqual([
-        "heartbeat-cancelled",
-        "heartbeat-producer-settled",
-        "visible-resolver-started",
-      ]);
-      expect(replyResolver).toHaveBeenCalledOnce();
-      expect(dispatcher.sendFinalReply).toHaveBeenCalledExactlyOnceWith({
-        text: "The visible request completed.",
-      });
-    } finally {
-      releaseProducer.resolve();
-      await producer;
-      await Promise.allSettled([dispatch]);
-    }
-  });
-
   it("does not route when Provider matches OriginatingChannel (even if Surface is missing)", async () => {
     setNoAbort();
     mocks.routeReply.mockClear();
@@ -536,11 +418,7 @@ describe("dispatchReplyFromConfig", () => {
     mocks.routeReply.mockClear();
     installThreadingTestPlugin({ id: "slack" });
     const dispatcher = createReplyDispatcher({ deliver: vi.fn() });
-    const ctx = buildTestCtx({
-      Provider: "slack",
-      Surface: "slack",
-      OriginatingChannel: "slack",
-      OriginatingTo: "channel:C123",
+    const ctx = createSlackChannelCtx({
       ChatType: "group",
       SessionKey: "agent:main:slack:channel:C123",
       MessageSid: "slack-message-1",
@@ -569,7 +447,7 @@ describe("dispatchReplyFromConfig", () => {
         kind: "channel-final",
         sourceMessageId: "slack-message-1",
       },
-      storePath: "/tmp/mock-sessions.json",
+      storePath: mockSessionStorePath,
       updateMode: "inline",
       config: emptyConfig,
       beforeMessageWrite: expect.any(Function),
@@ -731,13 +609,7 @@ describe("dispatchReplyFromConfig", () => {
     transcriptMocks.appendAssistantMessageToSessionTranscript.mockClear();
 
     const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "slack",
-        Surface: "slack",
-        OriginatingChannel: "slack",
-        OriginatingTo: "channel:C123",
-        SessionKey: "agent:main:slack:channel:C123",
-      }),
+      ctx: createSlackChannelCtx({ SessionKey: "agent:main:slack:channel:C123" }),
       cfg: emptyConfig,
       dispatcher,
       replyResolver: async () => payload(),
@@ -891,11 +763,7 @@ describe("dispatchReplyFromConfig", () => {
     transcriptMocks.appendAssistantMessageToSessionTranscript.mockClear();
 
     await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "slack",
-        Surface: "slack",
-        OriginatingChannel: "slack",
-        OriginatingTo: "channel:C123",
+      ctx: createSlackChannelCtx({
         SessionKey: "agent:main:slack:channel:C123",
         MessageSid: "slack-message-2",
       }),
@@ -924,13 +792,7 @@ describe("dispatchReplyFromConfig", () => {
     transcriptMocks.appendAssistantMessageToSessionTranscript.mockClear();
 
     await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "slack",
-        Surface: "slack",
-        OriginatingChannel: "slack",
-        OriginatingTo: "channel:C123",
-        SessionKey: "agent:main:slack:channel:C123",
-      }),
+      ctx: createSlackChannelCtx({ SessionKey: "agent:main:slack:channel:C123" }),
       cfg: emptyConfig,
       dispatcher,
       replyResolver: async () => ({ text: "Hidden Slack reply" }),
@@ -973,11 +835,11 @@ describe("dispatchReplyFromConfig", () => {
     let inBandMutationRan = false;
     const rotatedSessionId = "rotated-session";
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      expect(
-        isSessionControllerWorkActive("/tmp/mock-sessions.json", [sessionKey, sessionId]),
-      ).toBe(true);
+      expect(isSessionControllerWorkActive(mockSessionStorePath, [sessionKey, sessionId])).toBe(
+        true,
+      );
       await runSessionMutation({
-        scope: "/tmp/mock-sessions.json",
+        scope: mockSessionStorePath,
         identities: [sessionKey, sessionId],
         run: async () => {
           inBandMutationRan = true;
@@ -998,7 +860,7 @@ describe("dispatchReplyFromConfig", () => {
           )?.onSessionPrepared?.({
             sessionKey,
             sessionId: rotatedSessionId,
-            storePath: "/tmp/mock-sessions.json",
+            storePath: mockSessionStorePath,
           });
         },
       });
@@ -1040,14 +902,8 @@ describe("dispatchReplyFromConfig", () => {
   it("holds a Slack bypass lease until an abort-insensitive resolver settles", async () => {
     const { activeOperation, createCtx, sessionId, sessionKey } =
       await createActiveSlackThread("U3");
-    let releaseResolver: () => void = () => {};
-    const resolverGate = new Promise<void>((resolve) => {
-      releaseResolver = resolve;
-    });
-    let signalResolverEntered: () => void = () => {};
-    const resolverEntered = new Promise<void>((resolve) => {
-      signalResolverEntered = resolve;
-    });
+    const { promise: resolverGate, resolve: releaseResolver } = createDeferred();
+    const { promise: resolverEntered, resolve: signalResolverEntered } = createDeferred();
     let signalResolverAborted: () => void = () => {};
     const resolverAborted = new Promise<void>((resolve) => {
       signalResolverAborted = resolve;
@@ -1082,7 +938,7 @@ describe("dispatchReplyFromConfig", () => {
     const mutation = externalLifecycleRequest.runInAsyncScope(
       async () =>
         await runSessionMutation({
-          scope: "/tmp/mock-sessions.json",
+          scope: mockSessionStorePath,
           identities: [sessionKey, sessionId],
           kind: "reset",
           policy: "preempt",
@@ -1093,9 +949,7 @@ describe("dispatchReplyFromConfig", () => {
         }),
     );
     expect(mutationRan).toBe(false);
-    expect(isSessionControllerWorkActive("/tmp/mock-sessions.json", [sessionKey, sessionId])).toBe(
-      true,
-    );
+    expect(isSessionControllerWorkActive(mockSessionStorePath, [sessionKey, sessionId])).toBe(true);
 
     await resolverAborted;
     releaseResolver();
@@ -1104,7 +958,7 @@ describe("dispatchReplyFromConfig", () => {
 
     expect(result.queuedFinal).toBe(false);
     expect(mutationRan).toBe(true);
-    expect(isSessionControllerWorkActive("/tmp/mock-sessions.json", [sessionKey, sessionId])).toBe(
+    expect(isSessionControllerWorkActive(mockSessionStorePath, [sessionKey, sessionId])).toBe(
       false,
     );
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
@@ -1163,9 +1017,9 @@ describe("dispatchReplyFromConfig", () => {
       activeOperation.complete();
       await vi.waitFor(
         () => {
-          expect(
-            isSessionControllerWorkActive("/tmp/mock-sessions.json", [sessionKey, sessionId]),
-          ).toBe(false);
+          expect(isSessionControllerWorkActive(mockSessionStorePath, [sessionKey, sessionId])).toBe(
+            false,
+          );
         },
         { timeout: 500 },
       );
@@ -1284,7 +1138,7 @@ describe("dispatchReplyFromConfig", () => {
       undefined,
       undefined,
       undefined,
-      { storeScope: "/tmp/mock-sessions.json" },
+      { storeScope: mockSessionStorePath },
     );
     sessionStoreMocks.currentEntry = { sessionId, updatedAt: Date.now() };
     const dispatcher = createDispatcher();
@@ -1347,7 +1201,7 @@ describe("dispatchReplyFromConfig", () => {
       undefined,
       undefined,
       undefined,
-      { storeScope: "/tmp/mock-sessions.json" },
+      { storeScope: mockSessionStorePath },
     );
     sessionStoreMocks.currentEntry = { sessionId, updatedAt: Date.now() };
     hookMocks.runner.hasHooks.mockImplementation((hookName) => hookName === "before_dispatch");
@@ -1398,14 +1252,8 @@ describe("dispatchReplyFromConfig", () => {
       status: "failed",
     };
 
-    let releaseFirstTurn: () => void = () => {};
-    const firstResolverGate = new Promise<void>((release) => {
-      releaseFirstTurn = release;
-    });
-    let signalFirstResolverEntered: () => void = () => {};
-    const firstTurnEntered = new Promise<void>((resolve) => {
-      signalFirstResolverEntered = resolve;
-    });
+    const { promise: firstResolverGate, resolve: releaseFirstTurn } = createDeferred();
+    const { promise: firstTurnEntered, resolve: signalFirstResolverEntered } = createDeferred();
     const firstReplyResolver = vi.fn(async () => {
       signalFirstResolverEntered();
       await firstResolverGate;

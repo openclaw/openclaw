@@ -4,7 +4,6 @@ import { createDeferred } from "../../../../../test/helpers/promise.js";
 import * as gatewayRelayTransport from "./gateway-relay.ts";
 import * as googleLiveTransport from "./google-live.ts";
 import { useRealtimeTalkMicrophoneFixture } from "./input.test-support.ts";
-import { createRealtimeTalkEventEmitter } from "./shared.ts";
 import type { RealtimeTalkTransport, RealtimeTalkTransportContext } from "./shared.ts";
 import * as webRtcTransport from "./webrtc.ts";
 
@@ -187,14 +186,9 @@ describe("RealtimeTalkSession", () => {
     const session = sessionFor(request, { onStatus });
     await session.start();
     const ctx = transportContext(googleInstances[0]);
-    const emit = createRealtimeTalkEventEmitter(ctx, {
-      provider: "test",
-      transport: "webrtc",
-      clientSecret: "test-session",
-    });
     ctx.callbacks.onTranscript?.({ role: "user", text: "Keep this utterance", final: true });
     ctx.callbacks.onStatus?.("error", "Microphone disconnected");
-    emit({ type: "session.closed", final: true });
+    ctx.callbacks.onTalkEvent?.({ type: "session.closed" });
     expect(googleStop).toHaveBeenCalledOnce();
     expect(onStatus).toHaveBeenLastCalledWith("error", "Microphone disconnected");
     expect(request.mock.calls.filter(([method]) => method === "talk.client.close")).toEqual([]);
@@ -207,7 +201,7 @@ describe("RealtimeTalkSession", () => {
       ),
     );
     await session.start();
-    emit({ type: "session.closed", final: true });
+    ctx.callbacks.onTalkEvent?.({ type: "session.closed" });
     expect(googleStop).toHaveBeenCalledOnce();
     expect(request.mock.calls.filter(([method]) => method === "talk.client.close")).toHaveLength(1);
     void session.stop();

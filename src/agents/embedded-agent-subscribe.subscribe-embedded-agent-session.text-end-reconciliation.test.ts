@@ -1,14 +1,13 @@
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
-import { expect, it, onTestFinished, vi } from "vitest";
+import { expect, it, vi } from "vitest";
+import { createDeliveryHarness } from "./embedded-agent-subscribe.delivery.test-support.js";
 import {
-  createSubscribedSessionHarness,
   emitAssistantTextDelta,
   emitAssistantTextEnd,
-  extractTextPayloads,
 } from "./embedded-agent-subscribe.e2e-harness.js";
 import { textAssistant } from "./test-helpers/sparse-transcript.test-support.js";
 
-type Options = Omit<Parameters<typeof createSubscribedSessionHarness>[0], "runId">;
+type Options = Parameters<typeof createDeliveryHarness>[0];
 type NativeMessage = Pick<AssistantMessage, "role" | "content"> &
   Record<"api" | "provider" | "model", string>;
 function assistant(texts: readonly string[]): NativeMessage {
@@ -21,55 +20,32 @@ function assistant(texts: readonly string[]): NativeMessage {
   };
 }
 function setup(options: Options = {}, startNative = true) {
-  const onBlockReply = vi.fn();
   const onAgentEvent = vi.fn();
-  const harness = createSubscribedSessionHarness({
-    runId: "run",
-    onBlockReply,
-    onAgentEvent,
-    blockReplyBreak: "text_end",
-    ...options,
-  });
-  onTestFinished(() => harness.subscription.unsubscribe());
-  const { emit } = harness;
+  const harness = createDeliveryHarness({ onAgentEvent, ...options });
+  const { emit, start, update } = harness;
   if (startNative) {
-    emit({ type: "message_start", message: assistant([]) });
+    start(assistant([]));
   }
-  const readTexts = () => extractTextPayloads(onBlockReply.mock.calls);
   function nativeEvent(
     type: "text_delta" | "text_end",
     message: NativeMessage,
     index: number,
     text: string,
   ) {
-    emit({
-      type: "message_update",
-      message,
-      assistantMessageEvent: {
-        type,
-        contentIndex: index,
-        ...(type === "text_delta" ? { delta: text } : { content: text }),
-        partial: message,
-      },
+    update(message, {
+      type,
+      contentIndex: index,
+      ...(type === "text_delta" ? { delta: text } : { content: text }),
+      partial: message,
     });
   }
   return {
     ...harness,
-    onBlockReply,
-    texts: readTexts,
-    flush: async (expected: readonly string[], history = false, calls?: number) => {
-      await harness.subscription.waitForPendingEvents();
-      expect(readTexts()).toEqual(expected);
-      if (history) {
-        expect(harness.subscription.assistantTexts).toEqual(expected);
-      }
-      if (calls !== undefined) {
-        expect(onBlockReply).toHaveBeenCalledTimes(calls);
-      }
-    },
     finish: (texts: readonly string[]) => emit({ type: "message_end", message: assistant(texts) }),
-    plainStart: () => emit({ type: "message_start", message: { role: "assistant" } }),
-    plainEnd: (content: string) => emitAssistantTextEnd({ emit, content }),
+    plainReply: (content: string) => {
+      start();
+      emitAssistantTextEnd({ emit, content });
+    },
     delta: (texts: readonly string[], index: number, delta = texts[index] ?? "") =>
       nativeEvent("text_delta", assistant(texts), index, delta),
     end: (texts: readonly string[], index: number) =>
@@ -214,6 +190,9 @@ it("does not read future blocks from shared mutable text_end partials", async ()
   }
   h.emit({ type: "message_end", message: partial });
   await h.flush(["First", "Second"], true, 2);
+  const completedContent = partial.content;
+  partial.content = [{ type: "text", text: "Rewritten transcript reply" }];
+  expect(h.subscription.getCurrentAttemptAssistant()?.content).toEqual(completedContent);
 });
 
 it.each([
@@ -248,7 +227,7 @@ it.each([
 it("ignores an already-contained snapshot", async () => {
   const h = setup({}, false);
   emitAssistantTextDelta({ emit: h.emit, delta: "Hello world" });
-  h.plainEnd("world");
+  emitAssistantTextEnd({ emit: h.emit, content: "world" });
   await h.flush(["Hello world"], true, 1);
 });
 
@@ -264,8 +243,7 @@ it("sends only the new suffix when replies grow across tool calls", async () => 
       h.toolStart("browser", `tool-${index}`);
       await Promise.resolve();
     }
-    h.plainStart();
-    h.plainEnd(expected.slice(0, index + 1).join(""));
+    h.plainReply(expected.slice(0, index + 1).join(""));
     await h.subscription.waitForPendingEvents();
     expect(h.onBlockReply).toHaveBeenCalledTimes(index + 1);
   }
@@ -274,8 +252,7 @@ it("sends only the new suffix when replies grow across tool calls", async () => 
 
 it("does not safety-send a cumulative reply whose suffix a messaging tool sent", async () => {
   const h = setup({}, false);
-  h.plainStart();
-  h.plainEnd("Checking:");
+  h.plainReply("Checking:");
   await h.subscription.waitForPendingEvents();
   expect(h.onBlockReply).toHaveBeenCalledTimes(1);
   h.toolStart("message", "message-tool-1", {
@@ -292,8 +269,7 @@ it("does not safety-send a cumulative reply whose suffix a messaging tool sent",
     result: { details: { status: "sent" } },
   });
   await h.subscription.waitForPendingEvents();
-  h.plainStart();
-  h.plainEnd("Checking: Fetched prices");
+  h.plainReply("Checking: Fetched prices");
   await Promise.resolve();
   h.emit({ type: "message_end", message: textAssistant("Checking: Fetched prices") });
   await h.flush(["Checking:"]);
@@ -309,25 +285,11 @@ it("preserves split reply directives after a delivered chunk through text_end", 
   }
   const text = "Visible text.\n[[reply_to:target]]Bye";
   const message = assistant([text]);
-  h.emit({
-    type: "message_update",
-    message,
-    assistantMessageEvent: { type: "text_end", content: text, partial: message },
-  });
+  h.update(message, { type: "text_end", content: text, partial: message });
   await h.flush(["Visible text.", "Bye"]);
   expect(h.onBlockReply.mock.calls.at(-1)?.[0]).toMatchObject({
     text: "Bye",
     replyToId: "target",
     replyToTag: true,
   });
-});
-
-it("keeps the completed assistant independent from transcript mutation", () => {
-  const { emit, subscription } = setup({}, false);
-  const message = textAssistant("Current run reply");
-  emit({ type: "message_end", message });
-  message.content = [{ type: "text", text: "Rewritten transcript reply" }];
-  expect(subscription.getCurrentAttemptAssistant()?.content).toEqual([
-    { type: "text", text: "Current run reply" },
-  ]);
 });

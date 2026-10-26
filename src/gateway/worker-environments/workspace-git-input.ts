@@ -53,6 +53,7 @@ export async function writeWorkspaceGitInput(params: {
   entries: readonly WorkerWorkspaceManifestEntry[];
   readVerifiedContent: (entry: WorkerWorkspaceManifestEntry) => Promise<Uint8Array>;
   message?: { chunks: readonly Uint8Array[]; byteLength: number };
+  parentCommit?: string;
   assertBeforeMutation?: () => void;
 }): Promise<void> {
   const entries = params.entries.toSorted((left, right) => left.path.localeCompare(right.path));
@@ -67,7 +68,7 @@ export async function writeWorkspaceGitInput(params: {
       `commit ${params.ref}\nmark :${entries.length + 1}\nauthor OpenClaw <openclaw@localhost> 0 +0000\ncommitter OpenClaw <openclaw@localhost> 0 +0000\ndata ${params.message?.byteLength ?? 0}\n`,
     );
     yield* params.message?.chunks ?? [];
-    yield Buffer.from("\ndeleteall\n");
+    yield Buffer.from(`\n${params.parentCommit ? `from ${params.parentCommit}\n` : ""}deleteall\n`);
     for (let offset = 0; offset < entries.length; offset += 256) {
       yield Buffer.from(
         entries

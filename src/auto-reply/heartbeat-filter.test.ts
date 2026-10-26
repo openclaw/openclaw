@@ -41,6 +41,10 @@ function functionResult(call_id: string, output: string) {
   return user([{ type: "function_call_output", call_id, output }]);
 }
 
+function toolCall(name: string, args: unknown, id = "call_heartbeat") {
+  return { type: "toolCall", id, name, arguments: args };
+}
+
 function toolResult(toolCallId: string, text: string, isError?: boolean) {
   return {
     role: "toolResult",
@@ -69,7 +73,7 @@ function heartbeatCall(type: "toolCall" | "tool_use", attention = true) {
   return assistant([
     type === "tool_use"
       ? { type, id: "toolu_heartbeat", name: "heartbeat_respond", input: outcome }
-      : { type, id: "call_heartbeat", name: "heartbeat_respond", arguments: outcome },
+      : toolCall("heartbeat_respond", outcome),
   ]);
 }
 
@@ -101,6 +105,14 @@ describe("isHeartbeatUserMessage", () => {
       );
     }
 
+    expect(
+      isHeartbeatUserMessage(
+        user(
+          "Run the following periodic tasks (only those due based on their intervals):\n\n- email-check: Check for urgent unread emails\n\nAfter completing all due tasks, reply with exactly NO_REPLY as the entire final answer. NO_REPLY discards anything written this turn that was not sent, so send confirmations before ending silently.",
+        ),
+      ),
+    ).toBe(true);
+
     for (const completion of [
       "After completing all due tasks, use heartbeat_respond to report the outcome. Set notify=false when nothing needs the user's attention.",
       `After completing all due tasks:\n${HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS}`,
@@ -117,6 +129,37 @@ describe("isHeartbeatUserMessage", () => {
       `${resolveHeartbeatPromptForResponseTool(customHeartbeatPrompt)}\n\nUse workspace notes only.`,
       customHeartbeatPrompt,
     );
+  });
+  it("recognizes complete silent completion frames without treating quotes as wake inputs", () => {
+    const opening =
+      "An async command completion event was triggered, but user delivery is disabled for this run. ";
+    const closing = " Do not mention, summarize, or reuse command output.";
+    for (const prefix of ["", "[Mon 2026-10-26 10:00 UTC] "]) {
+      const text = `${prefix}${opening}Handle the result internally.${closing}`;
+      expect(isHeartbeatUserMessage(user(text))).toBe(false);
+      expect(
+        isHeartbeatUserMessage({ ...user(text), __openclaw: { importedFrom: "claude-cli" } }),
+      ).toBe(false);
+      const meta = { mirrorOrigin: "claude-catalog-import" };
+      expect(isHeartbeatUserMessage({ ...user(text), __openclaw: meta })).toBe(true);
+      expect(
+        isHeartbeatUserMessage({
+          ...user(`${text}\n\nHeartbeat monitor scratch:\ncheck disk`),
+          __openclaw: meta,
+        }),
+      ).toBe(true);
+      expect(
+        isHeartbeatUserMessage({ ...user(`Please explain this:\n${text}`), __openclaw: meta }),
+      ).toBe(false);
+      expect(
+        isHeartbeatUserMessage({ ...user(text), __openclaw: meta }, undefined, {
+          heartbeatOnly: true,
+        }),
+      ).toBe(false);
+      expect(isHeartbeatUserMessage(user(text), undefined, { claudeImport: true })).toBe(true);
+    }
+    expect(isHeartbeatUserMessage(user(opening))).toBe(false);
+    expect(isHeartbeatUserMessage(user(closing))).toBe(false);
   });
 });
 
@@ -312,18 +355,8 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
     expectFiltered([
       wake,
       assistant([
-        {
-          type: "toolCall",
-          id: "call_bash",
-          name: "bash",
-          arguments: { command: "inspect monitor scratch" },
-        },
-        {
-          type: "toolCall",
-          id: "call_heartbeat",
-          name: "heartbeat_respond",
-          arguments: createHeartbeatAttentionOutcome(),
-        },
+        toolCall("bash", { command: "inspect monitor scratch" }, "call_bash"),
+        toolCall("heartbeat_respond", createHeartbeatAttentionOutcome()),
       ]),
       toolResult("call_bash", "checked monitor scratch"),
       followup,

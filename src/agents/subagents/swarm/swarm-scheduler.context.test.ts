@@ -1,130 +1,118 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { afterEach, expect, it } from "vitest";
-import {
-  getActiveDiagnosticTraceContext,
-  runWithDiagnosticTraceContext,
-} from "../../../infra/diagnostic-trace-context.js";
-import {
-  AsyncWorkScope,
-  getAsyncWorkSignal,
-  trackAsyncWork,
-} from "../../../shared/async-work-scope.js";
+import { expect, it, vi } from "vitest";
+import * as trace from "../../../infra/diagnostic-trace-context.js";
+import * as work from "../../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
-import {
-  getGatewayToolCallerIdentity,
-  withGatewayToolCallerIdentity,
-} from "../../tools/gateway-caller-context.js";
-import {
-  activateSwarmRun,
-  closeSwarmScheduler,
-  holdQueuedSwarmRun,
-  isSwarmRunActive,
-  releaseSwarmRun,
-  reserveSwarmRun,
-} from "./swarm-scheduler.js";
-import { testing } from "./swarm-scheduler.test-support.js";
-
-afterEach(() => testing.reset());
+import * as caller from "../../tools/gateway-caller-context.js";
+import * as swarm from "./swarm-scheduler.js";
 
 const readContext = () => ({
-  caller: getGatewayToolCallerIdentity(),
-  trace: getActiveDiagnosticTraceContext(),
+  caller: caller.getGatewayToolCallerIdentity(),
+  trace: trace.getActiveDiagnosticTraceContext(),
 });
-function withContext<T>(agentId: string, run: () => T, trace = "1", span = "2") {
-  return withGatewayToolCallerIdentity({ agentId, sessionKey: `agent:${agentId}:main` }, () =>
-    runWithDiagnosticTraceContext({ traceId: trace.repeat(32), spanId: span.repeat(16) }, run),
+function withContext<T>(agentId: string, run: () => T, traceDigit = "1", span = "2") {
+  const identity = { agentId, sessionKey: `agent:${agentId}:main` };
+  const context = { traceId: traceDigit.repeat(32), spanId: span.repeat(16) };
+  return caller.withGatewayToolCallerIdentity(identity, () =>
+    trace.runWithDiagnosticTraceContext(context, run),
   );
 }
 
-function createContextRun() {
-  const activation = new AsyncWorkScope();
-  const lifecycleOwner = {};
-  const observed: ReturnType<typeof readContext>[] = [];
-  const tails: Promise<void>[] = [];
-  const tailFailures: unknown[] = [];
-  const trackTail = (tail: Promise<void>) => {
-    const pending = trackAsyncWork(async () => {
-      await tail;
-      observed.push(readContext());
-    });
-    tails.push(pending);
-    void pending.catch((error: unknown) => tailFailures.push(error));
-  };
-  const activate = async (
-    launch: Pick<Parameters<typeof activateSwarmRun>[0], "start" | "onStartFailure" | "onRemoved">,
-  ) => {
-    reserveSwarmRun({
-      groupId: "context",
-      runId: "queued",
-      maxConcurrent: 1,
-      activeRunIds: ["holder"],
-    });
-    const expected = await activation.run(() =>
-      withContext("activation-agent", () => {
-        activateSwarmRun({ groupId: "context", runId: "queued", lifecycleOwner, ...launch });
-        return readContext();
-      }),
-    );
-    await activation.drain();
-    return expected;
-  };
-  const close = () => closeSwarmScheduler(lifecycleOwner);
-  const dispose = async (pending?: Promise<void>) => {
-    await pending?.catch(() => {});
-    await Promise.allSettled(tails);
-    await close();
-  };
-  return { activation, observed, tailFailures, trackTail, activate, close, dispose };
-}
-
-it.each(["success", "failure"] as const)(
-  "runs delayed %s callbacks and joins their work after the activation request retires",
-  async (outcome) => {
-    const { activation, observed, tailFailures, trackTail, activate, close, dispose } =
-      createContextRun();
-    const entered = createDeferredCore();
-    const launchTail = createDeferredCore();
-    const failureEntered = createDeferredCore();
-    const failureTail = createDeferredCore();
+it.each(["success", "failure", "cancelled", "shutdown"] as const)(
+  "retains activation context and joins callback work after %s",
+  async (mode) => {
+    const removed = mode === "cancelled" || mode === "shutdown";
+    const activation = new work.AsyncWorkScope();
+    const lifecycleOwner = {};
+    const observed: ReturnType<typeof readContext>[] = [];
     const signals: Array<AbortSignal | undefined> = [];
+    const tails: Promise<void>[] = [];
+    const tailFailures: unknown[] = [];
+    const entered = createDeferredCore();
+    const failureEntered = createDeferredCore();
+    const launchTail = createDeferredCore();
+    const failureTail = createDeferredCore();
     const failure = new Error("queued launch failed");
     const failures: unknown[] = [];
-    let closing: Promise<void> | undefined;
-    let closed = false;
-    try {
-      const expected = await activate({
-        start: async () => {
-          entered.resolve();
-          signals.push(getAsyncWorkSignal());
-          await trackAsyncWork(() => observed.push(readContext()));
-          trackTail(launchTail.promise);
-          if (outcome === "failure") {
-            throw failure;
-          }
-        },
-        onStartFailure: async (error) => {
-          failures.push(error);
-          failureEntered.resolve();
-          signals.push(getAsyncWorkSignal());
-          await trackAsyncWork(() => observed.push(readContext()));
-          trackTail(failureTail.promise);
-          return true;
-        },
+    const reasons: string[] = [];
+    const settled = vi.fn();
+    let pending: Promise<void> | undefined;
+    const close = () => swarm.closeSwarmScheduler(lifecycleOwner);
+    const record = async (tail: Promise<void>, tracked: boolean) => {
+      signals.push(work.getAsyncWorkSignal());
+      const observe = () => observed.push(readContext());
+      if (tracked) {
+        await work.trackAsyncWork(observe);
+      } else {
+        observe();
+      }
+      const pendingTail = work.trackAsyncWork(async () => {
+        await tail;
+        observe();
       });
-      expect(observed).toEqual([]);
-      await withContext(
-        "release-agent",
-        () => expect(releaseSwarmRun("holder")).toBe(true),
-        "3",
-        "4",
+      tails.push(pendingTail);
+      void pendingTail.catch((error: unknown) => tailFailures.push(error));
+    };
+    const start = vi.fn(async () => {
+      entered.resolve();
+      await record(launchTail.promise, true);
+      if (mode === "failure") {
+        throw failure;
+      }
+    });
+    const reservation = { groupId: "context", runId: "queued" };
+    swarm.reserveSwarmRun({ ...reservation, maxConcurrent: 1, activeRunIds: ["holder"] });
+    const onRemoved = async (reason: "cancelled" | "shutdown") => {
+      reasons.push(reason);
+      await record(launchTail.promise, false);
+      entered.resolve();
+    };
+    try {
+      const expected = await activation.run(() =>
+        withContext("activation-agent", () => {
+          swarm.activateSwarmRun({
+            ...reservation,
+            lifecycleOwner,
+            start,
+            onStartFailure: async (error) => {
+              failures.push(error);
+              failureEntered.resolve();
+              await record(failureTail.promise, true);
+              return true;
+            },
+            onRemoved: removed ? onRemoved : undefined,
+          });
+          return readContext();
+        }),
       );
+      await activation.drain();
+      expect(observed).toEqual([]);
+      if (removed) {
+        await withContext("removal-agent", () => {
+          if (mode === "shutdown") {
+            pending = close();
+          } else {
+            const hold = swarm.holdQueuedSwarmRun("queued");
+            expect(hold?.withdraw()).toBe(true);
+            pending = hold?.release();
+          }
+        });
+        expect(pending).toBeDefined();
+      } else {
+        await withContext(
+          "release-agent",
+          () => expect(swarm.releaseSwarmRun("holder")).toBe(true),
+          "3",
+          "4",
+        );
+      }
       await entered.promise;
       await nextTurn();
       expect(signals[0]).toBeDefined();
       expect(signals[0]).not.toBe(activation.signal);
       expect(observed).toEqual([expected]);
       expect(failures).toEqual([]);
-      if (outcome === "failure") {
+      if (mode === "failure") {
         launchTail.resolve();
         await failureEntered.promise;
         await nextTurn();
@@ -132,89 +120,31 @@ it.each(["success", "failure"] as const)(
         expect(signals[1]).toBeDefined();
         expect(signals[1]).not.toBe(activation.signal);
         expect(observed).toEqual([expected, expected, expected]);
-        expect(isSwarmRunActive("queued")).toBe(true);
+        expect(swarm.isSwarmRunActive("queued")).toBe(true);
       }
-      closing = close().then(() => {
-        closed = true;
-      });
+      pending = (pending ?? close()).finally(settled);
       await nextTurn();
-      expect(closed).toBe(false);
+      expect(settled).not.toHaveBeenCalled();
       launchTail.resolve();
       failureTail.resolve();
-      await closing;
+      await pending;
       expect(expected.caller).toBeDefined();
       expect(expected.trace).toBeDefined();
-      expect(observed).toEqual(Array(outcome === "failure" ? 4 : 2).fill(expected));
-      expect(failures).toEqual(outcome === "failure" ? [failure] : []);
+      expect(observed).toEqual(Array(mode === "failure" ? 4 : 2).fill(expected));
+      expect(failures).toEqual(mode === "failure" ? [failure] : []);
       expect(tailFailures).toEqual([]);
+      if (removed) {
+        expect(start).not.toHaveBeenCalled();
+        expect(reasons).toEqual([mode]);
+        expect(swarm.releaseSwarmRun("holder")).toBe(true);
+      }
     } finally {
       launchTail.resolve();
       failureTail.resolve();
-      await dispose(closing);
-    }
-  },
-);
-
-it.each(["cancelled", "shutdown"] as const)(
-  "keeps activation identity and joins fresh cleanup work after %s",
-  async (reason) => {
-    const { activation, observed, tailFailures, trackTail, activate, close, dispose } =
-      createContextRun();
-    const entered = createDeferredCore();
-    const tail = createDeferredCore();
-    const signals: Array<AbortSignal | undefined> = [];
-    const reasons: string[] = [];
-    let started = false;
-    let removal: Promise<void> | undefined;
-    let removalSettled = false;
-    try {
-      const expected = await activate({
-        start: async () => {
-          started = true;
-        },
-        onStartFailure: async () => true,
-        onRemoved: async (actualReason) => {
-          reasons.push(actualReason);
-          observed.push(readContext());
-          signals.push(getAsyncWorkSignal());
-          trackTail(tail.promise);
-          entered.resolve();
-        },
-      });
-      await withContext("removal-agent", () => {
-        if (reason === "shutdown") {
-          removal = close();
-        } else {
-          const hold = holdQueuedSwarmRun("queued");
-          expect(hold?.withdraw()).toBe(true);
-          removal = hold?.release();
-        }
-      });
-      expect(removal).toBeDefined();
-      void removal?.then(
-        () => {
-          removalSettled = true;
-        },
-        () => {
-          removalSettled = true;
-        },
-      );
-      await entered.promise;
-      await nextTurn();
-      expect(removalSettled).toBe(false);
-      expect(signals[0]).toBeDefined();
-      expect(signals[0]).not.toBe(activation.signal);
-      tail.resolve();
-      await removal;
-      expect(reasons).toEqual([reason]);
-      expect(started).toBe(false);
-      expect(isSwarmRunActive("holder")).toBe(true);
-      expect(releaseSwarmRun("holder")).toBe(true);
-      expect(tailFailures).toEqual([]);
-      expect(observed).toEqual([expected, expected]);
-    } finally {
-      tail.resolve();
-      await dispose(removal);
+      await pending?.catch(() => {});
+      await Promise.allSettled(tails);
+      await close();
+      swarm.releaseSwarmRun("holder");
     }
   },
 );

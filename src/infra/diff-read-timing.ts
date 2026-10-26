@@ -1,5 +1,6 @@
 import { performance } from "node:perf_hooks";
 import { createQueuedDiagnosticPhaseEmitter } from "./diagnostic-events.js";
+import { hasNodeErrorCode } from "./path-guards.js";
 
 const DIFF_READ_STAGES = [
   "admission",
@@ -9,14 +10,30 @@ const DIFF_READ_STAGES = [
   "git-wall",
   "encode",
 ] as const;
-type DiffReadStage = (typeof DIFF_READ_STAGES)[number];
+
+type DiffRevisionUnavailableReason =
+  | "oversized"
+  | "no-revision-environment"
+  | "no-revision-platform"
+  | "no-revision-metadata"
+  | "no-revision-git-installation"
+  | "no-revision-config"
+  | "no-revision-reftable"
+  | "no-revision-alternates"
+  | "no-revision-symlink"
+  | "no-revision-status"
+  | "no-revision-unmerged"
+  | "no-revision-submodule"
+  | "no-revision-permission"
+  | "no-revision-missing"
+  | "no-revision-io";
 
 export type DiffReadCacheMissReason =
   | "cold"
   | "evicted"
   | "pending"
   | "no-revision"
-  | "oversized"
+  | DiffRevisionUnavailableReason
   | "revision-changed-head"
   | "revision-changed-index"
   | "revision-changed-untracked-set"
@@ -24,11 +41,29 @@ export type DiffReadCacheMissReason =
   | "revision-changed-metadata";
 
 export type DiffReadTiming = {
-  durations: Partial<Record<DiffReadStage, number>>;
+  durations: Partial<Record<(typeof DIFF_READ_STAGES)[number], number>>;
   outcome?: "cache-hit" | "cache-miss";
   missReason?: DiffReadCacheMissReason;
-  revisionUnavailableReason?: "oversized";
+  revisionUnavailableReason?: DiffRevisionUnavailableReason;
 };
+
+export function unavailableDiffRevision(
+  timing: DiffReadTiming | undefined,
+  reason?: DiffRevisionUnavailableReason,
+  error?: unknown,
+): null {
+  if (timing) {
+    timing.revisionUnavailableReason =
+      reason ??
+      timing.revisionUnavailableReason ??
+      (hasNodeErrorCode(error, "EACCES") || hasNodeErrorCode(error, "EPERM")
+        ? "no-revision-permission"
+        : hasNodeErrorCode(error, "ENOENT") || hasNodeErrorCode(error, "ENOTDIR")
+          ? "no-revision-missing"
+          : "no-revision-io");
+  }
+  return null;
+}
 
 export function addDiffReadDurations(target: DiffReadTiming, source: DiffReadTiming) {
   for (const stage of DIFF_READ_STAGES) {

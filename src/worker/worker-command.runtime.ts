@@ -254,8 +254,9 @@ async function runManagedWorkerCommand(
             await disposeWorkerGitHubEnvironment(stateDir, descriptor.assignment.turnId);
           };
           const canRetain =
-            result.status === "completed" ||
-            (result.status === "failed" && result.reason === "turn-failed");
+            !current.controller.signal.aborted &&
+            (result.status === "completed" ||
+              (result.status === "failed" && result.reason === "turn-failed"));
           let retention: WorkerProcessResult["retention"] =
             canRetain && getActiveBackgroundExecSessionCount() > 0
               ? "background"

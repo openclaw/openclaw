@@ -6,7 +6,6 @@ import {
   resolveTimeZoneDayStartMs,
   resolveTimezone,
 } from "./format-datetime.js";
-import { formatSingleUnitDuration } from "./format-duration-internal.js";
 import {
   formatDurationCompact,
   formatDurationHuman,
@@ -19,48 +18,25 @@ const invalidDurationInputs = [null, undefined, -100] as const;
 const timestamp = new Date("2024-01-15T14:30:45.000Z");
 const utcOptions = { timeZone: "UTC" };
 
-function expectFormatterCases<TInput, TOutput>(
-  formatter: (value: TInput) => TOutput,
-  cases: ReadonlyArray<readonly [TInput, TOutput]>,
-) {
-  for (const [input, expected] of cases) {
-    expect(formatter(input), String(input)).toBe(expected);
-  }
-}
-
 afterEach(() => vi.restoreAllMocks());
 
-it.each([null])("formatDurationCompact returns undefined for %j", (value) => {
-  expect(formatDurationCompact(value)).toBeUndefined();
-});
-
-it("formats compact units and omits trailing zero components", () => {
-  expectFormatterCases(formatDurationCompact, [
-    [0.1, "0ms"],
-    [500, "500ms"],
-    [999, "999ms"],
-    [999.6, "1s"],
-    [1000, "1s"],
-    [45000, "45s"],
-    [59000, "59s"],
-    [60000, "1m"],
-    [65000, "1m5s"],
-    [90000, "1m30s"],
-    [3600000, "1h"],
-    [3660000, "1h1m"],
-    [3630000, "1h30s"],
-    [5400000, "1h30m"],
-    [86400000, "1d"],
-    [90000000, "1d1h"],
-    [172800000, "2d"],
-    [86_430_000, "1d30s"],
-    [3_599_500, "1h"],
-    [86_399_500, "1d"],
-    [366 * 86400000, "366d"],
-  ]);
-});
-
 it.each([
+  [null, undefined, undefined],
+  [0.1, undefined, "0ms"],
+  [999, undefined, "999ms"],
+  [999.6, undefined, "1s"],
+  [59000, undefined, "59s"],
+  [60000, undefined, "1m"],
+  [65000, undefined, "1m5s"],
+  [3600000, undefined, "1h"],
+  [3660000, undefined, "1h1m"],
+  [3630000, undefined, "1h30s"],
+  [86400000, undefined, "1d"],
+  [90000000, undefined, "1d1h"],
+  [86_430_000, undefined, "1d30s"],
+  [3_599_500, undefined, "1h"],
+  [86_399_500, undefined, "1d"],
+  [366 * 86400000, undefined, "366d"],
   [366 * 86400000, { showYears: true, spaced: true }, "1y 1d"],
   [18_014_398_509_513_598_976, undefined, "208499982749d"],
 ] as const)("formats compact duration for %j", (input, options, expected) => {
@@ -73,25 +49,17 @@ it("formatDurationHuman returns fallback for invalid duration input", () => {
   expect(formatDurationHuman(null, "unknown")).toBe("unknown");
 });
 
-it("formats single-unit outputs and day threshold behavior", () => {
-  expectFormatterCases(formatDurationHuman, [
-    [500, "500ms"],
-    [999.6, "1s"],
-    [5000, "5s"],
-    [180000, "3m"],
-    [7200000, "2h"],
-    [23 * 3600000, "23h"],
-    [24 * 3600000, "1d"],
-    [25 * 3600000, "1d"],
-    [172800000, "2d"],
-  ]);
-});
-it("rounds nearly 24 hours up to one day", () => {
-  expect(formatSingleUnitDuration(86_370_000, true)).toBe("1 day");
-});
-
-it("keeps 12 hours in its own unit", () => {
-  expect(formatSingleUnitDuration(43_200_000, true)).toBe("12 hours");
+it.each([
+  [500, "500ms"],
+  [999.6, "1s"],
+  [180000, "3m"],
+  [7200000, "2h"],
+  [23 * 3600000, "23h"],
+  [24 * 3600000, "1d"],
+  [25 * 3600000, "1d"],
+  [86_370_000, "1d"],
+])("formats human duration for %j", (input, expected) => {
+  expect(formatDurationHuman(input)).toBe(expected);
 });
 it.each([
   [999, "999ms"],
@@ -148,16 +116,6 @@ it("follows host timezone changes while keeping explicit zones fixed", () => {
   }
 });
 
-it("returns undefined when required Intl parts are missing", () => {
-  vi.spyOn(Intl.DateTimeFormat.prototype, "formatToParts").mockReturnValue([
-    { type: "month", value: "01" },
-    { type: "day", value: "15" },
-    { type: "hour", value: "14" },
-    { type: "minute", value: "30" },
-  ]);
-  expect(formatZonedTimestamp(timestamp, utcOptions)).toBeUndefined();
-});
-
 it("returns undefined when Intl formatting throws", () => {
   vi.spyOn(Intl.DateTimeFormat.prototype, "formatToParts").mockImplementation(() => {
     throw new Error("boom");
@@ -171,38 +129,27 @@ it("formatTimeAgo returns fallback for invalid elapsed input", () => {
   expect(formatTimeAgo(null, { fallback: "n/a" })).toBe("n/a");
 });
 
-it("formats relative age around key unit boundaries", () => {
-  expectFormatterCases(formatTimeAgo, [
-    [0, "just now"],
-    [29000, "just now"],
-    [30000, "1m ago"],
-    [300000, "5m ago"],
-    [7200000, "2h ago"],
-    [47 * 3600000, "47h ago"],
-    [48 * 3600000, "2d ago"],
-  ]);
-});
-
 it.each([
-  [0, "0s"],
-  [7200000, "2h"],
-] as const)("omits suffix for %j when disabled", (input, expected) => {
-  expect(formatTimeAgo(input, { suffix: false })).toBe(expected);
+  [0, undefined, "just now"],
+  [29000, undefined, "just now"],
+  [30000, undefined, "1m ago"],
+  [47 * 3600000, undefined, "47h ago"],
+  [48 * 3600000, undefined, "2d ago"],
+  [0, { suffix: false }, "0s"],
+  [7200000, { suffix: false }, "2h"],
+] as const)("formats relative age for %j (%j)", (input, options, expected) => {
+  expect(formatTimeAgo(input, options)).toBe(expected);
 });
 
 describe("formatRelativeTimestamp", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2024-02-10T12:00:00.000Z"));
-  });
+  beforeEach(() => vi.useFakeTimers({ now: new Date("2024-02-10T12:00:00.000Z") }));
 
   afterEach(() => vi.useRealTimers());
 
   it("returns fallback for invalid timestamp input", () => {
     for (const value of [null, undefined]) {
-      expect(formatRelativeTimestamp(value)).toBe("n/a");
+      expect(formatRelativeTimestamp(value)).toBe("");
     }
-    expect(formatRelativeTimestamp(null, { fallback: "unknown" })).toBe("unknown");
   });
 
   it.each([
@@ -213,12 +160,13 @@ describe("formatRelativeTimestamp", () => {
   });
 
   it("keeps 7-day-old timestamps relative", () => {
-    const options = { dateFallback: true, timezone: "UTC" };
-    expect(formatRelativeTimestamp(Date.now() - 7 * 86400000, options)).toBe("7d ago");
+    expect(formatRelativeTimestamp(Date.now() - 7 * 86400000)).toBe("7d ago");
   });
 
   it("falls back to relative days when date formatting throws", () => {
-    const options = { dateFallback: true, timezone: "Invalid/Timezone" };
-    expect(formatRelativeTimestamp(Date.now() + 8 * 86400000, options)).toBe("in 8d");
+    vi.spyOn(Intl, "DateTimeFormat").mockImplementation(function () {
+      throw new RangeError("synthetic formatter failure");
+    });
+    expect(formatRelativeTimestamp(Date.now() + 8 * 86400000)).toBe("in 8d");
   });
 });

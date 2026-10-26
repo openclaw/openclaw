@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { spawnSync } from "node:child_process";
-import { assert, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { parseActivityEvent, updateToolActivity, type ActivityEntry } from "./tool-activity.ts";
 
 type ActivityEvent = Parameters<typeof updateToolActivity>[1];
@@ -15,9 +15,6 @@ function buildResultPreview(result: unknown) {
   const payload = activity({ toolCallId: "tool-1", name: "bash", phase: "result", result });
   return updateToolActivity([], payload)[0]?.outputPreview;
 }
-function parseItem(data: ActivityEvent["data"], receivedAt = 10) {
-  return parseActivityEvent(activity(data, { stream: "item", ts: 10 }), receivedAt);
-}
 
 it.each([
   ["a surrogate pair at the cap", "a".repeat(1_999) + "🦞tail", "a".repeat(1_999)],
@@ -27,14 +24,12 @@ it.each([
 });
 
 it("preserves dotted API keys in object-shaped tool results", () => {
+  const secret = 'visible secret with spaces, apostrophe: don\'t, quote: "keep hidden"';
   const preview = buildResultPreview({
-    "app.api.key": 'visible secret with spaces, apostrophe: don\'t, quote: "keep hidden"',
+    "app.api.key": secret,
     "server.port": 8080,
   });
-
-  expect(JSON.parse(preview ?? "")["app.api.key"]).toBe(
-    'visible secret with spaces, apostrophe: don\'t, quote: "keep hidden"',
-  );
+  expect(JSON.parse(preview ?? "")["app.api.key"]).toBe(secret);
   expect(preview).toContain('"server.port": 8080');
 });
 it("releases large tool payloads while retaining their previews", () => {
@@ -120,26 +115,16 @@ it("retains the latest 100 tool entries without mutating earlier snapshots", () 
     Array.from({ length: 100 }, (_, index) => String(index + 1)),
   );
 });
-it("updates one ephemeral entry from candidate through authoritative selection", () => {
-  const event = (status: "candidate" | "selected", progressText: string, receivedAt: number) => {
-    const parsed = parseItem(
-      {
-        kind: "answer_candidate",
-        itemId: "answer-1",
-        status,
-        progressText,
-      },
-      receivedAt,
+it("replaces candidate text when the same item becomes authoritative", () => {
+  const candidate = (status: "candidate" | "selected", progressText: string, receivedAt: number) =>
+    activity(
+      { kind: "answer_candidate", itemId: "answer-1", status, progressText },
+      { stream: "item", ts: 10, receivedAt },
     );
-    assert(parsed, "Expected answer candidate event");
-    return parsed;
-  };
-
   const entries = updateToolActivity(
-    updateToolActivity([], event("candidate", "First draft", 10)),
-    event("selected", "Final answer", 20),
+    updateToolActivity([], candidate("candidate", "First draft", 10)),
+    candidate("selected", "Final answer", 20),
   );
-
   expect(entries).toMatchObject([
     {
       id: "run-1:answer_candidate:answer-1",
@@ -153,5 +138,7 @@ it("updates one ephemeral entry from candidate through authoritative selection",
 });
 
 it("ignores unrelated item events", () => {
-  expect(parseItem({ kind: "preamble", itemId: "note-1" })).toBeNull();
+  expect(
+    parseActivityEvent(activity({ kind: "preamble", itemId: "note-1" }, { stream: "item" }), 10),
+  ).toBeNull();
 });

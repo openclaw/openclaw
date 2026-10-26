@@ -6,9 +6,10 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import type { EngineConnection } from "../infra/sql-connection.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
 import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
+import { ensureStatePostgresFragment } from "../state/openclaw-state-db-engine.js";
 import { ensureColumn, tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -69,9 +70,13 @@ function ensureProgressSchema(options: OpenClawStateDatabaseOptions): void {
   }
   runOpenClawStateWriteTransaction(
     ({ db }) => {
-      ensureProgressSchemaInDatabase(db);
-      ensureColumn(db, "outbound_message_progress", "context_id TEXT");
-      ensureColumn(db, "outbound_message_progress", "execution_id TEXT");
+      if (isPostgresSqlConnection(db)) {
+        ensureStatePostgresFragment(db, "outbound_message_progress");
+      } else {
+        ensureProgressSchemaInDatabase(db);
+        ensureColumn(db, "outbound_message_progress", "context_id TEXT");
+        ensureColumn(db, "outbound_message_progress", "execution_id TEXT");
+      }
     },
     options,
     { operationLabel: "audit.outbound-message-progress.schema.ensure" },
@@ -268,23 +273,17 @@ function pruneProgressAfterInsert(db: EngineConnection, now: number): void {
     0,
     OUTBOUND_MESSAGE_PROGRESS_MAX_ROWS - OUTBOUND_MESSAGE_PROGRESS_PRUNE_BATCH_ROWS,
   );
-  const overflow = executeSqliteQueryTakeFirstSync(
+  const overflowCutoff = kysely
+    .selectFrom("outbound_message_progress")
+    .select("sequence")
+    .orderBy("sequence", "desc")
+    .offset(retainedRows)
+    .limit(1);
+  const pruned = executeSqliteQuerySync(
     db,
-    kysely
-      .selectFrom("outbound_message_progress")
-      .select("sequence")
-      .orderBy("sequence", "desc")
-      .offset(retainedRows)
-      .limit(1),
+    kysely.deleteFrom("outbound_message_progress").where("sequence", "<=", overflowCutoff),
   );
-  const cutoff = overflow ? normalizeSqliteNumber(overflow.sequence) : undefined;
-  if (cutoff !== undefined) {
-    const pruned = executeSqliteQuerySync(
-      db,
-      kysely.deleteFrom("outbound_message_progress").where("sequence", "<=", cutoff),
-    );
-    rowCount = Math.max(0, rowCount - Number(pruned.numAffectedRows ?? 0n));
-  }
+  rowCount = Math.max(0, rowCount - Number(pruned.numAffectedRows ?? 0n));
   progressRowCounts.set(db, rowCount);
 }
 

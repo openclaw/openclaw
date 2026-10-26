@@ -38,6 +38,9 @@ import {
   githubPublicationTestMocks,
   installGitHubPublicationTestHarness,
   persistPublicationTestSession,
+  publicationRequest,
+  publicationWorktree,
+  registryPublicationWorktree,
   root,
 } from "./github-publication.test-support.js";
 import {
@@ -56,6 +59,44 @@ afterEach(async () => {
 });
 const mocks = githubPublicationTestMocks();
 const url = "https://github.com/owner/repository/pull/12";
+
+function observeSql() {
+  const sql = observeHostDataSql();
+  return { ...sql, [Symbol.dispose]: sql.restore };
+}
+
+function observeEvents() {
+  const observer = vi.fn();
+  return Object.assign(observer, { [Symbol.dispose]: onSessionLifecycleEvent(observer) });
+}
+
+function insertRepositoryReceipt(
+  workspace: Parameters<typeof repositoryReceipt>[0],
+  overrides?: Parameters<typeof repositoryReceipt>[1],
+) {
+  return insertRepositoryGitHubPublicationFixture(
+    repositoryReceipt(workspace, overrides),
+    () => {},
+  );
+}
+
+function holdObservation(onRead: (count: number) => void = () => {}) {
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const execute = stateReads.executeExistingOpenClawStateRead;
+  const held = vi
+    .spyOn(stateReads, "executeExistingOpenClawStateRead")
+    .mockImplementation(async (...args) => {
+      const result = await execute(...args);
+      if (args[1].type === "githubPublications.sharedObservation") {
+        entered.resolve();
+        onRead(held.mock.calls.length);
+        await release.promise;
+      }
+      return result;
+    });
+  return { entered, release, held };
+}
 
 function publishWorktree(row: GitHubPublicationRow) {
   const claimed = claimGitHubPublicationExecutionFixture(row.request_id, "fixture-instance");
@@ -85,6 +126,24 @@ function prohibitPublicationWork() {
       throw new Error("A status read must not publish or inspect credentials");
     });
   }
+}
+
+function expectNoPublicationWork() {
+  for (const mock of [mocks.prepareIdentity, mocks.refreshIdentity, mocks.runCommand]) {
+    expect(mock).not.toHaveBeenCalled();
+  }
+}
+
+async function expectSessionIsolation(
+  coordinator: ReturnType<typeof sharedPublicationCoordinator>,
+  requestId: string,
+) {
+  const location = { agentId: "main", sessionKey: "agent:main:dashboard:other" };
+  replaceSessionEntrySync(location, { ...mocks.loadSession(SESSION_KEY).entry });
+  expect(await coordinator.sharedStatus({ ...session, ...location }, requestId)).toBeUndefined();
+  await expect(
+    coordinator.sharedStatus({ ...session, agentId: "other" }, requestId),
+  ).rejects.toThrow("GitHub publication session lifecycle changed.");
 }
 
 async function createPrivatePublicationSession(sessionKey: string) {
@@ -117,12 +176,24 @@ async function createPrivatePublicationSession(sessionKey: string) {
 }
 
 describe("shared worktree receipt observation", () => {
-  it.each([false, true])(
-    "publishes a memory-only private worktree without host session reads unless closed before admission: %s",
-    async (closeBeforeAdmission) => {
-      const privateKey = "agent:main:dashboard:incognito-publication-execute";
-      const { owner, location } = await createPrivatePublicationSession(privateKey);
-      if (closeBeforeAdmission) {
+  it.each(["memory", "closed-memory", "draft"] as const)(
+    "publishes private %s without host session reads; closed admission rejects",
+    async (mode) => {
+      const privateKey = `agent:main:dashboard:${mode === "draft" ? "private" : "incognito"}-publication-execute`;
+      const key = mode === "draft" ? "private-publication" : "memory-publication";
+      const memory =
+        mode === "draft" ? undefined : await createPrivatePublicationSession(privateKey);
+      if (mode === "draft") {
+        const loadSession = mocks.loadSession.getMockImplementation()!;
+        mocks.loadSession.mockImplementation((sessionKey: string) => {
+          const loaded = loadSession(sessionKey);
+          return sessionKey === privateKey
+            ? { ...loaded, entry: { ...loaded.entry, visibility: "draft" } }
+            : loaded;
+        });
+        await persistPublicationTestSession(privateKey);
+      }
+      if (mode === "closed-memory" && memory) {
         const bind = publicationSource.bindGitHubPublicationSource;
         vi.spyOn(publicationSource, "bindGitHubPublicationSource").mockImplementation(
           (capability) => {
@@ -133,7 +204,7 @@ describe("shared worktree receipt observation", () => {
                 const admission = binding.createAdmission(operation);
                 admission.admission.observeRequests((request) => {
                   if (request.stage === "prepare") {
-                    owner.closeSession(privateKey);
+                    memory.owner.closeSession(privateKey);
                   }
                 });
                 return admission;
@@ -143,71 +214,38 @@ describe("shared worktree receipt observation", () => {
         );
       }
       try {
-        await deleteRegistryWorktree(process.env, "worktree-1");
-        await insertRegistryWorktree(process.env, {
-          id: "worktree-1",
-          name: "publication",
-          repoRoot: "/repo",
-          repoFingerprint: "fingerprint-1",
-          path: "/repo/worktree",
-          branch: BRANCH,
-          baseRef: "origin/main",
-          ownerKind: "session",
-          ownerId: privateKey,
-          createdAt: 1,
-          lastActiveAt: 1,
-        });
-        const sql = observeHostDataSql();
-        try {
-          const publication = sharedPublicationCoordinator().requestForSessionV2({
-            sessionKey: privateKey,
-            agentId: "main",
-            idempotencyKey: "memory-publication",
+        if (memory) {
+          await deleteRegistryWorktree(process.env, "worktree-1");
+          await insertRegistryWorktree(process.env, {
+            ...registryPublicationWorktree(publicationWorktree(privateKey)),
+            createdAt: 1,
+            lastActiveAt: 1,
           });
-          if (closeBeforeAdmission) {
-            await expect(publication).rejects.toThrow(/session|source|requester/i);
-            expect(
-              await readGitHubPublicationRequestAsync({
-                sessionId: session.sessionId,
-                idempotencyKey: "memory-publication",
-              }),
-            ).toBeUndefined();
-          } else {
-            expect(await publication).toMatchObject({ status: "published", headCommit: NEW_HEAD });
-          }
-          expect(sql.queries.filter((query) => /\bsession_nodes\b/.test(query))).toEqual([]);
-        } finally {
-          sql.restore();
         }
+        const coordinator = mode === "draft" ? sharedPublicationCoordinator() : undefined;
+        using sql = observeSql();
+        const publication = (coordinator ?? sharedPublicationCoordinator()).requestForSessionV2(
+          publicationRequest(key, { sessionKey: privateKey }),
+        );
+        if (mode === "closed-memory") {
+          await expect(publication).rejects.toThrow(/session|source|requester/i);
+          expect(
+            await readGitHubPublicationRequestAsync({
+              sessionId: session.sessionId,
+              idempotencyKey: key,
+            }),
+          ).toBeUndefined();
+        } else {
+          expect(await publication).toMatchObject({ status: "published", headCommit: NEW_HEAD });
+        }
+        expect(sql.queries.filter((query) => /\bsession_nodes\b/.test(query))).toEqual([]);
       } finally {
-        memorySessionActorOwners.closeDatabase(location);
+        if (memory) {
+          memorySessionActorOwners.closeDatabase(memory.location);
+        }
       }
     },
   );
-  it("publishes a durable draft worktree through the coordinator without host session reads", async () => {
-    const privateKey = "agent:main:dashboard:private-publication-execute";
-    const loadSession = mocks.loadSession.getMockImplementation()!;
-    mocks.loadSession.mockImplementation((key: string) => {
-      const loaded = loadSession(key);
-      return key === privateKey
-        ? { ...loaded, entry: { ...loaded.entry, visibility: "draft" } }
-        : loaded;
-    });
-    await persistPublicationTestSession(privateKey);
-    const coordinator = sharedPublicationCoordinator();
-    const sql = observeHostDataSql();
-    try {
-      const result = await coordinator.requestForSessionV2({
-        sessionKey: privateKey,
-        agentId: "main",
-        idempotencyKey: "private-publication",
-      });
-      expect(result).toMatchObject({ status: "published", headCommit: NEW_HEAD });
-      expect(sql.queries.filter((query) => /\bsession_nodes\b/.test(query))).toEqual([]);
-    } finally {
-      sql.restore();
-    }
-  });
   it("observes memory-only private receipts and refuses disclosure after session close", async () => {
     const privateSession = {
       ...session,
@@ -219,29 +257,15 @@ describe("shared worktree receipt observation", () => {
       publishWorktree(row);
       const coordinator = sharedPublicationCoordinator();
       const observe = () => coordinator.sharedStatus(privateSession, row.request_id);
-      const sql = observeHostDataSql();
-      try {
+      {
+        using sql = observeSql();
         expect((await observe())?.result).toMatchObject({
           requestId: row.request_id,
           status: "published",
         });
         expect(sql.queries).toEqual([]);
-      } finally {
-        sql.restore();
       }
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
-      const execute = stateReads.executeExistingOpenClawStateRead;
-      const held = vi
-        .spyOn(stateReads, "executeExistingOpenClawStateRead")
-        .mockImplementation(async (...args) => {
-          const result = await execute(...args);
-          if (args[1].type === "githubPublication.sharedObservation") {
-            entered.resolve();
-            await release.promise;
-          }
-          return result;
-        });
+      const { entered, release, held } = holdObservation();
       const pending = observe();
       try {
         await Promise.race([
@@ -295,23 +319,12 @@ describe("shared worktree receipt observation", () => {
       lifecycleRevision: selected.readCurrent().entry!.lifecycleRevision ?? null,
     };
     const coordinator = sharedPublicationCoordinator();
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
     const freshEntered = createDeferredCore();
-    const execute = stateReads.executeExistingOpenClawStateRead;
-    const held = vi
-      .spyOn(stateReads, "executeExistingOpenClawStateRead")
-      .mockImplementation(async (...args) => {
-        const result = await execute(...args);
-        if (args[1].type === "githubPublication.sharedObservation") {
-          entered.resolve();
-          if (held.mock.calls.length === 2) {
-            freshEntered.resolve();
-          }
-          await release.promise;
-        }
-        return result;
-      });
+    const { entered, release, held } = holdObservation((count) => {
+      if (count === 2) {
+        freshEntered.resolve();
+      }
+    });
     const observe = () =>
       coordinator.latestShared(identity, undefined, undefined, () => selected.readCurrent());
     const burst = Promise.allSettled(Array.from({ length: 150 }, observe));
@@ -345,50 +358,30 @@ describe("shared worktree receipt observation", () => {
 
   it("rehydrates a real publication from immutable receipts without Git, credentials, replay, or events", async () => {
     const coordinator = sharedPublicationCoordinator();
-    const published = await coordinator.requestForSessionV2({
-      sessionKey: SESSION_KEY,
-      agentId: "main",
-      idempotencyKey: "accepted",
-    });
+    const published = await coordinator.requestForSessionV2(publicationRequest("accepted"));
     expect(published.status).toBe("published");
     prohibitPublicationWork();
-    const observer = vi.fn();
-    const stop = onSessionLifecycleEvent(observer);
-    const sql = observeHostDataSql();
+    using observer = observeEvents();
+    using sql = observeSql();
     const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
-    try {
-      expect(await coordinator.sharedStatus(session, published.requestId)).toEqual({
-        result: published,
-        confirmation: null,
-      });
-      expect(await coordinator.latestShared(session)).toEqual({
-        result: published,
-        confirmation: null,
-      });
-      expect(await coordinator.latestShared(session, "accepted")).toEqual({
-        result: published,
-        confirmation: null,
-      });
-      expect(
-        reads.mock.calls.filter(
-          ([, command]) => command.type === "githubPublication.sharedObservation",
+    const expected = { result: published, confirmation: null };
+    expect(await coordinator.sharedStatus(session, published.requestId)).toEqual(expected);
+    expect(await coordinator.latestShared(session)).toEqual(expected);
+    expect(await coordinator.latestShared(session, "accepted")).toEqual(expected);
+    expect(
+      reads.mock.calls.filter(
+        ([, command]) => command.type === "githubPublications.sharedObservation",
+      ),
+    ).toHaveLength(3);
+    expect(observer).not.toHaveBeenCalled();
+    expectNoPublicationWork();
+    expect(
+      sql.queries.filter((query) =>
+        /\b(?:github_publication_requests|github_repository_publication_requests|github_publication_session_lifecycles|session_repository_workspaces|worktrees)\b/.test(
+          query,
         ),
-      ).toHaveLength(3);
-      expect(observer).not.toHaveBeenCalled();
-      expect(mocks.prepareIdentity).not.toHaveBeenCalled();
-      expect(mocks.refreshIdentity).not.toHaveBeenCalled();
-      expect(mocks.runCommand).not.toHaveBeenCalled();
-      expect(
-        sql.queries.filter((query) =>
-          /\b(?:github_publication_requests|github_repository_publication_requests|github_publication_session_lifecycles|session_repository_workspaces|worktrees)\b/.test(
-            query,
-          ),
-        ),
-      ).toEqual([]);
-    } finally {
-      sql.restore();
-      stop();
-    }
+      ),
+    ).toEqual([]);
   });
 
   it.each(["latest", "pending", "terminal"] as const)(
@@ -400,19 +393,7 @@ describe("shared worktree receipt observation", () => {
       if (mode !== "pending") {
         publishWorktree(row);
       }
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
-      const execute = stateReads.executeExistingOpenClawStateRead;
-      const held = vi
-        .spyOn(stateReads, "executeExistingOpenClawStateRead")
-        .mockImplementation(async (...args) => {
-          const result = await execute(...args);
-          if (args[1].type === "githubPublication.sharedObservation") {
-            entered.resolve();
-            await release.promise;
-          }
-          return result;
-        });
+      const { entered, release, held } = holdObservation();
       const request =
         mode === "latest"
           ? coordinator.latestShared(session)
@@ -488,9 +469,8 @@ describe("shared worktree receipt observation", () => {
       const bytes = await fs.readFile(databasePath);
       const files = await fs.readdir(path.dirname(databasePath));
       prohibitPublicationWork();
-      const observer = vi.fn();
-      const stop = onSessionLifecycleEvent(observer);
-      try {
+      {
+        using observer = observeEvents();
         expect(await coordinator.latestShared(session)).toBeNull();
         expect(await coordinator.latestShared(session, row.idempotency_key)).toBeNull();
         expect((await coordinator.sharedStatus(session, row.request_id))?.result).toMatchObject({
@@ -502,8 +482,6 @@ describe("shared worktree receipt observation", () => {
         expect(observer).not.toHaveBeenCalled();
         expect(mocks.prepareIdentity).not.toHaveBeenCalled();
         expect(mocks.runCommand).not.toHaveBeenCalled();
-      } finally {
-        stop();
       }
       const db = openOpenClawStateDatabase().db;
       db.prepare("UPDATE worktrees SET owner_id = ? WHERE id = ?").run(
@@ -563,33 +541,20 @@ describe("shared worktree receipt observation", () => {
   it("does not reveal receipts to other logical sessions or agents", async () => {
     const coordinator = sharedPublicationCoordinator();
     publishWorktree(insertSharedWorktreeReceipt("private-to-session"));
-    replaceSessionEntrySync(
-      { agentId: "main", sessionKey: "agent:main:dashboard:other" },
-      { ...mocks.loadSession(SESSION_KEY).entry },
-    );
-    expect(
-      await coordinator.sharedStatus(
-        { ...session, sessionKey: "agent:main:dashboard:other" },
-        "private-to-session",
-      ),
-    ).toBeUndefined();
-    await expect(
-      async () =>
-        await coordinator.sharedStatus({ ...session, agentId: "other" }, "private-to-session"),
-    ).rejects.toThrow("GitHub publication session lifecycle changed.");
+    await expectSessionIsolation(coordinator, "private-to-session");
     changeSession({ sessionId: "rotated-before-read" });
-    await expect(async () => await coordinator.latestShared(session)).rejects.toThrow(
-      /session.*changed/i,
-    );
+    await expect(coordinator.latestShared(session)).rejects.toThrow(/session.*changed/i);
   });
 
-  it.each(["binding", "digest", "publisher"])(
+  it.each(["binding", "table", "digest", "publisher"])(
     "surfaces unavailable or corrupt %s evidence, not discovery null",
     async (corruption) => {
       const coordinator = sharedPublicationCoordinator();
       insertSharedWorktreeReceipt("corrupt");
       const db = openOpenClawStateDatabase().db;
-      if (corruption === "binding") {
+      if (corruption === "table") {
+        db.exec("DROP TABLE github_publication_session_lifecycles");
+      } else if (corruption === "binding") {
         db.prepare("DELETE FROM github_publication_session_lifecycles WHERE request_id = ?").run(
           "corrupt",
         );
@@ -602,12 +567,16 @@ describe("shared worktree receipt observation", () => {
           "UPDATE github_publication_requests SET identity_login = '' WHERE request_id = ?",
         ).run("corrupt");
       }
-      await expect(async () => await coordinator.latestShared(session)).rejects.toThrow(
-        /unavailable|corrupt/,
-      );
-      await expect(async () => await coordinator.sharedStatus(session, "corrupt")).rejects.toThrow(
-        /unavailable|corrupt/,
-      );
+      const error = corruption === "table" ? /binding.*unavailable/ : /unavailable|corrupt/;
+      await expect(coordinator.latestShared(session)).rejects.toThrow(error);
+      await expect(coordinator.sharedStatus(session, "corrupt")).rejects.toThrow(error);
+      if (corruption === "table") {
+        expect(
+          db
+            .prepare("SELECT name FROM sqlite_schema WHERE name = ?")
+            .get("github_publication_session_lifecycles"),
+        ).toBeUndefined();
+      }
     },
   );
 
@@ -659,23 +628,6 @@ describe("shared worktree receipt observation", () => {
     expect(await coordinator.latestShared(session, "old-000")).toBeNull();
   });
 
-  it("does not recreate a missing lifecycle table while reporting unavailable evidence", async () => {
-    const coordinator = sharedPublicationCoordinator();
-    insertSharedWorktreeReceipt("unbound");
-    const db = openOpenClawStateDatabase().db;
-    db.exec("DROP TABLE github_publication_session_lifecycles");
-    await expect(async () => await coordinator.latestShared(session)).rejects.toThrow(
-      /binding.*unavailable/,
-    );
-    expect(
-      db
-        .prepare(
-          "SELECT name FROM sqlite_schema WHERE name = 'github_publication_session_lifecycles'",
-        )
-        .get(),
-    ).toBeUndefined();
-  });
-
   it("does not turn an unreadable existing database into discovery null", async () => {
     const coordinator = sharedPublicationCoordinator();
     const databasePath = openOpenClawStateDatabase().path;
@@ -684,28 +636,14 @@ describe("shared worktree receipt observation", () => {
       recursive: true,
     });
     vi.stubEnv("OPENCLAW_STATE_DIR", unavailableRoot);
-    await expect(async () => await coordinator.latestShared(session)).rejects.toThrow();
+    await expect(coordinator.latestShared(session)).rejects.toThrow();
   });
 });
 
 describe("shared repository receipt observation", () => {
-  it("does not qualify an unavailable repository workspace until this session has a shared receipt", async () => {
-    const workspace = await sharedRepositoryWorkspace();
-    const coordinator = sharedPublicationCoordinator();
-    openOpenClawStateDatabase()
-      .db.prepare("UPDATE session_repository_workspaces SET session_key = ? WHERE workspace_id = ?")
-      .run("other-session", workspace.workspaceId);
-    expect(await coordinator.latestShared(session)).toBeNull();
-    expect(await coordinator.latestShared(session, "absent")).toBeNull();
-    insertRepositoryGitHubPublicationFixture(repositoryReceipt(workspace), () => {});
-    await expect(async () => await coordinator.latestShared(session)).rejects.toThrow(
-      /owner.*unavailable/,
-    );
-  });
-
   it("reads durable effect facts after a new coordinator starts without confirmation, replay, or credential work", async () => {
     const workspace = await sharedRepositoryWorkspace();
-    const row = insertRepositoryGitHubPublicationFixture(repositoryReceipt(workspace), () => {});
+    const row = insertRepositoryReceipt(workspace);
     const execution = claimRepositoryGitHubPublicationFixture(row, "old-instance", {
       assertCustody: () => {},
       assertCurrent: () => {},
@@ -714,53 +652,40 @@ describe("shared repository receipt observation", () => {
     const coordinator = sharedPublicationCoordinator();
     const before = readRepositoryGitHubPublicationFixture(row.request_id);
     prohibitPublicationWork();
-    const observer = vi.fn();
-    const stop = onSessionLifecycleEvent(observer);
-    try {
-      expect(await coordinator.latestShared(session)).toMatchObject({
-        confirmation: null,
-        result: {
-          requestId: row.request_id,
-          status: "publishing",
-          effect: { kind: "push", status: "observed", headCommit: OLD_HEAD },
-        },
-      });
-      expect(await coordinator.sharedStatus(session, row.request_id)).toEqual(
-        await coordinator.latestShared(session, row.idempotency_key),
-      );
-      expect(readRepositoryGitHubPublicationFixture(row.request_id)).toEqual(before);
-      expect(observer).not.toHaveBeenCalled();
-      expect(mocks.prepareIdentity).not.toHaveBeenCalled();
-      expect(mocks.runCommand).not.toHaveBeenCalled();
-      expect(mocks.refreshIdentity).not.toHaveBeenCalled();
-    } finally {
-      stop();
-    }
+    using observer = observeEvents();
+    expect(await coordinator.latestShared(session)).toMatchObject({
+      confirmation: null,
+      result: {
+        requestId: row.request_id,
+        status: "publishing",
+        effect: { kind: "push", status: "observed", headCommit: OLD_HEAD },
+      },
+    });
+    expect(await coordinator.sharedStatus(session, row.request_id)).toEqual(
+      await coordinator.latestShared(session, row.idempotency_key),
+    );
+    expect(readRepositoryGitHubPublicationFixture(row.request_id)).toEqual(before);
+    expect(observer).not.toHaveBeenCalled();
+    expectNoPublicationWork();
   });
 
   it("discovers terminal outcomes by creation order and recovers exact older invocations", async () => {
     const workspace = await sharedRepositoryWorkspace();
     const coordinator = sharedPublicationCoordinator();
-    const older = insertRepositoryGitHubPublicationFixture(
-      repositoryReceipt(workspace, {
-        request_id: "older",
-        idempotency_key: "older-key",
-        created_at_ms: 1,
-      }),
-      () => {},
-    );
+    const older = insertRepositoryReceipt(workspace, {
+      request_id: "older",
+      idempotency_key: "older-key",
+      created_at_ms: 1,
+    });
     for (const requestId of ["new-a", "new-z"]) {
-      insertRepositoryGitHubPublicationFixture(
-        repositoryReceipt(workspace, {
-          request_id: requestId,
-          idempotency_key: requestId,
-          created_at_ms: 2,
-          status: "failed",
-          error_code: "push_rejected",
-          next_action: "Inspect the existing GitHub branch.",
-        }),
-        () => {},
-      );
+      insertRepositoryReceipt(workspace, {
+        request_id: requestId,
+        idempotency_key: requestId,
+        created_at_ms: 2,
+        status: "failed",
+        error_code: "push_rejected",
+        next_action: "Inspect the existing GitHub branch.",
+      });
     }
     const execution = claimRepositoryGitHubPublicationFixture(older, "instance", {
       assertCustody: () => {},
@@ -795,10 +720,7 @@ describe("shared repository receipt observation", () => {
   ])("does not discover stale repository scope: %j", async (scope) => {
     const workspace = await sharedRepositoryWorkspace();
     const coordinator = sharedPublicationCoordinator();
-    const row = insertRepositoryGitHubPublicationFixture(
-      repositoryReceipt(workspace, scope),
-      () => {},
-    );
+    const row = insertRepositoryReceipt(workspace, scope);
     expect(await coordinator.latestShared(session)).toBeNull();
     expect(await coordinator.latestShared(session, row.idempotency_key)).toBeNull();
     expect(await coordinator.sharedStatus(session, row.request_id)).toBeUndefined();
@@ -808,14 +730,11 @@ describe("shared repository receipt observation", () => {
     publishWorktree(insertSharedWorktreeReceipt("repository-request"));
     const workspace = await sharedRepositoryWorkspace();
     const coordinator = sharedPublicationCoordinator();
-    const row = insertRepositoryGitHubPublicationFixture(
-      repositoryReceipt(workspace, {
-        status: "published",
-        head_commit: OLD_HEAD,
-        pull_request_url: url,
-      }),
-      () => {},
-    );
+    const row = insertRepositoryReceipt(workspace, {
+      status: "published",
+      head_commit: OLD_HEAD,
+      pull_request_url: url,
+    });
     expect((await coordinator.latestShared(session))?.result).toMatchObject({
       status: "published",
       headCommit: OLD_HEAD,
@@ -833,32 +752,17 @@ describe("shared repository receipt observation", () => {
       headCommit: OLD_HEAD,
       url,
     });
-    replaceSessionEntrySync(
-      { agentId: "main", sessionKey: "agent:main:dashboard:other" },
-      { ...mocks.loadSession(SESSION_KEY).entry },
-    );
-    expect(
-      await coordinator.sharedStatus(
-        { ...session, sessionKey: "agent:main:dashboard:other" },
-        row.request_id,
-      ),
-    ).toBeUndefined();
-    await expect(
-      async () => await coordinator.sharedStatus({ ...session, agentId: "other" }, row.request_id),
-    ).rejects.toThrow("GitHub publication session lifecycle changed.");
+    await expectSessionIsolation(coordinator, row.request_id);
   });
 
-  it("excludes personal rows before decoding even when their stored digest is corrupt", async () => {
+  it("qualifies the workspace only for shared receipts and excludes corrupt personal rows", async () => {
     const workspace = await sharedRepositoryWorkspace();
     const coordinator = sharedPublicationCoordinator();
-    const row = insertRepositoryGitHubPublicationFixture(
-      repositoryReceipt(workspace, {
-        owner_profile_id: "private-person",
-        connection_generation: "private-generation",
-        identity_source: "personal",
-      }),
-      () => {},
-    );
+    const row = insertRepositoryReceipt(workspace, {
+      owner_profile_id: "private-person",
+      connection_generation: "private-generation",
+      identity_source: "personal",
+    });
     openOpenClawStateDatabase()
       .db.prepare(
         "UPDATE github_repository_publication_requests SET request_digest = 'corrupt-private-digest' WHERE request_id = ?",
@@ -870,45 +774,40 @@ describe("shared repository receipt observation", () => {
     expect(await coordinator.sharedStatus(session, row.request_id)).toBeUndefined();
     expect(await coordinator.latestShared(session)).toBeNull();
     expect(await coordinator.latestShared(session, row.idempotency_key)).toBeNull();
+    expect(await coordinator.latestShared(session, "absent")).toBeNull();
+    insertRepositoryReceipt(workspace, { request_id: "shared", idempotency_key: "shared" });
+    await expect(coordinator.latestShared(session)).rejects.toThrow(/owner.*unavailable/);
   });
 
   it("surfaces shared receipt corruption before filtering by branch", async () => {
     const workspace = await sharedRepositoryWorkspace();
     const coordinator = sharedPublicationCoordinator();
-    const row = insertRepositoryGitHubPublicationFixture(repositoryReceipt(workspace), () => {});
+    const row = insertRepositoryReceipt(workspace);
     openOpenClawStateDatabase()
       .db.prepare(
         "UPDATE github_repository_publication_requests SET branch = 'changed outside owner' WHERE request_id = ?",
       )
       .run(row.request_id);
-    await expect(async () => await coordinator.latestShared(session)).rejects.toThrow(/corrupt/);
-    await expect(
-      async () => await coordinator.sharedStatus(session, row.request_id),
-    ).rejects.toThrow(/corrupt/);
+    await expect(coordinator.latestShared(session)).rejects.toThrow(/corrupt/);
+    await expect(coordinator.sharedStatus(session, row.request_id)).rejects.toThrow(/corrupt/);
   });
   it("searches past retired repository history to select the current lifecycle", async () => {
     const workspace = await sharedRepositoryWorkspace();
     const coordinator = sharedPublicationCoordinator();
-    insertRepositoryGitHubPublicationFixture(
-      repositoryReceipt(workspace, {
-        request_id: "current",
-        idempotency_key: "current",
-        created_at_ms: 0,
-      }),
-      () => {},
-    );
+    insertRepositoryReceipt(workspace, {
+      request_id: "current",
+      idempotency_key: "current",
+      created_at_ms: 0,
+    });
     runOpenClawStateWriteTransaction(() => {
       for (let index = 0; index < 70; index += 1) {
         const id = "old-" + index.toString().padStart(3, "0");
-        insertRepositoryGitHubPublicationFixture(
-          repositoryReceipt(workspace, {
-            request_id: id,
-            idempotency_key: id,
-            created_at_ms: 1,
-            session_lifecycle_revision: "retired",
-          }),
-          () => {},
-        );
+        insertRepositoryReceipt(workspace, {
+          request_id: id,
+          idempotency_key: id,
+          created_at_ms: 1,
+          session_lifecycle_revision: "retired",
+        });
       }
     });
     expect((await coordinator.latestShared(session))?.result.requestId).toBe("current");

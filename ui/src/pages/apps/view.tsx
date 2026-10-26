@@ -2,12 +2,12 @@ import type { JSX } from "@solidjs/web";
 import { For, Show } from "solid-js";
 import type { RouteId } from "../../app-route-paths.ts";
 import { inferControlUiPublicAssetPath } from "../../app/public-assets.ts";
+import { NativeChromeSetup } from "../../components/native-chrome-setup.tsx";
 import { BrandIcon, Icon } from "../../components/solid/icon.tsx";
 import { registerAppsEnglish } from "../../i18n/locales/en-apps.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
-import { COMMUNITY_DISCORD_URL } from "../../lib/product-links.ts";
 import "../../styles/apps.css";
-import "../../components/native-chrome-setup.tsx";
+import { COMMUNITY_DISCORD_URL, OFFICIAL_SUPPORT_URL } from "../../lib/product-links.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 
 registerEnglishCatalog(registerAppsEnglish);
@@ -211,6 +211,11 @@ const APP_SECTIONS: readonly AppSection[] = [
 const COMMUNITY_LINKS: ReadonlyArray<{ href: string; icon: () => JSX.Element; labelKey: string }> =
   [
     {
+      href: OFFICIAL_SUPPORT_URL,
+      icon: () => <Icon name="messageSquare" />,
+      labelKey: "appsPage.linkSupport",
+    },
+    {
       href: COMMUNITY_DISCORD_URL,
       icon: () => <BrandIcon name="discord" />,
       labelKey: "appsPage.linkDiscord",
@@ -304,7 +309,7 @@ function AppCardView(props: { card: AppCard; options: AppsProps }) {
           </For>
         </div>
         <Show when={props.card.id === "chrome-extension"}>
-          <openclaw-native-chrome-setup />
+          <NativeChromeSetup />
         </Show>
       </div>
     </article>
@@ -336,7 +341,7 @@ export function Apps(props: AppsProps) {
   return (
     <div class="apps-page">
       <section class="apps-hero">
-        <h1 class="apps-hero__title">{t("appsPage.heroTitle")}</h1>
+        <h2 class="apps-hero__title">{t("appsPage.heroTitle")}</h2>
         <p class="apps-hero__tagline">{t("appsPage.heroTagline")}</p>
       </section>
       <For each={APP_SECTIONS}>

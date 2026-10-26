@@ -79,6 +79,24 @@ export function isSvgImageMediaPath(path: string, mediaType: unknown): boolean {
   return normalizedMediaType === "image/svg+xml" || getMediaFileExtension(path) === "svg";
 }
 
+export function isTextAttachment(rawMimeType: string, filename: string): boolean {
+  const mimeType = rawMimeType.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+  if (mimeType.startsWith("text/")) {
+    return true;
+  }
+  if (
+    /^application\/(?:(?:[\w.-]+\+)?(?:json|xml)|javascript|x-javascript|yaml|x-yaml)$/.test(
+      mimeType,
+    )
+  ) {
+    return true;
+  }
+  return (
+    (!mimeType || mimeType === "application/octet-stream") &&
+    /\.(?:txt|md|markdown|html?|log|csv|tsv|json|jsonl|xml|yaml|yml)$/i.test(filename)
+  );
+}
+
 export function isAudioTranscriptMediaPath(path: string, mediaType: unknown): boolean {
   if (normalizeMediaType(mediaType).startsWith("audio/")) {
     return true;

@@ -207,6 +207,17 @@ export function createVitestResolveConfig(repoRoot: string) {
         replacement: path.join(repoRoot, "packages", "gateway-protocol", "src", "index.ts"),
       },
       {
+        find: "@openclaw/ai/internal/model-request-body",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "ai",
+          "src",
+          "transports",
+          "model-request-body.ts",
+        ),
+      },
+      {
         find: /^@openclaw\/ai\/internal\/(.+)$/,
         replacement: path.join(repoRoot, "packages", "ai", "src", "internal", "$1.ts"),
       },

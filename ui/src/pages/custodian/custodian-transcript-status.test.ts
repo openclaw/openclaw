@@ -3,7 +3,7 @@
 import type { SystemAgentChatResult } from "@openclaw/gateway-protocol";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import * as uuid from "../../lib/uuid.ts";
 import { QUICK_ACTIONS_QUESTION } from "../../test-helpers/custodian-quick-actions.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
@@ -114,6 +114,29 @@ it("waits for pending history failure before recovery", async () => {
   expect(historyCalls()).toBe(3);
 });
 
+it("releases a retired history read before its transport settles", async () => {
+  const pending = deferred<ReturnType<typeof history>>();
+  const { request } = historyRequest(
+    (call) => (call === 1 ? history("Earlier history") : pending.promise),
+    (params) => chatReply(params?.message ? "New turn completed" : "Ready"),
+  );
+  const { page } = await mountTranscript(request);
+  await waitForFast(() => expect(page.textContent).toContain("Ready"));
+  const refresh = page.store.refreshTranscriptIfIdle();
+  await waitForFast(() => expect(page.store.transcript.refreshing).toBe(true));
+  const input = page.querySelector<HTMLTextAreaElement>("textarea")!;
+  input.value = "Continue while history is pending";
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  await page.updateComplete;
+  page.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
+  await waitForFast(() => expect(page.textContent).toContain("New turn completed"));
+  expect(page.store.transcript.refreshing).toBe(false);
+  pending.resolve(history("Retired history"));
+  await refresh;
+  await page.updateComplete;
+  expect(page.textContent).not.toContain("Retired history");
+});
+
 it("retries reconnect hydration once per availability edge", async () => {
   const { request, historyCalls } = historyRequest((call) => {
     if (call === 2) {
@@ -209,11 +232,12 @@ it("parks history recovery until welcome and wizard settle", async () => {
 
   const wizardMessage = page.store.messages.find((message) => message.step);
   expect(wizardMessage).toBeDefined();
-  page.store.answerWizardStep(wizardMessage!, "Continue");
+  const answering = page.store.answerWizardStep(wizardMessage!, "Continue");
   await page.updateComplete;
   expect(page.store.sending).toBe(true);
   expect(historyCalls()).toBe(1);
   answer.resolve(chatReply("Wizard complete", { wizardInputPending: false }));
+  await answering;
   await waitForFast(() => expect(page.textContent).toContain("Recovered after wizard"));
   expect(historyCalls()).toBe(2);
   expectNoStatus(page);

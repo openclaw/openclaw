@@ -1,8 +1,20 @@
-import { EventEmitter } from "node:events";
 import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
-import { describe, expect, it } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { enqueueCommandInLane } from "../process/command-queue.js";
+import {
+  captureGatewayRootWorkReleaseObserver,
+  GatewayDrainingError,
+  getActiveGatewayRootWorkCount,
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+  tryBeginGatewayRootWorkAdmission,
+  tryBeginGatewaySuspendAdmission,
+} from "../process/gateway-work-admission.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { createMockServerResponse } from "../test-utils/mock-http-response.js";
+import { createMockIncomingRequest } from "./test-helpers/mock-incoming-request.js";
 import { createFixedWindowRateLimiter } from "./webhook-memory-guards.js";
 import {
   applyBasicWebhookRequestGuards,
@@ -14,38 +26,15 @@ import {
   runDetachedWebhookWork,
 } from "./webhook-request-guards.js";
 
-type MockIncomingMessage = IncomingMessage & {
-  destroyed?: boolean;
-  destroy: () => MockIncomingMessage;
-  pause: () => MockIncomingMessage;
-};
-
 function createMockRequest(params: {
   method?: string;
   headers?: Record<string, string>;
   chunks?: string[];
-}): MockIncomingMessage {
-  const req = new EventEmitter() as MockIncomingMessage;
-  req.method = params.method ?? "POST";
-  req.headers = params.headers ?? {};
-  req.socket = new Socket();
-  req.destroyed = false;
-  req.destroy = (() => {
-    req.destroyed = true;
-    return req;
-  }) as MockIncomingMessage["destroy"];
-  req.pause = (() => req) as MockIncomingMessage["pause"];
-
-  if (params.chunks) {
-    void Promise.resolve().then(() => {
-      for (const chunk of params.chunks ?? []) {
-        req.emit("data", Buffer.from(chunk, "utf-8"));
-      }
-      req.emit("end");
-    });
-  }
-
-  return req;
+}): IncomingMessage {
+  return Object.assign(createMockIncomingRequest(params.chunks ?? []), {
+    method: params.method ?? "POST",
+    headers: params.headers ?? {},
+  });
 }
 
 async function readJsonBody(chunks: string[]) {
@@ -94,13 +83,21 @@ it("rejects missing media types", () => {
 });
 
 describe("applyBasicWebhookRequestGuards", () => {
-  it("rejects disallowed HTTP methods", () => {
-    const req = createMockRequest({ method: "GET" });
+  it.each([
+    ["HTTP method", { method: "GET" }, { allowMethods: ["POST"] }, 405, "POST"],
+    [
+      "media type",
+      { headers: { "content-type": "text/plain" } },
+      { requireJsonContentType: true },
+      415,
+      undefined,
+    ],
+  ] as const)("rejects a disallowed %s", (_name, request, guards, statusCode, allow) => {
     const res = createMockServerResponse();
-    const ok = applyBasicWebhookRequestGuards({ req, res, allowMethods: ["POST"] });
-    expect(ok).toBe(false);
-    expect(res.statusCode).toBe(405);
-    expect(res.getHeader("allow")).toBe("POST");
+    expect(
+      applyBasicWebhookRequestGuards({ req: createMockRequest(request), res, ...guards }),
+    ).toBe(false);
+    expect([res.statusCode, res.getHeader("allow")]).toEqual([statusCode, allow]);
   });
 
   it("enforces rate limits", () => {
@@ -123,18 +120,6 @@ describe("applyBasicWebhookRequestGuards", () => {
     expect(guard(res2, 1_001)).toBe(false);
     expect(res2.statusCode).toBe(429);
   });
-
-  it("rejects non-json requests when required", () => {
-    const req = createMockRequest({ headers: { "content-type": "text/plain" } });
-    const res = createMockServerResponse();
-    const ok = applyBasicWebhookRequestGuards({
-      req,
-      res,
-      requireJsonContentType: true,
-    });
-    expect(ok).toBe(false);
-    expect(res.statusCode).toBe(415);
-  });
 });
 
 describe("readJsonWebhookBodyOrReject", () => {
@@ -144,8 +129,7 @@ describe("readJsonWebhookBodyOrReject", () => {
   ] as const)("handles %s JSON bodies", async (_name, chunk, expected, statusCode, body) => {
     const { result, res } = await readJsonBody([chunk]);
     expect(result).toEqual(expected);
-    expect(res.statusCode).toBe(statusCode);
-    expect(res.body).toBe(body);
+    expect([res.statusCode, res.body]).toEqual([statusCode, body]);
   });
 });
 
@@ -193,6 +177,7 @@ describe("beginWebhookRequestPipelineOrReject", () => {
 });
 
 describe("runDetachedWebhookWork", () => {
+  afterEach(resetGatewayWorkAdmission);
   it("defers the callback until the request handler can acknowledge", async () => {
     const order: string[] = [];
     const detached: Promise<void>[] = [];
@@ -213,26 +198,64 @@ describe("runDetachedWebhookWork", () => {
   });
 
   it.each([
-    ["detached", runDetachedWebhookWork, true],
-    ["inherited", (run: () => Promise<number>) => run(), false],
-  ] as const)("checks %s post-ack admission after request release", async (kind, run, allowed) => {
-    const { enqueueCommandInLane } = await import("../process/command-queue.js");
+    ["detached", "accepting", true],
+    ["inherited", "accepting", false],
+    ["detached", "suspended", true],
+    ["detached", "restarting", false],
+  ] as const)("owns %s post-ack cleanup while %s", async (kind, phase, allowed) => {
+    const cleanupStarted = createDeferredCore();
+    const execute = createDeferredCore();
+    const released = createDeferredCore();
+    const deliver = vi.fn(async () => 42);
     let continued: Promise<number> | undefined;
-    await admitted(async () => {
-      continued = run(async () => {
-        await postAckDelay();
-        return await enqueueCommandInLane(`${kind}-webhook-work-test`, async () => 42);
+    try {
+      await admitted(async () => {
+        const run =
+          kind === "detached" ? runDetachedWebhookWork : (work: () => Promise<number>) => work();
+        continued = run(async () => {
+          const observeRelease = expectDefined(
+            captureGatewayRootWorkReleaseObserver(),
+            "work root observer",
+          );
+          observeRelease(() => released.resolve());
+          cleanupStarted.resolve();
+          await execute.promise;
+          return await enqueueCommandInLane(`${kind}-webhook-work-test`, deliver);
+        });
+        void continued.catch(() => {});
+        return true;
       });
-      continued.catch(() => {});
-      return true;
-    });
-    if (allowed) {
-      await expect(continued).resolves.toBe(42);
-    } else {
-      await expect(continued).rejects.toThrow(
-        "Gateway is temporarily unavailable. Please try again shortly.",
-      );
+      await cleanupStarted.promise;
+      expect(getActiveGatewayRootWorkCount()).toBe(kind === "detached" ? 1 : 0);
+      expect(deliver).not.toHaveBeenCalled();
+      if (phase === "suspended") {
+        expect(tryBeginGatewaySuspendAdmission(() => {})).not.toBeNull();
+        expect(tryBeginGatewayRootWorkAdmission("new-input")).toBeNull();
+      } else if (phase === "restarting") {
+        markGatewayRestartDraining();
+      }
+      execute.resolve();
+      if (allowed) {
+        await expect(continued).resolves.toBe(42);
+        expect(deliver).toHaveBeenCalledOnce();
+      } else {
+        await expect(continued).rejects.toBeInstanceOf(GatewayDrainingError);
+        expect(deliver).not.toHaveBeenCalled();
+      }
+      await released.promise;
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+    } finally {
+      execute.resolve();
+      await Promise.allSettled([continued]);
     }
+  });
+
+  it("refuses a new detached callback when restart has closed admission", async () => {
+    const work = vi.fn(async () => 42);
+    markGatewayRestartDraining();
+    await expect(runDetachedWebhookWork(work)).rejects.toBeInstanceOf(GatewayDrainingError);
+    expect(work).not.toHaveBeenCalled();
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
   });
 
   it("keeps tracked work accepted after the caller's async work scope closes", async () => {

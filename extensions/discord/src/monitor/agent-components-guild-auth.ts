@@ -11,7 +11,6 @@ import { resolveAgentComponentPolicyContext } from "./agent-components-live-poli
 import type {
   AgentComponentContext,
   AgentComponentInteraction,
-  ComponentInteractionContext,
   DiscordUser,
 } from "./agent-components.types.js";
 import {
@@ -112,38 +111,6 @@ async function ensureGuildComponentMemberAllowed(params: {
   return false;
 }
 
-async function ensureComponentUserAllowed(params: {
-  allowedUsers: string[];
-  interaction: AgentComponentInteraction;
-  user: DiscordUser;
-  componentLabel: string;
-  unauthorizedReply: string;
-  allowNameMatching: boolean;
-}) {
-  const allowList = normalizeDiscordAllowList(params.allowedUsers, ["discord:", "user:", "pk:"]);
-  if (!allowList) {
-    return true;
-  }
-  const match = resolveDiscordAllowListMatch({
-    allowList,
-    candidate: {
-      id: params.user.id,
-      name: params.user.username,
-      tag: formatDiscordUserTag(params.user),
-    },
-    allowNameMatching: params.allowNameMatching,
-  });
-  if (match.allowed) {
-    return true;
-  }
-
-  logVerbose(
-    `discord component ${params.componentLabel}: blocked user ${params.user.id} (not in allowedUsers)`,
-  );
-  await replyUnavailableComponentInteraction(params.interaction, params.unauthorizedReply);
-  return false;
-}
-
 export async function ensureAgentComponentInteractionAllowed(params: {
   ctx: AgentComponentContext;
   interaction: AgentComponentInteraction;
@@ -210,11 +177,40 @@ export async function resolveAuthorizedComponentInteraction(params: {
     return null;
   }
 
-  const commandAuthorized = await resolveComponentCommandAuthorized({
-    ctx,
-    interactionCtx,
-    ...guildContext,
-  });
+  const { channelConfig, guildInfo, allowNameMatching } = guildContext;
+  const commandAuthorized = await (async () => {
+    if (interactionCtx.isDirectMessage) {
+      return true;
+    }
+
+    const sender = {
+      id: interactionCtx.user.id,
+      name: interactionCtx.user.username,
+      tag: formatDiscordUserTag(interactionCtx.user),
+    };
+    const { ownerAllowList, ownerAllowed: ownerOk } = resolveDiscordOwnerAccess({
+      allowFrom: ctx.allowFrom,
+      sender,
+      allowNameMatching,
+    });
+
+    const { hasAccessRestrictions, memberAllowed: commandMemberAllowed } =
+      resolveDiscordMemberAccessState({
+        channelConfig,
+        guildInfo,
+        memberRoleIds: interactionCtx.memberRoleIds,
+        sender,
+        allowNameMatching,
+      });
+    return resolveCommandAuthorizedFromAuthorizers({
+      useAccessGroups: true,
+      authorizers: [
+        { configured: ownerAllowList != null, allowed: ownerOk },
+        { configured: hasAccessRestrictions, allowed: commandMemberAllowed },
+      ],
+      modeWhenAccessGroupsOff: "configured",
+    });
+  })();
 
   if (ctx.isPolicyCurrent?.() === false) {
     await replyUnavailableComponentInteraction(
@@ -223,62 +219,44 @@ export async function resolveAuthorizedComponentInteraction(params: {
     );
     return null;
   }
-  if (
-    params.allowedUsers !== undefined &&
-    !(await ensureComponentUserAllowed({
-      ...params,
-      allowedUsers: params.allowedUsers,
-      user: interactionCtx.user,
-      allowNameMatching: guildContext.allowNameMatching,
-    }))
-  ) {
-    return null;
+  if (params.allowedUsers !== undefined) {
+    const { interaction, componentLabel, unauthorizedReply, allowedUsers } = params;
+    const user = interactionCtx.user;
+    const componentAllowNameMatching = guildContext.allowNameMatching;
+    async function ensureComponentUserAllowed() {
+      const allowList = normalizeDiscordAllowList(allowedUsers, ["discord:", "user:", "pk:"]);
+      if (!allowList) {
+        return true;
+      }
+      const match = resolveDiscordAllowListMatch({
+        allowList,
+        candidate: {
+          id: user.id,
+          name: user.username,
+          tag: formatDiscordUserTag(user),
+        },
+        allowNameMatching: componentAllowNameMatching,
+      });
+      if (match.allowed) {
+        return true;
+      }
+
+      logVerbose(
+        `discord component ${componentLabel}: blocked user ${user.id} (not in allowedUsers)`,
+      );
+      await replyUnavailableComponentInteraction(interaction, unauthorizedReply);
+      return false;
+    }
+    if (!(await ensureComponentUserAllowed())) {
+      return null;
+    }
   }
   return {
     ctx,
     interactionCtx,
     channelCtx: guildContext.channelCtx,
     guildInfo: guildContext.guildInfo,
+    channelConfig: guildContext.channelConfig,
     commandAuthorized,
   };
-}
-
-export async function resolveComponentCommandAuthorized(params: {
-  ctx: AgentComponentContext;
-  interactionCtx: ComponentInteractionContext;
-  channelConfig: ReturnType<typeof resolveDiscordChannelConfigWithFallback>;
-  guildInfo: ReturnType<typeof resolveDiscordGuildEntry>;
-  allowNameMatching: boolean;
-}) {
-  const { ctx, interactionCtx, channelConfig, guildInfo } = params;
-  if (interactionCtx.isDirectMessage) {
-    return true;
-  }
-
-  const sender = {
-    id: interactionCtx.user.id,
-    name: interactionCtx.user.username,
-    tag: formatDiscordUserTag(interactionCtx.user),
-  };
-  const { ownerAllowList, ownerAllowed: ownerOk } = resolveDiscordOwnerAccess({
-    allowFrom: ctx.allowFrom,
-    sender,
-    allowNameMatching: params.allowNameMatching,
-  });
-
-  const { hasAccessRestrictions, memberAllowed } = resolveDiscordMemberAccessState({
-    channelConfig,
-    guildInfo,
-    memberRoleIds: interactionCtx.memberRoleIds,
-    sender,
-    allowNameMatching: params.allowNameMatching,
-  });
-  return resolveCommandAuthorizedFromAuthorizers({
-    useAccessGroups: true,
-    authorizers: [
-      { configured: ownerAllowList != null, allowed: ownerOk },
-      { configured: hasAccessRestrictions, allowed: memberAllowed },
-    ],
-    modeWhenAccessGroupsOff: "configured",
-  });
 }

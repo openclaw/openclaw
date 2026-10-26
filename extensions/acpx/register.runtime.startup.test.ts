@@ -4,11 +4,13 @@ import {
   requireAcpRuntimeBackend,
 } from "openclaw/plugin-sdk/acp-runtime-backend";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { resolvePreferredOpenClawTmpDir, tempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { afterEach, expect, it, vi, type MockInstance } from "vitest";
-import { createAcpxRuntimeService } from "./register.runtime.js";
+import { createRegisteredAcpxService } from "./registration.test-support.js";
 import type { OpenClawPluginServiceContext } from "./runtime-api.js";
 import { createEmptyAcpxKeyedStore } from "./src/empty-keyed-store.test-support.js";
+import * as acpxRuntime from "./src/runtime.js";
 import { makeEmptySessionStore, makeRuntime } from "./src/runtime.test-support.js";
 
 // mock-isolation: auth-file preparation is unrelated to startup admission and must not read host credentials.
@@ -55,9 +57,11 @@ async function withStartingBackend(
   vi.stubEnv("OPENCLAW_SKIP_ACPX_RUNTIME", undefined);
   vi.stubEnv("OPENCLAW_SKIP_ACPX_RUNTIME_PROBE", undefined);
   vi.stubEnv("OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE", "1");
-  const service = createAcpxRuntimeService({
-    openKeyedStore: createEmptyAcpxKeyedStore,
-    runtimeFactory: () => runtime,
+  vi.spyOn(acpxRuntime, "AcpxRuntime").mockImplementation(function () {
+    return runtime;
+  });
+  const service = createRegisteredAcpxService({
+    runtime: createPluginRuntimeMock({ state: { openKeyedStoreV2: createEmptyAcpxKeyedStore } }),
   });
   const admit = async (name: string) =>
     requireAcpRuntimeBackend("acpx").runtime.ensureSession({

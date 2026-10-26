@@ -1,7 +1,43 @@
 import { describe, expect, it } from "vitest";
-import { prepareAgentRunTerminalReply } from "./agent-run-terminal-reply.js";
+import {
+  filterAgentRunTerminalPayloadsForPresentation,
+  prepareAgentRunTerminalReply,
+} from "./agent-run-terminal-reply.js";
 
 describe("prepareAgentRunTerminalReply", () => {
+  it.each([
+    {
+      name: "an acknowledgement-only message",
+      payload: { text: "HEARTBEAT_OK" },
+      visible: false,
+    },
+    {
+      name: "visible text beside the acknowledgement",
+      payload: { text: "HEARTBEAT_OK Everything is ready." },
+      visible: true,
+    },
+    {
+      name: "media beside the acknowledgement",
+      payload: { text: "HEARTBEAT_OK", mediaUrl: "https://example.invalid/chart.png" },
+      visible: true,
+    },
+    {
+      name: "multiple media beside the acknowledgement",
+      payload: {
+        text: "HEARTBEAT_OK",
+        mediaUrl: "  ",
+        mediaUrls: ["  ", "https://example.invalid/chart.png"],
+      },
+      visible: true,
+    },
+  ])("projects $name through message presentation", ({ payload, visible }) => {
+    expect(
+      filterAgentRunTerminalPayloadsForPresentation({
+        payloads: [payload],
+      }),
+    ).toEqual(visible ? [payload] : []);
+  });
+
   it.each([
     ["answer\n\nNO_REPLY", "answer"],
     ["answer\r\n \tNO_REPLY \t\r\n\r\n", "answer"],

@@ -46,7 +46,7 @@ export type SubagentCompletionRequest = {
   triggerCleanup: boolean;
   startedAt?: number;
   suppressSessionEffects?: boolean;
-  recoverInterrupted?: true;
+  recoverInterrupted?: true | "failed";
   /** Prepare database currency asynchronously; publication rechecks live host authority. */
   recoveryCurrent?: SubagentRecoveryCurrent;
   /** Child effects may be fenced while the recorded result still owes requester delivery. */
@@ -188,6 +188,20 @@ type SubagentKillIntent = {
 };
 
 export type SubagentRunRecord = Omit<SubagentRunReadRecord, "execution" | "collectorCompletion"> & {
+  /** Host-captured SDK spawn provenance; absence never establishes plugin ownership. */
+  nativePluginOwner?: {
+    version: 1;
+    pluginId: string;
+    requesterProfileId: string;
+    requestId: string;
+  };
+  /** Exact package instructions used at child creation; not runtime authority. */
+  subagentProfile?: {
+    pluginId: string;
+    id: string;
+    instructionsFile: string;
+    instructionsSha256: string;
+  };
   /** Admission evidence only; restart continuation revalidates the live operator grant. */
   operatorRecoverySource?: RestartRecoveryOperatorSource;
   /** Child identity stays fixed when recovery redirects transcript writes. */
@@ -293,4 +307,9 @@ export type RegisterSubagentRunOptions = {
   assertCurrent?: () => void;
   assertPublicationCurrent?: () => void;
   retainOwnership?: (scope: SubagentRegistrationScope) => void;
+  /** Retain rejection cleanup at the non-queued registration's durable commit. */
+  retainAdmission?: (reject: SubagentAdmissionRejection) => void;
+  admissionSessionEffects?: SubagentSessionEffects;
 };
+
+export type SubagentAdmissionRejection = (error: string) => Promise<void>;

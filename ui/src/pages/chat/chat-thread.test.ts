@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { markInboundContextLabel } from "../../../../src/auto-reply/reply/inbound-context-marker.js";
 import { createRequireRecord } from "../../../../test/helpers/record.js";
 import type { MessageGroup } from "../../lib/chat/chat-types.ts";
@@ -23,21 +23,19 @@ import {
 } from "./chat-thread-fixtures.test-support.ts";
 import { groupMessages } from "./chat-thread-grouping.ts";
 import * as threadItems from "./chat-thread-items.ts";
+import { persistedMessageEntryId, readPendingSendStatus } from "./chat-thread-items.ts";
 import { buildItems, createProps, type CachedChatItemsProps } from "./chat-thread.test-support.ts";
 import {
   buildCachedChatItems,
-  coalesceStreamRuns,
-  collapseCompletedTurnWork,
   getExpansionStateVersion,
   getExpandedToolCards,
   getExpandedUserMessages,
-  persistedMessageEntryId,
-  readPendingSendStatus,
   resetChatThreadState,
   setExpansionState,
   subscribeExpansionState,
   syncToolCardExpansionState,
 } from "./chat-thread.ts";
+import { coalesceStreamRuns, collapseCompletedTurnWork } from "./chat-turn-presentation.ts";
 import { publishChatSessionProjectionMessages } from "./history-merge.ts";
 import { readLiveTerminalRevision, rememberLiveTerminalRun } from "./terminal-message-identity.ts";
 
@@ -116,6 +114,13 @@ function canvasToolOutput(viewId: string, title: string, preferredHeight: number
     },
     presentation: { target: "assistant_message" },
   });
+}
+
+function canvasBlock<P extends object>(preview: P) {
+  return {
+    type: "canvas",
+    preview: { kind: "canvas", surface: "assistant_message", render: "url", ...preview },
+  };
 }
 
 function messageGroups(props: Partial<CachedChatItemsProps>): MessageGroup[] {
@@ -339,45 +344,35 @@ describe("collapseCompletedTurnWork", () => {
     timestamp,
   });
 
-  it.each([
-    {
-      name: "durable context event retains surrounding replies",
-      message: {
-        role: "custom",
-        customType: "openclaw.context-compaction",
-        content: "Context compacted",
-        display: true,
-        excludeFromContext: true,
-        details: { runId: "run-1" },
-        idempotencyKey: "codex-context-compaction:thread:turn:item",
-        timestamp: 2_000,
-      },
-      surrounding: true,
-      divider: { compaction: "complete", label: "Context compacted" },
-    },
-    {
-      name: "persisted boundary retains recorded token savings",
-      message: {
-        role: "system",
-        timestamp: 2_000,
-        __openclaw: {
-          kind: "compaction",
-          id: "checkpoint-with-metrics",
-          tokensBefore: 900_000,
-          tokensAfter: 24_700,
-        },
-      },
-      surrounding: false,
-      divider: { kind: "divider", label: "Context compacted", metric: "saved 875.3k tokens" },
-    },
-  ])("renders a compaction marker when $name", ({ message, surrounding, divider }) => {
+  it.each(["context event", "persisted boundary"])("renders a compaction %s", (source) => {
+    const boundary = source === "persisted boundary";
+    const marker = boundary
+      ? {
+          role: "system",
+          timestamp: 2_000,
+          __openclaw: {
+            kind: "compaction",
+            id: "checkpoint-with-metrics",
+            tokensBefore: 900_000,
+            tokensAfter: 24_700,
+          },
+        }
+      : chatMessage("custom", "Context compacted", 2_000, {
+          customType: "openclaw.context-compaction",
+          display: true,
+          excludeFromContext: true,
+          details: { runId: "run-1" },
+          idempotencyKey: "codex-context-compaction:thread:turn:item",
+        });
     const items = collapsedItems({
-      messages: surrounding
-        ? [user("do it", 1_000), message, assistant("All done.", 3_000)]
-        : [message],
+      messages: boundary ? [marker] : [user("do it", 1_000), marker, assistant("All done.", 3_000)],
     });
-    expect(items[surrounding ? 1 : 0]).toMatchObject(divider);
-    if (surrounding) {
+    expect(items[boundary ? 0 : 1]).toMatchObject(
+      boundary
+        ? { kind: "divider", label: "Context compacted", metric: "saved 875.3k tokens" }
+        : { compaction: "complete", label: "Context compacted" },
+    );
+    if (!boundary) {
       expectKinds(items, ["group", "divider", "group"]);
       expect(requireGroup(items[2]).messages[0]?.message).toMatchObject({ content: "All done." });
     }
@@ -603,6 +598,50 @@ describe("buildCachedChatItems working spark", () => {
     expect(next.indicator.startedAt).toBe(3_000);
     expect(other.indicator.key).not.toBe(pending.indicator.key);
     expect(readingIndicator({ sessionKey, queue: [failed] })).toBeUndefined();
+  });
+
+  it("times an externally admitted run from its own start, not the previous run's activity", () => {
+    vi.useFakeTimers();
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    const sessionKey = "agent:main:external-runs";
+    const firstTool = resultMessage("first-call", "read", "first", 1_100, {
+      runId: "first-run",
+      __openclawToolStreamReceivedAt: 1_100,
+    });
+    const indicatorFor = (props: Partial<CachedChatItemsProps>) =>
+      requireItem(
+        buildItems({ sessionKey, toolMessages: [firstTool], ...props }),
+        "reading-indicator",
+      );
+    vi.setSystemTime(1_000);
+    expect(
+      indicatorFor({
+        runWorking: true,
+        runActive: true,
+        runId: "first-run",
+        stream: "",
+        streamStartedAt: 1_000,
+      }),
+    ).toMatchObject({ runId: "first-run", startedAt: 1_000 });
+    vi.setSystemTime(30_000);
+    expect(readingIndicator({ sessionKey, toolMessages: [firstTool] })).toBeUndefined();
+
+    vi.setSystemTime(60_000);
+    const admitted = indicatorFor({ runWorking: true, runActive: true });
+    expect(admitted.startedAt).toBe(60_000);
+    expect(admitted.runId).toBeUndefined();
+    vi.setSystemTime(60_500);
+    expect(
+      indicatorFor({
+        runWorking: true,
+        runActive: true,
+        runId: "second-run",
+        stream: "",
+        streamStartedAt: 60_500,
+      }),
+    ).toMatchObject({ key: admitted.key, runId: "second-run", startedAt: 60_000 });
   });
 
   it("yields to the initial-load skeleton on an empty thread", () => {
@@ -1105,11 +1144,11 @@ describe("buildCachedChatItems", () => {
     expect(messageRecord(requireGroup(items[1])).content).toBe("Missing timestamp.");
   });
 
-  it("keeps an unconfirmed attempted send after the preceding reply for inline retry", () => {
+  it("keeps an attempted pending send after the preceding reply", () => {
     const groups = messageGroups({
       messages: [assistant("Previous reply", 2)],
       queue: [
-        queuedSend("attempted-send-1", "retry me from the transcript", 1, "unconfirmed", {
+        queuedSend("attempted-send-1", "retry me from the transcript", 1, "waiting-reconnect", {
           sendError: "Delivery diagnostic",
           sendAttempts: 1,
         }),
@@ -1125,7 +1164,7 @@ describe("buildCachedChatItems", () => {
     });
     expect(readPendingSendStatus(message)).toEqual({
       id: "attempted-send-1",
-      state: "unconfirmed",
+      state: "waiting-reconnect",
       error: "Delivery diagnostic",
     });
   });
@@ -1254,15 +1293,7 @@ describe("buildCachedChatItems", () => {
         assistant(
           [
             textBlock(text),
-            {
-              type: "canvas",
-              preview: {
-                kind: "canvas",
-                surface: "assistant_message",
-                render: "url",
-                url: "/__openclaw__/canvas/documents/cv_url_match/index.html",
-              },
-            },
+            canvasBlock({ url: "/__openclaw__/canvas/documents/cv_url_match/index.html" }),
           ],
           1_003,
         ),
@@ -1498,15 +1529,7 @@ describe("buildCachedChatItems", () => {
           },
         ],
       };
-      const canvas = {
-        type: "canvas",
-        preview: {
-          kind: "canvas",
-          surface: "assistant_message",
-          render: "url",
-          viewId: "cv_final",
-        },
-      };
+      const canvas = canvasBlock({ viewId: "cv_final" });
       const saved = assistant([textBlock("Your counter is ready."), canvas], 1_003, {
         __openclaw: { id: "saved-final", seq: 3, runId },
       });
@@ -1854,19 +1877,13 @@ function mcpAppDescriptor(viewId: string, toolCallId: string) {
 }
 
 function mcpAppCanvasBlock(viewId: string, toolCallId: string) {
-  return {
-    type: "canvas",
-    preview: {
-      kind: "canvas",
-      surface: "assistant_message",
-      render: "url",
-      viewId,
-      title: "Demo App",
-      url: `/__openclaw__/canvas/documents/${viewId}/index.html`,
-      sandbox: "scripts",
-      mcpApp: mcpAppDescriptor(viewId, toolCallId),
-    },
-  };
+  return canvasBlock({
+    viewId,
+    title: "Demo App",
+    url: `/__openclaw__/canvas/documents/${viewId}/index.html`,
+    sandbox: "scripts",
+    mcpApp: mcpAppDescriptor(viewId, toolCallId),
+  });
 }
 
 function mcpAppResult(viewId: string, toolCallId: string, timestamp: number) {

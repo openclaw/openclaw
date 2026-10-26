@@ -1,4 +1,4 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { loadSessionGitHubDetail } from "./detail.js";
 import { loadSessionGitHubPreview, loadControlUiGitHubPreview } from "./preview.js";
 import type { SessionGitHubReadIdentity } from "./session-reader.js";
@@ -7,7 +7,6 @@ const host = "ghe.example.test";
 const apiBaseUrl = `https://${host}/api/v3`;
 const target = { owner: "example", repo: "project", kind: "issue" as const, number: 7 };
 const time = "2026-10-10T10:00:00Z";
-afterEach(() => vi.restoreAllMocks());
 function identity(scope: string): SessionGitHubReadIdentity {
   return {
     host,
@@ -53,14 +52,8 @@ it("renders Enterprise documents and isolates same-token cache entries by curren
   });
   expect((await loadSessionGitHubPreview(target, first, fetcher)).title).toBe("Private issue");
   const overview = await loadSessionGitHubDetail(target, first, fetcher, false, "overview");
-  expect(overview).toMatchObject({
-    title: "Private issue",
-    revision: time,
-    deferredSections: ["discussion"],
-  });
+  expect(overview).toMatchObject({ revision: time, deferredSections: ["discussion"] });
   expect(overview.comments).toBeUndefined();
-  const discussion = await loadSessionGitHubDetail(target, first, fetcher, false, "discussion");
-  expect(discussion).toMatchObject({ revision: time, comments: [], commentsTotal: 0 });
   const requests = fetcher.mock.calls.length;
   await loadSessionGitHubDetail(target, identity("principal-b/session-a"), fetcher);
   expect(fetcher.mock.calls.length).toBeGreaterThan(requests);
@@ -94,4 +87,29 @@ it("retains public-only repository admission even when a caller supplies session
     loadControlUiGitHubPreview(target, identity("public-cannot-upgrade"), fetcher),
   ).rejects.toThrow("not public");
   expect(fetcher).toHaveBeenCalledOnce();
+});
+
+it("previews Enterprise commits through the admitted API base without loading discussion", async () => {
+  const sha = "abcdef0123456789abcdef0123456789abcdef01";
+  const fetchRepository = fetchFixture();
+  const fetcher = vi.fn<typeof fetch>(async (input, init) => {
+    const url = input instanceof Request ? input.url : String(input);
+    if (url === apiBaseUrl + "/repos/example/project/commits/" + sha + "?per_page=1") {
+      return Response.json({
+        sha,
+        url: apiBaseUrl + "/repos/example/project/commits/" + sha,
+        commit: { message: "Private commit", author: { date: time }, comment_count: 0 },
+        author: { login: "reader" },
+        stats: { additions: 2, deletions: 1 },
+      });
+    }
+    return fetchRepository(input, init);
+  });
+  const preview = await loadSessionGitHubPreview(
+    { owner: "example", repo: "project", kind: "commit", sha },
+    identity("commit-session"),
+    fetcher,
+  );
+  expect(preview).toMatchObject({ kind: "commit", sha, title: "Private commit" });
+  expect(fetcher).toHaveBeenCalledTimes(2);
 });

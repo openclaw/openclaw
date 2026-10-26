@@ -1,8 +1,6 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
-import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
-import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
 import type { AssistantMessage } from "../../llm/types.js";
 import { buildAssistantFailoverSignal } from "../embedded-agent-helpers/assistant-message-failures.js";
 import { classifyFailoverSignal } from "../failover/classify.js";
@@ -20,6 +18,7 @@ import { SessionManager } from "../sessions/session-manager.js";
 import { SettingsManager } from "../sessions/settings-manager.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
+import { createRecoveryDefaults } from "./run.recovery.test-support.js";
 import { prepareEmbeddedAttemptPromptPreflight } from "./run/attempt-prompt-preflight.js";
 import { readCompactionAccountingRecorder } from "./run/compaction-accounting-bridge.js";
 import { createEmbeddedRunContextRecoveryState } from "./run/context-recovery-state.js";
@@ -29,7 +28,6 @@ import {
   clearEmbeddedSessionPromptStates,
   retainEmbeddedSessionPromptState,
 } from "./session-prompt-state.js";
-import { createUsageAccumulator } from "./usage-accumulator.js";
 
 const mocks = vi.hoisted(() => ({
   compact: vi.fn(),
@@ -140,18 +138,7 @@ function makeInput(overrides: RecoveryInputOverrides = {}): RecoveryInput {
   });
 
   const input: RecoveryInput = {
-    runParams: {
-      runId: "run-1",
-      sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
-      config: {},
-      workspaceDir: "/tmp/workspace",
-      prompt: "continue",
-      timeoutMs: 1_000,
-      onAutoCompactionSucceeded: vi.fn(),
-    },
-    state: createEmbeddedRunContextRecoveryState(),
-    assertRecoveryActive: vi.fn(),
+    ...createRecoveryDefaults(mocks.compact, () => input),
     // This leaf doubles orchestration; real admission and writer fencing have composed coverage.
     prepareRecoveryOwner: () => {
       const assertActive = composeSessionSourceAssertion([
@@ -188,16 +175,7 @@ function makeInput(overrides: RecoveryInputOverrides = {}): RecoveryInput {
       withSessionManagerRewriteLock: async <T>(operation: () => Promise<T> | T) =>
         await operation(),
     }),
-    contextEngine: {
-      info: { id: "legacy", name: "Legacy" },
-      ingest: vi.fn(),
-      assemble: vi.fn(),
-      compact: mocks.compact,
-    },
-    contextTokenBudget: 200_000,
-    genericCompactionRecoveryAllowed: true,
     aborted: false,
-    signalOwnedInterruption: false,
     promptError,
     assistantOverflowCandidate: assistantOverflowCandidate
       ? {
@@ -211,37 +189,9 @@ function makeInput(overrides: RecoveryInputOverrides = {}): RecoveryInput {
         }
       : undefined,
     attemptCompactionCount: 0,
-    runtimeAuthPlan: {
-      providerForAuth: "openai",
-      authProfileProviderForAuth: "openai",
-    },
-    resolvedSessionKey: "agent:main:session-1",
-    sessionAgentId: "main",
-    agentDir: "/tmp/agent",
-    workspaceDir: "/tmp/workspace",
-    modelSelection: { provider: "openai", model: "gpt-5.6-luna", authProfileIdSource: "auto" },
     harnessRuntime: "embedded",
-    thinkLevel: "off",
-    resolveContextEnginePluginId: () => undefined,
-    buildRuntimeSettings: ({ tokenBudget, degradedReason }) =>
-      buildContextEngineRuntimeSettings({
-        contextEngineHost: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
-        provider: input.modelSelection.provider,
-        requestedModel: input.modelSelection.model,
-        resolvedModel: input.modelSelection.model,
-        promptTokenBudget: tokenBudget,
-        degradedReason,
-      }),
-    onCompactionHookMessages: vi.fn(async () => {}),
-    runOwnsCompactionBeforeHook: vi.fn(async () => {}),
-    runOwnsCompactionAfterHook: vi.fn(async () => {}),
-    adoptCompactionTranscript: vi.fn(async () => undefined),
-    getActiveSession: () => ({ id: "session-1", file: "/tmp/session-1.jsonl" }),
     prepareCurrentTranscriptRetry: vi.fn(),
-    prepareCompactedTranscriptRetry: vi.fn(async () => {}),
     markOwnedTranscriptRetry: vi.fn(),
-    armPostCompactionGuard: vi.fn(),
-    usageAccumulator: createUsageAccumulator(),
     ...restOverrides,
     attempt,
   };
@@ -312,6 +262,36 @@ describe("recoverEmbeddedRunOverflow", () => {
     // must outrank them so validation-shaped wrappers still recover.
     assistantOverflowCandidate.errorType = "invalid_request_error";
     assistantOverflowCandidate.errorCode = "invalid_parameter_error";
+    const result = await recoverEmbeddedRunOverflow(
+      makeInput({ promptError: null, assistantOverflowCandidate }),
+    );
+
+    expect(result).toEqual({ action: "retry" });
+    expect(mocks.compact).toHaveBeenCalledOnce();
+    expect(mocks.warn).toHaveBeenCalledWith(expect.stringContaining("source=assistantError"));
+  });
+
+  it("recovers a SiliconFlow max_seq_len overflow as context overflow", async () => {
+    const assistantOverflowCandidate = makeAssistantMessage({
+      stopReason: "error",
+      errorMessage:
+        '400 {"code":20015,"message":"length of prompt_tokens (51353) must be less than max_seq_len (32768).","data":null}',
+    });
+    const result = await recoverEmbeddedRunOverflow(
+      makeInput({ promptError: null, assistantOverflowCandidate }),
+    );
+
+    expect(result).toEqual({ action: "retry" });
+    expect(mocks.compact).toHaveBeenCalledOnce();
+    expect(mocks.warn).toHaveBeenCalledWith(expect.stringContaining("source=assistantError"));
+  });
+
+  it("recovers a vLLM max_model_len overflow as context overflow", async () => {
+    const assistantOverflowCandidate = makeAssistantMessage({
+      stopReason: "error",
+      errorMessage:
+        "400 The decoder prompt (length 40000) is longer than the maximum model length of 32768. Make sure that `max_model_len` is no smaller than the number of text tokens.",
+    });
     const result = await recoverEmbeddedRunOverflow(
       makeInput({ promptError: null, assistantOverflowCandidate }),
     );

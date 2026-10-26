@@ -8,35 +8,42 @@ import {
   loadRequesterSessionEntry,
 } from "./subagent-announce-delivery.runtime.js";
 
-it("retires prepared requester guards when the session writer replaces the lifecycle", async () => {
+it("keeps requester identity through metadata updates but retires it on lifecycle replacement", async () => {
   await withOpenClawTestState({ label: "requester-current" }, async () => {
     const agentId = "main";
     const sessionKey = "agent:main:main";
     const storePath = resolveOpenClawAgentSqlitePath({ agentId });
     const scope = { agentId, sessionKey, storePath };
+    const entry = (lifecycleRevision: string, updatedAt = 2) => ({
+      sessionId: "requester",
+      lifecycleRevision,
+      updatedAt,
+    });
     const config = vi
       .spyOn(configRuntime, "getRuntimeConfig")
       .mockReturnValue({ session: { store: storePath } });
     let current: Awaited<ReturnType<typeof captureRequesterSessionEntryCurrent>> | undefined;
+    let missing: Awaited<ReturnType<typeof captureRequesterSessionEntryCurrent>> | undefined;
     try {
-      await replaceSessionEntry(scope, {
-        sessionId: "requester",
-        lifecycleRevision: "first",
-        updatedAt: 1,
-      });
+      missing = await captureRequesterSessionEntryCurrent(sessionKey, agentId);
+      expect(missing.readCurrent()).toBeUndefined();
+      await replaceSessionEntry(scope, entry("first", 1));
       current = await captureRequesterSessionEntryCurrent(sessionKey, agentId);
       expect(current.readCurrent()?.lifecycleRevision).toBe("first");
-      await replaceSessionEntry(scope, {
+      expect(missing.readCurrent()).toBeUndefined();
+      await replaceSessionEntry(scope, { ...entry("first"), lifecycleRunId: "active-run" });
+      expect(current.readCurrent()).toMatchObject({
         sessionId: "requester",
-        lifecycleRevision: "replacement",
-        updatedAt: 2,
+        lifecycleRevision: "first",
       });
+      await replaceSessionEntry(scope, entry("replacement"));
       expect(current.readCurrent()).toBeUndefined();
       expect((await loadRequesterSessionEntry(sessionKey, agentId)).entry?.lifecycleRevision).toBe(
         "replacement",
       );
     } finally {
       current?.release();
+      missing?.release();
       config.mockRestore();
     }
   });

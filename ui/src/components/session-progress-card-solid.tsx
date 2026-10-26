@@ -1,16 +1,13 @@
-import type { ProgressCard, ProgressCardStep, SessionRunStatus } from "@openclaw/gateway-protocol";
-import { createMemo, createSignal, createUniqueId, For, Show, useContext } from "solid-js";
-import { formatRelativeTimestamp } from "../lib/format.ts";
+import type { ProgressCard, SessionRunStatus } from "@openclaw/gateway-protocol";
+import { createMemo, createUniqueId, onSettled, Show } from "solid-js";
 import { i18nRevision, t } from "../lib/reactive/i18n.ts";
-import { createInterval } from "../lib/reactive/timers.ts";
-import { ContentPresentation } from "../lib/solid/presentation.ts";
+import { toSanitizedMarkdownHtml } from "./markdown.ts";
+import { CardActivity, StepMarker, Steps } from "./session-progress-card-content.tsx";
 import { ProgressCardMarkdown } from "./session-progress-card-view.tsx";
 import {
+  progressCardNoteSummary,
   progressCardPresentation,
   REFRESH_STATUS_LABEL_KEYS,
-  STATUS_LABEL_KEYS,
-  TERMINAL_RUN_OUTCOMES,
-  type PresentedProgressStepStatus,
   type SessionProgressCardRefreshAction,
 } from "./session-progress-card.ts";
 import {
@@ -20,10 +17,15 @@ import {
 import { Icon } from "./solid/icon.tsx";
 import { Menu, type MenuEntry, type MenuHandle, type MenuProps } from "./solid/menu.tsx";
 import { useScrollState } from "./solid/scroll-state.ts";
+import { createTextOverflow } from "./solid/text-overflow.ts";
+import "./tooltip.ts";
+import "../styles/chat/task-progress-details.css";
 
 export type SessionProgressCardProps = {
   card: ProgressCard | null | undefined;
   placement: "board" | "composer" | "details";
+  /** Explicit native desktop Details presentation; legacy/mobile callers retain their behavior. */
+  desktopDetails?: boolean;
   onDismiss?: (card: ProgressCard) => void;
   sessionStatus?: SessionRunStatus;
   startedAt?: number;
@@ -38,126 +40,6 @@ export type SessionProgressCardProps = {
 };
 
 type CardProps = SessionProgressCardProps & { card: ProgressCard };
-
-function CardActivity(props: { view: ReturnType<typeof cardPresentation>; composer?: boolean }) {
-  const presented = useContext(ContentPresentation);
-  const [revision, setRevision] = createSignal(0);
-  createInterval(
-    () => setRevision((value) => value + 1),
-    () => (presented() ? 30_000 : undefined),
-  );
-  const timestamp = () => props.view().activityTimestamp;
-  const label = createMemo(() => {
-    revision();
-    presented();
-    return t(props.view().activityKey, { time: formatRelativeTimestamp(timestamp()) });
-  });
-  const count = () => {
-    const { counts, currentPosition } = props.view();
-    return counts
-      ? props.composer
-        ? `${t("sessionProgressCard.stepCount", {
-            current: String(currentPosition),
-            total: String(counts.total),
-          })} · `
-        : ` · ${counts.completed}/${counts.total}`
-      : "";
-  };
-  return (
-    <span>
-      {props.composer && count()}
-      <time datetime={new Date(timestamp()).toISOString()} aria-label={label()} title={label()}>
-        {label()}
-      </time>
-      {!props.composer && count()}
-    </span>
-  );
-}
-
-function StepMarker(props: {
-  status: PresentedProgressStepStatus;
-  outcome?: ReturnType<typeof progressCardPresentation>["terminalOutcome"];
-}) {
-  return (
-    <Show
-      when={props.status === "in_progress" && !props.outcome}
-      fallback={
-        <Icon
-          name={
-            (props.outcome ?? props.status) === "completed"
-              ? "check"
-              : props.outcome
-                ? "circleX"
-                : "clock"
-          }
-        />
-      }
-    >
-      <span class="session-run-spinner" />
-    </Show>
-  );
-}
-
-function Steps(props: {
-  card: ProgressCard;
-  hasActiveRun: boolean;
-  sessionStatus?: SessionRunStatus;
-}) {
-  return (
-    <Show when={props.card.steps?.length}>
-      <ol class="session-progress-card__steps">
-        <For each={props.card.steps}>
-          {(step) => (
-            <Step
-              step={step}
-              hasActiveRun={props.hasActiveRun}
-              sessionStatus={props.sessionStatus}
-            />
-          )}
-        </For>
-      </ol>
-    </Show>
-  );
-}
-
-function Step(props: {
-  step: ProgressCardStep;
-  hasActiveRun: boolean;
-  sessionStatus?: SessionRunStatus;
-}) {
-  const terminalOutcome = () =>
-    props.step.status === "in_progress" && props.sessionStatus
-      ? TERMINAL_RUN_OUTCOMES[props.sessionStatus]
-      : undefined;
-  const status = (): PresentedProgressStepStatus =>
-    props.step.status === "in_progress" && !props.hasActiveRun && !terminalOutcome()
-      ? "paused"
-      : props.step.status;
-  const label = () =>
-    t(
-      terminalOutcome()
-        ? `sessionProgressCard.status.${terminalOutcome()}`
-        : status() === "paused"
-          ? "sessionProgressCard.status.paused"
-          : STATUS_LABEL_KEYS[props.step.status],
-    );
-  return (
-    <li
-      class={["session-progress-card__step", `session-progress-card__step--${status()}`]}
-      aria-label={t("sessionProgressCard.stepLabel", { status: label(), step: props.step.step })}
-    >
-      <span
-        class="session-progress-card__step-marker"
-        data-status={status()}
-        data-outcome={terminalOutcome() ? props.sessionStatus : undefined}
-        aria-hidden="true"
-      >
-        <StepMarker status={status()} outcome={terminalOutcome()} />
-      </span>
-      <span class="session-progress-card__step-text">{props.step.step}</span>
-    </li>
-  );
-}
 
 function CardAction(props: { card: ProgressCard; onAction?: (card: ProgressCard) => void }) {
   const label = () => t("sessionProgressCard.dismiss");
@@ -205,6 +87,14 @@ function CardMenu(props: CardProps) {
         return pending();
       },
       class: "session-progress-card__refresh",
+      details:
+        props.placement === "details" ? (
+          <CardActivity
+            view={() => progressCardPresentation(props.card)}
+            hideCount
+            hideTooltip={props.desktopDetails}
+          />
+        ) : undefined,
       icon: (
         <Icon
           name={
@@ -222,12 +112,54 @@ function CardMenu(props: CardProps) {
     { lazy: true },
   );
   const items = createMemo<MenuEntry[]>(
-    () => [
-      ...(props.refreshAction ? [refreshItem()] : []),
-      ...(props.onDismiss ? [{ id: "dismiss", label: t("sessionProgressCard.hide") }] : []),
-      ...(props.onClearSaved ? [{ id: "clear", label: t("sessionProgressCard.clearSaved") }] : []),
-      ...(props.menuOptions?.items ?? []),
-    ],
+    () => {
+      const actions: MenuEntry[] = [
+        ...(props.refreshAction ? [refreshItem()] : []),
+        ...(props.onDismiss
+          ? [
+              {
+                id: "dismiss",
+                label: t("sessionProgressCard.hide"),
+                icon: props.desktopDetails ? <Icon name="x" /> : undefined,
+              },
+            ]
+          : []),
+      ];
+      const clear: MenuEntry[] = props.onClearSaved
+        ? [
+            {
+              id: "clear",
+              label: t("sessionProgressCard.clearSaved"),
+              icon: props.desktopDetails ? <Icon name="trash" /> : undefined,
+              variant: props.desktopDetails ? "danger" : undefined,
+            },
+          ]
+        : [];
+      const preferences = props.menuOptions?.items ?? [];
+      if (!props.desktopDetails) {
+        return [...actions, ...clear, ...preferences];
+      }
+      return [
+        {
+          kind: "group",
+          id: "card-actions",
+          class: "task-progress-details__menu-group",
+          items: actions,
+        },
+        {
+          kind: "group",
+          id: "preferences",
+          class: "task-progress-details__menu-group",
+          items: preferences,
+        },
+        {
+          kind: "group",
+          id: "shared-progress",
+          class: "task-progress-details__menu-group",
+          items: clear,
+        },
+      ];
+    },
     { lazy: true },
   );
   return (
@@ -255,17 +187,20 @@ function CardMenu(props: CardProps) {
           trigger={
             <Icon
               name={
-                pending()
-                  ? "loader"
-                  : props.refreshAction?.state === "updated"
-                    ? "check"
-                    : "moreHorizontal"
+                props.placement === "details"
+                  ? "moreHorizontal"
+                  : pending()
+                    ? "loader"
+                    : props.refreshAction?.state === "updated"
+                      ? "check"
+                      : "moreHorizontal"
               }
             />
           }
           triggerAttributes={{
-            "data-state": props.refreshAction?.state ?? "idle",
-            "aria-busy": pending() ? "true" : "false",
+            "data-state":
+              props.placement === "details" ? undefined : (props.refreshAction?.state ?? "idle"),
+            "aria-busy": props.placement === "details" ? undefined : pending() ? "true" : "false",
           }}
           items={items()}
           disabled={disabled()}
@@ -297,7 +232,7 @@ function CardMenu(props: CardProps) {
   );
 }
 
-function cardPresentation(props: CardProps) {
+function cardPresentation(props: ProgressDetailsContentProps) {
   return createMemo(() => {
     i18nRevision();
     return progressCardPresentation(
@@ -308,6 +243,265 @@ function cardPresentation(props: CardProps) {
       props.hasActiveRun ?? true,
     );
   });
+}
+
+export type ProgressDetailsContentProps = Pick<
+  CardProps,
+  "card" | "sessionStatus" | "startedAt" | "endedAt" | "hasActiveRun"
+>;
+
+/** The same saved plan and native step states, without composer or board chrome. */
+export function ProgressDetailsContent(props: ProgressDetailsContentProps) {
+  const view = cardPresentation(props);
+  return (
+    <div class="task-progress-details__plan" data-has-steps={Boolean(props.card.steps?.length)}>
+      <ProgressCardMarkdown markdown={props.card.markdown} />
+      <Steps
+        card={props.card}
+        hasActiveRun={view().hasCurrentRunActivity}
+        sessionStatus={view().effectiveSessionStatus}
+      />
+    </div>
+  );
+}
+
+export function ProgressDetailsRefresh(props: {
+  card: ProgressCard;
+  action?: SessionProgressCardRefreshAction;
+  disabled?: boolean;
+  desktopDetails?: boolean;
+  hideTooltip?: boolean;
+}) {
+  const pending = () => props.action?.state === "pending";
+  return (
+    <Show when={props.action}>
+      <openclaw-tooltip
+        prop:placement="top"
+        prop:disabled={props.disabled || props.hideTooltip || false}
+      >
+        <button
+          type="button"
+          class="task-progress-details__refresh"
+          aria-label={t(
+            pending() ? "sessionProgressCard.refresh.pending" : "sessionProgressCard.refresh.label",
+          )}
+          aria-busy={pending() ? "true" : "false"}
+          disabled={props.disabled || pending()}
+          data-pending={pending() ? "true" : "false"}
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            if (!props.disabled && !pending()) {
+              props.action?.onRefresh(props.card);
+            }
+          }}
+        >
+          <Icon name={pending() ? "loader" : "refresh"} />
+        </button>
+        <span slot="content" class="task-progress-details__refresh-tooltip">
+          <span>{t("sessionProgressCard.refresh.label")}</span>
+          <CardActivity
+            view={() => progressCardPresentation(props.card)}
+            hideCount
+            hideTooltip={props.desktopDetails}
+          />
+        </span>
+      </openclaw-tooltip>
+    </Show>
+  );
+}
+
+export function ProgressDetailsRefreshStatus(props: {
+  card: ProgressCard;
+  action?: SessionProgressCardRefreshAction;
+  disabled?: boolean;
+}) {
+  const failed = () => props.action?.state === "failed" || props.action?.state === "timeout";
+  return (
+    <Show when={props.action?.state}>
+      {(state) => (
+        <div class="task-progress-details__refresh-status" data-state={state()} role="status">
+          <span>{t(REFRESH_STATUS_LABEL_KEYS[state()])}</span>
+          <Show when={failed()}>
+            <button
+              type="button"
+              class="task-progress-details__retry"
+              disabled={props.disabled}
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                if (!props.disabled) {
+                  props.action?.onRefresh(props.card);
+                }
+              }}
+            >
+              {t("common.retry")}
+            </button>
+          </Show>
+        </div>
+      )}
+    </Show>
+  );
+}
+
+function DetailsCard(props: CardProps) {
+  const view = cardPresentation(props);
+  const noteSummary = createMemo(() => {
+    if (!props.desktopDetails || view().counts || !props.card.markdown) {
+      return "";
+    }
+    // Reuse the full note's parser; the collapsed text preview omits progress bars.
+    return progressCardNoteSummary(
+      toSanitizedMarkdownHtml(props.card.markdown, {
+        progressBars: true,
+        codeBlockChrome: "none",
+      }),
+    );
+  });
+  const currentOverflow = createTextOverflow(() => [view().stepLabel, noteSummary()]);
+  const disclosure = createComposerProgressDisclosure(() => [
+    props.composerDisclosureContext?.sessionIdentity ?? props.card.sessionKey,
+    !props.collapseComposerByDefault,
+    props.composerDisclosureContext,
+  ]);
+  let element: HTMLDetailsElement;
+  let body: HTMLDivElement;
+  let animation: Animation | undefined;
+  const finishMotion = () => {
+    if (!animation) {
+      return;
+    }
+    animation.cancel();
+    animation = undefined;
+    element.removeAttribute("data-details-moving");
+    body.inert = false;
+  };
+  const toggle = (event: MouseEvent) => {
+    if (!props.desktopDetails) {
+      disclosure.onClick(event);
+      return;
+    }
+    const from = element.getBoundingClientRect().height;
+    const wasOpen = element.open;
+    disclosure.onClick(event);
+    if (element.open === wasOpen) {
+      return;
+    }
+    // The native disclosure still owns the choice. Only its painted height is animated.
+    // Sample before cancelling so a second click reverses from the visible position.
+    finishMotion();
+    if (event.detail === 0) {
+      return;
+    }
+    const to = element.getBoundingClientRect().height;
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (!reduced) {
+      element.setAttribute("data-details-moving", "");
+      body.inert = !element.open;
+    }
+    animation = element.animate(
+      reduced
+        ? [{ opacity: 0.7 }, { opacity: 1 }]
+        : [{ height: `${from}px` }, { height: `${to}px` }],
+      { duration: reduced ? 100 : 300, easing: "cubic-bezier(0.4, 0, 0.2, 1)" },
+    );
+    animation.onfinish = finishMotion;
+  };
+  function PresentedMotion() {
+    onSettled(() => finishMotion);
+    return null;
+  }
+  onSettled(() => finishMotion);
+  return (
+    <details
+      ref={(value) => {
+        element = value;
+        disclosure.details(value);
+      }}
+      onClick={toggle}
+      class="task-progress-details task-progress-details--desktop"
+      data-progress-card-placement="details"
+      data-desktop-details={props.desktopDetails ? "" : undefined}
+    >
+      <Show when={props.composerDisclosureContext?.presented !== false}>
+        <PresentedMotion />
+      </Show>
+      <summary
+        ref={disclosure.summary}
+        class="task-progress-details__summary"
+        aria-label={`${view().stepLabel}. ${view().outcomeLabel ?? view().countLabel}`}
+      >
+        <span class="task-progress-details__heading">
+          <span class="task-progress-details__title">{t("sessionProgressCard.composerTitle")}</span>
+          <span class="task-progress-details__chevron" aria-hidden="true">
+            <Icon name="chevronDown" />
+          </span>
+          <Show when={!props.desktopDetails || view().counts}>
+            <span
+              class="task-progress-details__current-marker session-progress-card__current-marker"
+              aria-hidden="true"
+            >
+              <Show when={view().counts} fallback={<Icon name="listChecks" />}>
+                <StepMarker
+                  status={
+                    view().complete ? "completed" : (view().presentedCurrentStatus ?? "pending")
+                  }
+                  outcome={view().terminalOutcome}
+                />
+              </Show>
+            </span>
+          </Show>
+          <span
+            ref={currentOverflow}
+            class="task-progress-details__current"
+            data-note={props.desktopDetails && !view().counts ? "" : undefined}
+          >
+            {view().counts
+              ? view().stepLabel
+              : props.desktopDetails
+                ? noteSummary()
+                : t("sessionProgressCard.composerTitle")}
+          </span>
+          <Show when={!props.desktopDetails && view().counts}>
+            <span
+              class="task-progress-details__count"
+              aria-label={t("sessionProgressCard.stepCount", {
+                current: String(view().currentPosition),
+                total: String(view().counts?.total),
+              })}
+            >
+              {view().currentPosition}/{view().counts?.total}
+            </span>
+          </Show>
+        </span>
+        <span class="task-progress-details__actions">
+          <span class="task-progress-details__expanded-refresh">
+            <ProgressDetailsRefresh
+              card={props.card}
+              action={props.refreshAction}
+              disabled={props.menuOptions?.disabled}
+              desktopDetails={props.desktopDetails}
+            />
+          </span>
+          <CardMenu {...props} />
+        </span>
+        <ProgressDetailsRefreshStatus
+          card={props.card}
+          action={props.refreshAction}
+          disabled={props.menuOptions?.disabled}
+        />
+      </summary>
+      <div
+        ref={(value) => {
+          body = value;
+          disclosure.body(value);
+        }}
+        class="task-progress-details__body"
+      >
+        <ProgressDetailsContent {...props} />
+      </div>
+    </details>
+  );
 }
 
 function ComposerCard(props: CardProps) {
@@ -358,7 +552,13 @@ function ComposerCard(props: CardProps) {
           />
         </span>
         <span class="session-progress-card__summary-collapsed">
-          <span class="session-progress-card__current">{view().stepLabel}</span>
+          <span
+            ref={createTextOverflow(() => view().stepLabel)}
+            class="session-progress-card__current"
+            title={view().stepLabel}
+          >
+            {view().stepLabel}
+          </span>
         </span>
         <Show when={view().counts}>
           <span
@@ -442,7 +642,12 @@ export function SessionProgressCard(props: SessionProgressCardProps) {
     <Show when={props.card}>
       {(card) => (
         <Show when={props.placement !== "board"} fallback={<BoardCard {...props} card={card()} />}>
-          <ComposerCard {...props} card={card()} />
+          <Show
+            when={props.placement === "details"}
+            fallback={<ComposerCard {...props} card={card()} />}
+          >
+            <DetailsCard {...props} card={card()} />
+          </Show>
         </Show>
       )}
     </Show>

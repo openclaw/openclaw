@@ -1,11 +1,19 @@
 import { copyFileSync, existsSync, linkSync, readFileSync, unlinkSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { getNodeSqliteKysely, iterateSqliteQuerySync } from "../infra/kysely-sync.js";
+import { isSqliteDatabaseAdmissionFactCurrent } from "../infra/sqlite-database-admission-record.js";
+import {
+  captureSqliteDatabaseAdmissions,
+  withSqliteDatabaseAdmissionExchange,
+} from "../infra/sqlite-database-admission.js";
 import { SQLITE_WORKER_PREPARE_COMMAND } from "../infra/sqlite-worker-contract.js";
 import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { readConfigMachineStateRowInDatabase } from "./config-machine-state-row.js";
+import { writeConfigMachineState } from "./config-machine-state-write.js";
 import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
@@ -13,6 +21,13 @@ import * as worker from "./openclaw-state.worker.js";
 
 let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
 let activeBackend: ReturnType<typeof worker.createSqliteWorkerBackend> | undefined;
+const key = "tts.prefsPath";
+const expected = { value_json: '"updated"', updated_at_ms: 12_345 };
+function readPersistedRow(reader: DatabaseSync) {
+  return reader
+    .prepare("SELECT value_json, updated_at_ms FROM config_machine_state WHERE state_key = ?")
+    .get(key);
+}
 async function openBackend(kind: "existing" | "native-closed" | "native" = "existing") {
   if (kind !== "native") {
     openOpenClawStateDatabase();
@@ -38,6 +53,51 @@ afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
   await state.cleanup();
 });
+
+it.each([false, true])(
+  "publishes a settled machine-state write (exchange failure=%s)",
+  async (failExchange) => {
+    writeConfigMachineState(key, "original");
+    const { run, backend, databasePath } = await openBackend("native");
+    const { db } = openOpenClawStateDatabase();
+    using reader = new DatabaseSync(databasePath, { readOnly: true });
+    await backend[SQLITE_WORKER_PREPARE_COMMAND]?.("machineState.write");
+    const [before] = captureSqliteDatabaseAdmissions(undefined, { location: databasePath });
+    const previous = before!.facts.get("state.tts-prefs-path")!;
+    expect(isSqliteDatabaseAdmissionFactCurrent(before!, previous)).toBe(true);
+    const rowsAtExchange: unknown[] = [];
+    const oldReceiptAtExchange: boolean[] = [];
+    vi.spyOn(Date, "now").mockReturnValue(expected.updated_at_ms);
+    const writtenAt = withSqliteDatabaseAdmissionExchange(
+      (admissions) => {
+        const next = admissions
+          .find((record) => record.identity === before!.identity)
+          ?.facts.get("state.tts-prefs-path");
+        if (next && next.publication !== previous.publication) {
+          rowsAtExchange.push(readPersistedRow(reader));
+          oldReceiptAtExchange.push(isSqliteDatabaseAdmissionFactCurrent(before!, previous));
+          if (failExchange) {
+            throw new Error("synthetic admission exchange failure");
+          }
+        }
+        return [];
+      },
+      () =>
+        run(() =>
+          backend.execute({
+            type: "machineState.write",
+            input: { key: ` ${key} `, value: "updated" },
+          }),
+        ),
+    );
+    expect(writtenAt).toBe(expected.updated_at_ms);
+    expect(rowsAtExchange).toEqual([expected]);
+    expect(oldReceiptAtExchange).toEqual([false]);
+    expect(readPersistedRow(reader)).toEqual(expected);
+    expect(readConfigMachineStateRowInDatabase(db, key)).toEqual(expected);
+    expect(() => backend.assertSettled!()).not.toThrow();
+  },
+);
 
 it("closes an existing-only actor without recreating its missing database", async () => {
   const { backend, databasePath } = await openBackend();

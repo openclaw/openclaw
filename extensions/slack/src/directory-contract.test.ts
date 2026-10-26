@@ -1,113 +1,68 @@
-// Slack tests cover directory contract plugin behavior.
 import { expectDirectoryIds } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import {
   listSlackDirectoryGroupsFromConfig,
   listSlackDirectoryPeersFromConfig,
 } from "../directory-contract-api.js";
 import { getSlackDirectorySelfLive } from "./directory-live.js";
-const slackClientMocks = vi.hoisted(() => ({
+
+const { authTest, usersInfo, createClient } = vi.hoisted(() => ({
   authTest: vi.fn(),
   usersInfo: vi.fn(),
-  createSlackLookupClient: vi.fn(() => ({
-    auth: { test: slackClientMocks.authTest },
-    users: { info: slackClientMocks.usersInfo },
-  })),
+  createClient: vi.fn(),
 }));
+// mock-isolation: directory requests use the fixture client instead of real Slack network clients.
+vi.mock("./client.js", () => ({ createSlackLookupClient: createClient }));
 
-vi.mock("./client.js", () => ({
-  createSlackLookupClient: slackClientMocks.createSlackLookupClient,
-}));
+function config(slack: NonNullable<OpenClawConfig["channels"]>["slack"]): OpenClawConfig {
+  return { channels: { slack } };
+}
+beforeEach(() => {
+  authTest.mockReset().mockResolvedValue({ ok: true, user_id: "USELF", user: "ada" });
+  usersInfo.mockReset();
+  createClient
+    .mockReset()
+    .mockReturnValue({ auth: { test: authTest }, users: { info: usersInfo } });
+});
 
-describe("Slack directory contract", () => {
-  beforeEach(() => {
-    slackClientMocks.authTest.mockReset();
-    slackClientMocks.usersInfo.mockReset();
-    slackClientMocks.createSlackLookupClient.mockClear();
+it("uses the bounded lookup client for live directory requests", async () => {
+  usersInfo.mockResolvedValue({
+    ok: true,
+    user: { id: "USELF", name: "ada", profile: { display_name: "Ada" } },
   });
+  await getSlackDirectorySelfLive({ cfg: config({ botToken: "lookup-fixture" }) });
+  expect(createClient).toHaveBeenCalledExactlyOnceWith("lookup-fixture");
+});
 
-  it("uses the bounded lookup client for live directory requests", async () => {
-    const fixture = "lookup-fixture";
-    slackClientMocks.authTest.mockResolvedValue({ ok: true, user_id: "U123", user: "bot" });
-    slackClientMocks.usersInfo.mockResolvedValue({
-      ok: true,
-      user: { id: "U123", name: "bot", profile: { display_name: "Bot" } },
-    });
-
-    await getSlackDirectorySelfLive({
-      cfg: { channels: { slack: { botToken: fixture } } },
-    } as Parameters<typeof getSlackDirectorySelfLive>[0]);
-
-    expect(slackClientMocks.createSlackLookupClient).toHaveBeenCalledOnce();
-    expect(slackClientMocks.createSlackLookupClient).toHaveBeenCalledWith(fixture);
+it("keeps directories readable when tokens are unresolved SecretRefs", async () => {
+  const secret = { source: "env", provider: "default", id: "MISSING_TEST_SECRET" } as const;
+  const cfg = config({
+    botToken: secret,
+    appToken: secret,
+    allowFrom: ["U123"],
+    channels: { C111: {} },
   });
+  await expectDirectoryIds(listSlackDirectoryPeersFromConfig, cfg, ["user:u123"]);
+  await expectDirectoryIds(listSlackDirectoryGroupsFromConfig, cfg, ["channel:c111"]);
+});
 
-  it("keeps directories readable when tokens are unresolved SecretRefs", async () => {
-    const envSecret = {
-      source: "env",
-      provider: "default",
-      id: "MISSING_TEST_SECRET",
-    } as const;
-    const cfg = {
-      channels: {
-        slack: {
-          botToken: envSecret,
-          appToken: envSecret,
-          allowFrom: ["U123"],
-          channels: { C111: {} },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    await expectDirectoryIds(listSlackDirectoryPeersFromConfig, cfg, ["user:u123"]);
-    await expectDirectoryIds(listSlackDirectoryGroupsFromConfig, cfg, ["channel:c111"]);
+it("applies query and limit filtering for config-backed directories", async () => {
+  const peers = await listSlackDirectoryPeersFromConfig({
+    cfg: config({ allowFrom: ["U100", "U200"], dms: { U300: {} } }),
+    accountId: "default",
+    query: "user:u",
+    limit: 2,
   });
+  expect(peers).toHaveLength(2);
+  expect(peers.every((entry) => entry.id.startsWith("user:u"))).toBe(true);
+});
 
-  it("applies query and limit filtering for config-backed directories", async () => {
-    const cfg = {
-      channels: {
-        slack: {
-          botToken: "xoxb-test",
-          appToken: "xapp-test",
-          allowFrom: ["U100", "U200"],
-          dms: { U300: {} },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const peers = await listSlackDirectoryPeersFromConfig({
-      cfg,
-      accountId: "default",
-      query: "user:u",
-      limit: 2,
-    });
-    expect(peers).toHaveLength(2);
-    expect(peers.every((entry) => entry.id.startsWith("user:u"))).toBe(true);
+it("falls back to auth identity when live user profile lookup fails", async () => {
+  usersInfo.mockRejectedValue(new Error("missing_scope"));
+  const self = await getSlackDirectorySelfLive({
+    cfg: config({ userToken: "xoxp-test" }),
+    accountId: "default",
   });
-
-  it("falls back to auth identity when live user profile lookup fails", async () => {
-    slackClientMocks.authTest.mockResolvedValue({
-      ok: true,
-      user_id: "USELF",
-      user: "ada",
-    });
-    slackClientMocks.usersInfo.mockRejectedValue(new Error("missing_scope"));
-    const cfg = {
-      channels: {
-        slack: {
-          userToken: "xoxp-test",
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const self = await getSlackDirectorySelfLive({ cfg, accountId: "default" });
-    if (!self) {
-      throw new Error("expected Slack self directory entry");
-    }
-    expect(self.kind).toBe("user");
-    expect(self.id).toBe("user:USELF");
-    expect(self.name).toBe("ada");
-    expect(self.handle).toBe("@ada");
-  });
+  expect(self).toMatchObject({ kind: "user", id: "user:USELF", name: "ada", handle: "@ada" });
 });

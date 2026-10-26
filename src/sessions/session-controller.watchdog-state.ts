@@ -17,7 +17,6 @@ export type SessionWatchdogSnapshot = Readonly<{
   phase: SessionWatchdogPhase;
   hasActiveAttempt?: boolean;
   semanticProgressAtMs: number;
-  transportProgressAtMs: number;
   lastProgressReason?: string;
   warningMs: number;
   semanticDeadlineAtMs: number;

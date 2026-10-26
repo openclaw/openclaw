@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SpeechModelOverridePolicy } from "./provider-types.js";
+import { createSpeechPolicy } from "./speech-provider.test-support.js";
 import { summarizeText } from "./tts-core.js";
 import type { ResolvedTtsConfig } from "./tts-types.js";
 
@@ -12,16 +13,7 @@ vi.mock("../agents/simple-completion-runtime.js", async (importOriginal) => ({
   completeWithPreparedSimpleCompletionModel,
 }));
 
-const modelOverridePolicy: SpeechModelOverridePolicy = {
-  enabled: false,
-  allowText: false,
-  allowProvider: false,
-  allowVoice: false,
-  allowModelId: false,
-  allowVoiceSettings: false,
-  allowNormalization: false,
-  allowSeed: false,
-};
+const modelOverridePolicy: SpeechModelOverridePolicy = createSpeechPolicy(false);
 
 const ttsConfig = {
   auto: "inbound",

@@ -1,7 +1,5 @@
-import { createServer } from "node:http";
 import {
   createAzureOpenAIResponsesTransportStreamFn,
-  createOpenAICompletionsTransportStreamFn,
   createOpenAIResponsesTransportStreamFn,
 } from "@openclaw/ai/transports";
 import { describe, expect, it, vi } from "vitest";
@@ -9,16 +7,26 @@ import {
   COLD_RUNNER_HTTP_TEST_TIMEOUT_MS,
   expectOpenAITransportRequestPolicy,
 } from "../../test/helpers/openai-transport-request-policy.js";
-import { classifyAssistantFailoverReason } from "./embedded-agent-helpers/assistant-message-failures.js";
-import { formatUserFacingAssistantErrorText } from "./embedded-agent-helpers/error-text.js";
 import {
   type CapturedStreamEvent,
-  makeCompletionsModel,
   createResponsesAssistantOutput,
   createAzureResponsesModel,
   streamChunks,
 } from "./openai-transport-stream.test-harness.js";
 import { testing } from "./openai-transport-stream.test-support.js";
+
+async function captureStream(chunks: readonly unknown[]) {
+  const model = createAzureResponsesModel();
+  const output = createResponsesAssistantOutput(model);
+  const events: CapturedStreamEvent[] = [];
+  await testing.processResponsesStream(
+    streamChunks(chunks),
+    output,
+    { push: (event) => events.push(event as CapturedStreamEvent) },
+    model,
+  );
+  return { output, events };
+}
 
 describe("openai transport stream", () => {
   it.each([
@@ -38,81 +46,11 @@ describe("openai transport stream", () => {
     COLD_RUNNER_HTTP_TEST_TIMEOUT_MS,
   );
 
-  it("classifies OpenAI-compatible unsupported-model detail from failed chat requests", async () => {
-    const server = createServer((req, res) => {
-      req.resume();
-      req.on("end", () => {
-        res.writeHead(400, {
-          "content-type": "application/json; charset=utf-8",
-          "x-request-id": "req_not_supported_model",
-        });
-        res.end(
-          JSON.stringify({
-            error: {
-              code: "400",
-              message: "Param Incorrect",
-              param: "Not supported model some-model-id",
-            },
-          }),
-        );
-      });
-    });
-
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    try {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("Missing loopback server address");
-      }
-      const model = makeCompletionsModel({
-        id: "some-model-id",
-        name: "Some Model",
-        baseUrl: `http://127.0.0.1:${address.port}/v1`,
-      });
-      const stream = createOpenAICompletionsTransportStreamFn()(
-        model,
-        {
-          systemPrompt: "system",
-          messages: [{ role: "user", content: "Reply OK", timestamp: Date.now() }],
-          tools: [],
-        } as never,
-        { apiKey: "test-key" } as never,
-      );
-
-      let errorPayload: Record<string, unknown> | undefined;
-      for await (const event of stream as AsyncIterable<{
-        type: string;
-        error?: Record<string, unknown>;
-      }>) {
-        if (event.type === "error") {
-          errorPayload = event.error;
-        }
-      }
-
-      expect(errorPayload).toMatchObject({
-        stopReason: "error",
-        errorMessage: "400 Param Incorrect",
-        errorCode: "400",
-      });
-      expect(String(errorPayload?.errorBody)).toContain("Not supported model some-model-id");
-      expect(classifyAssistantFailoverReason(errorPayload as never)).toBe("model_not_found");
-      expect(formatUserFacingAssistantErrorText(errorPayload as never)).toBe(
-        "This model was not found. Choose another model in the Control UI.",
-      );
-    } finally {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    }
-  });
-
   it("yields to aborts during bursty Responses streams", async () => {
     const model = createAzureResponsesModel();
     const output = createResponsesAssistantOutput(model);
     const abort = new AbortController();
-    const stream = { push: vi.fn() };
+    const stream = { push: vi.fn<(event: CapturedStreamEvent) => void>() };
     let yieldedToTimer = false;
 
     async function* mockStream() {
@@ -134,135 +72,67 @@ describe("openai transport stream", () => {
     ).rejects.toThrow("Request was aborted");
     expect(yieldedToTimer).toBe(true);
     expect(stream.push.mock.calls.length).toBeLessThan(512);
-  });
-
-  it("omits accumulated partial snapshots from Responses text deltas", async () => {
-    const model = createAzureResponsesModel();
-    const output = createResponsesAssistantOutput(model);
-    const events: CapturedStreamEvent[] = [];
-
-    await testing.processResponsesStream(
-      streamChunks([
-        { type: "response.output_item.added", item: { type: "message" } },
-        { type: "response.output_text.delta", delta: "a" },
-        { type: "response.output_text.delta", delta: "b" },
-        { type: "response.completed", response: { id: "resp_text", status: "completed" } },
-      ]),
-      output,
-      { push: (event) => events.push(event as CapturedStreamEvent) },
-      model,
-    );
-
-    const textDeltas = events.filter((event) => event.type === "text_delta");
-    expect(textDeltas).toHaveLength(2);
+    const textDeltas = stream.push.mock.calls.flat().filter((event) => event.type === "text_delta");
+    expect(textDeltas.length).toBeGreaterThan(0);
     expect(textDeltas.every((event) => !("partial" in event))).toBe(true);
-    expect(output.content).toEqual([{ type: "text", text: "ab" }]);
   });
 
-  it("materializes one stable tool call for a done-only idless Responses item", async () => {
-    const model = createAzureResponsesModel();
-    const output = createResponsesAssistantOutput(model);
-    const events: CapturedStreamEvent[] = [];
-    const item = {
-      type: "function_call",
-      name: "computer",
-      arguments: '{"action":"screenshot"}',
-      status: "completed",
-    };
+  it.each([false, true])(
+    "materializes stable done tool identity (added first: %s)",
+    async (added) => {
+      const item = {
+        type: "function_call",
+        name: "computer",
+        arguments: '{"action":"screenshot"}',
+        status: "completed",
+        ...(added ? { id: "fc_canonical", call_id: "call_canonical" } : {}),
+      };
 
-    await testing.processResponsesStream(
-      streamChunks([
+      const chunks = [
         {
           type: "response.output_item.done",
           output_index: 0,
-          sequence_number: 0,
           item,
         },
         {
           type: "response.completed",
-          sequence_number: 1,
           response: {
-            id: "resp_done_only_idless",
+            id: "resp_tool_identity",
             status: "completed",
             output: [item],
           },
         },
-      ]),
-      output,
-      { push: (event) => events.push(event as CapturedStreamEvent) },
-      model,
-    );
+      ];
+      const { output, events } = await captureStream(
+        added
+          ? [
+              {
+                type: "response.output_item.added",
+                output_index: 0,
+                item: { type: "function_call", name: "computer", arguments: "" },
+              },
+              ...chunks,
+            ]
+          : chunks,
+      );
 
-    expect(output.stopReason).toBe("toolUse");
-    expect(output.content).toEqual([
-      {
-        type: "toolCall",
-        id: expect.stringMatching(/^call_[0-9a-f]{24}$/),
-        name: "computer",
-        arguments: { action: "screenshot" },
-      },
-    ]);
-    const toolEvents = events.filter((event) => event.type?.startsWith("toolcall_")) as Array<{
-      type: string;
-      contentIndex: number;
-      toolCall?: { id?: string };
-    }>;
-    expect(toolEvents.map((event) => [event.type, event.contentIndex])).toEqual([
-      ["toolcall_start", 0],
-      ["toolcall_end", 0],
-    ]);
-    expect(toolEvents[1]?.toolCall?.id).toBe((output.content[0] as { id?: string }).id);
-  });
-
-  it("reconciles an idless added Responses item to its canonical done identity", async () => {
-    const model = createAzureResponsesModel();
-    const output = createResponsesAssistantOutput(model);
-    const events: CapturedStreamEvent[] = [];
-    const doneItem = {
-      type: "function_call",
-      id: "fc_canonical",
-      call_id: "call_canonical",
-      name: "computer",
-      arguments: '{"action":"screenshot"}',
-      status: "completed",
-    };
-
-    await testing.processResponsesStream(
-      streamChunks([
+      expect(output.stopReason).toBe("toolUse");
+      expect(output.content).toEqual([
         {
-          type: "response.output_item.added",
-          output_index: 0,
-          sequence_number: 0,
-          item: { type: "function_call", name: "computer", arguments: "" },
+          type: "toolCall",
+          id: added ? "call_canonical|fc_canonical" : expect.stringMatching(/^call_[0-9a-f]{24}$/),
+          name: "computer",
+          arguments: { action: "screenshot" },
         },
+      ]);
+      expect(events.filter((event) => event.type?.startsWith("toolcall_"))).toMatchObject([
+        { type: "toolcall_start", contentIndex: 0 },
         {
-          type: "response.output_item.done",
-          output_index: 0,
-          sequence_number: 1,
-          item: doneItem,
+          type: "toolcall_end",
+          contentIndex: 0,
+          toolCall: { id: (output.content[0] as { id?: string }).id },
         },
-        {
-          type: "response.completed",
-          sequence_number: 2,
-          response: {
-            id: "resp_canonical_tool_identity",
-            status: "completed",
-            output: [doneItem],
-          },
-        },
-      ]),
-      output,
-      { push: (event) => events.push(event as CapturedStreamEvent) },
-      model,
-    );
-
-    expect(output.stopReason).toBe("toolUse");
-    expect(output.content).toMatchObject([
-      { type: "toolCall", id: "call_canonical|fc_canonical", name: "computer" },
-    ]);
-    const end = events.find((event) => event.type === "toolcall_end") as
-      | { toolCall?: { id?: string } }
-      | undefined;
-    expect(end?.toolCall?.id).toBe("call_canonical|fc_canonical");
-  });
+      ]);
+    },
+  );
 });

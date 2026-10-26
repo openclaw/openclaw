@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { mediaTicketPayload } from "../test-helpers/control-ui-attachment-fixtures.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -26,20 +27,13 @@ suite.define(() => {
             canvas.getContext("2d")!.fillRect(0, 0, canvas.width, canvas.height);
             return canvas.toDataURL("image/png").split(",")[1]!;
           });
-          let releaseImage!: () => void;
-          const imageReady = new Promise<void>((resolve) => {
-            releaseImage = resolve;
-          });
+          const { promise: imageReady, resolve: releaseImage } = createDeferred();
           await page.route("**/__openclaw__/assistant-media?**", async (route) => {
             if (new URL(route.request().url()).searchParams.get("meta") === "1") {
               metadataRequested.resolve();
               await metadataReady.promise;
               await route.fulfill({
-                json: {
-                  available: true,
-                  mediaTicket: "sizing-ticket",
-                  mediaTicketExpiresAt: new Date(Date.now() + 300_000).toISOString(),
-                },
+                json: mediaTicketPayload("sizing-ticket", 300_000),
               });
               return;
             }

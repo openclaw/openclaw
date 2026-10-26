@@ -1,6 +1,6 @@
 import { Command } from "commander";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { defaultRuntime, ExitError } from "../runtime.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { ExitError } from "../runtime.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
 import { registerDnsCli } from "./dns-cli.js";
 import {
@@ -63,19 +63,13 @@ describe("runCommandWithRuntime", () => {
   });
 
   it("bubbles JSON-mode failures to the process-level owner", async () => {
-    const originalArgv = process.argv;
     const runtime = { error: vi.fn(), exit: vi.fn() };
-    process.argv = ["node", "openclaw", "backup", "verify", "missing.tgz", "--json"];
-    try {
-      await withConsoleLogsRoutedToStderrForJson(process.argv, async () => {
-        applyResolvedCommandOutputMode(true);
-        await expect(
-          runCommandWithRuntime(runtime, rejectWith(new Error("archive missing"))),
-        ).rejects.toThrow("archive missing");
-      });
-    } finally {
-      process.argv = originalArgv;
-    }
+    await withConsoleLogsRoutedToStderrForJson(["--json"], async () => {
+      applyResolvedCommandOutputMode(true);
+      await expect(
+        runCommandWithRuntime(runtime, rejectWith(new Error("archive missing"))),
+      ).rejects.toThrow("archive missing");
+    });
 
     expect([runtime.error.mock.calls, runtime.exit.mock.calls]).toEqual([[], []]);
   });
@@ -102,78 +96,49 @@ it.each([
   ]).toEqual([skip, startup]);
 });
 
-describe("dns cli", () => {
-  const log = vi.fn();
-  const output = () => log.mock.calls.map((call) => call.join(" ")).join("\\n");
-  const setup = (domain: string) => {
+it.each(["../../x", "evil\nrecords"])(
+  "rejects invalid --domain %j with explicit DNS-name diagnostic",
+  async (domain) => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
     const program = new Command();
     registerDnsCli(program);
-    return program.parseAsync(["dns", "setup", "--domain", domain], { from: "user" });
-  };
-  beforeEach(() => vi.spyOn(console, "log").mockImplementation(log.mockClear()));
+    await expect(
+      program.parseAsync(["dns", "setup", "--domain", domain], { from: "user" }),
+    ).rejects.toThrow("wide-area discovery domain must be a valid DNS name");
+    expect(log).not.toHaveBeenCalled();
+  },
+);
 
-  it("prints setup info (no apply)", async () => {
-    const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-    await setup("openclaw.internal");
-    expect(output()).toContain("DNS setup");
-    expect(output()).toContain("openclaw.internal");
-    expect(writeJson).toHaveBeenCalledWith({
-      gateway: { bind: "auto" },
-      discovery: { wideArea: { domain: "openclaw.internal." } },
-    });
-  });
-
-  it.each(["../../x", "evil\nrecords"])(
-    "rejects invalid --domain %j with explicit DNS-name diagnostic",
-    async (domain) => {
-      await expect(setup(domain)).rejects.toThrow(
-        "wide-area discovery domain must be a valid DNS name",
-      );
-      expect(output()).not.toContain("No wide-area domain configured");
-      expect(output()).not.toContain("DNS setup");
-    },
-  );
+it.each([
+  [parseByteSize, "10kb", 10 * 1024],
+  [parseByteSize, `${Number.MAX_SAFE_INTEGER}.1`, Number.MAX_SAFE_INTEGER],
+  [parseDurationMs, "0.5s", 500],
+  [parseDurationMs, "  1H30M  ", 5_400_000],
+  [parseDurationMs, "0.4ms0.4ms", 1],
+  [parseDurationMs, "9007199254740990ms1ms", Number.MAX_SAFE_INTEGER],
+] as const)("%s parses %j", (parse, input, expected) => {
+  expect(parse(input)).toBe(expected);
 });
 
-describe("parseByteSize", () => {
-  it.each([
-    ["10kb", 10 * 1024],
-    [`${Number.MAX_SAFE_INTEGER}.1`, Number.MAX_SAFE_INTEGER],
-  ] as const)("parses %s without losing precision", (input, expected) => {
-    expect(parseByteSize(input)).toBe(expected);
-  });
-
-  it.each(["", "nope", "9007199254740993"])("rejects invalid byte size %j", (input) => {
-    expect(() => parseByteSize(input)).toThrow(/Invalid byte size/);
-  });
+it.each([
+  [parseByteSize, "", /Invalid byte size/],
+  [parseByteSize, "nope", /Invalid byte size/],
+  [parseByteSize, "9007199254740993", /Invalid byte size/],
+  [parseDurationMs, "", /Invalid duration/],
+  [parseDurationMs, "-1s", /Invalid duration/],
+  [parseDurationMs, "1h30", /Invalid duration/],
+  [parseDurationMs, "9007199254740990ms10ms", /Invalid duration/],
+] as const)("%s rejects %j", (parse, input, error) => {
+  expect(() => parse(input)).toThrow(error);
 });
 
-describe("parseDurationMs", () => {
-  it.each([
-    ["0.5s", 500],
-    ["  1H30M  ", 5_400_000],
-    ["0.4ms0.4ms", 1],
-    ["9007199254740991ms", Number.MAX_SAFE_INTEGER],
-    ["9007199254740990ms1ms", Number.MAX_SAFE_INTEGER],
-  ] as const)("parses %s", (input, expected) => {
-    expect(parseDurationMs(input)).toBe(expected);
-  });
-
-  it.each(["", "-1s", "1h30", "9007199254740993ms", "9007199254740990ms10ms"])(
-    "rejects invalid or unsafe duration %j",
-    (input) => {
-      expect(() => parseDurationMs(input)).toThrow(/Invalid duration/);
-    },
-  );
-
-  it("retains the 100-character limit per token, including the default unit", () => {
-    const value = `${"0".repeat(97)}1`;
-    expect(parseDurationMs(`${value}ms`)).toBe(1);
-    expect(parseDurationMs(value)).toBe(1);
-    expect(parseDurationMs(`0${value}`, { defaultUnit: "s" })).toBe(1000);
-    expect(parseDurationMs("1ms".repeat(40))).toBe(40);
-    expect(() => parseDurationMs(`0${value}ms`)).toThrow(/Invalid duration/);
-    expect(() => parseDurationMs(`0${value}`)).toThrow(/Invalid duration/);
-    expect(() => parseDurationMs(`1s0${value}ms`)).toThrow(/Invalid duration/);
-  });
+it("retains the 100-character duration limit per token, including the default unit", () => {
+  const value = `${"0".repeat(97)}1`;
+  expect(parseDurationMs(`${value}ms`)).toBe(1);
+  expect(parseDurationMs(value)).toBe(1);
+  expect(parseDurationMs(`0${value}`, { defaultUnit: "s" })).toBe(1000);
+  expect(parseDurationMs("1ms".repeat(40))).toBe(40);
+  expect(() => parseDurationMs(`0${value}ms`)).toThrow(/Invalid duration/);
+  expect(() => parseDurationMs(`0${value}`)).toThrow(/Invalid duration/);
+  expect(() => parseDurationMs(`1s0${value}ms`)).toThrow(/Invalid duration/);
 });

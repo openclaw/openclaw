@@ -21,15 +21,14 @@ import {
 } from "./session-accessor.memory-exact-read.js";
 import "./plugin-host-cleanup.js";
 import "./session-accessor.sqlite-canonical-repair.js";
+import { resolveSessionEntry as resolveSessionEntrySelection } from "./session-accessor.sqlite-entry-admitted-read.js";
 import {
   listSessionEntryRows,
   listSessionEntriesReadOnly,
   loadExactSessionEntryCandidates,
-  loadExactSessionEntryReadOnly,
   patchSessionEntryCore,
   patchSessionEntryTarget,
 } from "./session-accessor.sqlite-entry.js";
-import { resolveSessionEntry as resolveSessionEntrySelection } from "./session-accessor.sqlite-exact-read.js";
 import "./session-accessor.sqlite-summary.js";
 import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope.js";
 import type {
@@ -44,7 +43,6 @@ import type {
   ResolvedSessionEntryUpdateContext,
   ResolvedSessionEntryUpdateResult,
   SessionEntrySummary,
-  SessionEntryReadView,
   SessionEntryPatchOptions,
   SessionEntryPatchContext,
   SessionEntryPatchResult,
@@ -492,38 +490,17 @@ export async function updateResolvedSessionEntry<T>(
   }
   return {
     canonicalKey: target.canonicalKey,
-    entry: structuredClone(updated),
     found: true,
     result: updateResult as T,
-    storeKey: target.storeKey,
   };
 }
 
 /** Lists entries from the resolved store, preserving the persisted key for each row. */
 export function listSessionEntriesCore(scope: SessionEntryListScope = {}): SessionEntrySummary[] {
   if (scope.clone === false) {
-    return openSessionEntryReadView(scope).entries();
+    return listSessionEntriesReadOnly({ ...scope, clone: false });
   }
   return listSessionEntryRows(scope);
-}
-
-/**
- * Synchronous read view: `get` queries one exact persisted key without alias resolution;
- * `entries` caches listing metadata or loads complete entries. Rows and nested values are
- * borrowed: callers must not mutate them and must drop the view before any await.
- */
-export function openSessionEntryReadView(
-  scope: Omit<SessionEntryListScope, "clone" | "readConsistency"> = {},
-): SessionEntryReadView {
-  return {
-    get: (sessionKey) =>
-      loadExactSessionEntryReadOnly({
-        ...scope,
-        clone: false,
-        sessionKey,
-      })?.entry,
-    entries: () => listSessionEntriesReadOnly({ ...scope, clone: false }),
-  };
 }
 
 /**

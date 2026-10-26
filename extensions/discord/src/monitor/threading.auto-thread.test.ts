@@ -1,10 +1,10 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelType } from "../internal/discord.js";
 import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
-type MaybeCreateDiscordAutoThreadFn = typeof import("./threading.js").maybeCreateDiscordAutoThread;
-type AutoThreadParams = Parameters<MaybeCreateDiscordAutoThreadFn>[0];
+import { maybeCreateDiscordAutoThread } from "./threading.js";
+type AutoThreadParams = Parameters<typeof maybeCreateDiscordAutoThread>[0];
 
 const { generateThreadTitleMock } = vi.hoisted(() => ({
   generateThreadTitleMock: vi.fn(),
@@ -13,8 +13,6 @@ const { generateThreadTitleMock } = vi.hoisted(() => ({
 vi.mock("./thread-title.js", () => ({
   generateThreadTitle: generateThreadTitleMock,
 }));
-
-let maybeCreateDiscordAutoThread: MaybeCreateDiscordAutoThreadFn;
 
 const postMock = vi.fn();
 const getMock = vi.fn();
@@ -27,16 +25,13 @@ const mockMessage = {
   timestamp: "123",
 } as unknown as AutoThreadParams["message"];
 
-function createMockMessage(overrides: Record<string, unknown>) {
-  return Object.assign({}, mockMessage, overrides) as AutoThreadParams["message"];
-}
-
 function createBaseParams(overrides: Partial<AutoThreadParams> = {}): AutoThreadParams {
   return {
     client: mockClient,
     message: mockMessage,
     messageChannelId: "text1",
     channel: "discord",
+    agentId: "main",
     isGuildMessage: true,
     channelConfig: { allowed: true, autoThread: true },
     channelType: ChannelType.GuildText,
@@ -61,16 +56,16 @@ function expectRestBodyField(mock: typeof postMock, field: string, expected: unk
 
 function generatedParams(overrides: Partial<AutoThreadParams> = {}) {
   return createBaseParams({
-    channelConfig: { allowed: true, autoThread: true, autoThreadName: "generated" },
+    channelConfig: {
+      allowed: true,
+      autoThread: true,
+      autoThreadName: "generated",
+      autoArchiveDuration: "10080",
+    },
     cfg: { agents: { defaults: { model: "anthropic/claude-opus-4-6" } } },
-    agentId: "main",
     ...overrides,
   });
 }
-
-beforeAll(async () => {
-  ({ maybeCreateDiscordAutoThread } = await import("./threading.js"));
-});
 
 beforeEach(() => {
   postMock.mockReset();
@@ -99,7 +94,9 @@ describe("maybeCreateDiscordAutoThread", () => {
       getMock.mockResolvedValueOnce(threadId ? { thread: { id: threadId } } : {});
       const result = await maybeCreateDiscordAutoThread(
         createBaseParams({
-          message: createMockMessage({ author: { bot: true } }),
+          message: Object.assign({}, mockMessage, {
+            author: { bot: true },
+          }) as AutoThreadParams["message"],
         }),
       );
 
@@ -107,15 +104,6 @@ describe("maybeCreateDiscordAutoThread", () => {
       expect(postMock).not.toHaveBeenCalled();
     },
   );
-  it("uses configured autoArchiveDuration", async () => {
-    mockThreadCreation();
-    await maybeCreateDiscordAutoThread(
-      createBaseParams({
-        channelConfig: { allowed: true, autoThread: true, autoArchiveDuration: "10080" },
-      }),
-    );
-    expectRestBodyField(postMock, "auto_archive_duration", 10080);
-  });
   it("renames created thread when generated mode is enabled", async () => {
     mockThreadCreation();
     patchMock.mockResolvedValueOnce({});
@@ -131,6 +119,7 @@ describe("maybeCreateDiscordAutoThread", () => {
     );
     expect(result).toBe("thread1");
     expectRestBodyField(postMock, "name", "Need help with deploy rollout");
+    expectRestBodyField(postMock, "auto_archive_duration", 10080);
     await flushAsyncWork();
     expect(generateThreadTitleMock.mock.calls[0]?.[0]).toMatchObject({
       agentId: "main",

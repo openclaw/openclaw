@@ -25,6 +25,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { VERSION } from "../../version.js";
+import { writeFixtureJson } from "../cli-fixtures.test-support.js";
 import * as configPreparation from "./update-command-config.js";
 import {
   releaseUpdateCommandPreflightForHandoff,
@@ -32,6 +33,7 @@ import {
 } from "./update-command-executor.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import { resultFixture } from "./update-command-fixtures.test-support.js";
+import { finishParams } from "./update-command-maintenance-fixtures.test-support.js";
 import * as postCore from "./update-command-post-core.js";
 import { finishUpdate } from "./update-command-post-update.js";
 import { UpdateCommandPendingRecoveryFailure } from "./update-command-result.js";
@@ -119,14 +121,11 @@ async function exercisePersistence(state: OpenClawTestState, scenario: (typeof s
   const peerLink = path.join(peerPackageDir, "node_modules", "openclaw");
   if (scenario === "host-link-recovery") {
     await fs.mkdir(path.dirname(peerLink), { recursive: true });
-    await fs.writeFile(
-      path.join(peerPackageDir, "package.json"),
-      JSON.stringify({
-        name: "peer-plugin",
-        version: "1.0.0",
-        peerDependencies: { openclaw: "*" },
-      }),
-    );
+    await writeFixtureJson(path.join(peerPackageDir, "package.json"), {
+      name: "peer-plugin",
+      version: "1.0.0",
+      peerDependencies: { openclaw: "*" },
+    });
     await fs.symlink(state.root, peerLink, "junction");
   }
   const resolveInstallKind = updateCheck.resolveUpdateInstallKind;
@@ -215,7 +214,7 @@ async function exercisePersistence(state: OpenClawTestState, scenario: (typeof s
       assertOriginalCurrent = fence.assertCurrent;
       return withUpdateCommandExecutor("independent-live-owner", async (otherExecutor) => {
         const otherFence = await otherExecutor.enter(otherRoot);
-        const params: FinishUpdateParams = {
+        const params = finishParams({
           root: state.root,
           result: resultFixture(state.root, {
             status: "skipped",
@@ -224,18 +223,11 @@ async function exercisePersistence(state: OpenClawTestState, scenario: (typeof s
           coreAlreadyCurrent: true,
           mutationStarted: false,
           shouldRestart: false,
-          installKindChanged: false,
           configSnapshot,
-          requestedChannel: null,
-          storedChannel: "stable",
-          channel: "stable",
-          downgradeRisk: false,
           opts: { json: true, yes: true, run },
-          controlPlaneUpdateSentinelMeta: null,
           preUpdatePluginInstallRecords,
-          startedAt: Date.now(),
           updateStepTimeoutMs: 1_000,
-        };
+        });
         const unlink = fsSync.unlinkSync.bind(fsSync);
         const unlinkSpy =
           scenario === "host-link-recovery" && !recovering

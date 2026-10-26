@@ -2,6 +2,7 @@ import MarkdownIt from "markdown-it";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { Overlay } from "../../components/overlay-lifecycle.ts";
 import * as textareaAnchor from "../../components/textarea-token-anchor.ts";
+import * as idleImport from "../../lib/idle-import.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 /* @vitest-environment jsdom */
 import {
@@ -11,6 +12,18 @@ import {
 import { renderComposerFixture, resetComposerFixture } from "./chat-composer.test-support.ts";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 
+const createIdleImport = idleImport.createIdleImport;
+const inputEvent = (data: string | undefined, type = "input") =>
+  new InputEvent(type, {
+    bubbles: true,
+    cancelable: type === "beforeinput",
+    inputType: "insertText",
+    data,
+  });
+async function settleImports() {
+  await vi.dynamicImportSettled();
+  flush();
+}
 const originalExecCommand = Object.getOwnPropertyDescriptor(document, "execCommand");
 afterEach(async () => {
   if (originalExecCommand) {
@@ -38,21 +51,20 @@ beforeEach(() => {
         throw new Error("Expected focused composer");
       }
       textarea.setRangeText(text, textarea.selectionStart, textarea.selectionEnd, "end");
-      textarea.dispatchEvent(
-        new InputEvent("input", { bubbles: true, inputType: "insertText", data: text }),
-      );
+      textarea.dispatchEvent(inputEvent(text));
       return true;
     }),
   });
 });
 
-function fixture(
+async function fixture(
   kind: "chat" | "new" = "chat",
   initial = "",
   locked = false,
   requiresModifier = false,
+  restored = false,
 ) {
-  let draft = "";
+  let draft = restored ? initial : "";
   const send = vi.fn();
   const backgroundSend = vi.fn();
   const onInput = (next: string) => {
@@ -62,6 +74,7 @@ function fixture(
     kind === "new"
       ? renderNewComposer({
           draftOwnerKey: "emoji",
+          message: draft,
           requiresModifier,
           messageLocked: locked,
           onInput,
@@ -70,12 +83,14 @@ function fixture(
         }).container
       : renderComposerFixture({
           canSend: !locked,
+          draft,
           getDraft: () => draft,
           onSend: send,
           onDraftChange: onInput,
         }).container;
   document.body.append(container);
   const textarea = container.querySelector("textarea")!;
+  const menu = () => container.querySelector('[aria-label="Emoji suggestions"]');
   textarea.focus();
   const dispatch = <T extends Event>(event: T) => {
     textarea.dispatchEvent(event);
@@ -84,35 +99,27 @@ function fixture(
   };
   const closed = (value: string) => {
     expect(draft).toBe(value);
-    expect(container.querySelector('[aria-label="Emoji suggestions"]')).toBeNull();
+    expect(menu()).toBeNull();
     expect(send).not.toHaveBeenCalled();
   };
   const input = (value: string, caret = value.length) => {
     textarea.value = value;
     textarea.setSelectionRange(caret, caret);
-    dispatch(
-      new InputEvent("input", { bubbles: true, inputType: "insertText", data: value.at(-1) }),
-    );
+    dispatch(inputEvent(value.at(-1)));
   };
   const key = (keyName: string, extra: KeyboardEventInit = {}) =>
     dispatch(
       new KeyboardEvent("keydown", { key: keyName, bubbles: true, cancelable: true, ...extra }),
     );
-  const colon = () =>
-    dispatch(
-      new InputEvent("beforeinput", {
-        bubbles: true,
-        cancelable: true,
-        inputType: "insertText",
-        data: ":",
-      }),
-    );
-  if (initial) {
+  const colon = () => dispatch(inputEvent(":", "beforeinput"));
+  if (initial && !restored) {
     input(initial);
+    await settleImports();
   }
   return {
     container,
     textarea,
+    menu,
     input,
     key,
     colon,
@@ -123,10 +130,83 @@ function fixture(
   };
 }
 
+function holdImports() {
+  const gate = Promise.withResolvers<void>();
+  const started = vi.fn();
+  const spy = vi
+    .spyOn(idleImport, "createIdleImport")
+    .mockImplementation(<T>(load: () => Promise<T>, onLoaded?: (value: T) => void) =>
+      createIdleImport(async () => {
+        started();
+        await gate.promise;
+        return load();
+      }, onLoaded),
+    );
+  onTestFinished(() => {
+    gate.resolve();
+    spy.mockRestore();
+  });
+  return { release: gate.resolve, started };
+}
+
+it("keeps native editing while cold and converts closing colons once ready", async () => {
+  const imports = holdImports();
+  const f = await fixture();
+  f.input("Ordinary typing");
+  expect(imports.started).not.toHaveBeenCalled();
+  f.input(":smile");
+  expect(imports.started).toHaveBeenCalledTimes(1);
+  expect(f.key("Tab").defaultPrevented).toBe(false);
+  expect(f.colon().defaultPrevented).toBe(false);
+  f.input(":smile:");
+  imports.release();
+  await settleImports();
+  f.closed(":smile:");
+  f.input(":smile");
+  expect(f.colon().defaultPrevented).toBe(true);
+  f.closed("😄");
+});
+
+it("discovers suggestions at the current draft and caret when cold data arrives", async () => {
+  const imports = holdImports();
+  const f = await fixture();
+  f.input(":smi");
+  f.input("New :hea suffix", 8);
+  imports.release();
+  await settleImports();
+  expect(f.textarea).toMatchObject({ value: "New :hea suffix", selectionStart: 8 });
+  expect(f.menu()?.textContent).toContain(":heart:");
+  expect(f.key("Tab").defaultPrevented).toBe(true);
+  f.closed("New 🎧 suffix");
+});
+
+it.each(["blur", "detach"])("does not reopen cold suggestions after %s", async (retirement) => {
+  const imports = holdImports();
+  const f = await fixture();
+  f.input(":smi");
+  if (retirement === "blur") {
+    f.textarea.blur();
+  } else {
+    f.container.remove();
+  }
+  imports.release();
+  await settleImports();
+  f.closed(":smi");
+});
+
+it.each(["chat", "new"] as const)("discovers a restored %s draft on focus", async (kind) => {
+  const f = await fixture(kind, ":smi", false, false, true);
+  await settleImports();
+  expect(f.draft()).toBe(":smi");
+  expect(f.menu()).not.toBeNull();
+  expect(f.key("Tab").defaultPrevented).toBe(true);
+  f.closed("😄");
+});
+
 it.each(["chat", "modifier", "background"])(
   "suppresses held emoji acceptance in %s mode",
-  (mode) => {
-    const f = fixture(mode === "chat" ? "chat" : "new", ":smi", false, mode !== "chat");
+  async (mode) => {
+    const f = await fixture(mode === "chat" ? "chat" : "new", ":smi", false, mode !== "chat");
     const keys = mode === "background" ? { ctrlKey: true, shiftKey: true } : {};
     f.key("Enter");
     f.closed("😄");
@@ -145,22 +225,8 @@ it.each(["chat", "modifier", "background"])(
   },
 );
 
-it("supports mouse and Tab acceptance and persistent Escape dismissal", () => {
-  const f = fixture("chat", ":smi");
-  f.key("Escape");
-  f.textarea.dispatchEvent(new Event("select"));
-  flush();
-  f.closed(":smi");
-  f.input(":smil");
-  f.container.querySelector<HTMLElement>('[role="option"]')!.click();
-  expect(f.draft()).toBe("😄");
-  f.input(":thumbsup");
-  f.key("Tab");
-  f.closed("👍");
-});
-
 describe.each(["chat", "new"] as const)("%s emoji composer", (kind) => {
-  it("accepts before synchronous overlay retirement can dismiss the menu again", () => {
+  it("accepts before synchronous overlay retirement can dismiss the menu again", async () => {
     let overlay: Overlay | undefined;
     vi.mocked(textareaAnchor.createTextareaTokenAnchor).mockReturnValue({
       updateNative(next) {
@@ -170,49 +236,46 @@ describe.each(["chat", "new"] as const)("%s emoji composer", (kind) => {
         overlay?.retire();
       },
     });
-    const f = fixture(kind, "Nice :smi");
+    const f = await fixture(kind);
+    f.input("Before :smi after", 11);
+    await settleImports();
     expect(overlay).toBeDefined();
-    f.key("ArrowDown");
+    const list = f.container.querySelector('[role="listbox"]')!;
+    expect(list.getAttribute("aria-label")).toBe("Emoji suggestions");
+    expect(f.textarea.getAttribute("aria-controls")).toBe(list.id);
+    const first = f.textarea.getAttribute("aria-activedescendant");
+    expect(f.key("ArrowDown").defaultPrevented).toBe(true);
+    expect(f.textarea.getAttribute("aria-activedescendant")).not.toBe(first);
     f.key("ArrowUp");
     expect(f.key("Tab").defaultPrevented).toBe(true);
-    f.closed("Nice 😄");
+    f.closed("Before 😄 after");
+    expect(f.textarea.selectionStart).toBe(9);
+    expect(document.activeElement).toBe(f.textarea);
   });
 
-  it("ignores a queued selection event after focus leaves the composer", () => {
-    const f = fixture(kind, ":smi");
+  it.each(["blur", "Escape"])("ignores a queued selection event after %s", async (dismissal) => {
+    const f = await fixture(kind, ":smi");
     f.textarea.setSelectionRange(4, 4);
-    f.textarea.blur();
+    if (dismissal === "blur") {
+      f.textarea.blur();
+    } else {
+      f.key("Escape");
+    }
     f.textarea.dispatchEvent(new Event("select"));
     flush();
     f.closed(":smi");
   });
 
-  it("leaves IME composition and locked text alone", () => {
-    const f = fixture(kind, ":smi");
+  it("leaves IME composition and locked text alone", async () => {
+    const f = await fixture(kind, ":smi");
     f.textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
     expect(f.key("Enter", { isComposing: true }).defaultPrevented).toBe(false);
     expect(f.colon().defaultPrevented).toBe(false);
     expect(f.send).not.toHaveBeenCalled();
-    const locked = fixture(kind, ":smile", true);
+    const locked = await fixture(kind, ":smile", true);
     expect(locked.colon().defaultPrevented).toBe(false);
-    expect(locked.container.querySelector('[aria-label="Emoji suggestions"]')).toBeNull();
+    expect(locked.menu()).toBeNull();
   });
-});
-
-it("navigates accessible suggestions and inserts only the caret token without sending", () => {
-  const f = fixture("chat");
-  f.input("Before :smi after", 11);
-  const list = f.container.querySelector('[role="listbox"]')!;
-  expect(list.getAttribute("aria-label")).toBe("Emoji suggestions");
-  expect(f.textarea.getAttribute("aria-controls")).toBe(list.id);
-  const first = f.textarea.getAttribute("aria-activedescendant");
-  expect(f.key("ArrowDown").defaultPrevented).toBe(true);
-  expect(f.textarea.getAttribute("aria-activedescendant")).not.toBe(first);
-  f.key("ArrowUp");
-  expect(f.key("Enter").defaultPrevented).toBe(true);
-  f.closed("Before 😄 after");
-  expect(f.textarea.selectionStart).toBe(9);
-  expect(document.activeElement).toBe(f.textarea);
 });
 
 it.each([
@@ -226,26 +289,27 @@ it.each([
   ["See <o'brien@example.com> :smile", true],
   ["Use \\`literal :smile", true],
   ["~~~\nif (a < b) {}\n~~~\n\nNice :smile", true],
-] as const)("handles shortcode context %s (convert=%s)", (value, convert) => {
-  const f = fixture("chat", value);
+] as const)("handles shortcode context %s (convert=%s)", async (value, convert) => {
+  const f = await fixture("chat", value);
   expect(f.colon().defaultPrevented).toBe(convert);
   f.closed(convert ? value.replace(":smile", "😄") : value);
 });
 
-it("avoids Markdown work for ordinary typing and reuses an unchanged shortcode context", () => {
+it("avoids Markdown work for ordinary typing and reuses an unchanged shortcode context", async () => {
   const parse = vi.spyOn(MarkdownIt.prototype, "parse");
-  const f = fixture("chat");
+  const f = await fixture("chat");
   f.input("Ordinary typing");
   f.input(":zzzzunknown");
   expect(parse).not.toHaveBeenCalled();
   f.input("Nice :s");
+  await settleImports();
   f.input("Nice :sm");
   f.input("Nice :smi");
   f.textarea.dispatchEvent(new Event("select"));
   expect(parse).toHaveBeenCalledTimes(1);
   f.input("`Nice :smi");
-  expect(f.container.querySelector('[aria-label="Emoji suggestions"]')).toBeNull();
+  expect(f.menu()).toBeNull();
   f.input("Nice :smi");
-  expect(f.container.querySelector('[aria-label="Emoji suggestions"]')).not.toBeNull();
+  expect(f.menu()).not.toBeNull();
   expect(parse).toHaveBeenCalledTimes(3);
 });

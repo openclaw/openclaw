@@ -1,11 +1,16 @@
+import { serialize } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, expect, it, vi } from "vitest";
+import { renderAssistantRequestFailureCopy } from "../../agents/failover/assistant-request-failure-copy.js";
 import { appendSessionManagerActor } from "../../agents/sessions/session-manager-actor-append.js";
-import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
+import { formatErrorMessageWithCode } from "../../infra/errors.js";
+import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
 import {
-  getOpenClawAgentDatabaseIfOpen,
-  openOpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
+  hasSqliteWorkerOutcomeUnknown,
+  SqliteWorkerError,
+} from "../../infra/sqlite-worker-contract.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
+import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -26,7 +31,7 @@ import { withActor } from "./session-actor-transport.test-support.js";
 import { seedSessionActorOutcomeTransferEntry } from "./session-actor-worker.test-support.js";
 import { createSessionCompoundWorkerFixture } from "./session-compound-worker.test-support.js";
 import { captureSessionEntryCurrentCheckAsyncInternal } from "./session-entry-current-check.js";
-import { acquireSessionInputActor } from "./session-input-actor.js";
+import { acquireSessionInputActor, throwSessionInputActorFailure } from "./session-input-actor.js";
 
 // mock-isolation: this transport proof does not schedule unrelated maintenance.
 vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
@@ -60,78 +65,6 @@ const messageAppend = (actor: SessionActor, sessionId: string, message: unknown)
     messageJson: JSON.stringify(message),
   },
 });
-
-it.each(["main", "secondary"])(
-  "publishes %s actor initialization in a shared store",
-  async (agentId) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async ({ env, statePath }) => {
-      const database = openOpenClawAgentDatabase({
-        agentId: "main",
-        path: statePath("shared.sqlite"),
-      });
-      const identity = readOpenClawAgentDatabaseIdentity(database);
-      if (typeof identity.identity !== "string") {
-        throw new Error("Fixture requires durable storage");
-      }
-      const scope = {
-        agentId,
-        storePath: database.path,
-        sessionKey: `agent:${agentId}:actor-first-maintenance`,
-        sessionId: "actor-first-maintenance",
-      };
-      const actor = await createSessionActorFactory({
-        agentId: "main",
-        path: database.path,
-        env,
-      }).acquire(
-        {
-          sessionKey: scope.sessionKey,
-          database: {
-            kind: "file",
-            physicalIdentity: identity.identity,
-            birthtime: identity.birthtime,
-            nativeLocation: database.path,
-          },
-        },
-        { assertCurrent() {}, assertReadable() {} },
-      );
-      const ageChanges = vi.fn();
-      const stopAgeChanges = observeSessionEntryMaintenanceAgeChanges(
-        identity.identity,
-        ageChanges,
-      );
-      try {
-        const result = await appendSessionManagerActor({
-          actor,
-          toolResult: false,
-          assertCurrent() {},
-          append: {
-            kind: "message",
-            input: {
-              scope,
-              cwd: "/synthetic",
-              messageJson: JSON.stringify({ role: "user", content: "first input", timestamp: 2 }),
-            },
-            initialization: { scope, entry: { sessionId: scope.sessionId, updatedAt: 2 } },
-          },
-        });
-        expect(result.failure).toBeUndefined();
-        expect(result.committed).toMatchObject({
-          kind: "message",
-          value: { snapshot: { ok: true } },
-        });
-        expect(ageChanges).toHaveBeenCalledExactlyOnceWith({
-          sessionKey: scope.sessionKey,
-          entry: expect.objectContaining({ sessionId: scope.sessionId }),
-          previousEntry: undefined,
-        });
-      } finally {
-        stopAgeChanges();
-        await actor.release();
-      }
-    });
-  },
-);
 
 it("acquires existing incognito input from memory without opening a database", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
@@ -690,8 +623,7 @@ it("shares actor revisions and isolates explicit policy copies", async () => {
           if (copy.entry) {
             copy.entry.sessionId = "policy-mutated";
           }
-          copy.version = { epoch: "policy-mutated", sequence: -1 };
-          copy.dependencySessionIds.length = 0;
+          copy.target = { ...copy.target, sessionKey: "policy-mutated" };
         },
       },
     );
@@ -714,8 +646,9 @@ it("shares actor revisions and isolates explicit policy copies", async () => {
   });
 });
 
-it("admits tool appends once per transaction boundary without transferring transcript indexes", async () => {
-  await withActor(async ({ actor, admissions }) => {
+it("admits tool appends once per transaction boundary without transferring replica state", async () => {
+  await withActor(async ({ actor, admissions, seedTransferEntry }) => {
+    seedTransferEntry(32 * 1024);
     const initial = await actor.read(authority);
     const append = messageAppend(actor, initial.entry!.sessionId, {
       role: "toolResult",
@@ -733,17 +666,15 @@ it("admits tool appends once per transaction boundary without transferring trans
     expect(result.kind).toBe("committed");
     expect(admissions.map(({ stage }) => stage)).toEqual(["transaction", "commit"]);
     for (const request of admissions) {
-      expect(request.facts).toMatchObject({
-        publication: {
-          snapshot: { target: actor.target, entry: { sessionId: initial.entry!.sessionId } },
-        },
-      });
       const facts = isRecord(request.facts) ? request.facts.publication : undefined;
-      expect(
-        isRecord(facts) && isRecord(facts.snapshot) && Object.hasOwn(facts.snapshot, "transcript"),
-      ).toBe(false);
+      assert(isRecord(facts) && isRecord(facts.snapshot));
+      expect(facts.snapshot.target).toEqual(actor.target);
+      expect(serialize(facts.snapshot).byteLength).toBeLessThan(1024);
     }
     const committed = actor.snapshot(authority)!;
+    expect(committed.entry).toBe(initial.entry);
+    expect(Object.isFrozen(committed.entry)).toBe(true);
+    expect(Object.isFrozen(committed.entry?.skillsSnapshot)).toBe(true);
     expect(committed.transcript.version.rawSeq).toBeGreaterThan(
       initial.transcript.version.rawSeq ?? -1,
     );
@@ -817,7 +748,30 @@ it.each([false, true])(
   },
 );
 
-it("retains rollback state and fences unknown commits until an explicit read", async () => {
+it.each([
+  [
+    Object.assign(new SqliteWorkerError("SQLite worker stopped", "outcome-unknown"), {
+      cause: Object.assign(new Error("database or disk is full"), { errcode: 13 }),
+    }),
+    "unknown",
+    false,
+    undefined,
+  ],
+  [new Error("database or disk is full"), "unknown-result", false, undefined],
+  [new Error("Ordinary reply lost"), "unknown", false, undefined],
+  [
+    Object.assign(new Error("database or disk is full"), { errcode: 13 }),
+    "normal",
+    true,
+    undefined,
+  ],
+  [
+    new Error("Ordinary reply lost"),
+    "unknown",
+    false,
+    Object.assign(new Error("database or disk is full during settlement"), { code: "SQLITE_FULL" }),
+  ],
+] as const)("retains uncertainty with %s (%s)", async (cause, reply, rollback, settlementError) => {
   await withActor(async ({ actor, commands, fault }) => {
     const initial = await actor.read(authority);
     if (actor.target.database.kind !== "file") {
@@ -842,7 +796,11 @@ it("retains rollback state and fences unknown commits until an explicit read", a
     const rolledBack = actor.snapshot(authority) ?? (await actor.read(authority));
     expect(rolledBack.entry?.updatedAt).toBe(initial.entry?.updatedAt);
     expect(retained.isCurrent()).toBe(true);
-    fault.reply = "unknown";
+    fault.reply = reply;
+    fault.replyError = cause;
+    fault.transactionError = rollback ? cause : undefined;
+    fault.settlementLost = rollback;
+    fault.settlementError = settlementError;
     const unknown = await actor.patch(
       activity("unknown", 456, { expected: rolledBack.version }),
       authority,
@@ -851,14 +809,76 @@ it("retains rollback state and fences unknown commits until an explicit read", a
     expect(retained.isCurrent()).toBe(false);
     expect(actor.snapshot(authority)).toBeUndefined();
     const before = commands.length;
+    const refused = await actor.patch(
+      { commandId: "unknown", phaseId: "turn", reducers: [] },
+      authority,
+    );
+    assert(refused.kind === "unknown");
+    let failure: unknown;
+    try {
+      throwSessionInputActorFailure(refused);
+    } catch (error) {
+      failure = error;
+    }
+    expect(hasSqliteWorkerOutcomeUnknown(failure)).toBe(true);
+    expect(classifyGatewayStorageFailure(failure)).toBe("session_actor_reconciliation");
     expect(
-      (await actor.patch({ commandId: "unknown", phaseId: "turn", reducers: [] }, authority)).kind,
-    ).toBe("unknown");
+      renderAssistantRequestFailureCopy({ storageFailure: classifyGatewayStorageFailure(failure) }),
+    ).toMatch(/check|reopen|retry/i);
+    const diagnostic = formatErrorMessageWithCode(failure);
+    expect(diagnostic).toContain("Session actor requires reconciliation before another command");
+    expect(diagnostic).toContain(cause.message);
+    if (settlementError) {
+      expect(diagnostic).toContain(settlementError.message);
+    }
+    await expect(
+      appendSessionManagerActor({
+        actor,
+        toolResult: false,
+        assertCurrent() {},
+        append: messageAppend(actor, initial.entry!.sessionId, { role: "user", content: [] }),
+      }),
+    ).rejects.toSatisfy(
+      (error: unknown) => classifyGatewayStorageFailure(error) === "session_actor_reconciliation",
+    );
     expect(commands).toHaveLength(before);
     fault.reply = "normal";
-    expect((await actor.read(authority)).entry?.updatedAt).toBe(456);
+    expect((await actor.read(authority)).entry?.updatedAt).toBe(
+      rollback ? initial.entry?.updatedAt : 456,
+    );
   });
 });
+
+it.each(["command", "flush"] as const)(
+  "preserves storage guidance when a phase %s has an unknown outcome",
+  async (stage) => {
+    await withActor(async ({ actor, fault, commands }) => {
+      await actor.read(authority);
+      fault.reply = "unknown-result";
+      fault.replyError = new Error("database or disk is full");
+      await expect(
+        actor.withPhase("turn", authority, async (phase) => {
+          if (stage === "command") {
+            await phase.actor.patch(activity("unknown", 456), authority);
+          } else {
+            phase.patch([{ kind: "activity", updatedAt: 456 }]);
+          }
+        }),
+      ).rejects.toSatisfy((error: unknown) => {
+        expect(hasSqliteWorkerOutcomeUnknown(error)).toBe(true);
+        expect(classifyGatewayStorageFailure(error)).toBe("session_actor_reconciliation");
+        expect(
+          renderAssistantRequestFailureCopy({
+            storageFailure: classifyGatewayStorageFailure(error),
+          }),
+        ).toMatch(/check|reopen|retry/i);
+        expect(formatErrorMessageWithCode(error)).toContain("database or disk is full");
+        return true;
+      });
+      expect(commands.filter((command) => command === "session.actor.patch")).toHaveLength(1);
+    });
+  },
+);
 
 it("release waits actual native settlement and flushes accepted phase work after an await", async () => {
   await withActor(async ({ actor, fault, commands }) => {

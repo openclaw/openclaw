@@ -58,15 +58,7 @@ export function defineGatewayModuleBoundaryTests(
               .locator(".gateway-status__label")
               .getByText("Reconnecting…", { exact: true })
               .waitFor({ state: "visible" });
-            const retry = connectionStatus.getByRole("button", { name: /Retry now/ });
-            expect(await retry.isDisabled()).toBe(true);
-            // Offline mock sockets stay pending until explicitly settled. Keep
-            // backoff paused so this click exercises Retry after a failed attempt.
-            await gateway.closeLatest(1006, "synthetic failed attempt");
-            await expect.poll(() => retry.isDisabled()).toBe(false);
-            const socketCount = await gateway.getSocketCount();
-            await retry.click();
-            await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(socketCount);
+            expect(await connectionStatus.getByRole("button").count()).toBe(0);
             await gateway.setOnline(true);
             await page.clock.resume();
             await waitForControlUiGatewayReady(page);

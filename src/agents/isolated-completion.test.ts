@@ -3,14 +3,18 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentRunDelegatedAuthority } from "../infra/agent-run-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { expectNoCalls } from "../test-utils/mock-call-assertions.js";
 import type { AdmittedRunContext } from "./admitted-run-context.js";
 import {
   isolatedAssistant,
-  nativeAuthPlan,
+  isolatedReply as reply,
+  isolatedErrorReply as errorReply,
+  prepareQuotaProfiles,
   isolatedCompletionMocks as mocks,
   runIsolatedCompletion,
   preparedModelRuntime,
   registerIsolatedHarness,
+  registerIsolatedRuntime,
   releaseRuntimeLease,
   isolatedRequest,
   resetIsolatedCompletionTestState,
@@ -40,14 +44,8 @@ function expectCall(mock: unknown, shape: object) {
   expect(mock).toHaveBeenCalledWith(expect.objectContaining(shape));
 }
 
-function expectNoCalls(...functions: unknown[]) {
-  for (const mock of functions) {
-    expect(mock).not.toHaveBeenCalled();
-  }
-}
-
 function complete(overrides: Partial<Parameters<typeof runIsolatedCompletion>[0]> = {}) {
-  return runIsolatedCompletion({ ...isolatedRequest(), ...overrides });
+  return runIsolatedCompletion(isolatedRequest(overrides));
 }
 
 function cliReply(text = "done") {
@@ -65,13 +63,9 @@ function cliComplete(overrides: Parameters<typeof complete>[0] = {}) {
 }
 
 const cliOwner = { kind: "cli", id: "claude-cli" };
-const reply = (text: string) => ({ assistant: isolatedAssistant([{ type: "text", text }]) });
 const runtimeLease = () => ({
   snapshot: preparedModelRuntime,
   [Symbol.asyncDispose]: releaseRuntimeLease,
-});
-const errorReply = (errorMessage: string) => ({
-  assistant: { ...isolatedAssistant([], "error"), errorMessage },
 });
 const admittedFixture = () => ({
   config: { agents: { defaults: { workspace: "/tmp/admitted-workspace" } } },
@@ -107,9 +101,7 @@ function pausedHarness(stage: PreparationStage, version: "v1" | "v2" = "v2") {
   const expired = new Error("The completion owner retired.");
   let current = true;
   const dispatch = vi.fn(async () => reply("done"));
-  registerIsolatedHarness(
-    version === "v1" ? { runIsolatedCompletion: dispatch } : { runIsolatedCompletionV2: dispatch },
-  );
+  registerIsolatedRuntime(version, dispatch);
   pausePreparation(stage, async () => {
     entered.resolve();
     await release.promise;
@@ -232,24 +224,6 @@ describe("runIsolatedCompletion", () => {
     expect(releaseRuntimeLease).toHaveBeenCalledOnce();
   });
 
-  function prepareQuotaProfiles() {
-    const profileIds = ["openai:first", "openai:backup"];
-    mocks.ensureAuthProfileStore.mockReturnValue({
-      version: 1,
-      profiles: Object.fromEntries(
-        profileIds.map((id) => [id, { type: "token", provider: "openai", token: id }]),
-      ),
-    });
-    mocks.prepareAgentRuntimeAuth.mockReturnValue({
-      plan: nativeAuthPlan,
-      attempts: profileIds.map((profileId) => ({
-        kind: "profile",
-        profileId,
-        plan: { ...nativeAuthPlan, forwardedAuthProfileId: profileId },
-      })),
-    });
-  }
-
   it.each([
     ["429 Too many requests", 400],
     ["You have hit your ChatGPT usage limit. Try again in 120 minutes.", 0],
@@ -259,7 +233,7 @@ describe("runIsolatedCompletion", () => {
     "rotates quota failure %s within one deadline (%s ms)",
     async (errorMessage, elapsedMs) => {
       prepareQuotaProfiles();
-      const now = vi.spyOn(performance, "now").mockReturnValue(1_000);
+      using now = vi.spyOn(performance, "now").mockReturnValue(1_000);
       const dispatch = vi
         .fn()
         .mockImplementationOnce(async () => {
@@ -269,26 +243,22 @@ describe("runIsolatedCompletion", () => {
         .mockResolvedValueOnce(reply("recovered"));
       registerIsolatedHarness({ authBootstrap: "harness", runIsolatedCompletionV2: dispatch });
 
-      try {
-        const completion = complete();
-        if (elapsedMs === 1_000) {
-          await expect(completion).rejects.toThrow("timed out");
-          expect(dispatch).toHaveBeenCalledOnce();
-        } else {
-          await expect(completion).resolves.toMatchObject({ text: "recovered" });
-          expect(dispatch).toHaveBeenCalledTimes(2);
-          expect(
-            dispatch.mock.calls.map(([params]) => params.authorization.plan.forwardedAuthProfileId),
-          ).toEqual(["openai:first", "openai:backup"]);
-          expect(dispatch).toHaveBeenNthCalledWith(
-            2,
-            expect.objectContaining({ timeoutMs: 1_000 - elapsedMs }),
-          );
-        }
-        expect(releaseRuntimeLease).toHaveBeenCalledOnce();
-      } finally {
-        now.mockRestore();
+      const completion = complete();
+      if (elapsedMs === 1_000) {
+        await expect(completion).rejects.toThrow("timed out");
+        expect(dispatch).toHaveBeenCalledOnce();
+      } else {
+        await expect(completion).resolves.toMatchObject({ text: "recovered" });
+        expect(dispatch).toHaveBeenCalledTimes(2);
+        expect(
+          dispatch.mock.calls.map(([params]) => params.authorization.plan.forwardedAuthProfileId),
+        ).toEqual(["openai:first", "openai:backup"]);
+        expect(dispatch).toHaveBeenNthCalledWith(
+          2,
+          expect.objectContaining({ timeoutMs: 1_000 - elapsedMs }),
+        );
       }
+      expect(releaseRuntimeLease).toHaveBeenCalledOnce();
     },
   );
 
@@ -448,6 +418,17 @@ describe("runIsolatedCompletion", () => {
       });
     },
   );
+
+  it("forwards the native output schema to a V2 harness", async () => {
+    const assistant = isolatedAssistant([{ type: "text", text: '{"ok":true}' }]);
+    const dispatch = vi.fn(async (_params: unknown) => ({ assistant }));
+    registerIsolatedHarness({ runIsolatedCompletionV2: dispatch });
+    const outputSchema = { type: "object" };
+
+    await runIsolatedCompletion({ ...isolatedRequest(), outputSchema });
+
+    expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ outputSchema }));
+  });
 
   it.each([false, true])(
     "captures call-owned choices and authority before admission (retired: %s)",

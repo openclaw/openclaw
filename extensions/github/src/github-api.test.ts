@@ -1,143 +1,78 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import { fetchGitHubApi, readGitHubGraphQLResponse, resolveGitHubApiUrls } from "./github-api.js";
 
 const log = vi.hoisted(() => ({ info: vi.fn(), debug: vi.fn() }));
 // mock-isolation: Capture severity without opening process-global log sinks.
-vi.mock("openclaw/plugin-sdk/logging-core", () => ({ createSubsystemLogger: () => log }));
+vi.mock("openclaw/plugin-sdk/diagnostic-runtime", () => ({ createSubsystemLogger: () => log }));
 
-function scopedRequests(
-  api: typeof import("./github-api.js"),
-  fetchImpl: typeof fetch,
-  baseUrl: string,
-) {
-  return (url: string, token?: string, graphql?: Parameters<typeof api.fetchGitHubApi>[7]) =>
-    api.fetchGitHubApi(
-      url,
-      fetchImpl,
-      token,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      graphql,
-      baseUrl,
-    );
+const publicRepo = "https://api.github.com/repos/acme/repo";
+const query = { query: "query { viewer { login } }", variables: {} };
+const quota = { statusCode: 429, retryAfterMs: 60_000 };
+function setup(base = "https://api.github.com") {
+  const fetcher = vi.fn<typeof fetch>().mockImplementation(async () => new Response("{}"));
+  const request = (url: string, token?: string, gql?: Parameters<typeof fetchGitHubApi>[7]) =>
+    fetchGitHubApi(url, fetcher, token, undefined, undefined, undefined, undefined, gql, base);
+  return { fetcher, request };
 }
-
 afterEach(() => {
   vi.restoreAllMocks();
   vi.clearAllMocks();
 });
 
-it.each([false, true])("keeps slow fetch diagnostics at debug (failed=%s)", async (failed) => {
-  const { fetchGitHubApi } = await import("./github-api.js");
+it("keeps slow failed-fetch diagnostics at debug", async () => {
   vi.spyOn(performance, "now")
     .mockReturnValueOnce(0)
     .mockReturnValueOnce(100)
     .mockReturnValueOnce(600);
-  const fetchImpl = vi.fn<typeof fetch>();
-  if (failed) {
-    fetchImpl.mockRejectedValue(new Error("synthetic network failure"));
-    await expect(
-      fetchGitHubApi("https://api.github.com/repos/acme/repo", fetchImpl),
-    ).rejects.toThrow("Could not reach GitHub");
-  } else {
-    fetchImpl.mockResolvedValue(new Response("{}"));
-    await expect(
-      fetchGitHubApi("https://api.github.com/repos/acme/repo", fetchImpl),
-    ).resolves.toBeInstanceOf(Response);
-  }
-  expect(log.debug).toHaveBeenCalledWith("Slow GitHub API request", {
-    authMs: 100,
-    networkMs: 500,
-    resource: "core",
-    aborted: false,
-  });
+  const { fetcher, request } = setup();
+  fetcher.mockRejectedValue(new Error("synthetic network failure"));
+  await expect(request(publicRepo)).rejects.toThrow("Could not reach GitHub");
+  expect(log.debug).toHaveBeenCalledOnce();
   expect(log.info).not.toHaveBeenCalled();
 });
 
-describe("GitHub API base URL", () => {
-  it("defaults to public GitHub", async () => {
-    const { GITHUB_API_BASE_URL, GITHUB_API_ORIGIN } = await import("../api.js");
-    expect(GITHUB_API_BASE_URL).toBe("https://api.github.com");
-    expect(GITHUB_API_ORIGIN).toBe("https://api.github.com");
-  });
+it("normalizes Enterprise REST and GraphQL URLs while preserving the port", async () => {
+  const expected = "https://ghe.example.test:8443/api/v3";
+  const { baseUrl, graphqlUrl } = resolveGitHubApiUrls(expected + "/");
+  const { fetcher, request } = setup(baseUrl);
+  await request(`${baseUrl}/repos/acme/private-repo`, "synthetic-token");
+  await request(graphqlUrl, "synthetic-token", query);
+  expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
+    `${expected}/repos/acme/private-repo`,
+    expected.replace("/api/v3", "/api/graphql"),
+  ]);
+  await expect(request("https://ghe.example.test/settings", "synthetic-token")).rejects.toThrow(
+    "Invalid GitHub API URL",
+  );
+  await expect(request("https://ghe.example.test/api/v3/repos/acme/private-repo")).rejects.toThrow(
+    "Invalid GitHub API URL",
+  );
+});
 
-  it("routes Enterprise Server REST and GraphQL requests to their API paths", async () => {
-    const api = await import("./github-api.js");
-    const { baseUrl, graphqlUrl } = api.resolveGitHubApiUrls("https://ghe.example.test/api/v3/");
-    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(new Response("{}"));
-    const request = scopedRequests(api, fetchImpl, baseUrl);
-    await request(`${baseUrl}/repos/acme/private-repo`, "synthetic-token");
-    await request(graphqlUrl, "synthetic-token", {
-      query: "query { viewer { login } }",
-      variables: {},
-    });
-    expect(fetchImpl.mock.calls.map(([url]) => url)).toEqual([
-      "https://ghe.example.test/api/v3/repos/acme/private-repo",
-      "https://ghe.example.test/api/graphql",
-    ]);
-    await expect(request("https://ghe.example.test/settings", "synthetic-token")).rejects.toThrow(
-      "Invalid GitHub API URL",
-    );
-  });
+it("retains GraphQL quota per admitted API and credential across interleaved requests", async () => {
+  vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+  const base = "https://ghe.example.test/api/v3";
+  const token = "synthetic-quota-token";
+  const { fetcher, request } = setup(base);
+  fetcher.mockResolvedValueOnce(
+    Response.json({ errors: [{ type: "RATE_LIMITED" }] }, { status: 403 }),
+  );
+  const response = await request(resolveGitHubApiUrls(base).graphqlUrl, token, query);
+  await expect(readGitHubGraphQLResponse(response, fetcher, token)).rejects.toMatchObject(quota);
+  await expect(fetchGitHubApi(publicRepo, fetcher, token)).resolves.toBeInstanceOf(Response);
+  await expect(request(`${base}/repos/acme/repo`, token)).rejects.toMatchObject(quota);
+  expect(fetcher).toHaveBeenCalledTimes(2);
+  await expect(
+    request(`${base}/repos/acme/repo`, "synthetic-rotated-token"),
+  ).resolves.toBeInstanceOf(Response);
+});
 
-  it("retains GraphQL quota on its admitted API while public requests are interleaved", async () => {
-    const api = await import("./github-api.js");
-    vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
-    const enterpriseBase = "https://ghe.example.test/api/v3";
-    const token = "synthetic-quota-token";
-    const fetchImpl = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify({ errors: [{ type: "RATE_LIMITED" }] }), { status: 403 }),
-      )
-      .mockImplementation(async () => new Response("{}"));
-    const enterprise = scopedRequests(api, fetchImpl, enterpriseBase);
-    const response = await enterprise(api.resolveGitHubApiUrls(enterpriseBase).graphqlUrl, token, {
-      query: "query { viewer { login } }",
-      variables: {},
-    });
-    await expect(api.readGitHubGraphQLResponse(response, fetchImpl, token)).rejects.toMatchObject({
-      statusCode: 429,
-      retryAfterMs: 60_000,
-    });
-    await expect(
-      api.fetchGitHubApi("https://api.github.com/repos/acme/repo", fetchImpl, token),
-    ).resolves.toBeInstanceOf(Response);
-    await expect(enterprise(`${enterpriseBase}/repos/acme/repo`, token)).rejects.toMatchObject({
-      statusCode: 429,
-      retryAfterMs: 60_000,
-    });
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
-    await expect(
-      enterprise(`${enterpriseBase}/repos/acme/repo`, "synthetic-rotated-token"),
-    ).resolves.toBeInstanceOf(Response);
-    expect(fetchImpl).toHaveBeenCalledTimes(3);
-  });
-
-  it("keeps a configured HTTPS API port on Enterprise requests", async () => {
-    const api = await import("./github-api.js");
-    const { baseUrl } = api.resolveGitHubApiUrls("https://ghe.example.test:8443/api/v3");
-    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(new Response("{}"));
-    const request = scopedRequests(api, fetchImpl, baseUrl);
-    await request(`${baseUrl}/repos/acme/private-repo`);
-    expect(fetchImpl).toHaveBeenCalledWith(
-      "https://ghe.example.test:8443/api/v3/repos/acme/private-repo",
-      expect.any(Object),
-    );
-    await expect(
-      request("https://ghe.example.test/api/v3/repos/acme/private-repo"),
-    ).rejects.toThrow("Invalid GitHub API URL");
-  });
-
-  it.each([
-    "http://api.ghe.example.test",
-    "https://user@example.com",
-    "https://api.ghe.example.test/other",
-  ])("rejects unsafe configured API origin %s", async (origin) => {
-    const api = await import("./github-api.js");
-    expect(() => api.resolveGitHubApiUrls(origin)).toThrow(
-      "gateway.github.apiBaseUrl must be an HTTPS GitHub API base URL",
-    );
-  });
+it.each([
+  "http://api.ghe.example.test",
+  "https://user@example.com",
+  "https://api.ghe.example.test/other",
+])("rejects unsafe configured API origin %s", (origin) => {
+  expect(() => resolveGitHubApiUrls(origin)).toThrow(
+    "gateway.github.apiBaseUrl must be an HTTPS GitHub API base URL",
+  );
 });

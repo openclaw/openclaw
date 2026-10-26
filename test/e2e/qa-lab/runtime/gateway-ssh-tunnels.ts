@@ -529,11 +529,7 @@ export async function runGatewaySshTunnels(
       title: "Gateway SSH tunnel fallback",
       sourcePath: "qa/scenarios/runtime/gateway-ssh-tunnels.yaml",
       docsRefs: ["docs/gateway/remote.md", "docs/cli/gateway.md"],
-      codeRefs: [
-        SOURCE_PATH,
-        "src/infra/ssh-tunnel.ts",
-        "src/commands/gateway-status/probe-run.ts",
-      ],
+      codeRefs: [SOURCE_PATH, "src/infra/ssh-tunnel.ts", "src/commands/gateway-status.ts"],
     },
   });
   if (process.env.OPENCLAW_TESTBOX !== "1") {

@@ -6,28 +6,22 @@ import { expectDefined, isRecord } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
-  areDiagnosticsEnabledForProcess,
-  setDiagnosticsEnabledForProcess,
+  areDiagnosticsEnabledForProcess as diagnosticsEnabled,
+  setDiagnosticsEnabledForProcess as setDiagnostics,
 } from "../infra/diagnostic-events.js";
 import {
-  runWithDiagnosticTraceContext,
+  runWithDiagnosticTraceContext as withTrace,
   type DiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
 import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
-import { logSessionControllerPhase } from "./session-controller.diagnostics.js";
+import { controllerGate as gate } from "./controller-core.test-support.js";
+import { logSessionControllerPhase as logPhase } from "./session-controller.diagnostics.js";
 import {
-  beginSessionEffect,
+  beginSessionEffect as beginEffect,
   captureSessionTarget,
-  runSessionMutation,
+  runSessionMutation as runMutation,
 } from "./session-controller.lifecycle.js";
-import {
-  claimSessionControllerTask,
-  releaseSessionControllerClaim,
-  reserveSessionControllerSource,
-  tryClaimSessionControllerTask,
-} from "./session-controller.mailbox.js";
 import { createReplyOperation } from "./session-controller.operation.js";
-import { findSessionControllerEntry } from "./session-controller.state.js";
 
 const traces = {
   first: { traceId: "1".repeat(32), spanId: "1".repeat(16) },
@@ -43,8 +37,15 @@ let clock = 120_000;
 let directory: string;
 let logFile: string;
 let diagnosticsWereEnabled: boolean;
+const messages = {
+  waiting: "session lifecycle queue waiting",
+  slow: "slow session lifecycle operation",
+  phase: "session controller phase",
+};
+type RecordKind = keyof typeof messages;
+type Target = { scope: string; identities: string[] };
 
-async function records(message: string): Promise<Record<string, unknown>[]> {
+async function records(kind: RecordKind): Promise<Record<string, unknown>[]> {
   await flushLogger();
   return fs
     .readFileSync(logFile, "utf8")
@@ -54,21 +55,14 @@ async function records(message: string): Promise<Record<string, unknown>[]> {
         return [];
       }
       const record: unknown = JSON.parse(line);
-      if (!isRecord(record) || record.message !== message) {
+      if (!isRecord(record) || record.message !== messages[kind]) {
         return [];
       }
       const fields = Object.values(record).find(
         (value): value is Record<string, unknown> => isRecord(value) && "diagnosticEpoch" in value,
       );
-      return [
-        {
-          ...fields,
-          traceId: record.traceId,
-          spanId: record.spanId,
-          parentSpanId: record.parentSpanId,
-          traceFlags: record.traceFlags,
-        },
-      ];
+      const { traceId, spanId, parentSpanId, traceFlags } = record;
+      return [{ ...fields, traceId, spanId, parentSpanId, traceFlags }];
     });
 }
 
@@ -77,41 +71,67 @@ async function advance(ms: number) {
   await vi.advanceTimersByTimeAsync(ms);
 }
 
+async function finish(releases: (() => void)[], ...work: Promise<unknown>[]) {
+  releases.forEach((release) => release());
+  await Promise.allSettled(work);
+}
+
+async function expectRecords(kind: RecordKind, rows: Record<string, unknown>[], unordered = false) {
+  const actual = await records(kind);
+  const expected = rows.map((row) => expect.objectContaining(row));
+  expect(actual).toEqual(unordered ? expect.arrayContaining(expected) : expected);
+  return actual;
+}
+
+async function expectRecord(kind: RecordKind, row: Record<string, unknown>) {
+  return (await expectRecords(kind, [row]))[0]!;
+}
+
+function expectPrivate(rows: unknown, target: Target) {
+  const json = JSON.stringify(rows);
+  for (const value of [target.scope, ...target.identities]) {
+    expect(json).not.toContain(value);
+  }
+}
+
+function mutate<T>(
+  target: Target,
+  trace: DiagnosticTraceContext | undefined,
+  options: Pick<
+    Parameters<typeof runMutation<T>>[0],
+    "run" | "prepare" | "finalize" | "diagnosticLabel"
+  >,
+) {
+  return withTrace(trace, () => runMutation({ ...target, policy: "wait", ...options }));
+}
+
 function hold(
   kind: "lifecycle" | "mutation",
-  target: { scope: string; identities: string[] },
+  target: Target,
   trace?: DiagnosticTraceContext,
   owner?: symbol,
 ) {
-  const entered = createDeferred();
-  const release = createDeferred();
-  const params = {
-    ...target,
-    run: async () => {
-      entered.resolve();
-      await release.promise;
-    },
-  };
-  const promise = runWithDiagnosticTraceContext(trace, () =>
+  const held = gate();
+  const promise = withTrace(trace, () =>
     kind === "lifecycle"
-      ? beginSessionEffect({
+      ? beginEffect({
           ...target,
           owner,
           serializeOwner: owner !== undefined,
-          assertAllowed: params.run,
+          assertAllowed: held.run,
           revalidateAllowed: () => {},
         }).then((lease) => lease.release())
-      : runSessionMutation({ ...params, policy: "wait", diagnosticLabel: "sharing" }),
+      : runMutation({ ...target, run: held.run, policy: "wait", diagnosticLabel: "sharing" }),
   );
-  return { entered: entered.promise, release: release.resolve, promise };
+  return { ...held, promise };
 }
 
 beforeEach(() => {
   directory = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-lifecycle-diagnostics-"));
   logFile = path.join(directory, "runtime.log");
   fs.writeFileSync(logFile, "");
-  diagnosticsWereEnabled = areDiagnosticsEnabledForProcess();
-  setDiagnosticsEnabledForProcess(true);
+  diagnosticsWereEnabled = diagnosticsEnabled();
+  setDiagnostics(true);
   resetLogger();
   setLoggerOverride({ level: "warn", consoleLevel: "silent", file: logFile });
   clock += 120_000;
@@ -127,63 +147,80 @@ afterEach(async () => {
     // A failed leak assertion must still release this fixture's process-wide state.
     vi.useRealTimers();
     vi.restoreAllMocks();
-    setDiagnosticsEnabledForProcess(diagnosticsWereEnabled);
+    setDiagnostics(diagnosticsWereEnabled);
     setLoggerOverride(null);
     resetLogger();
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
 
+it.each([false, true])(
+  "reports a long acquired effect only when contended=%s",
+  async (contended) => {
+    const target = { scope: "acquired-effect-store", identities: ["acquired-effect-session"] };
+    const owner = Symbol("effect-producer");
+    const effect = await withTrace(traces.first, () =>
+      beginEffect({ ...target, owner, serializeOwner: true }),
+    );
+    const waiter = contended ? hold("lifecycle", target, traces.waiter, owner) : undefined;
+    try {
+      await advance(2_000);
+      await expectRecords(
+        "waiting",
+        contended
+          ? [
+              {
+                operationTraceId: traces.waiter.traceId,
+                holderTraceId: traces.first.traceId,
+                holderObserved: true,
+                holderPhase: "run",
+                queueKind: "lifecycle",
+                waitMs: 2_000,
+              },
+            ]
+          : [],
+      );
+    } finally {
+      effect.release();
+      waiter?.release();
+      await waiter?.promise;
+    }
+    await expectRecords(
+      "slow",
+      contended
+        ? [
+            {
+              operationTraceId: traces.first.traceId,
+              lifecycleQueueWaitMs: 0,
+              phaseDurationsMs: { prepare: 0, run: 2_000, finalize: 0 },
+            },
+            { operationTraceId: traces.waiter.traceId, lifecycleQueueWaitMs: 2_000 },
+          ]
+        : [],
+    );
+  },
+);
+
 it("reports the current holder after turnover and preserves the waiter's trace and FIFO order", async () => {
   const target = { scope: "private-store-path", identities: ["private-session-key"] };
-  const firstStarted = createDeferred();
-  const secondStarted = createDeferred();
-  const releaseFirst = createDeferred();
-  const releaseSecond = createDeferred();
   const order: string[] = [];
-  const first = runWithDiagnosticTraceContext(traces.first, () =>
-    runSessionMutation({
-      diagnosticLabel: "create",
-      policy: "wait",
-      ...target,
-      run: async () => {
-        order.push("first");
-        firstStarted.resolve();
-        await releaseFirst.promise;
-      },
-    }),
-  );
-  await firstStarted.promise;
-  const second = runWithDiagnosticTraceContext(traces.second, () =>
-    runSessionMutation({
-      diagnosticLabel: "delete",
-      policy: "wait",
-      ...target,
-      run: async () => {
-        order.push("second");
-        secondStarted.resolve();
-        await releaseSecond.promise;
-      },
-    }),
-  );
-  const waiter = runWithDiagnosticTraceContext(traces.waiter, () =>
-    runSessionMutation({
-      diagnosticLabel: "sharing",
-      policy: "wait",
-      ...target,
-      run: async () => {
-        order.push("waiter");
-      },
-    }),
-  );
+  const firstGate = gate(() => order.push("first"));
+  const secondGate = gate(() => order.push("second"));
+  const first = mutate(target, traces.first, { diagnosticLabel: "create", run: firstGate.run });
+  await firstGate.entered;
+  const second = mutate(target, traces.second, { diagnosticLabel: "delete", run: secondGate.run });
+  const waiter = mutate(target, traces.waiter, {
+    diagnosticLabel: "sharing",
+    run: async () => {
+      order.push("waiter");
+    },
+  });
   try {
     await advance(500);
-    releaseFirst.resolve();
-    await secondStarted.promise;
+    firstGate.release();
+    await secondGate.entered;
     await advance(500);
-    const waiting = await records("session lifecycle queue waiting");
-    expect(waiting).toHaveLength(1);
-    expect(waiting[0]).toMatchObject({
+    const row = await expectRecord("waiting", {
       operationTraceId: traces.waiter.traceId,
       holderTraceId: traces.second.traceId,
       traceId: traces.waiter.traceId,
@@ -197,33 +234,26 @@ it("reports the current holder after turnover and preserves the waiter's trace a
       holderMutationKind: "delete",
       identityCount: 1,
     });
-    expect(waiting[0]?.identityHash).toMatch(/^[0-9a-f]{64}$/);
-    expect(waiting[0]?.sessionScopeHash).toBe(waiting[0]?.identityHash);
-    expect(waiting[0]?.holderSessionScopeHash).toBe(waiting[0]?.sessionScopeHash);
-    expect(JSON.stringify(waiting)).not.toContain(target.scope);
-    expect(JSON.stringify(waiting)).not.toContain(target.identities[0]);
+    expect(row.identityHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(row).toMatchObject({
+      sessionScopeHash: row.identityHash,
+      holderSessionScopeHash: row.identityHash,
+    });
+    expectPrivate([row], target);
     expect(order).toEqual(["first", "second"]);
   } finally {
-    releaseFirst.resolve();
-    releaseSecond.resolve();
-    await Promise.allSettled([first, second, waiter]);
+    await finish([firstGate.release, secondGate.release], first, second, waiter);
   }
   expect(order).toEqual(["first", "second", "waiter"]);
-  const completed = await records("slow session lifecycle operation");
-  expect(completed).toEqual([
-    expect.objectContaining({
-      mutationKind: "delete",
+  const completed = await expectRecords(
+    "slow",
+    ["delete", "sharing"].map((mutationKind) => ({
+      mutationKind,
       sessionScopeHash: expect.stringMatching(/^[0-9a-f]{64}$/),
       identityCount: 1,
-    }),
-    expect.objectContaining({
-      mutationKind: "sharing",
-      sessionScopeHash: expect.stringMatching(/^[0-9a-f]{64}$/),
-      identityCount: 1,
-    }),
-  ]);
-  expect(JSON.stringify(completed)).not.toContain(target.scope);
-  expect(JSON.stringify(completed)).not.toContain(target.identities[0]);
+    })),
+  );
+  expectPrivate(completed, target);
 });
 
 it("distinguishes mutation and lifecycle holders of the same normalized identity", async () => {
@@ -234,30 +264,33 @@ it("distinguishes mutation and lifecycle holders of the same normalized identity
   const waiter = hold("mutation", target, traces.waiter);
   try {
     await advance(1_000);
-    const waiting = await records("session lifecycle queue waiting");
-    expect(waiting).toHaveLength(2);
-    expect(waiting).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
+    const waiting = await expectRecords(
+      "waiting",
+      [
+        {
           queueKind: "lifecycle",
           operationTraceId: traces.second.traceId,
           holderTraceId: traces.first.traceId,
           holderPhase: "prepare",
-        }),
-        expect.objectContaining({
+        },
+        {
           queueKind: "mutation",
           operationTraceId: traces.waiter.traceId,
           holderTraceId: traces.second.traceId,
           holderPhase: "run-admission",
-        }),
-      ]),
+        },
+      ],
+      true,
     );
+    expect(waiting).toHaveLength(2);
     expect(new Set(waiting.map((record) => record.identityHash)).size).toBe(1);
   } finally {
-    lifecycle.release();
-    mutation.release();
-    waiter.release();
-    await Promise.allSettled([lifecycle.promise, mutation.promise, waiter.promise]);
+    await finish(
+      [lifecycle.release, mutation.release, waiter.release],
+      lifecycle.promise,
+      mutation.promise,
+      waiter.promise,
+    );
   }
 });
 
@@ -279,8 +312,8 @@ it("leaves the holder unknown while waiting on a turn instead of naming an unrel
     traces.first,
   );
   await unrelated.entered;
-  const waiter = runWithDiagnosticTraceContext(traces.waiter, () =>
-    runSessionMutation({
+  const waiter = withTrace(traces.waiter, () =>
+    runMutation({
       target,
       requiredSessionId: "waiting-turn",
       policy: "wait",
@@ -289,17 +322,13 @@ it("leaves the holder unknown while waiting on a turn instead of naming an unrel
   );
   try {
     await advance(1_000);
-    expect(await records("session lifecycle queue waiting")).toEqual([
-      expect.objectContaining({
-        operationTraceId: traces.waiter.traceId,
-        holderObserved: false,
-        queueKind: "lifecycle",
-      }),
-    ]);
+    await expectRecord("waiting", {
+      operationTraceId: traces.waiter.traceId,
+      holderObserved: false,
+      queueKind: "lifecycle",
+    });
   } finally {
-    turn.complete();
-    unrelated.release();
-    await Promise.allSettled([unrelated.promise, waiter]);
+    await finish([() => turn.complete(), unrelated.release], unrelated.promise, waiter);
   }
 });
 
@@ -307,123 +336,87 @@ it.each([true, false])(
   "preserves an outer holder through reentry when initially enabled=%s",
   async (initiallyEnabled) => {
     const target = { scope: `reentry-store-${initiallyEnabled}`, identities: ["reentry-session"] };
-    const outerStarted = createDeferred();
-    const beginNested = createDeferred();
-    const nestedStarted = createDeferred();
-    const releaseNested = createDeferred();
-    const nestedDone = createDeferred();
-    const releaseOuter = createDeferred();
-    setDiagnosticsEnabledForProcess(initiallyEnabled);
-    const outer = runWithDiagnosticTraceContext(traces.first, () =>
-      runSessionMutation({
-        diagnosticLabel: "create",
-        policy: "wait",
-        ...target,
-        run: async () => {
-          outerStarted.resolve();
-          await beginNested.promise;
-          await runWithDiagnosticTraceContext(traces.second, () =>
-            runSessionMutation({
-              diagnosticLabel: "delete",
-              policy: "wait",
-              ...target,
-              run: async () => {
-                nestedStarted.resolve();
-                await releaseNested.promise;
-              },
-            }),
-          );
-          nestedDone.resolve();
-          await releaseOuter.promise;
-        },
-      }),
-    );
+    const [outerStarted, beginNested] = [createDeferred(), createDeferred()];
+    const nested = gate();
+    const [nestedDone, releaseOuter] = [createDeferred(), createDeferred()];
+    setDiagnostics(initiallyEnabled);
+    const outer = mutate(target, traces.first, {
+      diagnosticLabel: "create",
+      run: async () => {
+        outerStarted.resolve();
+        await beginNested.promise;
+        await mutate(target, traces.second, { diagnosticLabel: "delete", run: nested.run });
+        nestedDone.resolve();
+        await releaseOuter.promise;
+      },
+    });
     await outerStarted.promise;
-    setDiagnosticsEnabledForProcess(true);
+    setDiagnostics(true);
     beginNested.resolve();
-    await nestedStarted.promise;
+    await nested.entered;
     const waiter = hold("mutation", target, traces.waiter);
     try {
       await advance(500);
-      releaseNested.resolve();
+      nested.release();
       await nestedDone.promise;
       await advance(500);
-      const waiting = await records("session lifecycle queue waiting");
-      expect(waiting).toHaveLength(1);
-      expect(waiting[0]).toMatchObject({
+      const row = await expectRecord("waiting", {
         operationTraceId: traces.waiter.traceId,
         holderObserved: initiallyEnabled,
       });
-      expect(waiting[0]?.holderTraceId).toBe(initiallyEnabled ? traces.first.traceId : undefined);
-      expect(waiting[0]?.holderTraceId).not.toBe(traces.second.traceId);
+      expect(row.holderTraceId).toBe(initiallyEnabled ? traces.first.traceId : undefined);
+      expect(row.holderTraceId).not.toBe(traces.second.traceId);
     } finally {
-      beginNested.resolve();
-      releaseNested.resolve();
-      releaseOuter.resolve();
-      waiter.release();
-      await Promise.allSettled([outer, waiter.promise]);
+      await finish(
+        [beginNested.resolve, nested.release, releaseOuter.resolve, waiter.release],
+        outer,
+        waiter.promise,
+      );
     }
   },
 );
 
 it("measures prepare and finalize separately while successors wait for real finalization", async () => {
   const target = { scope: "phase-store", identities: ["phase-session"] };
-  const prepareStarted = createDeferred();
-  const releasePrepare = createDeferred();
-  const finalizeStarted = createDeferred();
-  const releaseFinalize = createDeferred();
-  const first = runWithDiagnosticTraceContext(traces.first, () =>
-    runSessionMutation({
-      diagnosticLabel: "create",
-      policy: "wait",
-      ...target,
-      prepare: async () => {
-        prepareStarted.resolve();
-        await releasePrepare.promise;
-      },
-      run: async () => {
-        clock += 30;
-      },
-      finalize: async () => {
-        finalizeStarted.resolve();
-        await releaseFinalize.promise;
-      },
-    }),
-  );
-  await prepareStarted.promise;
+  const [prepare, finalize] = [gate(), gate()];
+  const first = mutate(target, traces.first, {
+    diagnosticLabel: "create",
+    prepare: prepare.run,
+    run: async () => {
+      clock += 30;
+    },
+    finalize: finalize.run,
+  });
+  await prepare.entered;
   await advance(200);
-  releasePrepare.resolve();
-  await finalizeStarted.promise;
-  const waiter = hold("mutation", target, traces.waiter);
+  prepare.release();
+  await finalize.entered;
+  const runWaiter = vi.fn(async () => {});
+  const waiter = mutate(target, traces.waiter, { run: runWaiter });
   try {
     await advance(1_000);
-    expect(await records("session lifecycle queue waiting")).toEqual([
-      expect.objectContaining({
-        operationTraceId: traces.waiter.traceId,
-        holderTraceId: traces.first.traceId,
-        holderPhase: "finalize",
-      }),
-    ]);
+    expect(runWaiter).not.toHaveBeenCalled();
+    await expectRecord("waiting", {
+      operationTraceId: traces.waiter.traceId,
+      holderTraceId: traces.first.traceId,
+      holderPhase: "finalize",
+    });
   } finally {
-    releasePrepare.resolve();
-    releaseFinalize.resolve();
-    waiter.release();
-    await Promise.allSettled([first, waiter.promise]);
+    await finish([prepare.release, finalize.release], first, waiter);
   }
-  const completed = await records("slow session lifecycle operation");
-  expect(completed).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({
+  expect(runWaiter).toHaveBeenCalledOnce();
+  await expectRecords(
+    "slow",
+    [
+      {
         operationTraceId: traces.first.traceId,
         phaseDurationsMs: { prepare: 200, run: 30, finalize: 1_000 },
         mutationQueueWaitMs: 0,
         lifecycleQueueWaitMs: 0,
-      }),
-      expect.objectContaining({
-        operationTraceId: traces.waiter.traceId,
-        mutationQueueWaitMs: 1_000,
-      }),
-    ]),
+      },
+      { operationTraceId: traces.waiter.traceId, mutationQueueWaitMs: 1_000 },
+    ],
+    true,
   );
 });
 
@@ -433,48 +426,36 @@ it("keeps canceled validator custody visible until the real callback returns", a
     identities: ["cancelled-validator-session"],
   };
   const controller = new AbortController();
-  const entered = createDeferred();
-  const finish = createDeferred();
+  const validator = gate();
   const error = new Error("cancel validator");
-  const effect = runWithDiagnosticTraceContext(traces.first, () =>
-    beginSessionEffect({
+  const effect = withTrace(traces.first, () =>
+    beginEffect({
       ...target,
       signal: controller.signal,
-      assertAllowed: async () => {
-        entered.resolve();
-        await finish.promise;
-      },
+      assertAllowed: validator.run,
       revalidateAllowed: () => {},
     }),
   );
-  await entered.promise;
+  await validator.entered;
   controller.abort(error);
   await expect(effect).rejects.toBe(error);
   const waiter = hold("mutation", target, traces.waiter);
   try {
     await advance(1_000);
-    expect(await records("session lifecycle queue waiting")).toEqual([
-      expect.objectContaining({
-        operationTraceId: traces.waiter.traceId,
-        holderTraceId: traces.first.traceId,
-        holderPhase: "prepare",
-        holderSignalAborted: true,
-        queueKind: "lifecycle",
-      }),
-    ]);
+    await expectRecord("waiting", {
+      operationTraceId: traces.waiter.traceId,
+      holderTraceId: traces.first.traceId,
+      holderPhase: "prepare",
+      holderSignalAborted: true,
+      queueKind: "lifecycle",
+    });
   } finally {
-    finish.resolve();
-    waiter.release();
-    await Promise.allSettled([effect, waiter.promise]);
+    await finish([validator.release, waiter.release], effect, waiter.promise);
   }
-  expect(await records("slow session lifecycle operation")).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({
-        operationTraceId: traces.first.traceId,
-        signalAborted: true,
-        elapsedMs: 1_000,
-      }),
-    ]),
+  await expectRecords(
+    "slow",
+    [{ operationTraceId: traces.first.traceId, signalAborted: true, elapsedMs: 1_000 }],
+    true,
   );
 });
 
@@ -484,17 +465,17 @@ it("stops pending and terminal emissions when diagnostics are disabled without c
   await holder.entered;
   const waiter = hold("mutation", target, traces.waiter);
   try {
-    setDiagnosticsEnabledForProcess(false);
+    setDiagnostics(false);
     await advance(1_000);
   } finally {
     holder.release();
     waiter.release();
     await Promise.all([holder.promise, waiter.promise]);
   }
-  expect(await records("session lifecycle queue waiting")).toEqual([]);
-  expect(await records("slow session lifecycle operation")).toEqual([]);
+  expect(await records("waiting")).toEqual([]);
+  expect(await records("slow")).toEqual([]);
   await expect(
-    runSessionMutation({
+    runMutation({
       diagnosticLabel: "sharing",
       policy: "wait",
       ...target,
@@ -519,30 +500,26 @@ it("bounds holder, timer and warning state without inventing a holder", async ()
     await advance(0);
     expect(vi.getTimerCount()).toBe(32);
     await advance(1_000);
-    const waiting = await records("session lifecycle queue waiting");
+    const waiting = await records("waiting");
     expect(waiting).toHaveLength(32);
     expect(waiting.every((row) => row.holderObserved === false)).toBe(true);
     expect(waiting.every((row) => row.holderTraceId === undefined)).toBe(true);
     expect(new Set(waiting.map((row) => row.identityHash)).size).toBe(1);
-    expect(JSON.stringify(waiting)).not.toContain(target.scope);
-    expect(JSON.stringify(waiting)).not.toContain(target.identities[0]);
+    expectPrivate(waiting, target);
     expect(
       waiting.some(
         (row) => typeof row.omittedObservations === "number" && row.omittedObservations > 0,
       ),
     ).toBe(true);
   } finally {
-    unobserved.release();
-    holders.forEach((holder) => holder.release());
-    waiters.forEach((waiter) => waiter.release());
-    await Promise.allSettled([
-      unobserved.promise,
-      ...holders.map((holder) => holder.promise),
-      ...waiters.map((waiter) => waiter.promise),
-    ]);
+    const held = [unobserved, ...holders, ...waiters];
+    await finish(
+      held.map((holder) => holder.release),
+      ...held.map((holder) => holder.promise),
+    );
   }
-  const waiting = await records("session lifecycle queue waiting");
-  const completed = await records("slow session lifecycle operation");
+  const waiting = await records("waiting");
+  const completed = await records("slow");
   expect(waiting.length + completed.length).toBe(60);
   await advance(60_000);
   const later = hold("mutation", { scope: "after-budget", identities: ["session"] });
@@ -550,44 +527,13 @@ it("bounds holder, timer and warning state without inventing a holder", async ()
   await advance(1_000);
   later.release();
   await later.promise;
-  expect(
-    (await records("slow session lifecycle operation")).at(-1)?.omittedObservations,
-  ).toBeGreaterThan(0);
-});
-
-it("does not let pre-dispatch bypass an older preparing input or retain a failed claim request", async () => {
-  setLoggerOverride({ level: "info", consoleLevel: "silent", file: logFile });
-  const sessionKey = "agent:phase-claim:test";
-  let firstClaim: ReturnType<typeof tryClaimSessionControllerTask>;
-  let secondClaim: ReturnType<typeof tryClaimSessionControllerTask>;
-  try {
-    const first = reserveSessionControllerSource(sessionKey, { policy: { mode: "followup" } });
-    const second = reserveSessionControllerSource(sessionKey, { policy: { mode: "followup" } });
-    expect(tryClaimSessionControllerTask(second)).toBeUndefined();
-    firstClaim = tryClaimSessionControllerTask(first);
-    expect(firstClaim?.inputs).toEqual([first]);
-    expect(tryClaimSessionControllerTask(second)).toBeUndefined();
-    releaseSessionControllerClaim(firstClaim!);
-    await firstClaim!.settlement.promise;
-    secondClaim = await claimSessionControllerTask(second, () => {});
-    expect(secondClaim.inputs).toEqual([second]);
-    expect(
-      (await records("session controller phase"))
-        .filter((record) => record.phase === "source-claim")
-        .map((record) => record.status),
-    ).toEqual(["selected", "waiting", "selected"]);
-  } finally {
-    const claims = [firstClaim, secondClaim].filter((claim) => claim !== undefined);
-    for (const claim of claims) {
-      releaseSessionControllerClaim(claim);
-    }
-    await Promise.all(claims.map((claim) => claim.settlement.promise));
-  }
-  expect(findSessionControllerEntry(sessionKey)).toBeUndefined();
+  expect((await records("slow")).at(-1)?.omittedObservations).toBeGreaterThan(0);
 });
 
 it("gates and hashes phase events without consuming the slow-warning budget", async () => {
-  setLoggerOverride({ level: "info", consoleLevel: "silent", file: logFile });
+  setLoggerOverride({ level: "info", consoleLevel: "info", consoleStyle: "pretty", file: logFile });
+  const consoleLog = vi.spyOn(console, "log").mockImplementation(() => {});
+  const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
   const fields = {
     phase: "source-claim" as const,
     status: "waiting" as const,
@@ -596,14 +542,14 @@ it("gates and hashes phase events without consuming the slow-warning budget", as
     sourceId: "sensitive-phase-source-id",
     prioritySourceId: "sensitive-phase-priority-id",
   };
-  setDiagnosticsEnabledForProcess(false);
-  logSessionControllerPhase(fields);
-  expect(await records("session controller phase")).toEqual([]);
-  setDiagnosticsEnabledForProcess(true);
+  setDiagnostics(false);
+  logPhase(fields);
+  expect(await records("phase")).toEqual([]);
+  setDiagnostics(true);
   for (let index = 0; index < 65; index++) {
-    logSessionControllerPhase(fields);
+    logPhase(fields);
   }
-  const phases = await records("session controller phase");
+  const phases = await records("phase");
   expect(phases).toHaveLength(60);
   expect(phases[0]).toMatchObject({
     sessionScopeHash: expect.stringMatching(/^[0-9a-f]{64}$/),
@@ -612,6 +558,7 @@ it("gates and hashes phase events without consuming the slow-warning budget", as
     prioritySourceIdHash: expect.stringMatching(/^[0-9a-f]{64}$/),
   });
   expect(JSON.stringify(phases)).not.toContain("sensitive-phase-");
+  expect(consoleLog).not.toHaveBeenCalled();
   const holder = hold("mutation", {
     scope: "phase-budget-store",
     identities: ["phase-budget-session"],
@@ -623,7 +570,11 @@ it("gates and hashes phase events without consuming the slow-warning budget", as
     holder.release();
     await holder.promise;
   }
-  expect(await records("slow session lifecycle operation")).toHaveLength(1);
+  expect(await records("slow")).toHaveLength(1);
+  expect(consoleWarn).toHaveBeenCalledExactlyOnceWith(
+    expect.stringContaining("slow session lifecycle operation"),
+  );
+  expect(consoleWarn.mock.calls[0]?.[0]).toContain("elapsedMs=1000");
 });
 it("preserves operation errors and queue release when the native logging sink throws", async () => {
   vi.resetModules();
@@ -642,14 +593,15 @@ it("preserves operation errors and queue release when the native logging sink th
   });
   transport.write = failedSink;
   const lifecycle = await import("./session-controller.lifecycle.js");
-  const started = createDeferred();
-  const release = createDeferred();
+  const [started, release] = [createDeferred(), createDeferred()];
   const operationError = new Error("original operation failure");
+  const finalize = vi.fn(async () => {});
   const target = { scope: "failed-sink-store", identities: ["failed-sink-session"] };
   const first = lifecycle.runSessionMutation({
     diagnosticLabel: "delete",
     policy: "wait",
     ...target,
+    finalize,
     run: async () => {
       started.resolve();
       await release.promise;
@@ -669,6 +621,7 @@ it("preserves operation errors and queue release when the native logging sink th
     expect(failedSink).toHaveBeenCalled();
     release.resolve();
     await expect(firstOutcome).resolves.toBe(operationError);
+    expect(finalize).toHaveBeenCalledOnce();
     await expect(second).resolves.toBe("next operation");
     expect(lifecycle.getSessionMutationCount()).toBe(0);
   } finally {

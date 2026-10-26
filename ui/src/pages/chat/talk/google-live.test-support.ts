@@ -1,7 +1,14 @@
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { waitForFast } from "../../../test-helpers/wait-for.ts";
 import { GoogleLiveRealtimeTalkTransport } from "./google-live.ts";
-import { prepareRealtimeTalkTestInput } from "./input.test-support.ts";
+import {
+  createPcmAudioContext,
+  mockAudioNode,
+  prepareRealtimeTalkTestInput,
+  type MockAudioBufferSource,
+  type MockAudioProcessor,
+  type MockAudioSink,
+} from "./input.test-support.ts";
 import type {
   RealtimeTalkJsonPcmWebSocketSessionResult,
   RealtimeTalkTransportContext,
@@ -15,16 +22,8 @@ type MockWebSocketEventType = "close" | "error" | "message" | "open";
 export const wsInstances: MockGoogleLiveWebSocket[] = [];
 export const audioContexts: MockAudioContext[] = [];
 export const createdSources: MockAudioBufferSource[] = [];
-export const inputProcessors: Array<{
-  connect: ReturnType<typeof vi.fn>;
-  disconnect: ReturnType<typeof vi.fn>;
-  onaudioprocess: ((event: { inputBuffer: { getChannelData: () => Float32Array } }) => void) | null;
-}> = [];
-export const inputSinks: Array<{
-  connect: ReturnType<typeof vi.fn>;
-  disconnect: ReturnType<typeof vi.fn>;
-  gain: { value: number };
-}> = [];
+export const inputProcessors: MockAudioProcessor[] = [];
+export const inputSinks: MockAudioSink[] = [];
 
 export const googleLiveTestFixture = {
   getUserMedia: vi.fn(),
@@ -107,65 +106,17 @@ class MockGoogleLiveWebSocket {
   }
 }
 
-class MockAudioBufferSource {
-  buffer: unknown = null;
-  readonly addEventListener = vi.fn();
-  readonly connect = vi.fn();
-  readonly start = vi.fn();
-  readonly stop = vi.fn();
-}
-
-function mockAudioNode() {
-  return { connect: vi.fn(), disconnect: vi.fn() };
-}
-
-class MockAudioContext {
+class MockAudioContext extends createPcmAudioContext(inputProcessors, inputSinks, createdSources) {
   readonly currentTime = 0;
-  readonly destination = {};
   readonly sampleRate: number;
-  readonly close = vi.fn(async () => undefined);
 
   constructor(options?: { sampleRate?: number }) {
+    super();
     this.sampleRate = options?.sampleRate ?? 24000;
     audioContexts.push(this);
   }
 
-  createMediaStreamSource = mockAudioNode;
-
-  createScriptProcessor() {
-    const processor = { ...mockAudioNode(), onaudioprocess: null };
-    inputProcessors.push(processor);
-    return processor;
-  }
-
-  createGain() {
-    const sink = { ...mockAudioNode(), gain: { value: 1 } };
-    inputSinks.push(sink);
-    return sink;
-  }
-
-  createAnalyser() {
-    return {
-      fftSize: 0,
-      smoothingTimeConstant: 0,
-      disconnect: vi.fn(),
-      getFloatTimeDomainData: (samples: Float32Array) => samples.fill(0.25),
-    };
-  }
-
-  createBuffer(_channels: number, length: number, sampleRate: number) {
-    const channel = new Float32Array(length);
-    return {
-      duration: length / sampleRate,
-      getChannelData: () => channel,
-    };
-  }
-
-  createBufferSource() {
-    const source = new MockAudioBufferSource();
-    createdSources.push(source);
-    return source;
-  }
+  override createMediaStreamSource = mockAudioNode;
 }
 
 export function createSession(
@@ -275,4 +226,10 @@ export function installGoogleLiveTestFixture(): void {
   });
 
   afterEach(() => vi.unstubAllGlobals());
+}
+
+export async function beginFakeTimedTransport(transport: GoogleLiveRealtimeTalkTransport) {
+  const start = transport.start();
+  await vi.advanceTimersByTimeAsync(0);
+  return { start, ws: latestWebSocket() };
 }

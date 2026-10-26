@@ -41,6 +41,9 @@ export function createE2EVitestConfig(env: Record<string, string | undefined> = 
     test: {
       ...baseTest,
       pool: "forks",
+      // Abandoned Gateway cleanup retains process-global owners, not just modules.
+      // Retire the process between files instead of resetting a still-closing owner.
+      isolate: true,
       maxWorkers: e2eWorkers,
       reporters: [...sharedVitestConfig.test.reporters, "default"],
       sequence: { sequencer: RepoE2eSequencer },

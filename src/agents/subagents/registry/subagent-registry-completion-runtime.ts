@@ -249,7 +249,7 @@ export function createSubagentRegistryCompletionRuntime(config: {
         "failed to retry subagent completion after gateway restart",
       );
     }, GATEWAY_ADMISSION_RETRY_DELAY_MS);
-    timer.unref?.();
+    timer.unref();
     retryTimers.add(timer);
   }
 
@@ -363,6 +363,7 @@ export function createSubagentRegistryCompletionRuntime(config: {
     recoveryCurrent?: SubagentCompletionRequest["recoveryCurrent"];
     sessionEffects?: SubagentCompletionRequest["sessionEffects"];
     error: string;
+    terminalStatus?: "failed";
     endedAt?: number;
     suppressSessionEffects?: boolean;
   }): Promise<number> {
@@ -400,7 +401,7 @@ export function createSubagentRegistryCompletionRuntime(config: {
       sendFarewell: true,
       accountId: entry.requesterOrigin?.accountId,
       triggerCleanup: true,
-      recoverInterrupted: true,
+      recoverInterrupted: params.terminalStatus ?? true,
       recoveryCurrent: {
         prepare: async () => (await params.recoveryCurrent?.prepare()) !== false,
         isHostCurrent: () => params.recoveryCurrent?.isHostCurrent() !== false,
@@ -598,6 +599,5 @@ export function createSubagentResumeReader(params: {
       pendingResumeChecks.has(getSubagentRunRuntimeKey(entry)),
     retirePending: (entry: SubagentRunRecord) =>
       pendingResumeChecks.delete(getSubagentRunRuntimeKey(entry)),
-    reset: () => pendingResumeChecks.clear(),
   };
 }

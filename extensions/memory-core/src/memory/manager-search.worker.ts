@@ -235,7 +235,6 @@ serveWorkerTasks(async (input): Promise<MemorySearchWorkerOutput> => {
                 : schema!.tables.has(MEMORY_INDEX_FTS_TABLE)),
             facts: hasIndex ? readMemoryDatabaseFacts(db) : undefined,
             identity: readOpenClawAgentDatabaseIdentity(opened.database),
-            schemaVersion: schema?.userVersion,
           },
         };
       }

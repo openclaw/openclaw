@@ -1,6 +1,4 @@
-import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, expect, it, vi, type MockInstance } from "vitest";
-import type { dispatchInboundMessageWithRoutedChannelDispatcher } from "../auto-reply/dispatch.js";
 import { enqueueSessionEventForHost as enqueueSessionEvent } from "../auto-reply/reply/session-event-handoff.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -26,67 +24,52 @@ import { createProcessTool } from "./bash-tools.process.js";
 import { acknowledgeInternalToolResult } from "./runtime/internal-hooks.js";
 
 const supervisorSpawnMock = vi.hoisted(() => vi.fn());
-const randomMock = vi.hoisted(() => vi.fn(() => 0));
 vi.mock("../auto-reply/reply/session-event-handoff.js", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../auto-reply/reply/session-event-handoff.js")>();
   return { ...actual, enqueueSessionEventForHost: vi.fn(actual.enqueueSessionEventForHost) };
 });
 // mock-isolation: Force deferred dispatch to test occurrence acknowledgment without model turns.
-vi.mock("../auto-reply/dispatch.js", () => ({
-  dispatchInboundMessageWithRoutedChannelDispatcher: vi.fn<
-    typeof dispatchInboundMessageWithRoutedChannelDispatcher
-  >(async ({ replyOptions }) => {
-    const lifecycle = expectDefined(replyOptions?.turnAdoptionLifecycle, "notification lifecycle");
-    const signal = expectDefined(lifecycle.abortSignal, "notification cancellation");
-    lifecycle.onDeferred?.();
-    const onAbort = async () => {
-      try {
-        await lifecycle.onAbandoned?.();
-      } finally {
-        await lifecycle.onSettled?.();
-      }
-    };
-    signal.addEventListener("abort", () => void onAbort(), { once: true });
-    if (signal.aborted) {
-      await onAbort();
-    }
-    return {
-      deferredToActiveRun: "followup",
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-    };
-  }),
-}));
+vi.mock("../auto-reply/dispatch.js", async () => {
+  const { createDeferredExecDispatchMock } =
+    await import("./bash-tools.exec-runtime.test-support.js");
+  return createDeferredExecDispatchMock();
+});
 vi.mock("../infra/secure-random.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/secure-random.js")>()),
-  generateSecureInt: randomMock,
+  generateSecureInt: vi.fn(() => 0),
 }));
 vi.mock("../process/supervisor/index.js", () => ({
   getProcessSupervisor: () => ({ spawn: supervisorSpawnMock }),
 }));
 
 const QUEUE_KEY = "agent:main:notify-ack";
-const startNotifyRun = () =>
-  startDeferredNotifyRun({
+const startNotifyRun = async (
+  options: Partial<Parameters<typeof startDeferredNotifyRun>[0]> = {},
+) => {
+  const process = await startDeferredNotifyRun({
     spawn: supervisorSpawnMock,
     sessionKey: QUEUE_KEY,
     notifyDeliveryContext: { channel: "telegram", to: "-100123", threadId: 42 },
+    ...options,
   });
-const processTool = createProcessTool();
-const execute = (action: "poll" | "clear", sessionId: string) =>
-  processTool.execute(`${action}-${sessionId}`, { action, sessionId });
-const poll = (sessionId: string) => execute("poll", sessionId);
-const contexts = () => peekSystemEventEntries(QUEUE_KEY).map((event) => event.contextKey);
-
-async function finishNotifyRun(process: Awaited<ReturnType<typeof startDeferredNotifyRun>>) {
   await process.finish();
   const result = vi.mocked(enqueueSessionEvent).mock.results.at(-1);
   if (result?.type !== "return") {
     throw new Error("Expected an exec completion receipt");
   }
   await expect(result.value.accepted).resolves.toEqual({ ok: true });
-  return result.value;
+  return { id: process.run.session.id, receipt: result.value };
+};
+const processTool = createProcessTool();
+const execute = (action: "poll" | "clear", sessionId: string) =>
+  processTool.execute(`${action}-${sessionId}`, { action, sessionId });
+const contexts = () => peekSystemEventEntries(QUEUE_KEY).map((event) => event.contextKey);
+
+async function pollAndAcknowledge(sessionId: string, queued = peekSystemEventEntries(QUEUE_KEY)) {
+  const result = await execute("poll", sessionId);
+  expect(peekSystemEventEntries(QUEUE_KEY)).toEqual(queued);
+  acknowledgeInternalToolResult(result);
 }
 
 let state: OpenClawTestState;
@@ -96,18 +79,17 @@ beforeEach(async () => {
   state = await createOpenClawTestState({ layout: "state-only", prefix: "exec-occurrence-" });
   setRuntimeConfigSnapshot({ agents: { entries: { main: {}, research: {} } } });
   openOpenClawStateDatabase({ env: state.env });
-  for (const { agentId, sessionKey } of [
-    { agentId: "main", sessionKey: QUEUE_KEY },
-    { agentId: "research", sessionKey: "global" },
-  ]) {
+  for (const [agentId, sessionKey] of [
+    ["main", QUEUE_KEY],
+    ["research", "global"],
+  ] as const) {
     writeSessionEntry(openOpenClawAgentDatabase({ agentId, env: state.env }), sessionKey, {
       sessionId: `${agentId}-origin`,
       lifecycleRevision: "original-revision",
       updatedAt: Date.now(),
     });
   }
-  const now = Date.now();
-  vi.spyOn(Date, "now").mockReturnValue(now);
+  vi.spyOn(Date, "now").mockReturnValue(Date.now());
 });
 afterEach(async () => {
   resetProcessRegistryForTests();
@@ -123,60 +105,43 @@ afterEach(async () => {
 });
 
 it("keeps selected-agent global completions scoped to their owner", async () => {
-  const process = await startDeferredNotifyRun({
-    spawn: supervisorSpawnMock,
+  await startNotifyRun({
     sessionKey: "global",
     agentId: "research",
+    notifyDeliveryContext: undefined,
   });
-  await finishNotifyRun(process);
 
-  expect(enqueueSessionEvent).toHaveBeenCalledWith(
-    expect.any(String),
-    expect.objectContaining({
-      source: "exec",
-      agentId: "research",
-      sessionKey: "global",
-      expectedTarget: expect.objectContaining({ agentId: "research" }),
-    }),
-  );
+  expect(vi.mocked(enqueueSessionEvent).mock.lastCall?.[1]).toMatchObject({
+    expectedTarget: { agentId: "research" },
+  });
   expect(peekSystemEventEntries("agent:research:global")).toHaveLength(1);
   expect(peekSystemEventEntries("agent:main:global")).toEqual([]);
 });
 
 it("isolates identical completions across exact full-slug reuse", async () => {
   const first = await startNotifyRun();
-  await finishNotifyRun(first);
-  await execute("clear", first.run.session.id);
+  await execute("clear", first.id);
   enqueueSystemEventEntry("unrelated", { sessionKey: QUEUE_KEY, contextKey: "marker" });
   const second = await startNotifyRun();
-  await finishNotifyRun(second);
 
-  expect([first.run.session.id, second.run.session.id]).toEqual(["amber-atlas", "amber-atlas"]);
   expect(contexts()).toEqual(["exec:amber-atlas", "marker", "exec:amber-atlas"]);
   const queued = peekSystemEventEntries(QUEUE_KEY);
   expect(queued[0]?.id).not.toBe(queued[2]?.id);
-  expect(queued[0]).toEqual({ ...queued[2], id: queued[0]?.id });
 
-  const result = await poll(second.run.session.id);
-  expect(peekSystemEventEntries(QUEUE_KEY)).toEqual(queued);
-  acknowledgeInternalToolResult(result);
+  await pollAndAcknowledge(second.id, queued);
   expect(contexts()).toEqual(["exec:amber-atlas", "marker"]);
-  acknowledgeInternalToolResult(await poll(second.run.session.id));
+  acknowledgeInternalToolResult(await execute("poll", second.id));
   expect(contexts()).toEqual(["exec:amber-atlas", "marker"]);
 });
 
 it("keeps an identical successor queued when an earlier consumer settles", async () => {
   const first = await startNotifyRun();
-  const receipt = await finishNotifyRun(first);
   const snapshot = peekSystemEventEntries(QUEUE_KEY);
-  const result = await poll(first.run.session.id);
-  expect(peekSystemEventEntries(QUEUE_KEY)).toEqual(snapshot);
-  acknowledgeInternalToolResult(result);
-  await execute("clear", first.run.session.id);
+  await pollAndAcknowledge(first.id, snapshot);
+  await execute("clear", first.id);
   const successor = await startNotifyRun();
-  await finishNotifyRun(successor);
-  expect(successor.run.session.id).toBe(first.run.session.id);
-  await expect(receipt.settled).resolves.toMatchObject({
+  expect(successor.id).toBe(first.id);
+  await expect(first.receipt.settled).resolves.toMatchObject({
     status: "cancelled",
     executionStarted: false,
   });
@@ -184,8 +149,6 @@ it("keeps an identical successor queued when an earlier consumer settles", async
   const queued = peekSystemEventEntries(QUEUE_KEY);
   expect(queued).toHaveLength(1);
   expect(queued[0]?.id).not.toBe(snapshot[0]?.id);
-  const successorResult = await poll(successor.run.session.id);
-  expect(peekSystemEventEntries(QUEUE_KEY)).toEqual(queued);
-  acknowledgeInternalToolResult(successorResult);
+  await pollAndAcknowledge(successor.id, queued);
   expect(peekSystemEventEntries(QUEUE_KEY)).toEqual([]);
 });

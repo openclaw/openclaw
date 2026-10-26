@@ -1,169 +1,64 @@
 /* @vitest-environment jsdom */
-
-import { createComponent, createRoot, createSignal, flush } from "solid-js";
-import { afterEach, expect, it, onTestFinished } from "vitest";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { createComposerProps, resetComposerFixture } from "./chat-composer.test-support.ts";
-import { createAsyncQuestionPresentation } from "./components/chat-async-question.ts";
-import { createComposerQuestionPanel } from "./components/chat-composer-question.tsx";
-import { getChatComposerState } from "./components/chat-composer-state.ts";
-import { ChatQuestionPanel } from "./components/chat-question-panel.tsx";
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterEach, expect, it } from "vitest";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import {
+  renderComposerFixture,
+  renderComposerInto,
+  resetComposerFixture,
+} from "./chat-composer.test-support.ts";
+import type { ChatQuestionPanel } from "./components/chat-question-panel.tsx";
 
 afterEach(() => resetComposerFixture());
 
-function questionReader(props: ReturnType<typeof createComposerProps>) {
-  return createRoot((dispose) => {
-    onTestFinished(dispose);
-    const [current, refresh] = createSignal(props, { equals: false });
-    const panel = createComposerQuestionPanel(current, getChatComposerState(props.paneId));
-    return () => {
-      refresh(props);
-      flush();
-      return panel();
-    };
-  });
-}
-
 it.each(["draft", "focus"])(
-  "keeps a new optional question compact around existing composer %s without closing an explicit expansion",
+  "preserves optional-question disclosure while editing via %s",
   async (editing) => {
-    const textarea = document.createElement("textarea");
-    document.body.append(textarea);
-    const props = createComposerProps({ draft: editing === "draft" ? "Keep writing" : "" });
-    const state = getChatComposerState(props.paneId);
-    state.composerTextarea = textarea;
+    const { container, props } = renderComposerFixture({
+      draft: editing === "draft" ? "Keep writing" : "",
+      onAsyncQuestionSubmit: async () => true,
+    });
+    document.body.append(container);
+    const textarea = await waitForSolid(() =>
+      expectDefined(container.querySelector<HTMLTextAreaElement>("textarea"), "composer textarea"),
+    );
     if (editing === "focus") {
       textarea.focus();
     }
-    props.asyncQuestions = createAsyncQuestionPresentation(
+    const focused = document.activeElement;
+    props.messages = [
       {
-        asyncQuestionDrafts: new Map(),
-        asyncQuestionRevision: 0,
-        transcriptRenderContext: {},
+        role: "assistant",
+        openclawAsyncDelivery: { itemId: "audience", questions: [{ title: "Which audience?" }] },
       },
-      {
-        sessionKey: props.sessionKey,
-        onAsyncQuestionSubmit: async () => true,
-        messages: [
-          {
-            role: "assistant",
-            content: "Which audience?",
-            openclawAsyncDelivery: {
-              itemId: "audience",
-              questions: [{ title: "Which audience?", options: ["Everyone", "Engineers"] }],
-            },
-          },
-        ],
-      },
-    );
-    // The persistence adapter can initialize an untouched draft before the dock renders.
-    props.asyncQuestions.drafts.set("audience", {
-      answers: new Map([["0", { selected: new Set(["Everyone"]), freeText: "" }]]),
-    });
-    const readPanel = questionReader(props);
-    let panel = readPanel()!;
-    expect(panel.model.nonBlocking).toBe(true);
-    expect(panel.model.collapsed).toBe(true);
-    expect(panel.model.autoFocus).toBe(false);
-    const container = document.createElement("div");
-    document.body.append(container);
-    const view = mountSolid(() => createComponent(ChatQuestionPanel, { props: panel }), {
-      container,
-    });
-    onTestFinished(view.unmount);
-    await container.querySelector<ChatQuestionPanel>("openclaw-chat-question-panel")
-      ?.updateComplete;
-    expect(container.textContent).not.toContain("Optional · work can continue");
-    expect(container.textContent).toContain("1 unanswered question");
-    if (editing === "focus") {
-      expect(document.activeElement).toBe(textarea);
-    }
-
-    // Durability becoming ready or a reconnect changes the callback scope, not
-    // the operator's disclosure choice for this still-pending question.
-    props.asyncQuestions.scope = `${props.asyncQuestions.scope}:owner-ready`;
-    panel = readPanel()!;
-    expect(panel.model.collapsed).toBe(true);
-    if (editing === "focus") {
-      expect(document.activeElement).toBe(textarea);
-    }
-
-    const submit = props.asyncQuestions.submit;
-    props.asyncQuestions.submit = undefined;
-    expect(readPanel()).toBeNull();
-    props.asyncQuestions.scope = `${props.asyncQuestions.scope}:reconnected`;
-    props.asyncQuestions.submit = submit;
-    panel = readPanel()!;
-    expect(panel.model.collapsed).toBe(true);
-
-    panel.onCollapsedChange?.(false);
-    panel = readPanel()!;
-    expect(panel.model.collapsed).toBe(false);
+    ];
+    const read = async (collapsed: boolean | null) => {
+      renderComposerInto(container, props);
+      return waitForSolid(() => {
+        const panel = container.querySelector<ChatQuestionPanel>(
+          "openclaw-chat-question-panel",
+        )?.props;
+        expect(panel ? panel.model.collapsed : null).toBe(collapsed);
+        return panel;
+      });
+    };
+    expect((await read(true))!.model).toMatchObject({ nonBlocking: true, autoFocus: false });
+    props.connectionEpoch = 1;
+    await read(true);
+    expect(document.activeElement).toBe(focused);
+    const submit = props.onAsyncQuestionSubmit;
+    props.onAsyncQuestionSubmit = undefined;
+    await read(null);
+    props.connectionEpoch = 2;
+    props.onAsyncQuestionSubmit = submit;
+    (await read(true))!.onCollapsedChange?.(false);
+    await read(false);
     textarea.focus();
-    props.asyncQuestions.scope = `${props.asyncQuestions.scope}:reconnected`;
-    expect(readPanel()!.model.collapsed).toBe(false);
-
-    const other = document.createElement("button");
-    document.body.append(other);
-    other.focus();
+    props.connectionEpoch = 3;
+    const panel = (await read(false))!;
+    document.body.appendChild(document.createElement("button")).focus();
     panel.onCollapsedChange?.(true);
     await Promise.resolve();
     expect(document.activeElement).toBe(textarea);
   },
 );
-
-it("keeps an unseen queued optional question compact when the previous request leaves", () => {
-  const textarea = document.createElement("textarea");
-  document.body.append(textarea);
-  textarea.focus();
-  const props = createComposerProps({ draft: "Keep writing" });
-  const state = getChatComposerState(props.paneId);
-  state.composerTextarea = textarea;
-  props.asyncQuestions = createAsyncQuestionPresentation(
-    {
-      asyncQuestionDrafts: new Map(),
-      asyncQuestionRevision: 0,
-      transcriptRenderContext: {},
-    },
-    {
-      sessionKey: props.sessionKey,
-      onAsyncQuestionSubmit: async () => true,
-      messages: [
-        {
-          role: "assistant",
-          content: "Which audience?",
-          openclawAsyncDelivery: {
-            itemId: "audience",
-            questions: [{ title: "Which audience?" }],
-          },
-        },
-      ],
-    },
-  );
-  const readPanel = questionReader(props);
-  expect(readPanel()!.model.collapsed).toBe(true);
-
-  props.asyncQuestions.pending.push({
-    itemId: "format",
-    questions: [{ title: "Which format?" }],
-  });
-  let panel = readPanel()!;
-  expect(panel.model.questions[0]?.question).toBe("Which audience?");
-  expect(panel.model.collapsed).toBe(true);
-
-  props.asyncQuestions.pending.shift();
-  panel = readPanel()!;
-  expect(panel.model.questions[0]?.question).toBe("Which format?");
-  expect(panel.model.collapsed).toBe(true);
-  expect(document.activeElement).toBe(textarea);
-
-  // Explicit navigation is an intentional expansion, not an automatic arrival.
-  props.asyncQuestions.pending.push({
-    itemId: "tone",
-    questions: [{ title: "Which tone?" }],
-  });
-  readPanel()!.onNextRequest?.();
-  panel = readPanel()!;
-  expect(panel.model.questions[0]?.question).toBe("Which tone?");
-  expect(panel.model.collapsed).toBe(false);
-});

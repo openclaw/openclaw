@@ -1,7 +1,11 @@
-import type { MemoryEntryProvenance } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import type {
+  MemoryEntryProvenance,
+  MemoryExtraPath,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { applyMMRToHybridResults, type MMRConfig } from "./mmr.js";
 import {
   applyRetrievalRanking,
+  hasValidProjectAnnotation,
   prepareActiveProjectKeys,
   projectScoreMultiplier,
 } from "./project-ranking.js";
@@ -53,6 +57,27 @@ export function scoreExactPathTieForTemporalDecay(contentScore: number): number 
   return (1 + Math.max(0, Math.min(1, contentScore))) / 2;
 }
 
+// BM25 keyword scores saturate as relevance / (1 + relevance), and every chunk
+// outside the keyword window scores 0, so a fixed text weight mostly rewards
+// window membership. Undo the saturation and measure each keyword hit against
+// the query's strongest one, which may earn up to the best vector score; no hit
+// gains credit. A score of 1 has no finite relevance (SQLite's unranked filename
+// substring match, PostgreSQL trigram similarity), so it counts as the strongest.
+function createKeywordScoreScale(keywordScores: number[], bestVectorScore: number) {
+  if (bestVectorScore === 0) {
+    return (score: number) => score;
+  }
+  const relevance = (score: number) => score / (1 - score);
+  const strongest = Math.max(0, ...keywordScores.filter((score) => score < 1).map(relevance));
+  return (score: number) => {
+    if (score <= 0) {
+      return score;
+    }
+    const share = score >= 1 ? 1 : relevance(score) / strongest;
+    return Math.min(score, share * bestVectorScore);
+  };
+}
+
 export async function mergeHybridResults<TSource extends HybridSource>(params: {
   vector: HybridVectorResult<TSource>[];
   keyword: HybridKeywordResult<TSource>[];
@@ -66,6 +91,7 @@ export async function mergeHybridResults<TSource extends HybridSource>(params: {
   mmr: MMRConfig;
   /** Temporal decay configuration for recency-aware scoring */
   temporalDecay: TemporalDecayConfig;
+  extraPaths?: MemoryExtraPath[];
   activeProjectKeys?: readonly string[];
   /** Test hook for deterministic time-dependent behavior */
   nowMs?: number;
@@ -116,15 +142,18 @@ export async function mergeHybridResults<TSource extends HybridSource>(params: {
     byId.set(r.id, existing);
   }
 
-  const merged = Array.from(byId.values()).map((entry) => {
-    // Exact specificity already carries path precedence. Keep body scores as
-    // the within-tier signal, and use path BM25 only for partial path-only hits.
-    const keywordScore =
-      entry.textScore > 0
-        ? entry.rankingScore
-        : entry.exactPathSpecificity > 0
-          ? 0
-          : entry.pathScore;
+  // Chunks that never reach results must not set the keyword scale either.
+  const candidates = Array.from(byId.values()).filter(hasValidProjectAnnotation);
+  // Exact specificity already carries path precedence. Keep body scores as
+  // the within-tier signal, and use path BM25 only for partial path-only hits.
+  const keywordScoreOf = (entry: (typeof candidates)[number]) =>
+    entry.textScore > 0 ? entry.rankingScore : entry.exactPathSpecificity > 0 ? 0 : entry.pathScore;
+  const scaleKeywordScore = createKeywordScoreScale(
+    candidates.map(keywordScoreOf),
+    params.vectorWeight > 0 ? Math.max(0, ...candidates.map((entry) => entry.vectorScore)) : 0,
+  );
+  const merged = candidates.map((entry) => {
+    const keywordScore = scaleKeywordScore(keywordScoreOf(entry));
     const dropMediaTextSignal =
       entry.hasVector &&
       !entry.hasKeyword &&
@@ -186,6 +215,7 @@ export async function mergeHybridResults<TSource extends HybridSource>(params: {
     results: weighted,
     temporalDecay: temporalDecayConfig,
     workspaceDir: params.workspaceDir,
+    extraPaths: params.extraPaths,
     sessionSourceMtimes: params.sessionSourceMtimes,
     memorySourceMtimes: params.memorySourceMtimes,
     nowMs: params.nowMs,
@@ -212,7 +242,8 @@ export async function mergeHybridResults<TSource extends HybridSource>(params: {
     a.endLine - b.endLine;
   const nonExact = rankable
     .filter((entry) => entry.exactPathSpecificity === 0)
-    .toSorted((a, b) => b.score - a.score || compareRankingScores(a, b));
+    // oxlint-disable-next-line unicorn/no-array-sort -- The filtered partition is privately owned.
+    .sort((a, b) => b.score - a.score || compareRankingScores(a, b));
 
   // Apply MMR re-ranking if enabled
   const rerankExactGroup = (entries: typeof rankable) => {
@@ -231,7 +262,8 @@ export async function mergeHybridResults<TSource extends HybridSource>(params: {
   const exact = ([3, 2, 1] as const).flatMap((specificity) => {
     const tier = rankable
       .filter((entry) => entry.exactPathSpecificity === specificity)
-      .toSorted(compareRankingScores);
+      // oxlint-disable-next-line unicorn/no-array-sort -- The filtered tier is privately owned.
+      .sort(compareRankingScores);
     if (temporalDecayConfig.enabled) {
       return rerankExactGroup(tier);
     }

@@ -60,6 +60,8 @@ const expected: [string, string][] = [
   ["beta/skip", "skipped"],
   ["beta/todo", "todo"],
 ];
+const failedCases = (failedName: string | undefined, cases = expected): [string, string][] =>
+  cases.map(([name, status]) => [name, name === failedName ? "failed" : status]);
 function expectPublished(
   expect: TestContext["expect"],
   result: ReportResult,
@@ -83,24 +85,16 @@ it.for([
   [["--reporter=github-actions", "--coverage.enabled=false"], false, false],
   [["--reporter=json", "--reporter=verbose", "--coverage"], true, true],
   [["--reporter=json", "--reporter=github-actions"], true, false],
-] as const)(
-  "requires explicit native output ownership: %j owner=%s",
-  ([args, owner, admitted], { expect }) => {
-    const { options } = parseCLI(["vitest", "run", ...args]);
-    expect(canParallelizeVitestOutput(options, owner)).toBe(admitted);
-  },
-);
-
-it.for([
   [{ reporter: "dot", coverage: { enabled: false } }, false, true],
   [{ reporters: "verbose", coverage: { enabled: false } }, false, true],
   [{ reporter: ["dot", "verbose"], coverage: { enabled: false } }, false, true],
   [{ reporter: "github-actions" }, true, false],
   [{ reporters: "./custom-reporter.mjs" }, true, false],
   [{ reporters: [["json", { outputFile: "shared.json" }]] }, true, false],
-] satisfies [CliOptions, boolean, boolean][])(
-  "keeps native reporter shape ownership: %j",
-  ([options, owner, admitted], { expect }) => {
+] satisfies [string[] | CliOptions, boolean, boolean][])(
+  "requires explicit native output ownership: %j owner=%s",
+  ([input, owner, admitted], { expect }) => {
+    const options = Array.isArray(input) ? parseCLI(["vitest", "run", ...input]).options : input;
     expect(canParallelizeVitestOutput(options, owner)).toBe(admitted);
   },
 );
@@ -123,12 +117,7 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
     }
   });
   type ReportRunner = ReturnType<typeof createVitestReportFixture>;
-  const reportTest = it.extend<{
-    reports: {
-      root: string;
-      run: ReportRunner;
-    };
-  }>({
+  const reportTest = it.extend<{ reports: { root: string; run: ReportRunner } }>({
     reports: async ({ onTestFinished, signal }, use) => {
       const lifetime = createFixtureLifetime();
       onTestFinished(() => lifetime.cleanup());
@@ -181,16 +170,10 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
     "classifies the final index write after assertion-red publication: entry=%s",
     { timeout: 60000 },
     async (entry, { expect, reports }) => {
-      const result = await reports.run("failure", {
-        entry,
-        finalIndexFailure: true,
-      });
+      const result = await reports.run("failure", { entry, finalIndexFailure: true });
       expect(result, result.stderr).toMatchObject({ code: 2, signal: null });
       expect(result.stderr).toContain("owned final index write failure");
-      const published = json(result.output);
-      expect(inventory(published)).toEqual(
-        expected.map(([name, status]) => [name, name === "beta/one" ? "failed" : status]),
-      );
+      expect(inventory(json(result.output))).toEqual(failedCases("beta/one"));
       const attempted = json(result.reportSet!, "index.json.final-write-attempt");
       expect(attempted).toMatchObject({
         complete: true,
@@ -312,10 +295,7 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
               "outer (inner)",
             ),
             project(root, "other (alpha)", "vitest.alpha.config.ts", "threads", "other"),
-            {
-              ...project(root, "beta", "vitest.beta.config.ts", "forks"),
-              root: path.join(root, "test/vitest"),
-            },
+            project(root, "beta", "vitest.beta.config.ts", "forks"),
           ]),
         );
         const modules = captures.flatMap((capture) => capture.modules);
@@ -386,12 +366,7 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
     async ({ expect, reports }) => {
       const result = await reports.run("watchdog");
       expect(result.code, result.stderr).toBe(143);
-      expect(
-        fs.readFileSync(
-          path.join(path.dirname(path.dirname(result.output)), "cold-started"),
-          "utf8",
-        ),
-      ).toBe("started");
+      expect(text(path.dirname(path.dirname(result.output)), "cold-started")).toBe("started");
       const index = indexOf(result);
       expect(index.complete).toBe(false);
       expect(index.entries[0].attempts).toHaveLength(1);
@@ -474,10 +449,7 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
         }
       } else {
         const report: JsonTestResults = json(output);
-        const cases = (betaOnly ? expected.slice(2) : expected).map(([name, status]) => [
-          name,
-          name === "beta/one" ? "failed" : status,
-        ]);
+        const cases = failedCases("beta/one", betaOnly ? expected.slice(2) : expected);
 
         expect(inventory(report), result.stderr).toEqual(cases);
         const failed = report.testResults
@@ -510,10 +482,7 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
           : mode === "failure" || mode === "batch-failure"
             ? "beta/one"
             : undefined;
-      const cases = expected.map(([name, status]): [string, string] => [
-        name,
-        name === failedName ? "failed" : status,
-      ]);
+      const cases = failedCases(failedName);
       if (mode === "suite-error") {
         cases.push(["broken suite body", "passed"]);
       }

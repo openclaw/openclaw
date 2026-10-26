@@ -1,222 +1,164 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { IncomingMessage } from "node:http";
+import { buffer } from "node:stream/consumers";
+import { withServer } from "openclaw/plugin-sdk/test-env";
+import { afterAll, expect, it, vi } from "vitest";
+import { createModelProviderConfig } from "../test-support/model-provider-config.test-support.js";
 import { buildXaiImageGenerationProvider } from "./image-generation-provider.js";
+import { buildXaiVideoGenerationProvider } from "./video-generation-provider.js";
 
-type GenerateImageParams = Parameters<
-  ReturnType<typeof buildXaiImageGenerationProvider>["generateImage"]
->[0];
-
-const { auth, http } = vi.hoisted(() => ({
-  auth: vi.fn(async (_params: { provider: string }) => ({ apiKey: "xai-key" })),
-  http: {
-    postJsonRequest:
-      vi.fn<
-        (params: ImageRequest) => Promise<{ response: Response; release: () => Promise<void> }>
-      >(),
-    assertOkOrThrowHttpError: vi.fn(async () => {}),
-    resolveProviderHttpRequestConfig: vi.fn((params: Record<string, unknown>) => {
-      const headers = new Headers(params.defaultHeaders as HeadersInit | undefined);
-      return {
-        baseUrl: params.baseUrl ?? params.defaultBaseUrl ?? "https://api.x.ai/v1",
-        allowPrivateNetwork: false,
-        headers,
-        dispatcherPolicy: undefined,
-      };
-    }),
-    createProviderOperationDeadline: vi.fn((params: Record<string, unknown>) => ({
-      timeoutMs: params.timeoutMs,
-      label: params.label,
-    })),
-    resolveProviderOperationTimeoutMs: vi.fn(
-      (params: Record<string, unknown>) => params.defaultTimeoutMs ?? 60000,
-    ),
-  },
+vi.hoisted(() => vi.resetModules());
+vi.unmock("openclaw/plugin-sdk/provider-http");
+// mock-isolation: Synthetic credentials only; never consult host auth storage.
+vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
+  resolveApiKeyForProvider: async () => ({ apiKey: "test-xai-key" }),
 }));
+afterAll(() => vi.resetModules());
 
-vi.mock("openclaw/plugin-sdk/provider-auth-runtime", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth-runtime")>()),
-  resolveApiKeyForProvider: auth,
-}));
-
-vi.mock("openclaw/plugin-sdk/provider-http", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/provider-http")>(
-    "openclaw/plugin-sdk/provider-http",
-  );
-  return {
-    ...actual,
-    ...http,
-    readProviderJsonResponse: actual.readProviderJsonResponse,
-  };
-});
-
-function generate(overrides: Partial<GenerateImageParams> = {}) {
-  return buildXaiImageGenerationProvider().generateImage({
+const media = Buffer.from("generated-media");
+type Kind = "image" | "edit" | "video";
+type Captured = Pick<IncomingMessage, "url" | "method" | "headers"> & { body: string };
+async function generate(kind: Kind, baseUrl: string, allowPrivateNetwork?: boolean) {
+  const req = {
     provider: "xai",
-    model: "grok-imagine-image",
-    prompt: "Combine the references",
-    cfg: {},
-    ...overrides,
-  });
-}
-
-function xaiConfig(overrides: { apiKey?: string; baseUrl?: string }) {
-  return {
-    models: { providers: { xai: { baseUrl: "https://api.x.ai/v1", models: [], ...overrides } } },
-  };
-}
-
-function mockImage(mime_type?: string, b64_json = Buffer.from("testpng").toString("base64")) {
-  http.postJsonRequest.mockResolvedValue({
-    response: Response.json({
-      data: [{ b64_json, mime_type }],
-    }),
-    release: vi.fn(async () => {}),
-  });
-}
-
-type ImageRequest = {
-  url?: string;
-  timeoutMs?: number;
-  body?: Record<string, unknown>;
-  headers?: Headers;
-};
-
-function requirePostJsonCall(index = 0): ImageRequest {
-  const params = http.postJsonRequest.mock.calls[index]?.[0];
-  if (!params) {
-    throw new Error(`Expected postJsonRequest call ${index}`);
-  }
-  return params;
-}
-
-describe("xai image generation provider", () => {
-  beforeEach(() => mockImage());
-
-  afterEach(() => {
-    auth.mockClear();
-    vi.unstubAllEnvs();
-    http.postJsonRequest.mockReset();
-    for (const mock of Object.values(http)) {
-      mock.mockClear();
-    }
-  });
-
-  it("builds provider with correct models, default, and capabilities", async () => {
-    const provider = buildXaiImageGenerationProvider();
-    expect(provider).toMatchObject({
-      id: "xai",
-      label: "xAI",
-      defaultModel: "grok-imagine-image",
-      models: ["grok-imagine-image", "grok-imagine-image-2.0", "grok-imagine-image-quality"],
-      capabilities: {
-        generate: { maxCount: 4, supportsAspectRatio: true },
-        edit: { enabled: true, maxInputImages: 3 },
+    model: kind === "video" ? "grok-imagine-video" : "grok-imagine-image",
+    prompt: "transport proof",
+    cfg: createModelProviderConfig({
+      xai: {
+        baseUrl,
+        apiKey: "test-xai-key",
+        models: [],
+        request: { allowPrivateNetwork, headers: { "X-Xai-Trace": "transport-proof" } },
       },
-    });
-    expect(provider.capabilities.geometry?.aspectRatios).toEqual(
-      "1:1 16:9 9:16 4:3 3:4 3:2 2:3 2:1 1:2 19.5:9 9:19.5 20:9 9:20".split(" "),
-    );
-    const isConfigured = provider.isConfiguredAsync;
-    if (!isConfigured) {
-      throw new Error("expected XAI image provider config predicate");
-    }
-    vi.stubEnv("XAI_API_KEY", undefined);
-    expect(await isConfigured({})).toBe(false);
-    expect(
-      await isConfigured({
-        cfg: xaiConfig({ apiKey: "xai-image-test-key" }),
-      }),
-    ).toBe(true);
-  });
+    }),
+  };
+  return kind === "video"
+    ? (await buildXaiVideoGenerationProvider().generateVideo(req)).videos[0]?.buffer
+    : (
+        await buildXaiImageGenerationProvider().generateImage({
+          ...req,
+          ...(kind === "edit" ? { inputImages: [{ buffer: media, mimeType: "image/png" }] } : {}),
+        })
+      ).images[0]?.buffer;
+}
 
-  it.each([
-    "grok-imagine-image",
-    "grok-imagine-image-2.0",
-    "grok-imagine-image-quality",
-    "grok-imagine-image-future",
-  ])("preserves explicit model %s in the generation request and result", async (model) => {
-    const provider = buildXaiImageGenerationProvider();
-    const result = await generate({
-      model,
-      prompt: "test prompt",
-      aspectRatio: "20:9",
-      resolution: "2K",
-      cfg: xaiConfig({ baseUrl: "https://custom.x.ai/v1" }),
-    });
-
-    expect(auth.mock.calls[0]?.[0]).toMatchObject({ provider: "xai" });
-    expect(http.resolveProviderHttpRequestConfig.mock.calls[0]?.[0]).toMatchObject({
-      provider: "xai",
-      capability: "image",
-      baseUrl: "https://custom.x.ai/v1",
-    });
-    const request = requirePostJsonCall();
-    expect(request.url).toContain("/images/generations");
-    expect(result.model).toBe(model);
-    expect(provider.defaultTimeoutMs).toBe(600_000);
-    expect(request).toMatchObject({
-      timeoutMs: 600_000,
-      body: { model, aspect_ratio: "20:9", resolution: "2k" },
-    });
-    expect(http.resolveProviderOperationTimeoutMs).toHaveBeenCalledWith(
-      expect.objectContaining({
-        defaultTimeoutMs: 600_000,
-      }),
-    );
-  });
-
-  it.each(["grok-imagine-image-2.0", "grok-imagine-image-quality"])(
-    "sends %s edits as JSON with an image_url object",
-    async (model) => {
-      mockImage(
-        "image/png",
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYGD4z0ABAAEfAG0B0xMAAAAASUVORK5CYII=",
-      );
-      const buffer = Buffer.from("fakeimage");
-      await generate({
-        model,
-        prompt: "Render this as a pencil sketch with detailed shading",
-        inputImages: [{ buffer, mimeType: "image/png" }],
-      });
-
-      const request = requirePostJsonCall();
-      expect(request.url).toContain("/images/edits");
-      expect(request.body).toMatchObject({
-        model,
-        prompt: "Render this as a pencil sketch with detailed shading",
-        image: { url: expect.stringContaining("data:image/png;base64,"), type: "image_url" },
-        response_format: "b64_json",
+async function withXaiServer(
+  run: (baseUrl: string, requests: Captured[]) => Promise<void>,
+  externalImage?: string,
+  redirect = false,
+) {
+  const requests: Captured[] = [];
+  let origin = "";
+  await withServer(
+    (req, res) => {
+      void (async () => {
+        requests.push({
+          method: req.method,
+          url: req.url,
+          headers: req.headers,
+          body: (await buffer(req)).toString(),
+        });
+        if (req.url === "/redirect.png") {
+          res.writeHead(302, { Location: externalImage });
+          res.end();
+        } else if (req.url === "/media/generated.mp4") {
+          res.writeHead(200, { "content-type": "video/mp4" });
+          res.end(media);
+        } else {
+          res.setHeader("content-type", "application/json");
+          const imageUrl = redirect ? `${origin}/redirect.png` : externalImage;
+          const routes: Record<string, unknown> = {
+            "/v1/images/generations": {
+              data: [imageUrl ? { url: imageUrl } : { b64_json: media.toString("base64") }],
+            },
+            "/v1/images/edits": { data: [{ b64_json: media.toString("base64") }] },
+            "/v1/videos/generations": { request_id: "local_request" },
+            "/v1/videos/local_request": {
+              status: "done",
+              video: { url: `${origin}/media/generated.mp4` },
+            },
+          };
+          res.writeHead(req.url && req.url in routes ? 200 : 404);
+          res.end(JSON.stringify(routes[req.url ?? ""]));
+        }
+      })().catch((error: unknown) => {
+        res.writeHead(500);
+        res.end(String(error));
       });
     },
+    async (url) => {
+      origin = url;
+      await run(`${url}/v1`, requests);
+    },
   );
+}
 
-  it("uses the plural xAI images payload for multiple edit inputs", async () => {
-    mockImage("image/png", Buffer.from("edited").toString("base64"));
-    await generate({
-      inputImages: [
-        { buffer: Buffer.from("first"), mimeType: "image/png" },
-        { buffer: Buffer.from("second"), mimeType: "image/jpeg" },
-        { buffer: Buffer.from("third"), mimeType: "image/webp" },
-      ],
+it.each(["image", "edit", "video"] as const)(
+  "allows opted-in private %s requests",
+  async (kind) => {
+    await withXaiServer(async (baseUrl, requests) => {
+      expect(await generate(kind, baseUrl, true)).toEqual(media);
+      if (kind !== "video") {
+        expect(requests.map((req) => req.url)).toEqual([
+          `/v1/images/${kind === "edit" ? "edits" : "generations"}`,
+        ]);
+        return;
+      }
+      const headers = { authorization: "Bearer test-xai-key", "x-xai-trace": "transport-proof" };
+      expect(requests).toMatchObject([
+        { method: "POST", url: "/v1/videos/generations", headers },
+        { method: "GET", url: "/v1/videos/local_request", headers },
+        { method: "GET", url: "/media/generated.mp4" },
+      ]);
+      expect(JSON.parse(requests[0]?.body ?? "{}")).toMatchObject({
+        model: "grok-imagine-video",
+        prompt: "transport proof",
+      });
+      expect(requests[2]?.headers.authorization).toBeUndefined();
+      expect(requests[2]?.headers["x-xai-trace"]).toBeUndefined();
     });
+  },
+);
 
-    const request = requirePostJsonCall();
-    expect(request.url).toContain("/images/edits");
-    expect(request.body?.images).toEqual([
-      { url: expect.stringContaining("data:image/png;base64,"), type: "image_url" },
-      { url: expect.stringContaining("data:image/jpeg;base64,"), type: "image_url" },
-      { url: expect.stringContaining("data:image/webp;base64,"), type: "image_url" },
-    ]);
-  });
-
-  it("rejects more than three xAI edit references before HTTP", async () => {
-    await expect(
-      generate({
-        inputImages: Array.from({ length: 4 }, (_, index) => ({
-          buffer: Buffer.from(`reference-${index}`),
-          mimeType: "image/png",
-        })),
-      }),
-    ).rejects.toThrow("xAI image editing supports up to 3 reference images");
-    expect(http.postJsonRequest).not.toHaveBeenCalled();
+it.each([
+  ["image", undefined],
+  ["image", false],
+  ["video", undefined],
+  ["video", false],
+] as const)("blocks private %s requests with opt-in %s", async (kind, optIn) => {
+  await withXaiServer(async (baseUrl, requests) => {
+    await expect(generate(kind, baseUrl, optIn)).rejects.toThrow(
+      kind === "image"
+        ? /private\/internal\/special-use/
+        : expect.objectContaining({
+            name: "SsrFBlockedError",
+            message: expect.stringContaining("private/internal/special-use IP address"),
+          }),
+    );
+    expect(requests).toHaveLength(0);
   });
 });
+
+it.each([false, true])(
+  "does not authorize another private image origin (redirect: %s)",
+  async (redirect) => {
+    let downloads = 0;
+    await withServer(
+      (_req, res) => {
+        downloads++;
+        res.end(media);
+      },
+      async (imageBaseUrl) => {
+        await withXaiServer(
+          async (baseUrl) => {
+            await expect(generate("image", baseUrl, true)).rejects.toThrow(
+              /private\/internal\/special-use/,
+            );
+            expect(downloads).toBe(0);
+          },
+          `${imageBaseUrl}/image.png`,
+          redirect,
+        );
+      },
+    );
+  },
+);
