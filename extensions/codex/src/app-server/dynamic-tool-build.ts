@@ -256,6 +256,7 @@ export async function buildDynamicTools(
       modelApi: params.model.api,
       modelContextWindowTokens: params.model.contextWindow,
       delegationCapability: params.delegationCapability,
+      toolPolicyScope: params.pluginHarnessToolPolicyScope,
       modelAuthMode: await resolveModelAuthModeAsync(
         params.model.provider,
         params.config,
