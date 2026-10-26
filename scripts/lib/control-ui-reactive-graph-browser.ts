@@ -107,14 +107,14 @@ export function installControlUiReactiveGraph(
     }
     const ownerPath = observe!.ownerPath(node) ?? [];
     let source: string | null = null;
-    // eslint-disable-next-line no-underscore-dangle -- Solid's observe nodes expose these runtime fields.
-    for (let current: LiveNode | null | undefined = node; current; current = current._parent) {
-      // eslint-disable-next-line no-underscore-dangle -- Source location belongs to the installed observe contract.
-      if (current._loc) {
-        // eslint-disable-next-line no-underscore-dangle -- Preserve the runtime source label without probing user values.
-        source = current._loc;
+    let current: LiveNode | null | undefined = node;
+    while (current) {
+      const { _loc: location, _parent: parent } = current;
+      if (location) {
+        source = location;
         break;
       }
+      current = parent;
     }
     const kind = "nodeKind" in event ? event.nodeKind : "effect";
     const key = JSON.stringify([kind, event.nodeName, source, ownerPath]);
