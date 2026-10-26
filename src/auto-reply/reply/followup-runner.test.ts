@@ -14,6 +14,7 @@ import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-paylo
 import type { ReplyPayload } from "../types.js";
 import type { FollowupExecutionResult } from "./followup-turn-execution.js";
 import type { FollowupRun } from "./queue.js";
+import type { QueuedFollowupReplyBatch } from "./queue/types.js";
 import type { AdmittedFollowupTurn } from "./reply-agent-turn-preparation.js";
 import { createMockTypingController } from "./test-helpers.js";
 
@@ -525,36 +526,24 @@ describe("createFollowupRunner", () => {
     expect(typing.markRunComplete).toHaveBeenCalledOnce();
   });
 
-  it.each(["terminal delivery", "progress presentation"] as const)(
-    "does not replay a settled execution after %s fails",
-    async (stage) => {
-      const failure = new Error(stage + " failed");
-      const execution =
-        stage === "terminal delivery" ? createRejectedExecution() : createSettledExecution();
-      const deliver = attachSource(turn);
-      admitTurn(turn, execution);
-      if (stage === "terminal delivery") {
-        state.resolveDecision.mockReturnValue({
-          kind: "deliver",
-          payloads: [{ text: "terminal failure", isError: true }],
-        });
-        state.deliver.mockRejectedValue(failure);
-      } else {
-        execution.progress.drain = vi.fn(async () => {
-          throw failure;
-        });
-      }
-      await createRunner({ typingMode: "instant" })(turn.queued);
-      expect(state.execute).toHaveBeenCalledOnce();
-      expect(turn.operation.fail).toHaveBeenCalledWith("run_failed", failure);
-      expect(deliver).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({
-          completion: { kind: "failed", error: failure.message },
-          payloads: [],
-        }),
-      );
-    },
-  );
+  it("does not replay a settled execution after progress presentation fails", async () => {
+    const failure = new Error("progress presentation failed");
+    const execution = createSettledExecution();
+    const deliver = attachSource(turn);
+    admitTurn(turn, execution);
+    execution.progress.drain = vi.fn(async () => {
+      throw failure;
+    });
+    await createRunner({ typingMode: "instant" })(turn.queued);
+    expect(state.execute).toHaveBeenCalledOnce();
+    expect(turn.operation.fail).toHaveBeenCalledWith("run_failed", failure);
+    expect(deliver).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        completion: { kind: "failed", error: failure.message },
+        payloads: [],
+      }),
+    );
+  });
 
   it("holds the reply operation through progress drain, accounting, and delivery", async () => {
     const order: string[] = [];
@@ -657,23 +646,22 @@ describe("createFollowupRunner", () => {
       );
       const decision = { kind: "deliver", payloads: [statusPayload] };
       const draft = { push: () => undefined, retire: () => undefined };
-      turn.queued.queuedFollowupReplyDisposition = {
-        kind: "deliver",
-        deliver: async (batch) => {
-          for (const payload of batch.payloads) {
-            adoptionResults.push(
-              getReplyPayloadMetadata(payload)?.progressContinuation?.adopt(draft),
-            );
-          }
-          if (outcome === "completion-failed") {
-            throw new Error("completion failed after adoption");
-          }
-        },
-      };
+      const failure = new Error("terminal delivery failed");
+      const deliver = vi.fn(async (batch: QueuedFollowupReplyBatch) => {
+        for (const payload of batch.payloads) {
+          adoptionResults.push(
+            getReplyPayloadMetadata(payload)?.progressContinuation?.adopt(draft),
+          );
+        }
+        if (outcome === "completion-failed") {
+          throw new Error("completion failed after adoption");
+        }
+      });
+      turn.queued.queuedFollowupReplyDisposition = { kind: "deliver", deliver };
       state.resolveDecision.mockResolvedValue(decision);
       state.deliver.mockImplementation(async () => {
         if (outcome === "delivery-failed") {
-          throw new Error("delivery failed before adoption");
+          throw failure;
         }
         return {
           kind: "completed",
@@ -694,6 +682,16 @@ describe("createFollowupRunner", () => {
       expect(adoptionResults).toEqual(
         outcome === "delivered" || outcome === "completion-failed" ? [true] : [],
       );
+      if (outcome === "delivery-failed") {
+        expect(state.execute).toHaveBeenCalledOnce();
+        expect(turn.operation.fail).toHaveBeenCalledWith("run_failed", failure);
+        expect(deliver).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            completion: { kind: "failed", error: failure.message },
+            payloads: [],
+          }),
+        );
+      }
     },
   );
 

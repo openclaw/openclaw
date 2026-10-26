@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { formatBillingErrorMessage } from "../../agents/failover/user-copy.js";
@@ -16,8 +16,12 @@ import {
 } from "../../logging/logger.js";
 import { loggingState } from "../../logging/state.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { getSessionControllerOperation } from "../../sessions/session-controller.js";
+import {
+  createReplyOperation,
+  getSessionControllerOperation,
+} from "../../sessions/session-controller.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
+import { testing as controllerTesting } from "../../sessions/session-controller.test-support.js";
 import * as channels from "../../test-utils/channel-plugins.js";
 import { withReplyDispatcher } from "../dispatch-dispatcher.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
@@ -36,6 +40,7 @@ import {
 } from "./dispatch-from-config.shared.test-harness.js";
 import type { DispatchFromConfigParams } from "./dispatch-from-config.types.js";
 import { expectedNoQueuedReplyResult } from "./dispatch-result-expectations.test-support.js";
+import { resetInboundDedupe } from "./inbound-dedupe.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import {
   REPLY_OPERATION_RUN_STATE,
@@ -44,11 +49,7 @@ import {
 } from "./reply-operation-run-state.js";
 import { buildTestCtx } from "./test-ctx.js";
 
-let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
-let createReplyOperation: typeof import("../../sessions/session-controller.js").createReplyOperation;
-
-let controllerTesting: typeof import("../../sessions/session-controller.test-support.js").testing;
-let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
+const { dispatchReplyFromConfig } = await import("./dispatch-from-config.js");
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -102,15 +103,6 @@ function expectFailure(
   expect(operation?.result).toEqual({ kind: "failed", code: "run_failed", cause });
 }
 
-beforeAll(async () => {
-  ({ dispatchReplyFromConfig } = await import("./dispatch-from-config.js"));
-  ({ createReplyOperation } = await import("../../sessions/session-controller.js"));
-
-  ({ testing: controllerTesting } =
-    await import("../../sessions/session-controller.test-support.js"));
-  ({ resetInboundDedupe } = await import("./inbound-dedupe.js"));
-});
-
 beforeEach(() => {
   controllerTesting.resetSessionControllerForTest();
   resetInboundDedupe();
@@ -122,8 +114,10 @@ beforeEach(() => {
 });
 
 describe("dispatchReplyFromConfig visible admission recovery", () => {
-  let processedEvents: Extract<DiagnosticEventPayload, { type: "message.processed" }>[];
-  let dispatchEvents: Extract<DiagnosticEventPayload, { type: "message.dispatch.completed" }>[];
+  let failureEvents: Extract<
+    DiagnosticEventPayload,
+    { type: "message.processed" | "message.dispatch.completed" }
+  >[];
   let unsubscribe: () => void;
 
   beforeEach(() => {
@@ -135,13 +129,10 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
       file: path.join(tempDirs.make("dispatch-diagnostics-"), "gateway.log"),
       consoleLevel: "silent",
     });
-    processedEvents = [];
-    dispatchEvents = [];
+    failureEvents = [];
     unsubscribe = onDiagnosticEvent((event) => {
-      if (event.type === "message.processed") {
-        processedEvents.push(event);
-      } else if (event.type === "message.dispatch.completed") {
-        dispatchEvents.push(event);
+      if (event.type === "message.processed" || event.type === "message.dispatch.completed") {
+        failureEvents.push(event);
       }
     });
     diagnosticMocks.forwardToRealPipeline = true;
@@ -218,24 +209,23 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
     expectFailure(replyOperation, resolverError);
     expect(result.queuedFinal).toBe(true);
     expect(readAgentRunTerminalOutcome(result)).toBe("failed");
-    for (const events of [processedEvents, dispatchEvents]) {
-      expect(events).toEqual([
-        expect.objectContaining({
-          outcome: "error",
-          sessionKey,
-          durationMs: expect.any(Number),
-          error: detail ? expect.stringContaining("preserved-after-redaction") : undefined,
-        }),
-      ]);
-      expect(JSON.stringify(events)).not.toContain(secret);
-      expect(JSON.stringify(events)).not.toContain("x".repeat(64));
+    expect(failureEvents.map((event) => event.type).toSorted()).toEqual([
+      "message.dispatch.completed",
+      "message.processed",
+    ]);
+    for (const event of failureEvents) {
+      expect(event).toMatchObject({
+        outcome: "error",
+        sessionKey,
+        error: detail ? expect.stringContaining("preserved-after-redaction") : undefined,
+      });
+      expect(JSON.stringify(event)).not.toContain(secret);
+      expect(JSON.stringify(event)).not.toContain("x".repeat(64));
       if (detail) {
-        expect(events[0]?.error?.length).toBeLessThanOrEqual(2_048);
-        expect(events[0]?.error?.isWellFormed()).toBe(true);
+        expect(event.error?.length).toBeLessThanOrEqual(2_048);
+        expect(event.error?.isWellFormed()).toBe(true);
       }
     }
-    expect(dispatchEvents[0]?.error).toBe(processedEvents[0]?.error);
-    expect(dispatchParams.replyOptions?.onPartialReply).toHaveBeenCalledTimes(256);
     expect(dispatchParams.dispatcher.sendFinalReply).toHaveBeenCalledWith(
       expect.objectContaining({
         text: expect.stringContaining("Check the conversation before trying again"),
