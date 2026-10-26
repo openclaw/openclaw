@@ -168,7 +168,6 @@ export function renderSteps(steps: UpdateStepResult[]) {
 
 export function registerCanarySnapshotCapacityTests(fixture: {
   canaryStateOptions: () => Parameters<typeof validateUpdateCandidateCanary>[0];
-  getRoot: () => string;
   mocks: { snapshot: ReturnType<typeof vi.fn>; spawn: ReturnType<typeof vi.fn> };
 }) {
   const { canaryStateOptions, mocks } = fixture;

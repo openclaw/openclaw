@@ -14,3 +14,17 @@ export function serializeSse(events: object[]): string {
 export function sseResponse(events: object[]): Response {
   return new Response(serializeSse(events), { headers: { "content-type": "text/event-stream" } });
 }
+
+export function makeStallingStream(
+  initialChunks: Uint8Array[],
+  onCancel: UnderlyingSource<Uint8Array>["cancel"],
+) {
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const chunk of initialChunks) {
+        controller.enqueue(chunk);
+      }
+    },
+    cancel: onCancel,
+  });
+}

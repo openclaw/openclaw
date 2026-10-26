@@ -4,6 +4,7 @@ import type { Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import { prepareModelRequestBody } from "../../packages/ai/src/transports/model-request-body.js";
 import { withinTest } from "../../test/helpers/promise.js";
+import { makeStallingStream } from "../infra/http-body.test-support.js";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import { mintSecretSentinel } from "../secrets/sentinel.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -354,14 +355,9 @@ describe("buildGuardedModelFetch", () => {
   ])(
     "reports oversized $contentType and releases resources while a clone stays unread",
     async ({ contentType, error }, { signal }) => {
-      const upstream = new Response(
-        new ReadableStream<Uint8Array>({
-          start(controller) {
-            controller.enqueue(new Uint8Array(17 * 1024 * 1024));
-          },
-        }),
-        { headers: { "content-type": contentType } },
-      );
+      const upstream = new Response(makeStallingStream([new Uint8Array(17 * 1024 * 1024)]), {
+        headers: { "content-type": contentType },
+      });
       const unreadClone = upstream.clone();
       const release = mockResponse(upstream);
       const reading = (await request(streaming)).text();
