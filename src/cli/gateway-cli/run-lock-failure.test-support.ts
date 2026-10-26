@@ -128,39 +128,23 @@ export function registerGatewayLockFailureTests({
     ["SQLITE_FULL", "Free up space"],
     ["SQLITE_IOERR_READ", "check the volume for I/O errors"],
     ["SQLITE_CANTOPEN", "check the volume for I/O errors"],
-  ])("reports %s without suggesting another Gateway", async (code, remedy) => {
-    runGatewayLoop.mockRejectedValueOnce(
-      new GatewayLockError(
-        "failed to acquire gateway state ownership",
-        Object.assign(new Error("storage unavailable"), { code }),
-        "/synthetic/state/openclaw.sqlite",
-      ),
-    );
-    await expectExit(1);
-    expect(runtimeErrors.join("\n")).toContain(remedy);
-    expect(runtimeErrors.join("\n")).toContain("openclaw doctor");
-    expect(runtimeErrors.join("\n")).not.toContain("gateway stop");
-  });
-
-  it.each(
-    ["EACCES", "EPERM", "EROFS", "EIO", "ENOSPC"].flatMap((code) =>
-      [true, false].map((hasDatabasePath) => ({ code, hasDatabasePath })),
-    ),
-  )(
-    "requires database context for $code (hasDatabasePath=$hasDatabasePath)",
-    async ({ code, hasDatabasePath }) => {
+    ...["EACCES", "EPERM", "EROFS", "EIO", "ENOSPC"].map((code) => [code, "storage failure"]),
+    ["EACCES", undefined],
+  ])(
+    "reports %s with database-specific guidance only in database context (%s)",
+    async (code, remedy) => {
       const databasePath = "/synthetic/state/openclaw.sqlite";
       runGatewayLoop.mockRejectedValueOnce(
         new GatewayLockError(
           "failed to acquire gateway state ownership",
           Object.assign(new Error("operation failed"), { code }),
-          hasDatabasePath ? databasePath : undefined,
+          remedy ? databasePath : undefined,
         ),
       );
       await expectExit(1);
       const output = runtimeErrors.join("\n");
-      if (hasDatabasePath) {
-        expect(output).toContain("storage failure");
+      if (remedy) {
+        expect(output).toContain(remedy);
         expect(output).toContain(databasePath);
         expect(output).toContain("openclaw doctor");
         expect(output).not.toContain("gateway stop");

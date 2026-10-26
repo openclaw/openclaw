@@ -6,6 +6,7 @@ import {
   readChildRuntimeViability,
 } from "../../infra/child-runtime-viability.js";
 import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
+import { expectCallCount } from "./run-loop-cleanup.test-support.js";
 import { gatewayWorkAdmissionActual, runLoopFixture as f } from "./run-loop-mocks.test-support.js";
 import {
   createLifecycleGate,
@@ -34,7 +35,7 @@ function diagnose() {
   classifyChildRuntimeFailure({ stderr: "dyld[123]: Library not loaded: /fixture/libnode.dylib" });
 }
 
-it("closes admission and drains active work before handing runtime recovery to the supervisor", async () => {
+function superviseRecovery() {
   process.env.OPENCLAW_SYSTEMD_UNIT = "openclaw-fixture.service";
   vi.mocked(readGatewayServiceState).mockResolvedValue({
     installed: true,
@@ -44,6 +45,10 @@ it("closes admission and drains active work before handing runtime recovery to t
     command: { programArguments: [serviceNodeExecPath, "/fixture/openclaw.mjs", "gateway", "run"] },
   });
   f.restartGatewayProcessWithFreshPid.mockReturnValue({ mode: "supervised" });
+}
+
+it("closes admission and drains active work before handing runtime recovery to the supervisor", async () => {
+  superviseRecovery();
   const drain = createLifecycleGate();
   f.createGatewayActiveWorkSnapshot.mockReturnValue(createActiveWorkSnapshot({ embeddedRuns: 1 }));
   f.waitForGatewayActiveWork.mockImplementation(async () => {
@@ -97,8 +102,7 @@ it("finishes cleanup instead of restarting in-process when a fresh-process hando
     diagnose();
     captureSignal("SIGUSR2")();
     await expect(exited).resolves.toBe(1);
-    expect(close).toHaveBeenCalledOnce();
-    expect(start).toHaveBeenCalledOnce();
+    expectCallCount(1, close, start);
     expect(f.gatewayLog.error).toHaveBeenCalledWith(
       expect.stringContaining("cannot recover in-process"),
     );
@@ -118,9 +122,7 @@ it.each(["disabled", "failed"] as const)(
       expect(readChildRuntimeViability().available).toBe(true);
       captureSignal("SIGUSR2")();
       await expect(exited).resolves.toBe(1);
-      expect(close).toHaveBeenCalledOnce();
-      expect(start).toHaveBeenCalledOnce();
-      expect(f.acquireGatewayLock).toHaveBeenCalledOnce();
+      expectCallCount(1, close, start, f.acquireGatewayLock);
       expect(f.gatewayLog.error).toHaveBeenCalledWith(
         expect.stringContaining("unsettled native worker cannot recover in-process"),
       );
@@ -129,15 +131,7 @@ it.each(["disabled", "failed"] as const)(
 );
 
 it("keeps the process hard-exit watchdog armed while native-worker close is unsettled", async () => {
-  process.env.OPENCLAW_SYSTEMD_UNIT = "openclaw-fixture.service";
-  vi.mocked(readGatewayServiceState).mockResolvedValue({
-    installed: true,
-    loadState: { status: "loaded" },
-    running: true,
-    env: {},
-    command: { programArguments: [serviceNodeExecPath, "/fixture/openclaw.mjs", "gateway", "run"] },
-  });
-  f.restartGatewayProcessWithFreshPid.mockReturnValue({ mode: "supervised" });
+  superviseRecovery();
   const closing = createLifecycleGate();
   // A pending operator intent cannot downgrade the process owner's recovery requirement.
   f.consumeGatewayRestartIntentPayload.mockResolvedValueOnce({ waitMs: 60_000 });
