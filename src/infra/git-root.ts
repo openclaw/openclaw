@@ -4,7 +4,7 @@ import path from "node:path";
 import { readFileDescriptorBoundedSync, readFileWindowFullySync } from "@openclaw/fs-safe/advanced";
 import { safeStatSync } from "@openclaw/fs-safe/path";
 import { escapeRegExp } from "../shared/regexp.js";
-import { listDirectoryTreeStrictSync } from "./directory-walk.js";
+import { visitDirectoryTreeStrictSync } from "./directory-walk.js";
 import { isMissingPathError } from "./errors.js";
 import { unquoteGitPath } from "./git-path-quote.js";
 
@@ -510,43 +510,38 @@ export function readGitRefs(refsBase: string, refs: readonly string[]): Map<stri
   return values;
 }
 
-/**
- * Ref names under `prefix` from loose files and the packed inventory. Both
- * representations yield the same names, so existence comparisons survive packing.
- */
-export function readGitRefNames(refsBase: string, prefix: string): string[] {
-  const names = new Set<string>();
-  const looseRoot = path.join(refsBase, prefix);
+/** Select matching tracking remotes without retaining unrelated loose or packed refs. */
+export function readGitBranchTrackingRemotes(refsBase: string, branch: string): string[] {
+  const remotes = new Set<string>();
+  const looseRoot = path.join(refsBase, "refs", "remotes");
+  const suffix = `${path.sep}${branch.split("/").join(path.sep)}`;
   if (fs.lstatSync(looseRoot, { throwIfNoEntry: false })?.isDirectory()) {
-    for (const { relativePath, dirent } of listDirectoryTreeStrictSync(looseRoot)) {
-      if (!dirent.isDirectory()) {
-        names.add(`${prefix}/${relativePath.split(path.sep).join("/")}`);
+    visitDirectoryTreeStrictSync(looseRoot, ({ relativePath, dirent }) => {
+      if (!dirent.isDirectory() && relativePath.endsWith(suffix)) {
+        remotes.add(relativePath.slice(0, -suffix.length).split(path.sep).join("/"));
       }
-    }
+    });
   }
   try {
     const packedRefs = readGitMetadataFile(
       path.join(refsBase, "packed-refs"),
       Number.MAX_SAFE_INTEGER,
     ).toString("utf8");
-    const marker = `${prefix}/`;
-    for (const line of packedRefs.split("\n")) {
-      // Peeled objects (`^<sha>`) and comments carry no ref name of their own.
-      if (!line || line.startsWith("#") || line.startsWith("^")) {
-        continue;
-      }
-      const separator = line.indexOf(" ");
-      const ref = separator > 0 ? line.slice(separator + 1).trim() : "";
-      if (ref.startsWith(marker)) {
-        names.add(ref);
-      }
+    // Preserve readGitRefs' selective-record approach: retained snapshots must not
+    // allocate a line, substring, or inventory entry for every unrelated ref.
+    const records = new RegExp(
+      `^(?![#^])[^\\S\\r\\n]*\\S+[^\\S\\r\\n]+refs/remotes/(\\S+)/${escapeRegExp(branch)}(?=\\s|$)`,
+      "gm",
+    );
+    for (const [, remote] of packedRefs.matchAll(records)) {
+      remotes.add(remote!);
     }
   } catch (error) {
     if (!isMissingPathError(error)) {
       throw error;
     }
   }
-  return [...names].toSorted();
+  return [...remotes].toSorted();
 }
 
 /** Safely resolve a Git ref path, rejecting traversal from a crafted HEAD file. */

@@ -8,7 +8,7 @@ import type { GitCheckoutContext, GitReadOperations } from "../infra/git-read-op
 import {
   readGitHead,
   readGitMetadataPrefix,
-  readGitRefNames,
+  readGitBranchTrackingRemotes,
   readGitRefs,
 } from "../infra/git-root.js";
 import { canReadGitFilesystemRefs } from "../infra/git-worker-context.js";
@@ -191,12 +191,7 @@ function readBranchTrackingRemotes(
   if (!head?.refsBase) {
     return [];
   }
-  const prefix = "refs/remotes/";
-  const suffix = `/${branch}`;
-  return readGitRefNames(head.refsBase, "refs/remotes")
-    .filter((ref) => ref.endsWith(suffix) && ref.length > prefix.length + suffix.length)
-    .map((ref) => ref.slice(prefix.length, -suffix.length))
-    .toSorted();
+  return readGitBranchTrackingRemotes(head.refsBase, branch);
 }
 
 /**
