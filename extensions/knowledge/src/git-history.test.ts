@@ -1,7 +1,8 @@
 import { execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, realpathSync } from "node:fs";
+import fs, { existsSync, realpathSync } from "node:fs";
 import { mkdir, writeFile, readFile, rm, rename, symlink } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { Check } from "typebox/value";
 import { expect, it, vi } from "vitest";
@@ -137,6 +138,32 @@ it("existing repo staging, unrelated dirty files, and same-path staged bytes sur
   expect(git(f.root, "show", `:private/${first.path}`)).toMatch(/Manually staged/);
   expect(await readFile(path.join(f.root, "unrelated.txt"), "utf8")).toBe("unstaged content");
   expect(git(f.root, "ls-tree", "-r", "--name-only", "HEAD")).toBe(`private/${first.path}`);
+});
+
+it("materializes checkpoint content once while updating both the commit and working index", async () => {
+  const f = await fixture();
+  const changes = ["one", "two", "three"].map((name) => ({
+    path: `private/${name}.md`,
+    raw: `Synthetic checkpoint ${name}\n`,
+  }));
+  const writes = vi.spyOn(fs, "writeFileSync");
+  syncBuiltinESMExports();
+  afterTest(() => {
+    writes.mockRestore();
+    syncBuiltinESMExports();
+  });
+  new GitHistory(f.root).checkpoint({
+    token: "a".repeat(64),
+    changes,
+    actor: "synthetic test",
+    at: "2026-01-01T00:00:00Z",
+  });
+  for (const { path: file, raw } of changes) {
+    expect(writes.mock.calls.filter(([, content]) => content === raw)).toHaveLength(1);
+    expect(git(f.root, "show", `HEAD:${file}`)).toBe(raw.trimEnd());
+    expect(git(f.root, "show", `:${file}`)).toBe(raw.trimEnd());
+  }
+  expect(git(f.root, "diff", "--cached", "--name-only")).toBe("");
 });
 
 for (const stage of ["before-git-ref", "after-git-ref"]) {
