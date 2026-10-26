@@ -100,9 +100,12 @@ export function createAgentHarnessHostCapabilities(params: {
   capabilities: AgentHarnessHostCapabilities;
   close: () => void;
   setInputAttachmentReadAllowed: (allowed: boolean) => void;
+  setToolPolicyScope: (scope: "conversation" | "turn" | undefined) => void;
   runWithScope: <T>(run: () => Promise<T>) => Promise<T>;
 } {
   const attempt = params.attempt;
+  // Set by host policy preparation; a plugin cannot widen continuation lifetime through options.
+  let toolPolicyScope: "conversation" | "turn" | undefined;
   const prepareContinuationRetryCount = attempt.prepareContinuationRetryCount;
   const requestCustody = captureExecRequestCustody(attempt);
   // Capture authority by value before any plugin handoff can mutate the attempt.
@@ -421,6 +424,7 @@ export function createAgentHarnessHostCapabilities(params: {
         // overrides cannot replace the identity captured before its handoff.
         exec: { ...effectiveOptions.exec, preparedRunEnvironment },
         runtimePluginToolGrant,
+        toolPolicyScope,
         skillsSnapshot: options?.skillsSnapshot ?? skillsSnapshot,
         installedSkills: getInstalledSkills(
           effectiveOptions.sandbox,
@@ -690,6 +694,9 @@ export function createAgentHarnessHostCapabilities(params: {
   return {
     capabilities,
     setInputAttachmentReadAllowed: media.setInputAttachmentReadAllowed,
+    setToolPolicyScope: (scope) => {
+      toolPolicyScope = scope;
+    },
     runWithScope: async (run) => {
       const preparedCaller = getGatewayToolCallerIdentity();
       if (preparedCaller?.operationalRunInstance === operationalRunInstance) {

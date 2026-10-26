@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { createOpenClawCodingTools } from "./agent-tools.js";
+import { createOpenClawCodingToolsInternal } from "./agent-tools.js";
 import * as pluginTools from "./openclaw-plugin-tools.js";
 import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
 import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
@@ -16,7 +16,7 @@ async function observeCallerIdentity(senderId: string, toolPolicyScope: "convers
     },
   ]);
   try {
-    const tools = createOpenClawCodingTools({
+    const tools = createOpenClawCodingToolsInternal({
       agentId: "main",
       config: { tools: { toolsBySender: { "id:guest": { deny: ["exec", "process"] } } } },
       sessionKey: "agent:main:main",

@@ -86,6 +86,7 @@ export async function createAdmittedHostCapabilityTestFixture(
       }),
     }),
     closeHost: host.close,
+    setToolPolicyScope: host.setToolPolicyScope,
     closeAdmission: admission.close,
     runWithGatewayScope,
     closeGateway,
