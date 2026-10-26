@@ -4,6 +4,7 @@ import { getRuntimeConfigWriteApplication } from "../../config/runtime-write-app
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { callAgentHandler } from "./agents-mutate.test-support.js";
+import { expectRpcError, expectRpcResult } from "./rpc-response.test-support.js";
 
 const fixture = vi.hoisted(() => {
   const config: OpenClawConfig = {};
@@ -62,11 +63,7 @@ it.each([false, true])(
     if (implicit) {
       fixture.config = {};
     }
-    expect(await update(request)).toHaveBeenCalledWith(
-      true,
-      { ok: true, agentId: "main" },
-      undefined,
-    );
+    expectRpcResult(await update(request), { ok: true, agentId: "main" });
     expect(
       implicit ? fixture.config.agents?.defaults : fixture.config.agents?.entries?.main,
     ).toMatchObject({
@@ -90,11 +87,7 @@ it("rechecks catalog ownership at the final config write", async () => {
   fixture.beforeWrite.mockImplementation(() => {
     current = false;
   });
-  expect(await update(request)).toHaveBeenCalledWith(
-    false,
-    undefined,
-    expect.objectContaining({ message: "Replaced" }),
-  );
+  expectRpcError(await update(request), { message: "Replaced" });
   expect(fixture.writes).not.toHaveBeenCalled();
   expect(fixture.config).toEqual(before);
 });
