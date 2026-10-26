@@ -6,40 +6,33 @@ import {
   deferredScope,
   expectType,
   expectUnused,
-  relayConfig,
+  loadConfiguredBackground,
+  relayReply,
   runtime,
 } from "./background.lifecycle-test-helpers.js";
-import { cleanupBackgroundHarnesses, loadBackground } from "./background.test-harness.js";
+import { cleanupBackgroundHarnesses } from "./background.test-harness.js";
 const originalUrl = "https://example.com/existing";
 const blankResult = { frameId: "root", loaderId: "blank-loader" };
+const frame = (url = "about:blank", loaderId = "blank-loader") => ({
+  frame: { id: "root", loaderId, url },
+});
 
-async function setup(mode: "all" | "selected" = "selected") {
-  const h = await loadBackground({
-    storedConfig: relayConfig(mode),
-    initialTabs: [
-      { id: 7, url: originalUrl, groupId: 7, windowId: 1 },
-      { id: 8, url: "about:blank", groupId: 7 },
-    ],
-  });
+async function setup() {
+  const h = await loadConfiguredBackground("selected", [
+    { id: 7, url: originalUrl, groupId: 7, windowId: 1 },
+    { id: 8, url: "about:blank", groupId: 7 },
+  ]);
   const connection = await connectRelay(h);
   const { request } = connection;
   expectType(await request({ type: "attach", tabId: 7 }));
   const emit = (method: string, params: unknown) =>
     h.debuggerEventListener?.({ tabId: 7 }, method, params);
-  const commitBlank = () => {
-    h.updateTab(7, { url: "about:blank" });
-    emit("Runtime.executionContextsCleared", {});
-    emit("Page.frameNavigated", {
-      frame: { id: "root", loaderId: "blank-loader", url: "about:blank" },
-    });
-    emit("Page.lifecycleEvent", { frameId: "root", loaderId: "blank-loader", name: "load" });
-  };
   const native = (navigate: () => Promise<Record<string, unknown>>) => {
-    h.debuggerSendCommand.mockImplementation(async (...args: unknown[]) => {
-      if (args[1] === "Page.getFrameTree") {
-        return { frameTree: { frame: { id: "root", loaderId: "original", url: originalUrl } } };
+    h.debuggerSendCommand.mockImplementation(async (_source, method) => {
+      if (method === "Page.getFrameTree") {
+        return { frameTree: frame(originalUrl, "original") };
       }
-      return args[1] === "Page.navigate" ? await navigate() : {};
+      return method === "Page.navigate" ? await navigate() : {};
     });
   };
   const command = (method: string, params?: Record<string, unknown>, extra = {}) =>
@@ -50,7 +43,10 @@ async function setup(mode: "all" | "selected" = "selected") {
     complete: () => Record<string, unknown> | Promise<Record<string, unknown>> = () => blankResult,
   ) =>
     native(async () => {
-      commitBlank();
+      h.updateTab(7, { url: "about:blank" });
+      emit("Runtime.executionContextsCleared", {});
+      emit("Page.frameNavigated", frame());
+      emit("Page.lifecycleEvent", { ...blankResult, name: "load" });
       return await complete();
     });
   const staleLookup = (update: (tabId: number) => void) => {
@@ -93,9 +89,7 @@ describe("commanded existing document navigation", () => {
     h.debuggerSendCommand.mockImplementationOnce(async () => {
       h.staleLookup((id) => {
         h.updateTab(id, { url: originalUrl }, false);
-        h.emit("Page.frameNavigated", {
-          frame: { id: "root", loaderId: "return", url: originalUrl },
-        });
+        h.emit("Page.frameNavigated", frame(originalUrl, "return"));
       });
       return { frameId: "root", loaderId: "return" };
     });
@@ -149,12 +143,7 @@ describe("commanded existing document navigation", () => {
     const replacement = h.relaySockets[1];
     assert(replacement);
     await h.authenticate(replacement);
-    replacement.receive({ type: "attach", tabId: 7, seq: 9001 });
-    await vi.waitFor(() =>
-      expect(replacement.send.mock.calls.map(([raw]) => JSON.parse(raw))).toContainEqual(
-        expect.objectContaining({ type: "error", seq: 9001 }),
-      ),
-    );
+    expectType(await relayReply(replacement, { type: "attach", tabId: 7, seq: 9001 }), "error");
     h.emit("Tracing.tracingComplete", { stream: "revoked-stream" });
     result.resolve(blankResult);
     // Closed sockets intentionally cannot receive the old response.
