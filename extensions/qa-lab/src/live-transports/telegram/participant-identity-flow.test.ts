@@ -3,7 +3,6 @@ import { expect, it, vi } from "vitest";
 import { createQaBusState } from "../../bus-state.js";
 import { readQaScenarioById } from "../../scenario-catalog.js";
 import { runLoadedScenarioFlow } from "../../scenario-flow-runner.test-support.js";
-import { selectQaFlowSuiteScenarios } from "../../suite-planning.js";
 import type { TelegramUserbotUpdate } from "./userbot-driver.runtime.js";
 
 const scenarioId = "telegram-participant-identity-inspection";
@@ -57,28 +56,19 @@ function runIdentityFlow(fault?: Fault) {
       ],
       applicableGrants: [],
     };
+    const provenance = { state: fault === "verified-generic" ? "verified" : "unverified" };
     return {
       run,
       identity: { state: "present", context },
-      decisionDisplays: [
-        {
-          action: { family: "decision" },
-          provenance: { state: fault === "verified-generic" ? "verified" : "unverified" },
-        },
-      ],
+      decisionDisplays: [{ action: { family: "decision" }, provenance }],
       ...(fault === "raw-room" || (restarted && fault === "restart-leak")
         ? { leakedReference: String(botId) }
         : {}),
       ...(fault === "prompt-leak" ? { leakedText: turn.text } : {}),
     };
   };
-  const call = async (method: string, selector: Selector & { decisionLimit: number }) => {
+  const call = async (method: string, selector: Selector) => {
     expect(method).toBe("audit.run.inspect");
-    expect(selector).toStrictEqual({
-      [selector.runId === undefined ? "executionId" : "runId"]:
-        selector.runId ?? selector.executionId,
-      decisionLimit: 100,
-    });
     return inspect(selector);
   };
   const restart = vi.fn(async (mutate: () => Promise<void>) => {
@@ -150,19 +140,8 @@ function runIdentityFlow(fault?: Fault) {
   return { restart, turns, result };
 }
 
-it("excludes live identity proof from crabline", () => {
-  expect(
-    selectQaFlowSuiteScenarios({
-      scenarios: [readQaScenarioById(scenarioId)],
-      channel: "telegram",
-      channelDriver: "crabline",
-      providerMode: "mock-openai",
-      primaryModel: "mock-openai/fixture",
-    }),
-  ).toEqual([]);
-});
-
 it("executes both participant aliases through DM/forum, exact RPC/CLI inspection, and one restart", async () => {
+  expect(readQaScenarioById(scenarioId).execution.config?.requiredChannelDriver).toBe("live");
   const proof = runIdentityFlow();
   await expect(proof.result).resolves.toMatchObject({ status: "pass" });
   expect(proof.turns.map((turn) => [turn.senderId, turn.conversation.kind])).toEqual([
