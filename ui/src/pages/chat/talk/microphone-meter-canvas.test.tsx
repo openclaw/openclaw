@@ -117,13 +117,14 @@ it("uses CSS while connecting and adopts the live source when the meter becomes 
     await waitForSolid(() =>
       expect(
         view.container.querySelector("openclaw-microphone-activity")?.getAttribute("data-level"),
-      ).toBe("0.2"),
+      ).toBe("0"),
     );
     expect(renderer.create).not.toHaveBeenCalled();
     const host = view.container.querySelector("openclaw-microphone-activity");
     const bars = Array.from(view.container.querySelectorAll(".agent-chat__voice-activity-bar"));
+    expect(host?.querySelector("canvas")).toBeNull();
     connectingSource.set(0.6);
-    expect(host?.getAttribute("data-level")).toBe("0.6");
+    expect(host?.getAttribute("data-level")).toBe("0");
 
     setStatus("listening");
     await waitForSolid(() => expect(renderer.create).toHaveBeenCalledTimes(1));
@@ -136,12 +137,13 @@ it("uses CSS while connecting and adopts the live source when the meter becomes 
     setStatus("connecting");
     await waitForSolid(() => expect(active.dispose).toHaveBeenCalledOnce());
     expect(renderer.create).toHaveBeenCalledTimes(1);
+    expect(host?.querySelector("canvas")).toBeNull();
     const replacement = new RealtimeTalkLevelSignal();
     replacement.set(0.35);
     setSource(replacement);
-    await waitForSolid(() => expect(host?.getAttribute("data-level")).toBe("0.35"));
+    await waitForSolid(() => expect(host?.getAttribute("data-level")).toBe("0.6"));
     connectingSource.set(0.9);
-    expect(host?.getAttribute("data-level")).toBe("0.35");
+    expect(host?.getAttribute("data-level")).toBe("0.6");
 
     setStatus("thinking");
     await waitForSolid(() => expect(renderer.create).toHaveBeenCalledTimes(2));

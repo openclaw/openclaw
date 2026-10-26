@@ -13,6 +13,9 @@ type MicrophoneMeterCanvasProps = {
 /** Keyed by status/source; native level events do not rerender this canvas. */
 export function MicrophoneMeterCanvas(props: MicrophoneMeterCanvasProps) {
   const initialStatus = props.initialStatus;
+  if (initialStatus === "connecting") {
+    return null;
+  }
   const initialSource = props.initialSource;
   const reducedMotion = createMediaQuerySource("(prefers-reduced-motion: reduce)");
   let canvas: HTMLCanvasElement | undefined;

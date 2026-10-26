@@ -1776,7 +1776,7 @@ describe("chat voice controls", () => {
     const visualizer = stopVoiceButton?.querySelector<HTMLElement>(
       `.agent-chat__voice-activity[data-status="${status}"]`,
     );
-    expect(visualizer?.getAttribute("data-level")).toBe("0.64");
+    expect(visualizer?.getAttribute("data-level")).toBe(status === "connecting" ? "0" : "0.64");
     expect(visualizer?.getAttribute("data-source")).toBe("microphone");
     expect(visualizer?.getAttribute("aria-hidden")).toBe("true");
     expect(visualizer?.querySelectorAll(".agent-chat__voice-activity-bar")).toHaveLength(7);
@@ -1831,12 +1831,12 @@ describe("chat voice controls", () => {
       const host = requireElement(container, "openclaw-microphone-activity", "voice meter");
       const bars = Array.from(host.querySelectorAll(".agent-chat__voice-activity-bar"));
       const canvas = await waitForSolid(() => requireElement(host, "canvas", "decorative canvas"));
-      await waitForSolid(() => expect(getContext.mock.contexts).toContain(canvas));
       expect(bars).toHaveLength(7);
       expect(canvas.hasAttribute("data-ready")).toBe(false);
 
       inputLevel.set(0.8);
       flush();
+      await waitForSolid(() => expect(getContext.mock.contexts).toContain(canvas));
       expect(container.querySelector("openclaw-microphone-activity")).toBe(host);
       expect(Array.from(host.querySelectorAll(".agent-chat__voice-activity-bar"))).toEqual(bars);
       expect(host.getAttribute("data-level")).toBe("0.8");
