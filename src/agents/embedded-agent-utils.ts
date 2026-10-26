@@ -284,10 +284,13 @@ export function createAssistantThinkingStream() {
       if (!prefixUnchanged || reasoningPrefixBlocks.length !== prefixLength) {
         prefixUnchanged = false;
         reasoningPrefixBlocks.length = prefixLength;
-        reasoningPrefix = reasoningPrefixBlocks
-          .map((raw) => raw.trim())
-          .filter(Boolean)
-          .join("\n");
+        reasoningPrefix =
+          prefixLength === 0
+            ? ""
+            : reasoningPrefixBlocks
+                .map((raw) => raw.trim())
+                .filter(Boolean)
+                .join("\n");
       }
       const text = typeof input === "string" ? input : (tail?.thinking ?? "");
       const append =
@@ -320,7 +323,9 @@ export function createAssistantThinkingStream() {
         // A fallback is not part of the native snapshot's prefix.
         reasoningProjection = createTextProjection([trimTextFilter("both")]);
       }
-      return { text: reasoningText, delta };
+      projected.text = reasoningText;
+      projected.delta = delta;
+      return projected;
     },
   };
 }
