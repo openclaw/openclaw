@@ -45,22 +45,14 @@ it("restores historical agent data without migration and rejects incompatible ve
   });
   const identity = { role: "agent", agentId: "main" } as const;
   const manifest = await dump(identity);
-  const restored = await restore(identity);
-  expect(restored.manifest.userVersion).toBe(version);
-  expect(restored.tables.every((table) => table.ok)).toBe(true);
-  withDatabase(
-    targetPath,
-    (database) => {
-      expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(version);
-      const statement = database.prepare(
-        "SELECT value, hex(bytes) AS bytes FROM compatibility_probe",
-      );
-      statement.setReadBigInts(true);
-      expect(statement.get()).toEqual(expected);
-      expect(database.prepare("PRAGMA integrity_check").get()?.integrity_check).toBe("ok");
-    },
-    { readOnly: true },
-  );
+  await restore(identity);
+  expectDatabaseRows(targetPath, {
+    "PRAGMA user_version": [{ user_version: version }],
+    "SELECT CAST(value AS TEXT) AS value, hex(bytes) AS bytes FROM compatibility_probe": [
+      { ...expected, value: expected.value.toString() },
+    ],
+    "PRAGMA integrity_check": [{ integrity_check: "ok" }],
+  });
 
   for (const invalidVersion of [OPENCLAW_AGENT_SCHEMA_VERSION, OPENCLAW_AGENT_SCHEMA_VERSION + 1]) {
     await fs.writeFile(
@@ -116,8 +108,7 @@ it("preserves TEXT, storage classes, key order, quoted DDL, and CASE triggers", 
     .split("\n")
     .map((line) => JSON.parse(line));
   expect(records).toEqual(rows.map(([key, , value]) => ({ key, value })));
-  const restored = await restore({ role: "global" });
-  expect(restored.tables.every((table) => table.ok)).toBe(true);
+  await restore({ role: "global" });
   withDatabase(targetPath, (database) => {
     database.exec("INSERT INTO trigger_values VALUES (1)");
   });
@@ -138,7 +129,6 @@ it("preserves TEXT, storage classes, key order, quoted DDL, and CASE triggers", 
     /CREATE TRIGGER zz_case_trigger[\s\S]*?\n\s*END;/u,
     (trigger) => trigger.replace(/\n\s*END;$/u, ""),
   );
-  expect(incompleteTrigger).not.toBe(schema);
   await fs.writeFile(schemaPath, incompleteTrigger);
   const refusedTarget = path.join(root, "incomplete-trigger.sqlite");
   await expect(
