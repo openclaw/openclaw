@@ -111,28 +111,26 @@ describe("google generative ai helpers", () => {
     }
   });
 
-  it("builds shared Google Generative AI HTTP request config", () => {
-    const oauthConfig = resolveGoogleGenerativeAiHttpRequestConfig({
+  it.each([
+    {
       apiKey: JSON.stringify({ token: "oauth-token" }),
+      auth: { authorization: "Bearer oauth-token" },
       baseUrl: origin,
       capability: "audio",
       transport: "media-understanding",
-    });
-    expect(oauthConfig).toMatchObject({ baseUrl: `${origin}/v1beta`, allowPrivateNetwork: false });
-    expect(Object.fromEntries(new Headers(oauthConfig.headers).entries())).toMatchObject({
-      authorization: "Bearer oauth-token",
-      "content-type": "application/json",
-      "x-goog-api-client": expect.stringMatching(/^openclaw\//u),
-    });
-    const apiKeyConfig = resolveGoogleGenerativeAiHttpRequestConfig({
+    },
+    {
       apiKey: "api-key-123",
+      auth: { "x-goog-api-key": "api-key-123" },
       capability: "image",
       transport: "http",
-    });
-    expect(apiKeyConfig).toMatchObject({ baseUrl: `${origin}/v1beta`, allowPrivateNetwork: false });
-    expect(Object.fromEntries(new Headers(apiKeyConfig.headers).entries())).toMatchObject({
+    },
+  ] as const)("builds shared HTTP request config for $capability", ({ auth, ...request }) => {
+    const config = resolveGoogleGenerativeAiHttpRequestConfig(request);
+    expect(config).toMatchObject({ baseUrl: `${origin}/v1beta`, allowPrivateNetwork: false });
+    expect(Object.fromEntries(new Headers(config.headers).entries())).toMatchObject({
+      ...auth,
       "content-type": "application/json",
-      "x-goog-api-key": "api-key-123",
       "x-goog-api-client": expect.stringMatching(/^openclaw\//u),
     });
   });

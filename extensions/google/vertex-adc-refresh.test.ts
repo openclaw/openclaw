@@ -29,13 +29,17 @@ const initial = {
 };
 const success = () =>
   Response.json({ access_token: "synthetic-access", token_type: "Bearer", expires_in: 3600 });
+const authorized = { Authorization: "Bearer synthetic-access" };
+async function resetState() {
+  await closeOpenClawStateDatabaseAsync();
+  resetPluginStateStoreForTests();
+  resetGoogleVertexAdcState();
+}
 function writeAdc(value = initial) {
   writeFileSync(adcPath, JSON.stringify(value));
 }
 beforeEach(async () => {
-  await closeOpenClawStateDatabaseAsync();
-  resetPluginStateStoreForTests();
-  resetGoogleVertexAdcState();
+  await resetState();
   root = mkdtempSync(path.join(os.tmpdir(), "vertex-refresh-owner-"));
   adcPath = path.join(root, "adc.json");
   vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
@@ -44,9 +48,7 @@ beforeEach(async () => {
   writeAdc();
 });
 afterEach(async () => {
-  await closeOpenClawStateDatabaseAsync();
-  resetPluginStateStoreForTests();
-  resetGoogleVertexAdcState();
+  await resetState();
   vi.unstubAllEnvs();
   rmSync(root, { recursive: true, force: true });
 });
@@ -75,19 +77,14 @@ it("coalesces the real form/parser and distinguishes clients even with the same 
     await reachRefreshBarrier(entered.promise, first);
     const second = resolveGoogleVertexAuthorizedUserHeaders(network);
     release.resolve();
-    expect(await Promise.all([first, second])).toEqual([
-      { Authorization: "Bearer synthetic-access" },
-      { Authorization: "Bearer synthetic-access" },
-    ]);
+    expect(await Promise.all([first, second])).toEqual([authorized, authorized]);
     expect(network).toHaveBeenCalledOnce();
     writeAdc({
       ...initial,
       client_id: "synthetic-other-client",
       client_secret: "synthetic-other-secret",
     });
-    await expect(resolveGoogleVertexAuthorizedUserHeaders(network)).resolves.toEqual({
-      Authorization: "Bearer synthetic-access",
-    });
+    await expect(resolveGoogleVertexAuthorizedUserHeaders(network)).resolves.toEqual(authorized);
     expect(network).toHaveBeenCalledTimes(2);
   } finally {
     release.resolve();
@@ -112,9 +109,7 @@ it.each(["nested-rejection", "unexpected-rotation"])(
       });
     });
     await expect(resolveGoogleVertexAuthorizedUserHeaders(network)).rejects.toThrow();
-    resetGoogleVertexAdcState();
-    await closeOpenClawStateDatabaseAsync();
-    resetPluginStateStoreForTests();
+    await resetState();
     await expect(resolveGoogleVertexAuthorizedUserHeaders(network)).rejects.toThrow();
     expect(network).toHaveBeenCalledTimes(2);
     expect(readFileSync(adcPath, "utf8")).toBe(original);
@@ -136,12 +131,8 @@ it.each(["lost-response", "503"])(
       return success();
     });
     await expect(resolveGoogleVertexAuthorizedUserHeaders(network)).rejects.toThrow();
-    resetGoogleVertexAdcState();
-    await closeOpenClawStateDatabaseAsync();
-    resetPluginStateStoreForTests();
-    await expect(resolveGoogleVertexAuthorizedUserHeaders(network)).resolves.toEqual({
-      Authorization: "Bearer synthetic-access",
-    });
+    await resetState();
+    await expect(resolveGoogleVertexAuthorizedUserHeaders(network)).resolves.toEqual(authorized);
     expect(network).toHaveBeenCalledTimes(2);
     expect(readFileSync(adcPath, "utf8")).toBe(original);
   },
@@ -161,9 +152,7 @@ it("never publishes or caches an exchange after its external ADC owner is replac
     writeAdc({ ...initial, refresh_token: "synthetic-new-login" });
     release.resolve();
     expect(await outcome).toBeInstanceOf(Error);
-    await expect(resolveGoogleVertexAuthorizedUserHeaders(network)).resolves.toEqual({
-      Authorization: "Bearer synthetic-access",
-    });
+    await expect(resolveGoogleVertexAuthorizedUserHeaders(network)).resolves.toEqual(authorized);
     expect(network).toHaveBeenCalledTimes(2);
   } finally {
     release.resolve();

@@ -11,19 +11,17 @@ vi.mock("openclaw/plugin-sdk/provider-transport-runtime", async (importOriginal)
 const terminal = {
   candidates: [{ content: { parts: [{ text: "complete" }] }, finishReason: "STOP" }],
 };
+const completedResponse = { stopReason: "stop", content: [{ type: "text", text: "complete" }] };
+const quotaError = {
+  error: { code: 429, status: "RESOURCE_EXHAUSTED", message: "Request denied" },
+};
+const encodeEvent = (event: unknown) =>
+  `data: ${typeof event === "string" ? event : JSON.stringify(event)}\n\n`;
 function response(events: unknown[], cancel = vi.fn(), open = false) {
   return new Response(
     new ReadableStream<Uint8Array>({
       start(controller) {
-        controller.enqueue(
-          new TextEncoder().encode(
-            events
-              .map(
-                (event) => `data: ${typeof event === "string" ? event : JSON.stringify(event)}\n\n`,
-              )
-              .join(""),
-          ),
-        );
+        controller.enqueue(new TextEncoder().encode(events.map(encodeEvent).join("")));
         if (!open) {
           controller.close();
         }
@@ -53,6 +51,16 @@ async function run(signal: AbortSignal, id = "gemini-2.5-pro") {
   );
   return stream.result();
 }
+async function advanceResponse(ms: number, id: string) {
+  const controller = new AbortController();
+  const completed = vi.fn();
+  const pending = run(controller.signal, id).then(completed);
+  await vi.advanceTimersByTimeAsync(ms);
+  const result = completed.mock.calls[0]?.[0];
+  controller.abort();
+  await pending;
+  expect(result).toMatchObject(completedResponse);
+}
 
 describe("Google stream lifecycle", () => {
   beforeEach(() => {
@@ -70,32 +78,12 @@ describe("Google stream lifecycle", () => {
       const cancel = vi.fn();
       guardedFetch.mockResolvedValueOnce(
         response(
-          [
-            terminal,
-            "[DONE]",
-            ...(id === "gemini-2.5-pro"
-              ? []
-              : [
-                  {
-                    error: { code: 429, status: "RESOURCE_EXHAUSTED", message: "late error" },
-                  },
-                ]),
-          ],
+          [terminal, "[DONE]", ...(id === "gemini-2.5-pro" ? [] : [quotaError])],
           cancel,
           true,
         ),
       );
-      const controller = new AbortController();
-      const completed = vi.fn();
-      const pending = run(controller.signal, id).then(completed);
-      await vi.advanceTimersByTimeAsync(1);
-      const result = completed.mock.calls[0]?.[0];
-      controller.abort();
-      await pending;
-      expect(result).toMatchObject({
-        stopReason: "stop",
-        content: [{ type: "text", text: "complete" }],
-      });
+      await advanceResponse(1, id);
       expect(cancel).toHaveBeenCalledOnce();
     },
   );
@@ -104,19 +92,10 @@ describe("Google stream lifecycle", () => {
     vi.stubEnv("OPENCLAW_LIVE_GEMINI_KEY", "");
     vi.stubEnv("GEMINI_API_KEYS", "fixture-key-2");
     guardedFetch
-      .mockResolvedValueOnce(
-        response([
-          {
-            error: { code: 429, status: "RESOURCE_EXHAUSTED", message: "Request denied" },
-          },
-        ]),
-      )
+      .mockResolvedValueOnce(response([quotaError]))
       .mockResolvedValueOnce(response([terminal, "[DONE]"]));
     const result = await run(new AbortController().signal);
-    expect(result).toMatchObject({
-      stopReason: "stop",
-      content: [{ type: "text", text: "complete" }],
-    });
+    expect(result).toMatchObject(completedResponse);
     expect(guardedFetch).toHaveBeenCalledTimes(2);
     expect(
       guardedFetch.mock.calls.map(([, init]) => new Headers(init.headers).get("x-goog-api-key")),
@@ -139,17 +118,7 @@ describe("Google stream lifecycle", () => {
     guardedFetch
       .mockResolvedValueOnce(response([chunk], cancel, true))
       .mockResolvedValueOnce(response([terminal, "[DONE]"]));
-    const controller = new AbortController();
-    const completed = vi.fn();
-    const pending = run(controller.signal, "gemini-3.1-pro-preview").then(completed);
-    await vi.advanceTimersByTimeAsync(11);
-    const result = completed.mock.calls[0]?.[0];
-    controller.abort();
-    await pending;
-    expect(result).toMatchObject({
-      stopReason: "stop",
-      content: [{ type: "text", text: "complete" }],
-    });
+    await advanceResponse(11, "gemini-3.1-pro-preview");
     expect(guardedFetch).toHaveBeenCalledTimes(2);
     expect(cancel).toHaveBeenCalledOnce();
     expect(
