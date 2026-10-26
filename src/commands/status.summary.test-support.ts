@@ -1,4 +1,3 @@
-/** Shared status-summary cases for session runtime and context-window projection. */
 import { expect, it, vi } from "vitest";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
 import * as stateDatabaseCache from "../state/openclaw-state-db-cache.js";
@@ -49,14 +48,9 @@ export function registerStatusSummarySessionRowCases(params: {
       abortedLastRun: true,
     });
     expect(row?.flags).toEqual([
-      "think:high",
-      "verbose:on",
+      ..."think:high verbose:on".split(" "),
       ...(fastFlag === undefined ? [] : [fastFlag]),
-      "reasoning:on",
-      "elevated:full",
-      "system",
-      "aborted",
-      "id:flag-order",
+      ..."reasoning:on elevated:full system aborted id:flag-order".split(" "),
     ]);
   });
 
