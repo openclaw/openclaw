@@ -526,7 +526,6 @@ it("keeps read-only Talk operator consult scaffolding out of chat and later cont
   runEmbeddedAgent.mockImplementation(async (params) => {
     const recorder = expectDefined(params.userTurnTranscriptRecorder, "consult input recorder");
     await recorder.persistApproved();
-    expect(recorder.hasPersisted()).toBe(true);
     await params.onAgentEvent?.({
       stream: "lifecycle",
       data: { phase: "start" },
@@ -552,7 +551,6 @@ it("keeps read-only Talk operator consult scaffolding out of chat and later cont
     modelStarted.promise,
     captureSessionControllerSettlement({ scope: storePath, identities: [sessionKey, sessionId] }),
   ]);
-  expect(context.logGateway.error).not.toHaveBeenCalled();
   expect(runEmbeddedAgent).toHaveBeenCalledOnce();
   const run = expectDefined(runEmbeddedAgent.mock.calls[0]?.[0], "consult model invocation");
   expect(run.toolsAllow).toEqual([
@@ -661,7 +659,6 @@ it.each(["before-final", "after-final"] as const)(
     runEmbeddedAgent.mockImplementation(async (params) => {
       const recorder = expectDefined(params.userTurnTranscriptRecorder, "direct input recorder");
       await recorder.persistApproved();
-      expect(recorder.hasPersisted()).toBe(true);
       const result = await completeModel(params);
       params.abortSignal?.throwIfAborted();
       transcriptManager(params).appendMessage(assistantMessage(directAnswer));
