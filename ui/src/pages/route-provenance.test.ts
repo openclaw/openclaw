@@ -3,8 +3,11 @@ import type { PageDefinition, RouteLoaderOptions } from "@openclaw/uirouter";
 import { expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type { ApplicationContext, ApplicationGatewaySnapshot } from "../app/context.ts";
-import { createApplicationGatewaySnapshot } from "../test-helpers/application-context-fixtures.ts";
+import type { ApplicationContext } from "../app/context.ts";
+import {
+  createApplicationGateway,
+  createApplicationGatewaySnapshot,
+} from "../test-helpers/application-context-fixtures.ts";
 import { createRouteLoaderOptions } from "../test-helpers/route-loader-options.ts";
 import { page as devicesPage } from "./devices/route.ts";
 import { page as modelProvidersPage } from "./model-providers/route.ts";
@@ -18,7 +21,7 @@ const selection = (id: string | null, intentRevision = 0) => ({
   intentRevision,
 });
 type RouteContext = {
-  agents?: { state?: { agentsList: null; agentsError?: null }; ensureList: () => Promise<unknown> };
+  agents?: { ensureList: () => Promise<unknown> };
   agentSelection?: ReturnType<typeof selection>;
   settingsAgentSelection?: ReturnType<typeof selection>;
 };
@@ -31,34 +34,26 @@ const loaderOptions: RouteLoaderOptions = createRouteLoaderOptions(
 
 function provenance(request: () => Promise<unknown> = vi.fn(async () => ({})), connected = true) {
   const client = { request } as unknown as GatewayBrowserClient;
-  const original: ApplicationGatewaySnapshot = createApplicationGatewaySnapshot({
+  const original = createApplicationGatewaySnapshot({
     client: connected ? client : null,
     phase: connected ? "connected" : "reconnecting",
     sessionKey: "main",
   });
-  let current = original;
-  const gateway = {
-    get snapshot() {
-      return current;
-    },
-  } as unknown as ApplicationContext["gateway"];
+  const { gateway, publish } = createApplicationGateway(original);
   return {
     client,
     replace(nextClient = client, nextConnected = false) {
-      current = {
+      publish({
         ...original,
         client: nextClient,
         phase: nextConnected ? "connected" : "reconnecting",
-      };
+      });
     },
     async load<T extends Pick<SkillsRouteData, "gateway" | "gatewaySnapshot">>(
       route: Pick<PageDefinition<string, ApplicationContext, unknown, T>, "loader">,
       overrides: RouteContext = {},
     ): Promise<T> {
-      if (!route.loader) {
-        throw new Error("route has no loader");
-      }
-      const data = (await route.loader(
+      const data = (await route.loader!(
         { gateway, ...overrides } as unknown as ApplicationContext,
         loaderOptions,
       )) as T;
@@ -70,8 +65,7 @@ function provenance(request: () => Promise<unknown> = vi.fn(async () => ({})), c
 }
 
 it("records the exact gateway source and snapshot for synchronous route state", async () => {
-  const source = provenance(undefined, false);
-  await source.load(devicesPage);
+  await provenance(undefined, false).load(devicesPage);
 });
 
 it("keeps usage provenance from before its async preload", async () => {
@@ -100,17 +94,11 @@ it("keeps model providers provenance from before its lazy module load", async ()
 it("keeps skills provenance from before its async preload", async () => {
   const requestMethod = vi.fn(async () => ({ skills: [] }));
   const source = provenance(requestMethod);
-  const agentsList = {
-    defaultId: "main",
-    agents: [{ id: "main" }, { id: "research" }],
-  };
+  const agentsList = { defaultId: "main", agents: [{ id: "main" }, { id: "research" }] };
   const agentsReady = deferred<typeof agentsList>();
   const agents = { ensureList: vi.fn(() => agentsReady.promise) };
   const selected = selection("research", 7);
-  const request = source.load(skillPages[0], {
-    agents,
-    agentSelection: selected,
-  });
+  const request = source.load(skillPages[0], { agents, agentSelection: selected });
 
   source.replace();
   selected.intentRevision += 1;
