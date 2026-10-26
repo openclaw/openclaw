@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
 import { jsonSchemaValuesEqual } from "@openclaw/normalization-core/json-schema";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { root } from "../infra/fs-safe.js";
 import { formatCwdRelativePathOrAbsolute as formatOutputPath } from "../infra/safe-cwd.js";
 import { getToolPluginMetadata } from "../plugin-sdk/tool-plugin.js";
@@ -270,7 +271,7 @@ export async function runPluginsValidateCommand(opts: PluginsValidateOptions): P
     defaultRuntime.writeJson(result);
     return;
   }
-  defaultRuntime.log(`Plugin ${result.pluginId} is valid.`);
+  defaultRuntime.log(`Plugin ${sanitizeTerminalText(result.pluginId)} is valid.`);
 }
 
 function normalizeRequiredPluginText(input: string, label: string): string {

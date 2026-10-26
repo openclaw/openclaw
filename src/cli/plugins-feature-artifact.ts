@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { create as createArchive } from "tar";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { root } from "../infra/fs-safe.js";
 import { readPluginControlUiAssets } from "../plugins/control-ui-assets.js";
 import { safePluginInstallFileName } from "../plugins/install-paths.js";
@@ -169,6 +170,6 @@ export async function runPluginsPackCommand(opts: PluginsPackOptions): Promise<v
     return;
   }
   defaultRuntime.log(
-    `Packed ${receipt.pluginId}: ${receipt.path}\nSHA256: ${receipt.sha256}\nUse plugin_activate_artifact with this path and digest to request activation approval.`,
+    `Packed ${sanitizeTerminalText(receipt.pluginId)}: ${receipt.path}\nSHA256: ${receipt.sha256}\nUse plugin_activate_artifact with this path and digest to request activation approval.`,
   );
 }
