@@ -4,7 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { Virtualizer } from "@tanstack/virtual-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { flush } from "../../../test-helpers/solid-settle.ts";
-import { createInitializationContext } from "../chat-pane.test-support.ts";
+import { createInitializationContext } from "../chat-application-context.test-support.ts";
 import { createTestTranscript, stubAnimationFrames } from "../chat-view.test-helpers.ts";
 import { saveChatSessionScrollPosition } from "../scroll.ts";
 import {
