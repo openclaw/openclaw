@@ -15,7 +15,8 @@ vi.mock("node:timers", async (importOriginal) => {
   return {
     ...actual,
     // Use the test clock for the reader's captured Node timers and 30-second flush deadline.
-    setTimeout: (...args: Parameters<typeof actual.setTimeout>) => globalThis.setTimeout(...args),
+    setTimeout: (callback: (...args: unknown[]) => void, delay?: number, ...args: unknown[]) =>
+      globalThis.setTimeout(callback, delay, ...args),
     clearTimeout: (...args: Parameters<typeof actual.clearTimeout>) =>
       globalThis.clearTimeout(...args),
   };
@@ -55,7 +56,7 @@ async function withHttpServer(run: (url: string, requestStarted: Promise<void>) 
 
 async function readSocketResponse(socket: Socket): Promise<string> {
   let response = "";
-  socket.setEncoding("utf8").on("data", (chunk) => (response += chunk));
+  socket.setEncoding("utf8").on("data", (chunk) => (response += chunk.toString()));
   // A reset can follow buffered rejection bytes; collect until the server closes.
   socket.on("error", () => {});
   await new Promise<void>((resolve) => {

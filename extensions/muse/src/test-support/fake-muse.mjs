@@ -86,12 +86,14 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     if (process.env.MUSE_FIXTURE_INITIALIZE_GATE) {
       const gate = createConnection(process.env.MUSE_FIXTURE_INITIALIZE_GATE);
       gate.on("connect", () => gate.write(String(process.pid)));
-      return gate.once("data", () => reply(id, result));
+      gate.once("data", () => reply(id, result));
+      return;
     }
     reply(id, result);
   } else if (method === "model/list") {
     if (process.env.MUSE_FIXTURE_CATALOG_PATH) {
-      return reply(id, JSON.parse(readFileSync(process.env.MUSE_FIXTURE_CATALOG_PATH, "utf8")));
+      reply(id, JSON.parse(readFileSync(process.env.MUSE_FIXTURE_CATALOG_PATH, "utf8")));
+      return;
     }
     reply(id, {
       providerId: "meta",
@@ -108,7 +110,8 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       ["busy-session", [-32021, "session in use", "sessionInUse"]],
     ]).get(params.sessionId);
     if (resumed && refusal) {
-      return reject(id, ...refusal);
+      reject(id, ...refusal);
+      return;
     }
     const sessionId = resumed ? params.sessionId : randomUUID();
     sessions.set(sessionId, resumed);

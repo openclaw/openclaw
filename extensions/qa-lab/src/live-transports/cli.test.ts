@@ -27,10 +27,12 @@ vi.mock("./discord/adapter.runtime.js", () => {
   mocks.runtimeLoads.discord += 1;
   return { createDiscordQaTransportAdapter: mocks.createDiscordAdapter };
 });
+// mock-isolation: Count lazy Slack adapter loads without booting the real transport.
 vi.mock("./slack/adapter.runtime.js", () => {
   mocks.runtimeLoads.slack += 1;
   return { createSlackQaTransportAdapter: mocks.createSlackAdapter };
 });
+// mock-isolation: Count lazy WhatsApp adapter loads without booting the real transport.
 vi.mock("./whatsapp/adapter.runtime.js", () => {
   mocks.runtimeLoads.whatsapp += 1;
   return { createWhatsAppQaTransportAdapter: mocks.createWhatsAppAdapter };
