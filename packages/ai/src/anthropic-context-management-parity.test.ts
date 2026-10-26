@@ -16,48 +16,36 @@ const clearingEdit = (trigger = 60_000, clearAtLeast = 12_500, exclude_tools: st
   clear_tool_inputs: false,
 });
 const contextBeta = "context-management-2025-06-27";
+type CaptureOptions = NonNullable<Parameters<typeof capturePaths>[0]>;
+const transportApi = "openclaw-anthropic-messages-transport";
 
 describe("Anthropic server context management parity", () => {
   registerParityHostLifecycle();
 
-  it.each([
-    { name: "default endpoint", model: { baseUrl: undefined }, enabled: true },
-    { name: "OAuth", apiKey: "sk-ant-oat01-synthetic", enabled: false },
-    { name: "Foundry", model: { provider: "microsoft-foundry" }, enabled: false },
-    { name: "environment proxy", env: true, model: { baseUrl: undefined }, enabled: false },
-    {
-      name: "small window without thinking",
-      model: { contextWindow: 100_000 },
-      reasoning: "off" as const,
-      trigger: 50_000,
-      enabled: true,
-    },
-    {
-      name: "transport alias",
-      transportOnly: true,
-      transportApi: "openclaw-anthropic-messages-transport",
-      enabled: true,
-    },
-  ])(
-    "gates tool clearing for $name",
-    async ({ enabled, env, transportOnly, trigger = 60_000, ...options }) => {
-      if (env) {
-        vi.stubEnv("ANTHROPIC_BASE_URL", "https://proxy.example/v1");
+  it.each<[string, CaptureOptions, boolean, number?, ("proxy" | "transport")?]>([
+    ["default endpoint", { model: { baseUrl: undefined } }, true],
+    ["OAuth", { apiKey: "sk-ant-oat01-synthetic" }, false],
+    ["Foundry", { model: { provider: "microsoft-foundry" } }, false],
+    ["environment proxy", { model: { baseUrl: undefined } }, false, 60_000, "proxy"],
+    ["small window", { model: { contextWindow: 100_000 }, reasoning: "off" }, true, 50_000],
+    ["transport alias", { transportApi }, true, 60_000, "transport"],
+  ])("gates tool clearing for %s", async (_name, options, enabled, trigger, mode) => {
+    if (mode === "proxy") {
+      vi.stubEnv("ANTHROPIC_BASE_URL", "https://proxy.example/v1");
+    }
+    for await (const { payload, headers } of capturePaths(
+      { ...options, cacheTtlPruning: {} },
+      mode === "transport",
+    )) {
+      expect(payload.context_management).toEqual(
+        enabled ? { edits: [clearingEdit(trigger ?? 60_000)] } : undefined,
+      );
+      expect(headers.get("anthropic-beta")?.includes(contextBeta) ?? false).toBe(enabled);
+      if (options.reasoning === "off") {
+        expect(headers.get("anthropic-beta") ?? "").not.toContain("thinking-binding-controls");
       }
-      for await (const { payload, headers } of capturePaths(
-        { ...options, cacheTtlPruning: {} },
-        transportOnly,
-      )) {
-        expect(payload.context_management).toEqual(
-          enabled ? { edits: [clearingEdit(trigger)] } : undefined,
-        );
-        expect(headers.get("anthropic-beta")?.includes(contextBeta) ?? false).toBe(enabled);
-        if (options.reasoning === "off") {
-          expect(headers.get("anthropic-beta") ?? "").not.toContain("thinking-binding-controls");
-        }
-      }
-    },
-  );
+    }
+  });
 
   it("derives thresholds, tool exclusions, and clearing-before-compaction order", async () => {
     const tools = context.tools.flatMap((tool) =>

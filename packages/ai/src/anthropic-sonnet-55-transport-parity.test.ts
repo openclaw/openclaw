@@ -1,4 +1,3 @@
-import type { Context } from "@openclaw/llm-core";
 import { describe, expect, it } from "vitest";
 import { capturePaths } from "./anthropic-parity.test-support.js";
 import {
@@ -116,23 +115,22 @@ describe("Anthropic 5.5 transport parity", () => {
     { source: "claude-sonnet-5-5", target: "claude-fable-5-1", preserve: false },
   ])("replays thinking from $source to $target", async ({ source, target, preserve }) => {
     const thinking = "  signed thinking\r\nwith exact whitespace  ";
-    const context: Context = {
-      messages: [
-        userMessage("Start."),
-        assistantMessage(
-          { ...anthropicModel, id: source },
-          [
-            { type: "thinking", thinking, thinkingSignature: "synthetic-signature" },
-            textBlock("Visible answer."),
-          ],
-          { timestamp: 2 },
-        ),
-        userMessage("Continue.", { timestamp: 3 }),
-      ],
-    };
     for await (const { payload } of capturePaths({
       model: { id: target },
-      context,
+      context: {
+        messages: [
+          userMessage("Start."),
+          assistantMessage(
+            { ...anthropicModel, id: source },
+            [
+              { type: "thinking", thinking, thinkingSignature: "synthetic-signature" },
+              textBlock("Visible answer."),
+            ],
+            { timestamp: 2 },
+          ),
+          userMessage("Continue.", { timestamp: 3 }),
+        ],
+      },
     })) {
       expect(payload.messages).toMatchObject([
         { role: "user" },
