@@ -100,26 +100,7 @@ describe("NodeHostWorkerBridgeClient", () => {
 });
 
 it("preserves the signal exit code when closing stdin emits EOF", async () => {
-  const calls: string[] = [];
-  let stopping = false;
-  const stop = async (exitCode: number) => {
-    if (stopping) {
-      return;
-    }
-    stopping = true;
-    calls.push(`stop:${exitCode}`);
-  };
-
-  await stopNodeHostWorkerFromSignal(
-    {
-      close: () => {
-        calls.push("close");
-        void stop(0);
-      },
-    },
-    stop,
-    143,
-  );
-
-  expect(calls).toEqual(["stop:143", "close"]);
+  const stop = vi.fn(async (_exitCode: number) => {});
+  await stopNodeHostWorkerFromSignal({ close: () => void stop(0) }, stop, 143);
+  expect(stop.mock.calls).toEqual([[143], [0]]);
 });

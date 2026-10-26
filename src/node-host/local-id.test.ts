@@ -58,6 +58,12 @@ it("uses the primary device identity, not the default runner UUID or instance ov
   await fs.rm(state.stateDir, { recursive: true });
   expect(loadDeviceIdentityIfPresent({ env: state.env })).toBeNull();
   await expect(resolveLocalNodeId(state.env)).resolves.toBe(identity.deviceId);
+
+  const independent = await createState("local-node-id-independent");
+  const independentIdentity = loadOrCreateDeviceIdentity({ env: independent.env });
+  expect(independentIdentity.deviceId).not.toBe(identity.deviceId);
+  await expect(resolveLocalNodeId(independent.env)).resolves.toBe(independentIdentity.deviceId);
+  await expect(resolveLocalNodeId(state.env)).resolves.toBe(identity.deviceId);
 });
 
 it("does not create credentials on a miss and discovers an identity created later", async () => {
@@ -74,18 +80,6 @@ it("does not create credentials on a miss and discovers an identity created late
 
   const identity = loadOrCreateDeviceIdentity({ env: state.env });
   await expect(resolveLocalNodeId(state.env)).resolves.toBe(identity.deviceId);
-});
-
-it("keeps independently created state-directory identities separate", async () => {
-  const gateway = await createState("local-node-id-gateway");
-  const independent = await createState("local-node-id-independent");
-  const gatewayIdentity = loadOrCreateDeviceIdentity({ env: gateway.env });
-  const independentIdentity = loadOrCreateDeviceIdentity({ env: independent.env });
-  expect(independentIdentity.deviceId).not.toBe(gatewayIdentity.deviceId);
-
-  await expect(resolveLocalNodeId(gateway.env)).resolves.toBe(gatewayIdentity.deviceId);
-  await expect(resolveLocalNodeId(independent.env)).resolves.toBe(independentIdentity.deviceId);
-  await expect(resolveLocalNodeId(gateway.env)).resolves.toBe(gatewayIdentity.deviceId);
 });
 
 it("retries after a failed canonical identity read", async () => {

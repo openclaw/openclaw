@@ -7,8 +7,8 @@ import type { ExecAsk, ExecSecurity } from "../infra/exec-approvals.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
-import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import * as state from "../state/openclaw-state-db.js";
+import { registerCommands } from "./node-host-command.fixture.test-support.js";
 import { invokeRegisteredNodeHostCommand } from "./plugin-node-host.js";
 
 beforeEach(() => {
@@ -37,30 +37,23 @@ async function checkLaunch(
 ) {
   const spawn = vi.fn();
   const controller = new AbortController();
-  const registry = createEmptyPluginRegistry();
-  registry.plugins.push(createPluginRecord({ id: "fixture" }));
-  registry.nodeHostCommands.push({
-    pluginId: "fixture",
-    source: "fixture",
-    command: {
-      command: "fixture.exec",
-      dangerous: true,
-      handle: async (_params, _io, context) => {
-        const assertAuthorized = context!.prepareExecAuthorization!(source);
-        await Promise.resolve();
-        options.prepare?.(controller);
-        const stopObserving = options.observe?.();
-        try {
-          assertAuthorized();
-        } finally {
-          stopObserving?.();
-        }
-        spawn();
-        return "{}";
-      },
+  registerCommands({
+    command: "fixture.exec",
+    dangerous: true,
+    handle: async (_params, _io, context) => {
+      const assertAuthorized = context!.prepareExecAuthorization!(source);
+      await Promise.resolve();
+      options.prepare?.(controller);
+      const stopObserving = options.observe?.();
+      try {
+        assertAuthorized();
+      } finally {
+        stopObserving?.();
+      }
+      spawn();
+      return "{}";
     },
   });
-  setActivePluginRegistry(registry);
   const result = invokeRegisteredNodeHostCommand("fixture.exec", "{}", undefined, {
     sendNodeEvent: async () => undefined,
     sessionKey: "agent:main:session",
@@ -122,18 +115,9 @@ it.each([
   }
 });
 
-it.each(["cancel", "plugin-replaced"] as const)(
-  "refuses %s during awaited setup",
-  async (reason) => {
-    await checkLaunch("session-full", {
-      prepare: (controller) => {
-        if (reason === "cancel") {
-          controller.abort();
-        } else {
-          setActivePluginRegistry(createEmptyPluginRegistry());
-        }
-      },
-      rejection: "authority is closed",
-    });
-  },
-);
+it.each([
+  ["cancel", (controller: AbortController) => controller.abort()],
+  ["plugin-replaced", () => setActivePluginRegistry(createEmptyPluginRegistry())],
+] as const)("refuses %s during awaited setup", async (_reason, prepare) => {
+  await checkLaunch("session-full", { prepare, rejection: "authority is closed" });
+});
