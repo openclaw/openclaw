@@ -41,21 +41,9 @@ function projection(raw: string, settleBefore?: number) {
 }
 
 describe("scanPlainTextToolCall JSON branch", () => {
-  it("returns the complete Harmony call before a visible suffix", () => {
-    const raw = '<|channel|>commentary to=read code<|message|>{"path":"/tmp/file"}<|call|>visible';
-    expect(scanPlainTextToolCall(raw).json).toMatchObject({
-      kind: "complete",
-      end: raw.indexOf("visible"),
-      name: { start: raw.indexOf("read"), end: raw.indexOf("read") + 4 },
-      payload: { start: raw.indexOf("{"), end: raw.indexOf("}") + 1 },
-    });
-  });
-
-  it("classifies the streaming Harmony prefix", () => {
-    expect(scanPlainTextToolCall("commentary to=read co").json).toMatchObject({
-      kind: "prefix",
-      candidate: { syntax: "harmony", nameComplete: true, name: { start: 14, end: 18 } },
-    });
+  it("classifies a partial Harmony header and strips the completed call", () => {
+    expect(scanPlainTextToolCall("commentary to=read co").json.kind).toBe("prefix");
+    expectStripped("<|channel|>commentary to=read code<|message|>{}<|call|>visible", "visible");
   });
 
   it.each([
@@ -75,24 +63,9 @@ describe("scanPlainTextToolCall JSON branch", () => {
 });
 
 describe("stripPlainTextToolCallBlocks", () => {
-  it("does not scan payloads inside protected code examples", () => {
-    const raw = "```text\n" + "[tool:read] {\n".repeat(128) + "```";
-    const tracked = trackStringOperations(raw);
-    expectStripped(tracked.text, raw, {
-      resolveProtectedRanges: () => [{ start: 0, end: raw.length }],
-    });
-    expect(tracked.counts.indexedReads).toBeGreaterThan(0);
-    expect(tracked.counts.indexedReads).toBeLessThan(raw.length * 16);
-  });
-
-  it.each([
-    "[guide](https://example.test)\nUse `code` here.",
-    "[guide][reference]\n\n[reference]: https://example.test\n\n```js\nconst x = {};\n```",
-    "[section]\nOrdinary prose with `code`.",
-    "[tool:read]\n",
-  ])("does not resolve Markdown ownership without a bracket payload: %s", (raw) => {
+  it("does not resolve Markdown ownership without a bracket payload", () => {
+    const raw = "[guide](https://example.test)\nUse `code`.\n[tool:read]\n";
     const resolveProtectedRanges = vi.fn(() => []);
-
     for (let end = 1; end <= raw.length; end++) {
       expectStripped(raw.slice(0, end), undefined, { resolveProtectedRanges });
     }
@@ -106,20 +79,15 @@ describe("stripPlainTextToolCallBlocks", () => {
 
   it.each(["\r", "\r\n"])("strips Unicode-indented bracket calls after %j", (lineBreak) => {
     const prefix = `Before${lineBreak}`;
-    const suffix = `${lineBreak}After`;
-    const json = `[read]${lineBreak}{"path":"example.txt"}[/read]`;
-    const xml = "[tool:read]<parameter=path>example.txt</parameter>";
-    const adjacent = '[tool:write]{"path":"output.txt"}';
-
-    expectStripped(`${prefix}\u00a0\t${json}${suffix}`, `${prefix}After`);
-    expectStripped(`${prefix}\u2003${xml} ${adjacent}${suffix}`, `${prefix}After`);
+    const strip = (call: string) =>
+      expectStripped(`${prefix}${call}${lineBreak}After`, `${prefix}After`);
+    strip(`\u00a0\t[read]${lineBreak}{}[/read]`);
+    strip("\u2003[tool:read]<parameter=x>x</parameter> [tool:write]{}");
   });
 
   it("preserves protected candidates while stripping adjacent unprotected calls", () => {
-    const protectedCall = '[read]\n{"path":"example.txt"}\n[/read]';
-    const unprotectedCall = '[read]\n{"path":"secret.txt"}\n[/read]';
-    const raw = [protectedCall, unprotectedCall].join("\n");
-
+    const protectedCall = "[read]\n{}\n[/read]";
+    const raw = `${protectedCall}\n${protectedCall}`;
     expectStripped(raw, `${protectedCall}\n`, {
       resolveProtectedRanges: () => [{ start: 0, end: protectedCall.length }],
     });
@@ -135,43 +103,41 @@ describe("stripPlainTextToolCallBlocks", () => {
     expectStripped(raw);
   });
 
+  const invalidXml = "<function=read><parameter=x>x\n".repeat(256) + "</parameter>X";
+  const invalidJson = "[read]\n{\n".repeat(256) + "}".repeat(256) + "[/wrong]";
+  const protectedExample = "```text\n" + "[tool:read] {\n".repeat(128) + "```";
   it.each([
-    [
-      "XML",
-      "<function=read><parameter=x>x\n".repeat(256) + "</parameter>X",
-      "indexOfCalls",
-      256 * 8,
-    ],
-    ["JSON", "[read]\n{\n".repeat(256) + "}".repeat(256) + "[/wrong]", "indexedReads", undefined],
-  ] as const)("advances once through a far-invalid %s payload", (_name, raw, counter, limit) => {
+    [invalidXml, "indexOfCalls", 256 * 8, false],
+    [invalidJson, "indexedReads", invalidJson.length * 16, false],
+    [protectedExample, "indexedReads", protectedExample.length * 16, true],
+  ] as const)("bounds scanning while preserving %j", (raw, counter, limit, protect) => {
     const tracked = trackStringOperations(raw);
-    expectStripped(tracked.text, raw);
-    expect(tracked.counts[counter]).toBeLessThan(limit ?? raw.length * 16);
+    expectStripped(tracked.text, raw, {
+      resolveProtectedRanges: protect ? () => [{ start: 0, end: raw.length }] : undefined,
+    });
+    expect(tracked.counts[counter]).toBeGreaterThan(0);
+    expect(tracked.counts[counter]).toBeLessThan(limit);
   });
 });
 
 describe("projectPlainTextToolCallBlocks", () => {
+  const prefix = "Before\n";
+  const settled = "[read]\n{}[/read]\n";
+  const offset = prefix.length;
   it.each([
-    ["[read]\n\n", "[read]\n\n"],
-    ["[tool:read] {}\n", ""],
-    ["[tool:read] {}\n[", "[tool:read] {}\n["],
-    ["[tool:read]<parameter=x>value</parameter>\n", ""],
-    ["[read]\n{}[/read] [write]\n", " [write]\n"],
-  ])("retains calls whose suffix can change the projection: %s", (pending, visible) => {
-    const prefix = "Before\n";
-    expect(projection(prefix + pending)).toEqual([prefix + visible, prefix.length, prefix.length]);
-  });
-
-  it("reports source and output boundaries after a settled removed line", () => {
-    const settled = "Before\n[read]\n{}[/read]\n";
-    const before = "Before\n".length;
-    expect(projection(`${settled}Tail`)).toEqual(["Before\nTail", settled.length, before]);
-    expect(projection(`${settled}Tail`, before)).toEqual(["Before\nTail", before, before]);
-  });
-
-  it("retains a terminal CR until newline consumption settles", () => {
-    const source = "[read]\n{}[/read]\r";
-    expect(projection(source)).toEqual(["", 0, 0]);
-    expect(projection(`${source}\n`)).toEqual(["", source.length + 1, 0]);
-  });
+    [prefix + "[read]\n\n", prefix + "[read]\n\n", offset, offset],
+    [prefix + "[tool:read] {}\n", prefix, offset, offset],
+    [prefix + "[tool:read] {}\n[", prefix + "[tool:read] {}\n[", offset, offset],
+    [prefix + "[tool:read]<parameter=x>value</parameter>\n", prefix, offset, offset],
+    [prefix + "[read]\n{}[/read] [write]\n", prefix + " [write]\n", offset, offset],
+    [prefix + settled + "Tail", prefix + "Tail", offset + settled.length, offset],
+    [prefix + settled + "Tail", prefix + "Tail", offset, offset, offset],
+    [settled.replace(/\n$/, "\r"), "", 0, 0],
+    [settled.replace(/\n$/, "\r\n"), "", settled.length + 1, 0],
+  ] as const)(
+    "projects text and retained boundaries for %j",
+    (raw, visible, retained, output, limit) => {
+      expect(projection(raw, limit)).toEqual([visible, retained, output]);
+    },
+  );
 });

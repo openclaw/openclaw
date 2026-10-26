@@ -1,8 +1,9 @@
 import { expect } from "vitest";
+import { findMarkdownCodeRegions as resolveTestFenceRanges } from "../../markdown-core/src/reasoning-tags.js";
 import { parseStandalonePlainTextToolCallBlocks } from "./payload.js";
 import {
   normalizePlainTextToolCallStreamEvents,
-  projectScrubbedPlainTextToolCallMessage,
+  projectScrubbedPlainTextToolCallMessage as scrubMessage,
   type PlainTextToolCallNameMatcher,
 } from "./stream-normalizer.js";
 
@@ -17,18 +18,7 @@ type Events = Event[];
 type Stream = readonly Event[];
 type NormalizeOptions = Parameters<typeof normalizePlainTextToolCallStreamEvents>[1];
 
-export function resolveTestFenceRanges(text: string): Array<{ end: number; start: number }> {
-  const ranges: Array<{ end: number; start: number }> = [];
-  const fences = /```|~~~/g;
-  for (let match = fences.exec(text); match; match = fences.exec(text)) {
-    const start = match.index;
-    const close = text.indexOf(match[0], start + 3);
-    const end = close === -1 ? text.length : close + 3;
-    ranges.push({ start, end });
-    fences.lastIndex = end;
-  }
-  return ranges;
-}
+export { resolveTestFenceRanges };
 
 export function parseSplitCall(parts: readonly string[]) {
   let offset = 0;
@@ -89,13 +79,8 @@ export async function normalize(
   return collectNormalizedEvents(events, {
     matcher,
     createPromotedToolCallEvents: () => [],
-    normalizeTerminalMessage: ({ message, preserveEmptyTextBlocks }) => {
-      const scrubbed = projectScrubbedPlainTextToolCallMessage({
-        matcher,
-        message,
-        preserveEmptyTextBlocks,
-        resolveProtectedRanges,
-      });
+    normalizeTerminalMessage: (params) => {
+      const scrubbed = scrubMessage({ ...params, matcher, resolveProtectedRanges });
       return scrubbed ? { kind: "scrubbed", ...scrubbed } : undefined;
     },
     // Custom resolvers must explicitly opt into the carried fence scan.
