@@ -327,7 +327,7 @@ describe("agents skills panel (browser)", () => {
     },
   );
 
-  it("shows matches from default-collapsed groups while filtering", async () => {
+  it("retains filtered controls and shows matches from default-collapsed groups", async () => {
     const view = mountSkills([
       createSkill({ name: "Unique Built In Match", source: "openclaw-bundled", bundled: true }),
       createSkill({ name: "Installed Distractor", source: "openclaw-managed" }),
@@ -336,14 +336,32 @@ describe("agents skills panel (browser)", () => {
     await waitForSolid(() =>
       expect(container.querySelector<HTMLDetailsElement>(".agent-skills-group")?.open).toBe(false),
     );
+    const rows = view.rows();
 
     view.update({ ...params, filter: "Unique Built In Match" });
     await waitForSolid(() => expect(container.textContent).toContain("1 shown"));
-    const filteredGroup = container.querySelector<HTMLDetailsElement>(".agent-skills-group");
+    const filteredGroup = container.querySelector<HTMLDetailsElement>(
+      ".agent-skills-group:not([hidden])",
+    );
     expect(filteredGroup?.open).toBe(true);
     expect(filteredGroup?.querySelector(".agent-skill-row")?.textContent).toContain(
       "Unique Built In Match",
     );
+    expect(container.querySelectorAll(".agent-skill-row:not([hidden])")).toHaveLength(1);
+    view.expectRows(rows);
+
+    view.update({ ...params, filter: "No matching skill" });
+    await waitForSolid(() => expect(container.textContent).toContain("0 shown"));
+    expect(container.querySelectorAll(".agent-skills-group:not([hidden])")).toHaveLength(0);
+    expect(container.querySelector<HTMLElement>(".agent-skills-groups")?.hidden).toBe(true);
+    view.expectRows(rows);
+
+    view.update({ ...params, filter: "" });
+    await waitForSolid(() =>
+      expect(container.querySelectorAll(".agent-skill-row:not([hidden])")).toHaveLength(2),
+    );
+    expect(container.querySelector<HTMLElement>(".agent-skills-groups")?.hidden).toBe(false);
+    view.expectRows(rows);
   });
 
   it("retires optimistic reset presentation when the selected agent changes", async () => {

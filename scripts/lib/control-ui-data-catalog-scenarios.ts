@@ -690,12 +690,12 @@ export const dataCatalogScenarios: readonly InteractionScenario[] = [
     ...fixture,
     id: "data-agent-skills-filter",
     route: pathForAgentPanel("main", "skills"),
-    expected: "Filtering 1,000 skills retains only Data skill 0999.",
+    expected: "Filtering 1,000 skills shows only Data skill 0999.",
     rowSelector: ".agent-skill-row",
     prepare: async (page) => countRows(page, ".agent-skill-row", inventorySize),
     run: async (page) => {
       await page.locator('input[name="agent-skills-filter"]').pressSequentially(skillQuery);
-      await countRows(page, ".agent-skill-row", 1);
+      await countRows(page, ".agent-skill-row:not([hidden])", 1);
       await page
         .locator(".agent-skill-row .settings-row__title")
         .getByText(skillQuery, { exact: true })
