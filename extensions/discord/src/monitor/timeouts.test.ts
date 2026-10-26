@@ -36,21 +36,16 @@ describe("discord monitor timeouts", () => {
   });
 
   it("preserves legacy timeout normalization semantics", () => {
-    expect(normalizeDiscordListenerTimeoutMs(undefined)).toBe(DISCORD_DEFAULT_LISTENER_TIMEOUT_MS);
-    expect(normalizeDiscordListenerTimeoutMs(0)).toBe(DISCORD_DEFAULT_LISTENER_TIMEOUT_MS);
-    expect(normalizeDiscordListenerTimeoutMs(250)).toBe(1_000);
-    expect(normalizeDiscordListenerTimeoutMs(Number.MAX_SAFE_INTEGER)).toBe(MAX_TIMER_TIMEOUT_MS);
-
-    expect(normalizeDiscordInboundWorkerTimeoutMs(undefined)).toBe(
-      DISCORD_DEFAULT_INBOUND_WORKER_TIMEOUT_MS,
-    );
-    expect(normalizeDiscordInboundWorkerTimeoutMs(0)).toBeUndefined();
-    expect(normalizeDiscordInboundWorkerTimeoutMs(-1)).toBe(
-      DISCORD_DEFAULT_INBOUND_WORKER_TIMEOUT_MS,
-    );
-    expect(normalizeDiscordInboundWorkerTimeoutMs(Number.MAX_SAFE_INTEGER)).toBe(
-      MAX_TIMER_TIMEOUT_MS,
-    );
+    for (const [input, listener, worker] of [
+      [undefined, DISCORD_DEFAULT_LISTENER_TIMEOUT_MS, DISCORD_DEFAULT_INBOUND_WORKER_TIMEOUT_MS],
+      [0, DISCORD_DEFAULT_LISTENER_TIMEOUT_MS, undefined],
+      [250, 1_000, 250],
+      [-1, DISCORD_DEFAULT_LISTENER_TIMEOUT_MS, DISCORD_DEFAULT_INBOUND_WORKER_TIMEOUT_MS],
+      [Number.MAX_SAFE_INTEGER, MAX_TIMER_TIMEOUT_MS, MAX_TIMER_TIMEOUT_MS],
+    ]) {
+      expect(normalizeDiscordListenerTimeoutMs(input)).toBe(listener);
+      expect(normalizeDiscordInboundWorkerTimeoutMs(input)).toBe(worker);
+    }
   });
 
   it("identifies abort errors for deprecated timeout compatibility callers", () => {
