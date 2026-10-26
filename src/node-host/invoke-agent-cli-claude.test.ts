@@ -41,6 +41,12 @@ function progressText(calls: Calls) {
     .join("");
 }
 
+function invocationResult(calls: Calls) {
+  return calls.find((call) => call.method === "node.invoke.result")?.params as
+    | { ok?: boolean; payloadJSON?: string; error?: { code?: string; message?: string } }
+    | undefined;
+}
+
 function decode(params: Record<string, unknown>) {
   return decodeClaudeCliNodeRunParams(
     JSON.stringify({ idleTimeoutMs: 1_000, timeoutMs: 2_000, ...params }),
@@ -247,9 +253,7 @@ describe("Claude CLI node command", () => {
         }
       });
 
-      const reply = calls.find((call) => call.method === "node.invoke.result")?.params as
-        | { ok?: boolean; error?: { code?: string; message?: string } }
-        | undefined;
+      const reply = invocationResult(calls);
       const progress = progressText(calls);
       expect(staged).toBe(1);
       expect(existsSync(marker)).toBe(!revoke);
@@ -310,12 +314,9 @@ describe("Claude CLI node command", () => {
     await invokeClaude({ argv: ["-p"], idleTimeoutMs: 1_000, timeoutMs: 2_000 }, undefined, calls);
 
     expect(handleSystemRun).not.toHaveBeenCalled();
-    expect(calls).toContainEqual({
-      method: "node.invoke.result",
-      params: expect.objectContaining({
-        ok: false,
-        error: expect.objectContaining({ message: "Claude CLI agent runs are unavailable" }),
-      }),
+    expect(invocationResult(calls)).toMatchObject({
+      ok: false,
+      error: { message: "Claude CLI agent runs are unavailable" },
     });
   });
 
@@ -364,12 +365,9 @@ describe("Claude CLI node command", () => {
 
       expect(calls.some((call) => call.method === "node.event")).toBe(false);
       expect(JSON.stringify(calls)).not.toContain("private prompt");
-      const response = calls.find((call) => call.method === "node.invoke.result")?.params as {
-        ok?: boolean;
-        payloadJSON?: string;
-      };
-      expect(response.ok).toBe(true);
-      expect(JSON.parse(response.payloadJSON ?? "{}")).toMatchObject({
+      const response = invocationResult(calls);
+      expect(response?.ok).toBe(true);
+      expect(JSON.parse(response?.payloadJSON ?? "{}")).toMatchObject({
         approvalRequired: true,
         security,
         ask,
@@ -424,12 +422,9 @@ process.stdout.write(JSON.stringify({
         scrubPresent: false,
         gitInstructionsDisabled: "1",
       });
-      expect(calls).toContainEqual({
-        method: "node.invoke.result",
-        params: expect.objectContaining({
-          ok: true,
-          payloadJSON: expect.stringContaining('"exitCode":0'),
-        }),
+      expect(invocationResult(calls)).toMatchObject({
+        ok: true,
+        payloadJSON: expect.stringContaining('"exitCode":0'),
       });
     },
   );
@@ -464,9 +459,7 @@ process.stdout.write(JSON.stringify({
           },
         },
       );
-      expect(calls.find((call) => call.method === "node.invoke.result")).toMatchObject({
-        params: { ok: true },
-      });
+      expect(invocationResult(calls)).toMatchObject({ ok: true });
       expect(JSON.parse(progressText(calls))).toEqual({
         type: "result",
         ...(nativeAuthOnly
@@ -555,12 +548,10 @@ process.stdin.on("end", () => {
         await expect(fs.readFile(result.stderr, "utf8")).resolves.toBe("descendant-owned prompt");
         expect(warning).toHaveBeenCalledWith(expect.stringContaining(reason));
       } finally {
-        try {
-          await spawning.close();
-        } finally {
+        await spawning.close().finally(() => {
           warning.mockRestore();
           removal.mockRestore();
-        }
+        });
       }
     },
   );
@@ -671,11 +662,7 @@ process.stdout.write(JSON.stringify({ type: "result", result: prompt }) + "\\n")
             try {
               receipts.release(marker, "read");
             } finally {
-              try {
-                await spawning.close();
-              } finally {
-                removal.mockRestore();
-              }
+              await spawning.close().finally(() => removal.mockRestore());
             }
           }
         });
