@@ -16,62 +16,31 @@ const REPO_ROOT = path.resolve(import.meta.dirname, "../../..");
 const EXTENSION_RUNTIME_FILE_EXTENSIONS = new Set([".cjs", ".js", ".jsx", ".mjs", ".ts", ".tsx"]);
 const BUILTIN_MODULES = new Set(builtinModules.map((moduleId) => moduleId.replace(/^node:/, "")));
 const OPTIONAL_UNDECLARED_RUNTIME_IMPORTS = new Map<string, Set<string>>([
-  [
-    "extensions/discord",
-    // @discordjs/voice still probes the native addon in its dependency report path.
-    new Set(["@discordjs/opus"]),
-  ],
+  // @discordjs/voice still probes the native addon in its dependency report path.
+  ["extensions/discord", new Set(["@discordjs/opus"])],
   ["extensions/qa-lab", new Set(["crabline"])],
 ]);
 const INDIRECT_RUNTIME_DEPENDENCIES = new Map<string, Set<string>>([
-  [
-    "extensions/browser",
-    // The MCP SDK loads zod through its server/zod-compat runtime path.
-    new Set(["zod"]),
-  ],
-  [
-    "extensions/whatsapp",
-    // Baileys loads this optional peer for audio decoding.
-    new Set(["audio-decode"]),
-  ],
-  [
-    "extensions/memory-lancedb",
-    // LanceDB imports apache-arrow at runtime through its peer dependency.
-    new Set(["apache-arrow"]),
-  ],
-  [
-    "extensions/memory-core",
-    // Packaged memory tools run through generated OpenClaw runtime chunks that parse JSON5 config.
-    new Set(["json5"]),
-  ],
-  [
-    "extensions/openai",
-    // Werift loads the packaged binary codec through its runtime dependency graph.
-    new Set(["@shinyoshiaki/binary-data"]),
-  ],
-  [
-    "extensions/slack",
-    // Bolt loads Socket Mode, whose Undici 7 peer must be provided by the plugin package.
-    new Set(["undici"]),
-  ],
-  [
-    "extensions/tlon",
-    // The Tlon plugin manifest exposes the bundled skill from this package path.
-    new Set(["@tloncorp/tlon-skill"]),
-  ],
+  // MCP's server/zod-compat runtime path.
+  ["extensions/browser", new Set(["zod"])],
+  // Baileys' optional audio decoder peer.
+  ["extensions/whatsapp", new Set(["audio-decode"])],
+  // LanceDB's runtime peer.
+  ["extensions/memory-lancedb", new Set(["apache-arrow"])],
+  // Generated memory runtime chunks parse JSON5 config.
+  ["extensions/memory-core", new Set(["json5"])],
+  // Werift's packaged binary codec.
+  ["extensions/openai", new Set(["@shinyoshiaki/binary-data"])],
+  // Bolt's Socket Mode requires its Undici 7 peer in the plugin package.
+  ["extensions/slack", new Set(["undici"])],
+  // Bundled skill exposed by the Tlon manifest.
+  ["extensions/tlon", new Set(["@tloncorp/tlon-skill"])],
 ]);
 const COMPUTED_RUNTIME_DEPENDENCIES = new Map<string, Set<string>>([
-  [
-    "extensions/discord",
-    // Bundled at build time into the served Discord Activity shell asset rather than
-    // imported by plugin runtime code; see scripts/build-discord-activity-sdk.mts.
-    new Set(["@discord/embedded-app-sdk"]),
-  ],
-  [
-    "extensions/lobster",
-    // Keep Lobster external to the plugin bundle; its computed core import is resolved at runtime.
-    new Set(["@clawdbot/lobster"]),
-  ],
+  // Built into the Activity shell by scripts/build-discord-activity-sdk.mts.
+  ["extensions/discord", new Set(["@discord/embedded-app-sdk"])],
+  // External to the bundle: the computed core import resolves at runtime.
+  ["extensions/lobster", new Set(["@clawdbot/lobster"])],
 ]);
 
 type PackageManifest = {
@@ -85,51 +54,22 @@ type PackageManifest = {
     };
   };
 };
-const trackedFilesByRoot = new Map<string, readonly string[] | null>();
 
 function readPackageManifest(filePath: string): PackageManifest {
   return JSON.parse(fs.readFileSync(path.resolve(REPO_ROOT, filePath), "utf8")) as PackageManifest;
 }
 
-function listTrackedFiles(root: string): string[] | null {
+function listTrackedFiles(root: string): string[] {
   const relativeRoot = toRepoRelativePath(REPO_ROOT, path.resolve(REPO_ROOT, root));
-  if (!relativeRoot || relativeRoot.startsWith("..")) {
-    return null;
-  }
-  if (trackedFilesByRoot.has(relativeRoot)) {
-    const files = trackedFilesByRoot.get(relativeRoot);
-    return files ? [...files] : null;
-  }
   const trackedFiles = listGitTrackedFiles({ repoRoot: REPO_ROOT, pathspecs: relativeRoot });
-  if (!trackedFiles) {
-    trackedFilesByRoot.set(relativeRoot, null);
-    return null;
-  }
-  const files = trackedFiles.toSorted();
-  trackedFilesByRoot.set(relativeRoot, files);
-  return [...files];
+  expect(trackedFiles, "dependency scans require a Git checkout").not.toBeNull();
+  return (trackedFiles ?? []).toSorted();
 }
 
 function listPackageManifests(root: string): string[] {
-  const trackedFiles = listTrackedFiles(root);
-  if (trackedFiles) {
-    return trackedFiles
-      .filter((filePath) => /^extensions\/[^/]+\/package\.json$/u.test(filePath))
-      .toSorted();
-  }
-
-  const entries = fs.readdirSync(root, { withFileTypes: true });
-  const manifests: string[] = [];
-  for (const entry of entries) {
-    if (!entry.isDirectory()) {
-      continue;
-    }
-    const manifestPath = path.join(root, entry.name, "package.json");
-    if (fs.existsSync(manifestPath)) {
-      manifests.push(manifestPath);
-    }
-  }
-  return manifests.toSorted();
+  return listTrackedFiles(root).filter((filePath) =>
+    /^extensions\/[^/]+\/package\.json$/u.test(filePath),
+  );
 }
 
 function shouldSkipRuntimeFile(filePath: string): boolean {
@@ -166,40 +106,16 @@ function listRuntimeFiles(root: string): string[] {
       ? [filePath]
       : [];
   });
-  const trackedFiles = listTrackedFiles(root);
-  if (trackedFiles) {
-    return [
-      ...new Set([
-        ...trackedFiles.filter(
-          (filePath) =>
-            EXTENSION_RUNTIME_FILE_EXTENSIONS.has(path.extname(filePath)) &&
-            !shouldSkipRuntimeFile(filePath),
-        ),
-        ...staticAssetSources,
-      ]),
-    ].toSorted();
-  }
-
-  const files: string[] = [];
-  const visit = (dir: string) => {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      const filePath = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        if (!shouldSkipRuntimeFile(filePath)) {
-          visit(filePath);
-        }
-        continue;
-      }
-      if (
-        EXTENSION_RUNTIME_FILE_EXTENSIONS.has(path.extname(entry.name)) &&
-        !shouldSkipRuntimeFile(filePath)
-      ) {
-        files.push(filePath);
-      }
-    }
-  };
-  visit(root);
-  return [...new Set([...files, ...staticAssetSources])].toSorted();
+  return [
+    ...new Set([
+      ...listTrackedFiles(root).filter(
+        (filePath) =>
+          EXTENSION_RUNTIME_FILE_EXTENSIONS.has(path.extname(filePath)) &&
+          !shouldSkipRuntimeFile(filePath),
+      ),
+      ...staticAssetSources,
+    ]),
+  ].toSorted();
 }
 
 function readManifestText(root: string): string {

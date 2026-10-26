@@ -4,7 +4,7 @@ import { posix, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { privateLocalOnlyPluginSdkEntrypoints } from "../../../scripts/lib/plugin-sdk-entries.mts";
 import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
-import { listGitTrackedFiles, toRepoRelativePath } from "../../test-utils/repo-files.js";
+import { listGitTrackedFiles } from "../../test-utils/repo-files.js";
 
 const REPO_ROOT = resolve(import.meta.dirname, "../../..");
 const EXTENSION_PACKAGE_BOUNDARY_PATHS_CONFIG =
@@ -35,7 +35,6 @@ const XAI_OMITTED_BOUNDARY_PATHS = {
     "../.artifacts/extension-package-boundary/plugins/whatsapp/api.d.ts",
   ],
 } as const;
-const trackedCodeFilesByRoot = new Map<string, readonly string[] | null>();
 
 type TsConfigJson = {
   extends?: unknown;
@@ -58,38 +57,23 @@ type PackageJson = {
   exports?: Record<string, { types?: unknown; default?: unknown }>;
   devDependencies?: Record<string, string>;
 };
-const MEMORY_HOST_SDK_EXPORTS = [
-  "./engine-embeddings",
-  "./engine-foundation",
-  "./engine-sessions",
-  "./engine-storage",
-  "./multimodal",
-  "./query",
-  "./runtime-core",
-  "./runtime-files",
-  "./secret",
-  "./status",
-] as const;
+const MEMORY_HOST_SDK_EXPORTS = (
+  "engine-embeddings engine-foundation engine-sessions engine-storage multimodal query " +
+  "runtime-core runtime-files secret status"
+)
+  .split(" ")
+  .map((name) => `./${name}`);
 const MEMORY_HOST_SDK_ALLOWED_CORE_BRIDGE_FILES = [
-  // Type-only alias to the canonical embedding provider contract.
-  "packages/memory-host-sdk/src/host/embeddings.types.ts",
-  "packages/memory-host-sdk/src/host/error-utils.ts",
-  "packages/memory-host-sdk/src/host/openclaw-runtime-agent.ts",
-  "packages/memory-host-sdk/src/host/openclaw-runtime-auth.ts",
-  "packages/memory-host-sdk/src/host/openclaw-runtime-config.ts",
-  "packages/memory-host-sdk/src/host/openclaw-runtime-io.ts",
-  "packages/memory-host-sdk/src/host/openclaw-runtime-kysely.ts",
-  "packages/memory-host-sdk/src/host/openclaw-runtime-memory.ts",
-  "packages/memory-host-sdk/src/host/openclaw-runtime-network.ts",
-  "packages/memory-host-sdk/src/host/openclaw-runtime-paths.ts",
-  "packages/memory-host-sdk/src/host/openclaw-runtime-session.ts",
-  "packages/memory-host-sdk/src/host/openclaw-runtime-sqlite.ts",
-  "packages/memory-host-sdk/src/host/openclaw-runtime-workspace.ts",
-  // Standalone transcript readers import their narrow core read owners directly.
-  "packages/memory-host-sdk/src/host/session-entry-render.ts",
-  "packages/memory-host-sdk/src/host/session-reset-recall-read.worker.ts",
-  "packages/memory-host-sdk/src/host/session-transcript-corpus.worker.ts",
-] as const;
+  "embeddings.types",
+  "error-utils",
+  ..."agent auth config io kysely memory network paths session sqlite workspace"
+    .split(" ")
+    .map((name) => `openclaw-runtime-${name}`),
+  // Standalone transcript readers use narrow core read owners.
+  "session-entry-render",
+  "session-reset-recall-read.worker",
+  "session-transcript-corpus.worker",
+].map((name) => `packages/memory-host-sdk/src/host/${name}.ts`);
 
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper lets assertions ascribe JSON file shape.
 function readJsonFile<T>(relativePath: string): T {
@@ -119,43 +103,13 @@ function collectExtensionsWithTsconfig(): string[] {
     .toSorted();
 }
 
-function listTrackedCodeFiles(relativeDir: string): string[] | null {
-  if (trackedCodeFilesByRoot.has(relativeDir)) {
-    const files = trackedCodeFilesByRoot.get(relativeDir);
-    return files ? [...files] : null;
-  }
+function collectCodeFiles(relativeDir: string): string[] {
   const trackedFiles = listGitTrackedFiles({ repoRoot: REPO_ROOT, pathspecs: relativeDir });
-  if (!trackedFiles) {
-    trackedCodeFilesByRoot.set(relativeDir, null);
-    return null;
-  }
-  const files = trackedFiles
+  expect(trackedFiles, "package boundary scans require a Git checkout").not.toBeNull();
+  return (trackedFiles ?? [])
     .filter((line) => line.length > 0 && /\.(?:[cm]?ts|tsx|mts|cts)$/u.test(line))
     .filter((line) => fs.existsSync(resolve(REPO_ROOT, line)))
     .toSorted();
-  trackedCodeFilesByRoot.set(relativeDir, files);
-  return [...files];
-}
-
-function collectCodeFiles(relativeDir: string): string[] {
-  const trackedFiles = listTrackedCodeFiles(relativeDir);
-  if (trackedFiles) {
-    return trackedFiles;
-  }
-
-  const dir = resolve(REPO_ROOT, relativeDir);
-  const files: string[] = [];
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    const nextPath = resolve(dir, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...collectCodeFiles(toRepoRelativePath(REPO_ROOT, nextPath)));
-      continue;
-    }
-    if (entry.isFile() && /\.(?:[cm]?ts|tsx|mts|cts)$/u.test(entry.name)) {
-      files.push(toRepoRelativePath(REPO_ROOT, nextPath));
-    }
-  }
-  return files.toSorted();
 }
 
 function collectCoreReferenceFiles(relativeDir: string): string[] {
@@ -306,81 +260,32 @@ describe("opt-in extension package boundaries", () => {
 
   it("keeps plugin-sdk package types generated from the package build, not a hand-maintained types bridge", () => {
     const tsconfig = readJsonFile<TsConfigJson>("packages/plugin-sdk/tsconfig.json");
-    expect(tsconfig.extends).toBe("../../tsconfig.json");
-    expect(tsconfig.compilerOptions?.declaration).toBe(true);
-    expect(tsconfig.compilerOptions?.emitDeclarationOnly).toBe(true);
-    expect(tsconfig.compilerOptions?.outDir).toBe("dist");
-    expect(tsconfig.compilerOptions?.rootDir).toBe("../..");
+    expect(tsconfig).toMatchObject({
+      extends: "../../tsconfig.json",
+      compilerOptions: {
+        declaration: true,
+        emitDeclarationOnly: true,
+        outDir: "dist",
+        rootDir: "../..",
+      },
+    });
     expect(tsconfig.include).toEqual(
       expect.arrayContaining(["../../src/plugin-sdk/**/*.ts", "../../src/types/**/*.d.ts"]),
     );
 
     const packageJson = readJsonFile<PackageJson>("packages/plugin-sdk/package.json");
     expect(packageJson.name).toBe("@openclaw/plugin-sdk");
-    expect(packageJson.exports?.["./account-id"]?.types).toBe(
-      "./dist/src/plugin-sdk/account-id.d.ts",
-    );
-    expect(packageJson.exports?.["./acp-runtime"]?.types).toBe(
-      "./dist/src/plugin-sdk/acp-runtime.d.ts",
-    );
-    expect(packageJson.exports?.["./cli-runtime"]?.types).toBe(
-      "./dist/src/plugin-sdk/cli-runtime.d.ts",
-    );
-    expect(packageJson.exports?.["./core"]?.types).toBe("./dist/src/plugin-sdk/core.d.ts");
-    expect(packageJson.exports?.["./error-runtime"]?.types).toBe(
-      "./dist/src/plugin-sdk/error-runtime.d.ts",
-    );
-    expect(packageJson.exports?.["./exec-approvals-runtime"]?.types).toBe(
-      "./dist/src/plugin-sdk/exec-approvals-runtime.d.ts",
-    );
-    expect(packageJson.exports?.["./plugin-entry"]?.types).toBe(
-      "./dist/src/plugin-sdk/plugin-entry.d.ts",
-    );
-    expect(packageJson.exports?.["./plugin-runtime"]?.types).toBe(
-      "./dist/src/plugin-sdk/plugin-runtime.d.ts",
-    );
-    expect(packageJson.exports?.["./provider-env-vars"]?.types).toBe(
-      "./dist/src/plugin-sdk/provider-env-vars.d.ts",
-    );
-    expect(packageJson.exports?.["./provider-http"]?.types).toBe(
-      "./dist/src/plugin-sdk/provider-http.d.ts",
-    );
-    expect(packageJson.exports?.["./provider-usage"]?.types).toBe(
-      "./dist/src/plugin-sdk/provider-usage.d.ts",
-    );
-    expect(packageJson.exports?.["./provider-web-search-contract"]?.types).toBe(
-      "./dist/src/plugin-sdk/provider-web-search-contract.d.ts",
-    );
-    expect(packageJson.exports?.["./provider-web-search-config-contract"]?.types).toBe(
-      "./dist/src/plugin-sdk/provider-web-search-config-contract.d.ts",
-    );
-    expect(packageJson.exports?.["./runtime-env"]?.types).toBe(
-      "./dist/src/plugin-sdk/runtime-env.d.ts",
-    );
-    expect(packageJson.exports?.["./security-runtime"]?.types).toBe(
-      "./dist/src/plugin-sdk/security-runtime.d.ts",
-    );
-    expect(packageJson.exports?.["./secret-ref-runtime"]?.types).toBe(
-      "./dist/src/plugin-sdk/secret-ref-runtime.d.ts",
-    );
-    expect(packageJson.exports?.["./ssrf-runtime"]?.types).toBe(
-      "./dist/src/plugin-sdk/ssrf-runtime.d.ts",
-    );
-    expect(packageJson.exports?.["./config-contracts"]?.types).toBe(
-      "./dist/src/plugin-sdk/config-contracts.d.ts",
-    );
-    expect(packageJson.exports?.["./text-utility-runtime"]?.types).toBe(
-      "./dist/src/plugin-sdk/text-utility-runtime.d.ts",
-    );
-    expect(packageJson.exports?.["./video-generation"]?.types).toBe(
-      "./dist/src/plugin-sdk/video-generation.d.ts",
-    );
-    expect(packageJson.exports?.["./provider-model-types"]?.types).toBe(
-      "./dist/src/plugin-sdk/provider-model-types.d.ts",
-    );
-    expect(packageJson.exports?.["./system-event-runtime"]?.types).toBe(
-      "./dist/src/plugin-sdk/system-event-runtime.d.ts",
-    );
+    for (const entry of (
+      "account-id acp-runtime cli-runtime core error-runtime exec-approvals-runtime " +
+      "plugin-entry plugin-runtime provider-env-vars provider-http provider-usage " +
+      "provider-web-search-contract provider-web-search-config-contract runtime-env " +
+      "security-runtime secret-ref-runtime ssrf-runtime config-contracts text-utility-runtime " +
+      "video-generation provider-model-types system-event-runtime"
+    ).split(" ")) {
+      expect(packageJson.exports?.[`./${entry}`]?.types, entry).toBe(
+        `./dist/src/plugin-sdk/${entry}.d.ts`,
+      );
+    }
     expect(fs.existsSync(resolve(REPO_ROOT, "packages/plugin-sdk/types/plugin-entry.d.ts"))).toBe(
       false,
     );
@@ -390,10 +295,12 @@ describe("opt-in extension package boundaries", () => {
     const packageJson = readJsonFile<PackageJson>("packages/memory-host-sdk/package.json");
     const packageExports = packageJson.exports as unknown as Record<string, string>;
 
-    expect(packageJson.name).toBe("@openclaw/memory-host-sdk");
-    expect(packageJson.version).toBe("0.0.0-private");
-    expect(packageJson.private).toBe(true);
-    expect(packageJson.type).toBe("module");
+    expect(packageJson).toMatchObject({
+      name: "@openclaw/memory-host-sdk",
+      version: "0.0.0-private",
+      private: true,
+      type: "module",
+    });
     expect(Object.keys(packageExports).toSorted()).toEqual([...MEMORY_HOST_SDK_EXPORTS]);
 
     for (const exportPath of MEMORY_HOST_SDK_EXPORTS) {
