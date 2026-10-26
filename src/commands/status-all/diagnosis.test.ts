@@ -10,17 +10,9 @@ import {
   setupStatusAllReportTest,
 } from "./report-data.test-support.js";
 
-const availableDiagnostics = (value: unknown) => ({ ok: true as const, value });
-const portConflict = "Port 18789 is already in use.";
-const expectedListener = "Detected OpenClaw Gateway listener on the configured port.";
-const noDispatch = "Messages were received, but no gateway dispatch started";
-const noTurn = "Gateway dispatch started, but no agent turn was created";
-const dispatchGap = "Multiple gateway dispatches have not completed yet";
-const logPaths = (logDir: string) => ({
-  logDir,
-  stdoutPath: `${logDir}/gateway.log`,
-  stderrPath: `${logDir}/gateway.err.log`,
-});
+function availableDiagnostics(value: unknown) {
+  return { ok: true as const, value };
+}
 
 describe("statusAllCommand diagnosis", () => {
   setupStatusAllReportTest();
@@ -81,7 +73,8 @@ describe("statusAllCommand diagnosis", () => {
       },
     });
 
-    expectReport(await reportText(), [
+    const output = await reportText();
+    expectReport(output, [
       "Delivery queue: warning",
       "outbound: 2",
       "inbound telegram/ops: 1 pressured lane, 2 pending, 0 claimed, 1 blocked",
@@ -93,14 +86,16 @@ describe("statusAllCommand diagnosis", () => {
       error: "health request timed out",
     });
 
-    expectReport(await reportText(), [
+    const output = await reportText();
+    expectReport(output, [
       "Gateway health:\n  health request timed out",
       "Pasteable debug report. Auth tokens redacted.",
     ]);
   });
 
   it("strips terminal controls from channel issues in the diagnostic report", async () => {
-    const output = await reportText({
+    // Hostile channel runtime data must not reach the operator's Diagnosis line.
+    const lines = await runStatusAllReport({
       overview: {
         channelsStatus: {},
         channelIssues: [
@@ -115,6 +110,7 @@ describe("statusAllCommand diagnosis", () => {
       },
     });
 
+    const output = lines.join("\n");
     expect(output).toContain("Channel issues (1)");
     // stripAnsi keeps BEL (0x07), so its absence proves the sanitizer ran.
     expect(output).not.toContain("\u0007");
@@ -130,20 +126,49 @@ describe("statusAllCommand diagnosis", () => {
     );
   });
 
-  it.each<{
-    name: string;
-    listeners: [number, string][];
-    status: "busy" | "unknown";
-    icon: string;
-    contains: string[];
-    excludes: string[];
-  }>`
-    name                                                        | listeners                                             | status       | icon   | contains                                                                               | excludes
-    ${"same-process dual-stack loopback"}                       | ${[[5001, "127.0.0.1:18789"], [5001, "[::1]:18789"]]} | ${"busy"}    | ${"✓"} | ${["Detected dual-stack loopback listeners"]}                                          | ${[portConflict]}
-    ${"single wildcard Gateway"}                                | ${[[5001, "0.0.0.0:18789"]]}                          | ${"busy"}    | ${"✓"} | ${[expectedListener]}                                                                  | ${[portConflict]}
-    ${"multi-process conflict"}                                 | ${[[5001, "127.0.0.1:18789"], [5002, "[::1]:18789"]]} | ${"busy"}    | ${"!"} | ${["2 OpenClaw gateway processes appear to be listening on port 18789", portConflict]} | ${[]}
-    ${"indeterminate availability despite attributed listener"} | ${[[5001, "127.0.0.1:18789"]]}                        | ${"unknown"} | ${"!"} | ${["Port 18789 availability could not be determined."]}                                | ${["Detected OpenClaw Gateway listener"]}
-  `("diagnoses $name", async ({ listeners, status, icon, contains, excludes }) => {
+  it.each([
+    {
+      name: "same-process dual-stack loopback",
+      listeners: [
+        [5001, "127.0.0.1:18789"],
+        [5001, "[::1]:18789"],
+      ],
+      status: "busy",
+      icon: "✓",
+      contains: ["Detected dual-stack loopback listeners"],
+      excludes: ["Port 18789 is already in use."],
+    },
+    {
+      name: "single wildcard Gateway",
+      listeners: [[5001, "0.0.0.0:18789"]],
+      status: "busy",
+      icon: "✓",
+      contains: ["Detected OpenClaw Gateway listener on the configured port."],
+      excludes: ["Port 18789 is already in use."],
+    },
+    {
+      name: "multi-process conflict",
+      listeners: [
+        [5001, "127.0.0.1:18789"],
+        [5002, "[::1]:18789"],
+      ],
+      status: "busy",
+      icon: "!",
+      contains: [
+        "2 OpenClaw gateway processes appear to be listening on port 18789",
+        "Port 18789 is already in use.",
+      ],
+      excludes: [],
+    },
+    {
+      name: "indeterminate availability despite attributed listener",
+      listeners: [[5001, "127.0.0.1:18789"]],
+      status: "unknown",
+      icon: "!",
+      contains: ["Port 18789 availability could not be determined."],
+      excludes: ["Detected OpenClaw Gateway listener"],
+    },
+  ] as const)("diagnoses $name", async ({ listeners, status, icon, contains, excludes }) => {
     mocks.inspectPortUsage.mockResolvedValueOnce({
       port: 18789,
       status,
@@ -157,30 +182,34 @@ describe("statusAllCommand diagnosis", () => {
     expectReport(await reportText(), [`${icon} Port 18789`, ...contains], excludes);
   });
 
-  it.each<{
-    status: "error" | "skipped";
-    reason: string;
-    headline: string;
-    hint: string;
-  }>`
-    status       | reason                              | headline                                                        | hint
-    ${"error"}   | ${"managed-service-handoff-failed"} | ${"⚠️ OpenClaw update failed: managed-service-handoff-failed."} | ${"Run openclaw triage to diagnose and repair the failed update."}
-    ${"skipped"} | ${"restart-health-pending"}         | ${"⬆️ OpenClaw update in progress: restarting."}                | ${"Check progress with openclaw update status."}
-  `("reports $status update sentinel", async ({ status, reason, headline, hint }) => {
-    mocks.readRestartSentinelReadOnly.mockResolvedValueOnce({
-      payload: {
-        kind: "update",
-        status,
-        ts: Date.now() - 60_000,
-        stats: { mode: "npm", reason, steps: [] },
-      },
-    });
-    expectReport(
-      await reportText(),
-      [`Update restart: ${headline}`, hint],
-      ["run openclaw gateway restart"],
-    );
-  });
+  it.each([
+    {
+      status: "error",
+      reason: "managed-service-handoff-failed",
+      headline: "⚠️ OpenClaw update failed: managed-service-handoff-failed.",
+      hint: "Run openclaw triage to diagnose and repair the failed update.",
+    },
+    {
+      status: "skipped",
+      reason: "restart-health-pending",
+      headline: "⬆️ OpenClaw update in progress: restarting.",
+      hint: "Check progress with openclaw update status.",
+    },
+  ] as const)(
+    "includes the shared update report for $status sentinels",
+    async ({ status, reason, headline, hint }) => {
+      mocks.readRestartSentinelReadOnly.mockResolvedValueOnce({
+        payload: {
+          kind: "update",
+          status,
+          ts: Date.now() - 60_000,
+          stats: { mode: "npm", reason, steps: [] },
+        },
+      });
+      const output = await reportText();
+      expectReport(output, [`Update restart: ${headline}`, hint], ["run openclaw gateway restart"]);
+    },
+  );
 
   it.each([
     { ages: [31 * 60_000, null], active: 0, icon: "!", warning: true },
@@ -204,23 +233,45 @@ describe("statusAllCommand diagnosis", () => {
     expect(output.includes("verify inbound dispatch and turn creation")).toBe(warning);
   });
 
-  it.each<{
-    counts: [number, number, number, number, number];
-    event: string;
-    age: number;
-    icon: string;
-    contains: string[];
-    excludes: string[];
-  }>`
-    counts             | event                         | age        | icon   | contains                      | excludes
-    ${[2, 2, 2, 2, 2]} | ${"session.turn.created"}     | ${60_000}  | ${"✓"} | ${["latest delivery event:"]} | ${[]}
-    ${[1, 0, 0, 0, 1]} | ${"message.processed"}        | ${30_000}  | ${"✓"} | ${[]}                         | ${[noDispatch]}
-    ${[1, 1, 1, 0, 1]} | ${"message.processed"}        | ${30_000}  | ${"✓"} | ${[]}                         | ${[noTurn]}
-    ${[3, 3, 1, 0, 1]} | ${"message.dispatch.started"} | ${120_000} | ${"!"} | ${[noTurn, dispatchGap]}      | ${[]}
-  `(
-    "reports delivery counters $counts",
-    async ({ counts, event, age, icon, contains, excludes }) => {
-      const [received, started, completed, turns, processed] = counts;
+  it.each([
+    [[2, 2, 2, 2, 2], "session.turn.created", 60_000, "✓", ["latest delivery event:"], []],
+    [
+      [1, 0, 0, 0, 1],
+      "message.processed",
+      30_000,
+      "✓",
+      [],
+      ["Messages were received, but no gateway dispatch started"],
+    ],
+    [
+      [1, 1, 1, 0, 1],
+      "message.processed",
+      30_000,
+      "✓",
+      [],
+      ["Gateway dispatch started, but no agent turn was created"],
+    ],
+    [
+      [3, 3, 1, 0, 1],
+      "message.dispatch.started",
+      120_000,
+      "!",
+      [
+        "Gateway dispatch started, but no agent turn was created",
+        "Multiple gateway dispatches have not completed yet",
+      ],
+      [],
+    ],
+  ] as const)(
+    "reports delivery counters %j",
+    async (
+      [received, started, completed, turns, processed],
+      event,
+      age,
+      icon,
+      contains,
+      excludes,
+    ) => {
       mocks.resolveStatusGatewayDiagnosticsSafe.mockResolvedValueOnce(
         availableDiagnostics({
           summary: {
@@ -286,8 +337,9 @@ describe("statusAllCommand diagnosis", () => {
     mocks.resolveStatusGatewayDiagnosticsSafe.mockResolvedValueOnce(failedProbe);
     mocks.resolveStatusGatewayDiagnosticsSafe.mockResolvedValueOnce(failedProbe);
 
+    const output = await reportText();
     expectReport(
-      await reportText(),
+      output,
       [
         "! Telemetry exporters: unavailable",
         "Exporter diagnostics failed: Error: diagnostics probe timed out at wss://***:***@gateway.example/socket?token=***",
@@ -306,19 +358,26 @@ describe("statusAllCommand diagnosis", () => {
   });
 
   it("avoids unreachable gateway diagnosis in node-only mode", async () => {
-    const connectionDetails = [
-      "Node-only mode detected",
-      "Local gateway: not expected on this machine",
-      "Remote gateway target: gateway.example.com:19000",
-    ].join("\n");
-    mocks.resolveStatusAllConnectionDetails.mockReturnValueOnce(connectionDetails);
+    mocks.resolveStatusAllConnectionDetails.mockReturnValueOnce(
+      [
+        "Node-only mode detected",
+        "Local gateway: not expected on this machine",
+        "Remote gateway target: gateway.example.com:19000",
+      ].join("\n"),
+    );
     const nodeOnlyGateway = {
       gatewayTarget: "gateway.example.com:19000",
       gatewayValue: "node → gateway.example.com:19000 · no local gateway",
-      connectionDetails: `${connectionDetails}\nInspect the remote gateway host for live channel and health details.`,
+      connectionDetails: [
+        "Node-only mode detected",
+        "Local gateway: not expected on this machine",
+        "Remote gateway target: gateway.example.com:19000",
+        "Inspect the remote gateway host for live channel and health details.",
+      ].join("\n"),
     };
+    const output = await reportText({ nodeOnlyGateway });
     expectReport(
-      await reportText({ nodeOnlyGateway }),
+      output,
       [
         "Node-only mode detected",
         "Channel issues skipped (node-only mode; query gateway.example.com:19000)",
@@ -336,31 +395,39 @@ describe("statusAllCommand diagnosis", () => {
   it.each(["ENOENT", "EACCES"])(
     "distinguishes absent log tails from unavailable log reads (%s)",
     async (code) => {
-      const paths = logPaths("/synthetic-status-logs");
-      mocks.resolveGatewayLogPaths.mockReturnValue(paths);
-      mocks.resolveGatewaySupervisorLogPaths.mockReturnValue(paths);
+      const logPaths = {
+        logDir: "/synthetic-status-logs",
+        stdoutPath: "/synthetic-status-logs/gateway.log",
+        stderrPath: "/synthetic-status-logs/gateway.err.log",
+      };
+      mocks.resolveGatewayLogPaths.mockReturnValue(logPaths);
+      mocks.resolveGatewaySupervisorLogPaths.mockReturnValue(logPaths);
       const actualGateway = await vi.importActual<typeof import("./gateway.js")>("./gateway.js");
       mocks.readFileTailLines.mockImplementation(actualGateway.readFileTailLines);
-      vi.spyOn(fs, "open").mockRejectedValue(
+      const open = vi.spyOn(fs, "open").mockRejectedValue(
         Object.assign(new Error("synthetic filesystem failure token=synthetic-private"), {
           code,
         }),
       );
-      const output = await reportText();
-      if (code === "ENOENT") {
-        expect(output).not.toContain("Log unavailable");
-      } else {
-        expectReport(output, [
-          "# stdout: /synthetic-status-logs/gateway.log",
-          "Log unavailable; check this file's path and permissions, then retry.",
-          "Gateway restart attempts (tail): /tmp/fixture-restart.log",
-        ]);
+      try {
+        const output = await reportText();
+        if (code === "ENOENT") {
+          expect(output).not.toContain("Log unavailable");
+        } else {
+          expectReport(output, [
+            "# stdout: /synthetic-status-logs/gateway.log",
+            "Log unavailable; check this file's path and permissions, then retry.",
+            "Gateway restart attempts (tail): /tmp/fixture-restart.log",
+          ]);
+        }
+        expectReport(
+          output,
+          ["Pasteable debug report. Auth tokens redacted."],
+          ["synthetic-private"],
+        );
+      } finally {
+        open.mockRestore();
       }
-      expectReport(
-        output,
-        ["Pasteable debug report. Auth tokens redacted."],
-        ["synthetic-private"],
-      );
     },
   );
 
@@ -368,9 +435,11 @@ describe("statusAllCommand diagnosis", () => {
     const originalPlatform = process.platform;
     Object.defineProperty(process, "platform", { value: "darwin" });
     try {
-      mocks.resolveGatewaySupervisorLogPaths.mockReturnValue(
-        logPaths("/Users/test/Library/Logs/openclaw"),
-      );
+      mocks.resolveGatewaySupervisorLogPaths.mockReturnValue({
+        logDir: "/Users/test/Library/Logs/openclaw",
+        stdoutPath: "/Users/test/Library/Logs/openclaw/gateway.log",
+        stderrPath: "/Users/test/Library/Logs/openclaw/gateway.err.log",
+      });
       mocks.resolveGatewayRestartLogPath.mockReturnValue("/tmp/openclaw/logs/gateway-restart.log");
       mocks.readFileTailLines.mockImplementation(async (filePath: string) => {
         if (filePath.endsWith("gateway.log")) {

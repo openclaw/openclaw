@@ -1,38 +1,51 @@
-import { expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => ({
+  handleMidTurnPrecheckRequest: vi.fn(),
+  isMidTurnPrecheckSignal: vi.fn(() => false),
+  isSessionsYieldAbortError: vi.fn(() => false),
+  markYieldAborted: vi.fn(),
+  sendCustomMessage: vi.fn(async () => undefined),
+  stripSessionsYieldArtifacts: vi.fn(),
   waitForEmbeddedAbortSettle: vi.fn(async () => undefined),
+  withOwnedTranscriptWrite: vi.fn(async (operation: () => unknown) => await operation()),
 }));
 
+vi.mock("./attempt-sessions-yield.js", () => ({
+  isSessionsYieldAbortError: hoisted.isSessionsYieldAbortError,
+  stripSessionsYieldArtifacts: hoisted.stripSessionsYieldArtifacts,
+}));
 vi.mock("./attempt-subscription-cleanup.js", () => ({
   waitForEmbeddedAbortSettle: hoisted.waitForEmbeddedAbortSettle,
+}));
+vi.mock("./midturn-precheck.js", () => ({
+  isMidTurnPrecheckSignal: hoisted.isMidTurnPrecheckSignal,
 }));
 
 import { SessionManager } from "../../sessions/session-manager.js";
 import { handleEmbeddedAttemptPromptError as handleError } from "./attempt-prompt-submit.js";
-import { MidTurnPrecheckSignal } from "./midturn-precheck.js";
 
 type PromptErrorInput = Parameters<typeof handleError>[0];
 
 function createInput(overrides: Partial<PromptErrorInput> = {}): PromptErrorInput {
   return {
     activeSession: {
-      messages: [],
-      agent: { state: { messages: [] } },
-      sendCustomMessage: vi.fn(),
+      sendCustomMessage: hoisted.sendCustomMessage,
       sessionManager: SessionManager.inMemory(),
     },
     attempt: { runId: "run-1", sessionId: "session-1" },
     error: new Error("prompt failed"),
-    handleMidTurnPrecheckRequest: vi.fn(),
-    markYieldAborted: vi.fn(),
-    withOwnedTranscriptWrite: vi.fn(async (operation: () => unknown) => await operation()),
+    handleMidTurnPrecheckRequest: hoisted.handleMidTurnPrecheckRequest,
+    markYieldAborted: hoisted.markYieldAborted,
+    withOwnedTranscriptWrite: hoisted.withOwnedTranscriptWrite,
     yieldAbortSettled: null,
     yieldDetected: false,
     yieldMessage: null,
     ...overrides,
   } as PromptErrorInput;
 }
+
+beforeEach(() => vi.resetAllMocks());
 
 it.each([false, true])("routes prompt failures (mid-turn precheck: %s)", async (precheck) => {
   const request = {
@@ -43,36 +56,23 @@ it.each([false, true])("routes prompt failures (mid-turn precheck: %s)", async (
     toolResultReducibleChars: 0,
     effectiveReserveTokens: 1,
   } as const;
-  const error = precheck ? new MidTurnPrecheckSignal(request) : new Error("provider failed");
-  const input = createInput({ error });
-  await expect(handleError(input)).resolves.toEqual(
+  const error = precheck ? { request } : new Error("provider failed");
+  hoisted.isMidTurnPrecheckSignal.mockReturnValue(precheck);
+  await expect(handleError(createInput({ error }))).resolves.toEqual(
     precheck ? {} : { promptFailure: { error, source: "prompt" } },
   );
   if (precheck) {
-    expect(input.withOwnedTranscriptWrite).toHaveBeenCalledOnce();
-    expect(input.handleMidTurnPrecheckRequest).toHaveBeenCalledWith(request);
+    expect(hoisted.withOwnedTranscriptWrite).toHaveBeenCalledOnce();
+    expect(hoisted.handleMidTurnPrecheckRequest).toHaveBeenCalledWith(request);
   }
 });
 
-it.each([false, true])("settles yield handoff (recovery failure: %s)", async (fails) => {
-  const recoveryError = new Error("recovery failed");
-  const input = createInput({
-    error: new Error("aborted", { cause: { code: "sessions_yield" } }),
-    yieldDetected: true,
-    yieldMessage: "wait for follow-up",
-  });
-  hoisted.waitForEmbeddedAbortSettle.mockImplementationOnce(async () => {
-    expect(input.markYieldAborted).toHaveBeenCalledOnce();
-    if (fails) {
-      throw recoveryError;
-    }
-  });
-  if (fails) {
-    await expect(handleError(input)).rejects.toBe(recoveryError);
-    return;
-  }
-  await expect(handleError(input)).resolves.toEqual({});
-  expect(input.activeSession.sendCustomMessage).toHaveBeenCalledWith(
+it("persists yield handoff context without displaying it or triggering a turn", async () => {
+  hoisted.isSessionsYieldAbortError.mockReturnValue(true);
+  await expect(
+    handleError(createInput({ yieldDetected: true, yieldMessage: "wait for follow-up" })),
+  ).resolves.toEqual({});
+  expect(hoisted.sendCustomMessage).toHaveBeenCalledWith(
     {
       customType: "openclaw.sessions_yield",
       content:
@@ -82,4 +82,22 @@ it.each([false, true])("settles yield handoff (recovery failure: %s)", async (fa
     },
     { triggerTurn: false },
   );
+});
+
+it("marks yield state before fallible abort settlement", async () => {
+  const recoveryError = new Error("recovery failed");
+  let marked = false;
+  hoisted.isSessionsYieldAbortError.mockReturnValue(true);
+  hoisted.waitForEmbeddedAbortSettle.mockImplementationOnce(async () => {
+    expect(marked).toBe(true);
+    throw recoveryError;
+  });
+
+  const input = createInput({
+    markYieldAborted: () => {
+      marked = true;
+    },
+    yieldDetected: true,
+  });
+  await expect(handleError(input)).rejects.toBe(recoveryError);
 });
