@@ -1,4 +1,3 @@
-import type { GatewayRequestHandlers } from "openclaw/plugin-sdk/gateway-runtime";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { beforeEach, expect, it, vi } from "vitest";
 import { createBrowserRouteContext, type BrowserRouteContext } from "../browser/server-context.js";
@@ -36,9 +35,14 @@ const { withTimeout } =
 import { browserHandlers } from "./browser-request.js";
 import { makeClient, makeRequest, deferredOperation } from "./browser-request.test-support.js";
 
-type Request = Parameters<GatewayRequestHandlers[string]>[0];
-function request(params: Request["params"], options: Partial<Request> = {}) {
-  return browserHandlers["browser.request"](makeRequest(params, options));
+const openTabParams = { method: "POST", path: "/tabs/open", body: { url: "about:blank" } };
+async function request(
+  params: Parameters<typeof makeRequest>[0],
+  options: Parameters<typeof makeRequest>[1] = {},
+) {
+  const req = makeRequest({ ...openTabParams, ...params }, options);
+  await browserHandlers["browser.request"](req);
+  return req.respond;
 }
 
 beforeEach(() => {
@@ -74,8 +78,8 @@ it.each([
   let current = true;
   const respond = vi.fn();
   const pending = request(
-    { target: "host", method: "POST", path: "/tabs/open", body: { url: "about:blank" }, timeoutMs },
-    { respond, context: {} as never, client, hasCurrentClientAuthority: () => current },
+    { target: "host", timeoutMs },
+    { respond, client, hasCurrentClientAuthority: () => current },
   );
   await admission.entered;
   if (revocation === "client") {
@@ -98,16 +102,7 @@ it.each([
   [4321, 4321],
   [Number.MAX_SAFE_INTEGER, MAX_TIMER_TIMEOUT_MS],
 ])("applies and caps local dispatch timeout %s", async (timeoutMs, expectedTimeout) => {
-  const respond = vi.fn();
-  await request(
-    {
-      method: "POST",
-      path: "/tabs/open",
-      body: { url: "https://example.com" },
-      timeoutMs,
-    },
-    { respond },
-  );
+  const respond = await request({ timeoutMs });
 
   expect(m.timeout).toHaveBeenCalledExactlyOnceWith(
     expect.any(Function),

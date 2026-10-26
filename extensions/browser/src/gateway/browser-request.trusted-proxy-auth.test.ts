@@ -30,9 +30,16 @@ const { captureRuntimeConfigAsyncReader, clearConfigCache, clearRuntimeConfigSna
 
 let root = "";
 let configPath = "";
-let gatewayPort = 0;
+function configFiles() {
+  return fs.readdirSync(path.dirname(configPath)).filter((name) => name.includes("openclaw"));
+}
 
-function writeTrustedProxyConfig() {
+beforeEach(async () => {
+  root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-browser-tp-")));
+  configPath = path.join(root, "config", "openclaw.json");
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  // Browser control derives its port from the Gateway port (+2); keep both free.
+  const gatewayPort = (await getFreePort()) - 2;
   const config = {
     gateway: {
       mode: "local",
@@ -46,19 +53,6 @@ function writeTrustedProxyConfig() {
     browser: { enabled: true, defaultProfile: "openclaw" },
   };
   fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
-}
-
-function configFiles() {
-  return fs.readdirSync(path.dirname(configPath)).filter((name) => name.includes("openclaw"));
-}
-
-beforeEach(async () => {
-  root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-browser-tp-")));
-  configPath = path.join(root, "config", "openclaw.json");
-  fs.mkdirSync(path.dirname(configPath), { recursive: true });
-  // Browser control derives its port from the Gateway port (+2); keep both free.
-  gatewayPort = (await getFreePort()) - 2;
-  writeTrustedProxyConfig();
   vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
   vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
   // Credential bootstrap is skipped under test environments; exercise the production path.

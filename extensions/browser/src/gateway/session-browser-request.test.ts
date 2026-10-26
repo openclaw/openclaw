@@ -1,6 +1,5 @@
-import type { GatewayRequestHandlers } from "openclaw/plugin-sdk/gateway-runtime";
 import { beforeEach, expect, it, vi } from "vitest";
-import { deferredOperation } from "./browser-request.test-support.js";
+import { deferredOperation, makeRequest } from "./browser-request.test-support.js";
 import { handleSessionBrowserGatewayRequest } from "./session-browser-request.js";
 
 const m = vi.hoisted(() => ({ access: vi.fn(), dispatch: vi.fn(), tabs: vi.fn(), current: true }));
@@ -21,59 +20,50 @@ const tabs = [
   { targetId: "admin-tab", title: "Private" },
   { targetId: "isolated-tab", title: "Review" },
 ];
-const actions = [{ kind: "click", targetId: "admin-tab" }];
-type Params = Record<string, unknown>;
 const current = () => {
   if (!m.current) {
     throw new Error("access revoked");
   }
 };
-async function request(path: string, params: Params = {}) {
-  const respond = vi.fn();
-  await handleSessionBrowserGatewayRequest({
-    params: {
+const resource = () => ({ assertCurrent: current, signal: new AbortController().signal });
+const retain = () => ({ ...resource(), release: vi.fn() });
+const sessionAccessAuthority = {
+  target: { sessionKey, agentId: "main", sessionId: "one" },
+  sandboxRequired: false,
+  assertCurrent: current,
+  retain,
+  retainSession: retain,
+  release: vi.fn(),
+};
+async function request(path: string, params: Record<string, unknown> = {}) {
+  const options = makeRequest(
+    {
       sessionKey,
       agentId: "main",
       dashboard: { name: "review", instanceId: "widget" },
       method: "POST",
       path,
+      body: {},
       ...params,
     },
-    respond,
-    sessionAccessAuthority: {
-      target: { sessionKey, agentId: "main", sessionId: "one" },
-      assertCurrent: current,
-      retain: () => ({
-        signal: new AbortController().signal,
-        assertCurrent: current,
-        release: vi.fn(),
-      }),
-    },
-  } as unknown as Parameters<GatewayRequestHandlers[string]>[0]);
-  return respond;
-}
-async function rejectedRequest(path: string, message: string, params: Params = {}) {
-  const respond = await request(path, params);
-  expect(respond).toHaveBeenCalledWith(
-    false,
-    undefined,
-    expect.objectContaining({ message: expect.stringContaining(message) }),
+    { sessionAccessAuthority },
   );
-  expect(m.dispatch).not.toHaveBeenCalled();
+  await handleSessionBrowserGatewayRequest(options);
+  return options.respond;
 }
 beforeEach(() => {
   vi.clearAllMocks();
   m.current = true;
   m.access.mockResolvedValue({
     response: { browserTab: target, paused: false },
-    resource: { assertCurrent: current, signal: new AbortController().signal },
+    resource: resource(),
   });
   m.dispatch.mockResolvedValue({ status: 200, body: { ok: true } });
   m.tabs.mockResolvedValue(tabs);
 });
 
 it("accepts the Control UI dashboard envelope and carries its timeout into startup", async () => {
-  const respond = await request("/dashboard", { body: {}, timeoutMs: 120_000 });
+  const respond = await request("/dashboard", { timeoutMs: 120_000 });
   expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ browserTab: target }));
   expect(m.access).toHaveBeenCalledWith(
     expect.objectContaining({ sessionKey, name: "review", instanceId: "widget" }),
@@ -87,7 +77,7 @@ it("aborts the UI action deadline without publishing a late successful result", 
   const action = Promise.withResolvers<unknown>();
   m.dispatch.mockImplementationOnce(() => action.promise);
   try {
-    const pending = request("/screenshot", { body: {}, timeoutMs: 100 });
+    const pending = request("/screenshot", { timeoutMs: 100 });
     await vi.advanceTimersByTimeAsync(100);
     const respond = await pending;
     expect(respond.mock.calls[0]?.[0]).toBe(false);
@@ -99,26 +89,30 @@ it("aborts the UI action deadline without publishing a late successful result", 
     vi.useRealTimers();
   }
 });
-it.each(["profile", "targetId", "node", "target"])(
-  "rejects caller-selected %s before binding",
-  async (selector) => {
-    await rejectedRequest("/navigate", "cannot select", {
-      body: { [selector]: "other", url: "https://example.test" },
-    });
-  },
-);
-
+const selectedTarget = (selector: string) => ({
+  body: { [selector]: "other", url: "https://example.test" },
+});
 it.each([
-  ["/tabs/open", { body: {} }, "unavailable"],
-  ["/act", { body: { kind: "batch", actions } }, "unavailable"],
-  ["/act", { body: { kind: "close", actions } }, "unavailable"],
+  ["/navigate", selectedTarget("profile"), "cannot select"],
+  ["/navigate", selectedTarget("targetId"), "cannot select"],
+  ["/navigate", selectedTarget("node"), "cannot select"],
+  ["/navigate", selectedTarget("target"), "cannot select"],
+  ["/tabs/open", {}, "unavailable"],
+  ["/act", { body: { kind: "batch" } }, "unavailable"],
+  ["/act", { body: { kind: "close" } }, "unavailable"],
   [
     "/dashboard",
     { dashboard: { name: "review", sessionKey: "agent:main:foreign" } },
     "match the admitted session",
   ],
 ] as const)("rejects administration or conflicting identity at %s", async (path, params, error) => {
-  await rejectedRequest(path, error, params);
+  const respond = await request(path, params);
+  expect(respond).toHaveBeenCalledWith(
+    false,
+    undefined,
+    expect.objectContaining({ message: expect.stringContaining(error) }),
+  );
+  expect(m.dispatch).not.toHaveBeenCalled();
   expect(m.access).not.toHaveBeenCalled();
 });
 
@@ -151,7 +145,7 @@ it("does not return data after authority changes during the action", async () =>
     m.current = false;
     return { status: 200, body: { private: true } };
   });
-  const respond = await request("/screenshot", { body: {} });
+  const respond = await request("/screenshot");
   expect(respond.mock.lastCall).toMatchObject([false, undefined, { message: "access revoked" }]);
   expect(respond).not.toHaveBeenCalledWith(true, expect.anything());
 });
