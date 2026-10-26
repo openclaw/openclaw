@@ -4,6 +4,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { listDirectoryTreeStrictSync } from "../infra/directory-walk.js";
 import * as runtimeProcess from "../infra/runtime-process-url.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
@@ -71,26 +72,18 @@ it("reports hosted Doctor findings without initializing or repairing operator st
         plugins: { enabled: false },
         memory: { search: { enabled: false } },
       });
-      const snapshot = () => {
-        const paths = fs.readdirSync(state.root);
-        const entries = [];
-        for (const relative of paths) {
+      const snapshot = () =>
+        listDirectoryTreeStrictSync(state.root).map(({ relativePath: relative }) => {
           const filename = path.join(state.root, relative);
           const stat = fs.lstatSync(filename, { bigint: true });
-          entries.push({
+          return {
             path: relative,
             mode: stat.mode,
             symlinkTarget: stat.isSymbolicLink() ? fs.readlinkSync(filename) : undefined,
             content: stat.isFile() ? fs.readFileSync(filename) : undefined,
             mtimeNs: stat.isFile() ? stat.mtimeNs : undefined,
-          });
-          // Capture links can point outside the fixture, including back to this checkout.
-          if (stat.isDirectory()) {
-            paths.push(...fs.readdirSync(filename).map((name) => path.join(relative, name)));
-          }
-        }
-        return entries.toSorted((left, right) => left.path.localeCompare(right.path));
-      };
+          };
+        });
       const before = snapshot();
       const { runtime, lines } = createSystemAgentTestRuntime();
       // Findings are expected (gateway.mode is unset); nonzero lint is not a repair.
