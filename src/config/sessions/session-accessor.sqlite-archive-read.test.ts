@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { constants as bufferConstants } from "node:buffer";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -119,6 +120,11 @@ it("pages the unique run generation and rejects replaced, deleted, corrupt, or a
     ...answer,
     message: { ...answer.message, content, __openclaw: { runId: nextRunId } },
   });
+  const successorAnswer = (content = "Original answer") => ({
+    ...answerFor("next-run", content),
+    id: "successor-answer",
+    parentId: "user",
+  });
   const archive = (
     generation: string,
     reply: typeof answer & { parentId?: string } = answer,
@@ -132,16 +138,9 @@ it("pages the unique run generation and rejects replaced, deleted, corrupt, or a
       { generation, name: `${generation}.jsonl`, createdAt: generation === "original" ? 1 : 2 },
     );
   const original = archive("original");
-  const successor = archive(
-    "successor",
-    {
-      ...answerFor("next-run", "Unrelated successor"),
-      id: "successor-answer",
-      parentId: "user",
-    },
-    sessionId,
-    [{ ...answer, parentId: "user" }],
-  );
+  const successor = archive("successor", successorAnswer("Unrelated successor"), sessionId, [
+    { ...answer, parentId: "user" },
+  ]);
   const replaceOriginal = (value: ReturnType<typeof archive>) => update("original", value);
   insert([original, successor]);
   await withSqliteTranscriptArchiveSession(options, async () => {
@@ -149,9 +148,7 @@ it("pages the unique run generation and rejects replaced, deleted, corrupt, or a
     expectEntries(page, [[answer, 2]]);
     expect(page).toMatchObject({ totalMessages: 2, binding: { generation: "original" } });
     expect(page?.nextCursor).toEqual(expect.any(String));
-    if (!page?.nextCursor) {
-      throw new Error("Expected an older archive page");
-    }
+    assert(page?.nextCursor, "Expected an older archive page");
     const continuation = { runId, limit: 1, cursor: page.nextCursor };
     const verifyBinding = () =>
       history.verifySessionTranscriptArchivePageBindingReadOnly(scope, runId, page.binding);
@@ -177,16 +174,7 @@ it("pages the unique run generation and rejects replaced, deleted, corrupt, or a
     );
 
     replaceOriginal(
-      archive(
-        "original",
-        {
-          ...answerFor("next-run"),
-          id: "successor-answer",
-          parentId: "user",
-        },
-        sessionId,
-        [{ ...answer, parentId: "user" }],
-      ),
+      archive("original", successorAnswer(), sessionId, [{ ...answer, parentId: "user" }]),
     );
     await expectUnavailable("run is not on the active branch");
 
@@ -200,9 +188,7 @@ it("pages the unique run generation and rejects replaced, deleted, corrupt, or a
     const contextSelected = { ...answer, id: "context-selected" };
     replaceEvents([user, contextBefore, contextSelected, answer]);
     const contextTail = await readPage({ limit: 1 });
-    if (!contextTail?.nextCursor) {
-      throw new Error("Expected a bounded projection-context page");
-    }
+    assert(contextTail?.nextCursor, "Expected a bounded projection-context page");
     const selectedAndNewerBytes = Buffer.byteLength(
       JSON.stringify(contextSelected) + JSON.stringify(answer),
     );
@@ -234,10 +220,11 @@ it("pages the unique run generation and rejects replaced, deleted, corrupt, or a
       [reply, 1027],
     ]);
     // Duplicate IDs resolve to the latest node; a cycle discards the whole path.
-    replaceEvents([root, reply, { ...reply, message: { ...reply.message, content: "Latest" } }]);
+    const latest = { ...reply, message: { ...reply.message, content: "Latest" } };
+    replaceEvents([root, reply, latest]);
     expectEntries(await readPage(), [
       [root, 1],
-      [{ ...reply, message: { ...reply.message, content: "Latest" } }, 3],
+      [latest, 3],
     ]);
     replaceEvents([root, reply, { ...root, parentId: answer.id }]);
     await expect(readPage()).rejects.toThrow("run is not on the active branch");
@@ -262,15 +249,7 @@ it("pages the unique run generation and rejects replaced, deleted, corrupt, or a
     replaceEvents([root, { ...reply, parentId: false }]);
     await expect(readPage()).rejects.toThrow("run is not on the active branch");
 
-    replaceOriginal(
-      archive("original", answer, sessionId, [
-        {
-          ...answer,
-          id: "large",
-          message: { ...answer.message, content: "x".repeat(2048) },
-        },
-      ]),
-    );
+    replaceEvents([user, { ...answerFor(runId, "x".repeat(2048)), id: "large" }, answer]);
     const tail = await readBoundedPage();
     expectEntries(tail, [[answer, 3]]);
     expect(tail?.omittedOversized).toBeUndefined();

@@ -475,8 +475,10 @@ describe("SQLite transcript archive worker", () => {
     const { generation, sessionUpdatedAt, transcriptUpdatedAt } = planned.snapshot;
     expect([generation, sessionUpdatedAt, transcriptUpdatedAt]).not.toContain(null);
     const materialized = await materializeSessionStateDeletePlans([planned]);
-    switch (kind) {
-      case "rewrite generation":
+    const updateWindow = (change: { transcript_updated_at?: number; updated_at?: number }) =>
+      rows(sql.updateTable("session_windows").set(change).where("session_id", "=", sessionId));
+    const mutations = {
+      "rewrite generation": () =>
         rows(
           sql
             .updateTable("transcript_rewrite_watermarks")
@@ -485,18 +487,11 @@ describe("SQLite transcript archive worker", () => {
               updated_at: Date.now(),
             })
             .where("session_id", "=", sessionId),
-        );
-        break;
-      case "transcript mutation watermark":
-      case "window metadata": {
-        const update =
-          kind === "transcript mutation watermark"
-            ? { transcript_updated_at: (transcriptUpdatedAt ?? 0) + 1 }
-            : { updated_at: (sessionUpdatedAt ?? 0) + 1 };
-        rows(sql.updateTable("session_windows").set(update).where("session_id", "=", sessionId));
-        break;
-      }
-      case "non-archive append":
+        ),
+      "transcript mutation watermark": () =>
+        updateWindow({ transcript_updated_at: (transcriptUpdatedAt ?? 0) + 1 }),
+      "window metadata": () => updateWindow({ updated_at: (sessionUpdatedAt ?? 0) + 1 }),
+      "non-archive append": () =>
         write((transaction) => {
           rows(
             sql.insertInto("transcript_events").values({
@@ -510,15 +505,11 @@ describe("SQLite transcript archive worker", () => {
             }),
           );
           touchTranscriptMutationInTransaction(transaction, sessionId);
-        });
-        break;
-      case "trajectory":
-        appendSqliteTrajectoryRuntimeEvents(target, [trajectory(sessionId)]);
-        break;
-      case "ACP parent-stream":
-        await acp(target, "concurrent", "run-1");
-        break;
-    }
+        }),
+      trajectory: () => appendSqliteTrajectoryRuntimeEvents(target, [trajectory(sessionId)]),
+      "ACP parent-stream": () => acp(target, "concurrent", "run-1"),
+    };
+    await mutations[kind]();
     expect(() => deletePlans(materialized, sessionKey)).toThrow(
       `SQLite session state changed before deletion for ${sessionId}`,
     );

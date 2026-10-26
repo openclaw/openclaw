@@ -18,16 +18,17 @@ const storageInput = { env: storageEnv };
 const messagePresenceInput = { scope: { agentId: "main", sessionId: "synthetic-session" } };
 
 function summaryEntry(sessionKey: string): InternalSessionEntry {
-  return {
+  const identity = {
     sessionId: "synthetic-session",
     lifecycleRevision: "synthetic-lifecycle",
+  };
+  const summary = { ...identity, sessionKey, agentId: "main" };
+  return {
+    ...identity,
     updatedAt: 1,
     lastRunId: "synthetic-run",
     observerDigest: {
-      sessionKey,
-      sessionId: "synthetic-session",
-      lifecycleRevision: "synthetic-lifecycle",
-      agentId: "main",
+      ...summary,
       runId: "synthetic-run",
       revision: 1,
       updatedAt: 1,
@@ -36,10 +37,7 @@ function summaryEntry(sessionKey: string): InternalSessionEntry {
     },
     restartRecoveryOperatorSource: {
       version: 1,
-      agentId: "main",
-      sessionKey,
-      sessionId: "synthetic-session",
-      lifecycleRevision: "synthetic-lifecycle",
+      ...summary,
       sourceRunId: "synthetic-run",
       snapshot: {
         profileId: "synthetic-profile",
