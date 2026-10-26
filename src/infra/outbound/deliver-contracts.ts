@@ -233,6 +233,8 @@ export type DeliverOutboundPayloadsCoreParams = OutboundChannelContext & {
   skipDestinationHistory?: boolean;
   /** @internal Stable delivery identity, independent of provider reconciliation markers. */
   transcriptDeliveryId?: string;
+  /** @internal State root captured for this delivery; history never follows a later ambient root. */
+  transcriptStateDir?: string;
   /** Pins destination history to the conversation generation the caller observed. */
   transcriptExpectedGeneration?: {
     sessionKey?: string;

@@ -7,6 +7,7 @@ import { resolveCurrentConversationByDelivery } from "../config/sessions/convers
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { readSessionEntryInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { runWithoutOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context-store.js";
+import { resolveStateDir } from "../config/state-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   bindOutboundSessionEntry,
@@ -50,6 +51,8 @@ export type ConfirmedVisibleMessageParams = {
   assertCurrent?: () => void;
   /** Fences new route-discovery I/O, not persistence of an accepted delivery. */
   assertDirectAdapterHandoff?: () => void;
+  /** State root captured when the delivery began; history never follows a later ambient root. */
+  stateDir?: string;
 };
 
 type ConfirmedDestination = { sessionKey: string; peer?: RoutePeer };
@@ -64,6 +67,10 @@ const skipped = (diagnostics?: string): BackgroundPayloadsCommit => ({
 export async function commitConfirmedVisibleMessage(
   params: ConfirmedVisibleMessageParams,
 ): Promise<BackgroundPayloadsCommit> {
+  // Session stores resolve from the ambient root, so a moved root would record elsewhere.
+  if (params.stateDir !== undefined && resolveStateDir(process.env) !== params.stateDir) {
+    return skipped("state root changed after the delivery began");
+  }
   const agentId = params.producer?.agentId ?? resolveDefaultAgentId(params.config);
   const storePath = resolveSessionStorePathCore(params.config.session?.store, { agentId });
   const toStoreKey = (requestKey: string) =>

@@ -62,6 +62,7 @@ export async function commitRecoveredVisibleMessages(
       payloadIndex: prepared.sourceIndex,
       assertCurrent: () => stateContext.workerContext.admission.assertCurrent(),
       assertDirectAdapterHandoff: () => stateContext.workerContext.admission.assertCurrent(),
+      stateDir: stateContext.stateDir,
     });
     const diagnostic = result.ok ? result.diagnostics : result.reason;
     if (diagnostic) {

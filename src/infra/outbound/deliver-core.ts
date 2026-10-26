@@ -697,6 +697,7 @@ async function recordConfirmedTranscript(input: {
       provenance: params.transcriptProvenance,
       assertCurrent: params.assertTranscriptCurrent,
       assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
+      stateDir: params.transcriptStateDir,
     });
     diagnostic = result.ok
       ? result.diagnostics
