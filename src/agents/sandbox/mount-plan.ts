@@ -124,6 +124,9 @@ export async function prepareSandboxMountPlan(params: {
   const planned: Array<(typeof selection.mounts)[number]> = [];
   const protectedTargets = new Set<string>();
   const pinnedAncestors = new Set<string>();
+  const pinnedAncestorTargets = new Set(
+    ancestors.map((ancestor) => normalizeMountContainerPath(ancestor.containerPath)),
+  );
   for (const mount of selection.mounts) {
     // Keep each self-bind ancestor directly before the first protected mount it pins.
     for (const ancestor of ancestorsByProtectedTarget.get(
@@ -156,7 +159,7 @@ export async function prepareSandboxMountPlan(params: {
       if (mount.source === "protectedSkill") {
         protectedTargets.add(projected.containerPath);
       }
-      if (ancestors.includes(mount as (typeof ancestors)[number])) {
+      if (pinnedAncestorTargets.has(target)) {
         pinnedAncestors.add(projected.containerPath);
       }
       binds.set(
