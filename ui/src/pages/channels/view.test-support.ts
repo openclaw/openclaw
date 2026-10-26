@@ -15,13 +15,12 @@ export type ChannelsViewTestOverrides = Partial<
   wizardHost?: Partial<ChannelsProps["wizardHost"]>;
 };
 
-export function createChannelsViewProps(
+export function createChannelsState(
   snapshot: ChannelsStatusSnapshot | null,
   pairingSnapshot: ChannelsPairingListResult | null,
-  overrides: ChannelsViewTestOverrides = {},
-): ChannelsProps {
-  const { channels, config, presentation, wizardHost, ...props } = overrides;
-  const channelState: ChannelCapability["state"] = {
+  overrides: Partial<ChannelCapability["state"]> = {},
+): ChannelCapability["state"] {
+  return {
     client: null,
     connected: true,
     channelsLoading: false,
@@ -43,8 +42,17 @@ export function createChannelsViewProps(
     whatsappLoginSessionKey: null,
     whatsappLoginConnected: null,
     whatsappBusy: false,
-    ...channels,
+    ...overrides,
   };
+}
+
+export function createChannelsViewProps(
+  snapshot: ChannelsStatusSnapshot | null,
+  pairingSnapshot: ChannelsPairingListResult | null,
+  overrides: ChannelsViewTestOverrides = {},
+): ChannelsProps {
+  const { channels, config, presentation, wizardHost, ...props } = overrides;
+  const channelState = createChannelsState(snapshot, pairingSnapshot, channels);
   return {
     channels: channelState,
     config: { ...createInitialConfigState(), ...config },

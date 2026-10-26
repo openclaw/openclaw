@@ -201,6 +201,19 @@ function renderSidebarAgentMenuForMenus(
     const source = host.sessionDataContext?.theme;
     return source && projectTheme(source).preferences;
   });
+  const creationDisabledReason = createMemo(() => {
+    const snapshot = gateway()?.read().snapshot;
+    if (canCallGatewayMethod(snapshot, "agents.create", "operator.admin")) {
+      return null;
+    }
+    if (!snapshot?.client || snapshot.phase !== "connected" || !snapshot.hello) {
+      return t("agentChip.creationRequiresConnection");
+    }
+    if (isGatewayMethodAdvertised(snapshot, "agents.create") !== true) {
+      return t("agentChip.creationUnsupported");
+    }
+    return t("agentChip.creationRequiresAdmin");
+  });
   return (
     <SidebarAgentMenu
       {...{
@@ -215,13 +228,7 @@ function renderSidebarAgentMenuForMenus(
           agents()?.read().recentlyCreatedAgentId ??
           preferences()?.read().sidebarRecentlyCreatedAgentId,
         rosterMode: host.sidebarAgentsMode === "roster" && !chipAgent().pending,
-        creationDisabledReason: canCallGatewayMethod(
-          gateway()?.read().snapshot,
-          "agents.create",
-          "operator.admin",
-        )
-          ? null
-          : t("agentChip.creationUnavailable"),
+        creationDisabledReason: creationDisabledReason(),
         onShowAllAgents: () => {
           host.navigationView = "sessions";
           host.sessionDataContext?.navigation.update({ navCollapsed: false });

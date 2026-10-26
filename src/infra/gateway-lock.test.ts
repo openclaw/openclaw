@@ -8,11 +8,8 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as nativeSleep } from "node:timers/promises";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  awaitGateBeforeSettlement,
-  createDeferred,
-  withinTest,
-} from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import { createEnteredGate } from "../agents/entered-gate.test-support.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
@@ -862,12 +859,8 @@ describe("gateway lock", () => {
 
   it("keeps startup excluded while concurrent releases join resource drainage", async () => {
     await withMaintenanceLock(async (lock, contender) => {
-      const started = createDeferred();
-      const drained = createDeferred();
-      const close = vi.fn(async () => {
-        started.resolve();
-        await drained.promise;
-      });
+      const drainageGate = createEnteredGate();
+      const close = vi.fn(drainageGate.wait);
       lock.run(() => {
         const scope = getOpenClawDatabaseMaintenanceScope();
         expect(scope?.ownsSchemaMaintenance).toBe(true);
@@ -875,12 +868,12 @@ describe("gateway lock", () => {
       });
       const releases = [lock.release(), lock.release(), lock.release()];
       try {
-        await started.promise;
+        await drainageGate.entered;
         await expect(contender()).rejects.toBeInstanceOf(GatewayLockError);
         await fs.access(lock.lockPath);
         await fs.access(lock.stateLockPath);
       } finally {
-        drained.resolve();
+        drainageGate.release();
         await Promise.all(releases);
       }
       expect(close).toHaveBeenCalledTimes(1);

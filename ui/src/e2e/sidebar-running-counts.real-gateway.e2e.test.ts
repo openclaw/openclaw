@@ -21,7 +21,7 @@ import {
 } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { controlUiSessionUrl, pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { deviceGatewayEnv } from "./device-gateway.test-support.ts";
+import { deviceGatewayEnv } from "./device-gateway-env.test-support.ts";
 import { createGatewayProxy, gatewayProxyRoute } from "./gateway-proxy.test-support.ts";
 
 declare global {

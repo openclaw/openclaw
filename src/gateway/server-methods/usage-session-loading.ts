@@ -71,7 +71,8 @@ export async function discoverAllSessionsForUsage(params: {
         return sessions.map((session) => Object.assign({}, session, { agentId }));
       }),
     );
-    return discovered.flat().toSorted((a, b) => b.mtime - a.mtime);
+    // oxlint-disable-next-line unicorn/no-array-sort -- flat returns a fresh, private array.
+    return discovered.flat().sort((a, b) => b.mtime - a.mtime);
   });
 }
 

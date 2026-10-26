@@ -90,6 +90,8 @@ const repositoryScriptEntries = [
   "apps/android/scripts/build-release-artifacts.ts!",
   // scripts/README.md invokes this warm-interaction benchmark CLI by path.
   "scripts/bench-control-ui-interactions.ts!",
+  // The opt-in projection benchmark builds its browser fixture through this CLI.
+  "scripts/build-control-ui-projection-fixture.mts!",
   // scripts/README.md invokes these exact memory-search benchmarks by path.
   "scripts/bench-memory-search.mjs!",
   "scripts/bench-memory-search-sqlite.mjs!",
@@ -165,6 +167,9 @@ const repositoryScriptEntries = [
   "scripts/perf/health-cron-fixture.ts!",
   // #183020 invokes this synthetic category-registration workload by path.
   "scripts/perf/session-group-registration-measure.ts!",
+  // Its source header documents this owner-level field-order benchmark.
+  "scripts/perf/session-event-field-order.ts!",
+  "scripts/perf/session-array-encoding.ts!",
   "scripts/perf/session-pr-subscriptions-measure.ts!",
   "scripts/perf/session-tool-surface-measure.ts!",
   "scripts/perf/subagent-maintenance-capture-measure.ts!",
@@ -223,6 +228,7 @@ const repositoryScriptEntries = [
   "scripts/perf/state-path-resolution-measure.ts!",
   // Maintained guides and source headers invoke these proof commands by exact path.
   "scripts/bench-control-ui-media.ts!",
+  "scripts/bench-control-ui-css.ts!",
   "scripts/bench-control-ui-rich-boot.ts!",
   "scripts/bench-control-ui-wire.ts!",
   "scripts/bench-dynamic-validators.mts!",
@@ -1306,6 +1312,21 @@ const config = {
     // Mirror config parsing, redaction mapping, cap fitting, and the runner are
     // asserted by the focused Beam mirror tests; production wires only the service.
     "extensions/beam/src/mirror.ts": ["exports", "types"],
+    // Knowledge's focused tests assert response budgets, link parsing, keyword
+    // expressions, flush request IDs, descriptor paths, memory-index pinning and
+    // labels, compact search limits and the worker operation table through these
+    // seams; production reaches them through service handlers and the prompt hook.
+    "extensions/knowledge/src/connections.ts": ["exports"],
+    "extensions/knowledge/src/ingestion-contract.ts": ["exports", "types"],
+    "extensions/knowledge/src/inspection.ts": ["exports"],
+    "extensions/knowledge/src/markdown-links.ts": ["exports"],
+    "extensions/knowledge/src/memory-index-hook.ts": ["exports"],
+    "extensions/knowledge/src/memory-index.ts": ["exports"],
+    "extensions/knowledge/src/retrieval.ts": ["exports"],
+    "extensions/knowledge/src/search-detail.ts": ["exports"],
+    "extensions/knowledge/src/service.ts": ["exports"],
+    "extensions/knowledge/src/source-descriptors.ts": ["exports"],
+    "extensions/knowledge/src/storage-host.ts": ["exports"],
     "src/infra/heartbeat-wake.ts": ["exports"],
     // Lazy loaders import these modules opaquely (media-understanding runner, config model
     // validation), which Knip counts as using every export until a bare namespace reference
@@ -1562,6 +1583,18 @@ const config = {
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/kilocode`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/kimi-coding`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/knowledge`]: {
+      ...bundledPluginWorkspace([
+        // knowledge-source-ingest/SKILL.md has agents run these bundled scripts by path.
+        "skills/knowledge-source-ingest/scripts/chat-transcript.mjs!",
+        "skills/knowledge-source-ingest/scripts/discrawl-normalize.mjs!",
+        "skills/knowledge-source-ingest/scripts/source-manifest.mjs!",
+        // skill-packaging.test.ts runs this skill-reference generator with --check.
+        "scripts/sync-skill-references.mjs",
+      ]),
+      // discrawl-normalize.mjs reads the user's own Discord archive through the discrawl CLI.
+      ignoreBinaries: ["discrawl"],
+    },
     [`${BUNDLED_PLUGIN_ROOT_DIR}/matrix`]: bundledPluginWorkspace([
       // The monitor lazy-loads outbound behavior on inbound-only processes.
       "src/matrix/send.ts!",

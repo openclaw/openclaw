@@ -165,8 +165,9 @@ it.each(["settled", "failed", "revoked", "unsandboxed"] as const)(
 );
 
 it.each(dispatchCases)(
-  "dispatches the generic harness for $agentId/global with policy $sandboxSessionKey, $skillCatalog skills, remote skills $remoteSkills, one-shot $oneShotCliRun, real managed workspace $realManagedWorkspace, explicit cwd $explicitCwd, host media $hostMedia, retired placement $retirePlacement, baseline $diffBaseline, cancelled trajectory $cancelTrajectory, prepared auth $preparedAuth",
+  "dispatches the generic harness for $agentId/global with policy $sandboxSessionKey, $skillCatalog skills, remote skills $remoteSkills, one-shot $oneShotCliRun, real managed workspace $realManagedWorkspace, explicit cwd $explicitCwd, host media $hostMedia, retired placement $retirePlacement, baseline $diffBaseline, cancelled trajectory $cancelTrajectory, prepared auth $preparedAuth, access $cyberAccessProgram",
   async ({
+    cyberAccessProgram,
     agentId = "work",
     sandboxSessionKey,
     remoteSkills = false,
@@ -330,6 +331,7 @@ it.each(dispatchCases)(
         | undefined;
       const sourceTurn = createSourceTurnDispatchAssertions();
       const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async (params) => {
+        expect(params.cyberAccessProgram).toBe(cyberAccessProgram);
         sourceTurn.expectBinding(params);
         retainedRetryPreparer = params.hostCapabilities?.prepareContinuationRetryCount;
         expect(params).not.toHaveProperty("prepareContinuationRetryCount");
@@ -393,6 +395,7 @@ it.each(dispatchCases)(
             }
           : undefined,
         admittedRunContext,
+        cyberAccessProgram,
         ...(cancelTrajectory ? { abortSignal: cancellation.signal } : {}),
         agentId,
         config,

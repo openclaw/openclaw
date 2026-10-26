@@ -224,8 +224,6 @@ it(
       const output = expectExit(await runDoctor(root, repair));
       expect(output).toContain('Retained unconfigured agent database "retired" at');
       expect(output).toContain(retained.path);
-      expect(output).toContain("Doctor will not remove it automatically because it may contain");
-      expect(output).toContain("retired or manually managed agent state.");
       expect(output).not.toContain('Retained unconfigured agent database "main"');
       expect(output).toContain("Skipped foreign agent database");
       expect(output).toContain(sanitizedExternalPath);

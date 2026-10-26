@@ -1,7 +1,7 @@
 // Gateway restart probe and health-detail tests.
-import { once } from "node:events";
 import { createServer } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withLoopbackTestServer } from "../../commands/loopback-server.test-support.js";
 import { GatewayCredentialsRequiredError } from "../../gateway/call-device-auth.js";
 import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
 import { createGatewayCloseTransportError } from "../../gateway/transport-error.js";
@@ -69,17 +69,7 @@ describe("restart health", () => {
       response.statusCode = request.url === "/healthz" ? 200 : 503;
       response.end();
     });
-    server.listen(0, "127.0.0.1");
-    await once(server, "listening");
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
-      throw new Error("expected loopback server address");
-    }
-
-    try {
+    await withLoopbackTestServer(server, async (port) => {
       const { waitForGatewayHttpReadiness } = await import("./restart-health-probe.js");
       const onObservation = vi.fn();
       await expect(
@@ -88,21 +78,11 @@ describe("restart health", () => {
           onObservation,
           deadlineAt: performance.now() + 1_000,
           delayMs: 0,
-          port: address.port,
+          port,
         }),
       ).resolves.toEqual({ healthz: 200, readyz: 503 });
       expect(onObservation).toHaveBeenCalledExactlyOnceWith({ healthz: 200, readyz: 503 });
-    } finally {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => {
-          if (error) {
-            reject(error);
-          } else {
-            resolve();
-          }
-        });
-      });
-    }
+    });
   });
 
   it.each([

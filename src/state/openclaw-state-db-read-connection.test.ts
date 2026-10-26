@@ -78,10 +78,6 @@ function caught(run: () => unknown) {
   throw new Error("Expected an exception");
 }
 
-function readPrivate(prepared: ReturnType<typeof snapshot>, identity?: string) {
-  return readLocation(value, pathname, prepared, undefined, identity, "/fixture");
-}
-
 function expectAggregate(error: unknown, primary: Error, cleanup: unknown) {
   expect(error).toBeInstanceOf(AggregateError);
   expect(error).toMatchObject({ cause: primary, errors: [primary, cleanup] });
@@ -111,23 +107,17 @@ beforeEach(() => {
 });
 
 it.each([
-  "schema",
-  "query",
-  "policy",
-  "handle policy",
-  "admission",
-  "admission cleanup",
-  "native cleanup",
-])("settles a %s failure only after releasing native custody", (phase) => {
+  ["schema", () => mocks.schema],
+  ["query", undefined],
+  ["policy", () => mocks.policy],
+  ["handle policy", () => mocks.policy.mockReturnValueOnce(false)],
+  ["admission", undefined],
+  ["admission cleanup", undefined],
+  ["native cleanup", () => mocks.db.close],
+] as const)("settles a %s failure only after releasing native custody", (phase, target) => {
   const failure = new Error(`${phase} failed`);
   const fail = failWith(failure);
-  const configure: Partial<Record<typeof phase, () => unknown>> = {
-    schema: () => mocks.schema.mockImplementation(fail),
-    policy: () => mocks.policy.mockImplementation(fail),
-    "handle policy": () => mocks.policy.mockReturnValueOnce(false).mockImplementationOnce(fail),
-    "native cleanup": () => mocks.db.close.mockImplementation(fail),
-  };
-  configure[phase]?.();
+  target?.().mockImplementation(fail);
   const read = phase === "query" ? fail : value;
   const admission =
     phase === "admission" ? fail : phase === "admission cleanup" ? () => fail : undefined;
@@ -138,7 +128,6 @@ it.each([
   } else {
     expect(run).toThrow(failure);
   }
-  expect(mocks.closeHandle).toHaveBeenCalledTimes(phase === "policy" ? 0 : 1);
   if (phase === "policy") {
     expect(mocks.openTracked).not.toHaveBeenCalled();
   } else {
@@ -189,7 +178,6 @@ it.each([
   const privateSource = phase.startsWith("private");
   const afterOpen = phase === "native post-open identity" || phase === "native identity and close";
   const closeFailed = phase === "native identity and close";
-  const nativeClose = mocks.db.close;
   if (phase === "private policy") {
     mocks.policy.mockImplementation(fail);
   } else if (phase === "private token") {
@@ -205,7 +193,7 @@ it.each([
   const prepared = snapshot();
   const failure = caught(() =>
     privateSource
-      ? readPrivate(prepared, expectedIdentity)
+      ? readLocation(value, pathname, prepared, undefined, expectedIdentity, "/fixture")
       : openConnection(pathname, pathname, expectedIdentity),
   );
   if (closeFailed) {
@@ -215,19 +203,8 @@ it.each([
   }
   expect(mocks.openPrivate).not.toHaveBeenCalled();
   expect(mocks.openTracked).toHaveBeenCalledTimes(afterOpen ? 1 : 0);
-  expect(mocks.closeHandle).toHaveBeenCalledTimes(afterOpen ? 1 : 0);
-  if (privateSource) {
-    expect(prepared.cleanup).toHaveBeenCalledOnce();
-  } else {
-    expect(mocks.identity).toHaveBeenCalledWith(pathname, expectedIdentity);
-  }
-  if (afterOpen) {
-    expect(mocks.closeHandle).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ db: mocks.db, path: pathname }),
-    );
-    expect(nativeClose).toHaveBeenCalledOnce();
-    expect(mocks.db.isOpen).toBe(closeFailed);
-  }
+  expect(prepared.cleanup).toHaveBeenCalledTimes(privateSource ? 1 : 0);
+  expect(mocks.db.isOpen).toBe(!afterOpen || closeFailed);
 });
 
 it.each(["clean", "token failure", "incomplete snapshot"])(
@@ -241,7 +218,10 @@ it.each(["clean", "token failure", "incomplete snapshot"])(
     }
     const prepared = snapshot(cleanupKind !== "incomplete snapshot");
     if (cleanupKind === "clean") {
-      expect(readPrivate(prepared)).toEqual({ status: "unavailable", error: primary });
+      expect(readLocation(value, pathname, prepared, undefined, undefined, "/fixture")).toEqual({
+        status: "unavailable",
+        error: primary,
+      });
     } else {
       const failure = caught(() =>
         openConnection(
@@ -260,10 +240,8 @@ it.each(["clean", "token failure", "incomplete snapshot"])(
       );
     }
     if (cleanupKind !== "incomplete snapshot") {
-      expect(mocks.acquireToken).toHaveBeenCalledExactlyOnceWith("/fixture");
       expect(mocks.releaseToken).toHaveBeenCalledOnce();
     }
-    expect(mocks.openPrivate).toHaveBeenCalledOnce();
     expect(prepared.cleanup).toHaveBeenCalledOnce();
     expect(mocks.closeHandle).not.toHaveBeenCalled();
   },

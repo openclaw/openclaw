@@ -79,6 +79,7 @@ it("measures newly committed rows before observer registration using fractional 
   virtualizer.getVirtualItems();
   const rowRefs = new TranscriptRowRefs(virtualizer, {
     isCurrentRow: () => true,
+    beforeMeasure: () => {},
     onMount: () => {},
   });
   try {

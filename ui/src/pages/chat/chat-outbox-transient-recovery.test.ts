@@ -1,10 +1,12 @@
 /* @vitest-environment jsdom */
+
 import { GatewayProtocolRequestTimeoutError } from "@openclaw/gateway-client/browser";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { GatewayPendingRequests } from "../../../../packages/gateway-client/src/pending-request.js";
 import type { RequestFrame } from "../../../../packages/gateway-protocol/src/schema/frames.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
+import { useFakeClock } from "../../test-helpers/fake-clock.ts";
 import { createTestGatewayClient as clientWithRequest } from "../../test-helpers/gateway-client.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
@@ -21,12 +23,6 @@ import { handleSendChat } from "./chat-send-submit.ts";
 import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
 useChatSendBrowserFixture();
 
-function useFakeClock() {
-  vi.useFakeTimers();
-  onTestFinished(() => {
-    vi.useRealTimers();
-  });
-}
 function unavailable(message = "History is temporarily unavailable") {
   return new GatewayRequestError({
     code: "UNAVAILABLE",

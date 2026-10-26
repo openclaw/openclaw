@@ -180,13 +180,12 @@ function observeWith(
   });
 }
 
-it.each(["load", "metadata", "policy"] as const)(
-  "offline %s consumes canonical config without reading pending migrations or changing artifacts",
-  async (method) => {
-    const { options, source, raw, pending, databasePath } = await pendingFixture();
-    const family = [databasePath, `${databasePath}-wal`, `${databasePath}-shm`];
-    const familyBefore = family.map((file) => (fs.existsSync(file) ? fs.readFileSync(file) : null));
-    const synchronousSnapshot = vi.spyOn(sqliteReadOnlyWorker, "runSqliteReadOnlyWorkerSync");
+it("offline reads consume canonical config without reading pending migrations or changing artifacts", async () => {
+  const { options, source, raw, pending, databasePath } = await pendingFixture();
+  const family = [databasePath, `${databasePath}-wal`, `${databasePath}-shm`];
+  const familyBefore = family.map((file) => (fs.existsSync(file) ? fs.readFileSync(file) : null));
+  const synchronousSnapshot = vi.spyOn(sqliteReadOnlyWorker, "runSqliteReadOnlyWorkerSync");
+  for (const method of ["load", "metadata", "policy"] as const) {
     await withoutMainSql(async () => {
       const read = () =>
         cached(async () => {
@@ -209,12 +208,21 @@ it.each(["load", "metadata", "policy"] as const)(
       expect(synchronousSnapshot).not.toHaveBeenCalled();
     });
     expect(fs.readFileSync(options.configPath, "utf8")).toBe(raw);
-    expect(family.map((file) => (fs.existsSync(file) ? fs.readFileSync(file) : null))).toEqual(
-      familyBefore,
-    );
-    expect(readDeferredPluginMigrations({ env: options.env })).toEqual([pending]);
-  },
-);
+    for (const [index, before] of familyBefore.entries()) {
+      const file = family[index]!;
+      const after = fs.existsSync(file) ? fs.readFileSync(file) : null;
+      expect(
+        before === null ? after === null : after?.equals(before),
+        `${file}: before=${before?.length ?? "absent"}, after=${after?.length ?? "absent"}`,
+      ).toBe(true);
+    }
+    await closeOpenClawStateDatabaseAsync();
+    clearBundledDiscoveryModeMemo();
+  }
+  expect(
+    readDeferredPluginMigrations({ env: options.env, artifactPreservingReadOnly: false }),
+  ).toEqual([pending]);
+});
 
 it("validates config and update ownership snapshots while a verified live writer checkpoints", async () => {
   const { options, raw, databasePath } = await pendingFixture();

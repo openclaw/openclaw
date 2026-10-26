@@ -1,3 +1,4 @@
+import "../../styles/skill-reader-dialog.css";
 import type { JSX } from "@solidjs/web";
 import { createMemo, Errored, Loading, Show } from "solid-js";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";

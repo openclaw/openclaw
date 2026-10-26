@@ -81,31 +81,22 @@ it.each([false, true])("cleans a stalled archive (entry suffix=%s)", async (with
   const { archivePath, archiveStream, writePromise, reportProgress } = startArchive();
   const suffix = `${"a".repeat(170)}/${"b".repeat(170)}/${"c".repeat(169)}`;
   if (withEntry) {
-    reportProgress({ phase: "raw", entryPath: `/source/🤖${suffix}`, bytes: 16 });
+    for (let elapsed = 0; elapsed < 360_000; elapsed += 60_000) {
+      await vi.advanceTimersByTimeAsync(60_000);
+      reportProgress({ phase: "raw", entryPath: `/source/🤖${suffix}`, bytes: 16 });
+    }
   }
   archiveStream.write("partial archive");
   const message = "Backup archive write stalled: no progress observed for 300000ms";
   const rejection = expect(writePromise).rejects.toThrow(
     withEntry
-      ? `${message} (phase=output, entry=${JSON.stringify(suffix)}, rawBytes=16, outputBytes=15)`
+      ? `${message} (phase=output, entry=${JSON.stringify(suffix)}, rawBytes=96, outputBytes=15)`
       : message,
   );
   await vi.advanceTimersByTimeAsync(300_001);
   await rejection;
   expect(archiveStream.destroyed).toBe(true);
   await expect(fs.lstat(archivePath)).rejects.toMatchObject({ code: "ENOENT" });
-});
-
-it("keeps the archive alive through more than five minutes of one entry's raw bytes", async () => {
-  vi.useFakeTimers();
-  const { archivePath, archiveStream, writePromise, reportProgress } = startArchive();
-  for (let elapsed = 0; elapsed < 360_000; elapsed += 60_000) {
-    await vi.advanceTimersByTimeAsync(60_000);
-    reportProgress({ phase: "raw", entryPath: "/source/large.pack", bytes: 16 });
-  }
-  archiveStream.end("archive after one large entry");
-  await expect(writePromise).resolves.toMatchObject({ archivePath });
-  await expect(fs.readFile(archivePath, "utf8")).resolves.toBe("archive after one large entry");
 });
 
 it("cancels an EOF retry backoff without starting another archive", async () => {

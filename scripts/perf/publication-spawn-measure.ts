@@ -1,6 +1,19 @@
-// Focused publication transport attribution; this is not a Gateway end-to-end benchmark.
+/**
+ * Focused publication transport attribution, not a Gateway end-to-end benchmark.
+ * Run five alternating pairs with separate new state directories, adding --spawn-broker
+ * on the broker side; use identical flags for A/A timing controls:
+ * node --import ./scripts/tsx.mjs scripts/perf/publication-spawn-measure.ts \
+ *   --state-dir /absolute/new-fixture --operations 200 --resident-mib 4096
+ * Repeat separately with --allocation for collected-object sampling. For promotion:
+ * node --trace-gc-nvp --import ./scripts/tsx.mjs scripts/perf/publication-spawn-measure.ts \
+ *   --state-dir /absolute/new-traced-fixture --operations 200 --resident-mib 4096
+ * Capture stdout/stderr together; sum promoted bytes between MEASURE_START/MEASURE_END.
+ * Traced results have their own baseline and cannot supply timing gates. GC, allocation,
+ * and promotion describe the parent; parent+broker CPU excludes Git subprocess CPU.
+ */
 import assert from "node:assert/strict";
 import { ChildProcess, execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
@@ -21,6 +34,8 @@ const { values } = parseArgs({
   options: {
     "state-dir": { type: "string" },
     "transport-owner": { type: "string" },
+    "spawn-broker": { type: "boolean", default: false },
+    "resident-mib": { type: "string", default: "0" },
     operations: { type: "string", default: "2000" },
     "start-at": { type: "string", default: "0" },
     allocation: { type: "boolean", default: false },
@@ -40,7 +55,7 @@ await mkdir(path.join(root, "home"));
 const operations = parseStrictIntegerOption({
   raw: values.operations,
   label: "operations",
-  min: 1000,
+  min: 200,
   fallback: 2000,
 });
 const startAt = parseStrictIntegerOption({
@@ -49,6 +64,13 @@ const startAt = parseStrictIntegerOption({
   min: 0,
   fallback: 0,
 });
+const residentMiB = parseStrictIntegerOption({
+  raw: values["resident-mib"],
+  label: "resident-mib",
+  min: 0,
+  fallback: 0,
+});
+const traced = process.execArgv.includes("--trace-gc-nvp");
 // Keep executable routing, but do not pass credentials or the operator's configuration to Git.
 const syntheticEnv = {
   PATH: process.env.PATH,
@@ -111,6 +133,9 @@ const { runPublicationCommand } =
 const { setDiagnosticsEnabledForProcess } = await import("../../src/infra/diagnostic-events.js");
 setDiagnosticsEnabledForProcess(true);
 assert(!values["transport-owner"] || baselineLoads > 0, "Baseline transport owner was not loaded");
+const { createSpawnBrokerHost } = await import("../../src/process/spawn-broker/host.js");
+const { runWithSpawnBroker } = await import("../../src/process/spawn-broker/context.js");
+const broker = values["spawn-broker"] ? createSpawnBrokerHost() : undefined;
 const commands = [
   { args: ["rev-parse", "--verify", "HEAD^{commit}"], expected: head },
   { args: ["config", "--get", "user.name"], expected: "Synthetic Fixture" },
@@ -119,163 +144,241 @@ const commands = [
 ];
 const operation = async (index: number) => {
   const command = commands[index % commands.length]!;
-  const result = await runPublicationCommand(["git", ...command.args], { cwd: repository });
+  const result = await runWithSpawnBroker(broker, () =>
+    runPublicationCommand(["git", ...command.args], { cwd: repository }),
+  );
   assert.equal(result.code, 0);
   assert.equal(result.stdout.toString("utf8").trim(), command.expected);
 };
-for (let index = 0; index < 100; index++) {
-  await operation(index);
-}
-
-const pauses: Record<string, number[]> = {
-  minor: [],
-  major: [],
-  incremental: [],
-  weak: [],
-  other: [],
-};
-let started = Infinity;
-let ended = Infinity;
-function observeGc(entries: PerformanceEntry[]) {
-  for (const entry of entries) {
-    if (entry.startTime < started || entry.startTime >= ended) {
-      continue;
-    }
-    const kind: unknown = Reflect.get(entry, "detail")?.kind;
-    const name =
-      kind === constants.NODE_PERFORMANCE_GC_MINOR
-        ? "minor"
-        : kind === constants.NODE_PERFORMANCE_GC_MAJOR
-          ? "major"
-          : kind === constants.NODE_PERFORMANCE_GC_INCREMENTAL
-            ? "incremental"
-            : kind === constants.NODE_PERFORMANCE_GC_WEAKCB
-              ? "weak"
-              : "other";
-    pauses[name]!.push(entry.duration);
-  }
-}
-function summary(input: number[]) {
-  const sorted = input.toSorted((a, b) => a - b);
-  const percentile = (fraction: number) =>
-    sorted[Math.max(0, Math.ceil(sorted.length * fraction) - 1)] ?? 0;
-  const totalMs = input.reduce((sum, value) => sum + value, 0);
-  return {
-    count: input.length,
-    totalMs,
-    meanMs: totalMs / (input.length || 1),
-    p95Ms: percentile(0.95),
-    p99Ms: percentile(0.99),
-    maxMs: sorted.at(-1) ?? 0,
-  };
-}
-const observer = new PerformanceObserver((list) => observeGc(list.getEntries()));
-observer.observe({ entryTypes: ["gc"] });
+let observer: PerformanceObserver | undefined;
 const loop = monitorEventLoopDelay({ resolution: 1 });
 const inspector = new Session();
-const samplingInterval = 32768;
-const spawnTimes: number[] = [];
 const spawnDescriptor = Object.getOwnPropertyDescriptor(ChildProcess.prototype, "spawn");
 assert(spawnDescriptor && typeof spawnDescriptor.value === "function");
-Object.defineProperty(ChildProcess.prototype, "spawn", {
-  ...spawnDescriptor,
-  value: new Proxy(spawnDescriptor.value, {
-    apply(target, receiver, args: unknown[]) {
-      const before = performance.now();
-      try {
-        return Reflect.apply(target, receiver, args);
-      } finally {
-        spawnTimes.push(performance.now() - before);
-      }
-    },
-  }),
-});
-if (startAt) {
-  assert(startAt > Date.now(), "Preparation missed the shared start deadline");
-  await delay(startAt - Date.now());
-}
-if (values.allocation || values["cpu-profile"]) {
-  inspector.connect();
-}
-if (values.allocation) {
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
-}
-if (values["cpu-profile"]) {
-  await inspector.post("Profiler.enable");
-  await inspector.post("Profiler.start");
-}
-const latencies: number[] = [];
-loop.enable();
-const startedAtEpochMs = Date.now();
-const threadBefore = process.threadCpuUsage();
-const processBefore = process.cpuUsage();
-started = performance.now();
 try {
-  for (let index = 0; index < operations; index++) {
-    const before = performance.now();
+  await broker?.ready();
+  // A global root keeps touched synthetic RSS alive through all measured operations.
+  Reflect.set(
+    globalThis,
+    Symbol.for("openclaw.perf.publicationResident"),
+    Array.from({ length: residentMiB }, () => Buffer.alloc(1024 * 1024, 1)),
+  );
+  for (let index = 0; index < 100; index++) {
     await operation(index);
-    latencies.push(performance.now() - before);
   }
+
+  const pauses: Record<string, number[]> = {
+    minor: [],
+    major: [],
+    incremental: [],
+    weak: [],
+    other: [],
+  };
+  let started = Infinity;
+  let ended = Infinity;
+  function observeGc(entries: PerformanceEntry[]) {
+    for (const entry of entries) {
+      if (entry.startTime < started || entry.startTime >= ended) {
+        continue;
+      }
+      const kind: unknown = Reflect.get(entry, "detail")?.kind;
+      const name =
+        kind === constants.NODE_PERFORMANCE_GC_MINOR
+          ? "minor"
+          : kind === constants.NODE_PERFORMANCE_GC_MAJOR
+            ? "major"
+            : kind === constants.NODE_PERFORMANCE_GC_INCREMENTAL
+              ? "incremental"
+              : kind === constants.NODE_PERFORMANCE_GC_WEAKCB
+                ? "weak"
+                : "other";
+      pauses[name]!.push(entry.duration);
+    }
+  }
+  function summary(input: number[]) {
+    const sorted = input.toSorted((a, b) => a - b);
+    const percentile = (fraction: number) =>
+      sorted[Math.max(0, Math.ceil(sorted.length * fraction) - 1)] ?? 0;
+    const totalMs = input.reduce((sum, value) => sum + value, 0);
+    return {
+      count: input.length,
+      totalMs,
+      meanMs: totalMs / (input.length || 1),
+      p95Ms: percentile(0.95),
+      p99Ms: percentile(0.99),
+      maxMs: sorted.at(-1) ?? 0,
+    };
+  }
+  observer = new PerformanceObserver((list) => observeGc(list.getEntries()));
+  observer.observe({ entryTypes: ["gc"] });
+  const samplingInterval = 32768;
+  const spawnTimes: number[] = [];
+  const spawnCpuTimes: number[] = [];
+  Object.defineProperty(ChildProcess.prototype, "spawn", {
+    ...spawnDescriptor,
+    value: new Proxy(spawnDescriptor.value, {
+      apply(target, receiver, args: unknown[]) {
+        const before = performance.now();
+        const cpuBefore = process.threadCpuUsage();
+        try {
+          return Reflect.apply(target, receiver, args);
+        } finally {
+          const cpu = process.threadCpuUsage(cpuBefore);
+          spawnTimes.push(performance.now() - before);
+          spawnCpuTimes.push((cpu.user + cpu.system) / 1000);
+        }
+      },
+    }),
+  });
+  if (startAt) {
+    assert(startAt > Date.now(), "Preparation missed the shared start deadline");
+    await delay(startAt - Date.now());
+  }
+  const clockTicks =
+    process.platform === "linux"
+      ? Number(execFileSync("getconf", ["CLK_TCK"], { encoding: "utf8" }))
+      : undefined;
+  function combinedCpuMs() {
+    const pids = [process.pid, ...(broker?.pid ? [broker.pid] : [])];
+    if (clockTicks) {
+      return pids.reduce((sum, pid) => {
+        const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+        const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+        return sum + ((Number(fields[11]) + Number(fields[12])) * 1000) / clockTicks;
+      }, 0);
+    }
+    const rows = execFileSync("ps", ["-p", pids.join(","), "-o", "time="], {
+      encoding: "utf8",
+    })
+      .trim()
+      .split("\n");
+    assert.equal(rows.length, pids.length, "A measured process exited before its CPU snapshot");
+    return rows.reduce((sum, row) => {
+      const [days, clock] = row.trim().includes("-") ? row.trim().split("-") : ["0", row.trim()];
+      const parts = clock!.split(":").map(Number);
+      const seconds = parts.reduce((value, part) => value * 60 + part, 0) + Number(days) * 86400;
+      assert(Number.isFinite(seconds), `Invalid ps CPU time: ${row}`);
+      return sum + seconds * 1000;
+    }, 0);
+  }
+  const combinedCpuBefore = combinedCpuMs();
+  if (values.allocation || values["cpu-profile"]) {
+    inspector.connect();
+  }
+  if (values.allocation) {
+    await inspector.post("HeapProfiler.startSampling", {
+      samplingInterval,
+      includeObjectsCollectedByMajorGC: true,
+      includeObjectsCollectedByMinorGC: true,
+    });
+  }
+  if (values["cpu-profile"]) {
+    await inspector.post("Profiler.enable");
+    await inspector.post("Profiler.start");
+  }
+  const latencies: number[] = [];
+  if (traced) {
+    console.error("MEASURE_START");
+  }
+  loop.enable();
+  const startedAtEpochMs = Date.now();
+  const threadBefore = process.threadCpuUsage();
+  const processBefore = process.cpuUsage();
+  started = performance.now();
+  try {
+    for (let index = 0; index < operations; index++) {
+      const before = performance.now();
+      await operation(index);
+      latencies.push(performance.now() - before);
+    }
+  } finally {
+    ended = performance.now();
+    loop.disable();
+    Object.defineProperty(ChildProcess.prototype, "spawn", spawnDescriptor);
+  }
+  const threadCpu = process.threadCpuUsage(threadBefore);
+  const processCpu = process.cpuUsage(processBefore);
+  if (traced) {
+    console.error("MEASURE_END");
+  }
+  let allocation:
+    | { samplingInterval: number; bytes: number; bytesPerOperation: number }
+    | undefined;
+  if (values.allocation) {
+    const { profile } = await inspector.post("HeapProfiler.stopSampling");
+    const allocated = (node: HeapProfiler.SamplingHeapProfileNode): number =>
+      node.selfSize + node.children.reduce((sum, child) => sum + allocated(child), 0);
+    const bytes = allocated(profile.head);
+    allocation = { samplingInterval, bytes, bytesPerOperation: bytes / operations };
+  }
+  let cpuProfile: string | undefined;
+  if (values["cpu-profile"]) {
+    const { profile } = await inspector.post("Profiler.stop");
+    cpuProfile = path.join(root, "publication-spawn.cpuprofile");
+    await writeFile(cpuProfile, JSON.stringify(profile));
+  }
+  const parentAndBrokerCpuMs = combinedCpuMs() - combinedCpuBefore;
+  await delay(10); // Deliver deferred GC observations; filter by the measured window above.
+  observeGc(observer.takeRecords());
+  observer.disconnect();
+  const totalGc = summary(Object.values(pauses).flat());
+  const result = {
+    workload: "publication-transport",
+    mode: values.allocation
+      ? "allocation"
+      : values["cpu-profile"]
+        ? "cpu-profile"
+        : traced
+          ? "traced"
+          : "untraced",
+    spawnBroker: Boolean(broker),
+    residentMiB,
+    operations,
+    environmentKeys: Object.keys(process.env).length,
+    baselineLoads,
+    startedAtEpochMs,
+    durationMs: ended - started,
+    mainThreadCpuMsPerOperation: (threadCpu.user + threadCpu.system) / 1000 / operations,
+    processCpuMsPerOperation: (processCpu.user + processCpu.system) / 1000 / operations,
+    latency: summary(latencies),
+    synchronousSpawn: summary(spawnTimes),
+    synchronousSpawnCpu: summary(spawnCpuTimes),
+    synchronousSpawnCpuMsPerOperation:
+      spawnCpuTimes.reduce((sum, value) => sum + value, 0) / operations,
+    parentAndBrokerCpu: {
+      totalMs: parentAndBrokerCpuMs,
+      msPerOperation: parentAndBrokerCpuMs / operations,
+      snapshotResolutionMs: clockTicks
+        ? 1000 / clockTicks
+        : process.platform === "darwin"
+          ? 10
+          : 1000,
+      source: `${clockTicks ? "/proc stat" : "ps time"}; snapshots outside the timed window; excludes Git children`,
+    },
+    allocation,
+    cpuProfile,
+    gc: {
+      total: totalGc,
+      msPerOperation: totalGc.totalMs / operations,
+      byKind: Object.fromEntries(
+        Object.entries(pauses).map(([kind, samples]) => [kind, summary(samples)]),
+      ),
+    },
+    eventLoop: {
+      count: loop.count,
+      p95Ms: loop.percentile(95) / 1e6,
+      p99Ms: loop.percentile(99) / 1e6,
+      maxMs: loop.max / 1e6,
+    },
+  };
+  const json = JSON.stringify(result, null, 2);
+  await writeFile(values.output ?? path.join(root, "result.json"), json + "\n");
+  console.log(json);
 } finally {
-  ended = performance.now();
   loop.disable();
-  Object.defineProperty(ChildProcess.prototype, "spawn", spawnDescriptor);
-}
-const threadCpu = process.threadCpuUsage(threadBefore);
-const processCpu = process.cpuUsage(processBefore);
-let allocation: { samplingInterval: number; bytes: number; bytesPerOperation: number } | undefined;
-if (values.allocation) {
-  const { profile } = await inspector.post("HeapProfiler.stopSampling");
-  const allocated = (node: HeapProfiler.SamplingHeapProfileNode): number =>
-    node.selfSize + node.children.reduce((sum, child) => sum + allocated(child), 0);
-  const bytes = allocated(profile.head);
-  allocation = { samplingInterval, bytes, bytesPerOperation: bytes / operations };
-}
-let cpuProfile: string | undefined;
-if (values["cpu-profile"]) {
-  const { profile } = await inspector.post("Profiler.stop");
-  cpuProfile = path.join(root, "publication-spawn.cpuprofile");
-  await writeFile(cpuProfile, JSON.stringify(profile));
-}
-if (values.allocation || values["cpu-profile"]) {
+  observer?.disconnect();
   inspector.disconnect();
+  Object.defineProperty(ChildProcess.prototype, "spawn", spawnDescriptor);
+  Reflect.deleteProperty(globalThis, Symbol.for("openclaw.perf.publicationResident"));
+  await broker?.close();
 }
-await delay(10); // Deliver deferred GC observations; filter by the measured window above.
-observeGc(observer.takeRecords());
-observer.disconnect();
-const totalGc = summary(Object.values(pauses).flat());
-const result = {
-  workload: "publication-transport",
-  mode: values.allocation ? "allocation" : values["cpu-profile"] ? "cpu-profile" : "untraced",
-  operations,
-  environmentKeys: Object.keys(process.env).length,
-  baselineLoads,
-  startedAtEpochMs,
-  durationMs: ended - started,
-  mainThreadCpuMsPerOperation: (threadCpu.user + threadCpu.system) / 1000 / operations,
-  processCpuMsPerOperation: (processCpu.user + processCpu.system) / 1000 / operations,
-  latency: summary(latencies),
-  synchronousSpawn: summary(spawnTimes),
-  allocation,
-  cpuProfile,
-  gc: {
-    total: totalGc,
-    msPerOperation: totalGc.totalMs / operations,
-    byKind: Object.fromEntries(
-      Object.entries(pauses).map(([kind, samples]) => [kind, summary(samples)]),
-    ),
-  },
-  eventLoop: {
-    count: loop.count,
-    p95Ms: loop.percentile(95) / 1e6,
-    p99Ms: loop.percentile(99) / 1e6,
-    maxMs: loop.max / 1e6,
-  },
-};
-const json = JSON.stringify(result, null, 2);
-await writeFile(values.output ?? path.join(root, "result.json"), json + "\n");
-console.log(json);

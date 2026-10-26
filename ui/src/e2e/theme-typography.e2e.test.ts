@@ -418,6 +418,6 @@ suite.define(() => {
     const paletteUrl = new URL(paletteHref ?? "", suite.server.baseUrl);
     expect(paletteUrl.pathname).toBe(`${basePath}/themes/absolutely.css`);
     expect(paletteUrl.searchParams.get("v")).toBe(buildId);
-    expect(await cssToken(page, "--bg")).toBe("#1c1c1a");
+    expect(await cssToken(page, "--bg-content")).toBe("#1b1b1a");
   });
 });

@@ -233,7 +233,8 @@ async function loadSessionFiles(
     root: loaded.root,
     fileRoot: loaded.fileRoot,
     diffCwd: loaded.diffCwd,
-    files: [...files.values()].toSorted((a, b) => {
+    // oxlint-disable-next-line unicorn/no-array-sort -- The spread creates a fresh, private array.
+    files: [...files.values()].sort((a, b) => {
       if (a.kind !== b.kind) {
         return a.kind === "modified" ? -1 : 1;
       }

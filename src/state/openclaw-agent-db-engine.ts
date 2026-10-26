@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { MEMORY_PATH_POSTGRES_INDEX_SQL } from "../../packages/memory-host-sdk/src/host/memory-path-postgres.js";
 import { admitStoreSearch } from "../infra/database-engine/adapters.js";
 import { getDatabaseEngineInput } from "../infra/database-engine/context.js";
 import type { SearchSchema, StoreSchema } from "../infra/database-engine/contract.js";
@@ -8,6 +9,7 @@ import {
   postgresIndexOrderingMigration,
   withLegacyPostgresIndexOrdering,
 } from "../infra/database-engine/postgres-index-ordering.js";
+import { arePostgresSearchExtensionsAdmitted } from "../infra/database-engine/search-extension.js";
 import {
   isPostgresSqlConnection,
   type EngineConnection,
@@ -35,6 +37,7 @@ import {
   AGENT_INDEX_RETIREMENT_SQL,
   withLegacyAgentPostgresIndexes,
 } from "./openclaw-agent-index-retirement-migration.js";
+import { withLegacyAgentPostgresMemoryPaths } from "./openclaw-agent-memory-path-migration.js";
 import {
   AGENT_MEMORY_REVISION_POSTGRES_SQL,
   withLegacyAgentPostgresMemoryRevisionTriggers,
@@ -66,6 +69,12 @@ export function admitAgentEngineSearchExtensions(
   if (!isPostgresSqlConnection(db)) {
     return;
   }
+  if (arePostgresSearchExtensionsAdmitted(db, definitions)) {
+    for (const definition of Object.values(definitions)) {
+      admitStoreSearch(db, definition);
+    }
+    return;
+  }
   db.runTransaction(
     () => {
       admit("transaction");
@@ -83,7 +92,12 @@ export function admitAgentEngineSearchExtensions(
 }
 
 const agentPostgresSql = `${agentPostgresRuntime.sql}\n${agentSearchPostgresRuntime.sql}`;
-const agentPostgresV33Sql = withLegacyPostgresIndexOrdering(agentPostgresSql);
+const agentPostgresV35Sql = withLegacyAgentPostgresMemoryPaths(agentPostgresSql);
+const agentPostgresV34Sql = withLegacyPostgresIndexOrdering(
+  agentPostgresV35Sql,
+  "schema-nullability",
+);
+const agentPostgresV33Sql = withLegacyPostgresIndexOrdering(agentPostgresV34Sql);
 const agentPostgresV30Sql = withLegacyAgentPostgresMemoryRevisionTriggers(agentPostgresV33Sql);
 const agentPostgresV29Sql = withLegacyAgentPostgresTrajectoryStorage(agentPostgresV30Sql);
 const agentPostgresV28Sql = withLegacyAgentPostgresIndexes(agentPostgresV29Sql);
@@ -177,13 +191,51 @@ export const agentEngineSchema: StoreSchema = {
         postgresVectorSearchVersion: 2,
       },
       schema: {
+        postgres: agentPostgresV34Sql,
+        postgresVectorDecoderVersion: 2,
+        postgresVectorSearchVersion: 2,
+      },
+      sql: `${postgresIndexOrderingMigration(agentPostgresV34Sql)}
+        UPDATE schema_meta
+        SET schema_version = 34,
+          app_version = '${VERSION.replaceAll("'", "''")}',
+          updated_at = CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint)
+        WHERE meta_key = 'primary';`,
+    },
+    {
+      version: 35,
+      fromSchema: {
+        postgres: agentPostgresV34Sql,
+        postgresVectorDecoderVersion: 2,
+        postgresVectorSearchVersion: 2,
+      },
+      schema: {
+        postgres: agentPostgresV35Sql,
+        postgresVectorDecoderVersion: 2,
+        postgresVectorSearchVersion: 2,
+      },
+      sql: `${postgresIndexOrderingMigration(agentPostgresV35Sql, "schema-nullability")}
+        UPDATE schema_meta
+        SET schema_version = 35,
+          app_version = '${VERSION.replaceAll("'", "''")}',
+          updated_at = CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint)
+        WHERE meta_key = 'primary';`,
+    },
+    {
+      version: 36,
+      fromSchema: {
+        postgres: agentPostgresV35Sql,
+        postgresVectorDecoderVersion: 2,
+        postgresVectorSearchVersion: 2,
+      },
+      schema: {
         postgres: agentPostgresSql,
         postgresVectorDecoderVersion: 2,
         postgresVectorSearchVersion: 2,
       },
-      sql: `${postgresIndexOrderingMigration(agentPostgresSql)}
+      sql: `${MEMORY_PATH_POSTGRES_INDEX_SQL}
         UPDATE schema_meta
-        SET schema_version = 34,
+        SET schema_version = 36,
           app_version = '${VERSION.replaceAll("'", "''")}',
           updated_at = CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint)
         WHERE meta_key = 'primary';`,
