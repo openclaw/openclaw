@@ -54,13 +54,14 @@ async function isolated<T>(run: (input: ReturnType<typeof fixture>) => Promise<T
   );
 }
 
-it("reports each external plugin's preparation worker in ordinary startup logs", () =>
+it("reports the shared external preparation worker once in ordinary startup logs", () =>
   isolated(async ({ options }) => {
     const info = vi.fn();
     const trace = createGatewayStartupTrace({ info } as never);
     try {
       const registry = await loadOpenClawPluginsAsync({ ...options, startupTrace: trace });
       expect(registry.plugins.filter((plugin) => plugin.status === "loaded")).toHaveLength(2);
+      const preparationMessages: string[] = [];
       for (const id of ["first-external", "second-external"]) {
         const messages = info.mock.calls
           .map(([message]) => String(message))
@@ -68,8 +69,13 @@ it("reports each external plugin's preparation worker in ordinary startup logs",
             message.startsWith(`startup trace: plugins.gateway-load.plugin.${id} `),
           );
         expect(messages).toHaveLength(1);
-        expect(messages[0]).toContain("plugin-generation-preparation.worker.js:1");
+        preparationMessages.push(messages[0]);
       }
+      expect(
+        preparationMessages.filter((message) =>
+          message.includes("plugin-generation-preparation.worker.js:1"),
+        ),
+      ).toHaveLength(1);
     } finally {
       trace.close();
     }

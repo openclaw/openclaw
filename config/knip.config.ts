@@ -451,6 +451,8 @@ const repositoryScriptEntries = [
   "scripts/perf/placement-recovery-reads-bench.ts!",
   "scripts/perf/plain-tool-brace-measure.ts!",
   "scripts/perf/plugin-cache-stat-facts.ts!",
+  "scripts/perf/plugin-preparation-boot.mjs!",
+  "scripts/perf/plugin-preparation-boot-preload.mjs!",
   "scripts/perf/plugin-source-preparation.ts!",
   "scripts/perf/prepared-gateway-startup-measure.mjs!",
   "scripts/perf/sandbox-paths-measure.ts!",
