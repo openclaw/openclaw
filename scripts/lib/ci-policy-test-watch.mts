@@ -140,6 +140,15 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     sourceOnly: true,
   },
   {
+    testFile: "test/e2e/qa-lab/runtime/gateway-session-steering.e2e.test.ts",
+    watchGlobs: [
+      "src/sessions/session-controller*.ts",
+      "src/auto-reply/reply/agent-runner-steer-adoption.ts",
+      "src/auto-reply/reply/queue/{enqueue,drain,drain-admission-scope}.ts",
+    ],
+    sourceOnly: true,
+  },
+  {
     testFile: "test/scripts/node-runtime-recovery.built-cli.e2e.test.ts",
     watchGlobs: [
       "node-runtime-recovery.mjs",
