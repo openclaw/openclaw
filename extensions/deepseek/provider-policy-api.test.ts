@@ -72,8 +72,8 @@ describe("deepseek provider-policy-api", () => {
   it("preserves tiered pricing layered onto an older flat catalog snapshot", () => {
     const userCost = {
       ...cost(1.74, 3.48, 0.145),
-      tieredPricing: [{ upTo: 200_000, ...cost(1, 2, 0.1) }],
-    };
+      tieredPricing: [{ range: [0, 200_000], ...cost(1, 2, 0.1) }],
+    } satisfies NonNullable<ModelProviderConfig["models"][number]["cost"]>;
     const providerConfig = configWithModels(model("deepseek-v4-pro", { cost: userCost }));
 
     expect(normalizeConfig({ provider: "deepseek", providerConfig }).models[0]?.cost).toBe(

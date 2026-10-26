@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { EdgeTTS } from "node-edge-tts";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildMicrosoftSpeechProvider } from "./speech-provider.js";
 
 const audioBuffer = Buffer.from([0xff, 0xfb, 0x90, 0x00]);
@@ -70,7 +70,9 @@ describe("Microsoft speech synthesis", () => {
   it("succeeds when the output file has content", async () => {
     const tts = vi.fn(writeAudio);
     await expect(synthesize(tts)).resolves.toMatchObject(expectedAudio);
-    const stagedPath = tts.mock.calls[0][1];
+    const firstCall = tts.mock.calls[0];
+    assert(firstCall);
+    const stagedPath = firstCall[1];
     expect(path.basename(stagedPath)).toMatch(/speech[.]mp3.*[.]part$/);
     expect([stagedPath, path.dirname(stagedPath)].filter(existsSync)).toEqual([]);
   });

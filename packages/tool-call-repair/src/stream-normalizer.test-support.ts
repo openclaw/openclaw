@@ -62,9 +62,10 @@ export async function collectNormalizedEvents(
   async function* source() {
     yield* events;
   }
-  const normalized = await Array.fromAsync(
-    normalizePlainTextToolCallStreamEvents(source(), options),
-  );
+  const normalized: unknown[] = [];
+  for await (const event of normalizePlainTextToolCallStreamEvents(source(), options)) {
+    normalized.push(event);
+  }
   return normalized.filter((event): event is Event => event !== null && typeof event === "object");
 }
 

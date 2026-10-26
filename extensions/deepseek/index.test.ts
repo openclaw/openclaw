@@ -64,7 +64,7 @@ it("strips replayed reasoning_content when DeepSeek V4 thinking is disabled", as
     return stream;
   };
   const wrapped = createDeepSeekV4ThinkingWrapper(streamFn as never, "none" as never);
-  await expectDefined(wrapped)(model, context, {});
+  await expectDefined(wrapped, "DeepSeek thinking wrapper")(model, context, {});
 });
 
 it("resolves API-key usage auth from DeepSeek config sources", async () => {

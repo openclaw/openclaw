@@ -36,7 +36,7 @@ it.each([
 });
 
 it("requires the persisted sandbox discriminator and preserves the private target", () => {
-  const job = makeCronJob({ schedule: structuredClone(stream), streamSandbox: target });
+  const job = { ...makeCronJob({ schedule: structuredClone(stream) }), streamSandbox: target };
   expect(decode(job)).toBeNull();
   expect(decode({ ...job, schedule: { ...job.schedule, kind: "sandbox-stream" } })).toMatchObject({
     schedule: job.schedule,
