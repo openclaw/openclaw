@@ -1026,21 +1026,24 @@ describe("quarantine health", () => {
         })(),
         async () => {
           release.resolve();
-          try {
-            await loading;
-            await retirement;
-            commit.mockRestore();
-            await resetQuarantine();
-            resetPluginLoaderTestStateForTest();
-            const { failures } = await waitForPluginCacheRetirement(true);
-            throwCollectedErrors(
-              failures.map(({ error }) => error),
-              "Plugin cleanup failed",
-            );
-          } finally {
-            observer.mockRestore();
-            restoreGlobalRegistry(previous);
-          }
+          await [
+            () => loading.then(() => retirement),
+            () => commit.mockRestore(),
+            () => resetQuarantine(),
+            () => resetPluginLoaderTestStateForTest(),
+            async () => {
+              const { failures } = await waitForPluginCacheRetirement(true);
+              const errors = failures.map(({ error }) => error);
+              throwCollectedErrors(errors, "Plugin cleanup failed");
+            },
+            () => observer.mockRestore(),
+            () => restoreGlobalRegistry(previous),
+          ].reduceRight<() => Promise<void>>(
+            (next, run) => async () => {
+              await settleWithCleanup(Promise.resolve().then(run), next, "Cleanup failed");
+            },
+            async () => {},
+          )();
         },
         "Activation health proof and cleanup failed",
       );
