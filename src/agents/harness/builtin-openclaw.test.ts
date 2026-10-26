@@ -106,6 +106,11 @@ it("enforces tool-free finalization while forwarding execution and lifecycle not
     sessionManager: { owner: "host" },
     sessionPersistence: "detached",
     disableTools: true,
+    disableTrajectory: true,
+    skipPreparedUserTurnMessage: true,
+    suppressNextUserMessagePersistence: true,
+    initialReplayState: { replayInvalid: false, hadPotentialSideEffects: false },
+    operation: "settled-tool-finalization",
     prepareAssistantTranscriptMessage: attempt.prepareAssistantTranscriptMessage,
   });
   for (const key of Object.keys(ambient)) {
