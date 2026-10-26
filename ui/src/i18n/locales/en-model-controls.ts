@@ -131,9 +131,10 @@ const enModelControls = {
       label: "Execution permissions",
       help: "Choose what available tools may do in this session. This does not change the tool profile.",
       default: "Default",
-      defaultDescription: "Follow the agent's configured execution permissions.",
+      defaultDescription: "The agent's configured permissions.",
       defaultWithMode: "Default ({mode})",
       fullRequiresAdmin: "Full access requires operator.admin access.",
+      requiresAdmin: "Requires admin access.",
       updateFailed: "Failed to update permissions: {error}",
       refreshFailed: "Permissions were saved, but refreshing the session failed: {error}",
       modes: {

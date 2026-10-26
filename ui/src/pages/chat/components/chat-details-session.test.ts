@@ -465,6 +465,7 @@ it("shows live environment facts without duplicating composer context", async ()
       outputTokens: 450,
     },
   });
+  await vi.dynamicImportSettled();
   const environment = element.querySelector('[data-details-group="environment"]')!;
   await waitForSolid(() => expect(environment.textContent).toContain("feature/details"));
   expect(environment.textContent).not.toContain("Design workstation");

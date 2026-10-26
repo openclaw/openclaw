@@ -1,8 +1,10 @@
 import fs from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
-import { loadDeviceAuthTokens } from "../infra/device-auth-store.js";
-import { seedDeviceAuthToken } from "../infra/device-auth-store.test-support.js";
+import {
+  loadDeviceAuthTokens,
+  storeDeviceAuthToken as seedDeviceAuthToken,
+} from "../infra/device-auth-store.js";
 import {
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
@@ -37,7 +39,7 @@ it("reads token inventories off-host without creating storage or retaining mutab
     await expect(fs.stat(state.statePath("client", "credentials.sqlite"))).rejects.toMatchObject({
       code: "ENOENT",
     });
-    const operator = seedDeviceAuthToken({
+    const operator = await seedDeviceAuthToken({
       deviceId: "synthetic-device",
       role: "operator",
       token: "synthetic-operator-token",
@@ -66,13 +68,15 @@ it("detects stale local tokens from the active state view while checking legacy 
       scopes: ["operator.read"],
     });
     await approveDevicePairing(pairing.request.requestId, { callerScopes: ["operator.read"] });
-    seedDeviceAuthToken({
+    const staleTokenClock = vi.spyOn(Date, "now").mockReturnValueOnce(1);
+    const staleTokenWrite = seedDeviceAuthToken({
       deviceId: identity.deviceId,
       role: "operator",
       token: "synthetic-stale-token",
       scopes: ["operator.read"],
-      updatedAtMs: 1,
     });
+    staleTokenClock.mockRestore();
+    await staleTokenWrite;
     const sourceDir = state.path("source-state");
     await fs.mkdir(`${sourceDir}/identity`, { recursive: true });
     await fs.writeFile(`${sourceDir}/identity/device-auth.json`, '{"version":1}');

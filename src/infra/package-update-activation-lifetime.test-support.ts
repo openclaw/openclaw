@@ -52,6 +52,14 @@ export function createPackageActivationLifetimeFixture() {
 
   return {
     lifetime,
+    async cleanup(this: void) {
+      try {
+        await lifetime.cleanup();
+      } finally {
+        vi.restoreAllMocks();
+        vi.unstubAllEnvs();
+      }
+    },
     setup(this: void) {
       root = fs.realpathSync(lifetime.createTempDir("activation-lifetime-"));
       const tmp = path.join(root, "private-tmp");

@@ -3,6 +3,7 @@ import { afterEach, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentsFilesListResult, AgentsListResult } from "../../api/types.ts";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { createGatewayMetadataObserver } from "../../app/gateway-observers.ts";
 import { createAgentCapability } from "../../lib/agents/index.ts";
@@ -231,12 +232,9 @@ export function settingsSelection(
   return selection;
 }
 
-export const agentsList: AgentsListResult = {
-  defaultId: "main",
-  mainKey: "main",
-  scope: "per-sender",
+export const agentsList: AgentsListResult = makeBootRoster({
   agents: [{ id: "main", name: "Main" }],
-};
+});
 
 export function agentsRouteData(
   _currentGateway: ApplicationContext["gateway"],

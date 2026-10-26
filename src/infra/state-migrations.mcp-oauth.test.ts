@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { root } from "@openclaw/fs-safe";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { operatorMcpOAuthIdentity } from "../agents/mcp-oauth-identity.js";
@@ -27,7 +26,6 @@ import {
   observeLegacyMcpOAuthImport,
 } from "./state-migrations.mcp-oauth-faults.test-support.js";
 import { isDefinitelyStaleLegacyMcpOAuthLock } from "./state-migrations.mcp-oauth-lock-stale.js";
-import { withRootBoundedLegacyFileLock } from "./state-migrations.mcp-oauth-lock.js";
 import {
   detectLegacyMcpOAuthStores,
   migrateLegacyMcpOAuthStores,
@@ -571,22 +569,18 @@ it("fails closed for live, young, and malformed owner evidence", () => {
 });
 
 it("reports a stale sidecar without unlinking a replacement-prone path", async () => {
-  const targetRelativePath = path.join("mcp-oauth", DEFAULT_FILE_NAME);
-  const lockPath = path.join(stateDir, `${targetRelativePath}.lock`);
-  await fsp.mkdir(path.dirname(lockPath), { recursive: true });
+  const sourcePath = await writeLegacy();
+  const lockPath = `${sourcePath}.lock`;
   const raw = lockPayload({
     pid: 2 ** 30,
     createdAt: new Date(Date.now() - 120_000).toISOString(),
     starttime: 1,
   });
   await fsp.writeFile(lockPath, raw);
-  const stateRoot = await root(stateDir, { hardlinks: "reject", symlinks: "reject" });
-  let entered = false;
-  await expect(
-    withRootBoundedLegacyFileLock({ stateRoot, targetRelativePath }, async () => {
-      entered = true;
-    }),
-  ).rejects.toMatchObject({ code: "file_lock_stale" });
-  expect(entered).toBe(false);
+  const result = await migrate();
+  expect(result.changes).toEqual([]);
+  expect(result.warnings[0]).toContain("Verify no older OpenClaw process is running");
+  expectFiles([sourcePath], [`${sourcePath}.doctor-importing`]);
+  expect([storeRow(), receipt()]).toEqual([undefined, undefined]);
   expect(await fsp.readFile(lockPath, "utf8")).toBe(raw);
 });

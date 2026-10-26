@@ -153,7 +153,7 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
   operationId: number;
   completion: "result" | "exit";
   databaseAuthority?: {
-    stateAccess: ReturnType<typeof captureStateDatabaseAccess>;
+    stateAccess: Awaited<ReturnType<typeof captureStateDatabaseAccess>>;
     creationPaths: readonly string[];
     maintenanceScope?: OpenClawDatabaseMaintenanceScope;
     assertCurrent(): void;

@@ -128,15 +128,34 @@ function createSessionWorkspaceFileContent(
     };
   }
   if (file.previewKind === "unsupported") {
+    const source: FilePreviewSource = {
+      path: filePath,
+      absolutePath: workspaceBrowserFilePath(result.root, filePath),
+      root: result.root,
+      download,
+    };
+    if (file.mimeType === "application/pdf") {
+      return {
+        kind: "attachment",
+        attachmentKind: "document",
+        title: name,
+        mimeType: file.mimeType,
+        sizeBytes: file.size,
+        sourceIdentity: JSON.stringify([
+          gatewayUrl,
+          result.sessionKey,
+          messageFile,
+          actionPath,
+          result.root,
+          result.source,
+        ]),
+        file: source,
+      };
+    }
     return {
       ...unsupportedFileSidebarContent(file, actionPath, download),
       fileLinkSessionKey: result.sessionKey,
-      file: {
-        path: filePath,
-        absolutePath: workspaceBrowserFilePath(result.root, filePath),
-        root: result.root,
-        download,
-      },
+      file: source,
     };
   }
   const text = readWorkspaceFileText(file);

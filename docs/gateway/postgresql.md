@@ -350,6 +350,45 @@ maintenance host. URL-encode special characters in credentials and paths.
 `sslmode=disable` disables TLS; reserve it for a deliberately local connection.
 Keep DSNs out of shell history, diagnostic captures, and logs.
 
+When PostgreSQL runs on the Gateway host, the server can accept connections only
+on its Unix socket (`listen_addresses = ''`). Put the socket directory in the
+DSN's `host` query parameter and disable TLS for it:
+
+```text
+postgresql://openclaw_runtime:<URL_ENCODED_PASSWORD>@localhost/openclaw?host=/path/to/socket-dir&sslmode=disable
+```
+
+PostgreSQL does not accept TLS on a Unix socket: keeping `sslmode=verify-full`
+or another TLS mode from a network DSN, or a `PGSSLMODE` environment variable,
+fails with "The server does not support SSL connections". Drop the certificate
+options and keep `sslmode=disable` in the DSN, which takes precedence over
+`PGSSLMODE`.
+
+The socket file belongs to the OS account that runs PostgreSQL, and
+`unix_socket_permissions` applies to that file, not to its directory. When
+PostgreSQL and the Gateway run as the same account, `unix_socket_permissions =
+0700` limits the socket to that account. When they run as different accounts,
+put both in a shared group, set `unix_socket_group` to it with
+`unix_socket_permissions = 0770`, and make the socket directory traversable by
+that group. Either way, authenticate the runtime role with a
+`local ... scram-sha-256` line in `pg_hba.conf`. A file SecretRef can read the
+DSN from a private file:
+
+```json5
+{
+  secrets: {
+    providers: {
+      pgdsn: { source: "file", path: "~/.openclaw/secrets/postgres-dsn", mode: "singleValue" },
+    },
+  },
+  database: {
+    postgres: {
+      connection: { source: "file", provider: "pgdsn", id: "value" },
+    },
+  },
+}
+```
+
 ### TLS and exec connection qualification
 
 For a private CA, install its certificate on every host that runs the Gateway or
