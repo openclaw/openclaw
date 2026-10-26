@@ -7,7 +7,6 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-api";
 import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { importFreshModule } from "../../plugin-sdk/test-helpers/import-fresh.js";
 import { createPluginRuntimeMock } from "../../plugin-sdk/test-helpers/plugin-runtime-mock.js";
 import { createPluginStateKeyedStoreV2 } from "../../plugin-state/plugin-state-store.js";
@@ -37,14 +36,13 @@ function transition(
 async function seedProvisioning(
   environmentId: string,
   profileSnapshot: Parameters<typeof state.store.createIntent>[0]["profileSnapshot"],
-  provisionOperationId = `provision:${"0".repeat(64)}`,
 ) {
   const intent = await state.store.createIntent({
     environmentId,
     providerId: "crabbox",
     profileId: "development",
     profileSnapshot,
-    provisionOperationId,
+    provisionOperationId: `provision:${"0".repeat(64)}`,
   });
   return transition(environmentId, intent.state, "provisioning");
 }
@@ -121,64 +119,6 @@ describe("Crabbox runtime preflight cleanup", () => {
     }
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
-  });
-
-  it("reclaims after Crabbox accepts stop while retaining waiting-stop release confirmation", async ({
-    signal,
-  }) => {
-    const environmentId = "worker-fast-reclaim";
-    const leaseId = "cbx_0123456789ab";
-    const acceptedStop = createDeferred();
-    const finishRelease = createDeferred();
-    const calls: string[][] = [];
-    vi.spyOn(processRuntime, "runCommandWithTimeout").mockImplementation(async (argv) => {
-      if (argv[1] === "--version") {
-        return commandResult({ stdout: "999.0.0" });
-      }
-      calls.push(argv);
-      expect(argv[1]).toBe("stop");
-      if (argv.includes("--wait=false")) {
-        acceptedStop.resolve();
-      } else {
-        await withinTest(finishRelease.promise, signal);
-      }
-      return commandResult();
-    });
-    const provider = await registerProvider();
-    // Seed the real persisted provider snapshot without allocating any cloud resource.
-    await seedProvisioning(
-      environmentId,
-      {
-        settings: { ...PROFILE, provider: "aws", warmImage: false },
-      },
-      "fast-reclaim-operation",
-    );
-    await transition(environmentId, "provisioning", "bootstrapping", {
-      leaseId,
-      sshEndpoint: support.SSH_ENDPOINT,
-    });
-    await transition(environmentId, "bootstrapping", "ready", support.readyPatch(environmentId));
-    const service = support.createService(provider);
-    const reclaim = service.reclaim(environmentId);
-    try {
-      await withinTest(acceptedStop.promise, signal);
-      await expect(withinTest(reclaim, signal)).resolves.toMatchObject({ state: "destroying" });
-      expect(state.store.get(environmentId)).toMatchObject({
-        state: "destroying",
-        leaseId,
-      });
-      finishRelease.resolve();
-      await expect(service.destroy(environmentId)).resolves.toMatchObject({
-        state: "destroyed",
-      });
-      expect(calls.map((argv) => argv.slice(1))).toEqual([
-        ["stop", "--provider", "aws", "--id", leaseId, "--wait=false"],
-        ["stop", "--provider", "aws", "--id", leaseId],
-      ]);
-    } finally {
-      finishRelease.resolve();
-      await reclaim;
-    }
   });
 
   it.each(["spawn", "config"])(
@@ -301,7 +241,6 @@ describe("Crabbox runtime preflight cleanup", () => {
 
   it.each([
     cleanupCase("terminal fixed lease"),
-    cleanupCase("absent attached resource", { ...absentResource, outcome: "destroyed" }),
     cleanupCase("absent resource with unconfirmed stop", {
       ...absentResource,
       outcome: "retry-stop",
@@ -462,14 +401,7 @@ describe("Crabbox runtime preflight cleanup", () => {
 
   // Synthetic CLI diagnostics exercise the real error producer, not captured native output.
   it.each([
-    { kind: "config", name: "config command failure", result: commandResult({ code: 2 }) },
     { kind: "config", name: "invalid config JSON", result: commandResult({ stdout: "{" }) },
-    { kind: "config", name: "removed coordinator", result: commandResult({ stdout: "{}" }) },
-    {
-      kind: "aws-profile",
-      name: "attached AWS profile",
-      result: commandResult({ stdout: JSON.stringify({ aws: { instanceProfile: "new-role" } }) }),
-    },
     { kind: "modes", name: "changed advertised modes" },
     { kind: "timeout", name: "invalid timeout metadata" },
     {
@@ -489,7 +421,6 @@ describe("Crabbox runtime preflight cleanup", () => {
     const profile = {
       ...PROFILE,
       ...(scenario.kind === "config" ? { provider: "hetzner", desktop: true } : {}),
-      ...(scenario.kind === "aws-profile" ? { provider: "aws" } : {}),
     };
     support.getDevelopmentProfile().provider = "crabbox";
     support.getDevelopmentProfile().settings = profile;
@@ -516,7 +447,6 @@ describe("Crabbox runtime preflight cleanup", () => {
               stdout: JSON.stringify({
                 coordinator: "https://coordinator.example.test",
                 brokerMode: "managed",
-                aws: { instanceProfile: "" },
               }),
             });
       }

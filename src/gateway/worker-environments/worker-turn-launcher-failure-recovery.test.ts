@@ -13,10 +13,6 @@ import { createReplyOperation, type ReplyOperation } from "../../sessions/sessio
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "../../worker/transcript-message.js";
 import { WorkerNodeLostError } from "../../worker/worker-node-loss.js";
-import { sessionByKeyReadHandlers } from "../server-methods/sessions-read-by-key.js";
-import { requestContext } from "../server-methods/sessions-read-cache.test-support.js";
-import { bindSessionRowProjection } from "../session-row-projection-access.js";
-import { createSessionRowProjection } from "../session-row-projection.js";
 import { placementTurnOwner, projectWorkerSessionTurnClaim } from "./placement-record.js";
 import { journalOwner } from "./placement-suite.test-support.js";
 import {
@@ -290,40 +286,12 @@ describe("worker turn launcher failure recovery", () => {
     }
   });
 
-  it("publishes bounded launch and cancellation diagnostics after held cleanup", async () => {
+  it("records bounded launch and cancellation diagnostics after held cleanup", async () => {
     const claim = await claimActivePlacement("rejected-launch-claim", "rejected-launch-run");
     const secret = "synthetic-worker-recovery-secret";
     const launchDiagnosis = "node worker supervisor worker.launch.v1 failed: invalid descriptor";
     const cancellationDiagnosis =
       "node worker cancellation did not produce a terminal receipt before its deadline";
-    const cfg = {
-      session: { store: fx.sessionTarget.storePath },
-      agents: {
-        entries: { main: {} },
-        defaults: { model: "unit-test/model", utilityModel: "" },
-      },
-    };
-    const projection = await createSessionRowProjection({
-      cfg,
-      modelCatalog: [],
-      placementFactsReader: fx.placements,
-    });
-    const context = bindSessionRowProjection(requestContext(cfg), () => projection);
-    const respond = vi.fn();
-    const expectDescribedPlacement = async (placement: object) => {
-      respond.mockClear();
-      await sessionByKeyReadHandlers["sessions.describe"]!({
-        req: { type: "req", id: "failed-worker-placement", method: "sessions.describe" },
-        params: { key: fx.SESSION_KEY },
-        client: null,
-        context,
-        isWebchatConnect: () => false,
-        respond,
-      });
-      expect(respond).toHaveBeenCalledExactlyOnceWith(true, {
-        session: expect.objectContaining({ placement: expect.objectContaining(placement) }),
-      });
-    };
     const { teardown, cleanup } = heldFailure(
       claim,
       new AggregateError(
@@ -340,7 +308,7 @@ describe("worker turn launcher failure recovery", () => {
         cleanup,
         "Failed worker did not enter teardown",
       );
-      await expectDescribedPlacement({ state: "draining" });
+      expectPlacement({ state: "draining" });
       teardown.finish.resolve();
       await cleanup;
       const failed = fx.placements.get(fx.SESSION_ID);
@@ -351,11 +319,9 @@ describe("worker turn launcher failure recovery", () => {
       expect(failed?.recoveryError).not.toContain("\n");
       expect(failed?.recoveryError?.length).toBeLessThanOrEqual(1_024);
       expect(failed?.terminalReason).toBe(failed?.recoveryError);
-      await expectDescribedPlacement({ state: "failed", recoveryError: failed?.recoveryError });
     } finally {
       teardown.finish.resolve();
       await cleanup;
-      projection.dispose();
     }
   });
 

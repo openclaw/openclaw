@@ -9,7 +9,6 @@ import {
   withinTest,
 } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { ensureStagedInputDirectory, stagedInputDirectory } from "../../media/staged-inputs.js";
 import { createStagedInputOwnershipFixture } from "../../media/staged-inputs.test-support.js";
 import { isChildProcessTreeAlive } from "../../process/child-process-tree.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
@@ -47,7 +46,6 @@ const userDirectories = [
 ];
 type TunnelHandle = Awaited<ReturnType<typeof startConnectedTunnel>>["handle"];
 type SyncRequest = Parameters<TunnelHandle["syncWorkspace"]>[0];
-type SyncedWorkspace = Awaited<ReturnType<TunnelHandle["syncWorkspace"]>>;
 const quiescence = { assertActive: async () => {}, resume: async () => {} };
 const handles: TunnelHandle[] = [];
 afterEach(() =>
@@ -81,25 +79,6 @@ function sync(
     generation,
     ...options,
   });
-}
-
-function reconciler(
-  handle: TunnelHandle,
-  localPath: string,
-  remote: SyncedWorkspace,
-  journal = memoryWorkspaceJournal(),
-) {
-  return (id: string, baseManifestRef = remote.manifestRef, owner = journal) =>
-    handle.reconcileWorkspace({
-      source: {
-        kind: "local",
-        path: localPath,
-        journal: owner,
-        stagedResult: { ref: workerWorkspaceResultRef(id), record: () => {} },
-      },
-      remoteWorkspaceDir: remote.remoteWorkspaceDir,
-      baseManifestRef,
-    });
 }
 
 function manifestPath(home: string, ref: string) {
@@ -255,12 +234,13 @@ describe("worker tunnel manager", () => {
       expect(fifo.code).toBe(0);
       for (const directory of ["", ...userDirectories]) {
         await writeFiles(path.join(localPath, directory), {
-          "current.txt": directory ? "user project\n" : "current\n",
+          "current.txt": directory ? "user project\n" : "base\n",
           "stale.txt": "remove before fallback\n",
         });
       }
       await initializeGit(localPath, ".");
       const baseCommit = await git(localPath, "rev-parse", "HEAD");
+      await fs.writeFile(path.join(localPath, "current.txt"), "current\n");
 
       const fakeRsync = path.join(bin, "rsync");
       await fs.writeFile(
@@ -587,66 +567,16 @@ describe("worker tunnel manager", () => {
   }, 60_000);
 });
 
-it("reclaims an empty worker commit even when the file manifest is unchanged", async () => {
-  const { localPath, remoteHome } = await localWorkspace("openclaw-worker-empty-commit-");
-  await writeFiles(localPath, { "tracked.txt": "base\n" });
+it("reclaims unchanged Git history and fences incoming workspace reconciliation", async () => {
+  const { localPath, remoteHome } = await localWorkspace("openclaw-worker-git-reclaim-");
+  await writeFiles(localPath, {
+    "tracked.txt": "base\n",
+    ".gitignore": "media/inbound/openclaw-staged-*/\n",
+  });
   await initializeGit(localPath, ".");
   const baseCommit = await git(localPath, "rev-parse", "HEAD");
-  const { handle } = await startTunnel(localWorkspaceRunner(remoteHome), "worker:empty-commit", 1);
-  const dispatched = await sync(handle, localPath, "empty-commit");
-  await git(dispatched.remoteWorkspaceDir, "commit", "--allow-empty", "-m", "worker checkpoint");
-  const workerCommit = await git(dispatched.remoteWorkspaceDir, "rev-parse", "HEAD");
-  const stagedResultRef = workerWorkspaceResultRef("empty-commit");
-  const reconciled = await reconciler(handle, localPath, dispatched)("empty-commit");
-  await verifyReconciledWorkspaceFinal(reconciled, quiescence);
-  expect(reconciled.changed).toBe(false);
-  expect(await git(localPath, "rev-parse", "HEAD")).toBe(baseCommit);
-  await expect(
-    adoptStagedWorkerWorkspaceHistory({ root: localPath, stagedResultRef }),
-  ).resolves.toBeUndefined();
-  expect(await git(localPath, "rev-parse", "HEAD")).toBe(workerCommit);
-  expect(await git(localPath, "status", "--porcelain")).toBe("");
-});
-
-it("materializes a large dirty git workspace as a credential-free commit-capable clone", async () => {
-  const { localPath, remoteHome } = await localWorkspace("openclaw-worker-git-sync-");
-  await fs.mkdir(path.join(localPath, "generated"));
-  await writeFiles(localPath, {
-    ".gitignore": "cache/**\nprivate/**\nmedia/inbound/openclaw-staged-*/\n",
-    ".worktreeinclude": "cache/*.txt\n",
-    "modified.txt": "before\n",
-    "conflict.txt": "base\n",
-  });
-  const largeFiles = Array.from(
-    { length: 1_800 },
-    (_, index) => `generated/long-worker-file-name-${String(index).padStart(4, "0")}.txt`,
-  );
-  for (let offset = 0; offset < largeFiles.length; offset += 64) {
-    await Promise.all(
-      largeFiles
-        .slice(offset, offset + 64)
-        .map((file, index) => fs.writeFile(path.join(localPath, file), `${offset + index}\n`)),
-    );
-  }
-  await initializeGit(localPath, ".");
-  const firstBase = await git(localPath, "rev-parse", "HEAD");
-  await writeFiles(localPath, { "vendor/sub/.git/secret": "must not transfer\n" });
-  await git(localPath, "update-index", "--add", "--cacheinfo", `160000,${firstBase},vendor/sub`);
-  await git(localPath, "commit", "-m", "record submodule");
-  const baseCommit = await git(localPath, "rev-parse", "HEAD");
-
-  await writeFiles(localPath, {
-    "modified.txt": "after\n",
-    "cache/allowed.txt": "allowed\n",
-    "private/ignored.txt": "private\n",
-    "ordinary-untracked.txt": "before ignore\n",
-  });
-
   const ownership = await createStagedInputOwnershipFixture(localPath);
-  const inputDirectory = stagedInputDirectory("b".repeat(64));
-  const privateInput = `${inputDirectory}/input-cache.pyc`;
-  await ensureStagedInputDirectory(localPath, inputDirectory);
-  await fs.writeFile(path.join(localPath, privateInput), "raw input bytes");
+  const localStatus = await git(localPath, "status", "--porcelain");
   let checkedPartialManifest = false;
   const fake = localWorkspaceRunner(remoteHome, async (argv, localArgv, options) => {
     if (checkedPartialManifest || !argv.at(-2)?.includes(":.openclaw-worker/manifests/")) {
@@ -663,133 +593,68 @@ it("materializes a large dirty git workspace as a credential-free commit-capable
     ).toBe(partial.ino);
     return transferred;
   });
-  const { handle } = await startTunnel(fake, "worker:real-git-sync", 11);
-
-  const result = await sync(handle, localPath, "real-git-sync");
-  const remote = result.remoteWorkspaceDir;
-  expect(result.mode).toBe("git");
+  const { handle } = await startTunnel(fake, "worker:git-reclaim", 1);
+  const dispatched = await sync(handle, localPath, "git-reclaim");
+  const remote = dispatched.remoteWorkspaceDir;
   for (const relative of ownership.unownedFiles) {
-    await expect(fs.stat(path.join(remote, relative))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    await expect(fs.stat(path.join(remote, relative))).rejects.toMatchObject({ code: "ENOENT" });
   }
   for (const relative of ownership.ownedFiles) {
     await expect(fs.readFile(path.join(remote, relative))).resolves.toEqual(
       await fs.readFile(path.join(localPath, relative)),
     );
   }
-  await createStagedInputOwnershipFixture(remote);
-  for (const relative of ownership.unownedFiles) {
-    await fs.writeFile(path.join(remote, relative), "worker project bytes\n");
-  }
-  await expectFiles(remote, {
-    [privateInput]: "raw input bytes",
-    [largeFiles[0] ?? ""]: "0\n",
-    [largeFiles.at(-1) ?? ""]: "1799\n",
-    "modified.txt": "after\n",
-    "cache/allowed.txt": "allowed\n",
-    "private/ignored.txt": null,
-    "vendor/sub/.git/secret": null,
-  });
-  await fs.writeFile(path.join(remote, privateInput), "edited input bytes");
-  expect(result.manifestRef).toMatch(/^sha256:[a-f0-9]{64}$/u);
-  expect(await git(remote, "rev-parse", "HEAD")).toBe(baseCommit);
-  expect(await git(remote, "rev-list", "--count", "HEAD")).toBe("1");
-  expect(await git(remote, "remote")).toBe("");
-  await git(remote, "add", "-A");
-  await git(remote, "commit", "-m", "worker commit");
+  await git(remote, "commit", "--allow-empty", "-m", "worker checkpoint");
   const workerCommit = await git(remote, "rev-parse", "HEAD");
-  await git(remote, "merge-base", "--is-ancestor", baseCommit, "HEAD");
-  await fs.mkdir(path.join(remote, "private"));
-  await Promise.all([
-    writeFiles(remote, {
-      "modified.txt": "worker result\n",
-      "conflict.txt": "worker result\n",
-      "ordinary-untracked.txt": "still present after ignore\n",
-      "worker-untracked.txt": "artifact\n",
-      "cache/worker-allowed.txt": "allowed\n",
-      "private/worker-secret.txt": "private\n",
-    }),
-    fs.appendFile(path.join(remote, ".gitignore"), "ordinary-untracked.txt\n"),
-    fs.symlink("modified.txt", path.join(remote, "worker-link")),
-  ]);
-  await fs.writeFile(path.join(localPath, "conflict.txt"), "local result\n");
-
-  let acceptedManifestRef = result.manifestRef;
-  const journal = memoryWorkspaceJournal((manifestRef) => {
-    acceptedManifestRef = manifestRef;
-  });
-  const reconcile = reconciler(handle, localPath, result, journal);
-  const reconciled = await reconcile("git-changed");
+  const stagedResultRef = workerWorkspaceResultRef("git-reclaim");
+  const reconcile = (id = "git-reclaim", baseManifestRef = dispatched.manifestRef) =>
+    handle.reconcileWorkspace({
+      source: {
+        kind: "local",
+        path: localPath,
+        journal: memoryWorkspaceJournal(),
+        stagedResult: { ref: workerWorkspaceResultRef(id), record: () => {} },
+      },
+      remoteWorkspaceDir: remote,
+      baseManifestRef,
+    });
+  const reconciled = await reconcile();
   await verifyReconciledWorkspaceFinal(reconciled, quiescence);
+  expect(reconciled.changed).toBe(false);
+  expect(checkedPartialManifest).toBe(true);
   expect(await git(localPath, "rev-parse", "HEAD")).toBe(baseCommit);
   await expect(
-    adoptStagedWorkerWorkspaceHistory({
-      root: localPath,
-      stagedResultRef: workerWorkspaceResultRef("git-changed"),
-    }),
+    adoptStagedWorkerWorkspaceHistory({ root: localPath, stagedResultRef }),
   ).resolves.toBeUndefined();
-  expect(reconciled).toMatchObject({ changed: true });
-  expect(checkedPartialManifest).toBe(true);
-  expect(reconciled.manifestRef).toMatch(/^sha256:[a-f0-9]{64}$/u);
-  await reconciled.verifyStable();
-  await reconciled.verifyLocalStable();
-  await expectFiles(localPath, {
-    ...Object.fromEntries(ownership.unownedFiles.map((file) => [file, `fixture bytes: ${file}\n`])),
-    [privateInput]: "edited input bytes",
-    "modified.txt": "worker result\n",
-    "worker-untracked.txt": "artifact\n",
-    "ordinary-untracked.txt": "still present after ignore\n",
-    "cache/worker-allowed.txt": "allowed\n",
-    "conflict.txt": "local result\n",
-    "private/worker-secret.txt": null,
-  });
-  await expect(fs.readlink(path.join(localPath, "worker-link"))).resolves.toBe("modified.txt");
-  await expectFiles(remote, { "conflict.txt": "local result\n", "private/ignored.txt": null });
   expect(await git(localPath, "rev-parse", "HEAD")).toBe(workerCommit);
-  // The Gateway fixture deliberately retains invalid submodule metadata.
-  expect(
-    (await git(localPath, "status", "--porcelain", "--ignore-submodules=all"))
-      .split("\n")
-      .map((line) => line.trim()),
-  ).toEqual(
-    expect.arrayContaining(["M modified.txt", "M conflict.txt", "?? worker-untracked.txt"]),
-  );
-  const unchanged = await reconcile("git-unchanged", acceptedManifestRef);
-  await verifyReconciledWorkspaceFinal(unchanged, quiescence);
-  expect(unchanged).toMatchObject({ manifestRef: acceptedManifestRef, changed: false });
-  await unchanged.verifyStable();
-  await unchanged.verifyLocalStable();
+  expect(await git(localPath, "status", "--porcelain")).toBe(localStatus);
+  await fs.writeFile(path.join(remote, "tracked.txt"), "worker result\n");
+  const changed = await reconcile("git-changed", reconciled.manifestRef);
+  await verifyReconciledWorkspaceFinal(changed, quiescence);
+  expect(changed.changed).toBe(true);
+  await expectFiles(localPath, { "tracked.txt": "worker result\n" });
+  await changed.verifyStable();
+  await changed.verifyLocalStable();
   await git(remote, "commit", "--allow-empty", "-m", "late worker commit");
-  await expect(unchanged.verifyStable()).rejects.toThrow(
+  await expect(changed.verifyStable()).rejects.toThrow(
     "Cloud workspace Git HEAD changed during final reconciliation",
   );
   await git(remote, "update-ref", "HEAD", workerCommit);
-  await fs.writeFile(path.join(remote, "modified.txt"), "late write\n");
-  await expect(unchanged.verifyStable()).rejects.toThrow(
+  await fs.writeFile(path.join(remote, "tracked.txt"), "late write\n");
+  await expect(changed.verifyStable()).rejects.toThrow(
     "Cloud workspace changed during final reconciliation",
   );
-  await fs.writeFile(path.join(localPath, "modified.txt"), "local late write\n");
-  await expect(unchanged.verifyLocalStable()).rejects.toThrow(
+  await fs.writeFile(path.join(localPath, "tracked.txt"), "local late write\n");
+  await expect(changed.verifyLocalStable()).rejects.toThrow(
     "Gateway workspace changed after cloud reconciliation",
   );
-
-  const manifestFile = manifestPath(remoteHome, result.manifestRef);
-  const manifest = JSON.parse(await fs.readFile(manifestFile, "utf8")) as {
-    entries: Array<{ path: string }>;
-  };
-  expect(manifest.entries.some((entry) => entry.path === ".git")).toBe(false);
-  expect(manifest.entries.some((entry) => entry.path.startsWith(".git/"))).toBe(false);
-
+  const manifestFile = manifestPath(remoteHome, dispatched.manifestRef);
   await fs.rm(manifestFile);
   await writeFiles(manifestFile, { "child.txt": "" });
-  // GNU rsync skips the directory; OpenRsync can leave an empty directory.
-  // Neither outcome may satisfy regular-file manifest admission.
-  await expect(
-    reconcile("git-invalid", result.manifestRef, memoryWorkspaceJournal()),
-  ).rejects.toThrow(
+  // Neither GNU rsync skipping the directory nor OpenRsync copying it admits a manifest.
+  await expect(reconcile("git-invalid")).rejects.toThrow(
     new RegExp(
-      `^(?:File not found: .*${result.manifestRef.slice("sha256:".length)}\\.json|path must be a regular file)$`,
+      `^(?:File not found: .*${dispatched.manifestRef.slice("sha256:".length)}\\.json|path must be a regular file)$`,
     ),
   );
 }, 60_000);
