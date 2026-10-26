@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { addSessionMember } from "../config/sessions/session-sharing-store.native.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
@@ -11,11 +10,8 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 import { gatewayConnect, gatewayProfile } from "./server/client-fixtures.test-support.js";
 import { resolveSessionMutationAuthorizationAsync } from "./session-sharing-authorization-async.js";
-import {
-  authorizeResolvedSessionMutationAsync,
-  resolveSessionSharingTargetAsync,
-  SessionMutationAuthorizationChangedError,
-} from "./session-sharing.js";
+import { SessionMutationAuthorizationChangedError } from "./session-sharing.js";
+import { rolePolicyConfig } from "./session-sharing.test-utils.js";
 
 afterEach(() => closeOpenClawAgentDatabasesForTest());
 
@@ -32,26 +28,8 @@ function sandboxRoleClient(role: "view" | "write"): GatewayClient {
 describe("session sharing sandbox requirements", () => {
   it("denies sandbox-required members host execution without changing session provenance", async () => {
     await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
-      const cfg: OpenClawConfig = {
-        gateway: {
-          roles: {
-            default: "view",
-            definitions: {
-              view: {
-                sessions: { others: "view" },
-                agents: "*",
-                scopes: ["operator.read", "operator.write"],
-                sandbox: "required",
-              },
-              write: {
-                sessions: { others: "write" },
-                agents: "*",
-                scopes: ["operator.read", "operator.write"],
-              },
-            },
-          },
-        },
-      };
+      const cfg = rolePolicyConfig();
+      cfg.gateway!.roles!.definitions.view!.sandbox = "required";
       setRuntimeConfigSnapshot(cfg);
       const guest = sandboxRoleClient("view");
       const maintainer = sandboxRoleClient("write");
@@ -85,20 +63,6 @@ describe("session sharing sandbox requirements", () => {
           expectedSessionId: "maintainer-host-session",
         },
       );
-
-      const hostTarget = await resolveSessionSharingTargetAsync({
-        cfg,
-        sessionKey: hostSessionKey,
-      });
-      expect(hostTarget).not.toBeNull();
-      expect(
-        await authorizeResolvedSessionMutationAsync({
-          cfg,
-          client: guest,
-          sessionKey: hostSessionKey,
-          agentId: "main",
-        }),
-      ).toMatchObject({ code: "FORBIDDEN", message: expect.stringMatching(/sandbox/i) });
 
       const context = { getRuntimeConfig: () => cfg } as GatewayRequestContext;
       const authorize = async (

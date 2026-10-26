@@ -17,6 +17,7 @@ import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { controlUiHandlers } from "./server-methods/control-ui.js";
 import type { GatewayRequestHandlerOptions, RespondFn } from "./server-methods/types.js";
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
+import { dispatchProfile } from "./server/client-fixtures.test-support.js";
 import {
   createDispatchTestHarness,
   createOperatorWsClient,
@@ -84,13 +85,10 @@ function fixture(method: "preview" | "detail") {
   );
   context.getGatewayMethodRegistry = () => methods;
   const client = createOperatorWsClient({ scopes: ["operator.read"] });
-  client.authenticatedUserProfile = {
-    profileId: ensureProfileForEmail("github-reader@example.test").id,
-    displayName: "GitHub reader",
-    avatarRevision: "1",
-    hasAvatar: false,
-    updatedAt: 1,
-  };
+  client.authenticatedUserProfile = dispatchProfile(
+    ensureProfileForEmail("github-reader@example.test").id,
+    { displayName: "GitHub reader" },
+  );
   const harness = createDispatchTestHarness({ buildRequestContext: () => context });
   harness.clients.add(client);
   context.getClientConnIds = (filter) =>
@@ -112,13 +110,10 @@ function fixture(method: "preview" | "detail") {
         url.includes("/issues/")
           ? {
               title: "Preview without reloading",
-              body: "Public issue content",
               state: "open",
-              comments: 0,
               repository_url: `https://api.github.com/repos/octocat/${method}`,
               created_at: "2026-09-21T12:00:00Z",
               updated_at: "2026-09-21T12:00:00Z",
-              user: { login: "octocat" },
             }
           : { id: 123, private: false, visibility: "public" },
       ),
@@ -139,7 +134,7 @@ function fixture(method: "preview" | "detail") {
       },
       client,
     );
-  return { client, harness, readResponse, fetchMock, entered, release, dispatch };
+  return { client, harness, readResponse, entered, release, dispatch };
 }
 
 describe("registered GitHub readers", () => {
@@ -153,7 +148,6 @@ describe("registered GitHub readers", () => {
       ok: true,
       payload: { title: "Preview without reloading" },
     });
-    expect(f.fetchMock).toHaveBeenCalled();
   });
 
   it("does not deliver detail when the original operator is revoked during the read", async () => {

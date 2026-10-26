@@ -37,16 +37,8 @@ const hookIdentity = {
 function writerConfig(
   scopes: GatewayOperatorRoleDefinition["scopes"] = ["operator.write"],
 ): OpenClawConfig {
-  return {
-    gateway: {
-      roles: {
-        default: "writer",
-        definitions: {
-          writer: { agents: "*", scopes, sessions: { others: "write" } },
-        },
-      },
-    },
-  };
+  const writer = { agents: "*" as const, scopes, sessions: { others: "write" as const } };
+  return { gateway: { roles: { default: "writer", definitions: { writer } } } };
 }
 
 function fixture(scopes = ["operator.write"]) {
@@ -59,14 +51,15 @@ function fixture(scopes = ["operator.write"]) {
   ]);
   const scoped = <T>(run: () => Promise<T>, client = caller) =>
     withPluginRuntimeGatewayRequestScope({ client, context, isWebchatConnect: () => false }, run);
-  const trusted = (pluginId = "lobster", pluginOrigin: "bundled" | "config" = "bundled") =>
+  const trusted = (
+    pluginId = "lobster",
+    pluginOrigin: "bundled" | "config" = "bundled",
+    method = "plugin.approval.request",
+    params: object = { pluginId, ...requestParams },
+  ) =>
     scoped(() =>
       withPluginRuntimePluginScope({ pluginId, pluginOrigin }, () =>
-        dispatchTrustedPluginGatewayMethod(
-          "plugin.approval.request",
-          { pluginId, ...requestParams },
-          { scopes: ["operator.approvals"] },
-        ),
+        dispatchTrustedPluginGatewayMethod(method, params, { scopes: ["operator.approvals"] }),
       ),
     );
   const hookOptions = withInProcessAgentRuntimeIdentity(
@@ -103,15 +96,10 @@ describe("trusted plugin approval requests", () => {
       expect(client?.internal?.pluginApprovalRequestOwnerId).toBe("lobster");
       expect(client?.internal?.approvalRuntime).not.toBe(true);
       await expect(
-        f.scoped(() =>
-          withPluginRuntimePluginScope({ pluginId: "lobster", pluginOrigin: "bundled" }, () =>
-            dispatchTrustedPluginGatewayMethod(
-              "plugin.approval.resolve",
-              { id: "plugin:test", decision: "allow-once" },
-              { scopes: ["operator.approvals"] },
-            ),
-          ),
-        ),
+        f.trusted("lobster", "bundled", "plugin.approval.resolve", {
+          id: "plugin:test",
+          decision: "allow-once",
+        }),
       ).rejects.toThrow(missingScope);
       expect(f.resolve).not.toHaveBeenCalled();
     });
