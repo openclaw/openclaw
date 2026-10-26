@@ -113,11 +113,7 @@ export async function createOperatorRecoveryFixture(params: {
     client.sharedGatewaySessionGeneration = params.sharedGeneration;
   }
   if (params.device) {
-    persistDevicePairingStoreState(
-      { pendingById: {}, pairedByDeviceId: { [params.device.deviceId]: params.device } },
-      params.stateDir,
-      "both",
-    );
+    persistDevices(params.stateDir, [params.device], "both");
     client.connect.device = {
       id: params.device.deviceId,
       publicKey: params.device.publicKey,

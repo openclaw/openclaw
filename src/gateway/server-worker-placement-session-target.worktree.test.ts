@@ -25,7 +25,9 @@ import { WorkerPlacementWorkspaceUnavailableError } from "./worker-environments/
 afterEach(() => resetConfigRuntimeState());
 
 const sessionRuntime = (
-  findLiveByOwner: WorkerPlacementSessionRuntime["managedWorktrees"]["findLiveByOwner"],
+  findLiveByOwner: WorkerPlacementSessionRuntime["managedWorktrees"]["findLiveByOwner"] = (
+    ...args
+  ) => managedWorktrees.findLiveByOwner(...args),
 ): WorkerPlacementSessionRuntime => ({
   resolveGatewaySessionStoreTargetInWorker,
   resolveCanonicalSessionEntryFromStoreKeys,
@@ -139,7 +141,7 @@ test("captures the physical owner of an unavailable session in a shared store", 
       ...identity,
       config,
       errorMessage: "placement source changed",
-      sessionRuntime: sessionRuntime((...args) => managedWorktrees.findLiveByOwner(...args)),
+      sessionRuntime: sessionRuntime(),
     });
     await expect(unavailable).rejects.toBeInstanceOf(WorkerPlacementWorkspaceUnavailableError);
     await expect(unavailable).rejects.toMatchObject({
@@ -163,7 +165,7 @@ test.each(["missing", "replacement"] as const)(
           createdAt: original.createdAt + 1,
         });
       }
-      const runtime = sessionRuntime((...args) => managedWorktrees.findLiveByOwner(...args));
+      const runtime = sessionRuntime();
       const unavailable = fixture.select(runtime);
       await expect(unavailable).rejects.toBeInstanceOf(WorkerPlacementWorkspaceUnavailableError);
       await expect(unavailable).rejects.toMatchObject({
@@ -189,9 +191,7 @@ test("keeps repository absence transient instead of requiring a session or workt
   withEmptyTargetState("unavailable-repository-placement-", async () => {
     const fixture = targetFixture("agent:main:unavailable-repository");
     await fixture.write({ repositoryWorkspaceId: "absent-repository" });
-    const unavailable = fixture.select(
-      sessionRuntime((...args) => managedWorktrees.findLiveByOwner(...args)),
-    );
+    const unavailable = fixture.select(sessionRuntime());
     await expect(unavailable).rejects.toThrow("placement source changed");
     await expect(unavailable).rejects.not.toBeInstanceOf(WorkerPlacementWorkspaceUnavailableError);
   }));
@@ -217,9 +217,7 @@ test("prepares concurrent empty workspaces while another session registers its c
       await awaitGateBeforeSettlement(read.promise, pending, "Workspace read never started");
       const secondWorktree = await createWorktree("second-empty", second.identity.sessionKey);
       await second.write({ worktree: worktreeEntry(secondWorktree) });
-      using secondTarget = await second.select(
-        sessionRuntime((...args) => managedWorktrees.findLiveByOwner(...args)),
-      );
+      using secondTarget = await second.select(sessionRuntime());
       release.resolve();
       using firstTarget = await pending;
       expect(firstTarget.workspace).toEqual({ kind: "local", path: firstWorktree.path });
