@@ -1,6 +1,6 @@
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   prepareRuntimeSkillEntries,
   resolveRuntimeSkillsPrompt,
@@ -10,11 +10,7 @@ import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import { writePluginWithSkill } from "../test-support/skill-plugin-fixtures.test-support.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "./session-snapshot.js";
 
-const tempDirs = createTempDirTracker();
-afterEach(() => {
-  vi.unstubAllEnvs();
-  tempDirs.cleanup();
-});
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 async function workspaceFixture(
   skills: ["agent" | "execution", string, string, ".agents"?][],

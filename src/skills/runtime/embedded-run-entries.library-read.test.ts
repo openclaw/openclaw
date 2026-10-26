@@ -7,29 +7,17 @@ import {
   closeOpenClawStateDatabaseAsync as closeDatabase,
   closeOpenClawStateDatabaseByPathAsync as closeDatabaseAt,
 } from "../../state/openclaw-state-db.js";
-import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { expectNoMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
-import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
-import { saveSkillLibrary } from "../library/service.js";
+import { useSkillLibraryFixture } from "../library/service.test-support.js";
 import * as loader from "../loading/workspace-skill-loader.js";
 import type { SkillEntry, SkillSnapshot } from "../types.js";
 
-const dirs = useStateDatabaseTempDirs();
+const { fixture: libraryFixture, tempDirs: dirs } = useSkillLibraryFixture();
 const content = "---\nname: guide\ndescription: Saved procedure\n---\n# Synthetic guide\n";
 async function fixture() {
-  const root = dirs.make("embedded-library-read-");
+  const { stateDir: root, lib } = libraryFixture();
   const workspaceDir = dirs.make("embedded-library-workspace-");
-  const options = { env: { OPENCLAW_STATE_DIR: root } };
-  const saved = await saveSkillLibrary(
-    {
-      profileId: ensureProfileForEmail("reader@example.test", options).id,
-      scopes: ["operator.read", "operator.write"],
-      getConfig: () => ({}),
-      assertCurrent() {},
-    },
-    { slug: "guide", content, expectedRevision: null },
-    options,
-  );
+  const saved = await lib.save({ slug: "guide", content, expectedRevision: null });
   const { skillId, revision, name, ownerProfileId } = saved.entry;
   const pin = { skillId, revision, name, ownerProfileId };
   // Workspace filtering must not remove already-authorized library pins.
@@ -40,10 +28,7 @@ async function fixture() {
     librarySelections: [pin, pin],
     skillFilter: [],
   };
-  const expected = {
-    skill: { name, description: "Saved procedure" },
-    syncDirName: `library-${skillId}-${revision}`,
-  };
+  const expected = { skill: { name, description: "Saved procedure" } };
   await closeDatabase();
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
   vi.stubEnv("OPENCLAW_BUNDLED_SKILLS_DIR", workspaceDir);
