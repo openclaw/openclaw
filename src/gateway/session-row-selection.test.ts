@@ -24,17 +24,20 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
 import { registerRpcSourceForTest } from "./server-methods/rpc-source-fixtures.test-support.js";
 import { requestContext } from "./server-methods/sessions-read-cache.test-support.js";
+import { createSessionIdentityProjection } from "./session-identity-projection.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { create as createSessionRow } from "./session-row-projection-record.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import { holdSubagentExecution } from "./session-row-projection.read-fixture.test-support.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
+import { createSessionRowSelection } from "./session-row-selection.js";
 import {
   filterAndSortSessionEntries,
   listProjectedSessions,
   prepareProjectedSessionList,
   prepareSessionRowSelection,
 } from "./session-utils-list.js";
+import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 import { claimRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
 type ListOptions = Parameters<typeof listProjectedSessions>[0];
@@ -57,6 +60,81 @@ beforeEach(() => {
 
 afterEach(() => {
   resetPluginRuntimeStateForTest();
+});
+
+it("selects canonical participant involvement without reading display fields", () => {
+  const cfg = { agents: { entries: { main: {} } } };
+  const label = vi.fn(() => "Participant display");
+  const context = buildSessionListRowMetadataContext({ now: 1 });
+  context.identityProjection = createSessionIdentityProjection();
+  for (const [id, profileId] of [
+    ["alias", "ada"],
+    ["ada", "ada"],
+    ["bob", "bob"],
+  ]) {
+    context.userProfileIdentityById.set(id!, {
+      kind: "resolved",
+      profileId: profileId!,
+      get label() {
+        return label();
+      },
+      hasUploadedAvatar: false,
+    });
+  }
+  const storePath = "/synthetic/involvement.sqlite";
+  const agents = new Set(["main"]);
+  const selection = createSessionRowSelection(
+    cfg,
+    {
+      path: storePath,
+      paths: new Map([[storePath, 0]]),
+      agentId: "main",
+      configuredAgentIds: agents,
+      ownerAgentIds: agents,
+    },
+    false,
+    () => context,
+  );
+  const key = "agent:main:participants";
+  const put = (entry: SessionEntry) =>
+    selection.add({
+      ...createSessionRow(
+        { key, agentId: "main", storeTarget: { agentId: "main", storePath } },
+        entry,
+      ),
+      entry,
+    });
+  const entry: SessionEntry = {
+    sessionId: key,
+    updatedAt: 1,
+    participants: [
+      { identity: { type: "profile", id: "alias" } },
+      { identity: { type: "profile", id: "ada" } },
+      { identity: { type: "agent", id: "main" } },
+      { identity: { type: "legacy", actorType: "human", source: null, id: "bob" } },
+    ],
+    profileInvolvement: { profiles: { ada: { hidden: true }, bob: { hidden: false } } },
+  };
+  put(entry);
+  const keys = (id: string, personal: boolean) => [
+    ...selection.read().involvementKeys(id, personal),
+  ];
+  expect(keys("ada", false)).toEqual([key]);
+  expect(keys("ada", true)).toEqual([]);
+  expect(keys("bob", false)).toEqual([]);
+  expect(keys("bob", true)).toEqual([key]);
+  expect(label).not.toHaveBeenCalled();
+  // Profile merges and entry replacement must retire the old membership.
+  context.userProfileIdentityById.set("alias", {
+    kind: "resolved",
+    profileId: "bob",
+    hasUploadedAvatar: false,
+  });
+  context.identityProjection.invalidate();
+  expect(keys("bob", false)).toEqual([key]);
+  put({ ...entry, participants: [], profileInvolvement: undefined });
+  expect(keys("ada", false)).toEqual([]);
+  expect(keys("bob", true)).toEqual([]);
 });
 
 it("updates empty involvement and creator indexes across row changes and topology resets", async () => {
