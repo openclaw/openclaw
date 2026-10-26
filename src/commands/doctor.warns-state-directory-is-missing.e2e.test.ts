@@ -10,6 +10,7 @@ import {
   createDoctorRuntime,
   ensureAuthProfileStore,
   mockDoctorConfigSnapshot,
+  readConfigFileSnapshot,
   transformConfigFile,
 } from "./doctor.e2e-harness.js";
 import { terminalNoteMock } from "./doctor.note-test-helpers.js";
@@ -127,6 +128,12 @@ describe("doctor command", () => {
 
     const missingDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-missing-state-"));
     fs.rmSync(missingDir, { recursive: true, force: true });
+    // Real config loading initializes SQLite-backed state; the mocked snapshot must too.
+    const loadSnapshot = readConfigFileSnapshot.getMockImplementation()!;
+    readConfigFileSnapshot.mockImplementation(async (...args) => {
+      fs.mkdirSync(missingDir, { recursive: true });
+      return await loadSnapshot(...args);
+    });
     await withEnvAsync({ OPENCLAW_STATE_DIR: missingDir }, async () => {
       await runDoctorNonInteractive();
     });
