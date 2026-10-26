@@ -28,6 +28,8 @@ import { createGatewayWsClient } from "../lib/gateway-ws-client.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 import { generateTeamShapeFixture, parseTeamShapeOptions } from "./team-shape-fixture.ts";
 
+type GatewayResponse = Awaited<ReturnType<ReturnType<typeof createGatewayWsClient>["request"]>>;
+
 const { values } = parseArgs({
   options: {
     entry: { type: "string", default: "dist/entry.js" },
@@ -268,7 +270,7 @@ for (const runs of [count, count * 2]) {
       assert(connected.ok, JSON.stringify(connected.error));
       let keys: string[] = [];
       for (let sample = 0; sample < 3; sample++) {
-        const listed = await client.request(
+        const listed: GatewayResponse = await client.request(
           "sessions.list",
           {
             limit: Math.max(4000, count * 3),
