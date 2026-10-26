@@ -452,58 +452,85 @@ describe("AgentSession compaction", () => {
     expect(manualRequestState).toBeUndefined();
   });
 
-  it("recovers through the overflow limit with context invalidated before every retry", async () => {
-    const overflowCount = MAX_OVERFLOW_COMPACTION_ATTEMPTS;
-    let agentRequests = 0;
-    const contextState = new Map([["skill", true]]);
-    const contextSizesAtCompactionEnd: number[] = [];
-    const preparedRequests: Array<string | undefined> = [];
-    streamMocks.streamSimple.mockImplementation((activeModel: Model) => {
-      agentRequests += 1;
-      if (agentRequests > 1) {
-        expect(contextState.size).toBe(0);
+  it.each(["recovered", "exhausted", "empty"] as const)(
+    "handles the overflow limit with clean retry context (%s)",
+    async (outcome) => {
+      const exhausted = outcome !== "recovered";
+      const overflowCount = MAX_OVERFLOW_COMPACTION_ATTEMPTS;
+      const sessionManager = SessionManager.inMemory();
+      let retainedAssistantId: string | undefined;
+      if (outcome !== "empty") {
+        sessionManager.appendMessage(makeUserMessage("old prompt", Date.now() - 3));
+        retainedAssistantId = sessionManager.appendMessage({
+          ...createAssistant(testModel, createStaleThinkingContent()),
+          timestamp: Date.now() - 2,
+        });
       }
-      const response =
-        agentRequests <= overflowCount
-          ? createOverflowAssistant(activeModel)
-          : createAssistant(activeModel, "complete retry");
-      return createAssistantResultStream({ ...response, timestamp: Date.now() + agentRequests });
-    });
-    const handlers = createResultHandlers(
-      "condensed history",
-      undefined,
-      (preparation) => preparedRequests.push(preparation.latestUnresolvedUserRequest),
-      true,
-    );
-    const { session } = await createTestSession({
-      settingsManager: createAutoCompactionSettings(),
-      extension: handlers,
-    });
-    const compactionEvents = collectCompactionEnds(session);
-    session[agentSessionSetContextReplacementHook](() => contextState.clear());
-    session.subscribe((event) => {
-      if (event.type === "compaction_end" && event.outcome.status === "completed") {
-        contextSizesAtCompactionEnd.push(contextState.size);
+      const contextState = new Map([["skill", true]]);
+      const contextSizesAtCompactionEnd: number[] = [];
+      const preparedRequests: Array<string | undefined> = [];
+      const requests = recordRequests((activeModel, index) => {
+        if (index > 1) {
+          expect(contextState.size).toBe(0);
+        }
+        const response =
+          exhausted || index <= overflowCount
+            ? createOverflowAssistant(activeModel)
+            : createAssistant(activeModel, "complete retry");
+        return createAssistantResultStream({ ...response, timestamp: Date.now() + index });
+      });
+      const handlers = createResultHandlers(
+        "condensed history",
+        retainedAssistantId,
+        (preparation) => preparedRequests.push(preparation.latestUnresolvedUserRequest),
+        true,
+      );
+      const { session } = await createTestSession({
+        sessionManager,
+        settingsManager: createAutoCompactionSettings(),
+        extension: handlers,
+      });
+      const compactionEvents = collectCompactionEnds(session);
+      session[agentSessionSetContextReplacementHook](() => contextState.clear());
+      session.subscribe((event) => {
+        if (event.type === "compaction_end" && event.outcome.status === "completed") {
+          contextSizesAtCompactionEnd.push(contextState.size);
+        }
+      });
+
+      await session.prompt("long request");
+
+      expect(requests).toHaveLength(overflowCount + 1);
+      expect(
+        compactionEvents.filter(
+          (event) =>
+            event.type === "compaction_end" &&
+            event.reason === "overflow" &&
+            event.outcome.status === "completed" &&
+            event.outcome.willRetry,
+        ),
+      ).toHaveLength(overflowCount);
+      if (exhausted) {
+        expect(compactionEvents.at(-1)).toMatchObject({
+          type: "compaction_end",
+          reason: "overflow",
+          outcome: {
+            status: "failed",
+            reason: `Context overflow recovery failed after ${overflowCount} compact-and-retry attempts. Try reducing context or switching to a larger-context model.`,
+          },
+        });
+      } else {
+        expect(session.getLastAssistantText()).toBe("complete retry");
       }
-    });
-
-    await session.prompt("long request");
-
-    expect(agentRequests).toBe(overflowCount + 1);
-    expect(
-      compactionEvents.filter(
-        (event) =>
-          event.type === "compaction_end" &&
-          event.reason === "overflow" &&
-          event.outcome.status === "completed" &&
-          event.outcome.willRetry,
-      ),
-    ).toHaveLength(overflowCount);
-    expect(session.getLastAssistantText()).toBe("complete retry");
-    expect(preparedRequests).toEqual(Array.from({ length: overflowCount }, () => "long request"));
-    expect(contextState.size).toBe(0);
-    expect(contextSizesAtCompactionEnd).toEqual(Array(overflowCount).fill(0));
-  });
+      if (outcome !== "empty") {
+        expectRetainedThinking(session);
+      }
+      expect(JSON.stringify(requests[1]?.messages)).not.toContain("stale-");
+      expect(preparedRequests).toEqual(Array.from({ length: overflowCount }, () => "long request"));
+      expect(contextState.size).toBe(0);
+      expect(contextSizesAtCompactionEnd).toEqual(Array(overflowCount).fill(0));
+    },
+  );
 
   it("reports replacement tokens and the exact equal-summary entry before a post-commit hook finishes", async () => {
     const sessionManager = SessionManager.inMemory();
@@ -573,60 +600,6 @@ describe("AgentSession compaction", () => {
     await expect(work).resolves.toMatchObject({ summary });
     expect(compactionEnds).toHaveLength(1);
     expect(compactionEnds[0]?.outcome.status).toBe("completed");
-  });
-
-  it("surfaces the shared overflow recovery limit after exhausting it", async () => {
-    let agentRequests = 0;
-    streamMocks.streamSimple.mockImplementation((activeModel: Model) => {
-      agentRequests += 1;
-      return createAssistantResultStream({
-        ...createOverflowAssistant(activeModel),
-        timestamp: Date.now() + agentRequests,
-      });
-    });
-    const { session } = await createTestSession({
-      settingsManager: createAutoCompactionSettings(),
-      extension: createCompactionExtension(),
-    });
-    const compactionEvents = collectCompactionEnds(session);
-
-    await session.prompt("long request");
-
-    expect(streamMocks.streamSimple).toHaveBeenCalledTimes(MAX_OVERFLOW_COMPACTION_ATTEMPTS + 1);
-    expect(compactionEvents.at(-1)).toMatchObject({
-      type: "compaction_end",
-      reason: "overflow",
-      outcome: {
-        status: "failed",
-        reason: `Context overflow recovery failed after ${MAX_OVERFLOW_COMPACTION_ATTEMPTS} compact-and-retry attempts. Try reducing context or switching to a larger-context model.`,
-      },
-    });
-  });
-
-  it("strips stale thinking signatures before continuing after auto-compaction", async () => {
-    const sessionManager = SessionManager.inMemory();
-    sessionManager.appendMessage(makeUserMessage("old prompt", Date.now() - 3));
-    const retainedAssistantId = sessionManager.appendMessage({
-      ...createAssistant(testModel, createStaleThinkingContent()),
-      timestamp: Date.now() - 2,
-    });
-    const handlers = createResultHandlers("condensed history", retainedAssistantId);
-    const requests = recordRequests((model, index) =>
-      createAssistantResultStream(
-        index === 1 ? createOverflowAssistant(model) : createAssistant(model, "complete retry"),
-      ),
-    );
-    const { session } = await createTestSession({
-      sessionManager,
-      settingsManager: createAutoCompactionSettings(),
-      extension: handlers,
-    });
-
-    await session.prompt("long request");
-
-    expect(requests).toHaveLength(2);
-    expectRetainedThinking(session);
-    expect(JSON.stringify(requests[1]?.messages)).not.toContain("stale-");
   });
 
   it("sanitizes restored compaction history before pre-prompt maintenance", async () => {

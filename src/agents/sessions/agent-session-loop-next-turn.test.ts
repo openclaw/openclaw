@@ -502,38 +502,8 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
     expect(session.pendingMessageCount).toBe(0);
   });
 
-  it("keeps decorated queue ownership process-local and byte-invisible", async () => {
-    const { session } = await createTestSession();
-    const recorder = createUserTurnTranscriptRecorder({
-      input: { text: "visible transcript prompt" },
-      target: createTestUserTurnTranscriptTarget(),
-    });
-    await session.steer(
-      "runtime prompt",
-      [image],
-      recorder,
-      [{ path: "/tmp/image.png", contentType: "image/png" }],
-      undefined,
-      "decorated-message",
-    );
-    const { queues, start } = queuedState(session);
-    const [message] = queues.steeringQueue.messages;
-    assert(message, "expected decorated queued message");
-    const serialized = JSON.stringify(message);
-    const restored = JSON.parse(serialized) as QueuedMessage;
-    await start(restored);
-    expect(session.getSteeringMessages()).toEqual(["runtime prompt"]);
-    expect(JSON.stringify(message)).toBe(serialized);
-
-    await start(message);
-    await start(message);
-
-    expect(session.getSteeringMessages()).toEqual([]);
-    expect(session.pendingMessageCount).toBe(0);
-  });
-
   it.each([false, true])(
-    "keeps accepted steering bytes stable across transcript persistence (image: %s)",
+    "keeps steering bytes stable and queue ownership process-local (image: %s)",
     async (withImage) => {
       const { session, sessionManager } = await createTestSession();
       const admittedAt = 1717570800000;
@@ -550,7 +520,14 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
       {
         using clock = vi.spyOn(Date, "now");
         clock.mockReturnValue(queuedAt);
-        await session.steer("Expanded runtime prompt", withImage ? [image] : undefined, recorder);
+        await session.steer(
+          "Expanded runtime prompt",
+          withImage ? [image] : undefined,
+          recorder,
+          withImage ? [{ path: "/tmp/image.png", contentType: "image/png" }] : undefined,
+          undefined,
+          "decorated-message",
+        );
       }
       const message = queued.mock.calls[0]?.[0];
       assert(message?.role === "user", "expected queued user message");
@@ -569,6 +546,14 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
           content: withImage ? message.content : "Visible transcript prompt",
         },
       });
+      const { start } = queuedState(session);
+      await start(JSON.parse(accepted) as QueuedMessage);
+      expect(session.getSteeringMessages()).toEqual(["Expanded runtime prompt"]);
+      expect(JSON.stringify(message)).toBe(accepted);
+      await start(message);
+      await start(message);
+      expect(session.getSteeringMessages()).toEqual([]);
+      expect(session.pendingMessageCount).toBe(0);
     },
   );
 
