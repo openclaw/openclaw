@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expect } from "vitest";
-import { writeJsonFile } from "../../test/helpers/temp-repo.js";
 import { loadSqliteVecExtension } from "../infra/database-engine/sqlite-vec.js";
 import { requireGitCommand } from "../infra/git-exec.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
@@ -152,12 +151,16 @@ export function createCatalogFixture(databasePath: string) {
   return { catalog, malformedHeaders, unusableCatalogs, scopes };
 }
 
-export function writeBackupManifest(scopePath: string, agentId: string): void {
-  writeJsonFile(path.join(scopePath, "manifest.json"), {
-    schemaVersion: 1,
-    identity: { role: "agent", agentId },
-    userVersion: 1,
-    excludedTables: [],
-    tables: {},
-  });
+export async function writeBackupManifest(scopePath: string, agentId: string): Promise<void> {
+  await fs.mkdir(scopePath, { recursive: true });
+  await fs.writeFile(
+    path.join(scopePath, "manifest.json"),
+    `${JSON.stringify({
+      schemaVersion: 1,
+      identity: { role: "agent", agentId },
+      userVersion: 1,
+      excludedTables: [],
+      tables: {},
+    })}\n`,
+  );
 }

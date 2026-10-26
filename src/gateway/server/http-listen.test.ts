@@ -26,7 +26,7 @@ function createFakeHttpServer(errors: string[], closeFailure?: "callback" | "thr
 
     close(cb?: (error?: Error) => void) {
       this.closeCalls += 1;
-      const error = closeFailure ? new Error("retry cleanup failed") : undefined;
+      const error = new Error("retry cleanup failed");
       if (closeFailure === "throw") {
         throw error;
       }
