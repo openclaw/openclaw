@@ -340,7 +340,7 @@
   background: var(--sidebar-rail-control-surface);
 }
 
-.sidebar-footer-bar__home .session-row-badge .session-css-icon {
+.sidebar-footer-bar__home .session-row-badge > i {
   width: 10px;
   height: 10px;
 }
