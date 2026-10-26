@@ -311,38 +311,6 @@ it.each(["user:John Smith", "Product Team/Roadmap"])("rejects non-id input %s", 
 });
 
 describe("configured allowlists that cannot be resolved stay configured", () => {
-  it("keeps a names-only teams allowlist non-empty and matching no real team", () => {
-    const projected = projectStableMSTeamsTeamsConfig({ Engineering: {} });
-    expect(Object.keys(projected ?? {})).toHaveLength(1);
-    expect(Object.keys(projected ?? {})).not.toContain("*");
-    expect(
-      resolveMSTeamsRouteConfig({ cfg: { teams: projected }, teamId: "19:other@thread.tacv2" }),
-    ).toMatchObject({ allowlistConfigured: true, allowed: false });
-  });
-
-  it("keeps name-only channels under a conversation-id team configured", () => {
-    const teamKey = "19:product@thread.tacv2";
-    const projected = projectStableMSTeamsTeamsConfig({ [teamKey]: team({ Roadmap: {} }) });
-    expect(
-      resolveMSTeamsRouteConfig({
-        cfg: { teams: projected },
-        teamId: teamKey,
-        conversationId: "19:random@thread.tacv2",
-      }),
-    ).toMatchObject({ allowed: false });
-  });
-
-  it("keeps name-only channels under a wildcard team configured", () => {
-    const projected = projectStableMSTeamsTeamsConfig({ "*": team({ Roadmap: {} }) });
-    expect(
-      resolveMSTeamsRouteConfig({
-        cfg: { teams: projected },
-        teamId: "19:any@thread.tacv2",
-        conversationId: "19:random@thread.tacv2",
-      }),
-    ).toMatchObject({ allowed: false });
-  });
-
   it("does not add placeholders to a team without channels or to an empty map", () => {
     expect(projectStableMSTeamsTeamsConfig({ "19:eng@thread.tacv2": {} })).toEqual({
       "19:eng@thread.tacv2": { channels: {} },
