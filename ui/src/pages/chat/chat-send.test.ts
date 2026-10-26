@@ -90,7 +90,6 @@ import {
 import { selectedChatSessionRow } from "./chat-state-route.ts";
 import { loadChatComposerState } from "./composer-draft-storage.ts";
 import { getChatSessionProjection, publishChatSessionProjection } from "./history-merge.ts";
-import { handleChatInputHistoryKey } from "./input-history.ts";
 import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";
 import { prepareOutboxPayload } from "./outbox-payloads.ts";
 import {
@@ -285,20 +284,6 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
-
-function navigateChatInputHistory(host: TestChatHost, direction: "up" | "down"): boolean {
-  return handleChatInputHistoryKey(host, {
-    key: direction === "up" ? "ArrowUp" : "ArrowDown",
-    selectionStart: 0,
-    selectionEnd: 0,
-    altKey: false,
-    ctrlKey: false,
-    metaKey: false,
-    shiftKey: false,
-    isComposing: false,
-    keyCode: direction === "up" ? 38 : 40,
-  }).handled;
-}
 
 function createJsonResponse(body: unknown, options: { ok?: boolean } = {}): Response {
   const response = new Response(null, { status: options.ok === false ? 500 : 200 });
@@ -963,11 +948,13 @@ describe("handleSendChat", () => {
   it.each([
     { chatMessage: "/pair :", attached: false },
     { chatMessage: "/pair", attached: true },
+    { chatMessage: "/btw summarize this", attached: false },
   ])(
     "routes presentation command $chatMessage with attachments=$attached",
     async ({ chatMessage, attached }) => {
       installPairClientPresentationCommand();
       const dispatchClientPresentation = vi.fn(async () => true);
+      const openSessionCompanion = vi.fn();
       const baselineMessages = [{ role: "assistant", content: "Ready." }];
       const host = makeChatHost({
         requestHandlers: { "chat.send": { status: "started" } },
@@ -977,6 +964,7 @@ describe("handleSendChat", () => {
           : [],
         chatMessages: baselineMessages,
         dispatchClientPresentation,
+        openSessionCompanion,
       });
 
       await handleSendChat(host);
@@ -985,11 +973,17 @@ describe("handleSendChat", () => {
         expect(dispatchClientPresentation).not.toHaveBeenCalled();
         expectRpc(host.request, "chat.send", expect.objectContaining({ message: chatMessage }));
       } else {
-        expect(dispatchClientPresentation).toHaveBeenCalledWith({ kind: "device-pairing" });
+        if (chatMessage.startsWith("/btw")) {
+          expect(openSessionCompanion).toHaveBeenCalledWith("summarize this");
+          expect(host.chatLocalInputHistoryBySession[host.sessionKey]?.[0]?.text).toBe(chatMessage);
+        } else {
+          expect(dispatchClientPresentation).toHaveBeenCalledWith({ kind: "device-pairing" });
+        }
         expectNoRpc(host.request, "chat.send");
         expect(host.chatQueue).toStrictEqual([]);
         expect(host.chatMessages).toEqual(baselineMessages);
         expect(host.chatMessage).toBe("");
+        expect(host.chatRunId).toBeNull();
       }
     },
   );
@@ -1705,23 +1699,6 @@ describe("handleSendChat", () => {
       }
     },
   );
-
-  it("routes /btw without adopting a main chat run when idle", async () => {
-    const openSessionCompanion = vi.fn();
-    const host = makeChatHost({
-      chatMessage: "/btw summarize this",
-      openSessionCompanion,
-    });
-
-    await handleSendChat(host);
-
-    expect(openSessionCompanion).toHaveBeenCalledWith("summarize this");
-    expect(host.chatRunId).toBeNull();
-    expect(host.chatMessages).toStrictEqual([]);
-    expect(host.chatMessage).toBe("");
-    expect(navigateChatInputHistory(host, "up")).toBe(true);
-    expect(host.chatMessage).toBe("/btw summarize this");
-  });
 
   it.each([
     { previousRunId: null, adoption: "status" },
@@ -2718,57 +2695,6 @@ describe("handleSendChat", () => {
     await waitForFast(() => expect(host.chatQueue).toEqual([]));
   });
 
-  it("restores input when a volatile send fails before transport", async () => {
-    installQuotaExceededStorage();
-
-    const host = makeChatHost({
-      requestHandlers: {
-        "chat.send": () => {
-          throw new Error("gateway not connected");
-        },
-      },
-      chatMessage: "safe to restore",
-    });
-
-    await handleSendChat(host);
-
-    expect(host.chatMessage).toBe("safe to restore");
-    expect(host.chatQueue).toStrictEqual([]);
-    expect(host.request).toHaveBeenCalledTimes(1);
-  });
-
-  it("retains a connected attachment when browser quota rejects durable admission", async () => {
-    installQuotaExceededStorage();
-    const replyTarget = { messageId: "quota-quote", text: "Keep the rejected quote" };
-
-    const attachment = {
-      id: "large-connected-attachment",
-      dataUrl: "data:application/pdf;base64,JVBERi0xLjQ=",
-      fileName: "large.pdf",
-      mimeType: "application/pdf",
-      sizeBytes: 20 * 1024 * 1024,
-    };
-    const host = makeChatHost({
-      requestHandlers: {
-        "chat.send": (params: unknown) =>
-          sendAck(params, "volatile connected send payload", "started"),
-      },
-      chatAttachments: [attachment],
-      chatMessage: "send the large file",
-      chatReplyTarget: replyTarget,
-    });
-
-    await handleSendChat(host);
-
-    expect(requestCalls(host.request, "chat.send")).toHaveLength(0);
-    expect(host.chatAttachments).toStrictEqual([attachment]);
-    expect(host.chatMessage).toBe("send the large file");
-    expect(host.chatReplyTarget).toEqual(replyTarget);
-    expect(host.chatQueue).toStrictEqual([]);
-    expect(host.chatRunId).toBeNull();
-    expect(host.lastError).toBe(storageError);
-  });
-
   it.each([
     { caller: "wrong queue", reason: "missing" },
     { caller: "wrong source tab", reason: "missing" },
@@ -3357,47 +3283,69 @@ describe("handleSendChat", () => {
     expect(host.lastError).toBe(storageError);
   });
 
-  it("restores an offline local command when durable admission fails", async () => {
-    installQuotaExceededStorage();
-    const replyTarget = { messageId: "command-quote", text: "Keep the rejected quote" };
-    const host = makeChatHost({
-      client: null,
-      connected: false,
-      chatMessage: "/think high",
-      chatReplyTarget: replyTarget,
-    });
-
-    await handleSendChat(host);
-
-    expect(host.chatMessage).toBe("/think high");
-    expect(host.chatReplyTarget).toEqual(replyTarget);
-    expect(host.chatQueue).toStrictEqual([]);
-    expect(host.lastError).toBe(storageError);
-  });
-
-  it("retains cold-offline attachments until a recovery owner is known", async () => {
-    installQuotaExceededStorage();
-    const attachment = {
-      id: "offline-attachment",
-      mimeType: "image/png",
-      fileName: "offline.png",
-      sizeBytes: 3,
-      dataUrl: "data:image/png;base64,AAA",
-    };
-    const host = makeChatHost({
-      client: null,
-      connected: false,
-      chatAttachments: [attachment],
-    });
-
-    await handleSendChat(host);
-
-    expect(host.chatAttachments).toEqual([attachment]);
-    expect(host.chatQueue).toStrictEqual([]);
-    expect(host.lastError).toBe(
-      "Browser attachment storage is unavailable. Allow browser storage and close older dashboard tabs before reconnecting and retrying. No new message was sent.",
-    );
-  });
+  it.each(["text", "file", "offline command", "cold file"] as const)(
+    "retains rejected %s input when durable storage is unavailable",
+    async (kind) => {
+      installQuotaExceededStorage();
+      const offline = kind === "offline command" || kind === "cold file";
+      const attachment =
+        kind === "file"
+          ? {
+              id: "file",
+              dataUrl: "data:application/pdf;base64,JVBERi0xLjQ=",
+              fileName: "large.pdf",
+              mimeType: "application/pdf",
+              sizeBytes: 20 * 1024 * 1024,
+            }
+          : {
+              id: "image",
+              dataUrl: "data:image/png;base64,AAA",
+              fileName: "offline.png",
+              mimeType: "image/png",
+              sizeBytes: 3,
+            };
+      const message =
+        kind === "offline command" ? "/think high" : kind === "cold file" ? "" : "retained input";
+      const replyTarget = { messageId: "quote", text: "Keep the rejected quote" };
+      const attachments = kind === "file" || kind === "cold file" ? [attachment] : [];
+      const host = makeChatHost({
+        requestHandlers: offline
+          ? {}
+          : {
+              "chat.send": (params: unknown) => {
+                if (kind === "text") {
+                  throw new Error("gateway not connected");
+                }
+                return sendAck(params, "quota send", "started");
+              },
+            },
+        ...(offline ? { client: null, connected: false } : {}),
+        chatMessage: message,
+        chatAttachments: attachments,
+        ...(kind === "file" || kind === "offline command" ? { chatReplyTarget: replyTarget } : {}),
+      });
+      await handleSendChat(host);
+      expect(host.chatMessage).toBe(message);
+      expect(host.chatQueue).toStrictEqual([]);
+      if (kind === "text") {
+        expect(host.request).toHaveBeenCalledTimes(1);
+      } else {
+        expect(requestCalls(host.request, "chat.send")).toHaveLength(0);
+        expect(host.chatAttachments).toStrictEqual(attachments);
+        expect(host.lastError).toBe(
+          kind === "cold file"
+            ? "Browser attachment storage is unavailable. Allow browser storage and close older dashboard tabs before reconnecting and retrying. No new message was sent."
+            : storageError,
+        );
+      }
+      if (kind === "file" || kind === "offline command") {
+        expect(host.chatReplyTarget).toEqual(replyTarget);
+      }
+      if (kind === "file") {
+        expect(host.chatRunId).toBeNull();
+      }
+    },
+  );
 
   it("keeps a reconnect send queued when attempt persistence fails", async () => {
     const storage = createStorageMock();
