@@ -204,7 +204,7 @@ it.each(
       return event === "input" ? { action: "handled" } : undefined;
     });
   const hasTail = event === "input" || event === "message_end";
-  const nextHandlers = hasTail ? [next, next] : [next];
+  const nextHandlers: TestHandler[] = hasTail ? [next, next] : [next];
   if (event === "input" || event === "session_before_switch") {
     nextHandlers.push(() => reject(new Error("handler ran after cancellation")));
   }

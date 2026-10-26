@@ -235,7 +235,7 @@ it("publishes concurrent stores atomically through a symlink without replacing t
     const rename = fs.rename;
     vi.spyOn(fs, "rename").mockImplementationOnce(async (source, target) => {
       await rename(source, target);
-      await expectPublished(firstStore, vienna);
+      await expect(fs.readFile(firstStore.databaseFile)).resolves.toEqual(vienna);
       const competing = `${firstStore.databaseFile}.partial`;
       await writeFile(competing, paris);
       await rename(competing, firstStore.databaseFile);

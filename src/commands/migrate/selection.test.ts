@@ -217,7 +217,10 @@ describe("applyMigrationSelections plugins", () => {
 
   it("keeps selected plugins and skips unselected plugin install items and config", () => {
     const selected = applyMigrationSelections(
-      applyMigrationItemSelection(pluginPlan("conflict"), ["plugin:google-calendar"]),
+      applyMigrationItemSelection(pluginPlan("conflict"), [
+        "plugin:google-calendar",
+        "plugin:gmail",
+      ]),
       { plugins: ["google-calendar"] },
     );
 

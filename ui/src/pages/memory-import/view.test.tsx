@@ -169,9 +169,12 @@ describe("renderMemoryImport", () => {
   });
 
   it("explains the cursor reset before confirming session backfill rollback", () => {
-    const container = renderView({ backfillRollbackPending: true });
+    const onBackfillRollbackConfirm = vi.fn();
+    const container = renderView({ backfillRollbackPending: true, onBackfillRollbackConfirm });
     expect(container.textContent).toContain("Session backfill cursors are rewound");
     expect(findButton(container, "memory-backfill-rollback-confirm").disabled).toBe(false);
+    findButton(container, "memory-backfill-rollback-confirm").click();
+    expect(onBackfillRollbackConfirm).toHaveBeenCalledOnce();
   });
 
   it("serializes memory imports with backfill mutations", () => {
@@ -182,9 +185,16 @@ describe("renderMemoryImport", () => {
   });
 
   it("requires confirmation and explains replacement backups", () => {
-    const container = renderView({ pendingProviderId: "codex", replaceExisting: true });
+    const onConfirmImport = vi.fn();
+    const container = renderView({
+      pendingProviderId: "codex",
+      replaceExisting: true,
+      onConfirmImport,
+    });
     expect(container.textContent).toContain("backed up in the migration report");
     expect(findButton(container, "memory-import-confirm").disabled).toBe(false);
+    findButton(container, "memory-import-confirm").click();
+    expect(onConfirmImport).toHaveBeenCalledOnce();
   });
 
   it("disables confirmation actions while an import is running", () => {

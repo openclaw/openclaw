@@ -280,8 +280,9 @@ export async function setupFeishuLifecycleHandler(params: {
   void completion.catch(started.reject);
   await started.promise;
 
-  const handlers = register.mock.calls.at(0)?.[0];
-  const handler = handlers?.[params.handlerKey] as LifecycleReplay["handler"] | undefined;
+  const handler = Object.entries(register.mock.calls.at(0)?.[0] ?? {}).find(
+    ([key]) => key === params.handlerKey,
+  )?.[1] as LifecycleReplay["handler"] | undefined;
   if (!handler) {
     throw new Error(params.missingHandlerMessage);
   }

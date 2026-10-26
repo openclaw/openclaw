@@ -201,7 +201,9 @@ describe("meta provider", () => {
           reasoning: level,
         },
       );
-      expect(await stream.result()).toMatchObject({ stopReason: "stop", errorMessage: undefined });
+      const result = await stream.result();
+      expect(result.stopReason).toBe("stop");
+      expect(result.errorMessage).toBeUndefined();
       const body = readRequest();
       expect(body).toMatchObject({ model: modelId });
       if (expectedCap === undefined) {
@@ -238,7 +240,7 @@ describe("meta provider", () => {
         ...initialAiTransportHost.plugin,
         resolveProviderStream: () => undefined,
         wrapSimpleCompletionStream: ({ context: { provider, modelId, model, streamFn } }) =>
-          wrapStream({ provider, modelId, model, streamFn }),
+          wrapStream({ provider, modelId, model, streamFn }) ?? undefined,
       },
     });
 

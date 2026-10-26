@@ -9,8 +9,12 @@ import {
   killProcessTree,
   spawnOomScoreAdjusted as spawn,
 } from "openclaw/plugin-sdk/process-runtime";
+import {
+  resolvePreferredOpenClawTmpDir,
+  tempWorkspaceSync,
+  type TempWorkspaceSync,
+} from "openclaw/plugin-sdk/temp-path";
 import { postRawWebhook } from "openclaw/plugin-sdk/test-env";
-import { createPluginSdkTestHarness } from "openclaw/plugin-sdk/test-helpers";
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import { afterEach, expect, it, vi } from "vitest";
 import { startRaftGatewayAccount } from "./gateway.js";
@@ -21,7 +25,7 @@ vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => ({
   spawnOomScoreAdjusted: vi.fn(),
 }));
 
-const { createTempDirSync } = createPluginSdkTestHarness();
+const tempWorkspaces: TempWorkspaceSync[] = [];
 const cleanups: (() => void | Promise<void>)[] = [];
 type WakeEvent = { accountId: string; key: string };
 type WakeInput = Parameters<ChannelInboundEventRunnerParams<unknown>["adapter"]["resolveTurn"]>[0];
@@ -107,7 +111,7 @@ async function startGateway(fixture = createContext()) {
     expect(response.status).toBe(status);
     return response.json();
   };
-  const headers = (authToken: string | null) =>
+  const headers = (authToken: string | null): HeadersInit =>
     authToken === null ? {} : { "x-raft-bridge-token": authToken };
   return {
     ...fixture,
@@ -136,6 +140,9 @@ afterEach(async () => {
     vi.mocked(spawn).mockReset();
     resetPluginStateStoreForTests();
     vi.restoreAllMocks();
+    for (const workspace of tempWorkspaces.splice(0)) {
+      workspace.cleanup();
+    }
   }
 });
 
@@ -238,7 +245,10 @@ it("accepts authenticated content-free wake hints and dedupes retry delivery ids
   expect(input?.rawText).not.toContain("wake-1");
   await stop();
   expect(killProcessTree).toHaveBeenCalledOnce();
-  expect(killProcessTree).toHaveBeenCalledWith(bridge.pid, expect.any(Object));
+  expect(killProcessTree).toHaveBeenCalledWith(bridge.pid, {
+    graceMs: 5_000,
+    detached: process.platform !== "win32",
+  });
 });
 
 it("keeps a failed delivery eligible for a bridge retry", async () => {
@@ -250,7 +260,12 @@ it("keeps a failed delivery eligible for a bridge retry", async () => {
 });
 
 it("persists accepted wake dedupe across restarts without crossing accounts", async () => {
-  const stateDir = createTempDirSync("raft-wake-dedupe-");
+  const workspace = tempWorkspaceSync({
+    rootDir: resolvePreferredOpenClawTmpDir(),
+    prefix: "openclaw-raft-wake-dedupe-",
+  });
+  tempWorkspaces.push(workspace);
+  const stateDir = workspace.dir;
   for (const phase of ["first", "restart", "other"] as const) {
     const accountId = phase === "other" ? "other" : "default";
     const { post, run, stop } = await startGateway(createContext(accountId, stateDir));

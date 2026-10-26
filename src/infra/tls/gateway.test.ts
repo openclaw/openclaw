@@ -280,9 +280,12 @@ it.each(["cert", "key", "inspection"])("bounds %s and closes descriptors", async
     ? await inspectTls(config)
     : await loadTls({ ...config, autoGenerate: false });
   expect(result).toMatchObject({
-    ...(inspection ? { ok: false } : { enabled: false, tlsOptions: undefined }),
+    ...(inspection ? { ok: false } : { enabled: false }),
     error: expect.stringContaining("File exceeds 65536 bytes"),
   });
+  if ("enabled" in result) {
+    expect(result.tlsOptions).toBeUndefined();
+  }
   expect(handles.length).toBeGreaterThan(0);
   expect(handles.every((handle) => handle.fd === -1)).toBe(true);
   expect(exec).not.toHaveBeenCalled();

@@ -1,7 +1,7 @@
 import { once } from "node:events";
 import { createServer, type RequestListener } from "node:http";
 import type { AddressInfo } from "node:net";
-import { json } from "node:stream/consumers";
+import { text } from "node:stream/consumers";
 import { isDeepStrictEqual } from "node:util";
 import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -131,7 +131,8 @@ async function reconnectFixture(holdStreamAfter = Infinity, missing = false, new
       response.writeHead(405).end();
       return;
     }
-    void json(request).then((received: Array<{ action: string }>) => {
+    void text(request).then((body) => {
+      const received: Array<{ action: string }> = JSON.parse(body);
       actions.push(...received);
       response.writeHead(204).end();
     });
