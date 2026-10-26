@@ -19,4 +19,5 @@
 # OPENCLAW_DISABLE_GATEWAY_LOCAL_TERMINALS (#177855) controls Gateway-local terminals.
 # OPENCLAW_DEVICE_NAME_PREFIX was removed with unread Matrix device-health projections (#178345).
 # Retiring A2UI removes its four renderer build environment names.
-457
+# OPENCLAW_UPDATE_REHEARSAL_CRON_IDENTITY carries the source partition through disposable update rehearsal.
+458
