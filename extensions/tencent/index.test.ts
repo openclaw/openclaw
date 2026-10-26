@@ -82,30 +82,33 @@ function capturePayload(
 
 describe("tencent provider plugin", () => {
   it.each([
-    { providerId: "tencent-tokenhub", choiceId: "tokenhub-api-key", build: buildTokenHubProvider },
-    {
-      providerId: "tencent-tokenplan",
-      choiceId: "tokenplan-api-key",
-      build: buildTokenPlanProvider,
-    },
-  ])(
-    "keeps $providerId generated rows out of merge config",
-    async ({ providerId, choiceId, build }) => {
+    ["tokenhub", "TokenHub", buildTokenHubProvider, ["hy4-preview", "hy3", "hy3-preview"]],
+    ["tokenplan", "TokenPlan", buildTokenPlanProvider, ["hy4-preview", "hy3"]],
+  ] as const)(
+    "%s auth preserves merge rows and configures its provider in replace mode",
+    async (endpoint, label, build, modelIds) => {
+      const providerId = `tencent-${endpoint}` as const;
+      const choiceId = `${endpoint}-api-key`;
       const { providers } = await registerTencentPlugin();
-      const runNonInteractive = resolveProviderPluginChoice({ providers, choice: choiceId })?.method
-        .runNonInteractive;
-      if (!runNonInteractive) {
+      const resolved = resolveProviderPluginChoice({ providers, choice: choiceId });
+      expect(resolved?.provider.id).toBe(providerId);
+      const run = resolved?.method.runNonInteractive;
+      if (!run) {
         throw new Error("expected Tencent noninteractive auth method");
       }
+      const resolveApiKey = vi.fn(async () => ({
+        key: "stored-test-key",
+        source: "profile" as const,
+      }));
       const toApiKeyCredential = vi.fn(() => null);
-      const apply = (config: OpenClawConfig) =>
-        runNonInteractive({
+      const apply = (config: OpenClawConfig, opts = {}) =>
+        run({
           authChoice: choiceId,
           config,
           baseConfig: config,
-          opts: {},
+          opts,
           runtime: createRuntimeEnv(),
-          resolveApiKey: async () => ({ key: "stored-test-key", source: "profile" }),
+          resolveApiKey,
           toApiKeyCredential,
         });
       expect((await apply({}))?.models?.providers?.[providerId]?.models).toEqual([]);
@@ -119,49 +122,25 @@ describe("tencent provider plugin", () => {
       });
       expect(result?.models?.providers?.[providerId]?.models).toEqual(authored);
       expect(toApiKeyCredential).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([
-    ["tokenhub", "TokenHub", ["hy4-preview", "hy3", "hy3-preview"]],
-    ["tokenplan", "TokenPlan", ["hy4-preview", "hy3"]],
-  ] as const)(
-    "configures only %s through its registered auth choice in replace mode",
-    async (endpoint, label, modelIds) => {
-      const providerId = `tencent-${endpoint}` as const;
-      const choiceId = `${endpoint}-api-key`;
       const aliases = Object.fromEntries(
         modelIds.map((id) => [
           `${providerId}/${id}`,
           { alias: `${id.replace("hy", "Hy").replace("-", " ")} (${label})` },
         ]),
       );
-      const { providers } = await registerTencentPlugin();
-      const resolved = resolveProviderPluginChoice({ providers, choice: choiceId });
-      expect(resolved?.provider.id).toBe(providerId);
-      const resolveApiKey = vi.fn(async () => ({
-        key: "stored-test-key",
-        source: "profile" as const,
-      }));
-      const toApiKeyCredential = vi.fn(() => null);
-      const method = resolved?.method;
-      if (!method?.runNonInteractive) {
-        throw new Error("expected Tencent noninteractive auth method");
-      }
-      const config = await method.runNonInteractive({
-        authChoice: choiceId,
-        config: { models: { mode: "replace" } },
-        baseConfig: { models: { mode: "replace" } },
-        opts: { tokenhubApiKey: "tokenhub-test-key", tokenplanApiKey: "tokenplan-test-key" },
-        runtime: createRuntimeEnv(),
-        resolveApiKey,
-        toApiKeyCredential,
-      });
+      resolveApiKey.mockClear();
+      const config = await apply(
+        { models: { mode: "replace" } },
+        {
+          tokenhubApiKey: "tokenhub-test-key",
+          tokenplanApiKey: "tokenplan-test-key",
+        },
+      );
 
       expect(resolveApiKey).toHaveBeenCalledExactlyOnceWith({
         provider: providerId,
         flagValue: `${endpoint}-test-key`,
-        flagName: `--${choiceId}`,
+        flagName: `--${endpoint}-api-key`,
         envVar: `${endpoint.toUpperCase()}_API_KEY`,
       });
       expect(toApiKeyCredential).not.toHaveBeenCalled();
