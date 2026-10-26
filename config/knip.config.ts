@@ -581,6 +581,7 @@ const repositoryScriptEntries = [
   "scripts/perf/compaction-serialization-measure.mjs!",
   "scripts/perf/exec-policy-sort-measure.mjs!",
   "scripts/perf/mcp-acquisition-measure.ts!",
+  "scripts/perf/profile-avatar-retention-measure.ts!",
   "scripts/perf/shell-extract-bench.ts!",
   "scripts/perf/subagent-active-read-measure.ts!",
   "scripts/perf/subagent-descendant-count-measure.ts!",
