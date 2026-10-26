@@ -9,10 +9,13 @@ import {
   createUniqueId,
   omit,
 } from "solid-js";
-import { t } from "../lib/reactive/i18n.ts";
+import { registerChatMediaEnglish } from "../i18n/locales/en-chat-media.ts";
+import { t, registerEnglishCatalog } from "../lib/reactive/i18n.ts";
 import { showToast } from "../lib/toast.ts";
 import type { ImageLightboxItem } from "./image-lightbox.types.ts";
 import { Icon } from "./solid/icon.tsx";
+
+registerEnglishCatalog(registerChatMediaEnglish);
 
 type FocusableRef = () => (element: HTMLElement) => void;
 
@@ -163,8 +166,8 @@ export function lightboxImageStyle(image: ImageLightboxItem | undefined) {
     typeof height === "number" &&
     Number.isFinite(height) &&
     height > 0
-    ? `width: min(${width}px, 100cqw, calc(100cqh * ${width / height}))`
-    : undefined;
+    ? { width: `min(${width}px, 100cqw, calc(100cqh * ${width / height}))` }
+    : { width: undefined };
 }
 
 function LightboxImageDownload(props: {

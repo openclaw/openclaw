@@ -10,6 +10,7 @@ import {
   readOperatorModelPolicyMembership,
   type PreparedOperatorModelPolicy,
 } from "../agents/operator-model-policy.js";
+import { runtimeConfigPublication } from "../config/runtime-config-publication.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -165,6 +166,7 @@ function prepareRunModelPolicy(params: {
   resolvePolicy: (cfg: OpenClawConfig) => GatewayOperatorRoleDefinition["modelPolicy"];
 }) {
   let { cfg, metadata } = params;
+  let publication = runtimeConfigPublication.current?.revision;
   const original = prepareOperatorModelPolicy({
     cfg,
     policy: params.initialPolicy,
@@ -176,7 +178,8 @@ function prepareRunModelPolicy(params: {
     readCurrent: () => {
       const nextConfig = params.getConfig();
       const nextMetadata = getProcessGatewayPluginMetadataSnapshot();
-      if (nextConfig !== cfg || nextMetadata !== metadata) {
+      const nextPublication = runtimeConfigPublication.current?.revision;
+      if (nextConfig !== cfg || nextMetadata !== metadata || nextPublication !== publication) {
         const current = prepareOperatorModelPolicy({
           cfg: nextConfig,
           policy: params.resolvePolicy(nextConfig),
@@ -185,6 +188,7 @@ function prepareRunModelPolicy(params: {
         policy = intersectOperatorRunModelPolicy(original, current);
         cfg = nextConfig;
         metadata = nextMetadata;
+        publication = nextPublication;
       }
       return policy;
     },
@@ -234,8 +238,10 @@ export function captureChannelOperatorRunAuthority(input: {
     assertCurrent: revocation.assertCurrent,
     signal: revocation.signal,
     retain: revocation.retain,
-    readCurrentRoleAssignment: () => params.assignedRole,
-    readCurrentGithubLogin: () => params.githubLogin ?? null,
+    readCurrentRoleFacts: () => ({
+      assignedRole: params.assignedRole,
+      githubLogin: params.githubLogin ?? null,
+    }),
     get modelPolicy() {
       return modelPolicy.readCurrent();
     },
@@ -579,8 +585,7 @@ export async function captureGatewayOperatorRunAuthority(input: {
       ...admission,
       recoverySnapshot,
       rolePolicy: prepareRunRolePolicy(capturedSourcePolicy),
-      readCurrentRoleAssignment: () => assertProfileCurrent().assignedRole,
-      readCurrentGithubLogin: () => assertProfileCurrent().githubLogin ?? null,
+      readCurrentRoleFacts: assertProfileCurrent,
       source: source.token,
       signal: revocation.signal,
       retain: () => {

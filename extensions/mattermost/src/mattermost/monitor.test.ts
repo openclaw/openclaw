@@ -11,10 +11,8 @@ import {
 } from "./monitor-auth.js";
 import {
   buildMattermostButtonInteractionMessageSid,
-  buildMattermostModelPickerSelectMessageSid,
   formatMattermostFinalDeliveryOutcomeLog,
   resolveMattermostInteractionReplyRootId,
-  resolveMattermostReactionChannelId,
   resolveMattermostThreadSessionContext,
   shouldUpdateMattermostDraftToolProgress,
 } from "./monitor-context.js";
@@ -87,20 +85,6 @@ describe("Mattermost monitor context", () => {
         agentId: "agent-1",
       }),
     ).toBe(expected);
-  });
-
-  it("normalizes model picker selection identities", () => {
-    expect(
-      buildMattermostModelPickerSelectMessageSid({
-        postId: "post",
-        provider: "OpenAI",
-        model: " GPT-5 ",
-      }),
-    ).toBe("interaction:post:select:openai/gpt-5");
-  });
-
-  it("resolves reaction channel without a broadcast", () => {
-    expect(resolveMattermostReactionChannelId({ data: { channel_id: "channel" } })).toBe("channel");
   });
 });
 

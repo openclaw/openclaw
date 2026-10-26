@@ -48,6 +48,7 @@ describe("browser cli snapshot defaults", () => {
     const browser = program
       .command("browser")
       .option("--json", "JSON output", false)
+      .option("--browser-profile <name>", "Browser profile")
       .option("--timeout <ms>", "Timeout in ms", "30000");
     registerBrowserInspectCommands(browser, (cmd) => cmd.parent?.opts() ?? {});
     await program.parseAsync(withJson ? ["browser", "--json", ...args] : ["browser", ...args], {
@@ -184,5 +185,104 @@ describe("browser cli snapshot defaults", () => {
     expect(runtime.error.mock.calls.at(-1)?.[0]).toContain("injected snapshot write failure");
     expect(fsSync.readFileSync(outputPath)).toEqual(priorBytes);
     expect(fsSync.readdirSync(tempDir)).toEqual(["snapshot.txt"]);
+  });
+
+  describe("dialog-blocked snapshots", () => {
+    const browserState = {
+      dialogs: {
+        pending: [
+          { id: "d1", type: "beforeunload", message: "Leave site?", openedAt: "2026-10-20" },
+        ],
+        recent: [],
+      },
+    };
+    const blocked = (format: "ai" | "aria"): SnapshotResult => {
+      const base = {
+        ok: true as const,
+        targetId: "t1",
+        url: "https://example.com",
+        blockedByDialog: true,
+        browserState,
+      };
+      return format === "aria"
+        ? { ...base, format, nodes: [] }
+        : { ...base, format, snapshot: "", refs: {} };
+    };
+    // runtime.error also receives the exit exception, so search every call.
+    const allErrorText = () => runtime.error.mock.calls.map((call) => String(call[0])).join("\n");
+
+    it.each(["ai", "aria"] as const)(
+      "fails instead of printing an empty %s snapshot",
+      async (format) => {
+        sharedMocks.callBrowserRequest.mockResolvedValueOnce(blocked(format));
+
+        await expect(runSnapshot(["--format", format])).rejects.toThrow("__exit__:1");
+
+        expect(allErrorText()).toContain("Snapshot not captured: a pending dialog blocks tab t1");
+        expect(allErrorText()).toContain('Dialog d1 (beforeunload): "Leave site?"');
+        expect(allErrorText()).toContain(
+          "openclaw browser dialog --dismiss --dialog-id d1 --target-id t1",
+        );
+        expect(runtime.log).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each([false, true])(
+      "does not write over an existing --out file (json: %s)",
+      async (withJson) => {
+        const outputPath = path.join(tempDirs.make("openclaw-dialog-out-"), "snapshot.txt");
+        fsSync.writeFileSync(outputPath, "previous snapshot\n");
+        const priorBytes = fsSync.readFileSync(outputPath);
+        sharedMocks.callBrowserRequest.mockResolvedValueOnce(blocked("ai"));
+
+        await expect(
+          runBrowserInspect(["snapshot", "--out", outputPath], withJson),
+        ).rejects.toThrow("__exit__:1");
+
+        expect(fsSync.readFileSync(outputPath)).toEqual(priorBytes);
+        expect(allErrorText()).toContain("Snapshot not captured");
+        expect(runtime.writeJson).not.toHaveBeenCalled();
+      },
+    );
+
+    it("keeps a non-default browser profile in the dismiss command", async () => {
+      sharedMocks.callBrowserRequest.mockResolvedValueOnce(blocked("ai"));
+
+      await expect(runBrowserInspect(["--browser-profile", "work", "snapshot"])).rejects.toThrow(
+        "__exit__:1",
+      );
+
+      expect(allErrorText()).toContain(
+        "openclaw browser dialog --browser-profile=work --dismiss --dialog-id d1 --target-id t1",
+      );
+    });
+
+    it("keeps returning the dialog details in --json mode", async () => {
+      sharedMocks.callBrowserRequest.mockResolvedValueOnce(blocked("ai"));
+
+      await runBrowserInspect(["snapshot"], true);
+
+      expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ blockedByDialog: true, browserState }),
+      );
+      expect(runtime.error).not.toHaveBeenCalled();
+      expect(runtime.exit).not.toHaveBeenCalled();
+    });
+
+    it("still prints a genuinely blank page and exits 0", async () => {
+      sharedMocks.callBrowserRequest.mockResolvedValueOnce({
+        ok: true,
+        format: "ai",
+        targetId: "t1",
+        url: "about:blank",
+        snapshot: "",
+      });
+
+      await runSnapshot([]);
+
+      expect(runtime.log).toHaveBeenCalledExactlyOnceWith("");
+      expect(runtime.error).not.toHaveBeenCalled();
+      expect(runtime.exit).not.toHaveBeenCalled();
+    });
   });
 });

@@ -113,7 +113,9 @@ export function WorkboardMiniWidget(props: WidgetProps) {
           >
             {(card) => (
               <div class="workboard-widget-mini__card">
-                <span class={`workboard-widget__status workboard-widget__status--${card().status}`}>
+                <span
+                  class={["workboard-widget__status", `workboard-widget__status--${card().status}`]}
+                >
                   {t(`workboard.status.${card().status}`)}
                 </span>
                 <strong>{card().title}</strong>
@@ -170,7 +172,10 @@ export function WorkboardCardWidget(props: WidgetProps) {
               <div class="workboard-widget-card__heading">
                 <strong>{current().title}</strong>
                 <span
-                  class={`workboard-widget__status workboard-widget__status--${current().status}`}
+                  class={[
+                    "workboard-widget__status",
+                    `workboard-widget__status--${current().status}`,
+                  ]}
                 >
                   {t(`workboard.status.${current().status}`)}
                 </span>

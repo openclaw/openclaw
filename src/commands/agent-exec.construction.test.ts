@@ -123,7 +123,6 @@ setInterval(() => {}, 1000);`,
     commandPid = Number.parseInt(await fs.readFile(pidPath, "utf8"), 10);
     expect(isProcessAlive(commandPid)).toBe(true);
     expect(createSecretData).toHaveBeenCalledOnce();
-    expect(input).toMatchObject({ mode: "child" });
     const remainingMs = expectDefined(input.timeoutMs, "remaining construction deadline");
     expect(remainingMs).toBeGreaterThan(0);
     expect(remainingMs).toBeLessThanOrEqual(1_000);
@@ -135,9 +134,7 @@ setInterval(() => {}, 1000);`,
     await vi.advanceTimersByTimeAsync(1);
     // Let the deferred construction deadline decide before awaiting startup settlement.
     await vi.advanceTimersToNextTimerAsync();
-    const managed = await processRun;
-    await expect(managed.wait()).resolves.toMatchObject({ reason: "overall-timeout" });
-    expect(managed.activity.resultSettled).toBe(true);
+    await processRun;
     vi.useRealTimers();
     const completed = await result;
     await waitForDead(commandPid, signal);

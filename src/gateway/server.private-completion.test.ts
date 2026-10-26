@@ -59,6 +59,7 @@ import { waitForChatAbortControllerRemoval } from "./chat-abort-lifecycle-intern
 import * as chatAbort from "./chat-abort.js";
 import { refusePendingInputCommit } from "./pending-input-commit.test-support.js";
 import { dispatchGatewayMethodInProcess } from "./server-plugin-in-process-dispatch.js";
+import { captureGatewayKernel } from "./server.capture-kernel.test-support.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import {
   createPrivateCompletionRequest,
@@ -101,17 +102,9 @@ describe("private subagent completion processing receipts", () => {
         },
       },
     });
-    const module = await import("./server-kernel.js");
-    const create = module.createGatewayKernel;
-    const capture = vi.spyOn(module, "createGatewayKernel").mockImplementation(async (...args) => {
-      kernel = await create(...args);
-      return kernel;
-    });
-    try {
+    kernel = await captureGatewayKernel(async () => {
       harness = await startGatewayServerHarness();
-    } finally {
-      capture.mockRestore();
-    }
+    });
   }
   installGatewayTestHooks({ scope: "suite", setup: start, cleanup: async () => harness?.close() });
   beforeEach(async () => {

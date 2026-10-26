@@ -17,6 +17,7 @@ import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js
 import { createProviderBrowserAuthSession } from "../provider-browser-auth.js";
 import { createGatewayHttpServer } from "../server-http.js";
 import { prepareTailscalePublishedOrigin } from "../tailscale-published-origin.js";
+import { PROVIDER_AUTH_INTEGRATION_ENV } from "../test-helpers.env.js";
 
 const providerId = "browser-auth-proof";
 const profileId = `${providerId}:default`;
@@ -58,15 +59,7 @@ async function writeBrowserProvider(workspaceDir: string, authorizationState: st
 it.each(["complete", "cancel"] as const)("callback receipt: %s", async (outcome) => {
   const state = await createOpenClawTestState({
     label: `browser-auth-${outcome}`,
-    env: {
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
-      OPENCLAW_OAUTH_DIR: undefined,
-      OPENCLAW_GATEWAY_URL: undefined,
-      OPENCLAW_GATEWAY_PORT: undefined,
-      OPENCLAW_GATEWAY_TOKEN: undefined,
-      OPENCLAW_GATEWAY_PASSWORD: undefined,
-    },
+    env: { ...PROVIDER_AUTH_INTEGRATION_ENV },
   });
   const authorizationState = `browser-${outcome}`;
   const opened = createDeferredCore<string>();

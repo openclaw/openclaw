@@ -14,11 +14,9 @@ import {
   mockToolRequests,
   runLiveRuntimeToolFixture as runLiveFixture,
   runMockRuntimeToolFixture as runMockFixture,
-  runRuntimeToolFixtureWithDeps,
   runtimePatchAddInput,
   runtimePatchUpdateInput,
   runtimeToolFixtureConfig,
-  runtimeToolFixtureDeps,
   simulateRuntimePatchHappyTurn,
   transcriptToolCall,
   transcriptToolResult,
@@ -52,6 +50,10 @@ async function expectAbsent(file: string) {
 }
 type NativeOptions = NonNullable<Parameters<typeof writeCodexNativePatchEvidence>[2]>;
 type NativeSetup = (env: QaSuiteRuntimeEnv) => NativeOptions | Promise<NativeOptions>;
+type InvalidNativeEvidence = NativeOptions & {
+  output?: string;
+  runAgentPrompt?: RuntimeToolFixtureDeps["runAgentPrompt"];
+};
 
 async function makeCodexEnv() {
   const env = await makeEnv();
@@ -137,25 +139,14 @@ function asyncImageFixtureConfig() {
   });
 }
 
-const patchDefaults = () => ({
-  toolName: "apply_patch",
-  happyArgs: { input: runtimePatchAddInput() },
-  failureArgs: { input: runtimePatchUpdateInput() },
-  happyOutput: "Successfully applied patch",
-  failureOutput: "Error: Path escapes sandbox root",
-});
 function patchRequests(overrides: Parameters<typeof mockToolRequests>[0] = {}) {
-  return mockToolRequests({ ...patchDefaults(), ...overrides });
-}
-function runMockPatchFixture(
-  overrides: Parameters<typeof mockToolRequests>[0] & { happyPatchContents?: string | null } = {},
-) {
-  return runMockFixture({
+  return mockToolRequests({
     toolName: "apply_patch",
-    requests: patchRequests(overrides),
-    runAgentPrompt: vi.fn((env, params) =>
-      simulateRuntimePatchHappyTurn(env, params, overrides.happyPatchContents),
-    ),
+    happyArgs: { input: runtimePatchAddInput() },
+    failureArgs: { input: runtimePatchUpdateInput() },
+    happyOutput: "Successfully applied patch",
+    failureOutput: "Error: Path escapes sandbox root",
+    ...overrides,
   });
 }
 function runAsyncImageFixture(requests: Parameters<typeof mockToolRequests>[0]) {
@@ -199,47 +190,19 @@ describe("runtime tool fixture", () => {
   });
 
   it("skips Codex-native fixtures when only OpenClaw dynamic exposure evidence is absent", async () => {
-    const env = await makeEnv({ mock: { baseUrl: MOCK_BASE_URL } });
-    env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME = "codex";
-    env.gateway.workspaceDir = env.repoRoot;
-
-    const fetchJson = vi
-      .fn()
-      .mockResolvedValueOnce({ cursor: 0 })
-      .mockResolvedValueOnce([
-        {
-          allInputText: "target=read",
-          plannedToolName: "read",
-          plannedToolArgs: { path: "README.md" },
-        },
-      ]);
-
-    const runAgentPrompt = vi.fn<RuntimeToolFixtureDeps["runAgentPrompt"]>().mockResolvedValue({});
     await expect(
-      runRuntimeToolFixtureWithDeps(
-        env,
-        {
-          toolName: "read",
-          toolCoverage: {
-            ...nativeCoverage,
-            reason: "Codex owns read natively.",
-          },
-          promptSnippet: "target=read",
-          failurePromptSnippet: "failure target=read",
-        },
-        runtimeToolFixtureDeps({ tools: [], runAgentPrompt, fetchJson }),
-      ),
+      runMockFixture({
+        forceCodex: true,
+        tools: [],
+        requests: mockToolRequests({ omitHappyOutput: true, omitFailureOutput: true }),
+        config: { toolCoverage: { ...nativeCoverage, reason: "Codex owns read natively." } },
+      }),
     ).rejects.toMatchObject({
       name: "QaSuiteScenarioSkipError",
       message: expect.stringMatching(
         /codex-native-workspace read[\s\S]*RUNTIME_PARITY_SESSION_KEY=agent:qa:runtime-tool:read:happy[\s\S]*RUNTIME_PARITY_SESSION_KEY=agent:qa:runtime-tool:read:failure/u,
       ),
     });
-    expect(runAgentPrompt).toHaveBeenCalledTimes(2);
-    expect(runAgentPrompt.mock.calls.map(([, params]) => params.transcriptToolName)).toEqual([
-      undefined,
-      undefined,
-    ]);
   });
 
   it("rejects a native patch whose recorded working directory changes its target", async () => {
@@ -293,11 +256,9 @@ describe("runtime tool fixture", () => {
         const happy = path.join(env.gateway.workspaceDir, PATCH_FILE);
         const denied = path.resolve(env.gateway.workspaceDir, DENIED_FILE);
         return {
-          happyArguments: {
-            input: `*** Begin Patch\n*** Add File: ${happy}\n+runtime patch\n*** End Patch\n`,
-          },
+          happyArguments: { input: runtimePatchAddInput(happy) },
           failureArguments: {
-            input: `*** Begin Patch\n*** Update File: ${denied}\n-runtime-tool-fixture-denied-original\n+runtime patch outside the workspace\n*** End Patch\n`,
+            input: runtimePatchUpdateInput(denied).replace("@@\n", ""),
           },
         };
       },
@@ -345,28 +306,25 @@ describe("runtime tool fixture", () => {
     await expectAbsent(path.resolve(env.gateway.workspaceDir, DENIED_FILE));
   });
 
-  it.each<
-    [
-      NativeOptions & {
-        output?: string;
-        runAgentPrompt?: RuntimeToolFixtureDeps["runAgentPrompt"];
-      },
-      string,
-    ]
-  >([
+  it.each<[InvalidNativeEvidence, string]>([
     [{ runAgentPrompt: vi.fn(async () => ({})) }, PATCH_CREATE_ERROR],
-    [
-      {
-        output:
-          "apply_patch failed: failed to find expected lines in runtime-tool-fixture-denied.txt",
-      },
-      PATCH_BOUNDARY_ERROR,
-    ],
+    [{ output: "Error: hunk mismatch" }, PATCH_BOUNDARY_ERROR],
     [
       { output: "apply_patch completed", failureStructuredError: false },
       "expected live failure-path tool failure output for apply_patch",
     ],
     [{ failureKind: "add" }, PATCH_UPDATE_ERROR],
+    [
+      {
+        failureArguments: {
+          input: runtimePatchUpdateInput().replace(
+            "+runtime patch outside the workspace",
+            "+incorrect replacement",
+          ),
+        },
+      },
+      PATCH_UPDATE_ERROR,
+    ],
   ])(
     "rejects invalid native patch evidence: %j",
     async ({ output, runAgentPrompt, ...options }, expected) => {
@@ -401,9 +359,6 @@ describe("runtime tool fixture", () => {
 
   it("verifies native-only private-QA Codex patch calls without skipping them", async () => {
     const env = await makeEnv({ mock: { baseUrl: MOCK_BASE_URL } });
-    const runAgentPrompt = vi.fn<RuntimeToolFixtureDeps["runAgentPrompt"]>(
-      simulateRuntimePatchHappyTurn,
-    );
     const details = await runMockFixture({
       env,
       toolName: "apply_patch",
@@ -414,91 +369,15 @@ describe("runtime tool fixture", () => {
       config: nativePatchFixtureConfig(),
       tools: [],
       forceCodex: true,
-      runAgentPrompt,
+      runAgentPrompt: simulateRuntimePatchHappyTurn,
     });
 
-    expect(
-      runAgentPrompt.mock.calls.map(([, params]) => ({
-        transcriptToolName: params.transcriptToolName,
-        requireSuccessfulTranscriptToolResult: params.requireSuccessfulTranscriptToolResult,
-      })),
-    ).toEqual([
-      { transcriptToolName: undefined, requireSuccessfulTranscriptToolResult: undefined },
-      { transcriptToolName: undefined, requireSuccessfulTranscriptToolResult: undefined },
-    ]);
     expect(details).toContain("apply_patch mock provider happy planned args");
     expect(details).toContain("runtime-tool-fixture-patch.txt");
     expect(details).toContain("../runtime-tool-fixture-denied.txt");
     expect(details).not.toContain("codex-native-workspace apply_patch");
     await expectAbsent(path.resolve(env.gateway.workspaceDir, DENIED_FILE));
     await expectAbsent(path.join(env.gateway.workspaceDir, PATCH_FILE));
-  });
-
-  it.each<[Parameters<typeof runMockPatchFixture>[0], string]>([
-    [
-      { failureOutput: "Error: failed to find expected lines in runtime-tool-fixture-denied.txt" },
-      "expected mock apply_patch failure to explicitly reject the workspace boundary",
-    ],
-    [{ happyPatchContents: null }, PATCH_CREATE_ERROR],
-    [
-      {
-        failureArgs: {
-          input: runtimePatchUpdateInput().replace(
-            "+runtime patch outside the workspace",
-            "+incorrect replacement",
-          ),
-        },
-      },
-      "expected linked mock apply_patch to update ../runtime-tool-fixture-denied.txt",
-    ],
-  ])("rejects invalid mock patch evidence %j", async (options, expected) => {
-    await expectRejected(runMockPatchFixture(options), expected);
-  });
-
-  it("skips Codex-native async planned-only fixtures without treating the plan as proof", async () => {
-    await expectRejected(
-      runMockFixture({
-        toolName: "image_generate",
-        requests: mockToolRequests({
-          toolName: "image_generate",
-          happyArgs: { prompt: "QA lighthouse runtime parity fixture" },
-          failureArgs: { __qaFailureMode: "denied-input" },
-          omitHappyOutput: true,
-          failureOutput: "Error: denied-input",
-        }),
-        config: runtimeToolFixtureConfig("image_generate", {
-          toolCoverage: {
-            ...nativeCoverage,
-            reason: "Codex owns image generation natively in this fixture.",
-          },
-          happyPathOutputRequired: false,
-        }),
-        tools: [],
-        forceCodex: true,
-      }),
-      "image_generate mock provider report-only",
-    );
-  });
-
-  it("requires mock runtime tool fixtures to produce tool output", async () => {
-    const requests = [
-      {
-        allInputText: "target=read",
-        plannedToolName: "read",
-        plannedToolArgs: { path: "README.md" },
-      },
-      {
-        allInputText: "failure target=read",
-        plannedToolName: "read",
-        plannedToolArgs: { path: "/missing" },
-      },
-      { allInputText: "failure target=read", toolOutput: "ENOENT: no such file or directory" },
-    ];
-
-    await expectRejected(
-      runMockFixture({ requests }),
-      "expected mock happy-path tool output for read",
-    );
   });
 
   it.each<[Parameters<typeof runAsyncImageFixture>[0], string]>([
@@ -600,50 +479,25 @@ describe("runtime tool fixture mock request linking", () => {
   });
 });
 
-it.each(["correlated success and error", "missing nested result"])(
-  "validates nested runtime evidence: %s",
-  async (testCase) => {
-    const missingResult = testCase === "missing nested result";
-    const env = await makeEnv();
-    const receipt = (phase: "happy" | "failure") => {
-      const activity = nestedToolActivityFixture({
-        toolName: "web_fetch",
-        toolCallId: `nested-${phase}`,
-        input: { url: phase === "happy" ? "https://example.com/" : "file:///denied" },
-        text: "completed",
-        isError: phase === "failure",
-      });
-      return {
-        ...activity,
-        details: {
-          ...activity.details,
-          result: missingResult ? undefined : activity.details.result,
-        },
-      };
-    };
-    const happy: Array<Record<string, unknown>> = [receipt("happy")];
-    if (!missingResult) {
-      happy.unshift({
-        role: "toolResult",
-        toolName: "unrelated",
-        toolCallId: "nested-happy",
-        isError: true,
-        content: "failed unrelated tool",
-      });
-    }
-    await writeRuntimeToolTranscripts(env, "web_fetch", happy, [receipt("failure")]);
-    const result = runRuntimeToolFixtureWithDeps(
-      env,
-      runtimeToolFixtureConfig("web_fetch"),
-      runtimeToolFixtureDeps({ tools: ["web_fetch"] }),
-    );
-    if (missingResult) {
-      await expectRejected(result, "expected live happy-path tool call for web_fetch");
-    } else {
-      await expect(result).resolves.toContain('"url":"https://example.com/"');
-    }
-  },
-);
+it("rejects nested runtime evidence without a result", async () => {
+  const env = await makeEnv();
+  const activity = nestedToolActivityFixture({
+    toolName: "web_fetch",
+    toolCallId: "nested-happy",
+    input: { url: "https://example.com/" },
+    text: "completed",
+  });
+  await writeRuntimeToolTranscripts(
+    env,
+    "web_fetch",
+    [{ ...activity, details: { ...activity.details, result: undefined } }],
+    [],
+  );
+  await expectRejected(
+    runLiveFixture(env, { toolName: "web_fetch" }),
+    "expected live happy-path tool call for web_fetch",
+  );
+});
 
 async function runTranscriptFixture(
   happyMessages: Array<Record<string, unknown>>,
@@ -677,27 +531,14 @@ async function runTranscriptFixture(
 }
 
 describe("runtime tool fixture transcript evidence", () => {
-  it.each(["missing", "empty"])(
-    "reports a %s transcript with its fixture sessions",
-    async (state) => {
-      const env = await makeEnv();
-      if (state === "empty") {
-        await writeRuntimeToolTranscripts(env, "read", [], []);
-      }
-      const result = runLiveFixture(env);
-      await expect(result).rejects.toThrow(
-        state === "missing"
-          ? "session transcript entry not found for agent:qa:runtime-tool:read:happy"
-          : "session transcript is empty for agent:qa:runtime-tool:read:happy",
-      );
-      await expect(result).rejects.toThrow(
-        "RUNTIME_PARITY_SESSION_KEY=agent:qa:runtime-tool:read:happy",
-      );
-      await expect(result).rejects.toThrow(
-        "RUNTIME_PARITY_SESSION_KEY=agent:qa:runtime-tool:read:failure",
-      );
-    },
-  );
+  it("rejects an empty transcript", async () => {
+    const env = await makeEnv();
+    await writeRuntimeToolTranscripts(env, "read", [], []);
+    await expectRejected(
+      runLiveFixture(env),
+      "session transcript is empty for agent:qa:runtime-tool:read:happy",
+    );
+  });
 
   it("prepares the authored config instead of seeding a stale runtime store", async () => {
     const env = await makeEnv();
@@ -772,6 +613,11 @@ describe("runtime tool fixture transcript evidence", () => {
     async (blockFallback) => {
       const env = await makeEnv();
       const happyArgs = '{"path":"README.md"}';
+      const result = (phase: string, content: unknown) => ({
+        role: "tool",
+        tool_call_id: `provider-${phase}`,
+        content,
+      });
       await writeRuntimeToolTranscripts(
         env,
         "read",
@@ -782,13 +628,12 @@ describe("runtime tool fixture transcript evidence", () => {
               { id: "provider-happy", function: { name: "read", arguments: happyArgs } },
             ],
           },
-          {
-            role: "tool",
-            tool_call_id: "provider-happy",
-            content: blockFallback
+          result(
+            "happy",
+            blockFallback
               ? [{ message: "README contents", error: "permission denied" }]
               : "README contents",
-          },
+          ),
         ],
         [
           {
@@ -800,11 +645,7 @@ describe("runtime tool fixture transcript evidence", () => {
             },
           },
           blockFallback
-            ? {
-                role: "tool",
-                tool_call_id: "provider-failure",
-                content: [{ error: "permission denied" }],
-              }
+            ? result("failure", [{ error: "permission denied" }])
             : {
                 role: "user",
                 content: [

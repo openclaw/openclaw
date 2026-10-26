@@ -139,7 +139,7 @@ export function isApprovalRecordVisibleToClient<TPayload>(params: {
   prepared?: Parameters<typeof canAccessApprovalSession>[0]["prepared"];
   sessionAccess?: Awaited<ReturnType<typeof prepareApprovalSessionAccess>>;
 }): boolean {
-  const scopes = Array.isArray(params.client?.connect?.scopes) ? params.client.connect.scopes : [];
+  const scopes = params.client?.connect.scopes ?? [];
   if (scopes.includes(ADMIN_SCOPE)) {
     return true;
   }

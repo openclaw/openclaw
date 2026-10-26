@@ -95,7 +95,9 @@ reads use batches of eight and skip stored JSON or compressed values above 64 Ki
 compressed messages are not decoded. Cold snapshot values and older transcript
 payloads are not scanned.
 Each bounded query finishes before yielding, so pacing holds no SQLite read transaction.
-Warming yields between chunks, targets 16 MiB/s, and stops at a 2 GiB pass budget
+Warming reports progress in roughly 1 MiB chunks instead of once per session or
+message batch, keeping small reads and their allocation in the worker. It still
+checks the byte budget after every bounded read. Warming targets 16 MiB/s and stops at a 2 GiB pass budget
 or three minutes per database. A final chunk can exceed the byte budget slightly.
 Shutdown cancels and joins the worker; no page map or read snapshot survives a pass.
 
@@ -205,7 +207,12 @@ The per-agent `session_transcript_cold_archives` table records cold transcript
 locations alongside `session_windows` and `transcript_events`. Each row belongs
 to a retained session window and identifies its generation, archive name, hash,
 counts, and sizes. The payload lives in an immutable compressed JSONL file, or
-in the row's blob when embedded by a supported backup.
+in the row's blob when embedded by a supported backup. Schema 36 adds
+`session_transcript_cold_archive_chunks`, keyed by session and ordered chunk index,
+with a cascading foreign key to the parent. Chunked parents retain window totals
+and the ordered manifest hash; each child records its sequence range, counts,
+file hash, and sizes. Backups embed each chunk in its own blob. Parents without
+children keep the original single-file representation.
 
 The default archive directory is
 `~/.openclaw/agents/<agentId>/sessions/cold/`, with filenames
@@ -214,7 +221,7 @@ The default archive directory is
 These files contain authoritative history. See
 [cold transcript storage](/reference/session-management-compaction/maintenance#cold-transcript-storage)
 for retention and restoration, and
-[agent schema 20](/reference/database-schemas/agent-schema-history#cold-transcript-storage)
+[agent schema 36](/reference/database-schemas/agent-schema-history#agent-schema-36)
 for the schema and update contract.
 
 ### Plugin state listing index

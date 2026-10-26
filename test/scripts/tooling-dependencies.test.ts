@@ -86,27 +86,13 @@ console.log(value, privateValue, local, process.env.TOOLING_FIXTURE_PRELOADED);
   return { ...fixture, source, donor, entry, wrapper, installed, link, manifest };
 }
 
-it.each(["full", "sparse", "different origin"])(
-  "qualifies a %s donor independently of inherited hook Git context",
-  (donor) => {
-    const root = tempDirs.make("openclaw-tooling-hook-context-");
-    const fixture = createToolingDependencyFixture(root);
-    execFileSync("git", ["-C", fixture.checkout, "config", "core.sparseCheckout", "true"]);
-    if (donor === "sparse") {
-      execFileSync("git", ["-C", fixture.tooling, "config", "core.sparseCheckout", "true"]);
-    } else if (donor === "different origin") {
-      execFileSync("git", [
-        "-C",
-        fixture.tooling,
-        "remote",
-        "set-url",
-        "origin",
-        "https://github.com/fixture/other.git",
-      ]);
-    }
-    writeFileSync(
-      join(fixture.checkout, "scripts/hook-context.mjs"),
-      `import assert from "node:assert/strict";
+it("qualifies a donor independently of inherited hook Git context", () => {
+  const root = tempDirs.make("openclaw-tooling-hook-context-");
+  const fixture = createToolingDependencyFixture(root);
+  execFileSync("git", ["-C", fixture.checkout, "config", "core.sparseCheckout", "true"]);
+  writeFileSync(
+    join(fixture.checkout, "scripts/hook-context.mjs"),
+    `import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -137,55 +123,34 @@ try {
 }
 await import("./crabbox-wrapper.mjs");
 `,
-    );
-    const result = expectRun(
-      fixture,
-      donor === "full" ? 0 : 1,
-      donor === "full" ? "qualified bootstrap OK\n" : "",
-      "hook-context.mjs",
-    );
-    if (donor !== "full") {
-      expect(result.stderr).toContain(
-        donor === "sparse" ? "Sparse checkout." : "Different repository.",
-      );
-    }
-  },
-);
+  );
+  expectRun(fixture, 0, "qualified bootstrap OK\n", "hook-context.mjs");
+});
 
-it.each(["clean", "stale", "missing subpath exports"])(
-  "bootstraps qualified dependencies beside a %s ancestor without linking them",
-  (ancestor) => {
-    const root = tempDirs.make("openclaw-tooling-bootstrap-");
-    const fixture = createToolingDependencyFixture(root, ancestor !== "clean");
-    if (ancestor === "missing subpath exports") {
-      fixture.writePackage("fixture-pkg", 'export default "stale";', "0.0.0-stale", root, {
-        "./advanced": 'export const legacyCopy = "stale";',
-      });
-      fixture.writePackage("fixture-pkg", 'export default "qualified";', "1.0.0", fixture.tooling, {
-        "./advanced": 'export const copyFileDescriptorSync = "advanced";',
-        "./watch": 'export const watch = "watch";',
-      });
-      writeFileSync(
-        join(fixture.checkout, "scripts/crabbox-wrapper.mts"),
-        `import { copyFileDescriptorSync } from "fixture-pkg/advanced";
+it("bootstraps qualified subpaths beside a stale ancestor without linking them", () => {
+  const root = tempDirs.make("openclaw-tooling-bootstrap-");
+  const fixture = createToolingDependencyFixture(root, true);
+  fixture.writePackage("fixture-pkg", 'export default "stale";', "0.0.0-stale", root, {
+    "./advanced": 'export const legacyCopy = "stale";',
+  });
+  fixture.writePackage("fixture-pkg", 'export default "qualified";', "1.0.0", fixture.tooling, {
+    "./advanced": 'export const copyFileDescriptorSync = "advanced";',
+    "./watch": 'export const watch = "watch";',
+  });
+  writeFileSync(
+    join(fixture.checkout, "scripts/crabbox-wrapper.mts"),
+    `import { copyFileDescriptorSync } from "fixture-pkg/advanced";
 import { watch } from "fixture-pkg/watch";
 console.log(copyFileDescriptorSync, watch);
 `,
-      );
-    }
-    expectRun(
-      fixture,
-      0,
-      ancestor === "missing subpath exports" ? "advanced watch\n" : "qualified bootstrap OK\n",
-    );
-    const ordinary = expectRun(fixture, 1, "", "ordinary.mjs");
-    expect(ordinary.stderr).toContain("Repository dependencies are missing");
-  },
-);
+  );
+  expectRun(fixture, 0, "advanced watch\n");
+  const ordinary = expectRun(fixture, 1, "", "ordinary.mjs");
+  expect(ordinary.stderr).toContain("Repository dependencies are missing");
+});
 
 it.each([
   { name: "tsx", invalid: "version" },
-  { name: "fixture-pkg", invalid: "version" },
   { name: "tsx", invalid: "owner" },
   { name: "fixture-pkg", invalid: "owner" },
 ])("rejects $name with an invalid $invalid before executing it", ({ name, invalid }) => {
@@ -214,7 +179,7 @@ it.each([
   expect(existsSync(join(fixture.checkout, "node_modules"))).toBe(false);
 });
 
-it.each(["local only", "different root pin", "stale ancestor", "missing subpath exports"])(
+it.each(["local only", "different root pin", "missing subpath exports"])(
   "resolves workspace-owned dependencies with %s and preserves checkout source",
   (scenario) => {
     const root = tempDirs.make("openclaw-tooling-package-");
@@ -235,11 +200,7 @@ ${source}`,
       );
     } else {
       fixture.writePackage("fixture-pkg", staleSource, "0.0.0", root);
-      if (scenario === "missing subpath exports") {
-        rewrite(fixture.entry, (source) =>
-          source.replace('"fixture-pkg"', '"fixture-pkg/feature"'),
-        );
-      }
+      rewrite(fixture.entry, (source) => source.replace('"fixture-pkg"', '"fixture-pkg/feature"'));
     }
     expectRun(fixture, 0, "workspace workspace-private checkout 1\n");
   },

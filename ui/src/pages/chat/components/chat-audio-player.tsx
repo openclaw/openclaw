@@ -1,7 +1,10 @@
 import { createMemo, createStore, For, onSettled, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
+import { registerChatMediaEnglish } from "../../../i18n/locales/en-chat-media.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
+import { observeResize } from "../../../lib/reactive/observers.ts";
 import { projectOwner } from "../../../lib/reactive/projection.ts";
 import type { SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { defineSolidBridge } from "../../../lib/solid-bridge.ts";
@@ -31,6 +34,10 @@ import {
 import { buildChatMediaFetchHeaders, type ChatMediaPlaybackMode } from "./chat-media-playback.ts";
 import { ChatMediaSourceOwner } from "./chat-media-source.ts";
 import { readResponseBytesWithinLimit } from "./chat-response-bytes.ts";
+
+registerEnglishCatalog(registerChatComposerEnglish);
+
+registerEnglishCatalog(registerChatMediaEnglish);
 
 const SEEK_STEP_SECONDS = 5;
 const WAVEFORM_FETCH_TIMEOUT_MS = 30_000;
@@ -450,17 +457,11 @@ function ChatAudioPlayerContent(
         if (typeof ResizeObserver === "undefined") {
           return undefined;
         }
-        let current: HTMLDivElement | null = waveform;
-        const observer = new ResizeObserver(([entry]) => {
-          if (entry && current === entry.target) {
+        return observeResize([waveform], ([entry]) => {
+          if (entry) {
             updateWaveformWidth(entry.contentRect.width);
           }
         });
-        observer.observe(waveform);
-        return () => {
-          observer.disconnect();
-          current = null;
-        };
       });
       return (
         <div class="chat-audio-player__waveform" ref={[waveformRef]}>

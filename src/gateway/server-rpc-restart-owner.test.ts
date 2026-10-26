@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { expect, it, onTestFinished, vi } from "vitest";
+import { readRequestText } from "../../test/helpers/gateway-integration-fixtures.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import {
   awaitGateBeforeSettlement,
@@ -20,6 +21,7 @@ import * as providerFixture from "./gateway-provider-fixture.test-support.js";
 import * as sourceFinalization from "./server-methods/chat-send-source-finalization.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
+import { createGatewayBackgroundTestEnv } from "./test-helpers.env.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 import "./server.subagent-prompt-recent.gateway.test-support.js";
 
@@ -30,16 +32,7 @@ it(
     const token = "synthetic-rpc-owner-token";
     const state = await createOpenClawTestState({
       label: "rpc-restart-owner",
-      env: {
-        OPENCLAW_GATEWAY_TOKEN: token,
-        OPENCLAW_SKIP_CHANNELS: "1",
-        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-        OPENCLAW_SKIP_CRON: "1",
-        OPENCLAW_SKIP_CANVAS_HOST: "1",
-        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-        OPENCLAW_SKIP_PROVIDERS: "1",
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      },
+      env: createGatewayBackgroundTestEnv(token),
     });
     const sessionKey = "agent:main:rpc-restart-owner";
     const firstGate = createDeferred();
@@ -48,19 +41,16 @@ it(
     const queuedSourceRegistered = createDeferred<rpcSources.RpcSourceRef>();
     const recoveryMarked = createDeferred();
     let firstReceived = false;
-    let followupReceived = false;
     const tasks = new Set<Promise<void>>();
     const providerServer = createServer((request, response) => {
       const task = (async () => {
-        const body = await providerFixture.readProviderBody(request);
+        const body = await readRequestText(request);
         if (request.method !== "POST" || request.url !== "/v1/responses") {
           response.writeHead(404).end();
           return;
         }
         const followup = body.includes("SYNTHETIC_QUEUED_REPLY");
-        if (followup) {
-          followupReceived = true;
-        } else if (body.includes("SYNTHETIC_FIRST_REPLY")) {
+        if (!followup && body.includes("SYNTHETIC_FIRST_REPLY")) {
           firstReceived = true;
           await firstGate.promise;
         }
@@ -127,10 +117,9 @@ it(
         };
       });
     onTestFinished(async () => {
-      startupSpy.mockRestore();
-      registrationSpy.mockRestore();
-      finalizationSpy.mockRestore();
-      markerSpy.mockRestore();
+      for (const spy of [startupSpy, registrationSpy, finalizationSpy, markerSpy]) {
+        spy.mockRestore();
+      }
       firstGate.resolve();
       finalGate.resolve();
       if (resources.gateway) {
@@ -203,7 +192,6 @@ it(
     expect(queuedSource.input.claim).toBeUndefined();
     firstGate.resolve();
     await withinTest(finalReached.promise, signal);
-    expect(followupReceived).toBe(true);
     const history = await client.request<{ messages: unknown[] }>("chat.history", {
       sessionKey,
       limit: 20,

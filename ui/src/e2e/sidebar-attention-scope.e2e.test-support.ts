@@ -9,6 +9,7 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
+import { twoFrames } from "./chat-presentation.test-support.ts";
 import { expectCount, expectVisible } from "./sidebar-assertions.test-support.ts";
 import { openSidebarPages, sidebarCronJob } from "./sidebar-customization.test-support.ts";
 import { setSidebarProofTheme } from "./sidebar-footer-proof.test-support.ts";
@@ -249,12 +250,7 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
     await expect
       .poll(() => page.locator(".shell").getAttribute("class"))
       .toContain("shell--mobile-nav");
-    await page.evaluate(
-      () =>
-        new Promise<void>((resolve) => {
-          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-        }),
-    );
+    await twoFrames(page);
     const floatingKinds = await page
       .locator(".sidebar-attention--floating [data-attention-kind]")
       .evaluateAll((elements) =>

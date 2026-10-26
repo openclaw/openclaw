@@ -89,23 +89,17 @@ describe("resolveGroupToolPolicy group context validation", () => {
   }
 
   it.each([
-    ["rejects forged groupId without group context", "main", "trusted-group", undefined, undefined],
+    ["forged groupId", "main", "trusted-group", undefined, undefined],
+    ["session overrides caller", "whatsapp:group:safe-room", "trusted-group", undefined, ["read"]],
     [
-      "prefers the session over a conflicting caller",
-      "whatsapp:group:safe-room",
-      "trusted-group",
-      undefined,
-      ["read"],
-    ],
-    [
-      "trusts a spawnedBy group",
+      "spawnedBy group",
       "main",
       "trusted-group",
       "agent:main:whatsapp:group:trusted-group",
       ["exec", "read", "write", "edit"],
     ],
     [
-      "prefers the specific session over its parent",
+      "specific session overrides parent",
       "whatsapp:group:room:sender:alice",
       "room",
       undefined,

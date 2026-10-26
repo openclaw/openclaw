@@ -237,13 +237,6 @@ describe("gateway telemetry maintenance", () => {
         () => thaw.promise,
       );
       const state = createMaintenanceDeps();
-      const {
-        worktreeGc,
-        runDeliveryQueueMediaGc,
-        logHealth,
-        refreshGatewayHealthSnapshot,
-        broadcast,
-      } = state;
       const timers = await startMaintenance({ ...state, restartRunningChannels });
       try {
         vi.setSystemTime(Date.now() + 75_000);
@@ -258,20 +251,24 @@ describe("gateway telemetry maintenance", () => {
         }
         const stopped = vi.fn();
         const stopping = timers.stopPeriodicTasks().finally(stopped);
-        refreshGatewayHealthSnapshot.mockRejectedValue(
+        state.refreshGatewayHealthSnapshot.mockRejectedValue(
           new Error("Gateway health refresh owner is closed"),
         );
-        broadcast.mockClear();
+        state.broadcast.mockClear();
         state.dedupe.set("retained-during-drain", { ts: 0, ok: true });
         thaw.resolve(true);
 
         await vi.advanceTimersByTimeAsync(2 * 60 * 60_000);
 
-        expect(logHealth.error).not.toHaveBeenCalled();
-        expect(refreshGatewayHealthSnapshot).toHaveBeenCalledOnce();
-        expect(broadcast).not.toHaveBeenCalled();
-        expect(worktreeGc).not.toHaveBeenCalled();
-        expect(runDeliveryQueueMediaGc).not.toHaveBeenCalled();
+        for (const producer of [
+          state.logHealth.error,
+          state.broadcast,
+          state.worktreeGc,
+          state.runDeliveryQueueMediaGc,
+        ]) {
+          expect(producer).not.toHaveBeenCalled();
+        }
+        expect(state.refreshGatewayHealthSnapshot).toHaveBeenCalledOnce();
         expect(checkTelemetryUpdateMock).toHaveBeenCalledOnce();
         expect(state.dedupe.has("retained-during-drain")).toBe(true);
         expect(restartRunningChannels.mock.calls[0]?.[1]?.()).toBe(false);
@@ -294,7 +291,6 @@ describe("gateway telemetry maintenance", () => {
       .mockRejectedValueOnce(new Error("offline"))
       .mockReturnValue(check.promise);
     const maintenanceState = createMaintenanceDeps();
-    const { logHealth } = maintenanceState;
     const timers = await startMaintenance(maintenanceState);
 
     expect(generateSecureIntMock).toHaveBeenNthCalledWith(1, 5 * 60_000);
@@ -303,7 +299,7 @@ describe("gateway telemetry maintenance", () => {
 
     await vi.advanceTimersByTimeAsync(30_000);
     expect(checkTelemetryUpdateMock).toHaveBeenCalledWith(maintenanceState.getRuntimeConfig);
-    expect(logHealth.error).not.toHaveBeenCalled();
+    expect(maintenanceState.logHealth.error).not.toHaveBeenCalled();
     expect(generateSecureIntMock).toHaveBeenNthCalledWith(2, 5 * 60_000);
 
     await vi.advanceTimersByTimeAsync(420_000);

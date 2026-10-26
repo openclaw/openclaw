@@ -79,6 +79,9 @@ export function buildSelectedSessionCreateParams(
       ? { mentions: draft.mentions.map((mention) => ({ ...mention })) }
       : {}),
     ...(displayName ? { displayName } : {}),
+    ...(displayName && draft.displayNameGenerated
+      ? { displayNameGenerated: draft.displayNameGenerated }
+      : {}),
     ...(titleSource ? { titleSource } : {}),
     ...(draft.visibility === "incognito" ? { incognito: true } : {}),
     ...(draft.visibility === "draft" ? { visibility: "draft" } : {}),

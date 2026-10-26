@@ -8,7 +8,7 @@ github_output="${3:-}"
 cli_label=ClawHub
 cli_package=clawhub
 expected_version=0.23.3
-expected_lock_sha256="8dc2d1dadd9c2423b87752c7fde83bf40018a30a46edb80166c43e458690f2b0"
+expected_lock_sha256="d5777c921323d324624e6cd78bf5ef3d343454c91629a222b29fcee793d2cace"
 expected_integrity="sha512-VwM6FQrZVarFRDiEqG42npUeyCu/iLhPnpO+b7kKIGRXv+TA6Lb8pboHnIgT6cmjFEnW3j/pTbshWeDQMQ7QWQ=="
 additional_bin=""
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/materialize-pinned-cli.sh"

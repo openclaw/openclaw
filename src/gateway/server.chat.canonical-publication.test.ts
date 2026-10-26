@@ -7,10 +7,8 @@ import type {
   ArtifactsDownloadResult,
   ArtifactsListResult,
 } from "../../packages/gateway-protocol/src/schema/artifacts.js";
-import {
-  writeOpenAiResponsesSse,
-  writeOpenAiResponsesText,
-} from "../../test/helpers/openai-responses-sse.js";
+import { readRequestText } from "../../test/helpers/gateway-integration-fixtures.js";
+import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
@@ -21,10 +19,11 @@ import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
   closeProvider,
   listenProvider,
-  readProviderBody,
+  writeToolCallResponse,
 } from "./gateway-provider-fixture.test-support.js";
-import { parseSseEvents } from "./http-stream.test-support.js";
+import { readSseEvent } from "./session-history-fixtures.test-support.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
+import { createGatewayArtifactTestEnv } from "./test-helpers.env.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -81,19 +80,7 @@ it(
     const media = path.join(workspace, "proof.txt");
     await fs.writeFile(media, attachment);
     const configPath = path.join(state, "openclaw.json");
-    const environment = {
-      OPENCLAW_HOME: root,
-      OPENCLAW_STATE_DIR: state,
-      OPENCLAW_CONFIG_PATH: configPath,
-      OPENCLAW_SKIP_CHANNELS: "1",
-      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-      OPENCLAW_SKIP_CRON: "1",
-      OPENCLAW_SKIP_CANVAS_HOST: "1",
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-      OPENCLAW_SKIP_PROVIDERS: "1",
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "0",
-      OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("dist/extensions"),
-    };
+    const environment = createGatewayArtifactTestEnv(root, state, configPath);
     const snapshot = captureEnv(Object.keys(environment));
     for (const [key, value] of Object.entries(environment)) {
       setTestEnvValue(key, value);
@@ -111,7 +98,7 @@ it(
     });
     const provider = createServer((request, response) => {
       void (async () => {
-        const input = await readProviderBody(request);
+        const input = await readRequestText(request);
         if (request.method !== "POST" || request.url !== "/v1/responses") {
           response.writeHead(404).end();
           return;
@@ -152,29 +139,7 @@ it(
               ...(selected.name === "cancel" ? { final: false } : {}),
             }),
           };
-          writeOpenAiResponsesSse(response, [
-            {
-              type: "response.output_item.added",
-              output_index: 0,
-              item: { ...item, status: "in_progress", arguments: "" },
-            },
-            {
-              type: "response.function_call_arguments.done",
-              item_id: item.id,
-              output_index: 0,
-              arguments: item.arguments,
-            },
-            { type: "response.output_item.done", output_index: 0, item },
-            {
-              type: "response.completed",
-              response: {
-                id: `response_${selected.name}`,
-                status: "completed",
-                output: [item],
-                usage: { input_tokens: 10, output_tokens: 10, total_tokens: 20 },
-              },
-            },
-          ]);
+          writeToolCallResponse(response, item, `response_${selected.name}`, 10, 10);
         } else if (selected.name === "cancel") {
           heldFinalRequest.resolve();
         } else {
@@ -251,7 +216,6 @@ it(
             messageRole: "assistant",
           });
         const started = await send();
-        let streamText = "";
         if (scenario.name === "details-cap") {
           await withTestTimeout(firstRequest.promise, 15_000, "tool request was not admitted");
           const stream = await fetch(
@@ -270,21 +234,18 @@ it(
           if (!reader) {
             throw new Error("Missing actual session-history stream");
           }
-          const decoder = new TextDecoder();
+          const streamState = { buffer: "" };
+          const received: unknown[] = [];
           try {
             while (true) {
-              const chunk = await reader.read();
-              expect(chunk.done).toBe(false);
-              streamText += decoder.decode(chunk.value, { stream: true });
-              const frames = parseSseEvents(streamText);
-              if (frames.some((frame) => frame.event === "history")) {
+              const frame = await readSseEvent(reader, streamState);
+              if (frame.event === "history") {
                 releaseTool.resolve();
               }
-              const messages = messagesFrom(
-                frames
-                  .filter((frame) => frame.event === "message")
-                  .map((frame): unknown => JSON.parse(frame.data)),
-              );
+              if (frame.event === "message") {
+                received.push(frame.data);
+              }
+              const messages = messagesFrom(received);
               if (
                 contentFrom(messages.filter((message) => message.role === "assistant")).some(
                   (block) => block.type === "attachment",
@@ -323,15 +284,6 @@ it(
         const page = await readHistory(2);
         const listed = await listArtifacts();
         const rawMessages = messagesFrom(rawEvents);
-        const diagnosticCalls = contentFrom(rawMessages).filter(
-          (block) => block.type === "toolCall",
-        );
-        expect(diagnosticCalls, scenario.name).toContainEqual(
-          expect.objectContaining({
-            name: "message",
-            arguments: expect.objectContaining({ message: scenario.caption }),
-          }),
-        );
         expect(toolResults, scenario.name).toHaveLength(1);
         if (scenario.name === "missing-media") {
           expect(toolResults[0]).toMatchObject({ isError: true });

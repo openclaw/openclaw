@@ -3,12 +3,7 @@ import type { Client, Tool } from "@modelcontextprotocol/client";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionToolOverrides } from "../config/sessions/types.js";
 import type { McpServerConfig } from "../config/types.mcp.js";
-import type {
-  McpCatalogTool,
-  McpServerCatalog,
-  McpToolCatalog,
-  McpToolCatalogDiagnostic,
-} from "./agent-bundle-mcp-types.js";
+import type { McpCatalogTool, McpServerCatalog, McpToolCatalog } from "./agent-bundle-mcp-types.js";
 import {
   readMcpAppIcons,
   readMcpAppSettingsCapability,
@@ -25,17 +20,6 @@ import {
 } from "./mcp-metadata.js";
 import { isMcpToolAllowed, normalizeMcpToolFilter } from "./mcp-tool-filter.js";
 import { normalizeMcpToolCatalog } from "./mcp-tool-metadata.js";
-
-export function projectBundleMcpCatalogFailure(
-  catalog: McpToolCatalog | undefined,
-  diagnostic: McpToolCatalogDiagnostic,
-): McpToolCatalog {
-  return {
-    ...(catalog ?? { version: 1, servers: {}, tools: [] }),
-    generatedAt: Date.now(),
-    diagnostics: [diagnostic],
-  };
-}
 
 export function projectBundleMcpServerCatalog({
   serverName,

@@ -9,6 +9,7 @@ import { withUpdateCommandExecutor } from "../cli/update-cli/update-command-exec
 import { createUpdateRunProgress } from "../cli/update-cli/update-command-run.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
+import { writeFixtureTree } from "./fixture-tree.test-support.js";
 import * as tempRoot from "./tmp-openclaw-dir.js";
 import { DoctorMaintenanceRefusalError } from "./update-doctor-result.js";
 import { createUpdateRun } from "./update-run-ledger.js";
@@ -17,6 +18,7 @@ import {
   expectRuntime,
   runFixtureGit as git,
   expectCancelledGitCandidateCleanup,
+  expectStep,
   type GitUpdateFixture,
 } from "./update-runner-git-candidate.test-support.js";
 import { selectChannelTag } from "./update-runner-git-target.js";
@@ -196,12 +198,8 @@ describe("Git checkout execution", () => {
         await git(root, "checkout", "--detach", beforeSha);
         await git(root, "branch", "-D", "main");
       }
-      const other = path.join(directory, "other");
-      if (trackingRef !== "team/fork/main") {
-        await git(directory, "clone", "--quiet", remote, other);
-        await git(other, "reset", "--hard", beforeSha);
-      }
-      await git(root, "remote", "add", "origin", other);
+      // An unusable origin must not override the explicitly selected source.
+      await git(root, "remote", "add", "origin", path.join(directory, "unavailable"));
       const savedConfig = await config();
       const result = await update({
         devTarget: { mode: "tracked", upstreamRef: trackingRef, upstreamSha: target },
@@ -283,23 +281,67 @@ describe("Git checkout execution", () => {
     await expectInstalled(beforeSha, savedConfig);
   });
 
-  it.each(["excluded", "unavailable"] as const)(
-    "refuses an %s authoritative source before activation",
-    async (source) => {
-      await advanceRemote();
-      if (source === "excluded") {
-        await git(root, "config", "--add", "remote.origin.fetch", "^refs/heads/main");
-      } else {
-        await git(root, "remote", "add", "secondary", remote);
-        await git(root, "remote", "set-url", "origin", path.join(directory, "unavailable"));
+  it.each([
+    ["excluded", "fetch-failed"],
+    ["unavailable", "fetch-failed"],
+    ["dirty", "dirty"],
+    ["unreadable", "clean-check-failed"],
+    ["install", "preflight-no-good-commit"],
+    ["build", "preflight-no-good-commit"],
+  ] as const)("preserves the serving checkout after %s failure", async (failure, reason) => {
+    const target = await advanceRemote();
+    const building = failure === "install" || failure === "build";
+    const beforeInspection = failure === "dirty" || failure === "unreadable";
+    const stale = path.join(
+      root,
+      "dist.openclaw-update-00000000-0000-0000-0000-000000000000.tmp",
+      "candidate",
+    );
+    const postbuild = path.join(root, "dist", ".runtime-postbuildstamp");
+    if (failure === "excluded") {
+      await git(root, "config", "--add", "remote.origin.fetch", "^refs/heads/main");
+    } else if (failure === "unavailable") {
+      await git(root, "remote", "add", "secondary", remote);
+      await git(root, "remote", "set-url", "origin", path.join(directory, "unavailable"));
+    } else if (failure === "dirty") {
+      await writeFixtureTree(root, { [path.relative(root, stale)]: "operator-owned" });
+    } else if (building) {
+      await git(remote, "tag", "v2026.9.2", target);
+      if (failure === "build") {
+        await fs.rm(postbuild);
       }
-      const savedConfig = await config();
-      expect(await update()).toMatchObject({ status: "error", reason: "fetch-failed" });
-      expect(fixture.stopped).toBe(false);
+    }
+    const commands: string[][] = [];
+    intercept((argv) => {
+      commands.push(argv);
+      if (failure === "unreadable" && argv[2] === root && argv[3] === "status") {
+        return reply(128, "index unavailable");
+      }
+      if (building && argv[0] === "pnpm" && argv[1] === failure) {
+        return reply(1, "candidate command failed");
+      }
+      return undefined;
+    });
+    const savedConfig = await config();
+    expect(await update(building ? { channel: "stable" } : {})).toMatchObject({
+      status: "error",
+      reason,
+    });
+    expect(fixture.stopped).toBe(false);
+    if (!building) {
       expect(events).toEqual([]);
-      await expectInstalled(beforeSha, savedConfig);
-    },
-  );
+    }
+    if (beforeInspection) {
+      expect(commands.some((argv) => argv.includes("clone") || argv.includes("fetch"))).toBe(false);
+    }
+    await expectInstalled(beforeSha, savedConfig);
+    if (failure === "dirty") {
+      expect(await fs.readFile(stale, "utf8")).toBe("operator-owned");
+    }
+    if (failure === "build") {
+      await expect(fs.stat(postbuild)).rejects.toMatchObject({ code: "ENOENT" });
+    }
+  });
 
   it.each(["exit", "signal"] as const)(
     "settles optional tag discovery after %s",
@@ -323,66 +365,6 @@ describe("Git checkout execution", () => {
       expect(result.status).toBe(failure === "signal" ? "error" : "ok");
       expect(fixture.stopped).toBe(failure !== "signal");
       await expectRuntime(root, failure === "signal" ? beforeSha : target);
-    },
-  );
-
-  it.each(["dirty", "unreadable"] as const)(
-    "refuses a %s checkout before inspection or shutdown",
-    async (kind) => {
-      await advanceRemote();
-      const commands: string[][] = [];
-      const stale = path.join(
-        root,
-        "dist.openclaw-update-00000000-0000-0000-0000-000000000000.tmp",
-        "candidate",
-      );
-      if (kind === "dirty") {
-        await fs.mkdir(path.dirname(stale));
-        await fs.writeFile(stale, "operator-owned");
-      }
-      intercept((argv) => {
-        commands.push(argv);
-        if (kind === "unreadable" && argv[2] === root && argv[3] === "status") {
-          return Promise.resolve(reply(128, "index unavailable"));
-        }
-        return undefined;
-      });
-      const result = await update();
-      expect(result).toMatchObject({
-        status: "error",
-        reason: kind === "dirty" ? "dirty" : "clean-check-failed",
-      });
-      expect(commands.some((argv) => argv.includes("clone") || argv.includes("fetch"))).toBe(false);
-      expect(events).toEqual([]);
-      expect(fixture.stopped).toBe(false);
-      await expectRuntime(root, beforeSha);
-      if (kind === "dirty") {
-        expect(await fs.readFile(stale, "utf8")).toBe("operator-owned");
-      }
-    },
-  );
-
-  it.each(["install", "build"] as const)(
-    "preserves the installed runtime when candidate %s fails",
-    async (command) => {
-      const target = await advanceRemote();
-      await git(remote, "tag", "v2026.9.2", target);
-      const postbuild = path.join(root, "dist", ".runtime-postbuildstamp");
-      if (command === "build") {
-        await fs.rm(postbuild);
-      }
-      intercept((argv) =>
-        argv[0] === "pnpm" && argv[1] === command
-          ? Promise.resolve(reply(1, "candidate command failed"))
-          : undefined,
-      );
-      const result = await update({ channel: "stable" });
-      expect(result).toMatchObject({ status: "error", reason: "preflight-no-good-commit" });
-      expect(fixture.stopped).toBe(false);
-      await expectInstalled();
-      if (command === "build") {
-        await expect(fs.stat(postbuild)).rejects.toMatchObject({ code: "ENOENT" });
-      }
     },
   );
 
@@ -450,13 +432,11 @@ describe("Git checkout execution", () => {
       const result = await update();
 
       expect(result).toMatchObject({ status: "error", reason: "checkout-failed" });
-      expect(result.steps).toContainEqual(
-        expect.objectContaining({
-          name: "git-activation-branch-check",
-          stdoutTail: null,
-          stderrTail: expect.stringContaining("a Git worktree uses or reserves branch main"),
-        }),
-      );
+      expectStep(result.steps, {
+        name: "git-activation-branch-check",
+        stdoutTail: null,
+        stderrTail: expect.stringContaining("a Git worktree uses or reserves branch main"),
+      });
       expect(fixture.stopped).toBe(false);
       await expectInstalled();
     },
@@ -545,13 +525,9 @@ describe("Git checkout execution", () => {
           );
         }
         if (repair && argv[0] === "pnpm" && argv[1] === "ui:build") {
-          await fs.mkdir(path.join(options.cwd!, "dist", "control-ui", "assets"), {
-            recursive: true,
+          await writeFixtureTree(options.cwd!, {
+            "dist/control-ui/assets/missing.js": "export {};\n",
           });
-          await fs.writeFile(
-            path.join(options.cwd!, "dist", "control-ui", "assets", "missing.js"),
-            "export {};\n",
-          );
         }
         return result;
       };
@@ -560,9 +536,7 @@ describe("Git checkout execution", () => {
       expect(fixture.stopped).toBe(repair);
       expect(result.steps.some((step) => step.name === "preflight-ui-build")).toBe(true);
       if (!repair) {
-        expect(result.steps).toContainEqual(
-          expect.objectContaining({ name: "preflight-ui-assets-verify", exitCode: 1 }),
-        );
+        expectStep(result.steps, { name: "preflight-ui-assets-verify", exitCode: 1 });
       }
       await expectRuntime(root, repair ? target : beforeSha);
     },

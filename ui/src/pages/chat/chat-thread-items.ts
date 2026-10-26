@@ -114,6 +114,10 @@ export function extractChatMessagePreview(toolMessage: unknown): ChatMessagePrev
 }
 
 function readChatMessagePreview(toolMessage: Record<string, unknown>) {
+  // Recorded Canvas references are text, not views created by this OpenClaw session.
+  if (asRecord(toolMessage["__openclaw"])?.catalogSource === true) {
+    return null;
+  }
   if (!safeNormalizeMessage(toolMessage)) {
     return null;
   }
@@ -297,7 +301,14 @@ export function isPendingSendMessage(message: unknown): boolean {
 export function readPendingSendStatus(message: unknown): {
   error?: string;
   id: string;
-  state: "failed" | "unconfirmed" | "held" | "waiting-reconnect";
+  state:
+    | "failed"
+    | "held"
+    | "waiting-reconnect"
+    | "waiting-model"
+    | "waiting-idle"
+    | "submitting"
+    | "sending";
 } | null {
   const metadata = asRecord(asRecord(message)?.["__openclaw"]);
   const state = metadata?.state;
@@ -305,9 +316,12 @@ export function readPendingSendStatus(message: unknown): {
   if (
     metadata?.kind !== "pending-send" ||
     (state !== "failed" &&
-      state !== "unconfirmed" &&
       state !== "held" &&
-      state !== "waiting-reconnect") ||
+      state !== "waiting-reconnect" &&
+      state !== "waiting-model" &&
+      state !== "waiting-idle" &&
+      state !== "submitting" &&
+      state !== "sending") ||
     typeof id !== "string"
   ) {
     return null;

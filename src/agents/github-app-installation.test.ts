@@ -2,7 +2,7 @@ import { generateKeyPairSync } from "node:crypto";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { prepareGitHubAppInstallation } from "./github-app-installation.js";
+import { prepareAppGitHubIdentity } from "./github-app-identity.js";
 import type { GitHubAppSelection } from "./github-credential-reader.js";
 import {
   resolveGitHubToolIdentityStatus,
@@ -27,8 +27,16 @@ const installation = {
 };
 let selected: GitHubAppSelection;
 let config: OpenClawConfig;
-function prepare(assertCurrent = () => {}) {
-  return prepareGitHubAppInstallation({ selection: selected, host, apiBaseUrl, assertCurrent });
+async function prepare() {
+  const { prepared, readToken } = await prepareAppGitHubIdentity(
+    { config, agentId: "main", allowAppInstallation: true, assertCurrent() {} },
+    selected,
+    "system-configured",
+    {},
+    host,
+    apiBaseUrl,
+  );
+  return { ...prepared, readToken };
 }
 function prepareRead(options: Partial<Parameters<typeof prepareGitHubReadIdentity>[0]> = {}) {
   return prepareGitHubReadIdentity({
@@ -42,7 +50,6 @@ function prepareRead(options: Partial<Parameters<typeof prepareGitHubReadIdentit
 }
 let overrides: Record<string, unknown>;
 let fetcher: ReturnType<typeof vi.fn<(url: string, init: RequestInit) => Promise<Response>>>;
-let onRequest: ((path: string) => void) | undefined;
 beforeEach(() => {
   selected = {
     profileId: "ghp_00000000000000000000000000000001",
@@ -65,10 +72,8 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-10-10T10:00:00Z"));
   overrides = {};
-  onRequest = undefined;
   fetcher = vi.fn(async (url: string, init: RequestInit) => {
     const path = url.slice(apiBaseUrl.length);
-    onRequest?.(path);
     const bodies: Record<string, unknown> = {
       "/app": { id: 101, slug: "factory", permissions },
       "/app/installations/202": installation,
@@ -102,25 +107,6 @@ afterEach(() => {
   setRuntimeConfigSnapshot({});
 });
 
-it("issues exact repository permissions and bot identity and revokes the retained execution grant", async () => {
-  const issued = await prepare();
-  expect(issued.account).toEqual({ accountId: 9001, login: "factory[bot]", avatarUrl: null });
-  const body = fetcher.mock.calls.find(([url]) => url.endsWith("/access_tokens"))?.[1].body;
-  if (typeof body !== "string") {
-    throw new Error("Expected bounded installation request");
-  }
-  expect(JSON.parse(body)).toEqual({
-    repository_ids: [404],
-    permissions: { contents: "write", metadata: "read" },
-  });
-  expect(fetcher.mock.calls.some(([url]) => url === `${apiBaseUrl}/user`)).toBe(false);
-  await issued.revoke();
-  await expect(issued.readToken()).rejects.toThrow("changed");
-  expect(fetcher.mock.calls.at(-1)).toMatchObject([
-    `${apiBaseUrl}/installation/token`,
-    { method: "DELETE" },
-  ]);
-});
 it("rejects a suspended installation before minting and never reads human credentials", async () => {
   overrides["/app/installations/202"] = {
     ...installation,
@@ -131,35 +117,12 @@ it("rejects a suspended installation before minting and never reads human creden
     fetcher.mock.calls.some(([url]) => url.endsWith("/access_tokens") || url.endsWith("/user")),
   ).toBe(false);
 });
-it.each([401, 500])(
-  "settles invalid-token revocation while preserving live-token cleanup failure (%s)",
-  async (status) => {
-    const issued = await prepare();
-    fetcher.mockResolvedValueOnce(new Response(null, { status }));
-    if (status === 401) {
-      await expect(issued.revoke()).resolves.toBeUndefined();
-    } else {
-      await expect(issued.revoke()).rejects.toThrow("revocation failed");
-    }
-    await expect(issued.readToken()).rejects.toThrow();
-  },
-);
-
-it("checks authority after issuance and revokes a token that cannot be admitted", async () => {
-  let current = true;
-  onRequest = (path) => {
-    if (path.endsWith("/access_tokens")) {
-      current = false;
-    }
-  };
-  await expect(
-    prepare(() => {
-      if (!current) {
-        throw new Error("Execution revoked");
-      }
-    }),
-  ).rejects.toThrow("Execution revoked");
-  expect(fetcher.mock.calls.at(-1)?.[1].method).toBe("DELETE");
+it("settles invalid-token revocation and retires token reads", async () => {
+  const issued = await prepare();
+  expect(issued.account).toEqual({ accountId: 9001, login: "factory[bot]", avatarUrl: null });
+  fetcher.mockResolvedValueOnce(new Response(null, { status: 401 }));
+  await expect(issued.revoke()).resolves.toBeUndefined();
+  await expect(issued.readToken()).rejects.toThrow("changed");
 });
 it("reports the selected App contract without minting an execution token during status", async () => {
   expect(

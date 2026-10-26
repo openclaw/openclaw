@@ -235,7 +235,11 @@ export function executeCronStateCommand(
           return receipts.removeStaleCronFamilyInWorker(database, command.input);
       }
     case "cron.loadMutable":
-      return loadMutableCronStoreInWorker(database, command.input.storeKey);
+      return loadMutableCronStoreInWorker(
+        database,
+        command.input.storeKey,
+        command.input.defaultStorePath,
+      );
     case "cron.recoverRuns":
       if (!recovery) {
         throw new Error("Cron recovery worker is not prepared");

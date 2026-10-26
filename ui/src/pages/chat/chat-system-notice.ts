@@ -3,6 +3,7 @@ import { readRunFailureNotice } from "../../../../src/shared/run-failure-notice.
 import { readSkillWorkshopChangeNotice } from "../../../../src/shared/skill-workshop-change-notice.js";
 import { isOpenClawDeliveryMirrorAssistantMessage } from "../../../../src/shared/transcript-only-openclaw-assistant.js";
 import { t } from "../../i18n/index.ts";
+import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import type { ChatItem, NormalizedMessage } from "../../lib/chat/chat-types.ts";
 import { userTurnRunId } from "../../lib/chat/history-message-identity.ts";
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
@@ -11,11 +12,18 @@ import { optionalBoundaryIdentity } from "./chat-thread-run-identity.ts";
 import { safeNormalizeMessage } from "./chat-turn-boundary.ts";
 import { resolveSystemNoticeKind, type PendingInputStatus } from "./system-notice-kinds.ts";
 
+registerChatSessionEnglish();
+
 /** Pending custody and persisted history share the same system-turn presentation. */
 export function projectChatSystemNotice(
   item: Extract<ChatItem, { kind: "message" }>,
   normalized?: NormalizedMessage | null,
-  pending?: { status: PendingInputStatus; key: string; timestamp: number },
+  pending?: {
+    status: PendingInputStatus;
+    key: string;
+    timestamp: number;
+    retired?: NonNullable<Extract<ChatItem, { kind: "notice" }>["retiredPendingInput"]>;
+  },
 ): ChatItem[] {
   const raw = asRecord(item.message);
   if (raw?.role === "custom" && raw.customType === "session-send-recovery-blocked") {
@@ -29,6 +37,21 @@ export function projectChatSystemNotice(
         text: extractTextCached(item.message) ?? "",
       },
     ];
+  }
+  if (raw?.role === "custom" && raw.customType === "session-model-change") {
+    const details = asRecord(raw.details);
+    if (typeof details?.from === "string" && typeof details.to === "string") {
+      return [
+        {
+          kind: "notice",
+          key: item.key,
+          timestamp: (normalized ?? safeNormalizeMessage(item.message))?.timestamp ?? 0,
+          icon: "brain",
+          label: t("chat.systemNotice.modelChanged", { from: details.from, to: details.to }),
+          text: "",
+        },
+      ];
+    }
   }
   const provenance = asRecord(raw?.provenance);
   const agentUpdate = provenance?.kind === "inter_session";
@@ -46,6 +69,7 @@ export function projectChatSystemNotice(
             key: pending.key,
             timestamp: pending.timestamp,
             text: pendingText,
+            ...(pending.retired ? { retiredPendingInput: pending.retired } : {}),
           },
         ]
       : [];
@@ -130,6 +154,7 @@ export function projectChatSystemNotice(
       text,
       timestamp: message.timestamp,
       ...optionalBoundaryIdentity(userTurnRunId(item.message)),
+      ...(pendingSummaryKey && pending?.retired ? { retiredPendingInput: pending.retired } : {}),
     },
     ...(pendingSummaryKey ? [] : pendingItems),
   ];

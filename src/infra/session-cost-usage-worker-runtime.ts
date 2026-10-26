@@ -236,6 +236,7 @@ type UsageCostWorkerRequest =
 export async function runUsageCostWorker(
   prepared: PreparedUsageCostWorker,
   operation: UsageCostWorkerRequest,
+  waitForRefresh = false,
 ): Promise<UsageCostWorkerResult | { kind: "busy" }> {
   if (prepared.memory) {
     const pricing =
@@ -250,14 +251,16 @@ export async function runUsageCostWorker(
       prepared.memory,
       request,
       createUsageCostResolver(prepared, pricing),
+      waitForRefresh,
     );
   }
-  return runPreparedUsageCostWorker(prepared, operation);
+  return runPreparedUsageCostWorker(prepared, operation, waitForRefresh);
 }
 
 async function runPreparedUsageCostWorker(
   prepared: PreparedUsageCostWorker,
   operation: UsageCostWorkerRequest,
+  waitForRefresh: boolean,
 ): Promise<UsageCostWorkerResult | { kind: "busy" }> {
   const { location, archiveStorePaths, stores } = prepared;
   const capturedOperation = structuredClone(operation);
@@ -294,7 +297,7 @@ async function runPreparedUsageCostWorker(
       return lock;
     };
     if (lock) {
-      if (!(await lock.acquire())) {
+      if (!(await lock.acquire(waitForRefresh))) {
         return { kind: "busy" };
       }
     }
@@ -412,6 +415,12 @@ async function runPreparedUsageCostWorker(
                         logger.warn("Could not clear usage refresh failure fact", { error });
                       });
                   }
+                  break;
+                case "write-quarters":
+                  output = await requireLock("write cache rows").writeQuarters(
+                    request.input,
+                    context.signal,
+                  );
                   break;
                 default:
                   throw new Error("Unknown usage worker host request");

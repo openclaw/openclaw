@@ -1,5 +1,6 @@
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import {
   downloadGoogleChatMedia,
@@ -515,30 +516,19 @@ describe("verifyGoogleChatRequest", () => {
   it("caps non-OK sendMessage error bodies before formatting the API error", async () => {
     const chunk = new TextEncoder().encode("x".repeat(1024 * 1024));
     const totalBytes = 32 * chunk.length;
-    const streamed = { bytesPulled: 0, canceled: false };
+    const streamed = createStreamingResponse({
+      chunkCount: 32,
+      chunkSize: chunk.length,
+      chunk,
+    });
     const release = guardedResponse(
-      new Response(
-        new ReadableStream<Uint8Array>({
-          pull(controller) {
-            if (streamed.bytesPulled >= totalBytes) {
-              controller.close();
-              return;
-            }
-            streamed.bytesPulled += chunk.length;
-            controller.enqueue(chunk);
-          },
-          cancel() {
-            streamed.canceled = true;
-          },
-        }),
-        { status: 500, statusText: "Internal Server Error" },
-      ),
+      new Response(streamed.response.body, { status: 500, statusText: "Internal Server Error" }),
     );
 
     await expect(send()).rejects.toThrow(/^Google Chat API 500: x+/);
 
-    expect(streamed.canceled).toBe(true);
-    expect(streamed.bytesPulled).toBeLessThan(totalBytes);
+    expect(streamed.wasCanceled()).toBe(true);
+    expect(streamed.getReadCount() * chunk.length).toBeLessThan(totalBytes);
     expect(release).toHaveBeenCalledOnce();
   });
 });

@@ -4,7 +4,7 @@ import {
   type SessionsPatchManyResult,
   type SessionsPatchMutation,
 } from "../../../packages/gateway-protocol/src/schema/sessions-patch.js";
-import { GatewayRequestError } from "../api/gateway.ts";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import {
   readSessionMethodAccess,
@@ -134,6 +134,52 @@ export async function patchSessionRows(
     );
     return null;
   }
+  const snapshot = scope.gateway.snapshot;
+  if (
+    typeof patch.archived === "boolean" &&
+    Object.keys(patch).length === 1 &&
+    !rows.some((row) => row.archiveGuard) &&
+    (snapshot.phase !== "connected" ||
+      snapshot.deferredIntentCount ||
+      snapshot.deferredIntentDraining)
+  ) {
+    const accepted: SessionActionRow[] = [];
+    for (const row of rows) {
+      if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
+        return null;
+      }
+      const params = {
+        key: row.key,
+        agentId: resolveUiSessionRowAgentId(row, scope.selectedAgentId),
+        expectedSessionId: row.sessionId,
+        ...patch,
+      };
+      if (
+        !requireSessionMutationAccess(deps, scope, {
+          method: "sessions.patch",
+          params,
+          session: row,
+          sessionScope: options.sessionScope,
+          allowDeferred: true,
+        })
+      ) {
+        return null;
+      }
+      const result = await scope.sessions.patch(row.key, patch, {
+        agentId: params.agentId,
+        expectedSessionId: row.sessionId,
+        onConfirmed: () => {
+          if (patch.archived) {
+            deps.pruneSidebarSessionEntry(row.key);
+          }
+        },
+      });
+      if (result) {
+        accepted.push(row);
+      }
+    }
+    return accepted;
+  }
   const dispatched: Array<{
     rows: readonly SessionActionRow[];
     result: SessionsPatchManyResult;
@@ -202,7 +248,7 @@ export async function patchSessionRows(
         return [];
       }
       const row = chunkRows[index];
-      if (row?.pinned && patch.archived === true) {
+      if (row && patch.archived === true) {
         deps.pruneSidebarSessionEntry(row.key);
       }
       return row ? [row] : [];

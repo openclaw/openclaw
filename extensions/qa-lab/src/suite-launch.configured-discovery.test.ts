@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { liveFrontierProviderDefinition } from "./providers/live-frontier/index.js";
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
-import { recordQaSuiteTestResults } from "./suite-test-helpers.js";
+import { makeQaSuiteTestResult, recordQaSuiteTestResults } from "./suite-test-helpers.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 const { runQaFlowSuite, runPluginCommandWithTimeout } = vi.hoisted(() => ({
@@ -37,16 +37,7 @@ beforeEach(() => {
       await fs.mkdir(outputDir, { recursive: true });
       await fs.writeFile(evidencePath, `${JSON.stringify(recorded.evidence, null, 2)}\n`, "utf8");
     }
-    return {
-      ...recorded,
-      outputDir,
-      evidencePath,
-      reportPath: path.join(outputDir, "qa-suite-report.md"),
-      summaryPath: path.join(outputDir, "qa-suite-summary.json"),
-      report: "# QA Suite Report\n",
-      startedScenarioIds: scenarioIds,
-      watchUrl: "http://127.0.0.1:43124",
-    };
+    return makeQaSuiteTestResult(recorded, outputDir, scenarioIds);
   });
 });
 

@@ -25,8 +25,6 @@ const suite = createControlUiE2eSuite({
   name: "Guest ordinary question lifecycle",
   startServerBeforeBrowser: true,
 });
-const viewport = { width: 1440, height: 900 };
-const summaryReady = "I have the outline ready. I need your preference before continuing.";
 const settle = (turn: Promise<unknown>) =>
   turn.then(
     (value) => ({ ok: true as const, value }),
@@ -58,7 +56,7 @@ suite.define(() => {
         locale: "en-US",
         colorScheme: "dark",
         serviceWorkers: "block",
-        viewport,
+        viewport: { width: 1440, height: 900 },
       });
       const page = await context.newPage();
       let gateway: MockGatewayControls | undefined;
@@ -77,7 +75,6 @@ suite.define(() => {
           operatorScopes: guestQuestionScopes,
           sessionKey,
           mainSessionKey: "agent:main:main",
-          communityInvite: false,
           featureMethods: [
             "chat.startup",
             "chat.metadata",
@@ -90,53 +87,38 @@ suite.define(() => {
               self: true,
               id: fixture.profileId,
               identity: { type: "profile", id: fixture.profileId },
-              name: "Guest",
             },
           ],
           sessions: [
             {
               key: sessionKey,
               sessionId: "guest-question-session",
-              label: "Summary draft",
               kind: "direct",
               visibility: "shared",
               sharingRole: "owner",
-              updatedAt: Date.now(),
             },
           ],
-          historyMessages: [
-            {
-              role: "assistant",
-              content: [{ type: "text", text: summaryReady }],
-            },
-          ],
+          historyMessages: [],
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         await releaseQuestionBridge(page, gateway);
-        await gateway.waitForRequest("chat.startup");
-        await page.getByText(summaryReady, { exact: true }).waitFor();
+        await page.locator(".agent-chat__composer-combobox textarea").waitFor();
         const result = settle(fixture.ask("summary-format", run.signal));
         turns.push(result);
-        const registered = await fixture.registration;
+        expect(await fixture.registration).toMatchObject({ ok: true });
         await fixture.flushEvents();
         const panel = page.locator(".agent-chat__question-dock openclaw-chat-question-panel");
-        expect(
-          registered,
-          `The Guest's original agent run must register an ordinary question: ${registered.error?.message ?? "no Gateway error"}`,
-        ).toMatchObject({ ok: true });
         await panel.getByText(guestQuestionPrompt, { exact: true }).waitFor();
-        const initialLists = fixture.requests.filter(
-          (request) => request.method === "question.list",
-        ).length;
+        const listCount = () =>
+          fixture.requests.filter(({ method }) => method === "question.list").length;
+        const initialLists = listCount();
 
         fixture.disconnect();
         await page.reload();
         fixture.reconnect();
         await releaseQuestionBridge(page, gateway);
         await panel.getByText(guestQuestionPrompt, { exact: true }).waitFor();
-        expect(
-          fixture.requests.filter((request) => request.method === "question.list").length,
-        ).toBeGreaterThan(initialLists);
+        expect(listCount()).toBeGreaterThan(initialLists);
         await panel.getByRole("radio", { name: /Concise/ }).click();
         await panel.getByRole("button", { name: "Submit", exact: true }).click();
         expect(await result).toMatchObject({

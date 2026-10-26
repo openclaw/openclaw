@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { stripVTControlCharacters } from "node:util";
@@ -7,7 +6,6 @@ import { Command } from "commander";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { resolveSessionTranscriptsDirForAgent as resolveTestSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
-import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -18,17 +16,14 @@ import {
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runtime";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  closeOpenClawStateDatabaseAsync,
-} from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import {
   firstWrittenJsonArg as jsonValue,
   spyRuntimeErrors,
   spyRuntimeJson,
   spyRuntimeLogs,
 } from "openclaw/plugin-sdk/test-fixtures";
-import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { openMemoryCoreStateStore } from "./dreaming-state.js";
 import type { MemoryForgetReport } from "./memory-forget-report.js";
 import type { GroundedRemPreviewResult } from "./rem-evidence.js";
@@ -38,6 +33,7 @@ import {
 } from "./short-term-promotion.js";
 import {
   configureMemoryCoreDreamingStateForTests,
+  createMemoryCoreTestHarness,
   resetMemoryCoreDreamingStateForTests,
   seedMemoryIndexWithOrphanedProvenance,
   shortTermTestState as shortTermTesting,
@@ -117,12 +113,13 @@ let fixtureRoot = "";
 let workspaceFixtureRoot = "";
 let workspaceCaseId = 0;
 
+const { createTempWorkspace } = createMemoryCoreTestHarness();
+
 beforeAll(async () => {
-  await configureMemoryCoreDreamingStateForTests();
   ({ registerMemoryCli } = await import("./cli.js"));
   ({ defaultRuntime, setVerbose } =
     await import("openclaw/plugin-sdk/memory-core-host-runtime-cli"));
-  fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-cli-fixtures-"));
+  fixtureRoot = await createTempWorkspace("memory-cli-fixtures-");
   workspaceFixtureRoot = path.join(fixtureRoot, "workspace");
   await fs.mkdir(workspaceFixtureRoot, { recursive: true });
 });
@@ -146,19 +143,6 @@ afterEach(() => {
   vi.unstubAllEnvs();
   process.exitCode = 0;
   setVerbose(false);
-});
-
-afterAll(async () => {
-  if (!fixtureRoot) {
-    return;
-  }
-  // The agent close releases its leases through shared state and reopens it, so the
-  // shared handle is released second; otherwise Windows fails the removal with EBUSY.
-  closeOpenClawAgentDatabasesForTest();
-  await closeOpenClawStateDatabaseAsync();
-  resetPluginStateStoreForTests();
-  await fs.rm(fixtureRoot, { recursive: true, force: true });
-  resetMemoryCoreDreamingStateForTests();
 });
 
 const inactiveMemorySecretDiagnostic = "memory.search.remote.apiKey inactive"; // pragma: allowlist secret

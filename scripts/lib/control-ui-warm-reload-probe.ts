@@ -1,9 +1,13 @@
 /** Browser-only diagnostic, serialized after the mock socket and wire-delay probe. */
-export function warmReloadProbe() {
+export function warmReloadProbe(
+  input: { rowFacts?: boolean; avatars?: boolean } = {},
+  samplePaneChrome?: (at: number) => void,
+) {
   const milestones: Record<string, number> = {};
   const mutations: Array<{ at: number; count: number; region: string }> = [];
   const shifts: Array<{ at: number; value: number }> = [];
   const states: Array<{ at: number; state: string }> = [];
+  const longTasks: Array<{ at: number; duration: number }> = [];
   const reads: Array<{ at: number; store: string; hit: boolean }> = [];
   const transactions: Array<{
     at: number;
@@ -13,6 +17,8 @@ export function warmReloadProbe() {
     boardFrames: number;
   }> = [];
   const rows = new Set<Element>();
+  const avatars = new WeakSet<Element>();
+  const avatarTransitions: Array<{ at: number; region: string; attribute: string }> = [];
   const sidebarFrames: Array<{
     at: number;
     cached: boolean;
@@ -41,7 +47,57 @@ export function warmReloadProbe() {
   let removedRows = 0;
   let stopped = false;
   let cachedRows: Element[] = [];
+  const factSelectors = {
+    reactions: ".chat-message-reactions",
+    notices: ".chat-run-failure",
+    activity: ".chat-activity-group",
+    meta: ".msg-meta",
+  };
+  const factFrames: Array<{
+    at: number;
+    changes: Array<{ rowKey: string | null; parts: string[]; heightDelta: number }>;
+  }> = [];
+  const threadFrames: Array<{ at: number; height: number; rowKeys: Array<string | null> }> = [];
+  const rowWindows: Array<{ at: number; rowKeys: Array<string | null> }> = [];
+  const firstRowFacts: Array<{
+    rowKey: string | null;
+    cached: boolean;
+    counts: Record<string, number>;
+  }> = [];
+  const observed = new WeakSet<Element>();
+  const sizes = new WeakMap<Element, number>();
+  const rowFacts = new WeakMap<
+    Element,
+    {
+      parts: Record<string, string>;
+      heights: Record<string, Array<number | undefined>>;
+      height?: number;
+      cached: boolean;
+    }
+  >();
+  const resize = input.rowFacts
+    ? new ResizeObserver((entries) => {
+        for (const entry of entries) {
+          sizes.set(entry.target, entry.borderBoxSize[0]?.blockSize ?? entry.contentRect.height);
+        }
+      })
+    : undefined;
+  const observeSize = (element: Element) => {
+    if (!observed.has(element)) {
+      observed.add(element);
+      resize?.observe(element);
+    }
+  };
   let retainedAtCatchup: number | null = null;
+  const duplicateRowKeys = new Set<string>();
+  type TranscriptAnchor = {
+    at: number;
+    rowKey: string;
+    offset: number;
+    scrollTop: number;
+  };
+  let cachedAnchor: TranscriptAnchor | null = null;
+  let liveAnchor: TranscriptAnchor | null = null;
   const mark = (name: string) => {
     milestones[name] ??= performance.now();
   };
@@ -54,6 +110,11 @@ export function warmReloadProbe() {
   observe("paint", (entries) => {
     for (const entry of entries) {
       milestones[entry.name] = entry.startTime;
+    }
+  });
+  observe("longtask", (entries) => {
+    for (const entry of entries) {
+      longTasks.push({ at: entry.startTime, duration: entry.duration });
     }
   });
   const elementLabel = (element: Element) =>
@@ -166,13 +227,19 @@ export function warmReloadProbe() {
       };
       socket.addEventListener("message", (event) => {
         const frame = JSON.parse(event.data);
+        if (frame.type === "event" && frame.event === "connect.challenge") {
+          mark("challenge");
+        }
         const method = pending.get(frame.id);
         if (method) {
           pending.delete(frame.id);
           if (method === "connect") {
             mark("hello");
           }
-          if (method === "chat.startup") {
+          if (
+            method === "chat.startup" ||
+            (method === "sessions.messages.subscribe" && frame.payload?.initialHistory)
+          ) {
             mark("catchupResponse");
           }
         }
@@ -192,6 +259,17 @@ export function warmReloadProbe() {
         ? "transcript"
         : (element?.closest("openclaw-chat-pane, openclaw-app-sidebar")?.localName ?? "shell");
       regions.set(region, (regions.get(region) ?? 0) + 1);
+      if (
+        input.avatars &&
+        element &&
+        avatars.has(element) &&
+        record.type === "attributes" &&
+        record.attributeName &&
+        ["class", "src", "data-avatar-state"].includes(record.attributeName) &&
+        record.oldValue !== element.getAttribute(record.attributeName)
+      ) {
+        avatarTransitions.push({ at: performance.now(), region, attribute: record.attributeName });
+      }
       const textRoot = element?.closest(".chat-text");
       if (textRoot) {
         textRoots.add(textRoot);
@@ -244,9 +322,10 @@ export function warmReloadProbe() {
     subtree: true,
     childList: true,
     attributes: true,
+    attributeOldValue: input.avatars,
     characterData: true,
   });
-  const sample = () => {
+  const sample = (frameAt: number) => {
     if (stopped) {
       return;
     }
@@ -283,18 +362,119 @@ export function warmReloadProbe() {
     const thread = pane?.querySelector(".chat-thread");
     const inner = thread?.querySelector(".chat-thread-inner");
     const currentRows = [...(thread?.querySelectorAll(".chat-virtual-row") ?? [])];
+    if (input.avatars && currentRows.length) {
+      for (const element of document.querySelectorAll(
+        ".chat-thread :is(.chat-avatar-slot, .chat-author-avatar, .identity-avatar--agent, img), aside.sidebar :is(.viewer-avatar, .identity-avatar--agent, img)",
+      )) {
+        avatars.add(element);
+      }
+    }
+    const currentKeys = new Set<string>();
     for (const row of currentRows) {
       rows.add(row);
+      const key = row.getAttribute("data-virtual-row-key");
+      if (key) {
+        if (currentKeys.has(key)) {
+          duplicateRowKeys.add(key);
+        }
+        currentKeys.add(key);
+      }
     }
     const visible = Boolean(
       currentRows.length && inner && getComputedStyle(inner).visibility !== "hidden",
     );
     if (visible) {
       mark("firstTranscript");
+      if (resize && inner) {
+        const at = performance.now();
+        const rowKeys = currentRows.map((row) => row.getAttribute("data-virtual-row-key"));
+        if (JSON.stringify(rowWindows.at(-1)?.rowKeys) !== JSON.stringify(rowKeys)) {
+          rowWindows.push({ at, rowKeys });
+        }
+        observeSize(inner);
+        const threadHeight = sizes.get(inner);
+        if (threadHeight !== undefined && threadFrames.at(-1)?.height !== threadHeight) {
+          threadFrames.push({ at, height: threadHeight, rowKeys });
+        }
+        const changes: (typeof factFrames)[number]["changes"] = [];
+        for (const row of currentRows) {
+          observeSize(row);
+          const parts: Record<string, string> = {};
+          const heights: Record<string, Array<number | undefined>> = {};
+          const counts: Record<string, number> = {};
+          for (const [part, selector] of Object.entries(factSelectors)) {
+            const elements = [...row.querySelectorAll(selector)];
+            elements.forEach(observeSize);
+            parts[part] = JSON.stringify(
+              elements.map((element) => [
+                element.textContent,
+                element.querySelectorAll("*").length,
+              ]),
+            );
+            heights[part] = elements.map((element) => sizes.get(element));
+            counts[part] = elements.length;
+          }
+          const previous = rowFacts.get(row);
+          const height = sizes.get(row);
+          const cached =
+            previous?.cached ?? Boolean(milestones.cacheRead && !milestones.catchupResponse);
+          if (previous?.cached) {
+            const changed = Object.keys(parts).filter(
+              (part) =>
+                previous.parts[part] !== parts[part] ||
+                heights[part]!.some((partHeight, index) => {
+                  const before = previous.heights[part]?.[index];
+                  return (
+                    partHeight !== undefined &&
+                    before !== undefined &&
+                    Math.abs(partHeight - before) > 0.5
+                  );
+                }),
+            );
+            const heightDelta =
+              height !== undefined && previous.height !== undefined ? height - previous.height : 0;
+            if (changed.length || Math.abs(heightDelta) > 0.5) {
+              changes.push({
+                rowKey: row.getAttribute("data-virtual-row-key"),
+                parts: changed,
+                heightDelta,
+              });
+            }
+          } else if (!previous) {
+            // A new row's complete first frame is the baseline, never an addition.
+            firstRowFacts.push({
+              rowKey: row.getAttribute("data-virtual-row-key"),
+              cached,
+              counts,
+            });
+          }
+          rowFacts.set(row, { parts, heights, height, cached });
+        }
+        if (changes.length) {
+          factFrames.push({ at, changes });
+        }
+      }
       if (!milestones.catchupResponse && milestones.cacheRead) {
         mark("firstCachedTranscript");
         if (!cachedRows.length) {
           cachedRows = currentRows;
+        }
+        if (thread) {
+          const bounds = thread.getBoundingClientRect();
+          for (const row of currentRows) {
+            const rowKey = row.getAttribute("data-virtual-row-key");
+            const rect = row.getBoundingClientRect();
+            if (rowKey && rect.bottom > bounds.top && rect.top < bounds.bottom) {
+              // Keep the last cached frame, after initial virtualizer positioning.
+              cachedAnchor = {
+                at: performance.now(),
+                rowKey,
+                offset: rect.top - bounds.top,
+                scrollTop: thread.scrollTop,
+              };
+              break;
+            }
+          }
         }
       }
     }
@@ -302,22 +482,37 @@ export function warmReloadProbe() {
     if (caughtUp && !milestones.catchupApplied) {
       mark("catchupApplied");
       retainedAtCatchup = cachedRows.filter((row) => row.isConnected).length;
+      const row = currentRows.find(
+        (candidate) => candidate.getAttribute("data-virtual-row-key") === cachedAnchor?.rowKey,
+      );
+      if (cachedAnchor && thread && row) {
+        liveAnchor = {
+          at: performance.now(),
+          rowKey: cachedAnchor.rowKey,
+          offset: row.getBoundingClientRect().top - thread.getBoundingClientRect().top,
+          scrollTop: thread.scrollTop,
+        };
+      }
     }
-    const input = pane?.querySelector<HTMLTextAreaElement>("textarea");
-    if (input && !input.disabled && !input.readOnly) {
+    const composer = pane?.querySelector<HTMLTextAreaElement>("textarea");
+    if (composer && !composer.disabled && !composer.readOnly) {
       mark("inputReady");
     }
     const state = JSON.stringify({
       shell: Boolean(document.querySelector(".shell")),
+      bootSkeleton: Boolean(document.querySelector("#openclaw-boot-shell")),
+      viewSkeleton: Boolean(document.querySelector(".lazy-view-state--loading")),
+      pane: Boolean(pane),
       sidebar: Boolean(document.querySelector("aside.sidebar")),
       header: pane?.querySelector(".chat-pane__session-title-text")?.textContent ?? null,
       rows: visible,
-      input: Boolean(input && !input.disabled),
+      input: Boolean(composer && !composer.disabled),
       board: Boolean(document.querySelector(".board-widget__frame")),
     });
     if (states.at(-1)?.state !== state) {
       states.push({ at: performance.now(), state });
     }
+    samplePaneChrome?.(frameAt);
     requestAnimationFrame(sample);
   };
   requestAnimationFrame(sample);
@@ -325,7 +520,26 @@ export function warmReloadProbe() {
     read() {
       stopped = true;
       observer.disconnect();
+      resize?.disconnect();
       const perf = Reflect.get(window, "__perf");
+      const coverage = input.rowFacts
+        ? Object.fromEntries(
+            Object.entries(factSelectors).map(([part, selector]) => [
+              part,
+              document.querySelectorAll(`.chat-pane-cache__pane--active .chat-thread ${selector}`)
+                .length,
+            ]),
+          )
+        : {};
+      if (
+        input.rowFacts &&
+        (!firstRowFacts.some((row) => row.cached) ||
+          Object.values(coverage).some((count) => count === 0))
+      ) {
+        throw new Error(
+          `Unqualified row-facts sample: cached rows or fact coverage missing (${JSON.stringify(coverage)})`,
+        );
+      }
       return {
         milestones,
         measures: performance.getEntriesByType("measure").map((entry) => entry.toJSON()),
@@ -338,13 +552,34 @@ export function warmReloadProbe() {
         lastLayoutShift: shifts.at(-1)?.at ?? null,
         lastMutationBurst: mutations.findLast((batch) => batch.count >= 10)?.at ?? null,
         mutations,
+        rowFacts: input.rowFacts
+          ? {
+              firstRowFacts,
+              frames: factFrames,
+              threadFrames,
+              rowWindows,
+              coverage,
+            }
+          : undefined,
         states,
+        longTasks,
         sidebarFrames,
+        avatarTransitions: input.avatars ? avatarTransitions : undefined,
         rows: {
           mounted: rows.size,
           removed: removedRows,
           cached: cachedRows.length,
           retainedAtCatchup,
+          duplicateKeys: [...duplicateRowKeys],
+        },
+        handoff: {
+          cachedAnchor,
+          liveAnchor,
+          anchorShift: cachedAnchor && liveAnchor ? liveAnchor.offset - cachedAnchor.offset : null,
+        },
+        externalRig: {
+          loaf: perf !== undefined,
+          rpcCensus: Reflect.has(window, "__wsLog"),
         },
         loaf: perf?.loaf ?? [],
         rpcCensus: Reflect.get(window, "__wsLog") ?? [],

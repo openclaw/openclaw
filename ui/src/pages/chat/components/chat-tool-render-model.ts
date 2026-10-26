@@ -57,6 +57,7 @@ export type ToolRenderOptions = {
   sessionKey?: string;
   agentId?: string;
   presented?: boolean;
+  mediaReadAllowed?: boolean;
   runActive?: boolean;
   onOpenSidebar?: (content: SidebarContent) => void;
   onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;

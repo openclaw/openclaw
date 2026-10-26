@@ -1,13 +1,14 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { createEffect, createMemo, createSignal, Errored, For, onSettled, Show } from "solid-js";
+import { registerBoardDocumentEnglish } from "../../i18n/locales/en-board-document.ts";
+import { BOARD_GRID_COLUMNS } from "../../lib/board/grid-constants.ts";
 import {
-  BOARD_GRID_COLUMNS,
   BOARD_DOCUMENT_AUTO_MAX_ROWS,
   boardWidgetGridItems,
   FINE_POINTER_QUERY,
   layout,
 } from "../../lib/board/grid.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { PanelLoadingSkeleton } from "../solid/panel-loading-skeleton.tsx";
@@ -22,6 +23,8 @@ import {
 } from "./board-view-state.ts";
 import type { BoardWidgetCellMethods, BoardWidgetCellProps } from "./board-widget-cell-options.ts";
 import { BoardWidgetCell } from "./board-widget-cell.solid.tsx";
+
+registerEnglishCatalog(registerBoardDocumentEnglish);
 
 export type { BoardViewProps } from "./board-view-state.ts";
 

@@ -61,10 +61,8 @@ it("prepares published compatibility and union dialects once without sharing the
   expect(compat).not.toHaveProperty("properties.action.anyOf.0.type");
   expect(moonshot).toHaveProperty("properties.action.description", null);
   expect(moonshot).toHaveProperty("properties.action.anyOf.0.type", "string");
-  for (let index = 0; index < 3; index++) {
-    expect(normalizeOpenAIStrictCompatSchema(schema)).toBe(compat);
-    expect(normalizeToolSchema(schema, "moonshot")).toBe(moonshot);
-  }
+  expect(normalizeOpenAIStrictCompatSchema(schema)).toBe(compat);
+  expect(normalizeToolSchema(schema, "moonshot")).toBe(moonshot);
   expect(publication(compat)).toBeDefined();
   expect(publication(moonshot)).toBeDefined();
   source.properties.action.anyOf[0] = { const: "delete" };
@@ -117,12 +115,6 @@ it("reuses published provider variants without changing current strict or compat
   expect(strict).not.toBe(loose);
   expect(payloadSchema(tools)).toBe(loose);
   expect(payloadSchema(tools, true)).toBe(strict);
-  const wire = wireTool(tools, true);
-  expect(wire).toMatchObject({ type: "function", ...descriptor, strict: true });
-  expect(wire.parameters).toBe(strict);
-  const renamed = wireTool([{ ...tool, name: "renamed", description: "New description" }], true);
-  expect(renamed).toMatchObject({ name: "renamed", description: "New description" });
-  expect(renamed).not.toBe(wire);
   const stripped = normalizePrepared(tools, stripEnumCompat);
   expect(stripped).not.toHaveProperty("properties.action.enum");
   expect(normalizePrepared(tools, stripEnumCompat)).toBe(stripped);

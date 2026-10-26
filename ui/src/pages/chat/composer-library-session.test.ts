@@ -5,6 +5,7 @@ import type {
   SkillsLibraryListResult,
   SkillsLibraryReadResult,
 } from "../../../../packages/gateway-protocol/src/index.ts";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayBrowserClient } from "../../api/gateway.ts";
 import { buildSkillLibraryMock } from "../../test-helpers/skill-library-fixtures.ts";
 import { ComposerLibrarySession } from "./composer-library-session.ts";
@@ -31,14 +32,9 @@ describe("composer session library ownership", () => {
     "discards a late %s result after the viewer connection changes",
     async (operation) => {
       const client = new GatewayBrowserClient({ url: "ws://127.0.0.1:12345" });
-      let resolve!: (
-        value: SkillsLibraryListResult | SkillsLibraryReadResult | SkillsLibraryActivateResult,
-      ) => void;
-      const deferred = new Promise<
+      const { promise: deferred, resolve } = createDeferred<
         SkillsLibraryListResult | SkillsLibraryReadResult | SkillsLibraryActivateResult
-      >((done) => {
-        resolve = done;
-      });
+      >();
       const request = vi.spyOn(client, "request").mockImplementationOnce(async () => deferred);
       const library = new ComposerLibrarySession(vi.fn());
       let epoch = 1;

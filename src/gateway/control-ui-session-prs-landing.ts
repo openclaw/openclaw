@@ -10,28 +10,16 @@ import type { GitMergedPullHead as MergedPullHead } from "../infra/git-read-oper
 import { readGitHead, readGitRefs, resolveGitRefsBase } from "../infra/git-root.js";
 import { canReadGitFilesystemRefs } from "../infra/git-worker-context.js";
 
-type BranchLanding = {
-  complete: boolean;
-  /** origin/<branch> tip when the remote-tracking ref resolves. */
-  pushedSha: string | null;
-  defaultSha: string | null;
-  /** Newest known-published commit to diff the working tree against. */
-  statsBase: string | null;
-  /** At least one merged PR provably landed on the default branch. */
-  hasLandedPullRequest: boolean;
-  /** The merge base contains every known landing, so Create PR is safe. */
-  provenNewPushedWork: boolean;
-};
-
 /** Only ordinary file-backed refs bypass Git; unusual discovery/layouts retain its semantics. */
 export function readCheckoutHead(
   root: string,
+  preparedHead?: ReturnType<typeof readGitHead>,
 ): { sha: string; branch?: string | null; refsBase: string } | null {
   if (!canReadGitFilesystemRefs()) {
     return null;
   }
   try {
-    const head = readGitHead(root, { maxDepth: 1 });
+    const head = preparedHead ?? readGitHead(root, { maxDepth: 1 });
     if (
       !head?.value ||
       !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(head.value) ||
@@ -246,7 +234,7 @@ export async function resolveBranchLanding(
     defaultBranch?: string;
     mergedHeads: readonly MergedPullHead[];
   },
-): Promise<BranchLanding> {
+) {
   let complete = true;
   const onUnavailable = () => {
     complete = false;

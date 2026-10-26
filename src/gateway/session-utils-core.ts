@@ -4,6 +4,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
+import { getSubagentChildControllerSessionKey } from "../agents/subagents/registry/subagent-registry-read.js";
 import {
   RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS,
   shouldKeepSubagentRunChildLink,
@@ -163,6 +164,36 @@ function shouldKeepStoreOnlyChildLink(entry: SessionEntry, now: number): boolean
 }
 
 const emptyChildOwners: readonly string[] = Object.freeze([]);
+
+/** Only the current executor/reservation can confer control; display snapshots cannot. */
+export function resolveSessionChildController(
+  key: string,
+  entry: SessionEntry,
+  parentSessionKey?: string,
+): string | undefined {
+  if (
+    parentSessionKey &&
+    parentSessionKey !== entry.parentSessionKey &&
+    parentSessionKey !== entry.spawnedBy
+  ) {
+    return undefined;
+  }
+  return getSubagentChildControllerSessionKey(key, entry);
+}
+
+/** Promotion cuts navigation activity, not a live controller's ownership. */
+export function shouldPropagateChildActivity(
+  key: string,
+  entry: SessionEntry,
+  ownerSessionKey: string,
+): boolean {
+  return (
+    entry.sidebarRoot !== true ||
+    parseAgentSessionKey(key)?.rest.startsWith("subagent:") === true ||
+    resolveSessionChildController(key, entry) === ownerSessionKey
+  );
+}
+
 const sessionChildOwners = new WeakMap<
   SessionEntry,
   {
@@ -183,31 +214,35 @@ export function resolveSessionChildOwners(params: {
   hasActiveRun?: boolean;
 }): readonly string[] {
   const { key, entry, now, subagentRuns } = params;
-  const latest = subagentRuns.getDisplaySubagentRun(key);
-  const keep =
-    params.hasActiveRun ||
-    (latest
+  const parsed = params.parsedKey === undefined ? parseAgentSessionKey(key) : params.parsedKey;
+  const native =
+    !entry.acp &&
+    !parsed?.rest.startsWith("acp:") &&
+    (parsed?.rest.startsWith("subagent:") ||
+      (Boolean(entry.spawnedBy) && (entry.spawnDepth ?? 0) > 0));
+  // Native lineage is a durable relationship, not a retained-run lease. Saved
+  // dashboard navigation keeps its existing lifetime. Other store-only rows
+  // retain the bounded fallback rather than acquiring permanent authority.
+  let keep = native || params.hasActiveRun;
+  if (!keep) {
+    const latest = subagentRuns.getDisplaySubagentRun(key);
+    keep = latest
       ? shouldKeepSubagentRunChildLink(latest, {
           activeDescendants: subagentRuns.countActiveDescendantRuns(key),
           now,
         })
-      : shouldKeepStoreOnlyChildLink(entry, now));
-  // Runtime control replaces spawnedBy, but only retained runs own controller links.
-  const controller = keep
-    ? latest
-      ? normalizeOptionalString(latest.controllerSessionKey) ||
-        normalizeOptionalString(latest.requesterSessionKey)
-      : normalizeOptionalString(entry.spawnedBy)
-    : undefined;
-  // Persistent dashboard navigation outlives the individual run, including forks.
-  const parent =
-    keep ||
-    (params.parsedKey === undefined
-      ? parseAgentSessionKey(key)
-      : params.parsedKey
-    )?.rest.startsWith("dashboard:")
+      : shouldKeepStoreOnlyChildLink(entry, now);
+  }
+  const controller = resolveSessionChildController(key, entry);
+  const explicitParent =
+    keep || parsed?.rest.startsWith("dashboard:")
       ? normalizeOptionalString(entry.parentSessionKey)
       : undefined;
+  const spawner = keep ? normalizeOptionalString(entry.spawnedBy) : undefined;
+  // Modern explicit lineage remains readable during foreign control. Legacy
+  // spawnedBy-only facts yield to a verified active controller. Neither grants
+  // permission to take over that execution (delivery checks the current owner).
+  const parent = explicitParent ?? (!controller || controller === spawner ? spawner : undefined);
   const cached = sessionChildOwners.get(entry);
   if (cached?.key === key && cached.controller === controller && cached.parent === parent) {
     return cached.owners;

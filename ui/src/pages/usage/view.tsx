@@ -3,6 +3,7 @@ import { extractQueryTerms } from "../../../../src/shared/usage-query.js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Menu } from "../../components/solid/menu.tsx";
 import { ProviderUsagePanel } from "../../components/solid/provider-usage.tsx";
+import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import {
   SettingsSection,
   SettingsPage,
@@ -12,7 +13,6 @@ import { registerUsageEnglish } from "../../i18n/locales/en-usage.ts";
 import "../../components/tooltip.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import "../../styles/usage.css";
-import { resolveUsageOverviewState } from "./cache-status.ts";
 import type { ProviderUsageSummary } from "./data-types.ts";
 import { formatIsoDate } from "./helpers.ts";
 import { UsageMosaic } from "./metrics-view.tsx";
@@ -32,8 +32,6 @@ import { SessionsCard } from "./view-sessions-card.tsx";
 
 registerEnglishCatalog(registerUsageEnglish);
 
-type ProviderUsageSnapshot = ProviderUsageSummary["providers"][number];
-
 function DateInput(props: { value: string; label: string; onChange: (value: string) => void }) {
   return (
     <input
@@ -48,7 +46,7 @@ function DateInput(props: { value: string; label: string; onChange: (value: stri
 }
 
 function renderProviderUsage(
-  providers: ProviderUsageSnapshot[],
+  providers: ProviderUsageSummary["providers"][number][],
   unavailable: boolean,
   stalled: boolean,
 ) {
@@ -109,9 +107,27 @@ export function renderUsage(props: UsageProps) {
 
 function UsageView(props: UsageProps & { loading: boolean; read: UsageRead }) {
   const loading = () => props.loading;
-  const overview = createMemo(() =>
-    resolveUsageOverviewState({ ...props.data, loading: loading() }),
-  );
+  const overview = createMemo(() => {
+    const data = props.data;
+    const pending = loading();
+    // Cold caches can list sessions before any usage has been read. Zero-filled
+    // aggregate objects are not evidence of zero usage while that read is pending.
+    const awaitingUsage =
+      data.cacheRefresh !== "complete" &&
+      !data.totals?.totalTokens &&
+      !data.totals?.totalCost &&
+      !data.sessions.some(
+        (session) =>
+          session.usage?.computedAt !== undefined ||
+          session.usage?.totalTokens ||
+          session.usage?.totalCost,
+      ) &&
+      !data.costDaily.some((day) => day.totalTokens || day.totalCost);
+    const hasOverviewData =
+      !awaitingUsage && Boolean(data.totals || data.sessions.length || data.costDaily.length);
+    const loadingOverview = pending || (awaitingUsage && data.cacheRefresh === "retrying");
+    return { hasOverviewData, loadingOverview };
+  });
   const lowerBound = () =>
     displayTotals()?.usageReport?.state === "unavailable" ||
     props.data.overview?.usageReport?.state === "unavailable";
@@ -293,21 +309,22 @@ function UsageView(props: UsageProps & { loading: boolean; read: UsageRead }) {
                     onChange={(endDate) => props.callbacks.filters.onDatesChange({ endDate })}
                   />
                 </div>
-                <select
+                <SettingsSelect
                   class="usage-select"
                   title={t("usage.filters.timeZone")}
                   aria-label={t("usage.filters.timeZone")}
                   value={props.filters.timeZone}
+                  options={[
+                    { value: "local", label: t("usage.filters.timeZoneLocal") },
+                    { value: "utc", label: t("usage.filters.timeZoneUtc") },
+                  ]}
                   onChange={(event) => {
                     const timeZone = event.currentTarget.value;
                     if (timeZone === "local" || timeZone === "utc") {
                       props.callbacks.filters.onScopeChange({ timeZone });
                     }
                   }}
-                >
-                  <option value="local">{t("usage.filters.timeZoneLocal")}</option>
-                  <option value="utc">{t("usage.filters.timeZoneUtc")}</option>
-                </select>
+                />
               </div>
               <div class="usage-view-options">
                 <UsageCreatorFilter
@@ -516,12 +533,13 @@ function UsageView(props: UsageProps & { loading: boolean; read: UsageRead }) {
                   <For each={queryTerms()}>
                     {(term) => {
                       const label = term.raw;
+                      const removeLabel = () => `${t("usage.filters.remove")}: ${label}`;
                       return (
                         <span class="usage-query-chip">
                           {label}
-                          <openclaw-tooltip prop:content={t("usage.filters.remove")}>
+                          <openclaw-tooltip prop:content={removeLabel()}>
                             <button
-                              aria-label={t("usage.filters.remove")}
+                              aria-label={removeLabel()}
                               onClick={() =>
                                 props.callbacks.filters.onQueryDraftChange(
                                   removeQueryToken(props.filters.queryDraft, label),

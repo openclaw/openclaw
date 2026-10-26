@@ -17,6 +17,7 @@ import {
   loadStoredSidebarSessionsShowPreview,
   loadStoredSidebarSessionsShowSystem,
 } from "./app-sidebar-session-types.ts";
+import { setSessionsGrouping } from "./session-organizer-menu.runtime.ts";
 import "../test-helpers/load-styles.ts";
 import "../styles/settings-controls.css";
 import "../styles/settings-native-controls.css";
@@ -436,7 +437,7 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
       const original = sessions.sessions.state.result!;
       const grouping = hiddenBy === "roster" ? "project" : "person";
       if (hiddenBy === "roster") {
-        sidebar.sessionOrganizer.setSessionsGrouping(grouping);
+        setSessionsGrouping(sidebar.sessionOrganizer, grouping);
         await role("button", "Filter & sort").click();
         await choose(/^Hide empty groups:/, "Never");
         sidebar.dismissTransientMenus();

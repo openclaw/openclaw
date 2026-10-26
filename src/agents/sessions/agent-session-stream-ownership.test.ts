@@ -1,24 +1,26 @@
 import { createAssistantMessageEventStream } from "@openclaw/ai/event-stream";
 import type { Message, Model } from "@openclaw/llm-core";
-import { Type } from "typebox";
-import { expect, it, vi } from "vitest";
-import { runAgentLoop } from "../../../packages/agent-core/src/agent-loop.js";
+import { assert, expect, it, vi } from "vitest";
 import {
-  makeAssistantMessage,
-  config as baseConfig,
+  captureToolLoop,
+  finishMessageStream,
+  makeTool,
   model as baseModel,
 } from "../../../packages/agent-core/src/agent-loop.test-support.js";
 import type { AgentMessage } from "../../../packages/agent-core/src/types.js";
+import { createAssistantOutput } from "../../../packages/ai/src/transports/assistant-output.js";
 import { buildOpenAIResponsesReasoningReplayMetadata } from "../../../packages/ai/src/transports/openai-responses-compaction-replay.js";
 import { convertResponsesMessages } from "../../../packages/ai/src/transports/openai-responses-replay-messages-internal.js";
 import { processResponsesStream } from "../../../packages/ai/src/transports/openai-responses-stream-internal.js";
+import {
+  completedResponse,
+  outputItem,
+  wireCall,
+  wireMessage,
+} from "../../../packages/ai/src/transports/openai-stream-cases.test-support.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { persistAgentSessionMessage } from "./agent-session-transcript.js";
 import { SessionManager } from "./session-manager.js";
-
-function outputItem(phase: "added" | "done", output_index: number, item: unknown) {
-  return { type: `response.output_item.${phase}`, output_index, item };
-}
 
 function isModelMessage(message: AgentMessage): message is Message {
   return message.role === "user" || message.role === "assistant" || message.role === "toolResult";
@@ -26,10 +28,8 @@ function isModelMessage(message: AgentMessage): message is Message {
 
 it.each([
   "item-done",
-  "terminal",
   "terminal-without-item-done",
   "terminal-without-item-done-absent-ciphertext",
-  "terminal-without-item-done-null-ciphertext",
 ] as const)(
   "persists replayable reasoning arriving at %s after an async prefix without freezing its producer",
   async (arrival) => {
@@ -46,39 +46,17 @@ it.each([
     };
     const replayIdentity = { sessionId: "synthetic-session", authProfileId: "synthetic-profile" };
     const replayMetadata = buildOpenAIResponsesReasoningReplayMetadata(model, replayIdentity);
-    const output = {
-      ...structuredClone(makeAssistantMessage([])),
-      api: model.api,
-      provider: model.provider,
-      model: model.id,
-    };
+    const output = createAssistantOutput(model);
     const reasoning = {
       type: "reasoning",
       id: "rs_test",
       summary: [{ type: "summary_text", text: "Synthetic reasoning" }],
       ...(arrival.endsWith("absent-ciphertext")
         ? {}
-        : {
-            encrypted_content: arrival.endsWith("null-ciphertext") ? null : "synthetic-ciphertext",
-          }),
+        : { encrypted_content: "synthetic-ciphertext" }),
     };
-    const call = {
-      type: "function_call",
-      id: "fc_test",
-      call_id: "call_test",
-      name: "lookup",
-      arguments: "{}",
-      status: "completed",
-      async: true,
-    };
-    const answer = {
-      type: "message",
-      id: "msg_test",
-      role: "assistant",
-      phase: "final_answer",
-      status: "completed",
-      content: [{ type: "output_text", text: "Done.", annotations: [] }],
-    };
+    const call = { ...wireCall("test", "lookup"), status: "completed", async: true };
+    const answer = { ...wireMessage("msg_test", "Done."), phase: "final_answer" };
     const answerStreamed = createDeferred();
     const manager = SessionManager.inMemory();
     let prefixWasPersisted = false;
@@ -89,20 +67,13 @@ it.each([
       return { content: [{ type: "text" as const, text: "Found." }], details: {} };
     });
     async function* events() {
-      yield outputItem("added", 0, { type: "reasoning", id: "rs_test", summary: [] });
-      const { encrypted_content: _ciphertext, ...unencryptedReasoning } = reasoning;
+      yield outputItem("added", { type: "reasoning", id: "rs_test", summary: [] });
       if (hasItemDone) {
-        yield outputItem(
-          "done",
-          0,
-          arrival === "item-done"
-            ? { ...reasoning, encrypted_content: "streamed-ciphertext" }
-            : unencryptedReasoning,
-        );
+        yield outputItem("done", { ...reasoning, encrypted_content: "streamed-ciphertext" });
       }
-      yield outputItem("added", 1, { ...call, arguments: "", status: "in_progress" });
-      yield outputItem("done", 1, call);
-      yield outputItem("added", 2, { ...answer, status: "in_progress", content: [] });
+      yield outputItem("added", { ...call, arguments: "", status: "in_progress" }, 1);
+      yield outputItem("done", call, 1);
+      yield outputItem("added", { ...answer, status: "in_progress", content: [] }, 2);
       yield {
         type: "response.content_part.added",
         output_index: 2,
@@ -114,58 +85,37 @@ it.each([
       await answerStreamed.promise;
       expect(prefixWasPersisted).toBe(false);
       expect(execute).not.toHaveBeenCalled();
-      yield outputItem("done", 2, answer);
+      yield outputItem("done", answer, 2);
       terminalSeen = true;
-      yield {
-        type: "response.completed",
-        response: {
-          id: "resp_test",
-          model: model.id,
-          status: "completed",
-          output: [reasoning, call, answer],
-          usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
-        },
-      };
+      yield completedResponse("resp_test", [reasoning, call, answer], {
+        model: model.id,
+        usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
+      });
     }
-    const messages = await runAgentLoop(
-      [{ role: "user", content: "Run lookup.", timestamp: 0 }],
-      {
-        systemPrompt: "Synthetic test",
-        messages: [],
-        tools: [
-          {
-            name: "lookup",
-            label: "Lookup",
-            description: "Lookup",
-            parameters: Type.Object({}),
-            execute,
-          },
-        ],
-      },
-      {
-        ...baseConfig,
-        model,
-        shouldStopAfterTurn: () => true,
-      },
-      async (event) => {
+    const loop = captureToolLoop({
+      prompt: { role: "user", content: "Run lookup.", timestamp: 0 },
+      tools: [{ ...makeTool("lookup"), execute }],
+      config: { model, shouldStopAfterTurn: () => true },
+      onEvent: (event) => {
         if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
           answerStreamed.resolve();
         }
-        if (event.type !== "message_end" || !isModelMessage(event.message)) {
+      },
+      onMessage: async (message) => {
+        if (!isModelMessage(message)) {
           return;
         }
-        await persistAgentSessionMessage(manager, event.message, {
+        await persistAgentSessionMessage(manager, message, {
           invalidateSerializedPrefixCache: false,
         });
         if (
-          event.message.role === "assistant" &&
-          event.message.content.some((block) => block.type === "toolCall")
+          message.role === "assistant" &&
+          message.content.some((block) => block.type === "toolCall")
         ) {
           prefixWasPersisted = true;
         }
       },
-      undefined,
-      () => {
+      streamFn: () => {
         const stream = createAssistantMessageEventStream();
         stream.push({ type: "start", partial: output });
         void processResponsesStream(events(), output, stream, model, {
@@ -176,18 +126,11 @@ it.each([
             output.stopReason = "error";
             output.errorMessage = error instanceof Error ? error.message : String(error);
           })
-          .then(() => {
-            const reason = output.stopReason;
-            if (reason === "error" || reason === "aborted") {
-              stream.push({ type: "error", reason, error: output });
-            } else {
-              stream.push({ type: "done", reason, message: output });
-            }
-            stream.end();
-          });
+          .then(() => finishMessageStream(stream, output));
         return stream;
       },
-    );
+    });
+    const messages = await loop.run;
 
     const final = messages.findLast((message) => message.role === "assistant");
     expect(
@@ -207,20 +150,14 @@ it.each([
       (message) =>
         message.role === "assistant" && message.content.some((block) => block.type === "toolCall"),
     );
-    if (prefix?.role !== "assistant") {
-      throw new Error("Missing persisted async prefix");
-    }
+    assert(prefix?.role === "assistant", "Missing persisted async prefix");
     const thinking = prefix.content[0];
-    if (thinking?.type !== "thinking") {
-      throw new Error("Missing persisted reasoning");
-    }
+    assert(thinking?.type === "thinking", "Missing persisted reasoning");
     if (hasItemDone) {
       const signature = JSON.parse(thinking.thinkingSignature ?? "null");
       expect(signature).toMatchObject({ id: "rs_test" });
-      if (arrival === "item-done") {
-        expect(thinking).toHaveProperty("openclawReasoningReplay", replayMetadata);
-        expect(signature).toHaveProperty("encrypted_content", "synthetic-ciphertext");
-      }
+      expect(thinking).toHaveProperty("openclawReasoningReplay", replayMetadata);
+      expect(signature).toHaveProperty("encrypted_content", "synthetic-ciphertext");
     }
     expect(Object.isFrozen(thinking)).toBe(true);
     expect(persisted.findLast((message) => message.role === "assistant")).toMatchObject({

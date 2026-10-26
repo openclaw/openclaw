@@ -109,19 +109,16 @@ export function mockPrCheckout(options: {
           return options.resolve(operation.input.root);
         }
         break;
-      case "pull-request.branch-facts":
-        return options.emptyFacts && !options.additions
-          ? undefined
-          : {
-              creatable: true,
-              stats: options.additions
-                ? {
-                    additions: options.additions(operation.input.root),
-                    deletions: 0,
-                    changedFiles: 1,
-                  }
-                : null,
-            };
+      case "pull-request.branch-facts": {
+        if (options.emptyFacts && !options.additions) {
+          return undefined;
+        }
+        const additions = options.additions?.(operation.input.root);
+        return {
+          creatable: true,
+          stats: additions === undefined ? null : { additions, deletions: 0, changedFiles: 1 },
+        };
+      }
       default:
         break;
     }
@@ -209,10 +206,10 @@ export function createSessionPullRequestsFixture() {
     await state.writeConfig(cfg);
     setRuntimeConfigSnapshot(cfg);
     seeded.clear();
-    // Prepare the canonical store before tests install fake clocks or concurrent reads.
+    // Prepare fresh rows before fake clocks or concurrent reads; maintenance must not age them out.
     await upsertSessionEntryCore(
       { agentId: "main", sessionKey: "agent:main:main" },
-      { sessionId: randomUUID(), updatedAt: 1 },
+      { sessionId: randomUUID(), updatedAt: Date.now() },
     );
     seeded.add("agent:main:main");
   });
@@ -232,7 +229,10 @@ export function createSessionPullRequestsFixture() {
       storeAgentId: agentId,
     });
     if (!seeded.has(sessionKey)) {
-      replaceSessionEntrySync({ agentId, sessionKey }, { sessionId: randomUUID(), updatedAt: 1 });
+      replaceSessionEntrySync(
+        { agentId, sessionKey },
+        { sessionId: randomUUID(), updatedAt: Date.now() },
+      );
       seeded.add(sessionKey);
     }
     return { sessionKey, agentId };

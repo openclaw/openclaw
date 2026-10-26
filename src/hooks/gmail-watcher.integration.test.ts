@@ -9,20 +9,12 @@ import {
   openFixtureReceiptChannel,
 } from "../../test/helpers/fixture-receipts.js";
 import { withinTest } from "../../test/helpers/promise.js";
+import { isProcessAlive as alive } from "../../test/scripts/live-process-fixture.test-support.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { startGmailWatcher, stopGmailWatcher } from "./gmail-watcher.js";
 import { createGmailConfig } from "./gmail.test-support.js";
 
 const describePosix = process.platform === "win32" ? describe.skip : describe;
-
-function alive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 describePosix("gmail-watcher process-tree shutdown (integration)", () => {
   it("stopGmailWatcher removes gog and its credential-helper descendant", async ({ signal }) => {

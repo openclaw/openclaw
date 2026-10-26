@@ -8,7 +8,7 @@ import {
   signCatalogEnvelope,
   legacyCatalogEnvelope,
 } from "./official-external-catalog-signing.test-support.js";
-import { createSqliteHostedOfficialExternalPluginCatalogSnapshotStore } from "./official-external-plugin-catalog-snapshot-store.js";
+import * as snapshotStores from "./official-external-plugin-catalog-snapshot-store.js";
 import {
   getOfficialExternalPluginCatalogManifest as manifest,
   resolveOfficialExternalPluginInstall as install,
@@ -30,9 +30,10 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     cleanup();
   }),
 );
+const realStore = snapshotStores.createSqliteHostedOfficialExternalPluginCatalogSnapshotStore;
 
 function sqliteStore() {
-  return createSqliteHostedOfficialExternalPluginCatalogSnapshotStore({
+  return realStore({
     stateDir: tempDirs.make("openclaw-catalog-"),
   });
 }
@@ -42,15 +43,21 @@ const originalFetch = globalThis.fetch;
 
 type LoadParams = NonNullable<Parameters<typeof loadHostedCatalogImpl>[0]> & {
   fetchImpl?: typeof globalThis.fetch;
+  snapshotStore?: ReturnType<typeof memoryStore> | null;
 };
 type CatalogConfig = NonNullable<LoadParams["catalogConfig"]>;
 type LoadResult = Awaited<ReturnType<typeof loadHostedCatalog>>;
 
 afterEach(() => vi.unstubAllGlobals());
 
-function loadHostedCatalog({ fetchImpl, ...params }: LoadParams = {}) {
+async function loadHostedCatalog({ fetchImpl, snapshotStore, ...params }: LoadParams = {}) {
   vi.stubGlobal("fetch", fetchImpl ?? originalFetch);
-  return loadHostedCatalogImpl(params);
+  using _ = vi
+    .spyOn(snapshotStores, "createSqliteHostedOfficialExternalPluginCatalogSnapshotStore")
+    .mockImplementation((options) =>
+      snapshotStore === undefined ? realStore(options) : (snapshotStore ?? memoryStore()),
+    );
+  return await loadHostedCatalogImpl(params);
 }
 
 function expectSource<Source extends LoadResult["source"]>(
@@ -197,9 +204,10 @@ describe("official external plugin catalog", () => {
       snapshotStore: null,
     });
 
-    expectSource(result, "bundled-fallback");
-    expect(result.entries).toEqual([]);
-    expect(result.error).toContain(
+    expectSource(
+      result,
+      "bundled-fallback",
+      [],
       'feed id "openclaw-official-external-plugins" did not match expected "clawhub-official"',
     );
   });
@@ -237,16 +245,10 @@ describe("official external plugin catalog", () => {
     });
 
     expectSource(result, "hosted");
-    expect(result.entries.map((entry) => entry.id)).toEqual([
-      "@acme/trusted",
-      "@acme/disabled",
-      "@acme/community",
-      "@acme/missing-authority",
-    ]);
-    const [trusted, disabled, community, missingAuthority] = result.entries;
-    if (!trusted || !disabled || !community || !missingAuthority) {
-      throw new Error("expected schema-v2 marketplace entries");
-    }
+    const trusted = result.entries[0]!;
+    const disabled = result.entries[1]!;
+    const community = result.entries[2]!;
+    const missingAuthority = result.entries[3]!;
     expect(install(trusted)).toEqual({
       clawhubSpec: "clawhub:@acme/trusted@1.2.3",
       defaultChoice: "clawhub",
@@ -416,11 +418,8 @@ describe("official external plugin catalog", () => {
       snapshotStore,
     });
 
-    expect(acceptedCurrent.source, JSON.stringify(acceptedCurrent)).toBe("hosted");
-    expect(acceptedCurrent.entries.map((entry) => entry.name)).toEqual(["@openclaw/signed-v9"]);
-    if (acceptedCurrent.source === "hosted") {
-      expect(acceptedCurrent.trust?.signedBy).toBe("acme-root-2026-q3");
-    }
+    expectSource(acceptedCurrent, "hosted", ["@openclaw/signed-v9"]);
+    expect(acceptedCurrent.trust?.signedBy).toBe("acme-root-2026-q3");
 
     const rolledBack = signedFeed(7, "@openclaw/signed-v7", { keyId: "acme-root-2026-q4" });
     const rejectedRollback = await loadSigned(rolledBack, {
@@ -428,9 +427,7 @@ describe("official external plugin catalog", () => {
       snapshotStore,
     });
 
-    expectSource(rejectedRollback, "bundled-fallback");
-    expect(rejectedRollback.entries).toEqual([]);
-    expect(rejectedRollback.error).toContain("signed feed sequence is older");
+    expectSource(rejectedRollback, "bundled-fallback", [], "signed feed sequence is older");
     expect(rejectedRollback.error).toContain("snapshot fallback failed");
 
     const retainedCurrent = await loadSigned(current, { offline: true, snapshotStore });
@@ -458,72 +455,62 @@ describe("official external plugin catalog", () => {
 
     const result = await loadSigned(repaired, { snapshotStore });
 
-    expect(result.source, JSON.stringify(result)).toBe("hosted");
-    expect(result.entries.map((entry) => entry.name)).toEqual(["@openclaw/repaired-current"]);
+    expectSource(result, "hosted", ["@openclaw/repaired-current"]);
     await expect(snapshotStore.read(FEED_URL)).resolves.toMatchObject({ body: repaired.body });
   });
 
-  it("fails closed for unsigned signed-profile responses and re-verifies offline snapshots", async () => {
-    const signed = signedFeed(8, "@openclaw/signed-offline");
-    const unsignedBody = JSON.stringify(
-      makeFeed({ sequence: 8, pluginName: "@openclaw/unsigned" }),
-    );
+  it.each(["unsigned", "beta", "wrong-media", "unsigned-override"] as const)(
+    "rejects %s live signed-profile responses",
+    async (kind) => {
+      const signed = signedFeed(8, "@openclaw/signed");
+      const body =
+        kind === "beta"
+          ? toLegacyBetaSignedEnvelope(signed.body)
+          : kind === "wrong-media"
+            ? signed.body
+            : JSON.stringify(makeFeed({ sequence: 8, pluginName: "@openclaw/unsigned" }));
+      const result = await loadSigned(signed, {
+        fetchImpl: fetchBody(
+          body,
+          { headers: { "content-type": "application/json" } },
+          kind !== "wrong-media",
+        ),
+        ...(kind === "unsigned-override" ? { feedUrl: "https://clawhub.ai/v1/feeds/plugins" } : {}),
+        snapshotStore: memoryStore(),
+      });
+      expectSource(
+        result,
+        "bundled-fallback",
+        [],
+        kind === "wrong-media"
+          ? "must use application/vnd.dsse+json"
+          : "signed envelope is malformed",
+      );
+    },
+  );
 
-    const unsigned = await loadSigned(signed, {
-      fetchImpl: fetchBody(unsignedBody, {}, true),
-      snapshotStore: memoryStore(),
-    });
-
-    expectSource(unsigned, "bundled-fallback", [], "signed envelope is malformed");
-
-    const signedSnapshot = memoryStore([
-      snapshot(signed.body, undefined, "2026-06-22T00:00:08.000Z"),
-    ]);
-    const offline = await loadSigned(signed, {
-      offline: true,
-      snapshotStore: signedSnapshot,
-    });
-
-    expectSource(offline, "hosted-snapshot", ["@openclaw/signed-offline"]);
-
-    const unsignedStore = memoryStore([
-      unsignedSnapshot(unsignedBody, FEED_URL, "2026-06-22T00:00:08.000Z"),
-    ]);
-    const rejectedSnapshot = await loadSigned(signed, {
-      offline: true,
-      snapshotStore: unsignedStore,
-    });
-
-    expectSource(rejectedSnapshot, "bundled-fallback", undefined, "signed envelope is malformed");
-  });
-
-  it("accepts beta envelopes only from persisted snapshots", async () => {
-    const signed = signedFeed(8, "@openclaw/legacy-snapshot");
-    const legacyBody = toLegacyBetaSignedEnvelope(signed.body);
-
-    const live = await loadSigned(signed, {
-      fetchImpl: fetchBody(legacyBody, {}, true),
-    });
-
-    expectSource(live, "bundled-fallback", undefined, "signed envelope is malformed");
-
-    const offline = await loadSigned(signed, {
-      offline: true,
-      snapshotStore: memoryStore([snapshot(legacyBody)]),
-    });
-
-    expectSource(offline, "hosted-snapshot", ["@openclaw/legacy-snapshot"]);
-  });
-
-  it("fails closed when a signed feed response does not use the DSSE media type", async () => {
-    const signed = signedFeed(8, "@openclaw/wrong-media-type");
-    const result = await loadSigned(signed, {
-      fetchImpl: fetchBody(signed.body, { headers: { "content-type": "application/json" } }),
-      snapshotStore: memoryStore(),
-    });
-
-    expectSource(result, "bundled-fallback", [], "must use application/vnd.dsse+json");
-  });
+  it.each(["signed", "unsigned", "beta"] as const)(
+    "re-verifies %s offline snapshots",
+    async (kind) => {
+      const signed = signedFeed(8, "@openclaw/signed-offline");
+      const body = kind === "beta" ? toLegacyBetaSignedEnvelope(signed.body) : signed.body;
+      const stored =
+        kind === "unsigned"
+          ? unsignedSnapshot(
+              JSON.stringify(makeFeed({ sequence: 8, pluginName: "@openclaw/unsigned" })),
+            )
+          : snapshot(body);
+      const result = await loadSigned(signed, {
+        offline: true,
+        snapshotStore: memoryStore([stored]),
+      });
+      if (kind === "unsigned") {
+        expectSource(result, "bundled-fallback", undefined, "signed envelope is malformed");
+      } else {
+        expectSource(result, "hosted-snapshot", ["@openclaw/signed-offline"]);
+      }
+    },
+  );
 
   it("rejects expired signed feeds and keeps expired snapshots visible but not installable", async () => {
     const feed = {
@@ -651,19 +638,6 @@ describe("official external plugin catalog", () => {
     expectSource(result, "hosted");
     expect(result.feed?.id).toBe("openclaw-official-external-plugins");
     expect(result.trust).toMatchObject({ mode: "signed", signedBy: "acme-root" });
-  });
-
-  it("preserves signed profile verification for direct feed URL overrides", async () => {
-    const signed = signedFeed(8, "@openclaw/signed-override");
-    const unsignedBody = JSON.stringify(
-      makeFeed({ sequence: 8, pluginName: "@openclaw/unsigned-override" }),
-    );
-    const result = await loadSigned(signed, {
-      feedUrl: "https://clawhub.ai/v1/feeds/plugins",
-      fetchImpl: fetchBody(unsignedBody, {}, true),
-    });
-
-    expectSource(result, "bundled-fallback", undefined, "signed envelope is malformed");
   });
 
   it("filters every source reference and refreshes profiles between hosted loads", async () => {

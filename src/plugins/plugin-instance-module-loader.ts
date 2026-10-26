@@ -4,20 +4,16 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isMainThread, workerData } from "node:worker_threads";
 import type { JitiOptions, JitiResolveOptions } from "jiti";
+import { isNativeEsmPackage } from "../infra/native-module-format.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolveGlobalMap, resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { createJiti } from "./jiti-factory.js";
 import {
   resolvePluginLoaderTryNative,
-  isNativeEsmPackage,
   isPluginSourceModulePath,
   supportsBunRuntimeOnResolveTargets,
   useNodeModuleHooks,
 } from "./native-module-require.js";
-import {
-  bundledPluginCaptureInputs,
-  resolveBundledPluginReloadSource,
-} from "./plugin-bundled-reload.js";
 import type { InspectionNativeEsmRetention, PluginModuleLoader } from "./plugin-cache-artifacts.js";
 import { bindPluginCacheRoot, getPluginCache, withPluginCache } from "./plugin-cache.js";
 import {
@@ -37,7 +33,6 @@ import { bindSharedPluginModuleLoader } from "./plugin-shared-module-loader.js";
 import {
   buildPluginTypeScriptSource,
   PLUGIN_SOURCE_RESOLVE_PREFIX,
-  type PluginSourceBuild,
   type PluginSourceFile,
   type PluginSourceLoadMode,
 } from "./plugin-source-build.js";
@@ -49,7 +44,7 @@ import { getPluginRuntimeLoadContextState } from "./runtime/load-context-state.j
 import { preparePluginLoaderAliases, isPluginSdkAliasSpecifier } from "./sdk-alias.js";
 import { recordPluginSdkDeprecatedImport } from "./sdk-deprecated-imports.js";
 
-type SourceBuilds = Map<string, PluginSourceBuild>;
+type SourceBuilds = Map<string, ReturnType<typeof buildPluginTypeScriptSource>>;
 type RetainedNativeEsm = {
   artifact?: PluginGenerationArtifact;
   builds: SourceBuilds;
@@ -231,13 +226,9 @@ function retainedNativeEsmExecution(retained: RetainedNativeEsm) {
 }
 
 /** Runtime and setup share code identity policy while keeping separate instance authority. */
-export function bindPluginInstanceModuleLoader(input: PluginInstanceModuleLoaderParams): void {
-  const params =
-    input.origin === "bundled" && input.reloadBundledCode && !input.bundledReloadSource
-      ? { ...input, bundledReloadSource: resolveBundledPluginReloadSource(input.rootDir) }
-      : input;
+export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoaderParams): void {
   const cache = getPluginCache();
-  if (params.origin === "bundled" && !params.reloadBundledCode) {
+  if (params.origin === "bundled") {
     if (params.expectedSourceDigest !== undefined) {
       throw new Error("Source digest validation is not applicable to core-bundled runtime modules");
     }
@@ -288,18 +279,11 @@ export function bindPluginInstanceModuleLoader(input: PluginInstanceModuleLoader
       reusedArtifact ??
       params.preparedArtifact?.artifact ??
       capturePluginGenerationArtifact(
-        ...bundledPluginCaptureInputs(
-          params.rootDir,
-          params.source,
-          params.bundledReloadSource,
-          Boolean(params.recoverySourceMap),
-          params.standalone,
-        ),
+        params.rootDir,
+        params.standalone ? params.source : undefined,
         retained ? retainedNativeEsmExecution(retained) : (run) => params.instance.run(run),
         moduleSource,
         params.nativeRecovery,
-        undefined,
-        params.bundledReloadSource,
       );
     if (
       params.expectedSourceDigest !== undefined &&
@@ -445,11 +429,6 @@ export function bindPluginInstanceModuleLoader(input: PluginInstanceModuleLoader
   const tsconfigPaths = entryPaths.resolver.options.tsconfigPaths;
   const demandedModules = new Map<string, { url: string } | { error: unknown }>();
   let resolvingPaths = false;
-  const includeSources = (additions: readonly string[]) => {
-    for (const build of sourceBuilds.values()) {
-      build.include(additions);
-    }
-  };
   const prepareSource = (
     filename: string,
     mode?: PluginSourceLoadMode,
@@ -503,7 +482,7 @@ export function bindPluginInstanceModuleLoader(input: PluginInstanceModuleLoader
             string | JitiResolveOptions,
           ];
           const query = typeof options === "string" ? { parentURL: options } : options;
-          includeSources(artifact.prepareDependency(parentSource, request));
+          artifact.prepareDependency(parentSource, request);
           let paths = pathResolvers.get(parentSource);
           if (!paths) {
             paths = createPaths(resolverSource, entryPaths.resolver.options);
@@ -520,10 +499,6 @@ export function bindPluginInstanceModuleLoader(input: PluginInstanceModuleLoader
         });
       }
       // Generated files resolve imports from their captured source's package and directory.
-      const sharedModule = parentSource && artifact.sharedModule?.(parentSource, specifier);
-      if (sharedModule) {
-        return nextResolve(pathToFileURL(sharedModule).href, context);
-      }
       const nativeContext =
         parentSource && parentRoot
           ? { ...context, parentURL: pathToFileURL(parentSource).href }
@@ -594,7 +569,7 @@ export function bindPluginInstanceModuleLoader(input: PluginInstanceModuleLoader
                   return { shortCircuit: true, url: demanded.url };
                 }
                 // A captured ancestor can contain another version; prepare this importer's lookup first.
-                includeSources(artifact.prepareDependency(parentSource, specifier));
+                artifact.prepareDependency(parentSource, specifier);
                 let resolutionFailure: unknown;
                 try {
                   const native = nextResolve(specifier, nativeContext);
@@ -629,7 +604,6 @@ export function bindPluginInstanceModuleLoader(input: PluginInstanceModuleLoader
                   if (!captured) {
                     throw resolutionFailure;
                   }
-                  includeSources(captured.additions);
                   if ("retryNative" in captured) {
                     const native = nextResolve(specifier, nativeContext);
                     demandedModules.set(key, { url: native.url });
@@ -685,8 +659,7 @@ export function bindPluginInstanceModuleLoader(input: PluginInstanceModuleLoader
           resolved = { ...resolved, importAttributes: { ...attributes, type: "json" } };
         }
         artifact.assertModuleAvailable(filename);
-        const additions = artifact.prepareModule(filename);
-        includeSources(additions);
+        artifact.prepareModule(filename);
         if (
           (isPluginSourceModulePath(filename) || filename.endsWith(".jsx")) &&
           artifact.moduleRoot(filename)

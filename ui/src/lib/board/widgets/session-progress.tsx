@@ -6,6 +6,7 @@ import { useOptionalApplication } from "../../reactive/context.ts";
 import { projectProgressCard } from "../../reactive/domain-keyed.ts";
 import { t } from "../../reactive/i18n.ts";
 import { projectSource } from "../../reactive/projection.ts";
+import { projectSessionProgressRoster } from "../../reactive/session-progress-roster.ts";
 import {
   resolveSessionProgressCardTarget,
   sessionProgressCardsForGateway,
@@ -102,21 +103,11 @@ function SessionProgressWidgetContent(
     projectSource(rosterScope(), {
       read: ([agentId]) => context?.sessions.listSnapshot(sessionProgressTargetQuery(agentId)),
       subscribe: ([agentId, active, connected], notify) => {
-        if (!connected || !context || !active) {
+        if (!context || !active || !connected) {
           return () => {};
         }
-        const query = sessionProgressTargetQuery(agentId);
-        const release = context.sessions.subscribeList(query, notify);
-        const snapshot = context.sessions.listSnapshot(query);
-        if (
-          !snapshot.result &&
-          !snapshot.loading &&
-          !snapshot.error &&
-          context.gateway.snapshot.phase === "connected"
-        ) {
-          void context.sessions.refreshList(query);
-        }
-        return release;
+        // A scoped child releases on invalidation even when an empty card never rereads it.
+        return projectSessionProgressRoster(context.sessions, agentId).subscribe(notify);
       },
       equality: "revision",
     }),

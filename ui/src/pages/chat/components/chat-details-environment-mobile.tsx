@@ -1,31 +1,30 @@
 import { onSettled, createMemo, merge, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { registerChatDetailsEnglish } from "../../../i18n/locales/en-chat-details.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { createDocumentVisibility } from "../../../lib/reactive/platform.ts";
+import type { ChatDetailsEnvironmentProps, ChatDetailsProps } from "./chat-details-types.ts";
 import {
   EnvironmentAction,
   EnvironmentChangeCounts,
   hasEnvironmentTextChanges,
-} from "./chat-details-environment.tsx";
-import type { ChatDetailsEnvironmentProps, ChatDetailsProps } from "./chat-details-types.ts";
+} from "./chat-environment-content.tsx";
 import {
   createChatMachinePresentation,
   type ChatPanePlacementProps,
 } from "./chat-pane-placement.tsx";
 
 registerEnglishCatalog(registerChatSessionEnglish);
-
-export type ChatDetailsEnvironmentMobileProps = Omit<
-  ChatDetailsEnvironmentProps,
-  "details" | "expanded" | "onExpandedChange"
-> & {
-  details: Pick<ChatDetailsProps, "detailsWorkspace" | "selectedSession">;
-  placement?: ChatPanePlacementProps;
-};
+registerEnglishCatalog(registerChatDetailsEnglish);
 
 /** A controlled leaf: the mobile host owns routes, facts, and retained state. */
-export function ChatDetailsEnvironmentMobile(props: ChatDetailsEnvironmentMobileProps) {
+export function ChatDetailsEnvironmentMobile(
+  props: Omit<ChatDetailsEnvironmentProps, "details" | "expanded" | "onExpandedChange"> & {
+    details: Pick<ChatDetailsProps, "detailsWorkspace" | "selectedSession">;
+    placement?: ChatPanePlacementProps;
+  },
+) {
   const visible = createDocumentVisibility();
   const requestUncommitted = createMemo(() =>
     props.presented && visible() ? props.onRequestUncommitted : undefined,

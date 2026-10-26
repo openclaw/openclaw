@@ -9,7 +9,17 @@ export type { ModelPickerOption, ModelPickerParams } from "../model-picker-optio
 type ModelSelectOption = ReturnType<typeof modelPickerOptions>["options"][number];
 
 export function ModelPicker(props: ModelPickerParams) {
-  const choices = createMemo(() => modelPickerOptions(props));
+  const options = createMemo(() => props.options);
+  const selectedValue = createMemo(() => props.value);
+  const customLabel = createMemo(() => props.custom?.label);
+  const choices = createMemo(() => {
+    const label = customLabel();
+    return modelPickerOptions({
+      options: options(),
+      value: selectedValue(),
+      custom: label === undefined ? undefined : { label },
+    });
+  });
   let customInput: HTMLInputElement;
   const commitCustom = (event: Event) => {
     if ((event.type === "change") === (props.custom?.commit === "change")) {

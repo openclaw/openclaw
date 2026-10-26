@@ -24,7 +24,9 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
-  min-height: 0;
+  /* One 36px activity row plus its 4px vertical insets. Its metadata arrives
+     after the saved transcript; reserve the same clearance while it is empty. */
+  min-height: 44px;
   max-height: max(0px, calc(100cqh - 100% - 8px));
   pointer-events: none;
 }
@@ -181,10 +183,6 @@
   height: auto;
   max-height: min(28dvh, 149px);
   overscroll-behavior: contain;
-}
-
-.agent-chat__composer-shell[data-mobile-composer="true"] .chat-queue__text {
-  font-weight: 500;
 }
 
 .agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]

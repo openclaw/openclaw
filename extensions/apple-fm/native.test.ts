@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { runCommandBuffered } from "openclaw/plugin-sdk/process-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { commandResult } from "../test-support/command-result.test-support.js";
 import { createAppleFmNative, type AppleFmNative } from "./native.js";
 
 vi.mock("openclaw/plugin-sdk/process-runtime", () => ({ runCommandBuffered: vi.fn() }));
@@ -17,11 +18,9 @@ let directory: string;
 let native: AppleFmNative;
 let abortAfterCompile: AbortController | undefined;
 const success = (stdout = "") => ({
+  ...commandResult(),
   stdout: Buffer.from(stdout),
   stderr: Buffer.alloc(0),
-  code: 0,
-  signal: null,
-  killed: false,
   termination: "exit" as const,
 });
 

@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { isReportableUpdateRun } from "../shared/update-outcome.js";
+import { isReportableUpdateRun } from "../shared/update-outcome-classification.js";
+import { expectText } from "../test-utils/text-assertions.js";
 import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
 import * as reportHealth from "./update-run-report-health.js";
@@ -65,15 +66,6 @@ function failedStep(step: string, patch: Partial<Step> = {}): Step {
 function expectChatBudget(markdown: string) {
   expect(markdown.length).toBeLessThanOrEqual(1500);
   expect(Buffer.from(markdown).toString("utf8")).toBe(markdown);
-}
-
-function expectText(text: string, contains: string[], excludes: string[] = []) {
-  for (const part of contains) {
-    expect(text).toContain(part);
-  }
-  for (const part of excludes) {
-    expect(text).not.toContain(part);
-  }
 }
 
 const recoveryStep = {

@@ -41,10 +41,15 @@ const initSessionState = (
   },
 ) => initSessionStateRaw({ ...params, ctx: finalizeInboundContext(params.ctx) });
 
-function startSession(storePath: string, sessionKey: string, Body = "hello") {
+function startSession(
+  storePath: string,
+  sessionKey: string,
+  Body = "hello",
+  reset?: SessionResetConfig,
+) {
   return initSessionState({
     ctx: { Body, SessionKey: sessionKey },
-    cfg: { session: { store: storePath } },
+    cfg: { session: { store: storePath, ...(reset ? { reset } : {}) } },
     commandAuthorized: true,
   });
 }
@@ -90,107 +95,38 @@ async function createStorePath(prefix: string): Promise<string> {
   return path.join(root, "sessions.json");
 }
 
-async function writeStore(
-  storePath: string,
-  store: Record<string, SessionEntry | Record<string, unknown>>,
-): Promise<void> {
+async function writeStore(storePath: string, store: Record<string, SessionEntry>): Promise<void> {
   await fs.mkdir(path.dirname(storePath), { recursive: true });
   for (const [sessionKey, entry] of Object.entries(store)) {
-    const sessionEntry = entry as Partial<SessionEntry>;
-    if (typeof sessionEntry.sessionId === "string" && sessionEntry.sessionId.trim()) {
-      await replaceSessionEntry({ storePath, sessionKey }, sessionEntry as SessionEntry);
-    }
+    await replaceSessionEntry({ storePath, sessionKey }, entry);
   }
-}
-
-async function writeTranscript(
-  storePath: string,
-  sessionId: string,
-  text = "hello",
-): Promise<string> {
-  const transcriptPath = path.join(path.dirname(storePath), `${sessionId}.jsonl`);
-  await fs.writeFile(
-    transcriptPath,
-    `${JSON.stringify({
-      type: "message",
-      id: `${sessionId}-m1`,
-      message: { role: "user", content: text },
-    })}\n`,
-    "utf-8",
-  );
-  return transcriptPath;
 }
 
 async function createStoredSession(params: {
   prefix: string;
   sessionKey: string;
   sessionId: string;
-  text?: string;
   updatedAt?: number;
-}): Promise<{ storePath: string; transcriptPath: string }> {
+}) {
   const storePath = await createStorePath(params.prefix);
-  const transcriptPath = await writeTranscript(storePath, params.sessionId, params.text);
   await writeStore(storePath, {
     [params.sessionKey]: {
       sessionId: params.sessionId,
-      sessionFile: transcriptPath,
       updatedAt: params.updatedAt ?? Date.now(),
     },
   });
-  return { storePath, transcriptPath };
+  return { storePath };
 }
 
 type SessionResetConfig = NonNullable<NonNullable<OpenClawConfig["session"]>["reset"]>;
 
-async function initStoredSessionState(params: {
-  prefix: string;
-  sessionKey: string;
-  sessionId: string;
-  text: string;
-  updatedAt: number;
-  reset?: SessionResetConfig;
-}): Promise<void> {
-  const { storePath } = await createStoredSession(params);
-  const cfg = {
-    session: {
-      store: storePath,
-      ...(params.reset ? { reset: params.reset } : {}),
-    },
-  } as OpenClawConfig;
-
-  await initSessionState({
-    ctx: { Body: "hello", SessionKey: params.sessionKey },
-    cfg,
-    commandAuthorized: true,
-  });
-}
-
 function expectFields(value: unknown, expected: Record<string, unknown>): void {
-  if (!value || typeof value !== "object") {
-    throw new Error("expected fields object");
-  }
-  const record = value as Record<string, unknown>;
-  for (const [key, expectedValue] of Object.entries(expected)) {
-    expect(record[key], key).toEqual(expectedValue);
-  }
+  expect(value).toMatchObject(expected);
 }
 
-function requireHookCall(
-  mock: ReturnType<typeof vi.fn>,
-  label: string,
-): readonly [Record<string, unknown>, Record<string, unknown> | undefined] {
-  const call = mock.mock.calls[0];
-  if (!call) {
-    throw new Error(`expected ${label} hook call`);
-  }
-  const [event, context] = call;
-  if (!event || typeof event !== "object") {
-    throw new Error(`expected ${label} hook event`);
-  }
-  if (context !== undefined && (!context || typeof context !== "object")) {
-    throw new Error(`expected ${label} hook context`);
-  }
-  return [event as Record<string, unknown>, context as Record<string, unknown> | undefined];
+function requireHookCall<T extends unknown[]>(mock: { mock: { calls: T[] } }, label: string): T {
+  expect(mock, label).toHaveBeenCalled();
+  return mock.mock.calls[0]!;
 }
 
 function holdRolloverHooks(onRelease?: (name: string) => Promise<void>) {
@@ -224,16 +160,13 @@ describe("session hook context wiring", () => {
   beforeEach(() => {
     resetGatewayWorkAdmission();
     hookRunnerMocks.hasHooks.mockReset();
-    hookRunnerMocks.runSessionStart.mockReset();
-    hookRunnerMocks.runSessionEnd.mockReset();
-    hookRunnerMocks.runBeforeReset.mockReset();
+    hookRunnerMocks.runSessionStart.mockReset().mockResolvedValue(undefined);
+    hookRunnerMocks.runSessionEnd.mockReset().mockResolvedValue(undefined);
+    hookRunnerMocks.runBeforeReset.mockReset().mockResolvedValue(undefined);
     sessionCleanupMocks.closeTrackedBrowserTabsForSessions.mockClear();
     sessionCleanupMocks.closeTrackedBrowserTabsForSessions.mockResolvedValue(0);
     sessionCleanupMocks.resetRegisteredAgentHarnessSessions.mockClear();
     sessionCleanupMocks.retireSessionMcpRuntime.mockClear();
-    hookRunnerMocks.runSessionStart.mockResolvedValue(undefined);
-    hookRunnerMocks.runSessionEnd.mockResolvedValue(undefined);
-    hookRunnerMocks.runBeforeReset.mockResolvedValue(undefined);
     hookRunnerMocks.hasHooks.mockImplementation(
       (hookName) => hookName === "session_start" || hookName === "session_end",
     );
@@ -245,13 +178,10 @@ describe("session hook context wiring", () => {
     vi.restoreAllMocks();
   });
 
-  it.each(
-    (["new", "reset", "daily", "idle"] as const).flatMap((reason) =>
-      [false, true].map((projectionRepair) => ({ reason, projectionRepair })),
-    ),
-  )(
-    "captures the retiring memory window before $reason (projection repair: $projectionRepair)",
-    async ({ reason, projectionRepair }) => {
+  it.each(["new", "reset", "daily", "idle"] as const)(
+    "captures the retiring memory window before %s",
+    async (reason) => {
+      const projectionRepair = reason === "reset" || reason === "idle";
       const sessionKey = "agent:main:memory-reset";
       const sessionId = "memory-reset-session";
       const storePath = await createStorePath(`memory-${reason}`);
@@ -394,18 +324,6 @@ describe("session hook context wiring", () => {
     },
   );
 
-  it("passes sessionKey to session_start hook context", async () => {
-    const sessionKey = "agent:main:telegram:direct:123";
-    const storePath = await createStorePath("openclaw-session-hook-start");
-    await writeStore(storePath, {});
-    await startSession(storePath, sessionKey);
-
-    expect(hookRunnerMocks.runSessionStart).toHaveBeenCalledTimes(1);
-    const [event, context] = requireHookCall(hookRunnerMocks.runSessionStart, "session_start");
-    expectFields(event, { sessionKey });
-    expectFields(context, { sessionKey, agentId: "main", sessionId: event?.sessionId });
-  });
-
   it.for([
     { kind: "new", dmScope: "main" },
     { kind: "admitted", dmScope: "main" },
@@ -498,6 +416,9 @@ describe("session hook context wiring", () => {
     const initialized = startSession(storePath, sessionKey, "First turn");
     await withinTest(Promise.all([initialized, completed.promise]), signal);
     expect(hookRunnerMocks.runSessionStart).toHaveBeenCalledOnce();
+    const [event, context] = requireHookCall(hookRunnerMocks.runSessionStart, "session_start");
+    expectFields(event, { sessionKey });
+    expectFields(context, { sessionKey, agentId: "main", sessionId: event.sessionId });
   });
 
   it("runs an unawaited session_start hook outside the reply turn that emitted it", async () => {
@@ -595,120 +516,89 @@ describe("session hook context wiring", () => {
     expect(hookRunnerMocks.runSessionStart).toHaveBeenCalledTimes(1);
   });
 
-  it("passes sessionKey to session_end hook context on reset", async () => {
-    const sessionKey = "agent:main:telegram:direct:123";
-    const { storePath } = await createStoredSession({
-      prefix: "openclaw-session-hook-end",
-      sessionKey,
-      sessionId: "old-session",
-    });
-    await startSession(storePath, sessionKey, "/new");
-
-    expect(hookRunnerMocks.runSessionEnd).toHaveBeenCalledTimes(1);
-    expect(hookRunnerMocks.runSessionStart).toHaveBeenCalledTimes(1);
-    const [event, context] = requireHookCall(hookRunnerMocks.runSessionEnd, "session_end");
-    expectFields(event, {
-      sessionKey,
-      reason: "new",
-    });
-    expectFields(context, { sessionKey, agentId: "main", sessionId: event?.sessionId });
-
-    const [startEvent, startContext] = requireHookCall(
-      hookRunnerMocks.runSessionStart,
-      "session_start",
-    );
-    expectFields(startEvent, { resumedFrom: "old-session" });
-    expect(event?.nextSessionId).toBe("old-session");
-    expect(startEvent?.sessionId).toBe("old-session");
-    expectFields(startContext, { sessionId: startEvent?.sessionId });
-  });
-
-  it("keeps rollover hooks alive after their requester closes", async ({ signal }) => {
-    const completedHooks: string[] = [];
-    const releases = holdRolloverHooks((name) =>
-      trackAsyncWork(() => {
-        completedHooks.push(name);
-      }),
-    );
-    const sessionKey = "agent:main:telegram:direct:held-rollover";
-    const { storePath } = await createStoredSession({
-      prefix: "openclaw-session-hook-held-rollover",
-      sessionKey,
-      sessionId: "old-held-session",
-    });
-    const owner = await import("../../process/gateway-work-admission.js");
-    const continuations = [
-      vi.spyOn(owner, "runWithGatewayIndependentRootWorkContinuation"),
-      vi.spyOn(owner, "runWithGatewayDetachedWorkContinuation"),
-    ];
-    const joinContinuations = () =>
-      Promise.allSettled(
-        continuations.flatMap((spy) =>
-          spy.mock.results
-            .filter((result) => result.type === "return")
-            .map((result) => result.value),
-        ),
+  it.for([false, true])(
+    "keeps rollover hooks alive after their requester closes (restart drain: %s)",
+    async (draining, { signal }) => {
+      const completedHooks: string[] = [];
+      const releases = holdRolloverHooks((name) =>
+        trackAsyncWork(() => {
+          completedHooks.push(name);
+        }),
       );
-    const parent = new AsyncWorkScope();
-    const admission = tryBeginGatewayRootWorkAdmission("test:reply-rollover");
-    if (!admission) {
-      throw new Error("Expected parent root admission");
-    }
-    try {
-      await admission.run(() => parent.run(() => startSession(storePath, sessionKey, "/reset")));
-      expect(releases).toHaveLength(3);
-      expect(hookRunnerMocks.runSessionEnd.mock.calls[0]?.[0]).toMatchObject({ reason: "reset" });
-      admission.release();
-      await withinTest(parent.drain(), signal);
-      expect(getActiveGatewayRootWorkCount()).toBe(3);
-      expect(completedHooks).toEqual([]);
-      for (const release of releases) {
-        release();
+      const sessionKey = "agent:main:telegram:direct:held-rollover";
+      const sessionId = "old-held-session";
+      const { storePath } = await createStoredSession({
+        prefix: "held-rollover",
+        sessionKey,
+        sessionId,
+      });
+      const owner = await import("../../process/gateway-work-admission.js");
+      const continuations = [
+        vi.spyOn(owner, "runWithGatewayIndependentRootWorkContinuation"),
+        vi.spyOn(owner, "runWithGatewayDetachedWorkContinuation"),
+      ];
+      const joinContinuations = () =>
+        Promise.allSettled(
+          continuations.flatMap((spy) =>
+            spy.mock.results
+              .filter((result) => result.type === "return")
+              .map((result) => result.value),
+          ),
+        );
+      const parent = new AsyncWorkScope();
+      const admission = tryBeginGatewayRootWorkAdmission("test:reply-rollover");
+      if (!admission) {
+        throw new Error("Expected parent root admission");
       }
-      await withinTest(joinContinuations(), signal);
-      expect(completedHooks.toSorted()).toEqual(["end", "start"]);
-      expect(getActiveGatewayRootWorkCount()).toBe(0);
-    } finally {
-      for (const release of releases) {
-        release();
+      try {
+        await admission.run(() =>
+          parent.run(async () => {
+            if (draining) {
+              markGatewayRestartDraining();
+            }
+            await startSession(storePath, sessionKey, draining ? "/new" : "/reset");
+            await vi.waitFor(() => expect(releases).toHaveLength(3));
+            expect(getActiveGatewayRootWorkCount()).toBe(4);
+          }),
+        );
+        expect(hookRunnerMocks.runSessionEnd).toHaveBeenCalledOnce();
+        expect(hookRunnerMocks.runSessionStart).toHaveBeenCalledOnce();
+        const [ended, endContext] = requireHookCall(hookRunnerMocks.runSessionEnd, "session_end");
+        expectFields(ended, {
+          sessionKey,
+          reason: draining ? "new" : "reset",
+          nextSessionId: sessionId,
+        });
+        expectFields(endContext, { sessionKey, agentId: "main", sessionId: ended.sessionId });
+        const [started, startContext] = requireHookCall(
+          hookRunnerMocks.runSessionStart,
+          "session_start",
+        );
+        expectFields(started, { sessionId, resumedFrom: sessionId });
+        expectFields(startContext, { sessionId: started.sessionId });
+        admission.release();
+        await withinTest(parent.drain(), signal);
+        expect(getActiveGatewayRootWorkCount()).toBe(3);
+        expect(completedHooks).toEqual([]);
+        for (const release of releases) {
+          release();
+        }
+        await withinTest(joinContinuations(), signal);
+        expect(completedHooks.toSorted()).toEqual(["end", "start"]);
+        expect(getActiveGatewayRootWorkCount()).toBe(0);
+      } finally {
+        for (const release of releases) {
+          release();
+        }
+        admission.release();
+        await parent.drain();
+        await joinContinuations();
+        for (const spy of continuations) {
+          spy.mockRestore();
+        }
       }
-      admission.release();
-      await parent.drain();
-      await joinContinuations();
-      for (const spy of continuations) {
-        spy.mockRestore();
-      }
-    }
-  });
-
-  it("hands rollover hooks off after restart drain closes admission", async () => {
-    const releases = holdRolloverHooks();
-    const sessionKey = "agent:main:telegram:direct:restart-handoff";
-    const { storePath } = await createStoredSession({
-      prefix: "openclaw-session-hook-restart-handoff",
-      sessionKey,
-      sessionId: "old-restart-session",
-    });
-    const admission = tryBeginGatewayRootWorkAdmission();
-    expect(admission).not.toBeNull();
-
-    await admission?.run(async () => {
-      markGatewayRestartDraining();
-      await startSession(storePath, sessionKey, "/new");
-      await vi.waitFor(() => expect(releases).toHaveLength(3));
-      expect(getActiveGatewayRootWorkCount()).toBe(4);
-    });
-
-    admission?.release();
-    expect(getActiveGatewayRootWorkCount()).toBe(3);
-    for (const release of releases) {
-      release();
-    }
-    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-    expect(hookRunnerMocks.runSessionEnd).toHaveBeenCalledTimes(1);
-    expect(hookRunnerMocks.runSessionEnd.mock.calls[0]?.[0]).toMatchObject({ reason: "new" });
-    expect(hookRunnerMocks.runSessionStart).toHaveBeenCalledTimes(1);
-  });
+    },
+  );
 
   it.each([
     { reason: "daily", reset: { mode: "daily" }, overlap: false },
@@ -725,14 +615,13 @@ describe("session hook context wiring", () => {
         registerInternalHook("session:auto-reset", listener);
         const sessionKey = `agent:main:telegram:direct:auto-${reason}`;
         const sessionId = `auto-${reason}-session`;
-        await initStoredSessionState({
+        const { storePath } = await createStoredSession({
           prefix: `openclaw-session-auto-${reason}`,
           sessionKey,
           sessionId,
-          text: reason,
           updatedAt: new Date(2026, 0, 18, overlap ? 4 : 3, overlap ? 45 : 0, 0).getTime(),
-          reset,
         });
+        await startSession(storePath, sessionKey, "hello", reset);
         const [ended] = requireHookCall(hookRunnerMocks.runSessionEnd, "session_end");
         const [started] = requireHookCall(hookRunnerMocks.runSessionStart, "session_start");
         expectFields(ended, { reason, nextSessionId: sessionId });

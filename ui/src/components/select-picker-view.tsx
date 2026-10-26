@@ -91,48 +91,59 @@ export function PickerContent<Option extends PickerOption>(props: {
     // SAFETY: Unknown selected references use only the base option fields, as before migration.
     return [...configuredOptions, { value, label: value } as Option];
   });
-  const sections = createMemo(() => {
-    const terms = query().trim().toLocaleLowerCase().split(/\s+/u);
-    const ungrouped: Section<Option> = { options: [], expanded: true };
-    const groups = new Map<string, Section<Option>>();
-    for (const option of options()) {
-      const group = props.params.groupBy?.(option);
-      if (
-        !terms.every((term) =>
-          [option.label, option.value, option.description, group?.label]
-            .join(" ")
-            .toLocaleLowerCase()
-            .includes(term),
-        )
-      ) {
-        continue;
+  const catalog = createMemo(
+    () => options().map((option) => ({ option, group: props.params.groupBy?.(option) })),
+    { lazy: true },
+  );
+  const searchText = createMemo(
+    () =>
+      catalog().map(({ option, group }) =>
+        [option.label, option.value, option.description, group?.label]
+          .join(" ")
+          .toLocaleLowerCase(),
+      ),
+    { lazy: true },
+  );
+  const sections = createMemo(
+    () => {
+      const search = query().trim().toLocaleLowerCase();
+      const terms = search ? search.split(/\s+/u) : [];
+      const text = search ? searchText() : undefined;
+      const ungrouped: Section<Option> = { options: [], expanded: true };
+      const groups = new Map<string, Section<Option>>();
+      for (const [index, { option, group }] of catalog().entries()) {
+        if (text && !terms.every((term) => text[index]!.includes(term))) {
+          continue;
+        }
+        if (!group) {
+          ungrouped.options.push(option);
+          continue;
+        }
+        let section = groups.get(group.id);
+        if (!section) {
+          section = {
+            group,
+            options: [],
+            expanded: Boolean(search) || !collapsed.includes(group.id),
+          };
+          groups.set(group.id, section);
+        }
+        section.options.push(option);
       }
-      if (!group) {
-        ungrouped.options.push(option);
-        continue;
-      }
-      let section = groups.get(group.id);
-      if (!section) {
-        section = {
-          group,
-          options: [],
-          expanded: Boolean(query().trim()) || !collapsed.includes(group.id),
-        };
-        groups.set(group.id, section);
-      }
-      section.options.push(option);
-    }
-    return [ungrouped, ...groups.values()].map((section, position) =>
-      Object.assign(section, { position }),
-    );
-  });
-  const rows = createMemo(() =>
-    sections().flatMap((section) => (section.expanded ? section.options : [])),
+      return [ungrouped, ...groups.values()].map((section, position) =>
+        Object.assign(section, { position }),
+      );
+    },
+    { lazy: true },
+  );
+  const rows = createMemo(
+    () => sections().flatMap((section) => (section.expanded ? section.options : [])),
+    { lazy: true },
   );
   const selected = createMemo(() =>
     options().find((option) => option.value === props.params.value),
   );
-  const visible = createMemo(() => new Set(rows().map((option) => option.value)));
+  const visible = createMemo(() => new Set(rows().map((option) => option.value)), { lazy: true });
   const optionId = (value: string) => `${id}:${value}`;
   // Native presentation mode belongs to this mounted overlay lifetime.
   const initialSheet = untrack(() => props.params.sheet);
@@ -181,12 +192,16 @@ export function PickerContent<Option extends PickerOption>(props: {
     ids: { content: contentId, trigger: triggerId },
     surface: "listbox",
     focus: "retain",
-    items: rows,
+    items: () => {
+      opened();
+      // Native opening asks for its initial highlight before Solid publishes open.
+      return overlay.open ? rows() : [];
+    },
     value: () => props.params.value,
   });
   const active = () => menu.highlightedValue();
   const controls = () =>
-    props.params.groupBy
+    opened() && props.params.groupBy
       ? sections()
           .map((_, index) => `${id}-group-${index}`)
           .join(" ")
@@ -243,7 +258,10 @@ export function PickerContent<Option extends PickerOption>(props: {
       list.scrollTop + list.clientHeight < list.scrollHeight - 1,
     );
   }
-  const scrollRef = createScrollStateRef(scrollFade, { presented: opened, content: rows });
+  const scrollRef = createScrollStateRef(scrollFade, {
+    presented: opened,
+    content: () => (opened() ? rows() : undefined),
+  });
   function handleKeydown(event: KeyboardEvent) {
     if (event.isComposing || props.params.disabled) {
       return;
@@ -620,7 +638,7 @@ export function PickerContent<Option extends PickerOption>(props: {
         <div
           class="picker-select__empty"
           role="status"
-          hidden={sections().some((section) => section.options.length > 0)}
+          hidden={!opened() || sections().some((section) => section.options.length > 0)}
         >
           {t("common.pickerNoMatches")}
         </div>

@@ -1,7 +1,8 @@
 import type { Question } from "@openclaw/gateway-protocol";
 import { createEffect, createMemo, createSignal, createUniqueId, For, onSettled } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerChatQuestionsEnglish } from "../../../i18n/locales/en-chat-questions.ts";
+import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import {
   adjustTextareaHeight,
   handleTextareaOverflowInteraction,
@@ -10,13 +11,7 @@ import {
   observeTextareaOverflow,
 } from "./chat-composer-dom.ts";
 
-type QuestionOptionsProps = {
-  question: Question;
-  selected: ReadonlySet<string>;
-  disabled: boolean;
-  onSelect: (label: string) => void;
-  optionRef?: (element: HTMLButtonElement) => () => void;
-};
+registerEnglishCatalog(registerChatQuestionsEnglish);
 
 type QuestionFreeTextProps = {
   getTranscriptElement?: () => HTMLElement | null;
@@ -36,7 +31,13 @@ function Shortcut(props: { value: number }) {
   );
 }
 
-export function QuestionOptions(props: QuestionOptionsProps) {
+export function QuestionOptions(props: {
+  question: Question;
+  selected: ReadonlySet<string>;
+  disabled: boolean;
+  onSelect: (label: string) => void;
+  optionRef?: (element: HTMLButtonElement) => () => void;
+}) {
   const implicit = () => props.question.resource?.selection === "implicit";
   const options = createMemo(() =>
     props.question.options.filter(

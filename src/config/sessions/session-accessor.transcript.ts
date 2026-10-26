@@ -29,7 +29,7 @@ export { readTranscriptRawDelta } from "./session-accessor.sqlite-delta.js";
 export { resolveSessionKeyBySessionId as resolveTranscriptSessionKeyBySessionId } from "./session-accessor.sqlite-exact-read.js";
 export { resolveSessionKeyBySessionIdAsync as resolveTranscriptSessionKeyBySessionIdAsync } from "./session-accessor.transcript-target.js";
 export { publishTranscriptUpdate } from "./session-accessor.sqlite-events.js";
-export { readTranscriptMutationAtSync } from "./session-accessor.sqlite-metadata-read.js";
+export { readTranscriptMutationAtSync } from "./session-accessor.sqlite-transcript-admitted-read.js";
 export {
   inspectTranscriptEventsSync,
   loadLatestAssistantText as readLatestTranscriptAssistantText,

@@ -288,7 +288,9 @@ export function resolveCronSession(
     ),
     sessionId,
     lifecycleRevision,
-    updatedAt: params.nowMs,
+    // Preparing a scheduled check is not conversation activity. New rows still
+    // need an initial timestamp; visible results advance existing rows later.
+    updatedAt: targetEntry?.updatedAt ?? params.nowMs,
     sessionStartedAt: isNewSession
       ? params.nowMs
       : (baseEntry?.sessionStartedAt ?? params.lifecycleTimestamps.sessionStartedAt),

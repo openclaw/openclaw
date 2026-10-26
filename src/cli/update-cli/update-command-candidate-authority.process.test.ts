@@ -26,6 +26,7 @@ import {
   withUpdateCommandExecutor,
   withUpdateCommandExecutorChild,
 } from "./update-command-executor.js";
+import { finishParams, updateResult } from "./update-command-maintenance-fixtures.test-support.js";
 import type { MigratedUpdateFinalizationInput } from "./update-command-migrated-types.js";
 
 const runtimeFixture = createFixtureLifetime();
@@ -164,32 +165,22 @@ it.for(["healthy", "candidate-owner-replaced", "doctor-owner-replaced"] as const
               executor: grant,
               bufferedSteps: [],
               resultPath,
-              params: {
+              params: finishParams({
                 root,
-                result: {
+                result: updateResult({
                   status: "skipped",
                   reason: "already-current",
-                  mode: "npm",
                   root,
-                  steps: [],
                   durationMs: 0,
-                },
+                }),
                 coreAlreadyCurrent: true,
                 mutationStarted: false,
                 shouldRestart: false,
-                installKindChanged: false,
                 configSnapshot,
-                requestedChannel: null,
-                storedChannel: "stable",
-                channel: "stable",
-                downgradeRisk: false,
                 opts: { json: true, yes: true, run: { runId: run.runId, env: state.env } },
-                controlPlaneUpdateSentinelMeta: null,
-                preUpdatePluginInstallRecords: {},
-                startedAt: Date.now(),
                 updateStepTimeoutMs: 60_000,
                 rollbackBlockedReason: "state-migrated-no-rollback",
-              },
+              }),
             };
             const pending = runUtf8CommandWithTimeout([process.execPath, workerPath], {
               input: JSON.stringify(input),
@@ -242,15 +233,11 @@ it.for(["healthy", "candidate-owner-replaced", "doctor-owner-replaced"] as const
               indexAtBoundary = readIndex();
               expect(indexAtBoundary).not.toEqual(originalIndex);
               if (fault !== "healthy") {
-                const db = new DatabaseSync(path.join(control, "managed-update-handoffs.sqlite"));
-                try {
-                  db.prepare("UPDATE managed_update_handoffs SET owner=? WHERE install_root=?").run(
-                    "replacement",
-                    root,
-                  );
-                } finally {
-                  db.close();
-                }
+                using db = new DatabaseSync(path.join(control, "managed-update-handoffs.sqlite"));
+                db.prepare("UPDATE managed_update_handoffs SET owner=? WHERE install_root=?").run(
+                  "replacement",
+                  root,
+                );
               }
             } finally {
               fs.writeFileSync(proceed, "go");

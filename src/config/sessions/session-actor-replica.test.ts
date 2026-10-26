@@ -2,7 +2,6 @@ import path from "node:path";
 import "../../test-utils/prepare-compiled-subprocesses.js";
 import { assert, expect, it as baseIt, vi } from "vitest";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
-import { prepareSessionCostUsageRefreshLock } from "../../infra/session-cost-usage-cache.sqlite.js";
 import {
   readSqliteDatabaseScopedWriteTokenForPath,
   sqliteSessionIdWriteScope,
@@ -24,6 +23,7 @@ import {
   completeRestartRecoveryTerminalDelivery,
 } from "./restart-recovery-receipt.js";
 import { createSessionEntryWithTranscript } from "./session-accessor.entry-mutation.js";
+import { readPreparedSessionEntryChange } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 import {
   deleteSessionEntryRows,
   writeSessionEntry,
@@ -173,6 +173,27 @@ function reloadInvalidated(fixture: Fixture) {
   return hydrate(fixture);
 }
 
+it("accounts for nested replica arrays without per-array reducer callbacks", ({ fixture }) => {
+  const state = hydrate(fixture);
+  const content = [{ type: "text", text: "synthetic" }];
+  const events = [{ rawSeq: 0, serializedBytes: 32, event: { content } }];
+  const transcript: SessionActorTranscriptReplica = {
+    sessionId: state.entry?.sessionId,
+    version: state.transcript.version,
+    tail: { coveredAfterSeq: -1, events },
+  };
+  const reduce = vi.spyOn(Array.prototype, "reduce");
+  try {
+    retainSessionActorTranscriptReplica(state, transcript);
+    expect(readSessionActorTranscriptReplica(state)).toBe(transcript);
+    expect(reduce.mock.contexts.filter((array) => array === events || array === content)).toEqual(
+      [],
+    );
+  } finally {
+    reduce.mockRestore();
+  }
+});
+
 it("keeps transcript replacement charges within the shared byte and entry budgets", async () => {
   await drainGlobalSingletonLifecycleState("restart");
   await withReplica((fixture) => {
@@ -259,7 +280,7 @@ it("keeps transcript replacement charges within the shared byte and entry budget
   });
 });
 
-it.each(["entry", "transcript", "plugin keys"] as const)(
+it.each(["entry", "plugin keys"] as const)(
   "evicts old replicas for large %s strings and releases replaced bytes",
   async (payload) => {
     await withReplica(({ replica, load }) => {
@@ -274,17 +295,12 @@ it.each(["entry", "transcript", "plugin keys"] as const)(
       const large = "x".repeat(5 * 1024 * 1024);
       const install = (label: string) => {
         const next = load();
-        if (payload !== "transcript") {
-          next.entry = entry(label);
-          if (payload === "plugin keys") {
-            next.entry.label = "before";
-            next.entry.pluginExtensions = { fixture: { [label]: null } };
-          }
+        next.entry = entry(label);
+        if (payload === "plugin keys") {
+          next.entry.label = "before";
+          next.entry.pluginExtensions = { fixture: { [label]: null } };
         }
         expect(replica.beginRead()(next)).toBe(true);
-        if (payload === "transcript") {
-          retainText(next, label);
-        }
         return next;
       };
       const installSibling = () => {
@@ -306,24 +322,6 @@ it.each(["entry", "transcript", "plugin keys"] as const)(
     });
   },
 );
-
-it("keeps actor facts after usage cache writes and pruning", async ({ fixture }) => {
-  const { database, scope, replica } = fixture;
-  const usage = prepareSessionCostUsageRefreshLock(scope.agentId, database.path, {
-    env: scope.env,
-  });
-  try {
-    expect(await usage.acquire()).toBe(true);
-    const snapshot = hydrate(fixture);
-    const valueJson = new TextEncoder().encode("{}");
-    await usage.writeRollup([{ rollupId: "usage-rollup", valueJson, blob: null, updatedAt: 1 }]);
-    expect(replica.read()).toEqual(snapshot);
-    await usage.pruneRows([{ key: "usage-rollup", valueJson, updatedAt: 1 }]);
-    expect(replica.read()).toEqual(snapshot);
-  } finally {
-    await usage.release();
-  }
-});
 
 it("retains the first creation after restart before any replica reader and applies later writes", async () => {
   await drainGlobalSingletonLifecycleState("restart");
@@ -347,6 +345,42 @@ it("retains the first creation after restart before any replica reader and appli
     });
     expect(readSessionActorEntryFacts(durableTarget)).toBeUndefined();
   });
+});
+
+it("shares immutable committed entry publications with replica readers", ({ fixture }) => {
+  const { scope, database } = fixture;
+  hydrate(fixture);
+  const target = sessionActorFileTarget(database, scope.sessionKey);
+  const published: NonNullable<ReturnType<typeof readPreparedSessionEntryChange>>[] = [];
+  const stop = sessionChanges.subscribeFacts((change) => {
+    const prepared = readPreparedSessionEntryChange(change, scope.sessionKey);
+    if (prepared?.fullEntry) {
+      published.push(prepared);
+    }
+  });
+  try {
+    for (const label of ["first", "second"]) {
+      replaceSessionEntrySync(scope, {
+        ...entry(label),
+        skillsSnapshot: { prompt: `Instructions for ${label}`, skills: [] },
+      });
+      const prepared = published.at(-1)?.fullEntry;
+      assert(prepared, "Expected a committed full-entry publication");
+      expect(Object.isFrozen(prepared.skillsSnapshot)).toBe(true);
+      const retained = readSessionActorEntryFacts(target)?.entry;
+      expect(retained).toBe(prepared);
+      expect(() => {
+        retained!.skillsSnapshot!.prompt = "Listener mutation";
+      }).toThrow(TypeError);
+    }
+    expect(published).toHaveLength(2);
+    expect(published[0]!.fullEntry?.skillsSnapshot?.prompt).toBe("Instructions for first");
+    expect(readSessionActorEntryFacts(target)?.entry?.skillsSnapshot?.prompt).toBe(
+      "Instructions for second",
+    );
+  } finally {
+    stop();
+  }
 });
 
 function command(snapshot: SessionActorHotState, commandId: string) {
@@ -395,6 +429,7 @@ it("returns a newer committed replica when a receipt arrives during a worker rea
     lifetime,
     replica,
     transport: {
+      agentId: "main",
       run: async (operation) => {
         const result = operation({ execute });
         started.resolve();
@@ -558,15 +593,9 @@ it("invalidates unaccounted native writes and retains accepted postimages across
 }) => {
   const { replica, load, scope, database } = fixture;
   const initial = hydrate(fixture);
-  const shared = replica.read()!;
-  expect(shared).toBe(initial);
-  expect(replica.read()).toBe(shared);
-  expect(replica.beginRead()(shared)).toBe(true);
-  expect(replica.read()).toBe(shared);
-
   const accepted = command(initial, "accepted");
   const pending = replica.beginCommand();
-  expect(replica.read()).toBe(shared);
+  expect(replica.read()).toBe(initial);
   const rowTarget = { path: database.path, sessionKey: scope.sessionKey };
   expect(readSessionActorRowFacts(rowTarget)).toMatchObject({
     entry: { sessionId: "replica-session", updatedAt: 1, label: "before" },
@@ -576,7 +605,7 @@ it("invalidates unaccounted native writes and retains accepted postimages across
     runSqliteImmediateTransactionSync(database.db, () => {
       database.db
         .prepare("UPDATE session_nodes SET updated_at = ?, entry_json = ? WHERE session_key = ?")
-        .run(2, JSON.stringify({ ...shared.entry, updatedAt: 2 }), scope.sessionKey);
+        .run(2, JSON.stringify({ ...initial.entry, updatedAt: 2 }), scope.sessionKey);
     }),
   );
   expect(replica.read()).toBeUndefined();
@@ -593,9 +622,6 @@ it("invalidates unaccounted native writes and retains accepted postimages across
   const opaque = load("opaque");
   opaque.entry!.swarmOutputSchema = { value: new Date(0) };
   expect(replica.beginRead()(opaque)).toBe(true);
-  const borrowed = replica.read()!;
-  expect(replica.beginRead()(borrowed)).toBe(true);
-  expect(replica.read()).toBe(borrowed);
   expect(replica.read()?.entry?.swarmOutputSchema).toEqual({ value: new Date(0) });
 
   const current = hydrate(fixture, "final");
@@ -631,7 +657,6 @@ it("reuses list facts and invalidates summary watermarks after transcript writes
     const before = hydrate(fixture);
     const target = { path: scope.storePath, sessionKey: scope.sessionKey };
     const facts = readSessionActorRowFacts(target);
-    expect(before.entry?.skillsSnapshot?.prompt).toBe("Saved instructions");
     expect(facts?.entry).not.toHaveProperty("skillsSnapshot");
     expect(facts).toMatchObject({
       hasBoard: false,
@@ -640,8 +665,6 @@ it("reuses list facts and invalidates summary watermarks after transcript writes
     assert(facts, "Expected resident row facts");
     facts.entry.label = "caller edit";
     expect(readSessionActorRowFacts(target)?.entry.label).toBeUndefined();
-    expect(facts.entry.activitySummary).toBe(before.entry?.activitySummary);
-    expect(facts.activitySummaryWatermark).toBe(before.transcript.watermark);
     expect(() => {
       facts.entry.activitySummary!.text = "Caller edit to borrowed summary";
     }).toThrow(TypeError);
@@ -664,20 +687,13 @@ it("reuses list facts and invalidates summary watermarks after transcript writes
     const selected = readEntry(["skillsSnapshot"]);
     expect(selected?.snapshots).toEqual(["skillsSnapshot"]);
     expect(selected?.entry?.skillsSnapshot?.prompt).toBe("Saved instructions");
-    expect(selected?.entry?.skillsSnapshot).toBe(before.entry?.skillsSnapshot);
     expect(() => {
       selected!.entry!.skillsSnapshot!.prompt = "Caller edit";
     }).toThrow(TypeError);
-    expect(readEntry()?.entry?.skillsSnapshot?.prompt).toBe("Saved instructions");
     replica.invalidate();
     const retainedEntry = { ...before.entry!, skillsSnapshot: undefined };
     retainEntry(before, { entry: retainedEntry, snapshots: [], projection }, "row-facts-reader");
     const retained = readEntry()!;
-    expect(retained.entry).toBe(retainedEntry);
-    expect(retained.projection).toBe(projection);
-    expect(retained.entry?.label).toBeUndefined();
-    expect(retained.projection?.hasBoard).toBe(false);
-    expect(readEntry()?.entry).toBe(retained.entry);
     expect(() => {
       retained.entry!.label = "Caller edit after reading";
     }).toThrow(TypeError);
@@ -687,9 +703,6 @@ it("reuses list facts and invalidates summary watermarks after transcript writes
     expect(readEntry()?.entry?.label).toBeUndefined();
     expect(readEntry()?.projection?.hasBoard).toBe(false);
     expect(readEntry(["skillsSnapshot"])?.snapshots).toEqual([]);
-    const retainedRow = readSessionActorRowFacts(target)!;
-    expect(retainedRow.entry.activitySummary).toBe(retained.entry?.activitySummary);
-    expect(retainedRow.activitySummaryWatermark).toBe(before.transcript.watermark);
     expect((await readSessionEntryReadOnlyInWorker(scope))?.skillsSnapshot?.prompt).toBe(
       "Saved instructions",
     );

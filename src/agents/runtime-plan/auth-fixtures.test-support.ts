@@ -6,19 +6,12 @@ import {
   createApiKeyCredential,
   createOAuthRefreshCredential,
 } from "../auth-profiles/credential-fixtures.test-support.js";
-import { providerConfig } from "../model-auth.fixtures.test-support.js";
+import { createPlatformAuthRoute, providerConfig } from "../model-auth.fixtures.test-support.js";
 import type { prepareAgentRuntimeAuth } from "./prepare-auth.js";
 import type { AgentRuntimeAuthPlan } from "./types.js";
 
 export const authProvider = { providerForAuth: "openai", authProfileProviderForAuth: "openai" };
-export const platformRoute = {
-  provider: "openai",
-  modelId: "gpt-5.5",
-  api: "openai-responses",
-  baseUrl: "https://api.openai.com/v1",
-  authRequirement: "api-key",
-  requestTransportOverrides: "none",
-} as const;
+export const platformRoute = createPlatformAuthRoute();
 export const subscriptionRoute = {
   ...platformRoute,
   api: "openai-chatgpt-responses",

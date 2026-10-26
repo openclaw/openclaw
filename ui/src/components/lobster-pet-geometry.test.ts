@@ -47,27 +47,7 @@ it("keeps the walking gap between supplied controls and releases removed obstacl
   expect(x()).toBeLessThan(between);
 });
 
-it("observes the current composer after a retained pet reconnects", async () => {
-  const element = createPet(42, "offline");
-  await frame(element, "render");
-  element.remove();
-  await Promise.resolve();
-
-  const replacement = createPet(42, "offline");
-  await replacement.updateComplete;
-  const elements = replacement.composerElements()!;
-  replacement.remove();
-  await Promise.resolve();
-  element.composerElements = () => elements;
-  elements.composer.prepend(element);
-  expect(await frame(element, "render")).toBe(true);
-
-  elements.composer.getBoundingClientRect().width = 0;
-  elements.footer.append(document.createElement("span"));
-  expect(await frame(element, "mutations")).toBe(false);
-});
-
-it("batches composer geometry reads before paint and retires detached work", async () => {
+it("batches geometry reads, retires detached work, and observes the current composer on reconnect", async () => {
   const element = createPet(42, "offline");
   await frame(element, "render");
   const { composer, footer } = element.composerElements()!;
@@ -108,4 +88,17 @@ it("batches composer geometry reads before paint and retires detached work", asy
   const reconnected = await frame(element, "render");
   expect(readStyle.mock.calls.length).toBeLessThanOrEqual(1);
   expect(reconnected).toBe(true);
+  element.remove();
+  await Promise.resolve();
+  const replacement = createPet(42, "offline");
+  await replacement.updateComplete;
+  const elements = replacement.composerElements()!;
+  replacement.remove();
+  await Promise.resolve();
+  element.composerElements = () => elements;
+  elements.composer.prepend(element);
+  expect(await frame(element, "render")).toBe(true);
+  elements.composer.getBoundingClientRect().width = 0;
+  elements.footer.append(document.createElement("span"));
+  expect(await frame(element, "mutations")).toBe(false);
 });

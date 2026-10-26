@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -101,6 +102,91 @@ it("resolveSandboxPath keeps home-sibling roots absolute in escape diagnostics",
 });
 
 describe("assertSandboxPath", () => {
+  it.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
+    "rejects root aliases whose target crosses an unsearchable directory before '..'",
+    async () => {
+      await withSandboxRoot(async (dir) => {
+        const parent = await fs.realpath(dir);
+        const root = path.join(parent, "root");
+        const locked = path.join(parent, "locked");
+        const alias = path.join(parent, "alias");
+        await fs.mkdir(root);
+        await fs.mkdir(locked);
+        await fs.symlink(`${locked}/../root`, alias);
+        await fs.chmod(locked, 0);
+        try {
+          await expect(sandboxPath(alias, "new.txt")).rejects.toMatchObject({ code: "EACCES" });
+        } finally {
+          await fs.chmod(locked, 0o700);
+        }
+      });
+    },
+  );
+
+  it("preserves missing-root admission and non-directory ancestor rejection", async () => {
+    await withSandboxRoot(async (dir) => {
+      const root = path.join(await fs.realpath(dir), "future", "workspace");
+      await expect(sandboxPath(root, "new.txt")).resolves.toMatchObject({
+        resolved: path.join(root, "new.txt"),
+      });
+      await fs.mkdir(path.dirname(root));
+      await fs.writeFile(root, "not a directory");
+      await expect(sandboxPath(path.join(root, "nested"), "new.txt")).rejects.toMatchObject({
+        code: "ENOTDIR",
+      });
+    });
+  });
+
+  it.each([1, 4, 16])("avoids ancestor Stats walks across %s canonical roots", async (count) => {
+    await withSandboxRoot(async (dir) => {
+      const parent = await fs.realpath(dir);
+      const roots = Array.from({ length: count }, (_, index) => path.join(parent, `root-${index}`));
+      for (const root of roots) {
+        await fs.mkdir(root);
+      }
+      const admittedRoot = path.join(parent, `root-${count - 1}`);
+      const target = path.join(admittedRoot, "proof.txt");
+      await fs.writeFile(target, "inside");
+      using lstat = vi.spyOn(fsSync, "lstatSync");
+
+      for (const root of roots) {
+        if (root === admittedRoot) {
+          await expect(sandboxPath(root, target)).resolves.toMatchObject({ resolved: target });
+        } else {
+          await expectPathRejection(root, target);
+        }
+      }
+      // Root admission still checks live metadata; it must not rescan ancestors.
+      expect(lstat.mock.calls.filter(([entry]) => entry === parent)).toHaveLength(0);
+    });
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "rechecks retargeted root and candidate aliases",
+    async () => {
+      await withSandboxRoot(async (dir) => {
+        const parent = await fs.realpath(dir);
+        const root = path.join(parent, "root");
+        const replacement = path.join(parent, "replacement");
+        const alias = path.join(parent, "alias");
+        await fs.mkdir(root);
+        await fs.mkdir(replacement);
+        await fs.symlink(root, alias);
+        await expect(sandboxPath(alias, path.join(root, "new.txt"))).resolves.toBeTruthy();
+        await fs.unlink(alias);
+        await fs.symlink(replacement, alias);
+        await expectPathRejection(alias, path.join(root, "new.txt"));
+        await expect(sandboxPath(alias, path.join(replacement, "new.txt"))).resolves.toBeTruthy();
+        const link = path.join(replacement, "link");
+        await fs.symlink(replacement, link);
+        await expect(sandboxPath(alias, "link/new.txt")).resolves.toBeTruthy();
+        await fs.unlink(link);
+        await fs.symlink(root, link);
+        await expectPathRejection(alias, "link/new.txt");
+      });
+    },
+  );
+
   it("expands file reference prefixes only once", async () => {
     await withSandboxRoot(async (root) => {
       await expect(sandboxPath(root, "@@notes.txt")).resolves.toMatchObject({
@@ -396,17 +482,13 @@ describe("resolveSandboxedMediaSource", () => {
   });
 
   it("rejects Windows network paths before sandbox resolution", async () => {
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    using _ = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
 
-    try {
-      await expect(
-        resolveSandboxedMediaSource({
-          media: "\\\\attacker\\share\\photo.png",
-          sandboxRoot: "/any/path",
-        }),
-      ).rejects.toThrow(/network paths/i);
-    } finally {
-      platformSpy.mockRestore();
-    }
+    await expect(
+      resolveSandboxedMediaSource({
+        media: "\\\\attacker\\share\\photo.png",
+        sandboxRoot: "/any/path",
+      }),
+    ).rejects.toThrow(/network paths/i);
   });
 });

@@ -3,6 +3,7 @@ import { expect, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { BoardSnapshot, BoardWidget } from "../../lib/board/types.ts";
 import type { BoardViewCallbacks } from "../../lib/board/view-types.ts";
+import { createBoardWidget } from "../../lib/board/widget.test-support.ts";
 import {
   createApplicationContextProvider,
   createApplicationGateway,
@@ -35,18 +36,11 @@ export async function openBoardMenu(
   await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
 }
 
-export const boardWidget = (overrides: Partial<BoardWidget> = {}): BoardWidget => ({
-  name: "alpha",
-  tabId: "main",
-  title: "Alpha status",
-  contentKind: "html",
-  sizeW: 6,
-  sizeH: 4,
-  position: 0,
-  grantState: "none",
-  revision: 1,
-  ...overrides,
-});
+export const boardWidget = (overrides: Partial<BoardWidget> = {}): BoardWidget =>
+  createBoardWidget({
+    title: "Alpha status",
+    ...overrides,
+  });
 
 export const snapshot = (overrides: Partial<BoardSnapshot> = {}): BoardSnapshot => ({
   sessionKey: "agent:main:test",

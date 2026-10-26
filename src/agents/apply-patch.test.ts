@@ -20,7 +20,7 @@ function makeDir(workspace = false) {
   return tempDirs.make("openclaw-patch-", workspace ? process.cwd() : undefined);
 }
 
-async function makeFile(content: string, name = "source.txt", dir = makeDir()) {
+async function makeFile(content: string | Buffer, name = "source.txt", dir = makeDir()) {
   const file = path.join(dir, name);
   await fs.writeFile(file, content);
   return { dir, file };
@@ -100,10 +100,8 @@ describe("applyPatch", () => {
   const priceUpdatePatch = buildUpdatePatch("source.txt", "-price: 5\n+price: 7");
 
   it.each([true, false])("rejects invalid UTF-8 (workspaceOnly=%s)", async (workspaceOnly) => {
-    const dir = makeDir();
-    const filePath = path.join(dir, "source.txt");
     const original = Buffer.concat([Buffer.from("heading\nprice: 5\n"), Buffer.from([0xff, 0xfe])]);
-    await fs.writeFile(filePath, original);
+    const { dir, file: filePath } = await makeFile(original);
 
     await expect(applyPatch(priceUpdatePatch, { cwd: dir, workspaceOnly })).rejects.toThrow(
       /not valid UTF-8/,
@@ -165,9 +163,10 @@ describe("applyPatch", () => {
       const moving = operation === "move";
       const memory = createMemoryPatchSandbox(moving ? { "source.txt": "foo\nbar\n" } : {});
       const target = moving ? "dest.txt" : "notes.txt";
-      memory.mkdirp.mockImplementation(async () => {
+      memory.bridge.createFileExclusive = async (params) => {
         memory.files.set(`/sandbox/${target}`, "written by another writer\n");
-      });
+        return memory.createFileExclusive(params);
+      };
       const patch = moving
         ? buildUpdatePatch("source.txt", " foo\n-bar\n+baz", target)
         : buildAddFilePatch(target, "replacement");
@@ -191,7 +190,7 @@ describe("applyPatch", () => {
     const result = await applyPatch(patch, memory.options);
 
     expect(memory.files.get("/sandbox/notes.txt")).toBe("new\n");
-    expect(result.summary.added).toEqual(["notes.txt"]);
+    expect(result.details.summary.added).toEqual(["notes.txt"]);
   });
 
   it("fails closed on sandbox adds when atomic create is unavailable", async () => {
@@ -205,14 +204,14 @@ describe("applyPatch", () => {
   });
 
   it("updates and moves a file", async () => {
-    const memory = createMemoryPatchSandbox({ "source.txt": "foo\nbar\n" });
-    const patch = buildUpdatePatch("source.txt", " foo\n-bar\n+baz", "dest.txt");
+    const memory = createMemoryPatchSandbox({ "source.txt": "It\u2019s here\nold\n" });
+    const patch = buildUpdatePatch("source.txt", " It's here\n-old\n+new", "dest.txt");
 
     const result = await applyPatch(patch, memory.options);
 
-    expect(memory.files.get("/sandbox/dest.txt")).toBe("foo\nbaz\n");
+    expect(memory.files.get("/sandbox/dest.txt")).toBe("It\u2019s here\nnew\n");
     expect(memory.files.has("/sandbox/source.txt")).toBe(false);
-    expect(result.summary.modified).toEqual(["dest.txt"]);
+    expect(result.details.summary.modified).toEqual(["dest.txt"]);
   });
 
   it.each(["./source.txt", "/sandbox/./source.txt", "/sandbox//source.txt"])(
@@ -233,7 +232,7 @@ describe("applyPatch", () => {
       expect(memory.files.size).toBe(1);
       expect(memory.createFileExclusive).not.toHaveBeenCalled();
       expect(memory.remove).not.toHaveBeenCalled();
-      expect(result.summary.modified).toEqual(["source.txt"]);
+      expect(result.details.summary.modified).toEqual(["source.txt"]);
     },
   );
 
@@ -254,10 +253,11 @@ describe("applyPatch", () => {
       const move = (before: string, after: string) =>
         buildUpdatePatch("source.txt", `-${before}\n+${after}`, movePath);
       await expect(applyPatch(move("before", "after"), memory.options)).resolves.toMatchObject({
-        summary: { modified: ["source.txt"] },
+        details: { summary: { modified: ["source.txt"] } },
       });
       await expect(applyPatch(move("after", "after"), memory.options)).resolves.toMatchObject({
-        noOp: true,
+        content: [{ type: "text", text: "No changes made to source.txt." }],
+        details: { summary: { added: [], modified: [], deleted: [] } },
       });
       expect([...memory.files.values()]).toEqual(["after\n"]);
       expect(memory.writeFile).toHaveBeenCalledTimes(1);
@@ -377,7 +377,7 @@ describe("applyPatch", () => {
     const patch = buildAddFilePatch(relativeEscape);
 
     const result = await applyPatch(patch, { cwd: dir, workspaceOnly: false });
-    expect(result.summary.added.length).toBe(1);
+    expect(result.details.summary.added.length).toBe(1);
     await expect(fs.readFile(escapedPath, "utf8")).resolves.toBe("escaped\n");
   });
 
@@ -395,7 +395,7 @@ describe("applyPatch", () => {
     const patch = buildDeletePatch("link");
 
     const result = await applyPatch(patch, { cwd: dir });
-    expect(result.summary.deleted).toEqual(["link"]);
+    expect(result.details.summary.deleted).toEqual(["link"]);
     await expectMissingPath(fs.lstat(linkDir));
     await expect(fs.readFile(outsideTarget, "utf8")).resolves.toBe("keep\n");
   });
@@ -578,13 +578,6 @@ describe("apply_patch unrestricted host writes", () => {
     vi.restoreAllMocks();
   });
 
-  async function createHostFile(content: string) {
-    const tempDir = tempDirs.make("openclaw-patch-host-write-");
-    const filePath = path.join(tempDir, "important.txt");
-    await fs.writeFile(filePath, content);
-    return filePath;
-  }
-
   function failWrites(filePath: string, originalByteLength: number, phase: "prefix" | "extension") {
     const realOpen = fs.open.bind(fs);
     vi.spyOn(fs, "open").mockImplementation(async (target, flags, mode) => {
@@ -626,7 +619,7 @@ describe("apply_patch unrestricted host writes", () => {
     async (phase) => {
       const originalContent =
         phase === "prefix" ? `original\n${"important content\n".repeat(64)}` : "original\n";
-      const filePath = await createHostFile(originalContent);
+      const { file: filePath } = await makeFile(originalContent, "important.txt");
       failWrites(filePath, Buffer.byteLength(originalContent), phase);
       await expect(hostUpdate(filePath)).rejects.toThrow("disk full");
 
@@ -636,13 +629,13 @@ describe("apply_patch unrestricted host writes", () => {
   );
 
   it.runIf(process.platform !== "win32")("applies host update hunks in place", async () => {
-    const filePath = await createHostFile("original\n");
+    const { file: filePath } = await makeFile("original\n", "important.txt");
     await fs.chmod(filePath, 0o640);
     const before = await fs.stat(filePath);
 
     const result = await hostUpdate(filePath);
 
-    expect(result.summary.modified).toEqual(["important.txt"]);
+    expect(result.details.summary.modified).toEqual(["important.txt"]);
     await expect(fs.readFile(filePath, "utf8")).resolves.toBe("replacement\n");
     const after = await fs.stat(filePath);
     expect(after.ino).toBe(before.ino);

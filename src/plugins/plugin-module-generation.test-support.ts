@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 import { afterEach } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -10,6 +9,7 @@ import {
 } from "./plugin-cache.js";
 import { bindPluginInstanceModuleLoader } from "./plugin-instance-module-loader.js";
 import { PluginInstance } from "./plugin-instance.js";
+import { writeArtifacts } from "./public-surface.test-support.js";
 
 export function createPluginModuleGenerationTestHarness() {
   const temp = useAutoCleanupTempDirTracker(afterEach);
@@ -26,11 +26,7 @@ export function createPluginModuleGenerationTestHarness() {
   });
   function fixture(files: Record<string, string>) {
     const root = temp.make("plugin-native-interop-");
-    for (const [name, source] of Object.entries(files)) {
-      const filename = path.join(root, name);
-      fs.mkdirSync(path.dirname(filename), { recursive: true });
-      fs.writeFileSync(filename, source);
-    }
+    writeArtifacts(root, files);
     return root;
   }
   function host(rootDir: string, standalone = false, sharedCache?: PluginCache) {

@@ -1,7 +1,7 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { parseDateStringTimestampMs } from "openclaw/plugin-sdk/number-runtime";
-import { createEmptyTransportUsage } from "openclaw/plugin-sdk/provider-transport-runtime";
+import { createEmptyTransportUsage } from "openclaw/plugin-sdk/provider-stream-shared";
 import { withSessionTranscriptWrite } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { CLAUDE_CLI_BACKEND_ID } from "./cli-constants.js";
 import type { ClaudeTranscriptItem } from "./session-catalog-transcript.js";

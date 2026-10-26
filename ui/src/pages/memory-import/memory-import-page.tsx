@@ -8,6 +8,7 @@ import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.t
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { SettingsPageHeader, LearnMoreLink } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
+import { registerRouteSubtitlesEnglish } from "../../i18n/locales/en-route-subtitles.ts";
 import { listSelectableAgents } from "../../lib/agents/display.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
@@ -24,6 +25,8 @@ import type {
   SessionBackfillRollbackResult,
 } from "./view-types.ts";
 import { MemoryImport } from "./view.tsx";
+
+registerRouteSubtitlesEnglish();
 
 const SESSION_BACKFILL_BATCH_DAYS = 14;
 const MEMORY_IMPORT_DOCS_URL = "https://docs.openclaw.ai/install/migrating";
@@ -179,7 +182,9 @@ export function MemoryImportPage() {
   }
   onSettled(() => {
     // Target/access receipts retire import and backfill epochs before replanning.
-    const stops = [gateway, agents, selection].map((projection) => projection.subscribe(syncPlan));
+    const stops = [context.gateway, context.agents, context.agentSelection].map((owner) =>
+      owner.subscribe(syncPlan),
+    );
     stops.push(
       context.router.subscribe(() => {
         retirePresentation();
@@ -188,9 +193,7 @@ export function MemoryImportPage() {
     );
     syncPlan();
     return () => {
-      for (const stop of stops) {
-        stop();
-      }
+      stops.forEach((stop) => stop());
       presentationLifetime.resolve();
       applyEpoch += 1;
       backfillEpoch += 1;

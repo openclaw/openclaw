@@ -40,7 +40,6 @@ import {
   setClientProfile,
   useBrowserFollowupFixture,
 } from "./chat-send-pending-inputs.test-support.js";
-import * as sessionChangeEvent from "./session-change-event.js";
 import type { RespondFn } from "./types.js";
 
 installGatewayTestHooks();
@@ -283,16 +282,15 @@ describe("queued chat input withdrawal", () => {
     "keeps refused removal available for $0 and fences adoption through withdrawal commit",
     async (afterRefusal) => {
       await using fixture = await startInput();
-      const { runId, active, context, scope } = fixture;
+      const { runId, active, scope } = fixture;
       const { sessionKey, sessionId, agentId } = scope;
       let unsubscribe: (() => void) | undefined;
       const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
       const refusal = vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission");
-      const publishChange = vi.spyOn(sessionChangeEvent, "emitSessionsChanged");
       let replacement: RpcSourceRef | undefined;
       let cleanupReplacement: (() => void) | undefined;
       let retiredAfterCommit = false;
-      const published: Promise<PromiseSettledResult<boolean>>[] = [];
+      const published: Promise<boolean>[] = [];
       try {
         const run = enqueueInput(fixture, active);
         expect(isRpcSourceQueued(active)).toBe(true);
@@ -316,14 +314,12 @@ describe("queued chat input withdrawal", () => {
         let requestCurrent = true;
         unsubscribe = sessionChanges.subscribe((change) => {
           if ("sessionKey" in change && change.sessionKey === scope.sessionKey) {
-            published.push(
-              Promise.allSettled([
-                listSessionPendingInputs(scope).then(({ items }) => {
-                  const input = items[0];
-                  return input?.state === "cancelled" && input.message.display === false;
-                }),
-              ]).then(([result]) => result),
-            );
+            const publication = listSessionPendingInputs(scope).then(({ items }) => {
+              const input = items[0];
+              return input?.state === "cancelled" && input.message.display === false;
+            });
+            void publication.catch(() => {});
+            published.push(publication);
             // Revoke at publication; awaiting the read would miss this synchronous race.
             if (afterRefusal === "retired" && !replacement) {
               rpcSourceTesting.delete(runId);
@@ -391,18 +387,12 @@ describe("queued chat input withdrawal", () => {
           expect(rpcSourceTesting.get(runId)).toBe(replacement);
         }
         expect(published.length).toBeGreaterThan(0);
-        for (const result of await Promise.all(published)) {
+        for (const result of await Promise.allSettled(published)) {
           expect(result).toEqual({ status: "fulfilled", value: true });
         }
-        expect(publishChange).toHaveBeenCalledWith(
-          context,
-          { sessionKey, sessionId, agentId, reason: "agent.input.settled" },
-          { accessChanged: false },
-        );
         expect(loadTranscriptEventsSync(scope)).toEqual(fixture.activeTranscript);
       } finally {
         refusal.mockRestore();
-        publishChange.mockRestore();
         unsubscribe?.();
         await Promise.allSettled(published);
         cleanupReplacement?.();

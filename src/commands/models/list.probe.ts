@@ -36,6 +36,7 @@ import {
 import { findNormalizedProviderValue, normalizeProviderId } from "../../agents/model-selection.js";
 import { readPreparedModelCatalog } from "../../agents/prepared-model-catalog.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
+import { prepareLocalCapabilityAccountSecrets } from "../../cli/capability-cli/local-account-secrets.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
 import { resolveMergedModelProviderEntry } from "../../config/model-provider-config.js";
@@ -127,15 +128,6 @@ function buildNoModelProbeResult(target: AuthProbeTarget): AuthProbeResult {
     error: "No model available for check",
   });
 }
-
-export type AuthProbeSummary = {
-  startedAt: number;
-  finishedAt: number;
-  durationMs: number;
-  totalTargets: number;
-  options: Omit<AuthProbeOptions, "includeDirectKeys">;
-  results: AuthProbeResult[];
-};
 
 export type AuthProbeOptions = {
   provider?: string;
@@ -639,7 +631,7 @@ export async function runAuthProbes(
     onProgress?: (update: { completed: number; total: number; label?: string }) => void;
     stateOwnership?: AuthProbeStateOwnership;
   },
-): Promise<AuthProbeSummary> {
+) {
   return await withAuthProbeStateOwnership(params.stateOwnership, async (abortSignal) => {
     const startedAt = Date.now();
     const plan = await buildProbeTargets(params);
@@ -662,6 +654,10 @@ export async function runAuthProbes(
       const agentId = suppliedAgentId ?? resolveDefaultAgentId(cfg);
       const agentDir = suppliedAgentDir ?? resolveAgentDir(cfg, agentId);
       const workspaceDir = suppliedWorkspaceDir ?? resolveAgentWorkspaceDir(cfg, agentId);
+
+      if (params.stateOwnership) {
+        await prepareLocalCapabilityAccountSecrets({ cfg, agentId });
+      }
 
       await fs.mkdir(workspaceDir, { recursive: true });
 
@@ -820,7 +816,7 @@ export function sortProbeResults(results: AuthProbeResult[]): AuthProbeResult[] 
   });
 }
 
-export function describeProbeSummary(summary: AuthProbeSummary): string {
+export function describeProbeSummary(summary: Awaited<ReturnType<typeof runAuthProbes>>): string {
   if (summary.totalTargets === 0) {
     return "No check targets.";
   }

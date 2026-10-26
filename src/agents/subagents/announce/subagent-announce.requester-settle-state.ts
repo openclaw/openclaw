@@ -6,6 +6,7 @@ import type {
 } from "../registry/subagent-registry.types.js";
 import { isSubagentObligationRetired } from "../registry/subagent-requester-settle-identity.js";
 import { isSameSubagentRun, isSameSubagentRunOwner } from "../registry/subagent-run-generation.js";
+import { hasSubagentRunEnded } from "../registry/subagent-run-liveness.js";
 import { finalizeRequesterFinalAttachment } from "../requester-final-attachment.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 
@@ -13,6 +14,14 @@ export type RequesterSettleWakeBatchState = Omit<RequesterSettleWakeState, "reti
 
 export const REQUESTER_SETTLE_WAKE_MAX_ATTEMPTS = 3;
 const REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS = [30_000, 120_000] as const;
+
+export function isRequesterSettleMemberReady(entry: SubagentRunRecord): boolean {
+  return (
+    entry.execution.status !== "running" &&
+    entry.pauseReason !== "sessions_yield" &&
+    hasSubagentRunEnded(entry)
+  );
+}
 
 export function needsRequesterSettleFindings(entry: SubagentRunRecord): boolean {
   // Earlier delivery cannot discharge reconciliation of restart-interrupted work.
@@ -107,6 +116,7 @@ export type RequesterSettleWakeParams = RequesterSettleWakeBatchCallbacks & {
   requesterOrigin?: DeliveryContext;
   settledEntry: SubagentRunRecord;
   signal?: AbortSignal;
+  onAccepted?: () => void;
   isSourceCurrent: () => boolean;
   onDescendantsPending?: (deadline?: number) => void;
 };

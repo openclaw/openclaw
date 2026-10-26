@@ -80,17 +80,15 @@ export async function verifyDoctorLintPrivateAuthRetirement(
       const writer = openOpenClawStateDatabase();
       const reader = openOpenClawStateReadConnection(writer.path, writer.path);
       const admission = captureOpenClawStateDatabaseReadAdmission(writer.path);
-      privateState = writer;
-      privateRead = reader;
+      [privateState, privateRead] = [writer, reader];
       const privateStateDir = path.dirname(writer.path);
       const privateAuthPath = path.join(privateStateDir, "private-auth.sqlite");
       auth = openAuthReader(privateAuthPath);
       if (windows) {
-        // Native Windows must reject unlinking the pooled reader, never skip this gate.
         await expect(remove(privateAuthPath, { force: true })).rejects.toMatchObject(denied);
         expect(auth.prepare("SELECT value FROM fixture").get()).toEqual(unchanged);
         if (cleanupFailure) {
-          // Unowned handle blocks cleanup even after Doctor retires its handles.
+          // Unowned handle blocks cleanup after Doctor retires its handles.
           blockerPath = path.join(privateStateDir, "held-cleanup.sqlite");
           blocker = openNodeSqliteDatabase(blockerPath);
           blocker.exec("CREATE TABLE fixture AS SELECT 1 AS value");
@@ -121,8 +119,7 @@ export async function verifyDoctorLintPrivateAuthRetirement(
       return readerFailure ? [detectorFinding] : [];
     }
     installHealthChecks([{ id: checkId, kind: "core", description: checkId, detect }]);
-    // The fork's native child owns an outer staging root beyond Doctor's private root.
-    // Capture its disposal for every failure mode so finally joins that exact owner.
+    // Join the native child's outer staging root even when private-root disposal fails.
     const fork = sqliteSnapshotSource.forkSqlitePrivateSnapshot;
     const snapshot = vi
       .spyOn(sqliteSnapshotSource, "forkSqlitePrivateSnapshot")
@@ -132,7 +129,6 @@ export async function verifyDoctorLintPrivateAuthRetirement(
         if (!cleanupFailure) {
           return prepared;
         }
-        // Native-child payload retirement is outside this host's fs mock.
         return {
           ...prepared,
           async cleanupAsync() {
@@ -146,7 +142,7 @@ export async function verifyDoctorLintPrivateAuthRetirement(
     const removal = vi.spyOn(fs.promises, "rm").mockImplementation(async (target, options) => {
       const prefix = `${String(target)}${path.sep}`;
       if (!windows) {
-        // POSIX permits unlinking open files; only non-Windows uses the simulator.
+        // Simulate Windows unlink semantics on POSIX only.
         const openHandle = sqliteOpen.mock.calls.some(
           ([file, , db]) => file.startsWith(prefix) && db.isOpen,
         );
@@ -165,9 +161,11 @@ export async function verifyDoctorLintPrivateAuthRetirement(
           ? { includeAllChecks: true }
           : { onlyIds: [checkId] }),
       });
-      expect(exitCode).toBe(1);
       const report = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
-      expect(report).toMatchObject({ schemaVersion: 1, ok: false });
+      expect({ exitCode, report }).toMatchObject({
+        exitCode: 1,
+        report: { schemaVersion: 1, ok: false },
+      });
       const failure = expect.objectContaining({
         severity: "error",
         message: !cleanupFailure
@@ -177,7 +175,6 @@ export async function verifyDoctorLintPrivateAuthRetirement(
       if (readerFailure) {
         expect(report.findings).toEqual(expect.arrayContaining([detectorFinding, failure]));
         expect(report.findings).toHaveLength(2);
-        // Disposal must retain the completed report's count, including plugin checks.
         expect(report.checksRun).toBeGreaterThan(0);
       } else {
         expect(report.findings).toEqual([failure]);
@@ -186,10 +183,9 @@ export async function verifyDoctorLintPrivateAuthRetirement(
         });
         expect(report.checksRun).toBe(1);
       }
-      expect(privateState).toBeDefined();
       const snapshotRoot = path.dirname(resolveOpenClawStateDirForDatabasePath(privateState!.path));
       if (!cleanupFailure) {
-        // A separate full-report snapshot may retire, but not this failed snapshot or its family.
+        // Other full-report snapshots may retire, but this failed family must remain.
         expect(
           removal.mock.calls
             .map(([target]) => path.resolve(String(target)))
@@ -214,7 +210,7 @@ export async function verifyDoctorLintPrivateAuthRetirement(
       if (readerFailure || cleanupFailure) {
         expect([privateState?.db.isOpen, privateRead?.database.db.isOpen]).toEqual([false, false]);
       }
-      // Recursive removal can partially succeed before a genuine Windows denial.
+      // Windows recursive removal may partially succeed before denial.
       expect(fs.existsSync(snapshotRoot)).toBe(true);
       if (!windows || !cleanupFailure) {
         expect(fs.existsSync(privateState!.path)).toBe(true);
@@ -240,7 +236,7 @@ export async function verifyDoctorLintPrivateAuthRetirement(
         const rootPath = resolveOpenClawStateDirForDatabasePath(privateState.path);
         closeAuthProfileReadPool({ kind: "root", rootPath });
         await closeOpenClawStateDatabaseByPathAsync(privateState.path);
-        // Retained snapshots still own native staging tokens after injected failures.
+        // Retained snapshots still own native staging tokens after failure.
         expect(
           await (cleanupFork ? cleanupFork() : removeTempDirectoryAsync(path.dirname(rootPath))),
         ).toBe(true);

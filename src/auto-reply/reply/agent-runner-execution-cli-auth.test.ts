@@ -15,6 +15,7 @@ import {
   fallbackAttemptOptions,
   getExecuteAgentTurnForTest,
   setupAgentRunnerExecutionTestState,
+  runFallbackCandidate,
   initialFallbackAttemptOptions,
   useProductionEmbeddedRunExecutionParamsForTest,
   type FallbackRunnerParams,
@@ -152,16 +153,14 @@ describe("executeAgentTurn: CLI credential selection", () => {
       resolvePluginSetupCliBackend: () => undefined,
     });
     state.isCliProviderMock.mockImplementation((provider) => provider === testCase.backend);
-    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run(
+    state.runWithModelFallbackMock.mockImplementationOnce((params: FallbackRunnerParams) =>
+      runFallbackCandidate(
+        params,
         testCase.provider,
         model,
         fallbackAttemptOptions(params, "rate_limit"),
       ),
-      provider: testCase.provider,
-      model,
-      attempts: [],
-    }));
+    );
     state.runCliAgentMock.mockResolvedValueOnce({ payloads: [{ text: "done" }], meta: {} });
     const executeAgentTurn = await getExecuteAgentTurnForTest();
     const result = executeAgentTurn(createMinimalRunAgentTurnParams({ followupRun }));

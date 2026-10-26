@@ -110,29 +110,30 @@ export async function prepareGatewayLifecycle(params: {
     current?: import("./desktop/node-source.js").NodeDesktopService;
   } = {};
   const { createGatewayNodeSessionRuntime } = await import("./server-node-session-runtime.js");
-  const { nodeWorkerSupervisorTransport, ...nodeRuntime } = createGatewayNodeSessionRuntime({
-    broadcast,
-    sessionEventSubscribers,
-    sessionMessageSubscribers,
-    listRegisteredNodePluginToolCommands: () => pluginRuntime.registry.nodeHostCommands,
-    getConfig: getRuntimeConfig,
-    onRunnerStateChanged: (nodeId, change) => {
-      if (change.availabilityChanged) {
-        workerPlacementRuntime?.runnerAvailability.markChanged(nodeId);
-        void workerPlacementRuntime?.scheduleNodeWorkspaceRetention(nodeId);
-      }
-    },
-    onPairingInvalidated: ({ nodeId, connId }) => {
-      void nodeDesktopServiceRef.current?.stopNode(nodeId);
-      upsertPresence(nodeId, { reason: "disconnect" });
-      commitPresence(nodeId, connId);
-      runtime.publishPresence();
-      removeRemoteNodeInfoForConnection(nodeId, connId);
-    },
-    onPairingGenerationChanged: ({ nodeId }) => {
-      void nodeDesktopServiceRef.current?.stopNode(nodeId);
-    },
-  });
+  const { nodeWorkerSupervisorTransport, closeHostStats, ...nodeRuntime } =
+    createGatewayNodeSessionRuntime({
+      broadcast,
+      sessionEventSubscribers,
+      sessionMessageSubscribers,
+      listRegisteredNodePluginToolCommands: () => pluginRuntime.registry.nodeHostCommands,
+      getConfig: getRuntimeConfig,
+      onRunnerStateChanged: (nodeId, change) => {
+        if (change.availabilityChanged) {
+          workerPlacementRuntime?.runnerAvailability.markChanged(nodeId);
+          void workerPlacementRuntime?.scheduleNodeWorkspaceRetention(nodeId);
+        }
+      },
+      onPairingInvalidated: ({ nodeId, connId }) => {
+        void nodeDesktopServiceRef.current?.stopNode(nodeId);
+        upsertPresence(nodeId, { reason: "disconnect" });
+        commitPresence(nodeId, connId);
+        runtime.publishPresence();
+        removeRemoteNodeInfoForConnection(nodeId, connId);
+      },
+      onPairingGenerationChanged: ({ nodeId }) => {
+        void nodeDesktopServiceRef.current?.stopNode(nodeId);
+      },
+    });
   const { nodeRegistry, nodeSendToSession, nodeUnsubscribeAll } = nodeRuntime;
   const stopNodeConnectionNotifications = startNodeConnectionNotifications(
     nodeRegistry,
@@ -249,6 +250,19 @@ export async function prepareGatewayLifecycle(params: {
     },
   });
   // Kernel methods are the only writers for readiness and advertised-method state.
+  let readyAnnounced = false;
+  const announceReady = () => {
+    if (
+      !readyAnnounced &&
+      !unavailableGatewayMethods.has("chat.send") &&
+      startupState.sidecarsReady &&
+      runtime.getReadiness().ready
+    ) {
+      readyAnnounced = true;
+      runtime.startupTrace.mark("ready");
+      log.info("gateway ready");
+    }
+  };
   const kernel = {
     pluginRuntimeGeneration,
     pluginMetadata: params.pluginMetadata,
@@ -259,22 +273,18 @@ export async function prepareGatewayLifecycle(params: {
       startupState.sidecarsReady = true;
     },
     unlockStartupMethods: (options?: { keepChatSendUnavailable?: boolean }) => {
-      const chatWasUnavailable = unavailableGatewayMethods.has("chat.send");
       for (const method of STARTUP_UNAVAILABLE_GATEWAY_METHODS) {
         if (method !== "chat.send" || !options?.keepChatSendUnavailable) {
           unavailableGatewayMethods.delete(method);
         }
       }
-      if (
-        chatWasUnavailable &&
-        !unavailableGatewayMethods.has("chat.send") &&
-        startupState.sidecarsReady &&
-        runtime.getReadiness().ready
-      ) {
-        runtime.startupTrace.mark("ready");
-        log.info("gateway ready");
+      if (!options?.keepChatSendUnavailable) {
+        runtime.inputRecovery.releaseInitial();
       }
+      announceReady();
     },
+    trackInputRecovery: (progress: Parameters<typeof runtime.inputRecovery.track>[0]) =>
+      runtime.inputRecovery.track(progress, announceReady),
     publishMethodSurface: (methods: readonly string[]) => {
       runtimeState.gatewayMethods.splice(0, runtimeState.gatewayMethods.length, ...methods);
     },
@@ -362,6 +372,7 @@ export async function prepareGatewayLifecycle(params: {
     clients,
     publishPresence: runtime.publishPresence,
   });
+  runtime.attachSessionViewerPresence(runtimeState.sessionViewerPresence);
   deps.cron = runtimeState.cronState.cron;
   const cronReconciliation = createGatewayCronReconciliation({
     port,
@@ -463,7 +474,7 @@ export async function prepareGatewayLifecycle(params: {
   const runClosePrelude = async () => {
     await beginClosePrelude();
     stopNodeConnectionNotifications();
-    watchNodeHttpRuntime.close();
+    await watchNodeHttpRuntime.close();
     await shutdownRuntime.runGatewayClosePrelude({
       stopDiagnostics: stopGatewayDiagnosticHeartbeat,
       skillsChangeUnsub: () => runtimeState.skillsChangeUnsub({ exitAfterClose }),
@@ -492,7 +503,7 @@ export async function prepareGatewayLifecycle(params: {
         getEventLoopHealth: readinessEventLoopHealth.snapshot,
         getConfigReloaderHotReloadStatus: kernel.getConfigReloaderHotReloadStatus,
         getSessionRowProjection: runtime.getSessionRowProjection,
-        getCronStorePath: () => runtimeState.cronState.storePath,
+        getCronState: () => runtimeState.cronState,
       }),
     );
   };
@@ -599,7 +610,10 @@ export async function prepareGatewayLifecycle(params: {
               lifecycleUnsub: runtimeState.lifecycleUnsub,
               chatRunState,
               clients,
-              finishRequestEntries: () => requestEntryLifetime.sealAndJoin(),
+              finishRequestEntries: async () => {
+                await requestEntryLifetime.sealAndJoin();
+                await closeHostStats();
+              },
               drainSdkWork: () => params.sdkResourceHost.drainWork(),
               stopScheduler: () => runtime.scheduler.stop(),
               closeSdkResources: () => params.sdkResourceHost.close(),

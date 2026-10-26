@@ -1,5 +1,3 @@
-import { writeFileSync } from "node:fs";
-import path from "node:path";
 import photon from "@silvia-odwyer/photon-node";
 import { expect, it } from "vitest";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
@@ -9,6 +7,7 @@ import {
   controlUiSessionUrl,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import { chatMessage } from "./chat-flow.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -25,7 +24,7 @@ suite.define(() => {
       async ({ page }) => {
         const gateway = await installMockGateway(page, {
           historyMessages: [
-            { role: "assistant", content: [{ type: "text", text: first }] },
+            chatMessage("assistant", first),
             {
               role: "user",
               content: [
@@ -38,21 +37,15 @@ suite.define(() => {
                 },
               ],
             },
-            {
-              role: "assistant",
-              content: [
-                {
-                  type: "text",
-                  text:
-                    "A paragraph with **bold text**, a [link](https://example.com), and selectable code.\n\n- A selectable list item\n\n" +
-                    last,
-                },
-              ],
-            },
+            chatMessage(
+              "assistant",
+              "A paragraph with **bold text**, a [link](https://example.com), and selectable code.\n\n- A selectable list item\n\n" +
+                last,
+            ),
           ],
         });
         await page.goto(suite.server.baseUrl + "chat");
-        await gateway.waitForRequest("chat.startup");
+        await gateway.waitForRequest("sessions.messages.subscribe");
         const thread = page.locator(".chat-thread");
         const start = page.getByText(first, { exact: true });
         const end = page.getByText(last, { exact: true });
@@ -93,9 +86,6 @@ suite.define(() => {
         expect(allText).toContain(first);
         expect(allText).toContain(last);
         const selected = await capture();
-        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-          writeFileSync(path.join(suite.artifactDir, colorScheme + "-selected.png"), selected.png);
-        }
         const beforeImage = photon.PhotonImage.new_from_byteslice(unselected.elements[0]!.png);
         const afterImage = photon.PhotonImage.new_from_byteslice(selected.elements[0]!.png);
         try {
@@ -165,7 +155,7 @@ suite.define(() => {
           sessions: [{ key: sessionKey, kind: "direct", reasoningLevel: "on" }],
           historyMessages: [
             { role: "assistant", content: [{ type: "thinking", thinking: reasoningText }] },
-            { role: "assistant", content: [{ type: "text", text: answerText }] },
+            chatMessage("assistant", answerText),
           ],
         });
         await page.route("**/control-ui-config.json", (route) =>
@@ -205,12 +195,6 @@ suite.define(() => {
         expect(selection).toContain(reasoningText);
         expect(selection).toContain(answerText);
         expect(selection).not.toContain("Just now");
-        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1" && bubbles) {
-          const frame = await takeControlUiScreenshotFrame(page, pane, [reasoning, answer], {
-            animations: "disabled",
-          });
-          writeFileSync(path.join(suite.artifactDir, "reasoning-bubbles-selected.png"), frame.png);
-        }
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       },
     );

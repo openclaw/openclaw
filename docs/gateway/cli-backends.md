@@ -40,7 +40,7 @@ Deprecated catalog models are not added at sign-in; an existing entry for one is
 
 `main` is the default agent id when no explicit agent list is configured. Swap in your own agent id otherwise.
 
-When you switch an existing chat away from Claude CLI and back, the first resumed turn includes a short count, time range, and model summary of messages since the last saved Claude CLI reply—not their contents. The note prefixes that native user prompt; OpenClaw's transcript keeps the original user text. When `sessions_history` is available, the note includes the current chat's session key and call shape so Claude can read those messages on demand. An empty Claude reply leaves no saved reply boundary, so the note can repeat on the following turn.
+When the same native CLI session resumes, its next turn includes bounded conversation updates committed by OpenClaw since its previous input. These include cron results, Talk utterances and consult replies, and completion announcements. The updates prefix that turn's message; the system prompt and stored user text stay unchanged. A new or replacement native session still follows the [history account boundary](#history-account-boundaries).
 
 When an account change starts a fresh native Claude session in an existing chat, its first turn receives the same kind of note about earlier messages in the chat. This includes opaque native logins. Claude can read that history on demand through `sessions_history` when tool policy allows it; OpenClaw never automatically replays raw transcript content or durable context across the account boundary. A brand-new chat has no earlier-message note.
 
@@ -167,6 +167,67 @@ session, because the tool names changed. Explicit native-tool selections, node
 execution, side questions, and isolated tool-free completions retain their own
 tool contracts.
 
+### Keeping Claude Code orchestration tools on managed turns
+
+Managed turns expose no Claude-native tools by default. Operators who want
+Claude Code's native subagents or workflows can opt in per agent, or for every
+agent, through the Anthropic plugin config:
+
+```json5
+{
+  plugins: {
+    entries: {
+      anthropic: {
+        config: {
+          managedNativeTools: {
+            default: ["Agent", "Workflow"],
+            agents: { ops: [] }, // per-agent list replaces the default
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Only `Agent` and `Workflow` are accepted: they add orchestration without
+granting file, shell, or network authority, so descendants act through the same
+policy-filtered OpenClaw tools as the parent. File and shell tools stay with
+OpenClaw. `Skill` is not offered because managed turns load no Claude skills.
+Managed turns also load no user or project settings, so `Agent` offers Claude
+Code's built-in subagent types only; custom subagents in `~/.claude/agents/` or
+a project's `.claude/agents/` are not loaded.
+
+- The same list applies to ordinary turns, verified child completions, and cron
+  turns in a session, so the tool definitions and cached prefix stay stable.
+  Changing the list keeps the native session; its next turn rebuilds the
+  cached prefix once.
+- Managed isolation stays in force: Claude settings, hooks, plugins, slash
+  commands, Chrome, and Claude-only MCP servers remain excluded, and scheduled
+  wake-ups, cron creation, background shell commands, and monitors stay blocked.
+- Restricted senders, delegated execution, turns with an explicit tool cap, and
+  `tools.fs.workspaceOnly` still receive no native tools. A capped turn in an
+  opted-in session therefore launches with different tool definitions.
+- Each native call still passes `before_tool_call` and exec policy: ask
+  `on-miss` or `always` routes it through approval, and exec security `deny`,
+  or `allowlist` with ask `off`, refuses it. Under those two settings the
+  opt-in has no effect, because `Agent` and `Workflow` are refused before any
+  descendant starts.
+- Descendants see the managed turn's tool list: the selected orchestration
+  tools plus OpenClaw's policy-filtered tools, never Claude-native file or
+  shell tools. Their OpenClaw tool calls pass the same grant and hooks as the
+  parent's.
+- Known limitations: native calls made by descendants (nested `Agent` or
+  `Workflow`) reach `before_tool_call` but do not emit `after_tool_call`, and the
+  parent sees only the descendant's result. OpenClaw does not track native
+  descendants as tasks, so `sessions_yield` does not wait for them. If an
+  `Agent` or `Workflow` descendant is still running when the turn ends,
+  OpenClaw closes the warm Claude Code process instead of reusing it, so that
+  descendant stops and can never act under a later turn's authority; the next
+  turn resumes the stored session in a fresh process. A
+  `Workflow` call can read its script from a workspace path through
+  `scriptPath`; the script itself can only orchestrate agents.
+
 Managed turns also exclude Claude's user settings, instruction files, auto-memory,
 user hooks, plugins, Chrome, and MCP servers configured only in Claude. OpenClaw supplies
 the instructions, selected skills, and policy-filtered tools for these turns.
@@ -231,7 +292,9 @@ Plugin tools such as remote SSH do not become background jobs automatically.
 When Claude Code moves a foreground Bash command to the background after its tool timeout,
 OpenClaw keeps the turn active until Claude processes the completion and returns its final answer.
 Stopping a native task releases that task's hold. Completions belonging to an earlier
-input do not hold or settle a newer input.
+input do not hold or settle a newer input. Nested Agent and Workflow completions stay
+within their running parent; if that background parent ends first, the turn waits for
+the forwarded result.
 Follow-up tools still require the current turn's host permissions. Commands started explicitly
 in the background do not hold the turn open. If the turn fails or is cancelled while one of these
 commands still needs a follow-up, OpenClaw closes that subprocess and starts a fresh one for the next turn.
@@ -333,7 +396,8 @@ remain authorized by the Gateway rather than receiving duplicate native
 approval. Other MCP tools stay host-permission controlled.
 
 Claude's native `AskUserQuestion` uses OpenClaw's structured question flow and
-the canonical `ask_user` tool capability. When
+the canonical `ask_user` tool capability. Long option descriptions are shortened
+for display; question text and option labels keep their exact limits. When
 OpenClaw rejects malformed questions, it reports the failed field and
 constraint without repeating the submitted text, and asks Claude to correct
 the field and retry. Invalid questions do not prompt the user. If the user
@@ -471,35 +535,42 @@ have a separate revision from the active database.
 Incognito history uses a request-scoped memory index and never writes that index
 to disk. No migration or update repair is required.
 
-When a restricted completion turn runs in a separate Claude session, the next
-ordinary turn can resume a session that never saw that result. OpenClaw carries
-completion replies recorded since the last ordinary Claude reply into the resumed
-turn, including their prompts when saved. This uses the canonical transcript;
-it adds no stored state and survives Gateway restarts. The newest eight exchanges
-are included, with each string capped at 2,000 characters and labeled as historical
-records whose current facts should be verified. A completion that already ran in
-the bound session may appear once more as quoted context.
+Claude CLI and Gemini CLI resume their own conversation histories. OpenClaw therefore
+hands the same resumed native session new conversation rows it did not receive:
+scheduled results, Talk speech and consult replies, and completion announcements.
+One bounded history renderer supplies the newest eight user/assistant records,
+with each string capped at 2,000 characters and labeled as quoted history.
+Hidden consult instructions remain excluded.
 
-This replay requires the resuming turn's [history account boundary](#history-account-boundaries).
-When that boundary withholds saved text, the metadata-only session-gap note counts
-the completion turns instead, with a `sessions_history` hint when that tool is
-available. Completion tool restrictions remain unchanged.
+The native binding records the input snapshot and the turn's own transcript identities.
+Successful settlement advances this checkpoint, so a later turn does not repeat the
+handoff. Results committed while the CLI is running remain eligible for the next turn.
+A failed turn or failed binding settlement may repeat the handoff on retry. Existing
+bindings without a checkpoint start from their last ordinary backend reply. A missing
+anchor after reset or bounded history truncation withholds the handoff.
+
+This handoff applies only to an actual resume of the same native session, including
+opaque native logins. It never accompanies a fresh recovery attempt or a fork.
+The resumed session already holds this conversation; supplying its newly committed
+rows does not grant permission to seed another native session with older history.
+Fresh-session seeding, saved notes, and interrupted-input recovery retain the
+[history account boundary](#history-account-boundaries). Tool restrictions are unchanged.
 
 ### History account boundaries
 
 Native session compatibility and permission to replay saved OpenClaw history are separate. Clearing or replacing a native binding does not establish ownership of older transcript rows. OpenClaw records a private account fingerprint and contiguous transcript coverage before an admitted CLI turn, then advances coverage with that turn’s stored transcript writes. It never stores credential values in this metadata.
 
-Automatic durable recovery requires a resolved static credential, a named OAuth account, or, for the bundled Claude CLI running on the Gateway host with no forwarded credential, the native Claude login once the operator opts in with `plugins.entries.anthropic.config.historyRecovery.attestNativeLogin: true`. The opt-in is off by default. While it is off, history recovery never reads or sends the native token, and a native login cannot authorize automatic replay. The login is resolved from the environment the Claude process receives, including backend, prepared and skill env overrides such as `CLAUDE_CONFIG_DIR`, never from the Gateway process alone. A child that selects an API key, token, or cloud provider through its environment or its user settings `env` block, a login held in a macOS Keychain item the Gateway cannot read, a Keychain lookup that fails or times out (only a confirmed "item not found" lets the credentials file stand), or an environment that cannot be resolved has no provable owner. Other opaque CLI logins, identity-less OAuth credentials, legacy transcripts without provenance, imported or otherwise unaccounted content, and incompatible provenance versions cannot authorize automatic replay. Native resume remains available under the backend’s existing rules. Switching accounts makes mixed history ineligible even after a successful replacement, a later clear, or a switch back to the original account. A new session or an empty reset can establish a new boundary. A reset that retains messages cannot relabel them.
+Automatic durable recovery requires a resolved static credential, a named OAuth account, or, for the bundled Claude CLI running on the Gateway host with no forwarded credential, the native Claude login once the operator opts in with `plugins.entries.anthropic.config.historyRecovery.attestNativeLogin: true`. The opt-in is off by default. While it is off, history recovery never reads or sends the native token, and a native login cannot authorize older-history recovery. The login is resolved from the environment the Claude process receives, including backend, prepared and skill env overrides such as `CLAUDE_CONFIG_DIR`, never from the Gateway process alone. A child that selects an API key, token, or cloud provider through its environment, its user settings `env` block, or Claude's admin-managed settings (an auth `env` key or `apiKeyHelper` in `managed-settings.json` or a `managed-settings.d` drop-in; MDM and server-managed policy are not checked), a login held in a macOS Keychain item the Gateway cannot read, a Keychain lookup that fails or times out (only a confirmed "item not found" lets the credentials file stand), or an environment that cannot be resolved has no provable owner. Other opaque CLI logins, identity-less OAuth credentials, legacy transcripts without provenance, imported or otherwise unaccounted content, and incompatible provenance versions cannot authorize automatic replay. Native resume remains available under the backend’s existing rules. Switching accounts makes mixed history ineligible even after a successful replacement, a later clear, or a switch back to the original account. A new session or an empty reset can establish a new boundary. A reset that retains messages cannot relabel them.
 
 With the opt-in on, the native login's owner is the account Anthropic attests for its credential, not the account record in `.claude.json`. When a turn is prepared, OpenClaw reads the access token the Claude process would use (Keychain first, then `.credentials.json`) and sends it, with a 3 second timeout, only to `https://api.anthropic.com/api/oauth/profile`, the endpoint Claude CLI itself uses to look up the account behind that token. The owner is the account id in the response. A credential for one account beside a record naming another is owned by the credential's account. Any failure has no owner and refuses history: a network error, a timeout, a non-success status, a response without an account id, a missing credential, or an expired access token this Gateway process has not attested before. OpenClaw never refreshes, writes, logs, or stores the token. It keeps only, in process memory, which owner it attested for a keyed hash of each token (the key is random per process), and persists only the private account fingerprint described above. Before every Claude spawn and prompt send, before it answers Claude's prompt hook with the turn's private context, and at each transcript coverage commit, OpenClaw rereads the credential and accepts it only if this process already attested that exact token to the same owner. If the check fails at the prompt hook, the turn's private context is withheld. A coverage commit asks for that check from inside its database transaction, as the last step before the rows and their coverage commit together, so a login that changes while the commit is queued leaves the rows without coverage. These checks never wait on the network. If the credential differs, a turn that may carry saved history is refused before Claude receives it. That is every turn of a conversation this login owns, fresh or resumed, because a fresh session can receive a recovery prompt and a resumed session receives reference context and interrupted inputs. A turn prepared on a token close to expiry carries no saved history and runs: OpenClaw attests the new token in the background and waits for that result after the Claude process exits, and the turn's transcript rows are covered only if the new token belongs to the same account. Otherwise the rows are kept but not covered, so their history is not replayed later. Claude CLI rotates its access token itself, before it accepts a prompt, once the token is within minutes of expiry. A turn prepared on a token that close to expiry therefore runs without saved history or interrupted inputs, and after the Claude process exits OpenClaw attests the token it rotated to before the turn's rows are covered. After a Gateway restart, an access token that expired while idle cannot be attested until Claude refreshes it, so that turn has no owner and history stays refused for the conversation. A plan or token change for the same account does not change the owner. Moving the same account between the native login and a forwarded credential changes the owner, so earlier history is not replayed.
 
-Without the `attestNativeLogin` opt-in, a native `claude auth login` registered with `--method cli` is an opaque CLI login and cannot authorize automatic replay. A subscription token saved with `openclaw models auth paste-token --provider anthropic` gives new `claude-cli` chats a recoverable owner. Chats that already hold history without a recorded boundary stay refused after the token is saved; a new chat establishes the boundary.
+Without the `attestNativeLogin` opt-in, a native `claude auth login` registered with `--method cli` is an opaque CLI login and cannot authorize older-history recovery. The same-session handoff described above remains available on native resume. A subscription token saved with `openclaw models auth paste-token --provider anthropic` gives new `claude-cli` chats a recoverable owner. Chats that already hold history without a recorded boundary stay refused after the token is saved; a new chat establishes the boundary.
 
 This uses existing session metadata and transcript generation/sequence counters. No SQLite schema migration or transcript deletion occurs. Existing conversations are not backfilled from their latest native binding. Older binaries do not enforce this new recovery boundary. After a downgrade and subsequent transcript writes, upgrading again refuses automatic replay because those writes are not covered. Do not rely on a downgrade to preserve the new security behavior.
 
-Explicit caller-owned in-memory context remains caller-supplied input, not permission to read a durable conversation carrying the same identifiers. Authentication invalidations still refuse its recovery prompt and saved session notes. When automatic recovery is refused, the saved transcript remains intact. The next CLI process receives the current request without the saved history or notes.
+Explicit caller-owned in-memory context remains caller-supplied input, not permission to read a durable conversation carrying the same identifiers. Authentication invalidations still refuse its recovery prompt and saved session notes. When automatic recovery is refused, the saved transcript remains intact. A fresh CLI process receives the current request without saved history or notes; the same native resume may also receive the bounded conversation handoff described above.
 
-An admitted resume of the same native Claude session can still receive the count, time range, and models of intervening messages, plus a `sessions_history` call for the current chat when that tool is available. A fresh native Claude session after an authentication-profile, epoch, or unknown-identity boundary can receive the same metadata about earlier recorded messages in its existing OpenClaw chat. This notice contains no transcript text or saved notes and does not authorize automatic replay; reading history remains an on-demand tool action subject to the current tool policy.
+When the handoff is unavailable, an admitted native Claude resume can still receive the count, time range, and models of intervening messages, plus a `sessions_history` call for the current chat when that tool is available. A fresh native Claude session after an authentication-profile, epoch, or unknown-identity boundary can receive the same metadata about earlier recorded messages in its existing OpenClaw chat. This notice contains no transcript text or saved notes and does not authorize automatic replay; reading history remains an on-demand tool action subject to the current tool policy.
 
 The notice prefixes only that native user turn. OpenClaw keeps the original user text; native-history imports correlate the prefixed turn with its existing local row instead of adding a duplicate.
 
@@ -508,6 +579,11 @@ Serialization: `serialize: true` keeps same-lane runs ordered (most CLIs seriali
 When the resolved MCP tool names change, OpenClaw starts a fresh native CLI session
 and logs `cli session reset: provider=<backend> reason=prompt-tools`. This refreshes
 the CLI's cached tool catalog; resending prompt text alone cannot refresh it.
+Tools that follow the calling client (`screen`, `show_widget`, `suggest_task`,
+`dismiss_task`) do not count: subagent-completion and channel turns drop them, and
+resetting on each change would discard the session's context. Their change still
+alters the system prompt, so a warm process restarts and the resumed CLI lists the
+current tools.
 The OpenClaw chat remains intact, and saved-history recovery follows the
 [history account boundaries](#history-account-boundaries) above. System-prompt-only
 changes continue to reuse the native session when the backend can resend the prompt.
@@ -546,8 +622,11 @@ For JSONL, banner scanning starts fresh on each line.
 
 Claude streaming limits discount recognized partial-message envelopes while
 counting their text, thinking, and tool-input payloads. Cumulative snapshots and
-tool results still count toward the output budget. Single-line limits and bounded
-frame counts remain active, including for empty or unrecognized events.
+tool results still count toward the output budget. Forwarded subagent assistant
+messages and tool-result messages that the parser discards are charged a fixed
+allowance for their parent progress id. Child attribution alone does not earn
+that discount: retained stream-event text still counts toward the same 8 MiB
+output limit. Single-line limits and bounded frame counts remain active.
 
 Input modes:
 

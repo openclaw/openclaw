@@ -187,7 +187,6 @@ suite.define(() => {
 
       await expect.poll(archivedRequests).toHaveLength(initialRequests + 2);
       await archivedRow.waitFor({ state: "detached" });
-      await captureUiProof(suite, page, "filtered-roster-forced-refresh-after.png");
     });
   });
 

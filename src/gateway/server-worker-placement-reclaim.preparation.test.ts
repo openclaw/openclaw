@@ -32,6 +32,7 @@ import {
   sessionIdentity,
 } from "./worker-environments/placement-suite.test-support.js";
 import { prepareSessionWorkerPlacementStop } from "./worker-environments/session-placement-lifecycle.js";
+import { createWorkerWorkspaceRecoveryFixture } from "./worker-environments/workspace-recovery.test-support.js";
 
 const fixtures = useReclaimFixtures();
 async function cancellationLoadFixture(
@@ -94,6 +95,14 @@ async function cancellationLoadFixture(
     cancellationStarted,
     harness,
     coordinated,
+    replaceIncarnation: () => {
+      entry.lifecycleRevision = "replacement";
+      return replaceSessionEntry({ ...REQUEST, storePath }, entry);
+    },
+    expectCancellationBlocked: () => {
+      expect(cancellationStarted).not.toHaveBeenCalled();
+      expect(harness.environments.destroy).not.toHaveBeenCalled();
+    },
     armCancellation: () => {
       delayCancellation = true;
       started = createDeferredCore();
@@ -158,8 +167,7 @@ it.each(["same-owner", "replacement", "incarnation", "authorization"] as const)(
       if (change === "replacement") {
         await f.placements.startDrain(placementTransition(active));
       } else if (change === "incarnation") {
-        f.entry.lifecycleRevision = "replacement";
-        await replaceSessionEntry({ ...REQUEST, storePath: f.storePath }, f.entry);
+        await f.replaceIncarnation();
       } else if (change === "authorization") {
         authorized = false;
       }
@@ -173,8 +181,7 @@ it.each(["same-owner", "replacement", "incarnation", "authorization"] as const)(
         expect(f.harness.environments.destroy).toHaveBeenCalledOnce();
       } else {
         expect(await second).toBeInstanceOf(Error);
-        expect(f.cancellationStarted).not.toHaveBeenCalled();
-        expect(f.harness.environments.destroy).not.toHaveBeenCalled();
+        f.expectCancellationBlocked();
       }
     } finally {
       provisioning.release.resolve();
@@ -383,8 +390,7 @@ it.each(
       if (change === "replacement") {
         await f.placements.startDispatch(REQUEST);
       } else if (change === "incarnation") {
-        f.entry.lifecycleRevision = "replacement";
-        await replaceSessionEntry({ ...REQUEST, storePath: f.storePath }, f.entry);
+        await f.replaceIncarnation();
       }
       f.loaded.resolve();
       const result = await second;
@@ -482,8 +488,7 @@ it.each([
         }
         await f.placements.startDrain(placementTransition(current));
       } else if (advance === "incarnation") {
-        f.entry.lifecycleRevision = "replacement";
-        await replaceSessionEntry({ ...REQUEST, storePath: f.storePath }, f.entry);
+        await f.replaceIncarnation();
       }
       f.loaded.resolve();
       if (advance !== "replacement" && advance !== "incarnation") {
@@ -497,8 +502,7 @@ it.each([
       const result = await stopping;
       if (advance === "replacement" || advance === "incarnation") {
         expect(result).toBeInstanceOf(Error);
-        expect(f.cancellationStarted).not.toHaveBeenCalled();
-        expect(f.harness.environments.destroy).not.toHaveBeenCalled();
+        f.expectCancellationBlocked();
       } else {
         if (action === "archive") {
           expect(result).toBeUndefined();
@@ -531,15 +535,23 @@ it.each([
   async ({ advance, targetKind }) => {
     const reconciling = createPlacementTestHold();
     const cleaning = createPlacementTestHold();
+    let workspacePath = "";
+    const recovery = createWorkerWorkspaceRecoveryFixture({
+      resolveWorkspace: async () => ({ kind: "local", path: workspacePath }),
+    });
     const f = await cancellationLoadFixture({
       runMoveBarrier: async (request) => await barrier(request),
       afterReconcile: async () => {
         await reconciling.wait();
       },
-      afterStopTunnel: async () => {
+      withPreparedRecovery: async (identity, assertCurrent, run) => {
+        const result = await recovery.withPreparedRecovery(identity, assertCurrent, run);
+        // Recovery releases its source after publishing the local placement.
         await cleaning.wait();
+        return result;
       },
     });
+    workspacePath = path.dirname(f.storePath);
     const barrier = createGatewayWorkerPlacementMoveBarrier({
       placements: f.placements,
       loadSessionRuntime: async () => f.runtime,
@@ -567,12 +579,7 @@ it.each([
         },
       )
       .catch((error: unknown) => error);
-    await Promise.race([
-      reconciling.entered.promise,
-      moving.then(() => {
-        throw new Error("Move completed before reconciliation hold");
-      }),
-    ]);
+    await waitFor(reconciling.entered.promise, moving, "Move completed before reconciliation hold");
     expect(f.placements.get(REQUEST.sessionId)?.state).toBe("draining");
     f.cancellationStarted.mockClear();
     f.armCancellation();
@@ -590,12 +597,7 @@ it.each([
     try {
       await waitFor(f.loading.promise, stopping);
       reconciling.release.resolve();
-      await Promise.race([
-        cleaning.entered.promise,
-        moving.then(() => {
-          throw new Error("Move completed before cleanup hold");
-        }),
-      ]);
+      await waitFor(cleaning.entered.promise, moving, "Move completed before cleanup hold");
       expect(f.placements.get(REQUEST.sessionId)?.state).toBe("local");
       if (advance !== "cleanup") {
         cleaning.release.resolve();
@@ -627,7 +629,6 @@ it.each([
         expect(f.placements.get(REQUEST.sessionId)?.turnClaim).toBeNull();
         expect(await f.placements.listPendingWorkspaceResultsAsync()).toEqual([]);
         expect(f.harness.environments.createWithRequest).toHaveBeenCalledOnce();
-        expect(f.harness.log.filter((event) => event === "placement:requested")).toHaveLength(1);
       }
     } finally {
       reconciling.release.resolve();

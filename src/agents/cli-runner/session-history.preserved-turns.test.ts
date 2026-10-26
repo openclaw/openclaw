@@ -64,7 +64,7 @@ it("preserves unseen Claude exchanges and bounds", async ({ onTestFinished }) =>
   const load = (overrides: Partial<Parameters<typeof loadCliSessionPromptContext>[0]> = {}) =>
     loadCliSessionPromptContext({ ...resumed, ...overrides });
   const preserved = async (overrides: Parameters<typeof load>[0] = {}) =>
-    (await load(overrides)).preservedTurnsContext;
+    (await load(overrides)).resumeContext;
   await turn(0, "Spawn the review.");
   await turn(1, "Child result: CHILD_RESULT_7f3a9c", completion);
   await turn(2, "Refresh the card.", {
@@ -77,19 +77,24 @@ it("preserves unseen Claude exchanges and bounds", async ({ onTestFinished }) =>
   const context = await load();
   const prompt = annotateInterSessionPromptText("Child result: CHILD_RESULT_7f3a9c", completion);
   const exchanges = [
-    { source: "subagent_announce", prompt, reply: "reply-1" },
-    { source: "subagent_announce", reply: "reply-3" },
+    { role: "user", content: prompt },
+    { role: "assistant", content: "reply-1" },
+    { role: "assistant", content: "reply-3" },
   ];
-  expect(context.preservedTurnsContext).toContain(JSON.stringify(exchanges));
-  expect(context.preservedTurnsContext).toContain("Verify current and time-sensitive facts");
+  expect(context.resumeContext).toContain(JSON.stringify(exchanges));
+  expect(context.resumeContext).toContain("Verify current and time-sensitive facts");
   expect(context.sessionGapContext).toBeUndefined();
   expect(await preserved({ nativeSessionId: undefined })).toBeUndefined();
 
-  const withheld = await load({ rawTranscriptReseedReason: "auth-unknown" });
-  expect(withheld.preservedTurnsContext).toBeUndefined();
-  expect(withheld.sessionGapContext).toBe(
-    '[OpenClaw: 5 messages recorded in this chat since your last reply here (possibly already in this session) from 1970-01-01T00:00:03.000Z to 1970-01-01T00:00:08.000Z, using "claude-cli/test-model". Their contents are not included here.]',
+  expect((await load({ rawTranscriptReseedReason: "auth-unknown" })).resumeContext).toBe(
+    context.resumeContext,
   );
+  const withheld = await load({
+    rawTranscriptReseedReason: "auth-unknown",
+    nativeSessionId: undefined,
+  });
+  expect(withheld.resumeContext).toBeUndefined();
+  expect(withheld.reseedMessages).toEqual([]);
 
   await turn(4, "What did the review find?");
   expect(await preserved()).toBeUndefined();
@@ -100,9 +105,9 @@ it("preserves unseen Claude exchanges and bounds", async ({ onTestFinished }) =>
   }
   await reply(14, "announce:long", "```" + "x".repeat(3_000));
   const newest = await preserved();
-  expect(newest).not.toContain('"reply":"reply-6"');
+  expect(newest).not.toContain('"content":"reply-6"');
   for (let index = 7; index < 14; index++) {
-    expect(newest).toContain(`"reply":"reply-${index}"`);
+    expect(newest).toContain(`"content":"reply-${index}"`);
   }
   expect(newest).toContain("`\u200b``");
   expect(newest).toContain("…[truncated]");

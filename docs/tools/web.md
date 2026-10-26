@@ -250,6 +250,13 @@ payload carrying an `error` key is always reported as `kind: "error"` with the
 raw provider code preserved inside the wrapped message. Raw passthrough
 payloads keep whatever markers the provider set.
 
+Structured results share a 20,000-character budget for URLs and sanitized prose,
+excluding external-content envelopes. URLs are reserved first. Prose is allocated
+from shorter to longer sanitized rows without changing provider result order, so
+long early snippets cannot consume the entire budget before later rows receive a
+share. Sanitization expansion counts toward the budget; truncated output sets
+`truncated: true`.
+
 Perplexity, Tavily, and xAI HTTP errors retain the status code and bounded
 diagnostics, with reflected request credentials redacted. Review diagnostics
 before sharing them; redaction does not remove every kind of sensitive content.

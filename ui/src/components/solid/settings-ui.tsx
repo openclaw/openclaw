@@ -4,48 +4,10 @@ import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { Icon } from "./icon.tsx";
+import type { SettingsSegmentedProps, SettingsToggleControl } from "./settings-ui.types.ts";
 import "../tooltip.ts";
 
-export type SettingsToggleControl = {
-  checked: boolean;
-  disabled?: boolean;
-  onChange: (checked: boolean) => boolean | void;
-  onAct?: (checked: boolean) => void;
-};
-
-type SettingsSegmentedOption<T extends string, Label> = {
-  value: T;
-  label: Label;
-  title?: string;
-  testId?: string;
-  disabled?: boolean;
-  compactLabel?: string;
-  ariaLabel?: string;
-};
-
-export type SettingsSegmentedProps<T extends string, Label> = {
-  value: T;
-  options: ReadonlyArray<SettingsSegmentedOption<T, Label>>;
-  inputRef?: (value: T, element: HTMLInputElement) => void;
-  disabled?: boolean;
-  ariaLabel?: string;
-  descriptionId?: string;
-  class?: string;
-} & (
-  | {
-      mode?: undefined;
-      ariaRequired?: boolean;
-      onChange: (value: T, element: HTMLElement) => boolean | void;
-      onReselect?: (value: T, element: HTMLElement) => void;
-    }
-  | {
-      mode: "buttons";
-      variant?: "accent" | "primary" | "compact";
-      onClick?: (event: MouseEvent, value: T) => void;
-      onChange: (value: T) => void;
-      onReselect?: (value: T) => void;
-    }
-);
+export type { SettingsSegmentedProps, SettingsToggleControl } from "./settings-ui.types.ts";
 
 let radioId = 0;
 const nextSettingsRadioName = () => `settings-radio-${++radioId}`;
@@ -58,6 +20,25 @@ const CARAPACE_STATUS_CLASS: Record<SettingsStatusKind, string> = {
   ok: "oc-status-success",
   warn: "oc-status-warning",
 };
+
+export function RetryAction(props: {
+  onRetry: () => void;
+  label?: string;
+  class?: string;
+  type?: "button" | "submit" | "reset";
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      class={props.class ?? "btn btn--sm"}
+      type={props.type}
+      disabled={props.disabled}
+      onClick={() => props.onRetry()}
+    >
+      {props.label ?? t("common.retry")}
+    </button>
+  );
+}
 
 type SettingsRowProps = {
   title: JSX.Element;
@@ -307,11 +288,12 @@ function ToggleControl(
         type="checkbox"
         role="switch"
         checked={props.checked}
-        aria-disabled={props.disabled ? "true" : undefined}
+        disabled={props.disabled}
+        aria-disabled={props.saving ? "true" : undefined}
         aria-labelledby={props.labelledBy ?? labelId}
         onClick={(event) => {
           const input = event.currentTarget;
-          if (props.disabled) {
+          if (props.disabled || props.saving) {
             // Busy switches keep focus (aria-disabled), so cancel the native toggle here.
             event.preventDefault();
           } else if (!input.matches(":disabled") && input.checked !== props.checked) {
@@ -323,6 +305,7 @@ function ToggleControl(
           if (
             input.matches(":disabled") ||
             props.disabled ||
+            props.saving ||
             props.onChange(input.checked) === false
           ) {
             input.checked = props.checked;
@@ -333,7 +316,7 @@ function ToggleControl(
             return;
           }
           const input = event.currentTarget;
-          if (input.matches(":disabled") || props.disabled) {
+          if (input.matches(":disabled") || props.disabled || props.saving) {
             return;
           }
           event.preventDefault();
@@ -391,7 +374,7 @@ export function SettingsToggleRow(
         ) {
           return;
         }
-        if (!input || input.matches(":disabled") || props.disabled) {
+        if (!input || input.matches(":disabled") || props.disabled || props.saving) {
           return;
         }
         input.click();
@@ -459,12 +442,12 @@ export function SettingsSegmented<T extends string>(props: SettingsSegmentedProp
                     name={name}
                     value={option().value}
                     checked={option().value === props.value}
-                    disabled={option().disabled}
-                    aria-disabled={props.disabled ? "true" : undefined}
+                    disabled={props.disabled || option().disabled}
+                    aria-disabled={props.saving ? "true" : undefined}
                     aria-label={option().ariaLabel}
                     onClick={(event) => {
                       const input = event.currentTarget;
-                      if (props.disabled) {
+                      if (props.disabled || props.saving) {
                         // Busy radios keep focus (aria-disabled), so cancel the native selection.
                         event.preventDefault();
                         return;
@@ -486,6 +469,7 @@ export function SettingsSegmented<T extends string>(props: SettingsSegmentedProp
                       }
                       if (
                         props.disabled ||
+                        props.saving ||
                         input.matches(":disabled") ||
                         props.onChange(
                           option().value,
@@ -522,7 +506,7 @@ export function SettingsSegmented<T extends string>(props: SettingsSegmentedProp
                           return;
                       }
                       event.preventDefault();
-                      if (props.disabled) {
+                      if (props.disabled || props.saving) {
                         return;
                       }
                       const enabled = radios().filter((radio) => !radio.matches(":disabled"));
@@ -573,10 +557,10 @@ function SettingsSegmentedButtons<T extends string>(props: SettingsSegmentedProp
             data-compact-label={option().compactLabel}
             data-test-id={option().testId}
             title={option().title}
-            disabled={option().disabled}
-            aria-disabled={props.disabled ? "true" : undefined}
+            disabled={props.disabled || option().disabled}
+            aria-disabled={props.saving ? "true" : undefined}
             onClick={(event) => {
-              if (props.mode !== "buttons" || props.disabled) {
+              if (props.mode !== "buttons" || props.disabled || props.saving) {
                 return;
               }
               props.onClick?.(event, option().value);

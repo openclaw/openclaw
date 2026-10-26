@@ -2,7 +2,7 @@
 import { expect, vi } from "vitest";
 import type { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 
-export function createRuntimeProbeResult(bunVersion = "1.4.3") {
+export function createRuntimeProbeResult(bunVersion: string | null = "1.4.3") {
   return {
     stdout: JSON.stringify({
       nodeVersion: "26.8.1",

@@ -83,8 +83,13 @@ export class SubagentSessionReadLookup {
   }
 
   set(cacheKey: string, entry: LookupIdentity | undefined): void {
-    this.#topology = undefined;
     const previous = this.#memberships.get(cacheKey);
+    if (
+      previous?.entry.childSessionKey !== entry?.childSessionKey ||
+      previous?.entry.requesterSessionKey !== entry?.requesterSessionKey
+    ) {
+      this.#topology = undefined;
+    }
     if (!entry) {
       if (previous) {
         this.#index(previous, false);

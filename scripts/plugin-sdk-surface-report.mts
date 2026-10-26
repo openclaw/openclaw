@@ -233,7 +233,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: shared database-engine host and worker adapters.
       // +1: maintainer-requested context-engine-transcript-runtime watermark subpath (2026-10-08).
       // +1: approved shared OpenAI Decisions codec used by OpenAI and ClawRouter.
-      157,
+      // +1: approved lightweight nullable request-header projection for provider transports.
+      158,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -293,7 +294,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: awaited web_search policy preparation for harnesses; the sync resolver stays.
       // +3: shared Decisions support/evaluation functions and the canonical capability schema.
       // +2: openRecord and ToolArgumentValidationError on the existing tool-plugin facade.
-      3815,
+      // +1: resolveManagedResourceStateDir keeps plugin-managed model caches and binaries on the operator root during redirected agent exec.
+      3816,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -338,7 +340,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: the same awaited web_search policy preparation.
       // +2: the same shared Decisions support predicate and evaluator.
       // +1: the same openRecord helper; ToolArgumentValidationError is construct-only.
-      2211,
+      // +1: resolveManagedResourceStateDir keeps plugin-managed model caches and binaries on the operator root during redirected agent exec.
+      2212,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

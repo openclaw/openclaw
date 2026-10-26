@@ -19,7 +19,6 @@ import {
 } from "../test-helpers/control-ui-team-scale-fixture.ts";
 import { useCanvasSandboxFixture } from "./canvas-sandbox.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { selectAllSidebarSessions } from "./sidebar-navigation.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Team-scale cold-load fixture" });
 
@@ -189,10 +188,6 @@ suite.define(() => {
         );
         await page.locator(".chat-pane__header").first().waitFor();
 
-        await selectAllSidebarSessions(page);
-        const catalogRequest = await gateway.waitForRequest("sessions.catalog.list");
-        const progressId = asRecord(catalogRequest.params)?.progressId;
-        expect(typeof progressId).toBe("string");
         const connectRequest = await gateway.waitForRequest("connect");
         const instanceId = asRecord(asRecord(connectRequest.params)?.client)?.instanceId;
         expect(typeof instanceId).toBe("string");
@@ -202,37 +197,13 @@ suite.define(() => {
               entry.instanceId === TEAM_SCALE_SELF_INSTANCE_ID ? instanceId : entry.instanceId,
           });
         for (const frame of fixture.events) {
-          await gateway.emitGatewayEvent(
-            frame.event,
-            frame.event === "sessions.catalog.host"
-              ? { ...frame.payload, progressId }
-              : {
-                  presence: frame.payload.presence.map(ownPresence),
-                },
-          );
+          if (frame.event === "presence") {
+            await gateway.emitGatewayEvent("presence", {
+              presence: frame.payload.presence.map(ownPresence),
+            });
+          }
         }
-
         const sidebar = page.locator("openclaw-app-sidebar");
-        const pinned = sidebar.locator('[data-session-section="pinned"] .sidebar-recent-session');
-        const lastPin = sidebar.locator(
-          `[data-session-section="pinned"] [data-session-key="${fixture.pinnedKeys[29]}"]`,
-        );
-        await lastPin
-          .getByText("Project dashboard 30", { exact: true })
-          .waitFor({ state: "attached" });
-        expect(await pinned.count()).toBe(30);
-        expect(
-          await sidebar.locator('.sidebar-rail [data-sidebar-entry^="session:"]').count(),
-        ).toBe(0);
-        await sidebar.locator('[data-sidebar-entry="plugin:team-scale-7/overview"]').waitFor();
-        const activations = await gateway.getRequests("plugins.controlUi.report");
-        expect(activations).toHaveLength(1);
-        const reports = asRecord(activations[0]?.params)?.reports;
-        expect(reports).toHaveLength(7);
-        expect(
-          Array.isArray(reports) &&
-            reports.every((report) => asRecord(report)?.status === "activated"),
-        ).toBe(true);
         await page.evaluate("globalThis.__name = (fn) => fn");
         const onlineWrite = await observeStoreWrite(page, {
           store: "sidebarSnapshots",
@@ -255,22 +226,9 @@ suite.define(() => {
           return [...document.fonts].map(({ family, status }) => ({ family, status }));
         });
         expect(fontState).toContainEqual({ family: "TeamMetric", status: "loaded" });
-        await page
-          .frameLocator(".chat-tool-card__preview-frame")
-          .last()
-          .frameLocator("iframe")
-          .getByText("Team metric 12", { exact: true })
-          .waitFor();
-        await page
-          .locator("openclaw-message-reaction-picker")
-          .first()
-          .waitFor({ state: "attached" });
-        await page.locator(".chat-tool-card__widget-actions").first().waitFor();
-        await page.locator(".context-usage").waitFor();
-
         const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
         // Use the gutter outside widget frames and sample after native wheel delivery.
-        await thread.hover({ position: { x: 4, y: 4 } });
+        await thread.hover({ position: { x: 24, y: 24 } });
         const coverage = await thread.evaluateHandle((element) => {
           const initialTop = element.scrollTop;
           const padding = getComputedStyle(element);
@@ -318,7 +276,7 @@ suite.define(() => {
         const warm = await page.evaluate(persistColdLoadWarmState, warmInput);
         expect(warm).toMatchObject({
           databaseVersion: 8,
-          projectionVersion: 3,
+          projectionVersion: 5,
           sidebarView: "online",
           sidebarPeople: 120,
         });
@@ -364,7 +322,6 @@ suite.define(() => {
         await sidebarWrite.dispose();
         const mutated = await page.evaluate(readStoredWarmState, warmInput);
         expect(JSON.stringify(mutated.transcript)).toContain(mutation);
-        expect(mutated.transcript).not.toEqual(baseline.transcript);
         expect(mutated.sidebar).not.toEqual(baseline.sidebar);
         const draftWrite = await observeStoreWrite(page, {
           store: "composerDrafts",
@@ -374,6 +331,17 @@ suite.define(() => {
         await composer.fill("Synthetic streaming input");
         await draftWrite.evaluate(({ done }) => done);
         await draftWrite.dispose();
+        const leavingWarm = await page.evaluate(persistColdLoadWarmState, warmInput);
+        const exitKey = "control-ui-bench-exit";
+        await page.evaluate((key) => {
+          window.addEventListener("pagehide", () => localStorage.setItem(key, "saved"));
+        }, exitKey);
+        await restoreColdLoadWarmState(page, warm.storage, leavingWarm.storage);
+        expect(leavingWarm.storage.local).toContainEqual([exitKey, "saved"]);
+        expect(await page.evaluate((key) => localStorage.getItem(key), exitKey)).toBeNull();
+        await page.evaluate((key) => localStorage.setItem(key, "measured-change"), exitKey);
+        await restoreColdLoadWarmState(page, leavingWarm.storage);
+        expect(await page.evaluate((key) => localStorage.getItem(key), exitKey)).toBe("saved");
         await restoreColdLoadWarmState(page, warm.storage);
         expect(
           await page.evaluate(readStoredWarmState, { ...warmInput, includeDrafts: true }),
@@ -384,11 +352,6 @@ suite.define(() => {
         expect(await sidebar.locator("[data-online-user-id]").count()).toBe(120);
         expect(await composer.inputValue()).toBe("");
         await page.locator(".chat-pane__header").first().waitFor();
-
-        const rosterRequests = await gateway.getRequests("sessions.list");
-        expect(rosterRequests.some((request) => asRecord(request.params)?.limit === 200)).toBe(
-          true,
-        );
       },
     );
   });

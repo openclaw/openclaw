@@ -87,7 +87,7 @@ suite.define(() => {
           }),
         );
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, source));
-        await gateway.waitForRequest("chat.startup");
+        await gateway.waitForRequest("sessions.messages.subscribe");
         await page.getByText("Synthetic navigation proof.").first().waitFor();
         const client = {
           connId,

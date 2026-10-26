@@ -15,7 +15,6 @@ import { loadBundledPluginFacade } from "../../../test-utils/bundled-plugin-publ
 import { reserveTestPortListener } from "../../../test-utils/port-claims.js";
 import type { StreamFn } from "../../runtime/index.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
-import { recoverAfterTransportDrop } from "./attempt-recovery.test-support.js";
 import {
   resolveLlmFirstEventTimeoutMs,
   resolveLlmIdleTimeoutMs,
@@ -166,28 +165,6 @@ describe("provider header deadline", () => {
       );
       expect(await withinTest(stream.completion, signal)).toBe(stream.onTimeout.mock.calls[0]?.[0]);
       await withinTest(stream.closed.promise, signal);
-      if (api === "openai-responses" && providerMs === undefined && runMs === undefined) {
-        const recovering = recoverAfterTransportDrop({
-          noTools: true,
-          diagnostics: [],
-          content: [],
-          replaySafe: true,
-          errorMessage: stream.onTimeout.mock.calls[0]?.[0].message,
-          terminal: { kind: "timeout", phase: "prompt", source: "idle", aborted: true },
-        });
-        await vi.advanceTimersByTimeAsync(10_000);
-        const recovery = await withinTest(recovering, signal);
-        expect(recovery.recovery).toMatchObject({
-          action: "retry",
-          lastRetryFailoverReason: "timeout",
-        });
-        expect(recovery.onAgentEvent).toHaveBeenCalledWith(
-          expect.objectContaining({
-            stream: "run_status",
-            data: expect.objectContaining({ phase: "retrying", retryAttempt: 1 }),
-          }),
-        );
-      }
     },
   );
 

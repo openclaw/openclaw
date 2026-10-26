@@ -58,6 +58,19 @@ export function createModelSpeedPolicyResolver(params: {
       return {};
     }
     const route = evaluation.selectedRoute ?? entry;
+    if (!policy.resolveFastModeSupport && !policy.resolveServiceTiers) {
+      return {
+        supportsFastMode: undefined,
+        serviceTiers: undefined,
+        supportsServiceTierRecovery:
+          (runtimeId ?? entry.nativeRuntime) === "openclaw" &&
+          supportsNativeOpenAIResponsesEndpoint({
+            provider: entry.provider,
+            api: route.api ?? "",
+            baseUrl: route.baseUrl,
+          }),
+      };
+    }
     const { defaultParams, modelParams, agentModelParams, agentParams } =
       resolveModelExtraParamSources({
         config: params.cfg,

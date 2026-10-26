@@ -29,7 +29,7 @@ import {
 } from "./run-lifecycle.ts";
 import { replaceChatStream } from "./stream-causal-boundary.ts";
 import { materializeVisibleStreamState } from "./stream-reconciliation.ts";
-import { handleAgentEvent } from "./tool-stream.ts";
+import type { handleAgentEvent } from "./tool-stream.ts";
 
 export function materializeVisibleAssistantStreamMessages(
   messages: unknown[],
@@ -99,12 +99,14 @@ export function readRunProjections(state: ChatState, sessionKey: string, agentId
 export function applyHistoryRun(params: {
   state: ChatState;
   run: ChatHistoryResult["inFlightRun"];
+  observedRunActivity?: boolean;
   sessionInfo: GatewaySessionRow | undefined;
   historyRun: ChatHistoryRunObservation | undefined;
   previousRunProjections: ReturnType<typeof getChatSessionProjection>["runs"];
   runProjectionsBeforeApply: ReturnType<typeof getChatSessionProjection>["runs"];
   currentRunProjections: ReturnType<typeof getChatSessionProjection>["runs"];
   resetStream: boolean;
+  replayAgentEvent: typeof handleAgentEvent | undefined;
 }): void {
   const {
     state,
@@ -274,7 +276,10 @@ export function applyHistoryRun(params: {
   );
   const startupPhase = startup?.data.phase;
   if (
-    run.text &&
+    (run.text ||
+      (!startup &&
+        state.chatRunStartup?.runId !== inFlightRunId &&
+        (params.observedRunActivity ?? state.knownAgentRunIds?.has(inFlightRunId)))) &&
     startupPhase !== "waiting_for_model" &&
     !isChatRunRecoveryStatus(state.chatRunStartup)
   ) {
@@ -297,7 +302,7 @@ export function applyHistoryRun(params: {
     for (const event of run.events) {
       if (event?.runId === run.runId) {
         // SAFETY: history replays the same agent events against the pane that owns live tool state.
-        handleAgentEvent(state as never, event as never, "history");
+        params.replayAgentEvent?.(state as never, event as never, "history");
       }
     }
   }

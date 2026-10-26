@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import type { Command } from "commander";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { runWithLocalStateOwner } from "openclaw/plugin-sdk/cli-state-owner";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -23,6 +24,22 @@ import { getMatrixRuntime } from "./runtime.js";
 import type { CoreConfig } from "./types.js";
 
 const MATRIX_CLI_RECOVERY_KEY_STDIN_MAX_BYTES = 1024 * 1024;
+
+export function withMatrixVerificationBootstrapOptions(command: Command): Command {
+  return command
+    .option("--account <id>", "Account ID (for multi-account setups)")
+    .option(
+      "--recovery-key <key>",
+      "Recovery key to apply before bootstrap (prefer --recovery-key-stdin)",
+    )
+    .option("--recovery-key-stdin", "Read the Matrix recovery key from stdin")
+    .option(
+      "--force-reset-cross-signing",
+      "Force reset cross-signing identity before bootstrap (requires active recovery key)",
+    )
+    .option("--verbose", "Show detailed diagnostics")
+    .option("--json", "Output as JSON");
+}
 
 async function readMatrixCliRecoveryKeyFromStdin(): Promise<string> {
   const bytes = await readByteStreamWithLimit(process.stdin, {

@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createCliTtyMock } from "../cli/test-runtime-capture.js";
 import { createConfigIO } from "../config/io.factory.js";
 import { patchConfigHealthEntryToStore } from "../config/io.health-state.js";
 import { promoteConfigSnapshotToLastKnownGood, readConfigFileSnapshot } from "../config/io.js";
@@ -82,16 +83,12 @@ function runDoctorConfigPreflight(
 }
 
 async function withStdoutIsTTY<T>(isTTY: boolean, run: () => Promise<T>): Promise<T> {
-  const original = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
-  Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: isTTY });
+  const ttyMock = createCliTtyMock([process.stdout]);
+  ttyMock.set(isTTY);
   try {
     return await run();
   } finally {
-    if (original) {
-      Object.defineProperty(process.stdout, "isTTY", original);
-    } else {
-      Reflect.deleteProperty(process.stdout, "isTTY");
-    }
+    ttyMock.restore();
   }
 }
 

@@ -36,7 +36,7 @@ const suite = createControlUiE2eSuite({
 
 let activePage: Page | undefined;
 
-function ownerSessions(visibility: "draft" | "shared", single = false) {
+function ownerSessions(visibility: "draft" | "shared" | "read-only", single = false) {
   const sessions = visibility === "draft" ? draftSessionsList() : sessionsList();
   const active = sessions.sessions[0];
   if (!active) {
@@ -52,7 +52,7 @@ function ownerSessions(visibility: "draft" | "shared", single = false) {
 }
 
 async function newPage(width = 1200) {
-  const context = await suite.browser.newContext({ viewport: { height: 800, width } });
+  const context = await suite.newBrowserContext({ viewport: { height: 800, width } });
   activePage = await context.newPage();
   return activePage;
 }
@@ -118,11 +118,10 @@ function geometry(element: Element) {
 
 suite.define(() => {
   afterEach(async () => {
-    await activePage
-      ?.context()
-      .close()
-      .catch(() => {});
-    activePage = undefined;
+    if (activePage) {
+      await suite.closeBrowserContext(activePage.context());
+      activePage = undefined;
+    }
   });
 
   it("keeps collaborative owner stacks legible without shifting session rows", async () => {
@@ -260,9 +259,12 @@ suite.define(() => {
     await chooseSidebarMenuOption(page, "Group by", "Person");
     await closeSidebarMenu(page);
     await chooseOwner(page, "owner:profile-patrick");
-    // The picker helper's Escape also dismisses the mobile drawer.
+    // Escape may close only the picker, leaving the mobile drawer open.
     if (width === 390) {
-      await navigationDrawerToggle(page).click();
+      const toggle = navigationDrawerToggle(page);
+      if ((await toggle.getAttribute("aria-expanded")) !== "true") {
+        await toggle.click();
+      }
       await waitForMobileSidebarDrawerOpen(page);
     }
     const group = page.locator(".sidebar-recent-sessions__group--inline-owner");
@@ -681,7 +683,7 @@ suite.define(() => {
   });
 
   it("lets a read-scoped owner inspect sharing but blocks mutations", async () => {
-    const { page, gateway } = await openSession(ownerSessions("draft"), {
+    const { page, gateway } = await openSession(ownerSessions("read-only"), {
       featureMethods: [...visibilityMethods, ...memberMethods],
       operatorScopes: ["operator.read"],
       methodResponses: {
@@ -689,6 +691,7 @@ suite.define(() => {
           sessionKey: "agent:main:ada",
           members: [],
           identities: [{ type: "human", id: "profile-bob", label: "Bob" }],
+          permissions: [{ identityId: "profile-bob", level: "read", options: ["read", "send"] }],
           role: "owner",
           allowedVisibilities: ["shared", "draft"],
         },
@@ -699,7 +702,7 @@ suite.define(() => {
     await page.getByRole("button", { name: "Session sharing", exact: true }).click();
     await gateway.waitForRequest("session.members.listEvidence");
     const dropdown = page.locator(".chat-pane__sharing-menu");
-    const member = dropdown.getByRole("menuitemcheckbox", { name: "Bob", exact: true });
+    const member = dropdown.getByRole("menuitem", { name: "Bob, Can read", exact: true });
     await expectBrowser(member).toBeVisible();
     await expectBrowser(member).toBeDisabled();
     await member.evaluate((element) => (element as HTMLButtonElement).click());
@@ -731,7 +734,7 @@ suite.define(() => {
       { type: "system" as const, id: "system-operations", label: "Operations" },
     ];
     const { page, gateway } = await openSession(
-      ownerSessions("shared", true),
+      ownerSessions("read-only", true),
       {
         hasMultipleSessionSharingIdentities: true,
         featureMethods: [...chatMethods, ...memberMethods, "session.visibility.set"],
@@ -741,6 +744,11 @@ suite.define(() => {
             sessionKey: "agent:main:ada",
             members: [{ identityId: longMemberId, addedBy: "profile-ada", addedAt: 1 }],
             identities: [...humanIdentities, ...nonHumanIdentities],
+            permissions: humanIdentities.map((identity) => ({
+              identityId: identity.id,
+              level: identity.id === longMemberId ? "send" : "read",
+              options: ["read", "send"],
+            })),
             role: "owner",
             allowedVisibilities: ["shared", "read-only", "suggest", "draft"],
           },
@@ -755,26 +763,20 @@ suite.define(() => {
     const dropdown = page.locator(".chat-pane__sharing-menu");
     const roster = dropdown.locator(".chat-pane__sharing-roster");
     const people = roster.locator(".chat-pane__sharing-person");
-    await expectBrowser(people).toHaveCount(32);
-    const longNameItem = dropdown.getByRole("menuitemcheckbox", {
-      name: longMemberLabel,
-      exact: true,
-    });
-    const longIdItem = dropdown.getByRole("menuitemcheckbox", {
-      name: longMemberId,
-      exact: true,
-    });
+    await expectBrowser(people).toHaveCount(30);
+    const longNameItem = people.filter({ hasText: longMemberLabel });
+    const longIdItem = people.filter({ hasText: longMemberId });
     await longIdItem.scrollIntoViewIfNeeded();
-    await expectBrowser(longIdItem).toBeChecked();
-    const selectedIndicator = longIdItem.locator(".chat-pane__sharing-member-check");
-    await expectBrowser(selectedIndicator).toBeVisible();
-    await expectBrowser(selectedIndicator).toHaveAttribute("aria-label", "Member");
+    const selectedControl = longIdItem.getByRole("menuitem", {
+      name: `${longMemberId}, Can send`,
+      exact: true,
+    });
+    await expectBrowser(selectedControl).toBeVisible();
     expect(
-      await longIdItem.evaluate((item) => {
-        const indicator = item.querySelector<HTMLElement>(".chat-pane__sharing-member-check")!;
-        const itemRect = item.getBoundingClientRect();
-        const indicatorRect = indicator.getBoundingClientRect();
-        return indicatorRect.left >= itemRect.left && indicatorRect.right <= itemRect.right;
+      await selectedControl.evaluate((control) => {
+        const row = control.closest(".chat-pane__sharing-person")!.getBoundingClientRect();
+        const rect = control.getBoundingClientRect();
+        return rect.left >= row.left && rect.right <= row.right;
       }),
     ).toBe(true);
 
@@ -839,8 +841,7 @@ suite.define(() => {
     expect(afterScroll.accessTop).toBeCloseTo(beforeScroll.accessTop, 1);
     expect(afterScroll.permissionsTop).toBeCloseTo(beforeScroll.permissionsTop, 1);
     await expectBrowser(roster.locator("openclaw-session-owner-chip")).toHaveCount(30);
-    // All identities share one list; owner-chip presentation remains human-only.
-    await expectBrowser(roster.locator(".chat-pane__sharing-member-icon > svg")).toHaveCount(2);
+    await expectBrowser(roster.locator(".chat-pane__sharing-member-icon > svg")).toHaveCount(0);
     await expectBrowser(dropdown.getByRole("button", { name: "Next", exact: true })).toHaveCount(0);
     await expectBrowser(
       dropdown.getByRole("button", { name: "Previous", exact: true }),

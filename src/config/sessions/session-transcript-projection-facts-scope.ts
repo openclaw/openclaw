@@ -14,7 +14,11 @@ export function withSessionTranscriptProjectionReceipt<T>(
   return projectionReceipts.run(receipt, read);
 }
 
-function readCurrentReceipt(database: { db: EngineConnection; path: string }, sessionId: string) {
+/** Worker transport already isolated these facts; readers borrow them within this task. */
+export function readSessionTranscriptProjectionReceipt(
+  database: { db: EngineConnection; path: string },
+  sessionId: string,
+) {
   const receipt = projectionReceipts.getStore();
   if (
     !receipt ||
@@ -28,26 +32,13 @@ function readCurrentReceipt(database: { db: EngineConnection; path: string }, se
   return receipt;
 }
 
-export function readSessionTranscriptProjectionReceipt(
-  database: { db: EngineConnection; path: string },
-  sessionId: string,
-) {
-  const receipt = readCurrentReceipt(database, sessionId);
-  return (
-    receipt &&
-    structuredClone({
-      facts: receipt.facts,
-      contextStats: receipt.contextStats,
-      contextOnly: receipt.contextOnly,
-    })
-  );
-}
-
 /** Accounting needs row validity, already established by the complete actor postimage. */
 export function hasSessionTranscriptEntryReceipt(
   database: { db: EngineConnection; path: string },
   sessionId: string,
   sessionKey: string,
 ): boolean {
-  return readCurrentReceipt(database, sessionId)?.entrySessionKey === sessionKey;
+  return (
+    readSessionTranscriptProjectionReceipt(database, sessionId)?.entrySessionKey === sessionKey
+  );
 }

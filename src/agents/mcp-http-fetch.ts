@@ -5,7 +5,6 @@
  */
 import fs from "node:fs";
 import type { FetchLike } from "@modelcontextprotocol/client";
-import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { wrapGuardedBodyStream } from "../infra/net/guarded-body-stream.js";
 import {
   ssrfPolicyFromHttpBaseUrlAllowedOrigin,
@@ -14,6 +13,7 @@ import {
 import { globalUndiciStreamTimeoutMs } from "../infra/net/undici-dispatcher-options.js";
 import { loadUndiciRuntimeDeps } from "../infra/net/undici-runtime.js";
 import type { ResolvedHttpMcpTransportConfig } from "./mcp-transport-config.js";
+import { fetchWithProviderHttpGuard } from "./provider-transport-dispatcher-pool.js";
 
 const fetchWithUndiciGuard = async (
   input: RequestInfo | URL,
@@ -112,7 +112,8 @@ function buildMcpHttpFetchWithRedirectPolicy(
       ...(policy ? { policy } : {}),
       ...(needsCustomDispatcher ? { resolveDispatcherPolicy: resolveCustomDispatcherPolicy } : {}),
     };
-    const { response, release, refreshTimeout } = await fetchWithSsrFGuard(guardedFetchOptions);
+    const { response, release, refreshTimeout } =
+      await fetchWithProviderHttpGuard(guardedFetchOptions);
     if (!response.body) {
       void release();
     }

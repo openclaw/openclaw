@@ -7,6 +7,8 @@ import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e.t
 import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
 import { openProgressHomeDock } from "./session-progress-home.test-support.ts";
 
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+
 const suite = createChatFlowE2eSuite();
 
 async function waitForHomeScrollIdle(thread: Locator) {
@@ -108,7 +110,7 @@ suite.define(() => {
         // The same Home conversation cannot own both the page and its dock.
         await page.goto(`${suite.server.baseUrl}new`);
         await openProgressHomeDock(page);
-        await gateway.waitForRequest("chat.startup", { match: { sessionKey } });
+        await gateway.waitForRequest("sessions.messages.subscribe", { match: { key: sessionKey } });
         await card.waitFor();
         await waitForHomeScrollIdle(thread);
         await home
@@ -152,7 +154,9 @@ suite.define(() => {
           thread: await thread.evaluate((element) => element.scrollTop),
           output: await outputScroller.evaluate((element) => element.scrollTop),
         };
-        await page.screenshot({ path: path.join(artifactDir, "before-wheel.png") });
+        if (captureUiProof) {
+          await page.screenshot({ path: path.join(artifactDir, "before-wheel.png") });
+        }
         for (let index = 0; index < 3; index++) {
           await page.mouse.wheel(0, -240);
           // These are three separate gestures under the disclosure's 200 ms boundary.
@@ -164,7 +168,9 @@ suite.define(() => {
           thread: await thread.evaluate((element) => element.scrollTop),
           output: await outputScroller.evaluate((element) => element.scrollTop),
         };
-        await page.screenshot({ path: path.join(artifactDir, "after-wheel.png") });
+        if (captureUiProof) {
+          await page.screenshot({ path: path.join(artifactDir, "after-wheel.png") });
+        }
         await writeFile(
           path.join(artifactDir, "offsets.json"),
           JSON.stringify({ target, before, after, cardOpen: await isOpen() }, null, 2),
@@ -228,7 +234,7 @@ suite.define(() => {
       // The same Home conversation cannot own both the page and its dock.
       await page.goto(`${suite.server.baseUrl}new`);
       await openProgressHomeDock(page);
-      await gateway.waitForRequest("chat.startup", { match: { sessionKey } });
+      await gateway.waitForRequest("sessions.messages.subscribe", { match: { key: sessionKey } });
       await card.waitFor();
       expect(await card.getAttribute("open")).toBeNull();
       await card.locator("summary").click();
@@ -249,7 +255,9 @@ suite.define(() => {
         );
       });
       const offsets: Array<{ before: number; released: number; settled: number }> = [];
-      await page.screenshot({ path: path.join(artifactDir, "before-touch.png") });
+      if (captureUiProof) {
+        await page.screenshot({ path: path.join(artifactDir, "before-touch.png") });
+      }
       for (let index = 0; index < 3; index++) {
         const before = await thread.evaluate((element) => element.scrollTop);
         const timestamp = Date.now() / 1000;
@@ -283,7 +291,9 @@ suite.define(() => {
           ),
         );
       }
-      await page.screenshot({ path: path.join(artifactDir, "after-touch.png") });
+      if (captureUiProof) {
+        await page.screenshot({ path: path.join(artifactDir, "after-touch.png") });
+      }
       await writeFile(
         path.join(artifactDir, "touch-offsets.json"),
         JSON.stringify(offsets, null, 2),
@@ -341,7 +351,7 @@ suite.define(() => {
       // The same Home conversation cannot own both the page and its dock.
       await page.goto(`${suite.server.baseUrl}new`);
       await openProgressHomeDock(page);
-      await gateway.waitForRequest("chat.startup", { match: { sessionKey } });
+      await gateway.waitForRequest("sessions.messages.subscribe", { match: { key: sessionKey } });
       await card.waitFor();
       await waitForHomeScrollIdle(thread);
       await gateway.deferNext("chat.history");

@@ -22,6 +22,7 @@ import {
 
 export type SandboxMountPlan = {
   binds: string[];
+  protectedTargets: string[];
   skippedBinds: string[];
   readOnlyWorkspaceSkillMounts: ReturnType<
     typeof resolveSandboxMountSelection
@@ -69,6 +70,7 @@ export async function prepareSandboxMountPlan(params: {
   ];
   const targets = selection.mounts.map((mount) => mount.containerPath);
   const binds = new Map<string, string>();
+  const protectedTargets = new Set<string>();
   for (const mount of selection.mounts) {
     const target = normalizeMountContainerPath(mount.containerPath);
     if (mount.source === "bind") {
@@ -87,6 +89,9 @@ export async function prepareSandboxMountPlan(params: {
         })
       : [{ ...mount, containerPath: target }];
     for (const projected of translated) {
+      if (mount.source === "protectedSkill") {
+        protectedTargets.add(projected.containerPath);
+      }
       binds.set(
         projected.containerPath,
         `${projected.hostPath}:${projected.containerPath}:${projected.readOnly ? "ro,z" : "z"}`,
@@ -97,10 +102,13 @@ export async function prepareSandboxMountPlan(params: {
   // win exact collisions; other explicit overrides match filesystem bridge policy.
   for (const bind of selection.custom) {
     const parsed = splitSandboxBindSpec(bind);
-    binds.set(parsed ? normalizeMountContainerPath(parsed.container) : bind, bind);
+    const target = parsed ? normalizeMountContainerPath(parsed.container) : bind;
+    binds.set(target, bind);
+    protectedTargets.delete(target);
   }
   return {
     binds: [...binds.values()],
+    protectedTargets: [...protectedTargets],
     skippedBinds: selection.skippedBinds,
     readOnlyWorkspaceSkillMounts: selection.readOnlyWorkspaceSkillMounts,
     tmpfs: resolveSandboxTmpfsMounts(params.tmpfs),
@@ -238,11 +246,11 @@ export async function resolveSandboxContainerOnlyMounts(params: {
   return [...masks];
 }
 
-export async function sandboxMountPlanMatchesContainer(params: {
+export async function compareSandboxMountPlan(params: {
   engine: SandboxContainerEngine;
   containerName: string;
   plan: SandboxMountPlan;
-}): Promise<boolean> {
+}): Promise<"match" | "protected-mounts-added" | "changed"> {
   const actual = await inspectSandboxMounts(params);
   const expected = new Map(
     params.plan.binds.flatMap((bind) => {
@@ -269,22 +277,35 @@ export async function sandboxMountPlanMatchesContainer(params: {
       expected.has(mount.destination) ||
       (mount.type === "tmpfs" && coversBind(mount.destination)),
   );
-  return (
-    managed.length === expected.size + expectedTmpfs.size &&
-    managed.every((mount) => {
-      if (mount.type === "tmpfs") {
-        const tmpfs = expectedTmpfs.get(mount.destination);
-        return tmpfs !== undefined && mount.writable === !tmpfs.readOnly;
-      }
-      const bind = expected.get(mount.destination);
-      return (
-        bind !== undefined &&
-        mount.type === "bind" &&
-        getSandboxHostPathPolicyKey(mount.source) === getSandboxHostPathPolicyKey(bind.host) &&
-        mount.writable === !bind.options.split(",").includes("ro")
-      );
-    })
-  );
+  const mountMatches = (mount: (typeof actual)[number]) => {
+    if (mount.type === "tmpfs") {
+      const tmpfs = expectedTmpfs.get(mount.destination);
+      return tmpfs !== undefined && mount.writable === !tmpfs.readOnly;
+    }
+    const bind = expected.get(mount.destination);
+    return (
+      bind !== undefined &&
+      mount.type === "bind" &&
+      getSandboxHostPathPolicyKey(mount.source) === getSandboxHostPathPolicyKey(bind.host) &&
+      mount.writable === !bind.options.split(",").includes("ro")
+    );
+  };
+  const matches =
+    managed.length === expected.size + expectedTmpfs.size && managed.every(mountMatches);
+  if (matches) {
+    return "match";
+  }
+  const actualTargets = new Set(actual.map((mount) => mount.destination));
+  const added = params.plan.protectedTargets.filter((target) => !actualTargets.has(target));
+  // Only new Gateway-selected read-only overlays can be installed automatically.
+  // Existing mounts must match: a previous user bind at a protected target is not
+  // evidence that the Gateway owned it, even when it was read-only.
+  // Image volumes require explicit recreation to preserve container-only data.
+  return actual.every((mount) => mount.type === "bind" || mount.type === "tmpfs") &&
+    managed.length + added.length === expected.size + expectedTmpfs.size &&
+    managed.every(mountMatches)
+    ? "protected-mounts-added"
+    : "changed";
 }
 
 /** Read saved workspace bytes only when the existing runtime exposes that same bind. */

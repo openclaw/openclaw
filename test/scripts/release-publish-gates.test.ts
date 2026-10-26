@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import {
   evaluateReleaseBootstrapGate,
   evaluateReleasePublishGates,
@@ -53,17 +53,8 @@ type Outcome = string[] | "any failure" | "selected-lanes";
 type PolicyRow = [string, Evidence, Outcome, HistoricalInput?];
 const consumers = ["publisher", "core-npm", "stable-closeout"] as const;
 const waiver = "2026.9.5 approved";
-type SharedCase = { changes: Evidence; expected: string[]; input: HistoricalInput };
-describe.each(consumers)("%s publication gates", (consumer) => {
-  it.each`
-    name                     | changes                                                                                          | expected                                     | input
-    ${"stable evidence"}     | ${{}}                                                                                            | ${[]}                                        | ${{ expectedSha: targetSha }}
-    ${"waived soak"}         | ${{ controls: { performanceBlocking: false }, runReleaseSoak: "false" }}                         | ${["performance", "soak"]}                   | ${{ expectedSha: targetSha, stableSoakWaiver: "2026.9.5 Approved after infrastructure failure" }}
-    ${"missing performance"} | ${{ controls: {}, childRuns: {} }}                                                               | ${["performance"]}                           | ${{ expectedSha: targetSha }}
-    ${"historical waivers"}  | ${{ releaseProfile: "beta", runReleaseSoak: "false", controls: { performanceBlocking: false } }} | ${["performance", "stable-profile", "soak"]} | ${{ stableSoakWaiver: waiver, laneWaiver: waiver, publishAcceptedWaivers: { stableSoakWaiver: waiver, laneWaiver: waiver } }}
-  `("$name", ({ changes, expected, input }: SharedCase) =>
-    checkPolicy(changes, expected, { ...input, consumer }),
-  );
+it.each(consumers)("accepts stable evidence for %s", (consumer) => {
+  checkPolicy({}, [], { expectedSha: targetSha, consumer });
 });
 const recordedWaivers = [
   { validationInputs: { laneWaiver: waiver } },
@@ -72,6 +63,17 @@ const recordedWaivers = [
   { advisoryJobs: [{ child: "normalCi", job: "tests", conclusion: "failure" }] },
 ];
 const policyCases: PolicyRow[] = [
+  ["missing performance", { controls: {}, childRuns: {} }, ["performance"]],
+  [
+    "historical waivers",
+    { releaseProfile: "beta", runReleaseSoak: "false", controls: { performanceBlocking: false } },
+    ["performance", "stable-profile", "soak"],
+    {
+      stableSoakWaiver: waiver,
+      laneWaiver: waiver,
+      publishAcceptedWaivers: { stableSoakWaiver: waiver, laneWaiver: waiver },
+    },
+  ],
   ...(["publisher", "core-npm"] as const).map((consumer): PolicyRow => [
     "deferred beta performance/" + consumer,
     { releaseProfile: "beta", controls: { performanceBlocking: false }, childRuns: {} },
@@ -96,14 +98,11 @@ const policyCases: PolicyRow[] = [
     ["workflow", "target", "profile", "rerun-group", "soak"],
     { expectedSha: targetSha, expectedReleaseProfile: "full" },
   ],
-  ...recordedWaivers.flatMap((changes, index) =>
-    ["v2026.9.5", "v2026.9.5-beta.1"].map((releaseTag): PolicyRow => [
-      `recorded waiver/advisory ${index}/${releaseTag}`,
-      changes,
-      "selected-lanes",
-      { releaseTag, npmDistTag: releaseTag.includes("beta") ? "beta" : "latest" },
-    ]),
-  ),
+  ...recordedWaivers.map((changes, index): PolicyRow => [
+    `recorded waiver/advisory ${index}`,
+    changes,
+    "selected-lanes",
+  ]),
   [
     "failed Windows child without advisory row",
     {

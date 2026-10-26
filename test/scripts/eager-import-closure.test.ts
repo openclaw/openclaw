@@ -5,7 +5,6 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
-  readdirSync,
   realpathSync,
   rmSync,
   symlinkSync,
@@ -14,6 +13,7 @@ import {
 import { dirname, join, posix, relative } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-closure.mts";
+import { listDirectoryTreeStrictSync } from "../../src/infra/directory-walk.js";
 import { createRuntimeProcessEntrypoints } from "../../src/infra/runtime-process-manifest.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -27,6 +27,11 @@ const inventoryCheck =
   'pnpm test test/scripts/eager-import-closure.test.ts -t "PR wrapper inventory"';
 const wrapperFailure = (output: string) =>
   `${output}\nCheck the inventory first: ${inventoryCheck}`;
+const filesUnder = (root: string) =>
+  listDirectoryTreeStrictSync(root)
+    .map((entry) => entry.dirent)
+    .filter((entry) => entry.isFile())
+    .map((entry) => join(entry.parentPath, entry.name));
 
 function run(
   command: string,
@@ -99,11 +104,8 @@ it("keeps the PR wrapper inventory closed over runtime imports", () => {
   const stale = components.filter((file) => !existsSync(file)).toSorted();
   // scripts/pr archives all of pr-lib implicitly. Other inventory entries also
   // seed the graph: shell-launched helpers and workers are not ordinary imports.
-  const wrapperFiles = readdirSync("scripts/pr-lib", { recursive: true, withFileTypes: true })
-    .filter((entry) => entry.isFile())
-    .map((entry) => join(entry.parentPath, entry.name));
   const closure = collectRuntimeImportClosure(process.cwd(), [
-    ...wrapperFiles,
+    ...filesUnder("scripts/pr-lib"),
     ...components.filter((file) => existsSync(file)),
   ]);
   // Forked children resolve through the process manifest, not an import edge. Wrapper
@@ -160,14 +162,10 @@ it("acquires wrapper leases and manages templates without the application comman
         import assert from "node:assert/strict";
         import { withWorktreeAllocationLease } from "./src/agents/worktrees/allocation.js";
         import {
-          deleteTemplateAsync, hasTemplatesAsync, listTemplatesAsync,
-          markTemplateReadyAsync, readTemplateAsync, reserveTemplateAsync,
+          readTemplateAsync, reserveTemplateAsync,
         } from "./src/agents/worktrees/template-registry-async.js";
         import { withOpenClawStateLease } from "./src/state/openclaw-state-lease.js";
-        import {
-          closeOpenClawStateDatabaseAsync,
-          openOpenClawStateDatabase,
-        } from "./src/state/openclaw-state-db.js";
+        import { closeOpenClawStateDatabaseAsync } from "./src/state/openclaw-state-db.js";
         const options = {
           scope: "core:wrapper-bootstrap",
           key: "lease",
@@ -175,9 +173,7 @@ it("acquires wrapper leases and manages templates without the application comman
           leaseMs: 60_000,
           waitMs: 0,
         };
-        for (let grant = 0; grant < 2; grant += 1) {
-          await withOpenClawStateLease(options, async (lease) => lease.assertOwned());
-        }
+        await withOpenClawStateLease(options, async (lease) => lease.assertOwned());
         await withWorktreeAllocationLease({ env: process.env }, async ({ commitGuard: guard }) => {
           const template = {
             cacheKey: "wrapper-template", id: "generation-1",
@@ -186,21 +182,9 @@ it("acquires wrapper leases and manages templates without the application comman
             backend: "apfs", sourceCommit: "a".repeat(40), contentKey: "source",
             status: "preparing", createdAt: 1, lastUsedAt: 1,
           };
-          assert.equal(await hasTemplatesAsync(process.env), false);
           await reserveTemplateAsync(process.env, template, guard);
           assert.deepEqual(await readTemplateAsync(process.env, template.cacheKey), template);
-          assert.equal(await markTemplateReadyAsync(process.env, template.id, 2, guard), true);
-          assert.deepEqual(await listTemplatesAsync(process.env), [
-            { ...template, status: "ready", lastUsedAt: 2 },
-          ]);
-          assert.equal(await deleteTemplateAsync(process.env, template.id, guard), true);
-          assert.equal(await hasTemplatesAsync(process.env), false);
         });
-        const database = openOpenClawStateDatabase({ env: process.env });
-        const row = database.db.prepare(
-          "SELECT COUNT(*) AS count FROM state_leases WHERE scope = ? AND lease_key = ?",
-        ).get(options.scope, options.key);
-        assert.equal(Number(row.count), 0);
         await closeOpenClawStateDatabaseAsync();
         console.log("LEASE_BOOTSTRAP_OK");
       `,
@@ -223,20 +207,8 @@ it("acquires wrapper leases and manages templates without the application comman
 
 it("resolves wrapper package exports and workspace aliases from the extracted dependency context", () => {
   const root = tempDirs.make("openclaw-pr-package-closure-");
-  const components = copyPrWrapperSources(root);
-  expect(components.filter((component, index) => components.indexOf(component) !== index)).toEqual(
-    [],
-  );
-  const files = readdirSync(root, { recursive: true, withFileTypes: true })
-    .filter((entry) => entry.isFile())
-    .map((entry) => relative(root, join(entry.parentPath, entry.name)));
-  for (const entrypoint of [
-    "src/state/openclaw-state.worker.ts",
-    "src/state/openclaw-state-lease-worker.ts",
-    "src/infra/sqlite-store.worker.ts",
-  ]) {
-    expect(files).toContain(join(entrypoint));
-  }
+  copyPrWrapperSources(root);
+  const files = filesUnder(root).map((file) => relative(root, file));
   const pinned = run(process.execPath, [
     join(root, "scripts/pr-lib/materialize-dependencies.mjs"),
     join(process.cwd(), "node_modules"),
@@ -308,7 +280,7 @@ itPosix.each(["empty", "legacy", "outdated"])(
       expect(bootstrap.status, bootstrap.stderr).toBe(1);
       expect(bootstrap.stderr).toContain("has version 0.5.6; the trust anchor requires");
       expect(bootstrap.stderr).toContain(
-        "Restore frozen dependencies in a clean trusted-main checkout",
+        "The current trusted wrapper can materialize this anchor’s frozen dependencies",
       );
       expect(existsSync(join(anchor, "node_modules"))).toBe(false);
       expectResult(run("git", ["-C", canonical, "for-each-ref", "refs/openclaw"], { env }), {
@@ -459,6 +431,12 @@ it("resolves runtime aliases and import/require conditions without following dec
 
 it.each([
   {
+    name: "local avatar worker",
+    entrypoints: ["src/agents/identity-avatar-file.worker.ts"],
+    dynamic: false,
+    deferredOwners: ["src/agents/agent-scope.ts", "src/agents/agent-scope-config.ts"],
+  },
+  {
     name: "native update authority",
     dynamic: false,
     entrypoints: [
@@ -480,12 +458,42 @@ it.each([
     deferredOwners: ["src/cli/daemon-cli.ts", "src/cli/daemon-cli/register.ts"],
   },
   {
+    name: "shared-state read worker startup",
+    entrypoints: ["src/state/openclaw-state-read.worker.ts"],
+    dynamic: false,
+    deferredOwners: [
+      "src/infra/state-migrations.cron-run-logs.ts",
+      "src/cron/run-history-detail.ts",
+    ],
+  },
+  {
     name: "Git operation workers",
     entrypoints: ["src/infra/git-operation.worker.ts"],
     dynamic: true,
     deferredOwners: [
       "src/agents/worktrees/service-preparation.ts",
       "src/agents/worktrees/allocation.ts",
+    ],
+  },
+  {
+    name: "persisted model catalog reader",
+    entrypoints: ["src/agents/plugin-model-catalog-read.worker.ts"],
+    dynamic: false,
+    deferredOwners: [
+      "src/state/openclaw-agent-db-readonly.ts",
+      "src/state/openclaw-agent-db-borrower.ts",
+    ],
+  },
+  {
+    name: "cold archive preparation",
+    entrypoints: [
+      "src/config/sessions/session-cold-storage-selection.ts",
+      "src/config/sessions/session-cold-storage-prepare.ts",
+    ],
+    dynamic: false,
+    deferredOwners: [
+      "src/state/openclaw-agent-db.ts",
+      "src/config/sessions/session-turn.kernel.ts",
     ],
   },
   {

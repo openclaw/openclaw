@@ -64,6 +64,7 @@ import {
   readSessionMessagesMatchingIdAsync,
   readSessionMessagesWithSourceAsync,
 } from "./session-transcript-readers.js";
+import { iterateSessionTranscriptSourcePages } from "./session-transcript-source-pages.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const timestamp = "2026-09-04T00:00:00.000Z";
@@ -103,18 +104,20 @@ async function fixture(messageId = "attached") {
   return { scope, attachmentId, messageId, originalPath, block, download };
 }
 
-async function seed(f: Awaited<ReturnType<typeof fixture>>, events: unknown[]) {
+type Fixture = Awaited<ReturnType<typeof fixture>>;
+
+async function seed(f: Fixture, events: unknown[], source: "sqlite" | "archive" = "sqlite") {
   await replaceTranscriptEvents(f.scope, [
     { type: "session", version: 3, id: f.scope.sessionId, timestamp, cwd: stateDir },
-    ...events,
+    ...(source === "sqlite" ? events : []),
   ]);
   await readSessionMessageCountAsync(f.scope);
+  if (source === "archive") {
+    archive(f, events);
+  }
 }
 
-function archive(
-  f: Awaited<ReturnType<typeof fixture>>,
-  events: unknown[] = [message(f.messageId, null, [f.block])],
-) {
+function archive(f: Fixture, events: unknown[] = [message(f.messageId, null, [f.block])]) {
   const bytes = Buffer.from(
     [{ type: "session", version: 3, id: f.scope.sessionId, timestamp, cwd: stateDir }, ...events]
       .map((event) => JSON.stringify(event))
@@ -136,6 +139,18 @@ function archive(
     bytes,
     sha256: createHash("sha256").update(bytes).digest("hex"),
   });
+}
+
+const cleanup = (
+  options: Omit<
+    NonNullable<Parameters<typeof cleanupManagedOutgoingMediaRecords>[0]>,
+    "stateDir"
+  > = {},
+) => cleanupManagedOutgoingMediaRecords({ stateDir, ...options });
+
+async function expectRetained(f: Pick<Fixture, "attachmentId" | "originalPath">) {
+  expect(await readManagedImageRecord(f.attachmentId, stateDir)).not.toBeNull();
+  expect(fs.existsSync(f.originalPath)).toBe(true);
 }
 
 describe("managed attachment SQLite visibility", () => {
@@ -183,25 +198,25 @@ describe("managed attachment SQLite visibility", () => {
         { include: ["worker.request"] },
       ),
     );
-    const cleanup = async (expectedReads: number) => {
+    const cleanAndCountReads = async (expectedReads: number) => {
       reads.length = 0;
       await cleanupManagedOutgoingMediaRecords({ stateDir, nowMs });
       await waitForDiagnosticEventsDrained();
       expect(reads).toHaveLength(expectedReads);
     };
 
-    await cleanup(1);
+    await cleanAndCountReads(1);
     await fsAsync.mkdir(originals, { recursive: true });
-    await cleanup(1);
+    await cleanAndCountReads(1);
     await fsAsync.writeFile(kept, "kept");
     await fsAsync.utimes(kept, new Date(nowMs), new Date(nowMs));
-    await cleanup(1);
+    await cleanAndCountReads(1);
 
     const orphan = path.join(originals, "orphan.png");
     await fsAsync.writeFile(orphan, "orphan");
     await fsAsync.utimes(orphan, new Date(0), new Date(0));
     await fsAsync.utimes(kept, new Date(0), new Date(0));
-    await cleanup(2);
+    await cleanAndCountReads(2);
     expect(await fsAsync.readFile(kept, "utf8")).toBe("kept");
     await expect(fsAsync.stat(orphan)).rejects.toMatchObject({ code: "ENOENT" });
   });
@@ -232,9 +247,8 @@ describe("managed attachment SQLite visibility", () => {
         });
       }
       expect(await f.download()).toBeNull();
-      await cleanupManagedOutgoingMediaRecords({ stateDir, sessionKey: f.scope.sessionKey });
-      expect(await readManagedImageRecord(f.attachmentId, stateDir)).not.toBeNull();
-      expect(fs.existsSync(f.originalPath)).toBe(true);
+      await cleanup({ sessionKey: f.scope.sessionKey });
+      await expectRetained(f);
     },
   );
 
@@ -249,10 +263,7 @@ describe("managed attachment SQLite visibility", () => {
           { type: "text", text: "x".repeat(8 * 1024 * 1024) },
         ]),
       ];
-      await seed(oversized, source === "sqlite" ? history : []);
-      if (source === "archive") {
-        archive(oversized, history);
-      }
+      await seed(oversized, history, source);
       const original = await readManagedImageRecord(oversized.attachmentId, stateDir);
       expect(original).not.toBeNull();
       await insertManagedImageRecord(
@@ -261,11 +272,80 @@ describe("managed attachment SQLite visibility", () => {
       );
       await seed(orphan, [message("different", null, "no attachment")]);
 
-      await cleanupManagedOutgoingMediaRecords({ stateDir });
-      expect(await readManagedImageRecord(oversized.attachmentId, stateDir)).not.toBeNull();
-      expect(fs.existsSync(oversized.originalPath)).toBe(true);
+      await cleanup();
+      await expectRetained(oversized);
       expect(await readManagedImageRecord(orphan.attachmentId, stateDir)).toBeNull();
       expect(fs.existsSync(orphan.originalPath)).toBe(false);
+    },
+  );
+
+  it.each(["active", "off-path", "archive"] as const)(
+    "selects recorded attachment messages without returning unrelated %s payloads",
+    async (source) => {
+      const f = await fixture();
+      const second = await createFixture(stateDir, {
+        attachmentId: randomUUID(),
+        sessionKey: f.scope.sessionKey,
+        agentId: "main",
+        messageId: "second",
+        createdAt: timestamp,
+        body: Buffer.from("second managed original"),
+        filename: "second.png",
+      });
+      const secondBlock = {
+        type: "image",
+        url: `/api/chat/media/outgoing/${encodeURIComponent(f.scope.sessionKey)}/${second.attachmentId}/full`,
+      };
+      const events = [
+        message("root", null, "root"),
+        ...Array.from({ length: 129 }, (_, index) =>
+          message(
+            `unrelated-${index}`,
+            index ? `unrelated-${index - 1}` : "root",
+            "x".repeat(1024),
+          ),
+        ),
+        message(f.messageId, "unrelated-128", [f.block]),
+        message("second", source === "off-path" ? "root" : f.messageId, [secondBlock]),
+      ];
+      await seed(f, events, source === "archive" ? "archive" : "sqlite");
+      const selected: unknown[] = [];
+      for await (const page of iterateSessionTranscriptSourcePages(
+        readSessionMessagesWithSourceAsync,
+        f.scope,
+        {
+          allowResetArchiveFallback: true,
+          includeOffPathMessages: true,
+          messageIds: [f.messageId, "second"],
+        },
+      )) {
+        selected.push(...page.messages);
+      }
+      expect(selected).toHaveLength(2);
+      expect(selected).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ __openclaw: expect.objectContaining({ id: f.messageId }) }),
+          expect.objectContaining({ __openclaw: expect.objectContaining({ id: "second" }) }),
+        ]),
+      );
+      await cleanup({ sessionKey: f.scope.sessionKey });
+      await expectRetained(f);
+      await expectRetained(second);
+    },
+  );
+
+  it.each(["sqlite", "archive"] as const)(
+    "retains attachments whose %s message ID comes from legacy metadata",
+    async (source) => {
+      const f = await fixture();
+      const legacy = {
+        type: "message",
+        timestamp,
+        message: { role: "assistant", content: [f.block], __openclaw: { id: f.messageId } },
+      };
+      await seed(f, [legacy], source);
+      await cleanup({ sessionKey: f.scope.sessionKey });
+      await expectRetained(f);
     },
   );
 
@@ -302,6 +382,8 @@ describe("managed attachment SQLite visibility", () => {
     expect(full).toHaveLength(2);
     expect(await readSessionMessagesMatchingIdAsync(f.scope, f.messageId)).toEqual(full);
     expect(await f.download()).not.toBeNull();
+    await cleanup({ sessionKey: f.scope.sessionKey });
+    expect(await readManagedImageRecord(f.attachmentId, stateDir)).not.toBeNull();
   });
 
   it("uses the admitted bounds for both matching and missing IDs", async () => {
@@ -425,7 +507,7 @@ describe("managed attachment SQLite visibility", () => {
     expect(await f.download()).toBeNull();
     const hostSql = observeHostDataSql();
     try {
-      await cleanupManagedOutgoingMediaRecords({ stateDir, sessionKey: f.scope.sessionKey });
+      await cleanup({ sessionKey: f.scope.sessionKey });
       expect(hostSql.queries.filter(isSessionEntryDataSql)).toEqual([]);
     } finally {
       hostSql.restore();
@@ -447,11 +529,9 @@ describe("managed attachment SQLite visibility", () => {
       )`)
       .run("\u0000trailing", corrupt.scope.sessionId, corrupt.scope.sessionId);
     expect(await f.download()).not.toBeNull();
-    await cleanupManagedOutgoingMediaRecords({ stateDir, sessionKey: f.scope.sessionKey });
-    expect(await readManagedImageRecord(f.attachmentId, stateDir)).not.toBeNull();
-    expect(await readManagedImageRecord(corrupt.attachmentId, stateDir)).not.toBeNull();
-    expect(fs.existsSync(f.originalPath)).toBe(true);
-    expect(fs.existsSync(corrupt.originalPath)).toBe(true);
+    await cleanup({ sessionKey: f.scope.sessionKey });
+    await expectRetained(f);
+    await expectRetained(corrupt);
   });
 });
 

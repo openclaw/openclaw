@@ -1,5 +1,5 @@
 {
-  "commit": "1b58cb9a1b4f4353e1add63c8506db4d890962e8",
+  "commit": "157d8c2bc3ea2fa183afdc11088e69690bf8e64e",
   "entrypoints": {
     "account-core": [
       "DEFAULT_ACCOUNT_ID",
@@ -3901,6 +3901,6 @@
       "isCompleteHtmlDocument"
     ]
   },
-  "release": "v2026.10.5",
+  "release": "v2026.10.7",
   "schema": "openclaw.plugin-sdk-shipped-surface/v1"
 }

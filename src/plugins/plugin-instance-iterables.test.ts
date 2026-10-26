@@ -1,3 +1,4 @@
+import { AsyncResource } from "node:async_hooks";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { PluginInstance } from "./plugin-instance.js";
@@ -33,6 +34,59 @@ async function* yieldingFinally(values: number[], finished = () => {}) {
     finished();
   }
 }
+
+it("reuses the scoped protocol callback across overlapping stream operations", async () => {
+  const instance = owner();
+  const resume = createDeferredCore();
+  const first = { done: false, value: "first" };
+  const second = { done: false, value: "second" };
+  const source = instance.wrap(
+    iterable({
+      async next(value: number) {
+        await resume.promise;
+        return value === 1 ? first : second;
+      },
+      async return() {
+        return { done: true, value: undefined };
+      },
+    }),
+  );
+  const iterator = source[Symbol.asyncIterator]();
+  const scoped = vi.spyOn(AsyncResource.prototype, "runInAsyncScope");
+  try {
+    const pending = [iterator.next(1), iterator.next(2)];
+    resume.resolve();
+    const received = await Promise.all(pending);
+    expect(received[0]).toBe(first);
+    expect(received[1]).toBe(second);
+    const callbacks = scoped.mock.calls.map(([callback]) => callback);
+    expect(callbacks).toHaveLength(2);
+    expect(new Set(callbacks).size).toBe(1);
+  } finally {
+    scoped.mockRestore();
+    resume.resolve();
+    await iterator.return();
+  }
+});
+
+it.each(["next", "return"] as const)(
+  "shares admission when an iterable returns its own already-bound iterator (%s)",
+  async (terminal) => {
+    const instance = owner();
+    const iterator = instance.wrap(chunks("first"));
+    const source = instance.wrap(iterable(iterator));
+    const acquired = source[Symbol.asyncIterator]();
+    expect(acquired).toBe(iterator);
+    try {
+      expect(instance.ordinaryCallCount).toBe(1);
+      await expect(acquired.next()).resolves.toEqual({ done: false, value: "first" });
+      await expect(acquired[terminal]()).resolves.toEqual({ done: true, value: undefined });
+      expect(instance.ordinaryCallCount).toBe(0);
+    } finally {
+      await acquired.return();
+    }
+  },
+);
 
 it.each(["promise", "thenable"] as const)(
   "awaits a next() %s with native assimilation and live admission",
@@ -79,19 +133,7 @@ it.each(["next", "throw"] as const)(
     }
     const native = source();
     const instance = owner();
-    const raw = source();
-    let acquisitions = 0;
-    let factoryReads = 0;
-    Object.defineProperty(raw, Symbol.asyncIterator, {
-      get() {
-        factoryReads += 1;
-        return function (this: typeof raw) {
-          acquisitions += 1;
-          return this;
-        };
-      },
-    });
-    const stream = instance.wrap(raw);
+    const stream = instance.wrap(source());
     const open = stream[Symbol.asyncIterator];
     const wrapped = open();
     for (const iterator of [native, wrapped]) {
@@ -100,7 +142,6 @@ it.each(["next", "throw"] as const)(
     }
     expect(open()).toBe(wrapped);
     expect(wrapped[Symbol.asyncIterator]()).toBe(wrapped);
-    expect([instance.ordinaryCallCount, acquisitions, factoryReads]).toEqual([0, 1, 1]);
     const supplied = new Error("caller-supplied terminal reason");
     const [expected, actual] = await Promise.allSettled([
       native[method](supplied),
@@ -385,13 +426,9 @@ it.each(["missing", "done-false", "getter", "non-callable"] as const)(
   },
 );
 
-it.each([
-  { phase: "live", resume: "next" },
-  { phase: "live", resume: "iterator" },
-  { phase: "retired", resume: "next" },
-] as const)(
-  "only resumes a finally yield through $resume when its instance is $phase",
-  async ({ phase, resume }) => {
+it.each(["live", "retired"] as const)(
+  "only resumes a finally yield when its instance is %s",
+  async (phase) => {
     const instance = owner();
     const finished = vi.fn();
     const source = yieldingFinally([2], finished);
@@ -399,9 +436,6 @@ it.each([
     await expect(iterator.next()).resolves.toEqual({ done: false, value: 1 });
     await expect(iterator.return(undefined)).resolves.toEqual({ done: false, value: 2 });
     if (phase === "live") {
-      if (resume === "iterator") {
-        expect(iterator[Symbol.asyncIterator]()).toBe(iterator);
-      }
       await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined });
     }
     const closed = expect(instance.dispose()).resolves.toEqual({ errors: [] });

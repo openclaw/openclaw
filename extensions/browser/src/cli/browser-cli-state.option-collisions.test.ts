@@ -1,18 +1,14 @@
-import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { mockBrowserGateway } from "./browser-cli.test-support.js";
 
 const gatewayMock = mockBrowserGateway();
 const {
   createBrowserProgram: createBrowserProgramShared,
   getBrowserCliRuntime,
+  mockBrowserCliRuntime,
   getBrowserCliRuntimeCapture,
 } = await import("./browser-cli.test-support.js");
-const browserCliRuntime = getBrowserCliRuntime();
-vi.spyOn(defaultRuntime, "log").mockImplementation(browserCliRuntime.log);
-vi.spyOn(defaultRuntime, "writeJson").mockImplementation(browserCliRuntime.writeJson);
-vi.spyOn(defaultRuntime, "error").mockImplementation(browserCliRuntime.error);
-vi.spyOn(defaultRuntime, "exit").mockImplementation(browserCliRuntime.exit);
+mockBrowserCliRuntime();
 
 const { registerBrowserStateCommands } = await import("./browser-cli-state.js");
 
@@ -111,14 +107,15 @@ describe("browser state option collisions", () => {
 
   it("does not inherit the parent Gateway URL as the cookie scope", async () => {
     const program = createStateProgram({ withGatewayUrl: true });
-    await program.parseAsync(
-      ["browser", "--url", "wss://gateway.example.com", "cookies", "set", "session", "abc"],
-      { from: "user" },
-    );
+    await expect(
+      program.parseAsync(
+        ["browser", "--url", "wss://gateway.example.com", "cookies", "set", "session", "abc"],
+        { from: "user" },
+      ),
+    ).rejects.toThrow("Missing required --url option for cookies set");
 
     expect(gatewayMock).not.toHaveBeenCalled();
-    expectErrorMessage("Missing required --url option for cookies set");
-    expect(getBrowserCliRuntime().exit).toHaveBeenCalledWith(1);
+    expect(getBrowserCliRuntime().exit).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -138,9 +135,31 @@ describe("browser state option collisions", () => {
 
   it.each([
     ["set viewport 1e3 768", "Invalid width: must be a positive integer"],
-    ["set viewport 8193 768", "Invalid width: maximum is 8192"],
     ["set media sepia", "Expected dark|light|no-preference|none"],
-    ["set geo 48.208 16.373 --accuracy fast", "Invalid --accuracy: must be a finite number"],
+    ["set geo 48 16 --accuracy fast", "Invalid --accuracy: must be a finite number"],
+    ["cookies set session abc", "Missing required --url option for cookies set"],
+  ])("passes JSON refusal for %s to the host renderer", async (command, message) => {
+    const program = createStateProgram();
+    await expect(
+      program.parseAsync(["browser", "--json", ...command.split(" ")], { from: "user" }),
+    ).rejects.toThrow(message);
+    expect(gatewayMock).not.toHaveBeenCalled();
+    expect(getBrowserCliRuntime().exit).not.toHaveBeenCalled();
+    expect(getBrowserCliRuntime().error).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["set viewport 8193 768", "Invalid width: maximum is 8192"],
+    ["set viewport 1024 0", "Invalid height: must be a positive integer"],
+    ["set offline sometimes", "Expected on|off"],
+    ["set geo 0x10 16", "Invalid latitude: must be a finite number"],
+    ["set geo 48 NaN", "Invalid longitude: must be a finite number"],
+  ])("rejects %s before dispatch", async (command, message) => {
+    await expect(run(command)).rejects.toThrow(message);
+    expect(gatewayMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
     [
       "set headers",
       "Error: Missing headers JSON (pass --headers-json or positional JSON argument)",

@@ -17,6 +17,7 @@ import {
 } from "../../plugins/runtime.js";
 import { setPluginToolMeta } from "../../plugins/tool-metadata.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { fixedStoreOwnershipConfig } from "./sessions-fixed-store.test-support.js";
 import { toolsEffectiveHandlers, testing } from "./tools-effective.js";
 
 type InventoryModule = typeof import("../../agents/tools-effective-inventory.js");
@@ -737,14 +738,7 @@ describe("tools.effective handler", () => {
   });
 
   it("loads a bare session through the persisted fixed-store owner", async () => {
-    const cfg: OpenClawConfig = {
-      session: { store: "/tmp/shared-sessions.sqlite", scope: "global" },
-      agents: {
-        ownership: "explicit",
-        entries: { ops: {}, research: {} },
-        defaults: { sessionStore: { agentId: "ops" } },
-      },
-    };
+    const cfg: OpenClawConfig = fixedStoreOwnershipConfig("/tmp/shared-sessions.sqlite");
     const entry = { sessionId: "session-ops-global", updatedAt: 1 };
     mockSession(entry, {
       cfg,

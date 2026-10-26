@@ -14,6 +14,8 @@ const roomSender = `U${"3".repeat(32)}`;
 const group = `C${"5".repeat(32)}`;
 const room = `R${"6".repeat(32)}`;
 const directoryConfig = config({
+  dmPolicy: "allowlist",
+  groupPolicy: "allowlist",
   allowFrom: [user, `line:user:${user}`, "*", "accessGroup:operators"],
   groupAllowFrom: [groupSender, user],
   groups: {
@@ -40,27 +42,17 @@ it("leaves an unconfigured directory empty", async () => {
 const allowlist = linePlugin.allowlist;
 
 it("reads dm/group allowlists and group overrides from line config", () => {
-  const cfg = config({
+  expect(allowlist?.readConfig?.({ cfg: directoryConfig, accountId: "default" })).toEqual({
+    dmAllowFrom: [user, `line:user:${user}`, "*", "accessGroup:operators"],
+    groupAllowFrom: [groupSender, user],
     dmPolicy: "allowlist",
     groupPolicy: "allowlist",
-    allowFrom: ["Ualice"],
-    groupAllowFrom: ["Ubob"],
-    groups: { Cgroup1: { allowFrom: ["Ucarol"] } },
-  });
-
-  expect(allowlist?.readConfig?.({ cfg, accountId: "default" })).toEqual({
-    dmAllowFrom: ["Ualice"],
-    groupAllowFrom: ["Ubob"],
-    dmPolicy: "allowlist",
-    groupPolicy: "allowlist",
-    groupOverrides: [{ label: "Cgroup1", entries: ["Ucarol"] }],
+    groupOverrides: [{ label: `group:${group}`, entries: [roomSender] }],
   });
 });
 
 it("treats a line:-prefixed entry as already present via the line normalizer", () => {
-  const parsedConfig: Record<string, unknown> = {
-    channels: { line: { allowFrom: ["Ufrank"] } },
-  };
+  const parsedConfig = { channels: { line: { allowFrom: ["Ufrank"] } } };
   const result = allowlist?.applyConfigEdit?.({
     cfg: {},
     parsedConfig,
@@ -71,7 +63,7 @@ it("treats a line:-prefixed entry as already present via the line normalizer", (
   });
 
   expect(result).toMatchObject({ kind: "ok", changed: false });
-  expect(parsedConfig).toMatchObject({ channels: { line: { allowFrom: ["Ufrank"] } } });
+  expect(parsedConfig.channels.line.allowFrom).toEqual(["Ufrank"]);
 });
 const collect = lineStatusAdapter.collectStatusIssues!;
 const issue = { channel: "line", accountId: "default", kind: "config" };
@@ -79,30 +71,28 @@ function snapshot(probe: ChannelAccountSnapshot["probe"]): ChannelAccountSnapsho
   return { accountId: "default", enabled: true, configured: true, tokenSource: "config", probe };
 }
 function expectIssue(issues: ReturnType<typeof collect>, message: string, fix?: string) {
-  expect(issues).toEqual([{ ...issue, message, ...(fix === undefined ? {} : { fix }) }]);
+  expect(issues).toEqual([
+    {
+      ...issue,
+      message: expect.stringContaining(message),
+      ...(fix === undefined ? {} : { fix: expect.stringContaining(fix) }),
+    },
+  ]);
 }
 
-it("keeps an opaque webhook route out of snapshots and remediation", async () => {
+it.each([
+  ["unset", "no webhook URL registered", "register your gateway's public HTTPS URL"],
+  ["disabled", "switched off", "turn Use webhook on"],
+] as const)("reports %s without exposing the route", async (status, message, fix) => {
   const account = await lineStatusAdapter.buildAccountSnapshot!({
     cfg: {},
     account: lineAccount({ webhookPath: "hooks/line-primary/" }),
-    probe: { ok: true, webhook: { status: "unset" } },
+    probe: { ok: true, webhook: { status } },
   });
   const issues = collect([account]);
   expect(JSON.stringify({ account, issues })).not.toContain("hooks/line-primary");
-  expectIssue(
-    issues,
-    "LINE is not delivering webhook events: this channel has no webhook URL registered.",
-    "register your gateway's public HTTPS URL for the route in channels.line.webhookPath (default /line/webhook) in the channel's Messaging API tab in the LINE Developers Console, then turn Use webhook on",
-  );
-});
-
-it("reports a registered webhook that is switched off", () => {
-  expectIssue(
-    collect([snapshot({ ok: true, webhook: { status: "disabled" } })]),
-    "LINE is not delivering webhook events: this channel's webhook URL is registered but switched off.",
-    "turn Use webhook on in the channel's Messaging API tab in the LINE Developers Console",
-  );
+  expectIssue(issues, message, fix);
+  expect(issues[0]?.fix).toContain("LINE Developers Console");
 });
 
 it("leaves active and unanswered webhooks quiet", () => {

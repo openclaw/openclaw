@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { admitMediaHandle } from "../media-generation-activity.test-support.js";
 vi.mock("../media-generation-activity.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../media-generation-activity.js")>();
   const { observeMediaActivity } =
@@ -18,7 +17,6 @@ import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
-import { MUSIC_GENERATION_TASK_KIND } from "../media-generation-task-status.js";
 import { resolveGeneratedMediaSessionDeliveryRoute } from "../subagents/announce/subagent-announce-origin.js";
 import {
   createMediaCompletionFixture,
@@ -180,103 +178,37 @@ it.each([
   },
 );
 
-it("records task progress updates", () => {
-  imageGenerationTaskLifecycle.recordTaskProgress({
-    handle: admitMediaHandle({
-      taskId: "task-123",
-      runId: "tool:image_generate:abc",
-      requesterSessionKey: "agent:main:discord:direct:123",
-      taskLabel: "small watercolor robot",
-    }),
-    progressSummary: "Saving generated image",
+it("wakes the original conversation with generated attachments and visible-reply guidance", async () => {
+  const attachments = (
+    [
+      ["audio", "audio/mpeg", "night-drive.mp3"],
+      ["image", "image/png", "night-drive-cover.png"],
+    ] as const
+  ).map(([type, mimeType, name]) => ({ type, mimeType, name, path: `/tmp/generated-${name}` }));
+  const path = "/tmp/generated-preview.png";
+  const completed = completion("music", `Generated a track and cover art.\nMEDIA:${path}`, [path]);
+  await musicGenerationTaskLifecycle.wakeTaskCompletion({
+    ...completed,
+    attachments,
   });
-  expect(taskExecutorMocks.recordProgress.mock.calls[0]?.[0]).toMatchObject({
-    runId: "tool:image_generate:abc",
-    progressSummary: "Saving generated image",
-  });
-});
-
-it("queues a completion event through the shared generated-media wake path", async () => {
-  const path = "/tmp/generated-robot.png";
-  await imageGenerationTaskLifecycle.wakeTaskCompletion(
-    completion("image", `Generated 1 image.\nMEDIA:${path}`, [path]),
-  );
   expectFallbackMediaAnnouncement({
     deliverAnnouncementMock: announce,
-    requesterSessionKey: "agent:main:discord:direct:123",
+    requesterSessionKey: completed.handle.requesterSessionKey,
     channel: "discord",
     to: "channel:1",
-    source: "image_generation",
-    announceType: "image generation task",
+    source: "music_generation",
+    announceType: "music generation task",
     resultMediaPath: `MEDIA:${path}`,
-    mediaUrls: [path],
+    mediaUrls: [path, ...attachments.map((attachment) => attachment.path)],
   });
+  const event = expectReplyInstruction([
+    "do not send them again",
+    "Check the result against what the user asked for",
+    "generate again with adjusted parameters",
+    "current visible-reply contract",
+  ]);
+  expect(event?.attachments).toEqual(attachments);
 });
-
-it("keeps failed completion notices in the durable agent-loop handoff", async () => {
-  announce.mockResolvedValue({
-    delivered: false,
-    path: "direct",
-    reason: "generated_media_missing",
-    error: "completion agent did not deliver generated media",
-  });
-  await expect(
-    imageGenerationTaskLifecycle.wakeTaskCompletion({
-      ...completion("image", "provider failed"),
-      status: "error",
-      statusLabel: "failed",
-    }),
-  ).resolves.toEqual({ status: "permanent_failure" });
-  expect(announce).toHaveBeenCalledTimes(1);
-});
-
-it("creates a running task with queued progress text", async () => {
-  const handle = await musicGenerationTaskLifecycle.createTaskRun({
-    sessionKey: "agent:main:discord:direct:123",
-    requesterOrigin: { channel: "discord", to: "channel:1" },
-    prompt: "night-drive synthwave",
-    providerId: "google",
-  });
-  expect(handle).toMatchObject({
-    taskId: "task-123",
-    requesterSessionKey: "agent:main:discord:direct:123",
-    taskLabel: "night-drive synthwave",
-  });
-  expect(taskExecutorMocks.createOperation.mock.calls[0]?.[0]).toMatchObject({
-    taskKind: MUSIC_GENERATION_TASK_KIND,
-    sourceId: "music_generate:google",
-    progressSummary: "Queued music generation",
-  });
-});
-
-it.each([
-  "agent:main:discord:direct:123",
-  "agent:main:discord:channel:C123",
-  "agent:main:whatsapp:123@g.us",
-])(
-  "gives %s tool-agnostic visible-reply guidance with every generated attachment",
-  async (requesterSessionKey) => {
-    const attachments = (
-      [
-        ["audio", "audio/mpeg", "night-drive.mp3"],
-        ["image", "image/png", "night-drive-cover.png"],
-      ] as const
-    ).map(([type, mimeType, name]) => ({ type, mimeType, name, path: `/tmp/generated-${name}` }));
-    const completed = completion("music", "Generated a track and cover art.");
-    await musicGenerationTaskLifecycle.wakeTaskCompletion({
-      ...completed,
-      attachments,
-      handle: { ...completed.handle, requesterSessionKey },
-    });
-    const event = expectReplyInstruction([
-      "do not send them again",
-      "Check the result against what the user asked for",
-      "generate again with adjusted parameters",
-      "current visible-reply contract",
-    ]);
-    expect(event?.attachments).toEqual(attachments);
-  },
-);
 it("keeps the detached video tool run context registered until terminal status", async () => {
   const handle = await videoGenerationTaskLifecycle.createTaskRun({
     sessionKey: "agent:main:discord:channel:123",

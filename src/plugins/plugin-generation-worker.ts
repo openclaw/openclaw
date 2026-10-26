@@ -12,7 +12,6 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { isArtifactPreservingStateRead } from "../state/artifact-preserving-state-reads.js";
 import { resolveActivePluginInstallRoots } from "./install-root-context.js";
-import { resolveBundledPluginReloadSource } from "./plugin-bundled-reload.js";
 import type { PluginGenerationArtifact } from "./plugin-generation-artifact.js";
 import { createPluginGenerationNativeRoots } from "./plugin-generation-native-roots.js";
 import { GenerationCodec } from "./plugin-generation-worker-codec.js";
@@ -41,7 +40,6 @@ type PreparationParameters = {
   rootDir: string;
   source: string;
   standalone?: boolean;
-  bundledReload?: boolean;
 };
 type PreparationOwner = { closing: boolean; clients: Set<() => Promise<void>> };
 const preparationOwners = resolveGlobalSingleton(
@@ -300,22 +298,12 @@ export async function preparePluginGenerationArtifact(
     }
   }
   try {
-    const bundledReloadSource = params.bundledReload
-      ? resolveBundledPluginReloadSource(params.rootDir)
-      : undefined;
     const artifact = await request({
       operation: "capture",
       captureId: 1,
       progressSignal: waitSignal,
-      rootDir: bundledReloadSource?.hostRoot ?? params.rootDir,
-      entryFile: bundledReloadSource
-        ? bundledReloadSource.ownedPaths.map((relative) =>
-            path.join(bundledReloadSource.hostRoot, relative),
-          )
-        : params.standalone
-          ? params.source
-          : undefined,
-      bundledReloadSource,
+      rootDir: params.rootDir,
+      entryFile: params.standalone ? params.source : undefined,
       storage,
       installRoots,
       readOnly,

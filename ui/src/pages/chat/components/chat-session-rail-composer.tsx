@@ -32,9 +32,11 @@ import {
   paneDomId,
   scheduleTextareaHeightAdjustment,
 } from "./chat-composer-dom.ts";
-import { createComposerEmojiMenu, EmojiMenu } from "./chat-composer-emoji.tsx";
+import { createComposerEmojiMenu } from "./chat-composer-emoji-state.ts";
+import { EmojiMenu } from "./chat-composer-emoji.tsx";
 import { ChatComposerPlusMenu } from "./chat-composer-plus-menu.tsx";
-import { ChatModelControls, type ChatModelControlsProps } from "./chat-model-controls.tsx";
+import { ChatModelControls } from "./chat-model-controls.tsx";
+import type { ChatModelControlsProps } from "./chat-model-controls.types.ts";
 import { ComposerDictationStatus } from "./chat-voice-activity.tsx";
 import { DirectDictationView } from "./direct-dictation-view.tsx";
 

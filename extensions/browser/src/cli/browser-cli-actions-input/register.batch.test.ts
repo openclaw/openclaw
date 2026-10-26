@@ -1,33 +1,24 @@
+import fs from "node:fs/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { createNonExitingRuntime, defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as browserCliSharedModule from "../browser-cli-shared.js";
 import {
   createBrowserProgram,
-  getBrowserCliRuntime,
+  mockBrowserCliRuntime,
   getBrowserCliRuntimeCapture,
   mockBrowserGateway,
 } from "../browser-cli.test-support.js";
-import * as batchSharedModule from "./shared.js";
 
 const mocks = vi.hoisted(() => ({
   callBrowserRequest: vi.fn<
-    (
-      opts?: unknown,
-      req?: unknown,
-      extra?: { timeoutMs?: number },
-    ) => Promise<Record<string, unknown>>
+    typeof browserCliSharedModule.callBrowserRequest<Record<string, unknown>>
   >(async () => ({ results: [{ ok: true }] })),
-  readActionsPayload: vi.fn(async () => ""),
 }));
 
 vi.spyOn(browserCliSharedModule, "callBrowserRequest").mockImplementation(mocks.callBrowserRequest);
-vi.spyOn(batchSharedModule, "readActionsPayload").mockImplementation(mocks.readActionsPayload);
-const browserCliRuntime = getBrowserCliRuntime();
-vi.spyOn(defaultRuntime, "log").mockImplementation(browserCliRuntime.log);
-vi.spyOn(defaultRuntime, "writeJson").mockImplementation(browserCliRuntime.writeJson);
-vi.spyOn(defaultRuntime, "error").mockImplementation(browserCliRuntime.error);
-vi.spyOn(defaultRuntime, "exit").mockImplementation(browserCliRuntime.exit);
+const realpath = vi.spyOn(fs, "realpath");
+mockBrowserCliRuntime();
 
 const { registerBrowserActionInputCommands } = await import("./register.js");
 
@@ -50,7 +41,6 @@ const actionsJson = JSON.stringify(SAMPLE_ACTIONS);
 const capture = getBrowserCliRuntimeCapture();
 
 function runBatch(options: string[] = [], parentOptions: string[] = []) {
-  mocks.readActionsPayload.mockResolvedValueOnce(actionsJson);
   return run(...parentOptions, "batch", "--actions", actionsJson, ...options);
 }
 
@@ -159,30 +149,30 @@ describe("browser action input batch command", () => {
   });
 
   it("rejects conflicting inline and file actions before reading either source", async () => {
-    await expectRejected(
-      ["--actions", "[]", "--actions-file", "/tmp/browser-actions.json"],
-      "Specify only one of --actions or --actions-file",
-    );
-    expect(mocks.readActionsPayload).not.toHaveBeenCalled();
+    await expect(
+      run("batch", "--actions", "[]", "--actions-file", "/tmp/browser-actions.json"),
+    ).rejects.toThrow("Specify only one of --actions or --actions-file");
+    expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
+    expect(realpath).not.toHaveBeenCalled();
   });
 
   it("rejects malformed actions JSON before dispatch", async () => {
-    mocks.readActionsPayload.mockResolvedValueOnce("NOT JSON {{{");
     await expectRejected(["--actions", "NOT JSON {{{"], "actions must be valid JSON");
   });
 
   it("rejects non-array actions before dispatch", async () => {
     const payload = JSON.stringify({ kind: "click" });
-    mocks.readActionsPayload.mockResolvedValueOnce(payload);
     await expectRejected(["--actions", payload], "actions must be a JSON array");
   });
 
   it("rejects empty actions before dispatch", async () => {
-    mocks.readActionsPayload.mockResolvedValueOnce("[]");
     await expectRejected(["--actions", "[]"], "actions must contain at least one entry");
   });
 
   it("requires actions from --actions, --actions-file, or stdin", async () => {
-    await expectRejected([], "Provide --actions, --actions-file, or --actions-file -");
+    await expect(run("batch")).rejects.toThrow(
+      "Provide --actions, --actions-file, or --actions-file -",
+    );
+    expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
   });
 });
