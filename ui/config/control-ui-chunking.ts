@@ -217,7 +217,6 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/pages/chat/export.ts":
       return "chat-export-runtime";
     case "ui/src/lib/sessions/session-mutation-operations.runtime.ts":
-    case "ui/src/lib/sessions/session-mutation-refresh.ts":
     case "ui/src/lib/sessions/create.ts":
     case "ui/src/lib/sessions/session-patch-row-facts.ts":
     case "src/shared/session-unread.ts":
