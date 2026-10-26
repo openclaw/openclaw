@@ -9,14 +9,18 @@ const PATH_LENGTH_LIMIT = 4096;
 const COERCION_ERROR = expect.objectContaining({ reason: "parse-error" });
 
 it.each<[string[], RegExp?]>([
-  [["oc://X/foo /bar"]],
+  [["oc://X/foo /bar", "oc://X/foo\tbar"]],
   [['oc://"\\\\srv\\\\share\\\\foo"/section']],
   [["oc://X/[unclosed", "oc://X/closed]", "oc://X/{a,b"]],
   [["oc://X.md/a&b", "oc://X.md/a%b"]],
-  [["oc://X/\x00", "oc://X/foo\x7Fbar", "oc://X.md/items/[k=a\x00b]"], /Control character/],
+  [
+    ["oc://X/\x00", "oc://X/foo\x01bar", "oc://X/foo\x7Fbar", "oc://X.md/items/[k=a\x00b]"],
+    /Control character/,
+  ],
   [["oc:///etc/passwd"], /Empty segment/],
   [['oc://"/etc/passwd"/section'], /Absolute file slot/],
   [['oc://"C:/Windows/System32/foo"/section'], /Absolute file slot/],
+  [['oc://"C:\\\\Windows\\\\System32"/section'], /Absolute file slot/],
   [['oc://"../foo"/section', 'oc://"foo/../bar"/section'], /Parent-directory/],
   [["oc://X.jsonc/items/[]"]],
   [["oc://X/[=foo]", "oc://X/[id=]"], /Malformed predicate/],

@@ -1,11 +1,13 @@
 import { expect, it } from "vitest";
 import {
   isSessionsHubRoute,
+  isSettingsNavigationRoute,
   normalizeSidebarEntries,
   visibleSettingsNavigationGroups,
 } from "./app-navigation.ts";
 import type { NativeDeviceSettingsCapability as Device } from "./app/native-device-settings.ts";
 import { getStaticCommandPaletteCatalogItems } from "./components/command-palette-catalog-search.ts";
+import { settingsNavigationOwnerRoute } from "./lib/settings-navigation.ts";
 import { findSettingsSearchBlocks } from "./pages/config/settings-search.ts";
 import { createChromeExtensionSetupResult } from "./test-helpers/chrome-extension-setup.ts";
 import {
@@ -109,6 +111,12 @@ it("treats worktrees as a sessions hub tab", () => {
   expect(isSessionsHubRoute("sessions")).toBe(true);
   expect(isSessionsHubRoute("worktrees")).toBe(true);
   expect(isSessionsHubRoute("chat")).toBe(false);
+});
+
+it("keeps model setup as a settings subpage without a sidebar entry", () => {
+  expect(isSettingsNavigationRoute("claws")).toBe(false);
+  expect(isSettingsNavigationRoute("model-setup")).toBe(true);
+  expect(settingsNavigationOwnerRoute("model-setup")).toBe("model-providers");
 });
 
 const opaqueIds = ["plugin:reports/daily/team:summary", "plugin:reports/日报 summary"];

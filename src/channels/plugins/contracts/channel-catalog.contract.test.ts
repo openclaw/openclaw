@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
 import { afterEach, expect, it } from "vitest";
-import whatsappPackageJson from "../../../../extensions/whatsapp/package.json" with { type: "json" };
 import { createOpenClawCodingToolsInternalAsync } from "../../../agents/agent-tools.js";
 import { resolveRuntimeChannelPromptContext } from "../../../agents/runtime-capabilities.js";
 import { buildAgentSystemPrompt } from "../../../agents/system-prompt.js";
@@ -11,10 +12,7 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../../../plugins/runtime.js";
-import {
-  createChannelTestPluginBase,
-  createTestRegistry,
-} from "../../../test-utils/channel-plugins.js";
+import { createTestRegistry } from "../../../test-utils/channel-plugins.js";
 import { getBundledChannelPluginAsync } from "./test-helpers/bundled-channel-plugin-loader.js";
 import {
   describeBundledMetadataOnlyChannelCatalogContract,
@@ -47,19 +45,37 @@ for (const [channelId, npmSpec, alias] of [
   describeChannelCatalogEntryContract({ channelId, npmSpec, alias });
 }
 
-const whatsappNpmSpec = whatsappPackageJson.openclaw.install.npmSpec ?? whatsappPackageJson.name;
+const whatsappPackageJson = JSON.parse(
+  fs.readFileSync(path.join(process.cwd(), "extensions", "whatsapp", "package.json"), "utf8"),
+) as {
+  name?: string;
+  version?: string;
+  openclaw?: { install?: { npmSpec?: string } };
+};
+const whatsappNpmSpec = whatsappPackageJson.openclaw?.install?.npmSpec ?? whatsappPackageJson.name;
+const whatsappVersion = whatsappPackageJson.version;
+if (!whatsappNpmSpec || !whatsappVersion) {
+  throw new Error("missing package metadata for whatsapp");
+}
 const whatsappCatalog = {
   pluginId: "whatsapp",
   channelId: "whatsapp",
   packageName: "@openclaw/whatsapp",
   npmSpec: "@openclaw/whatsapp",
-  meta: createChannelTestPluginBase({ id: "whatsapp" }).meta,
+  meta: {
+    id: "whatsapp",
+    label: "WhatsApp",
+    selectionLabel: "WhatsApp (QR link)",
+    detailLabel: "WhatsApp Web",
+    docsPath: "/channels/whatsapp",
+    blurb: "works with your own number; recommend a separate phone + eSIM.",
+  },
 };
 describeBundledMetadataOnlyChannelCatalogContract({ ...whatsappCatalog, defaultChoice: "npm" });
 describeOfficialFallbackChannelCatalogContract({
   ...whatsappCatalog,
-  npmSpec: isPrereleaseSemverVersion(whatsappPackageJson.version)
-    ? `${whatsappNpmSpec}@${whatsappPackageJson.version}`
+  npmSpec: isPrereleaseSemverVersion(whatsappVersion)
+    ? `${whatsappNpmSpec}@${whatsappVersion}`
     : whatsappNpmSpec,
   externalNpmSpec: "@vendor/whatsapp-fork",
   externalLabel: "WhatsApp Fork",

@@ -48,41 +48,54 @@ it("preserves classifier estimates and the physical worker admission callback", 
     },
   });
   expect(classify).toHaveBeenCalledWith(model, expect.any(Array), ctx.signal, ctx.isAdmissible);
-  expect(classify.mock.calls[0]?.[1][0]?.text).toBe('{"message":"A pleasant holiday"}');
+  expect(classify.mock.calls[0]?.[1][0]).toMatchObject({
+    text: '{"message":"A pleasant holiday"}',
+    labels: ["trip", "cash"],
+  });
 });
 
 it("keeps per-model limits and canonical billing facts during V1 catalog enrichment", async () => {
-  const native = preparedContext().model;
-  const cost = { input: 0.01 };
-  const billing = { unit: "tokens", source: "provider-docs", usdPerMillion: cost } as const;
-  native.inference = { chat: false, decision: { protocol: "pinned", input: ["text"], billing } };
-  const legacy = preparedContext().model;
-  legacy.id = "deberta-v3-base-zeroshot-v2.0";
-  const question = { probabilities: "provider-defined" as const, maxOptions: 64 };
-  const limits = {
-    maxQuestions: 32,
-    maxInputTokens: 512,
-    inputTokenScope: "state-plus-each-criterion" as const,
+  type Decision = NonNullable<
+    NonNullable<DecisionProviderContextV2["model"]["inference"]>["decision"]
+  >;
+  const entry = (id: string, decision: Decision) => ({
+    id,
+    name: id,
+    provider: "onnx",
+    inference: { chat: false as const, decision },
+  });
+  const native = entry("pinned", {
+    protocol: "pinned",
+    input: ["text"],
+    billing: { unit: "tokens", source: "provider-docs", usdPerMillion: { input: 0.01 } },
+  });
+  const question = {
+    probabilities: "provider-defined" as const,
+    abstention: false,
+    maxOptions: 64,
   };
-  legacy.inference = {
-    chat: false,
-    decision: {
-      protocol: "decision-v1",
-      input: ["text"],
-      questions: { choice: question, score: question },
-      limits,
+  const legacy = entry("deberta-v3-base-zeroshot-v2.0", {
+    protocol: "decision-v1",
+    input: ["text"],
+    questions: { choice: question, score: question },
+    limits: {
+      maxQuestions: 32,
+      maxInputTokens: 512,
+      inputTokenScope: "state-plus-each-criterion",
     },
-  };
-  const entries = [native, legacy];
-  const rows = await prepared.provider?.augmentModelCatalog?.({ env: {}, entries });
-  expect(rows?.find((row) => row.id === native.id)).toEqual(native);
+  });
+  const rows = await prepared.provider?.augmentModelCatalog?.({
+    env: {},
+    entries: [native, legacy],
+  });
+  expect(rows?.find((row) => row.id === "pinned")).toEqual(native);
   expect(rows?.find((row) => row.id === legacy.id)?.inference?.decision).toMatchObject({
     protocol: "onnx-classifier",
     questions: {
       choice: { probabilities: "categorical", minOptions: 2, maxOptions: 64 },
       score: { probabilities: "categorical", minOptions: 2, maxOptions: 64 },
     },
-    limits,
+    limits: legacy.inference.decision.limits,
   });
 });
 const batch: DecisionBatch = {
@@ -95,10 +108,18 @@ const batch: DecisionBatch = {
 };
 
 it.each(["list", "reasoning", "bare"] as const)("rejects %s before dispatch", async (kind) => {
-  let input = decisionBatchV1ToV2(batch)!;
   if (kind === "bare") {
-    input = { ...input, questions: { ...input.questions, bare: { type: "boolean" } } };
-  } else if (kind === "list") {
+    expect(
+      await provider.evaluate(
+        { ...batch, questions: { ...batch.questions, bare: { type: "boolean" } } },
+        context(),
+      ),
+    ).toEqual(unavailable);
+    expect(classify).not.toHaveBeenCalled();
+    return;
+  }
+  let input = decisionBatchV1ToV2(batch)!;
+  if (kind === "list") {
     input = { ...input, state: { type: "list", items: [{ id: "one", content: "first" }] } };
   }
   const reasoning = kind === "reasoning" ? "on" : undefined;

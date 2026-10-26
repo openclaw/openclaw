@@ -122,9 +122,15 @@ it("does not auto-select key-free providers but preserves explicit selection and
   expect(isConfigured({ config: {} })).toBe(false);
   const config = { tools: { web: { search: { provider: "uninstalled-provider" } } } };
   expect(isConfigured({ config })).toBe(true);
-  const runtimeWebSearch = {
-    providerSource: "none" as const,
-    diagnostics: [{ code: "WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK", message: "private diagnostic" }],
-  };
-  expect(isConfigured({ config: {}, runtimeWebSearch })).toBe(true);
+  expect(
+    isConfigured({
+      config: {},
+      runtimeWebSearch: {
+        providerSource: "none",
+        diagnostics: [
+          { code: "WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK", message: "private diagnostic" },
+        ],
+      },
+    }),
+  ).toBe(true);
 });

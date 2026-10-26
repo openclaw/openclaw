@@ -103,18 +103,45 @@ it("retains only recorded terminal references and never guesses a prior device o
   expect(rows[3]?.sessions).toEqual([{ kind: "placement", session: moved }]);
 });
 
-it("keeps canonical inventory when auxiliary resource reads fail, with visible errors", async () => {
+function setup(...responses: unknown[]) {
   const client = new GatewayBrowserClient({ url: "ws://gateway.test" });
-  vi.spyOn(client, "request")
-    .mockResolvedValueOnce({ environments })
-    .mockRejectedValueOnce(new Error("Node inventory denied"))
-    .mockRejectedValueOnce(new Error("System info unavailable"));
+  const request = vi.spyOn(client, "request");
+  for (const response of responses) {
+    request.mockImplementationOnce(() =>
+      response instanceof Error ? Promise.reject(response) : Promise.resolve(response),
+    );
+  }
   const gateway = createApplicationGateway({
     client,
     phase: "connected",
     hello: gatewayHelloForMethods(["system.info"]),
   } as ApplicationGatewaySnapshot).gateway;
-  expect(await loadSystemsInventory(gateway, {})).toMatchObject({
+  return { request, load: (signal?: AbortSignal) => loadSystemsInventory(gateway, { signal }) };
+}
+
+it("loads the existing read contracts and does not create a second session inventory", async () => {
+  const { request, load } = setup({ environments }, { nodes: inventory.nodes }, systemInfo);
+  const controller = new AbortController();
+  expect(await load(controller.signal)).toEqual({
+    ...inventory,
+    gatewaySampledAtMs: expect.any(Number),
+  });
+  expect(
+    request.mock.calls.map(([method, params, options]) => [method, params, options?.signal]),
+  ).toEqual([
+    ["environments.list", { includeDesktopSetup: true }, controller.signal],
+    ["node.list", {}, controller.signal],
+    ["system.info", {}, expect.any(AbortSignal)],
+  ]);
+});
+
+it("keeps canonical inventory when auxiliary resource reads fail, with visible errors", async () => {
+  const { load } = setup(
+    { environments },
+    new Error("Node inventory denied"),
+    new Error("System info unavailable"),
+  );
+  expect(await load()).toMatchObject({
     environments,
     nodes: [],
     gatewaySystemInfo: null,
@@ -123,4 +150,10 @@ it("keeps canonical inventory when auxiliary resource reads fail, with visible e
       systemInfo: expect.stringContaining("System info unavailable"),
     },
   });
+});
+
+it("propagates inventory failure rather than synthesizing a successful list from nodes", async () => {
+  const failure = new Error("Inventory unavailable");
+  const { load } = setup(failure, { nodes: inventory.nodes }, systemInfo);
+  await expect(load()).rejects.toBe(failure);
 });

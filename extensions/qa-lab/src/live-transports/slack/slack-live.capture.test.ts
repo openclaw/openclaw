@@ -17,7 +17,10 @@ it("reads successful inline and blob-backed writes in request order", async () =
   const post = request(3, "chat.postMessage", {
     text: "fallback",
     thread_ts: threadId,
-    blocks: JSON.stringify(["Update", "COMMENTARY"].map((text) => ({ text: { text } }))),
+    blocks: JSON.stringify([
+      { type: "header", text: { type: "plain_text", text: "Update" } },
+      { type: "section", text: { type: "mrkdwn", text: "COMMENTARY" } },
+    ]),
   });
   const posted = response(3);
   const blobs = new Map(Object.entries({ request: post.dataText, response: posted.dataText }));

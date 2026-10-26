@@ -2,7 +2,7 @@ import { streamSimple, resolveOpenAIRequestReasoning, type Model } from "opencla
 import { capturePluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-model-metadata";
 import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
-import { expect, it } from "vitest";
+import { assert, expect, it } from "vitest";
 import plugin from "./index.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
@@ -54,6 +54,8 @@ it("clamps GPT OSS thinking levels to Groq's low, medium, and high efforts", () 
 });
 
 it("maps Groq reasoning to its wire contract on both completion paths", async () => {
+  const gptOss = catalog.models.find((model) => model.id === "openai/gpt-oss-120b");
+  assert(gptOss, "Expected Groq GPT OSS catalog model");
   expect(qwen.input).toEqual(["text"]);
   expect(qwen.compat?.supportedReasoningEfforts).toEqual(["none", "default"]);
   const qwenModel = makeModel(qwen);
@@ -67,7 +69,7 @@ it("maps Groq reasoning to its wire contract on both completion paths", async ()
     [qwen, [undefined, "off", ...enabledLevels], "default", true],
     [{ ...qwen, id: "qwen/future-reasoner" }, ["high"], "default", true],
     [{ ...qwen, id: "qwen/future-text-model", reasoning: false }, ["high"], undefined, false],
-    [catalog.models[0], ["high"], "high", false],
+    [gptOss, ["high"], "high", false],
   ] as const) {
     const model = makeModel(row);
     for (const [streamFn, reasoning] of completionStreams(model).flatMap((stream) =>
