@@ -69,6 +69,7 @@ const repositoryScriptEntries = [
   "scripts/perf/access-authority-callback-measure.mjs!",
   // Its header documents the sandbox/workspace ownership assertion benchmark.
   "scripts/perf/workspace-assertion-measure.mjs!",
+  "scripts/perf/state-owner-identity-measure.mjs!",
   // Its header documents the full transcript-pairing repair benchmark.
   "scripts/perf/tool-result-pairing-measure.ts!",
   "scripts/perf/assistant-thinking-measure.ts!",
