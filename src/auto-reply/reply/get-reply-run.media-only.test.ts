@@ -479,8 +479,12 @@ async function prepareActiveQueue(
   return { runtime, operation };
 }
 
-function runPrepared(overrides: Partial<Parameters<typeof runPreparedReply>[0]> = {}) {
+function runPrepared(overrides: Partial<ReplyRunParams> = {}) {
   return runPreparedReply(baseParams(overrides));
+}
+
+function createConfig(overrides: Partial<ReplyRunParams["cfg"]> = {}): ReplyRunParams["cfg"] {
+  return { session: {}, channels: {}, agents: { defaults: {} }, ...overrides };
 }
 
 async function useActualSystemEventDrain() {
@@ -973,8 +977,7 @@ describe("runPreparedReply media-only handling", () => {
       elevatedAllowed: true,
     });
 
-    const call = requireRunReplyAgentCall();
-    expect(call.followupRun.run.bashElevated).toEqual({
+    expect(requireRunReplyAgentCall().followupRun.run.bashElevated).toEqual({
       enabled: true,
       allowed: true,
       defaultLevel: "on",
@@ -1041,8 +1044,7 @@ describe("runPreparedReply media-only handling", () => {
       opts: {
         sourceReplyDeliveryMode: "message_tool_only",
         sourceReplyDeliveryModeOrigin: "runtime_default",
-      } as NonNullable<Parameters<typeof runPreparedReply>[0]["opts"]> &
-        SourceReplyDeliveryRuntimeOptions,
+      } as NonNullable<ReplyRunParams["opts"]> & SourceReplyDeliveryRuntimeOptions,
       ...turn("hello", {
         ...createProviderSurface("discord"),
         ChatType: "direct",
@@ -1050,9 +1052,7 @@ describe("runPreparedReply media-only handling", () => {
       }),
     });
 
-    const call = requireRunReplyAgentCall(-1);
-    const followupRun = call.followupRun;
-    const run = followupRun.run;
+    const { run } = requireRunReplyAgentCall(-1).followupRun;
     const initialTurnContext = { start: 0, text: "Inbound metadata.\n\ndirect:message_tool_only" };
     const automaticTurnContext = { start: 0, text: "Inbound metadata.\n\ndirect:automatic" };
     const staticPrompt = "direct:message_tool_only\n\nPersistent policy.";
@@ -1164,9 +1164,9 @@ describe("runPreparedReply media-only handling", () => {
 
     await runPreparedReply(params);
 
-    const call = requireRunReplyAgentCall();
-    expect(call.followupRun.prompt).toContain("[User sent media without caption]");
-    expect(call.followupRun.userTurnTranscriptRecorder?.message).toMatchObject({
+    const { followupRun } = requireRunReplyAgentCall();
+    expect(followupRun.prompt).toContain("[User sent media without caption]");
+    expect(followupRun.userTurnTranscriptRecorder?.message).toMatchObject({
       role: "user",
       content: "",
       __openclaw: { media: [expect.objectContaining({ path: "/tmp/input.png" })] },
@@ -1327,14 +1327,13 @@ describe("runPreparedReply media-only handling", () => {
   });
 
   it("projects partially hydrated current images into the runner and transcript layout", async () => {
-    const secondImageData = Buffer.from("second image bytes");
     const media = () => [
       { path: "/tmp/described-image.png", contentType: "image/png", workspaceDir: "/tmp" },
       { path: "/tmp/undescribed-image.png", contentType: "image/png", workspaceDir: "/tmp" },
     ];
     const image = {
       type: "image" as const,
-      data: secondImageData.toString("base64"),
+      data: Buffer.from("second image bytes").toString("base64"),
       mimeType: "image/png",
     };
     resolveCurrentTurnImagesMock.mockResolvedValueOnce({
@@ -1365,20 +1364,18 @@ describe("runPreparedReply media-only handling", () => {
 
     expect(result).toEqual({ text: "ok" });
     expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
-    const call = requireRunReplyAgentCall();
-    expect(call.followupRun.images).toEqual([image]);
-    expect(
-      (
-        call.followupRun.userTurnTranscriptRecorder?.message as unknown as Record<string, unknown>
-      )?.["__openclaw"],
-    ).toMatchObject({
-      mediaImageLayout: {
-        slots: [{ kind: "inline", factIndex: 1 }],
-        suppressedFactIndexes: [0],
+    const { followupRun } = requireRunReplyAgentCall();
+    expect(followupRun.images).toEqual([image]);
+    expect(followupRun.userTurnTranscriptRecorder?.message).toMatchObject({
+      __openclaw: {
+        mediaImageLayout: {
+          slots: [{ kind: "inline", factIndex: 1 }],
+          suppressedFactIndexes: [0],
+        },
       },
     });
-    expect(call.followupRun.imageOrder).toEqual(["inline"]);
-    expect(call.followupRun.prompt).toContain("a tiny dot image");
+    expect(followupRun.imageOrder).toEqual(["inline"]);
+    expect(followupRun.prompt).toContain("a tiny dot image");
   });
 
   it.each([false, true])(
@@ -1451,9 +1448,7 @@ describe("runPreparedReply media-only handling", () => {
 
   it("keeps /reset soft tails even when the bare reset prompt is empty", async () => {
     const result = await runPrepared({
-      ctx: {
-        ...createInboundBody("/reset soft re-read persona files"),
-      },
+      ctx: createInboundBody("/reset soft re-read persona files"),
       sessionCtx: {
         ...createSessionBody(""),
         Provider: "slack",
@@ -1551,11 +1546,6 @@ describe("runPreparedReply media-only handling", () => {
       ...activeEntry,
       goal: { ...activeEntry.goal!, status: "complete" },
     };
-    const cfg = {
-      session: {},
-      channels: {},
-      agents: { defaults: {} },
-    };
     await useQueueMode("interrupt");
     vi.mocked(inboundMeta.formatActiveGoalContext).mockImplementation((entry) =>
       entry?.goal?.status === "active" ? "Active goal: Finish the interrupted work" : undefined,
@@ -1586,7 +1576,6 @@ describe("runPreparedReply media-only handling", () => {
     });
 
     const runPromise = runPrepared({
-      cfg,
       isNewSession: false,
       sessionId: "session-goal-interrupt",
       sessionEntry: activeEntry,
@@ -1711,56 +1700,37 @@ describe("runPreparedReply media-only handling", () => {
     }
   });
 
-  it("rebinds a queued pre-dispatch reply operation after session rollover", async () => {
-    const operation = createOperation("session-before-rollover");
-
-    try {
-      await expect(
-        runPrepared({
-          isNewSession: true,
-          sessionId: "session-after-rollover",
-          opts: { replyOperation: operation } as never,
-        }),
-      ).resolves.toEqual({ text: "ok" });
-
-      const call = requireRunReplyAgentCall(-1);
-      expect(operation.sessionId).toBe("session-after-rollover");
-      expect(call.replyOperation).toBe(operation);
-      expect(call.followupRun.run.sessionId).toBe("session-after-rollover");
-    } finally {
-      operation.complete();
-    }
-  });
-
-  it("rebinds a provisional pre-dispatch operation to a discovered existing session", async () => {
-    const operation = createOperation("provisional-session");
-    const sessionStore: Record<string, SessionEntry> = {
-      "session-key": {
-        sessionId: "existing-session",
-        updatedAt: 1,
-      },
-    };
-
-    try {
-      await expect(
-        runPrepared({
-          isNewSession: false,
-          sessionEntry: undefined,
-          sessionId: undefined,
-          sessionStore,
-          storePath: "/tmp/sessions.json",
-          opts: { replyOperation: operation } as never,
-        }),
-      ).resolves.toEqual({ text: "ok" });
-
-      const call = requireRunReplyAgentCall(-1);
-      expect(operation.sessionId).toBe("existing-session");
-      expect(call.replyOperation).toBe(operation);
-      expect(call.followupRun.run.sessionId).toBe("existing-session");
-    } finally {
-      operation.complete();
-    }
-  });
+  it.each(["rollover", "discovered"] as const)(
+    "rebinds a pre-dispatch reply operation to the %s session",
+    async (kind) => {
+      const operation = createOperation(
+        kind === "rollover" ? "session-before-rollover" : "provisional-session",
+      );
+      const sessionId = kind === "rollover" ? "session-after-rollover" : "existing-session";
+      try {
+        await expect(
+          runPrepared({
+            ...(kind === "rollover"
+              ? { isNewSession: true, sessionId }
+              : {
+                  isNewSession: false,
+                  sessionEntry: undefined,
+                  sessionId: undefined,
+                  sessionStore: { "session-key": { sessionId, updatedAt: 1 } },
+                  storePath: "/tmp/sessions.json",
+                }),
+            opts: { replyOperation: operation } as never,
+          }),
+        ).resolves.toEqual({ text: "ok" });
+        const call = requireRunReplyAgentCall(-1);
+        expect(operation.sessionId).toBe(sessionId);
+        expect(call.replyOperation).toBe(operation);
+        expect(call.followupRun.run.sessionId).toBe(sessionId);
+      } finally {
+        operation.complete();
+      }
+    },
+  );
 
   it("keeps route and dispatch system events queued when busy admission returns", async () => {
     vi.useFakeTimers();
@@ -1768,7 +1738,7 @@ describe("runPreparedReply media-only handling", () => {
     await useQueueMode("interrupt");
     const routeSessionKey = "agent:main:slack:channel:c123";
     const dispatchSessionKey = `${routeSessionKey}:thread:123.456`;
-    const cfg = { session: {}, channels: {}, agents: { defaults: {} } };
+    const cfg = createConfig();
     const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
     let resolveCancelled!: () => void;
     const cancelled = new Promise<void>((resolve) => {
@@ -1907,9 +1877,10 @@ describe("runPreparedReply media-only handling", () => {
       currentInboundAudio: true,
       run: { sourceReplyDeliveryMode: "message_tool_only", terminalReplyExpectation: "optional" },
     });
-    expect(call?.followupRun.run.suppressNextUserMessagePersistence).toBeUndefined();
-    expect(call?.followupRun.run.suppressTranscriptOnlyAssistantPersistence).toBe(true);
-    expect(call?.followupRun.userTurnTranscriptRecorder?.message).toEqual({
+    const { run, userTurnTranscriptRecorder, currentInboundContext } = call.followupRun;
+    expect(run.suppressNextUserMessagePersistence).toBeUndefined();
+    expect(run.suppressTranscriptOnlyAssistantPersistence).toBe(true);
+    expect(userTurnTranscriptRecorder?.message).toEqual({
       role: "user",
       content: "#35676 Keśava: No wtf",
       idempotencyKey: buildChannelSourceTurnId({
@@ -1936,7 +1907,7 @@ describe("runPreparedReply media-only handling", () => {
         },
       },
     });
-    call?.followupRun.userTurnTranscriptRecorder?.markRuntimePersisted({
+    userTurnTranscriptRecorder?.markRuntimePersisted({
       role: "user",
       content: "#35676 Keśava: No wtf",
       timestamp: 1_710_000_000_000,
@@ -1949,15 +1920,11 @@ describe("runPreparedReply media-only handling", () => {
       timestampMs: 1_710_000_000_000,
       expectedSessionId: expect.any(String),
     });
-    expect(call?.followupRun.currentInboundContext?.text).toContain(
-      "#35675 obviyus ->#35674: Are you fr fr",
-    );
-    expect(call?.followupRun.currentInboundContext?.text).toContain("[OpenClaw room event]");
-    expect(call?.followupRun.currentInboundContext?.text).toContain(
-      ROOM_EVENT_MESSAGE_TOOL_DIRECTIVE,
-    );
-    expect(call?.followupRun.currentInboundContext?.text).not.toContain("visible_reply_contract:");
-    expect(call?.followupRun.currentInboundContext?.text).not.toContain("Current event:");
+    expect(currentInboundContext?.text).toContain("#35675 obviyus ->#35674: Are you fr fr");
+    expect(currentInboundContext?.text).toContain("[OpenClaw room event]");
+    expect(currentInboundContext?.text).toContain(ROOM_EVENT_MESSAGE_TOOL_DIRECTIVE);
+    expect(currentInboundContext?.text).not.toContain("visible_reply_contract:");
+    expect(currentInboundContext?.text).not.toContain("Current event:");
   });
 
   it.each([
@@ -2033,9 +2000,9 @@ describe("runPreparedReply media-only handling", () => {
       ),
     });
 
-    const call = requireRunReplyAgentCall(-1);
-    expect(call?.followupRun.run.sourceReplyDeliveryMode).toBe("automatic");
-    expect(call?.followupRun.currentInboundContext?.text).not.toContain(
+    const { followupRun } = requireRunReplyAgentCall(-1);
+    expect(followupRun.run.sourceReplyDeliveryMode).toBe("automatic");
+    expect(followupRun.currentInboundContext?.text).not.toContain(
       "visible_reply_contract: message_tool_only",
     );
   });
@@ -2158,79 +2125,63 @@ describe("runPreparedReply media-only handling", () => {
     },
   );
 
-  it.each([
-    { stableMode: "message_tool_only", expectedPrompt: "group:telegram:group:message_tool_only" },
-  ] as const)(
-    "keeps CLI binding facts stable across room-event, primary, and cron assembly for $stableMode",
-    async ({ stableMode, expectedPrompt }) => {
-      vi.mocked(buildSourceConversationContext).mockImplementation(
-        ({ sessionCtx, sourceReplyDeliveryMode }) =>
-          [
-            "group",
-            sessionCtx.Provider,
-            sessionCtx.ChatType,
-            sourceReplyDeliveryMode ?? "automatic",
-          ].join(":"),
-      );
-      const cfg: ReplyRunParams["cfg"] = {
-        session: {},
-        channels: {},
-        agents: { defaults: {} },
-        ...(stableMode === "message_tool_only"
-          ? { messages: { visibleReplies: "message_tool" } }
-          : {}),
-      };
-      const sessionEntry = createTelegramGroupSession();
-      const stableOptions: ReplyRunParams["opts"] = {
-        sourceReplyDeliveryMode: stableMode,
-        sessionPromptSourceReplyDeliveryMode: stableMode,
-      };
-      const sequence: Array<readonly ["room_event" | "primary" | "cron", ReplyRunParams["opts"]]> =
+  it("keeps CLI binding facts stable across room-event, primary, and cron assembly", async () => {
+    const stableMode = "message_tool_only";
+    const expectedPrompt = "group:telegram:group:message_tool_only";
+    vi.mocked(buildSourceConversationContext).mockImplementation(
+      ({ sessionCtx, sourceReplyDeliveryMode }) =>
         [
-          ["room_event", { ...stableOptions, sourceReplyDeliveryMode: "message_tool_only" }],
-          ["primary", stableOptions],
-          ["cron", { ...stableOptions }],
-        ];
-      // Scheduled wakes must derive the same stable session policy.
-      for (const [kind, opts] of sequence) {
-        const isWake = kind === "cron";
-        const messageId = kind === "room_event" ? "msg-1" : "msg-2";
-        await runPrepared({
-          cfg,
-          opts,
-          isNewSession: false,
-          systemSent: true,
-          sessionEntry,
-          ...turn(
-            isWake ? "scheduled wake" : "@bot check this",
-            isWake
-              ? { InternalTurnSource: kind }
-              : { ...createProviderSurface("telegram"), ChatType: "group", MessageSid: messageId },
-            kind === "room_event" ? { InboundEventKind: kind } : {},
-            isWake ? { SessionKey: "agent:main:telegram:-100123" } : {},
-          ),
-        });
-      }
+          "group",
+          sessionCtx.Provider,
+          sessionCtx.ChatType,
+          sourceReplyDeliveryMode ?? "automatic",
+        ].join(":"),
+    );
+    const cfg = createConfig({ messages: { visibleReplies: "message_tool" } });
+    const sessionEntry = createTelegramGroupSession();
+    const stableOptions: ReplyRunParams["opts"] = {
+      sourceReplyDeliveryMode: stableMode,
+      sessionPromptSourceReplyDeliveryMode: stableMode,
+    };
+    // Scheduled wakes must derive the same stable session policy.
+    for (const kind of ["room_event", "primary", "cron"] as const) {
+      const isWake = kind === "cron";
+      const messageId = kind === "room_event" ? "msg-1" : "msg-2";
+      await runPrepared({
+        cfg,
+        opts: { ...stableOptions },
+        isNewSession: false,
+        systemSent: true,
+        sessionEntry,
+        ...turn(
+          isWake ? "scheduled wake" : "@bot check this",
+          isWake
+            ? { InternalTurnSource: kind }
+            : { ...createProviderSurface("telegram"), ChatType: "group", MessageSid: messageId },
+          kind === "room_event" ? { InboundEventKind: kind } : {},
+          isWake ? { SessionKey: "agent:main:telegram:-100123" } : {},
+        ),
+      });
+    }
 
-      const roomEvent = requireRunReplyAgentCall(0).followupRun;
-      const primary = requireRunReplyAgentCall(1).followupRun.run;
-      const cron = requireRunReplyAgentCall(2).followupRun.run;
-      expect(roomEvent.run.sourceReplyDeliveryMode).toBe("message_tool_only");
-      expect(primary.sourceReplyDeliveryMode).toBe(stableMode);
-      expect(cron.sourceReplyDeliveryMode).toBe(stableMode);
-      expect(roomEvent.run.extraSystemPrompt).toBe(expectedPrompt);
-      expect(roomEvent.currentInboundContext?.text).toContain(
-        "You were not explicitly tagged or mentioned in this room event",
-      );
-      for (const prepared of [roomEvent.run, primary, cron]) {
-        expect(prepared.extraSystemPromptStatic).toBe(expectedPrompt);
-        expect(prepared.cliSessionBindingFacts).toEqual({
-          extraSystemPromptStatic: expectedPrompt,
-          sourceReplyDeliveryMode: stableMode,
-        });
-      }
-    },
-  );
+    const roomEvent = requireRunReplyAgentCall(0).followupRun;
+    const primary = requireRunReplyAgentCall(1).followupRun.run;
+    const cron = requireRunReplyAgentCall(2).followupRun.run;
+    expect(roomEvent.run.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(primary.sourceReplyDeliveryMode).toBe(stableMode);
+    expect(cron.sourceReplyDeliveryMode).toBe(stableMode);
+    expect(roomEvent.run.extraSystemPrompt).toBe(expectedPrompt);
+    expect(roomEvent.currentInboundContext?.text).toContain(
+      "You were not explicitly tagged or mentioned in this room event",
+    );
+    for (const prepared of [roomEvent.run, primary, cron]) {
+      expect(prepared.extraSystemPromptStatic).toBe(expectedPrompt);
+      expect(prepared.cliSessionBindingFacts).toEqual({
+        extraSystemPromptStatic: expectedPrompt,
+        sourceReplyDeliveryMode: stableMode,
+      });
+    }
+  });
 
   it.each(["originless", "message-tool-denied"] as const)(
     "resolves automatic synthetic stable facts for %s sessions",
@@ -2246,14 +2197,11 @@ describe("runPreparedReply media-only handling", () => {
         );
       }
       await runPrepared({
-        cfg: {
-          session: {},
-          channels: {},
-          agents: { defaults: {} },
-          ...(!originless
+        cfg: createConfig(
+          !originless
             ? { messages: { visibleReplies: "message_tool" }, tools: { deny: ["message"] } }
-            : {}),
-        },
+            : {},
+        ),
         opts: {},
         isNewSession: false,
         systemSent: true,
@@ -2288,22 +2236,20 @@ describe("runPreparedReply media-only handling", () => {
     vi.mocked(buildSourceConversationContext).mockReturnValue("group:telegram:group:automatic");
     vi.mocked(buildGroupIntro).mockReturnValue("intro:mention");
     const sessionEntry = createTelegramGroupSession();
+    const opts: ReplyRunParams["opts"] = {
+      sourceReplyDeliveryMode: "automatic",
+      sessionPromptSourceReplyDeliveryMode: "automatic",
+    };
 
     await runPrepared({
-      opts: {
-        sourceReplyDeliveryMode: "automatic",
-        sessionPromptSourceReplyDeliveryMode: "automatic",
-      },
+      opts: { ...opts },
       isNewSession: true,
       systemSent: false,
       sessionEntry,
       ...turn("@bot first", { ...createProviderSurface("telegram"), ChatType: "group" }),
     });
     await runPrepared({
-      opts: {
-        sourceReplyDeliveryMode: "automatic",
-        sessionPromptSourceReplyDeliveryMode: "automatic",
-      },
+      opts: { ...opts },
       isNewSession: false,
       systemSent: true,
       sessionEntry,
@@ -2321,11 +2267,9 @@ describe("runPreparedReply media-only handling", () => {
 
   it("captures the prepared reply policy for queued Slack runs", async () => {
     await runPrepared({
-      cfg: {
-        session: {},
+      cfg: createConfig({
         channels: { slack: { replyToMode: "all" } },
-        agents: { defaults: {} },
-      },
+      }),
       ...turn(
         "",
         {
@@ -2355,19 +2299,16 @@ describe("runPreparedReply media-only handling", () => {
         ChatType: liveChatType,
       };
       await runPrepared({
-        cfg: {
-          session: {},
+        cfg: createConfig({
           channels: {
             slack: {
               replyToMode: "all",
               replyToModeByChatType: { channel: "off", direct: "first" },
             },
           },
-          agents: { defaults: {} },
-        },
+        }),
         opts: {},
-        ctx: { ...createInboundBody("scheduled wake"), ...route },
-        sessionCtx: { ...createSessionBody("scheduled wake"), ...route },
+        ...turn("scheduled wake", route),
         sessionEntry: {
           sessionId: "session-1",
           updatedAt: 1,
