@@ -78,9 +78,10 @@ it("pins, updates and reopens a report for a global agent without a document", a
     props: updated,
     revision: 2,
   });
-  const view = await invoke("board.get", target);
-  expect(view.mock.calls[0]?.[0]).toBe(true);
-  const snapshot = view.mock.calls[0]?.[1] as { widgets: Array<Record<string, unknown>> };
+  const snapshot = await callGateway<{ widgets: Array<Record<string, unknown>> }>(
+    "board.get",
+    target,
+  );
   expect(snapshot.widgets[0]).toMatchObject({ pluginKind: "session:report", props: updated });
   expect(snapshot.widgets[0]).not.toHaveProperty("frameUrl");
   expect(snapshot.widgets[0]).not.toHaveProperty("viewTicket");
@@ -139,10 +140,8 @@ it("accepts HTML widget payload when report is an empty object", async () => {
     kind: "canvas",
     view: { boardWidgetName: "saas-operations" },
   });
-  expect(mock).toHaveBeenCalledWith(
+  expect(mock.mock.calls[0]).toMatchObject([
     "board.widget.put",
-    expect.objectContaining({
-      content: expect.objectContaining({ kind: "html", html: "<main>dashboard</main>" }),
-    }),
-  );
+    { content: { kind: "html", html: "<main>dashboard</main>" } },
+  ]);
 });

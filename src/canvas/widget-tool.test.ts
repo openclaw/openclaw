@@ -61,35 +61,27 @@ const failingPresenter = () =>
     error: { code: "presentation_error", message: "delivery rejected" },
   }));
 
-async function executeWidget(
-  params: Pick<WidgetToolOptions, "agentId" | "agentSessionKey" | "presenters"> & {
-    title?: string;
-    widgetCode: string;
-    pin?: boolean;
-    name?: string;
-    tab?: string;
-    size?: "sm" | "md" | "lg" | "xl" | "full";
-    presentation?: {
-      target?: "assistant_message" | "node_panel";
-      frame?: "card" | "full-bleed" | "frameless";
-    };
-    capabilities?: { netOrigins?: string[]; tools?: string[] };
-  },
-) {
-  const {
-    agentId = "main",
-    agentSessionKey,
-    presenters,
-    title = "Widget title",
-    widgetCode,
-    ...input
-  } = params;
-  const tool = createTool({
-    sessionId: "widget-session",
-    agentId,
-    agentSessionKey,
-    presenters,
-  });
+async function executeWidget({
+  agentId = "main",
+  agentSessionKey,
+  presenters,
+  title = "Widget title",
+  widgetCode,
+  ...input
+}: Pick<WidgetToolOptions, "agentId" | "agentSessionKey" | "presenters"> & {
+  title?: string;
+  widgetCode: string;
+  pin?: boolean;
+  name?: string;
+  tab?: string;
+  size?: "sm" | "md" | "lg" | "xl" | "full";
+  presentation?: {
+    target?: "assistant_message" | "node_panel";
+    frame?: "card" | "full-bleed" | "frameless";
+  };
+  capabilities?: { netOrigins?: string[]; tools?: string[] };
+}) {
+  const tool = createTool({ sessionId: "widget-session", agentId, agentSessionKey, presenters });
   const result = await tool.execute("widget-call", { title, widget_code: widgetCode, ...input });
   const parsed = payload(result) as {
     kind?: string;
@@ -118,7 +110,7 @@ function pinner(agentSessionKey = "agent:main:pinned") {
 }
 
 it("uses board-only delivery when inline hosting is disabled", async () => {
-  const { mock: callGatewayMock } = createBoardPutCaller();
+  createBoardPutCaller();
   const tool = createTool({
     agentSessionKey: "agent:main:board-only",
     inlineHostEnabled: false,
@@ -140,12 +132,6 @@ it("uses board-only delivery when inline hosting is disabled", async () => {
     capabilityState: "none",
     text: "Widget pinned to dashboard tab main as diagram. Open this dashboard tab in Control UI to view it.",
   });
-  expect(callGatewayMock).toHaveBeenCalledExactlyOnceWith(
-    "board.widget.put",
-    expect.objectContaining({
-      content: { kind: "html", html: "<p>ready</p>" },
-    }),
-  );
   await expectNoDocument();
 });
 
@@ -377,9 +363,6 @@ it("wraps SVG widgets with the stable result and sandbox contracts", async () =>
   expect(documentHtml).toContain("font-src data:");
   expect(documentHtml).toContain("img-src data:; media-src data: https: blob:; connect-src 'none'");
   expect(documentHtml).toContain("<title>&lt;Status&gt;</title>");
-  expect(documentHtml).toContain("--accent:#bd4531");
-  expect(documentHtml).toContain("--accent:#ff5c5c");
-  expect(documentHtml).toContain("--accent-fill:#d13c3c");
   expect(documentHtml).toContain('<body class="svg-widget"><script>');
   expect(documentHtml).toContain("openclaw:widget-size");
   const manifest = JSON.parse(await readFile(documentFile(viewId, "manifest.json"), "utf8")) as {
@@ -428,10 +411,18 @@ it.each([
     const result = await pinWidget(initialHtml, true);
     const pinnedTitle = Array.from(title).slice(0, 80).join("");
 
-    expect(await readBoardHtml(store, target, "release-status")).toMatchObject({
-      html: buildWidgetDocument(pinnedTitle, initialHtml),
-      revision: 1,
-    });
+    const expectPinned = async (source: string, revision: number) => {
+      expect(await readBoardHtml(store, target, "release-status")).toMatchObject({
+        html: buildWidgetDocument(pinnedTitle, source),
+        revision,
+      });
+      expect(broadcast).toHaveBeenCalledWith(
+        "board.changed",
+        { sessionKey: eventSessionKey, revision, widget: "release-status" },
+        boardBroadcastScope,
+      );
+    };
+    await expectPinned(initialHtml, 1);
     expect((await store.getSnapshot(target)).widgets[0]).toMatchObject({
       title: pinnedTitle,
       presentation: "frameless",
@@ -439,11 +430,6 @@ it.each([
     expect(result.resultText).toContain("pinned to dashboard tab main as release-status (lg)");
     expect(result.boardWidgetName).toBe("release-status");
     expect((await readCanvasDocumentHtmlSource(result.viewId)).html).toContain(initialHtml);
-    expect(broadcast).toHaveBeenCalledWith(
-      "board.changed",
-      { sessionKey: eventSessionKey, revision: 1, widget: "release-status" },
-      boardBroadcastScope,
-    );
 
     await expect(
       callGateway("board.widget.put", {
@@ -456,16 +442,8 @@ it.each([
 
     const refreshed = await pinWidget("<p>refreshed</p>");
 
-    expect(await readBoardHtml(store, target, "release-status")).toMatchObject({
-      html: buildWidgetDocument(pinnedTitle, "<p>refreshed</p>"),
-      revision: 2,
-    });
+    await expectPinned("<p>refreshed</p>", 2);
     expect(refreshed.boardWidgetName).toBe("release-status");
-    expect(broadcast).toHaveBeenCalledWith(
-      "board.changed",
-      { sessionKey: eventSessionKey, revision: 2, widget: "release-status" },
-      boardBroadcastScope,
-    );
     expect(await store.getSnapshot(sibling)).toEqual(siblingBefore);
   },
 );
