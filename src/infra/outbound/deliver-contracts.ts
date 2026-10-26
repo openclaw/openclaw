@@ -88,6 +88,7 @@ export type ChannelHandler = {
     payloads: NormalizedPayloadForChannelDelivery[],
   ) => NormalizedPayloadForChannelDelivery[];
   sendTextOnlyErrorPayloads?: boolean;
+  supportsReasoningPayloads?: boolean;
   renderPresentation?: (
     payload: ReplyPayload,
     sourcePresentation?: MessagePresentation,
@@ -259,6 +260,8 @@ export type DeliverOutboundPayloadsParams = DeliverOutboundPayloadsCoreParams & 
 
 /** Private owner facts excluded from SDK delivery parameters and stored payloads. */
 export type InternalDeliverOutboundPayloadsParams = DeliverOutboundPayloadsParams & {
+  /** In-memory original source lanes; never included in prepared batches or queue storage. */
+  reasoningPayloadIndexes?: ReadonlySet<number>;
   /** Host-captured session generation retained independently by this delivery intent. */
   sessionGeneration?: SessionDeliveryGeneration;
   conversationDeliveryTarget?: ConversationDeliveryTarget;

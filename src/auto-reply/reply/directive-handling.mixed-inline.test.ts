@@ -293,7 +293,17 @@ describe("mixed inline directives", () => {
     expect(sessionEntry.reasoningLevel).toBe("on");
     expect(persistenceMocks.persist).toHaveBeenCalledOnce();
     expect(enqueueSystemEvent).toHaveBeenCalledOnce();
-    expect(lifecycleEvents).toEqual([patchedSession]);
+    expect(lifecycleEvents).toEqual([{ ...patchedSession, reasoningLevel: "on" }]);
+  });
+
+  it("publishes an explicit off after committing an already-off reasoning setting", async () => {
+    await applyMixedDirectives({
+      body: "/reasoning off",
+      storePath: "/tmp/sessions.json",
+      sessionEntry: createSessionEntry({ reasoningLevel: "off" }),
+    });
+    expect(persistenceMocks.persist).toHaveBeenCalledOnce();
+    expect(lifecycleEvents).toEqual([{ ...patchedSession, reasoningLevel: "off" }]);
   });
 
   it("forwards automatic provenance for a source-less auth pin", async () => {

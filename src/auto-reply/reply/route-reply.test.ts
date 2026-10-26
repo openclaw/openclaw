@@ -19,6 +19,11 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
+import {
+  bindReplyReasoningVisibility,
+  isReplyReasoningVisible,
+  registerReplyReasoningVisibility,
+} from "./reasoning-visibility-state.js";
 import { resolveRoutedReplyDeliveryOutcome } from "./reply-dispatch-outcome.js";
 
 const mocks = vi.hoisted(() => ({
@@ -153,6 +158,98 @@ describe("routeReply", () => {
     expect(await expectSlackNoDelivery(payload)).toMatchObject(outcome);
   });
 
+  it("routes host-admitted reasoning live-only to an opted-in payload sender", async () => {
+    const owner = { retainForQueue: () => {}, releaseDispatch: () => {}, close: () => {} };
+    const release = registerReplyReasoningVisibility(owner, () => true);
+    const payload = { text: "private thought", isReasoning: true };
+    bindReplyReasoningVisibility(payload, owner);
+    const assertCurrent = vi.fn();
+    register({
+      ...createChannelPlugin("matrix"),
+      outbound: {
+        deliveryMode: "direct",
+        supportsReasoningPayloads: true,
+        sendText: vi.fn(),
+        sendPayload: vi.fn(),
+      },
+    });
+    try {
+      await routeTestReply(payload, {
+        channel: "matrix",
+        to: "!room:example.org",
+        sessionKey: "agent:main:matrix:room:test",
+        deliveryIntentId: "must-not-become-a-replayable-reasoning-intent",
+        assertCurrent,
+      });
+      expect(mocks.deliverOutboundPayloads).toHaveBeenCalledOnce();
+      expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+        expect.objectContaining({ skipQueue: true, queuePolicy: "best_effort" }),
+        undefined,
+        true,
+      );
+      const delivery = lastDelivery();
+      expect(delivery.deliveryIntentId).toBeUndefined();
+      expect(delivery.completionRetention).toBeUndefined();
+      expect(delivery.reusePendingDeliveryIntent).toBeUndefined();
+      expect(delivery.mirror).toBeUndefined();
+      expect(isReplyReasoningVisible(lastDeliveryPayload())).toBe(true);
+      delivery.assertDirectAdapterHandoff?.();
+      expect(assertCurrent).toHaveBeenCalledOnce();
+    } finally {
+      release();
+    }
+  });
+
+  it.each([
+    "default target",
+    "missing payload sender",
+    "closed owner",
+    "unbound",
+    "forged owner",
+    "pending completion",
+  ])("suppresses reasoning with %s before delivery", async (caseName) => {
+    const owner = { retainForQueue: () => {}, releaseDispatch: () => {}, close: () => {} };
+    const release = registerReplyReasoningVisibility(owner, () => true);
+    const payload = { text: "private thought", isReasoning: true };
+    bindReplyReasoningVisibility(payload, owner);
+    register({
+      ...createChannelPlugin("matrix"),
+      outbound: {
+        deliveryMode: "direct",
+        supportsReasoningPayloads: caseName !== "default target",
+        sendText: vi.fn(),
+        ...(caseName === "missing payload sender" ? {} : { sendPayload: vi.fn() }),
+      },
+    });
+    if (caseName === "closed owner") {
+      release();
+    }
+    if (caseName === "unbound" || caseName === "forged owner") {
+      setReplyPayloadMetadata(payload, {
+        reasoningVisibilityOwner: caseName === "unbound" ? undefined : {},
+      });
+    }
+    if (caseName === "pending completion") {
+      setReplyPayloadMetadata(payload, {
+        pendingFinalDeliveryCompletion: {
+          deliveryId: "answer-delivery",
+          intentId: "answer-intent",
+          sessionId: "session",
+          sessionKey: "agent:main:matrix:room:test",
+          storePath: "/not-to-be-read/sessions.json",
+        },
+      });
+    }
+    try {
+      expect(
+        await routeTestReply(payload, { channel: "matrix", to: "!room:example.org" }),
+      ).toMatchObject({ ok: true, delivered: false, suppressed: true });
+      expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+    } finally {
+      release();
+    }
+  });
+
   it("records a channel transform veto before transport or mirroring", async () => {
     const messaging = {
       transformReplyPayload: vi.fn(function (this: unknown) {
@@ -201,6 +298,7 @@ describe("routeReply", () => {
     expect(res).toMatchObject({ ok: true, delivered: false });
     expect(res.queueCustody).toBeUndefined();
     expect(lastDeliveryPayload()).toMatchObject({ text: "hello" });
+    expect(lastDelivery().skipQueue).toBeUndefined();
     expect(lastDelivery().replyPayloadSendingHook).toMatchObject({
       kind: "block",
       channel: "telegram",

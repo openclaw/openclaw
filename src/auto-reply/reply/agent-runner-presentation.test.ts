@@ -19,6 +19,7 @@ import { createTypingController } from "./typing.js";
 function createPresentation(
   options: {
     silentExpected?: boolean;
+    blockStreamingEnabled?: boolean;
     directBlockDeliveries?: DirectBlockDelivery[];
     conversationContext?: string;
     onPartialReply?: GetReplyOptions["onPartialReply"];
@@ -45,7 +46,7 @@ function createPresentation(
         mode: "never",
       }),
     replyOperation: options.replyOperation,
-    blockStreamingEnabled: true,
+    blockStreamingEnabled: options.blockStreamingEnabled ?? true,
     blockReplyPipeline: options.pipeline ?? null,
     applyReplyToMode: (payload: ReplyPayload) => payload,
   } as unknown as AgentTurnParams;
@@ -114,6 +115,29 @@ it.each(["direct", "buffered"] as const)(
     }
   },
 );
+
+it("forwards completed options through the reasoning-bound block handler", async () => {
+  const delivered = vi.fn(async (_payload: ReplyPayload) => {});
+  const presentation = createPresentation({
+    blockStreamingEnabled: false,
+    onPreparedBlockReply: async (plan) => delivered(plan.payload),
+  });
+  const { typing } = presentation;
+  const handler = presentation.blockReplyHandler;
+  if (!handler) {
+    throw new Error("expected the prepared block delivery handler");
+  }
+  try {
+    await handler({ text: "Intermediate answer." });
+    expect(delivered).not.toHaveBeenCalled();
+    await handler({ text: "Final answer." }, { completed: true });
+    expect(delivered).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ text: "Final answer." }),
+    );
+  } finally {
+    typing.cleanup();
+  }
+});
 
 it("refreshes typing for whitespace appended while typing sends are failing", async () => {
   vi.useFakeTimers();

@@ -30,6 +30,7 @@ import {
   matchesMentionPatterns,
   matchesMentionWithExplicit,
 } from "../../auto-reply/reply/mentions.js";
+import { isReplyReasoningVisible } from "../../auto-reply/reply/reasoning-visibility-state.js";
 import { createReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.js";
 import {
   createAckReactionHandle,
@@ -269,6 +270,7 @@ export function createRuntimeChannel(options?: {
       convertMarkdownTables,
     },
     reply: {
+      isReasoningVisible: isReplyReasoningVisible,
       dispatchReplyWithBufferedBlockDispatcher: (params) =>
         dispatchReplyWithBufferedBlockDispatcherCore(publicChannelTurn(params)),
       createReplyDispatcherWithTyping,

@@ -7,6 +7,7 @@ type PreviewDeliveryHarness = {
   createStreamingHarness: (options: {
     streaming: "partial";
     previewToolProgressEnabled?: boolean;
+    isReasoningVisible?: (payload: ReplyPayload) => boolean;
   }) => {
     dispatch: () => Promise<{
       deliver: (payload: ReplyPayload, info: { kind: string }) => Promise<unknown>;
@@ -84,11 +85,22 @@ export function registerMatrixPreviewDeliveryTests(harness: PreviewDeliveryHarne
       branch: "reasoning",
       payload: { mediaUrl: "https://example.com/image.png", isReasoning: true },
       failEdit: false,
+      revokeAtHandoff: false,
+    },
+    {
+      branch: "late-revoked reasoning",
+      payload: { text: "Reasoning:\nHidden", isReasoning: true },
+      failEdit: false,
+      revokeAtHandoff: true,
     },
   ])(
     "retains a visible draft when $branch replacement is suppressed",
-    async ({ payload, failEdit }) => {
-      const { dispatch, redactEventMock } = createStreamingHarness({ streaming: "partial" });
+    async ({ payload, failEdit, revokeAtHandoff }) => {
+      let reasoningVisible = revokeAtHandoff;
+      const { dispatch, redactEventMock } = createStreamingHarness({
+        streaming: "partial",
+        isReasoningVisible: () => reasoningVisible,
+      });
       const { deliver, opts, finish } = await dispatch();
 
       await opts.onPartialReply?.({ text: "Visible preview" });
@@ -98,6 +110,16 @@ export function registerMatrixPreviewDeliveryTests(harness: PreviewDeliveryHarne
       if (failEdit) {
         editMessageMatrixMock.mockRejectedValueOnce(new Error("final edit failed"));
       }
+      let reachedPlatformSend = false;
+      if (revokeAtHandoff) {
+        sendMessageMatrixMock.mockImplementationOnce(async (_roomId, _text, sendOptions) => {
+          reasoningVisible = false;
+          expect(sendOptions?.assertDirectAdapterHandoff).toBeTypeOf("function");
+          sendOptions?.assertDirectAdapterHandoff?.();
+          reachedPlatformSend = true;
+          throw new Error("revoked reasoning unexpectedly crossed platform handoff");
+        });
+      }
       const result = await deliver(payload, { kind: "final" });
       await finish();
 
@@ -106,6 +128,63 @@ export function registerMatrixPreviewDeliveryTests(harness: PreviewDeliveryHarne
         visibleReplySent: true,
         content: "Visible preview",
       });
+      expect(redactEventMock).not.toHaveBeenCalled();
+      expect(editMessageMatrixMock).not.toHaveBeenCalled();
+      if (revokeAtHandoff) {
+        expect(sendMessageMatrixMock).toHaveBeenCalledTimes(1);
+        expect(reachedPlatformSend).toBe(false);
+      } else {
+        expect(sendMessageMatrixMock).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "finalizes the answer preview after suppressed final reasoning (late revocation: %s)",
+    async (revokeAtHandoff) => {
+      let reasoningVisible = revokeAtHandoff;
+      const { dispatch, redactEventMock } = createStreamingHarness({
+        streaming: "partial",
+        isReasoningVisible: () => reasoningVisible,
+      });
+      const { deliver, opts, finish } = await dispatch();
+
+      await opts.onPartialReply?.({ text: "Visible preview" });
+      await waitForMatrixState(() => {
+        expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+      });
+      if (revokeAtHandoff) {
+        sendMessageMatrixMock.mockImplementationOnce(async (_roomId, _text, sendOptions) => {
+          reasoningVisible = false;
+          sendOptions?.assertDirectAdapterHandoff?.();
+          throw new Error("revoked reasoning unexpectedly crossed platform handoff");
+        });
+      }
+      const reasoningResult = await deliver(
+        { text: "Reasoning:\nHidden", isReasoning: true },
+        { kind: "final" },
+      );
+      expect(reasoningResult).toMatchObject({
+        messageIds: ["$draft1"],
+        visibleReplySent: true,
+        content: "Visible preview",
+      });
+      const answerResult = await deliver({ text: "Final answer" }, { kind: "final" });
+      await finish();
+
+      expect(answerResult).toMatchObject({
+        messageIds: ["$draft1"],
+        visibleReplySent: true,
+        content: "Final answer",
+      });
+      expect(editMessageMatrixMock).toHaveBeenCalledExactlyOnceWith(
+        "!room:example.org",
+        "$draft1",
+        "Final answer",
+        expect.anything(),
+      );
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+      expect(sendMessageMatrixMock).toHaveBeenCalledTimes(revokeAtHandoff ? 1 : 0);
       expect(redactEventMock).not.toHaveBeenCalled();
     },
   );

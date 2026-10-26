@@ -23,6 +23,7 @@ import {
   type CompactionNoticePhase,
 } from "./compaction-notice.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
+import { bindReplyReasoningVisibility } from "./reasoning-visibility.js";
 import { createBlockReplyDeliveryHandler, type DirectBlockDelivery } from "./reply-delivery.js";
 import { createReplyMediaContext } from "./reply-media-paths.js";
 import type { ReplyMediaContext } from "./reply-media-paths.js";
@@ -211,11 +212,19 @@ export function createAgentTurnPresentation(params: {
         })
       : undefined;
 
+  const reasoningBoundBlockReplyHandler: typeof blockReplyHandler = blockReplyHandler
+    ? (...args) => {
+        // The prebuilt block pipeline bypasses opts.onBlockReply while enqueueing.
+        bindReplyReasoningVisibility(args[0], params.turn.followupRun.run.reasoningVisibility);
+        return blockReplyHandler(...args);
+      }
+    : undefined;
+
   return {
     presentPartialReply,
     normalizeStreamingText,
     presentWithTyping,
-    blockReplyHandler,
+    blockReplyHandler: reasoningBoundBlockReplyHandler,
   };
 }
 

@@ -493,6 +493,9 @@ export async function handleDirectiveOnly(
         agentId: activeAgentId,
         reason: "patch",
         ...(modelSelectionUpdated ? { catalogChanged: true } : {}),
+        ...(directiveFieldsUpdated && directives.hasReasoningDirective
+          ? { reasoningLevel: directives.reasoningLevel }
+          : {}),
       });
     }
     if (modelSelection && modelSelectionUpdated && sessionKey) {

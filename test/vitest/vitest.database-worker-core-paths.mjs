@@ -2,6 +2,7 @@
 export const databaseWorkerCoreTestFiles = [
   "src/commands/doctor/shared/model-replacement.test.ts",
   "src/infra/database-engine/memory-path-migration.conformance.test.ts",
+  "src/plugins/registry-runtime.reasoning-visibility.test.ts",
   "src/auto-reply/reply/get-reply.fallback-transcript.test.ts",
   "src/config/sessions/session-actor-initialization.test.ts",
   "test/scripts/upgrade-survivor-acp-metadata.test.ts",

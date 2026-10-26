@@ -106,6 +106,45 @@ describe("resolveReplyToMode", () => {
 });
 
 describe("createReplyToModeFilterForChannel", () => {
+  it.each(["first", "batched"] as const)(
+    "preserves the %s answer target after reasoning only for declared targets",
+    (mode) => {
+      for (const supportsReasoningPayloads of [true, false, undefined]) {
+        register({
+          ...createChannelTestPluginBase({ id: "matrix" }),
+          outbound: {
+            deliveryMode: "direct",
+            supportsReasoningPayloads,
+          },
+        });
+        const filter = createReplyToModeFilterForChannel(mode, "matrix");
+        const reasoning = { text: "quiet thought", isReasoning: true, replyToId: "parent" };
+        expect(filter(reasoning).replyToId).toBe("parent");
+        expect(filter({ text: "answer", replyToId: "parent" }).replyToId).toBe(
+          supportsReasoningPayloads ? "parent" : undefined,
+        );
+        expect(filter({ text: "later answer", replyToId: "parent" }).replyToId).toBeUndefined();
+      }
+    },
+  );
+
+  it.each(["off", "all"] as const)(
+    "preserves existing %s target and explicit-tag behavior for opted-in reasoning",
+    (mode) => {
+      register({
+        ...createChannelTestPluginBase({ id: "matrix" }),
+        outbound: { deliveryMode: "direct", supportsReasoningPayloads: true },
+      });
+      const filter = createReplyToModeFilterForChannel(mode, "matrix");
+      const reason = { text: "thought", isReasoning: true, replyToId: "parent" };
+      expect(filter(reason).replyToId).toBe(mode === "all" ? "parent" : undefined);
+      expect(filter({ ...reason, replyToTag: true }).replyToId).toBe("parent");
+      expect(filter({ text: "answer", replyToId: "parent" }).replyToId).toBe(
+        mode === "all" ? "parent" : undefined,
+      );
+    },
+  );
+
   it("previews batched transport without consuming its single reply slot", () => {
     const filter = createReplyToModeFilterForChannel("batched", "discord");
     expect(filter.preview({ text: "discarded", replyToId: "parent" }).replyToId).toBe("parent");

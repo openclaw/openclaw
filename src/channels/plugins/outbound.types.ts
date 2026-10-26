@@ -28,6 +28,8 @@ export type ChannelOutboundContext = Omit<
 
 export type ChannelOutboundPayloadContext = ChannelOutboundContext & {
   payload: ReplyPayload;
+  /** @internal Fixed live transport lane; the host visibility reader still authorizes each send. */
+  guardedReasoning?: true;
 };
 
 export type ChannelPresentationCapabilities = {
@@ -157,6 +159,11 @@ export type ChannelOutboundAdapter = {
     params: ChannelOutboundNormalizePayloadBatchParams,
   ) => ReadonlyArray<ReplyPayload | null>;
   sendTextOnlyErrorPayloads?: boolean;
+  /**
+   * Accept host-admitted reasoning as quiet, live-only payloads. Revalidate the
+   * payload's host visibility policy before every physical platform send.
+   */
+  supportsReasoningPayloads?: boolean;
   /**
    * Route ordinary multi-media payloads intact to sendPayload for native grouping.
    * The adapter must check cancellation and revalidate authority before every physical send.

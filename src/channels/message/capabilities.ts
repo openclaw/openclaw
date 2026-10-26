@@ -49,9 +49,10 @@ export function deriveDurableFinalDeliveryRequirements(
 /** Matches the structured-payload branch selected by core delivery. */
 export function payloadRequiresDurablePayloadTransport(
   payload: ReplyPayload,
-  options?: { sendTextOnlyErrorPayloads?: boolean },
+  options?: { sendTextOnlyErrorPayloads?: boolean; supportsReasoningPayloads?: boolean },
 ): boolean {
   return (
+    (payload.isReasoning === true && options?.supportsReasoningPayloads === true) ||
     (payload.isError === true && options?.sendTextOnlyErrorPayloads === true) ||
     hasReplyPayloadContent(
       {

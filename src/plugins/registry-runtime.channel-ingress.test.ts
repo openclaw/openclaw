@@ -2,6 +2,7 @@ import { AsyncResource } from "node:async_hooks";
 import { setImmediate } from "node:timers/promises";
 import { queryObjects } from "node:v8";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { isReplyReasoningVisible } from "../auto-reply/reply/reasoning-visibility-state.js";
 import { buildChannelInboundEventContext } from "../channels/inbound-event/context.js";
 import {
   createChannelAdmissionAudit,
@@ -482,7 +483,11 @@ describe("bundled channel ingress runtime ownership", () => {
     bindGatewayContextResolver(subagent, () => gateway);
     let channelReads = 0;
     const inbound = { buildContext: buildChannelInboundEventContext, dispatch: vi.fn() };
-    const channel = { inbound, turn: inbound };
+    const channel = {
+      inbound,
+      turn: inbound,
+      reply: { isReasoningVisible: isReplyReasoningVisible },
+    };
     const runtime = Object.defineProperty({ subagent } as PluginRuntime, "channel", {
       configurable: true,
       get: () => {

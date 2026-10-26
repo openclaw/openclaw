@@ -253,6 +253,8 @@ export type SessionWriterDeliveryAuthority = {
 export type ReplyPayloadMetadata = {
   /** Raw parsing classified the text as silent before removing its control token. */
   silentReply?: true;
+  /** Opaque, process-local reasoning policy issued by the producing core turn. */
+  reasoningVisibilityOwner?: object;
   /** The model failed after a committed recovery compaction in the same turn. */
   postCompactionModelFailure?: true;
   assistantMessageIndex?: number;

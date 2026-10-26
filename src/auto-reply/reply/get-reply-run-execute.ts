@@ -54,6 +54,7 @@ import {
   suppressUnresolvedPromptMedia,
   updateRoomEventAmbientTranscriptWatermark,
 } from "./get-reply-run-helpers.js";
+import { prepareReplyRunReasoningVisibility } from "./get-reply-run-reasoning.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { normalizeMessageTimestampMs } from "./message-timestamp.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
@@ -431,6 +432,11 @@ export async function executePreparedReplyRun(
             { isCurrent: isCurrentOwner, ...cronOwner },
           )
       : undefined;
+  const pendingReasoning = prepareReplyRunReasoningVisibility(state, sessionKey, opts);
+  const reasoningVisibility = pendingReasoning ? await pendingReasoning : undefined;
+  if (reasoningVisibility) {
+    opts?.registerReasoningVisibilityCleanup?.(reasoningVisibility.releaseDispatch);
+  }
   const followupRun = {
     createChannelCronAuthority,
     prompt: queuedBody,
@@ -612,6 +618,7 @@ export async function executePreparedReplyRun(
       })(),
       verboseLevel: resolvedVerboseLevel,
       reasoningLevel: resolvedReasoningLevel,
+      reasoningVisibility,
       elevatedLevel: resolvedElevatedLevel,
       execOverrides,
       bashElevated: {

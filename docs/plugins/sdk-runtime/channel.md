@@ -11,6 +11,28 @@ Channel-specific runtime helpers, available when a channel plugin is loaded. Par
 
 ## Channel namespaces
 
+Channels that opt into completed reasoning payloads with `replyOptions.reasoningPayloadsEnabled`
+can also enable `replyOptions.reasoningVisibilityEnabled` on the shared reply
+dispatcher. Call `api.runtime.channel.reply.isReasoningVisible(payload)` for the
+exact payload immediately before each platform request, including chunks and retries.
+This host-owned boolean reader follows the producing turn across queued delivery
+without retaining a dispatch callback. It honors the original authorized
+`/reasoning on` choice and later disablement. Off, stream, unbound payloads, and
+settled or revoked turns return false. Bundled plugins use the current host's
+reader; a retired plugin generation cannot authorize a send. Preserve core payload
+metadata when transforming replies; do not reconstruct this policy from session
+settings or configuration defaults.
+
+Origin-routed replies also require the target outbound adapter to declare
+`supportsReasoningPayloads: true` and implement `sendPayload`. This declaration
+does not authorize a payload: the host reader must still accept its producing
+turn, and the adapter must send quiet text notices and recheck before every
+platform request. Core fixes the guarded transport lane before modifiers run;
+the internal `guardedReasoning` context is a lane marker, never permission to
+send or a replacement for the host reader. Such reasoning is live-only, including after queued execution;
+it is not persisted as a delivery intent or replayed as ordinary text. Ordinary
+answers retain their existing durable delivery behavior.
+
 <AccordionGroup>
   <Accordion title="api.runtime.channel">
     Channel-specific runtime helpers (available when a channel plugin is loaded). Grouped by concern:

@@ -104,6 +104,18 @@ Notes:
 - Preview edits cost extra Matrix API calls. Leave `streaming.mode: "off"` for the most conservative rate-limit profile.
 - Legacy scalar/boolean `streaming` values and the flat `blockStreaming` / `chunkMode` keys are rewritten to this nested shape by `openclaw doctor --fix`.
 
+## Reasoning visibility
+
+Use `/reasoning on` to receive explicit model reasoning as separate, non-notifying
+Matrix notices. Long reasoning is split into messages without replacing the answer
+preview. `/reasoning off` hides it. Matrix does not display `/reasoning stream`
+updates; use `on` for completed reasoning messages.
+
+Reasoning follows the sender's command authorization and any inline setting for
+the current turn. Turning it off stops unsent reasoning chunks once the setting
+change is committed. `/reasoning off` may wait for an active reply to finish;
+notices already delivered remain in the room.
+
 ## Voice messages
 
 Inbound Matrix voice notes are transcribed before the room mention gate, so a voice note saying the bot name can trigger the agent in a `requireMention: true` room, and the agent gets the transcript instead of only an audio attachment placeholder.

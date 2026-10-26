@@ -102,6 +102,133 @@ async function makePendingFinalFixture() {
 }
 
 describe("beforeDeliver in reply dispatcher", () => {
+  it.each(["raw", "prepared", "prepare-before-enqueue"] as const)(
+    "keeps host-bound reasoning in its delivery lane after a channel rewrite (%s)",
+    async (operation) => {
+      const owner = {};
+      const source = setReplyPayloadMetadata(
+        { text: "Private reasoning", isReasoning: true },
+        { reasoningVisibilityOwner: owner },
+      );
+      const delivered: ReplyPayload[] = [];
+      const dispatcher = createReplyDispatcher({
+        transformReplyPayload: () => ({ text: "Rewritten private reasoning" }),
+        deliver: async (payload) => {
+          delivered.push(payload);
+        },
+        deliverPrepared: async (plan) => {
+          delivered.push(plan.payload);
+        },
+      });
+      let payload: ReplyPayload = source;
+      if (operation === "prepare-before-enqueue") {
+        const outcome = prepareReplyPayloadForDispatcher(dispatcher, "final", source);
+        expect(outcome.kind).toBe("deliver");
+        if (outcome.kind !== "deliver") {
+          throw new Error("Expected a prepared reasoning reply");
+        }
+        payload = outcome.payload;
+      }
+      expect(sendFinal(dispatcher, operation === "prepared" ? "prepared" : "raw", payload)).toBe(
+        true,
+      );
+      dispatcher.markComplete();
+      await dispatcher.waitForIdle();
+
+      expect(delivered).toHaveLength(1);
+      expect(delivered[0]).toMatchObject({
+        text: "Rewritten private reasoning",
+        isReasoning: true,
+      });
+      expect(getReplyPayloadMetadata(delivered[0]!)?.reasoningVisibilityOwner).toBe(owner);
+    },
+  );
+
+  it.each(["replacement", "in-place"] as const)(
+    "keeps host-bound reasoning in its delivery lane across an asynchronous hook (%s)",
+    async (rewrite) => {
+      const owner = {};
+      const source = setReplyPayloadMetadata(
+        { text: "Private reasoning", isReasoning: true },
+        { reasoningVisibilityOwner: owner },
+      );
+      const entered = createDeferred();
+      const release = createDeferred();
+      const delivered: ReplyPayload[] = [];
+      const dispatcher = createReplyDispatcher({
+        beforeDeliver: async (payload) => {
+          entered.resolve();
+          await release.promise;
+          if (rewrite === "in-place") {
+            delete payload.isReasoning;
+            payload.text = "Rewritten private reasoning";
+            return payload;
+          }
+          return { text: "Rewritten private reasoning" };
+        },
+        deliver: async (payload) => {
+          delivered.push(payload);
+        },
+      });
+      try {
+        expect(dispatcher.sendBlockReply(source)).toBe(true);
+        await entered.promise;
+        expect(delivered).toEqual([]);
+      } finally {
+        release.resolve();
+        dispatcher.markComplete();
+        await dispatcher.waitForIdle();
+      }
+
+      expect(delivered).toHaveLength(1);
+      expect(delivered[0]).toMatchObject({
+        text: "Rewritten private reasoning",
+        isReasoning: true,
+      });
+      expect(getReplyPayloadMetadata(delivered[0]!)?.reasoningVisibilityOwner).toBe(owner);
+    },
+  );
+
+  it.each(["ordinary-with-owner", "unbound-reasoning"] as const)(
+    "preserves existing rewrite behavior for %s",
+    async (kind) => {
+      const owner = {};
+      const source: ReplyPayload = { text: "Original text", isReasoning: false };
+      if (kind === "unbound-reasoning") {
+        source.isReasoning = true;
+      }
+      setReplyPayloadMetadata(source, {
+        assistantMessageIndex: 4,
+        ...(kind === "ordinary-with-owner" ? { reasoningVisibilityOwner: owner } : {}),
+      });
+      const delivered: ReplyPayload[] = [];
+      const dispatcher = createReplyDispatcher({
+        transformReplyPayload: () => ({ text: "Transformed text" }),
+        beforeDeliver: async () => ({
+          text: "Hook replacement",
+          ...(kind === "ordinary-with-owner" ? { isReasoning: false } : {}),
+        }),
+        deliver: async (payload) => {
+          delivered.push(payload);
+        },
+      });
+      expect(dispatcher.sendBlockReply(source)).toBe(true);
+      dispatcher.markComplete();
+      await dispatcher.waitForIdle();
+
+      expect(delivered).toEqual([
+        {
+          text: "Hook replacement",
+          ...(kind === "ordinary-with-owner" ? { isReasoning: false } : {}),
+        },
+      ]);
+      expect(getReplyPayloadMetadata(delivered[0]!)?.assistantMessageIndex).toBe(4);
+      expect(getReplyPayloadMetadata(delivered[0]!)?.reasoningVisibilityOwner).toBe(
+        kind === "ordinary-with-owner" ? owner : undefined,
+      );
+    },
+  );
+
   it.each(["unchanged", "replacement", "in-place"] as const)(
     "retains delta mode only when a hook keeps the chunk text (%s)",
     async (rewrite) => {

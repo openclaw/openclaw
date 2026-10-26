@@ -10,7 +10,8 @@ type MatrixSend = typeof import("../send.js").sendMessageMatrix;
 const sendMessageMatrixMock = vi.hoisted(() => vi.fn<MatrixSend>());
 
 // mock-isolation: delivery fixtures record sends without starting a Matrix transport.
-vi.mock("../send.js", () => ({
+vi.mock("../send.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../send.js")>()),
   sendMessageMatrix: sendMessageMatrixMock,
 }));
 
@@ -138,6 +139,46 @@ describe("Matrix reply dispatcher delivery", () => {
     expect(sendOptions(0).cfg).toBe(cfg);
   });
 
+  it("delivers explicit reasoning as quiet notices without consuming the answer reply target", async () => {
+    const actualSend = await vi.importActual<typeof import("../send.js")>("../send.js");
+    sendMessageMatrixMock.mockImplementation(actualSend.sendMessageMatrix);
+    const sendMessage = vi.fn(
+      async (_roomId: string, _content: Record<string, unknown>) => "$sent",
+    );
+    const client = {
+      sendMessage,
+      prepareRoomForMessageSend: async () => "m.room.message",
+      getJoinedRoomMembers: async () => ["@alice:example.org"],
+      getUserId: async () => "@bot:example.org",
+    } as unknown as MatrixClient;
+    const result = await deliver({
+      cfg,
+      replies: [
+        { text: "Reasoning: consider @room and @alice:example.org", isReasoning: true },
+        { text: "Visible answer" },
+      ],
+      roomId: "!room:example.org",
+      client,
+      runtime: runtimeEnv,
+      replyToMode: "first",
+      replyToEventId: "$question",
+      shouldDeliverReasoning: () => true,
+    });
+
+    expect(result).toMatchObject({ visibleReplySent: true });
+    expect(sendMessage.mock.calls.map((call) => call[1])).toEqual([
+      expect.objectContaining({
+        body: "Reasoning: consider @room and @alice:example.org",
+        msgtype: "m.notice",
+        "m.mentions": {},
+      }),
+      expect.objectContaining({
+        body: "Visible answer",
+        msgtype: "m.text",
+        "m.relates_to": { "m.in_reply_to": { event_id: "$question" } },
+      }),
+    ]);
+  });
   it.each([false, true])(
     "gates suppression diagnostics through runtime.log with verbose=%s",
     async (verbose) => {

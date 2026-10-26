@@ -22,10 +22,13 @@ import { registerMatrixLiveAllowlistTests } from "./handler.live-allowlist.test-
 import { registerMatrixPreviewDeliveryTests } from "./handler.preview-delivery.test-support.js";
 import {
   createMatrixHandlerTestHarness as createHarness,
+  createMatrixReplyDispatcherTestState as replyDispatcher,
   createMatrixReactionEvent,
   createMatrixReactionTestHarness,
   createMatrixRoomMessageEvent,
   createMatrixTextMessageEvent as textEvent,
+  createMatrixThreadRelationTestContent as threadRelation,
+  createMatrixThreadRootTestEvent as threadRoot,
 } from "./handler.test-helpers.js";
 import { stripMatrixMentionPrefix } from "./mentions.js";
 
@@ -71,7 +74,8 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => {
 });
 
 // mock-isolation: Keep Matrix network sends inert while testing monitor routing and delivery decisions.
-vi.mock("../send.js", () => ({
+vi.mock("../send.js", async () => ({
+  chunkMatrixText: (await import("../send/chunking.js")).chunkMatrixText,
   editMessageMatrix: editMock,
   prepareMatrixSingleText: prepareMatrixSingleTextMock,
   reactMatrixMessage: vi.fn(async () => {}),
@@ -104,10 +108,6 @@ type SessionOrigin = {
   nativeChannelId?: string;
 };
 
-function threadRoot(eventId = "$root", body = "Root topic") {
-  return textEvent({ eventId, sender: "@alice:example.org", body });
-}
-
 function agentRoute(sessionKey = "agent:ops:main") {
   return {
     agentId: "ops",
@@ -119,21 +119,8 @@ function agentRoute(sessionKey = "agent:ops:main") {
   };
 }
 
-function threadRelation(root = "$root") {
-  return { rel_type: "m.thread", event_id: root, "m.in_reply_to": { event_id: root } };
-}
-
 function dispatchResult(final = 0, block = 0) {
   return { queuedFinal: final > 0, counts: { final, block, tool: 0 } };
-}
-
-function replyDispatcher(waitForIdle = async () => {}) {
-  return {
-    dispatcher: { markComplete: () => {}, waitForIdle },
-    replyOptions: {},
-    markDispatchIdle: () => {},
-    markRunComplete: () => {},
-  };
 }
 
 beforeEach(() => {
@@ -792,6 +779,7 @@ describe("matrix monitor handler draft streaming", () => {
     blockStreamingEnabled?: boolean;
     streaming?: "partial" | "quiet" | "progress" | "off";
     previewToolProgressEnabled?: boolean;
+    isReasoningVisible?: (payload: ReplyPayload) => boolean;
     accountConfig?: import("../../types.js").MatrixConfig;
   }) {
     let capturedDeliver: DeliverFn | undefined;
@@ -815,6 +803,7 @@ describe("matrix monitor handler draft streaming", () => {
 
     const { handler } = createHarness({
       streaming: opts?.streaming ?? "quiet",
+      isReasoningVisible: opts?.isReasoningVisible,
       accountConfig: opts?.accountConfig,
       previewToolProgressEnabled: opts?.previewToolProgressEnabled ?? false,
       blockStreamingEnabled: opts?.blockStreamingEnabled ?? false,

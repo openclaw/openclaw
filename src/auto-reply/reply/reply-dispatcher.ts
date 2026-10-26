@@ -10,7 +10,6 @@ import {
 import { toErrorObject } from "../../infra/errors.js";
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import type { OutboundPayloadPlan } from "../../infra/outbound/reply-payload-parts.js";
-import { generateSecureInt } from "../../infra/secure-random.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
@@ -44,6 +43,7 @@ import {
   shouldRetryReplyDispatch,
   type ReplyDispatchDeliveryOutcome,
 } from "./reply-dispatch-outcome.js";
+import { getHumanDelay, getHumanDelayMax } from "./reply-dispatcher-human-delay.js";
 import {
   mapReplyDispatchCounts,
   type ReplyDispatchBeforeDeliver,
@@ -59,30 +59,6 @@ import type { ResponsePrefixContext } from "./response-prefix-template.js";
 import type { TypingController } from "./typing.js";
 
 export type { ReplyDispatchDeliveryOutcome };
-
-const DEFAULT_RANGE = { min: 800, max: 2500 };
-
-function resolveHumanDelayRange(config: HumanDelayConfig | undefined) {
-  if (!config?.mode || config.mode === "off") {
-    return undefined;
-  }
-  return config.mode === "custom"
-    ? { min: config.minMs ?? DEFAULT_RANGE.min, max: config.maxMs ?? DEFAULT_RANGE.max }
-    : DEFAULT_RANGE;
-}
-
-function getHumanDelay(config: HumanDelayConfig | undefined): number {
-  const range = resolveHumanDelayRange(config);
-  if (!range || range.max <= range.min) {
-    return range?.min ?? 0;
-  }
-  return range.min + generateSecureInt(range.max - range.min + 1);
-}
-
-function getHumanDelayMax(config: HumanDelayConfig | undefined): number {
-  const range = resolveHumanDelayRange(config);
-  return range ? Math.max(range.min, range.max) : 0;
-}
 
 type ReplyDispatchDeliveryOutcomeTracker = {
   promise: Promise<ReplyDispatchDeliveryOutcome>;
@@ -333,8 +309,12 @@ export function createReplyDispatcher(
     kind: ReplyDispatchKind,
     payload: ReplyPayload,
     notifySkip: boolean,
-  ) =>
-    normalizeReplyPayloadOutcome(payload, {
+  ) => {
+    // A channel rewrite cannot turn host-bound reasoning into an ordinary answer.
+    const boundReasoning =
+      payload.isReasoning === true &&
+      getReplyPayloadMetadata(payload)?.reasoningVisibilityOwner !== undefined;
+    const outcome = normalizeReplyPayloadOutcome(payload, {
       responsePrefix: options.responsePrefix,
       responsePrefixContext:
         options.responsePrefixContextProvider?.() ?? options.responsePrefixContext,
@@ -349,6 +329,16 @@ export function createReplyDispatcher(
             })
         : undefined,
     });
+    return boundReasoning && outcome.kind === "deliver" && outcome.payload.isReasoning !== true
+      ? {
+          kind: "deliver" as const,
+          payload: copyReplyPayloadMetadata(outcome.payload, {
+            ...outcome.payload,
+            isReasoning: true,
+          }),
+        }
+      : outcome;
+  };
 
   const notifyBeforeDeliverCancelled = async (
     payload: ReplyPayload,
@@ -389,6 +379,8 @@ export function createReplyDispatcher(
     let deliveryStarted = false;
     let pendingDelivery = false;
     const metadata = getReplyPayloadMetadata(payload);
+    const boundReasoning =
+      payload.isReasoning === true && metadata?.reasoningVisibilityOwner !== undefined;
     const custody = metadata?.pendingFinalDeliveryCompletion;
     const settleCustody =
       custody &&
@@ -440,6 +432,9 @@ export function createReplyDispatcher(
         if (deliverPayload?.textMode === "delta" && deliverPayload.text !== originalText) {
           const { textMode: _textMode, ...snapshot } = deliverPayload;
           deliverPayload = snapshot;
+        }
+        if (boundReasoning && deliverPayload && deliverPayload.isReasoning !== true) {
+          deliverPayload = { ...deliverPayload, isReasoning: true };
         }
         deliveryInput = deliverPayload
           ? replaceDispatchPayload(input, copyReplyPayloadMetadata(payload, deliverPayload))

@@ -1,5 +1,7 @@
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { chunkTextForOutbound, type OpenClawConfig } from "../runtime-api.js";
+import { installMatrixTestRuntime } from "./test-runtime.js";
 
 const mocks = vi.hoisted(() => ({
   sendMessageMatrix: vi.fn(),
@@ -63,6 +65,16 @@ function senderResult(
   };
 }
 
+function installReasoningVisibility(read: (payload: PayloadContext["payload"]) => boolean) {
+  const runtime = createPluginRuntimeMock();
+  vi.mocked(runtime.channel.reply.isReasoningVisible).mockImplementation(read);
+  vi.mocked(runtime.channel.text.chunkMarkdownTextWithMode).mockImplementation((text, limit) =>
+    chunkTextForOutbound(text, limit),
+  );
+  installMatrixTestRuntime({ channel: runtime.channel });
+  return runtime;
+}
+
 describe("matrixOutbound cfg threading", () => {
   const cfg: OpenClawConfig = {
     channels: { matrix: { accessToken: "resolved-token" } },
@@ -80,6 +92,114 @@ describe("matrixOutbound cfg threading", () => {
     mocks.sendMessageMatrix.mockResolvedValue({ messageId: "evt-1", roomId: "!room:example" });
     mocks.sendPollMatrix.mockResolvedValue({ eventId: "$poll", roomId: "!room:example" });
   });
+
+  it("sends admitted reasoning as quiet notices while keeping ordinary answers independent", async () => {
+    const payload = { text: "private thought", isReasoning: true };
+    installReasoningVisibility((candidate) => candidate === payload);
+    mocks.sendMessageMatrix.mockResolvedValueOnce(
+      senderResult("private thought", ["$reason", "text"]),
+    );
+    const result = await sendPayload(payload, { ...context, guardedReasoning: true });
+    expect(result).toMatchObject({ messageId: "$reason" });
+    expectSend(mocks.sendMessageMatrix, "private thought", {
+      extraContent: { msgtype: "m.notice", "m.mentions": {} },
+    });
+    await sendPayload({ text: "ordinary answer" }, context);
+    expectSend(mocks.sendMessageMatrix, "ordinary answer", {}, 2);
+    expect(mockOptions(mocks.sendMessageMatrix, 1).extraContent).toBeUndefined();
+  });
+
+  it("returns deliberate no-send for an unbound or revoked reasoning payload", async () => {
+    installReasoningVisibility(() => false);
+    await expect(
+      sendPayload(
+        { text: "private thought", isReasoning: true },
+        { ...context, guardedReasoning: true },
+      ),
+    ).resolves.toMatchObject({
+      channel: "matrix",
+      messageId: "",
+      outcome: "not_sent",
+    });
+    expect(mocks.sendMessageMatrix).not.toHaveBeenCalled();
+  });
+
+  it("retains accepted notice chunks when the producing policy is revoked", async () => {
+    let visible = true;
+    installReasoningVisibility(() => visible);
+    mocks.sendMessageMatrix.mockImplementationOnce(async () => {
+      visible = false;
+      return senderResult("abcde", ["$first", "text"]);
+    });
+    const result = await sendPayload(
+      { text: "abcdefghij", isReasoning: true },
+      { cfg: { channels: { matrix: { textChunkLimit: 5 } } }, guardedReasoning: true },
+    );
+    expect(mocks.sendMessageMatrix).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({
+      messageId: "$first",
+      receipt: { platformMessageIds: ["$first"] },
+    });
+  });
+
+  it("combines original handoff authority with the last reasoning visibility check", async () => {
+    let visible = true;
+    const assertCurrent = vi.fn();
+    installReasoningVisibility(() => visible);
+    mocks.sendMessageMatrix.mockImplementationOnce(async (_to, _text, options) => {
+      await Promise.resolve();
+      visible = false;
+      options.assertDirectAdapterHandoff();
+      throw new Error("revoked visibility must stop before this send");
+    });
+    await expect(
+      sendPayload(
+        { text: "private thought", isReasoning: true },
+        { guardedReasoning: true, assertDirectAdapterHandoff: assertCurrent },
+      ),
+    ).resolves.toMatchObject({ outcome: "not_sent" });
+    expect(assertCurrent).toHaveBeenCalledOnce();
+  });
+
+  it("does not swallow the original handoff authority rejection", async () => {
+    const rejected = new Error("writer authority retired");
+    installReasoningVisibility(() => true);
+    mocks.sendMessageMatrix.mockImplementationOnce(async (_to, _text, options) => {
+      options.assertDirectAdapterHandoff();
+      throw new Error("retired authority must stop before this send");
+    });
+    await expect(
+      sendPayload(
+        { text: "private thought", isReasoning: true },
+        {
+          guardedReasoning: true,
+          assertDirectAdapterHandoff: () => {
+            throw rejected;
+          },
+        },
+      ),
+    ).rejects.toBe(rejected);
+  });
+
+  it.each([false, true])(
+    "preserves legacy unbound cron reasoning with structured=%s",
+    async (structured) => {
+      const runtime = installReasoningVisibility(() => false);
+      const extraContent = { "com.openclaw.presentation": presentationContent };
+      await sendPayload(
+        {
+          text: "legacy cron thought",
+          isReasoning: true,
+          ...(structured ? { channelData: channelData(extraContent) } : {}),
+        },
+        context,
+      );
+      expectSend(mocks.sendMessageMatrix, "legacy cron thought", {
+        extraContent: structured ? extraContent : undefined,
+      });
+      expect(runtime.channel.reply.isReasoningVisible).not.toHaveBeenCalled();
+    },
+  );
 
   it("makes progress for fractional BMP and astral limits", () => {
     const chunker = matrixOutbound.chunker;

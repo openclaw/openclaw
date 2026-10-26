@@ -71,11 +71,13 @@ import type {
 import { settleAgentFallbackCycle } from "./agent-runner-fallback-settlement.js";
 import { buildReplyMediaContextParams } from "./agent-runner-media-context.js";
 import { createAgentTurnPresentation } from "./agent-runner-presentation.js";
+import { buildReasoningParams } from "./agent-runner-run-params.js";
 import { prepareReplySubagentContinuation } from "./agent-runner-subagent.js";
 import { createAgentTurnTimingTracker } from "./agent-runner-turn-timing.js";
 import { shouldNotifyUserAboutCompaction } from "./compaction-notice.js";
 import { type CurrentTurnImages, resolveCurrentTurnImages } from "./current-turn-images.js";
 import type { FollowupRun } from "./queue.js";
+import { bindReplyReasoningVisibility } from "./reasoning-visibility.js";
 import { resolveReplyFailureVisibility, type DirectBlockDelivery } from "./reply-delivery.js";
 import { createReplyMediaContext, type ReplyMediaContext } from "./reply-media-paths.js";
 import { resolveReplyOperationAbortReason } from "./reply-operation-abort.js";
@@ -698,9 +700,15 @@ export async function executeAgentTurn(params: AgentTurnParams): Promise<AgentTu
     resolvedVerboseLevel: params.resolvedVerboseLevel,
   });
   const runId = params.opts?.runId ?? crypto.randomUUID();
-  const executionParams =
-    params.opts?.runId === runId ? params : { ...params, opts: { ...params.opts, runId } };
-  return await runAgentTurnWithOutcome(executionParams, runId, () =>
-    executeAgentTurnOutcome(executionParams, runId),
-  );
+  const reasoningVisibility = params.followupRun.run.reasoningVisibility;
+  const executionParams = buildReasoningParams(params, runId, reasoningVisibility);
+  return await runAgentTurnWithOutcome(executionParams, runId, async () => {
+    const result = await executeAgentTurnOutcome(executionParams, runId);
+    if (result.outcome.kind === "settled") {
+      for (const payload of result.outcome.result.payloads ?? []) {
+        bindReplyReasoningVisibility(payload, reasoningVisibility);
+      }
+    }
+    return result;
+  });
 }

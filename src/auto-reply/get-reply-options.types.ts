@@ -372,6 +372,8 @@ export type GetReplyOptions = {
   progressPreambleEnabled?: boolean;
   /** Deliver durable reasoning payloads to channels that own a separate reasoning lane. */
   reasoningPayloadsEnabled?: boolean;
+  /** Prepare producing-turn visibility for the host runtime's durable reasoning reader. */
+  reasoningVisibilityEnabled?: boolean;
   /** Deliver durable commentary (💬) payloads to channels that own a separate commentary lane. */
   commentaryPayloadsEnabled?: boolean;
   /** Optional turn-frozen commentary owner; visibility is live by default.
