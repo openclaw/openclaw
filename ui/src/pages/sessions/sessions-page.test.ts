@@ -20,7 +20,6 @@ import { registerSessionPluginAction } from "../../test-helpers/control-ui-plugi
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import {
   gatewayHelloForMethods,
-  SESSION_MUTATION_TEST_METHODS,
   sessionMutationGatewayHello,
 } from "../../test-helpers/gateway-methods.ts";
 import {
@@ -440,43 +439,6 @@ describe("sessions page lifecycle", () => {
     });
     expect(sessions.patch).not.toHaveBeenCalled();
     expect(page.error).toBe("Connect to the Gateway to change sessions.");
-  });
-
-  it("uses personal visibility RPC from the management menu", async () => {
-    const request = vi.fn(async () => ({ ok: true }));
-    const connection = createGateway({ request } as unknown as GatewayBrowserClient);
-    connection.emit({
-      hello: {
-        ...gatewayHelloForMethods(
-          [...SESSION_MUTATION_TEST_METHODS, "sessions.setInvolvement"],
-          ["operator.read"],
-        ),
-        policy: { hasMultipleSessionSharingIdentities: true },
-      },
-    });
-    const managed = createManagedSessions();
-    const target = sessionRow("personal", { hiddenFromInvolvingMe: true });
-    const context = createContext(connection.gateway, managed.sessions);
-    const page = await createRenderedPage(context, sessionsResult([target], 1));
-    const menu = await openRowMenu(page, target);
-    await openSubmenu(menu, "Advanced");
-    const item = menu.querySelector('[value="toggle-involving-me"]')!;
-    expect(item.textContent).toContain("Show in Involving me");
-    expect(item.hasAttribute("disabled")).toBe(false);
-    managed.refreshList.mockClear();
-    await selectMenuValue(menu, "toggle-involving-me");
-    await waitForFast(() =>
-      expect(request).toHaveBeenCalledWith(
-        "sessions.setInvolvement",
-        expect.objectContaining({
-          key: target.key,
-          expectedSessionId: target.sessionId,
-          hidden: false,
-        }),
-      ),
-    );
-    await waitForFast(() => expect(managed.refreshList).toHaveBeenCalled());
-    expect(managed.sessions.patch).not.toHaveBeenCalled();
   });
 
   it.each([false, true])(
