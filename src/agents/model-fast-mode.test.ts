@@ -42,16 +42,16 @@ const openai: ModelCatalogEntry = {
   api: "openai-responses",
   baseUrl: "https://api.openai.com/v1",
 };
-function resolver(
-  catalog = [opus],
-  cfg: OpenClawConfig = {},
-  providers = catalog.map((entry) => entry.provider),
-) {
-  return createModelSpeedPolicyResolver({
+function fastResolver(params: Parameters<typeof createModelSpeedPolicyResolver>[0]) {
+  const resolve = createModelSpeedPolicyResolver(params);
+  return (...args: Parameters<typeof resolve>) => resolve(...args).supportsFastMode;
+}
+function resolver(cfg: OpenClawConfig = {}) {
+  return fastResolver({
     cfg,
     agentId: "main",
-    catalog,
-    metadataSnapshot: metadata(providers),
+    catalog: [opus],
+    metadataSnapshot: metadata(["anthropic"]),
   });
 }
 describe("private selected Fast metadata", () => {
@@ -61,23 +61,19 @@ describe("private selected Fast metadata", () => {
       { id: "grok-3", name: "Grok 3", provider: "xai", api: "openai-responses" },
       { id: "MiniMax-M2.7", name: "MiniMax M2.7", provider: "minimax", api: "anthropic-messages" },
     ];
-    const resolve = resolver(catalog);
+    const resolve = fastResolver({
+      cfg: {},
+      agentId: "main",
+      catalog,
+      metadataSnapshot: metadata(["openai", "xai", "minimax"]),
+    });
+    const expected = [true, undefined];
     expect(
-      catalog.map((entry) => {
-        const native = resolve(entry, available, "openclaw");
-        const codex = resolve(entry, available, "codex");
-        return [
-          native.supportsFastMode,
-          codex.supportsFastMode,
-          native.supportsServiceTierRecovery,
-          codex.supportsServiceTierRecovery,
-        ];
-      }),
-    ).toEqual([
-      [true, undefined, true, false],
-      [true, undefined, false, false],
-      [true, undefined, false, false],
-    ]);
+      catalog.map((entry) => [
+        resolve(entry, available, "openclaw"),
+        resolve(entry, available, "codex"),
+      ]),
+    ).toEqual([expected, expected, expected]);
   });
   it("loads the provider's light policy for the exact model and auth facts", () => {
     const resolve = resolver();
@@ -100,7 +96,7 @@ describe("private selected Fast metadata", () => {
       [{ entries: { main: { models } } }, false],
     ];
     for (const [agents, expected] of cases) {
-      expect(resolver([opus], { agents })(opus, available).supportsFastMode).toBe(expected);
+      expect(resolver({ agents })(opus, available)).toBe(expected);
     }
   });
   it("does not replace unresolved route ownership with catalog provenance", () => {
@@ -108,6 +104,32 @@ describe("private selected Fast metadata", () => {
       resolver()(opus, { availability: undefined, routeResolution: { kind: "indeterminate" } }),
     ).toBeUndefined();
   });
+});
+
+it("derives tier recovery from the selected transport rather than catalog provenance", () => {
+  const resolve = createModelSpeedPolicyResolver({
+    cfg: {},
+    agentId: "main",
+    catalog: [openai],
+    metadataSnapshot: metadata(["openai"]),
+  });
+  for (const [baseUrl, expected] of [
+    ["https://api.openai.com/v1", true],
+    ["https://custom.example/v1", false],
+    ["https://api.openai.com/proxy", false],
+  ] as const) {
+    const evaluation = {
+      ...available,
+      selectedRoute: {
+        api: "openai-responses" as const,
+        baseUrl,
+        authRequirement: "api-key" as const,
+        requestTransportOverrides: "none" as const,
+      },
+    };
+    expect(resolve(openai, evaluation, "openclaw").supportsServiceTierRecovery).toBe(expected);
+    expect(resolve(openai, evaluation, "codex").supportsServiceTierRecovery).toBe(false);
+  }
 });
 
 describe("speed policy context preparation", () => {
@@ -121,7 +143,12 @@ describe("speed policy context preparation", () => {
       "resolveProviderFastModeRequestCapabilities",
     );
     const native = { ...openai, nativeRuntime: "openclaw" };
-    const resolve = resolver([native], {}, []);
+    const resolve = createModelSpeedPolicyResolver({
+      cfg: {},
+      agentId: "main",
+      catalog: [native],
+      metadataSnapshot: metadata([]),
+    });
     const expected = (recovery: boolean) => ({
       supportsFastMode: undefined,
       serviceTiers: undefined,
@@ -190,7 +217,12 @@ describe("speed policy context preparation", () => {
         },
       },
     };
-    const resolve = resolver([entry], cfg, []);
+    const resolve = createModelSpeedPolicyResolver({
+      cfg,
+      agentId: "main",
+      catalog: [entry],
+      metadataSnapshot: metadata([]),
+    });
     const selectedRoute = {
       api: "openai-completions" as const,
       baseUrl: "http://127.0.0.1:1234/v1",
