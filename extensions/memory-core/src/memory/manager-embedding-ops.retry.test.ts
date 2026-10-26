@@ -69,7 +69,7 @@ const documentInput = () => ({
 });
 
 describe("memory model input formatting", () => {
-  it.each<[string, string, boolean, string?]>([
+  it.each<[string, string, boolean, string?, { query: string; document: string }?]>([
     [
       "local",
       "hf:ggml-org/embeddinggemma-300m-qat-q8_0-GGUF/embeddinggemma-300m-qat-Q8_0.gguf",
@@ -84,16 +84,17 @@ describe("memory model input formatting", () => {
     ["openai-compatible", "other/embeddinggemmax", false],
     ["gemini", "gemini-embedding-2", false],
     ["local", "embeddinggemma", true, "custom: "],
+    ["ollama", "embeddinggemma", false, undefined, { query: "", document: "" }],
   ])(
     "formats query and document inputs for %s/%s",
-    async (id, model, prefixed, queryInstruction) => {
+    async (id, model, prefixed, queryInstruction, inputFormat) => {
       const embed = vi.fn<EmbeddingProvider["embed"]>(async () => [1, 0]);
       const embedBatch = vi.fn<EmbeddingProvider["embedBatch"]>(async (inputs) =>
         inputs.map(() => [0, 1]),
       );
       const manager = createEmbeddingBatchRetryHarness(embedBatch);
       Object.assign(manager.provider, { id, model, embed });
-      Object.assign(manager, { settings: { queryInstruction } });
+      Object.assign(manager, { settings: { queryInstruction, inputFormat } });
       const document = documentInput();
 
       await expect(manager.embedQueryWithRetry("find this")).resolves.toEqual([1, 0]);
@@ -110,7 +111,10 @@ describe("memory model input formatting", () => {
             : "find this",
       );
       expect(embed.mock.calls[0]?.[1]?.queryInstructionApplied).toBe(
-        queryInstruction ? true : undefined,
+        queryInstruction || inputFormat ? true : undefined,
+      );
+      expect(embedBatch.mock.calls[0]?.[1]?.documentFormatApplied).toBe(
+        inputFormat ? true : undefined,
       );
       expect(embedBatch.mock.calls[0]?.[0]).toEqual(
         prefixed

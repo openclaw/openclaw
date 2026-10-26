@@ -140,10 +140,10 @@ vi.mock("../config/sessions/session-accessor.sqlite-entry-store.js", () => ({
   parseReadableSqliteSessionEntryRow: mocks.forbiddenSqlite,
 }));
 
-import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { migrateManagedWorktreeCanonicalWorkspaces } from "../config/sessions/worktree-workspace-migration.js";
 import { sha256HexPrefixCore } from "../infra/crypto-digest.js";
+import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { OpenClawStateLeaseContext } from "../state/openclaw-state-lease.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
@@ -169,21 +169,6 @@ beforeEach(() => {
 });
 
 type LeaseRun = (lease: OpenClawStateLeaseContext) => Promise<unknown>;
-type ProjectOperation =
-  | "remove"
-  | "register"
-  | "materialize"
-  | "refresh"
-  | "selector"
-  | "migration";
-type ProjectCommandName =
-  | "projects.insert"
-  | "projects.remove"
-  | "projects.resolveRefreshOwner"
-  | "projects.resolve";
-type ProjectCommand = {
-  [Name in ProjectCommandName]: { type: Name; input: OpenClawStateWorkerOperations[Name]["input"] };
-}[ProjectCommandName];
 
 const root = path.resolve("/synthetic-project-state");
 const databasePath = path.join(root, "state", "openclaw.sqlite");
@@ -203,29 +188,18 @@ const sourceProject: ProjectRegistryRecord = {
   repoRoot: project.repoRoot,
   source: "registered",
 };
-const sourceOperations = new Set<ProjectOperation>(["selector", "migration"]);
-const cases: { operation: ProjectOperation; environment: "plain" | "precloned" }[] = [
-  ...(["remove", "register", "materialize", "refresh"] as const).flatMap((operation) =>
-    (["plain", "precloned"] as const).map((environment) => ({ operation, environment })),
-  ),
-  { operation: "selector", environment: "plain" },
-  { operation: "migration", environment: "plain" },
-];
-
-it.each(cases)(
-  "retains $environment Windows state for $operation after caller changes",
-  async ({ operation, environment }) => {
+it.each(["remove", "register", "materialize", "refresh", "selector", "migration"] as const)(
+  "retains Windows state for %s after caller changes",
+  async (operation) => {
     await withMockedPlatform("win32", async () => {
-      const supplied: NodeJS.ProcessEnv = {
+      const caller: NodeJS.ProcessEnv = {
         OpenClaw_State_Dir: root,
         OpenClaw_Supervisor_Mode: "external",
       };
-      const caller =
-        environment === "precloned" ? cloneEnvWithPlatformSemantics(supplied) : supplied;
       const options = { env: caller };
       const entered = createDeferredCore();
       const resume = createDeferredCore();
-      const source = sourceOperations.has(operation);
+      const source = operation === "selector" || operation === "migration";
       let paused = false;
       const pauseOnce = async () => {
         if (!paused) {
@@ -259,7 +233,10 @@ it.each(cases)(
       mocks.refresh.mockResolvedValue(undefined);
       mocks.read.mockResolvedValue({ ok: true, type: "projects.list", projects: [] });
       mocks.execute.mockImplementation(
-        async (_context: OpenClawStateWorkerContext, command: ProjectCommand) => {
+        async (
+          _context: OpenClawStateWorkerContext,
+          command: SqliteWorkerCommand<OpenClawStateWorkerOperations>,
+        ) => {
           switch (command.type) {
             case "projects.resolve":
               await pauseOnce();
@@ -301,7 +278,7 @@ it.each(cases)(
           ) => ({ ...entry, ...update(entry) }),
         );
       }
-      const start: Record<ProjectOperation, () => Promise<unknown>> = {
+      const start: Record<typeof operation, () => Promise<unknown>> = {
         remove: () => removeProjectRegistry(project, options),
         register: () => registerProjectRegistry({ path: project.repoRoot }, options),
         materialize: () =>

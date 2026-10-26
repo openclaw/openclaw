@@ -202,6 +202,7 @@ export const preservedModuleBuildSources = [
   "src/agents/agent-bundle-mcp-manager.ts",
   "src/agents/agent-bundle-mcp-manager-api.ts",
   "src/agents/mcp-auth-profile.integration.test-support.ts",
+  "src/agents/mcp-auth-profile-authorization.ts",
   "src/agents/mcp-auth-profile.ts",
   "src/agents/mcp-auth-profile.runtime.ts",
   "src/agents/auth-profiles/oauth.ts",

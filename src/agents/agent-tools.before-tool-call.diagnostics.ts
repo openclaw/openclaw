@@ -244,44 +244,24 @@ export function resolveToolErrorDiagnostic(
   };
 }
 
-type ResolvedToolTerminalDiagnostic =
-  | {
-      type: "tool.execution.blocked";
-      deniedReason: "tool_result_blocked";
-      reason: "tool_result_blocked";
-    }
-  | {
-      type: "tool.execution.completed";
-      durationMs: number;
-    }
-  | {
-      type: "tool.execution.error";
-      durationMs: number;
-      errorCategory: "tool_result_error";
-      terminalReason: DiagnosticToolTerminalReason;
-    };
-
-export function resolveToolResultTerminalDiagnostic(
-  result: unknown,
-  durationMs: number,
-): ResolvedToolTerminalDiagnostic {
+export function resolveToolResultTerminalDiagnostic(result: unknown, durationMs: number) {
   // Tool execution may resolve with a structured failure. Classify that here
   // so every diagnostic consumer sees one canonical terminal outcome.
   const failureKind = resolveToolResultFailureKind(result);
   if (!failureKind) {
-    return { type: "tool.execution.completed", durationMs };
+    return { type: "tool.execution.completed" as const, durationMs };
   }
   if (failureKind === "blocked") {
     return {
-      type: "tool.execution.blocked",
-      deniedReason: "tool_result_blocked",
-      reason: "tool_result_blocked",
+      type: "tool.execution.blocked" as const,
+      deniedReason: "tool_result_blocked" as const,
+      reason: "tool_result_blocked" as const,
     };
   }
   return {
-    type: "tool.execution.error",
+    type: "tool.execution.error" as const,
     durationMs,
-    errorCategory: "tool_result_error",
+    errorCategory: "tool_result_error" as const,
     terminalReason: failureKind,
   };
 }

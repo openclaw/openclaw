@@ -9,7 +9,6 @@ import {
 } from "../../infra/git-exec.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { OpenClawStateLeaseError } from "../../state/openclaw-state-lease-error.js";
-import type { WorktreeWaitBudget } from "./allocation.js";
 import { withWorktreeGitConfig } from "./checkout-git-config.js";
 import { prepareWorktreePromptFiles } from "./checkout-inputs.js";
 import { materializeManagedWorktree } from "./checkout-materialize.js";
@@ -32,6 +31,7 @@ import {
   timeWorktreePreparationPhase,
 } from "./preparation-timing.js";
 import { prepareWorktreeTemplate } from "./template-cache.js";
+import type { WorktreeWaitBudget } from "./types.js";
 
 const log = createSubsystemLogger("agents/worktrees");
 

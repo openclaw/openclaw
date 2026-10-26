@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { resolveColdLoadLatency } from "../../../scripts/lib/control-ui-bench-latency.ts";
 import { createColdLoadProbeInitScript } from "./control-ui-cold-load-probes.ts";
 
 describe("serialized cold-load probes", () => {
@@ -67,7 +68,14 @@ describe("serialized cold-load probes", () => {
     }
   });
 
-  it("serializes ready reply bytes on the selected download link", () => {
+  it.each([
+    8,
+    resolveColdLoadLatency({
+      profile: "live-capped",
+      methodLatencyMs: [],
+      sidebarQueryLatencyMs: [],
+    }).downloadKbps,
+  ])("serializes ready reply bytes on the %i Kbit/s download link", (downloadKbps) => {
     const iframe = document.createElement("iframe");
     document.body.append(iframe);
     try {
@@ -82,7 +90,7 @@ describe("serialized cold-load probes", () => {
         const timers = [];
         window.setTimeout = (callback, delay) => { timers.push({callback, delay}); return timers.length; };
         window.WebSocket = class extends EventTarget { send() {} };
-        ${createColdLoadProbeInitScript({ ownerProbes: false, latencyMs: 100, downloadKbps: 8, frameGapMs: 0, events: [] })}
+        ${createColdLoadProbeInitScript({ ownerProbes: false, latencyMs: 100, downloadKbps, frameGapMs: 0, events: [] })}
         const socket = new WebSocket();
         let delivered = 0;
         socket.addEventListener("message", () => delivered++);
@@ -104,7 +112,8 @@ describe("serialized cold-load probes", () => {
       doc.body.append(script);
       const proof = Reflect.get(target, "downloadProof");
       expect(proof.eligibility).toEqual([100, 100]);
-      expect(proof.delivery).toEqual([proof.bytes, proof.bytes * 2]);
+      const transferMs = (proof.bytes * 8) / downloadKbps;
+      expect(proof.delivery).toEqual([transferMs, transferMs * 2]);
       expect(proof.before).toBe(0);
       expect(proof.delivered).toBe(2);
     } finally {

@@ -15,6 +15,7 @@ import {
   deleteSessionCostUsagePartitionsInDatabase,
   pruneSessionCostUsagePartitionsInDatabase,
 } from "./session-cost-usage-partitions.worker.js";
+import { USAGE_COST_QUARTER_SCOPE } from "./session-cost-usage-quarters.js";
 import {
   decodeUsageCostRollupEnvelope,
   USAGE_COST_ROLLUP_SCOPE as ROLLUP_SCOPE,
@@ -186,14 +187,29 @@ export function writeSessionCostUsageRollupsInDatabase(
         expires_at: null,
         updated_at: row.updatedAt,
       },
-      ...(row.partitions ?? []).map((partition) => ({
-        scope: USAGE_COST_PARTITION_SCOPE,
-        key: usageCostPartitionKey(row.rollupId, partition.date),
-        value_json: partition.valueJson,
-        blob: partition.blob,
-        expires_at: null,
-        updated_at: row.updatedAt,
-      })),
+      ...(row.partitions ?? []).flatMap((partition) => {
+        const key = usageCostPartitionKey(row.rollupId, partition.date);
+        const stored = {
+          scope: USAGE_COST_PARTITION_SCOPE,
+          key,
+          value_json: partition.valueJson,
+          blob: partition.blob,
+          expires_at: null,
+          updated_at: row.updatedAt,
+        };
+        // Readers pair the report summary with its partition by key and update time.
+        return partition.quarters
+          ? [
+              stored,
+              {
+                ...stored,
+                scope: USAGE_COST_QUARTER_SCOPE,
+                value_json: partition.quarters.valueJson,
+                blob: partition.quarters.blob,
+              },
+            ]
+          : [stored];
+      }),
     ]);
     for (const batch of chunkItems(rows, 100)) {
       executeSqliteQuerySync(

@@ -356,7 +356,9 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
           if (change.scope === "transcript" || change.factsInvalidated === true) {
             backfill.remove(records.identity(row));
           }
-          markStoredRow(row, change, prepared);
+          revisions.withChangeScope(change.scope ?? "session-entry", () =>
+            markStoredRow(row, change, prepared),
+          );
         },
       });
     }

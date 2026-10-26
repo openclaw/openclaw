@@ -1,4 +1,6 @@
+import { randomUUID } from "node:crypto";
 import { addAbortListener } from "node:events";
+import { clearCommittedSessionResetRuntimeState } from "../auto-reply/reply/session-reset-cleanup.js";
 import type { VerboseLevel } from "../auto-reply/thinking.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { createSessionWorkStartChangedError } from "../config/sessions/lifecycle.js";
@@ -55,7 +57,6 @@ import {
   prepareCommandSessionRecoveryEntry,
   prepareEmbeddedSessionState,
 } from "./command/session-preparation.js";
-import { clearRotatedSessionMetadata } from "./command/session.js";
 import type {
   AgentCommandGatewayIngressOpts,
   AgentCommandIngressOpts,
@@ -69,6 +70,7 @@ import {
   scheduleSessionMaintenance,
   type SessionMaintenanceRequest,
 } from "./session-maintenance/run.js";
+import { clearRotatedSessionMetadata } from "./session-reset-metadata.js";
 import { measureAgentStartup } from "./startup-timing.js";
 
 const log = createSubsystemLogger("agents/agent-command");
@@ -161,6 +163,7 @@ async function agentCommandInternalOwned(
     sessionStore,
     storePath,
     isNewSession,
+    automaticReset,
     sessionAgentId,
     workspaceDir,
     cwd,
@@ -312,8 +315,13 @@ async function agentCommandInternalOwned(
         const allowCreate = currentStoreEntry === undefined && sessionEntry === undefined;
         const initialEntry = currentStoreEntry ??
           sessionEntry ?? { sessionId, updatedAt: now, sessionStartedAt: now };
-        const isSessionRollover = isNewSession && initialEntry.sessionId !== sessionId;
+        const isSessionRollover =
+          isNewSession && (initialEntry.sessionId !== sessionId || automaticReset !== undefined);
         const entry = isSessionRollover ? clearRotatedSessionMetadata(initialEntry) : initialEntry;
+        if (automaticReset) {
+          entry.lifecycleRevision = randomUUID();
+          entry.agentHarnessId = undefined;
+        }
         await prepareDeliveryForRun(entry);
         const { nextEntry, guardedHarnessCompletion, isCompletionCurrent } =
           prepareCommandSessionRecoveryEntry({
@@ -336,11 +344,22 @@ async function agentCommandInternalOwned(
           storePath,
           initialEntry,
           entry: nextEntry,
+          ...(automaticReset
+            ? {
+                resetBoundary: {
+                  context: "preserve-tail" as const,
+                  reason: automaticReset.reason,
+                  cwd: cwd ?? workspaceDir,
+                },
+              }
+            : {}),
           creation: operatorSession?.creation,
           assertCommitAllowed: operatorSession?.assertCurrent,
           shouldPersist: (current) => {
             operatorSession?.assertAuthorized(current);
             return (
+              (!automaticReset ||
+                current?.lifecycleRevision === automaticReset.expectedLifecycleRevision) &&
               isCompletionCurrent(current) &&
               (isSessionRollover
                 ? current?.sessionId === initialEntry.sessionId
@@ -357,6 +376,17 @@ async function agentCommandInternalOwned(
         // The commit already happened. Cleanup must retain ownership even if
         // cancellation invalidates the task during the awaited session write.
         sessionEntry = persisted;
+        if (automaticReset && persisted) {
+          clearCommittedSessionResetRuntimeState({
+            previousSessionEntry: initialEntry,
+            agentId: sessionAgentId,
+            sessionKey,
+            storePath,
+            signal: opts.abortSignal,
+            onError: (error) =>
+              log.warn(`Failed to clear reset runtime state: ${diagnosticError(error)}`),
+          });
+        }
         trackedRestartRecoveryDeliveryClaim = persisted?.restartRecoveryDeliveryRunId === runId;
         const completion = bindCommandHarnessCompletionAssertion({
           claim: guardedHarnessCompletion,

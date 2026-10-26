@@ -29,6 +29,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
+import { buildControlUiSessionPath } from "@openclaw/session-url-contract";
 import { chromium, type Browser, type CDPSession, type Page } from "playwright";
 import { buildSandboxHostPath } from "../src/agents/sandbox-host.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE } from "../src/gateway/control-ui-bootstrap-contract.ts";
@@ -42,7 +43,6 @@ import {
   createControlUiMockBootstrapConfig,
   installControlUiMockBootstrapDocument,
   createControlUiMockGatewayInitScript,
-  controlUiSessionPath,
   controlUiSessionUrl,
   controlUiBundledSettingsStorageKey,
   prepareControlUiMockGatewayScenario,
@@ -101,6 +101,7 @@ import {
   type InteractionStyleSheet,
 } from "./lib/control-ui-interaction-trace.ts";
 import { probeColdLoadOverlays } from "./lib/control-ui-overlay-probe.ts";
+import { installPaneChromeProbe } from "./lib/control-ui-pane-chrome-probe.ts";
 import { warmReloadProbe } from "./lib/control-ui-warm-reload-probe.ts";
 import {
   GATEWAY_HEAP_SAMPLE_INTERVAL,
@@ -258,6 +259,7 @@ const { values } = parseArgs({
     allocations: { type: "boolean", default: false },
     "warm-reload": { type: "boolean", default: false },
     "row-facts": { type: "boolean", default: false },
+    "pane-chrome-probe": { type: "boolean", default: false },
     "large-snapshot": { type: "boolean", default: false },
     "dashboard-widget": { type: "boolean", default: false },
     "connect-not-before-ms": { type: "string" },
@@ -331,6 +333,9 @@ const { values } = parseArgs({
     output: { type: "string", default: ".artifacts/control-ui-cold-load" },
   },
 });
+if (values["pane-chrome-probe"] && !values["warm-reload"]) {
+  throw new Error("pane-chrome-probe requires warm-reload for the first transcript paint boundary");
+}
 if (values["selector-stats"] && (values.untraced || values["filmstrip-only"])) {
   throw new Error("selector-stats requires tracing; exclude untraced and filmstrip-only");
 }
@@ -505,8 +510,24 @@ if (
 ) {
   throw new Error("Non-chat boot routes exclude chat interaction phases");
 }
+const {
+  latencyProfile,
+  downloadKbps: profileDownloadKbps,
+  latencyMs,
+  frameGapMs,
+  connectNotBeforeMs,
+  methodLatencyMs,
+  sidebarQueryLatencyMs,
+} = resolveColdLoadLatency({
+  profile: values["latency-profile"],
+  latencyMs: values["latency-ms"],
+  frameGapMs: values["frame-gap-ms"],
+  connectNotBeforeMs: values["connect-not-before-ms"],
+  methodLatencyMs: values["method-latency-ms"],
+  sidebarQueryLatencyMs: values["sidebar-query-latency-ms"],
+});
 const networkLatencyMs = Number(values["network-latency-ms"] ?? 0);
-const downloadKbps = Number(values["download-kbps"] ?? 0);
+const downloadKbps = Number(values["download-kbps"] ?? profileDownloadKbps);
 const cpuThrottle = Number(values["cpu-throttle"] ?? 1);
 if (
   (gatewayUrl &&
@@ -534,21 +555,7 @@ if (
     "gateway-url requires an HTTP origin, bundle-dir and one first-load run without comparison; gateway-http requires bundle-dir without gateway-url; first-load requires sidebar-view=sessions without warm-reload; network limits must be nonnegative and cpu-throttle at least 1",
   );
 }
-const {
-  latencyProfile,
-  latencyMs,
-  frameGapMs,
-  connectNotBeforeMs,
-  methodLatencyMs,
-  sidebarQueryLatencyMs,
-} = resolveColdLoadLatency({
-  profile: values["latency-profile"],
-  latencyMs: values["latency-ms"],
-  frameGapMs: values["frame-gap-ms"],
-  connectNotBeforeMs: values["connect-not-before-ms"],
-  methodLatencyMs: values["method-latency-ms"],
-  sidebarQueryLatencyMs: values["sidebar-query-latency-ms"],
-});
+
 const historyValidatorDelayMs = Number(values["history-validator-delay-ms"]);
 if (
   !Number.isFinite(historyValidatorDelayMs) ||
@@ -763,7 +770,6 @@ const fixture = createControlUiTeamScaleFixture({
   dashboardWidgetFontUrl: dashboardFont
     ? `http://127.0.0.1:${address.port}${dashboardFontPath}`
     : undefined,
-  historyStateReceipt: historyValidatorDelayMs > 0,
   dashboardPaintMarker: values["dashboard-paint-marker"],
 });
 const streamingReply = values["streaming-reply"]
@@ -1240,14 +1246,18 @@ try {
           : "chip",
     },
   );
-  const warmProbes = values["warm-reload"]
-    ? `\n(${warmReloadProbe.toString()})(${JSON.stringify({ rowFacts: values["row-facts"], avatars: values["transcript-avatars"] })});`
+  const paneChromeScript = values["pane-chrome-probe"]
+    ? `const __paneChrome = (${installPaneChromeProbe.toString()})(); Reflect.set(window, "__paneChrome", __paneChrome);`
     : "";
+  const warmProbes =
+    values["warm-reload"] || firstLoad
+      ? `\n${paneChromeScript}\n(${warmReloadProbe.toString()})(${JSON.stringify({ rowFacts: values["row-facts"], avatars: values["transcript-avatars"] })}, ${values["pane-chrome-probe"] ? "__paneChrome.sample" : "undefined"});`
+      : "";
   const boardTickets = values["dashboard-widget"]
     ? `\n(${installRotatingBoardTickets.toString()})(${JSON.stringify(fixture.board)}, window.openclawControlUiE2eGateway);`
     : "";
   await page.addInitScript({
-    content: `;(() => { if (window !== window.top || location.protocol === "about:") return; const __name = (fn) => fn; (${installWidgetReadiness.toString()})(); ${createControlUiMockGatewayInitScript(prepared.scenario)}\n${rigProbeScript}\nwindow.__teamScaleSidebarLists = { apply: (mutation) => window.__teamScaleMutate(mutation) }; window.openclawControlUiE2eGateway.setRequestHandler("sessions.list", async ({ params, respond }) => respond(await window.__teamScaleList(params))); window.openclawControlUiE2eGateway.setRequestHandler("cron.list", async ({ params, respond }) => respond(await window.__teamScaleCronList(params)));\n${boardTickets}\n${createColdLoadProbeInitScript({ latencyMs, downloadKbps: values["critical-path"] ? downloadKbps : undefined, methodLatencyMs, sidebarQueryLatencyMs, omitHelloSelfPresence: values["omit-hello-self-presence"], connectNotBeforeMs, frameGapMs, events: fixture.events, liveEvents: fixture.liveEvents, liveHistory: fixture.liveHistory, ownerProbes, sidebarCounters })}\n${streamingReply ? createStreamingReplyProbeInitScript() : ""}\n${extraInitScripts.join("\n")}\n${warmProbes} })();`,
+    content: `;(() => { if (window !== window.top || location.protocol === "about:") return; const __name = (fn) => fn; (${installWidgetReadiness.toString()})(); ${createControlUiMockGatewayInitScript(prepared.scenario)}\n${rigProbeScript}\nwindow.__teamScaleSidebarLists = { apply: (mutation) => window.__teamScaleMutate(mutation) }; window.openclawControlUiE2eGateway.setRequestHandler("sessions.list", async ({ params, respond }) => respond(await window.__teamScaleList(params))); window.openclawControlUiE2eGateway.setRequestHandler("cron.list", async ({ params, respond }) => respond(await window.__teamScaleCronList(params)));\n${boardTickets}\n${createColdLoadProbeInitScript({ latencyMs, downloadKbps: values["critical-path"] || latencyProfile === "live-capped" ? downloadKbps : undefined, methodLatencyMs, sidebarQueryLatencyMs, omitHelloSelfPresence: values["omit-hello-self-presence"], connectNotBeforeMs, frameGapMs, events: fixture.events, liveEvents: fixture.liveEvents, liveHistory: fixture.liveHistory, ownerProbes, sidebarCounters })}\n${streamingReply ? createStreamingReplyProbeInitScript() : ""}\n${extraInitScripts.join("\n")}\n${warmProbes} })();`,
   });
   if (values["critical-path"]) {
     await page.addInitScript({
@@ -1256,6 +1266,21 @@ try {
   }
   // Fetch the real public document; the init script selects the synthetic session.
   // Session-entry authorization is outside this static-delivery benchmark.
+  const shortSessionUrl = (namespace: "chat" | "dashboard") => {
+    const pathname = buildControlUiSessionPath({
+      namespace,
+      sessionKey: fixture.selectedSessionKey,
+      fallbackAgentId: "main",
+      shortIdLength: values["off-roster-route"] ? 8 : 32,
+    });
+    if (!pathname) {
+      throw new Error("Fixture session has no short route");
+    }
+    return new URL(pathname, baseUrl).href;
+  };
+  const chatDashboardUrl = values["short-route"]
+    ? shortSessionUrl("chat")
+    : controlUiSessionUrl(baseUrl, fixture.selectedSessionKey, "chat");
   const chatUrl = usesGatewayHttp
     ? new URL("/chat", baseUrl).href
     : values["full-uuid-route"]
@@ -1264,7 +1289,7 @@ try {
           baseUrl,
         ).href
       : values["short-route"]
-        ? new URL(controlUiSessionPath(fixture.selectedSessionKey, "", face), baseUrl).href
+        ? shortSessionUrl(face)
         : controlUiSessionUrl(baseUrl, fixture.selectedSessionKey, face);
   const url =
     bootRoute === "chat"
@@ -1567,7 +1592,7 @@ try {
       if (values["chat-dashboard-route"]) {
         await page.evaluate(
           (deepLink) => history.replaceState(null, "", deepLink),
-          controlUiSessionUrl(baseUrl, fixture.selectedSessionKey, "chat"),
+          chatDashboardUrl,
         );
       }
       await settle("chat");
@@ -1622,10 +1647,11 @@ try {
     const bundleIndex = run % bundleSlots.length;
     const layoutCell = layoutCells[Math.floor(run / bundleSlots.length) % layoutCells.length];
     const runRoute = layoutCell?.route ?? bootRoute;
+    const cold = layoutCell?.cold ?? firstLoad;
     const runUrl =
       runRoute === "chat"
-        ? values["chat-dashboard-route"]
-          ? controlUiSessionUrl(baseUrl, fixture.selectedSessionKey, "chat")
+        ? values["chat-dashboard-route"] && !cold
+          ? chatDashboardUrl
           : chatUrl
         : new URL(runRoute === "settings" ? "/settings/appearance" : `/${runRoute}`, baseUrl).href;
     let reloadStorage = warmStates[bundleIndex];
@@ -1683,7 +1709,7 @@ try {
     }
     const validatorRequestsBeforeReload = historyValidatorRequests;
     const cdp = await context.newCDPSession(page);
-    if (layoutCell?.cold ?? firstLoad) {
+    if (cold) {
       await resetColdState(cdp, bundleIndex);
     } else {
       await restoreColdLoadWarmState(page, reloadStorage!, layoutCell && reloadStorage);
@@ -1712,7 +1738,11 @@ try {
     if (values["cold-http-cache"]) {
       await cdp.send("Network.setCacheDisabled", { cacheDisabled: true });
     }
-    if (values["network-latency-ms"] !== undefined || values["download-kbps"] !== undefined) {
+    if (
+      values["network-latency-ms"] !== undefined ||
+      values["download-kbps"] !== undefined ||
+      profileDownloadKbps > 0
+    ) {
       await cdp.send("Network.emulateNetworkConditions", {
         offline: false,
         latency: networkLatencyMs,
@@ -2002,8 +2032,24 @@ try {
     if (historyValidatorDelayMs && metrics.historyValidatorResources.length !== 1) {
       throw new Error("Measured reload lacks the delayed validator resource timing");
     }
-    const warmReload = values["warm-reload"]
-      ? await page.evaluate(() => Reflect.get(window, "__warmReload").read())
+    const warmReload =
+      values["warm-reload"] || firstLoad
+        ? await page.evaluate(() => Reflect.get(window, "__warmReload").read())
+        : undefined;
+    const paneChrome = values["pane-chrome-probe"]
+      ? {
+          ...(await page.evaluate(
+            (firstPaint) => Reflect.get(window, "__paneChrome").read(firstPaint),
+            warmReload?.milestones.firstTranscriptPaint ?? null,
+          )),
+          snapshotBytes: Buffer.byteLength(
+            JSON.stringify(
+              reloadStorage!.records.snapshots.find((record) =>
+                record.sessionKey.endsWith(`\u0000${fixture.selectedSessionKey}`),
+              )!.snapshot,
+            ),
+          ),
+        }
       : undefined;
     if (cpuProfile) {
       await writeFile(
@@ -2917,6 +2963,7 @@ try {
       sessionSwitch,
       criticalPath,
       warmReload,
+      paneChrome,
       historyValidatorRequests: historyValidatorRequests - validatorRequestsBeforeReload,
       snapshotSave: snapshotSaves[bundleIndex],
       overlays,

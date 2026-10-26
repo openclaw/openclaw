@@ -81,6 +81,7 @@ packages/llm-core/src/usage-cost.ts
 packages/llm-core/src/utils/assistant-message-events.ts
 packages/llm-core/src/utils/diagnostics.ts
 packages/llm-core/src/utils/event-stream.ts
+packages/llm-core/src/utils/observe-async-iterator.ts
 packages/llm-core/src/utils/request-headers.ts
 packages/llm-core/src/validation.ts
 packages/media-core/src/constants.ts
@@ -1600,6 +1601,7 @@ src/plugins/provider-thinking.ts
 src/plugins/registry-runtime-binding.ts
 src/plugins/plugin-instance-error.ts
 src/plugins/plugin-instance-invocation.ts
+src/plugins/plugin-instance-iterator.ts
 src/plugins/plugin-instance-module-loader.ts
 src/plugins/plugin-state-operation-module-loader.ts
 src/plugins/plugin-state-operation-source.ts

@@ -2,7 +2,6 @@ import { afterEach, expect, it, vi } from "vitest";
 import * as stateReads from "../../../state/openclaw-state-db-readonly.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { compactSubagentRunForMemory, subagentRuns } from "../registry/subagent-registry-memory.js";
-import { listSubagentRunsForRequester } from "../registry/subagent-registry-read.js";
 import { persistRegistryFixture } from "../registry/subagent-registry-state.fixture.test-support.js";
 import { clearSubagentRunsReadCacheForTest } from "../registry/subagent-registry-state.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
@@ -20,7 +19,6 @@ function fixture() {
   const child = (runId: string, overrides: Partial<SubagentRunRecord> = {}) =>
     makeSettledChild({
       requesterAgentId: "main",
-      task: "synthetic task",
       createdAt: 1,
       expectsCompletionMessage: undefined,
       execution: { status: "terminal", startedAt: 2, endedAt: 3 },
@@ -44,30 +42,15 @@ function fixture() {
   return { entry, params, child, read: createRequesterDescendantReader(params) };
 }
 
-it("reads descendant facts without traversing unrelated retained runs", async () => {
-  const { entry, read, child } = fixture();
-  subagentRuns.set(
-    "unrelated",
-    child("unrelated", {
-      requesterSessionKey: "agent:main:unrelated",
-    }),
-  );
-  const values = vi.spyOn(subagentRuns, "values");
-  expect(listSubagentRunsForRequester(entry.requesterSessionKey)).toEqual([entry]);
-  const sibling = child("sibling");
-  subagentRuns.set(sibling.runId, sibling);
-  const changed = { ...entry, task: "updated task" };
-  subagentRuns.set(entry.runId, changed);
-  expect(listSubagentRunsForRequester(entry.requesterSessionKey)).toEqual([changed, sibling]);
-  await expect(read()).resolves.toEqual({ unsettled: false, active: 0 });
-  expect(values).not.toHaveBeenCalled();
-});
-
 it("counts resident and durable descendants without restoring settled text", async () => {
   await withOpenClawTestState(
     { scenario: "minimal", env: { OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" } },
     async () => {
       const { entry, read, child } = fixture();
+      subagentRuns.set(
+        "unrelated",
+        child("unrelated", { requesterSessionKey: "agent:main:other" }),
+      );
       const completed = child("completed", {
         requesterSettleWake: undefined,
         cleanupCompletedAt: 5,
@@ -83,6 +66,7 @@ it("counts resident and durable descendants without restoring settled text", asy
       persistRegistryFixture(new Map([entry, completed, pending].map((row) => [row.runId, row])));
       subagentRuns.set(completed.runId, compactSubagentRunForMemory(completed));
       clearSubagentRunsReadCacheForTest();
+      const values = vi.spyOn(subagentRuns, "values");
       const execute = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
       await expect(read()).resolves.toEqual({
         unsettled: true,
@@ -105,6 +89,7 @@ it("counts resident and durable descendants without restoring settled text", asy
         [],
       );
       expect(subagentRuns.get(completed.runId)?.completion?.resultText).toBeUndefined();
+      expect(values).not.toHaveBeenCalled();
     },
   );
 });

@@ -389,7 +389,9 @@ export async function recoverInterruptedSubagentRow(
       if (
         !sessionAgentId ||
         !sessionId ||
-        lifecycleRunId !== runId ||
+        // Session recovery clears the active run while retaining its source.
+        (lifecycleRunId !== runId &&
+          session?.sessionEntry?.restartRecoveryDeliverySourceRunId !== runId) ||
         entry.execution.restartRecovery ||
         !params.gatewayRuntime
       ) {

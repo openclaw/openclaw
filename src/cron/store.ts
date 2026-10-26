@@ -398,7 +398,7 @@ function saveCronJobsStoreWithRevisionNative(
 }
 
 /** Persist cron data and return only this operation's publication revision. */
-export async function saveCronJobsStoreWithRevision(
+async function saveCronJobsStoreWithRevision(
   storePath: string,
   store: CronStoreFile,
   opts?: SaveCronJobsStoreOptions,
