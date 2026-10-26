@@ -285,7 +285,7 @@ export function createSidebarPinnedSessions(
 }
 
 /** Saved group membership is a reference, never authority to reveal a session. */
-export function resolvePersonalSidebarSession(host: PersonalNavigationHost, key: string) {
+function resolvePersonalSidebarSession(host: PersonalNavigationHost, key: string) {
   const loaded = host.findSidebarSessionByKey(key);
   const catalog = loaded
     ? undefined

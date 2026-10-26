@@ -1,3 +1,4 @@
+import path from "node:path";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
@@ -18,136 +19,155 @@ suite.define(() => {
   it.for(["operator.admin", "operator.sessions.read"])(
     "organizes a personal layout without shared mutations (%s)",
     async (scope) => {
-      await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
-        const childKey = "agent:main:reliability-child";
-        const rows = [
-          createControlUiSessionRow(key, "Reliability Tracker", Date.now(), {
-            category: "Engineering",
-            childSessions: [childKey],
-          }),
-          createControlUiSessionRow(releaseKey, "Release checklist", Date.now() - 1000),
-          createControlUiSessionRow(childKey, "Verification notes", Date.now() - 2000, {
-            spawnedBy: key,
-          }),
-        ];
-        const gateway = await installMockGateway(page, {
-          sessionKey: key,
-          operatorScopes: [scope],
-          sessions: rows,
-        });
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
-        const sidebar = page.locator("openclaw-app-sidebar");
-        await sidebar.locator(`.sidebar-recent-session[data-session-key="${key}"]`).waitFor();
-        const capture =
-          process.env.OPENCLAW_CAPTURE_UI_PROOF === "1" && scope === "operator.sessions.read";
-        const artifacts = capture
-          ? createControlUiE2eArtifactDir(
-              "personal-session-groups",
-              process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR,
-            )
-          : undefined;
-        if (artifacts && process.env.OPENCLAW_PERSONAL_GROUP_PROOF_STAGE === "before") {
-          await captureFrame(artifacts, "before.png", page.locator(".shell"), [
-            sidebar.locator(".sidebar-sessions"),
-          ]);
-          console.log("Personal groups before proof: " + artifacts);
-        }
-        const create = async (label: string, selected?: string) => {
-          await sidebar.getByRole("button", { name: "New personal group", exact: true }).click();
-          const dialog = page.getByRole("dialog", { name: "New personal group", exact: true });
-          await dialog.getByLabel("Group name", { exact: true }).fill(label);
-          if (selected) {
-            await dialog.getByRole("checkbox", { name: selected, exact: true }).check();
+      const capture =
+        process.env.OPENCLAW_CAPTURE_UI_PROOF === "1" && scope === "operator.sessions.read";
+      const artifacts = capture
+        ? createControlUiE2eArtifactDir(
+            "personal-session-groups",
+            process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR,
+          )
+        : undefined;
+      await suite.withPage(
+        {
+          viewport: { width: 1280, height: 900 },
+          ...(artifacts
+            ? { recordVideo: { dir: artifacts, size: { width: 1280, height: 900 } } }
+            : {}),
+        },
+        async ({ page }) => {
+          const childKey = "agent:main:reliability-child";
+          const rows = [
+            createControlUiSessionRow(key, "Reliability Tracker", Date.now(), {
+              category: "Engineering",
+              childSessions: [childKey],
+            }),
+            createControlUiSessionRow(releaseKey, "Release checklist", Date.now() - 1000),
+            createControlUiSessionRow(childKey, "Verification notes", Date.now() - 2000, {
+              spawnedBy: key,
+            }),
+          ];
+          const gateway = await installMockGateway(page, {
+            sessionKey: key,
+            operatorScopes: [scope],
+            sessions: rows,
+          });
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
+          const sidebar = page.locator("openclaw-app-sidebar");
+          await sidebar.locator(`.sidebar-recent-session[data-session-key="${key}"]`).waitFor();
+          if (artifacts && process.env.OPENCLAW_PERSONAL_GROUP_PROOF_STAGE === "before") {
+            await captureFrame(artifacts, "before.png", page.locator(".shell"), [
+              sidebar.locator(".sidebar-sessions"),
+            ]);
+            console.log("Personal groups before proof: " + artifacts);
           }
-          await dialog.getByRole("button", { name: "Save", exact: true }).click();
-          await dialog.waitFor({ state: "hidden" });
-        };
-        const group = (label: string) =>
-          sidebar
-            .locator("[data-personal-session-group]")
-            .filter({ has: page.getByRole("list", { name: label, exact: true }) });
-        const options = async (label: string, action: string) => {
-          await sidebar
-            .getByRole("button", { name: `Options for personal group ${label}`, exact: true })
-            .click();
-          await page.getByRole("menuitem", { name: action, exact: true }).click();
-        };
-        const childToggle = sidebar.locator(`[data-child-session-toggle="${key}"]`);
-        await childToggle.waitFor();
-        if ((await childToggle.getAttribute("aria-expanded")) === "false") {
-          await childToggle.click();
-        }
-        await sidebar.locator(`[data-session-key="${childKey}"]`).waitFor();
-        await create("Focus", "Reliability Tracker");
-        await group("Focus")
-          .getByRole("link", { name: /Reliability Tracker/ })
-          .waitFor();
-        if (artifacts) {
-          await captureFrame(artifacts, "grouped-children.png", page.locator(".shell"), [
-            group("Focus"),
-            sidebar.locator('[data-session-section="category:Engineering"]'),
-          ]);
-          console.log("Personal group child-tree proof: " + artifacts);
-        }
-        await group("Focus")
-          .getByRole("link", { name: /Verification notes/ })
-          .waitFor();
-        expect(await sidebar.locator(`[data-session-key="${childKey}"]`).count()).toBe(2);
-        await create("Later");
-        // A guest's ordinary session drag adds a personal reference, not a shared move.
-        await sidebar
-          .locator(`.sidebar-recent-session[data-session-key="${releaseKey}"]`)
-          .dragTo(group("Focus"));
-        await group("Focus")
-          .getByRole("link", { name: /Release checklist/ })
-          .waitFor();
-        await options("Focus", "Edit group");
-        const editor = page.getByRole("dialog", { name: "Edit personal group", exact: true });
-        await editor.getByLabel("Group name", { exact: true }).fill("This week");
-        await editor.getByRole("checkbox", { name: "Reliability Tracker", exact: true }).uncheck();
-        await editor.getByRole("button", { name: "Save", exact: true }).click();
-        await editor.waitFor({ state: "hidden" });
-        expect(await group("This week").locator(".sidebar-recent-session").count()).toBe(1);
-        await options("Later", "Move up");
-        const order = () =>
-          sidebar
-            .locator("[data-personal-session-group] .sidebar-session-group-toggle")
-            .allTextContents();
-        await expect.poll(order).toEqual(["Later", "This week"]);
-        // Native group dragging is also personal, with a keyboard menu equivalent above.
-        await group("Later").locator(".personal-session-groups__header").dragTo(group("This week"));
-        await expect.poll(order).toEqual(["This week", "Later"]);
-        await page.reload();
-        await expect.poll(order).toEqual(["This week", "Later"]);
-        await group("This week")
-          .getByRole("link", { name: /Release checklist/ })
-          .waitFor();
-        if (artifacts && process.env.OPENCLAW_PERSONAL_GROUP_PROOF_STAGE !== "before") {
-          await captureFrame(artifacts, "after.png", page.locator(".shell"), [
-            sidebar.locator(".sidebar-sessions"),
-          ]);
-          console.log("Personal groups after proof: " + artifacts);
-        }
-        await options("This week", "Remove personal group");
-        await expect.poll(order).toEqual(["Later"]);
-        expect(
+          const create = async (label: string, selected?: string) => {
+            await sidebar.getByRole("button", { name: "New personal group", exact: true }).click();
+            const dialog = page.getByRole("dialog", { name: "New personal group", exact: true });
+            await dialog.getByLabel("Group name", { exact: true }).fill(label);
+            if (selected) {
+              await dialog.getByRole("checkbox", { name: selected, exact: true }).check();
+            }
+            await dialog.getByRole("button", { name: "Save", exact: true }).click();
+            await dialog.waitFor({ state: "hidden" });
+          };
+          const group = (label: string) =>
+            sidebar
+              .locator("[data-personal-session-group]")
+              .filter({ has: page.getByRole("list", { name: label, exact: true }) });
+          const options = async (label: string, action: string) => {
+            await sidebar
+              .getByRole("button", { name: `Options for personal group ${label}`, exact: true })
+              .click();
+            await page.getByRole("menuitem", { name: action, exact: true }).click();
+          };
+          const childToggle = sidebar.locator(`[data-child-session-toggle="${key}"]`);
+          await childToggle.waitFor();
+          if ((await childToggle.getAttribute("aria-expanded")) === "false") {
+            await childToggle.click();
+          }
+          await sidebar.locator(`[data-session-key="${childKey}"]`).waitFor();
+          await create("Focus", "Reliability Tracker");
+          await group("Focus")
+            .getByRole("link", { name: /Reliability Tracker/ })
+            .waitFor();
+          if (artifacts) {
+            await captureFrame(artifacts, "grouped-children.png", page.locator(".shell"), [
+              group("Focus"),
+              sidebar.locator('[data-session-section="category:Engineering"]'),
+            ]);
+            console.log("Personal group child-tree proof: " + artifacts);
+          }
+          await group("Focus")
+            .getByRole("link", { name: /Verification notes/ })
+            .waitFor();
+          expect(await sidebar.locator(`[data-session-key="${childKey}"]`).count()).toBe(2);
+          await create("Later");
+          // A guest's ordinary session drag adds a personal reference, not a shared move.
           await sidebar
             .locator(`.sidebar-recent-session[data-session-key="${releaseKey}"]`)
-            .count(),
-        ).toBe(1);
-        expect(await sidebar.locator('[data-session-section="category:Engineering"]').count()).toBe(
-          1,
-        );
-        for (const method of [
-          "sessions.patch",
-          "sessions.groups.put",
-          "sessions.groups.rename",
-          "sessions.groups.delete",
-          "config.patch",
-        ]) {
-          expect(await gateway.getRequests(method)).toEqual([]);
-        }
-      });
+            .dragTo(group("Focus"));
+          await group("Focus")
+            .getByRole("link", { name: /Release checklist/ })
+            .waitFor();
+          await options("Focus", "Edit group");
+          const editor = page.getByRole("dialog", { name: "Edit personal group", exact: true });
+          await editor.getByLabel("Group name", { exact: true }).fill("This week");
+          await editor
+            .getByRole("checkbox", { name: "Reliability Tracker", exact: true })
+            .uncheck();
+          await editor.getByRole("button", { name: "Save", exact: true }).click();
+          await editor.waitFor({ state: "hidden" });
+          expect(await group("This week").locator(".sidebar-recent-session").count()).toBe(1);
+          await options("Later", "Move up");
+          const order = () =>
+            sidebar
+              .locator("[data-personal-session-group] .sidebar-session-group-toggle")
+              .allTextContents();
+          await expect.poll(order).toEqual(["Later", "This week"]);
+          // Native group dragging is also personal, with a keyboard menu equivalent above.
+          await group("Later")
+            .locator(".personal-session-groups__header")
+            .dragTo(group("This week"));
+          await expect.poll(order).toEqual(["This week", "Later"]);
+          await page.reload();
+          await expect.poll(order).toEqual(["This week", "Later"]);
+          await group("This week")
+            .getByRole("link", { name: /Release checklist/ })
+            .waitFor();
+          if (artifacts && process.env.OPENCLAW_PERSONAL_GROUP_PROOF_STAGE !== "before") {
+            await captureFrame(artifacts, "after.png", page.locator(".shell"), [
+              sidebar.locator(".sidebar-sessions"),
+            ]);
+            console.log("Personal groups after proof: " + artifacts);
+          }
+          await options("This week", "Remove personal group");
+          await expect.poll(order).toEqual(["Later"]);
+          expect(
+            await sidebar
+              .locator(`.sidebar-recent-session[data-session-key="${releaseKey}"]`)
+              .count(),
+          ).toBe(1);
+          expect(
+            await sidebar.locator('[data-session-section="category:Engineering"]').count(),
+          ).toBe(1);
+          for (const method of [
+            "sessions.patch",
+            "sessions.groups.put",
+            "sessions.groups.rename",
+            "sessions.groups.delete",
+            "config.patch",
+          ]) {
+            expect(await gateway.getRequests(method)).toEqual([]);
+          }
+        },
+        async ({ page, context }) => {
+          const video = page.video();
+          await suite.closeBrowserContext(context);
+          if (artifacts) {
+            await video?.saveAs(path.join(artifacts, "personal-groups.webm"));
+          }
+        },
+      );
     },
   );
 
@@ -383,6 +403,14 @@ suite.define(() => {
       await expect
         .poll(() => choices.evaluate((element) => element.scrollWidth <= element.clientWidth))
         .toBe(true);
+      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+        const artifacts = createControlUiE2eArtifactDir(
+          "personal-group-long-list",
+          process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR,
+        );
+        await captureFrame(artifacts, "long-list.png", page.locator(".shell"), [dialog]);
+        console.log("Personal group long-list proof: " + artifacts);
+      }
       await choices.getByRole("checkbox").last().check();
       await save.click();
       await dialog.waitFor({ state: "hidden" });

@@ -1,3 +1,4 @@
+import "./personal-session-group-dialog.css";
 import { createMemo, createSignal, For, Show } from "solid-js";
 import { t } from "../lib/reactive/i18n.ts";
 import type { PersonalSessionGroup } from "../lib/sessions/personal-groups.ts";
@@ -36,7 +37,7 @@ export function PersonalSessionGroupDialogView(props: {
       onModal-cancel={() => props.finish()}
     >
       <form
-        class="exec-approval-card exec-approval-card--modal exec-approval-modal-stack personal-session-group-dialog"
+        class="exec-approval-card exec-approval-modal-stack personal-session-group-dialog"
         onSubmit={(event) => {
           event.preventDefault();
           if (!label().trim()) {
@@ -79,7 +80,7 @@ export function PersonalSessionGroupDialogView(props: {
         <div
           role="group"
           aria-label={t("sessionsView.personalGroupSessions")}
-          class="exec-approval-modal-content stack personal-session-group-dialog__sessions"
+          class="stack personal-session-group-dialog__sessions"
         >
           <span class="muted">{t("sessionsView.personalGroupSessions")}</span>
           <For each={rows()} keyed={(row) => row.key}>
