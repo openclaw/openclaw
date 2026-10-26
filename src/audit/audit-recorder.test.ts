@@ -42,25 +42,34 @@ function runEvent(runId: string, seq = 1, phase = "start"): AgentEventPayload {
   };
 }
 
-it("assigns identity and sequence only to accepted messages", async () => {
-  const messageRecorder = createAuditEventRecorder({
-    scheduler: createTestGatewayScheduler(),
-    getConfig: () => ({ logging: { audit: { messages: "direct" } } }),
-    writer,
-  });
-  recorder = messageRecorder;
-  const message = { ...messageEvent("message.outbound.finished"), sourceId: undefined };
-  messageRecorder.recordMessage({ ...message, conversationKind: "group" });
-  messageRecorder.recordMessage(message);
-  await recorder.stop();
-  expect(inputs).toEqual([
-    expect.objectContaining({
-      conversationKind: "direct",
-      sourceId: expect.stringMatching(/^message:/u),
-      sourceSequence: 1,
-    }),
-  ]);
-});
+it.each([
+  ["off", []],
+  ["direct", ["direct"]],
+  ["all", ["group", "direct"]],
+] as const)(
+  "assigns identity and sequence only to messages accepted in %s mode",
+  async (messages, accepted) => {
+    const messageRecorder = createAuditEventRecorder({
+      scheduler: createTestGatewayScheduler(),
+      getConfig: () => ({ logging: { audit: { messages } } }),
+      writer,
+    });
+    recorder = messageRecorder;
+    const message = { ...messageEvent("message.outbound.finished"), sourceId: undefined };
+    messageRecorder.recordMessage({ ...message, conversationKind: "group" });
+    messageRecorder.recordMessage(message);
+    await recorder.stop();
+    expect(inputs).toEqual(
+      accepted.map((conversationKind, index) =>
+        expect.objectContaining({
+          conversationKind,
+          sourceId: expect.stringMatching(/^message:/u),
+          sourceSequence: index + 1,
+        }),
+      ),
+    );
+  },
+);
 
 describe("buffered agent audit starts", () => {
   it("retains the original start when a rejected pair settles after capacity returns", async () => {

@@ -4,14 +4,17 @@ import { afterEach, expect, it, vi } from "vitest";
 import { wrapLmstudioInferencePreload } from "./stream.js";
 import { listedModel, streamModel } from "./stream.test-support.js";
 
-const loads = vi.hoisted(() => [] as number[]);
+const loads = vi.hoisted(() => [] as Array<{ timeoutMs: number; body: unknown }>);
 
 vi.mock("openclaw/plugin-sdk/provider-transport-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-transport-runtime")>()),
   buildGuardedModelFetch:
     (_model: unknown, timeoutMs: number) => async (url: string, init?: RequestInit) => {
       if (url.endsWith("/load")) {
-        loads.push(timeoutMs);
+        loads.push({
+          timeoutMs,
+          body: typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
+        });
       }
       return await fetch(url, init);
     },
@@ -100,6 +103,8 @@ it.each([
       expect([model.id, streamFn.mock.calls[0]?.[0].id]).toEqual([key, key]);
     }
     const timeout = timeoutMs ?? (timeoutSeconds ? timeoutSeconds * 1000 : 120_000);
-    expect(loads).toEqual(needsLoad ? [timeout] : []);
+    expect(loads).toEqual(
+      needsLoad ? [{ timeoutMs: timeout, body: { model: key, context_length: 16384 } }] : [],
+    );
   },
 );
