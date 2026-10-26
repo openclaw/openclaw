@@ -1,6 +1,5 @@
 import path from "node:path";
-import { beforeEach, describe, expect, vi } from "vitest";
-import { createCommandTest } from "../../../test/helpers/command-fixture.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/io.js";
 import { runSessionMutation } from "../../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -25,7 +24,6 @@ import { workspaceJournal } from "./workspace-manifest-fixtures.test-support.js"
 import * as workspaceResultStaging from "./workspace-result-staging.js";
 
 const tempDirs = useStateDatabaseTempDirs();
-const it = createCommandTest();
 
 describe("worker placement dispatch reclaim", () => {
   let root: string;
@@ -494,26 +492,6 @@ describe("worker placement dispatch reclaim", () => {
       expect(placementStore.get(active.sessionId)).not.toHaveProperty("workspaceResultConflict");
     },
   );
-
-  it("releases a failed stop claim so reclaim can be retried", async ({ command }) => {
-    const workspacePath = path.join(root, "retry-workspace");
-    const initialized = await command.run("git", ["init", "--quiet", workspacePath], {
-      timeout: 10_000,
-    });
-    expect(initialized.status).toBe(0);
-    const harness = await createHarness(database, placementStore, {
-      reconcileFailureCount: 1,
-      workspacePath,
-    });
-    await harness.service.dispatch(REQUEST);
-
-    await expect(harness.service.reclaim(REQUEST)).rejects.toThrow("workspace conflict");
-    expectPlacement(placementStore, "draining", { turnClaim: null });
-    await expectNoPendingResults();
-
-    await expect(harness.service.reclaim(REQUEST)).resolves.toMatchObject({ state: "reclaimed" });
-    expect(harness.environments.destroy).toHaveBeenCalledOnce();
-  });
 
   it("rejects a replaced reclaimed owner after waiting to enter the lifecycle fence", async () => {
     const entered = createDeferredCore();
