@@ -2,7 +2,6 @@ import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
   createAssistantMessageEventStream,
   streamSimple,
-  type AssistantMessage,
   type Model,
   type SimpleStreamOptions,
 } from "openclaw/plugin-sdk/llm";
@@ -11,6 +10,7 @@ import {
   registerSingleProviderPlugin,
   requireRegisteredProvider,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { makeAgentAssistantMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, it, vi } from "vitest";
 import plugin from "./index.js";
 
@@ -34,33 +34,10 @@ function createModel(overrides: Partial<Model> = {}): Model {
 }
 
 function wrapModel(model: Model, streamFn?: StreamFn, sourceApi?: Model["api"]) {
-  const { provider, id: modelId } = model;
-  const registeredProvider = requireRegisteredProvider(
+  return requireRegisteredProvider(
     capturePluginRegistration(plugin).providers,
     "fireworks",
-  );
-  return registeredProvider.wrapStreamFn?.({ provider, modelId, model, streamFn, sourceApi });
-}
-
-function capturePayload(model: Model, payload: Record<string, unknown>) {
-  let captured: unknown;
-  const baseStreamFn: StreamFn = (_model, _context, options) => {
-    options?.onPayload?.(payload, _model);
-    const stream = createAssistantMessageEventStream();
-    stream.end();
-    return stream;
-  };
-  const wrapped = wrapModel(model, baseStreamFn) ?? baseStreamFn;
-  void wrapped(
-    model,
-    { messages: [] },
-    {
-      onPayload(value) {
-        captured = structuredClone(value);
-      },
-    },
-  );
-  return captured;
+  ).wrapStreamFn?.({ provider: model.provider, modelId: model.id, model, streamFn, sourceApi });
 }
 
 it.each<[string, SimpleStreamOptions, Partial<Model>, string?]>([
@@ -78,16 +55,14 @@ it.each<[string, SimpleStreamOptions, Partial<Model>, string?]>([
 ])("sends %s in the provider request", async (_name, options, overrides, affinity) => {
   const provider = await registerSingleProviderPlugin(plugin);
   const originalModel = createModel({ id: glmId, ...overrides });
-  const modelId = originalModel.id;
   const model =
     provider.normalizeResolvedModel?.({
       provider: originalModel.provider,
-      modelId,
+      modelId: originalModel.id,
       model: originalModel,
     }) ?? originalModel;
   let serializedPayload = "";
-  const wrapped = wrapModel(model, streamSimple) ?? streamSimple;
-  const stream = await wrapped(
+  const stream = await (wrapModel(model, streamSimple) ?? streamSimple)(
     model,
     {
       systemPrompt: "Stable synthetic instructions.",
@@ -117,7 +92,7 @@ it.each<[string, SimpleStreamOptions, Partial<Model>, string?]>([
       { role: "user", content: "Synthetic question." },
     ],
   });
-  if (modelId.includes("kimi")) {
+  if (model.id.includes("kimi")) {
     expect(payload).toHaveProperty("thinking", { type: "disabled" });
   }
 });
@@ -139,14 +114,11 @@ it.each<[string, string[], number, boolean, number, boolean?, Model["api"]?]>([
       ...(api ? { api } : {}),
       cost: { input: 2, output: 4, cacheRead: 1, cacheWrite: 0 },
     });
-    const message: AssistantMessage = {
-      role: "assistant",
+    const message = makeAgentAssistantMessage({
       api: model.api,
       provider: model.provider,
       model: model.id,
       content: [{ type: "text", text: "Synthetic reply." }],
-      stopReason: "stop",
-      timestamp: 1,
       usage: {
         input: 100 - read,
         output: 10,
@@ -163,7 +135,7 @@ it.each<[string, string[], number, boolean, number, boolean?, Model["api"]?]>([
           totalOrigin: "provider-billed",
         },
       },
-    };
+    });
     const baseStreamFn: StreamFn = async (nextModel, _context, options) => {
       await options?.onResponse?.(
         {
@@ -213,10 +185,19 @@ it.each<[string, string[], number, boolean, number, boolean?, Model["api"]?]>([
 it.each<[string, Record<string, unknown>]>([
   ["accounts/fireworks/routers/kimi-k2.5-synthetic-test", {}],
   [kimiId, { reasoning_effort: "high", reasoning: { effort: "high" }, reasoningEffort: "high" }],
-])("sanitizes %s before invoking the caller payload hook", (id, payload) => {
-  expect(capturePayload(createModel({ id }), payload)).toEqual({
-    thinking: { type: "disabled" },
+])("sanitizes %s before invoking the caller payload hook", async (id, payload) => {
+  const model = createModel({ id });
+  const onPayload = vi.fn((value) => {
+    expect(value).toEqual({ thinking: { type: "disabled" } });
   });
+  const base: StreamFn = (nextModel, _context, options) => {
+    options?.onPayload?.(payload, nextModel);
+    const stream = createAssistantMessageEventStream();
+    stream.end();
+    return stream;
+  };
+  await (wrapModel(model, base) ?? base)(model, { messages: [] }, { onPayload });
+  expect(onPayload).toHaveBeenCalledOnce();
 });
 
 it("returns no provider wrapper for non-target Fireworks requests", () => {
