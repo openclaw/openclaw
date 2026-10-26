@@ -482,6 +482,12 @@ it.each([
     ],
   },
   {
+    name: "Git worktree inspections",
+    entrypoints: ["src/agents/worktrees/git-worktree-operations.runtime.ts"],
+    dynamic: false,
+    deferredOwners: ["src/agents/worktrees/snapshot-inventory.ts"],
+  },
+  {
     name: "persisted model catalog reader",
     entrypoints: ["src/agents/plugin-model-catalog-read.worker.ts"],
     dynamic: false,
