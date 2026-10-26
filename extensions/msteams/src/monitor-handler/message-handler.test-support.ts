@@ -5,7 +5,6 @@ import {
   createMSTeamsMessageHandlerDeps,
   installMSTeamsTestRuntime,
 } from "../monitor-handler.test-helpers.js";
-import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.types.js";
 import type { MSTeamsTurnContext } from "../sdk-types.js";
 
 export const channelConversationId = "19:general@thread.tacv2";
@@ -21,7 +20,6 @@ export function createDebounceControl() {
   };
   return {
     createDebouncer,
-    drain: () => drain(),
     async flush(milliseconds: number) {
       await vi.advanceTimersByTimeAsync(milliseconds);
       await drain();
@@ -75,23 +73,14 @@ export function createMessageHandlerDeps(
     resolveStorePath: options.resolveStorePath ?? (() => "/tmp/test-store"),
   });
 
-  const defaults = createMSTeamsMessageHandlerDeps({ cfg });
-  const conversationStore = {
-    ...defaults.conversationStore,
+  const deps = createMSTeamsMessageHandlerDeps({ cfg });
+  const conversationStore = Object.assign(deps.conversationStore, {
     upsert: vi.fn(async () => undefined),
-  };
-
-  const deps: MSTeamsMessageHandlerDeps = {
-    ...defaults,
-    accountId,
-    appId: "test-app",
-    tokenProvider: { getAccessToken: vi.fn(async () => "token") },
-    mediaMaxBytes: 1024 * 1024,
-    conversationStore,
-    pollStore: {
-      recordVote: vi.fn(async () => null),
-    } as unknown as MSTeamsMessageHandlerDeps["pollStore"],
-  };
+  });
+  deps.accountId = accountId;
+  deps.appId = "test-app";
+  deps.tokenProvider.getAccessToken = vi.fn(async () => "token");
+  deps.mediaMaxBytes = 1024 * 1024;
 
   return { conversationStore, deps, ...effects };
 }
