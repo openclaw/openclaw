@@ -2,19 +2,11 @@ import { createSignal, flush } from "solid-js";
 import { vi } from "vitest";
 import type { SystemAgentSetupDetectResult } from "../../../api/types.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import type { ModelSetupViewProps } from "../view-types.ts";
+import type { ModelSetupViewProps as ViewProps } from "../view-types.ts";
 import { ModelSetupView } from "../view.tsx";
 
-export type { ModelSetupViewProps } from "../view-types.ts";
+const provider = (id: string, label: string) => ({ id, brandId: id, label });
 
-function provider(id: string, label: string) {
-  return { id, brandId: id, label };
-}
-
-const openai = {
-  ...provider("openai", "OpenAI"),
-  icon: "https://cdn.example.com/openai.png",
-};
 const ollama = {
   ...provider("ollama", "Ollama"),
   icon: "https://cdn.simpleicons.org/ollama",
@@ -31,7 +23,6 @@ export const detected: SystemAgentSetupDetectResult = {
       modelRef: "openai/gpt-5",
       recommended: true,
       credentials: true,
-      icon: "https://cdn.example.com/codex.png",
     },
   ],
   manualProviders: [
@@ -41,52 +32,27 @@ export const detected: SystemAgentSetupDetectResult = {
       groupLabel: "Google",
       hint: "Supported API-key access from aistudio.google.com/apikey",
     },
-    {
-      ...openai,
-      groupLabel: "OpenAI",
-      hint: "Use a project API key.",
-    },
+    provider("openai", "OpenAI"),
   ],
   authOptions: [
-    {
-      ...openai,
-      id: "openai-oauth",
-      kind: "oauth",
-      featured: true,
-      hint: "Continue in your browser.",
-    },
-    {
-      id: "other-device",
-      label: "Other provider",
-      kind: "device-code",
-      featured: false,
-    },
+    { id: "openai-oauth", label: "OpenAI", kind: "oauth", featured: true },
+    { id: "other-device", label: "Other provider", kind: "device-code", featured: false },
   ],
-  prepareOptions: [
-    {
-      ...ollama,
-      hint: "Connect to an Ollama server and select a cloud or local model",
-      actionLabel: "Choose connection",
-    },
-    {
-      ...provider("lmstudio", "LM Studio"),
-      hint: "Connect to a running LM Studio server and use an already loaded model",
-      actionLabel: "Connect server",
-      icon: "https://cdn.simpleicons.org/lmstudio",
-      website: "https://lmstudio.ai/download",
-    },
-    {
-      ...provider("llama-cpp", "llama.cpp"),
-      hint: "Install a verified llama.cpp server and run a private GGUF model managed by OpenClaw",
-      actionLabel: "Set up model",
-    },
-  ],
+  prepareOptions: (
+    [
+      ["ollama", "Ollama", "Choose connection"],
+      ["lmstudio", "LM Studio", "Connect server"],
+      ["llama-cpp", "llama.cpp", "Set up model"],
+    ] as const
+  ).map(([id, label, actionLabel]) =>
+    Object.assign(provider(id, label), { actionLabel, hint: "Local model" }),
+  ),
   recommendedInstalls: [{ ...ollama, hint: "Run open models locally" }],
   workspace: "/tmp/workspace",
   setupComplete: false,
 };
 
-export function props(overrides: Partial<ModelSetupViewProps> = {}): ModelSetupViewProps {
+export function props(overrides: Partial<ViewProps> = {}): ViewProps {
   return {
     detectionIdentity: () => undefined,
     page: { phase: "ready", result: detected },
@@ -106,11 +72,7 @@ export function props(overrides: Partial<ModelSetupViewProps> = {}): ModelSetupV
     manualError: null,
     moreSignInOpen: false,
     firstRun: false,
-    iconUrls: {
-      "https://cdn.example.com/codex.png": "blob:codex",
-      "https://cdn.example.com/openai.png": "blob:openai",
-      "https://cdn.simpleicons.org/ollama": "blob:ollama",
-    },
+    iconUrls: {},
     onDetect: vi.fn(),
     onVerify: vi.fn(),
     onActivateCandidate: vi.fn(),
@@ -131,12 +93,9 @@ export function props(overrides: Partial<ModelSetupViewProps> = {}): ModelSetupV
   };
 }
 
-const roots = new Map<
-  HTMLElement,
-  { update: (view: ModelSetupViewProps) => void; dispose: () => void }
->();
+const roots = new Map<HTMLElement, { update: (view: ViewProps) => void; dispose: () => void }>();
 
-export function renderSetup(view: ModelSetupViewProps, container: HTMLElement): void {
+export function renderSetup(view: ViewProps, container: HTMLElement): void {
   const root = roots.get(container);
   if (root) {
     root.update({ ...view });
@@ -155,9 +114,8 @@ export function disposeViews(): void {
   roots.clear();
 }
 
-export function mount(viewProps: ModelSetupViewProps): HTMLDivElement {
-  const container = document.createElement("div");
-  document.body.append(container);
+export function mount(viewProps: ViewProps): HTMLDivElement {
+  const container = document.body.appendChild(document.createElement("div"));
   renderSetup(viewProps, container);
   return container;
 }

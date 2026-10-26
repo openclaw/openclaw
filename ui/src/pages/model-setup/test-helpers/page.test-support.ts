@@ -69,21 +69,16 @@ export function createContext() {
     subscribeEvents: subscribe,
   } as unknown as ApplicationGateway;
   const runtimeConfig = createRuntimeConfigCapability(gateway);
-  return {
-    client,
-    request,
+  const context = {
+    gateway,
+    agentSelection: selection(),
+    settingsAgentSelection: selection(),
+    basePath: "/openclaw",
+    resourceBasePath: "/openclaw",
+    navigate: vi.fn(),
     runtimeConfig,
-    snapshot,
-    context: {
-      gateway,
-      agentSelection: selection(),
-      settingsAgentSelection: selection(),
-      basePath: "/openclaw",
-      resourceBasePath: "/openclaw",
-      navigate: vi.fn(),
-      runtimeConfig,
-    } as unknown as ApplicationContext,
-  };
+  } as unknown as ApplicationContext;
+  return { client, request, runtimeConfig, snapshot, context };
 }
 
 export async function mountPage(
