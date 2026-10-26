@@ -1,3 +1,4 @@
+import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import { resolveAgentModelFallbackValues, toAgentModelListLike } from "../../config/model-input.js";
@@ -9,6 +10,7 @@ import {
   ensureFlagCompatibility,
   mergePrimaryFallbackConfig,
   modelKey,
+  requireKnownModelProvider,
   resolveModelTarget,
   resolveModelRefsFromEntries,
   upsertCanonicalModelConfigEntry,
@@ -65,7 +67,7 @@ export async function listFallbacksCommand(
   }
   if (opts.plain) {
     for (const entry of fallbacks) {
-      writeRuntimeStdout(runtime, entry);
+      writeRuntimeStdout(runtime, sanitizeTerminalText(entry));
     }
     return;
   }
@@ -76,7 +78,7 @@ export async function listFallbacksCommand(
     return;
   }
   for (const entry of fallbacks) {
-    runtime.log(`- ${entry}`);
+    runtime.log(`- ${sanitizeTerminalText(entry)}`);
   }
 }
 
@@ -88,10 +90,18 @@ export async function changeFallbacksCommand(
   modelRaw: string,
   runtime: RuntimeEnv,
 ) {
+  let warning: string | undefined;
   const updated = await updateConfig(
     (cfg, context) => {
       const { runtimeConfig } = context;
       const resolved = resolveModelTarget({ raw: modelRaw, cfg: runtimeConfig });
+      if (params.action === "add") {
+        warning = requireKnownModelProvider(
+          runtimeConfig,
+          resolved,
+          context.providerRegistryAvailable,
+        ).warning;
+      }
       const nextModels = params.action === "add" ? { ...cfg.agents?.defaults?.models } : undefined;
       const targetKey = nextModels
         ? upsertCanonicalModelConfigEntry(nextModels, resolved, context)
@@ -126,6 +136,9 @@ export async function changeFallbacksCommand(
     ],
   );
 
+  if (warning) {
+    runtime.error?.(warning);
+  }
   logConfigUpdated(runtime);
   runtime.log(`${params.label}: ${getFallbacks(updated, params.key).join(", ")}`);
 }

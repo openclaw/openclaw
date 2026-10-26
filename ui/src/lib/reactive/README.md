@@ -19,34 +19,50 @@ owner notification, including mutations of the same object. Value comparators
 are reserved for immutable values. Do not put mutable snapshots behind
 `Object.is` or copy them into a second writable store.
 
-Pass a new scope object to `replaceSource()` when a connection, agent, session,
+Per-consumer adapters expose `replaceSource()` and `dispose()`. Pass a new scope
+object to `replaceSource()` when a connection, agent, session,
 or query changes. Replacement releases the previous subscription before
 acquiring the new one; stale deliveries cannot update the projection. Do not
 mutate scope objects in place. Creating an adapter under a Solid owner binds its
-disposal to that owner. All adapters also expose idempotent `dispose()` for
+disposal to that owner. These adapters also expose idempotent `dispose()` for
 explicit application, pane, or test lifetimes. Disposal releases observation and
 retains the last read/published reference; it does not deep-freeze owner objects
 or dispose the authoritative owner.
 
-`projectEvents()` preserves synchronous event delivery, duplicates, order, and
-the upstream subscription lifetime. It has no latest-value signal or replay.
-`projectAsyncEvents()` aggregates returned promises for channels that await
-observers, so publisher completion still includes the consumers' work. Channels whose own
-contract replays an admitted value, such as native drafts, retain that behavior.
+Fixed shared adapters expose `read()`, `revision()`, and `subscribe()`. Each
+contract shares one projection per owner and scope across independently mounted
+consumers. They connect lazily on the first tracked read or subscription, release
+the native subscription when the last observer leaves, and read the current owner
+when observation resumes. Consumers cannot replace or dispose a projection shared
+with other views. A scoped child projection can subscribe to the shared adapter
+so invalidating its scope releases observation even if its read is no longer used.
+
+Event consumers subscribe directly to their owners, preserving each channel's
+delivery order, replay behavior, and completion contract.
+
+`observeState(initial)` adapts page-local synchronous request state through the
+same projection contract. Top-level assignments publish automatically; use
+`edit()` for nested changes and `invalidate()` for external owner receipts.
+Reads remain synchronous, and disposal retires notifications without changing
+the state or owning its requests. Existing domain owners still use `projectOwner()`.
+
+For a private leaf owner created with its view, `projectCallbackOwner(create, read)`
+from `callback-owner.ts`
+supplies its sole notification callback and returns `{ owner, view }`. The view
+uses the same lazy observation and disposal contract, without requiring a
+subscription API on the leaf. Retained owners that outlive a view still need a
+rebindable subscription; use `projectOwner` for those lifetimes.
 
 ## Adapter families
 
-| Module                   | Owners                                                                                                                                                                          |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `application.ts`         | Gateway snapshots/events/logs, config, selections, navigation preferences, dock/input, creation metadata, overlays, mentions, attention, scope upgrade, push, placement startup |
-| `application-native.ts`  | Native drafts, conversation presentation, device settings, notifications, Gateway inventory                                                                                     |
-| `domain-capabilities.ts` | Agents, identity, roster activity, channels, runtime config, sessions and managed list queries                                                                                  |
-| `domain-keyed.ts`        | Projects, progress cards, pull requests, stored outbox reads                                                                                                                    |
-| `domain-board.ts`        | Board value/event sources, existing providers, shared scoped provider leases                                                                                                    |
-| `registries.ts`          | Model catalog, chat metadata, MCP contexts, chat work, plugin help, palette preferences                                                                                         |
-| `events.ts`              | Boot retirement, HTTP failure/auth restoration, outbox/draft/attention changes, snapshot invalidation, initial handoff, activation clearing, picker confirmations               |
-| `events-browser.ts`      | Browser history, native browser state, native occlusion, lobster visits, transcript scroll events                                                                               |
-| `router.ts`              | Router state, with loaders and route retirement left in the router                                                                                                              |
+| Module                              | Owners                                                                            |
+| ----------------------------------- | --------------------------------------------------------------------------------- |
+| `application.ts`                    | Gateway snapshots, config, agent selection, overlays                              |
+| `application-native.ts`             | Native device settings                                                            |
+| `domain-capabilities.ts`            | Per-consumer agents, channels, runtime config, session lists                      |
+| `shared-application-projections.ts` | Shared agents, identity, runtime config, profiles, theme, sessions, pull requests |
+| `session-progress-roster.ts`        | Shared progress roster by session capability and agent                            |
+| `events-browser.ts`                 | Lobster visits                                                                    |
 
 `projectTheme()` exposes preference and applied-palette projections separately.
 Preferences change immediately; `appliedPalette` advances only after the theme
@@ -56,19 +72,44 @@ loads or applies CSS itself.
 
 Solid consumers import `t` from `lib/reactive/i18n.ts` and keep the call shape
 `t("key", params)`. It reads a locale/catalog revision through `projectI18n()`.
-The existing Lit translator and English registrars are unchanged. Locale loading,
-fallback, persistence, and stale-load rejection stay in the i18n manager. Solid
-consumers call `registerEnglishCatalog(registerPageEnglish)` before reading that
-page's lazy keys, and use `registerLocaleCatalog(manager, locale, catalog)` for
-catalog replacement. These delegate to the existing owners and notify only the
-Solid projections; repeated English registration does not trigger render loops.
-Calling a legacy registrar directly does not notify Solid readers.
+Locale loading, fallback, persistence, and stale-load rejection stay in the i18n
+manager. Solid consumers call `registerEnglishCatalog(registerPageEnglish)`
+before reading that page's lazy keys. This delegates to the existing owner and
+notifies the Solid projections; repeated English registration does not trigger
+render loops. Calling a legacy registrar directly does not notify Solid readers.
 
 `ApplicationContext` and its supporting types live in `app/context-types.ts`.
-`app/context.ts` retains the Lit token during migration. Solid callers use
-`ApplicationProvider` and `useApplication()` from `context.ts` in this directory;
-both renderers receive the same capability object. Providers do not assume
-ownership of those capabilities.
+`app/context.ts` defines the native context-request token. Solid callers use
+`ApplicationProvider` and `useApplication()` from `context.ts` in this directory.
+Native hosts request the same capability object through the DOM context
+transport. Providers do not assume ownership of those capabilities.
 
 These foundations do not mount new product UI. The tests exercise real owner
 publication paths plus shared subscription, replacement, and disposal contracts.
+
+## Retained Solid panes
+
+`createParkedProjection(read, presented)` keeps the last presentation while a
+mounted pane is hidden. It stops reading its source and drops those reactive
+dependencies until reveal, then reads the current owner once. A first hidden
+mount reads once without subscribing so the retained DOM can be initialized.
+Return immutable presentation values from `read`: parking does not clone or
+freeze mutable domain objects. Project their displayed fields rather than
+holding a mutable object and reading its fields directly from JSX.
+
+The chat pane reads domain projections and projected presentation fields through
+`createParkedProjection`. Synchronous owner mutations publish those values;
+the pane has no generic redraw callback. Its `updateComplete` getter observes
+pending DOM work, while `awaitDomCommit()` explicitly fences pane-level focus and
+layout tasks without rendering an unchanged pane. Parked tasks wait for reveal
+or disposal. The stream owner still controls publication cadence.
+
+Imperative transcript and detail-panel islands use `createSolidRenderLifecycle`
+in `pages/chat/solid-render-lifecycle.ts`. It wraps this projection in a `snapshot`
+accessor and exposes `invalidate()` for their synchronous mutations. Their
+`afterCommit` requests a new generation and runs in Solid's split-effect apply
+phase, after DOM bindings. Requests made from a callback wait for the following
+generation. ResizeObserver, child custom elements, images, and overlay animations
+retain their own settlement contracts. The method owns returned cleanup until the
+callback calls `complete`, is cancelled, the pane parks, or the owner disposes.
+Pending callbacks wait through parking; disposal cancels them.

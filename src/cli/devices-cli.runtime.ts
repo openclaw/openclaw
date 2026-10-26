@@ -47,10 +47,10 @@ import {
 } from "./devices-cli-fallback.js";
 import { ExpectedCliError } from "./failure-output.js";
 import { callGatewayFromCliWithTransport } from "./gateway-rpc.js";
+import { prepareCliGatewayStateAccess } from "./gateway-rpc.runtime.js";
 import { runWithLocalStateOwner } from "./local-state-owner.js";
 import { formatConnectionFlagReminder } from "./nodes-cli/cli-utils.js";
 import { formatPairingApproveCommand } from "./pairing-command-format.js";
-import { quoteCliArg } from "./quote-cli-arg.js";
 
 type DevicesRpcOpts = {
   url?: string;
@@ -187,6 +187,7 @@ async function listPairingWithFallback(opts: DevicesRpcOpts): Promise<DevicePair
     if (!fallback) {
       throw error;
     }
+    await prepareCliGatewayStateAccess();
     const local = await listDevicePairing();
     const list = {
       pending: local.pending as PendingDevice[],
@@ -240,6 +241,7 @@ async function approvePairingWithFallback(
       method: "device.pair.approve",
       params: { requestId },
       target: requestId,
+      databaseEngine: "configured",
       onForeignOwner: "refuse",
       runLocal: async ({ env, assertCurrent }) => {
         const gatewayRequestId = normalizeOptionalString(fallback.details.requestId);
@@ -497,31 +499,6 @@ async function resolveTokenManagementScopes(
   );
 }
 
-async function resolveApprovePairingGatewayContext(
-  opts: DevicesRpcOpts,
-  requestId: string,
-): Promise<ApprovePairingGatewayContext> {
-  try {
-    const list = await listPairingWithFallback(opts);
-    const request = findPendingRequestById(list.pending, requestId);
-    if (!request) {
-      return { originalRequest: null, pairingList: list, scopes: undefined };
-    }
-    return {
-      originalRequest: request,
-      pairingList: list,
-      scopes: resolvePairingCallScopes(
-        resolvePendingOperatorApprovalScopes(
-          request,
-          lookupPairedDevice(indexPairedDevices(list.paired), request),
-        ),
-      ),
-    };
-  } catch {
-    return { originalRequest: null, pairingList: null, scopes: undefined };
-  }
-}
-
 function selectLatestPendingRequest(pending: PendingDevice[] | undefined) {
   if (!pending?.length) {
     return null;
@@ -612,20 +589,6 @@ function lookupPairedDevice(
   return paired;
 }
 
-function formatAuthFlagReminder(opts: DevicesRpcOpts): string {
-  const flags: string[] = [];
-  if (normalizeOptionalString(opts.token)) {
-    flags.push("--token");
-  }
-  if (normalizeOptionalString(opts.password)) {
-    flags.push("--password");
-  }
-  if (flags.length === 0) {
-    return "";
-  }
-  return `Reuse the same ${flags.join("/")} option${flags.length === 1 ? "" : "s"} when rerunning.`;
-}
-
 function failDevicesCommand(json: boolean | undefined, ...lines: string[]): void {
   // Throw JSON refusals to the root failure handler so stdout gets its one error document.
   if (json) {
@@ -636,22 +599,6 @@ function failDevicesCommand(json: boolean | undefined, ...lines: string[]): void
     defaultRuntime.error(line);
   }
   defaultRuntime.exit(1);
-}
-
-function resolveRequiredDeviceRole(
-  opts: DevicesRpcOpts,
-): { deviceId: string; role: string } | null {
-  const deviceId = normalizeStringifiedOptionalString(opts.device) ?? "";
-  const role = normalizeStringifiedOptionalString(opts.role) ?? "";
-  if (deviceId && role) {
-    return { deviceId, role };
-  }
-  // Token commands always return JSON, including when --json is omitted.
-  failDevicesCommand(
-    true,
-    `--device and --role are required. Run ${formatCliCommand("openclaw devices list")} to choose a paired device.`,
-  );
-  return null;
 }
 
 export async function runDevicesListCommand(opts: DevicesRpcOpts): Promise<void> {
@@ -754,30 +701,6 @@ export async function runDevicesListCommand(opts: DevicesRpcOpts): Promise<void>
   }
 }
 
-export async function runDevicesJoinCodeCommand(opts: DevicesRpcOpts): Promise<void> {
-  const result = await callGatewayCli(
-    "device.pair.setupCode",
-    opts,
-    {
-      bootstrapProfile: "node",
-      includeQr: false,
-      joinUrl: true,
-    },
-    { scopes: [ADMIN_SCOPE] },
-  );
-  const joinUrl = normalizeOptionalString((result as { joinUrl?: unknown }).joinUrl);
-  if (!joinUrl) {
-    throw new Error("Gateway did not return a device join URL.");
-  }
-  const command = `npx openclaw connect ${quoteCliArg(joinUrl)}`;
-  if (opts.json) {
-    defaultRuntime.writeJson({ joinUrl, command });
-    return;
-  }
-  defaultRuntime.log(joinUrl);
-  defaultRuntime.log(command);
-}
-
 export async function runDevicesDeleteCommand(
   operation: "remove" | "reject",
   id: string,
@@ -872,7 +795,17 @@ export async function runDevicesApproveCommand(
       lookupPairedDevice(indexPairedDevices(pairingList?.paired), req),
     );
     const approveCommand = formatPairingApproveCommand("devices", req.requestId, opts);
-    const authReminder = formatAuthFlagReminder(opts);
+    const flags: string[] = [];
+    if (normalizeOptionalString(opts.token)) {
+      flags.push("--token");
+    }
+    if (normalizeOptionalString(opts.password)) {
+      flags.push("--password");
+    }
+    const authReminder =
+      flags.length === 0
+        ? ""
+        : `Reuse the same ${flags.join("/")} option${flags.length === 1 ? "" : "s"} when rerunning.`;
     if (opts.json) {
       defaultRuntime.writeJson({
         selected: req,
@@ -910,7 +843,25 @@ export async function runDevicesApproveCommand(
     return;
   }
   let result: Record<string, unknown> | null;
-  const approvalContext = await resolveApprovePairingGatewayContext(opts, resolvedRequestId);
+  let approvalContext: ApprovePairingGatewayContext;
+  try {
+    const list = await listPairingWithFallback(opts);
+    const request = findPendingRequestById(list.pending, resolvedRequestId);
+    approvalContext = {
+      originalRequest: request,
+      pairingList: list,
+      scopes: request
+        ? resolvePairingCallScopes(
+            resolvePendingOperatorApprovalScopes(
+              request,
+              lookupPairedDevice(indexPairedDevices(list.paired), request),
+            ),
+          )
+        : undefined,
+    };
+  } catch {
+    approvalContext = { originalRequest: null, pairingList: null, scopes: undefined };
+  }
   try {
     result = await approvePairingWithFallback(opts, resolvedRequestId, approvalContext);
   } catch (error) {
@@ -973,10 +924,17 @@ export async function runDevicesTokenCommand(
   operation: "rotate" | "revoke",
   opts: DevicesRpcOpts,
 ): Promise<void> {
-  const required = resolveRequiredDeviceRole(opts);
-  if (!required) {
+  const deviceId = normalizeStringifiedOptionalString(opts.device) ?? "";
+  const role = normalizeStringifiedOptionalString(opts.role) ?? "";
+  if (!deviceId || !role) {
+    // Token commands always return JSON, including when --json is omitted.
+    failDevicesCommand(
+      true,
+      `--device and --role are required. Run ${formatCliCommand("openclaw devices list")} to choose a paired device.`,
+    );
     return;
   }
+  const required = { deviceId, role };
   const requestedScopes =
     operation === "rotate" ? (opts.scopes === false ? [] : opts.scope) : undefined;
   const params = operation === "rotate" ? { ...required, scopes: requestedScopes } : required;

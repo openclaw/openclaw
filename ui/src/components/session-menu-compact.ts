@@ -1,6 +1,3 @@
-import { html, nothing, type TemplateResult } from "lit";
-import { t } from "../i18n/index.ts";
-import { icons } from "./icons.ts";
 import "../styles/session-menu-compact.css";
 
 export type CompactSessionMenuView =
@@ -11,12 +8,12 @@ export type CompactSessionMenuView =
   | "icon"
   | "group"
   | "snooze"
-  | "settings";
+  | "advanced";
 
 const COMPACT_SESSION_MENU_VIEW_BY_VALUE: Record<string, CompactSessionMenuView> = {
   "compact:back": "root",
-  "compact:open-settings": "settings",
-  "compact:back-settings": "settings",
+  "compact:open-advanced": "advanced",
+  "compact:back-advanced": "advanced",
   "compact:open-copy": "copy",
   "compact:open-snooze": "snooze",
   "compact:open-assign-owner": "assign-owner",
@@ -27,54 +24,4 @@ const COMPACT_SESSION_MENU_VIEW_BY_VALUE: Record<string, CompactSessionMenuView>
 
 export function compactSessionMenuViewForValue(value: string): CompactSessionMenuView | null {
   return COMPACT_SESSION_MENU_VIEW_BY_VALUE[value] ?? null;
-}
-
-export function renderCompactSessionMenuNavigationItem(params: {
-  value: string;
-  label: string;
-  icon: TemplateResult;
-  details?: TemplateResult;
-  accessibleLabel?: string;
-  disabled?: boolean;
-  title?: string;
-}) {
-  return html`
-    <wa-dropdown-item
-      class=${`session-menu__item${params.details ? " session-menu__item--compact-details" : ""}`}
-      value=${params.value}
-      aria-label=${params.accessibleLabel ?? nothing}
-      ?disabled=${params.disabled ?? false}
-      title=${params.title ?? nothing}
-    >
-      <span slot="icon" class="session-menu__icon" aria-hidden="true">${params.icon}</span>
-      <span class="session-menu__text">${params.label}</span>
-      ${
-        params.details
-          ? html`<span class="session-menu__compact-details" aria-hidden="true"
-              >${params.details}</span
-            >`
-          : nothing
-      }
-      <span slot="details" class="session-menu__icon session-menu__chevron" aria-hidden="true"
-        >${icons.chevronRight}</span
-      >
-    </wa-dropdown-item>
-  `;
-}
-
-export function renderCompactSessionMenuFrame(
-  body: TemplateResult | readonly TemplateResult[],
-  parent: "root" | "settings" = "root",
-) {
-  return html`
-    <wa-dropdown-item
-      class="session-menu__item session-menu__back"
-      value=${parent === "settings" ? "compact:back-settings" : "compact:back"}
-    >
-      <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.arrowLeft}</span>
-      <span class="session-menu__text">${t("common.back")}</span>
-    </wa-dropdown-item>
-    <div class="session-menu__separator" role="separator"></div>
-    ${body}
-  `;
 }

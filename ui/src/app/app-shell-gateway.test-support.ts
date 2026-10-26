@@ -1,7 +1,8 @@
-import { expect, vi } from "vitest";
+import { expect, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import { createChatPageSessions } from "../pages/chat/chat-page.test-support.ts";
+import { createConfigCapabilityHarness } from "../lib/config/config-test-harness.ts";
+import { createChatPageSessions } from "../pages/chat/chat-page-sessions.test-support.ts";
 import { createShellConfigFixture } from "./app-host.test-support.ts";
 import { ShellGatewayOwner, type ShellGatewayHost } from "./app-shell-gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "./context.ts";
@@ -11,9 +12,10 @@ export function createProfileAppearanceGateway(profileId: string | null) {
   let requestStarted = createDeferred();
   const request = vi.fn(
     () =>
-      new Promise<{ status: string; entries: { "ui.accent": string } }>((resolve) => {
+      new Promise<ProfileAppearanceReply>((resolve) => {
         pendingResponses.push((accent) =>
-          resolve({ status: "ok", entries: { "ui.accent": accent } }),
+          // Existing personal navigation keeps this appearance fixture out of legacy inventory.
+          resolve(profileAppearanceReply(accent)),
         );
         requestStarted.resolve();
       }),
@@ -30,7 +32,7 @@ export function createProfileAppearanceGateway(profileId: string | null) {
     hello: { auth: { role: "operator", scopes: ["operator.write"] } },
   } as ApplicationGatewaySnapshot;
   const refreshTheme = vi.fn();
-  const requestUpdate = vi.fn();
+  const invalidate = vi.fn();
   const connectionBootstrap = {
     reset: vi.fn(),
     run: (_key: string, task: () => Promise<unknown>) => task(),
@@ -46,7 +48,8 @@ export function createProfileAppearanceGateway(profileId: string | null) {
     sessions: createChatPageSessions(),
     runtimeConfig: {
       canPatch: false,
-      ensureLoaded: vi.fn(async () => undefined),
+      ensureDisplayLoaded: vi.fn(async () => undefined),
+      refreshDisplay: vi.fn(async () => undefined),
       runExternalMutation: vi.fn(),
       state: {
         client,
@@ -61,10 +64,12 @@ export function createProfileAppearanceGateway(profileId: string | null) {
     activeSessionKey: "",
     lastLocalePrefSignature: null,
     outboxStoreImport: { load: vi.fn(async () => undefined) },
-    recoverDeletedActiveSession: vi.fn(),
-    requestUpdate,
+    shellNavigation: { recoverDeletedActiveSession: vi.fn() },
+    invalidate,
     routeState: {},
   } as unknown as ShellGatewayHost;
+  const owner = new ShellGatewayOwner(host);
+  onTestFinished(() => owner.reset());
   return {
     async completeProfileAppearance(this: void, accent = "#336699") {
       // The first request follows a lazy import; synchronize on its arrival, not loader speed.
@@ -83,10 +88,38 @@ export function createProfileAppearanceGateway(profileId: string | null) {
     },
     context,
     host,
-    owner: new ShellGatewayOwner(host),
+    owner,
     refreshTheme,
-    requestUpdate,
+    invalidate,
     request,
     snapshot,
   };
+}
+
+export function createShellConfig(request: Parameters<typeof createConfigCapabilityHarness>[0]) {
+  const harness = createConfigCapabilityHarness(request);
+  const { context, owner } = createProfileAppearanceGateway(null);
+  Object.assign(context, { runtimeConfig: harness.runtimeConfig });
+  return { ...harness, context, owner };
+}
+
+export function holdProfileAppearanceRead(
+  request: ReturnType<typeof createProfileAppearanceGateway>["request"],
+) {
+  const readStarted = createDeferred();
+  const reply = createDeferred<ProfileAppearanceReply>();
+  request.mockImplementationOnce(() => {
+    readStarted.resolve();
+    return reply.promise;
+  });
+  return { readStarted, reply };
+}
+
+type ProfileAppearanceReply = {
+  status: string;
+  entries: { "ui.accent": string; "ui.railShortcuts": string[] };
+};
+
+export function profileAppearanceReply(accent: string): ProfileAppearanceReply {
+  return { status: "ok", entries: { "ui.accent": accent, "ui.railShortcuts": [] } };
 }

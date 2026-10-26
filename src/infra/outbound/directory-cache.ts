@@ -1,6 +1,7 @@
 import { resolveNonNegativeIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import type { ChannelDirectoryEntryKind, ChannelId } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { getOrCreateWeakOwnerMap } from "../../shared/weak-owner-map.js";
 import { pruneMapToMaxSize } from "../map-size.js";
 
 type CacheEntry<T> = {
@@ -33,13 +34,13 @@ export class DirectoryCache<T> {
   }
 
   get(key: string, cfg: OpenClawConfig): T | undefined {
-    const cache = this.cacheForConfig(cfg);
+    const cache = getOrCreateWeakOwnerMap(this.cachesByConfig, cfg);
     this.pruneExpired(cache, Date.now());
     return cache.get(key)?.value;
   }
 
   set(key: string, value: T, cfg: OpenClawConfig): void {
-    const cache = this.cacheForConfig(cfg);
+    const cache = getOrCreateWeakOwnerMap(this.cachesByConfig, cfg);
     const now = Date.now();
     this.pruneExpired(cache, now);
     // Refresh insertion order so active keys are less likely to be evicted.
@@ -62,15 +63,6 @@ export class DirectoryCache<T> {
 
   clear(): void {
     this.cachesByConfig = new WeakMap();
-  }
-
-  private cacheForConfig(cfg: OpenClawConfig): Map<string, CacheEntry<T>> {
-    let cache = this.cachesByConfig.get(cfg);
-    if (!cache) {
-      cache = new Map();
-      this.cachesByConfig.set(cfg, cache);
-    }
-    return cache;
   }
 
   private pruneExpired(cache: Map<string, CacheEntry<T>>, now: number): void {

@@ -188,24 +188,23 @@ export async function sendGatewayConversationMessage(params: {
     if (action.handledBy !== "core" || !action.sendResult) {
       throw new Error("Conversation delivery did not return a core platform send result");
     }
-    const messageId = readMessageIdFromActionResult(action);
-    if (action.sendResult.deliveryStatus === "suppressed") {
-      const operation = await markConversationDeliverySuppressed(scope, record.operationId);
-      return { deliveryStatus: "suppressed", operation };
+    const deliveryStatus = action.sendResult.deliveryStatus;
+    const operation =
+      deliveryStatus === "suppressed"
+        ? await markConversationDeliverySuppressed(scope, record.operationId)
+        : deliveryStatus === "sent"
+          ? await markConversationDeliverySent(
+              scope,
+              record.operationId,
+              readMessageIdFromActionResult(action),
+            )
+          : undefined;
+    // Queue settlement may already own a terminal outcome that the transition preserves.
+    const completed = operation ? resultFromExistingOperation(operation) : undefined;
+    if (completed) {
+      return completed;
     }
-    if (action.sendResult.deliveryStatus !== "sent") {
-      throw new Error(
-        `Conversation delivery was not confirmed (${action.sendResult.deliveryStatus ?? "unknown"})`,
-      );
-    }
-    const operation = await markConversationDeliverySent(scope, record.operationId, messageId);
-    const confirmedMessageId =
-      messageId ?? operation.platformMessageId ?? operation.preparedMessageId;
-    return {
-      deliveryStatus: "sent",
-      operation,
-      ...(confirmedMessageId ? { messageId: confirmedMessageId } : {}),
-    };
+    throw new Error(`Conversation delivery was not confirmed (${deliveryStatus ?? "unknown"})`);
   } catch (error) {
     // Queue settlement may have committed before the sender observed an error.
     const persisted = resultFromExistingOperation(await readAuthoritativeOperation());

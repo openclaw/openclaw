@@ -25,6 +25,7 @@ import {
   type SessionSqliteMigrationMove,
   type SessionSqliteMigrationMoveKind,
 } from "../infra/session-sqlite-migration-manifest.js";
+import { groupPluginRecords as groupRecords } from "../plugins/record-groups.js";
 import type { gatherLegacyArchiveCoverage } from "./doctor-session-sqlite-discovery.js";
 import {
   countBlockingSessionSqliteIssues,
@@ -118,11 +119,7 @@ export async function archiveImportedLegacySessionStores(
   assertCurrent?: () => void,
   publishSourceRemoval?: (remove: () => void, retainSource: () => void) => void,
 ): Promise<void> {
-  const byStore = new Map<string, LegacyArchiveTarget[]>();
-  for (const owner of owners) {
-    const storePath = owner.target.storePath;
-    byStore.set(storePath, [...(byStore.get(storePath) ?? []), owner]);
-  }
+  const byStore = groupRecords(owners, (owner) => owner.target.storePath);
   for (const [storePath, entries] of byStore) {
     assertCurrent?.();
     // A historical-only target may never have had an index; losing an admitted index is a failure.

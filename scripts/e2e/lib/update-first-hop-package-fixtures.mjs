@@ -12,7 +12,10 @@ import {
   PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH,
   parsePackageDistContentInventory,
 } from "../../lib/package-dist-inventory-contract.mts";
-import { isUpdateCompatibilityChunk } from "../../lib/update-compat-contract.mjs";
+import {
+  isUpdateCompatibilityChunk,
+  supportsUpdateSchemas,
+} from "../../lib/update-compat-contract.mjs";
 import { readJson } from "./fixtures/common.mjs";
 
 // Frozen candidates predating the recorded inventory retain their original fixture contract.
@@ -22,8 +25,16 @@ export const LEGACY_UPDATE_COMPAT_CHUNKS = [
   "shared-DFJEouXv.js",
 ];
 
+// Candidates through 2026.10.5-beta.1 packed their inventory; later candidates leave it
+// in the source tree, which this harness checkout carries as release tooling.
+const PACKED_UPDATE_COMPAT_INVENTORY = path.join("dist", "update-compat-inventory.json");
+const HARNESS_UPDATE_COMPAT_INVENTORY = fileURLToPath(
+  new URL("../../lib/update-compat-inventory.json", import.meta.url),
+);
+
 function readFirstHopReleases(packageRoot) {
-  const inventoryPath = path.join(packageRoot, "dist", "update-compat-inventory.json");
+  const packedPath = path.join(packageRoot, PACKED_UPDATE_COMPAT_INVENTORY);
+  const inventoryPath = fs.existsSync(packedPath) ? packedPath : HARNESS_UPDATE_COMPAT_INVENTORY;
   if (!fs.existsSync(inventoryPath)) {
     return [];
   }
@@ -35,9 +46,13 @@ function readFirstHopReleases(packageRoot) {
 }
 
 export function listFirstHopSourceVersions(packageRoot, filter = "") {
-  const versions = readFirstHopReleases(packageRoot).map((release) => release.version);
+  const releases = readFirstHopReleases(packageRoot);
+  const target = readJson(path.join(packageRoot, "package.json")).openclaw?.schemaVersions;
+  const versions = releases
+    .filter((release) => supportsUpdateSchemas(release.schemaVersions, target))
+    .map((release) => release.version);
   if (
-    versions.length === 0 ||
+    releases.length === 0 ||
     new Set(versions).size !== versions.length ||
     versions.some(
       (version) =>
@@ -49,8 +64,9 @@ export function listFirstHopSourceVersions(packageRoot, filter = "") {
   const selected = filter.split(/[\s,]+/u).filter(Boolean);
   const unrecorded = selected.filter((version) => !versions.includes(version));
   if (unrecorded.length > 0) {
+    const recorded = releases.some((release) => unrecorded.includes(release.version));
     throw new Error(
-      `first-hop sources are not recorded in the candidate: ${unrecorded.join(", ")}`,
+      `first-hop sources are ${recorded ? "unsupported by" : "not recorded in"} the candidate: ${unrecorded.join(", ")}`,
     );
   }
   return selected.length > 0 ? versions.filter((version) => selected.includes(version)) : versions;
@@ -152,13 +168,9 @@ export function removeLegacyUpdateCompatChunks(packageRoot, expectedMissingChunk
     throw new Error("package fixture inventory is not a string array");
   }
 
-  const compatibilityPath = path.join(paths.root, "dist", "update-compat-inventory.json");
-  const hasRecordedCompatibility = fs.existsSync(compatibilityPath);
-  const recordedChunks = hasRecordedCompatibility
-    ? readJson(compatibilityPath).releases.flatMap((release) =>
-        release.chunks.map((chunk) => chunk.path),
-      )
-    : [];
+  const recordedChunks = readFirstHopReleases(paths.root).flatMap((release) =>
+    (release.chunks ?? []).map((chunk) => chunk.path),
+  );
   if (
     recordedChunks.some(
       (name) =>
@@ -180,18 +192,22 @@ export function removeLegacyUpdateCompatChunks(packageRoot, expectedMissingChunk
       throw new Error("package fixture expected missing chunk has an invalid path");
     }
   }
+  // Harness records may name chunks this candidate never built; only its own bridges count.
+  const bridges = recordedChunks.filter((name) => {
+    const filePath = path.join(paths.root, "dist", name);
+    return (
+      /-[A-Za-z0-9_-]{8}\.m?js$/.test(name) &&
+      fs.existsSync(filePath) &&
+      isUpdateCompatibilityChunk(fs.readFileSync(filePath, "utf8"))
+    );
+  });
+  const hasRecordedCompatibility =
+    fs.existsSync(path.join(paths.root, PACKED_UPDATE_COMPAT_INVENTORY)) || bridges.length > 0;
   const chunks = new Set(
     expectedMissingChunk
       ? [expectedMissingChunk]
       : hasRecordedCompatibility
-        ? recordedChunks.filter((name) => {
-            if (!/-[A-Za-z0-9_-]{8}\.m?js$/.test(name)) {
-              return false;
-            }
-            return isUpdateCompatibilityChunk(
-              fs.readFileSync(path.join(paths.root, "dist", name), "utf8"),
-            );
-          })
+        ? bridges
         : LEGACY_UPDATE_COMPAT_CHUNKS,
   );
   const removed = [];
@@ -377,30 +393,38 @@ export function packUnsupportedAdmissionFixture(candidateTarball, outputTarball,
   };
 }
 
-function packFutureRuntimeFixture(candidateTarball, outputTarball, sequence = 0) {
+function packFuturePluginFixture(candidateTarball, outputTarball, sequence = 0, expectedName = "") {
+  const receipt = packTransformedFixture(candidateTarball, outputTarball, (root, sourceVersion) => {
+    const version = futureFixtureVersion(sourceVersion, sequence);
+    const manifestPath = path.join(root, "package.json");
+    const manifest = readJson(manifestPath);
+    if (
+      typeof manifest.name !== "string" ||
+      !manifest.name.startsWith("@openclaw/") ||
+      (expectedName && manifest.name !== expectedName)
+    ) {
+      throw new Error("future plugin fixture requires " + (expectedName || "an @openclaw package"));
+    }
+    if (
+      typeof manifest.version !== "string" ||
+      !/^\d{4}\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[a-z0-9]+(?:[.-][a-z0-9]+)*)?$/iu.test(
+        manifest.version,
+      ) ||
+      manifest.openclaw?.build?.openclawVersion !== sourceVersion
+    ) {
+      throw new Error("plugin package version and OpenClaw build cohort must match");
+    }
+    manifest.version = version;
+    manifest.openclaw.build.openclawVersion = version;
+    writeJson(manifestPath, manifest);
+    return { name: manifest.name };
+  });
   return {
-    method: "candidate-same-schema-runtime-fixture",
-    name: "@openclaw/codex",
-    ...packTransformedFixture(candidateTarball, outputTarball, (root, sourceVersion) => {
-      const version = futureFixtureVersion(sourceVersion, sequence);
-      const manifestPath = path.join(root, "package.json");
-      const manifest = readJson(manifestPath);
-      if (manifest.name !== "@openclaw/codex") {
-        throw new Error("future runtime fixture requires the @openclaw/codex package");
-      }
-      if (
-        typeof manifest.version !== "string" ||
-        !/^\d{4}\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[a-z0-9]+(?:[.-][a-z0-9]+)*)?$/iu.test(
-          manifest.version,
-        ) ||
-        manifest.openclaw?.build?.openclawVersion !== manifest.version
-      ) {
-        throw new Error("runtime package version and OpenClaw build cohort must match");
-      }
-      manifest.version = version;
-      manifest.openclaw.build.openclawVersion = version;
-      writeJson(manifestPath, manifest);
-    }),
+    method:
+      receipt.name === "@openclaw/codex"
+        ? "candidate-same-schema-runtime-fixture"
+        : "candidate-same-schema-plugin-fixture",
+    ...receipt,
   };
 }
 
@@ -448,7 +472,11 @@ function main() {
     "negative-tarball": packNegativeUpdateFixture,
     "future-tarball": packFutureUpdateFixture,
     "unsupported-admission-tarball": packUnsupportedAdmissionFixture,
-    "future-runtime-tarball": packFutureRuntimeFixture,
+    "future-plugin-tarball": packFuturePluginFixture,
+    // The v2026.9.7 extended-stable survivor calls this mode against trusted tooling.
+    // Retire the alias with that frozen lane, retaining its Codex-only identity check.
+    "future-runtime-tarball": (source, output, fixtureSequence) =>
+      packFuturePluginFixture(source, output, fixtureSequence, "@openclaw/codex"),
   };
   if (Object.hasOwn(packers, mode) && packageRoot && outputTarball) {
     const fixtureArg =
@@ -464,7 +492,7 @@ function main() {
   }
   if (!packageRoot || (mode !== "negative" && mode !== "future")) {
     throw new Error(
-      "usage: update-first-hop-package-fixtures.mjs pack-filename <npm-pack.json> OR <negative|future> <package-root> OR <first-hop-tarball|negative-tarball|future-tarball|unsupported-admission-tarball|future-runtime-tarball> <source.tgz> <new-output.tgz> [sequence0–9]",
+      "usage: update-first-hop-package-fixtures.mjs pack-filename <npm-pack.json> OR <negative|future> <package-root> OR <first-hop-tarball|negative-tarball|future-tarball|unsupported-admission-tarball|future-plugin-tarball|future-runtime-tarball> <source.tgz> <new-output.tgz> [sequence0–9]",
     );
   }
   if (mode === "negative") {

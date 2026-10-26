@@ -25,10 +25,7 @@ import {
   type SessionsDirFileStat,
 } from "./disk-budget-files.js";
 import { measureSessionPhysicalDiskUsage } from "./disk-budget-runtime.js";
-import type {
-  SessionDiskBudgetSweepResult,
-  SessionUnreferencedArtifactSweepResult,
-} from "./disk-budget.types.js";
+import type { SessionUnreferencedArtifactSweepResult } from "./disk-budget.types.js";
 import { readLegacyCompactionSnapshotPaths } from "./legacy-compaction-history.js";
 import { resolveSessionArtifactDirectory, resolveSessionFilePathCore } from "./paths.js";
 import type { SqliteSessionArchivePruningDiagnostics } from "./session-accessor.sqlite-contract.js";
@@ -280,7 +277,7 @@ async function removePromptBlobFileForBudget(params: {
 }
 
 export async function pruneUnreferencedSessionArtifacts(params: {
-  store: Record<string, SessionEntry>;
+  store: Record<string, SessionEntry> | (() => Promise<Record<string, SessionEntry>>);
   storePath: string;
   olderThanMs: number;
   dryRun?: boolean;
@@ -291,6 +288,10 @@ export async function pruneUnreferencedSessionArtifacts(params: {
   const sessionsDir = resolveSessionArtifactDirectory(params.storePath);
   const files = await readSessionsDirFiles(sessionsDir);
   const promptBlobFiles = await readSessionPromptBlobFiles(sessionsDir);
+  if (files.length === 0 && promptBlobFiles.length === 0) {
+    return { scannedFiles: 0, removedFiles: 0, freedBytes: 0, olderThanMs };
+  }
+  const store = typeof params.store === "function" ? await params.store() : params.store;
   const fileSizesByPath = new Map(
     [...files, ...promptBlobFiles].map((file) => [file.canonicalPath, file.size]),
   );
@@ -304,7 +305,7 @@ export async function pruneUnreferencedSessionArtifacts(params: {
       (file) => file.mtimeMs <= cutoffMs && !params.excludeCanonicalPaths?.has(file.canonicalPath),
     ),
     sessionsDir,
-    store: params.store,
+    store,
   });
   // Prompt refs are projected through the persistence layer so inline snapshots and externalized
   // prompt blobs are judged against the bytes that would actually hit disk.
@@ -313,7 +314,7 @@ export async function pruneUnreferencedSessionArtifacts(params: {
       ? buildSessionEntryRefCounts(
           projectSessionStoreForPersistence({
             storePath: params.storePath,
-            store: params.store,
+            store,
           }).store,
           resolveProjectedPromptBlobHash,
         )
@@ -392,11 +393,11 @@ export async function enforceSessionDiskBudget(params: {
   warnOnly: boolean;
   log?: SessionDiskBudgetLogger;
   commitEvictedIndex?: () => Promise<void>;
-}): Promise<SessionDiskBudgetSweepResult | null> {
+}): Promise<void> {
   const maxBytes = params.maintenance.maxDiskBytes;
   const highWaterBytes = params.maintenance.highWaterBytes;
   if (maxBytes == null || highWaterBytes == null) {
-    return null;
+    return;
   }
   const log = params.log;
   const sessionsDir = resolveSessionArtifactDirectory(params.storePath);
@@ -449,25 +450,14 @@ export async function enforceSessionDiskBudget(params: {
         highWaterBytes,
       });
     }
-    return {
-      totalBytesBefore: totalBefore,
-      totalBytesAfter: total,
-      removedFiles: 0,
-      removedEntries: 0,
-      freedBytes: 0,
-      maxBytes,
-      highWaterBytes,
-      overBudget,
-    };
+    return;
   }
 
   let removedFiles = 0;
   let removedEntries = 0;
-  let freedBytes = 0;
   const recordRemoval = (removal: FileRemovalResult) => {
     if (removal.ok) {
       total -= removal.value;
-      freedBytes += removal.value;
       removedFiles += 1;
     }
   };
@@ -649,15 +639,4 @@ export async function enforceSessionDiskBudget(params: {
       removedEntries,
     });
   }
-
-  return {
-    totalBytesBefore: totalBefore,
-    totalBytesAfter: total,
-    removedFiles,
-    removedEntries,
-    freedBytes,
-    maxBytes,
-    highWaterBytes,
-    overBudget: true,
-  };
 }

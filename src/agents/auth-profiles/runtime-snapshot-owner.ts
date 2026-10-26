@@ -6,6 +6,7 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import { cloneAuthProfileStore } from "./clone.js";
 import { AUTH_STORE_VERSION } from "./constants.js";
 import { observeCanonicalAuthProfileCredentials } from "./credential-observation.js";
+import { admitAuthProfileLegacySources } from "./file-state.js";
 import {
   assertAuthProfileMigrationCandidates,
   assertAuthProfileMigrationStateAtDatabasePath,
@@ -24,10 +25,6 @@ import {
   loadPersistedAuthProfileStoreAtDatabasePath,
   mergeAuthProfileStores,
 } from "./persisted.js";
-import {
-  getRuntimeExternalCliProfileIds,
-  setRuntimeExternalCliProfileIds,
-} from "./runtime-external-profile-references.js";
 import { resolveAuthProfileDatabasePath } from "./sqlite.js";
 import type {
   AuthProfileCredential,
@@ -44,7 +41,6 @@ export function stripRuntimeExternalProfileMetadata(store: AuthProfileStore): Au
   const stripped = { ...store };
   delete stripped.runtimeExternalProfileIds;
   delete stripped.runtimeExternalProfileIdsAuthoritative;
-  setRuntimeExternalCliProfileIds(stripped, []);
   return stripped;
 }
 
@@ -186,12 +182,6 @@ export function replaceRuntimeAuthProfileStoreCredentials(
         ? [...external].toSorted()
         : undefined,
   };
-  setRuntimeExternalCliProfileIds(
-    next,
-    getRuntimeExternalCliProfileIds(store).filter(
-      (id) => !changed.includes(id) || external.has(id),
-    ),
-  );
   return next;
 }
 
@@ -203,6 +193,11 @@ export function loadRuntimeAuthProfileOwnerSnapshot(
     inheritedStore?: AuthProfileStore;
   } = {},
 ): RuntimeAuthProfileStore {
+  if (options.candidates) {
+    admitAuthProfileLegacySources(
+      [...options.candidates.local, ...options.candidates.shared].map((source) => source.path),
+    );
+  }
   // Only lifecycle clear owns a recorded migration refusal; a committed write cannot bypass it.
   assertAuthProfileMigrationStateAtDatabasePath(owner.databasePath);
   assertAuthProfileMigrationStateAtDatabasePath(owner.sharedDatabasePath);
@@ -365,7 +360,6 @@ export function runtimeAuthMetadataState(store: RuntimeAuthProfileStore) {
     runtimePersistedProfileIds: store.runtimePersistedProfileIds,
     runtimeExternalProfileIds: store.runtimeExternalProfileIds,
     runtimeExternalProfileIdsAuthoritative: store.runtimeExternalProfileIdsAuthoritative,
-    runtimeExternalCliProfileIds: store.runtimeExternalCliProfileIds,
     runtimeLocalProfileIds: store.runtimeLocalProfileIds,
     runtimeLocalOrderProviderIds: store.runtimeLocalOrderProviderIds,
     availability: Object.fromEntries(
@@ -406,11 +400,14 @@ export function pruneAuthProfileStoreReferences(
   store.order = store.order
     ? Object.fromEntries(
         Object.entries(store.order)
-          .map(([provider, profileIds]) => [
-            provider,
-            profileIds.filter((profileId) => keptOrderProfileIds.has(profileId)),
-          ])
-          .filter(([, profileIds]) => Array.isArray(profileIds) && profileIds.length > 0),
+          .map(
+            ([provider, profileIds]) =>
+              [
+                provider,
+                profileIds.filter((profileId) => keptOrderProfileIds.has(profileId)),
+              ] as const,
+          )
+          .filter(([, profileIds]) => profileIds.length > 0),
       )
     : undefined;
   store.lastGood = store.lastGood
@@ -435,10 +432,6 @@ export function pruneAuthProfileStoreReferences(
   if (store.runtimePersistedProfileIds?.length === 0) {
     store.runtimePersistedProfileIds = undefined;
   }
-  setRuntimeExternalCliProfileIds(
-    store,
-    getRuntimeExternalCliProfileIds(store).filter((profileId) => keptProfileIds.has(profileId)),
-  );
   if (
     store.runtimeExternalProfileIds?.length === 0 &&
     store.runtimeExternalProfileIdsAuthoritative !== true

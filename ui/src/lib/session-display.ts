@@ -30,7 +30,7 @@ const CHANNEL_LABELS = new Map<string, string>([
 const OPAQUE_ID_RUN_RE =
   /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{10,}/gi;
 
-function shortenOpaqueIdRuns(text: string): string {
+export function shortenOpaqueIdRuns(text: string): string {
   return text.replace(OPAQUE_ID_RUN_RE, (match) => `…${match.slice(-4)}`);
 }
 
@@ -68,6 +68,7 @@ type SessionWorktreeDisplayRow = {
   placement?: GatewaySessionRow["placement"];
   execNode?: string;
   execCwd?: string;
+  deviceFolder?: { deviceId: string; path: string };
   spawnedWorkspaceDir?: string;
   spawnedCwd?: string;
 };
@@ -88,6 +89,13 @@ export type SessionWorkContext =
 export function resolveSessionWorkContext(
   row: SessionWorktreeDisplayRow,
 ): SessionWorkContext | undefined {
+  if (row.deviceFolder) {
+    return {
+      kind: "workspace",
+      name: pathDisplayName(row.deviceFolder.path),
+      path: row.deviceFolder.path,
+    };
+  }
   // Cloud repository identity is not a Gateway filesystem path. A bare node
   // cwd likewise must not borrow repository facts from a local worktree.
   const repoRoot =
@@ -122,6 +130,9 @@ export function resolveSessionWorkContext(
 
 /** Compact "repo ⎇ branch" (plus node host) line for worktree/work sessions. */
 export function resolveSessionWorkSubtitle(row: SessionWorktreeDisplayRow): string | undefined {
+  if (row.deviceFolder) {
+    return `${row.deviceFolder.path} · ${shortenOpaqueIdRuns(row.deviceFolder.deviceId)}`;
+  }
   // execNode is often a raw node id (long hex); never render it in full.
   const rawNode = normalizeOptionalString(row.execNode);
   const node = rawNode ? shortenOpaqueIdRuns(rawNode) : undefined;
@@ -141,17 +152,6 @@ export function resolveSessionWorkSubtitle(row: SessionWorktreeDisplayRow): stri
   return checkout ?? node;
 }
 
-type SessionKeyInfo = {
-  /** Typed-session identity; display branching keys off this, not label text. */
-  kind?: "subagent" | "automation";
-  /** Catalog-backed prefix for typed sessions. Empty for others. */
-  prefix: string;
-  /** Human-readable fallback when no label / displayName is available. */
-  fallbackName: string;
-  /** Raw account segment; only a fallback, Gateway rows carry the real one. */
-  accountId?: string;
-};
-
 type SessionDisplayRow = {
   label?: string;
   displayName?: string;
@@ -160,11 +160,34 @@ type SessionDisplayRow = {
   accountId?: string;
 } & SessionWorktreeDisplayRow;
 
+/** Naming has a separate lifetime from the first reply; a usable name always wins. */
+export function isSessionTitlePending(
+  key: string,
+  row?: SessionDisplayRow & { titlePending?: boolean },
+): boolean {
+  return (
+    /^agent:[^:]+:dashboard:/.test(key) &&
+    row?.titlePending === true &&
+    ![row.label, row.displayName, row.derivedTitle].some(
+      (name) => name?.trim() && name.trim() !== key,
+    )
+  );
+}
+
 export function formatSessionChannelLabel(channel: string): string {
   return CHANNEL_LABELS.get(channel) ?? channel.charAt(0).toUpperCase() + channel.slice(1);
 }
 
-function parseSessionKey(key: string): SessionKeyInfo {
+function parseSessionKey(key: string): {
+  /** Typed-session identity; display branching keys off this, not label text. */
+  kind?: "subagent" | "automation";
+  /** Catalog-backed prefix for typed sessions. Empty for others. */
+  prefix: string;
+  /** Human-readable fallback when no label / displayName is available. */
+  fallbackName: string;
+  /** Raw account segment; only a fallback, Gateway rows carry the real one. */
+  accountId?: string;
+} {
   const normalized = normalizeLowercaseStringOrEmpty(key);
 
   if (key === "main" || /^agent:[^:]+:main$/u.test(key)) {
@@ -270,25 +293,20 @@ export function resolveSessionDisplayName(key: string, row?: SessionDisplayRow):
     return prefixPattern.test(name) ? name : `${prefix} ${name}`;
   };
 
-  const resolveNamedOrFallback = (): string => {
-    if (label && label !== key) {
-      return applyTypedPrefix(label);
-    }
-    if (displayName && displayName !== key) {
-      return applyTypedPrefix(displayName);
-    }
+  let name = fallbackName;
+  if (label && label !== key) {
+    name = applyTypedPrefix(label);
+  } else if (displayName && displayName !== key) {
+    name = applyTypedPrefix(displayName);
+  } else {
     // Unnamed work sessions read as their checkout instead of an opaque key.
     const workSubtitle = row ? resolveSessionWorkSubtitle(row) : undefined;
     if (workSubtitle && row?.worktree) {
-      return applyTypedPrefix(workSubtitle);
+      name = applyTypedPrefix(workSubtitle);
+    } else if (derivedTitle && derivedTitle !== key) {
+      name = applyTypedPrefix(derivedTitle);
     }
-    if (derivedTitle && derivedTitle !== key) {
-      return applyTypedPrefix(derivedTitle);
-    }
-    return fallbackName;
-  };
-
-  const name = resolveNamedOrFallback();
+  }
   if (!accountId || accountId === "default") {
     return name;
   }

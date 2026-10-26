@@ -132,3 +132,28 @@ test("operator policy rejects missing expectations and missing selected model", 
     ...profile, policy: { ...profile.policy, updateAuto: true },
   }).status, 0, "operator profile cannot enable unattended updates");
 });
+
+test("operator policy captures only the selected model fallback policy", (t) => {
+  const fixture = configFixture(t);
+  fixture.config.agents.defaults = { model: { primary: "fixture/default", fallbacks: ["fixture/default-fallback"] } };
+  for (const [model, expected] of [
+    [undefined, ["fixture/default-fallback"]],
+    ["fixture/selected-model", []],
+    [{ primary: "fixture/selected-model" }, []],
+    [{ primary: "fixture/selected-model", fallbacks: [] }, []],
+    [{ primary: "fixture/selected-model", fallbacks: ["fixture/fallback"] }, ["fixture/fallback"]],
+  ]) {
+    fixture.config.agents.entries["sample-agent"].model = model;
+    fixture.write();
+    const result = invoke(["policy", fixture.pathname]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout).fallbacks, expected);
+  }
+  for (const fallbacks of ["fixture/fallback", ["unqualified"], [null]]) {
+    fixture.config.agents.entries["sample-agent"].model = { primary: "fixture/selected-model", fallbacks };
+    fixture.write();
+    const result = invoke(["policy", fixture.pathname]);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /configured deployment model fallbacks are invalid/);
+  }
+});

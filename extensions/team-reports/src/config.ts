@@ -1,3 +1,4 @@
+import { constants } from "node:fs";
 import { open } from "node:fs/promises";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { readFileHandleBounded } from "openclaw/plugin-sdk/file-access-runtime";
@@ -49,6 +50,7 @@ const summariesSchema = z.strictObject({
   agentId: nonempty.optional(),
 });
 const scheduleSchema = z.strictObject({
+  enabled: z.boolean().default(true),
   closedDayUtc: z
     .string()
     .regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/)
@@ -144,7 +146,8 @@ const peopleFileSchema = z.strictObject({ people: z.array(personSchema) });
 const MAX_PEOPLE_FILE_BYTES = 2 * 1024 * 1024;
 
 async function readPeopleFile(filePath: string) {
-  const handle = await open(filePath, "r");
+  // Reach the regular-file check even when the configured path is a FIFO without a writer.
+  const handle = await open(filePath, constants.O_RDONLY | constants.O_NONBLOCK);
   const invalidFileMessage =
     "team-reports.peopleFile must be a regular JSON file of at most 2 MiB.";
   try {

@@ -27,6 +27,11 @@
       { "id": "codex-app-server-sidecars-to-plugin-state" },
       { "id": "codex-native-task-assignments" },
       {
+        "id": "codex-native-assignment-repair",
+        "doctorOnly": true,
+        "phase": "after-session-repair"
+      },
+      {
         "id": "codex-app-server-orphaned-session-bindings",
         "doctorOnly": true,
         "phase": "after-session-repair"
@@ -295,6 +300,11 @@
                 "pluginName": {
                   "type": "string"
                 },
+                "read_only": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "Expose only app tools explicitly marked read-only. Unknown and disabled tools are denied."
+                },
                 "allow_destructive_actions": {
                   "oneOf": [{ "type": "boolean" }, { "const": "auto" }, { "const": "ask" }]
                 }
@@ -424,11 +434,6 @@
             "additionalProperties": false,
             "properties": {
               "mode": { "type": "string", "enum": ["auto", "off"], "default": "auto" },
-              "model": {
-                "type": "string",
-                "minLength": 1,
-                "default": "gpt-daybreak-blue-latest"
-              },
               "cooloffMs": { "type": "number", "minimum": 1, "default": 600000 }
             }
           },
@@ -509,7 +514,7 @@
     },
     "sessionCatalog.homes": {
       "label": "Additional Codex Homes",
-      "help": "Existing local Codex home directories to include in native session discovery. String paths use the canonical directory basename as their label; object entries can override it with label. Paths are canonicalized and deduplicated. Requires appServer.transport=stdio and a Gateway restart.",
+      "help": "Existing local Codex home directories to include in native session discovery. String paths use the last directory name of the resolved path as their label; object entries can override it with label. Paths are resolved and duplicates are removed. Requires appServer.transport=stdio and a Gateway restart.",
       "advanced": true
     },
     "codexDynamicToolsLoading": {

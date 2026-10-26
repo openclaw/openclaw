@@ -22,6 +22,7 @@ import {
   type SpawnResult,
 } from "../../process/exec.js";
 import { parseOpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withUpdateCommandExecutorChild } from "./update-command-executor.js";
 import type { UpdateDoctorInput } from "./update-command-migrated-types.js";
@@ -29,17 +30,13 @@ import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-err
 
 /** Inspect the same published --check contract consumed by candidate canary. */
 export async function inspectUpdateDoctorChildSupport(
-  argv: string[],
+  worker: { workerUrl: URL; argv: string[] },
   options: CommandOptions,
   assertCurrent: () => void,
 ): Promise<boolean> {
   assertCurrent();
-  const workerPath = argv[1];
-  if (!workerPath) {
-    throw new UpdateCommandRecoveryPendingError("Target Doctor worker path is missing.");
-  }
   try {
-    await fs.lstat(workerPath);
+    await fs.lstat(worker.workerUrl);
   } catch (cause) {
     if (hasErrnoCode(cause, "ENOENT")) {
       // Candidate canary preserves this pre-worker published-target contract.
@@ -54,7 +51,7 @@ export async function inspectUpdateDoctorChildSupport(
   assertCurrent();
   let result: SpawnResult;
   try {
-    result = await runUtf8CommandWithTimeout([...argv, "--check"], {
+    result = await runUtf8CommandWithTimeout([...worker.argv, "--check"], {
       ...options,
       killProcessTree: true,
       requireProcessTreeExtinction: true,
@@ -90,16 +87,6 @@ export async function inspectUpdateDoctorChildSupport(
   // v2026.9.3 reports its schemas but has no delegated Doctor entrypoint.
   return capability === "pid-start-v1";
 }
-
-export type UpdateDoctorChildContext = {
-  runId: string;
-  executorFence: UpdateRecoveryFence;
-  requester?: Readonly<UpdateRequester>;
-  /** The parent mutation fence is suspended while its child owns effects. */
-  assertRequesterCurrent: () => void;
-  onStateHandoff?: () => void;
-  onProcessSettlement?: (step: UpdateStepResult) => void;
-};
 
 /** Both delegated and standalone update Doctors publish through the same result channel. */
 export async function runUpdateDoctorProcess(
@@ -172,10 +159,14 @@ export async function runUpdateDoctorProcess(
     return outcome.result;
   } finally {
     try {
-      // Doctor can migrate in another process, outside this parent's admission publication cells.
-      revokeSqliteDatabaseAdmissionsForPath(statePath);
+      // Doctor's foreign schema writes require cold admission, including retained parent handles.
+      await closeOpenClawStateDatabaseByPathAsync(statePath);
     } finally {
-      custody.close();
+      try {
+        revokeSqliteDatabaseAdmissionsForPath(statePath);
+      } finally {
+        custody.close();
+      }
     }
   }
 }
@@ -184,7 +175,15 @@ export async function runUpdateDoctorProcess(
 export async function withUpdateDoctorChild<T>(
   params: {
     root: string;
-    context: UpdateDoctorChildContext;
+    context: {
+      runId: string;
+      executorFence: UpdateRecoveryFence;
+      requester?: Readonly<UpdateRequester>;
+      /** The parent mutation fence is suspended while its child owns effects. */
+      assertRequesterCurrent: () => void;
+      onStateHandoff?: () => void;
+      onProcessSettlement?: (step: UpdateStepResult) => void;
+    };
     input: Omit<UpdateDoctorInput, "executor" | "runId" | "root" | "requester">;
   },
   operation: (

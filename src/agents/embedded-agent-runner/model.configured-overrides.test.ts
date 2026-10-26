@@ -1,37 +1,48 @@
 // Guards which configured transport routes may replace a catalog model's native route.
 import { describe, expect, it } from "vitest";
 import { makeEmptyPluginMetadataOwners } from "../../plugins/current-plugin-metadata.test-support.js";
-import { hasConfiguredModelRouteSupport } from "./model.configured-overrides.js";
+import type { PluginMetadataSnapshotOwnerMaps } from "../../plugins/plugin-metadata-snapshot.types.js";
+import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
+import { applyConfiguredProviderOverrides } from "./model.configured-overrides.js";
+import { createProviderRuntimeTestMock } from "./model.provider-runtime.test-support.js";
 
-const providerMetadataOwners = {
+const providerMetadataOwners: PluginMetadataSnapshotOwnerMaps = {
   ...makeEmptyPluginMetadataOwners(),
   providerEndpoints: [
     { endpointClass: "anthropic-public", hosts: ["api.anthropic.com"] },
     { endpointClass: "vercel-ai-gateway", hosts: ["ai-gateway.vercel.sh"] },
   ],
 };
-const catalogModel = {
+const catalogModel: ProviderRuntimeModel = {
   id: "claude-sonnet-4-6",
+  reasoning: false,
+  input: ["text"],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 1,
+  maxTokens: 1,
   name: "Claude Sonnet 4.6",
   provider: "anthropic",
   api: "anthropic-messages",
   baseUrl: "https://api.anthropic.com",
 };
 
-function supportsRoute(baseUrl: string): boolean {
-  return hasConfiguredModelRouteSupport({
+function resolveRoute(baseUrl: string) {
+  return applyConfiguredProviderOverrides({
     provider: "anthropic",
     modelId: catalogModel.id,
-    catalogModel: catalogModel as never,
+    discoveredModel: catalogModel,
+    providerConfig: { api: "anthropic-messages", baseUrl, models: [] },
     manifestAlias: { provider: "anthropic" },
-    route: { api: "anthropic-messages", baseUrl },
-    providerMetadataOwners: providerMetadataOwners as never,
+    providerMetadataOwners,
+    runtimeHooks: createProviderRuntimeTestMock({ handledDynamicProviders: [] }),
   });
 }
 
-describe("hasConfiguredModelRouteSupport", () => {
+describe("configured model proxy routing", () => {
   it("keeps catalog models routed through Vercel AI Gateway as operator proxy routes", () => {
-    expect(supportsRoute("https://ai-gateway.vercel.sh")).toBe(true);
-    expect(supportsRoute("https://proxy.example.com")).toBe(true);
+    expect(resolveRoute("https://ai-gateway.vercel.sh")?.baseUrl).toBe(
+      "https://ai-gateway.vercel.sh",
+    );
+    expect(resolveRoute("https://proxy.example.com")?.baseUrl).toBe("https://proxy.example.com");
   });
 });

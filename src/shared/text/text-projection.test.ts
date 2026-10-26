@@ -1,209 +1,207 @@
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { findCodeRegions } from "./code-regions.js";
-import {
-  applyTextFilters,
-  createTextProjection,
-  duplicateParagraphTextFilter,
-  leadingEmptyLinesTextFilter,
-  trimTextFilter,
-  type TextFilter,
-} from "./text-projection.js";
+import * as text from "./text-projection.js";
 
 vi.mock("./code-regions.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./code-regions.js")>();
   return { ...actual, findCodeRegions: vi.fn(actual.findCodeRegions) };
 });
 
-describe("createTextProjection", () => {
-  it("activates split markers, reprojects completed syntax, and replaces the source", () => {
-    const projection = createTextProjection([
-      {
-        activationTokens: ["<private>"],
-        transform: (text) => text.replace(/<private>[\s\S]*?<\/private>/gi, ""),
-      },
-    ]);
-    expect(projection.append("Before <PRI")).toEqual({ text: "Before <PRI", delta: "Before <PRI" });
-    expect(projection.append("VATE>secret")).toEqual({
-      text: "Before <PRIVATE>secret",
-      delta: "VATE>secret",
-    });
-    expect(projection.append("</PRIVATE>after")).toEqual({ text: "Before after", delta: null });
-    expect(projection.append(".")).toEqual({ text: "Before after.", delta: "." });
-    expect(projection.replace("Fresh ")).toEqual({ text: "Fresh ", delta: null });
-    expect(projection.append("reply")).toEqual({ text: "Fresh reply", delta: "reply" });
-    expect(projection.source).toBe("Fresh reply");
-    expect(projection.text).toBe("Fresh reply");
-  });
-
-  it("rechecks downstream activation when a preceding filter joins a marker", () => {
-    const filters: TextFilter[] = [
-      { activationTokens: ["<cut>"], transform: (text) => text.replace(/<cut>.*?<\/cut>/g, "") },
-      { activationTokens: ["BEGIN"], transform: (text) => text.replace(/BEGIN.*?END/g, "") },
-    ];
-    const projection = createTextProjection(filters);
-    projection.append("Before BE<cut>hidden");
-    expect(projection.append("</cut>GIN private ENDafter")).toEqual({
-      text: "Before after",
-      delta: null,
-    });
-    expect(applyTextFilters(projection.source, filters)).toBe("Before after");
-  });
-
-  it("preserves an append when downstream filtering cancels an intermediate correction", () => {
-    const projection = createTextProjection([
-      { activationTokens: ["<cut>"], transform: (text) => text.replace(/<cut>.*?<\/cut>/g, "") },
-      { activationTokens: ["<cut>"], transform: (text) => text.replace(/<cut>.*/g, "") },
-    ]);
-    expect(projection.append("Ready <cut>hidden")).toEqual({ text: "Ready ", delta: "Ready " });
-    expect(projection.append("</cut>reply")).toEqual({ text: "Ready reply", delta: "reply" });
-    expect(projection.replace("Ready reply")).toEqual({ text: "Ready reply", delta: null });
-  });
-
-  it.each(["none", "start", "both"] as const)("trims %s across whitespace boundaries", (mode) => {
-    const filter = trimTextFilter(mode);
-    const projection = createTextProjection([filter]);
-    let source = "";
-    let delivered = "";
-    for (const delta of [" \r", "\n\u00a0", " A ", "\t", "B\r", "\n", " C", "  "]) {
-      source += delta;
-      const result = projection.append(delta);
-      const expected =
-        mode === "both" ? source.trim() : mode === "start" ? source.trimStart() : source;
-      expect(result).toEqual({ text: expected, delta: expected.slice(delivered.length) });
-      delivered = expected;
-    }
-    expect(projection.replace(" \tReset \n")).toEqual({
-      text: filter.transform(" \tReset \n"),
-      delta: null,
-    });
-    expect(projection.append("end").text).toBe(filter.transform(" \tReset \nend"));
-  });
-
-  it.each([
-    { chunks: [" \r", "\n\t\n", "  Code", "\n next"], expected: "  Code\n next" },
-    { chunks: ["\v", "\n", " Text"], expected: "\v\n Text" },
-    { chunks: [" \n\r\n", "\t"], expected: "" },
-  ])("removes only leading empty lines %#", ({ chunks, expected }) => {
-    const projection = createTextProjection([leadingEmptyLinesTextFilter]);
-    let delivered = "";
-    for (const chunk of chunks) {
-      const result = projection.append(chunk);
+const project = (...filters: text.TextFilter[]) => text.createTextProjection(filters);
+const expectUpdate = (actual: text.TextProjection, value: string, delta: string | null = value) =>
+  expect(actual).toEqual({ text: value, delta });
+const replaceFilter = (token: string, pattern: RegExp, replacement = ""): text.TextFilter => ({
+  activationTokens: [token],
+  transform: (value) => value.replace(pattern, replacement),
+});
+function replay(filter: text.TextFilter, chunks: string[], expected: string, strict = false) {
+  const projection = project(filter);
+  let delivered = "";
+  for (const chunk of chunks) {
+    const result = projection.append(chunk);
+    if (strict) {
       expect(result.delta).not.toBeNull();
-      delivered += result.delta;
-      expect(delivered).toBe(result.text);
     }
-    expect(projection.text).toBe(expected);
-    expect(projection.replace("\n  Reset")).toEqual({ text: "  Reset", delta: null });
-  });
+    delivered = result.delta === null ? result.text : delivered + result.delta;
+    expect(delivered).toBe(result.text);
+  }
+  expect(projection.text).toBe(expected);
+  return projection;
+}
+
+it("activates split markers, reprojects completed syntax, and replaces the source", () => {
+  const projection = project(replaceFilter("<private>", /<private>[\s\S]*?<\/private>/gi));
+  expectUpdate(projection.append("Before <PRI"), "Before <PRI");
+  expectUpdate(projection.append("VATE>secret"), "Before <PRIVATE>secret", "VATE>secret");
+  expectUpdate(projection.append("</PRIVATE>after"), "Before after", null);
+  expectUpdate(projection.append("."), "Before after.", ".");
+  expectUpdate(projection.replace("Fresh "), "Fresh ", null);
+  expectUpdate(projection.append("reply"), "Fresh reply", "reply");
+  expect(projection).toMatchObject({ source: "Fresh reply", text: "Fresh reply" });
 });
 
-describe("duplicate paragraphs", () => {
-  it.each([
-    { text: " \r\n\t ", expected: " \r\n\t " },
-    { text: "  A \n\n A  ", expected: "A" },
-    { text: "A\n\nB\n\nA", expected: "A\n\nB\n\nA" },
-    { text: "A  B\n\nA\tB", expected: "A  B" },
-    { text: "A\r\n\r\nA", expected: "A\r\n\r\nA" },
-    { text: "A\n\nA\n\nB\n\nB", expected: "A\n\nB" },
-    { text: "first\n\nfirst diverges\n\nfirst diverges", expected: "first\n\nfirst diverges" },
-    { text: "A\n\nA\n\nB C\n\nB\u00a0C", expected: "A\n\nB C" },
-    { text: "A\n\n \n\nA", expected: "A\n\n \n\nA" },
-    { text: "A\n\nA\n\n \n\nB", expected: "A\n\n\n\nB" },
-    { text: "\n\n \n\nA\n\nA\n\n \n\n", expected: "A" },
-    {
-      text: "```text\nrepeat\n\nrepeat\n```",
-      expected: "```text\nrepeat\n\nrepeat\n```",
-    },
-    {
-      text: "    first\n\n    second\n\ntail\n\ntail",
-      expected: "    first\n\n    second\n\ntail",
-    },
-    { text: "repeat\n\n    repeat\n\nrepeat", expected: "repeat\n\n    repeat\n\nrepeat" },
-    { text: "Run `x`.\n\nRun `x`.", expected: "Run `x`." },
-    {
-      text: "Same `x`.\n\nSame `x`.\n\nOther `x`.\n\nOther `x`.",
-      expected: "Same `x`.\n\nOther `x`.",
-    },
-    {
-      text: "repeat\n\nrepeat\n\n```text\n$$ $& $` $'\n```\n\n```text\n$$ $& $` $'\n```",
-      expected: "repeat\n\n```text\n$$ $& $` $'\n```\n\n```text\n$$ $& $` $'\n```",
-    },
-    {
-      text: "\0\0\0\n\nrepeat\n\nrepeat\n\nUse `x`\u0000`y` and `x`.",
-      expected: "\0\0\0\n\nrepeat\n\nUse `x`\u0000`y` and `x`.",
-    },
-    {
-      text: 'repeat\n\nrepeat\n\n```js\nfunction replacement() {\n\n  return "$$ $& $` $\'";\n}\n```',
-      expected: 'repeat\n\n```js\nfunction replacement() {\n\n  return "$$ $& $` $\'";\n}\n```',
-    },
-    {
-      text: '    const replacement = "$$ $& $` $\'";\n\nrepeat\n\nrepeat',
-      expected: '    const replacement = "$$ $& $` $\'";\n\nrepeat',
-    },
-    { text: "Use ``$$ $& $` $'``.\n\nUse ``$$ $& $` $'``.", expected: "Use ``$$ $& $` $'``." },
-    { text: "repeat\n\nrepeat `x`", expected: "repeat\n\nrepeat `x`" },
-    { text: "Do `x` repeat\n\nrepeat", expected: "Do `x` repeat\n\nrepeat" },
-  ])("preserves canonical separators and whitespace %#", ({ text, expected }) => {
-    expect(duplicateParagraphTextFilter.transform(text)).toBe(expected);
-    const partitions = [
-      text.split(""),
-      ...Array.from({ length: text.length + 1 }, (_, split) => [
-        text.slice(0, split),
-        text.slice(split),
-      ]),
-    ];
-    for (const chunks of partitions) {
-      const projection = createTextProjection([duplicateParagraphTextFilter]);
-      let delivered = "";
-      for (const chunk of chunks) {
-        const result = projection.append(chunk);
-        delivered = result.delta === null ? result.text : delivered + result.delta;
-        expect(delivered).toBe(result.text);
-      }
-      expect(projection.text).toBe(expected);
-    }
-  });
+it("rechecks downstream activation when a preceding filter joins a marker", () => {
+  const filters: text.TextFilter[] = [
+    replaceFilter("<cut>", /<cut>.*?<\/cut>/g),
+    replaceFilter("BEGIN", /BEGIN.*?END/g),
+  ];
+  const projection = project(...filters);
+  projection.append("Before BE<cut>hidden");
+  expectUpdate(projection.append("</cut>GIN private ENDafter"), "Before after", null);
+  expect(text.applyTextFilters(projection.source, filters)).toBe("Before after");
+});
 
-  it.each([
+it("preserves an append when downstream filtering cancels an intermediate correction", () => {
+  const projection = project(
+    replaceFilter("<cut>", /<cut>.*?<\/cut>/g),
+    replaceFilter("<cut>", /<cut>.*/g),
+  );
+  expectUpdate(projection.append("Ready <cut>hidden"), "Ready ");
+  expectUpdate(projection.append("</cut>reply"), "Ready reply", "reply");
+  expectUpdate(projection.replace("Ready reply"), "Ready reply", null);
+});
+
+it("keeps settled equal-length rewrites when later checkpoint windows are unchanged", () => {
+  const rewrite = (value: string) => value.replaceAll("@", "!");
+  const projection = project({
+    activationTokens: ["@"],
+    transform: rewrite,
+    checkpoint: (value, settleBefore) => ({
+      text: rewrite(value),
+      retainStart: settleBefore,
+      retainedOutputStart: settleBefore,
+    }),
+  });
+  expectUpdate(projection.append("@first\n"), "!first\n");
+  expectUpdate(projection.append("second\n"), "!first\nsecond\n", "second\n");
+  expectUpdate(projection.append("third\n"), "!first\nsecond\nthird\n", "third\n");
+  expectUpdate(projection.replace("fresh\n"), "fresh\n", null);
+  expectUpdate(projection.append("@next\n"), "fresh\n!next\n", "!next\n");
+});
+
+it("restores a transformed prefix through chained checkpoints", () => {
+  const rewrite = (value: string) => value.replaceAll("A", "@");
+  const projection = project(
     {
-      initial: "A\n\n\nB\n\nB",
-      initialText: "A\n\nB",
-      appended: " changes",
-      expected: { text: "A\n\n\nB\n\nB changes", delta: null },
+      activationTokens: ["secret"],
+      transform: (value) => value,
+      checkpoint: (value, boundary) => ({
+        text: value,
+        retainStart: boundary,
+        retainedOutputStart: boundary,
+      }),
     },
     {
-      initial: "first\n\nfirst",
-      initialText: "first",
-      appended: " diverges\n\nfirst diverges",
-      expected: { text: "first\n\nfirst diverges", delta: "\n\nfirst diverges" },
+      activationTokens: ["secret"],
+      transform: (value) => (value.endsWith("!") ? value : value.replace("secret ", "")),
     },
-  ])(
-    "reconciles a provisional duplicate as later paragraphs diverge %#",
-    ({ initial, initialText, appended, expected }) => {
-      const projection = createTextProjection([duplicateParagraphTextFilter]);
-      expect(projection.append(initial)).toEqual({ text: initialText, delta: initialText });
-      expect(projection.append(appended)).toEqual(expected);
-      expect(projection.replace("  New\n\nNew")).toEqual({ text: "New", delta: null });
-      expect(projection.append("\n\nLast ")).toEqual({ text: "New\n\nLast", delta: "\n\nLast" });
-      expect(projection.append("word")).toEqual({ text: "New\n\nLast word", delta: " word" });
+    {
+      activationTokens: ["A"],
+      transform: rewrite,
+      checkpoint: (value, boundary) => ({
+        text: rewrite(value),
+        retainStart: boundary,
+        retainedOutputStart: boundary,
+      }),
     },
   );
+  expectUpdate(projection.append("secret A\n\nB\n\nC"), "@\n\nB\n\nC");
+  expectUpdate(projection.append("!"), "secret @\n\nB\n\nC!", null);
+  expectUpdate(projection.append(" tail"), "@\n\nB\n\nC! tail", null);
+});
 
-  it("keeps code-bearing continuation appends on the incremental suffix path", () => {
-    const parser = vi.mocked(findCodeRegions);
-    parser.mockClear();
-    const code = "```text\ninside\n\ninside\n```";
-    const source = `${code}\n\nrepeat\n\nrepeat\n\ntail`;
-    const projection = createTextProjection([duplicateParagraphTextFilter]);
-    expect(projection.append(source).text).toBe(`${code}\n\nrepeat\n\ntail`);
-    const initialParses = parser.mock.calls.length;
-    expect(initialParses).toBeGreaterThan(0);
+it.each(["none", "start", "both"] as const)("trims %s across whitespace boundaries", (mode) => {
+  const filter = text.trimTextFilter(mode);
+  const projection = project(filter);
+  let source = "";
+  let delivered = "";
+  for (const delta of [" \r", "\n\u00a0", " A ", "\t", "B\r", "\n", " C", "  "]) {
+    source += delta;
+    const result = projection.append(delta);
+    const expected =
+      mode === "both" ? source.trim() : mode === "start" ? source.trimStart() : source;
+    expectUpdate(result, expected, expected.slice(delivered.length));
+    expect(projection.matchesTrimmedSource).toBe(expected === source.trim());
+    delivered = expected;
+  }
+  expectUpdate(projection.replace(" \tReset \n"), filter.transform(" \tReset \n"), null);
+  expect(projection.append("end").text).toBe(filter.transform(" \tReset \nend"));
+});
 
-    for (let index = 0; index < 256; index++) {
-      const delta = `-${index}`;
-      expect(projection.append(delta).delta).toBe(delta);
-    }
-    expect(parser).toHaveBeenCalledTimes(initialParses);
-    expect(projection.text).toBe(duplicateParagraphTextFilter.transform(projection.source));
-  });
+it("distinguishes preserved indentation and equal-length rewrites from trimmed source", () => {
+  const projection = project(
+    replaceFilter("swap", /swap/, "edit"),
+    text.trimTextFilter("both", { preserveCodeIndentation: true }),
+  );
+  for (const source of ["\u00a0plain \n", "    code\n", " swap ", "\t\n"]) {
+    projection.replace(source);
+    expect(projection.matchesTrimmedSource).toBe(projection.text === source.trim());
+    projection.append(" tail");
+    expect(projection.matchesTrimmedSource).toBe(projection.text === `${source} tail`.trim());
+  }
+  const padding = project(replaceFilter("\n", /^\n/), text.trimTextFilter("both"));
+  padding.append("\nSame ");
+  expect(padding.matchesTrimmedSource).toBe(true);
+});
+
+it("removes only leading empty lines", () => {
+  const projection = replay(
+    text.leadingEmptyLinesTextFilter,
+    [" \r", "\n\t\n", "  C", "\n D"],
+    "  C\n D",
+    true,
+  );
+  expectUpdate(projection.replace("\n  Reset"), "  Reset", null);
+});
+it.each([
+  ["A\n\nA\n\n \n\nB", "A\n\n\n\nB"],
+  ["\0\0\0\n\nA\n\nA\n\n`x`\0`y` `x`", "\0\0\0\n\nA\n\n`x`\0`y` `x`"],
+  ["A\n\nA `x`", "A\n\nA `x`"],
+  ["A\r\n\r\nA\r\n\r\nB", "A\r\n\r\nB"],
+  ["A\r\nB\r\n\r\nA\r\nB", "A\r\nB"],
+  ["A\r\n\r\nB", "A\r\n\r\nB"],
+  ["```text\r\nA\r\n\r\nA\r\n```\r\n\r\nB\r\n\r\nB", "```text\r\nA\r\n\r\nA\r\n```\r\n\r\nB"],
+  ["A\n\nA\n\n```\n", "A\n\n```\n"],
+])("preserves canonical separators and whitespace %#", (source, expected) => {
+  expect(text.duplicateParagraphTextFilter.transform(source)).toBe(expected);
+  const partitions = [
+    source.split(""),
+    ...Array.from({ length: source.length + 1 }, (_, i) => [source.slice(0, i), source.slice(i)]),
+  ];
+  for (const chunks of partitions) {
+    replay(text.duplicateParagraphTextFilter, chunks, expected);
+  }
+});
+
+it.each([
+  ["A\n\n\nB\n\nB", "A\n\nB", " changes", "A\n\n\nB\n\nB changes", null],
+  ["A\n\nA", "A", " B\n\nA B", "A\n\nA B", "\n\nA B"],
+] as const)(
+  "reconciles diverging provisional duplicates %#",
+  (initial, first, suffix, expected, delta) => {
+    const projection = project(text.duplicateParagraphTextFilter);
+    expectUpdate(projection.append(initial), first);
+    expectUpdate(projection.append(suffix), expected, delta);
+    expectUpdate(projection.replace("  New\n\nNew"), "New", null);
+    expectUpdate(projection.append("\n\nLast "), "New\n\nLast", "\n\nLast");
+    expectUpdate(projection.append("word"), "New\n\nLast word", " word");
+  },
+);
+
+it("keeps code-bearing continuation appends on the incremental suffix path", () => {
+  const parser = vi.mocked(findCodeRegions);
+  parser.mockClear();
+  const code = "```text\ninside\n\ninside\n```";
+  const source = `${code}\n\nrepeat\n\nrepeat\n\ntail`;
+  const projection = project(text.duplicateParagraphTextFilter);
+  expect(projection.append(source).text).toBe(`${code}\n\nrepeat\n\ntail`);
+  const initialParses = parser.mock.calls.length;
+  expect(initialParses).toBeGreaterThan(0);
+
+  for (let index = 0; index < 256; index++) {
+    const delta = `-${index}`;
+    expect(projection.append(delta).delta).toBe(delta);
+  }
+  expect(parser).toHaveBeenCalledTimes(initialParses);
+  expect(projection.text).toBe(text.duplicateParagraphTextFilter.transform(projection.source));
 });

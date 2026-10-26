@@ -8,24 +8,39 @@ import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { sqliteWorkerPreloadEnv } from "./sqlite-worker-preload.test-support.js";
 import {
+  readUpdateDatabaseGenerationsIsolated,
   readUpdateStateSchemaVersions,
-  updateStateSchemaVersionsMatch,
 } from "./update-candidate-state.js";
+import { updateStateSchemaVersionsMatch } from "./update-candidate-state.versions.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+type SchemaInput = Parameters<typeof readUpdateStateSchemaVersions>[0];
+const inspect = (stateDir: string, options: Partial<SchemaInput> = {}) =>
+  readUpdateStateSchemaVersions({ stateDir, config: {}, ...options });
+
+function createDatabase(file: string, sql: string, registered?: string) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  using db = openNodeSqliteDatabase(file);
+  db.exec(sql);
+  if (registered) {
+    db.prepare("INSERT INTO agent_databases VALUES (?)").run(registered);
+  }
+}
+
+function agentFile(stateDir: string, agent = "main") {
+  return path.join(stateDir, "agents", agent, "agent", "openclaw-agent.sqlite");
+}
 
 it.each(["malformed", "nonregular-wal", "empty-worker"])(
   "reports an actionable schema inspection failure: %s",
   async (kind) => {
     const stateDir = fs.realpathSync(dirs.make("update-schema-invalid-"));
-    const file = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+    const file = agentFile(stateDir);
     fs.mkdirSync(path.dirname(file), { recursive: true });
     if (kind === "malformed") {
       fs.writeFileSync(file, "not a SQLite database");
     } else {
-      const db = openNodeSqliteDatabase(file);
-      db.exec("PRAGMA journal_mode=WAL; PRAGMA user_version=3;");
-      db.close();
+      createDatabase(file, "PRAGMA journal_mode=WAL; PRAGMA user_version=3;");
       if (kind === "nonregular-wal") {
         fs.mkdirSync(`${file}-wal`);
       }
@@ -41,17 +56,13 @@ it.each(["malformed", "nonregular-wal", "empty-worker"])(
       fs.writeFileSync(worker, "process.exitCode = 1;\n");
     }
     const before = fs.readFileSync(file);
-    const failure = await readUpdateStateSchemaVersions({
+    const failure = await inspect(
       stateDir,
-      config: {},
-      ...(kind === "empty-worker" ? { root: candidateRoot } : {}),
-    }).catch((error: unknown) => error);
+      kind === "empty-worker" ? { root: candidateRoot } : {},
+    ).catch((error: unknown) => error);
     assert(failure instanceof Error);
-    expect(failure).toHaveProperty(
-      "message",
-      expect.stringContaining("State schema inspection failed"),
-    );
     const message = failure.message;
+    expect(message).toContain("State schema inspection failed");
     expect
       .soft(message)
       .toContain(kind === "empty-worker" ? path.join(stateDir, "state", "openclaw.sqlite") : file);
@@ -71,21 +82,64 @@ it.each(["malformed", "nonregular-wal", "empty-worker"])(
   },
 );
 
+it("reports a best-effort generation verification failure for its actual sources", async () => {
+  const stateDir = fs.realpathSync(dirs.make("update-generation-unstable-"));
+  const file = agentFile(stateDir);
+  const missing = agentFile(stateDir, "ops");
+  createDatabase(file, "PRAGMA user_version=3;");
+  const preload = path.join(stateDir, "write-between-reads.cjs");
+  // Wait for the private image to close, then commit between the final generation
+  // reads. A write during provisional capture can instead fail snapshot acquisition.
+  const generationProbe = `
+    const fs = require('node:fs'), path = require('node:path');
+    const { DatabaseSync } = require('node:sqlite');
+    const source = ${JSON.stringify(file)};
+    const open = fs.openSync, close = DatabaseSync.prototype.close;
+    let snapshotClosed = false, written = false;
+    DatabaseSync.prototype.close = function(...args) {
+      const snapshot = path.basename(this.location() ?? '') === 'database.sqlite';
+      const result = close.apply(this, args);
+      snapshotClosed ||= snapshot;
+      return result;
+    };
+    fs.openSync = function(file, ...args) {
+      if (snapshotClosed && String(file) === source + '-wal' && !written) {
+        written = true;
+        const writer = new DatabaseSync(source);
+        try { writer.exec('PRAGMA user_version=4'); } finally { writer.close(); }
+      }
+      return open.call(this, file, ...args);
+    };
+  `;
+  fs.writeFileSync(preload, generationProbe);
+
+  const failure = await readUpdateDatabaseGenerationsIsolated([file, missing], {
+    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir, ...sqliteWorkerPreloadEnv(preload) },
+    retryAdvice: false,
+  }).catch((error: unknown) => error);
+
+  assert(failure instanceof Error);
+  expect(failure.message).toContain(
+    `State schema inspection failed (exit): SQLite file generation changed while reading; after `,
+  );
+  expect(failure.message).toContain(
+    `during database generation verification for source scope [${file}, ${missing}] (scope: 2 source paths)`,
+  );
+  expect(failure.message).not.toMatch(/shared database discovery|retry the update|free space/);
+  using changed = openNodeSqliteDatabase(file);
+  expect(changed.prepare("PRAGMA user_version").get()).toEqual({ user_version: 4 });
+});
+
 it.skipIf(process.platform === "win32")(
   "refuses source replacement during pinned header inspection",
   async () => {
     const stateDir = fs.realpathSync(dirs.make("update-schema-identity-"));
-    const file = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    const db = openNodeSqliteDatabase(file);
-    db.exec("PRAGMA user_version=3;");
-    db.close();
+    const file = agentFile(stateDir);
+    createDatabase(file, "PRAGMA user_version=3;");
     const preload = path.join(stateDir, "replace-source.cjs");
     // Replace the pathname while the canonical owner still holds its original
     // descriptor. A numeric result from that retired inode must not be published.
-    fs.writeFileSync(
-      preload,
-      `
+    const replacementProbe = `
       const fs = require('node:fs');
       const source = ${JSON.stringify(file)};
       const open = fs.openSync, read = fs.readSync;
@@ -104,14 +158,10 @@ it.skipIf(process.platform === "win32")(
         }
         return count;
       };
-    `,
-    );
+    `;
+    fs.writeFileSync(preload, replacementProbe);
     await expect(
-      readUpdateStateSchemaVersions({
-        stateDir,
-        config: {},
-        env: { ...process.env, ...sqliteWorkerPreloadEnv(preload) },
-      }),
+      inspect(stateDir, { env: { ...process.env, ...sqliteWorkerPreloadEnv(preload) } }),
     ).rejects.toThrow(/SQLite source changed/);
     expect(fs.readFileSync(file)).toEqual(fs.readFileSync(`${file}.retired`));
   },
@@ -120,19 +170,14 @@ it.skipIf(process.platform === "win32")(
 it("discovers an agent registered after directory enumeration in the shared snapshot", async () => {
   const stateDir = fs.realpathSync(dirs.make("update-schema-new-agent-"));
   const sharedPath = path.join(stateDir, "state", "openclaw.sqlite");
-  const agentPath = path.join(stateDir, "agents", "late", "agent", "openclaw-agent.sqlite");
-  fs.mkdirSync(path.dirname(sharedPath), { recursive: true });
+  const agentPath = agentFile(stateDir, "late");
+  createDatabase(sharedPath, "PRAGMA user_version=7; CREATE TABLE agent_databases(path TEXT);");
   fs.mkdirSync(path.join(stateDir, "agents"));
-  const shared = openNodeSqliteDatabase(sharedPath);
-  shared.exec("PRAGMA user_version=7; CREATE TABLE agent_databases(path TEXT);");
-  shared.close();
-  const before = await readUpdateStateSchemaVersions({ stateDir, config: {} });
+  const before = await inspect(stateDir);
   const preload = path.join(stateDir, "late-registration.cjs");
   // Insert after enumeration returns its old directory list. Only discovery
   // from the subsequently captured shared generation can find this new store.
-  fs.writeFileSync(
-    preload,
-    `
+  const registrationProbe = `
     const fs = require('node:fs'), path = require('node:path');
     const { DatabaseSync } = require('node:sqlite');
     const agents = ${JSON.stringify(path.join(stateDir, "agents"))};
@@ -150,11 +195,9 @@ it("discovers an agent registered after directory enumeration in the shared snap
       }
       return entries;
     };
-  `,
-  );
-  const after = await readUpdateStateSchemaVersions({
-    stateDir,
-    config: {},
+  `;
+  fs.writeFileSync(preload, registrationProbe);
+  const after = await inspect(stateDir, {
     env: { ...process.env, ...sqliteWorkerPreloadEnv(preload) },
   });
   expect(before.some((entry) => entry.path === agentPath)).toBe(false);
@@ -175,30 +218,26 @@ it("fences WAL schema migration without copying a large registered agent payload
   const preload = path.join(root, "bounded-source-reads.cjs");
   const copiedShared = path.join(root, "shared-copied");
   const cache = path.join(root, "cache");
-  fs.mkdirSync(path.dirname(sharedPath), { recursive: true });
   fs.mkdirSync(cache);
-  const shared = openNodeSqliteDatabase(sharedPath);
-  shared.exec(`
+  createDatabase(
+    sharedPath,
+    `
     PRAGMA user_version=15;
     CREATE TABLE config_machine_state(state_key TEXT PRIMARY KEY, value_json TEXT);
     INSERT INTO config_machine_state VALUES('state.schema.contentVersion','16');
     CREATE TABLE agent_databases(path TEXT);
-  `);
-  shared.prepare("INSERT INTO agent_databases VALUES (?)").run(agentPath);
-  shared.close();
-  const writer = openNodeSqliteDatabase(agentPath);
+  `,
+    agentPath,
+  );
+  using writer = openNodeSqliteDatabase(agentPath);
   writer.exec(`
     PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;
     CREATE TABLE payload(data BLOB); INSERT INTO payload VALUES(zeroblob(67108864));
-    CREATE TABLE schema_meta(meta_key TEXT PRIMARY KEY, app_version TEXT);
-    INSERT INTO schema_meta VALUES('primary','baseline');
     PRAGMA user_version=3; PRAGMA wal_checkpoint(TRUNCATE);
   `);
   expect(fs.statSync(agentPath).size).toBeGreaterThan(64 * 1024 * 1024);
   // Shared discovery gets one native snapshot; agent metadata must not copy its payload.
-  fs.writeFileSync(
-    preload,
-    `
+  const boundedReadProbe = `
     const fs = require('node:fs'), sqlite = require('node:sqlite');
     const source = ${JSON.stringify(agentPath)}, shared = ${JSON.stringify(sharedPath)};
     const marker = ${JSON.stringify(copiedShared)};
@@ -221,35 +260,30 @@ it("fences WAL schema migration without copying a large registered agent payload
       fs.writeFileSync(marker, 'copied');
       return pages;
     };
-  `,
-  );
+  `;
+  fs.writeFileSync(preload, boundedReadProbe);
   const env = { ...process.env, ...sqliteWorkerPreloadEnv(preload), XDG_CACHE_HOME: cache };
-  const inspect = () => readUpdateStateSchemaVersions({ stateDir, config: {}, env });
-  try {
-    // Only WAL records the committed candidate version; the main header stays at 3.
-    writer.exec("BEGIN IMMEDIATE; PRAGMA user_version=4; COMMIT;");
-    const baseline = await inspect();
-    expect(baseline).toContainEqual({ path: agentPath, userVersion: 4 });
-    expect(baseline).toContainEqual({ path: sharedPath, userVersion: 15, contentVersion: 16 });
-    expect(baseline).toContainEqual({
-      path: path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite"),
-      userVersion: null,
-    });
-    expect(fs.readFileSync(copiedShared, "utf8")).toBe("copied");
-    const comparison = { sharedPath, candidateSchemaVersions: { state: 16, agent: 5 } };
-    expect(updateStateSchemaVersionsMatch(baseline, await inspect(), comparison)).toBe(true);
-    writer.exec("BEGIN IMMEDIATE; PRAGMA user_version=5; COMMIT;");
-    const migrated = await inspect();
-    expect(migrated).toContainEqual({ path: agentPath, userVersion: 5 });
-    expect(updateStateSchemaVersionsMatch(baseline, migrated, comparison)).toBe(false);
-    expect(
-      fs.existsSync(path.join(cache, "openclaw"))
-        ? fs.readdirSync(path.join(cache, "openclaw"))
-        : [],
-    ).toEqual([]);
-  } finally {
-    writer.close();
-  }
+  const read = () => inspect(stateDir, { env });
+  // Only WAL records the committed candidate version; the main header stays at 3.
+  writer.exec("BEGIN IMMEDIATE; PRAGMA user_version=4; COMMIT;");
+  const baseline = await read();
+  expect(baseline).toEqual(
+    expect.arrayContaining([
+      { path: agentPath, userVersion: 4 },
+      { path: sharedPath, userVersion: 15, contentVersion: 16 },
+      { path: agentFile(stateDir), userVersion: null },
+    ]),
+  );
+  expect(fs.readFileSync(copiedShared, "utf8")).toBe("copied");
+  const comparison = { sharedPath, candidateSchemaVersions: { state: 16, agent: 5 } };
+  expect(updateStateSchemaVersionsMatch(baseline, await read(), comparison)).toBe(true);
+  writer.exec("BEGIN IMMEDIATE; PRAGMA user_version=5; COMMIT;");
+  const migrated = await read();
+  expect(migrated).toContainEqual({ path: agentPath, userVersion: 5 });
+  expect(updateStateSchemaVersionsMatch(baseline, migrated, comparison)).toBe(false);
+  expect(
+    fs.existsSync(path.join(cache, "openclaw")) ? fs.readdirSync(path.join(cache, "openclaw")) : [],
+  ).toEqual([]);
 });
 
 async function writeInstalledCandidateWorkers(packageRoot: string, legacy: boolean): Promise<void> {
@@ -330,14 +364,12 @@ it.each([
     const stateDir = path.join(root, "state-owner");
     const shared = path.join(stateDir, "state", "openclaw.sqlite");
     const external = path.join(root, "registered.sqlite");
-    fs.mkdirSync(path.dirname(shared), { recursive: true });
-    const agent = openNodeSqliteDatabase(external);
-    agent.exec("PRAGMA user_version = 7;");
-    agent.close();
-    const db = openNodeSqliteDatabase(shared);
-    db.exec("PRAGMA user_version = 3; CREATE TABLE agent_databases (path TEXT);");
-    db.prepare("INSERT INTO agent_databases VALUES (?)").run(external);
-    db.close();
+    createDatabase(external, "PRAGMA user_version = 7;");
+    createDatabase(
+      shared,
+      "PRAGMA user_version = 3; CREATE TABLE agent_databases (path TEXT);",
+      external,
+    );
     const sourceBytes = fs.readFileSync(shared);
     const previousRoot = path.join(root, "previous-package");
     const candidateRoot =
@@ -354,7 +386,7 @@ it.each([
       });
     }
     try {
-      const before = await readUpdateStateSchemaVersions({ stateDir, config: {} });
+      const before = await inspect(stateDir);
       expect(before).toEqual([
         { path: shared, userVersion: 3 },
         { path: external, userVersion: 7 },
@@ -375,9 +407,7 @@ it.each([
         );
       }
       const report = path.join(root, "snapshot.json");
-      const after = await readUpdateStateSchemaVersions({
-        stateDir,
-        config: {},
+      const after = await inspect(stateDir, {
         root: candidateRoot,
         nodeRunner,
         env: {

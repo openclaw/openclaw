@@ -4,8 +4,10 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
+import { withSessionMutationOperations } from "../../lib/sessions/session-mutation-operations.ts";
 import type { GatewayRequestHandler } from "../../test-helpers/gateway-client.ts";
 import { createMountedPanes, refreshPane } from "./chat-pane-mounted.test-support.ts";
+import { mountSettings, settingsAck, settingsRow } from "./chat-pane-settings.test-support.ts";
 import { switchChatSetting } from "./chat-session.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
 import {
@@ -26,18 +28,13 @@ it.each([
 ] as const)(
   "reconciles a held settings preview with authoritative publication: %s",
   async (change) => {
-    const initial: GatewaySessionRow = {
-      key: "agent:main:settings-publication",
-      agentId: "main",
+    const initial = settingsRow("settings-publication", {
       sessionId: "current-session",
-      kind: "direct",
-      updatedAt: 1,
       label: "Original label",
-      thinkingLevel: "high",
       fastMode: false,
       effectiveFastMode: false,
       contextWindow: "64k",
-    };
+    });
     const other: GatewaySessionRow = {
       ...initial,
       key: "agent:main:unrelated",
@@ -49,23 +46,13 @@ it.each([
     const rows = unrelated ? [initial, other] : [initial];
     const acknowledgement = createDeferred<unknown>();
     const patch = vi.fn<GatewayRequestHandler>(() => acknowledgement.promise);
-    const { sessions, mount, emitGatewayEvent } = createMountedPanes(rows, "main", undefined, {
+    const fixture = createMountedPanes(rows, "main", undefined, {
       "sessions.patch": patch,
     });
+    const { sessions, emitGatewayEvent } = fixture;
     let operation: Promise<boolean> | undefined;
     try {
-      await sessions.refresh({ agentId: "main", force: true });
-      const panes = [mount(initial.key), mount(initial.key)];
-      await Promise.all(panes.map(refreshPane));
-      const assertRows = (expected: GatewaySessionRow) => {
-        expect(sessions.state.result?.sessions.filter((row) => row.key === initial.key)).toEqual([
-          expect.objectContaining(expected),
-        ]);
-        for (const pane of panes) {
-          expect(pane.state.currentSessionId).toBe(expected.sessionId);
-          expect(selectedChatSessionRow(pane.state)).toMatchObject(expected);
-        }
-      };
+      const { panes, assertRows } = await mountSettings(fixture, initial, true);
       assertRows(initial);
       const pendingFields: Partial<GatewaySessionRow> =
         change === "speed" ? { fastMode: true, effectiveFastMode: true } : { thinkingLevel: "off" };
@@ -73,12 +60,13 @@ it.each([
         change === "speed"
           ? switchChatSetting(panes[0]!.state, { kind: "fastMode", value: "on" })
           : switchChatSetting(panes[0]!.state, { kind: "thinkingLevel", value: "off" });
+      assertRows({ ...initial, ...pendingFields });
+      await withSessionMutationOperations(() => undefined);
       expect(patch).toHaveBeenCalledOnce();
       expect(patch.mock.calls[0]?.[1]).toMatchObject({
         key: initial.key,
         ...(change === "speed" ? { fastMode: true } : { thinkingLevel: "off" }),
       });
-      assertRows({ ...initial, ...pendingFields });
       let authoritative = initial;
       if (unrelated) {
         rows[1] = { ...other, updatedAt: 2, label: "Unrelated publication" };
@@ -127,7 +115,7 @@ it.each([
       if (confirmed) {
         authoritative = { ...initial, thinkingLevel: "off", updatedAt: 3 };
         rows[0] = authoritative;
-        acknowledgement.resolve({ ok: true, key: initial.key, path: "", entry: authoritative });
+        acknowledgement.resolve(settingsAck(initial, authoritative));
       } else {
         acknowledgement.reject(new Error("Synthetic settings rejection after publication"));
       }
@@ -144,14 +132,12 @@ it.each([
 it.each(["qualified", "global"] as const)(
   "keeps a descriptor-only thinking preview and rollback with its caller (%s)",
   async (scope) => {
-    const primary: GatewaySessionRow = {
+    const primary = settingsRow("primary", {
       key: scope === "global" ? "global" : "agent:main:primary",
-      agentId: "main",
       sessionId: "same-id-in-separate-agent-stores",
       kind: scope === "global" ? "global" : "direct",
-      updatedAt: 1,
       thinkingLevel: "medium",
-    };
+    });
     const target: GatewaySessionRow = {
       ...primary,
       key: scope === "global" ? "global" : "agent:research:held-effort",
@@ -160,15 +146,11 @@ it.each(["qualified", "global"] as const)(
     };
     const acknowledgement = createDeferred<unknown>();
     const patch = vi.fn<GatewayRequestHandler>(() => acknowledgement.promise);
-    const { sessions, mount, emitGatewayEvent } = createMountedPanes(
-      [primary, target],
-      "main",
-      undefined,
-      {
-        "sessions.list": () => sessionsResult([primary], 1),
-        "sessions.patch": patch,
-      },
-    );
+    const fixture = createMountedPanes([primary, target], "main", undefined, {
+      "sessions.list": () => sessionsResult([primary], 1),
+      "sessions.patch": patch,
+    });
+    const { sessions, mount, emitGatewayEvent } = fixture;
     let operation: Promise<boolean> | undefined;
     try {
       await sessions.refresh({ agentId: "main", force: true });
@@ -186,7 +168,6 @@ it.each(["qualified", "global"] as const)(
         expect(selectedChatSessionRow(pane.state)).toMatchObject(target);
       }
       operation = switchChatSetting(panes[0]!.state, { kind: "thinkingLevel", value: "off" });
-      expect(patch.mock.calls[0]?.[1]).toMatchObject({ key: target.key, thinkingLevel: "off" });
       const assertOwned = (thinkingLevel: string) => {
         expect(selectedChatSessionRow(main.state)).toMatchObject(primary);
         expect(sessions.state.result?.sessions).toEqual([expect.objectContaining(primary)]);
@@ -201,6 +182,8 @@ it.each(["qualified", "global"] as const)(
         }
       };
       assertOwned("off");
+      await withSessionMutationOperations(() => undefined);
+      expect(patch.mock.calls[0]?.[1]).toMatchObject({ key: target.key, thinkingLevel: "off" });
       emitGatewayEvent("sessions.changed", {
         sessionKey: primary.key,
         agentId: "main",
@@ -219,7 +202,7 @@ it.each(["qualified", "global"] as const)(
         expect(selectedChatSessionRow(pane.state)).toMatchObject(target);
       }
     } finally {
-      acknowledgement.resolve({ ok: true, key: target.key, path: "", entry: target });
+      acknowledgement.resolve(settingsAck(target, target));
       await operation;
       await vi.dynamicImportSettled();
     }
@@ -229,24 +212,13 @@ it.each(["qualified", "global"] as const)(
 it.each(["delayed", "failed"] as const)(
   "retains a standalone thinking ACK when the canonical read is %s",
   async (read) => {
-    const initial: GatewaySessionRow = {
-      key: "agent:main:settings-ack",
-      agentId: "main",
-      sessionId: "settings-ack-session",
-      kind: "direct",
-      updatedAt: 1,
-      thinkingLevel: "high",
+    const initial = settingsRow("settings-ack", {
       fastMode: false,
       effectiveFastMode: false,
       contextWindow: "64k",
-    };
+    });
     const fields = { thinkingLevel: "off" };
-    const acknowledgement = {
-      ok: true,
-      key: initial.key,
-      path: "",
-      entry: { sessionId: initial.sessionId, updatedAt: 2, ...fields },
-    };
+    const acknowledgement = settingsAck(initial, { updatedAt: 2, ...fields });
     const readStarted = createDeferred();
     const readReply = createDeferred<ReturnType<typeof sessionsResult>>();
     let acknowledged = false;
@@ -254,7 +226,7 @@ it.each(["delayed", "failed"] as const)(
       acknowledged = true;
       return acknowledgement;
     });
-    const { sessions, mount } = createMountedPanes([initial], "main", undefined, {
+    const fixture = createMountedPanes([initial], "main", undefined, {
       "sessions.patch": patch,
       "sessions.list": () => {
         if (!acknowledged) {
@@ -267,11 +239,10 @@ it.each(["delayed", "failed"] as const)(
         return readReply.promise;
       },
     });
+    const { sessions } = fixture;
     let operation: ReturnType<typeof sessions.patch> | undefined;
     try {
-      await sessions.refresh({ agentId: "main", force: true });
-      const panes = [mount(initial.key), mount(initial.key)];
-      await Promise.all(panes.map(refreshPane));
+      const { assertRows } = await mountSettings(fixture, initial);
       operation = sessions.patch(initial.key, fields, { agentId: "main" });
       await Promise.race([
         readStarted.promise,
@@ -286,11 +257,7 @@ it.each(["delayed", "failed"] as const)(
       });
       const assertReceiptFields = () => {
         const expected = { key: initial.key, sessionId: initial.sessionId, ...fields };
-        expect(sessions.state.result?.sessions).toEqual([expect.objectContaining(expected)]);
-        for (const pane of panes) {
-          expect(pane.state.currentSessionId).toBe(initial.sessionId);
-          expect(selectedChatSessionRow(pane.state)).toMatchObject(expected);
-        }
+        assertRows(expected);
       };
       assertReceiptFields();
       readReply.resolve(sessionsResult([initial], 1));
@@ -308,14 +275,7 @@ it.each(["delayed", "failed"] as const)(
 it.each(["confirmed", "rejected", "both-rejected"] as const)(
   "settles overlapping settings without retiring the latest pending choice (%s)",
   async (outcome) => {
-    const initial: GatewaySessionRow = {
-      key: "agent:main:settings-own-event",
-      agentId: "main",
-      sessionId: "settings-own-event-session",
-      kind: "direct",
-      updatedAt: 1,
-      thinkingLevel: "high",
-    };
+    const initial = settingsRow("settings-own-event");
     const firstCommitted = { ...initial, updatedAt: 2, thinkingLevel: "off" };
     const secondCommitted = { ...initial, updatedAt: 3, thinkingLevel: "low" };
     const rows = [initial];
@@ -332,28 +292,22 @@ it.each(["confirmed", "rejected", "both-rejected"] as const)(
       secondDispatched.resolve();
       return secondReply.promise;
     });
-    const { sessions, mount, emitGatewayEvent } = createMountedPanes(rows, "main", undefined, {
+    const fixture = createMountedPanes(rows, "main", undefined, {
       "sessions.patch": patch,
     });
+    const { emitGatewayEvent } = fixture;
     let first: Promise<boolean> | undefined;
     let second: Promise<boolean> | undefined;
     let secondSettled = false;
     try {
-      await sessions.refresh({ agentId: "main", force: true });
-      const panes = [mount(initial.key), mount(initial.key)];
-      await Promise.all(panes.map(refreshPane));
-      const assertThinking = (thinkingLevel: string) => {
-        const expected = { key: initial.key, sessionId: initial.sessionId, thinkingLevel };
-        expect(sessions.state.result?.sessions).toEqual([expect.objectContaining(expected)]);
-        for (const pane of panes) {
-          expect(pane.state.currentSessionId).toBe(initial.sessionId);
-          expect(selectedChatSessionRow(pane.state)).toMatchObject(expected);
-        }
-      };
+      const { panes, assertRows } = await mountSettings(fixture, initial);
+      const assertThinking = (thinkingLevel: string) =>
+        assertRows({ key: initial.key, sessionId: initial.sessionId, thinkingLevel });
       assertThinking("high");
       first = switchChatSetting(panes[0]!.state, { kind: "thinkingLevel", value: "off" });
-      expect(patch).toHaveBeenCalledOnce();
       assertThinking("off");
+      await withSessionMutationOperations(() => undefined);
+      expect(patch).toHaveBeenCalledOnce();
       second = switchChatSetting(panes[1]!.state, { kind: "thinkingLevel", value: "low" });
       void second.then(
         () => {
@@ -363,8 +317,8 @@ it.each(["confirmed", "rejected", "both-rejected"] as const)(
           secondSettled = true;
         },
       );
-      expect(patch).toHaveBeenCalledOnce();
       assertThinking("low");
+      expect(patch).toHaveBeenCalledOnce();
       if (outcome === "both-rejected") {
         firstReply.reject(new Error("Synthetic first settings rejection"));
       } else {
@@ -377,7 +331,7 @@ it.each(["confirmed", "rejected", "both-rejected"] as const)(
           session: firstCommitted,
         });
         assertThinking("low");
-        firstReply.resolve({ ok: true, key: initial.key, path: "", entry: firstCommitted });
+        firstReply.resolve(settingsAck(initial, firstCommitted));
       }
       await expect(first).resolves.toBe(outcome !== "both-rejected");
       await Promise.race([secondDispatched.promise, second]);
@@ -386,7 +340,7 @@ it.each(["confirmed", "rejected", "both-rejected"] as const)(
       assertThinking("low");
       if (outcome === "confirmed") {
         rows[0] = secondCommitted;
-        secondReply.resolve({ ok: true, key: initial.key, path: "", entry: secondCommitted });
+        secondReply.resolve(settingsAck(initial, secondCommitted));
       } else {
         secondReply.reject(new Error("Synthetic latest settings rejection"));
       }

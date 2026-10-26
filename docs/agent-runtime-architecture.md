@@ -84,8 +84,11 @@ serial. Pools create workers on demand and use their existing idle retirement.
 Physical session disk accounting uses the reader limit so independent stores can
 scan concurrently without creating a worker for each store.
 Shared-state readers retain at least two slots so a held settlement read cannot
-block a fresh catalog read. Foreground transcript and SQLite broker pools keep
-their separate sizing policies.
+block a fresh catalog read. Foreground transcript history and search also use the
+two-worker reader cap. The SQLite broker multiplexes independent database owners
+over two writer isolates, preserving per-database ordering without multiplying
+loaded backends on high-core hosts. These pools keep their existing admission and
+native-resource cleanup owners.
 
 File-tool workers perform pure edit matching, Unicode normalization, and diff
 computation. One prepared patch supplies both display and unified-patch receipts,
@@ -115,6 +118,13 @@ the pool's idle timeout. Local `node:diagnostics_channel` subscribers to
 `openclaw.worker.task` can observe queue, preparation, execution wall time,
 message transfer time, and pending task/input counts. These events contain no
 task inputs; execution wall time includes worker startup and host waits.
+
+Model-context transcript reads have a three-minute local worker deadline to allow
+for cold startup on slow hardware. Caller cancellation still stops the read.
+A local worker deadline stops model fallback and does not mark provider credentials
+unhealthy. Context-read failures report “Context preparation timed out locally”;
+retry the request and check Gateway logs for slow context reads if it persists.
+An actual provider HTTP 408 retains the provider timeout and fallback policy.
 
 ## Related
 

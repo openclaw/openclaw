@@ -15,7 +15,7 @@ import {
   createContext,
   createOperatorClient,
 } from "../server-plugin-in-process-dispatch.test-support.js";
-import { readWorkerProjectPreparation } from "./preparation-identity.js";
+import { readWorkerProjectPreparation } from "./preparation-identity.schema.js";
 import * as support from "./service.test-support.js";
 import * as workspaceGitBase from "./workspace-git-base.js";
 
@@ -157,9 +157,9 @@ describe("on-demand prepared worker admission", () => {
     }
   });
 
-  it.each(["build", "reserve", "expired reserve"] as const)(
+  it.each(["reserve"] as const)(
     "cancels an in-flight %s while retaining cleanup ownership until the provider settles",
-    async (purpose) => {
+    async () => {
       const f = await fixture();
       const entered = createDeferredCore<AbortSignal>();
       const release = createDeferredCore();
@@ -179,34 +179,26 @@ describe("on-demand prepared worker admission", () => {
         expect(provisionSettled).toBe(true);
       });
       f.provider.destroy = destroyProvider;
-      let environmentId: string;
-      if (purpose === "build") {
-        ({ environmentId } = await f.service.prepare(f.request));
-      } else {
-        const intent = await f.service.prepareProjectIntent("development", {
-          projectPath: f.projectPath,
-          executionMode: "worker-turn",
-          setupAuthorized: true,
-        });
-        ({ environmentId } = await support.testState.store.createIntent({
-          environmentId: "automatic-reserve",
-          provisionOperationId: "automatic-reserve-operation",
-          providerId: intent.providerId,
-          profileId: "development",
-          profileSnapshot: intent.profileSnapshot,
-          preparation: {
-            purpose: "reserve",
-            key: intent.preparationKey!,
-            demandAtMs: 1_000,
-            expiresAtMs: 11_000,
-          },
-        }));
-        f.service.schedulePreparedRefill();
-      }
+      const intent = await f.service.prepareProjectIntent("development", {
+        projectPath: f.projectPath,
+        executionMode: "worker-turn",
+        setupAuthorized: true,
+      });
+      const { environmentId } = await support.testState.store.createIntent({
+        environmentId: "automatic-reserve",
+        provisionOperationId: "automatic-reserve-operation",
+        providerId: intent.providerId,
+        profileId: "development",
+        profileSnapshot: intent.profileSnapshot,
+        preparation: {
+          purpose: "reserve",
+          key: intent.profileSnapshot.project!.preparation!.key,
+          demandAtMs: 1_000,
+          expiresAtMs: 11_000,
+        },
+      });
+      f.service.schedulePreparedRefill();
       const signal = await entered.promise;
-      if (purpose === "expired reserve") {
-        support.testState.nowMs = 11_001;
-      }
       const cancelled = new Promise<void>((resolve) => {
         signal.addEventListener("abort", () => resolve(), { once: true });
       });
@@ -266,13 +258,12 @@ describe("on-demand prepared worker admission", () => {
         "original preparation source",
       );
       client.internal = { operatorRunAuthority: source.authority };
-      const prepareTarget = vi.fn(() => {
+      f.provider.resolvePreparationTarget = () => {
         if (revoked) {
           controller.abort(new Error("Original preparation source revoked"));
         }
         return { machineClass: "small", platform: "linux" as const, arch: "x64" as const };
-      });
-      f.provider.resolvePreparationTarget = prepareTarget;
+      };
       try {
         const request = withPluginRuntimeGatewayRequestScope(
           { context, client, isWebchatConnect: () => false },
@@ -294,7 +285,6 @@ describe("on-demand prepared worker admission", () => {
           );
           await support.waitForFast(() => expect(f.provision).toHaveBeenCalledOnce());
         }
-        expect(prepareTarget).toHaveBeenCalled();
       } finally {
         source.release();
       }

@@ -1,11 +1,77 @@
+import { createHash } from "node:crypto";
 import os from "node:os";
+import { runGitBuffered } from "../../agents/worktrees/git.js";
 import { enqueueGitRefMutation, gitCommandArgv } from "../../infra/git-exec.js";
-import { runCommandWithTimeout } from "../../process/exec.js";
+import { withGitProcessOperation } from "../../process/spawn-diagnostics.js";
+import { resolveGlobalMap } from "../../shared/global-singleton.js";
+import type { StagedWorkerWorkspaceInventory } from "./workspace-result-inventory.js";
+
+type StagedManifestReads = Map<string, Promise<StagedWorkerWorkspaceInventory>>;
+const stagedManifestReads = resolveGlobalMap<AbortSignal | undefined, StagedManifestReads>(
+  Symbol.for("openclaw.workspaceStagedManifestReads"),
+);
+
+/** Shares only pending reads; result-ref writers invalidate admission on both sides. */
+export function joinStagedWorkspaceManifestRead(
+  input: { root: string; ref: string; buildCacheInputs?: string[] },
+  signal: AbortSignal | undefined,
+  read: () => Promise<StagedWorkerWorkspaceInventory>,
+): Promise<StagedWorkerWorkspaceInventory> {
+  signal?.throwIfAborted();
+  // The broker captures this environment and input synchronously at admission.
+  // Hash the complete environment so Git policy differs without retaining credentials.
+  const key = createHash("sha256")
+    .update(
+      JSON.stringify([
+        process.cwd(),
+        input,
+        Object.entries(process.env).toSorted(([left], [right]) => left.localeCompare(right)),
+      ]),
+    )
+    .digest("hex");
+  const reads: StagedManifestReads = stagedManifestReads.get(signal) ?? new Map();
+  const pending = reads.get(key);
+  if (pending) {
+    return pending;
+  }
+  const operation = read();
+  stagedManifestReads.set(signal, reads);
+  reads.set(key, operation);
+  const settled = () => {
+    reads.delete(key);
+    if (reads.size === 0 && stagedManifestReads.get(signal) === reads) {
+      stagedManifestReads.delete(signal);
+    }
+  };
+  void operation.then(settled, settled);
+  return operation;
+}
 
 export const WORKSPACE_RESULT_GIT_TIMEOUT_MS = 10 * 60_000;
 
 export function workspaceResultCheckpointInitArgs(): string[] {
   return ["init", "--quiet", "--bare", "--object-format=sha1"];
+}
+
+export async function readWorkspaceResultGit(
+  root: string,
+  args: string[],
+  options: { maxOutputBytes: number; input?: Uint8Array },
+  failureMessage = `git ${args[0]} failed`,
+): Promise<Buffer> {
+  const result = await withGitProcessOperation(
+    "workspace.result",
+    () =>
+      runGitBuffered(root, args, {
+        timeoutMs: WORKSPACE_RESULT_GIT_TIMEOUT_MS,
+        ...options,
+      }),
+    "default",
+  );
+  if (result.termination !== "exit" || result.code !== 0) {
+    throw new Error(result.stderr.toString("utf8").trim() || failureMessage);
+  }
+  return result.stdout;
 }
 
 export function workspaceResultGitCommand(cwd: string, args: string[]): string[] {
@@ -21,13 +87,19 @@ export async function requireWorkspaceResultGit(
   args: string[],
   options: { input?: Uint8Array; baseEnv?: NodeJS.ProcessEnv; beforeInput?: () => void } = {},
 ): Promise<string> {
-  const result = await runCommandWithTimeout(workspaceResultGitCommand(cwd, args), {
-    timeoutMs: WORKSPACE_RESULT_GIT_TIMEOUT_MS,
-    maxOutputBytes: 1024 * 1024,
-    baseEnv: options.baseEnv,
-    input: options.input,
-    beforeInput: options.beforeInput,
-  });
+  const { runCommandWithTimeout } = await import("../../process/exec.js");
+  const result = await withGitProcessOperation(
+    "workspace.result",
+    () =>
+      runCommandWithTimeout(workspaceResultGitCommand(cwd, args), {
+        timeoutMs: WORKSPACE_RESULT_GIT_TIMEOUT_MS,
+        maxOutputBytes: 1024 * 1024,
+        baseEnv: options.baseEnv,
+        input: options.input,
+        beforeInput: options.beforeInput,
+      }),
+    "default",
+  );
   if (result.termination !== "exit" || result.code !== 0) {
     throw new Error((result.stderr || result.stdout || `git ${args[0]} failed`).trim());
   }
@@ -44,7 +116,16 @@ export async function withWorkspaceResultRefMutation<T>(
   const common = await requireWorkspaceResultGit(root, ["rev-parse", "--git-common-dir"], {
     baseEnv,
   });
-  return await enqueueGitRefMutation(root, common, () => operation(baseEnv));
+  return await enqueueGitRefMutation(root, common, async () => {
+    // Clear lookup only: admitted reads keep their outcome, but later readers must
+    // observe the ref mutation, including aliases and partially failed writes.
+    stagedManifestReads.clear();
+    try {
+      return await operation(baseEnv);
+    } finally {
+      stagedManifestReads.clear();
+    }
+  });
 }
 
 type WorkspaceResultRefUpdate = { ref: string; objectId?: string };

@@ -3,6 +3,7 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiChatHistoryMessage } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -98,26 +99,16 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         featureMethods: ["chat.metadata", "chat.startup", "sessions.patch", "tools.effective"],
         historyMessages: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "text",
-                text: "Review the release dashboard and flag anything that needs attention.",
-              },
-            ],
-            timestamp: Date.now() - 60_000,
-          },
-          {
-            role: "assistant",
-            content: [
-              {
-                type: "text",
-                text: "The rollout is healthy. I found two follow-ups:\n\n- Confirm the mobile smoke lane\n- Review the connector permission changes",
-              },
-            ],
-            timestamp: Date.now() - 30_000,
-          },
+          createControlUiChatHistoryMessage(
+            "user",
+            "Review the release dashboard and flag anything that needs attention.",
+            Date.now() - 60_000,
+          ),
+          createControlUiChatHistoryMessage(
+            "assistant",
+            "The rollout is healthy. I found two follow-ups:\n\n- Confirm the mobile smoke lane\n- Review the connector permission changes",
+            Date.now() - 30_000,
+          ),
         ],
         methodResponses: {
           "config.get": configResponse(),
@@ -132,14 +123,14 @@ suite.define(() => {
       });
 
       await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       const composer = page.locator(".agent-chat__input");
       await expect.poll(() => composer.isVisible()).toBe(true);
-      const dropdown = composer.locator("wa-dropdown.agent-chat__capability-menu");
+      const dropdown = composer.locator(".agent-chat__capability-menu");
       const attach = composer.locator("button.agent-chat__input-btn--attach");
       await expect.poll(() => attach.isVisible()).toBe(true);
       await attach.click();
-      await dropdown.locator('[value="open-skills"]').click();
+      await dropdown.locator('[data-value="open-skills"]').click();
       await expect.poll(() => dropdown.getAttribute("data-view")).toBe("skills");
 
       const artifactDirParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
@@ -156,7 +147,7 @@ suite.define(() => {
         }, theme);
         await page.waitForTimeout(50);
         const menuCenter = await dropdown.evaluate((node) => {
-          const menu = node.shadowRoot?.querySelector<HTMLElement>('[part="menu"]');
+          const menu = node.querySelector<HTMLElement>(".oc-menu");
           if (!menu) {
             throw new Error("expected capability menu bounds");
           }
@@ -172,9 +163,9 @@ suite.define(() => {
 
       const inspectView = async (view: string) => {
         const layout = await dropdown.evaluate((node) => {
-          const menu = node.shadowRoot?.querySelector<HTMLElement>('[part="menu"]');
+          const menu = node.querySelector<HTMLElement>(".oc-menu");
           const composerElement = node.closest<HTMLElement>(".agent-chat__input");
-          const back = node.querySelector<HTMLElement>('[value="back"]');
+          const back = node.querySelector<HTMLElement>('[data-value="back"]');
           if (!menu || !composerElement || !back) {
             throw new Error("expected capability menu layout");
           }
@@ -185,7 +176,7 @@ suite.define(() => {
           return {
             backOffset: backRect.top - menuRect.top,
             clientHeight: menu.clientHeight,
-            maxHeight: Number.parseFloat(style.maxHeight),
+            height: menuRect.height,
             overscrollY: style.overscrollBehaviorY,
             scrollHeight: menu.scrollHeight,
             scrollTop: menu.scrollTop,
@@ -204,8 +195,8 @@ suite.define(() => {
 
       const layouts = [await inspectView("skills")];
 
-      const back = dropdown.locator('[value="back"]');
-      const interactionTarget = dropdown.locator('[value="skill:19"]');
+      const back = dropdown.locator('[data-value="back"]');
+      const interactionTarget = dropdown.locator('[data-value="skill:skill-20"]');
       const captureInteraction = async (state: "focus" | "hover", theme: "dark" | "light") => {
         await page.evaluate((mode) => {
           document.documentElement.dataset.themeMode = mode;
@@ -236,8 +227,8 @@ suite.define(() => {
         await expect
           .poll(() =>
             dropdown.evaluate((node, target) => {
-              const menu = node.shadowRoot?.querySelector<HTMLElement>('[part="menu"]');
-              const backRow = node.querySelector<HTMLElement>('[value="back"]');
+              const menu = node.querySelector<HTMLElement>(".oc-menu");
+              const backRow = node.querySelector<HTMLElement>('[data-value="back"]');
               const targetRow = node.querySelector<HTMLElement>(target);
               if (!menu || !backRow || !targetRow) {
                 return false;
@@ -253,7 +244,7 @@ suite.define(() => {
                 targetRect.top >= menuRect.top &&
                 targetRect.bottom <= menuRect.bottom
               );
-            }, '[value="skill:19"]'),
+            }, '[data-value="skill:skill-20"]'),
           )
           .toBe(true);
 
@@ -289,11 +280,11 @@ suite.define(() => {
       await captureInteraction("focus", "light");
 
       await back.click();
-      await dropdown.locator('[value="open-connectors"]').click();
+      await dropdown.locator('[data-value="open-connectors"]').click();
       await expect.poll(() => dropdown.getAttribute("data-view")).toBe("connectors");
       layouts.push(await inspectView("connectors"));
 
-      await dropdown.locator('[value="tools:0"]').click();
+      await dropdown.locator('[data-value="tools:connector-00"]').click();
       await expect.poll(() => dropdown.getAttribute("data-view")).toBe("tools:connector-00");
       await expect.poll(() => dropdown.getByText("28 of 28 tools on").isVisible()).toBe(true);
       layouts.push(await inspectView("tool-access"));
@@ -310,8 +301,8 @@ suite.define(() => {
         expect(compactHeightCap).toBe(420);
         expect(layout.scrollHeight).toBeGreaterThan(layout.clientHeight);
         expect(layout.scrollTop).toBeGreaterThan(0);
-        expect(layout.maxHeight).toBeGreaterThanOrEqual(compactHeightCap - 1);
-        expect(layout.maxHeight).toBeLessThanOrEqual(compactHeightCap + 1);
+        expect(layout.height).toBeGreaterThanOrEqual(compactHeightCap - 1);
+        expect(layout.height).toBeLessThanOrEqual(compactHeightCap + 1);
         expect(layout.clientHeight).toBeLessThanOrEqual(compactHeightCap + 1);
         expect(layout.overscrollY).toBe("contain");
         expect(layout.backOffset).toBeGreaterThanOrEqual(0);

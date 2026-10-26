@@ -29,7 +29,7 @@ Use the verified stable release with an exact pin:
 npm install --save-exact @openclaw/gateway-protocol@2026.8.1
 ```
 
-This release declares Node.js `>=22.19.0`. See the canonical
+This release declares Node.js `>=22.19.0`. See the
 [installation guide](https://docs.openclaw.ai/gateway/clients#install-the-packages)
 for the matching client package, package/wire-version rules, and recovery from
 reserved `0.0.0` artifacts. Test it with the Gateway version you deploy; the root
@@ -57,13 +57,21 @@ reserved `0.0.0` artifacts. Test it with the Gateway version you deploy; the roo
 The `frame-guards`, `client-info`, `connect-error-details`, `gateway-error-details`,
 `startup-unavailable`, and `version` entry points are TypeBox-free. Prefer them when
 a browser bundle only needs envelope dispatch, handshake constants, or reconnect
-policy. This also avoids runtime compilation in CSP-sensitive consumers. The root
-and `schema` entry points provide the full validation surface and depend on TypeBox.
+policy. This also avoids loading the full schema and diagnostic graph. The root
+and `schema` entry points provide the full validation surface and depend on TypeBox;
+their fixed validators do not require string code generation.
 
 ## Validate an inbound frame
 
 The compiled validators are callable type guards. Their `errors` property contains
 the most recent validation errors.
+
+Fixed protocol checks are generated from their canonical schemas during development
+and shipped as JavaScript; starting a client or validating its first request does
+not compile validator source. Invalid input still receives the same schema-based
+diagnostics, and each validator exposes its original `schema`. After changing a
+protocol schema, run `pnpm gateway:validators:gen` from the workspace root;
+`pnpm gateway:validators:check` verifies that the checked-in validators are current.
 
 ```ts
 import { formatValidationErrors, validateRequestFrame } from "@openclaw/gateway-protocol";
@@ -83,7 +91,7 @@ validators as `validate*Params` functions.
 
 External lifecycle controllers can validate suspension responses with
 `validateGatewaySuspendPrepareResult` and `validateGatewaySuspendStatusResult`.
-These use the canonical result schemas without changing the payload. Preserve
+These use the shared result schemas without changing the payload. Preserve
 optional `writeCustody`: absence means unknown custody, not an empty list. Phase
 names are open strings; consumers must not discard an unfamiliar owner phase.
 Validation does not authorize a stop or replace lease, process-identity, and

@@ -4,8 +4,8 @@ import { createInterface } from "node:readline";
 import * as json5 from "json5";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { acquireGatewayLock, type GatewayLockHandle } from "../../infra/gateway-lock.js";
-import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { registerSealedRuntime } from "../../infra/sealed-runtime-registry.js";
+import { setLoggerOverride } from "../../logging/logger.js";
 import { resolveSandboxContext } from "../../plugin-sdk/agent-harness-runtime.js";
 import { createPluginRuntime } from "../../plugins/runtime/index.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
@@ -17,31 +17,12 @@ const root = process.env.OPENCLAW_HOME!;
 const control = path.join(root, "control");
 fs.mkdirSync(control, { recursive: true });
 registerSealedRuntime({ json5, resolveSecureTempRoot: () => control });
-let callerSql = 0;
-const native = requireNodeSqlite();
-for (const method of ["prepare", "exec"] as const) {
-  Object.defineProperty(native.DatabaseSync.prototype, method, {
-    ...Object.getOwnPropertyDescriptor(native.DatabaseSync.prototype, method),
-    value: new Proxy(native.DatabaseSync.prototype[method], {
-      apply(target, receiver, args) {
-        callerSql++;
-        return Reflect.apply(target, receiver, args);
-      },
-    }),
-  });
-}
-for (const method of ["get", "all", "run", "iterate"] as const) {
-  Object.defineProperty(native.StatementSync.prototype, method, {
-    ...Object.getOwnPropertyDescriptor(native.StatementSync.prototype, method),
-    value: new Proxy(native.StatementSync.prototype[method], {
-      apply(target, receiver, args) {
-        callerSql++;
-        return Reflect.apply(target, receiver, args);
-      },
-    }),
-  });
-}
+// Diagnostic logs are outside the state tree checked for foreign-owner mutations.
+setLoggerOverride({ file: process.env.OPENCLAW_TEST_LOG_FILE });
 let backendCalls = 0;
+const unusedCommand = async () => {
+  throw new Error("This fixture never executes a sandbox command");
+};
 const restoreBackend = registerSandboxBackend("docker", async (params) => {
   backendCalls++;
   return {
@@ -49,37 +30,33 @@ const restoreBackend = registerSandboxBackend("docker", async (params) => {
     runtimeId: `synthetic-${params.sessionKey}`,
     runtimeLabel: "synthetic SDK owner proof",
     workdir: "/workspace",
-    async buildExecSpec() {
-      throw new Error("This fixture never executes a sandbox command");
-    },
-    async runShellCommand() {
-      throw new Error("This fixture never executes a sandbox command");
-    },
+    buildExecSpec: unusedCommand,
+    runShellCommand: unusedCommand,
   };
 });
 const runtime = createPluginRuntime();
-const config: OpenClawConfig = {
-  agents: {
-    defaults: {
-      skipBootstrap: true,
-      sandbox: {
-        mode: "all",
-        scope: "session",
-        workspaceAccess: "rw",
-        prune: { idleHours: 0, maxAgeDays: 0 },
-        browser: { enabled: false },
-      },
+function makeConfig(mode: "all" | "off"): OpenClawConfig {
+  const sandbox = {
+    mode,
+    scope: "session",
+    workspaceAccess: "rw",
+    prune: { idleHours: 0, maxAgeDays: 0 },
+    browser: { enabled: false },
+  } as const;
+  return {
+    agents: {
+      defaults: { skipBootstrap: true, sandbox },
+      entries: { main: { workspace: path.join(root, "workspace") } },
     },
-    entries: { main: { workspace: path.join(root, "workspace") } },
-  },
-  tools: { elevated: { enabled: false }, sandbox: { tools: { allow: ["read"] } } },
-  skills: { load: { watch: false } },
-};
+    tools: { elevated: { enabled: false }, sandbox: { tools: { allow: ["read"] } } },
+    skills: { load: { watch: false } },
+  };
+}
+const config = makeConfig("all");
 fs.writeFileSync(process.env.OPENCLAW_CONFIG_PATH!, JSON.stringify(config));
 
 async function callApis(phase: string, selectedConfig = config, workspaceRoot = root) {
   const outcomes = [];
-  const sqlBefore = callerSql;
   const callsBefore = backendCalls;
   for (const api of ["resolveSandboxContext", "prepareWorkspaceAuthority"] as const) {
     const params = {
@@ -106,23 +83,19 @@ async function callApis(phase: string, selectedConfig = config, workspaceRoot = 
       });
     }
   }
-  return { outcomes, callerSql: callerSql - sqlBefore, backendCalls: backendCalls - callsBefore };
+  return { outcomes, backendCalls: backendCalls - callsBefore };
 }
+
+export type SdkStateOwnerReply = {
+  phase: string;
+  data: Awaited<ReturnType<typeof callApis>> & { entries?: Array<{ containerName: string }> };
+};
 
 const send = (phase: string, data: unknown = {}) =>
   process.stdout.write(`sdk-owner-proof:${JSON.stringify({ phase, data })}\n`);
 const workerRoot = path.join(root, "worker-shaped");
 fs.mkdirSync(workerRoot);
-const sandboxOffConfig: OpenClawConfig = {
-  ...config,
-  agents: {
-    ...config.agents,
-    defaults: {
-      ...config.agents?.defaults,
-      sandbox: { ...config.agents?.defaults?.sandbox, mode: "off" },
-    },
-  },
-};
+const sandboxOffConfig = makeConfig("off");
 
 async function closeDatabases() {
   await closeOpenClawAgentDatabasesAsync();

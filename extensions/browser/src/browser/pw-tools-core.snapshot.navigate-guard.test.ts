@@ -81,6 +81,21 @@ describe("pw-tools-core.snapshot navigate guard", () => {
     expect(goto).not.toHaveBeenCalled();
   });
 
+  it("cancels the navigation policy preflight before acquiring a page", async () => {
+    const controller = new AbortController();
+    const reason = new Error("navigation caller cancelled");
+    controller.abort(reason);
+
+    await expect(
+      mod.navigateViaPlaywright({
+        ...target,
+        url: "https://example.com",
+        signal: controller.signal,
+      }),
+    ).rejects.toBe(reason);
+    expect(getPwToolsCoreSessionMocks().getPageForTargetId).not.toHaveBeenCalled();
+  });
+
   it("returns managed download metadata when navigation starts an attachment download", async () => {
     const download = {
       url: "https://example.com/export.csv",
@@ -119,12 +134,10 @@ describe("pw-tools-core.snapshot navigate guard", () => {
   });
 
   it("handles capture timeouts that win before ordinary navigation settles", async () => {
-    let rejectCapture!: (err: Error) => void;
+    const { promise: capture, reject: rejectCapture } = Promise.withResolvers<never>();
     const downloadCapture = {
       armed: true,
-      promise: new Promise<never>((_, reject) => {
-        rejectCapture = reject;
-      }),
+      promise: capture,
       cancel: vi.fn(),
     };
     setPwToolsCoreDownloadCapture(downloadCapture);
@@ -182,54 +195,6 @@ describe("pw-tools-core.snapshot navigate guard", () => {
       page,
       targetId: "tab-1",
     });
-  });
-
-  it("surfaces managed download save failures", async () => {
-    const downloadCapture = {
-      armed: true,
-      promise: Promise.reject(new Error("download save failed")),
-      cancel: vi.fn(),
-    };
-    setPwToolsCoreDownloadCapture(downloadCapture);
-    setPwToolsCoreCurrentPage({
-      goto: vi.fn(async () => {
-        throw new Error("page.goto: Download is starting");
-      }),
-      url: vi.fn(() => "https://example.com/start"),
-    });
-
-    await expect(
-      mod.navigateViaPlaywright({
-        ...target,
-        url: "https://example.com/export.csv",
-        ssrfPolicy: { allowPrivateNetwork: true },
-      }),
-    ).rejects.toThrow("download save failed");
-  });
-
-  it("rethrows download-starting navigation errors when no download is captured", async () => {
-    const downloadCapture = {
-      armed: false,
-      promise: new Promise<never>(() => {}),
-      cancel: vi.fn(),
-    };
-    setPwToolsCoreDownloadCapture(downloadCapture);
-    setPwToolsCoreCurrentPage({
-      goto: vi.fn(async () => {
-        throw new Error("page.goto: Download is starting");
-      }),
-      url: vi.fn(() => "https://example.com/start"),
-    });
-
-    await expect(
-      mod.navigateViaPlaywright({
-        ...target,
-        url: "https://example.com/export.csv",
-        ssrfPolicy: { allowPrivateNetwork: true },
-      }),
-    ).rejects.toThrow("Download is starting");
-
-    expect(downloadCapture.cancel).toHaveBeenCalledTimes(1);
   });
 
   it("reconnects and retries once when navigation detaches frame", async () => {

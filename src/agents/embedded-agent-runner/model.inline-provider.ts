@@ -1,7 +1,7 @@
 /**
  * Converts inline provider model config into runtime model definitions.
  */
-import { normalizeResolvedPricing } from "@openclaw/llm-core";
+import { normalizeResolvedPricing, omitNullRequestHeaders } from "@openclaw/llm-core";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { MODEL_APIS } from "../../config/model-config-vocabulary.js";
 import { resolveMergedModelProviderModels } from "../../config/model-provider-config.js";
@@ -24,9 +24,10 @@ import {
 /**
  * Normalizes inline `models.providers` config into runtime model entries.
  */
-export type InlineModelEntry = Omit<ModelDefinitionConfig, "api" | "contextWindow"> & {
+export type InlineModelEntry = Omit<ModelDefinitionConfig, "api" | "contextWindow" | "input"> & {
   api?: Api;
   contextWindow?: number;
+  input: ReturnType<typeof resolveProviderModelInput>;
   provider: string;
   baseUrl?: string;
   headers?: Record<string, string>;
@@ -125,7 +126,7 @@ export function buildInlineProviderModels(
       models: entry?.models,
       normalizeModelId: (modelId) => modelId.trim(),
     });
-    return Array.from(models.values()).map((model) => {
+    return Array.from(models.values(), (model) => {
       const api = normalizeResolvedTransportApi(model.api ?? entry?.api);
       const configuredBaseUrl = model.baseUrl ?? entry?.baseUrl;
       const baseUrl =
@@ -163,7 +164,7 @@ export function buildInlineProviderModels(
               provider: trimmed,
               baseUrl: requestConfig.baseUrl ?? baseUrl,
               api: requestConfig.api ?? model.api,
-              headers: requestConfig.headers,
+              headers: omitNullRequestHeaders(requestConfig.headers),
             },
             providerRequest,
           ),
@@ -186,14 +187,10 @@ export function completeInlineProviderModel(
     api: model.api ?? providerConfig.api ?? "openai-responses",
     baseUrl: model.baseUrl ?? "",
     reasoning: model.reasoning ?? false,
-    input: resolveProviderModelInput({
-      provider: model.provider,
-      modelId: model.id,
-      modelName: model.name,
-      input: model.input,
-    }),
     cost: model.cost ?? normalizeResolvedPricing({}),
-    contextWindow: model.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
+    contextWindow:
+      model.contextWindow ?? Math.max(model.contextTokens ?? 0, DEFAULT_CONTEXT_TOKENS),
+    ...(model.contextWindow === undefined ? { contextWindowSource: "synthetic" as const } : {}),
     contextTokens: model.contextTokens,
     maxTokens: model.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
     ...(providerConfig.authHeader !== undefined ? { authHeader: providerConfig.authHeader } : {}),

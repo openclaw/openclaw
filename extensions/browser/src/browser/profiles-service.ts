@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import {
-  getRuntimeConfig,
+  readRuntimeConfig as getRuntimeConfig,
   getRuntimeConfigSourceSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
@@ -213,7 +213,7 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
       getRuntimeConfigSourceSnapshot()?.browser?.profiles,
       name,
     );
-    const expected = structuredClone(sourceProfile ?? runtimeProfile);
+    const expected = sourceProfile ?? runtimeProfile;
 
     let deleted = false;
     const configuredProfile = resolveProfile(resolveBrowserConfig(cfg.browser, cfg), name);
@@ -251,7 +251,6 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
         runtime,
         reason: "profile deletion requested",
         terminal: "deleted",
-        advanceConfigRevision: true,
         closeRelay: resolved.driver === "extension",
         managedChrome: "release-profile-data",
         afterCleanup: persistDelete,

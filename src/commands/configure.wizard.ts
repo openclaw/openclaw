@@ -1,4 +1,3 @@
-import fsPromises from "node:fs/promises";
 import nodePath from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
@@ -15,11 +14,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createChannelSetupHooks, setupChannels } from "../flows/channel-setup.js";
 import { validateGatewayPortInput } from "../gateway/gateway-config-prompts.shared.js";
 import { resolveGatewayProbeAuthSafeWithSecretInputs } from "../gateway/probe-auth.js";
+import { canAccess } from "../infra/path-existence.js";
 import { parseTcpPort } from "../infra/tcp-port.js";
 import { formatWindowsGatewayFirewallGuidance } from "../infra/windows-gateway-firewall-diagnostics.js";
 import { resolvePluginContributionOwners } from "../plugins/plugin-registry.js";
-import type { RuntimeEnv } from "../runtime.js";
-import { defaultRuntime } from "../runtime.js";
+import { defaultRuntime as runtime } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
@@ -32,7 +31,7 @@ import {
   type GatewayHealthCheckOutcome,
 } from "./configure.gateway-health.js";
 import { promptGatewayConfig } from "./configure.gateway.js";
-import { createConfigurePrompts } from "./configure.prompts.js";
+import { configurePrompts as prompts } from "./configure.prompts.js";
 import type { WizardSection } from "./configure.shared.js";
 import { CONFIGURE_SECTION_OPTIONS, intro, outro } from "./configure.shared.js";
 import { resolveGatewayStartupTiming } from "./gateway-startup-timing.js";
@@ -60,10 +59,8 @@ const GATEWAY_HINT_PROBE_TIMEOUT_MS = 300;
 
 async function promptWebToolsConfig(
   nextConfig: OpenClawConfig,
-  runtime: RuntimeEnv,
   prompter: ReturnType<typeof createClackPrompter>,
 ): Promise<OpenClawConfig> {
-  const prompts = createConfigurePrompts(runtime);
   type WebSearchConfig = NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["search"];
   const existingSearch = nextConfig.tools?.web?.search;
   const existingFetch = nextConfig.tools?.web?.fetch;
@@ -97,7 +94,7 @@ async function promptWebToolsConfig(
   let workingConfig = nextConfig;
 
   if (enableSearch) {
-    const codexRelevant = isCodexNativeWebSearchRelevant({ config: nextConfig });
+    const codexRelevant = await isCodexNativeWebSearchRelevant({ config: nextConfig });
     let configureManagedProvider = true;
 
     if (codexRelevant) {
@@ -224,11 +221,7 @@ async function promptWebToolsConfig(
 }
 
 /** Run the configure wizard, optionally limited to selected sections. */
-export async function runConfigureWizard(
-  opts: { sections?: WizardSection[] },
-  runtime: RuntimeEnv = defaultRuntime,
-) {
-  const prompts = createConfigurePrompts(runtime);
+export async function runConfigureWizard(opts: { sections?: WizardSection[] }) {
   try {
     intro("OpenClaw configure");
     const prompter = createClackPrompter();
@@ -447,16 +440,7 @@ export async function runConfigureWizard(
           nodePath.join(workspaceDir, name),
         );
         const hasExistingContent = (
-          await Promise.all(
-            indicators.map(async (candidate) => {
-              try {
-                await fsPromises.access(candidate);
-                return true;
-              } catch {
-                return false;
-              }
-            }),
-          )
+          await Promise.all(indicators.map((candidate) => canAccess(candidate)))
         ).some(Boolean);
         if (hasExistingContent) {
           note(
@@ -505,7 +489,7 @@ export async function runConfigureWizard(
           onPostWriteHook: channelSetup.onPostWriteHook,
         });
       } else {
-        nextConfig = await removeChannelConfigWizard(nextConfig, runtime);
+        nextConfig = await removeChannelConfigWizard(nextConfig);
       }
     };
 
@@ -521,10 +505,16 @@ export async function runConfigureWizard(
         );
       },
       web: async () => {
-        nextConfig = await promptWebToolsConfig(nextConfig, runtime, prompter);
+        nextConfig = await promptWebToolsConfig(nextConfig, prompter);
+      },
+      memory: async () => {
+        const { runMemorySetupFlow } = await import("../flows/memory-setup.js");
+        nextConfig = await runMemorySetupFlow(nextConfig, prompter, {
+          agentDir: (await resolveSetupTarget()).agentDir,
+        });
       },
       gateway: async () => {
-        const gateway = await promptGatewayConfig(nextConfig, runtime);
+        const gateway = await promptGatewayConfig(nextConfig);
         nextConfig = gateway.config;
         gatewayPort = gateway.port;
         didConfigureGateway = true;
@@ -555,7 +545,7 @@ export async function runConfigureWizard(
           });
           gatewayPort = parseTcpPort(portInput) ?? gatewayPort;
         }
-        daemonSetupOutcome = await maybeInstallDaemon({ runtime, port: gatewayPort });
+        daemonSetupOutcome = await maybeInstallDaemon({ port: gatewayPort });
       },
       health: async () => {
         healthCheckOutcome = await runGatewayHealthCheck({
@@ -575,19 +565,13 @@ export async function runConfigureWizard(
 
       // Section flags retain their canonical setup order regardless of flag order;
       // the complete config is committed once before service or health effects.
-      for (const section of [
-        "workspace",
-        "model",
-        "web",
-        "gateway",
-        "channels",
-        "plugins",
-        "skills",
-      ] as const) {
-        if (selectedSections.includes(section)) {
-          await sectionActions[section]();
-          hasPendingConfig = true;
+      for (const { value: section } of CONFIGURE_SECTION_OPTIONS) {
+        if (section === "daemon" || section === "health" || !selectedSections.includes(section)) {
+          continue;
         }
+        const before = nextConfig;
+        await sectionActions[section]();
+        hasPendingConfig ||= section !== "memory" || nextConfig !== before;
       }
 
       await persistPendingConfig();
@@ -619,10 +603,11 @@ export async function runConfigureWizard(
         if (choice === "daemon" || choice === "health") {
           await persistPendingConfig();
         }
+        const before = nextConfig;
         await sectionActions[choice]();
         if (choice !== "daemon" && choice !== "health") {
           // Interactive setup commits each section before showing another prompt.
-          hasPendingConfig = true;
+          hasPendingConfig ||= choice !== "memory" || nextConfig !== before;
           await persistPendingConfig();
         }
       }

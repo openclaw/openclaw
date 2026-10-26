@@ -1,6 +1,5 @@
 // Passers and bottles have seeded clocks independent of the resident's visits.
 import { expectDefined } from "@openclaw/normalization-core";
-import type { ReactiveController, ReactiveControllerHost } from "lit";
 import {
   LOBSTER_BOTTLE_FORTUNES,
   resolveLobsterPasserCrossMs,
@@ -12,24 +11,9 @@ import {
 } from "./lobster-pet-plans.ts";
 import { LobsterPetTimers } from "./lobster-pet-timers.ts";
 
-// Facing, reactions, and the act loop stay owned by the pet element; the
-// controller only reports crossing milestones.
-type LobsterTrafficHooks = {
-  visitsEnabled: () => boolean;
-  passerOptions: () => LobsterPasserOptions;
-  onPasserStart: (plan: LobsterPasserPlan) => void;
-  // Fired at crossing start (toward the entry side) and mid-cross (travel
-  // direction) so the resident can watch the traffic go by.
-  onPasserFacing: (facing: 1 | -1) => void;
-  onPasserMidCross: () => void;
-  onPasserDone: () => void;
-};
-
-type LobsterBottleScene = { spotPct: number; opened: boolean; fortune: string };
-
-export class LobsterLedgeTraffic implements ReactiveController {
+export class LobsterLedgeTraffic {
   passer: LobsterPasserPlan | null = null;
-  bottle: LobsterBottleScene | null = null;
+  bottle: { spotPct: number; opened: boolean; fortune: string } | null = null;
   private connected = false;
   private readonly timers = new LobsterPetTimers<
     "passerTimer" | "passerEndTimer" | "passerWatchTimer" | "bottleTimer" | "bottleEndTimer"
@@ -39,17 +23,26 @@ export class LobsterLedgeTraffic implements ReactiveController {
   private crossingMs = 0;
 
   constructor(
-    private readonly host: ReactiveControllerHost,
-    private readonly hooks: LobsterTrafficHooks,
-  ) {
-    host.addController(this);
-  }
+    private readonly notify: () => void,
+    // Facing, reactions, and the act loop stay owned by the pet element; the
+    // controller only reports crossing milestones.
+    private readonly hooks: {
+      visitsEnabled: () => boolean;
+      passerOptions: () => LobsterPasserOptions;
+      onPasserStart: (plan: LobsterPasserPlan) => void;
+      // Fired at crossing start (toward the entry side) and mid-cross (travel
+      // direction) so the resident can watch the traffic go by.
+      onPasserFacing: (facing: 1 | -1) => void;
+      onPasserMidCross: () => void;
+      onPasserDone: () => void;
+    },
+  ) {}
 
-  hostConnected() {
+  connect() {
     this.connected = true;
   }
 
-  hostUpdate() {
+  update() {
     if (!this.hooks.visitsEnabled()) {
       this.clearTimers();
       this.passer = null;
@@ -57,13 +50,13 @@ export class LobsterLedgeTraffic implements ReactiveController {
     }
   }
 
-  hostDisconnected() {
+  dispose() {
     this.connected = false;
     this.clearTimers();
     // Clear visible guests so a reconnect cannot show a stopped passer or bottle.
     this.passer = null;
     this.bottle = null;
-    this.host.requestUpdate();
+    this.notify();
   }
 
   // Only a new seed restores a crossing already consumed by this load.
@@ -77,7 +70,25 @@ export class LobsterLedgeTraffic implements ReactiveController {
     this.bottle = null;
     if (this.connected && this.hooks.visitsEnabled()) {
       this.schedulePasser(seed);
-      this.scheduleBottle(seed);
+      const plan = planLobsterBottle(seed);
+      if (!plan) {
+        return;
+      }
+      this.timers.schedule("bottleTimer", plan.atMs, () => {
+        if (!this.connected || !this.hooks.visitsEnabled()) {
+          return;
+        }
+        this.bottle = {
+          spotPct: plan.spotPct,
+          opened: false,
+          fortune: expectDefined(
+            LOBSTER_BOTTLE_FORTUNES[plan.fortuneIndex],
+            "lobster bottle fortune",
+          ),
+        };
+        this.notify();
+        this.armBottleEbb(300_000);
+      });
     }
   }
 
@@ -116,7 +127,7 @@ export class LobsterLedgeTraffic implements ReactiveController {
     }
     this.bottle = { ...this.bottle, opened: true };
     this.armBottleEbb(120_000);
-    this.host.requestUpdate();
+    this.notify();
   };
 
   private clearTimers() {
@@ -153,40 +164,19 @@ export class LobsterLedgeTraffic implements ReactiveController {
         plan.kind,
         this.hooks.passerOptions().critterArtwork,
       );
-      this.host.requestUpdate();
+      this.notify();
       const crossMs = this.passerCrossMs();
       this.hooks.onPasserFacing(plan.direction === 1 ? -1 : 1);
       this.timers.schedule("passerWatchTimer", crossMs / 2, () => {
         this.hooks.onPasserFacing(plan.direction);
         this.hooks.onPasserMidCross();
+        this.notify();
       });
       this.timers.schedule("passerEndTimer", crossMs, () => {
         this.passer = null;
-        this.host.requestUpdate();
+        this.notify();
         this.hooks.onPasserDone();
       });
-    });
-  }
-
-  private scheduleBottle(seed: number) {
-    const plan = planLobsterBottle(seed);
-    if (!plan) {
-      return;
-    }
-    this.timers.schedule("bottleTimer", plan.atMs, () => {
-      if (!this.connected || !this.hooks.visitsEnabled()) {
-        return;
-      }
-      this.bottle = {
-        spotPct: plan.spotPct,
-        opened: false,
-        fortune: expectDefined(
-          LOBSTER_BOTTLE_FORTUNES[plan.fortuneIndex],
-          "lobster bottle fortune",
-        ),
-      };
-      this.host.requestUpdate();
-      this.armBottleEbb(300_000);
     });
   }
 
@@ -194,7 +184,7 @@ export class LobsterLedgeTraffic implements ReactiveController {
     this.timers.clear("bottleEndTimer");
     this.timers.schedule("bottleEndTimer", delayMs, () => {
       this.bottle = null;
-      this.host.requestUpdate();
+      this.notify();
     });
   }
 }

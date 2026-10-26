@@ -1,15 +1,6 @@
-import type {
-  OpenAsyncKeyedStoreOptions,
-  OpenKeyedStoreOptions,
-} from "openclaw/plugin-sdk/plugin-state-runtime";
-import {
-  createPluginStateKeyedStoreForTests,
-  createPluginStateSyncKeyedStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { composeOutbound, generateIdentity } from "../protocol/index.js";
-import { MemoryAuditStore } from "../protocol/memory-stores.test-support.js";
+import { generateIdentity, seal } from "../protocol/index.js";
+import { openReefAuditStore } from "./audit-state.js";
 import { ReefMessageFlow } from "./flow.js";
 import {
   allow,
@@ -20,7 +11,6 @@ import {
   reefKeys,
   resetFlowStoresForTests,
   transport,
-  trust,
 } from "./flow.test-helpers.js";
 import {
   REEF_DELIVERED_MAX_ENTRIES,
@@ -28,25 +18,11 @@ import {
   REEF_DELIVERED_TTL_MS,
   openStores,
 } from "./state.js";
+import { createRuntime } from "./state.test-support.js";
 import { ReefInboxConnection, type ReefTransportClient } from "./transport.js";
 import { createClient, parseRequestUrl } from "./transport.test-helpers.js";
+import { openReefTrustStore } from "./trust-store.js";
 import type { InboxEntry } from "./types.js";
-
-// New runtime and store handles over the same persisted database, as on restart.
-function reopenRuntime(stateDir: string) {
-  const runtime = createPluginRuntimeMock();
-  runtime.state.openSyncKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
-    createPluginStateSyncKeyedStoreForTests<T>("reef", {
-      ...options,
-      env: { OPENCLAW_STATE_DIR: stateDir },
-    });
-  runtime.state.openKeyedStore = <T>(options: OpenAsyncKeyedStoreOptions) =>
-    createPluginStateKeyedStoreForTests<T>("reef", {
-      ...options,
-      env: { OPENCLAW_STATE_DIR: stateDir },
-    });
-  return runtime;
-}
 
 async function fixture(peers = ["alice"], deliveredMaxEntries = REEF_DELIVERED_MAX_ENTRIES) {
   const keys = reefKeys();
@@ -55,21 +31,22 @@ async function fixture(peers = ["alice"], deliveredMaxEntries = REEF_DELIVERED_M
     identities.map(async ({ peer, identity }, index): Promise<InboxEntry> => {
       const seq = index + 1;
       const id = `01JZ${String(seq).padStart(22, "0")}`;
-      const { envelope } = await composeOutbound({
+      const envelope = seal({
         id,
         from: `${peer}#1`,
         to: "bob#1",
         body: { text: `message ${seq}` },
         senderSigningSecretKey: identity.signing.secretKey,
         recipientEncryptionPublicKey: keys.encryption.publicKey,
-        guard: guard(allow),
-        audit: new MemoryAuditStore(new Uint8Array(32).fill(3)),
-        policyVersion: "v1",
       });
       return { seq, peer, id, kind: "message", envelope, ts: Math.floor(Date.now() / 1_000) };
     }),
   );
   const stores = flowStores(deliveredMaxEntries);
+  const trusted = openReefTrustStore(stores.runtime, config());
+  for (const { peer, identity } of identities) {
+    await trusted.set(peer, peerTrust(identity));
+  }
   const raw = stores.runtime.state.openSyncKeyedStore<{ id: string }>({
     namespace: REEF_DELIVERED_NAMESPACE,
     maxEntries: deliveredMaxEntries,
@@ -88,13 +65,11 @@ async function fixture(peers = ["alice"], deliveredMaxEntries = REEF_DELIVERED_M
     const { replay, reviews, delivered } = await openStores(runtime, keys, { deliveredMaxEntries });
     const flow = new ReefMessageFlow({
       config: config(),
-      trust: trust(
-        Object.fromEntries(identities.map(({ peer, identity }) => [peer, peerTrust(identity)])),
-      ).store,
+      trust: openReefTrustStore(runtime, config()),
       keys,
       transport: relay as unknown as ReefTransportClient, // SAFETY: ack-recording mock satisfies the client contract
       guard: guard(allow),
-      audit: new MemoryAuditStore(new Uint8Array(32).fill(30)),
+      audit: openReefAuditStore(runtime, new Uint8Array(32).fill(30)),
       replay,
       reviews,
       delivered,
@@ -162,7 +137,7 @@ describe("Reef capacity-parked delivery recovery (production connection path)", 
 
     // The persisted replay survives a restart; absent confirmation allows one redispatch.
     raw.delete("occupied");
-    await (await connect(reopenRuntime(stores.stateDir))).drain();
+    await (await connect(createRuntime(stores.stateDir))).drain();
     expect(onIngress).toHaveBeenCalledTimes(2);
     await expect(stores.delivered.status(entries[0]!.id)).resolves.toBe("delivered");
     expect(relay.acknowledge).toHaveBeenCalledTimes(1);

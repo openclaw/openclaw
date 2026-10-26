@@ -75,22 +75,17 @@ export async function findSessionRepositoryWorkspaces(
   if (!reply) {
     return [];
   }
-  if (!reply.ok || reply.type !== "sessionRepositoryWorkspaces.find") {
-    throw new Error("Unexpected session repository workspace lookup result");
-  }
   return reply.workspaces;
 }
 
 export function createSessionRepositoryWorkspaceStore(
   options: {
     path?: string;
-    now?: () => number;
     env?: NodeJS.ProcessEnv;
   } = {},
 ) {
   const env = options.env && cloneEnvWithPlatformSemantics(options.env);
   const databasePath = resolveDatabasePath({ path: options.path, env });
-  const now = options.now;
   const context = () => captureOpenClawStateWorkerContext({ path: databasePath, env });
   async function mutate(
     command: Mutation,
@@ -158,23 +153,16 @@ export function createSessionRepositoryWorkspaceStore(
               },
               assertCurrent: captured.assertPublicationCurrent ?? captured.admission.assertCurrent,
             });
-            let stage: "transaction" | "commit" | "complete" = "transaction";
             admission = createSqliteWorkerOperationAdmission((request, grant) => {
               check();
               const admitted = assertSessionEntryCurrentAdmission(request, sessionEntryCurrent);
-              if (admitted.stage === "transaction" && stage === "transaction") {
-                stage = "commit";
+              if (admitted.stage === "transaction") {
                 grant();
                 return;
               }
-              if (
-                admitted.stage !== "commit" ||
-                stage !== "commit" ||
-                !isMutationResult(admitted.facts)
-              ) {
+              if (admitted.stage !== "commit" || !isMutationResult(admitted.facts)) {
                 throw new Error("Repository workspace mutation has no admitted commit result");
               }
-              stage = "complete";
               prepared = admitted.facts;
               if (afterCommit) {
                 const identity = captured.admission.identity;
@@ -288,7 +276,6 @@ export function createSessionRepositoryWorkspaceStore(
               requestedRef: input.requestedRef,
               runSetupScript: input.runSetupScript,
               branch: input.branch,
-              nowMs: now?.(),
             },
           },
           input.assertCurrent,
@@ -305,7 +292,6 @@ export function createSessionRepositoryWorkspaceStore(
               expectedRevision: input.expectedRevision,
               baseCommit: input.baseCommit,
               baseManifestHash: input.baseManifestHash,
-              nowMs: now?.(),
             },
           },
           input.assertCurrent,
@@ -322,7 +308,6 @@ export function createSessionRepositoryWorkspaceStore(
               expectedRevision: input.expectedRevision,
               checkpointRef: input.checkpointRef,
               manifestHash: input.manifestHash,
-              nowMs: now?.(),
             },
           },
           input.assertCurrent,

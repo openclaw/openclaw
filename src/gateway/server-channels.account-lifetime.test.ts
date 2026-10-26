@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import type { ChannelGatewayContextV2 } from "../channels/plugins/types.adapters.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { registerPluginHttpRoute } from "../plugins/http-registry.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
@@ -26,6 +27,125 @@ describe("channel account scheduling lifetime", () => {
     vi.clearAllTimers();
     vi.useRealTimers();
     resetGatewayWorkAdmission();
+  });
+
+  it.each(["accounts", "channels"] as const)(
+    "starts healthy %s independently of pending database preparation",
+    async (scope) => {
+      const preparation = createDeferred();
+      const started: string[] = [];
+      const makePlugin = (id: string, order: number, accountIds: string[]) => {
+        const plugin = createTestPlugin({
+          id,
+          order,
+          listAccountIds: () => accountIds,
+          startAccount: async ({ accountId, abortSignal }) => {
+            started.push(`${id}/${accountId}`);
+            await waitForAbort(abortSignal);
+          },
+        });
+        plugin.config.resolveAccountAsync = async (_cfg, accountId) => {
+          if (accountId !== "ready") {
+            await preparation.promise;
+          }
+          return { enabled: true, configured: true };
+        };
+        return plugin;
+      };
+      const plugins =
+        scope === "accounts"
+          ? [
+              makePlugin("discord", 0, [
+                "pending-1",
+                "pending-2",
+                "pending-3",
+                "pending-4",
+                "ready",
+              ]),
+            ]
+          : [
+              ...Array.from({ length: 4 }, (_, index) =>
+                makePlugin(`pending-${index}`, index, ["pending"]),
+              ),
+              makePlugin("discord", 4, ["ready"]),
+            ];
+      const registry = createTestChannelRegistry(...plugins);
+      const manager = createTestChannelManager({
+        getPluginRegistry: () => registry,
+        startupTrace: { measure: async (_name, run) => await run() },
+      });
+      const starting = manager.startChannels();
+      try {
+        // Startup handoff yields to the event loop; preparation remains unresolved.
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(started).toEqual(["discord/ready"]);
+        preparation.resolve();
+        await starting;
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(started).toHaveLength(5);
+      } finally {
+        preparation.resolve();
+        await starting;
+        await Promise.all(plugins.map((plugin) => manager.stopChannel(plugin.id)));
+      }
+    },
+  );
+
+  it("retains timed-out idle cleanup after the account is disabled", async () => {
+    const entered = createDeferred();
+    const release = createDeferred();
+    const stopAccount = vi.fn(async () => {
+      entered.resolve();
+      await release.promise;
+    });
+    let config: OpenClawConfig = { channels: { discord: { enabled: true } } };
+    const registry = createTestChannelRegistry(
+      createTestPlugin({
+        startAccount: ({ abortSignal }) => waitForAbort(abortSignal),
+        stopAccount,
+      }),
+    );
+    const manager = createTestChannelManager({
+      getRuntimeConfig: () => config,
+      getPluginRegistry: () => registry,
+    });
+    const firstStop = manager
+      .stopChannel("discord", DEFAULT_ACCOUNT_ID)
+      .catch((error: unknown) => error);
+    let secondStop: Promise<void> | undefined;
+    try {
+      await entered.promise;
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(await firstStop).toBeInstanceOf(Error);
+      config = { channels: { discord: { enabled: false } } };
+      let settled = false;
+      secondStop = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID).then(() => {
+        settled = true;
+      });
+      await flushMicrotasks();
+      expect(settled).toBe(false);
+      expect(stopAccount).toHaveBeenCalledOnce();
+      config = { channels: { discord: { enabled: true } } };
+      expect(await manager.startChannel("discord", DEFAULT_ACCOUNT_ID)).toEqual(
+        new Map([[DEFAULT_ACCOUNT_ID, { status: "retry", reason: "stop-in-flight" }]]),
+      );
+      release.resolve();
+      await secondStop;
+      expect(settled).toBe(true);
+      expect(stopAccount).toHaveBeenCalledOnce();
+    } finally {
+      release.resolve();
+      await firstStop;
+      await secondStop;
+      await manager.stopChannel("discord");
+    }
   });
 
   it("retains account capabilities until admitted scheduled I/O settles", async () => {

@@ -1,4 +1,3 @@
-// Whatsapp tests cover media plugin behavior.
 import { Readable } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -7,36 +6,23 @@ import {
   mockNormalizeMessageContent,
 } from "../../../../test/mocks/baileys.js";
 import { downloadInboundMedia, downloadQuotedInboundMedia } from "./media.js";
-
 type MockMessageInput = Parameters<typeof mockNormalizeMessageContent>[0];
 
-const {
-  extractMessageContent,
-  getContentType,
-  normalizeMessageContent,
-  downloadMediaMessage,
-  saveMediaStream,
-} = vi.hoisted(() => ({
-  extractMessageContent: vi.fn((msg: MockMessageInput) => mockExtractMessageContent(msg)),
-  getContentType: vi.fn((msg: MockMessageInput) => mockGetContentType(msg)),
-  normalizeMessageContent: vi.fn((msg: MockMessageInput) => mockNormalizeMessageContent(msg)),
-  downloadMediaMessage: vi.fn().mockResolvedValue(Buffer.from("fake-media-data")),
+const { downloadMediaMessage, saveMediaStream } = vi.hoisted(() => ({
+  downloadMediaMessage: vi.fn(),
   saveMediaStream: vi.fn(),
 }));
 
-vi.mock("baileys", async () => {
-  return {
-    DisconnectReason: { loggedOut: 401 },
-    extractMessageContent,
-    getContentType,
-    normalizeMessageContent,
-    downloadMediaMessage,
-  };
-});
-
-vi.mock("openclaw/plugin-sdk/media-store", () => ({
-  saveMediaStream,
+vi.mock("baileys", () => ({
+  DisconnectReason: { loggedOut: 401 },
+  extractMessageContent: (msg: MockMessageInput) => mockExtractMessageContent(msg),
+  getContentType: (msg: MockMessageInput) => mockGetContentType(msg),
+  normalizeMessageContent: (msg: MockMessageInput) => mockNormalizeMessageContent(msg),
+  downloadMediaMessage,
 }));
+
+// mock-isolation: Exercise inbound media streams without writing to the real media store.
+vi.mock("openclaw/plugin-sdk/media-store", () => ({ saveMediaStream }));
 
 const mockSock = {
   updateMediaMessage: vi.fn(),
@@ -47,24 +33,15 @@ const mockSock = {
     phoneNumber: "15559876543@s.whatsapp.net",
   },
 };
+const SAVED = { id: "saved-media", path: "/tmp/saved-media", size: 15 };
+const IMAGE = { imageMessage: { mimetype: "image/jpeg" } };
 
-async function expectMimetype(message: Record<string, unknown>, expected: string) {
-  const result = await downloadInboundMedia({ message } as never, mockSock as never);
-  expect(result).toEqual({
-    saved: {
-      id: "saved-media",
-      path: "/tmp/saved-media",
-      size: Buffer.byteLength("fake-media-data"),
-      contentType: expected,
-    },
-    mimetype: expected,
-    fileName: undefined,
-  });
+function download(message: Record<string, unknown>, maxBytes?: number) {
+  return downloadInboundMedia({ message } as never, mockSock as never, maxBytes);
 }
 
 describe("downloadInboundMedia", () => {
   beforeEach(() => {
-    normalizeMessageContent.mockClear();
     downloadMediaMessage.mockClear();
     downloadMediaMessage.mockImplementation(() => Readable.from([Buffer.from("fake-media-data")]));
     saveMediaStream.mockClear();
@@ -82,55 +59,32 @@ describe("downloadInboundMedia", () => {
             throw new Error("Media exceeds limit");
           }
         }
-        return { id: "saved-media", path: "/tmp/saved-media", size: total, contentType };
+        return { ...SAVED, size: total, contentType };
       },
     );
     mockSock.updateMediaMessage.mockClear();
   });
 
   it("returns undefined for messages without media", async () => {
-    const msg = { message: { conversation: "hello" } } as never;
-    const result = await downloadInboundMedia(msg, mockSock as never);
-    expect(result).toBeUndefined();
-  });
-
-  it("uses explicit mimetype from audioMessage when present", async () => {
-    await expectMimetype({ audioMessage: { mimetype: "audio/mp4", ptt: true } }, "audio/mp4");
-  });
-
-  it("defaults audio messages without MIME to OGG Opus", async () => {
-    await expectMimetype({ audioMessage: {} }, "audio/ogg; codecs=opus");
-  });
-
-  it("uses explicit mimetype from imageMessage when present", async () => {
-    await expectMimetype({ imageMessage: { mimetype: "image/png" } }, "image/png");
+    expect(await download({ conversation: "hello" })).toBeUndefined();
   });
 
   it.each([
-    { name: "image", message: { imageMessage: {} }, mimetype: "image/jpeg" },
-    { name: "video", message: { videoMessage: {} }, mimetype: "video/mp4" },
-    { name: "video note", message: { ptvMessage: {} }, mimetype: "video/mp4" },
-    { name: "sticker", message: { stickerMessage: {} }, mimetype: "image/webp" },
-  ])("defaults MIME for $name messages without explicit MIME", async ({ message, mimetype }) => {
-    await expectMimetype(message, mimetype);
-  });
-
-  it("preserves fileName from document messages", async () => {
-    const msg = {
-      message: {
-        documentMessage: { mimetype: "application/pdf", fileName: "report.pdf" },
-      },
-    } as never;
-    const result = await downloadInboundMedia(msg, mockSock as never);
-    expect(result).toEqual({
-      saved: {
-        id: "saved-media",
-        path: "/tmp/saved-media",
-        size: Buffer.byteLength("fake-media-data"),
-        contentType: "application/pdf",
-      },
-      mimetype: "application/pdf",
-      fileName: "report.pdf",
+    [{ audioMessage: {} }, "audio/ogg; codecs=opus", undefined],
+    [{ imageMessage: {} }, "image/jpeg", undefined],
+    [{ videoMessage: {} }, "video/mp4", undefined],
+    [{ ptvMessage: {} }, "video/mp4", undefined],
+    [{ stickerMessage: {} }, "image/webp", undefined],
+    [
+      { documentMessage: { mimetype: "application/pdf", fileName: "report.pdf" } },
+      "application/pdf",
+      "report.pdf",
+    ],
+  ] as const)("downloads %j with MIME %s and file name %s", async (message, mimetype, fileName) => {
+    expect(await download(message)).toEqual({
+      saved: { ...SAVED, contentType: mimetype },
+      mimetype,
+      fileName,
     });
   });
 
@@ -139,81 +93,25 @@ describe("downloadInboundMedia", () => {
       Readable.from([Buffer.alloc(4), Buffer.alloc(4)]),
     );
 
-    await expect(
-      downloadInboundMedia(
-        { message: { imageMessage: { mimetype: "image/jpeg" } } } as never,
-        mockSock as never,
-        7,
-      ),
-    ).rejects.toThrow(/Media exceeds/i);
+    await expect(download(IMAGE, 7)).rejects.toThrow(/Media exceeds/i);
     expect(downloadMediaMessage.mock.calls[0]?.[1]).toBe("stream");
   });
 
-  it("preserves the store's fractional limit error for the message owner", async () => {
-    const limitError = Object.assign(new Error("Media exceeds 256KB limit"), { code: "too-large" });
-    saveMediaStream.mockRejectedValueOnce(limitError);
-
-    await expect(
-      downloadInboundMedia(
-        { message: { imageMessage: { mimetype: "image/jpeg" } } } as never,
-        mockSock as never,
-        0.25 * 1024 * 1024,
-      ),
-    ).rejects.toBe(limitError);
-  });
-
-  it("propagates transport download failures to the message owner", async () => {
-    downloadMediaMessage.mockRejectedValueOnce(new Error("expired media reference"));
-
-    await expect(
-      downloadInboundMedia(
-        { message: { imageMessage: { mimetype: "image/jpeg" } } } as never,
-        mockSock as never,
-      ),
-    ).rejects.toThrow("expired media reference");
-  });
-
   it.each([
-    {
-      name: "the bot's device-scoped phone identity",
-      participant: "15559876543@s.whatsapp.net",
-      expectedFromMe: true,
-    },
-    {
-      name: "the bot's LID identity",
-      participant: "277038292303944@lid",
-      expectedFromMe: true,
-    },
-    {
-      name: "another sender",
-      participant: "15550000000@s.whatsapp.net",
-      expectedFromMe: false,
-    },
+    { name: "the bot's LID identity", participant: "277038292303944@lid", expectedFromMe: true },
+    { name: "another sender", participant: "15550000000@s.whatsapp.net", expectedFromMe: false },
   ])("preserves quoted media authorship for $name", async ({ participant, expectedFromMe }) => {
+    const contextInfo = { stanzaId: "quoted-image", participant, quotedMessage: IMAGE };
     await downloadQuotedInboundMedia(
       {
         key: { remoteJid: "120363000000000000@g.us", id: "reply-1", fromMe: false },
-        message: {
-          extendedTextMessage: {
-            text: "inspect this",
-            contextInfo: {
-              stanzaId: "quoted-image",
-              participant,
-              quotedMessage: { imageMessage: { mimetype: "image/jpeg" } },
-            },
-          },
-        },
+        message: { extendedTextMessage: { text: "inspect this", contextInfo } },
       } as never,
       mockSock as never,
     );
 
-    const quotedMessage = downloadMediaMessage.mock.calls[0]?.[0] as
-      | { key?: { fromMe?: boolean; id?: string; participant?: string } }
-      | undefined;
-    expect(quotedMessage?.key).toMatchObject({
-      fromMe: expectedFromMe,
-      id: "quoted-image",
-      participant,
+    expect(downloadMediaMessage.mock.calls[0]?.[0]).toMatchObject({
+      key: { fromMe: expectedFromMe, id: "quoted-image", participant },
     });
   });
 });

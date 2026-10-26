@@ -1,7 +1,14 @@
+import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
+import {
+  generateConversationLabel as generateTopicLabel,
+  resolveChunkMode,
+} from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { createSubsystemLogger, danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { resolveAutoTopicLabelConfig } from "./auto-topic-label-config.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
 import { resolveDispatchTelegramContext } from "./bot-message-dispatch-context.js";
 import {
@@ -16,15 +23,7 @@ import {
   createFreshTelegramSessionEntryLoader,
   resolveTelegramReasoningLevel,
 } from "./bot-message-dispatch-session.js";
-import { createTelegramDispatchStatus } from "./bot-message-dispatch-status.js";
 import { runTelegramDispatchTurn } from "./bot-message-dispatch-turn.js";
-import { resolveAgentDir } from "./bot-message-dispatch.agent.runtime.js";
-import {
-  generateTopicLabel,
-  getAgentScopedMediaLocalRoots,
-  resolveAutoTopicLabelConfig,
-  resolveChunkMode,
-} from "./bot-message-dispatch.runtime.js";
 import type {
   DispatchTelegramMessageParams,
   TelegramDispatchTurn,
@@ -54,78 +53,6 @@ function includeStickerDescription(params: {
     return params.body;
   }
   return `${params.formattedDescription}\n${params.body}`;
-}
-
-function resolveTelegramQuoteContext(params: {
-  context: TelegramMessageContext;
-  replyToMode: DispatchTelegramMessageParams["replyToMode"];
-}) {
-  const { context, replyToMode } = params;
-  const rawReplyQuoteText =
-    context.ctxPayload.ReplyToIsQuote && typeof context.ctxPayload.ReplyToQuoteText === "string"
-      ? context.ctxPayload.ReplyToQuoteText
-      : undefined;
-  const replyQuoteText = context.ctxPayload.ReplyToIsQuote
-    ? rawReplyQuoteText?.trim()
-      ? rawReplyQuoteText
-      : context.ctxPayload.ReplyToBody?.trim() || undefined
-    : undefined;
-  const replyQuoteMessageId =
-    replyQuoteText && !context.ctxPayload.ReplyToIsExternal
-      ? resolveTelegramReplyId(context.ctxPayload.ReplyToId)
-      : undefined;
-  const replyQuotePosition =
-    typeof context.ctxPayload.ReplyToQuotePosition === "number"
-      ? context.ctxPayload.ReplyToQuotePosition
-      : undefined;
-  const replyQuoteEntities = Array.isArray(context.ctxPayload.ReplyToQuoteEntities)
-    ? context.ctxPayload.ReplyToQuoteEntities
-    : undefined;
-  const replyQuoteTargetsBotMessage = context.msg.reply_to_message?.from?.is_bot === true;
-  const replyQuoteByMessageId: TelegramNativeQuoteCandidateByMessageId = {};
-  if (replyToMode !== "off") {
-    if (replyQuoteText && replyQuoteMessageId != null) {
-      addTelegramNativeQuoteCandidate(replyQuoteByMessageId, replyQuoteMessageId, {
-        text: replyQuoteText,
-        ...(replyQuotePosition !== undefined ? { position: replyQuotePosition } : {}),
-        ...(replyQuoteEntities ? { entities: replyQuoteEntities } : {}),
-      });
-    }
-    addTelegramNativeQuoteCandidate(
-      replyQuoteByMessageId,
-      context.ctxPayload.MessageSid ?? context.msg.message_id,
-      buildTelegramNativeQuoteCandidate(getTelegramTextParts(context.msg)),
-    );
-    if (
-      !context.ctxPayload.ReplyToIsExternal &&
-      typeof context.ctxPayload.ReplyToQuoteSourceText === "string"
-    ) {
-      addTelegramNativeQuoteCandidate(
-        replyQuoteByMessageId,
-        context.ctxPayload.ReplyToId,
-        buildTelegramNativeQuoteCandidate({
-          text: context.ctxPayload.ReplyToQuoteSourceText,
-          entities: Array.isArray(context.ctxPayload.ReplyToQuoteSourceEntities)
-            ? context.ctxPayload.ReplyToQuoteSourceEntities
-            : undefined,
-        }),
-      );
-    }
-  }
-  const draftReplyToMessageId =
-    replyToMode !== "off" && typeof context.msg.message_id === "number"
-      ? replyQuoteTargetsBotMessage
-        ? context.msg.message_id
-        : (replyQuoteMessageId ?? context.msg.message_id)
-      : undefined;
-  return {
-    draftReplyToMessageId,
-    replyQuoteByMessageId,
-    replyQuoteEntities,
-    replyQuoteMessageId,
-    replyQuotePosition,
-    replyQuoteText,
-  };
 }
 
 async function prepareTelegramSticker(params: {
@@ -189,61 +116,6 @@ async function prepareTelegramSticker(params: {
   logVerbose(`telegram: cached sticker description for ${sticker.fileUniqueId}`);
 }
 
-function scheduleDmTopicLabel(params: {
-  bot: DispatchTelegramMessageParams["bot"];
-  cfg: DispatchTelegramMessageParams["cfg"];
-  context: TelegramMessageContext;
-  isFirstTurnInSession: boolean;
-  telegramCfg: DispatchTelegramMessageParams["telegramCfg"];
-}) {
-  const { context } = params;
-  const isDmTopic =
-    !context.isGroup && context.threadSpec.scope === "dm" && context.threadSpec.id != null;
-  if (!isDmTopic || !params.isFirstTurnInSession) {
-    return;
-  }
-  const userMessage = truncateUtf16Safe(
-    context.ctxPayload.RawBody ?? context.ctxPayload.Body ?? "",
-    500,
-  );
-  if (!userMessage.trim()) {
-    return;
-  }
-  const directAutoTopicLabel =
-    context.groupConfig && "autoTopicLabel" in context.groupConfig
-      ? context.groupConfig.autoTopicLabel
-      : undefined;
-  const autoTopicConfig = resolveAutoTopicLabelConfig(
-    directAutoTopicLabel,
-    params.telegramCfg.autoTopicLabel,
-  );
-  if (!autoTopicConfig) {
-    return;
-  }
-  const topicThreadId = context.threadSpec.id!;
-  void (async () => {
-    try {
-      const label = await generateTopicLabel({
-        userMessage,
-        prompt: autoTopicConfig.prompt,
-        maxLength: 128,
-        cfg: params.cfg,
-        agentId: context.route.agentId,
-        agentDir: resolveAgentDir(params.cfg, context.route.agentId),
-      });
-      if (!label) {
-        logVerbose("auto-topic-label: LLM returned empty label");
-        return;
-      }
-      logVerbose(`auto-topic-label: generated label (len=${label.length})`);
-      await params.bot.api.editForumTopic(context.chatId, topicThreadId, { name: label });
-      logVerbose(`auto-topic-label: renamed topic ${context.chatId}/${topicThreadId}`);
-    } catch (err) {
-      logVerbose(`auto-topic-label: failed: ${String(err)}`);
-    }
-  })();
-}
-
 export const dispatchTelegramMessage = async (
   dispatchParams: DispatchTelegramMessageParams,
 ): Promise<TelegramDispatchResult> => {
@@ -254,18 +126,31 @@ export const dispatchTelegramMessage = async (
     runtime,
     replyToMode,
     telegramCfg,
-    telegramDeps: injectedTelegramDeps,
     retryDispatchErrors = false,
     suppressFailureFallback = false,
     turnAdoptionLifecycle,
   } = dispatchParams;
   const dispatchStartedAt = Date.now();
   const dispatchContext = await resolveDispatchTelegramContext({ context });
-  const telegramDeps =
-    injectedTelegramDeps ?? (await import("./bot-deps.js")).defaultTelegramBotDeps;
-  const loadFreshSessionEntry = createFreshTelegramSessionEntryLoader({ cfg, telegramDeps });
+  const loadFreshSessionEntry = createFreshTelegramSessionEntryLoader({ cfg });
   const isRoomEvent = dispatchContext.ctxPayload.InboundEventKind === "room_event";
-  const status = createTelegramDispatchStatus({ context: dispatchContext });
+  const statusReactionController = isRoomEvent ? null : dispatchContext.statusReactionController;
+  const finalizeStatus = async (outcome: "done" | "error" | "cancelled") => {
+    if (!statusReactionController) {
+      return;
+    }
+    if (outcome === "done") {
+      await statusReactionController.setDone();
+    } else if (outcome === "error") {
+      await statusReactionController.setError();
+    }
+    await statusReactionController.restoreInitial();
+  };
+  const finalizeStatusInBackground = (outcome: "done" | "error" | "cancelled", label: string) => {
+    void finalizeStatus(outcome).catch((err: unknown) => {
+      logVerbose(`telegram: status reaction ${label} failed: ${String(err)}`);
+    });
+  };
   const richMessagesParams = {
     cfg,
     accountId: dispatchContext.route.accountId,
@@ -273,13 +158,70 @@ export const dispatchTelegramMessage = async (
   };
   const richMessages = resolveTelegramRichMessages(richMessagesParams);
   const tableMode = resolveTelegramTableMode(richMessagesParams);
-  const resolvedReasoningLevel = resolveTelegramReasoningLevel({
+  const resolvedReasoningLevel = await resolveTelegramReasoningLevel({
     cfg,
     sessionKey: dispatchContext.ctxPayload.SessionKey,
     agentId: dispatchContext.route.agentId,
     loadFreshSessionEntry,
   });
-  const quote = resolveTelegramQuoteContext({ context: dispatchContext, replyToMode });
+  const rawReplyQuoteText =
+    dispatchContext.ctxPayload.ReplyToIsQuote &&
+    typeof dispatchContext.ctxPayload.ReplyToQuoteText === "string"
+      ? dispatchContext.ctxPayload.ReplyToQuoteText
+      : undefined;
+  const replyQuoteText = dispatchContext.ctxPayload.ReplyToIsQuote
+    ? rawReplyQuoteText?.trim()
+      ? rawReplyQuoteText
+      : dispatchContext.ctxPayload.ReplyToBody?.trim() || undefined
+    : undefined;
+  const replyQuoteMessageId =
+    replyQuoteText && !dispatchContext.ctxPayload.ReplyToIsExternal
+      ? resolveTelegramReplyId(dispatchContext.ctxPayload.ReplyToId)
+      : undefined;
+  const replyQuotePosition =
+    typeof dispatchContext.ctxPayload.ReplyToQuotePosition === "number"
+      ? dispatchContext.ctxPayload.ReplyToQuotePosition
+      : undefined;
+  const replyQuoteEntities = Array.isArray(dispatchContext.ctxPayload.ReplyToQuoteEntities)
+    ? dispatchContext.ctxPayload.ReplyToQuoteEntities
+    : undefined;
+  const replyQuoteTargetsBotMessage = dispatchContext.msg.reply_to_message?.from?.is_bot === true;
+  const replyQuoteByMessageId: TelegramNativeQuoteCandidateByMessageId = {};
+  if (replyToMode !== "off") {
+    if (replyQuoteText && replyQuoteMessageId != null) {
+      addTelegramNativeQuoteCandidate(replyQuoteByMessageId, replyQuoteMessageId, {
+        text: replyQuoteText,
+        ...(replyQuotePosition !== undefined ? { position: replyQuotePosition } : {}),
+        ...(replyQuoteEntities ? { entities: replyQuoteEntities } : {}),
+      });
+    }
+    addTelegramNativeQuoteCandidate(
+      replyQuoteByMessageId,
+      dispatchContext.ctxPayload.MessageSid ?? dispatchContext.msg.message_id,
+      buildTelegramNativeQuoteCandidate(getTelegramTextParts(dispatchContext.msg)),
+    );
+    if (
+      !dispatchContext.ctxPayload.ReplyToIsExternal &&
+      typeof dispatchContext.ctxPayload.ReplyToQuoteSourceText === "string"
+    ) {
+      addTelegramNativeQuoteCandidate(
+        replyQuoteByMessageId,
+        dispatchContext.ctxPayload.ReplyToId,
+        buildTelegramNativeQuoteCandidate({
+          text: dispatchContext.ctxPayload.ReplyToQuoteSourceText,
+          entities: Array.isArray(dispatchContext.ctxPayload.ReplyToQuoteSourceEntities)
+            ? dispatchContext.ctxPayload.ReplyToQuoteSourceEntities
+            : undefined,
+        }),
+      );
+    }
+  }
+  const draftReplyToMessageId =
+    replyToMode !== "off" && typeof dispatchContext.msg.message_id === "number"
+      ? replyQuoteTargetsBotMessage
+        ? dispatchContext.msg.message_id
+        : (replyQuoteMessageId ?? dispatchContext.msg.message_id)
+      : undefined;
   // Draft messages are provider-visible before final modifiers run. Suppress them when a hook
   // can rewrite or cancel, or the original payload can flash before the normal delivery gate.
   const hookRunner = getGlobalHookRunner();
@@ -292,7 +234,12 @@ export const dispatchTelegramMessage = async (
   const isDispatchSuperseded = () => turnAdoptionLifecycle?.abortSignal?.aborted === true;
   const turnConfig = {
     ...dispatchParams,
-    ...quote,
+    draftReplyToMessageId,
+    replyQuoteByMessageId,
+    replyQuoteEntities,
+    replyQuoteMessageId,
+    replyQuotePosition,
+    replyQuoteText,
     allowProviderPreview,
     chunkMode: resolveChunkMode(cfg, "telegram", dispatchContext.route.accountId),
     context: dispatchContext,
@@ -302,9 +249,8 @@ export const dispatchTelegramMessage = async (
     mediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, dispatchContext.route.agentId),
     resolvedReasoningLevel,
     richMessages,
-    statusReactionController: status.controller,
+    statusReactionController,
     tableMode,
-    telegramDeps,
   };
   const draftState = createDraftState(turnConfig);
   const progressState = createProgressState(turnConfig, draftState, () => turn);
@@ -332,8 +278,9 @@ export const dispatchTelegramMessage = async (
     try {
       const sessionKey = dispatchContext.ctxPayload.SessionKey;
       if (sessionKey) {
-        isFirstTurnInSession = !loadFreshSessionEntry(dispatchContext.route.agentId, sessionKey)
-          .entry?.systemSent;
+        isFirstTurnInSession = !(
+          await loadFreshSessionEntry(dispatchContext.route.agentId, sessionKey)
+        ).entry?.systemSent;
       } else {
         logVerbose("auto-topic-label: SessionKey is absent, skipping first-turn detection");
       }
@@ -346,11 +293,11 @@ export const dispatchTelegramMessage = async (
   // ingress watchdog. Never enter the reply pipeline after that owner has
   // already fenced this attempt; the canonical spool row will retry it.
   if (isDispatchSuperseded()) {
-    status.finalizeInBackground("cancelled", "cancelled finalize");
+    finalizeStatusInBackground("cancelled", "cancelled finalize");
     return { kind: "completed" };
   }
-  if (status.controller && !isRoomEvent) {
-    void status.controller.setThinking();
+  if (statusReactionController && !isRoomEvent) {
+    void statusReactionController.setThinking();
   }
   try {
     turnDispatched = await runTelegramDispatchTurn(turn);
@@ -380,8 +327,8 @@ export const dispatchTelegramMessage = async (
     return { kind: "completed" };
   }
   if (dispatchWasSuperseded) {
-    if (status.controller) {
-      status.finalizeInBackground("done", "finalize");
+    if (statusReactionController) {
+      finalizeStatusInBackground("done", "finalize");
     }
     return { kind: "completed" };
   }
@@ -462,8 +409,8 @@ export const dispatchTelegramMessage = async (
         )
       : null);
 
-  if (status.controller && !hasVisibleResponse && !intentionalNoResponse) {
-    status.finalizeInBackground("error", "error finalize");
+  if (statusReactionController && !hasVisibleResponse && !intentionalNoResponse) {
+    finalizeStatusInBackground("error", "error finalize");
   }
   const shouldReturnRetryableDispatchFailure =
     retryDispatchErrors &&
@@ -477,15 +424,54 @@ export const dispatchTelegramMessage = async (
     return { kind: "completed" };
   }
 
-  scheduleDmTopicLabel({
-    bot,
-    cfg,
-    context: dispatchContext,
-    isFirstTurnInSession,
-    telegramCfg,
-  });
-  if (status.controller) {
-    status.finalizeInBackground(
+  const scheduleDmTopicLabel = () => {
+    if (!isDmTopic || !isFirstTurnInSession) {
+      return;
+    }
+    const userMessage = truncateUtf16Safe(
+      dispatchContext.ctxPayload.RawBody ?? dispatchContext.ctxPayload.Body ?? "",
+      500,
+    );
+    if (!userMessage.trim()) {
+      return;
+    }
+    const directAutoTopicLabel =
+      dispatchContext.groupConfig && "autoTopicLabel" in dispatchContext.groupConfig
+        ? dispatchContext.groupConfig.autoTopicLabel
+        : undefined;
+    const autoTopicConfig = resolveAutoTopicLabelConfig(
+      directAutoTopicLabel,
+      telegramCfg.autoTopicLabel,
+    );
+    if (!autoTopicConfig) {
+      return;
+    }
+    const topicThreadId = dispatchContext.threadSpec.id!;
+    void (async () => {
+      try {
+        const label = await generateTopicLabel({
+          userMessage,
+          prompt: autoTopicConfig.prompt,
+          maxLength: 128,
+          cfg,
+          agentId: dispatchContext.route.agentId,
+          agentDir: resolveAgentDir(cfg, dispatchContext.route.agentId),
+        });
+        if (!label) {
+          logVerbose("auto-topic-label: LLM returned empty label");
+          return;
+        }
+        logVerbose(`auto-topic-label: generated label (len=${label.length})`);
+        await bot.api.editForumTopic(dispatchContext.chatId, topicThreadId, { name: label });
+        logVerbose(`auto-topic-label: renamed topic ${dispatchContext.chatId}/${topicThreadId}`);
+      } catch (err) {
+        logVerbose(`auto-topic-label: failed: ${String(err)}`);
+      }
+    })();
+  };
+  scheduleDmTopicLabel();
+  if (statusReactionController) {
+    finalizeStatusInBackground(
       turn.agentRunFailed ||
         turn.dispatchError != null ||
         turn.previewLifecycle.finalFailed ||

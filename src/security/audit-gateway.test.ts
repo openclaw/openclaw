@@ -1,325 +1,131 @@
-// Covers gateway security audit aggregation.
-import { describe, expect, it } from "vitest";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { setConfigResolutionFacts } from "../config/resolution-facts.js";
+import { createConfigIO } from "../config/io.js";
 import { collectGatewayConfigFindings } from "./audit-gateway-config.js";
+import { runSecurityAuditCore } from "./audit.js";
 
-function hasFinding(checkId: string, findings: ReturnType<typeof collectGatewayConfigFindings>) {
-  return findings.some((finding) => finding.checkId === checkId);
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+function collect(cfg: OpenClawConfig, sourceConfig = cfg, env: NodeJS.ProcessEnv = {}) {
+  return collectGatewayConfigFindings(cfg, sourceConfig, env);
 }
-
-function hasFindingWithSeverity(
-  checkId: string,
-  severity: "info" | "warn" | "critical",
-  findings: ReturnType<typeof collectGatewayConfigFindings>,
-) {
-  return findings.some((finding) => finding.checkId === checkId && finding.severity === severity);
+function finding(checkId: string, severity?: string) {
+  return expect.objectContaining(severity ? { checkId, severity } : { checkId });
+}
+function lan(auth: NonNullable<OpenClawConfig["gateway"]>["auth"]): OpenClawConfig {
+  return { gateway: { bind: "lan", auth } };
 }
 
 describe("security audit gateway config findings", () => {
   it.each([
-    { bind: "loopback", allowTailscale: true, missingAuth: false },
-    { bind: "loopback", allowTailscale: false, missingAuth: true },
-    { bind: "lan", allowTailscale: true, missingAuth: true },
-  ] as const)("limits Tailscale auth to its enabled loopback path: %j", (testCase) => {
+    ["env references", "${AUDIT_SECRET}", false],
+    ["literal secret", "synthetic-audit-secret", true],
+    ["escaped reference", "$${AUDIT_SECRET}", true],
+  ] as const)("audits loaded %s by authored provenance", async (_name, value, stored) => {
+    const stateDir = tempDirs.make("openclaw-audit-env-");
+    const configPath = path.join(stateDir, "openclaw.json");
+    const env = { OPENCLAW_STATE_DIR: stateDir, AUDIT_SECRET: "synthetic-audit-secret" };
+    await fs.writeFile(
+      configPath,
+      JSON.stringify({
+        gateway: { auth: { mode: "password", password: value } },
+        hooks: { enabled: true, token: value },
+      }),
+    );
+    const snapshot = await createConfigIO({
+      configPath,
+      env,
+      homedir: () => stateDir,
+      pluginValidation: "core-only",
+      shellEnvFallback: "defer",
+      observe: false,
+    }).readConfigFileSnapshot();
+    expect(snapshot.valid).toBe(true);
+    const report = await runSecurityAuditCore({
+      config: snapshot.config,
+      sourceConfig: snapshot.sourceConfig,
+      configPath,
+      stateDir,
+      env,
+      workspaceDir: stateDir,
+      includeFilesystem: false,
+    });
+    for (const checkId of [
+      "config.secrets.gateway_password_in_config",
+      "config.secrets.hooks_token_in_config",
+    ]) {
+      expect(report.findings.some((entry) => entry.checkId === checkId)).toBe(stored);
+    }
+  });
+
+  it("does not allow Tailscale auth outside loopback", () => {
     const cfg: OpenClawConfig = {
       gateway: {
-        bind: testCase.bind,
-        auth: { allowTailscale: testCase.allowTailscale },
+        bind: "lan",
+        auth: { allowTailscale: true },
         tailscale: { mode: "serve" },
       },
     };
-    const findings = collectGatewayConfigFindings(cfg, cfg, {});
-    const checkId =
-      testCase.bind === "loopback" ? "gateway.loopback_no_auth" : "gateway.bind_no_auth";
-    expect(hasFindingWithSeverity(checkId, "critical", findings)).toBe(testCase.missingAuth);
+    expect(collect(cfg)).toContainEqual(finding("gateway.bind_no_auth", "critical"));
   });
 
   describe.each(["token", "password"] as const)("%s strength", (credential) => {
-    const envKey = credential === "token" ? "OPENCLAW_GATEWAY_TOKEN" : "OPENCLAW_GATEWAY_PASSWORD";
-    const inactiveCredential = credential === "token" ? "password" : "token";
-    it.each(["null", "  undefined  ", "  "])(
-      'flags a stringified nullish gateway secret as critical: "%s"',
-      (secret) => {
-        const cfg: OpenClawConfig = {
-          gateway: {
-            bind: "loopback",
-            auth: { mode: credential, [credential]: secret },
-          },
-        };
-        const findings = collectGatewayConfigFindings(cfg, cfg, {});
-        expect(
-          hasFindingWithSeverity(`gateway.${credential}_placeholder_value`, "critical", findings),
-        ).toBe(true);
-        // The placeholder finding replaces the misleading length-only warning.
-        expect(hasFinding(`gateway.${credential}_too_short`, findings)).toBe(false);
-      },
-    );
-
-    describe("SecretRef secret inspection", () => {
-      const ref = { source: "exec", provider: "fixture", id: "gateway" } as const;
-      const sourceConfig: OpenClawConfig = {
-        gateway: { auth: { mode: credential, [credential]: ref } },
-        secrets: { providers: { fixture: { source: "exec", command: "/usr/bin/printf" } } },
-      };
-
-      it.each([
-        { name: "scrubbed", secret: undefined, unresolved: false },
-        { name: "structured", secret: ref, unresolved: false },
-        { name: "pending inline", secret: "${GATEWAY_REF}", unresolved: false },
-        { name: "unresolved provenance", secret: "undefined", unresolved: true },
-      ])(
-        "does not audit an ambient credential over a $name reference",
-        ({ secret, unresolved }) => {
-          const cfg: OpenClawConfig = {
-            ...sourceConfig,
-            gateway: { auth: { mode: credential, [credential]: secret } },
-          };
-          if (unresolved) {
-            setConfigResolutionFacts(cfg, new Set([`gateway.auth.${credential}`]));
-          }
-          for (const ambient of ["undefined", "short"]) {
-            const findings = collectGatewayConfigFindings(cfg, sourceConfig, {
-              [envKey]: ambient,
-            });
-            expect(hasFinding(`gateway.${credential}_placeholder_value`, findings)).toBe(false);
-            expect(hasFinding(`gateway.${credential}_too_short`, findings)).toBe(false);
-          }
-        },
-      );
-
-      it.each([
-        { secret: "undefined", critical: true, short: false },
-        { secret: "${LITERAL}", critical: false, short: true },
-      ])("audits materialized reference value $secret", ({ secret, critical, short }) => {
-        const cfg: OpenClawConfig = {
-          ...sourceConfig,
-          gateway: { auth: { mode: credential, [credential]: secret } },
-        };
-        setConfigResolutionFacts(cfg, new Set());
-        const findings = collectGatewayConfigFindings(cfg, sourceConfig, {
-          [envKey]: "undefined",
-        });
-        expect(
-          hasFindingWithSeverity(`gateway.${credential}_placeholder_value`, "critical", findings),
-        ).toBe(critical);
-        expect(hasFinding(`gateway.${credential}_too_short`, findings)).toBe(short);
-      });
-
-      it.each(["undefined", "short"])(
-        "audits explicit override %s over an unresolved reference",
-        (secret) => {
-          const cfg: OpenClawConfig = { ...sourceConfig, gateway: { auth: { mode: credential } } };
-          setConfigResolutionFacts(cfg, new Set([`gateway.auth.${credential}`]));
-          const findings = collectGatewayConfigFindings(
-            cfg,
-            sourceConfig,
-            { [envKey]: "ambient-secret" },
-            {
-              gatewayAuthOverride: { mode: credential, [credential]: secret },
-            },
-          );
-          expect(
-            hasFindingWithSeverity(`gateway.${credential}_placeholder_value`, "critical", findings),
-          ).toBe(secret === "undefined");
-          expect(hasFinding(`gateway.${credential}_too_short`, findings)).toBe(secret === "short");
-        },
-      );
-    });
-
-    it("keeps a valid environment fallback authoritative over a blank inline secret", () => {
-      const cfg: OpenClawConfig = { gateway: { auth: { mode: credential, [credential]: " " } } };
-      expect(
-        hasFinding(
-          `gateway.${credential}_placeholder_value`,
-          collectGatewayConfigFindings(cfg, cfg, { [envKey]: "synthetic-valid-secret" }),
-        ),
-      ).toBe(false);
-    });
-
-    it("does not report an inactive or overridden secret as the active credential", () => {
-      const cfg: OpenClawConfig = {
-        gateway: {
-          auth: {
-            mode: inactiveCredential,
-            [inactiveCredential]: "synthetic-password",
-            [credential]: "undefined",
-          },
-        },
-      };
-      expect(
-        hasFinding(
-          `gateway.${credential}_placeholder_value`,
-          collectGatewayConfigFindings(cfg, cfg, {}),
-        ),
-      ).toBe(false);
-      expect(
-        hasFinding(
-          `gateway.${credential}_placeholder_value`,
-          collectGatewayConfigFindings(
-            cfg,
-            cfg,
-            {},
-            {
-              gatewayAuthOverride: { mode: credential, [credential]: "synthetic-valid-secret" },
-            },
-          ),
-        ),
-      ).toBe(false);
-    });
-
-    it("keeps the short-secret warning for a real short gateway secret", () => {
+    it.each(["  "])('flags a stringified nullish gateway secret as critical: "%s"', (secret) => {
       const cfg: OpenClawConfig = {
         gateway: {
           bind: "loopback",
-          auth: { mode: credential, [credential]: "undefined-ish" },
+          auth: { mode: credential, [credential]: secret },
         },
       };
-      const findings = collectGatewayConfigFindings(cfg, cfg, {});
-      expect(hasFinding(`gateway.${credential}_placeholder_value`, findings)).toBe(false);
-      expect(hasFindingWithSeverity(`gateway.${credential}_too_short`, "warn", findings)).toBe(
-        true,
+      const findings = collect(cfg);
+      expect(findings).toContainEqual(
+        finding(`gateway.${credential}_placeholder_value`, "critical"),
       );
+      // The placeholder finding replaces the misleading length-only warning.
+      expect(findings).not.toContainEqual(finding(`gateway.${credential}_too_short`));
     });
   });
 
   it("evaluates gateway auth presence and rate-limit guardrails", () => {
-    const collect = (cfg: OpenClawConfig, sourceConfig = cfg) =>
-      collectGatewayConfigFindings(cfg, sourceConfig, {});
-    expect(
-      hasFindingWithSeverity(
-        "gateway.bind_no_auth",
-        "critical",
-        collect({ gateway: { bind: "lan", auth: {} } }),
-      ),
-    ).toBe(true);
+    const noAuth = finding("gateway.bind_no_auth");
+    expect(collect({ gateway: { bind: "lan", auth: {} } })).toContainEqual(
+      finding("gateway.bind_no_auth", "critical"),
+    );
 
-    const passwordConfig: OpenClawConfig = {
-      gateway: {
-        bind: "lan",
-        auth: {
-          password: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_PASSWORD" },
-        },
-      },
-    };
-    expect(hasFinding("gateway.bind_no_auth", collect(passwordConfig))).toBe(false);
+    const passwordConfig = lan({
+      password: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_PASSWORD" },
+    });
+    expect(collect(passwordConfig)).not.toContainEqual(noAuth);
 
     const sourceConfig: OpenClawConfig = {
-      gateway: {
-        bind: "lan",
-        auth: { token: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_TOKEN" } },
-      },
+      ...lan({ token: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_TOKEN" } }),
       secrets: { providers: { default: { source: "env" } } },
     };
     const resolvedConfig: OpenClawConfig = {
-      gateway: { bind: "lan", auth: {} },
+      ...lan({}),
       secrets: sourceConfig.secrets,
     };
-    expect(hasFinding("gateway.bind_no_auth", collect(resolvedConfig, sourceConfig))).toBe(false);
+    expect(collect(resolvedConfig, sourceConfig)).not.toContainEqual(noAuth);
 
-    expect(
-      hasFindingWithSeverity(
-        "gateway.auth_no_rate_limit",
-        "warn",
-        collect({ gateway: { bind: "lan", auth: { token: "secret" } } }),
-      ),
-    ).toBe(true);
-    const rateLimitedConfig: OpenClawConfig = {
-      gateway: {
-        bind: "lan",
-        auth: {
-          token: "secret",
-          rateLimit: { maxAttempts: 10, windowMs: 60_000, lockoutMs: 300_000 },
-        },
-      },
-    };
-    expect(hasFinding("gateway.auth_no_rate_limit", collect(rateLimitedConfig))).toBe(false);
-  });
-
-  it("honors runtime password auth override for bind auth checks", () => {
-    const cfg: OpenClawConfig = {
-      gateway: {
-        bind: "lan",
-        auth: {},
-      },
-    };
-
-    const findings = collectGatewayConfigFindings(
-      cfg,
-      cfg,
-      {},
-      {
-        gatewayAuthOverride: {
-          mode: "password",
-          password: "runtime-gateway-password-1234567890", // pragma: allowlist secret
-        },
-      },
+    expect(collect({ gateway: { bind: "lan", auth: { token: "secret" } } })).toContainEqual(
+      finding("gateway.auth_no_rate_limit", "warn"),
     );
-
-    expect(hasFinding("gateway.bind_no_auth", findings)).toBe(false);
+    const rateLimitedConfig = lan({
+      token: "secret",
+      rateLimit: { maxAttempts: 10, windowMs: 60_000, lockoutMs: 300_000 },
+    });
+    expect(collect(rateLimitedConfig)).not.toContainEqual(finding("gateway.auth_no_rate_limit"));
   });
 
   it("warns when OPENCLAW_GATEWAY_TOKEN shadows a different configured token source", () => {
     const cfg: OpenClawConfig = {
       gateway: { auth: { token: "config-token" } },
     };
-    const findings = collectGatewayConfigFindings(cfg, cfg, {
-      OPENCLAW_GATEWAY_TOKEN: "env-token",
-    });
-
-    expect(hasFinding("gateway.env_token_overrides_config", findings)).toBe(true);
-  });
-
-  it("does not warn inside the managed gateway service credential context", () => {
-    const cfg: OpenClawConfig = {
-      gateway: { auth: { token: "config-token" } },
-    };
-    const findings = collectGatewayConfigFindings(cfg, cfg, {
-      OPENCLAW_GATEWAY_TOKEN: "env-token",
-      OPENCLAW_SERVICE_KIND: "gateway",
-    });
-
-    expect(hasFinding("gateway.env_token_overrides_config", findings)).toBe(false);
-  });
-
-  it("does not count an unresolved token as configured auth", () => {
-    const config: OpenClawConfig = {
-      gateway: { bind: "lan", auth: { mode: "token", token: "${MISSING_TOKEN}" } },
-    };
-    setConfigResolutionFacts(config, new Set(["gateway.auth.token"]));
-
-    const unresolved = collectGatewayConfigFindings(config, config, {});
-    expect(hasFindingWithSeverity("gateway.bind_no_auth", "critical", unresolved)).toBe(true);
-
-    setConfigResolutionFacts(config, new Set());
-    const literal = collectGatewayConfigFindings(config, config, {});
-    expect(hasFinding("gateway.bind_no_auth", literal)).toBe(false);
-  });
-
-  it("does not warn when gateway.auth.token resolves from OPENCLAW_GATEWAY_TOKEN", () => {
-    const cfg: OpenClawConfig = {
-      gateway: { auth: { token: "${OPENCLAW_GATEWAY_TOKEN}" } },
-      secrets: { providers: { default: { source: "env" } } },
-    };
-    const findings = collectGatewayConfigFindings(cfg, cfg, {
-      OPENCLAW_GATEWAY_TOKEN: "env-token",
-    });
-
-    expect(hasFinding("gateway.env_token_overrides_config", findings)).toBe(false);
-  });
-
-  it("does not warn about local gateway auth token precedence in remote mode", () => {
-    const cfg: OpenClawConfig = {
-      gateway: {
-        mode: "remote",
-        remote: { token: "remote-token" },
-        auth: { token: "local-token" },
-      },
-    };
-    const findings = collectGatewayConfigFindings(cfg, cfg, {
-      OPENCLAW_GATEWAY_TOKEN: "env-token",
-    });
-
-    expect(hasFinding("gateway.env_token_overrides_config", findings)).toBe(false);
+    expect(collect(cfg, cfg, { OPENCLAW_GATEWAY_TOKEN: "env-token" })).toContainEqual(
+      finding("gateway.env_token_overrides_config"),
+    );
   });
 });

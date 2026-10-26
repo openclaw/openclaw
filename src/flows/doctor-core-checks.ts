@@ -1,8 +1,7 @@
-import { listAgentIds, tryResolveSoleAgentId } from "../agents/agent-scope.js";
-import { isExperimentalClawsEnabled } from "../claws/experimental.js";
+import { listAgentIds } from "../agents/agent-scope.js";
 import {
   maybeRepairOwnedChromeExtensionNativeHosts,
-  noteChromeMcpBrowserReadiness,
+  collectBrowserReadinessFindings,
 } from "../commands/doctor-browser.js";
 import { hasConfiguredCommandOwners } from "../commands/doctor-command-owner.js";
 import {
@@ -24,29 +23,24 @@ import {
   collectDisabledCodexPluginRouteIssues,
 } from "../commands/doctor/shared/codex-route-warnings.js";
 import { isDefaultInstallIdentity } from "../config/paths.js";
-import type { CronListPageResult } from "../cron/service/list-page-types.js";
-import type { CronJob } from "../cron/types.js";
 import { hasAmbiguousGatewayAuthModeConfig } from "../gateway/auth-mode-policy.js";
 import type { SkillStatusEntry } from "../skills/discovery/status.js";
 import { resolveSkillWorkshopConfig } from "../skills/workshop/config.js";
 import { detectSkillWorkshopToolPolicyDiagnostic } from "../skills/workshop/tool-policy-diagnostic.js";
-import { createAcpAgentModelCheck } from "./doctor-acp-agent-model-check.js";
+import { acpAgentModelCheck } from "./doctor-acp-agent-model-check.js";
 import { finalConfigValidationCheck } from "./doctor-config-validation-check.js";
+import { bootstrapSizeCheck } from "./doctor-core-bootstrap-size-check.js";
 import { detectGatewayAuthHealth } from "./doctor-gateway-auth.js";
-import { hasActiveGatewayExecCredential } from "./doctor-gateway-exec-credential.js";
 import { gatewayServicesExtraCheck } from "./doctor-gateway-services-check.js";
 import type { DoctorHealthCheckContext } from "./doctor-health-contribution-types.js";
 import { legacyOwnedRepair } from "./doctor-health-contribution.js";
-import { createModelReferenceCheck } from "./doctor-model-reference-check.js";
+import { modelReferenceCheck } from "./doctor-model-reference-check.js";
 import { removedWorkspacesStateCheck } from "./doctor-removed-workspaces-state-check.js";
-import {
-  collectRuntimeToolSchemaFindingsWithRuntime,
-  createRuntimeToolSchemaCheck,
-} from "./doctor-tool-schema-check.js";
+import { runtimeToolSchemaCheck } from "./doctor-tool-schema-check.js";
 import { resolveDoctorWorkspaceSuggestionScopes } from "./doctor-workspace-suggestion-scopes.js";
 import { securityAuditFindingToHealthFinding } from "./health-check-adapter.js";
 import type { DoctorHealthCheck } from "./health-check-runner-types.js";
-import type { HealthCheckContext, HealthFinding } from "./health-checks.js";
+import type { HealthFinding } from "./health-checks.js";
 
 type CoreHealthCheck = Omit<DoctorHealthCheck, "kind" | "source">;
 
@@ -57,77 +51,6 @@ const TELEGRAM_GENERAL_TOPIC_CONVERSATIONS_CHECK_ID =
   "core/doctor/telegram-general-topic-conversations";
 const SKILL_WORKSHOP_TOOL_POLICY_CHECK_ID = "core/doctor/skill-workshop-tool-policy";
 
-async function listGatewayCronJobsWithRuntime(
-  ctx: HealthCheckContext,
-): Promise<readonly CronJob[]> {
-  const { bindAgentToolGatewayRequest } = await import("../agents/tools/in-process-gateway.js");
-  const requestGateway = bindAgentToolGatewayRequest({ hostedOnly: true });
-  if (
-    (await hasActiveGatewayExecCredential({ cfg: ctx.cfg })) &&
-    ctx.allowExecSecretRefs !== true
-  ) {
-    throw new Error(
-      "Gateway cron inventory skipped because credentials use an exec SecretRef; rerun doctor with --allow-exec.",
-    );
-  }
-  const jobs: CronJob[] = [];
-  let offset = 0;
-  let snapshotRevision: string | undefined;
-  let total: number | undefined;
-
-  while (total === undefined || offset < total) {
-    const request = {
-      method: "cron.list",
-      params: { includeDisabled: true, limit: 200, offset },
-      timeoutMs: 3000,
-      config: ctx.cfg,
-      deviceIdentity: null,
-    };
-    const page = await requestGateway<CronListPageResult>(request);
-    const validPage =
-      Array.isArray(page.jobs) &&
-      typeof page.snapshotRevision === "string" &&
-      page.snapshotRevision.length > 0 &&
-      Number.isSafeInteger(page.total) &&
-      page.total >= 0 &&
-      page.offset === offset &&
-      Number.isSafeInteger(page.limit) &&
-      page.limit > 0 &&
-      typeof page.hasMore === "boolean" &&
-      (page.nextOffset === null || Number.isSafeInteger(page.nextOffset));
-    if (!validPage) {
-      throw new Error("Gateway returned an invalid cron inventory response.");
-    }
-    if (
-      (snapshotRevision !== undefined && page.snapshotRevision !== snapshotRevision) ||
-      (total !== undefined && page.total !== total)
-    ) {
-      throw new Error("Gateway cron inventory changed while doctor was reading it.");
-    }
-    snapshotRevision ??= page.snapshotRevision;
-    total ??= page.total;
-    jobs.push(...page.jobs);
-
-    if (!page.hasMore) {
-      if (page.nextOffset !== null || jobs.length !== total) {
-        throw new Error("Gateway returned an inconsistent cron inventory response.");
-      }
-      return jobs;
-    }
-    const expectedNextOffset = offset + page.jobs.length;
-    if (
-      page.nextOffset !== expectedNextOffset ||
-      expectedNextOffset <= offset ||
-      expectedNextOffset >= total
-    ) {
-      throw new Error("Gateway returned an invalid cron inventory cursor.");
-    }
-    offset = expectedNextOffset;
-  }
-
-  throw new Error("Gateway returned an incomplete cron inventory response.");
-}
-
 const gatewayConfigCheck: CoreHealthCheck = {
   id: "core/doctor/gateway-config",
   description: "openclaw.jsonc gateway block is set and unambiguous.",
@@ -136,6 +59,8 @@ const gatewayConfigCheck: CoreHealthCheck = {
     if (!ctx.cfg.gateway?.mode) {
       findings.push({
         checkId: "core/doctor/gateway-config",
+        category: "fix-now",
+        docsUrl: "https://docs.openclaw.ai/gateway/configuration",
         severity: "warning",
         message: "gateway.mode is unset; gateway start will be blocked.",
         path: "gateway.mode",
@@ -146,6 +71,8 @@ const gatewayConfigCheck: CoreHealthCheck = {
     if (ctx.cfg.gateway?.mode !== "remote" && hasAmbiguousGatewayAuthModeConfig(ctx.cfg)) {
       findings.push({
         checkId: "core/doctor/gateway-config",
+        category: "fix-now",
+        docsUrl: "https://docs.openclaw.ai/gateway/configuration",
         severity: "warning",
         message:
           "gateway.auth.token and gateway.auth.password are both configured while gateway.auth.mode is unset; auth selection is ambiguous.",
@@ -168,6 +95,8 @@ const commandOwnerCheck: CoreHealthCheck = {
     return [
       {
         checkId: "core/doctor/command-owner",
+        category: "recommended",
+        docsUrl: "https://docs.openclaw.ai/tools/slash-commands",
         severity: "info",
         message:
           "No command owner is configured. Owner-only commands (/diagnostics, /export-trajectory, /config, exec approvals) have no allowed sender.",
@@ -197,6 +126,8 @@ const skillWorkshopToolPolicyCheck: CoreHealthCheck = {
     );
     return diagnostics.map((diagnostic) => ({
       checkId: SKILL_WORKSHOP_TOOL_POLICY_CHECK_ID,
+      category: "fix-now",
+      docsUrl: "https://docs.openclaw.ai/tools/skill-workshop",
       severity: "warning",
       message: diagnostic.detail,
       path: diagnostic.source,
@@ -221,6 +152,8 @@ const hooksModelCheck: CoreHealthCheck = {
     return (await collectHooksModelIssues(ctx.cfg)).map(({ kind, model }): HealthFinding => {
       const finding: HealthFinding = {
         checkId: "core/doctor/hooks-model",
+        category: "fix-now",
+        docsUrl: "https://docs.openclaw.ai/automation/cron-jobs/gmail",
         severity: "warning",
         path: "hooks.gmail.model",
         message:
@@ -229,15 +162,11 @@ const hooksModelCheck: CoreHealthCheck = {
             : kind === "not-allowed"
               ? `hooks.gmail.model "${model}" is not allowed by agents.defaults.modelPolicy.allow.`
               : `hooks.gmail.model "${model}" is not in the model catalog.`,
+        fixHint:
+          kind === "not-allowed"
+            ? "Add the model or its provider wildcard to agents.defaults.modelPolicy.allow, or remove hooks.gmail.model."
+            : "Run `openclaw models list` and set hooks.gmail.model to a configured provider/model, or remove the override to use the agent default.",
       };
-      if (kind !== "unresolved") {
-        Object.assign(finding, {
-          fixHint:
-            kind === "not-allowed"
-              ? "Add the model or its provider wildcard to agents.defaults.modelPolicy.allow, or remove hooks.gmail.model."
-              : "Choose a model from the configured provider catalog.",
-        });
-      }
       return finding;
     });
   },
@@ -259,6 +188,8 @@ const legacyStateCheck: CoreHealthCheck = {
     return [
       ...detected.preview.map((line): HealthFinding => ({
         checkId: "core/doctor/legacy-state",
+        category: "fix-now",
+        docsUrl: "https://docs.openclaw.ai/cli/doctor/state-migrations",
         severity: "warning",
         message: line.replace(/^- /, ""),
         path: detected.stateDir,
@@ -266,6 +197,8 @@ const legacyStateCheck: CoreHealthCheck = {
       })),
       ...detected.warnings.map((warning): HealthFinding => ({
         checkId: "core/doctor/legacy-state",
+        category: "fix-now",
+        docsUrl: "https://docs.openclaw.ai/cli/doctor/state-migrations",
         severity: "warning",
         message: warning,
         path: detected.stateDir,
@@ -275,78 +208,13 @@ const legacyStateCheck: CoreHealthCheck = {
   },
 };
 
-const bootstrapSizeCheck: CoreHealthCheck = {
-  id: "core/doctor/bootstrap-size",
-  description: "Workspace bootstrap files fit within configured injection limits.",
-  async detect(ctx) {
-    if (!ctx.cwd) {
-      return [];
-    }
-    const { collectBootstrapFileSize } = await import("../commands/doctor-bootstrap-size.js");
-    const { isFixedUserCapFile } = await import("../agents/bootstrap-budget.js");
-    const { USER_BOOTSTRAP_MAX_CHARS } =
-      await import("../agents/embedded-agent-helpers/bootstrap.js");
-    const workspaceDir = ctx.cwd;
-    const { analysis } = await collectBootstrapFileSize(
-      ctx.cfg,
-      workspaceDir,
-      tryResolveSoleAgentId(ctx.cfg),
-    );
-    // USER.md's fixed cap makes per-file tuning advice a dead end: name the cap
-    // and the compaction action instead, matching the interactive Doctor note.
-    const fixedCapHint = `Reduce the file size; USER.md has a fixed ${USER_BOOTSTRAP_MAX_CHARS.toLocaleString("en-US")}-character bootstrap cap that \`bootstrapMaxChars\` cannot raise.`;
-    const findings: HealthFinding[] = [];
-    for (const file of analysis.truncatedFiles) {
-      let fixHint =
-        "Reduce the file size or tune `agents.entries.*.bootstrapMaxChars` / `bootstrapTotalMaxChars` for this agent, or the corresponding `agents.defaults.*` fallback.";
-      if (file.causes.includes("per-file-limit") && isFixedUserCapFile(file)) {
-        fixHint = fixedCapHint;
-        if (file.causes.includes("total-limit")) {
-          fixHint +=
-            " Also reduce total bootstrap size or tune `agents.entries.*.bootstrapTotalMaxChars` for this agent, or `agents.defaults.bootstrapTotalMaxChars` as fallback.";
-        }
-      }
-      findings.push({
-        checkId: "core/doctor/bootstrap-size",
-        severity: "warning",
-        message: `${file.name} exceeds bootstrap limits and will be truncated.`,
-        path: file.path,
-        fixHint,
-      });
-    }
-    for (const file of analysis.nearLimitFiles) {
-      if (file.truncated) {
-        continue;
-      }
-      findings.push({
-        checkId: "core/doctor/bootstrap-size",
-        severity: "info",
-        message: `${file.name} is near the configured bootstrap file limit.`,
-        path: file.path,
-        fixHint: isFixedUserCapFile(file)
-          ? fixedCapHint
-          : "Reduce the file size or tune `agents.entries.*.bootstrapMaxChars` for this agent, or `agents.defaults.bootstrapMaxChars` as fallback, for per-file limits.",
-      });
-    }
-    if (analysis.totalNearLimit) {
-      findings.push({
-        checkId: "core/doctor/bootstrap-size",
-        severity: analysis.hasTruncation ? "warning" : "info",
-        message: "Total bootstrap context is near the configured total limit.",
-        path: workspaceDir,
-        fixHint:
-          "Reduce bootstrap file sizes or tune `agents.entries.*.bootstrapTotalMaxChars` for this agent, or `agents.defaults.bootstrapTotalMaxChars` as fallback.",
-      });
-    }
-    return findings;
-  },
-};
-
 function noteTextToFinding(params: {
   checkId: string;
   severity: HealthFinding["severity"];
   text: string;
   target?: string;
+  category?: HealthFinding["category"];
+  docsUrl?: string;
 }): HealthFinding {
   const lines = params.text.split("\n");
   const first = (lines[0] ?? params.text).replace(/^- /, "").trim();
@@ -354,6 +222,8 @@ function noteTextToFinding(params: {
   return {
     checkId: params.checkId,
     severity: params.severity,
+    ...(params.category ? { category: params.category } : {}),
+    ...(params.docsUrl ? { docsUrl: params.docsUrl } : {}),
     message: first,
     ...(params.target ? { target: params.target } : {}),
     ...(rest ? { fixHint: rest } : {}),
@@ -452,6 +322,8 @@ const openAIOAuthTlsCheck: CoreHealthCheck = {
     return [
       noteTextToFinding({
         checkId: "core/doctor/oauth-tls",
+        category: "fix-now",
+        docsUrl: "https://docs.openclaw.ai/help/troubleshooting",
         severity: "warning",
         text: fix,
       }),
@@ -473,6 +345,8 @@ const legacyWhatsAppCrontabCheck: CoreHealthCheck = {
     return [
       noteTextToFinding({
         checkId: "core/doctor/legacy-whatsapp-crontab",
+        category: "recommended",
+        docsUrl: "https://docs.openclaw.ai/cli/doctor/checks",
         severity: "warning",
         text: warning,
       }),
@@ -541,7 +415,7 @@ const codexSessionRoutesCheck: CoreHealthCheck = {
 
 const telegramGeneralTopicConversationsCheck: CoreHealthCheck = {
   id: TELEGRAM_GENERAL_TOPIC_CONVERSATIONS_CHECK_ID,
-  description: "Telegram General-topic conversation bindings use the canonical chat target.",
+  description: "Telegram General-topic conversation bindings use the chat target.",
   async detect(ctx) {
     const { detectTelegramGeneralTopicConversationRepairs } =
       await import("../commands/doctor-telegram-general-topic-conversations.js");
@@ -551,10 +425,12 @@ const telegramGeneralTopicConversationsCheck: CoreHealthCheck = {
     });
     return repairs.map((repair) => ({
       checkId: TELEGRAM_GENERAL_TOPIC_CONVERSATIONS_CHECK_ID,
+      category: "fix-now",
+      docsUrl: "https://docs.openclaw.ai/channels/telegram",
       severity: "warning" as const,
       message: `Agent ${repair.agentId} has a stale Telegram General-topic conversation identity.`,
       target: repair.agentId,
-      requirement: "One canonical chat-scoped conversation binding for Telegram General topic.",
+      requirement: "One chat-scoped conversation binding for Telegram General topic.",
       fixHint: "Run `openclaw doctor --fix` to merge the stale topic-qualified identity.",
     }));
   },
@@ -596,6 +472,8 @@ const gatewayPlatformNotesCheck: CoreHealthCheck = {
     return warnings.map((warning) =>
       noteTextToFinding({
         checkId: "core/doctor/gateway-services/platform-notes",
+        category: "recommended",
+        docsUrl: "https://docs.openclaw.ai/cli/doctor/recovery",
         severity: "warning",
         text: warning,
       }),
@@ -617,9 +495,7 @@ const browserCheck: CoreHealthCheck = {
   id: "core/doctor/browser",
   description: "Browser readiness is captured as structured findings.",
   async detect(ctx) {
-    const collector = createNoteCollector("core/doctor/browser");
-    await noteChromeMcpBrowserReadiness(ctx.cfg, { noteFn: collector.noteFn });
-    return collector.findings;
+    return await collectBrowserReadinessFindings(ctx.cfg);
   },
   async repair(ctx) {
     if (ctx.dryRun === true) {
@@ -701,6 +577,8 @@ const skillsReadinessCheck: CoreHealthCheck = {
 function unavailableSkillToFinding(skill: SkillStatusEntry): HealthFinding {
   return {
     checkId: "core/doctor/skills-readiness",
+    category: "recommended",
+    docsUrl: "https://docs.openclaw.ai/tools/skills",
     severity: "warning",
     message: `${skill.name} is allowed but unavailable: ${formatMissingSkillSummary(skill)}.`,
     path: skillReadinessPath(skill),
@@ -769,6 +647,8 @@ const workspaceSuggestionsCheck: CoreHealthCheck = {
         return notes.map((text) =>
           noteTextToFinding({
             checkId: "core/doctor/workspace-suggestions",
+            category: "recommended",
+            docsUrl: "https://docs.openclaw.ai/concepts/agent-workspace",
             severity: "info",
             text: `${prefix}${text}`,
             ...(labelAgent ? { target: agentId } : {}),
@@ -818,6 +698,22 @@ export function createCoreHealthChecks(): readonly DoctorHealthCheck[] {
     },
     nodeRuntimeCheck,
     {
+      id: "core/doctor/runtime-capabilities",
+      description: "Report capabilities of the Doctor process without executing optional features.",
+      async detect() {
+        const { collectRuntimeCapabilities, formatRuntimeCapabilities } =
+          await import("../infra/runtime-capabilities.js");
+        return [
+          {
+            checkId: "core/doctor/runtime-capabilities",
+            severity: "info",
+            source: "doctor-process",
+            message: `Runtime capabilities (Doctor process)\n${formatRuntimeCapabilities(collectRuntimeCapabilities())}`,
+          },
+        ];
+      },
+    },
+    {
       id: "core/doctor/security",
       updateReadiness: "post-plugin",
       description: "Security posture checks produce structured findings.",
@@ -831,8 +727,8 @@ export function createCoreHealthChecks(): readonly DoctorHealthCheck[] {
     openAIOAuthTlsCheck,
     hooksModelCheck,
     bootstrapSizeCheck,
-    createModelReferenceCheck(),
-    createAcpAgentModelCheck(),
+    modelReferenceCheck,
+    acpAgentModelCheck,
     {
       id: "core/doctor/provider-catalog-projection",
       description: "Provider catalog hooks project into unified text model catalog rows.",
@@ -851,35 +747,9 @@ export function createCoreHealthChecks(): readonly DoctorHealthCheck[] {
         return collectLocalAudioAccelerationFindings();
       },
     },
-    createRuntimeToolSchemaCheck({
-      collectRuntimeToolSchemaFindings: collectRuntimeToolSchemaFindingsWithRuntime,
-    }),
+    runtimeToolSchemaCheck,
     workspaceSuggestionsCheck,
     skillWorkshopToolPolicyCheck,
-    ...(isExperimentalClawsEnabled()
-      ? [
-          {
-            id: "core/doctor/claws-state",
-            description: "Claw lifecycle ownership and managed resources are consistent.",
-            defaultEnabled: false as const,
-            async detect(ctx: HealthCheckContext) {
-              const [{ collectClawStateHealthFindings }, { listConfiguredMcpServers }] =
-                await Promise.all([
-                  import("../claws/doctor.js"),
-                  import("../config/mcp-config.js"),
-                ]);
-              return await collectClawStateHealthFindings({
-                cfg: ctx.cfg,
-                env: process.env,
-                listMcpServers: listConfiguredMcpServers,
-                cronGateway: {
-                  list: () => listGatewayCronJobsWithRuntime(ctx),
-                },
-              });
-            },
-          },
-        ]
-      : []),
     commandOwnerCheck,
     skillsReadinessCheck,
     finalConfigValidationCheck,

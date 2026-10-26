@@ -159,142 +159,6 @@ export function registerBackupCommand(program: Command) {
     .option("--error <text>", "Failure details")
     .option("--json", "Output JSON", false);
 
-  registerBackupSqliteCommands(backup);
-  registerBackupGitCommands(backup);
-  registerBackupScheduleCommands(backup);
-}
-
-function registerBackupScheduleCommands(backup: Command): void {
-  addGatewayClientOptions(
-    backup
-      .command("enable")
-      .description("Provision a Gateway automation for offsite or Git backups")
-      .action(
-        backupAction(
-          async () => (await import("../../commands/backup-schedule.js")).backupEnableCommand,
-        ),
-      )
-      .option("--repository <path>", "Git backup repository directory")
-      .option("--to <location>", "Storage location for offsite archive backups")
-      .option(
-        "--claim-namespace",
-        "Deliberately take over the backup namespace on each scheduled run",
-      )
-      .option("--namespace <name>", "Backup namespace (default: sanitized hostname)")
-      .option("--no-include-workspace", "Exclude workspace directories from offsite archives")
-      .option("--keep-daily <n>", "Retain the newest backup in N daily UTC buckets")
-      .option("--keep-weekly <n>", "Retain the newest backup in N weekly UTC buckets")
-      .option("--keep-monthly <n>", "Retain the newest backup in N monthly UTC buckets")
-      .option("--every <duration>", "Backup interval", "24h")
-      .option("--push", "Push the current branch to origin after each backup", false)
-      .option("--exclude-secrets", "Omit credential-bearing database tables", false)
-      .option(
-        "--include-secrets",
-        "Keep credential-bearing tables in pushed scheduled backups",
-        false,
-      )
-      .option("--global-only", "Back up only the shared state database", false)
-      .option("--agent <id>", "Back up only one agent database"),
-  );
-
-  addGatewayClientOptions(
-    backup
-      .command("disable")
-      .description("Remove both scheduled backup modes, or the selected mode")
-      .action(
-        backupAction(
-          async () => (await import("../../commands/backup-schedule.js")).backupDisableCommand,
-        ),
-      )
-      .option("--offsite", "Disable only offsite archive backups", false)
-      .option("--git", "Disable only Git backups", false),
-  );
-}
-
-function registerBackupGitCommands(backup: Command): void {
-  const git = backup
-    .command("git")
-    .description("Create and restore deterministic versioned SQLite dumps in Git")
-    .action(() => {
-      git.outputHelp();
-      process.exitCode = 1;
-    });
-
-  git
-    .command("init")
-    .description("Initialize or adopt an operator-owned Git backup repository")
-    .action(
-      backupAction(async () => (await import("../../commands/backup-git.js")).backupGitInitCommand),
-    )
-    .requiredOption("--repository <path>", "Git backup repository directory")
-    .option("--remote <url>", "Add the remote as origin")
-    .option("--json", "Output JSON", false);
-
-  git
-    .command("create")
-    .description("Dump selected OpenClaw databases and commit one Git revision")
-    .requiredOption("--repository <path>", "Git backup repository directory")
-    .option("--all", "Back up the shared database and every registered agent database", false)
-    .option("--global", "Back up the shared OpenClaw state database", false)
-    .option("--agent <id>", "Back up an agent database (repeatable)", collectOption, [])
-    .option("--push", "Push the current branch to origin", false)
-    .option("--exclude-secrets", "Omit credential-bearing database tables", false)
-    .option("--json", "Output JSON", false)
-    .action(async (opts) => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const { backupGitCreateCommand } = await import("../../commands/backup-git.js");
-        const { agent: agents, ...options } = opts;
-        await backupGitCreateCommand(defaultRuntime, { ...options, agents });
-      });
-    });
-
-  git
-    .command("log")
-    .description("Show Git backup commits")
-    .action(
-      backupAction(async () => (await import("../../commands/backup-git.js")).backupGitLogCommand),
-    )
-    .requiredOption("--repository <path>", "Git backup repository directory")
-    .option(
-      "--limit <n>",
-      "Maximum commits to show",
-      (value) => parseStrictPositiveIntOption(value, "--limit"),
-      20,
-    )
-    .option("--json", "Output JSON", false);
-
-  for (const operation of ["verify", "restore"] as const) {
-    const restore = operation === "restore";
-    const verb = restore ? "Restore" : "Verify";
-    const command = git
-      .command(operation)
-      .description(
-        restore
-          ? "Restore one database snapshot from a Git ref to a fresh SQLite file"
-          : "Restore and verify one database snapshot from a Git ref",
-      )
-      .action(
-        backupAction(async () => {
-          const commands = await import("../../commands/backup-git.js");
-          return restore ? commands.backupGitRestoreCommand : commands.backupGitVerifyCommand;
-        }),
-      )
-      .requiredOption("--repository <path>", "Git backup repository directory");
-    if (restore) {
-      command.requiredOption(
-        "--target <path>",
-        "Fresh target path; existing files and sidecars are refused",
-      );
-    }
-    command
-      .option("--ref <commit>", `Commit or ref to ${operation}`, "HEAD")
-      .option("--global", `${verb} the shared state database`, false)
-      .option("--agent <id>", `${verb} one agent database`)
-      .option("--json", "Output JSON", false);
-  }
-}
-
-function registerBackupSqliteCommands(backup: Command): void {
   const sqlite = backup
     .command("sqlite")
     .description("Create, list, verify, and restore SQLite snapshots")
@@ -368,4 +232,135 @@ function registerBackupSqliteCommands(backup: Command): void {
       }),
     );
   }
+
+  const git = backup
+    .command("git")
+    .description("Create and restore reproducible database exports in Git")
+    .action(() => {
+      git.outputHelp();
+      process.exitCode = 1;
+    });
+
+  git
+    .command("init")
+    .description("Initialize or adopt an operator-owned Git backup repository")
+    .action(
+      backupAction(async () => (await import("../../commands/backup-git.js")).backupGitInitCommand),
+    )
+    .requiredOption("--repository <path>", "Git backup repository directory")
+    .option("--remote <url>", "Add the remote as origin")
+    .option("--json", "Output JSON", false);
+
+  git
+    .command("create")
+    .description("Dump selected OpenClaw databases and commit one Git revision")
+    .requiredOption("--repository <path>", "Git backup repository directory")
+    .option(
+      "--all",
+      "Back up shared state, every configured agent, and discovered PostgreSQL stores",
+      false,
+    )
+    .option("--global", "Back up the shared OpenClaw state database", false)
+    .option("--agent <id>", "Back up an agent database (repeatable)", collectOption, [])
+    .option("--push", "Push the current branch to origin", false)
+    .option("--exclude-secrets", "Omit credential-bearing database tables", false)
+    .option("--json", "Output JSON", false)
+    .action(async (opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { backupGitCreateCommand } = await import("../../commands/backup-git.js");
+        const { agent: agents, ...options } = opts;
+        await backupGitCreateCommand(defaultRuntime, { ...options, agents });
+      });
+    });
+
+  git
+    .command("log")
+    .description("Show Git backup commits")
+    .action(
+      backupAction(async () => (await import("../../commands/backup-git.js")).backupGitLogCommand),
+    )
+    .requiredOption("--repository <path>", "Git backup repository directory")
+    .option(
+      "--limit <n>",
+      "Maximum commits to show",
+      (value) => parseStrictPositiveIntOption(value, "--limit"),
+      20,
+    )
+    .option("--json", "Output JSON", false);
+
+  for (const operation of ["verify", "restore"] as const) {
+    const restore = operation === "restore";
+    const verb = restore ? "Restore" : "Verify";
+    const command = git
+      .command(operation)
+      .description(
+        restore
+          ? "Restore one database snapshot from a Git ref to a fresh database path"
+          : "Verify one database snapshot from a Git ref",
+      )
+      .action(
+        backupAction(async () => {
+          const commands = await import("../../commands/backup-git.js");
+          return restore ? commands.backupGitRestoreCommand : commands.backupGitVerifyCommand;
+        }),
+      )
+      .requiredOption("--repository <path>", "Git backup repository directory");
+    if (restore) {
+      command.requiredOption(
+        "--target <path>",
+        "Fresh target path; existing files and sidecars are refused",
+      );
+    }
+    command
+      .option("--ref <commit>", `Commit or ref to ${operation}`, "HEAD")
+      .option("--global", `${verb} the shared state database`, false)
+      .option("--agent <id>", `${verb} one agent database`)
+      .option("--store <id>", `${verb} one plugin store by its recorded Git backup identity`)
+      .option("--json", "Output JSON", false);
+  }
+
+  addGatewayClientOptions(
+    backup
+      .command("enable")
+      .description("Provision a Gateway automation for offsite or Git backups")
+      .action(
+        backupAction(
+          async () => (await import("../../commands/backup-schedule.js")).backupEnableCommand,
+        ),
+      )
+      .option("--repository <path>", "Git backup repository directory")
+      .option("--to <location>", "Storage location for offsite archive backups")
+      .option(
+        "--claim-namespace",
+        "Deliberately take over the backup namespace on each scheduled run",
+      )
+      .option("--namespace <name>", "Backup namespace (default: sanitized hostname)")
+      .option("--no-include-workspace", "Exclude workspace directories from offsite archives")
+      .option("--keep-daily <n>", "Retain the newest backup in N daily UTC buckets")
+      .option("--keep-weekly <n>", "Retain the newest backup in N weekly UTC buckets")
+      .option("--keep-monthly <n>", "Retain the newest backup in N monthly UTC buckets")
+      .option("--every <duration>", "Backup interval", "24h")
+      .option("--push", "Push the current branch to origin after each backup", false)
+      .option("--exclude-secrets", "Omit credential-bearing database tables", false)
+      .option(
+        "--include-secrets",
+        "Keep credential-bearing tables in pushed scheduled backups",
+        false,
+      )
+      .option("--global-only", "Back up only the shared state database", false)
+      .option("--agent <id>", "Back up only one agent database"),
+  );
+
+  addGatewayClientOptions(
+    backup
+      .command("disable")
+      .description("Remove both scheduled backup modes, or the selected mode")
+      .action(
+        backupAction(
+          async () => (await import("../../commands/backup-schedule.js")).backupDisableCommand,
+        ),
+      )
+      .option("--offsite", "Disable only offsite archive backups", false)
+      .option("--git", "Disable only Git backups", false),
+  );
 }

@@ -20,6 +20,7 @@ import {
 import { describePluginAvailabilityFailure } from "../plugins/runtime-degraded-state.js";
 import { collectConfiguredWorkerProviderIds } from "../plugins/worker-provider-config.js";
 import { listBundledWorkerProviderOwners } from "../plugins/worker-provider-manifest.js";
+import type { SetupSecretMigrationInspection } from "../secrets/setup-secret-migration.js";
 import { getHealthCheck, registerHealthCheck } from "./health-check-registry.js";
 import type { HealthFinding } from "./health-checks.js";
 
@@ -55,6 +56,10 @@ type BundledHealthApi = {
     memoryCoreActive: boolean;
   }) => void;
   registerPolicyDoctorChecks?: (host: { registerHealthCheck: typeof registerHealthCheck }) => void;
+  registerOpenAIDoctorChecks?: (host: {
+    getHealthCheck: typeof getHealthCheck;
+    registerHealthCheck: typeof registerHealthCheck;
+  }) => void;
 };
 
 type WorkerProviderHealthApi = {
@@ -62,6 +67,10 @@ type WorkerProviderHealthApi = {
     getHealthCheck: typeof getHealthCheck;
     registerHealthCheck: typeof registerHealthCheck;
     listPluginStateEntries: <T>(options: OpenKeyedStoreOptions) => Promise<PluginStateEntry<T>[]>;
+    inspectSetupSecrets: (
+      names: readonly string[],
+      env?: NodeJS.ProcessEnv,
+    ) => Promise<SetupSecretMigrationInspection[]>;
   }) => void;
 };
 
@@ -106,6 +115,7 @@ const HEALTH_CHECK_REGISTRATIONS = [
   defineHealthCheckRegistration(registerMemoryCoreHealthChecks, "post-plugin"),
   defineHealthCheckRegistration(registerCodexHealthChecks),
   defineHealthCheckRegistration(registerPolicyHealthChecks),
+  defineHealthCheckRegistration(registerOpenAIHealthChecks),
   defineHealthCheckRegistration(registerCuaHealthChecks),
   defineHealthCheckRegistration(registerBundledWorkerProviderHealthChecks),
 ];
@@ -306,6 +316,17 @@ function registerPolicyHealthChecks(
   }
 }
 
+function registerOpenAIHealthChecks(
+  _params: BundledHealthCheckParams,
+  registerCheck: typeof registerHealthCheck,
+): void {
+  // Inspect retained model references even when no OpenAI runtime is active.
+  loadBundledPluginPublicArtifactModuleSync<BundledHealthApi>({
+    dirName: "openai",
+    artifactBasename: "doctor-health-api.js",
+  }).registerOpenAIDoctorChecks?.({ getHealthCheck, registerHealthCheck: registerCheck });
+}
+
 function registerCuaHealthChecks(
   params: BundledHealthCheckParams,
   registerCheck: typeof registerHealthCheck,
@@ -338,6 +359,11 @@ function registerBundledWorkerProviderHealthChecks(
     })?.registerWorkerProviderDoctorChecks?.({
       getHealthCheck,
       registerHealthCheck: registerCheck,
+      async inspectSetupSecrets(names, inspectionEnv) {
+        const { inspectSetupSecretMigration } =
+          await import("../secrets/setup-secret-migration.js");
+        return inspectSetupSecretMigration({ names, env: inspectionEnv ?? env });
+      },
       async listPluginStateEntries<T>(options: OpenKeyedStoreOptions) {
         const { createPluginStateKeyedStore } =
           await import("../plugin-state/plugin-state-store.js");

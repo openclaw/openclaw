@@ -128,20 +128,11 @@ export async function selectDevicePlacementCandidates(params: {
   if (failed && !failed.eligibility.ok) {
     return { ok: false, error: failed.eligibility.error };
   }
-  const atCapacity =
-    requirement.consumesWorkerSlot && attempts.every(({ availableSlots }) => availableSlots === 0);
-  if (atCapacity) {
-    return {
-      ok: false,
-      error: `all paired session-host nodes are at capacity; ${deviceUnavailableText(
-        attempts[0]!.deviceId,
-        { available: false, unavailableReason: "at-capacity" },
-      )}`,
-    };
-  }
   return {
     ok: false,
-    error:
-      "no paired session-host node supports this runtime; check node commands and reconnect an eligible host",
+    error: `all paired session-host nodes are at capacity; ${deviceUnavailableText(
+      attempts[0]!.deviceId,
+      { available: false, unavailableReason: "at-capacity" },
+    )}`,
   };
 }

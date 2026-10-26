@@ -105,10 +105,14 @@ Options:
   --refresh-github-snapshot
                         Ignore an existing exact-range snapshot and rebuild it.
   --main-ref <ref>      Canonical mainline used to replace backport PRs.
+  --release-branch <ref>
+                        Ref whose history must contain the generation target.
   --seed-ref <ref>      Use an existing release section as editorial input.
   --shipped-ref <tag>   Exclude PRs already recorded by this shipped tag; repeatable.
   --release-provenance <sha -> #PR[, #PR]>
                         Supply an exact provenance marker; repeatable.
+  --regular-stable-version <version>
+                        Regular stable version linked by extended-stable release notes.
   --write-ledger        Write the verified split release entry and contribution record.
   --release-tag <tag>   GitHub release tag to compare; repeatable with --check-github.
   --check-github        Require each supplied GitHub release body to match.
@@ -126,7 +130,9 @@ export function parseArgs(argv) {
     manifestPath: undefined,
     githubSnapshotPath: undefined,
     mainRef: undefined,
+    releaseBranch: /** @type {string | undefined} */ (undefined),
     noGithubSnapshot: false,
+    regularStableVersion: undefined,
     refreshGithubSnapshot: false,
     seedRef: /** @type {string | undefined} */ (undefined),
     shippedRefs: [],
@@ -149,7 +155,9 @@ export function parseArgs(argv) {
     ["--shipped-ref", "shippedRefs"],
     ["--github-snapshot", "githubSnapshotPath"],
     ["--main-ref", "mainRef"],
+    ["--release-branch", "releaseBranch"],
     ["--manifest", "manifestPath"],
+    ["--regular-stable-version", "regularStableVersion"],
     ["--seed-ref", "seedRef"],
   ]);
 
@@ -1899,10 +1907,17 @@ export function validateReleaseProvenanceOverrides(
   nodes,
   mainCommit,
   isMainAncestor = gitIsAncestor,
+  resolveNodes = (numbers) => resolveReferences(numbers).nodes,
 ) {
+  // Shipped-ref subtraction removes already-released PRs from the release
+  // inventory, but markers naming them still need the same main validation.
+  const missing = [...new Set([...provenanceOverrides.values()].flat())].filter(
+    (number) => !nodes.has(number),
+  );
+  const markerNodes = missing.length > 0 ? resolveNodes(missing) : new Map();
   for (const [commit, pullRequests] of provenanceOverrides) {
     for (const number of pullRequests) {
-      const node = nodes.get(number);
+      const node = nodes.get(number) ?? markerNodes.get(number);
       // Markers may name current-main forward-ports, but never release-only or unmerged PRs.
       if (
         node?.__typename !== "PullRequest" ||
@@ -2577,7 +2592,13 @@ function manifestFor(options, source, ledger, directCommitRecords) {
   };
 }
 
-function releaseChecks(changelog, version, releaseTags, contributionRecordPath) {
+function releaseChecks(
+  changelog,
+  version,
+  releaseTags,
+  contributionRecordPath,
+  regularStableVersion,
+) {
   const checks = [];
   for (const tag of releaseTags) {
     const release = githubApi([`repos/${repo}/releases/tags/${encodeURIComponent(tag)}`]);
@@ -2587,6 +2608,7 @@ function releaseChecks(changelog, version, releaseTags, contributionRecordPath) 
       version,
       tag,
       repository: repo,
+      regularStableVersion,
       contributionRecordPath,
     });
     checks.push({
@@ -2612,6 +2634,19 @@ function writeFileAtomic(filePath, contents) {
   } finally {
     rmSync(tempDirectory, { force: true, recursive: true });
   }
+}
+
+function loadOrInitializeReleaseChangelog(rootDir, version, writeLedger) {
+  const existing = findReleaseChangelog({ rootDir, version });
+  if (existing || !writeLedger) {
+    return existing ?? loadReleaseChangelog({ rootDir, version });
+  }
+  writeReleaseChangelog({
+    rootDir,
+    version,
+    section: `## ${version}\n\n### Highlights\n\n### Changes\n\n### Fixes\n`,
+  });
+  return loadReleaseChangelog({ rootDir, version });
 }
 
 function main() {
@@ -2669,7 +2704,16 @@ function main() {
     options.base = git(["merge-base", options.base, options.target]);
   }
   const rootDir = process.cwd();
-  const releaseSource = loadReleaseChangelog({ rootDir, version: options.version });
+  if (options.releaseBranch && !gitIsAncestor(options.target, options.releaseBranch)) {
+    fail(
+      `release notes target ${options.target} is not reachable from canonical release branch ${options.releaseBranch}; generate notes from that branch's frozen tip`,
+    );
+  }
+  const releaseSource = loadOrInitializeReleaseChangelog(
+    rootDir,
+    options.version,
+    options.writeLedger,
+  );
   if (releaseSource.format !== "initial") {
     fail("docs-mirrored release notes must be verified by the docs-publication workflow");
   }
@@ -2947,6 +2991,7 @@ function main() {
         options.version,
         options.releaseTags,
         releaseSource.recordPath ?? undefined,
+        options.regularStableVersion,
       )
     : [];
   for (const check of github) {
@@ -2994,6 +3039,11 @@ function main() {
     process.stdout.write(
       `${options.version}: ${ledger.provenance.uniquePullRequests} unique PRs (${ledger.provenance.inRangePullRequests} in-range + ${ledger.provenance.retainedSeedOnlyPullRequests} retained seed-only), ${ledger.issues.length} issues, ${errors.length === 0 ? "verified" : `${errors.length} errors`}${snapshotSummary}\n`,
     );
+    if (errors.length > 0) {
+      process.stdout.write(
+        `${errors.map((error) => `- ${error.replaceAll("\n", "\n  ")}`).join("\n")}\n`,
+      );
+    }
   }
   if (errors.length > 0) {
     process.exitCode = 1;

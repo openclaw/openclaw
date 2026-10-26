@@ -84,6 +84,14 @@ type ManagedCommandOptions = {
   comSpec?: string;
 };
 
+export type ManagedCommandTimeoutObservation = {
+  elapsedMs: number;
+  /** An observed leader exit, not proof that descendants have exited. */
+  exit: { code: number | null; signal: NodeJS.Signals | null; elapsedMs: number } | null;
+  stdout: { bytes: number; lastDataElapsedMs: number | null; closed: boolean } | null;
+  stderr: { bytes: number; lastDataElapsedMs: number | null; closed: boolean } | null;
+};
+
 export type RunManagedCommandOptions = ManagedCommandOptions & {
   memoryLimitBytes?: number;
   onMemoryScope?: (unit: string) => void;
@@ -94,6 +102,8 @@ export type RunManagedCommandOptions = ManagedCommandOptions & {
   requireProcessTreeExit?: boolean;
   runTaskkill?: TaskkillRunner;
   onReady?: (child: ChildProcess) => void;
+  /** Synchronous, scalar-only observation before timeout cancellation. Consumes piped output. */
+  onTimeout?: (observation: ManagedCommandTimeoutObservation) => void;
   signal?: AbortSignal;
   abortKillGraceMs?: number;
   cleanupDrainTimeoutMs?: number;
@@ -603,7 +613,9 @@ export async function runManagedCommand({
       }
       return signalExitCode(receivedSignal ?? error.signal);
     }
-    if (receivedSignal && hasProcessErrorCode(error, "ABORT_ERR")) {
+    // A caller can abort in its own OS signal handler. Preserve its cancellation
+    // result instead of treating the same signal as an unhandled interruption.
+    if (receivedSignal && !command.signal?.aborted && hasProcessErrorCode(error, "ABORT_ERR")) {
       return signalExitCode(receivedSignal);
     }
     throw error;
@@ -705,6 +717,7 @@ async function runManagedCommandInner(
     requireProcessTreeExit = false,
     runTaskkill = spawnSync,
     onReady,
+    onTimeout,
     signal,
     abortKillGraceMs,
     cleanupDrainTimeoutMs,
@@ -766,6 +779,7 @@ async function runManagedCommandInner(
   // Register before spawn: a child can become ready before spawn returns.
   installSignalHandlers();
   let child: ChildProcess;
+  const startedAt = onTimeout ? Date.now() : 0;
   try {
     child = spawnManagedChild(spawnSpec.command, spawnSpec.args, spawnSpec.options);
   } catch (error) {
@@ -773,6 +787,11 @@ async function runManagedCommandInner(
     releaseOwnership();
     throw error;
   }
+  let childClosed = false;
+  child.once("close", () => {
+    childClosed = true;
+    clearTimeout(timeoutTimer);
+  });
   const cleanupHandoff = handoff.attach(child);
   if (cleanupHandoff) {
     cleanupHandoffs.set(child, cleanupHandoff);
@@ -788,6 +807,31 @@ async function runManagedCommandInner(
     pipe.once("close", onClose);
     return () => pipe.off("close", onClose);
   });
+  let observedExit: ManagedCommandTimeoutObservation["exit"] = null;
+  const observeExit = (code: number | null, received: NodeJS.Signals | null) => {
+    observedExit = { code, signal: received, elapsedMs: Date.now() - startedAt };
+  };
+  const outputProgress = onTimeout
+    ? [child.stdout, child.stderr].map((pipe) => {
+        if (!pipe) {
+          return null;
+        }
+        let bytes = 0;
+        let lastDataElapsedMs: number | null = null;
+        const observeData = (data: Buffer | string) => {
+          bytes += Buffer.byteLength(data);
+          lastDataElapsedMs = Date.now() - startedAt;
+        };
+        pipe.on("data", observeData);
+        return {
+          snapshot: () => ({ bytes, lastDataElapsedMs, closed: !pendingOutputCloses.has(pipe) }),
+          remove: () => pipe.off("data", observeData),
+        };
+      })
+    : [];
+  if (onTimeout) {
+    child.once("exit", observeExit);
+  }
   let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
   let finalization: Promise<{ type: "failed"; error: unknown } | undefined> | undefined;
   const stopController = new AbortController();
@@ -819,6 +863,7 @@ async function runManagedCommandInner(
       forceKillOnLeaderExit,
       drainTimeoutMs: cleanupDrainTimeoutMs,
       areOutputPipesClosed: () => pendingOutputCloses.size === 0,
+      isChildClosed: () => childClosed,
       onTerminated: releaseOwnership,
       stopControl,
     }).then(
@@ -851,7 +896,6 @@ async function runManagedCommandInner(
       }
     });
     // The wall deadline includes output drainage, but not group verification after close.
-    child.once("close", () => clearTimeout(timeoutTimer));
     // Tree owners must start cleanup at exit: descendants can hold output
     // open indefinitely. Finalization still joins the group and output pipes.
     child.once(ownsProcessTree ? "exit" : "close", (status, received) => {
@@ -862,6 +906,16 @@ async function runManagedCommandInner(
     });
     if (timeoutMs !== undefined) {
       timeoutTimer = setTimeout(() => {
+        try {
+          onTimeout?.({
+            elapsedMs: Date.now() - startedAt,
+            exit: observedExit,
+            stdout: outputProgress[0]?.snapshot() ?? null,
+            stderr: outputProgress[1]?.snapshot() ?? null,
+          });
+        } catch {
+          // Diagnostics must not replace the timeout or prevent joined cleanup.
+        }
         void stop({ type: "timeout" }, "SIGTERM", timeoutKillGraceMs, timeoutForceKillOnLeaderExit);
       }, timeoutMs);
     }
@@ -930,6 +984,10 @@ async function runManagedCommandInner(
     for (const removeListener of removeOutputCloseListeners) {
       removeListener();
     }
+    child.off("exit", observeExit);
+    for (const progress of outputProgress) {
+      progress?.remove();
+    }
     clearTimeout(timeoutTimer);
     signal?.removeEventListener("abort", abort);
     managedChildren.delete(forwardSignal);
@@ -951,6 +1009,7 @@ export async function finalizeManagedChild(
     drainTimeoutMs = PROCESS_GROUP_DRAIN_TIMEOUT_MS,
     retainOutputOnFailure = false,
     areOutputPipesClosed,
+    isChildClosed = () => true,
     onTerminated = () => {},
     stopControl,
   }: {
@@ -961,6 +1020,7 @@ export async function finalizeManagedChild(
     drainTimeoutMs?: number;
     retainOutputOnFailure?: boolean;
     areOutputPipesClosed?: () => boolean;
+    isChildClosed?: () => boolean;
     onTerminated?: () => void;
     stopControl?: ManagedChildStopControl;
   },
@@ -1168,6 +1228,7 @@ export async function finalizeManagedChild(
       if (
         groupState === "dead" &&
         exited &&
+        isChildClosed() &&
         outputClosed() &&
         cleanupHandoff?.settled() !== false
       ) {

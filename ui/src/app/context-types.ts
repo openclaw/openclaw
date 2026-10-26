@@ -14,7 +14,7 @@ import type {
 } from "../lib/chat/chat-types.ts";
 import type { RuntimeConfigCapability } from "../lib/config/runtime-config-capability.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
-import type { reviewPrivateComposerDraft } from "../pages/chat/components/private-composer-recovery-dialog.ts";
+import type { reviewPrivateComposerDraft } from "../pages/chat/components/private-composer-recovery-dialog.tsx";
 import type { NewSessionDraftHandoff } from "../pages/new-session/draft-persistence.ts";
 import type { ControlUiPluginCapability } from "../plugins/control-ui-capability.ts";
 import type { AgentSelectionCapability } from "./agent-selection.ts";
@@ -22,8 +22,10 @@ import type { AssistantDock } from "./assistant-dock.ts";
 import type { ApplicationChatSubmissions } from "./chat-submissions.ts";
 import type { ApplicationConfigCapability } from "./config.ts";
 import type { ConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
+import type { ControlUiReadinessOutlet } from "./control-ui-readiness.ts";
 import type { ScopeUpgradeCapability } from "./device-scope-upgrade.ts";
 import type { ApplicationGateway } from "./gateway.ts";
+import type { GuestWelcomeHandle } from "./guest-welcome-handle.ts";
 import type { NativeChatDrafts } from "./native-bridge.ts";
 import type { NativeConversationBridge } from "./native-conversation-types.ts";
 import type { NativeDeviceSettingsCapability } from "./native-device-settings.ts";
@@ -36,18 +38,7 @@ import type { ThemeCatalogSnapshot } from "./theme-catalog.ts";
 import type { ThemeMode, ThemeName } from "./theme.ts";
 import type { WebPushCapability } from "./web-push.ts";
 
-export type {
-  ApplicationGateway,
-  ApplicationGatewayConnection,
-  ApplicationGatewayConnectOptions,
-  ApplicationGatewaySnapshot,
-} from "./gateway.ts";
-
-export type ApplicationThemeServerSelection = {
-  readonly revision: number;
-  readonly scope: string;
-  readonly theme: ThemeName | null;
-};
+export type { ApplicationGateway, ApplicationGatewaySnapshot } from "./gateway.ts";
 
 export type ApplicationTheme = {
   readonly branding: ThemeBranding;
@@ -56,7 +47,6 @@ export type ApplicationTheme = {
   readonly settings: UiPreferences;
   readonly mode: ThemeMode;
   readonly resolvedMode: "dark" | "light";
-  readonly serverSelection: ApplicationThemeServerSelection | null;
   readonly appliedPalette: ApplicationThemePalette | null;
   recordServerSelection: (theme: ThemeName | null, scope: string) => void;
   setMode: (mode: ThemeMode, element?: HTMLElement | null) => void;
@@ -86,6 +76,11 @@ export type ApplicationNavigationPreferences = {
 export type ApplicationNavigationOptions = Partial<
   Pick<RouteLocation, "pathname" | "search" | "hash">
 >;
+
+export type MountedApplicationShell = {
+  readonly element: HTMLElement;
+  readonly routeOutlet?: ControlUiReadinessOutlet;
+};
 
 type ChatAttachmentHandoffKey = {
   owner: ApplicationGateway["snapshot"]["client"];
@@ -128,6 +123,7 @@ export type ApplicationContext<TRouteId extends string = RouteId> = {
   readonly basePath: string;
   readonly resourceBasePath: string;
   readonly lifecycleAbortSignal?: AbortSignal;
+  readonly routeOutlet?: ControlUiReadinessOutlet;
   readonly router: Pick<
     Router<RouteId, ApplicationContext, unknown, unknown>,
     "getState" | "subscribe" | "navigate"
@@ -150,6 +146,8 @@ export type ApplicationContext<TRouteId extends string = RouteId> = {
   readonly sessions: SessionCapability;
   readonly placementStartup: ApplicationPlacementStartup;
   readonly plugins: ControlUiPluginCapability;
+  /** Visitor Access welcome-session setup for invited guests; app router documents only. */
+  readonly guestWelcome?: GuestWelcomeHandle;
   readonly assistantDock: AssistantDock;
   readonly overlays: ApplicationOverlays;
   readonly navigation: ApplicationNavigationPreferences;

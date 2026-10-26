@@ -13,6 +13,7 @@ import {
   readArtifactRecord,
   writeArtifactRecord,
 } from "./lib/build-artifact-cache.mts";
+import { runCancelableCommand } from "./lib/cancelable-command.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { withDistArtifactOwnership } from "./lib/dist-artifact-ownership.mts";
 import {
@@ -30,20 +31,23 @@ import {
   ensureRepoNodeModulesLink,
   isConstrainedCiCheckHost,
   isLocalCheckEnabled,
+  resolveCheckMemoryCapacityBytes,
   resolveLocalCheckEnv,
 } from "./lib/local-check-runtime.mts";
-import { runManagedCommand, signalExitCode } from "./lib/managed-child-process.mts";
+import { runManagedCommand } from "./lib/managed-child-process.mts";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { readProcessMemoryCapacity } from "./lib/process-memory.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { resolveTsgoTimeoutMs } from "./run-tsgo.mts";
-const repoRoot = resolveRepoRoot(import.meta.url);
+// Native compiler output uses long Windows paths even when Node entered through an 8.3 alias.
+const repoRoot = fs.realpathSync.native(resolveRepoRoot(import.meta.url));
 const DEFAULT_NODE_STEP_ABORT_KILL_GRACE_MS = 1_000;
 type NodeStepParams = {
   bin?: string;
   shell?: boolean;
   windowsVerbatimArguments?: boolean;
   abortController?: AbortController;
+  signal?: AbortSignal;
   abortKillGraceMs?: number;
   env?: NodeJS.ProcessEnv;
   onStdoutLine?: (line: string) => boolean;
@@ -53,7 +57,6 @@ type NodeStep = Omit<NodeStepParams, "abortController"> & {
   label: string;
   timeoutMs: number;
 };
-const activeNodeSteps = new Set<Promise<number>>();
 let nodeStepParentSignal: NodeJS.Signals | undefined;
 export function parseMode(argv: string[] = process.argv.slice(2)) {
   const mode = argv.find((arg) => arg.startsWith("--mode="))?.slice("--mode=".length) ?? "all";
@@ -111,6 +114,7 @@ export async function runNodeStep(
   timeoutMs: number,
   params: NodeStepParams = {},
 ) {
+  params.signal?.throwIfAborted();
   if (params.abortController?.signal.aborted || nodeStepParentSignal) {
     throw new Error(`${label} canceled before starting`);
   }
@@ -128,7 +132,10 @@ export async function runNodeStep(
     // Artifact writers must finish before stamps, dependent readers, or lock release.
     requireProcessTreeExit: process.platform !== "win32",
     timeoutMs: resolvedTimeoutMs,
-    signal: params.abortController?.signal,
+    signal:
+      params.signal && params.abortController
+        ? AbortSignal.any([params.signal, params.abortController.signal])
+        : (params.signal ?? params.abortController?.signal),
     abortKillGraceMs: Math.max(
       0,
       Math.floor(params.abortKillGraceMs ?? DEFAULT_NODE_STEP_ABORT_KILL_GRACE_MS),
@@ -144,9 +151,12 @@ export async function runNodeStep(
       child.stderr!.on("data", (chunk: string) => stderrWriter.write(chunk));
     },
   });
-  activeNodeSteps.add(command);
   try {
     const code = await command;
+    params.signal?.throwIfAborted();
+    if (nodeStepParentSignal) {
+      throw new DOMException(`${label} canceled after parent signal`, "AbortError");
+    }
     if (code !== 0) {
       throw new Error(`${label} failed with exit code ${code}`);
     }
@@ -156,11 +166,10 @@ export async function runNodeStep(
       code === "ETIMEDOUT"
         ? new Error(`${label} timed out after ${resolvedTimeoutMs}ms`, { cause: error })
         : code === "ABORT_ERR"
-          ? new Error(`${label} canceled after sibling failure`, { cause: error })
+          ? Object.assign(new Error(`${label} canceled after sibling failure`, { cause: error }), {
+              code: "ABORT_ERR",
+            })
           : error;
-    if (nodeStepParentSignal && code === "EPROCESSGROUP_CLEANUP_FAILED") {
-      console.error(failure);
-    }
     if (params.abortController && !params.abortController.signal.aborted) {
       params.abortController.abort(failure);
     }
@@ -168,11 +177,8 @@ export async function runNodeStep(
   } finally {
     stdoutWriter.flush();
     stderrWriter.flush();
-    activeNodeSteps.delete(command);
-    // The last sibling exits only after all managed cancellation has joined.
-    if (nodeStepParentSignal && activeNodeSteps.size === 0) {
-      process.exit(signalExitCode(nodeStepParentSignal));
-    }
+    // Let the caller join sibling steps and release artifact ownership before exiting.
+    // A leaf process.exit() bypasses both that release and the inherited child claim.
   }
 }
 
@@ -212,18 +218,59 @@ export async function runNodeStepsInParallel(steps: NodeStep[]) {
   }
 }
 
-function canPairCiDeclarations(env: NodeJS.ProcessEnv) {
+type DeclarationHost = Parameters<typeof isConstrainedCiCheckHost>[0];
+
+function readDeclarationHost(): DeclarationHost {
+  return {
+    logicalCpuCount: os.availableParallelism(),
+    totalMemoryBytes: os.totalmem(),
+    memoryCapacityBytes: readProcessMemoryCapacity({}).capacityBytes,
+  };
+}
+
+function ownsCiHost(env: NodeJS.ProcessEnv) {
   return (
-    process.platform === "linux" &&
     (env.CI === "true" || env.GITHUB_ACTIONS === "true") &&
     !env.OPENCLAW_LOCAL_CHECK?.trim() &&
-    !env.OPENCLAW_LOCAL_CHECK_MODE?.trim() &&
-    !isConstrainedCiCheckHost({
-      logicalCpuCount: os.availableParallelism(),
-      totalMemoryBytes: os.totalmem(),
-      memoryCapacityBytes: readProcessMemoryCapacity({}).capacityBytes,
-    })
+    !env.OPENCLAW_LOCAL_CHECK_MODE?.trim()
   );
+}
+
+function canPairCiDeclarations(env: NodeJS.ProcessEnv, host = readDeclarationHost()) {
+  return process.platform === "linux" && ownsCiHost(env) && !isConstrainedCiCheckHost(host);
+}
+
+/** Sizes the native compiler's Go runtime for how many declaration owners share the host. */
+export function resolveDeclarationCompilerEnv(
+  env: NodeJS.ProcessEnv,
+  host: DeclarationHost = readDeclarationHost(),
+) {
+  const paired = canPairCiDeclarations(env, host);
+  const memoryCapacityBytes = resolveCheckMemoryCapacityBytes(host);
+  let policyEnv = paired ? { ...env, OPENCLAW_LOCAL_CHECK: "0" } : env;
+  if (ownsCiHost(env) && isConstrainedCiCheckHost(host) && memoryCapacityBytes > 0) {
+    // Owners run one at a time here. Laptop GC limits held the 13k-file SDK to
+    // 220s instead of 135s on 4 CPUs/15 GiB (peak RSS 5.5 vs 8.2 GB).
+    policyEnv = {
+      ...env,
+      GOMAXPROCS: env.GOMAXPROCS?.trim() || String(host.logicalCpuCount),
+      GOGC: env.GOGC?.trim() || "100",
+      GOMEMLIMIT:
+        env.GOMEMLIMIT?.trim() || `${Math.floor((memoryCapacityBytes * 0.75) / 1024 ** 2)}MiB`,
+    };
+  }
+  const { env: compilerEnv } = applyLocalTsgoPolicy([], policyEnv, {
+    logicalCpuCount: host.logicalCpuCount,
+    totalMemoryBytes: host.totalMemoryBytes,
+  });
+  if (paired) {
+    // Two children share at least eight CPUs and 24 GiB; avoid laptop GC limits.
+    compilerEnv.GOMAXPROCS = String(
+      Math.min(4, parsePositiveInt(env.GOMAXPROCS?.trim() || "4", "GOMAXPROCS")),
+    );
+    compilerEnv.GOMEMLIMIT ||= "8GiB";
+  }
+  return compilerEnv;
 }
 
 /**
@@ -241,9 +288,11 @@ export async function runNodeSteps(steps: NodeStep[], env: NodeJS.ProcessEnv = p
   }
 }
 
-async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process.argv.slice(2)) {
+async function prepareExtensionPackageBoundaryArtifacts(argv: string[], signal: AbortSignal) {
+  signal.throwIfAborted();
   const mode = parseMode(argv);
   await ensureKyselyTypes(repoRoot);
+  signal.throwIfAborted();
   const selectedArgument = argv.find((arg) => arg.startsWith("--extensions="));
   let selected: string[] | undefined;
   let discoverPreparation: typeof resolveExtensionBoundaryPreparation | undefined;
@@ -261,28 +310,14 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
     selected = requested;
     ({ resolveExtensionBoundaryPreparation: discoverPreparation } =
       await import("./lib/extension-boundary-projects.mts"));
+    signal.throwIfAborted();
     preparation = await discoverPreparation(repoRoot, selected);
+    signal.throwIfAborted();
     process.stdout.write(
       `selected preparation: ${preparation.sdkRoots.length} SDK roots; plugin producers: ${preparation.pluginIds.join(", ") || "none"}\n`,
     );
   }
-  const env = resolveLocalCheckEnv(process.env);
-  const paired = canPairCiDeclarations(env);
-  const { env: compilerEnv } = applyLocalTsgoPolicy(
-    [],
-    paired ? { ...env, OPENCLAW_LOCAL_CHECK: "0" } : env,
-    {
-      logicalCpuCount: os.availableParallelism(),
-      totalMemoryBytes: os.totalmem(),
-    },
-  );
-  if (paired) {
-    // Two children share at least eight CPUs and 24 GiB; avoid laptop GC limits.
-    compilerEnv.GOMAXPROCS = String(
-      Math.min(4, parsePositiveInt(env.GOMAXPROCS?.trim() || "4", "GOMAXPROCS")),
-    );
-    compilerEnv.GOMEMLIMIT ||= "8GiB";
-  }
+  const compilerEnv = resolveDeclarationCompilerEnv(resolveLocalCheckEnv(process.env));
   const compilerTimeoutMs = resolveTsgoTimeoutMs(compilerEnv);
   const sharedSdk = process.env.OPENCLAW_CI_SHARED_SDK === "1";
   const sdk = sdkBoundaryUnit(sharedSdk ? undefined : preparation?.sdkRoots);
@@ -296,17 +331,26 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
   }));
   const batches = [[sdk], mode === "all" ? plugins : []].map((batch) =>
     batch.map((unit) => {
-      fs.mkdirSync(resolve(repoRoot, unit.outDir), { recursive: true });
+      const outputDir = resolve(repoRoot, unit.outDir);
+      fs.mkdirSync(outputDir, { recursive: true });
       if (unit.id !== "plugin-sdk") {
+        const modulesDir = resolve(repoRoot, unit.rootDir, "node_modules");
+        const dependencyLink = resolve(outputDir, "node_modules");
+        // Copied generated trees must not retain another checkout's dependency scope.
+        if (
+          fs.lstatSync(dependencyLink, { throwIfNoEntry: false })?.isSymbolicLink() &&
+          resolve(outputDir, fs.readlinkSync(dependencyLink)) !== modulesDir
+        ) {
+          fs.unlinkSync(dependencyLink);
+        }
         // Relocated declarations still resolve third-party types through their package owner.
-        ensureRepoNodeModulesLink(resolve(repoRoot, unit.rootDir, "node_modules"), {
-          cwd: resolve(repoRoot, unit.outDir),
-        });
+        ensureRepoNodeModulesLink(modulesDir, { cwd: outputDir });
       }
-      return { ...unit, outputRoot: fs.realpathSync.native(resolve(repoRoot, unit.outDir)) };
+      return { ...unit, outputRoot: fs.realpathSync.native(outputDir) };
     }),
   );
   const prepareBatch = async (batch: (typeof batches)[number]) => {
+    signal.throwIfAborted();
     if (!batch.length) {
       return;
     }
@@ -346,16 +390,16 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
         // Output directories stay intact until a successful complete inventory exists.
         fs.rmSync(resolve(repoRoot, inputReceipt), { force: true });
         const outputs = new Set<string>();
-        return Object.assign(unit, { recordPath, inputReceipt, args, outputs, startedAt: 0 });
+        return Object.assign(unit, { recordPath, inputReceipt, args, outputs });
       })
       .filter((unit) => unit !== null);
     await runNodeSteps(
       pending.map((unit) => {
-        unit.startedAt = Date.now();
         return {
           label: `${unit.id} boundary dts`,
           args: unit.args,
           env: compilerEnv,
+          signal,
           timeoutMs: Math.min(
             unit.id === "plugin-sdk" ? resolveBoundaryRootShimsTimeoutMs() : 300_000,
             compilerTimeoutMs ?? Number.POSITIVE_INFINITY,
@@ -370,6 +414,8 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
         };
       }),
     );
+    // Cancellation in an async gap must not admit compilers or publish receipts.
+    signal.throwIfAborted();
     if (!pending.length) {
       return;
     }
@@ -388,8 +434,6 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
         unit.args,
         unit.inputReceipt,
         outputs,
-        before,
-        unit.startedAt,
         unit.outputRoot,
       );
       return Object.assign(unit, { record });
@@ -424,6 +468,7 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
     const discovered = await discoverPreparation!(repoRoot, selected!, {
       preparedSdk: true,
     });
+    signal.throwIfAborted();
     if (sharedSdk) {
       if (discovered.sdkRoots.length) {
         throw new Error(
@@ -452,5 +497,12 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
 
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   // The private entry must observe cleanup metadata before releasing its claim.
-  await withDistArtifactOwnership(repoRoot, () => prepareExtensionPackageBoundaryArtifacts());
+  process.exitCode = await runCancelableCommand(async (signal) => {
+    await withDistArtifactOwnership(
+      repoRoot,
+      () => prepareExtensionPackageBoundaryArtifacts(process.argv.slice(2), signal),
+      signal,
+    );
+    return 0;
+  });
 }

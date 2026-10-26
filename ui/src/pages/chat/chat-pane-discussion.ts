@@ -1,10 +1,13 @@
 import type { SessionDiscussionInfo } from "../../../../packages/gateway-protocol/src/index.js";
 import { t } from "../../i18n/index.ts";
+import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { ChatPaneSessionMenu } from "./chat-pane-session-menu.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
-import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.ts";
+import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.tsx";
 import { closeSlot, openSlot } from "./sidebar-layout.ts";
+
+registerChatSessionEnglish();
 
 export abstract class ChatPaneDiscussion extends ChatPaneSessionMenu {
   // Probe once per session activation; transient failures stay uncached so the
@@ -14,7 +17,7 @@ export abstract class ChatPaneDiscussion extends ChatPaneSessionMenu {
     if (
       !state?.connected ||
       !state.client ||
-      this.sessionDiscussionStates.has(sessionKey) ||
+      this.sessionDiscussion.snapshot.states.has(sessionKey) ||
       // One in-flight probe per key: a rapid A→B→A switch must not start a
       // second probe whose slower twin could later overwrite the fresh result.
       this.sessionDiscussionProbes.has(sessionKey) ||
@@ -38,8 +41,7 @@ export abstract class ChatPaneDiscussion extends ChatPaneSessionMenu {
       if (generation !== this.connectionGeneration) {
         return;
       }
-      this.sessionDiscussionStates.set(sessionKey, info.state);
-      this.requestUpdate();
+      this.sessionDiscussion.record(sessionKey, info.state);
     } catch {
       // Leave unprobed: the action stays hidden and a later switch retries.
     } finally {
@@ -49,7 +51,7 @@ export abstract class ChatPaneDiscussion extends ChatPaneSessionMenu {
       if (
         generation !== this.connectionGeneration &&
         this.state?.sessionKey === sessionKey &&
-        !this.sessionDiscussionStates.has(sessionKey)
+        !this.sessionDiscussion.snapshot.states.has(sessionKey)
       ) {
         void this.probeSessionDiscussion(sessionKey);
       }
@@ -79,7 +81,7 @@ export abstract class ChatPaneDiscussion extends ChatPaneSessionMenu {
     const contentGeneration = this.connectionGeneration;
     const cached = this.sessionDiscussionPanels.get(sessionKey);
     if (cached?.generation === contentGeneration && cached.canOpen === canOpen) {
-      cached.config.openUrl = this.sessionDiscussionOpenUrls.get(sessionKey) ?? null;
+      cached.config.openUrl = this.sessionDiscussion.snapshot.openUrls.get(sessionKey) ?? null;
       return cached.config;
     }
     const request = async (
@@ -107,7 +109,7 @@ export abstract class ChatPaneDiscussion extends ChatPaneSessionMenu {
     const config: SessionDiscussionPanelConfig = {
       sessionKey,
       canOpen,
-      openUrl: this.sessionDiscussionOpenUrls.get(sessionKey) ?? null,
+      openUrl: this.sessionDiscussion.snapshot.openUrls.get(sessionKey) ?? null,
       loadInfo: (key) => request("session.discussion.info", key),
       openDiscussion: (key) => request("session.discussion.open", key),
       onStateChange: (key, discussionState, openUrl) => {
@@ -116,19 +118,11 @@ export abstract class ChatPaneDiscussion extends ChatPaneSessionMenu {
         if (contentGeneration !== this.connectionGeneration) {
           return;
         }
-        this.sessionDiscussionStates.set(key, discussionState);
         const isCurrentSession = state.sessionKey.trim() === key;
-        if (isCurrentSession) {
-          this.sessionDiscussionOpenUrls.set(key, openUrl);
-        }
-        if (discussionState === "none") {
-          this.sessionDiscussionOpenUrls.delete(key);
-        }
+        this.sessionDiscussion.record(key, discussionState, isCurrentSession ? openUrl : undefined);
         if (discussionState === "none" && isCurrentSession) {
           state.updateSidebarLayout(closeSlot(state.sidebarLayout, "discussion"));
-          return;
         }
-        state.requestUpdate();
       },
     };
     this.sessionDiscussionPanels.set(sessionKey, {
@@ -154,14 +148,10 @@ export abstract class ChatPaneDiscussion extends ChatPaneSessionMenu {
     }
   }
 
-  protected resolveSessionDiscussionAction(): {
-    active: boolean;
-    label: string;
-    onToggle: () => void;
-  } | null {
+  protected resolveSessionDiscussionAction() {
     const state = this.state;
     const sessionKey = state?.sessionKey.trim() ?? "";
-    const known = sessionKey ? this.sessionDiscussionStates.get(sessionKey) : undefined;
+    const known = sessionKey ? this.sessionDiscussion.snapshot.states.get(sessionKey) : undefined;
     if (
       !state ||
       !sessionKey ||

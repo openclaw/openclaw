@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.js";
 import { resetAgentRunRegistryForTest } from "../../infra/agent-run-registry.js";
 import {
@@ -12,21 +12,16 @@ import { setGatewayPluginMetadataSnapshot } from "../../plugins/current-plugin-m
 import { createPluginCache, withPluginCache } from "../../plugins/plugin-cache.js";
 import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
-import {
-  createOperationalRunInstanceRef,
-  prepareAgentRunAdmission,
-} from "../admitted-run-context.js";
-import type { AnyAgentTool } from "../tools/common.js";
-import { createAgentHarnessHostCapabilities } from "./host-capability.js";
+import { createAdmittedHostCapabilityTestFixture } from "./host-capability.test-support.js";
 
-type HostAttempt = Parameters<typeof createAgentHarnessHostCapabilities>[0]["attempt"];
 const PLUGIN_A = "test-grant-alpha";
 const PLUGIN_B = "test-grant-beta";
 const TOOL_A = "alpha_optional_tool";
 const TOOL_B = "beta_optional_tool";
-const grantA = () => ({ pluginId: PLUGIN_A, toolNames: [TOOL_A] });
 const grantB = () => ({ pluginId: PLUGIN_B, toolNames: [TOOL_B] });
 let tempDir: string;
+const cleanups: Array<() => void> = [];
+const ioPath = (suffix: string) => path.join(tempDir, `io-${suffix}.txt`);
 
 beforeEach(async () => {
   tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-host-grant-"));
@@ -38,19 +33,13 @@ beforeEach(async () => {
     await fs.mkdir(pluginDir, { recursive: true });
     await fs.writeFile(
       path.join(pluginDir, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: pluginId,
-        name: `${pluginId} fixture`,
-        version: "0.0.0-test",
-        configSchema: {},
-        contracts: { tools: [toolName] },
-      }),
+      JSON.stringify({ id: pluginId, configSchema: {}, contracts: { tools: [toolName] } }),
     );
     await fs.writeFile(
       path.join(pluginDir, "index.cjs"),
       `
       const toolName = ${JSON.stringify(toolName)};
-      const plugin = { register(api) {
+      module.exports = { register(api) {
         api.registerTool({
           name: toolName, label: toolName, description: toolName + ' fixture tool',
           parameters: { type: 'object', properties: {} },
@@ -61,36 +50,23 @@ beforeEach(async () => {
           },
         }, { name: toolName, optional: true });
       }};
-      module.exports = plugin;
-      module.exports.default = plugin;
     `,
     );
   }
 });
 
 afterEach(async () => {
+  for (const close of cleanups.splice(0).toReversed()) {
+    close();
+  }
   resetAgentRunRegistryForTest();
   resetPluginRuntimeStateForTest();
   clearRuntimeConfigSnapshot();
   await fs.rm(tempDir, { recursive: true, force: true });
 });
 
-async function withSurface(
-  grant: HostAttempt["runtimePluginToolGrant"],
-  harnessOptions: Record<string, unknown>,
-  check: (tools: AnyAgentTool[]) => Promise<void> | void,
-  afterCapture?: (attempt: HostAttempt) => void,
-) {
-  const runId = "host-grant-authority";
-  const admission = prepareAgentRunAdmission({
-    cfg: {},
-    facts: {
-      runId,
-      agentId: "main",
-      ingress: { kind: "system", boundary: "host-grant-authority-test", state: "present" },
-    },
-    operationalRunInstance: createOperationalRunInstanceRef(runId),
-  });
+async function createSurface(scenario: "forged options" | "mutated attempt" | "absent grant") {
+  const grant = { pluginId: PLUGIN_A, toolNames: [TOOL_A] };
   const workspaceDir = path.join(tempDir, "workspace");
   const config: OpenClawConfig = {
     tools: { profile: "coding" },
@@ -100,83 +76,61 @@ async function withSurface(
       entries: { [PLUGIN_A]: { enabled: true }, [PLUGIN_B]: { enabled: true } },
     },
   };
-  let host: ReturnType<typeof createAgentHarnessHostCapabilities> | undefined;
-  try {
-    const attempt: HostAttempt = {
-      agentId: "main",
-      sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
-      runId,
-      cwd: path.join(tempDir, "worktree"),
-      workspaceDir,
-      currentChannelId: "chat-1",
-      messageChannel: "telegram",
-      runtimePluginToolGrant: grant,
-      admittedRunContext: await admission.admit("plugin-harness", `harness-${runId}`),
-    };
-    await fs.mkdir(workspaceDir, { recursive: true });
-    setRuntimeConfigSnapshot(config, config);
-    const tools = withPluginCache(createPluginCache(), () => {
-      resetPluginRuntimeStateForTest();
-      setGatewayPluginMetadataSnapshot(
-        loadPluginMetadataSnapshot({ config, workspaceDir, env: process.env }),
-      );
-      host = createAgentHarnessHostCapabilities({ attempt, pluginId: "test-host" });
-      afterCapture?.(attempt);
-      return (
-        host.capabilities.createToolSurface?.({
-          config,
-          sessionKey: attempt.sessionKey,
-          workspaceDir,
-          cwd: workspaceDir,
-          agentDir: path.join(tempDir, "agent"),
-          ...harnessOptions,
-        }) ?? []
-      );
-    });
-    await check(tools);
-  } finally {
-    host?.close();
-    admission.close();
-  }
+  await fs.mkdir(workspaceDir, { recursive: true });
+  setRuntimeConfigSnapshot(config, config);
+  return withPluginCache(createPluginCache(), async () => {
+    resetPluginRuntimeStateForTest();
+    setGatewayPluginMetadataSnapshot(
+      loadPluginMetadataSnapshot({ config, workspaceDir, env: process.env }),
+    );
+    const { attempt, hostCapabilities, closeHost, closeAdmission } =
+      await createAdmittedHostCapabilityTestFixture({
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        runId: "host-grant-authority",
+        cwd: path.join(tempDir, "worktree"),
+        workspaceDir,
+        currentChannelId: "chat-1",
+        messageChannel: "telegram",
+        runtimePluginToolGrant: scenario === "absent grant" ? undefined : grant,
+      });
+    cleanups.push(closeAdmission, closeHost);
+    if (scenario === "mutated attempt") {
+      grant.pluginId = PLUGIN_B;
+      grant.toolNames.push(TOOL_B);
+      attempt.runtimePluginToolGrant = grantB();
+    }
+    return (
+      hostCapabilities.createToolSurface?.({
+        config,
+        sessionKey: attempt.sessionKey,
+        workspaceDir,
+        cwd: workspaceDir,
+        agentDir: path.join(tempDir, "agent"),
+        ...(scenario === "mutated attempt" ? {} : { runtimePluginToolGrant: grantB() }),
+      }) ?? []
+    );
+  });
 }
 
-describe("host runtime plugin tool grant authority", () => {
-  it.each(["forged options", "mutated attempt", "absent grant"] as const)(
-    "keeps optional tools bound to the captured host grant with %s",
-    async (scenario) => {
-      const grant = grantA();
-      await withSurface(
-        scenario === "absent grant" ? undefined : grant,
-        scenario === "mutated attempt" ? {} : { runtimePluginToolGrant: grantB() },
-        async (tools) => {
-          const names = tools.map((tool) => tool.name);
-          expect(names).not.toContain(TOOL_B);
-          if (scenario === "absent grant") {
-            expect(names).not.toContain(TOOL_A);
-          } else {
-            expect(names).toContain(TOOL_A);
-            if (scenario === "forged options") {
-              const result = await tools
-                .find((tool) => tool.name === TOOL_A)
-                ?.execute("call-1", {});
-              expect(JSON.stringify(result)).toContain(`grant-ok:${TOOL_A}`);
-              expect(await fs.readFile(path.join(tempDir, "io-a.txt"), "utf8")).toBe(
-                "io-performed",
-              );
-            } else {
-              await expect(fs.stat(path.join(tempDir, "io-b.txt"))).rejects.toThrow();
-            }
-          }
-        },
-        scenario === "mutated attempt"
-          ? (attempt) => {
-              grant.pluginId = PLUGIN_B;
-              grant.toolNames.push(TOOL_B);
-              attempt.runtimePluginToolGrant = grantB();
-            }
-          : undefined,
-      );
-    },
-  );
-});
+it.each(["forged options", "mutated attempt", "absent grant"] as const)(
+  "keeps optional tools bound to the captured host grant with %s",
+  async (scenario) => {
+    const tools = await createSurface(scenario);
+    const names = tools.map((tool) => tool.name);
+    expect(names).not.toContain(TOOL_B);
+    if (scenario === "absent grant") {
+      expect(names).not.toContain(TOOL_A);
+    } else {
+      expect(names).toContain(TOOL_A);
+      if (scenario === "forged options") {
+        const result = await tools.find((tool) => tool.name === TOOL_A)?.execute("call-1", {});
+        expect(JSON.stringify(result)).toContain(`grant-ok:${TOOL_A}`);
+        expect(await fs.readFile(ioPath("a"), "utf8")).toBe("io-performed");
+      } else {
+        await expect(fs.stat(ioPath("b"))).rejects.toThrow();
+      }
+    }
+  },
+);

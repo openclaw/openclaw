@@ -2,11 +2,10 @@ import { spawn, spawnSync } from "node:child_process";
 import {
   closeSync,
   fstatSync,
-  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
-  realpathSync,
+  readSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -15,6 +14,11 @@ import { constants, tmpdir } from "node:os";
 import { basename, delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { inspectManagedProcessGroup } from "../lib/managed-child-process.mts";
+import {
+  claimMaterializedAnchor,
+  retireMaterializedAnchor,
+  sweepMaterializedAnchors,
+} from "./materialized-anchor.mjs";
 
 const SIGNAL_GRACE_MS = 5000;
 const KILL_DRAIN_MS = 5000;
@@ -33,48 +37,44 @@ if (process.platform === "win32") {
 }
 
 const repoRoot = resolve(repoRootArg);
-// Only the mktemp creator survives both execs as this supervisor. No child may
-// inherit cleanup authority, and an inherited pathname is never a deletion input.
-const anchorCreator = process.env.OPENCLAW_PR_ANCHOR_CREATOR_PID;
-const anchorFd = process.env.OPENCLAW_PR_ANCHOR_FD;
+const ownedAnchor = claimMaterializedAnchor(script);
 delete process.env.OPENCLAW_PR_ANCHOR_CREATOR_PID;
 delete process.env.OPENCLAW_PR_ANCHOR_FD;
-let ownedAnchor;
-if (anchorCreator === String(process.pid) && anchorFd === "9") {
-  let directoryFd = false;
-  try {
-    const path = dirname(dirname(resolve(script)));
-    const held = fstatSync(9, { bigint: true });
-    directoryFd = held.isDirectory();
-    const current = lstatSync(path, { bigint: true });
-    if (
-      basename(path).startsWith("openclaw-pr-anchor.") &&
-      resolve(script) === join(path, "scripts", "pr") &&
-      realpathSync(script) === resolve(script) &&
-      realpathSync(fileURLToPath(import.meta.url)) ===
-        join(path, "scripts", "pr-lib", "process-group-runner.mjs") &&
-      held.isDirectory() &&
-      current.isDirectory() &&
-      held.dev === current.dev &&
-      held.ino === current.ino &&
-      held.uid === BigInt(process.getuid()) &&
-      (held.mode & 0o777n) === 0o700n &&
-      held.mode === current.mode &&
-      held.uid === current.uid
-    ) {
-      ownedAnchor = { path, dev: held.dev, ino: held.ino, uid: held.uid, mode: held.mode };
-    }
-  } catch {
-    // Missing or replaced creation evidence is retain-only.
+// Startup failures have no operation child whose code could still be in use.
+let operationStarted = false;
+process.once("exit", () => {
+  if (!operationStarted) {
+    retireMaterializedAnchor(ownedAnchor);
   }
-  if (directoryFd) {
-    process.once("exit", () => {
-      try {
-        closeSync(9);
-      } catch {
-        // A missing creation FD never grants cleanup authority.
-      }
-    });
+});
+sweepMaterializedAnchors(ownedAnchor);
+const workflowContext = process.env.OPENCLAW_PR_WORKFLOW_CONTEXT;
+if (workflowContext) {
+  // Exec preserves the verified producer PID; only its child receives this FD.
+  // The child validates the repository/PR/source again before loading helpers.
+  try {
+    const held = fstatSync(8);
+    if (
+      !held.isFile() ||
+      held.uid !== process.getuid() ||
+      (held.mode & 0o777) !== 0o400 ||
+      held.nlink !== 0 ||
+      held.size < 1 ||
+      held.size > 4096 ||
+      `${held.dev}:${held.ino}` !== workflowContext
+    ) {
+      throw new Error("Invalid workflow selection descriptor");
+    }
+    const bytes = Buffer.alloc(held.size);
+    if (
+      readSync(8, bytes, 0, bytes.length, 0) !== bytes.length ||
+      JSON.parse(bytes.toString("utf8")).creator !== String(process.pid)
+    ) {
+      throw new Error("Workflow selection does not belong to this supervisor");
+    }
+  } catch (error) {
+    console.error(error.message);
+    process.exit(1);
   }
 }
 // The supervisor must not retain a cwd inside a worktree the operation may
@@ -342,8 +342,14 @@ const child = spawn(script, args, {
     OPENCLAW_PR_LOCK_SUPERVISOR_PID: String(process.pid),
     OPENCLAW_PR_GITHUB_SNAPSHOT_ROOT: lockSnapshotDir,
   },
-  stdio: ["inherit", "inherit", "inherit", "pipe"],
+  stdio: workflowContext
+    ? ["inherit", "inherit", "inherit", "pipe", "ignore", "ignore", "ignore", "ignore", 8]
+    : ["inherit", "inherit", "inherit", "pipe"],
 });
+operationStarted = true;
+if (workflowContext) {
+  closeSync(8);
+}
 operationGroup.pid = child.pid;
 if (killDeadline) {
   signalProcessGroup("SIGKILL");
@@ -530,6 +536,25 @@ function childResultAllowsLockRelease() {
     !notificationFailure &&
     !hadLingeringGroup;
   return completedCleanly || failedDuringValidation;
+}
+
+// A side-effecting failure that ended on its own leaves the same evidence as a
+// clean exit once the full drain observes the group dead and every inherited
+// notification-pipe holder gone: only an escaped, fd-closing daemonizer stays
+// invisible, the residual a clean exit already accepts (#124583). Signals,
+// lingering group work, open pipes, and controller loss keep the lock sticky.
+function failedOperationDrainAllowsLockRelease() {
+  return (
+    drainResult === "drained" &&
+    operationCompleteReceived &&
+    childResult.code !== null &&
+    childResult.code > 0 &&
+    childResult.code < 128 &&
+    !receivedSignal &&
+    !childResult.signal &&
+    !notificationFailure &&
+    !hadLingeringGroup
+  );
 }
 
 const postExitGroupStatus = child.pid ? processGroupStatus() : "dead";
@@ -734,7 +759,9 @@ for (const [signal, handler] of signalHandlers) {
 
 const retainedLocks = [];
 const releaseFailures = new Set();
-if (drained && childResultAllowsLockRelease()) {
+const releaseAfterDrainedFailure =
+  drained && !childResultAllowsLockRelease() && failedOperationDrainAllowsLockRelease();
+if (drained && (childResultAllowsLockRelease() || releaseAfterDrainedFailure)) {
   for (const lock of locks.values()) {
     try {
       releaseLock(lock);
@@ -751,34 +778,21 @@ if (drained && childResultAllowsLockRelease()) {
 for (const { lock, releaseError } of retainedLocks) {
   reportRetainedLock(lock, releaseError, releaseFailures);
 }
-
-if (
-  ownedAnchor &&
-  drainResult === "drained" &&
-  childResultAllowsLockRelease() &&
-  retainedLocks.length === 0 &&
-  !notificationFailure
-) {
-  try {
-    const held = fstatSync(9, { bigint: true });
-    const current = lstatSync(ownedAnchor.path, { bigint: true });
-    if (
-      current.isDirectory() &&
-      realpathSync(ownedAnchor.path) === ownedAnchor.path &&
-      [held, current].every(
-        (value) =>
-          value.dev === ownedAnchor.dev &&
-          value.ino === ownedAnchor.ino &&
-          value.uid === ownedAnchor.uid &&
-          value.mode === ownedAnchor.mode,
-      )
-    ) {
-      // rm does not follow the materializer's external dependency symlinks.
-      rmSync(ownedAnchor.path, { recursive: true });
+if (releaseAfterDrainedFailure) {
+  for (const { lockRef } of locks.values()) {
+    if (!retainedLocks.some(({ lock }) => lock.lockRef === lockRef)) {
+      console.error(
+        `Released the operation lock for PR #${lockRef.split("/").at(-1)} after exit code ${childResult.code}; its process group and every notification-pipe holder exited.`,
+      );
     }
-  } catch {
-    console.error("Warning: retaining the materialized PR wrapper after anchor cleanup failed.");
   }
+}
+
+if (drainResult === "drained") {
+  // Anchors hold code bytes, not PR state. A dead group and closed pipe leave
+  // only the fd-closing escapee residual already accepted on clean exits.
+  // Lock/merge recovery runs from trusted checkouts, never these anchor paths.
+  retireMaterializedAnchor(ownedAnchor);
 }
 
 if (notificationFailure) {

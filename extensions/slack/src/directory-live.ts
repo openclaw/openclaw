@@ -81,10 +81,7 @@ function createSlackDirectoryLister<T>(options: {
     const query = normalizeLowercaseStringOrEmpty(params.query);
     const rows = (await options.fetchRows(client))
       .filter((row) => {
-        const candidates = options
-          .searchValues(row)
-          .map(normalizeOptionalLowercaseString)
-          .filter(Boolean);
+        const candidates = options.searchValues(row).map(normalizeOptionalLowercaseString);
         return !query || candidates.some((candidate) => candidate?.includes(query));
       })
       .map(options.toEntry)

@@ -11,11 +11,7 @@ import type {
   CodexCatalogRolloutFingerprint,
 } from "./session-catalog-index-row.js";
 import { detachCodexCatalogString } from "./session-catalog-limits.js";
-import {
-  boundedCatalogString,
-  selectCodexCatalogPreviewInput,
-  truncateCodexCatalogPreview,
-} from "./session-catalog-parsing.js";
+import { boundedCatalogString, truncateCodexCatalogPreview } from "./session-catalog-parsing.js";
 
 const WINDOW_BYTES = 128 * 1024;
 const ROLLOUT_SOURCE_DENIAL_CODES = new Set([
@@ -119,7 +115,7 @@ function previewFromEvent(
     message = message.slice(message.indexOf(prefix) + prefix.length);
   }
   return (
-    truncateCodexCatalogPreview(selectCodexCatalogPreviewInput(message ?? ""), sanitize) ||
+    truncateCodexCatalogPreview(message ?? "", sanitize) ||
     (image ? "[Image]" : audio ? "[Audio]" : undefined)
   );
 }
@@ -131,8 +127,6 @@ async function compressedHead(handle: fs.FileHandle, size: number): Promise<Buff
     chunkSize: 16 * 1024,
     params: { [constants.ZSTD_d_windowLogMax]: 25 },
   });
-  // Destroying a FileHandle-backed stream also closes its descriptor, even with
-  // autoClose:false. Keep ownership here so the caller can verify its final stat.
   decoder.end(input.subarray(0, bytesRead));
   const timer = setTimeout(() => decoder.destroy(new Error("Rollout read timed out")), 5_000);
   const chunks: Buffer[] = [];
@@ -200,10 +194,6 @@ export async function readCodexCatalogRollout(
       const bytes = Buffer.alloc(stat.size - offset);
       await handle.read(bytes, 0, bytes.length, offset);
       tail = records(bytes, true);
-    }
-    const current = await handle.stat();
-    if (stat.size !== current.size || stat.mtimeMs !== current.mtimeMs) {
-      return undefined;
     }
     const thread: CodexThread = {
       id,

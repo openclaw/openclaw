@@ -17,7 +17,9 @@ import type {
   PluginCapabilityCatalogContext,
   PluginCapabilityCatalogHostContext,
 } from "./capability-catalog-context.types.js";
+import { createCatalogContextFixture } from "./capability-catalog.test-support.js";
 import { isPluginRegistryLoadInFlight, resolvePluginRegistryLoadCacheKey } from "./loader-cache.js";
+import { pluginFixtureConfig } from "./loader-fixture-builders.test-support.js";
 import { createLazyPluginRuntime } from "./loader-module-runtime.js";
 import { loadOpenClawPluginsWithInternalOverrides } from "./loader-runtime-load.js";
 import { loadOpenClawPlugins, type PluginLoadOptions } from "./loader.js";
@@ -56,24 +58,8 @@ function createContext(): PluginCapabilityCatalogHostContext {
     throw new Error("registration invoked a host operation");
   };
   return {
-    isProviderApiKeyConfigured: unavailable,
-    isProviderAuthProfileConfigured: unavailable,
-    resolveAgentDir: unavailable,
-    createRealtimeTranscriptionWebSocketSession: unavailable,
-    resolveProviderRequestHeaders: unavailable,
-    resolveProviderAuthProfileApiKey: unavailable,
-    resolveApiKeyForProvider: unavailable,
-    captureWsEvent: unavailable,
-    captureWsEventAsync: unavailable,
-    createDebugProxyWebSocketAgent: unavailable,
-    resolveDebugProxySettings: unavailable,
-    fetchWithSsrFGuard: unavailable,
-    createProviderHttpError: unavailable,
-    readProviderJsonResponse: unavailable,
-    readProviderTextResponse: unavailable,
+    ...createCatalogContextFixture(unavailable),
     formatErrorMessage: vi.fn(() => "ready"),
-    warn: unavailable,
-    redactSensitiveText: unavailable,
   };
 }
 
@@ -114,13 +100,7 @@ async function withFactoryPlugin(
     async () =>
       await run(
         {
-          config: {
-            plugins: {
-              allow: [plugin.id],
-              load: { paths: [plugin.file] },
-              slots: { memory: "none" },
-            },
-          },
+          config: pluginFixtureConfig(plugin),
           pluginSdkResolution: "src",
           activate: false,
         },

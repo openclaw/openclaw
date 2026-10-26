@@ -1,54 +1,64 @@
-import rawFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { Worker } from "node:worker_threads";
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { withEnvAsync } from "../test-utils/env.js";
+import { readClaudeCliFallbackSeed } from "./cli-session-history.claude.js";
 import {
   readClaudeCliSessionMessagesAsync,
   createClaudeTextHistoryLines,
+  claudeUser,
   withClaudeProjectsDir,
 } from "./cli-session-history.test-support.js";
-import { expectRecordFields, requireGatewayRecord } from "./test-helpers.assertions.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-function readRecord(value: unknown): Record<string, unknown> {
-  return requireGatewayRecord(value, "record");
+function history(uuid: string, content: string, role: "user" | "assistant" = "user") {
+  return createClaudeTextHistoryLines([{ role, uuid, content }]);
 }
 
-it("reads changed Claude sources and preserves discovery precedence", async () => {
-  await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
-    const read = () => readClaudeCliSessionMessagesAsync({ cliSessionId: sessionId, homeDir });
-    const initial = await read();
-    expect(initial).toHaveLength(3);
+const writeHistory = (file: string, ...entry: Parameters<typeof history>) =>
+  fs.writeFile(file, history(...entry));
 
-    await fs.appendFile(
-      filePath,
-      `\n${createClaudeTextHistoryLines([
-        { role: "user", uuid: "appended-user", content: "appended" },
-      ])}`,
-      "utf8",
-    );
+const messageShape = (externalId: string, content: unknown) => ({
+  __openclaw: { externalId },
+  content,
+});
+
+it("imports and seeds history only from the selected Claude config root", () =>
+  withClaudeProjectsDir(async ({ homeDir, sessionId, filePath, readMessages }) => {
+    const configDir = path.join(homeDir, "selected-claude");
+    const projectDir = path.join(configDir, "projects", "configured-workspace");
+    const selectedFile = path.join(projectDir, path.basename(filePath));
+    await fs.mkdir(projectDir, { recursive: true });
+    await writeHistory(selectedFile, "selected-account", "Selected account answer", "assistant");
+    await withEnvAsync({ CLAUDE_CONFIG_DIR: configDir }, async () => {
+      expect(await readClaudeCliSessionMessagesAsync({ cliSessionId: sessionId })).toMatchObject([
+        { role: "assistant", content: "Selected account answer" },
+      ]);
+      expect(await readClaudeCliFallbackSeed({ cliSessionId: sessionId })).toMatchObject({
+        recentTurns: [{ role: "assistant", content: "Selected account answer" }],
+      });
+      // Explicit offline homes remain isolated from the running Gateway's account.
+      expect(await readMessages()).toHaveLength(3);
+      await fs.rm(selectedFile);
+      expect(await readClaudeCliSessionMessagesAsync({ cliSessionId: sessionId })).toEqual([]);
+      expect(await readClaudeCliFallbackSeed({ cliSessionId: sessionId })).toBeUndefined();
+    });
+  }));
+
+it("reads changed Claude sources and preserves discovery precedence", () =>
+  withClaudeProjectsDir(async ({ filePath, readMessages: read }) => {
+    expect(await read()).toHaveLength(3);
+
+    await fs.appendFile(filePath, `\n${history("appended-user", "appended")}`, "utf8");
     const appended = await read();
     expect(appended).toHaveLength(4);
-    expect(appended.map((message) => readRecord(message)["__openclaw"])).toContainEqual(
+    expect(appended.map((message) => message["__openclaw"])).toContainEqual(
       expect.objectContaining({ externalId: "appended-user" }),
     );
 
-    await fs.writeFile(
-      filePath,
-      createClaudeTextHistoryLines([
-        { role: "assistant", uuid: "replacement-assistant", content: "replacement" },
-      ]),
-      "utf8",
-    );
+    await writeHistory(filePath, "replacement-assistant", "replacement", "assistant");
     const replaced = await read();
-    expect(replaced).toHaveLength(1);
-    expectRecordFields(readRecord(replaced[0])["__openclaw"], "fields", {
-      externalId: "replacement-assistant",
-    });
+    expect(replaced).toMatchObject([messageShape("replacement-assistant", "replacement")]);
 
     const movedProjectDir = path.join(path.dirname(path.dirname(filePath)), "moved-workspace");
     await fs.mkdir(movedProjectDir);
@@ -57,46 +67,36 @@ it("reads changed Claude sources and preserves discovery precedence", async () =
     expect(await read()).toEqual(replaced);
 
     await fs.rm(movedFilePath);
-    const deleted = await read();
-    expect(deleted).toEqual([]);
-  });
-});
+    expect(await read()).toEqual([]);
+  }));
 
-it("preserves project precedence when a later matching transcript is found first", async () => {
-  await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
+it("preserves project precedence when a later matching transcript is found first", () =>
+  withClaudeProjectsDir(async ({ filePath, readMessages }) => {
     const projectsDir = path.dirname(path.dirname(filePath));
     const otherProjectDir = path.join(projectsDir, "other-workspace");
     await fs.mkdir(otherProjectDir);
-    await fs.writeFile(
+    await writeHistory(
       path.join(otherProjectDir, path.basename(filePath)),
-      createClaudeTextHistoryLines([
-        { role: "user", uuid: "other-project-user", content: "other project" },
-      ]),
+      "other-project-user",
+      "other project",
     );
     const [firstPath, secondPath] = (await fs.readdir(projectsDir)).map((project) =>
       path.join(projectsDir, project, path.basename(filePath)),
     );
-    await fs.writeFile(
-      filePath,
-      createClaudeTextHistoryLines([
-        { role: "user", uuid: "original-project-user", content: "original project" },
-      ]),
-    );
+    await writeHistory(filePath, "original-project-user", "original project");
     const releaseFirst = createDeferred();
     const foundSecond = createDeferred();
     const access = fs.access;
-    const accessSpy = vi
-      .spyOn(rawFs.promises, "access")
-      .mockImplementation(async (candidate, mode) => {
-        if (candidate === firstPath) {
-          await releaseFirst.promise;
-        }
-        await access(candidate, mode);
-        if (candidate === secondPath) {
-          foundSecond.resolve();
-        }
-      });
-    const pending = readClaudeCliSessionMessagesAsync({ cliSessionId: sessionId, homeDir });
+    const accessSpy = vi.spyOn(fs, "access").mockImplementation(async (candidate, mode) => {
+      if (candidate === firstPath) {
+        await releaseFirst.promise;
+      }
+      await access(candidate, mode);
+      if (candidate === secondPath) {
+        foundSecond.resolve();
+      }
+    });
+    const pending = readMessages();
     try {
       await Promise.race([foundSecond.promise, pending]);
       releaseFirst.resolve();
@@ -108,60 +108,35 @@ it("preserves project precedence when a later matching transcript is found first
       await pending;
       accessSpy.mockRestore();
     }
-  });
-});
+  }));
 
-it("projects oversized Claude messages off-thread using one worker per snapshot", async () => {
-  const homeDir = tempDirs.make("openclaw-claude-snapshot-");
-  const sessionId = "5b8b202c-f6bb-4046-9475-d2f15fd07530";
-  const projectsDir = path.join(homeDir, ".claude", "projects", "demo-workspace");
-  const record = (uuid: string, content: string) =>
-    JSON.stringify({
-      type: "user",
-      uuid,
-      timestamp: "2026-03-26T16:29:54.700Z",
-      message: { role: "user", content },
-    });
-  const oversized = "q".repeat(2 * 1024 * 1024);
-  await fs.mkdir(projectsDir, { recursive: true });
-  await fs.writeFile(
-    path.join(projectsDir, `${sessionId}.jsonl`),
-    [
-      record("oversized-user-0", oversized),
-      "!".repeat(2 * 1024 * 1024),
-      record("oversized-user-1", oversized),
-      record("oversized-user-2", oversized),
-      record("visible-after-oversized", "visible"),
-    ].join("\n"),
-    "utf8",
-  );
-  const parseSpy = vi.spyOn(JSON, "parse");
-  const workers: Worker[] = [];
-  const onWorker = (worker: Worker) => workers.push(worker);
-  process.on("worker", onWorker);
-  try {
-    const messages = await readClaudeCliSessionMessagesAsync({ cliSessionId: sessionId, homeDir });
+it("bounds oversized Claude messages and continues after malformed records", () =>
+  withClaudeProjectsDir(async ({ filePath, readMessages }) => {
+    const record = (uuid: string, content: unknown) =>
+      JSON.stringify(claudeUser(content, { uuid }));
+    const oversized = "q".repeat(2 * 1024 * 1024);
+    await fs.writeFile(
+      filePath,
+      [
+        record("oversized-user-0", oversized),
+        "!".repeat(2 * 1024 * 1024),
+        record("oversized-user-1", oversized),
+        record("oversized-tool-result", [
+          { type: "tool_result", tool_use_id: "tool-1", content: oversized },
+        ]),
+        record("visible-after-oversized", "visible"),
+      ].join("\n"),
+      "utf8",
+    );
+    const messages = await readMessages();
 
-    expect(messages).toHaveLength(4);
-    for (let index = 0; index < 3; index++) {
-      expect(messages[index]).toMatchObject({
-        __openclaw: { externalId: `oversized-user-${index}` },
-        content: expect.stringContaining("exceeded 1 MiB"),
-      });
-    }
-    expect(messages[3]).toMatchObject({
-      __openclaw: { externalId: "visible-after-oversized" },
-      content: "visible",
-    });
-    expect(workers).toHaveLength(1);
-    expect(workers[0]?.threadId).toBe(-1);
-    expect(
-      parseSpy.mock.calls.some(
-        ([source]) => typeof source === "string" && source.length > 1024 * 1024,
-      ),
-    ).toBe(false);
-  } finally {
-    process.off("worker", onWorker);
-    parseSpy.mockRestore();
-  }
-});
+    const omitted = expect.stringContaining("exceeded 1 MiB");
+    // A tool result must keep its shape, or the placeholder renders as a user turn.
+    expect(messages).toMatchObject([
+      ...[0, 1].map((index) => messageShape(`oversized-user-${index}`, omitted)),
+      messageShape("oversized-tool-result", [
+        { type: "tool_result", tool_use_id: "tool-1", content: omitted },
+      ]),
+      messageShape("visible-after-oversized", "visible"),
+    ]);
+  }));

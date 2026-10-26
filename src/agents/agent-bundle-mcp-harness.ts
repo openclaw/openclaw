@@ -17,7 +17,7 @@ import { mergeMcpConnectCatalog } from "./agent-bundle-mcp-requester-connect.js"
 import type { McpToolCatalog } from "./agent-bundle-mcp-types.js";
 import type { CodexMcpServersConfig } from "./codex-mcp-config.types.js";
 import {
-  resolveConversationCapabilityProfile,
+  prepareConversationCapabilityProfile,
   type ConversationCapabilityProfileParams,
   type ResolvedConversationCapabilityProfile,
 } from "./conversation-capability-profile.js";
@@ -48,23 +48,6 @@ type StaticHarnessMcpTools = {
   diagnosticNotice?: string;
   dispose: () => Promise<void>;
 };
-
-function formatConfiguredMcpDiagnosticNotice(
-  messages: readonly string[],
-  runLabel: "this scheduled run" | "this run",
-): string | undefined {
-  const bounded = [...new Set(messages)]
-    .map((message) => message.replaceAll(/\s+/g, " ").trim().slice(0, 180))
-    .filter(Boolean)
-    .slice(0, 4);
-  if (bounded.length === 0) {
-    return undefined;
-  }
-  return (
-    `Configured MCP is incomplete for ${runLabel}: ${bounded.join("; ")}. ` +
-    "Do not claim MCP-backed work succeeded; report this blocker to the operator."
-  );
-}
 
 type InteractiveConfiguredMcpApprovalRequest = {
   signal?: AbortSignal;
@@ -191,13 +174,13 @@ function notConnectedToolResult(serverName: string, toolName: string) {
   };
 }
 
-function resolveHarnessCapabilityProfile(
+async function resolveHarnessCapabilityProfile(
   params: MaterializeRequesterScopedMcpToolsForHarnessRunParams,
 ) {
   return (
     params.conversationCapabilityProfile ??
     (params.policyContext
-      ? resolveConversationCapabilityProfile({
+      ? prepareConversationCapabilityProfile({
           ...params.policyContext,
           runtimeToolAllowlist: params.toolsAllow,
         })
@@ -245,10 +228,11 @@ export async function materializeStaticMcpToolsForHarnessRunCore(
     retireSessionRuntimeAfterDispose?: boolean;
   },
 ): Promise<StaticHarnessMcpTools> {
-  const conversationCapabilityProfile = resolveHarnessCapabilityProfile(params);
+  const conversationCapabilityProfile = await resolveHarnessCapabilityProfile(params);
   const acquisition = await acquireSessionMcpRuntime({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
+    agentId: params.agentId ?? conversationCapabilityProfile?.agentId,
     workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
     cfg: params.cfg,
@@ -264,18 +248,12 @@ export async function materializeStaticMcpToolsForHarnessRunCore(
         });
       }
     : undefined;
-  let liveRuntime: Awaited<ReturnType<typeof materializeBundleMcpToolsForRun>>;
-  try {
-    liveRuntime = await materializeBundleMcpToolsForRun({
-      ...acquisition,
-      agentId: params.agentId,
-      reservedToolNames: params.reservedToolNames,
-      ...(retireSnapshotRuntime ? { disposeRuntime: retireSnapshotRuntime } : {}),
-    });
-  } catch (error) {
-    await retireSnapshotRuntime?.();
-    throw error;
-  }
+  const liveRuntime = await materializeBundleMcpToolsForRun({
+    ...acquisition,
+    agentId: params.agentId,
+    reservedToolNames: params.reservedToolNames,
+    ...(retireSnapshotRuntime ? { disposeRuntime: retireSnapshotRuntime } : {}),
+  });
   try {
     // Policy warnings describe inputs; only actual omissions make configured MCP incomplete.
     const omissions: string[] = [];
@@ -318,26 +296,26 @@ export async function materializeStaticMcpToolsForHarnessRunCore(
         },
       ),
     );
-    const diagnosticNotice = formatConfiguredMcpDiagnosticNotice(
-      [
-        ...(liveRuntime.diagnostics ?? []).map(
-          (diagnostic) => `${diagnostic.serverName}: ${diagnostic.message}`,
-        ),
-        ...omissions,
-      ],
-      params.requestInteractiveCodexApproval ? "this run" : "this scheduled run",
-    );
-    let disposed = false;
+    const messages = [
+      ...(liveRuntime.diagnostics ?? []).map(
+        (diagnostic) => `${diagnostic.serverName}: ${diagnostic.message}`,
+      ),
+      ...omissions,
+    ];
+    const runLabel = params.requestInteractiveCodexApproval ? "this run" : "this scheduled run";
+    const bounded = [...new Set(messages)]
+      .map((message) => message.replaceAll(/\s+/g, " ").trim().slice(0, 180))
+      .filter(Boolean)
+      .slice(0, 4);
+    const diagnosticNotice =
+      bounded.length > 0
+        ? `Configured MCP is incomplete for ${runLabel}: ${bounded.join("; ")}. ` +
+          "Do not claim MCP-backed work succeeded; report this blocker to the operator."
+        : undefined;
     return {
       tools: allowed,
       ...(diagnosticNotice ? { diagnosticNotice } : {}),
-      dispose: async () => {
-        if (disposed) {
-          return;
-        }
-        disposed = true;
-        await liveRuntime.dispose();
-      },
+      dispose: liveRuntime.dispose,
     };
   } catch (error) {
     await liveRuntime.dispose();
@@ -355,11 +333,12 @@ export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
 ): Promise<RequesterScopedHarnessMcpTools | undefined> {
   const policyParams = {
     ...params,
-    conversationCapabilityProfile: resolveHarnessCapabilityProfile(params),
+    conversationCapabilityProfile: await resolveHarnessCapabilityProfile(params),
   };
   const scopedRuntimeHandle = await acquireRequesterScopedMcpRuntime({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
+    agentId: params.agentId ?? policyParams.conversationCapabilityProfile?.agentId,
     workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
     cfg: params.cfg,
@@ -429,17 +408,10 @@ export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
         })
       : filteredTools;
 
-    let disposed = false;
     return {
       tools: executableTools,
       advertisedTools: filteredAdvertised,
-      dispose: async () => {
-        if (disposed) {
-          return;
-        }
-        disposed = true;
-        await liveRuntime?.dispose();
-      },
+      dispose: liveRuntime?.dispose ?? (async () => {}),
     };
   } catch (error) {
     await liveRuntime?.dispose();

@@ -4,7 +4,6 @@ type AgentScopeSelection = {
   subscribe: (listener: (state: { scopeId: string | null }) => void) => () => void;
 };
 
-/** Watches semantic scope changes across selection-source replacements. */
 export function watchAgentScope(
   onChange: (scopeId: string | null, intentChanged: boolean) => void,
 ): (selection: AgentScopeSelection) => () => void {
@@ -25,6 +24,7 @@ export function watchAgentScope(
       );
     };
     sync();
+    // Watch semantic scope changes across selection-source replacements.
     return selection.subscribe(sync);
   };
 }

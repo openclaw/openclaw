@@ -18,7 +18,7 @@ import { sendDiscordComponentMessage } from "../send.components.js";
 import { DiscordThreadInitialMessageError } from "../send.js";
 import * as discordMessagingActionRuntime from "../send.js";
 import type { DiscordSendComponents, DiscordSendEmbeds } from "../send.shared.js";
-import { resolveDiscordChannelId } from "../targets.js";
+import { resolveDiscordChannelId } from "../target-parsing.js";
 import type { DiscordMessagingActionContext } from "./runtime.messaging.shared.js";
 import { readDiscordAutoArchiveDurationParam } from "./runtime.shared.js";
 
@@ -33,101 +33,6 @@ function resolveActionReplyReference(ctx: DiscordMessagingActionContext, replyTo
         replyToMode: reply.source === "implicit" ? reply.mode : undefined,
       })
     : createReusableDiscordReplyReference(replyToId);
-}
-
-function normalizeDiscordThreadListActionResult(params: {
-  value: unknown;
-  includeArchived: boolean;
-  channelId?: string;
-  guildId: string;
-  limit?: number;
-  before?: string;
-}) {
-  const record = asOptionalRecord(params.value);
-  const threadItems = Array.isArray(record?.threads) ? record.threads : [];
-  const hasMore = record?.has_more === true;
-  const archiveTimestamp =
-    params.includeArchived && hasMore
-      ? asOptionalRecord(asOptionalRecord(threadItems[threadItems.length - 1])?.thread_metadata)
-          ?.archive_timestamp
-      : undefined;
-  const nextBefore =
-    typeof archiveTimestamp === "string" && archiveTimestamp.trim() ? archiveTimestamp : undefined;
-
-  return {
-    ok: true,
-    threads: params.value,
-    complete: !hasMore,
-    hasMore,
-    returnedCount: threadItems.length,
-    source: params.includeArchived ? "discord.threadList.archived" : "discord.threadList.active",
-    query: {
-      guildId: params.guildId,
-      ...(params.channelId ? { channelId: params.channelId } : {}),
-      includeArchived: params.includeArchived,
-      ...(params.before ? { before: params.before } : {}),
-      ...(params.limit !== undefined ? { limit: params.limit } : {}),
-    },
-    ...(nextBefore ? { nextBefore } : {}),
-  };
-}
-
-async function appendDiscordThreadRenameResult(
-  ctx: DiscordMessagingActionContext,
-  params: {
-    payload: Record<string, unknown>;
-    target: string;
-    threadName?: string;
-  },
-) {
-  const threadName = params.threadName;
-  if (!threadName) {
-    return params.payload;
-  }
-  const ignored = (reason: string) => ({
-    ...params.payload,
-    warning: `Discord threadName was ignored because ${reason}.`,
-  });
-  if (!ctx.isActionEnabled("channels")) {
-    return ignored("Discord channel management is disabled");
-  }
-
-  let channelId: string;
-  try {
-    channelId = resolveDiscordChannelId(params.target);
-  } catch {
-    return ignored("the send target is not a channel/thread");
-  }
-
-  try {
-    const channel = await discordMessagingActionRuntime.fetchChannelInfoDiscord(
-      channelId,
-      ctx.withOpts(),
-    );
-    if (!isDiscordThreadChannelType(channel.type)) {
-      return ignored("the send target is not a thread");
-    }
-    const renamed = await discordMessagingActionRuntime.editChannelDiscord(
-      {
-        channelId,
-        name: threadName,
-      },
-      ctx.withOpts(),
-    );
-    return {
-      ...params.payload,
-      threadRename: {
-        ok: true,
-        channelId,
-        name: renamed.name ?? threadName,
-      },
-    };
-  } catch (error) {
-    return {
-      ...params.payload,
-      warning: `Discord message was sent, but thread rename failed: ${formatErrorMessage(error)}`,
-    };
-  }
 }
 
 export async function handleDiscordMessageSendAction(ctx: DiscordMessagingActionContext) {
@@ -242,17 +147,53 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
           ...(suppressEmbeds === undefined ? {} : { suppressEmbeds }),
         });
       }
-      return jsonResult(
-        await appendDiscordThreadRenameResult(ctx, {
-          payload: {
-            ok: true,
-            result,
-            ...(componentSpec ? { components: true } : asVoice ? { voiceMessage: true } : {}),
-          },
-          target: asVoice ? to : (result.receipt?.threadId ?? to),
-          threadName,
-        }),
-      );
+      const payload = {
+        ok: true,
+        result,
+        ...(componentSpec ? { components: true } : asVoice ? { voiceMessage: true } : {}),
+      };
+      const target = asVoice ? to : (result.receipt?.threadId ?? to);
+      if (!threadName) {
+        return jsonResult(payload);
+      }
+      const ignored = (reason: string) =>
+        jsonResult({
+          ...payload,
+          warning: `Discord threadName was ignored because ${reason}.`,
+        });
+      if (!ctx.isActionEnabled("channels")) {
+        return ignored("Discord channel management is disabled");
+      }
+
+      let channelId: string;
+      try {
+        channelId = resolveDiscordChannelId(target);
+      } catch {
+        return ignored("the send target is not a channel/thread");
+      }
+
+      try {
+        const channel = await discordMessagingActionRuntime.fetchChannelInfoDiscord(
+          channelId,
+          ctx.withOpts(),
+        );
+        if (!isDiscordThreadChannelType(channel.type)) {
+          return ignored("the send target is not a thread");
+        }
+        const renamed = await discordMessagingActionRuntime.editChannelDiscord(
+          { channelId, name: threadName },
+          ctx.withOpts(),
+        );
+        return jsonResult({
+          ...payload,
+          threadRename: { ok: true, channelId, name: renamed.name ?? threadName },
+        });
+      } catch (error) {
+        return jsonResult({
+          ...payload,
+          warning: `Discord message was sent, but thread rename failed: ${formatErrorMessage(error)}`,
+        });
+      }
     }
 
     case "threadCreate": {
@@ -273,7 +214,7 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
         messageId,
         autoArchiveMinutes,
         content,
-        appliedTags: appliedTags ?? undefined,
+        appliedTags,
       };
       try {
         const { initialMessageDelivery, ...thread } =
@@ -338,13 +279,35 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
         channelId && includeArchived !== true
           ? await ctx.filterActiveThreadList({ guildId, channelId, value: response })
           : response;
-      return jsonResult(
-        normalizeDiscordThreadListActionResult({
-          value: threads,
-          ...query,
-          includeArchived: includeArchived === true,
-        }),
-      );
+      const archived = includeArchived === true;
+      const record = asOptionalRecord(threads);
+      const threadItems = Array.isArray(record?.threads) ? record.threads : [];
+      const hasMore = record?.has_more === true;
+      const archiveTimestamp =
+        archived && hasMore
+          ? asOptionalRecord(asOptionalRecord(threadItems[threadItems.length - 1])?.thread_metadata)
+              ?.archive_timestamp
+          : undefined;
+      const nextBefore =
+        typeof archiveTimestamp === "string" && archiveTimestamp.trim()
+          ? archiveTimestamp
+          : undefined;
+      return jsonResult({
+        ok: true,
+        threads,
+        complete: !hasMore,
+        hasMore,
+        returnedCount: threadItems.length,
+        source: archived ? "discord.threadList.archived" : "discord.threadList.active",
+        query: {
+          guildId,
+          ...(channelId ? { channelId } : {}),
+          includeArchived: archived,
+          ...(before ? { before } : {}),
+          ...(limit !== undefined ? { limit } : {}),
+        },
+        ...(nextBefore ? { nextBefore } : {}),
+      });
     }
     case "threadReply": {
       if (!ctx.isActionEnabled("threads")) {

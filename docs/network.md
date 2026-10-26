@@ -3,7 +3,7 @@ summary: "Network hub: gateway surfaces, pairing, discovery, and security"
 read_when:
   - You need the network architecture + security overview
   - You are debugging local vs tailnet access or pairing
-  - You want the canonical list of networking docs
+  - You want the main list of networking docs
 title: "Network"
 ---
 
@@ -19,7 +19,7 @@ Most operations flow through the Gateway (`openclaw gateway`), a single long-run
   shared-secret token/password auth, or a correctly configured non-loopback
   `trusted-proxy` deployment.
 - **One Gateway per host** is recommended. For isolation, run multiple gateways with isolated profiles and ports ([Multiple Gateways](/gateway/multiple-gateways)).
-- **Hosted widget documents and A2UI renderer assets** are served on the same port as the Gateway (`/__openclaw__/canvas/`, `/__openclaw__/a2ui/`), protected by Gateway auth when bound beyond loopback.
+- **Hosted widget documents** are served on the same port as the Gateway (`/__openclaw__/canvas/`), protected by Gateway auth when bound beyond loopback.
 - **Remote access** is typically an SSH tunnel or Tailscale VPN ([Remote Access](/gateway/remote)).
 
 Key references:

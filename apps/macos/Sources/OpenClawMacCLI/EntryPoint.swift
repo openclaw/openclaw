@@ -1,4 +1,7 @@
 import Foundation
+import OpenClawIPC
+import OpenClawKit
+import OpenClawNativeState
 
 enum RootCommandAction: Equatable {
     case usage
@@ -20,11 +23,20 @@ struct OpenClawMacCLI {
         } catch {
             exitMacCLI(error, json: args.contains("--json"))
         }
+        let directory = context.profile
+            .stateDirectoryURL(homeDirectory: FileManager.default.homeDirectoryForCurrentUser)
+        var credentialOptions = MacControlOptions(
+            request: MacControlRequest(operation: "client.credentials"), profile: context.profile)
+        credentialOptions.launch = false
+        let credentialClient = MacControlClient(options: credentialOptions, directory: directory)
+        DeviceCredentialAccess.install { root, operation in
+            try executeMacClientCredentials(root: root, operation: operation, client: credentialClient)
+        }
         switch resolveRootCommandAction(context.arguments) {
         case .usage:
             printUsage()
         case .control:
-            runMacControl(context)
+            runMacControl(context, directory: directory)
         case let .connect(commandArgs):
             await runConnect(commandArgs, configURL: context.configURL)
         case let .configureRemote(commandArgs):
@@ -39,6 +51,37 @@ struct OpenClawMacCLI {
             exit(exitCode)
         }
     }
+}
+
+func executeMacClientCredentials(
+    root: URL,
+    operation: ClientCredentialOperation,
+    client: MacControlClient) throws -> ClientCredentialResult
+{
+    let socket = client.directory.appendingPathComponent(MacControlCredentials.socketFilename)
+    guard FileManager.default.fileExists(atPath: socket.path) else {
+        return try DeviceCredentialAccess.executeOffline(root: root, operation: operation)
+    }
+    var request = MacControlRequest(operation: "client.credentials")
+    request.credentialRoot = root.standardizedFileURL.path
+    request.credentialOperation = operation
+    let data: Data
+    do {
+        data = try client.send(request)
+    } catch is MacControlConnectionRefused {
+        // The kernel refused the connection before dispatch; no remote operation can be replayed.
+        return try DeviceCredentialAccess.executeOffline(root: root, operation: operation)
+    }
+    let response = try JSONDecoder().decode(MacControlResponse<ClientCredentialResult>.self, from: data)
+    if !response.ok, response.error?.code == "credential_root_unowned" {
+        return try DeviceCredentialAccess.executeOffline(root: root, operation: operation)
+    }
+    guard response.ok, let result = response.result else {
+        throw response.error ?? MacControlError(
+            code: "unavailable",
+            message: "Use a compatible running app for local credentials.")
+    }
+    return result
 }
 
 func resolveRootCommandAction(_ args: [String]) -> RootCommandAction {

@@ -1,20 +1,25 @@
 /* @vitest-environment jsdom */
 
-import { ContextProvider } from "@lit/context";
 import { expectDefined } from "@openclaw/normalization-core";
 import { createRouter } from "@openclaw/uirouter";
 import { IDBFactory } from "fake-indexeddb";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { applicationContext } from "../../app/context.ts";
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import { SESSION_FACE_PREFERENCE_PARAM } from "../../lib/sessions/route-navigation.ts";
+import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { chatHistoryRequests } from "./chat-history-state.ts";
-import { stubMatchMedia } from "./chat-page.test-support.ts";
-import { ChatPage } from "./chat-page.ts";
+import { settleChatPage, stubMatchMedia } from "./chat-page.test-support.ts";
+import "./chat-page.tsx";
 import { createMountedPanes } from "./chat-pane-mounted.test-support.ts";
-import { nativeHistoryMessage, type TestChatPane } from "./chat-pane.test-support.ts";
+import { ChatPaneRuntime } from "./chat-pane-render.ts";
+import { nativeHistoryMessage } from "./chat-pane.test-support.ts";
+import type { ChatPaneElement } from "./chat-pane.tsx";
+import type { ChatPageHost } from "./chat-state-host.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -74,12 +79,7 @@ it.each([false, true])(
     const originalRequest = client.request.bind(client);
     const routedClient = createTestGatewayClient(async (method, params, options) => {
       if (method === "agents.list") {
-        return {
-          defaultId: "main",
-          mainKey: "main",
-          scope: "global",
-          agents: [{ id: "main" }, { id: "research" }],
-        };
+        return makeBootRoster({ scope: "global", agents: [{ id: "main" }, { id: "research" }] });
       }
       if (method === "sessions.resolve") {
         return {
@@ -122,7 +122,6 @@ it.each([false, true])(
       "chat",
       lifecycle.signal,
     );
-    expect(route).toMatchObject({ kind: "session", sessionKey: "global" });
     if (!("kind" in route) || route.kind !== "session") {
       throw new Error("Expected the supported global chat route");
     }
@@ -136,32 +135,54 @@ it.each([false, true])(
     const release = createDeferred();
     // oxlint-disable-next-line typescript/unbound-method -- Rebound to the original page-store receiver below.
     const originalRead = SessionSnapshotStore.prototype.read;
-    const storedRead = vi
-      .spyOn(SessionSnapshotStore.prototype, "read")
-      .mockImplementation(async function (this: SessionSnapshotStore, key, onPrewarm) {
-        const snapshot = await originalRead.call(this, key, onPrewarm);
-        if (key === mainSnapshotKey) {
-          entered.resolve();
-          await release.promise;
-        }
-        return snapshot;
-      });
-    const page = new ChatPage();
-    Object.assign(page, { context });
-    const provider = new ContextProvider(page, { context: applicationContext });
-    provider.setValue(context);
-    page.data = route;
-    let pane: TestChatPane | undefined;
+    vi.spyOn(SessionSnapshotStore.prototype, "read").mockImplementation(async function (
+      this: SessionSnapshotStore,
+      key,
+      onBoard,
+    ) {
+      const snapshot = await originalRead.call(this, key, onBoard);
+      if (key === mainSnapshotKey) {
+        entered.resolve();
+        await release.promise;
+      }
+      return snapshot;
+    });
+    let pane: ChatPaneRuntime | undefined;
+    const connected = vi.spyOn(ChatPaneRuntime.prototype, "start");
+    const provider = createSolidApplicationContextProvider(context);
+    const container = document.body.appendChild(createApplicationContextProvider(context));
+    let view: ReturnType<typeof mountSolid> | undefined;
+    const pageState = () => {
+      // SAFETY: The real runtime owns this protected state; this test observes hydration without exposing a production accessor.
+      const state = (pane as unknown as { state?: ChatPageHost } | undefined)?.state;
+      return expectDefined(state, "mounted pane state");
+    };
     try {
-      document.body.append(page);
-      await page.updateComplete;
-      pane = expectDefined(page.querySelector<TestChatPane>("openclaw-chat-pane"), "rendered pane");
-      expect(pane.state).toBeDefined();
-      expect(chatHistoryRequests(pane.state).initialSnapshotHydration).toBeDefined();
-      expect(storedRead).toHaveBeenCalledWith(mainSnapshotKey, expect.any(Function));
+      view = mountSolid(
+        () => Object.assign(document.createElement("openclaw-chat-page"), { data: route }),
+        {
+          container,
+          wrapper: provider.wrapper,
+        },
+      );
+      const page = expectDefined(
+        view.container.querySelector("openclaw-chat-page"),
+        "mounted page",
+      );
+      await settleChatPage(page);
+      const paneElement = expectDefined(
+        page.querySelector<ChatPaneElement>("openclaw-chat-pane"),
+        "rendered pane",
+      );
+      pane = connected.mock.contexts.find(
+        (value): value is ChatPaneRuntime =>
+          value instanceof ChatPaneRuntime && value.element === paneElement,
+      );
+      expect(expectDefined(pane, "mounted pane runtime").element).toBe(paneElement);
+      expect(chatHistoryRequests(pageState()).initialSnapshotHydration).toBeDefined();
       await entered.promise;
-      expect((pane as TestChatPane & { agentId?: string }).agentId).toBeUndefined();
-      const state = pane.state;
+      expect(pane?.agentId).toBeUndefined();
+      const state = pageState();
       expect(state.sessionKey).toBe("global");
       expect(state.assistantAgentId).toBe("main");
       const hydration = expectDefined(
@@ -171,12 +192,9 @@ it.each([false, true])(
       if (changeAgent) {
         context.agentSelection.set("research");
       }
-      expect(page.querySelector("openclaw-chat-pane")).toBe(pane);
-      expect(pane.state).toBe(state);
+      expect(page.querySelector("openclaw-chat-pane")).toBe(paneElement);
+      expect(pageState()).toBe(state);
       expect(state.assistantAgentId).toBe(changeAgent ? "research" : "main");
-      expect(resolveChatSnapshotKey(state, { sessionKey: "global" })).toBe(
-        changeAgent ? researchSnapshotKey : mainSnapshotKey,
-      );
       const sessionBefore = state.currentSessionId;
       const paginationBefore = state.chatHistoryPagination;
       release.resolve();
@@ -191,11 +209,12 @@ it.each([false, true])(
       expect
         .soft(readChatSessionSnapshot(state.chatMessagesBySession, state, { sessionKey: "global" }))
         .toEqual(changeAgent ? null : mainSnapshot);
-      await pane.sessionSnapshotStore?.flush();
+      await pane?.sessionSnapshotStore?.flush();
       expect(await originalRead.call(writer, researchSnapshotKey)).toEqual(researchSnapshot);
     } finally {
       release.resolve();
-      page.remove();
+      view?.unmount();
+      container.remove();
       await pane?.sessionSnapshotStore?.whenIdle();
       lifecycle.abort();
       router.stop();

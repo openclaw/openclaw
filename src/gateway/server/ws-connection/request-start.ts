@@ -3,6 +3,7 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { RequestFrame } from "../../../../packages/gateway-protocol/src/index.js";
 import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
+import { runWithMainThreadTask } from "../../../infra/main-thread-stall.js";
 import { runOutsideGatewayRootWorkAdmission } from "../../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 
@@ -21,6 +22,7 @@ type RequestStart = {
   expiresAt: number;
   preparation: boolean;
   independentRead: boolean;
+  lifecycle: boolean;
   settled: Promise<void>;
   signal?: AbortSignal;
   budget: StartBudget;
@@ -74,7 +76,9 @@ async function grantStarts(): Promise<void> {
         (work.preparation && preparations >= MAX_CONCURRENT_PREPARATIONS) ||
         (!work.independentRead && blockedConnections.has(work.connection.id))
       ) {
-        blockedConnections.add(work.connection.id);
+        if (!work.independentRead) {
+          blockedConnections.add(work.connection.id);
+        }
         return false;
       }
       return true;
@@ -137,17 +141,48 @@ export function scheduleGatewayRequestStart(
   return runOutsideGatewayRootWorkAdmission(() => {
     // Handshakes bypass this queue. Yield before each snapshot/replay start so
     // ready upgrade/hello I/O runs before another preparation resumes on the main thread.
+    const params = asOptionalRecord(request.params);
     const preparation =
-      request.method === "sessions.subscribe" ||
+      (request.method === "sessions.subscribe" &&
+        Object.keys(params ?? {}).some((key) => key !== "includeMessageBodies")) ||
       request.method === "models.list" ||
       (request.method === "sessions.messages.subscribe" &&
-        asOptionalRecord(request.params)?.includeApprovals === true);
-    const independentRead = request.method === "chat.history" || request.method === "sessions.list";
-    const control =
+        (params?.includeApprovals === true || params?.initialHistory !== undefined));
+    const lifecycle =
       frameBytes <= MAX_CONTROL_FRAME_BYTES &&
-      (request.method === "sessions.messages.unsubscribe" ||
-        (request.method === "sessions.messages.subscribe" &&
-          asOptionalRecord(request.params)?.includeApprovals !== true));
+      (request.method === "gateway.suspend.prepare" ||
+        request.method === "gateway.suspend.status" ||
+        request.method === "gateway.suspend.resume" ||
+        request.method === "gateway.suspend.handoff" ||
+        request.method === "gateway.restart.request" ||
+        request.method === "update.status" ||
+        request.method === "update.run");
+    const independentRead =
+      request.method === "models.list" ||
+      request.method === "chat.history" ||
+      request.method === "board.get" ||
+      request.method === "sessions.resolve" ||
+      request.method === "sessions.describe" ||
+      request.method === "sessions.list" ||
+      request.method === "users.list" ||
+      request.method === "agents.list" ||
+      request.method === "agent.identity.get" ||
+      request.method === "plugins.controlUi.list" ||
+      request.method === "cron.list" ||
+      request.method === "push.web.vapidPublicKey" ||
+      request.method === "sessions.github.options" ||
+      request.method === "workboard.cards.list" ||
+      request.method === "workboard.boards.list" ||
+      request.method === "github.preview" ||
+      request.method === "gateway.suspend.status" ||
+      request.method === "update.status";
+    const control =
+      lifecycle ||
+      (frameBytes <= MAX_CONTROL_FRAME_BYTES &&
+        (request.method === "sessions.messages.unsubscribe" ||
+          (request.method === "sessions.messages.subscribe" &&
+            params?.includeApprovals !== true &&
+            params?.initialHistory === undefined)));
     const budget = control ? controlBudget : workBudget;
     const connection = budget.connections.get(connId);
     // Parked preparations still consume waiting capacity, never a runnable start.
@@ -164,12 +199,20 @@ export function scheduleGatewayRequestStart(
     budget.bytes += frameBytes;
     queuedConnection.count++;
     budget.connections.set(connId, queuedConnection);
-    pending.push({
+    // Lifecycle requests precede unrelated work, but mutations cannot pass an
+    // earlier start on their own connection. Ordinary enqueue stays constant-time.
+    const insertion = lifecycle
+      ? pending.findLastIndex(
+          (work) => work.lifecycle || (!independentRead && work.connection.id === connId),
+        ) + 1
+      : pending.length;
+    pending.splice(insertion, 0, {
       grant,
       reject,
       expiresAt: performance.now() + MAX_QUEUE_WAIT_MS,
       preparation,
       independentRead,
+      lifecycle,
       settled,
       signal,
       budget,
@@ -178,7 +221,7 @@ export function scheduleGatewayRequestStart(
     });
     if (!active) {
       active = true;
-      void grantStarts();
+      void runWithMainThreadTask("gateway:rpc:queue", grantStarts);
     } else {
       notifyQueueChanged?.();
     }

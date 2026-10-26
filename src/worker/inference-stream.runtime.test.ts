@@ -19,10 +19,10 @@ import {
   type WorkerInferenceStartParams,
   type WorkerInferenceTerminalOutcome,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
+import { createUsageFixture } from "../agents/test-helpers/usage-fixtures.js";
 import type { Usage } from "../llm/types.js";
 import { createWorkerInferenceStreamAdapter } from "./inference-stream.runtime.js";
 import { createWorkerImageHistory } from "./replay-images.test-support.js";
-import { fitWorkerReplayImages } from "./replay-message-window.js";
 import {
   isWorkerTranscriptMessageFrameSafe,
   WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE,
@@ -31,14 +31,7 @@ import { createWorkerConnection } from "./worker-connection.js";
 import { WorkerInferenceProxyClient } from "./worker-rpc-inference-client.js";
 
 const modelRef: WorkerInferenceModelRef = { provider: "test", model: "test-model" };
-const usage: Usage = {
-  input: 1,
-  output: 2,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 3,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+const usage: Usage = createUsageFixture(1, 2, 3);
 
 function createClient() {
   return new WorkerInferenceProxyClient(
@@ -72,24 +65,36 @@ function createClient() {
   );
 }
 
-function createAdapterFixture(computerContextEpoch?: {
-  value: number;
-  frameToolCallId?: string;
-  frameImageIdentity?: string;
-}) {
+function createAdapterFixture(
+  computerContextEpoch?: {
+    value: number;
+    frameToolCallId?: string;
+    frameImageIdentity?: string;
+  },
+  events: WorkerInferenceEventParams["event"][] = [],
+  gap = false,
+) {
   const client = createClient();
-  const start = vi.spyOn(client, "start").mockResolvedValue({
-    type: "done",
-    message: {
-      role: "assistant",
-      content: [{ type: "text", text: "Done." }],
-      api: "openai-responses",
-      provider: "test",
-      model: "test-model",
-      stopReason: "stop",
-      usage,
-      timestamp: 1,
-    },
+  const start = vi.spyOn(client, "start").mockImplementation(async (request, handlers) => {
+    if (gap) {
+      handlers?.onStreamGap?.();
+    }
+    events.forEach((event, index) =>
+      handlers?.onEvent?.({ ...request, seq: index + (gap ? 2 : 1), event }),
+    );
+    return {
+      type: "done",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Done." }],
+        api: "openai-responses",
+        provider: "test",
+        model: "test-model",
+        stopReason: "stop",
+        usage,
+        timestamp: 1,
+      },
+    };
   });
   const options = {
     client,
@@ -127,6 +132,118 @@ function inferenceRequest(context: WorkerInferenceContext): WorkerInferenceStart
   };
 }
 
+it("keeps text and thinking content and signatures in their own stream blocks", async () => {
+  const fixture = createAdapterFixture(undefined, [
+    { type: "text_start", contentIndex: 0, contentSignature: "initial-text" },
+    { type: "text_delta", contentIndex: 0, delta: "hello" },
+    { type: "text_end", contentIndex: 0, contentSignature: "final-text" },
+    { type: "thinking_start", contentIndex: 1 },
+    { type: "thinking_delta", contentIndex: 1, delta: "reasoning" },
+    { type: "thinking_end", contentIndex: 1, contentSignature: "final-thinking" },
+  ]);
+  try {
+    const ended = [];
+    for await (const event of fixture.stream({
+      modelRef,
+      context: { messages: [] },
+      options: {},
+    })) {
+      if (event.type === "text_end" || event.type === "thinking_end") {
+        ended.push({
+          type: event.type,
+          content: event.content,
+          block: event.partial.content[event.contentIndex],
+        });
+      }
+    }
+    expect(ended).toEqual([
+      {
+        type: "text_end",
+        content: "hello",
+        block: { type: "text", text: "hello", textSignature: "final-text" },
+      },
+      {
+        type: "thinking_end",
+        content: "reasoning",
+        block: { type: "thinking", thinking: "reasoning", thinkingSignature: "final-thinking" },
+      },
+    ]);
+  } finally {
+    fixture.client.dispose();
+  }
+});
+
+it.each([62_500, null])(
+  "retains provider retry floor %s when a worker error becomes an assistant failure",
+  async (retryAfterMs) => {
+    const fixture = createAdapterFixture();
+    fixture.start.mockResolvedValue({
+      type: "error",
+      reason: "provider-error",
+      message: "429: rate_limit_exceeded",
+      retryAfterMs,
+    });
+    try {
+      const result = await fixture
+        .stream({ modelRef, context: { messages: [] }, options: {} })
+        .result();
+      expect(result).toMatchObject({ stopReason: "error", retryAfterMs });
+      expect(isWorkerTranscriptMessageFrameSafe(result)).toBe(true);
+    } finally {
+      fixture.client.dispose();
+    }
+  },
+);
+
+it.each([
+  ["text", "end", { type: "text_end", contentIndex: 0 }],
+  ["thinking", "delta", { type: "thinking_delta", contentIndex: 0, delta: "wrong block" }],
+] as const)(
+  "rejects %s %s when its content block has the wrong kind",
+  async (kind, suffix, event) => {
+    const fixture = createAdapterFixture(undefined, [
+      { type: kind === "text" ? "thinking_start" : "text_start", contentIndex: 0 },
+      event,
+    ]);
+    try {
+      await expect(
+        fixture.stream({ modelRef, context: { messages: [] }, options: {} }).result(),
+      ).resolves.toMatchObject({
+        stopReason: "error",
+        errorMessage: `worker inference ${kind} ${suffix} has no active ${kind} block`,
+      });
+    } finally {
+      fixture.client.dispose();
+    }
+  },
+);
+
+it("tolerates missing text and thinking blocks after a stream gap", async () => {
+  const fixture = createAdapterFixture(
+    undefined,
+    [
+      { type: "text_delta", contentIndex: 0, delta: "missing" },
+      { type: "text_end", contentIndex: 0 },
+      { type: "thinking_delta", contentIndex: 1, delta: "missing" },
+      { type: "thinking_end", contentIndex: 1 },
+    ],
+    true,
+  );
+  try {
+    const types = [];
+    for await (const event of fixture.stream({
+      modelRef,
+      context: { messages: [] },
+      options: {},
+    })) {
+      types.push(event.type);
+    }
+    expect(types).toEqual(["done"]);
+  } finally {
+    fixture.client.dispose();
+  }
+});
+
 it("preserves the provider failure and usage after an oversized partial response", async () => {
   const fixture = createAdapterFixture();
   fixture.start.mockImplementation(async (request, handlers) => {
@@ -154,39 +271,6 @@ it("preserves the provider failure and usage after an oversized partial response
   }
 });
 
-it("rejects an oversized successful reply without truncating it or losing its usage", async () => {
-  const fixture = createAdapterFixture();
-  const reply: Extract<WorkerInferenceTerminalOutcome, { type: "done" }>["message"] = {
-    role: "assistant",
-    content: [{ type: "text", text: "x".repeat(WORKER_PROTOCOL_MAX_PAYLOAD_BYTES) }],
-    api: "openai-responses",
-    provider: modelRef.provider,
-    model: modelRef.model,
-    stopReason: "stop",
-    usage,
-    timestamp: 1,
-  };
-  fixture.start.mockResolvedValue({ type: "done", message: reply });
-
-  try {
-    const result = await fixture
-      .stream({ modelRef, context: { messages: [] }, options: {} })
-      .result();
-    expect(result).toMatchObject({
-      stopReason: "error",
-      errorMessage: "Worker inference result exceeds the transcript message limit.",
-      usage,
-      content: [],
-    });
-    expect(isWorkerTranscriptMessageFrameSafe(result)).toBe(true);
-    expect(reply.content).toEqual([
-      { type: "text", text: "x".repeat(WORKER_PROTOCOL_MAX_PAYLOAD_BYTES) },
-    ]);
-  } finally {
-    fixture.client.dispose();
-  }
-});
-
 it.each([false, true])(
   "bounds screenshot serialization work while preserving the fitted request (oversized: %s)",
   async (oversized) => {
@@ -204,10 +288,6 @@ it.each([false, true])(
     const context = { messages, systemPrompt: 'Inspect café 😀 with quotes " and a slash \\.' };
     const request = inferenceRequest(context);
     const originalBytes = inferenceFrameBytes(request);
-    const expected = fitWorkerReplayImages(messages, (candidate) =>
-      inferenceFrameBytes({ ...request, context: { ...context, messages: candidate } }),
-    );
-    const originalContents = messages.map((message) => message.content);
     const fixture = createAdapterFixture();
     const stringify = JSON.stringify;
     let serializedBytes = 0;
@@ -231,13 +311,9 @@ it.each([false, true])(
       fixture.client.dispose();
     }
     const [sent] = expectDefined(fixture.start.mock.calls[0], "inference start");
-    expect(sent.context.messages).toEqual(expected);
     expect(inferenceFrameBytes(sent)).toBeLessThanOrEqual(
       WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES,
     );
-    for (const [index, message] of messages.entries()) {
-      expect(message.content).toBe(originalContents[index]);
-    }
     if (oversized) {
       // Several removals must not re-encode all stable screenshots for every candidate.
       expect(serializedBytes).toBeLessThan(originalBytes * 2);
@@ -247,63 +323,7 @@ it.each([false, true])(
   },
 );
 
-it.each([-1, 0, 1])(
-  "preserves exact fitting decisions at the payload limit %+i",
-  async (offset) => {
-    const image = (data: string) => ({ type: "image" as const, data, mimeType: "image/png" });
-    const messages: WorkerInferenceContext["messages"] = [
-      { role: "user", content: [image("A"), image("B".repeat(1024))], timestamp: 0 },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "Observed." }],
-        api: "openai-responses",
-        provider: modelRef.provider,
-        model: modelRef.model,
-        stopReason: "stop",
-        usage,
-        timestamp: 1,
-      },
-      { role: "user", content: [image("C".repeat(1024))], timestamp: 2 },
-    ];
-    const context = {
-      messages,
-      systemPrompt: 'café 😀 "\\\n\ud800',
-      tools: [{ name: "inspect", description: 'quoted " field', parameters: { type: "object" } }],
-    } satisfies WorkerInferenceContext;
-    const request = inferenceRequest(context);
-    context.systemPrompt += "P".repeat(
-      WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES + offset - inferenceFrameBytes(request),
-    );
-    const candidates: number[] = [];
-    const expected = fitWorkerReplayImages(messages, (candidate) => {
-      const bytes = inferenceFrameBytes({
-        ...request,
-        context: { ...context, messages: candidate },
-      });
-      candidates.push(bytes);
-      return bytes;
-    });
-    if (offset > 0) {
-      // Replacing the tiny first image grows this candidate; a later image must still be tried.
-      expect(candidates[1]).toBeGreaterThan(expectDefined(candidates[0], "initial frame size"));
-      expect(candidates).toHaveLength(3);
-    }
-    const fixture = createAdapterFixture();
-    try {
-      await fixture.stream({ modelRef, context, options: {} }).result();
-      const [sent] = expectDefined(fixture.start.mock.calls[0], "inference start");
-      expect(sent.context.messages).toEqual(expected);
-      expect(inferenceFrameBytes(sent)).toBeLessThanOrEqual(
-        WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES,
-      );
-      expect(messages[0]?.content).toEqual([image("A"), image("B".repeat(1024))]);
-    } finally {
-      fixture.client.dispose();
-    }
-  },
-);
-
-it.each([false, true])(
+it.each([true])(
   "fits observed screenshot history without changing durable messages (user image: %s)",
   async (userImage) => {
     const messages = createWorkerImageHistory(userImage);

@@ -94,3 +94,15 @@ export function createGatewayNormalCloseError() {
     },
   });
 }
+
+export function gatewaySuccessReply(text: string) {
+  return {
+    runId: "idem-1",
+    status: "ok",
+    result: { payloads: [{ text }], meta: { stub: true } },
+  };
+}
+
+export const remoteGatewayConfig = {
+  gateway: { mode: "remote" as const, remote: { url: "wss://gateway.example" } },
+};

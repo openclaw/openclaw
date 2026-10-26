@@ -1,5 +1,6 @@
 // Proxy CLI rich-theme coverage stays isolated because the theme mock must precede runtime import.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resetProxyValidationMocks } from "./proxy-cli.runtime.test-support.js";
 import "../test-utils/prepare-compiled-subprocesses.js";
 
 const { getRuntimeConfigMock, runProxyValidationMock } = vi.hoisted(() => ({
@@ -7,8 +8,10 @@ const { getRuntimeConfigMock, runProxyValidationMock } = vi.hoisted(() => ({
   runProxyValidationMock: vi.fn(),
 }));
 
+// mock-isolation: Theme fixtures provide config without preparing a real config owner.
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: getRuntimeConfigMock,
+  captureRuntimeConfigAsyncReader: () => async () => getRuntimeConfigMock(),
 }));
 
 vi.mock("../infra/net/proxy/proxy-validation.js", () => ({
@@ -17,31 +20,7 @@ vi.mock("../infra/net/proxy/proxy-validation.js", () => ({
 
 describe("proxy cli runtime theme", () => {
   beforeEach(() => {
-    getRuntimeConfigMock.mockReset();
-    getRuntimeConfigMock.mockReturnValue({
-      proxy: {
-        enabled: true,
-        proxyUrl: "http://config-proxy.example:3128",
-      },
-    });
-    runProxyValidationMock.mockReset();
-    runProxyValidationMock.mockResolvedValue({
-      ok: true,
-      config: {
-        enabled: true,
-        proxyUrl: "http://config-proxy.example:3128",
-        source: "config",
-        errors: [],
-      },
-      checks: [
-        {
-          kind: "allowed",
-          url: "https://example.com/",
-          ok: true,
-          status: 200,
-        },
-      ],
-    });
+    resetProxyValidationMocks(getRuntimeConfigMock, runProxyValidationMock);
     vi.spyOn(process.stdout, "write").mockImplementation(() => true);
   });
 

@@ -61,6 +61,8 @@ Owner page: [Gateway authentication](/gateway/authentication) — auth modes, to
   excludes pairing-mutation scopes and `operator.admin`.
 - `hello-ok.auth.deviceTokens` contains only additional bootstrap-handoff tokens.
   Do not use it as metadata for the primary `deviceToken` reconnect record.
+- A node-only bootstrap retry reuses an already-approved node pairing without
+  requesting an operator handoff or changing the node's pairing generation.
 - While a non-baseline setup-code bootstrap waits for approval,
   `PAIRING_REQUIRED` details include `recommendedNextStep: "wait_then_retry"`,
   `retryable: true`, and `pauseReconnect: false`. Keep reconnecting with the
@@ -176,7 +178,7 @@ Common migration failures:
 | `device signature invalid`  | `DEVICE_AUTH_SIGNATURE_INVALID`  | `device-signature`       | Signature payload does not match v2 payload.       |
 | `device signature expired`  | `DEVICE_AUTH_SIGNATURE_EXPIRED`  | `device-signature-stale` | Signed timestamp is outside allowed skew.          |
 | `device identity mismatch`  | `DEVICE_AUTH_DEVICE_ID_MISMATCH` | `device-id-mismatch`     | `device.id` does not match public key fingerprint. |
-| `device public key invalid` | `DEVICE_AUTH_PUBLIC_KEY_INVALID` | `device-public-key`      | Public key format/canonicalization failed.         |
+| `device public key invalid` | `DEVICE_AUTH_PUBLIC_KEY_INVALID` | `device-public-key`      | Public key format or normalization failed.         |
 
 Migration target:
 

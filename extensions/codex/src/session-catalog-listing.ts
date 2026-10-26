@@ -28,11 +28,7 @@ import {
   createCodexTerminalNodeHostCommand,
   createCodexTerminalStartNodeHostCommand,
 } from "./session-catalog-terminal.js";
-import {
-  parseCodexCatalogTranscriptPage,
-  readCodexCatalogTranscriptPage,
-  readLegacyCodexTranscriptPage,
-} from "./session-catalog-transcript.js";
+import type { readCodexCatalogTranscriptPage } from "./session-catalog-transcript.js";
 import type {
   CodexSessionCatalogControl,
   CodexSessionCatalogControlFactory,
@@ -150,7 +146,10 @@ export function createCodexSessionCatalogNodeHostCommands(
         }),
       );
     }),
-    transcriptCommand(CODEX_CATALOG_TRANSCRIPT_READ_COMMAND, readCodexCatalogTranscriptPage),
+    transcriptCommand(CODEX_CATALOG_TRANSCRIPT_READ_COMMAND, async (control, action) => {
+      const { readCodexCatalogTranscriptPage } = await import("./session-catalog-transcript.js");
+      return readCodexCatalogTranscriptPage(control, action);
+    }),
     createCodexTerminalNodeHostCommand(bindRequest),
     createCodexTerminalStartNodeHostCommand(),
   ];
@@ -161,11 +160,7 @@ export function createCodexSessionCatalogNodeHostCommands(
     : commands;
 }
 
-type CodexNodeSessionTranscriptParams = {
-  threadId: string;
-  cursor?: string;
-  limit: number;
-};
+type CodexNodeSessionTranscriptParams = Parameters<typeof readCodexCatalogTranscriptPage>[1];
 
 function readNodeTranscriptParams(
   value: Record<string, unknown>,
@@ -204,6 +199,13 @@ export async function readCodexSessionTranscript(params: {
     DEFAULT_TRANSCRIPT_PAGE_LIMIT,
     MAX_TRANSCRIPT_PAGE_LIMIT,
   );
+  // Transcript presentation uses the harness runtime; listing/registration stays lightweight.
+  const {
+    parseCodexCatalogTranscriptPage,
+    readCodexCatalogTranscriptPage,
+    readLegacyCodexTranscriptPage,
+    projectCodexCatalogTranscriptPageForDisplay,
+  } = await import("./session-catalog-transcript.js");
   if (params.source || params.hostId === CODEX_LOCAL_SESSION_HOST_ID) {
     const page = await readCodexCatalogTranscriptPage(params.control, {
       threadId: params.threadId,
@@ -214,7 +216,7 @@ export async function readCodexSessionTranscript(params: {
       hostId: params.hostId,
       label: params.source?.label ?? "Local Codex",
       threadId: params.threadId,
-      ...page,
+      ...projectCodexCatalogTranscriptPageForDisplay(page),
     };
   }
 
@@ -250,13 +252,11 @@ export async function readCodexSessionTranscript(params: {
         await invoke(CODEX_CATALOG_TRANSCRIPT_READ_COMMAND, { cursor, limit }),
       )
     : await readLegacyCodexTranscriptPage(
-        async ({ cursor: turnCursor, limit: turnLimit }) =>
-          parseTranscriptPage(
-            await invoke(CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND, {
-              cursor: turnCursor,
-              limit: turnLimit,
-            }),
-          ),
+        ({ cursor: turnCursor, limit: turnLimit }) =>
+          invoke(CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND, {
+            cursor: turnCursor,
+            limit: turnLimit,
+          }),
         { threadId: params.threadId, cursor, limit },
       );
   const { nodeLabel } = await import("./session-catalog-node-continue.js");
@@ -264,6 +264,6 @@ export async function readCodexSessionTranscript(params: {
     hostId: params.hostId,
     label: nodeLabel(node),
     threadId: params.threadId,
-    ...page,
+    ...projectCodexCatalogTranscriptPageForDisplay(page),
   };
 }

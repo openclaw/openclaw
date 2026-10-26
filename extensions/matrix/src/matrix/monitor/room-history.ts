@@ -34,7 +34,6 @@ export type { HistoryEntry };
 
 type HistorySnapshotToken = {
   snapshotIdx: number;
-  queueGeneration: number;
 };
 
 export type ReservedHistorySlot = HistorySnapshotToken & {
@@ -56,7 +55,6 @@ type HistoryQueue = {
   entries: QueuedHistoryEntry[];
   /** Absolute index of entries[0] — increases as old entries are trimmed. */
   baseIndex: number;
-  generation: number;
   preparedTriggers: Map<string, PreparedTriggerResult>;
 };
 
@@ -73,7 +71,6 @@ export function createRoomHistoryTracker(
   const roomQueues = new Map<string, RoomQueue>();
   /** Maps `{agentId, roomId, scope}` → absolute consumed-up-to index */
   const agentWatermarks = new Map<string, number>();
-  let nextQueueGeneration = 1;
 
   function clearWatermarks(roomId: string, threadRootId?: string): void {
     for (const key of agentWatermarks.keys()) {
@@ -91,7 +88,6 @@ export function createRoomHistoryTracker(
     return {
       entries: [],
       baseIndex: 0,
-      generation: nextQueueGeneration++,
       preparedTriggers: new Map(),
     };
   }
@@ -158,7 +154,6 @@ export function createRoomHistoryTracker(
     }
     return {
       snapshotIdx: queue.baseIndex + queue.entries.length,
-      queueGeneration: queue.generation,
     };
   }
 
@@ -179,10 +174,8 @@ export function createRoomHistoryTracker(
 
   function rememberWatermark(key: string, snapshotIdx: number): void {
     const nextSnapshotIdx = Math.max(agentWatermarks.get(key) ?? 0, snapshotIdx);
-    if (agentWatermarks.has(key)) {
-      // Refresh insertion order so capped-map eviction removes the stalest pair, not an active one.
-      agentWatermarks.delete(key);
-    }
+    // Refresh insertion order so capped-map eviction removes the stalest pair, not an active one.
+    agentWatermarks.delete(key);
     setBoundedMap(agentWatermarks, key, nextSnapshotIdx, maxWatermarkEntries);
   }
 
@@ -208,10 +201,8 @@ export function createRoomHistoryTracker(
     retryKey: string,
     prepared: PreparedTriggerResult,
   ): PreparedTriggerResult {
-    if (queue.preparedTriggers.has(retryKey)) {
-      // Refresh insertion order so capped eviction keeps actively retried events hot.
-      queue.preparedTriggers.delete(retryKey);
-    }
+    // Refresh insertion order so capped eviction keeps actively retried events hot.
+    queue.preparedTriggers.delete(retryKey);
     setBoundedMap(queue.preparedTriggers, retryKey, prepared, maxPreparedTriggerEntries);
     return prepared;
   }
@@ -255,7 +246,7 @@ export function createRoomHistoryTracker(
     const queue = getScopedQueue(roomId, threadRootId);
     if (slot) {
       const rel = slot.slotIdx - queue.baseIndex;
-      if (queue.generation !== slot.queueGeneration || rel < 0 || rel >= queue.entries.length) {
+      if (rel < 0 || rel >= queue.entries.length) {
         slot = undefined;
       }
     }
@@ -282,9 +273,7 @@ export function createRoomHistoryTracker(
         slot?.watermarkIdx,
         threadRootId,
       ),
-      ...(slot
-        ? { snapshotIdx: slot.slotIdx + 1, queueGeneration: queue.generation }
-        : appendToQueue(queue, entry)),
+      ...(slot ? { snapshotIdx: slot.slotIdx + 1 } : appendToQueue(queue, entry)),
     };
     if (retryKey) {
       return rememberPreparedTrigger(queue, retryKey, prepared);
@@ -299,7 +288,7 @@ export function createRoomHistoryTracker(
     threadRootId?: string,
   ): void {
     const queue = findScopedQueue(roomId, threadRootId);
-    if (!queue || queue.generation !== slot.queueGeneration) {
+    if (!queue) {
       return;
     }
     const rel = slot.slotIdx - queue.baseIndex;
@@ -352,11 +341,6 @@ export function createRoomHistoryTracker(
         // The room or thread was evicted while this trigger was in flight. Keep eviction
         // authoritative so a late completion cannot recreate a stale watermark.
         agentWatermarks.delete(key);
-        return;
-      }
-      if (queue.generation !== snapshot.queueGeneration) {
-        // The room was evicted and recreated before this trigger completed. Reject the stale
-        // snapshot so it cannot advance or erase state for the new queue generation.
         return;
       }
       const firstReservedRel = queue.entries.findIndex(

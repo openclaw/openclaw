@@ -1,6 +1,6 @@
 import type { SessionTranscriptContextVersion } from "../../config/sessions/session-accessor.sqlite-contract.js";
 import { readTranscriptEventAtSeqSync } from "../../config/sessions/session-accessor.sqlite-read.js";
-import { readActiveTranscriptEntryAnchor } from "../../config/sessions/session-accessor.sqlite-transcript-anchor.js";
+import { readActiveTranscriptEntryAnchor } from "../../config/sessions/session-accessor.sqlite-transcript-admitted-read.js";
 import { isIndexedSessionEntry } from "../../config/sessions/session-entry-codec.js";
 import { walkSessionCurrentTurn } from "../../config/sessions/session-entry-navigation.js";
 import type { TranscriptEntryAnchor } from "../../config/sessions/transcript-entry-anchor.js";
@@ -10,7 +10,10 @@ import {
   SYSTEM_UPDATE_MESSAGE_CUSTOM_TYPE,
 } from "../internal-runtime-context.js";
 import { isSessionContextMetadataEntry } from "./session-manager-codec.js";
-import { prepareSessionManagerHydration } from "./session-manager-incognito.js";
+import {
+  prepareSessionManagerHydration,
+  readSessionManagerActorTranscript,
+} from "./session-manager-incognito.js";
 import type { SessionEntry, SessionMessageEntry } from "./session-manager-types.js";
 import type { SessionManagerPersistenceTarget } from "./session-manager-view-types.js";
 
@@ -156,13 +159,18 @@ export async function prepareCurrentTurnReplaySelection(
   if (!userId || entry?.id !== userId || !matchesUser(entry)) {
     return undefined;
   }
-  const result = await reader.readCurrentTurnEntry({
-    entryId: userId,
-    version,
-    includeEntry: false,
-  });
+  const transcript = readSessionManagerActorTranscript(view.target, version);
+  const anchor = transcript
+    ? transcript.anchors.find((candidate) => candidate.entryId === userId)
+    : (
+        await reader.readCurrentTurnEntry({
+          entryId: userId,
+          version,
+          includeEntry: false,
+        })
+      ).anchor;
   assertCurrent();
-  if (!result.anchor) {
+  if (!anchor) {
     return undefined;
   }
   assertCurrent();

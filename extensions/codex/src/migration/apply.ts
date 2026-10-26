@@ -33,6 +33,7 @@ import { resolveCodexAppServerFallbackApiKeyCacheKey } from "../app-server/auth-
 import { resolveCodexAppServerAuthProfileIdForAgent } from "../app-server/auth-profile.js";
 import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
+  readCodexPluginConfig,
   resolveCodexAppServerRuntimeOptions,
   type ResolvedCodexPluginPolicy,
 } from "../app-server/config.js";
@@ -209,11 +210,9 @@ async function applyCodexPluginInstallItem(
         await requestTargetCodexAppServerJson({
           method,
           requestParams,
-          timeoutMs: 60_000,
           startOptions: appServer.start,
           agentDir: resolvePlannedMigrationTargets(ctx).agentDir,
           config: ctx.config,
-          isolated: false,
         }),
       appCache: defaultCodexAppInventoryCache,
       appCacheKey,
@@ -282,31 +281,32 @@ async function applyCodexPluginInstallItem(
 
 function resolveTargetCodexAppServer(ctx: MigrationProviderContext) {
   return resolveCodexAppServerRuntimeOptions({
-    pluginConfig: ctx.config.plugins?.entries?.codex?.config,
+    pluginConfig: readCodexPluginConfig(ctx.config.plugins?.entries?.codex?.config),
   });
 }
 
 async function requestTargetCodexAppServerJson(params: {
   method: string;
   requestParams?: unknown;
-  timeoutMs: number;
   startOptions: ReturnType<typeof resolveTargetCodexAppServer>["start"];
   agentDir: string;
   config: MigrationProviderContext["config"];
-  isolated?: boolean;
 }): Promise<unknown> {
+  const options = { ...params, timeoutMs: 60_000, isolated: false };
   if (params.method !== "plugin/list") {
-    return await requestCodexAppServerJson(params);
+    return await requestCodexAppServerJson(options);
   }
 
-  const deadline = Date.now() + params.timeoutMs;
+  // Use the monotonic clock so NTP adjustments or sleep resumes cannot stretch
+  // or shrink the discovery budget while request timers (also monotonic) are in flight.
+  const deadline = performance.now() + options.timeoutMs;
   const discoveryTimeoutMs = targetCodexMarketplaceDiscoveryTimeoutMs();
-  const discoveryDeadline = Math.min(deadline, Date.now() + discoveryTimeoutMs);
+  const discoveryDeadline = Math.min(deadline, performance.now() + discoveryTimeoutMs);
   let lastResponse: v2.PluginListResponse;
   do {
-    const remainingMs = Math.max(1, discoveryDeadline - Date.now());
+    const remainingMs = Math.max(1, discoveryDeadline - performance.now());
     lastResponse = await requestCodexAppServerJson<v2.PluginListResponse>({
-      ...params,
+      ...options,
       timeoutMs: remainingMs,
     });
     if (
@@ -316,15 +316,15 @@ async function requestTargetCodexAppServerJson(params: {
     ) {
       return lastResponse;
     }
-    if (Date.now() >= discoveryDeadline) {
+    if (performance.now() >= discoveryDeadline) {
       return lastResponse;
     }
     const waitMs = Math.min(
       TARGET_CODEX_MARKETPLACE_DISCOVERY_POLL_MS,
-      discoveryDeadline - Date.now(),
+      discoveryDeadline - performance.now(),
     );
     await sleep(waitMs);
-  } while (Date.now() < discoveryDeadline);
+  } while (performance.now() < discoveryDeadline);
 
   return lastResponse;
 }
@@ -348,7 +348,7 @@ function isCodexPluginLoadWarningItem(item: MigrationItem): boolean {
 async function buildTargetCodexPluginAppCacheKey(ctx: MigrationProviderContext): Promise<string> {
   const targets = resolvePlannedMigrationTargets(ctx);
   const appServer = resolveTargetCodexAppServer(ctx);
-  const authProfileId = resolveCodexAppServerAuthProfileIdForAgent({
+  const authProfileId = await resolveCodexAppServerAuthProfileIdForAgent({
     agentDir: targets.agentDir,
     config: ctx.config,
   });

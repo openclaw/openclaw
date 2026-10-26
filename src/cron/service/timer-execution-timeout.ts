@@ -1,52 +1,24 @@
-import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
-import type { HeartbeatWakeRequest } from "../../infra/heartbeat-wake.js";
-import type { CommandLaneTaskMarker } from "../../process/command-queue.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { CronActiveJobMarker } from "../active-jobs.js";
 import type { CronCompletionDeliveryFence } from "../delivery-attempt-fence.js";
-import type { CronRunReceiptSettlementDisposition } from "../store/run-receipt-store.js";
 import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";
-import type { StartupDeferredJob } from "../store/runtime-worker.types.js";
 import type {
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
   CronCompletionStatus,
   CronJob,
+  CronJobExecutionResult,
   CronNextCheckProposal,
   CronResolvedDeliveryState,
   CronRunOutcome,
+  CronRunDeliveryResult,
   CronRunTelemetry,
 } from "../types.js";
-import type { CronRunDeliveryResult, CronServiceState } from "./state.js";
-
-export const MAX_CRON_TIMER_DELAY_MS = 60_000;
-
-/**
- * Minimum gap between consecutive fires of the same cron job.  This is a
- * safety net that prevents spin-loops when `computeJobNextRunAtMs` returns
- * a value within the same second as the just-completed run.  The guard
- * is intentionally generous (2 s) so it never masks a legitimate schedule
- * but always breaks an infinite re-trigger cycle.  (See #17821)
- */
-export const MIN_REFIRE_GAP_MS = 2_000;
-
-export const DEFAULT_MISSED_JOB_STAGGER_MS = 5_000;
-
-export const DEFAULT_MAX_MISSED_JOBS_PER_RESTART = 5;
-
-export const DEFAULT_STARTUP_DEFERRED_MISSED_AGENT_JOB_DELAY_MS = 2 * 60_000;
-
-export type CronJobExecutionResult = CronRunOutcome &
-  CronRunTelemetry &
-  CronRunDeliveryResult & {
-    nextCheck?: CronNextCheckProposal;
-    scriptStateChanged?: boolean;
-    scriptState?: unknown;
-    triggerEval?: CronTriggerEvalOutcome;
-  };
+import type { CronIdleAdmissionSource, CronIdleAdmissionWait, CronServiceState } from "./state.js";
 
 export type TimedCronRunOutcome = CronJobExecutionResult & {
   jobId: string;
@@ -56,13 +28,12 @@ export type TimedCronRunOutcome = CronJobExecutionResult & {
   deliveryState: CronResolvedDeliveryState;
   isolatedAgentSetupTimeout?: IsolatedAgentSetupTimeoutSignal;
   activeJobMarker?: CronActiveJobMarker;
-  reservationIdentity?: object;
   runReceipt?: CronRunReceiptHandle;
   runReceiptContext?: OpenClawStateWorkerContext;
-  receiptSettlementDisposition?: CronRunReceiptSettlementDisposition;
   request?: {
     executionJob: CronJob;
     preserveCadence: boolean;
+    onExitWatcherCompletion?: boolean;
     scheduleOwnershipAtMs: number;
     runId?: string;
     terminalTracker?: { emitted: boolean };
@@ -80,13 +51,6 @@ export type CronJobRunResult = CronRunOutcome &
     nextCheck?: CronNextCheckProposal;
   };
 
-export type CronTriggerEvalOutcome = {
-  fired: boolean;
-  stateChanged: boolean;
-  state?: unknown;
-  busy?: true;
-};
-
 export type IsolatedAgentSetupTimeoutSignal = {
   error: string;
   timeoutMs: number;
@@ -99,39 +63,18 @@ export type IsolatedAgentSetupTimeoutResult = {
   isolatedAgentSetupTimeout?: IsolatedAgentSetupTimeoutSignal;
 };
 
-export type StartupCatchupCandidate = {
-  jobId: string;
-  job: CronJob;
-  reservedAtMs: number;
-  reservationIdentity: object;
-};
-
-export type StartupCatchupPlan = {
-  lifecycleGeneration: number;
-  candidates: StartupCatchupCandidate[];
-  deferredJobs: StartupDeferredJob[];
-};
-
-export type StartupCatchupExecution =
-  | { ok: true; outcomes: TimedCronRunOutcome[] }
-  | { ok: false; outcomes: TimedCronRunOutcome[]; error: unknown };
-
 export type ExecuteJobCoreOptions = {
+  /** Queue admission supplies this fact so receipt I/O cannot reorder payload starts. */
+  migrationPending?: boolean;
+  idleAdmission?: CronIdleAdmissionSource;
+  waitForIdle?: CronIdleAdmissionWait;
   deliveryAttemptFence?: CronCompletionDeliveryFence;
   activeJobMarker?: CronActiveJobMarker;
-  owningCronLaneTaskMarker?: CommandLaneTaskMarker;
-  onPayloadExecutionStarted?: () => void;
   onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
   onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
   onLaneWait?: (info?: { waiting?: boolean }) => void;
-  onHeartbeatExecutionStarted?: (opts: HeartbeatWakeRequest & { agentId: string }) =>
-    | {
-        onAttemptStarted?: () => void;
-        onQueued?: () => void;
-      }
-    | undefined;
   executionIdentity?: import("./state.js").CronExecutionIdentityAdmission;
-  /** Revalidates the durable run fence after awaited planning and before effects. */
+  /** Revalidates live Gateway admission after awaited planning and before effects. */
   assertRunCurrent?: () => Promise<void>;
   streamBatch?: string;
   // Source definition and logical identity are an inseparable admission claim.
@@ -145,10 +88,10 @@ export function runsDetachedFromMainSession(job: CronJob): boolean {
   return job.sessionTarget !== "main" || job.payload.kind === "script";
 }
 
-export function resolveMainSessionCronDeliveryContext(
+export async function resolveMainSessionCronDeliveryContext(
   state: CronServiceState,
   job: CronJob,
-): DeliveryContext | undefined {
+): Promise<DeliveryContext | undefined> {
   const targetSessionKey = job.sessionKey?.trim();
   if (!targetSessionKey) {
     return undefined;
@@ -166,7 +109,7 @@ export function resolveMainSessionCronDeliveryContext(
     return undefined;
   }
   try {
-    const sessionEntry = loadSessionEntryReadOnly({
+    const sessionEntry = await readSessionEntryReadOnlyInWorker({
       agentId,
       sessionKey: targetSessionKey,
       storePath,

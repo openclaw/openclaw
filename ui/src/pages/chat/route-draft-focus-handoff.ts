@@ -1,33 +1,16 @@
-import type { BoardFace } from "../../lib/board/settings.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
+import { chatPanesWithin } from "./chat-pane-elements.ts";
 import type { SessionChatRouteData } from "./route-loader.ts";
 
 const HANDOFF_TTL_MS = 30_000;
 const MAINTENANCE_MS = 15_000;
 const RETRY_MS = 250;
-const COMPOSER_SELECTOR = ".agent-chat__composer-combobox textarea";
 
 type PendingHandoff = {
   expiresAt: number;
   sessionKey: string;
   sourceData: SessionChatRouteData;
-};
-
-export type ChatPaneElement = HTMLElement & {
-  active?: boolean;
-  conversationPresented?: boolean;
-  discardStagedAttachments?: () => void;
-  paneId?: string;
-  prepareForEviction?: () => void;
-  hasQueuedMessageEdit?: boolean;
-  presented?: boolean;
-  captureNavigationFace?: () => BoardFace | undefined;
-  routeFace?: BoardFace;
-  sessionKey?: string;
-  transcriptLoading?: boolean;
-  transcriptReady?: boolean;
-  updateComplete?: Promise<unknown>;
-  visuallyPresented?: boolean;
 };
 
 let pendingHandoff: PendingHandoff | undefined;
@@ -47,7 +30,7 @@ function pendingMatches(sessionKey: string, data: SessionChatRouteData): boolean
 }
 
 export class RouteDraftComposerFocus {
-  private timer: number | undefined;
+  private cancelMaintenance: (() => void) | undefined;
 
   constructor(private readonly host: HTMLElement) {}
 
@@ -100,44 +83,66 @@ export class RouteDraftComposerFocus {
     };
   }
 
+  dispose(): void {
+    this.cancelMaintenance?.();
+  }
+
   private maintain(sessionKey: string): void {
-    if (this.timer !== undefined) {
-      window.clearTimeout(this.timer);
-      this.timer = undefined;
-    }
+    this.cancelMaintenance?.();
     const deadline = Date.now() + MAINTENANCE_MS;
     let ownedComposer: HTMLTextAreaElement | undefined;
+    let timer: number | undefined;
+    const doc = this.host.ownerDocument;
+    const cancel = () => {
+      window.clearTimeout(timer);
+      stopEvents.forEach((stop) => stop());
+      this.cancelMaintenance = undefined;
+    };
+    const onFocus = (event: FocusEvent) => {
+      if (event.target !== ownedComposer) {
+        cancel();
+      }
+    };
+    // A brief menu interaction can return focus to body between maintenance ticks.
+    // Once the user takes focus, this handoff must not reclaim it.
+    const stopEvents = [
+      listen(doc, "pointerdown", cancel, true),
+      listen(doc, "keydown", cancel, true),
+      listen(doc, "focusin", onFocus, true),
+    ];
+    this.cancelMaintenance = cancel;
 
     const focusCurrentComposer = () => {
       if (!this.host.isConnected) {
-        this.timer = undefined;
+        cancel();
         return;
       }
-      const pane = [...this.host.querySelectorAll<ChatPaneElement>("openclaw-chat-pane")].find(
+      // Route replacement remounts pane bridges; resolve their current composer for this handoff.
+      const pane = chatPanesWithin(this.host).find(
         (candidate) =>
           candidate.active &&
           candidate.sessionKey !== undefined &&
           areUiSessionKeysEquivalent(candidate.sessionKey, sessionKey),
       );
-      const composer = pane?.querySelector<HTMLTextAreaElement>(COMPOSER_SELECTOR);
-      const activeElement = document.activeElement;
+      const composer = pane?.composerElement;
+      const activeElement = doc.activeElement;
       const focusStillOwned =
         activeElement === ownedComposer ||
-        activeElement === document.body ||
+        activeElement === doc.body ||
         (activeElement instanceof HTMLElement && !activeElement.isConnected);
 
       if (composer && (!ownedComposer || focusStillOwned)) {
-        composer.focus({ preventScroll: true });
         ownedComposer = composer;
+        composer.focus({ preventScroll: true });
       } else if (ownedComposer && !focusStillOwned) {
-        this.timer = undefined;
+        cancel();
         return;
       }
 
       if (Date.now() < deadline) {
-        this.timer = window.setTimeout(focusCurrentComposer, RETRY_MS);
+        timer = window.setTimeout(focusCurrentComposer, RETRY_MS);
       } else {
-        this.timer = undefined;
+        cancel();
       }
     };
 

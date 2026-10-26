@@ -1,14 +1,23 @@
 /** Tests CLI runner integration with context-engine lifecycle hooks. */
-import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { resolveSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
 import type { ContextEngine } from "../context-engine/types.js";
 import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
-import { prepareSystemAgentRunAdmission, type AdmittedRunContext } from "./admitted-run-context.js";
+import { expectNoCalls } from "../test-utils/mock-call-assertions.js";
+import {
+  createAdmittedRunOperatorAuthority,
+  prepareSystemAgentRunAdmission,
+  type AdmittedRunContext,
+} from "./admitted-run-context.js";
+import { buildPreparedCliRunContext } from "./cli-runner.test-helpers.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
-import { waitForDeferredTurnMaintenanceForSession } from "./embedded-agent-runner/context-engine-maintenance.js";
+import {
+  createContextEngine as createTestContextEngine,
+  textMessage,
+} from "./harness/context-engine-lifecycle.test-support.js";
+import { waitForSessionMaintenance } from "./session-maintenance/coordinator.js";
 
 const { executeMock, historyMock, hookHistoryMock, hookRunnerMock, beforeReplyMock, prepareMock } =
   vi.hoisted(() => ({
@@ -48,25 +57,11 @@ vi.mock("../plugins/before-agent-reply.js", async (importOriginal) => ({
   runBeforeAgentReplyForTurn: beforeReplyMock,
 }));
 
-function textMessage(role: "user" | "assistant", text: string, timestamp: number): AgentMessage {
-  return {
-    role,
-    content: [{ type: "text", text }],
-    timestamp,
-  } as AgentMessage;
-}
-
 function createContextEngine(overrides: Partial<ContextEngine> = {}): ContextEngine {
-  return {
+  return createTestContextEngine({
     info: { id: "test-context-engine", name: "Test context engine" },
-    ingest: vi.fn(async () => ({ ingested: true })),
-    assemble: vi.fn(async (params) => ({
-      messages: params.messages,
-      estimatedTokens: 0,
-    })),
-    compact: vi.fn(async () => ({ ok: true, compacted: false })),
     ...overrides,
-  };
+  });
 }
 
 function createLifecycle() {
@@ -117,52 +112,30 @@ function buildPreparedContext(contextEngine: ContextEngine): PreparedCliRunConte
     sessionMode: "existing" as const,
     serialize: true,
   };
-
-  return {
-    params: {
-      admittedRunContext: testAdmittedRunContext,
-      sessionId: "openclaw-session-1",
-      sessionKey: "agent:main:main",
-      agentId: "main",
-      sessionFile: "session.jsonl",
-      sessionTarget,
-      workspaceDir: "/tmp/openclaw-cli-context-engine-test",
-      prompt: "visible ask",
-      transcriptPrompt: "transcript visible ask",
-      provider: "claude-cli",
-      model: "sonnet-4.6",
-      thinkLevel: "low",
-      timeoutMs: 1_000,
-      runId: "run-1",
-    },
-    started: Date.now(),
-    startedMonotonicMs: performance.now(),
+  const context = buildPreparedCliRunContext({
+    sessionTarget,
     workspaceDir: "/tmp/openclaw-cli-context-engine-test",
-    backendResolved: {
-      id: "claude-cli",
-      config: backend,
-      bundleMcp: false,
-      pluginId: "anthropic",
+    prompt: "visible ask",
+    model: "sonnet-4.6",
+    thinkLevel: "low",
+    runId: "run-1",
+    backend,
+  });
+  return {
+    ...context,
+    params: {
+      ...context.params,
+      admittedRunContext: testAdmittedRunContext,
+      sessionFile: "session.jsonl",
+      transcriptPrompt: "transcript visible ask",
     },
+    backendResolved: { id: "claude-cli", config: backend, bundleMcp: false, pluginId: "anthropic" },
+    preparedBackend: { backend, env: {} },
     executionTarget: { kind: "process" },
-    preparedBackend: {
-      backend,
-      env: {},
-    },
-    reusableCliSession: {
-      mode: "reuse",
-      sessionId: "existing-external-cli-session",
-    },
+    reusableCliSession: { mode: "reuse", sessionId: "existing-external-cli-session" },
     hadSessionFile: true,
-    contextEngineConfig: {},
     contextEngine,
     contextEngineTurnPrompt: "transcript visible ask",
-    modelId: "sonnet-4.6",
-    normalizedModel: "sonnet-4.6",
-    systemPrompt: "You are a helpful assistant.",
-    systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
-    claudeSkillsPluginArgs: [],
-    authEpochVersion: 2,
   };
 }
 
@@ -206,18 +179,45 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     const context = buildPreparedContext(createContextEngine(hooks));
     context.params.isolatedCompletion = true;
     context.params.outputTextPolicy = "strict-visible";
+    context.params.terminalReplyExpectation = "result-required";
     executeMock.mockResolvedValueOnce({ text: "" });
     prepareMock.mockResolvedValue(context);
 
     expect((await runCliAgent(context.params)).payloads).toBeUndefined();
     expect(executeMock).toHaveBeenCalledWith(context, undefined, undefined);
-    expect(beforeReplyMock).not.toHaveBeenCalled();
-    expect(hookRunnerMock).not.toHaveBeenCalled();
-    expect(hookHistoryMock).not.toHaveBeenCalled();
-    expect(historyMock).not.toHaveBeenCalled();
-    for (const hook of Object.values(hooks)) {
-      expect(hook).not.toHaveBeenCalled();
-    }
+    expectNoCalls(
+      beforeReplyMock,
+      hookRunnerMock,
+      hookHistoryMock,
+      historyMock,
+      ...Object.values(hooks),
+    );
+  });
+
+  it("publishes the generated response before backend cleanup can throw", async () => {
+    const context = buildPreparedContext(createContextEngine());
+    context.preparedBackend.cleanup = async () => {
+      throw new Error("backend cleanup failed");
+    };
+    const publishResultContent = vi.fn();
+    const diagnosticLifecycle = {
+      setPhase: vi.fn(),
+      setExecutionContext: vi.fn(),
+      publishCapturedContent: vi.fn(),
+      publishResultContent,
+    };
+
+    await expect(runPreparedCliAgent(context, diagnosticLifecycle)).rejects.toThrow(
+      "backend cleanup failed",
+    );
+    expect(publishResultContent).toHaveBeenCalledOnce();
+    expect(publishResultContent.mock.calls[0]?.[0]).toMatchObject({
+      meta: expect.objectContaining({
+        finalAssistantRawText: " final answer ",
+        finalAssistantVisibleText: " final answer ",
+        terminalReply: { disposition: "visible", text: "final answer" },
+      }),
+    });
   });
 
   it("runs a native control command on the existing session without turn side effects", async () => {
@@ -225,6 +225,7 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     const context = buildPreparedContext(createContextEngine({ bootstrap, afterTurn }));
     context.params.controlOperation = "compact";
     context.params.allowEmptyAssistantReplyAsSilent = true;
+    context.params.terminalReplyExpectation = "result-required";
     executeMock.mockResolvedValueOnce({
       text: "",
       rawText: "",
@@ -234,14 +235,27 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     prepareMock.mockResolvedValue(context);
     const result = await runCliAgent(context.params);
 
-    expect(beforeReplyMock).not.toHaveBeenCalled();
     expect(result.meta.agentMeta?.sessionId).toBe("existing-external-cli-session");
+    expect(result.meta.terminalReply).toEqual({ disposition: "empty" });
     expect(executeMock).toHaveBeenCalledWith(context, "existing-external-cli-session", undefined);
-    expect(hookRunnerMock).not.toHaveBeenCalled();
-    expect(hookHistoryMock).not.toHaveBeenCalled();
-    expect(historyMock).not.toHaveBeenCalled();
-    expect(bootstrap).not.toHaveBeenCalled();
-    expect(afterTurn).not.toHaveBeenCalled();
+    expectNoCalls(
+      beforeReplyMock,
+      hookRunnerMock,
+      hookHistoryMock,
+      historyMock,
+      bootstrap,
+      afterTurn,
+    );
+  });
+
+  it.each(["", "NO_REPLY"])("rejects a result-required ordinary completion %j", async (text) => {
+    const context = buildPreparedContext(createContextEngine());
+    context.params.terminalReplyExpectation = "result-required";
+    executeMock.mockResolvedValue({ text, rawText: text });
+
+    await expect(runPreparedCliAgent(context)).rejects.toMatchObject({
+      reason: "empty_response",
+    });
   });
 
   it("finalizes full post-bootstrap history with transcript turn text", async () => {
@@ -260,56 +274,46 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     context.contextEngineTurnPrompt = "original user ask";
     const result = await runPreparedCliAgent(context);
 
-    expect(result.meta.agentMeta?.sessionId).toBe("external-cli-session-1");
     expect(result.meta.agentMeta).toMatchObject({
+      sessionId: "external-cli-session-1",
       usage: { input: 11, output: 7, total: 18 },
       lastCallUsage: { input: 11, output: 7, total: 18 },
       diagnosticUsage: { input: 21, output: 9, total: 30 },
     });
     expect(historyMock).toHaveBeenCalledExactlyOnceWith(context.params);
     expect(hookHistoryMock).not.toHaveBeenCalled();
-    expect(bootstrap).toHaveBeenCalledTimes(1);
-    const bootstrapParams = bootstrap.mock.calls[0]?.[0];
-    expect.soft(bootstrapParams).toMatchObject({
-      sessionId: "openclaw-session-1",
-      sessionKey: "agent:main:main",
+    const session = {
+      sessionId: sessionTarget.sessionId,
+      sessionKey: sessionTarget.sessionKey,
       sessionTarget,
       sessionFile: "session.jsonl",
-    });
+    };
+    expect(bootstrap).toHaveBeenCalledExactlyOnceWith(expect.objectContaining(session));
     expect(afterTurn).toHaveBeenCalledTimes(1);
     const afterTurnParams = afterTurn.mock.calls[0]?.[0];
     expect.soft(afterTurnParams).toMatchObject({
-      sessionId: "openclaw-session-1",
-      sessionKey: "agent:main:main",
-      sessionTarget,
-      sessionFile: "session.jsonl",
+      ...session,
       prePromptMessageCount: 101,
-      isHeartbeat: false,
       tokenBudget: undefined,
       runtimeContext: undefined,
     });
-    expect(afterTurnParams?.messages).toHaveLength(103);
-    expect(afterTurnParams?.messages.slice(0, 101)).toEqual(history);
-    expect(afterTurnParams?.messages[101]).toMatchObject({
-      role: "user",
-      content: "original user ask",
-    });
-    expect(afterTurnParams?.messages[102]).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: "final answer" }],
-      provider: "claude-cli",
-      model: "sonnet-4.6",
-      usage: { input: 11, output: 7, total: 18 },
-    });
+    expect(afterTurnParams?.messages).toEqual([
+      ...history,
+      expect.objectContaining({ role: "user", content: "original user ask" }),
+      expect.objectContaining({
+        role: "assistant",
+        content: [{ type: "text", text: " final answer " }],
+        provider: "claude-cli",
+        model: "sonnet-4.6",
+        usage: { input: 11, output: 7, total: 18 },
+      }),
+    ]);
     expect(maintain).toHaveBeenCalledTimes(2);
     expect.soft(maintain.mock.calls[0]?.[0]).toMatchObject({
       sessionTarget,
     });
     expect.soft(maintain.mock.calls[1]?.[0]).toMatchObject({
-      sessionId: "openclaw-session-1",
-      sessionKey: "agent:main:main",
-      sessionTarget,
-      sessionFile: "session.jsonl",
+      ...session,
       runtimeContext: {
         rewriteTranscriptEntries: expect.any(Function),
         llm: { complete: expect.any(Function) },
@@ -324,6 +328,7 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     const finishBootstrap = createDeferred();
     const lifecycle: string[] = [];
     let requireScopedSource = false;
+    const expectedReadFence: { current: typeof admission | undefined } = { current: undefined };
     const source = composeSessionSourceAssertion([
       Object.assign(
         () => {
@@ -333,7 +338,9 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
         },
         {
           prepareSessionSourceScope: async () => {
-            expect(resolveSessionTranscriptReadFence(sessionTarget)).toBe(admission);
+            expect(resolveSessionTranscriptReadFence(sessionTarget)).toBe(
+              expectedReadFence.current,
+            );
             lifecycle.push("open");
             let active = true;
             return {
@@ -375,6 +382,8 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     );
     context.params.runId = "cli-scoped-source";
     context.params.admittedRunContext = await prepared.admit("embedded");
+    expectedReadFence.current = admission;
+    lifecycle.length = 0;
     context.params.userTurnTranscriptRecorder = recorder;
     const run = runPreparedCliAgent(context);
     try {
@@ -405,10 +414,8 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
 
     await runCliAgent(context.params);
 
-    expect(onContextEngineTurnCandidate).not.toHaveBeenCalled();
-    expect(afterTurn).not.toHaveBeenCalled();
+    expectNoCalls(onContextEngineTurnCandidate, afterTurn, dispose);
     expect(maintain).toHaveBeenCalledTimes(1);
-    expect(dispose).not.toHaveBeenCalled();
   });
 
   it.each(["messaging", "room_event"] as const)(
@@ -424,6 +431,7 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
           text: "",
           didSendViaMessagingTool: true,
           sourceReplyDelivered: true,
+          messagingToolSourceReplyPayloads: [{ text: "Delivered answer.", sourceReplyFinal: true }],
         });
       } else {
         context.params.currentInboundEventKind = "room_event";
@@ -442,25 +450,21 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
 
   it("does not synthesize a context-engine user turn for empty transcript prompts", async () => {
     const { afterTurn, dispose } = createLifecycle();
-    const contextEngine = createContextEngine({ afterTurn, dispose });
-    const context = buildPreparedContext(contextEngine);
+    const context = buildPreparedContext(createContextEngine({ afterTurn, dispose }));
     context.params.transcriptPrompt = "";
     context.contextEngineTurnPrompt = "";
     await runPreparedCliAgent(context);
 
     const afterTurnParams = afterTurn.mock.calls[0]?.[0];
-    expect(afterTurnParams?.messages).toHaveLength(3);
     expect(afterTurnParams?.prePromptMessageCount).toBe(2);
-    expect(afterTurnParams?.messages.slice(0, 2)).toEqual([
+    expect(afterTurnParams?.messages).toEqual([
       textMessage("user", "old ask", 1),
       textMessage("assistant", "old answer", 2),
+      expect.objectContaining({
+        role: "assistant",
+        content: [{ type: "text", text: " final answer " }],
+      }),
     ]);
-    const turnMessages = afterTurnParams?.messages.slice(afterTurnParams.prePromptMessageCount);
-    expect(turnMessages).toHaveLength(1);
-    expect(turnMessages?.[0]).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: "final answer" }],
-    });
     expect(dispose).not.toHaveBeenCalled();
   });
 
@@ -480,7 +484,7 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     await runPreparedCliAgent(context);
 
     expect(dispose).not.toHaveBeenCalled();
-    await waitForDeferredTurnMaintenanceForSession(context.params.sessionKey);
+    await waitForSessionMaintenance(context.params.sessionKey);
     expect(maintain).toHaveBeenCalledTimes(2);
     expect(dispose).not.toHaveBeenCalled();
   });
@@ -508,9 +512,48 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     );
 
     expect(bootstrap).toHaveBeenCalledTimes(1);
-    expect(afterTurn).not.toHaveBeenCalled();
-    expect(ingestBatch).not.toHaveBeenCalled();
+    expectNoCalls(afterTurn, ingestBatch, dispose);
     expect(maintain).toHaveBeenCalledTimes(1);
-    expect(dispose).not.toHaveBeenCalled();
+  });
+
+  it("keeps a committed CLI reply successful after operator model authority revokes post-commit", async () => {
+    let revoked = false;
+    const authority = createAdmittedRunOperatorAuthority({
+      profileId: "operator-profile",
+      scopes: [],
+      assertCurrent: () => {
+        if (revoked) {
+          throw new Error("operator model execution authority is no longer active");
+        }
+      },
+    });
+    const admission = prepareSystemAgentRunAdmission(
+      {},
+      "run-auth-revoked",
+      "main",
+      "cli-context-engine-test",
+      undefined,
+      authority,
+    );
+    try {
+      const admitted = await admission.admit("embedded");
+      const context = buildPreparedContext(createContextEngine());
+      context.params.admittedRunContext = admitted;
+      // Revoke after the final reply commits: cleanup runs inside settlement
+      // between the committed complete() and the return, so the wrapper must
+      // not re-assert authority afterwards; the committed turn stays successful.
+      context.preparedBackend.cleanup = async () => {
+        revoked = true;
+      };
+      prepareMock.mockResolvedValue(context);
+
+      const result = await runCliAgent(context.params);
+
+      expect(revoked).toBe(true);
+      expect(result.meta.error).toBeUndefined();
+      expect(result.payloads?.[0]).toMatchObject({ text: expect.stringContaining("final answer") });
+    } finally {
+      admission.close();
+    }
   });
 });

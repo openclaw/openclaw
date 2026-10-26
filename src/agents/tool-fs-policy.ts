@@ -1,6 +1,4 @@
 /**
- * Tool filesystem policy resolver.
- *
  * Combines global and agent fs/tool policy into workspace-only and root-expansion decisions.
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";

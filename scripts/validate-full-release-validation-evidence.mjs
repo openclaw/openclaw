@@ -69,10 +69,9 @@ function displayValue(value) {
  * @typedef {object} StrictReleaseEvidence
  * @property {unknown} [schema]
  * @property {unknown} [valid]
- * @property {{ runId?: unknown, targetSha?: unknown, runAttempt?: unknown, manifest?: unknown, workflowRefProof?: unknown }} [current]
- * @property {{ runId?: unknown, targetSha?: unknown, manifest?: unknown }} [root]
+ * @property {{ runId?: unknown, targetSha?: unknown, runAttempt?: unknown, manifest?: unknown, workflowRefProof?: unknown, conclusion?: unknown }} [current]
+ * @property {{ runId?: unknown, targetSha?: unknown, manifest?: unknown, conclusion?: unknown }} [root]
  * @property {{ changedPaths?: unknown, evidenceSha?: unknown, policy?: unknown, rootRunId?: unknown, selectedRunId?: unknown } | null} [evidenceReuse]
- * @property {{ allRequiredSucceeded?: unknown }} [conclusions]
  */
 /**
  * @typedef {object} FullReleaseValidationManifest
@@ -349,8 +348,12 @@ export function validateFullReleaseValidationEvidence({
         publicationSourceJson(sourceAdmission.publicationSelection) !==
           publicationSourceJson(selected))
     ) {
+      const windowsRemediation =
+        selected?.windowsNodeTag && !sourceAdmission.publicationSelection?.windowsNodeTag
+          ? " Remove --windows-node-tag when reusing this FRV and attach Windows afterward via windows-node-release.yml, or obtain new FRV evidence admitted with Windows selected."
+          : "";
       throw new Error(
-        "New-contract nonpublish or differently selected evidence cannot prepare publication.",
+        `New-contract nonpublish or differently selected evidence cannot prepare publication.${windowsRemediation}`,
       );
     }
     if (expectedCoreNpmPublication) {
@@ -395,7 +398,7 @@ export function validateFullReleaseValidationEvidence({
       authenticated.current?.runId !== String(expectedRunId) ||
       authenticated.current?.targetSha !== expectedTargetSha ||
       authenticated.current?.runAttempt !== run.runAttempt ||
-      authenticated.conclusions?.allRequiredSucceeded !== true ||
+      authenticated.current?.conclusion !== "success" ||
       publicationObservationJson(authenticated.current?.manifest) !==
         publicationObservationJson(manifest)
     ) {
@@ -412,7 +415,7 @@ export function validateFullReleaseValidationEvidence({
       authenticated.current?.runAttempt !== run.runAttempt ||
       authenticated.current?.targetSha !== expectedTargetSha ||
       authenticated.current?.workflowRefProof !== "candidate-owned-admission-v1" ||
-      authenticated.conclusions?.allRequiredSucceeded !== true ||
+      authenticated.current?.conclusion !== "success" ||
       publicationObservationJson(authenticated.current?.manifest) !==
         publicationObservationJson(manifest)
     ) {
@@ -523,7 +526,7 @@ export function validateFullReleaseValidationEvidence({
       scalarString(reusedEvidence.evidenceReuse?.rootRunId) !== scalarString(reuse.runId) ||
       scalarString(reusedEvidence.evidenceReuse?.selectedRunId) !==
         scalarString(reuse.selectedRunId) ||
-      reusedEvidence.conclusions?.allRequiredSucceeded !== true
+      reusedEvidence.current?.conclusion !== "success"
     ) {
       throw new Error("SHA-pinned validation evidence reuse failed strict chain validation.");
     }
@@ -566,7 +569,7 @@ export async function authenticateFullReleaseValidationEvidence(options, client)
     },
     { ...evidenceClient, getWorkflowSource },
   );
-  if (!evidence.conclusions.allRequiredSucceeded) {
+  if (evidence.current.conclusion !== "success") {
     throw new Error("Required release validation evidence did not pass.");
   }
   if (evidence.current.runAttempt !== run.runAttempt) {
@@ -632,7 +635,7 @@ export async function authenticateCandidateOwnedArtifact({
     evidence.current.targetSha !== candidateSha ||
     evidence.current.runAttempt !== Number(manifest.runAttempt) ||
     evidence.current.workflowRefProof !== "candidate-owned-admission-v1" ||
-    !evidence.conclusions.allRequiredSucceeded ||
+    evidence.current.conclusion !== "success" ||
     !isDeepStrictEqual(evidence.current.manifest, sortJsonValueKeys(manifest))
   ) {
     throw new Error("Publication artifact is not bound to authenticated candidate qualification");

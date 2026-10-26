@@ -16,8 +16,8 @@ import {
 } from "./image-generation-provider.test-support.js";
 
 const {
-  ensureAuthProfileStoreMock,
-  isProviderApiKeyConfiguredMock,
+  ensureAuthProfileStoreAsyncMock,
+  isProviderApiKeyConfiguredAsyncMock,
   listProfilesForProviderMock,
   resolveApiKeyForProviderMock,
   postJsonRequestMock,
@@ -27,10 +27,13 @@ const {
   sanitizeConfiguredModelProviderRequestMock,
   logInfoMock,
 } = vi.hoisted(() => ({
-  ensureAuthProfileStoreMock: vi.fn(() => ({ version: 1, profiles: {} })),
-  isProviderApiKeyConfiguredMock: vi.fn<
-    (params: { provider: string; agentDir?: string }) => boolean
-  >(() => false),
+  ensureAuthProfileStoreAsyncMock: vi.fn<() => Promise<AuthProfileStore>>(async () => ({
+    version: 1,
+    profiles: {},
+  })),
+  isProviderApiKeyConfiguredAsyncMock: vi.fn<
+    (params: { provider: string; agentDir?: string }) => Promise<boolean>
+  >(async () => false),
   listProfilesForProviderMock: vi.fn(
     (store: { profiles?: Record<string, { provider?: string }> }, provider: string) =>
       Object.entries(store.profiles ?? {})
@@ -47,26 +50,16 @@ const {
   postJsonRequestMock: vi.fn(),
   postMultipartRequestMock: vi.fn(),
   assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
-  resolveProviderHttpRequestConfigMock: vi.fn((params) => {
-    const headers = new Headers(params.defaultHeaders);
-    new Headers(params.headers).forEach((value, key) => headers.set(key, value));
-    return {
-      baseUrl: params.baseUrl ?? params.defaultBaseUrl,
-      allowPrivateNetwork: Boolean(
-        params.allowPrivateNetwork ?? params.request?.allowPrivateNetwork,
-      ),
-      headers,
-      dispatcherPolicy: undefined,
-    };
-  }),
+  resolveProviderHttpRequestConfigMock:
+    vi.fn<typeof import("openclaw/plugin-sdk/provider-http").resolveProviderHttpRequestConfig>(),
   sanitizeConfiguredModelProviderRequestMock: vi.fn((request) => request),
   logInfoMock: vi.fn(),
 }));
 
 vi.mock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth")>()),
-  ensureAuthProfileStore: ensureAuthProfileStoreMock,
-  isProviderApiKeyConfigured: isProviderApiKeyConfiguredMock,
+  ensureAuthProfileStoreAsync: ensureAuthProfileStoreAsyncMock,
+  isProviderApiKeyConfiguredAsync: isProviderApiKeyConfiguredAsyncMock,
   listProfilesForProvider: listProfilesForProviderMock,
 }));
 
@@ -74,16 +67,20 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
   resolveApiKeyForProvider: resolveApiKeyForProviderMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/provider-http", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-http")>()),
-  assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
-  postJsonRequest: postJsonRequestMock,
-  postMultipartRequest: postMultipartRequestMock,
-  // Pass-through: bounded-reader enforcement is tested via bounded-reader unit tests.
-  readProviderJsonResponse: async (response: { json(): Promise<unknown> }) => response.json(),
-  resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
-  sanitizeConfiguredModelProviderRequest: sanitizeConfiguredModelProviderRequestMock,
-}));
+vi.mock("openclaw/plugin-sdk/provider-http", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/provider-http")>();
+  resolveProviderHttpRequestConfigMock.mockImplementation(actual.resolveProviderHttpRequestConfig);
+  return {
+    ...actual,
+    assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
+    postJsonRequest: postJsonRequestMock,
+    postMultipartRequest: postMultipartRequestMock,
+    // Pass-through: bounded-reader enforcement is tested via bounded-reader unit tests.
+    readProviderJsonResponse: async (response: { json(): Promise<unknown> }) => response.json(),
+    resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
+    sanitizeConfiguredModelProviderRequest: sanitizeConfiguredModelProviderRequestMock,
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/logging-core", () => ({
   createSubsystemLogger: vi.fn(() => ({
@@ -217,9 +214,9 @@ function authResolutionCall(callIndex = 0): AuthResolutionCall {
 
 describe("openai image generation provider", () => {
   const provider = buildOpenAIImageGenerationProvider({
-    ensureAuthProfileStore: ensureAuthProfileStoreMock,
+    ensureAuthProfileStoreAsync: ensureAuthProfileStoreAsyncMock,
     listProfilesForProvider: listProfilesForProviderMock,
-    isProviderApiKeyConfigured: isProviderApiKeyConfiguredMock,
+    isProviderApiKeyConfiguredAsync: isProviderApiKeyConfiguredAsyncMock,
   });
   const emptyConfig: OpenClawConfig = {};
   type OpenAIImageRequest = Parameters<typeof provider.generateImage>[0];
@@ -236,10 +233,10 @@ describe("openai image generation provider", () => {
     });
 
   afterEach(() => {
-    ensureAuthProfileStoreMock.mockReset();
-    ensureAuthProfileStoreMock.mockReturnValue({ version: 1, profiles: {} });
-    isProviderApiKeyConfiguredMock.mockReset();
-    isProviderApiKeyConfiguredMock.mockReturnValue(false);
+    ensureAuthProfileStoreAsyncMock.mockReset();
+    ensureAuthProfileStoreAsyncMock.mockResolvedValue({ version: 1, profiles: {} });
+    isProviderApiKeyConfiguredAsyncMock.mockReset();
+    isProviderApiKeyConfiguredAsyncMock.mockResolvedValue(false);
     listProfilesForProviderMock.mockClear();
     resolveApiKeyForProviderMock.mockReset();
     resolveApiKeyForProviderMock.mockResolvedValue({ apiKey: "openai-key" });

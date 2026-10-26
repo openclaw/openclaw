@@ -11,13 +11,7 @@ export async function readLocalWorkspaceProjection(id: string, env?: NodeJS.Proc
     { type: "localWorkspace.get", input: { id } },
     { current: true, live: true },
   );
-  if (!reply) {
-    return undefined;
-  }
-  if (!reply.ok || reply.type !== "localWorkspace.get") {
-    throw new Error("Unexpected local workspace result");
-  }
-  return reply.row;
+  return reply?.row;
 }
 
 export function observeLocalWorkspaceStoreSql() {
@@ -67,6 +61,7 @@ export function localWorkspaceProjectionFixture(
     source_paths_json: "[]",
     baseline_json: null,
     baseline_ref: null,
+    checkpoint_json: null,
     pending_ref: null,
     pending_target: null,
     journal_json: null,

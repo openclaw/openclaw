@@ -25,4 +25,4 @@ docker_e2e_build_or_reuse "$IMAGE_NAME" anthropic-cache-live
 docker_e2e_run_with_harness \
   -e ANTHROPIC_API_KEY \
   "$IMAGE_NAME" \
-  node scripts/e2e/anthropic-cache-live.mts "$@"
+  node scripts/e2e/anthropic-cache-live.mts --provider anthropic "$@"

@@ -5,26 +5,15 @@ import {
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { SessionWorkStartInvalidatedError } from "./lifecycle.js";
 import { readSessionEntryInstanceId } from "./session-accessor.sqlite-entry-identity.js";
+import {
+  SessionReactionLimitError,
+  SessionReactionMessageMissingError,
+} from "./session-reaction-errors.js";
 import { reactionDb, reactionRows, summarizeReactions } from "./session-reaction-store.read.js";
 import type {
   SessionReactionWrite,
   SetSessionReactionParams,
 } from "./session-reaction-store.types.js";
-
-export class SessionReactionLimitError extends Error {
-  constructor() {
-    super("reaction limit reached");
-    this.name = "SessionReactionLimitError";
-  }
-}
-
-/** The message was deleted between the caller's asynchronous read and this transaction. */
-export class SessionReactionMessageMissingError extends Error {
-  constructor() {
-    super("unknown message");
-    this.name = "SessionReactionMessageMissingError";
-  }
-}
 
 export function setSessionReactionInDatabase(
   database: OpenClawAgentDatabase,
@@ -64,60 +53,72 @@ export function setSessionReactionInDatabase(
         .where("emoji", "=", params.emoji)
         .where("identity_id", "=", params.identityId),
     );
+    const index = rows.findIndex(
+      (row) => row.emoji === params.emoji && row.identity_id === params.identityId,
+    );
+    rows.splice(index, 1);
   } else {
-    const count =
-      executeSqliteQueryTakeFirstSync(
-        database.db,
-        db
-          .selectFrom("session_reactions")
-          .select((eb) => eb.fn.countAll<number>().as("count"))
-          .where("session_key", "=", sessionKey)
-          .where("session_id", "=", params.expectedSessionId),
-      )?.count ?? 0;
+    const quota = executeSqliteQueryTakeFirstSync(
+      database.db,
+      db
+        .selectFrom("session_reactions")
+        .select((eb) => [
+          eb.fn.countAll<number>().as("count"),
+          eb
+            .exists(
+              db
+                .selectFrom("transcript_event_identities")
+                .select("event_id")
+                .where("session_id", "=", params.expectedSessionId)
+                .where("event_id", "=", params.messageId),
+            )
+            .as("message_exists"),
+        ])
+        .where("session_key", "=", sessionKey)
+        .where("session_id", "=", params.expectedSessionId),
+    );
     if (
-      count >= 5_000 ||
+      (quota?.count ?? 0) >= 5_000 ||
       rows.filter((row) => row.identity_id === params.identityId).length >= 20
     ) {
       throw new SessionReactionLimitError();
     }
     // The caller looked the message up asynchronously; a transcript rewrite can
-    // have deleted it (and pruned its reactions) since, so re-check inside the
-    // transaction rather than insert a reaction for a message that is gone.
-    const identity = executeSqliteQueryTakeFirstSync(
-      database.db,
-      db
-        .selectFrom("transcript_event_identities")
-        .select("event_id")
-        .where("session_id", "=", params.expectedSessionId)
-        .where("event_id", "=", params.messageId),
-    );
-    if (!identity) {
+    // have deleted it since. The quota read carries its current existence;
+    // quota rejection still takes precedence over a missing message.
+    if (!quota?.message_exists) {
       throw new SessionReactionMessageMissingError();
     }
-    executeSqliteQuerySync(
+    const inserted = executeSqliteQueryTakeFirstSync(
       database.db,
-      db.insertInto("session_reactions").values({
-        session_key: sessionKey,
-        session_id: params.expectedSessionId,
-        message_id: params.messageId,
-        emoji: params.emoji,
-        identity_id: params.identityId,
-        identity_label: params.identityLabel ?? null,
-        created_at: Date.now(),
-      }),
+      db
+        .insertInto("session_reactions")
+        .values({
+          session_key: sessionKey,
+          session_id: params.expectedSessionId,
+          message_id: params.messageId,
+          emoji: params.emoji,
+          identity_id: params.identityId,
+          identity_label: params.identityLabel ?? null,
+          created_at: Date.now(),
+        })
+        .returningAll(),
+    );
+    if (!inserted) {
+      throw new Error("Reaction insert did not return its stored row");
+    }
+    rows.push(inserted);
+    // Match SQLite BINARY text ordering, including supplementary Unicode characters.
+    rows.sort(
+      (left, right) =>
+        left.created_at - right.created_at ||
+        Buffer.compare(Buffer.from(left.emoji), Buffer.from(right.emoji)) ||
+        Buffer.compare(Buffer.from(left.identity_id), Buffer.from(right.identity_id)),
     );
   }
-  const remainingRows = executeSqliteQuerySync(
-    database.db,
-    reactionRows(database, sessionKey, params.expectedSessionId).where(
-      "message_id",
-      "=",
-      params.messageId,
-    ),
-  ).rows;
   return {
-    reactions: summarizeReactions(remainingRows),
-    newestRemainingEmoji: remainingRows.at(-1)?.emoji,
+    reactions: summarizeReactions(rows),
+    newestRemainingEmoji: rows.at(-1)?.emoji,
     changed: true,
   };
 }

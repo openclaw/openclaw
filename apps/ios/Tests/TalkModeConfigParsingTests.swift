@@ -7,8 +7,6 @@ import Testing
 
 @MainActor
 struct TalkModeManagerTests {
-    private struct CloseError: Error {}
-
     @Test func `recording sessions preserve system keyboard feedback`() throws {
         let session = AVAudioSession.sharedInstance()
         let previousSetting = session.allowHapticsAndSystemSoundsDuringRecording
@@ -153,19 +151,6 @@ struct TalkModeManagerTests {
         #expect(closeRequestCount == 0)
         manager._test_clearRealtimeSession()
         await gateway.disconnect()
-    }
-
-    @Test func `retries realtime voice session close three times`() async throws {
-        var attempts = 0
-
-        try await TalkModeManager._test_retryRealtimeVoiceSessionClose {
-            attempts += 1
-            if attempts < 3 {
-                throw CloseError()
-            }
-        }
-
-        #expect(attempts == 3)
     }
 
     @Test func `encodes transcript entry id as a decimal string`() throws {
@@ -381,7 +366,7 @@ struct TalkModeManagerTests {
 
                 #expect(manager.gatewayTalkConfigLoaded)
                 #expect(manager._test_runtimeRoute() == .realtimeWebRTC)
-                await manager.prefetchRealtimeSessionIfReady(reason: "config-test")
+                await manager.prefetchRealtimeSessionIfReady()
                 let frame = try #require(await requests.next())
                 let request = try #require(JSONSerialization.jsonObject(with: frame) as? [String: Any])
                 let params = try #require(request["params"] as? [String: Any])
@@ -490,6 +475,20 @@ struct TalkModeManagerTests {
         manager._test_handleRealtimeRelayStatus("Reconnecting")
         #expect(manager.phase == .connecting)
         #expect(manager.watchPresentation == .phase)
+    }
+
+    @Test func `realtime input loss notices keep the call listening`() {
+        let manager = TalkModeManager(allowSimulatorCapture: true)
+
+        manager._test_handleRealtimeRelayStatus("Realtime audio input fell behind; repeat the last part")
+        #expect(manager.phase == .listening)
+        #expect(manager.isListening)
+        #expect(manager.watchPresentation == .localized("Realtime audio input fell behind; repeat the last part"))
+
+        manager._test_handleRealtimeRelayStatus("Microphone input recovered; repeat the last part")
+        #expect(manager.phase == .listening)
+        #expect(manager.isListening)
+        #expect(manager.watchPresentation == .localized("Microphone input recovered; repeat the last part"))
     }
 
     @Test func `WebRTC progress remains semantic on the watch`() {
@@ -632,20 +631,6 @@ struct TalkModeManagerTests {
             captureIsContinuous: false))
     }
 
-    @Test @MainActor func `speech restart clears only the presentation revision it owns`() {
-        let manager = TalkModeManager(allowSimulatorCapture: true)
-        manager._test_markSpeechErrorStatusPendingRestart("Spracherkennungsfehler")
-        manager._test_restoreListeningStatusAfterSpeechErrorRestart()
-        #expect(manager.statusText == String(localized: "Listening"))
-        #expect(manager.phase == .listening)
-
-        manager._test_markSpeechErrorStatusPendingRestart("Spracherkennungsfehler")
-        manager.statusText = "Neue Statusmeldung"
-        manager._test_restoreListeningStatusAfterSpeechErrorRestart()
-        #expect(manager.statusText == "Neue Statusmeldung")
-        #expect(manager.phase == .idle)
-    }
-
     @Test func `keeps provider web socket realtime transport on gateway relay`() {
         let parsed = Self.parseRealtime(
             provider: "google",
@@ -736,6 +721,8 @@ struct TalkModeManagerTests {
             #expect(!TalkAudioRoute.shouldForceSpeaker(
                 preferenceEnabled: true,
                 outputPortTypes: [output]))
+            // A mixed route (for example speaker plus AirPlay) keeps headset-style separate engines.
+            #expect(!TalkAudioRoute.isBuiltInOutput([.builtInSpeaker, output]))
         }
     }
 

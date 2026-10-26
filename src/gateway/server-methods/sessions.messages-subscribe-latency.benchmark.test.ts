@@ -5,31 +5,27 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { createOperatorApprovalSessionEventRuntime } from "../operator-approval-session-events.js";
 import * as approvals from "../operator-approval-store.js";
-import { createSessionMessageSubscriberRegistry } from "../server-chat-state.js";
+import { gatewayRequest } from "../request-frame.test-support.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
-import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
 import * as lifetime from "../session-utils-read-lifetime.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
 import { disposeSessionReadContexts } from "./sessions-read-cache.test-support.js";
 import { sessionSubscriptionHandlers } from "./sessions-subscriptions.js";
-import { proveSubscriptionDoesNotWaitForDisplayRows } from "./sessions.messages-subscribe-wait.test-support.js";
+import {
+  prepareSubscriptionFixture,
+  proveSubscriptionDoesNotWaitForDisplayRows,
+} from "./sessions.messages-subscribe-wait.test-support.js";
 
 afterEach(() => vi.restoreAllMocks());
 
-it("subscribes during an active turn among 8,000 sessions without waiting for display facts", async ({
-  signal,
-}) => {
-  await proveSubscriptionDoesNotWaitForDisplayRows(8_000, signal);
-});
+it("subscribes during an active turn among 8,000 sessions", ({ signal }) =>
+  proveSubscriptionDoesNotWaitForDisplayRows(8_000, signal));
 
 it("measures subscription dispatch with a 160k-token transcript", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const cfg = rolePolicyConfig();
-    cfg.gateway!.roles!.definitions.view!.scopes.push("operator.approvals");
-    await state.writeConfig(cfg);
+    const { cfg, client, subscribers, runtime } = await prepareSubscriptionFixture(state, "perf");
     const scope = {
       agentId: "main",
       sessionKey: "agent:main:subscribe-perf",
@@ -40,35 +36,20 @@ it("measures subscription dispatch with a 160k-token transcript", async () => {
       updatedAt: 1,
       visibility: "shared",
     });
-    const subscribers = createSessionMessageSubscriberRegistry();
-    const client = { ...roleClient("view", "perf-reader"), connId: "perf-reader" };
-    client.connect.scopes = ["operator.sessions.read", "operator.approvals"];
-    client.connect.device = {
-      id: "perf-device",
-      publicKey: "key",
-      signature: "signature",
-      signedAt: 1,
-      nonce: "nonce",
-    };
-    const runtime = createOperatorApprovalSessionEventRuntime({
-      clients: [client],
-      sessionMessageSubscribers: subscribers,
-      broadcastToConnIds: () => {},
-    });
     const context = await createHistoryReadContext({
       getRuntimeConfig: () => cfg,
       subscribeSessionMessageEvents: subscribers.subscribe,
       listSessionPendingApprovals: runtime.replay,
     });
-    const phaseMs = { expiry: 0, pending: 0 };
-    const expire = approvals.expireDueOperatorApprovals;
+    const phaseMs = { preparation: 0, pendingAfterExpiry: 0 };
+    const prepare = approvals.prepareOperatorApprovalReplay;
     const pending = approvals.listPendingOperatorApprovals;
-    vi.spyOn(approvals, "expireDueOperatorApprovals").mockImplementation(async (...args) => {
+    vi.spyOn(approvals, "prepareOperatorApprovalReplay").mockImplementation(async (...args) => {
       const start = performance.now();
       try {
-        return await expire(...args);
+        return await prepare(...args);
       } finally {
-        phaseMs.expiry += performance.now() - start;
+        phaseMs.preparation += performance.now() - start;
       }
     });
     vi.spyOn(approvals, "listPendingOperatorApprovals").mockImplementation(async (...args) => {
@@ -76,16 +57,16 @@ it("measures subscription dispatch with a 160k-token transcript", async () => {
       try {
         return await pending(...args);
       } finally {
-        phaseMs.pending += performance.now() - start;
+        phaseMs.pendingAfterExpiry += performance.now() - start;
       }
     });
     const projection = getSessionRowProjection(context)!;
     let readMs = 0;
     let currencyReads = 0;
     const retain = lifetime.retainGatewaySessionEntryReadOnly;
-    vi.spyOn(lifetime, "retainGatewaySessionEntryReadOnly").mockImplementation((...args) => {
+    vi.spyOn(lifetime, "retainGatewaySessionEntryReadOnly").mockImplementation(async (...args) => {
       const start = performance.now();
-      const read = retain(...args);
+      const read = await retain(...args);
       readMs += performance.now() - start;
       const assert = read.isCurrentAtResponse;
       return {
@@ -121,21 +102,16 @@ it("measures subscription dispatch with a 160k-token transcript", async () => {
           const samples: number[] = [];
           readMs = 0;
           currencyReads = 0;
-          phaseMs.expiry = 0;
-          phaseMs.pending = 0;
+          phaseMs.preparation = 0;
+          phaseMs.pendingAfterExpiry = 0;
           for (let index = 0; index < 50; index++) {
             const respond = vi.fn();
             const start = performance.now();
             await handleGatewayRequest({
-              req: {
-                type: "req",
-                id: `${index}`,
-                method: "sessions.messages.subscribe",
-                params: {
-                  key: scope.sessionKey,
-                  ...(includeApprovals ? { includeApprovals: true } : {}),
-                },
-              },
+              req: gatewayRequest(`${index}`, "sessions.messages.subscribe", {
+                key: scope.sessionKey,
+                ...(includeApprovals ? { includeApprovals: true } : {}),
+              }),
               client,
               context,
               respond,
@@ -160,8 +136,8 @@ it("measures subscription dispatch with a 160k-token transcript", async () => {
               p50Ms: samples[25],
               p99Ms: samples[49],
               retainedReadMs: readMs / samples.length,
-              expiryMs: phaseMs.expiry / samples.length,
-              pendingMs: phaseMs.pending / samples.length,
+              approvalStorePreparationMs: phaseMs.preparation / samples.length,
+              pendingAfterExpiryMs: phaseMs.pendingAfterExpiry / samples.length,
               currencyReadsPerSubscribe: currencyReads / samples.length,
             }),
           );

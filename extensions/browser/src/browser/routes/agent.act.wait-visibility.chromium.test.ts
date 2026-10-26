@@ -1,11 +1,13 @@
 import { setTimeout as sleep } from "node:timers/promises";
+import { expectDefined } from "@openclaw/normalization-core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { Browser, Page } from "playwright-core";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import * as navigationGuard from "../navigation-guard.js";
 import { getPlaywrightCore } from "../playwright-core.runtime.js";
+import { atBarrier, runRoute } from "./agent-route.test-support.js";
 import { createExistingSessionAgentSharedModule } from "./existing-session.test-support.js";
-import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
+import { createBrowserRouteApp } from "./test-helpers.js";
 
 const browserState = vi.hoisted(() => ({ page: undefined as Page | undefined }));
 vi.mock("../chrome-mcp.js", async (importOriginal) => ({
@@ -14,16 +16,16 @@ vi.mock("../chrome-mcp.js", async (importOriginal) => ({
     _params: unknown,
     task: (document: { evaluate: (fn: string) => Promise<unknown> }) => Promise<unknown>,
   ) => {
-    const page = browserState.page;
-    if (!page) {
-      throw new Error("Chromium page is not initialized");
-    }
+    const page = expectDefined(browserState.page, "Chromium page is not initialized");
     return await task({ evaluate: (fn) => page.evaluate(`(${fn})(document)`) });
   },
 }));
 vi.mock("./agent.shared.js", () => createExistingSessionAgentSharedModule());
 
 const { registerBrowserAgentActRoutes } = await import("./agent.act.js");
+const button = (attributes = "") => `<button id="target" ${attributes}>Ready</button>`;
+const contents = (children = "") => `<div id="target" style="display:contents">${children}</div>`;
+const markPredicate = '() => { document.title = "predicate ran"; return true; }';
 
 describe.runIf(process.env.OPENCLAW_BROWSER_WAIT_E2E === "1")(
   "existing-session selector wait visibility in Chromium",
@@ -48,50 +50,33 @@ describe.runIf(process.env.OPENCLAW_BROWSER_WAIT_E2E === "1")(
       registerBrowserAgentActRoutes(app, {
         state: () => ({ resolved: { evaluateEnabled: true } }),
       } as never);
-      const handler = postHandlers.get("/act");
-      if (!handler) {
-        throw new Error("Missing /act route");
-      }
-      const response = createBrowserRouteResponse();
-      await handler(
-        { params: {}, query: {}, body: { kind: "wait", selector, timeoutMs: 250, ...extra } },
-        response.res,
-      );
-      return response;
+      return runRoute(postHandlers.get("/act"), {
+        body: { kind: "wait", selector, timeoutMs: 250, ...extra },
+      });
     }
 
     it.each([
-      ["display:none", '<button id="target" style="display:none">Ready</button>'],
-      ["visibility:hidden", '<button id="target" style="visibility:hidden">Ready</button>'],
-      ["hidden attribute", '<button id="target" hidden>Ready</button>'],
-      ["zero width", '<div id="target" style="width:0;height:10px"></div>'],
-      ["zero height", '<div id="target" style="width:10px;height:0"></div>'],
-      ["empty display:contents", '<div id="target" style="display:contents"></div>'],
-      [
-        "closed details",
-        '<details><summary>Open</summary><button id="target">Ready</button></details>',
-      ],
-      ["missing element", "<p>No target</p>"],
-    ])("does not report success for %s", async (_name, html) => {
+      ["display:none", button('style="display:none"'), false],
+      ["visibility:hidden", button('style="visibility:hidden"'), false],
+      ["hidden attribute", button("hidden"), false],
+      ["zero width", '<div id="target" style="width:0;height:10px"></div>', false],
+      ["zero height", '<div id="target" style="width:10px;height:0"></div>', false],
+      ["empty display:contents", contents(), false],
+      ["closed details", `<details><summary>Open</summary>${button()}</details>`, false],
+      ["missing element", "<p>No target</p>", false],
+      ["ordinary element", button(), true],
+      ["opacity zero", button('style="opacity:0"'), true],
+      ["offscreen element", button('style="position:absolute;left:-10000px"'), true],
+      ["display:contents element child", contents("<button>Ready</button>"), true],
+      ["display:contents text child", contents("Ready"), true],
+    ] as const)("checks %s visibility", async (_name, html, visible) => {
       await page.setContent(html);
-      await expect(waitForSelector("#target")).rejects.toThrow("Timed out waiting for condition");
-    });
-
-    it.each([
-      ["ordinary element", '<button id="target">Ready</button>'],
-      ["opacity zero", '<button id="target" style="opacity:0">Ready</button>'],
-      [
-        "offscreen element",
-        '<button id="target" style="position:absolute;left:-10000px">Ready</button>',
-      ],
-      [
-        "display:contents element child",
-        '<div id="target" style="display:contents"><button>Ready</button></div>',
-      ],
-      ["display:contents text child", '<div id="target" style="display:contents">Ready</div>'],
-    ])("accepts a visible %s", async (_name, html) => {
-      await page.setContent(html);
-      expect((await waitForSelector("#target")).statusCode).toBe(200);
+      const pending = waitForSelector("#target");
+      if (visible) {
+        expect((await pending).statusCode).toBe(200);
+      } else {
+        await expect(pending).rejects.toThrow("Timed out waiting for condition");
+      }
     });
 
     it("waits for the first match to become visible rather than accepting another match", async () => {
@@ -121,7 +106,7 @@ describe.runIf(process.env.OPENCLAW_BROWSER_WAIT_E2E === "1")(
     });
 
     it("preserves combined-condition short-circuiting and async function waits", async () => {
-      await page.setContent('<button id="target">Ready</button>');
+      await page.setContent(button());
       await expect(
         waitForSelector("#target", {
           text: "Not ready",
@@ -140,7 +125,7 @@ describe.runIf(process.env.OPENCLAW_BROWSER_WAIT_E2E === "1")(
 
     it("readmits a changed URL before running the predicate after an awaited policy check", async () => {
       await page.goto("about:blank#before");
-      await page.setContent('<button id="target">Ready</button>');
+      await page.setContent(button());
       const readmissionStarted = createDeferred<void>();
       const readmissionAllowed = createDeferred<void>();
       const observedUrls: string[] = [];
@@ -155,17 +140,13 @@ describe.runIf(process.env.OPENCLAW_BROWSER_WAIT_E2E === "1")(
             await readmissionAllowed.promise;
           }
         });
-      const pending = waitForSelector("#target", {
-        timeoutMs: 2_000,
-        fn: '() => { document.title = "predicate ran"; return true; }',
-      });
+      const pending = waitForSelector("#target", { timeoutMs: 2_000, fn: markPredicate });
       try {
-        await Promise.race([
+        await atBarrier(
           readmissionStarted.promise,
-          pending.then(() => {
-            throw new Error("Wait completed before the changed URL was readmitted");
-          }),
-        ]);
+          pending,
+          "Wait completed before URL readmission",
+        );
         expect(await page.title()).toBe("");
         readmissionAllowed.resolve();
         expect((await pending).statusCode).toBe(200);
@@ -181,7 +162,7 @@ describe.runIf(process.env.OPENCLAW_BROWSER_WAIT_E2E === "1")(
 
     it("ignores page-controlled globalThis when admitting the document URL", async () => {
       await page.goto("about:blank");
-      await page.setContent('<button id="target">Ready</button>');
+      await page.setContent(button());
       await page.evaluate(() => {
         Object.defineProperty(window, "globalThis", {
           value: { document, location: { href: "https://spoof.example" } },
@@ -199,11 +180,9 @@ describe.runIf(process.env.OPENCLAW_BROWSER_WAIT_E2E === "1")(
           }
         });
       try {
-        await expect(
-          waitForSelector("#target", {
-            fn: '() => { document.title = "predicate ran"; return true; }',
-          }),
-        ).rejects.toThrow("Actual document URL denied");
+        await expect(waitForSelector("#target", { fn: markPredicate })).rejects.toThrow(
+          "Actual document URL denied",
+        );
         expect(observedUrls).toEqual(["about:blank"]);
         expect(await page.title()).toBe("");
       } finally {

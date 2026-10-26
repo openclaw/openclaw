@@ -78,8 +78,11 @@ suite.define(() => {
         expect(composerBox).not.toBeNull();
         expect(noticeBox!.x).toBeCloseTo(composerBox!.x, 0);
         expect(noticeBox!.width).toBeCloseTo(composerBox!.width, 0);
-        expect(await notice.evaluate((node) => getComputedStyle(node).borderRadius)).toBe(
-          await composer.evaluate((node) => getComputedStyle(node).borderRadius),
+        // The compact mobile input is a capsule; its neighboring notice retains
+        // the reading card radius while sharing the same column.
+        expect(await notice.evaluate((node) => getComputedStyle(node).borderRadius)).toBe("25px");
+        expect(await composer.evaluate((node) => getComputedStyle(node).borderRadius)).toBe(
+          viewport.width === 390 ? "35px" : "25px",
         );
       } finally {
         if (process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR) {

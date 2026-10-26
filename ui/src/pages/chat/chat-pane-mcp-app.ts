@@ -1,9 +1,10 @@
+import { onCleanup } from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { MCP_APP_OPEN_EVENT, type McpAppOpenDetail } from "../../components/mcp-app-launch.ts";
 import {
   MCP_APP_RESOURCE_MENTION_EVENT,
   type McpAppResourceMentionDetail,
-} from "../../components/mcp-app-resources.ts";
+} from "../../components/mcp-app-resource-mention.ts";
 import {
   WIDGET_PROMPT_EVENT,
   MCP_APP_CONTEXT_EVENT,
@@ -16,14 +17,19 @@ import {
 } from "../../components/mcp-app-security.ts";
 import { t } from "../../i18n/index.ts";
 import { registerMcpAppEnglish } from "../../i18n/locales/en-mcp-app.ts";
+import type { ChatComposerScope } from "../../lib/chat/outbox-store.ts";
 import { publishMcpAppContext } from "../../lib/mcp-app-context.ts";
-import { mcpAppMessageInput, sendMcpAppNewConversation } from "../../lib/mcp-app-message.ts";
+import { mcpAppMessageInput } from "../../lib/mcp-app-message.ts";
+import { listen } from "../../lib/reactive/listener.ts";
+import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { uploadsEnabled } from "../../lib/uploads.ts";
+import { generateUUID } from "../../lib/uuid.ts";
 import {
   releaseChatAttachmentPayloads,
   generateAttachmentId,
   registerChatAttachmentPayload,
 } from "./attachment-payload-store.ts";
+import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import {
   resolveChatAttachmentLimits,
@@ -31,6 +37,8 @@ import {
   chatAttachmentBatchBytes,
 } from "./components/chat-attachment-admission.ts";
 import { encodeTextAsDataUrl } from "./components/chat-attachment-text.ts";
+import { sessionWorkspaceForHost } from "./components/chat-session-workspace-state.ts";
+import type { SessionWorkspacePreview } from "./components/chat-sidebar-content-types.ts";
 
 registerMcpAppEnglish();
 
@@ -47,17 +55,23 @@ declare global {
   }
 }
 
-type ChatPaneMcpAppState = Pick<
-  ChatPageHost,
-  | "sessionKey"
-  | "assistantAgentId"
-  | "chatAttachments"
-  | "uploadConfig"
-  | "hello"
-  | "requestUpdate"
-  | "handleSendChat"
-  | "handleOpenSidebar"
->;
+type ChatPaneMcpAppState = ChatComposerScope &
+  Pick<
+    ChatPageHost,
+    | "sessionKey"
+    | "assistantAgentId"
+    | "chatAttachments"
+    | "uploadConfig"
+    | "hello"
+    | "handleSendChat"
+    | "handleOpenSidebar"
+    | "sessionWorkspaceState"
+    | "connectionEpoch"
+    | "sessions"
+    | "client"
+    | "connected"
+    | "sidebarContent"
+  >;
 
 /** Read at delivery, not subscription time: retained panes can change presentation/connection. */
 export type ChatPaneMcpAppOwner = {
@@ -66,62 +80,69 @@ export type ChatPaneMcpAppOwner = {
   presented: boolean;
   agentId?: string;
   launch?: McpAppOpenDetail;
+  replaceAttachments: (attachments: ChatPaneMcpAppState["chatAttachments"]) => void;
   /** Captures this state; the workspace owner still owns file admission and rendering. */
-  openFile: (path: string) => void;
+  openFile: (path: string) => void | Promise<SessionWorkspacePreview | undefined>;
 };
 
-export class ChatPaneMcpAppController {
-  private openedLaunch?: McpAppOpenDetail;
-
-  constructor(
-    private readonly options: {
-      element: HTMLElement;
-      current: () => ChatPaneMcpAppOwner | null;
-    },
-  ) {}
-
-  subscribe(): () => void {
-    // Listening on the containing pane keeps split-view prompts with their iframe.
-    const element = this.options.element;
-    const listen = <K extends keyof HTMLElementEventMap>(
-      name: K,
-      listener: (event: HTMLElementEventMap[K]) => void,
-    ) => {
-      element.addEventListener(name, listener);
-      return () => element.removeEventListener(name, listener);
-    };
-    const cleanups = [
-      listen(MCP_APP_RESOURCE_MENTION_EVENT, (event) => this.receiveResourceMention(event)),
-      listen(MCP_APP_MESSAGE_EVENT, (event) => this.receiveMessage(event)),
-      listen(MCP_APP_FILE_OPEN_EVENT, (event) => this.receiveFile(event)),
-      listen(MCP_APP_CONTEXT_EVENT, (event) => this.receiveContext(event)),
-      listen(MCP_APP_OPEN_EVENT, (event) => this.receiveOpen(event)),
-      listen(WIDGET_PROMPT_EVENT, (event) => this.receiveWidgetPrompt(event)),
-    ];
-    return () => cleanups.forEach((cleanup) => cleanup());
-  }
-
-  syncLaunch(): void {
-    const owner = this.options.current();
+/** Create inside the mounted pane's Solid owner. */
+export function createChatPaneMcpApps(options: {
+  element: HTMLElement;
+  current: () => ChatPaneMcpAppOwner | null;
+}): () => void {
+  let disposed = false;
+  let openedLaunch: McpAppOpenDetail | undefined;
+  const retirementListeners = new Set<() => void>();
+  function syncLaunch(): void {
+    const owner = options.current();
     const launch = owner?.launch;
     if (
       !owner ||
       !launch ||
-      this.openedLaunch === launch ||
+      openedLaunch === launch ||
       launch.owner !== owner.context.gateway.snapshot.client ||
       launch.sessionKey !== owner.state.sessionKey
     ) {
       return;
     }
-    this.openedLaunch = launch;
-    this.openLaunch(owner, launch);
+    openedLaunch = launch;
+    openLaunch(owner, launch);
   }
 
-  private openLaunch(owner: ChatPaneMcpAppOwner, launch: McpAppOpenDetail, fileSuffix = ""): void {
+  function openLaunch(owner: ChatPaneMcpAppOwner, launch: McpAppOpenDetail, fileSuffix = ""): void {
     owner.state.handleOpenSidebar({
       kind: "mcp-app",
       title: launch.entrypoint.title,
       launch,
+      observeRetirement(retire) {
+        const workspace = sessionWorkspaceForHost(owner.state);
+        const check = () => {
+          const current = workspace.state;
+          const content = current?.previews.find(
+            (entry) => entry.id === current.activePreviewId,
+          )?.content;
+          if (
+            disposed ||
+            current?.sessionKey !== owner.state.sessionKey ||
+            current?.connectionEpoch !== owner.state.connectionEpoch ||
+            content?.kind !== "mcp-app" ||
+            content.launch !== launch ||
+            owner.context.gateway.snapshot.client !== launch.owner ||
+            owner.context.gateway.snapshot.phase !== "connected"
+          ) {
+            retire();
+          }
+        };
+        retirementListeners.add(retire);
+        const stopWorkspace = workspace.subscribe(check);
+        const stopGateway = owner.context.gateway.subscribe(check);
+        check();
+        return () => {
+          retirementListeners.delete(retire);
+          stopWorkspace();
+          stopGateway();
+        };
+      },
       fileTab: {
         id: `mcp-app:${launch.serverName}/${launch.entrypoint.toolName}:${launch.settings ? "settings" : "app"}${fileSuffix}`,
         label: launch.entrypoint.title,
@@ -129,24 +150,24 @@ export class ChatPaneMcpAppController {
     });
   }
 
-  private presentedEventOwner(event: CustomEvent<{ sessionKey: string }>) {
+  function presentedEventOwner(event: CustomEvent<{ sessionKey: string }>) {
     if (!(event instanceof CustomEvent) || event.defaultPrevented) {
       return null;
     }
-    const owner = this.options.current();
+    const owner = options.current();
     return owner?.presented && event.detail.sessionKey === owner.state.sessionKey ? owner : null;
   }
 
-  private receiveWidgetPrompt(event: CustomEvent<WidgetPromptEventDetail>): void {
+  function receiveWidgetPrompt(event: CustomEvent<WidgetPromptEventDetail>): void {
     const detail = event.detail;
     const text = typeof detail?.text === "string" ? detail.text.trim() : "";
     if (text) {
-      void this.options.current()?.state.handleSendChat(text);
+      void options.current()?.state.handleSendChat(text);
     }
   }
 
-  private receiveResourceMention(event: CustomEvent<McpAppResourceMentionDetail>): void {
-    const owner = this.presentedEventOwner(event);
+  function receiveResourceMention(event: CustomEvent<McpAppResourceMentionDetail>): void {
+    const owner = presentedEventOwner(event);
     if (!owner || !uploadsEnabled(owner.state.uploadConfig)) {
       return;
     }
@@ -177,12 +198,11 @@ export class ChatPaneMcpAppController {
       dataUrl: encodeTextAsDataUrl(text),
       file,
     });
-    state.chatAttachments = [...state.chatAttachments, attachment];
-    state.requestUpdate();
+    owner.replaceAttachments([...state.chatAttachments, attachment]);
   }
 
-  private receiveMessage(event: CustomEvent<McpAppMessageEventDetail>): void {
-    const owner = this.presentedEventOwner(event);
+  function receiveMessage(event: CustomEvent<McpAppMessageEventDetail>): void {
+    const owner = presentedEventOwner(event);
     if (!owner) {
       return;
     }
@@ -191,11 +211,38 @@ export class ChatPaneMcpAppController {
     event.preventDefault();
     void (async () => {
       if (detail.target === "new") {
-        return sendMcpAppNewConversation(
-          context,
-          state.assistantAgentId || owner.agentId || "",
-          detail,
+        const client = context.gateway.snapshot.client;
+        const connectionGeneration = client?.connectionGeneration;
+        const agentId = state.assistantAgentId || owner.agentId || "";
+        const selectionIntent = context.agentSelection.intentRevision;
+        const request = chatOutboxOwner(state).admissions.beginRequest(
+          state,
+          resolveUiConversationIdentity(state, state.sessionKey),
+          generateUUID(),
         );
+        try {
+          const { sendMcpAppNewConversation } =
+            await import("../../lib/mcp-app-new-conversation.ts");
+          const current = options.current();
+          if (
+            disposed ||
+            request.signal.aborted ||
+            !current ||
+            current.state !== state ||
+            current.context !== context ||
+            state.client !== client ||
+            context.gateway.snapshot.client !== client ||
+            client?.connectionGeneration !== connectionGeneration ||
+            context.agentSelection.intentRevision !== selectionIntent ||
+            state.sessionKey !== detail.sessionKey ||
+            (state.assistantAgentId || current.agentId || "") !== agentId
+          ) {
+            return false;
+          }
+          return await sendMcpAppNewConversation(context, agentId, detail, request.signal);
+        } finally {
+          request.release();
+        }
       }
       const turn = mcpAppMessageInput(detail.content, context);
       let admitted = false;
@@ -215,23 +262,23 @@ export class ChatPaneMcpAppController {
     })().then(detail.respond, () => detail.respond(false));
   }
 
-  private receiveFile(event: CustomEvent<McpAppFileOpenEventDetail>): void {
-    const owner = this.presentedEventOwner(event);
+  function receiveFile(event: CustomEvent<McpAppFileOpenEventDetail>): void {
+    const owner = presentedEventOwner(event);
     if (!owner) {
       return;
     }
     const detail = event.detail;
     event.preventDefault();
-    owner.openFile(detail.path);
+    void owner.openFile(detail.path);
     detail.respond(true);
   }
 
-  private receiveContext(event: CustomEvent<McpAppContextEventDetail>): void {
+  function receiveContext(event: CustomEvent<McpAppContextEventDetail>): void {
     if (!(event instanceof CustomEvent)) {
       return;
     }
     const detail = event.detail;
-    const owner = this.options.current();
+    const owner = options.current();
     const client = owner?.context.gateway.snapshot.client;
     if (!owner || !client || detail.sessionKey !== owner.state.sessionKey) {
       return;
@@ -252,13 +299,32 @@ export class ChatPaneMcpAppController {
     });
   }
 
-  private receiveOpen(event: CustomEvent<McpAppOpenDetail>): void {
-    const owner = this.presentedEventOwner(event);
+  function receiveOpen(event: CustomEvent<McpAppOpenDetail>): void {
+    const owner = presentedEventOwner(event);
     const detail = event.detail;
     if (!owner || detail.owner !== owner.context.gateway.snapshot.client) {
       return;
     }
     event.preventDefault();
-    this.openLaunch(owner, detail, `:${detail.filePath ?? ""}`);
+    openLaunch(owner, detail, `:${detail.filePath ?? ""}`);
   }
+
+  // Pane-local listeners keep split-view prompts with their iframe.
+  const element = options.element;
+  const stopEvents = [
+    listen(element, MCP_APP_RESOURCE_MENTION_EVENT, { handleEvent: receiveResourceMention }),
+    listen(element, MCP_APP_MESSAGE_EVENT, { handleEvent: receiveMessage }),
+    listen(element, MCP_APP_FILE_OPEN_EVENT, { handleEvent: receiveFile }),
+    listen(element, MCP_APP_CONTEXT_EVENT, { handleEvent: receiveContext }),
+    listen(element, MCP_APP_OPEN_EVENT, { handleEvent: receiveOpen }),
+    listen(element, WIDGET_PROMPT_EVENT, { handleEvent: receiveWidgetPrompt }),
+  ];
+  onCleanup(() => {
+    disposed = true;
+    for (const retire of retirementListeners) {
+      retire();
+    }
+    stopEvents.forEach((stop) => stop());
+  });
+  return syncLaunch;
 }

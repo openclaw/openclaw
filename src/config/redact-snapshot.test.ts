@@ -14,19 +14,37 @@ import { makeSnapshot, restoreRedactedValues } from "./redact-snapshot.test-help
 import { buildConfigSchemaCore } from "./schema.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
+const apiKeyConfig = (apiKey: Record<string, unknown>, provider = "default") => ({
+  models: { providers: { [provider]: { apiKey } } },
+});
+const secretRef = { source: "env", provider: "default", id: "OPENAI_API_KEY" };
+const account = (id: string, token = REDACTED_SENTINEL) => ({ id, token });
+const secretAccount = (id: string, tokenId = id) => account(id, `synthetic-${tokenId}-token`);
+const providerAccounts = (id: string, ...accounts: ReturnType<typeof account>[]) => ({
+  id,
+  accounts,
+});
+const tokenConfig = (token: string) => ({ gateway: { auth: { token } } });
+function expectProjections(result: ReturnType<typeof redactConfigSnapshot>, expected: unknown) {
+  for (const projection of [
+    result.config,
+    result.parsed,
+    result.sourceConfig,
+    result.resolved,
+    result.runtimeConfig,
+  ]) {
+    expect(projection).toEqual(expected);
+  }
+}
+
 describe("redactConfigSnapshot", () => {
   it("redacts whole serviceAccount objects without schema hints", () => {
-    const config = {
-      channels: {
-        googlechat: {
-          serviceAccount: {
-            type: "service_account",
-            client_email: "bot@example.test",
-            private_key: "synthetic-private-key",
-          },
-        },
-      },
+    const serviceAccount = {
+      type: "service_account",
+      client_email: "bot@example.test",
+      private_key: "synthetic-private-key",
     };
+    const config = { channels: { googlechat: { serviceAccount } } };
     const result = redactConfigSnapshot(makeSnapshot(config));
     expect(result.config).toEqual({
       channels: { googlechat: { serviceAccount: REDACTED_SENTINEL } },
@@ -35,28 +53,20 @@ describe("redactConfigSnapshot", () => {
   });
 
   it("redacts every string in an apiKey object without schema hints", () => {
-    const config = {
-      models: {
-        providers: {
-          example: {
-            apiKey: { source: "env", provider: "default", id: "EXAMPLE_API_KEY" },
-          },
+    const config = apiKeyConfig(
+      { source: "env", provider: "default", id: "EXAMPLE_API_KEY" },
+      "example",
+    );
+    expect(redactConfigSnapshot(makeSnapshot(config)).config).toEqual(
+      apiKeyConfig(
+        {
+          source: REDACTED_SENTINEL,
+          provider: REDACTED_SENTINEL,
+          id: REDACTED_SENTINEL,
         },
-      },
-    };
-    expect(redactConfigSnapshot(makeSnapshot(config)).config).toEqual({
-      models: {
-        providers: {
-          example: {
-            apiKey: {
-              source: REDACTED_SENTINEL,
-              provider: REDACTED_SENTINEL,
-              id: REDACTED_SENTINEL,
-            },
-          },
-        },
-      },
-    });
+        "example",
+      ),
+    );
   });
 
   it("redacts and restores MCP headers while leaving blank and env-backed values editable", () => {
@@ -83,15 +93,7 @@ describe("redactConfigSnapshot", () => {
         },
       },
     };
-    for (const projection of [
-      result.config,
-      result.parsed,
-      result.sourceConfig,
-      result.resolved,
-      result.runtimeConfig,
-    ]) {
-      expect(projection).toEqual(expected);
-    }
+    expectProjections(result, expected);
     expect(result.raw).toBe(JSON.stringify(expected));
     expect(restoreRedactedValues(result.config, config, hints)).toEqual(config);
     const servers = expectDefined(result.config.mcp?.servers, "redacted MCP servers");
@@ -118,21 +120,13 @@ describe("redactConfigSnapshot", () => {
   it("withholds overlapping raw replacements without corrupting SecretRef identity", () => {
     const config = {
       gateway: { mode: "default", auth: { password: "default" } }, // pragma: allowlist secret
-      models: {
-        providers: {
-          default: { apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" } },
-        },
-      },
+      ...apiKeyConfig(secretRef),
     };
     const result = redactConfigSnapshot(makeSnapshot(config), mainSchemaHints);
     expect(result.raw).toBeNull();
     expect(result.config).toEqual({
       gateway: { mode: "default", auth: { password: REDACTED_SENTINEL } },
-      models: {
-        providers: {
-          default: { apiKey: { source: "env", provider: "default", id: REDACTED_SENTINEL } },
-        },
-      },
+      ...apiKeyConfig({ ...secretRef, id: REDACTED_SENTINEL }),
     });
     expect(restoreRedactedValues(result.config, config, mainSchemaHints)).toEqual(config);
   });
@@ -148,15 +142,7 @@ describe("redactConfigSnapshot", () => {
       sourceConfigBeforeMigrations: { gateway: { auth: { token: "migration-only-value" } } },
     });
     const expected = { ...config, gateway: { auth: { token: REDACTED_SENTINEL } } };
-    for (const projection of [
-      result.config,
-      result.parsed,
-      result.sourceConfig,
-      result.resolved,
-      result.runtimeConfig,
-    ]) {
-      expect(projection).toEqual(expected);
-    }
+    expectProjections(result, expected);
     expect(result.sourceConfig).toBe(result.resolved);
     expect(result.runtimeConfig).toBe(result.config);
     expect(result).not.toHaveProperty("sourceConfigBeforeMigrations");
@@ -200,21 +186,8 @@ describe("generated redaction hints", () => {
     expect(hints["channels.matrix.accounts.*.password"]?.sensitive).toBe(true);
     expect(hints["channels.matrix.accounts.*.accessToken"]?.sensitive).toBe(true);
 
-    const snapshot = makeSnapshot({
-      channels: {
-        matrix: {
-          accounts: {
-            work: {
-              password: {
-                source: "store",
-                provider: "default",
-                id: "MATRIX_WORK_PASSWORD",
-              },
-            },
-          },
-        },
-      },
-    });
+    const password = { source: "store", provider: "default", id: "MATRIX_WORK_PASSWORD" };
+    const snapshot = makeSnapshot({ channels: { matrix: { accounts: { work: { password } } } } });
 
     const result = redactConfigSnapshot(snapshot, hints);
     expect(result.config).toHaveProperty("channels.matrix.accounts.work.password", {
@@ -224,11 +197,7 @@ describe("generated redaction hints", () => {
     });
 
     const restored = restoreRedactedValues(result.config, snapshot.config, hints);
-    expect(restored.channels.matrix.accounts.work.password).toEqual({
-      source: "store",
-      provider: "default",
-      id: "MATRIX_WORK_PASSWORD",
-    });
+    expect(restored.channels.matrix.accounts.work.password).toEqual(password);
   });
 
   it("normalizes authored URL tags and protects custom plugin endpoints", () => {
@@ -264,22 +233,23 @@ describe("generated redaction hints", () => {
 });
 
 describe("replaceSensitiveValuesInRaw", () => {
-  it("redacts non-empty values while preserving blank strings", () => {
-    const result = replaceSensitiveValuesInRaw({
+  it.each([
+    {
+      name: "preserves blank strings",
       raw: '{ "token": "", "secret": "abc123", "other": "" }',
       sensitiveValues: ["", "abc123"],
-      redactedSentinel: REDACTED_SENTINEL,
-    });
-    expect(result).toBe(`{ "token": "", "secret": "${REDACTED_SENTINEL}", "other": "" }`);
-  });
-
-  it("replaces longest values first for overlapping matches", () => {
-    const result = replaceSensitiveValuesInRaw({
+      expected: `{ "token": "", "secret": "${REDACTED_SENTINEL}", "other": "" }`,
+    },
+    {
+      name: "replaces longest values first for overlapping matches",
       raw: '{ "token": "abcd", "prefix": "ab" }',
       sensitiveValues: ["ab", "abcd", "abcd"],
-      redactedSentinel: REDACTED_SENTINEL,
-    });
-    expect(result).toBe(`{ "token": "${REDACTED_SENTINEL}", "prefix": "${REDACTED_SENTINEL}" }`);
+      expected: `{ "token": "${REDACTED_SENTINEL}", "prefix": "${REDACTED_SENTINEL}" }`,
+    },
+  ])("$name", ({ raw, sensitiveValues, expected }) => {
+    expect(
+      replaceSensitiveValuesInRaw({ raw, sensitiveValues, redactedSentinel: REDACTED_SENTINEL }),
+    ).toBe(expected);
   });
 });
 
@@ -290,27 +260,14 @@ describe("redactConfigSnapshot", () => {
     const preMigrationToken = "synthetic-pre-migration-token-canary";
     const snapshot = {
       ...makeSnapshot({
-        gateway: { auth: { token } },
-        plugins: {
-          allow: ["demo"],
-        },
+        ...tokenConfig(token),
+        plugins: { allow: ["demo"] },
       }),
       valid,
-      authoredConfig: { gateway: { auth: { token: authoredToken } } },
-      sourceConfigBeforeMigrations: makeSnapshot({
-        gateway: { auth: { token: preMigrationToken } },
-      }).sourceConfig,
+      authoredConfig: tokenConfig(authoredToken),
+      sourceConfigBeforeMigrations: makeSnapshot(tokenConfig(preMigrationToken)).sourceConfig,
       pluginMetadataSnapshot: {
-        manifestRegistry: {
-          plugins: [
-            {
-              id: "demo",
-              rootDir: "/private/plugin/root",
-              manifestPath: "/private/plugin/root/openclaw.plugin.json",
-            },
-          ],
-          diagnostics: [],
-        },
+        manifestRegistry: { plugins: [{ rootDir: "/private/plugin/root" }] },
       },
     };
     const original = structuredClone(snapshot);
@@ -318,21 +275,28 @@ describe("redactConfigSnapshot", () => {
     const result = redactConfigSnapshot(snapshot);
     const serialized = JSON.stringify(result);
 
-    expect(serialized).not.toContain(preMigrationToken);
-    expect(serialized).not.toContain(authoredToken);
-    expect(serialized).not.toContain(token);
-    expect(serialized).not.toContain("/private/plugin/root");
-    expect("sourceConfigBeforeMigrations" in result).toBe(false);
-    expect("authoredConfig" in result).toBe(false);
-    expect("pluginMetadataSnapshot" in result).toBe(false);
+    for (const secret of [preMigrationToken, authoredToken, token, "/private/plugin/root"]) {
+      expect(serialized).not.toContain(secret);
+    }
+    for (const key of [
+      "sourceConfigBeforeMigrations",
+      "authoredConfig",
+      "pluginMetadataSnapshot",
+    ]) {
+      expect(key in result).toBe(false);
+    }
     expect(result).toMatchObject({ path: snapshot.path, hash: "abc123", exists: true, valid });
     const expectedConfig = valid
       ? { gateway: { auth: { token: REDACTED_SENTINEL } }, plugins: { allow: ["demo"] } }
       : {};
-    expect(result.config).toEqual(expectedConfig);
-    expect(result.sourceConfig).toEqual(expectedConfig);
-    expect(result.resolved).toEqual(expectedConfig);
-    expect(result.runtimeConfig).toEqual(expectedConfig);
+    for (const projection of [
+      result.config,
+      result.sourceConfig,
+      result.resolved,
+      result.runtimeConfig,
+    ]) {
+      expect(projection).toEqual(expectedConfig);
+    }
     expect(result.sourceConfig).toBe(result.resolved);
     expect(result.runtimeConfig).toBe(result.config);
     if (!valid) {
@@ -359,19 +323,15 @@ describe("restoreRedactedValues", () => {
     }
   });
 
-  it.each(["constructor"])(
-    "rejects inherited %s values when the original key is missing",
-    (key) => {
-      const hints = { [key]: { sensitive: true } };
-      const result = restoreRedactedValues_orig({ [key]: REDACTED_SENTINEL }, {}, hints);
-
-      expect(result.ok).toBe(false);
-    },
-  );
+  it("rejects inherited constructor values when the original key is missing", () => {
+    const hints = { constructor: { sensitive: true } };
+    expect(restoreRedactedValues_orig({ constructor: REDACTED_SENTINEL }, {}, hints).ok).toBe(
+      false,
+    );
+  });
 
   it("rejects invalid restore inputs", () => {
-    const invalidInputs = [null, undefined, "token-value"] as const;
-    for (const input of invalidInputs) {
+    for (const input of [null, undefined, "token-value"]) {
       const result = restoreRedactedValues_orig(input, { token: "x" });
       expect(result.ok).toBe(false);
     }
@@ -382,15 +342,9 @@ describe("restoreRedactedValues", () => {
   });
 
   it("rejects sentinel literals even when uiHints mark the path non-sensitive", () => {
-    const hints: ConfigUiHints = {
-      "gateway.auth.token": { sensitive: false },
-    };
-    const incoming = {
-      gateway: { auth: { token: REDACTED_SENTINEL } },
-    };
-    const original = {
-      gateway: { auth: { token: "real-secret" } },
-    };
+    const hints: ConfigUiHints = { "gateway.auth.token": { sensitive: false } };
+    const incoming = tokenConfig(REDACTED_SENTINEL);
+    const original = tokenConfig("real-secret");
     const result = restoreRedactedValues_orig(incoming, original, hints);
     expect(result.ok).toBe(false);
     expect(result.humanReadableMessage).toContain("Reserved redaction sentinel");
@@ -398,115 +352,64 @@ describe("restoreRedactedValues", () => {
 
   describe("stable array identities", () => {
     const hints = { "accounts[].token": { sensitive: true } };
-    const original = {
-      accounts: [
-        { id: "alpha", token: "synthetic-alpha-token" },
-        { id: "bravo", token: "synthetic-bravo-token" },
-        { id: "charlie", token: "synthetic-charlie-token" },
-      ],
-    };
+    it.each([
+      {
+        name: "a unique owner after ambiguous siblings are deleted",
+        previous: [
+          secretAccount("duplicate", "first-duplicate"),
+          secretAccount("duplicate", "second-duplicate"),
+          secretAccount("bravo"),
+        ],
+        incoming: [account("bravo")],
+        expected: [secretAccount("bravo")],
+      },
+      {
+        name: "prototype-shaped identities without inherited-key collisions",
+        previous: [secretAccount("__proto__", "prototype"), secretAccount("constructor")],
+        incoming: [account("constructor"), account("__proto__")],
+        expected: [secretAccount("constructor"), secretAccount("__proto__", "prototype")],
+      },
+      {
+        name: "escaped environment identities positionally after runtime substitution",
+        previous: [secretAccount("${ACCOUNT_ID}", "literal"), secretAccount("bravo")],
+        incoming: [account("$${ACCOUNT_ID}"), account("bravo")],
+        expected: [secretAccount("$${ACCOUNT_ID}", "literal"), secretAccount("bravo")],
+      },
+    ])("restores $name", ({ previous, incoming, expected }) => {
+      expect(
+        restoreRedactedValues({ accounts: incoming }, { accounts: previous }, hints).accounts,
+      ).toEqual(expected);
+    });
 
     it.each([
       {
-        kind: "ambiguous",
-        siblings: [
-          { id: "duplicate", token: "synthetic-first-duplicate-token" },
-          { id: "duplicate", token: "synthetic-second-duplicate-token" },
-        ],
+        name: "a new identity borrowing its position",
+        previous: [secretAccount("alpha"), secretAccount("bravo"), secretAccount("charlie")],
+        incoming: [account("new-owner")],
+        secret: "synthetic-alpha-token",
       },
-    ])("keeps a unique owner's secret when $kind siblings are deleted", ({ siblings }) => {
-      const previous = {
-        accounts: [...siblings, { id: "bravo", token: "synthetic-bravo-token" }],
-      };
-      const incoming = { accounts: [{ id: "bravo", token: REDACTED_SENTINEL }] };
-
-      expect(restoreRedactedValues(incoming, previous, hints).accounts).toEqual([
-        { id: "bravo", token: "synthetic-bravo-token" },
-      ]);
-    });
-
-    it("rejects a redacted secret for a new identity instead of borrowing its position", () => {
+      {
+        name: "an unidentified entry moving onto an identified owner's position",
+        previous: [{ token: "synthetic-unidentified-token" }, secretAccount("bravo")],
+        incoming: [account("bravo"), { token: REDACTED_SENTINEL }],
+        secret: "synthetic-bravo-token",
+      },
+    ])("rejects $name", ({ previous, incoming, secret }) => {
       const result = restoreRedactedValues_orig(
-        { accounts: [{ id: "new-owner", token: REDACTED_SENTINEL }] },
-        original,
+        { accounts: incoming },
+        { accounts: previous },
         hints,
       );
-
       expect(result.ok).toBe(false);
-      expect(result.humanReadableMessage).not.toContain("synthetic-alpha-token");
+      expect(result.humanReadableMessage).not.toContain(secret);
     });
 
-    it("matches prototype-shaped identities without inherited-key collisions", () => {
-      const previous = {
-        accounts: [
-          { id: "__proto__", token: "synthetic-prototype-token" },
-          { id: "constructor", token: "synthetic-constructor-token" },
-        ],
-      };
-      const incoming = {
-        accounts: [
-          { id: "constructor", token: REDACTED_SENTINEL },
-          { id: "__proto__", token: REDACTED_SENTINEL },
-        ],
-      };
-
-      expect(restoreRedactedValues(incoming, previous, hints).accounts).toEqual([
-        { id: "constructor", token: "synthetic-constructor-token" },
-        { id: "__proto__", token: "synthetic-prototype-token" },
-      ]);
-    });
-
-    it("keeps escaped environment identities positional after runtime substitution", () => {
-      const previous = {
-        accounts: [
-          { id: "${ACCOUNT_ID}", token: "synthetic-literal-token" },
-          { id: "bravo", token: "synthetic-bravo-token" },
-        ],
-      };
-      const incoming = {
-        accounts: [
-          { id: "$${ACCOUNT_ID}", token: REDACTED_SENTINEL },
-          { id: "bravo", token: REDACTED_SENTINEL },
-        ],
-      };
-
-      expect(restoreRedactedValues(incoming, previous, hints).accounts).toEqual([
-        { id: "$${ACCOUNT_ID}", token: "synthetic-literal-token" },
-        { id: "bravo", token: "synthetic-bravo-token" },
-      ]);
-    });
-
-    it("rejects moving an unidentified redacted entry onto an identified owner's position", () => {
-      const previous = {
-        accounts: [
-          { token: "synthetic-unidentified-token" },
-          { id: "bravo", token: "synthetic-bravo-token" },
-        ],
-      };
-      const incoming = {
-        accounts: [{ id: "bravo", token: REDACTED_SENTINEL }, { token: REDACTED_SENTINEL }],
-      };
-
-      const result = restoreRedactedValues_orig(incoming, previous, hints);
-
-      expect(result.ok).toBe(false);
-      expect(result.humanReadableMessage).not.toContain("synthetic-bravo-token");
-    });
-
-    it.each([
-      {
-        reason: "original identities are duplicated",
-        previous: [{ id: "duplicate" }, { id: "duplicate" }],
-        incoming: [{ id: "duplicate" }, { id: "duplicate" }],
-      },
-    ])("keeps positional restoration when $reason", ({ previous, incoming }) => {
+    it("keeps positional restoration when original identities are duplicated", () => {
+      const identities = [{ id: "duplicate" }, { id: "duplicate" }];
       const restored = restoreRedactedValues(
-        { accounts: incoming.map((entry) => ({ ...entry, token: REDACTED_SENTINEL })) },
+        { accounts: identities.map(({ id }) => account(id)) },
         {
-          accounts: previous.map((entry, index) => ({
-            ...entry,
-            token: `synthetic-${index}-token`,
-          })),
+          accounts: identities.map(({ id }, index) => account(id, `synthetic-${index}-token`)),
         },
         hints,
       );
@@ -519,106 +422,45 @@ describe("restoreRedactedValues", () => {
   });
 
   it("matches stable identities independently at each nested array boundary", () => {
-    const hints: ConfigUiHints = {
-      "providers[].accounts[].token": { sensitive: true },
-    };
+    const hints: ConfigUiHints = { "providers[].accounts[].token": { sensitive: true } };
     const original = {
       providers: [
-        {
-          id: "provider-alpha",
-          accounts: [{ id: "account-one", token: "synthetic-alpha-one-token" }],
-        },
-        {
-          id: "provider-bravo",
-          accounts: [
-            { id: "account-one", token: "synthetic-bravo-one-token" },
-            { id: "account-two", token: "synthetic-bravo-two-token" },
-          ],
-        },
+        providerAccounts("provider-alpha", secretAccount("account-one", "alpha-one")),
+        providerAccounts(
+          "provider-bravo",
+          secretAccount("account-one", "bravo-one"),
+          secretAccount("account-two", "bravo-two"),
+        ),
       ],
     };
     const incoming = {
       providers: [
-        {
-          id: "provider-bravo",
-          accounts: [
-            { id: "account-two", token: REDACTED_SENTINEL },
-            { id: "account-one", token: REDACTED_SENTINEL },
-          ],
-        },
+        providerAccounts("provider-bravo", account("account-two"), account("account-one")),
       ],
     };
 
     const restored = restoreRedactedValues(incoming, original, hints);
 
     expect(restored.providers).toEqual([
-      {
-        id: "provider-bravo",
-        accounts: [
-          { id: "account-two", token: "synthetic-bravo-two-token" },
-          { id: "account-one", token: "synthetic-bravo-one-token" },
-        ],
-      },
+      providerAccounts(
+        "provider-bravo",
+        secretAccount("account-two", "bravo-two"),
+        secretAccount("account-one", "bravo-one"),
+      ),
     ]);
   });
 
   it("rejects SecretRef source/provider changes when id is still redacted", () => {
-    const incoming = {
-      models: {
-        providers: {
-          default: {
-            apiKey: {
-              source: "file",
-              provider: "vault",
-              id: REDACTED_SENTINEL,
-            },
-          },
-        },
-      },
-    };
-    const original = {
-      models: {
-        providers: {
-          default: {
-            apiKey: {
-              source: "env",
-              provider: "default",
-              id: "OPENAI_API_KEY",
-            },
-          },
-        },
-      },
-    };
+    const incoming = apiKeyConfig({ source: "file", provider: "vault", id: REDACTED_SENTINEL });
+    const original = apiKeyConfig(secretRef);
     const result = restoreRedactedValues_orig(incoming, original, mainSchemaHints);
     expect(result.ok).toBe(false);
     expect(result.humanReadableMessage).toContain("changed source/provider");
   });
 
   it("reports a provider-focused error when original SecretRefs lack provider", () => {
-    const incoming = {
-      models: {
-        providers: {
-          default: {
-            apiKey: {
-              source: "env",
-              id: REDACTED_SENTINEL,
-            },
-          },
-        },
-      },
-    };
-    const original = {
-      models: {
-        providers: {
-          default: {
-            apiKey: {
-              source: "env",
-              id: "OPENAI_API_KEY",
-            },
-          },
-        },
-      },
-    };
+    const incoming = apiKeyConfig({ source: "env", id: REDACTED_SENTINEL });
+    const original = apiKeyConfig({ source: "env", id: "OPENAI_API_KEY" });
     const result = restoreRedactedValues_orig(incoming, original, mainSchemaHints);
     expect(result.ok).toBe(false);
     expect(result.humanReadableMessage).toContain("requires a provider field");

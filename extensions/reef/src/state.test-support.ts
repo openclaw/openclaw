@@ -4,6 +4,7 @@ import path from "node:path";
 import type {
   OpenAsyncKeyedStoreOptions,
   OpenKeyedStoreOptions,
+  PluginStateActionAuthority,
   PluginStateKeyedStore,
   PluginStateOperation,
   PluginStateOperationDefinitions,
@@ -11,6 +12,7 @@ import type {
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
@@ -18,29 +20,26 @@ import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { expect, vi } from "vitest";
 
-export function createRuntime(stateDir: string, registrationHost: "worker" | "legacy" = "worker") {
+type OperationStore = Pick<PluginStateKeyedStore<unknown, 2>, "createOperation">;
+
+export function createRuntime(stateDir: string | NodeJS.ProcessEnv) {
+  const env = typeof stateDir === "string" ? { OPENCLAW_STATE_DIR: stateDir } : stateDir;
   const runtime = createPluginRuntimeMock();
-  const stateStores: Array<Pick<PluginStateKeyedStore<unknown>, "createOperation">> = [];
+  const stateStores: OperationStore[] = [];
   runtime.state.openSyncKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
-    createPluginStateSyncKeyedStoreForTests<T>("reef", {
-      ...options,
-      env: { OPENCLAW_STATE_DIR: stateDir },
-    });
-  runtime.state.openKeyedStore = <T>(options: OpenAsyncKeyedStoreOptions) => {
-    const store = createPluginStateKeyedStoreForTests<T>("reef", {
-      ...options,
-      env: { OPENCLAW_STATE_DIR: stateDir },
-    });
+    createPluginStateSyncKeyedStoreForTests<T>("reef", { ...options, env });
+  runtime.state.openKeyedStore = <T>(options: OpenAsyncKeyedStoreOptions) =>
+    createPluginStateKeyedStoreForTests<T>("reef", { ...options, env });
+  runtime.state.openKeyedStoreV2 = <T>(
+    options: OpenAsyncKeyedStoreOptions,
+    authority?: PluginStateActionAuthority,
+  ) => {
+    const store = createPluginStateKeyedStoreV2ForTests<T>(
+      "reef",
+      { ...options, env },
+      authority ?? { assertCurrent() {} },
+    );
     stateStores.push(store);
-    if (registrationHost === "legacy") {
-      const {
-        createOperation: _createOperation,
-        observe: _observe,
-        compareAndApply: _compareAndApply,
-        ...legacy
-      } = store;
-      return legacy;
-    }
     return store;
   };
   return Object.assign(runtime, { stateStores });
@@ -52,10 +51,10 @@ export function beforeNextStateOperation(
   phase: "before" | "after" = "before",
 ) {
   let pending = true;
-  const intercept = (store: Pick<PluginStateKeyedStore<unknown>, "createOperation">) => {
+  const intercept = <Store extends OperationStore>(store: Store): Store => {
     const create = store.createOperation;
     if (!create) {
-      return;
+      return store;
     }
     store.createOperation = <Operations extends PluginStateOperationDefinitions>(
       ...args: Parameters<typeof create>
@@ -76,15 +75,12 @@ export function beforeNextStateOperation(
         },
       };
     };
+    return store;
   };
   runtime.stateStores.forEach(intercept);
-  const open = runtime.state.openKeyedStore;
-  vi.spyOn(runtime.state, "openKeyedStore").mockImplementation(
-    <T>(options: OpenAsyncKeyedStoreOptions) => {
-      const store = open<T>(options);
-      intercept(store);
-      return store;
-    },
+  const open = runtime.state.openKeyedStoreV2;
+  vi.spyOn(runtime.state, "openKeyedStoreV2").mockImplementation(
+    <T>(...args: Parameters<typeof open>) => intercept(open<T>(...args)),
   );
 }
 
@@ -98,10 +94,10 @@ export async function expectReefStateOperationError(
     code: "PLUGIN_STATE_WRITE_FAILED",
     operation: "register",
     message: "Failed to execute plugin state operation.",
-    cause: expect.objectContaining({
+    cause: {
       name,
       message: typeof message === "string" ? message : expect.stringMatching(message),
-    }),
+    },
   });
 }
 

@@ -1,19 +1,13 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { GatewaySessionRow, SessionRunStatus, SessionsListResult } from "../../api/types.ts";
 import { formatUiExternalText } from "../format-error.ts";
-import type { GatewayConnectionScope } from "../gateway-connection-lifecycle.ts";
-import { isSessionRunActive } from "../session-run-state.ts";
+import { isSessionRunStateActive } from "../session-run-state.ts";
 import { mapSessionResultRows } from "./reconcile.ts";
 import {
   areUiSessionKeysEquivalent,
   isUiGlobalSessionKey,
   normalizeAgentId,
-  parseAgentSessionKey,
 } from "./session-key.ts";
-import {
-  createSessionWriteObservation,
-  type createSessionRowProvenance,
-} from "./session-row-provenance.ts";
 
 export type SessionRunTerminal = {
   sessionKeys: readonly string[];
@@ -22,16 +16,17 @@ export type SessionRunTerminal = {
   /** Latest session status after this owned model run leaves the active registry. */
   status: SessionRunStatus;
   errorMessage?: string;
+  suppressErrorNotice?: boolean;
   endedAt: number;
 };
 
 type SessionRunTerminalObservation = {
   agentId: (row: GatewaySessionRow) => string | null;
   project: (row: GatewaySessionRow) => GatewaySessionRow;
-  observe: (row: GatewaySessionRow, previous: GatewaySessionRow, fields: readonly string[]) => void;
+  observe: (row: GatewaySessionRow, previous: GatewaySessionRow) => void;
 };
 
-function createSessionRunTerminalReconciler(
+export function createSessionRunTerminalReconciler(
   terminal: SessionRunTerminal,
   observation?: SessionRunTerminalObservation,
 ): (row: GatewaySessionRow) => GatewaySessionRow {
@@ -57,7 +52,7 @@ function createSessionRunTerminalReconciler(
       return existing;
     }
     const row = observation?.project(existing) ?? existing;
-    const wasActive = row.hasActiveRun === true || isSessionRunActive(row);
+    const wasActive = row.hasActiveRun === true || isSessionRunStateActive(row);
     const previousTerminalRunId = row.lastRunId?.trim();
     const isTerminal = terminal.status !== "queued" && terminal.status !== "running";
     // An idle tuple may predate this run or belong to a newer completion.
@@ -84,7 +79,7 @@ function createSessionRunTerminalReconciler(
         hasActiveRun: true,
         status: "running" as const,
       };
-      observation?.observe(next, row, ["activeRunIds", "hasActiveRun", "status"]);
+      observation?.observe(next, row);
       return next;
     }
     // Exact active ownership can precede the persisted lifecycle update. Replace
@@ -97,6 +92,7 @@ function createSessionRunTerminalReconciler(
     const lastRunError = failed
       ? errorMessage || (replacementRunId ? undefined : row.lastRunError)
       : undefined;
+    const suppressErrorNotice = terminal.suppressErrorNotice ?? false;
     const endedAt = replacementRunId ? terminal.endedAt : (row.endedAt ?? terminal.endedAt);
     const runtimeMs = replacementRunId
       ? undefined
@@ -110,29 +106,12 @@ function createSessionRunTerminalReconciler(
         : replacementRunId || terminal.status === "running"
           ? false
           : row.abortedLastRun;
-    const fields = ["hasActiveRun", "status"];
-    if (activeRunIds !== undefined) {
-      fields.push("activeRunIds");
-    }
-    if (!failed || errorMessage || replacementRunId) {
-      fields.push("lastRunError");
-    }
-    if (replacementRunId) {
-      fields.push("lastRunId", "startedAt", "endedAt", "runtimeMs");
-    } else if (row.endedAt == null) {
-      fields.push("endedAt");
-      if (typeof row.startedAt === "number") {
-        fields.push("runtimeMs");
-      }
-    }
-    if (replacementRunId || terminal.status === "killed" || terminal.status === "running") {
-      fields.push("abortedLastRun");
-    }
     const next =
       !replacementRunId &&
       row.hasActiveRun === false &&
       row.status === terminal.status &&
       row.lastRunError === lastRunError &&
+      (row.suppressErrorNotice ?? false) === suppressErrorNotice &&
       row.endedAt === endedAt &&
       row.runtimeMs === runtimeMs &&
       row.activeRunIds === activeRunIds &&
@@ -145,12 +124,12 @@ function createSessionRunTerminalReconciler(
             hasActiveRun: false,
             status: terminal.status,
             lastRunError,
+            suppressErrorNotice,
             endedAt,
             runtimeMs,
             abortedLastRun,
           };
-    // Same-value terminal facts still precede an already-issued list response.
-    observation?.observe(next, row, fields);
+    observation?.observe(next, row);
     return next;
   };
 }
@@ -165,81 +144,4 @@ export function reconcileSessionRunTerminal(
   }
   const reconcileRow = createSessionRunTerminalReconciler(terminal, observation);
   return mapSessionResultRows(result, reconcileRow);
-}
-
-type SessionTerminalRosterState = {
-  result: SessionsListResult | null;
-  agentId: string | null;
-};
-
-type SessionTerminalRosterHost = {
-  readState: () => SessionTerminalRosterState;
-  prepareProjection: () => {
-    projectFields: (row: GatewaySessionRow, agentId: string | null) => GatewaySessionRow;
-  };
-  provenance: Pick<
-    ReturnType<typeof createSessionRowProvenance>,
-    "owner" | "inheritRow" | "observeFields"
-  >;
-  stage: (
-    scope: GatewayConnectionScope | null,
-    projectList: (entry: { snapshot: SessionTerminalRosterState }) => SessionsListResult | null,
-    projectRow: (entry: {
-      target: Readonly<{ key: string; agentId: string }>;
-      row: GatewaySessionRow | null;
-    }) => {
-      row: GatewaySessionRow | null;
-      invalidateRevision?: number;
-    },
-  ) => { changed: boolean; notify: () => void };
-};
-
-export function createSessionRunTerminalStaging(host: SessionTerminalRosterHost) {
-  return (
-    terminal: SessionRunTerminal,
-    event: { scope: GatewayConnectionScope | null; revision: number },
-  ): { result: SessionsListResult | null; changed: boolean; notify: () => void } => {
-    const { owner, inheritRow, observeFields } = host.provenance;
-    const { projectFields: project } = host.prepareProjection();
-    const observation = (agentId: string | null): SessionRunTerminalObservation => ({
-      agentId: (row) => owner(row, agentId),
-      project: (row) => project(row, agentId),
-      observe: (row, source, fields) => {
-        inheritRow(row, source);
-        // Terminal time is local; only Gateway rows supply the updatedAt clock.
-        observeFields(row, fields, createSessionWriteObservation(event.revision, null), agentId);
-      },
-    });
-    const reconcile = (result: SessionsListResult | null, agentId: string | null) =>
-      result && reconcileSessionRunTerminal(result, terminal, observation(agentId));
-    const state = host.readState();
-    const result = reconcile(state.result, state.agentId);
-    // Compute every owner against the unchanged held rows: consuming an overlap
-    // in one window must not make another reject the same completed run.
-    const staged = host.stage(
-      event.scope,
-      (entry) => reconcile(entry.snapshot.result, entry.snapshot.agentId),
-      (entry) => {
-        const matches = terminal.sessionKeys.some((key) => {
-          const agentId = parseAgentSessionKey(key)?.agentId ?? terminal.agentId;
-          return Boolean(
-            agentId &&
-            areUiSessionKeysEquivalent(key, entry.target.key) &&
-            normalizeAgentId(agentId) === normalizeAgentId(entry.target.agentId),
-          );
-        });
-        return {
-          row:
-            entry.row && matches
-              ? createSessionRunTerminalReconciler(
-                  terminal,
-                  observation(entry.target.agentId),
-                )(entry.row)
-              : entry.row,
-          ...(!entry.row && matches ? { invalidateRevision: event.revision } : {}),
-        };
-      },
-    );
-    return { result, changed: result !== state.result || staged.changed, notify: staged.notify };
-  };
 }

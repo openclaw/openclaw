@@ -94,12 +94,7 @@ function toFetchUrl(resource: RequestInfo | URL): string {
 const MATRIX_STATE_AFTER_SYNC_PARAM = "org.matrix.msc4222.use_state_after";
 
 function withoutMatrixStateAfterSyncParam(rawUrl: string): string {
-  let url: URL;
-  try {
-    url = new URL(rawUrl);
-  } catch {
-    return rawUrl;
-  }
+  const url = new URL(rawUrl);
 
   if (!url.pathname.endsWith("/sync") || !url.searchParams.has(MATRIX_STATE_AFTER_SYNC_PARAM)) {
     return rawUrl;
@@ -107,27 +102,6 @@ function withoutMatrixStateAfterSyncParam(rawUrl: string): string {
 
   url.searchParams.delete(MATRIX_STATE_AFTER_SYNC_PARAM);
   return url.toString();
-}
-
-function buildBufferedResponse(params: {
-  source: Response;
-  body: BodyInit;
-  url: string;
-}): Response {
-  const response = new Response(params.body, {
-    status: params.source.status,
-    statusText: params.source.statusText,
-    headers: new Headers(params.source.headers),
-  });
-  try {
-    Object.defineProperty(response, "url", {
-      value: params.source.url || params.url,
-      configurable: true,
-    });
-  } catch {
-    // Response.url is read-only in some runtimes; metadata is best-effort only.
-  }
-  return response;
 }
 
 async function consumeMatrixResponse<T>(
@@ -179,7 +153,7 @@ async function fetchWithMatrixGuardedRedirects(params: {
   assertCurrent?: () => void;
   beforeDispatch?: () => Promise<void> | undefined;
   assertSendCurrent?: () => void;
-}): Promise<{ response: Response; release: () => Promise<void>; finalUrl: string }> {
+}): Promise<{ response: Response; release: () => Promise<void> }> {
   const effect = captureEffectAuthority();
   const assertDispatchCurrent = () => {
     params.assertCurrent?.();
@@ -224,8 +198,6 @@ async function fetchWithMatrixGuardedRedirects(params: {
         signal,
         dispatcher,
       };
-      assertDispatchCurrent();
-      signal?.throwIfAborted();
       // The runtime fetch preserves the validated pinned-address dispatcher.
       let entered = false;
       const response = await effect
@@ -250,7 +222,6 @@ async function fetchWithMatrixGuardedRedirects(params: {
             cleanup();
             await closeDispatcher(dispatcher);
           },
-          finalUrl: currentUrl.toString(),
         };
       }
 
@@ -384,7 +355,19 @@ export function createMatrixGuardedFetch(params: {
           ),
         assertCurrent,
       },
-      (body) => buildBufferedResponse({ source: response, body: Uint8Array.from(body), url }),
+      (body) => {
+        const bufferedBody = Uint8Array.from(body);
+        const bufferedResponse = new Response(bufferedBody, {
+          status: response.status,
+          statusText: response.statusText,
+          headers: new Headers(response.headers),
+        });
+        Object.defineProperty(bufferedResponse, "url", {
+          value: response.url || url,
+          configurable: true,
+        });
+        return bufferedResponse;
+      },
     );
   }) as typeof fetch;
 }

@@ -1,5 +1,6 @@
+import type { Locator, Page } from "playwright";
 import { expect as expectBrowser } from "playwright/test";
-import { expect, it } from "vitest";
+import { assert, expect, it } from "vitest";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
   controlUiSessionUrl,
@@ -8,6 +9,7 @@ import {
   sessionsListResponse,
   waitForSessionRosterHydration,
 } from "./session-management.test-support.ts";
+import { selectAllSidebarSessions } from "./sidebar-navigation.test-support.ts";
 import {
   chooseSidebarOwner,
   openSidebarMenu,
@@ -24,179 +26,168 @@ function largeOwnerList(count: number) {
   }));
 }
 
-suite.define(() => {
-  it("navigates session filters and display controls with Tab, arrows, Space, and Escape", async () => {
-    const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      sessionKey: "agent:main:ada",
-      presenceUsers: [{ self: true, id: "profile-patrick", name: "Patrick" }],
-      historyMessages: [{ role: "assistant", content: [{ type: "text", text: "Ready." }] }],
-      methodResponses: {
-        "sessions.list": {
-          ...sessionsListResponse([
-            sessionRow("agent:main:ada", "Ada research", 2),
-            sessionRow("agent:main:bob", "Bob operations", 1),
-          ]),
-          owners: [
-            { type: "human", id: "profile-ada", label: "Ada Lovelace Byron" },
-            { type: "human", id: "profile-bob", label: "Bob" },
-            { type: "human", id: "profile-carol", label: "Carol" },
-            { type: "human", id: "profile-dave", label: "Dave" },
-          ],
-        },
-      },
-    });
+async function openRoster(
+  page: Page,
+  sessions: ReturnType<typeof sessionRow>[],
+  owners: ReturnType<typeof largeOwnerList>,
+  options: Pick<
+    NonNullable<Parameters<typeof installMockGateway>[1]>,
+    "presenceUsers" | "historyMessages"
+  > = {},
+) {
+  const [first] = sessions;
+  assert(first, "Expected a session to open");
+  const key = first.key;
+  const gateway = await installMockGateway(page, {
+    ...options,
+    sessionKey: key,
+    methodResponses: { "sessions.list": { ...sessionsListResponse(sessions), owners } },
+  });
+  await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
+  return gateway;
+}
 
-    try {
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
+async function expectContained(locator: Locator, viewport: { width: number; height: number }) {
+  const bounds = await locator.boundingBox();
+  expect(bounds).not.toBeNull();
+  expect(bounds!.x).toBeGreaterThanOrEqual(0);
+  expect(bounds!.y).toBeGreaterThanOrEqual(0);
+  expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(viewport.width);
+  expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(viewport.height);
+}
+
+suite.define(() => {
+  it("navigates session filters and display controls with Tab, arrows, Space, and Escape", () =>
+    suite.withPage({ viewport: { height: 800, width: 1200 } }, async ({ page }) => {
+      const gateway = await openRoster(
+        page,
+        [
+          sessionRow("agent:main:ada", "Ada research", 2),
+          sessionRow("agent:main:bob", "Bob operations", 1),
+        ],
+        [
+          { type: "human", id: "profile-ada", label: "Ada Lovelace Byron" },
+          { type: "human", id: "profile-bob", label: "Bob" },
+          { type: "human", id: "profile-carol", label: "Carol" },
+          { type: "human", id: "profile-dave", label: "Dave" },
+        ],
+        {
+          presenceUsers: [{ self: true, id: "profile-patrick", name: "Patrick" }],
+          historyMessages: [{ role: "assistant", content: [{ type: "text", text: "Ready." }] }],
+        },
+      );
       await waitForSessionRosterHydration(page);
+      await selectAllSidebarSessions(page);
       const trigger = page.getByRole("button", { name: "Filter & sort", exact: true });
-      await trigger.focus();
+      const owners = page.locator("#sidebar-session-owner-title");
+      const picker = page.locator(".sidebar-session-owner-filter");
+      await owners.focus();
       await page.keyboard.press("Enter");
-      const menu = page.locator(".sidebar-session-sort-menu");
-      await expectBrowser(menu.getByRole("dialog")).toBeVisible();
-      const active = menu.getByRole("radio", { name: "Active", exact: true });
-      const owners = menu.locator("#sidebar-sessions-owner");
-      await expectBrowser(owners).toBeFocused();
-      await page.keyboard.press("Enter");
-      await expectBrowser(menu.locator('[role="option"][data-value^="owner:"]')).toHaveCount(5);
+      await expectBrowser(picker.locator('[role="option"][data-value^="owner:"]')).toHaveCount(5);
       await page.keyboard.press("ArrowDown");
       await page.keyboard.press("ArrowDown");
       await page.keyboard.press("ArrowDown");
       await page.keyboard.press("Enter");
       await expect
-        .poll(async () =>
-          (await gateway.getRequests("sessions.list")).some(
-            (request) =>
-              (request.params as { ownerId?: unknown } | undefined)?.ownerId === "profile-ada",
-          ),
+        .poll(
+          async () =>
+            (await gateway.getRequests("sessions.list", { ownerId: "profile-ada" })).length > 0,
         )
         .toBe(true);
       await expectBrowser(owners).toHaveAccessibleName("Owners: Ada Lovelace Byron");
-      await owners.focus();
-      await page.keyboard.press("Tab");
+      await trigger.focus();
+      await page.keyboard.press("Enter");
+      const menu = page.locator(".sidebar-session-sort-menu");
+      const active = menu.getByRole("radio", { name: "Active", exact: true });
       await expectBrowser(active).toBeFocused();
       await page.keyboard.press("ArrowRight");
       await expectBrowser(menu.getByRole("radio", { name: "Snoozed", exact: true })).toBeChecked();
       await page.keyboard.press("ArrowLeft");
       await expectBrowser(active).toBeChecked();
-      // Row order, switches, and display submenus are covered by the sidebar
-      // filter browser test; this flow proves the Gateway-backed owner filter.
       await page.keyboard.press("Escape");
       await expectBrowser(menu).toHaveCount(0);
       await expectBrowser(trigger).toBeFocused();
       await page.keyboard.press("Enter");
-      await expectBrowser(owners).toBeFocused();
+      await expectBrowser(active).toBeFocused();
+      await expectBrowser(menu.getByRole("button", { name: "Reset", exact: true })).toHaveCount(0);
       await expectBrowser(owners).toHaveAccessibleName("Owners: Ada Lovelace Byron");
-      await page.keyboard.press("Shift+Tab");
-      await expectBrowser(menu.getByRole("button", { name: "Reset", exact: true })).toBeFocused();
       await menu.getByRole("link", { name: "Session sources", exact: true }).focus();
       await page.keyboard.press("Tab");
       await expectBrowser(menu).toHaveCount(0);
-    } finally {
-      await context.close();
-    }
-  });
+    }));
 
   it.each([
     { name: "desktop", ownerCount: 60, viewport: { height: 800, width: 1200 } },
     { name: "compact", ownerCount: 30, viewport: { height: 650, width: 390 } },
   ])(
     "contains the filters and a large owner roster in the $name viewport",
-    async ({ name, ownerCount, viewport }) => {
-      const context = await suite.browser.newContext({ viewport });
-      const page = await context.newPage();
-      const ownerOptions = largeOwnerList(ownerCount);
-      await installMockGateway(page, {
-        sessionKey: "agent:main:large-roster",
-        methodResponses: {
-          "sessions.list": {
-            ...sessionsListResponse([
-              sessionRow("agent:main:large-roster", "Large owner roster", Date.now()),
-            ]),
-            owners: ownerOptions,
-          },
-        },
-      });
-
-      try {
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:large-roster"));
+    ({ name, ownerCount, viewport }) =>
+      suite.withPage({ viewport }, async ({ page }) => {
+        const ownerOptions = largeOwnerList(ownerCount);
+        await openRoster(
+          page,
+          [sessionRow("agent:main:large-roster", "Large owner roster", Date.now())],
+          ownerOptions,
+        );
         if (name === "compact") {
           await page.getByRole("button", { name: "Expand sidebar" }).click();
         }
         await page.getByRole("button", { name: "Filter & sort", exact: true }).click();
         await openSidebarMenu(page);
         const menu = page.locator(".sidebar-session-sort-menu");
-        const menuBounds = await menu.locator(".sidebar-session-filter-panel").boundingBox();
-        expect(menuBounds).not.toBeNull();
-        expect(menuBounds!.x).toBeGreaterThanOrEqual(0);
-        expect(menuBounds!.y).toBeGreaterThanOrEqual(0);
-        expect(menuBounds!.x + menuBounds!.width).toBeLessThanOrEqual(viewport.width);
-        expect(menuBounds!.y + menuBounds!.height).toBeLessThanOrEqual(viewport.height);
-        const owners = menu.locator("#sidebar-sessions-owner");
+        await expectContained(menu.locator(".sidebar-session-filter-panel"), viewport);
+        await page.keyboard.press("Escape");
+        const owners = page.locator("#sidebar-session-owner-title");
         await owners.click();
-        await expectBrowser(menu.locator('[role="option"][data-value^="owner:"]')).toHaveCount(
-          ownerCount,
-        );
-        const list = menu.getByRole("listbox", { name: "Owners", exact: true });
+        await expectBrowser(
+          page.locator('.sidebar-session-owner-filter [role="option"][data-value^="owner:"]'),
+        ).toHaveCount(ownerCount);
+        const list = page.getByRole("listbox", { name: "Owners", exact: true });
         await settleSidebarMenuMotion(list);
-        const listBounds = await list.boundingBox();
-        expect(listBounds).not.toBeNull();
-        expect(listBounds!.x).toBeGreaterThanOrEqual(0);
-        expect(listBounds!.y).toBeGreaterThanOrEqual(0);
-        expect(listBounds!.x + listBounds!.width).toBeLessThanOrEqual(viewport.width);
-        expect(listBounds!.y + listBounds!.height).toBeLessThanOrEqual(viewport.height);
-        await menu
+        await expectContained(list, viewport);
+        await page
           .getByRole("combobox", { name: "Search", exact: true })
           .fill(ownerOptions.at(-1)!.id);
         await expectBrowser(list.getByRole("option")).toHaveCount(1);
         await list.getByRole("option").click();
-        await expectBrowser(menu.getByRole("dialog")).toBeVisible();
+        await expectBrowser(menu).toHaveCount(0);
         await expectBrowser(owners).toHaveAccessibleName(`Owners: ${ownerOptions.at(-1)!.id}`);
         const selectedBounds = await owners.boundingBox();
         expect(selectedBounds).not.toBeNull();
         expect(selectedBounds!.x + selectedBounds!.width).toBeLessThanOrEqual(viewport.width);
-      } finally {
-        await context.close();
-      }
-    },
+      }),
   );
 
-  it("keeps owner selection and radio navigation usable in RTL", async () => {
-    const context = await suite.browser.newContext({ viewport: { height: 650, width: 390 } });
-    const page = await context.newPage();
-    await installMockGateway(page, {
-      sessionKey: "agent:main:rtl-owners",
-      methodResponses: {
-        "sessions.list": {
-          ...sessionsListResponse([sessionRow("agent:main:rtl-owners", "RTL owners", Date.now())]),
-          owners: largeOwnerList(3),
-        },
-      },
-    });
-
-    try {
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:rtl-owners"));
+  it("keeps owner selection and radio navigation usable in RTL", () =>
+    suite.withPage({ viewport: { height: 650, width: 390 } }, async ({ page }) => {
+      await openRoster(
+        page,
+        [sessionRow("agent:main:rtl-owners", "RTL owners", Date.now())],
+        largeOwnerList(3),
+      );
       await page.locator("html").evaluate((element) => element.setAttribute("dir", "rtl"));
       await page.getByRole("button", { name: "Expand sidebar" }).click();
       await page.getByRole("button", { name: "Filter & sort", exact: true }).click();
       await openSidebarMenu(page);
       const menu = page.locator(".sidebar-session-sort-menu");
-      const owners = menu.locator("#sidebar-sessions-owner");
+      const owners = page.locator("#sidebar-session-owner-title");
+      await page.keyboard.press("Escape");
       await chooseSidebarOwner(page, "owner:profile-0");
       await expectBrowser(owners).toHaveAccessibleName("Owners: Owner 1");
+      await openSidebarMenu(page);
       const active = menu.getByRole("radio", { name: "Active", exact: true });
+      const snoozed = menu.getByRole("radio", { name: "Snoozed", exact: true });
       await active.focus();
+      await page.keyboard.press("ArrowLeft");
+      await expectBrowser(snoozed).toBeChecked();
+      await expectBrowser(snoozed).toBeFocused();
       await page.keyboard.press("ArrowRight");
-      await expectBrowser(menu.getByRole("radio", { name: "Snoozed", exact: true })).toBeChecked();
+      await expectBrowser(active).toBeChecked();
+      await expectBrowser(active).toBeFocused();
       await page.keyboard.press("Escape");
       await expectBrowser(menu).toHaveCount(0);
       await expectBrowser(
         page.getByRole("button", { name: "Filter & sort", exact: true }),
       ).toBeFocused();
-    } finally {
-      await context.close();
-    }
-  });
+    }));
 });

@@ -10,9 +10,15 @@ function isObsoleteGeneratedEntry(entry: ExecAllowlistEntry): boolean {
   return entry.source === "allow-always" && classifyExecAllowlistScope(entry) === "inactive";
 }
 
+export function countObsoleteGeneratedExecApprovalRules(
+  rules: readonly ExecAllowlistEntry[],
+): number {
+  return rules.filter(isObsoleteGeneratedEntry).length;
+}
+
 export function countObsoleteGeneratedExecApprovals(file: ExecApprovalsFile): number {
   return Object.values(file.agents ?? {}).reduce(
-    (count, agent) => count + (agent.allowlist ?? []).filter(isObsoleteGeneratedEntry).length,
+    (count, agent) => count + countObsoleteGeneratedExecApprovalRules(agent.allowlist ?? []),
     0,
   );
 }
@@ -39,12 +45,10 @@ function removeObsoleteGeneratedExecApprovals(file: ExecApprovalsFile): {
 
 export function repairObsoleteGeneratedExecApprovals(): number {
   let removed = 0;
-  updateExecApprovalsForMaintenance({
-    update: (file) => {
-      const result = removeObsoleteGeneratedExecApprovals(file);
-      removed = result.removed;
-      return result.removed > 0 ? result.file : null;
-    },
+  updateExecApprovalsForMaintenance((file) => {
+    const result = removeObsoleteGeneratedExecApprovals(file);
+    removed = result.removed;
+    return result.removed > 0 ? result.file : null;
   });
   return removed;
 }

@@ -12,20 +12,10 @@ type MatrixCryptoFacadeClient = {
   getUserId: () => string | null;
 };
 
-type MatrixCryptoNodeRuntime = typeof import("./crypto-node.runtime.js");
-const matrixCryptoNodeRuntimeLoader = createLazyRuntimeModule(
+// Keep native crypto bindings off the CLI startup graph; failed imports require a restart.
+const loadMatrixCryptoNodeRuntime = createLazyRuntimeModule(
   () => import("./crypto-node.runtime.js"),
 );
-
-async function loadMatrixCryptoNodeRuntime(): Promise<MatrixCryptoNodeRuntime> {
-  // Keep the native crypto package out of the main CLI startup graph.
-  try {
-    return await matrixCryptoNodeRuntimeLoader();
-  } catch (error) {
-    matrixCryptoNodeRuntimeLoader.clear();
-    throw error;
-  }
-}
 
 async function loadMatrixCryptoNodeBindings() {
   await ensureMatrixCryptoRuntime();
@@ -37,7 +27,6 @@ export function createMatrixCryptoFacade(deps: {
   client: MatrixCryptoFacadeClient;
   verificationManager: MatrixVerificationManager;
   recoveryKeyStore: MatrixRecoveryKeyStore;
-  isRoomEncrypted: (roomId: string) => Promise<boolean>;
   downloadContent: (
     mxcUrl: string,
     opts?: { maxBytes?: number; readIdleTimeoutMs?: number },
@@ -60,7 +49,6 @@ export function createMatrixCryptoFacade(deps: {
   }
 
   return {
-    isRoomEncrypted: deps.isRoomEncrypted,
     encryptMedia: async (
       buffer: Buffer,
     ): Promise<{ buffer: Buffer; file: Omit<EncryptedFile, "url"> }> => {

@@ -1,5 +1,5 @@
 import type { UserProfile, UsersSelfResult } from "../../../packages/gateway-protocol/src/index.js";
-import { GatewayRequestError } from "../api/gateway.ts";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
 import { userProfileAvatarUrl } from "../pages/profile/profile-avatar-url.ts";
 import type { ApplicationGatewayConnection, ApplicationGatewaySnapshot } from "./gateway.ts";
 import { hasOperatorReadAccess, hasOperatorSelfReadAccess } from "./operator-access.ts";
@@ -21,12 +21,13 @@ export function createGatewaySelfProfile(options: {
   const loadSelfProfile = (): Promise<UserProfile | null> => {
     const requestClient = options.getSnapshot().client;
     const hello = options.getSnapshot().hello;
-    if (
-      !requestClient ||
-      !hello ||
-      options.getSnapshot().phase !== "connected" ||
-      !hasOperatorSelfReadAccess(hello.auth ?? null)
-    ) {
+    if (!requestClient || !hello || options.getSnapshot().phase !== "connected") {
+      return Promise.resolve(null);
+    }
+    if (!hasOperatorSelfReadAccess(hello.auth ?? null)) {
+      if (!options.getSnapshot().selfUser) {
+        options.publish(null);
+      }
       return Promise.resolve(null);
     }
     if (selfProfileRequest) {

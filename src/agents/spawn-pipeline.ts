@@ -34,7 +34,6 @@ type SpawnPipelineResult<TState> =
       ok: false;
       phase: SpawnPipelinePhase;
       error: unknown;
-      state?: TState;
       runId?: string;
     };
 
@@ -97,7 +96,7 @@ export async function runSpawnPipeline<TState>(
         error,
         ...(registrationScope ? { registrationScope } : {}),
       });
-      return { ok: false, phase, state, runId, error };
+      return { ok: false, phase, runId, error };
     }
 
     if (params.hookRunner?.hasHooks("subagent_progress")) {

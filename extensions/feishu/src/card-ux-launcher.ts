@@ -1,7 +1,3 @@
-import {
-  asDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
-} from "openclaw/plugin-sdk/number-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
 import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
@@ -19,12 +15,23 @@ const QUICK_ACTION_MENU_KEYS = new Set(["quick-actions", "quick_actions", "launc
 
 function createQuickActionLauncherCard(params: {
   operatorOpenId: string;
-  chatId?: string;
   expiresAt: number;
-  chatType?: "p2p" | "group";
-  sessionKey?: string;
 }): Record<string, unknown> {
-  const context = buildFeishuCardInteractionContext(params);
+  const context = buildFeishuCardInteractionContext({ ...params, chatType: "p2p" });
+  const approvalActions = [
+    {
+      label: "New session",
+      type: "primary",
+      command: "/new",
+      prompt: "Start a fresh session? This will reset the current chat context.",
+    },
+    {
+      label: "Reset",
+      type: "danger",
+      command: "/reset",
+      prompt: "Reset this session now? Any active conversation state will be cleared.",
+    },
+  ] as const;
   return buildFeishuActionCard({
     title: "Quick actions",
     template: "indigo",
@@ -39,32 +46,18 @@ function createQuickActionLauncherCard(params: {
           c: context,
         }),
       }),
-      buildFeishuCardButton({
-        label: "New session",
-        type: "primary",
-        value: createFeishuCardInteractionEnvelope({
-          k: "meta",
-          a: FEISHU_APPROVAL_REQUEST_ACTION,
-          m: {
-            command: "/new",
-            prompt: "Start a fresh session? This will reset the current chat context.",
-          },
-          c: context,
+      ...approvalActions.map(({ label, type, command, prompt }) =>
+        buildFeishuCardButton({
+          label,
+          type,
+          value: createFeishuCardInteractionEnvelope({
+            k: "meta",
+            a: FEISHU_APPROVAL_REQUEST_ACTION,
+            m: { command, prompt },
+            c: context,
+          }),
         }),
-      }),
-      buildFeishuCardButton({
-        label: "Reset",
-        type: "danger",
-        value: createFeishuCardInteractionEnvelope({
-          k: "meta",
-          a: FEISHU_APPROVAL_REQUEST_ACTION,
-          m: {
-            command: "/reset",
-            prompt: "Reset this session now? Any active conversation state will be cleared.",
-          },
-          c: context,
-        }),
-      }),
+      ),
     ],
   });
 }
@@ -75,23 +68,12 @@ export async function maybeHandleFeishuQuickActionMenu(params: {
   operatorOpenId: string;
   runtime?: RuntimeEnv;
   accountId?: string;
-  now?: number;
 }): Promise<boolean> {
   if (!QUICK_ACTION_MENU_KEYS.has(normalizeOptionalLowercaseString(params.eventKey) ?? "")) {
     return false;
   }
 
-  const now = asDateTimestampMs(params.now ?? Date.now());
-  const expiresAt =
-    now === undefined
-      ? undefined
-      : resolveExpiresAtMsFromDurationMs(FEISHU_QUICK_ACTION_CARD_TTL_MS, { nowMs: now });
-  if (expiresAt === undefined) {
-    params.runtime?.log?.(
-      `feishu[${params.accountId ?? "default"}]: failed to open quick-action launcher for ${params.operatorOpenId}: invalid expiry clock`,
-    );
-    return false;
-  }
+  const expiresAt = Date.now() + FEISHU_QUICK_ACTION_CARD_TTL_MS;
   try {
     await sendCardFeishu({
       cfg: params.cfg,
@@ -99,17 +81,16 @@ export async function maybeHandleFeishuQuickActionMenu(params: {
       card: createQuickActionLauncherCard({
         operatorOpenId: params.operatorOpenId,
         expiresAt,
-        chatType: "p2p",
       }),
       accountId: params.accountId,
     });
   } catch (err) {
-    params.runtime?.log?.(
+    params.runtime?.log(
       `feishu[${params.accountId ?? "default"}]: failed to open quick-action launcher for ${params.operatorOpenId}: ${String(err)}`,
     );
     return false;
   }
-  params.runtime?.log?.(
+  params.runtime?.log(
     `feishu[${params.accountId ?? "default"}]: opened quick-action launcher for ${params.operatorOpenId}`,
   );
   return true;

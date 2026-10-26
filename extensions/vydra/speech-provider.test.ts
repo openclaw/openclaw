@@ -1,7 +1,8 @@
+import { jsonResponse } from "openclaw/plugin-sdk/test-env";
 import { bufferedOversizedJsonResponse as oversizedJsonResponse } from "openclaw/plugin-sdk/test-fixtures";
 import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-media-understanding";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { binaryResponse, jsonResponse, stubFetch } from "./provider-test-helpers.js";
+import { binaryResponse, stubFetch } from "./provider-test-helpers.js";
 import { buildVydraSpeechProvider } from "./speech-provider.js";
 
 describe("vydra speech provider", () => {
@@ -55,10 +56,12 @@ describe("vydra speech provider", () => {
     expect(result.audioBuffer).toEqual(Buffer.from("mp3-data"));
   });
 
-  it("does not treat a blank environment API key as configured", () => {
+  it("does not treat a blank environment API key as configured", async () => {
     vi.stubEnv("VYDRA_API_KEY", "   ");
 
-    expect(provider.isConfigured?.({ providerConfig: {}, timeoutMs: 30_000 })).toBe(false);
+    expect(await provider.isConfiguredAsync?.({ providerConfig: {}, timeoutMs: 30_000 })).toBe(
+      false,
+    );
   });
 
   it("rejects blank environment API keys before making requests", async () => {

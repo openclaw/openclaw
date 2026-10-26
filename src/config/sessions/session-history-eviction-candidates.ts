@@ -1,3 +1,4 @@
+import { engineTextHexSql } from "../../infra/database-engine/text-bytes.js";
 import {
   executeSqliteQuerySync,
   iterateSqliteQuerySync,
@@ -9,9 +10,11 @@ import type {
   ArchivedSessionEvictionQuery,
 } from "./disk-budget.types.js";
 import { collectRecentSessionHistoryIds } from "./session-accessor.sqlite-history-recency.js";
-import { readReferencedSessionIds } from "./session-accessor.sqlite-lifecycle-state.js";
-import { collectSessionStateIdsForEntry } from "./session-accessor.sqlite-references.js";
-import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import {
+  collectSessionStateIdsForEntry,
+  readReferencedSessionIds,
+} from "./session-accessor.sqlite-references.js";
+import { getSessionKysely } from "./session-accessor.sqlite-scope-helpers.js";
 import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
 import { sessionEntrySnapshotColumns } from "./session-entry-snapshots.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
@@ -107,7 +110,10 @@ export function collectSessionAdmissionReferences(params: {
     params.database.db,
     db
       .selectFrom("session_nodes")
-      .select(["session_key", db.fn<string>("hex", ["session_key"]).as("key_bytes")]),
+      .select((eb) => [
+        "session_key",
+        engineTextHexSql(params.database.db, eb.ref("session_key")).as("key_bytes"),
+      ]),
   )) {
     if (normalizedAdmissionKeys.has(normalizeStoreSessionKey(row.session_key))) {
       admittedKeyBytes.push(row.key_bytes);
@@ -127,10 +133,12 @@ export function collectSessionAdmissionReferences(params: {
             db
               .selectFrom("session_nodes")
               .select("session_key")
-              .where(
-                db.fn<string>("hex", ["session_key"]),
-                "in",
-                sqliteStringSet(admittedKeyBytes),
+              .where((eb) =>
+                eb(
+                  engineTextHexSql(params.database.db, eb.ref("session_key")),
+                  "in",
+                  sqliteStringSet(admittedKeyBytes),
+                ),
               ),
           ),
       )

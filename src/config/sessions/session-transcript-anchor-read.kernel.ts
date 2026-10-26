@@ -1,5 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { readSessionTranscriptRunId } from "../../sessions/transcript-events.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -8,6 +8,7 @@ import {
   readExactSessionEntryRow,
   readSessionEntryRow,
 } from "./session-accessor.sqlite-entry-read.js";
+import { readSessionTranscriptMetadataInDatabase } from "./session-accessor.sqlite-metadata-read.js";
 import { validateSessionTranscriptContextInDatabase } from "./session-accessor.sqlite-model-context.js";
 import {
   readCurrentProjectionSnapshot,
@@ -15,6 +16,7 @@ import {
 } from "./session-accessor.sqlite-projection-read.js";
 import type { ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import {
+  readActivePathEntryRelationFromProjection,
   readActiveTranscriptEntryAnchorFromProjection,
   readActiveTranscriptEntryAnchorInTransaction,
 } from "./session-accessor.sqlite-transcript-anchor.js";
@@ -24,7 +26,11 @@ import {
   readTranscriptHeaderFromDatabase,
 } from "./session-accessor.sqlite-transcript-metadata-read.js";
 import { readSessionTranscriptWatermarkInDatabase } from "./session-accessor.sqlite-transcript-watermark.js";
-import type { SessionTranscriptAnchorFacts } from "./session-transcript-anchor-read.types.js";
+import type { SessionEntrySummary } from "./session-accessor.types.js";
+import type {
+  SessionTranscriptAnchorEntry,
+  SessionTranscriptAnchorFacts,
+} from "./session-transcript-anchor-read.types.js";
 import { SessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
 import {
   resolveSqliteSessionTranscriptReadFence,
@@ -36,6 +42,7 @@ import type { InternalSessionEntry } from "./types.js";
 
 export type SessionTranscriptAnchorSelection = {
   entryIds: readonly string[];
+  activePathEntryId?: string | null;
   afterSeq?: number;
   /** Payload selection stays in the history lane and shares the anchor snapshot. */
   includeMessagesForRunId?: string;
@@ -43,6 +50,7 @@ export type SessionTranscriptAnchorSelection = {
   includeHeader?: boolean;
   includeWatermark?: boolean;
   includeMessagePresence?: boolean;
+  includeMetadata?: boolean;
   contextValidation?: Parameters<typeof validateSessionTranscriptContextInDatabase>[2];
   contextAuthority?: true | { permissionMode: InternalSessionEntry["permissionMode"] };
   replayValidation?: Pick<
@@ -52,6 +60,50 @@ export type SessionTranscriptAnchorSelection = {
 };
 
 type AnchorMessageReader = (projection: CurrentTranscriptProjection, entryId: string) => unknown;
+
+export function readSessionEntryTranscriptFacts(
+  database: Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">,
+  request: {
+    transcript?: Omit<SessionTranscriptAnchorSelection, "afterSeq" | "includeMessagesForRunId"> & {
+      sessionKey: string;
+      agentId?: string;
+    };
+    env: NodeJS.ProcessEnv;
+  },
+  entries: readonly SessionEntrySummary[],
+): { transcript?: SessionTranscriptAnchorFacts } {
+  const selection = request.transcript;
+  if (!selection) {
+    return {};
+  }
+  const entry = entries.find((row) => row.sessionKey === selection.sessionKey)?.entry;
+  if (!entry) {
+    return {
+      transcript: {
+        anchors: [],
+        ...(selection.activePathEntryId !== undefined
+          ? { activePathRelation: selection.activePathEntryId === null ? "exact" : "off-path" }
+          : {}),
+      },
+    };
+  }
+  return {
+    transcript: readSessionTranscriptAnchorFactsInDatabase(
+      database,
+      {
+        agentId: selection.agentId ?? database.agentId,
+        sessionId: entry.sessionId,
+        sessionKey: selection.sessionKey,
+        path: database.path,
+        env: request.env,
+      },
+      selection,
+      undefined,
+      undefined,
+      entry,
+    ),
+  };
+}
 
 /** Load display policy before entering the synchronous anchor snapshot. */
 export async function prepareSessionTranscriptAnchorMessageReader(
@@ -71,13 +123,15 @@ export async function prepareSessionTranscriptAnchorMessageReader(
     )?.message;
 }
 
-/** Readiness, identities and optional reply-tail facts belong to one snapshot. */
+/** The cohort's entry and optional reply-tail facts belong to the same snapshot. */
 export function readSessionTranscriptAnchorFactsInDatabase(
   database: Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">,
   resolved: ResolvedTranscriptScope,
   selection: SessionTranscriptAnchorSelection,
   readMessage?: AnchorMessageReader,
   projection?: CurrentTranscriptProjection,
+  preparedEntry?: SessionTranscriptAnchorEntry,
+  messagePresence?: true,
 ): SessionTranscriptAnchorFacts {
   if (
     projection &&
@@ -95,17 +149,21 @@ export function readSessionTranscriptAnchorFactsInDatabase(
     throw new Error("Transcript anchor message selection requires prepared display policy");
   }
   const read = (): SessionTranscriptAnchorFacts => {
-    const readWatermark = () =>
-      projection
-        ? { generation: projection.version.generation, maxSeq: projection.version.rawSeq }
+    const readWatermark = (currentProjection = projection) =>
+      currentProjection
+        ? {
+            generation: currentProjection.version.generation,
+            maxSeq: currentProjection.version.rawSeq,
+          }
         : readSessionTranscriptWatermarkInDatabase(database, resolved.sessionId);
     const contextEntry = selection.contextAuthority
-      ? readSessionEntryRow(database, resolved.sessionKey)?.entry
+      ? (preparedEntry ?? readSessionEntryRow(database, resolved.sessionKey)?.entry)
       : undefined;
     const contextAuthority = selection.contextAuthority
       ? {
           entry: contextEntry && {
             sessionId: contextEntry.sessionId,
+            updatedAt: contextEntry.updatedAt,
             lifecycleRevision: contextEntry.lifecycleRevision,
             activeWriterRunId: contextEntry.activeWriterRunId,
             cliHistoryBoundary: contextEntry.cliHistoryBoundary,
@@ -127,7 +185,7 @@ export function readSessionTranscriptAnchorFactsInDatabase(
     let replayValidated: SessionTranscriptAnchorFacts["replayValidated"];
     const replay = selection.replayValidation;
     if (replay) {
-      const entry = readSessionEntryRow(database, resolved.sessionKey)?.entry;
+      const entry = preparedEntry ?? readSessionEntryRow(database, resolved.sessionKey)?.entry;
       if (
         !entry &&
         replay.allowInitial &&
@@ -163,12 +221,15 @@ export function readSessionTranscriptAnchorFactsInDatabase(
       );
     }
     const validated = {
-      ...(selection.includeMessagePresence
-        ? { messagePresence: hasSessionTranscriptMessageInDatabase(database, resolved.sessionId) }
+      ...(selection.includeMetadata
+        ? { metadata: readSessionTranscriptMetadataInDatabase(database, resolved.sessionId) }
         : {}),
-      ...(selection.includeWatermark
+      ...(selection.includeMessagePresence
         ? {
-            watermark: contextAuthority?.watermark ?? readWatermark(),
+            // A selected message proves presence; a bounded window cannot prove absence.
+            messagePresence:
+              messagePresence ??
+              hasSessionTranscriptMessageInDatabase(database, resolved.sessionId),
           }
         : {}),
       ...(contextAuthority ? { contextAuthority } : {}),
@@ -176,7 +237,8 @@ export function readSessionTranscriptAnchorFactsInDatabase(
       ...(replayValidated ? { replayValidated } : {}),
     };
     const entry = selection.includeSession
-      ? readExactSessionEntryRow(database, resolved.sessionKey, "list", "canonical")?.entry
+      ? (preparedEntry ??
+        readExactSessionEntryRow(database, resolved.sessionKey, "list", "canonical")?.entry)
       : undefined;
     const session = entry
       ? { sessionId: entry.sessionId, lifecycleRevision: entry.lifecycleRevision }
@@ -191,22 +253,42 @@ export function readSessionTranscriptAnchorFactsInDatabase(
       }
     }
     const readAnchors = (currentProjection?: CurrentTranscriptProjection) => {
+      const watermark = selection.includeWatermark
+        ? {
+            watermark: contextAuthority?.watermark ?? readWatermark(currentProjection),
+          }
+        : {};
       const anchors = new Map<string, TranscriptEntryAnchor | undefined>();
       const readAnchor = (entryId: string) => {
-        if (!anchors.has(entryId)) {
-          const anchor = currentProjection
-            ? readActiveTranscriptEntryAnchorFromProjection(currentProjection, entryId)
-            : readActiveTranscriptEntryAnchorInTransaction({ database, resolved, entryId });
-          anchors.set(
-            entryId,
-            fence && anchor && anchor.rawSeq >= fence.beforeRawSeq ? undefined : anchor,
-          );
+        if (anchors.has(entryId)) {
+          return anchors.get(entryId);
         }
-        return anchors.get(entryId);
+        const anchor = currentProjection
+          ? readActiveTranscriptEntryAnchorFromProjection(currentProjection, entryId)
+          : readActiveTranscriptEntryAnchorInTransaction({ database, resolved, entryId });
+        const value = fence && anchor && anchor.rawSeq >= fence.beforeRawSeq ? undefined : anchor;
+        anchors.set(entryId, value);
+        return value;
       };
       const selected = selection.entryIds.flatMap((entryId) => readAnchor(entryId) ?? []);
+      const activePath =
+        selection.activePathEntryId !== undefined && currentProjection
+          ? {
+              activePathRelation: readActivePathEntryRelationFromProjection(
+                currentProjection,
+                selection.activePathEntryId,
+              ),
+            }
+          : {};
       if (selection.afterSeq === undefined) {
-        return { anchors: selected, ...validated, ...sessionFacts, ...header };
+        return {
+          anchors: selected,
+          ...activePath,
+          ...validated,
+          ...watermark,
+          ...sessionFacts,
+          ...header,
+        };
       }
       const rows = loadTranscriptEventRowsAfterSeqInDatabase(
         database,
@@ -246,6 +328,7 @@ export function readSessionTranscriptAnchorFactsInDatabase(
           ? [...anchors.values()].flatMap((anchor) => anchor ?? [])
           : selected,
         ...validated,
+        ...watermark,
         ...sessionFacts,
         ...header,
         tail: { lastSeq: rows.at(-1)?.seq, entries },
@@ -255,6 +338,7 @@ export function readSessionTranscriptAnchorFactsInDatabase(
       return readAnchors(projection);
     }
     if (
+      selection.activePathEntryId !== undefined ||
       (selection.replayValidation && selection.entryIds.length > 0) ||
       selection.includeMessagesForRunId !== undefined
     ) {
@@ -266,9 +350,16 @@ export function readSessionTranscriptAnchorFactsInDatabase(
     }
     return readAnchors();
   };
-  return database.db.isTransaction
+  const singleStatement =
+    selection.entryIds.length === 0 &&
+    ((selection.contextValidation?.through !== undefined &&
+      selection.contextValidation.admission === undefined &&
+      Object.keys(selection).every((key) => key === "entryIds" || key === "contextValidation")) ||
+      (selection.includeWatermark === true &&
+        Object.keys(selection).every((key) => key === "entryIds" || key === "includeWatermark")));
+  return database.db.isTransaction || singleStatement
     ? read()
-    : runSqliteDeferredTransactionSync(database.db, read, {
+    : runSqliteReadSnapshotSync(database.db, read, {
         databaseLabel: database.path,
         operationLabel: "session transcript anchors read",
       });

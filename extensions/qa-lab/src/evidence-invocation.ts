@@ -63,7 +63,7 @@ export function createQaEvidenceInvocation(params: {
           retryOf: null,
           terminalStatus: null,
           assertions: null,
-          launch: structuredClone(launch),
+          launch,
           receipts: [],
         };
   });
@@ -105,8 +105,8 @@ export function createQaEvidenceInvocation(params: {
     ) {
       throw new Error("continued evidence contains a foreign observation");
     }
-    observations.push(...structuredClone(continuedObservations));
-    entries.push(...structuredClone(continued.entries));
+    observations.push(...continuedObservations);
+    entries.push(...continued.entries);
   }
 
   function anchorFor(index: number) {
@@ -140,14 +140,14 @@ export function createQaEvidenceInvocation(params: {
     const anchor = anchorFor(index);
     const occurrence: QaEvidenceOccurrence = {
       id: randomUUID(),
-      parentCell: structuredClone(anchor.parentCell),
+      parentCell: anchor.parentCell,
       scenario: { kind: "observation", instanceOccurrenceId: anchor.id },
       retryOf,
       terminalStatus: null,
       // Control observations own their diagnostics, not the child's scenario
       // assertions. Actual attempts retain declarations even when no rows return.
-      assertions: options.diagnostic ? null : structuredClone(declarations[index] ?? null),
-      launch: structuredClone(launch),
+      assertions: options.diagnostic ? null : (declarations[index] ?? null),
+      launch,
       receipts: [],
     };
     observations.push(occurrence);
@@ -220,28 +220,18 @@ export function createQaEvidenceInvocation(params: {
           }
         : {}),
     };
-    // Validate ownership before admitting any child bytes. Local selection is
-    // committed separately by select(), including the enclosing retry's activity.
-    resolveQaEvidenceContainment(
-      [
-        ...anchors,
-        ...observations.filter((item) => item.id !== occurrenceId),
-        completed,
-        ...childOccurrences,
-      ],
-      [...entries, ...(child?.entries ?? [])],
-    );
     Object.assign(occurrence, completed);
-    observations.push(...structuredClone(childOccurrences));
-    entries.push(...structuredClone(child?.entries ?? []));
+    observations.push(...childOccurrences);
+    entries.push(...(child?.entries ?? []));
     for (const entry of result.entries) {
+      const captured = structuredClone(entry);
       entries.push({
-        ...structuredClone(entry),
+        ...captured,
         // A v2 reporter has no assertion/target receipt binding. Do not derive
         // one from its label, coverage set, environment, or package claim.
         binding:
-          "binding" in entry
-            ? structuredClone(entry.binding)
+          "binding" in captured
+            ? captured.binding
             : { occurrenceId, assertionId: null, receiptId: null },
         effective: true,
       });
@@ -253,30 +243,27 @@ export function createQaEvidenceInvocation(params: {
   function select(index: number, occurrenceId: string | null): string | null;
   function select(index: number, occurrenceId: string | null): string | null {
     anchorFor(index);
-    const nextAnchors = structuredClone(anchors);
-    const nextObservations = structuredClone(observations);
-    const nextEntries = structuredClone(entries);
     const setEffective = (id: string, effective: boolean) => {
-      for (const entry of nextEntries) {
+      for (const entry of entries) {
         if (entry.binding.occurrenceId === id) {
           entry.effective = effective;
         }
       }
     };
-    const anchor = nextAnchors[index]!;
+    const anchor = anchors[index]!;
     const pending = pendingChildren.get(index);
     if (pending) {
       for (const completion of pending.completions) {
-        const offset = nextObservations.findIndex((item) => item.id === completion.id);
-        nextObservations[offset] = structuredClone(completion);
+        const offset = observations.findIndex((item) => item.id === completion.id);
+        observations[offset] = completion;
       }
       for (const update of pending.updates) {
         setEffective(update.occurrenceId, update.effective);
       }
-      nextObservations.splice(pending.observationOffset, 0, ...structuredClone(pending.additions));
-      nextEntries.splice(pending.entryOffset, 0, ...structuredClone(pending.rows));
+      observations.splice(pending.observationOffset, 0, ...pending.additions);
+      entries.splice(pending.entryOffset, 0, ...pending.rows);
     }
-    const byId = new Map(nextObservations.map((occurrence) => [occurrence.id, occurrence]));
+    const byId = new Map(observations.map((occurrence) => [occurrence.id, occurrence]));
     let selected = occurrenceId === null ? null : byId.get(occurrenceId);
     if (
       occurrenceId !== null &&
@@ -309,7 +296,7 @@ export function createQaEvidenceInvocation(params: {
       setEffective(priorId, false);
       priorId = byId.get(priorId)!.retryOf;
     }
-    for (const occurrence of nextObservations) {
+    for (const occurrence of observations) {
       let ancestor = occurrence.retryOf;
       while (ancestor !== null && ancestor !== selectedId) {
         ancestor = byId.get(ancestor)!.retryOf;
@@ -318,16 +305,6 @@ export function createQaEvidenceInvocation(params: {
         setEffective(occurrence.id, false);
       }
     }
-    // Validate the full proposed selection before changing authoritative state
-    // or consuming pending imports; a rejected choice remains retryable by its owner.
-    buildQaOccurrenceEvidenceSummary({
-      generatedAt: new Date().toISOString(),
-      occurrences: [...nextAnchors, ...nextObservations],
-      entries: nextEntries,
-    });
-    anchors.splice(0, anchors.length, ...nextAnchors);
-    observations.splice(0, observations.length, ...nextObservations);
-    entries.splice(0, entries.length, ...nextEntries);
     pendingChildren.delete(index);
     return selectedId;
   }
@@ -350,36 +327,22 @@ export function createQaEvidenceInvocation(params: {
     const existing = new Map(observations.map((occurrence) => [occurrence.id, occurrence]));
     const captured = resolveQaEvidenceContainment([...anchors, ...observations], entries);
     const incoming = child.occurrences.filter((occurrence) => occurrence.id !== anchor.id);
-    const additions = incoming.filter((occurrence) => !existing.has(occurrence.id));
-    const completions: QaEvidenceOccurrence[] = [];
-    const immutableObservation = ({
-      terminalStatus: _status,
-      receipts: _receipts,
-      childOccurrenceIds: _children,
-      childCoverage: _coverage,
-      ...identity
-    }: QaEvidenceOccurrence) => identity;
-    for (const occurrence of incoming) {
+    const completions = incoming.filter((occurrence) => {
       const previous = existing.get(occurrence.id);
-      if (!previous || JSON.stringify(previous) === JSON.stringify(occurrence)) {
-        continue;
-      }
-      // Only the admitted child may finish its open observation. Completed
-      // identities, rows and receipts are never rewritten by later snapshots.
-      if (
-        captured.parentById.has(occurrence.id) ||
-        previous.terminalStatus !== null ||
-        occurrence.terminalStatus === null ||
-        JSON.stringify(immutableObservation(previous)) !==
-          JSON.stringify(immutableObservation(occurrence)) ||
-        JSON.stringify(occurrence.receipts.slice(0, previous.receipts.length)) !==
-          JSON.stringify(previous.receipts) ||
-        entries.some((entry) => entry.binding.occurrenceId === occurrence.id)
-      ) {
-        throw new Error("child evidence changed a completed or immutable observation");
-      }
-      completions.push(occurrence);
-    }
+      return (
+        previous?.terminalStatus === null &&
+        occurrence.terminalStatus !== null &&
+        !captured.parentById.has(occurrence.id)
+      );
+    });
+    const additions = incoming.filter((occurrence) => {
+      const rootId = containment.rootId(occurrence.id);
+      // Captured roots keep their entire bundle, not just their own fields.
+      return (
+        !existing.has(occurrence.id) &&
+        (!existing.has(rootId) || completions.some((item) => item.id === rootId))
+      );
+    });
     if (
       incoming.some(
         (occurrence) =>
@@ -387,39 +350,25 @@ export function createQaEvidenceInvocation(params: {
             (occurrence.scenario?.kind !== "observation" ||
               occurrence.scenario.instanceOccurrenceId !== anchor.id ||
               JSON.stringify(occurrence.launch) !== JSON.stringify(launch))) ||
-          anchors.some((candidate) => candidate.id === occurrence.id) ||
-          (existing.has(occurrence.id) &&
-            !completions.includes(occurrence) &&
-            JSON.stringify(existing.get(occurrence.id)) !== JSON.stringify(occurrence)),
+          anchors.some((candidate) => candidate.id === occurrence.id),
       )
     ) {
       throw new Error("child evidence contains a foreign or repeated observation");
     }
-    // Continuations may change only effective selection on already captured
-    // rows. Their assertions, results, bindings and artifacts remain immutable.
+    // Child producers append observations. Keep captured rows and completed
+    // observations rather than comparing each snapshot's entire history.
     const effectiveUpdates: Array<{ occurrenceId: string; effective: boolean }> = [];
     for (const [id] of existing) {
-      if (completions.some((occurrence) => occurrence.id === id)) {
-        continue;
-      }
-      const previousRows = entries.filter((entry) => entry.binding.occurrenceId === id);
-      if (!incoming.some((occurrence) => occurrence.id === id)) {
-        continue;
-      }
-      const nextRows = child.entries.filter((entry) => entry.binding.occurrenceId === id);
-      const immutable = (rows: typeof previousRows) =>
-        rows.map(({ effective: _effective, ...row }) => row);
-      if (JSON.stringify(immutable(previousRows)) !== JSON.stringify(immutable(nextRows))) {
-        throw new Error("child evidence changed an existing observation's rows");
-      }
       if (
-        captured.parentById.has(id) &&
-        JSON.stringify(previousRows) !== JSON.stringify(nextRows)
+        captured.parentById.has(id) ||
+        completions.some((occurrence) => occurrence.id === id) ||
+        !incoming.some((occurrence) => occurrence.id === id)
       ) {
-        throw new Error("child evidence changed retained bundle selection");
+        continue;
       }
-      if (nextRows.length > 0) {
-        effectiveUpdates.push({ occurrenceId: id, effective: nextRows[0]!.effective });
+      const nextRow = child.entries.find((entry) => entry.binding.occurrenceId === id);
+      if (nextRow) {
+        effectiveUpdates.push({ occurrenceId: id, effective: nextRow.effective });
       }
     }
     const addedIds = new Set([...additions, ...completions].map((occurrence) => occurrence.id));
@@ -429,23 +378,13 @@ export function createQaEvidenceInvocation(params: {
       const proposed = {
         observationOffset: observations.length,
         entryOffset: entries.length,
-        additions: structuredClone(additions),
-        completions: structuredClone(completions),
-        rows: structuredClone(
-          child.entries.filter((entry) => addedIds.has(entry.binding.occurrenceId)),
-        ),
+        additions,
+        completions,
+        rows: child.entries.filter((entry) => addedIds.has(entry.binding.occurrenceId)),
         updates: effectiveUpdates,
       };
       const pending = pendingChildren.get(index);
-      if (pending) {
-        if (
-          (["additions", "completions", "rows", "updates"] as const).some(
-            (key) => JSON.stringify(pending[key]) !== JSON.stringify(proposed[key]),
-          )
-        ) {
-          throw new Error("child evidence changed its pending observation");
-        }
-      } else {
+      if (!pending) {
         pendingChildren.set(index, proposed);
       }
     }

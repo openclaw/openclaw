@@ -8,6 +8,11 @@ import {
 } from "../../infra/outbound/agent-delivery.js";
 import { shouldDowngradeDeliveryToSessionOnly } from "../../infra/outbound/best-effort-delivery.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
+import {
+  getRpcSourceIdentity,
+  isRpcSourceActive,
+  listRpcSourceEntries,
+} from "../../sessions/session-controller.rpc-sources.js";
 import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
@@ -21,6 +26,7 @@ import { errorShapeFromError } from "../error-shape.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
+import { captureRpcSourceScopeMatcher } from "../session-runtime-scope.js";
 import type { AgentTurnContext, AgentTurnPrincipal } from "./types.js";
 
 export type AgentDeliveryPhaseResult = NonNullable<
@@ -34,6 +40,7 @@ export async function resolveAgentDeliveryPhase(params: {
   sessionEntry?: SessionEntry;
   resolvedSessionKey?: string;
   resolvedSessionAgentId?: string;
+  storePath?: string;
   agentId?: string;
   replyTo: string;
   to: string;
@@ -80,14 +87,27 @@ export async function resolveAgentDeliveryPhase(params: {
           params.resolvedSessionKey,
         )
       : undefined;
-    for (const [activeRunId, active] of params.context.chatAbortControllers) {
-      const sameSession = active.sessionKey === params.resolvedSessionKey;
+    const matchesScope = params.storePath
+      ? captureRpcSourceScopeMatcher({
+          storePath: params.storePath,
+          resolveGatewayContext: params.context.resolveGatewayContext,
+        })
+      : undefined;
+    for (const [activeRunId, active] of listRpcSourceEntries()) {
+      const identity = getRpcSourceIdentity(active);
+      const sameSession = identity.sessionKey === params.resolvedSessionKey;
       const activeOwner = resolveChatRunOwnerAgentId({
-        agentId: active.agentId,
-        sessionKey: active.sessionKey,
+        agentId: identity.agentId,
+        sessionKey: identity.sessionKey,
         defaultAgentId: compatibilityOwnerAgentId,
       });
-      if (activeRunId !== params.runId && sameSession && activeOwner === activeSessionAgentId) {
+      if (
+        activeRunId !== params.runId &&
+        sameSession &&
+        activeOwner === activeSessionAgentId &&
+        matchesScope?.(active) &&
+        isRpcSourceActive(active)
+      ) {
         params.onRunObserved(activeRunId);
       }
     }
@@ -174,7 +194,7 @@ export async function resolveAgentDeliveryPhase(params: {
   }
 
   if (!resolvedTo && isDeliverableMessageChannel(resolvedChannel)) {
-    const fallback = resolveAgentOutboundTarget({
+    const fallback = await resolveAgentOutboundTarget({
       cfg: params.cfgForAgent ?? params.cfg,
       plan: effectivePlan,
       targetMode: deliveryTargetMode ?? "implicit",

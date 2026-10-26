@@ -1,11 +1,12 @@
-import { STREAM_ERROR_FALLBACK_TEXT } from "@openclaw/ai/internal/shared";
 import { GATEWAY_ASSISTANT_ERROR_FALLBACK_TEXT } from "@openclaw/gateway-protocol/gateway-error-details";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { STREAM_ERROR_FALLBACK_TEXT } from "../../packages/ai/src/replay-turn-classification.js";
 import {
   renderAssistantRequestFailureCopy,
   renderRecordedAssistantFailureCopy,
 } from "../agents/failover/assistant-request-failure-copy.js";
 import { readTranscriptSenderIdentity } from "../chat/sender-identity.js";
+import { projectPreservedCatalogMessageForDisplay } from "../chat/session-catalog-display.js";
 import {
   projectAgentHistoryActivity,
   type AgentHistoryActivity,
@@ -19,7 +20,11 @@ import {
   readSessionTranscriptFailureRunId,
   readSessionTranscriptRunId,
 } from "../sessions/transcript-events.js";
-import { formatProviderRefusalText } from "../shared/assistant-error-format.js";
+import {
+  CONTEXT_OVERFLOW_ERROR_MESSAGE,
+  formatProviderRefusalText,
+} from "../shared/assistant-error-format.js";
+import { readRunFailureNotice } from "../shared/run-failure-notice.js";
 import {
   isOpenClawMessageToolMirrorAssistantMessage,
   isTranscriptOnlyOpenClawAssistantMessage,
@@ -38,17 +43,18 @@ import {
   filterVisibleProjectedHistoryMessages,
   mergeTtsSupplementMessages,
   projectForwardedMessages,
+  projectPluginSteeringMessage,
   toProjectedMessages,
 } from "./chat-display-projection.history.js";
 import { mapChatDisplayMessages } from "./chat-display-projection.map.js";
 import {
+  prepareAssistantHistoryMessage,
   sanitizeChatHistoryContentBlock,
   sanitizeChatHistoryMessage,
   sanitizeChatHistoryMessages,
   shouldDropAssistantHistoryMessage,
 } from "./chat-display-projection.sanitize.js";
 import { stripEnvelopeFromMessages } from "./chat-sanitize.js";
-import { isSuppressedControlReplyText } from "./control-reply-text.js";
 import type {
   CurrentUserProfileDisplay,
   CurrentUserProfileDisplayResolver,
@@ -59,6 +65,7 @@ import { projectTranscriptImageArtifacts } from "./transcript-image-artifacts.js
 export type ChatDisplayProjectionOptions = {
   resolveCronJobName?: (jobId: string) => string | undefined;
   includeCommentaryFallbacks?: boolean;
+  includePluginSteering?: boolean;
   maxChars?: number;
   toolResultMaxChars?: number;
   activity?: false;
@@ -145,6 +152,7 @@ function getAssistantErrorFallbackText(message: Record<string, unknown>): string
 
 function sanitizeAssistantErrorDisplayMessage(
   message: Record<string, unknown>,
+  includeFailureCopy = true,
 ): Record<string, unknown> {
   const { content, ...envelope } = message;
   let next = sanitizeChatHistoryMessage(envelope, Number.MAX_SAFE_INTEGER).message as Record<
@@ -189,7 +197,7 @@ function sanitizeAssistantErrorDisplayMessage(
       code: typeof message.errorCode === "string" ? message.errorCode : undefined,
     }) ??
     renderRecordedAssistantFailureCopy(message);
-  if (terminalCopy) {
+  if (includeFailureCopy && terminalCopy) {
     // Apply the normal visibility rules before adding host-owned failure copy.
     // Put it first in surviving text so phase filtering and display caps retain it.
     // SAFETY: Sanitizing a record only clones/filters its fields; its envelope remains a record.
@@ -274,7 +282,7 @@ function hasVisibleAssistantDisplayContent(message: Record<string, unknown>): bo
     string,
     unknown
   >;
-  if (shouldDropAssistantHistoryMessage(sanitized)) {
+  if (shouldDropAssistantHistoryMessage(message)) {
     return false;
   }
   if (hasAssistantDisplayableNonTextContent(sanitized) || hasTranscriptMediaFacts(sanitized)) {
@@ -295,15 +303,11 @@ function hasVisibleAssistantReplyText(message: Record<string, unknown>): boolean
       return false;
     }
     const visible = text.trim();
-    return (
-      visible.length > 0 &&
-      visible !== STREAM_ERROR_FALLBACK_TEXT &&
-      !isSuppressedControlReplyText(visible)
-    );
+    return visible.length > 0 && visible !== STREAM_ERROR_FALLBACK_TEXT;
   });
 }
 
-export function isPendingAssistantError(value: unknown): boolean {
+function isDiagnosticOnlyAssistantError(value: unknown): boolean {
   const message = asOptionalRecord(value);
   return (
     message?.role === "assistant" &&
@@ -312,7 +316,45 @@ export function isPendingAssistantError(value: unknown): boolean {
     (isPureStreamErrorFallbackAssistantMessage(message) ||
       (Boolean(readSessionTranscriptRunId(message)) &&
         !hasAssistantDisplayableNonTextContent(message) &&
-        !hasVisibleAssistantDisplayContent(message)))
+        !hasTranscriptMediaFacts(message) &&
+        (!hasVisibleAssistantDisplayContent(message) ||
+          // Older projections stored the host error copy as assistant text. It
+          // is diagnostic-only, but partial answers and media must stay visible.
+          extractAssistantTextForSilentCheck(message)
+            ?.trim()
+            .replace(/^⚠️\s*/u, "") === CONTEXT_OVERFLOW_ERROR_MESSAGE)))
+  );
+}
+
+export function isPendingAssistantError(value: unknown): boolean {
+  const message = asOptionalRecord(value);
+  return Boolean(
+    message?.role === "assistant" &&
+    message.display !== false &&
+    message.stopReason === "error" &&
+    (readSessionTranscriptRunId(message) || isPureStreamErrorFallbackAssistantMessage(message)),
+  );
+}
+
+/** Retain authored output, never a model attempt's host-owned failure copy. */
+function projectAssistantAttemptContent(message: Record<string, unknown>) {
+  const diagnosticOnly = isDiagnosticOnlyAssistantError(message);
+  const next = sanitizeAssistantErrorDisplayMessage(message, false);
+  delete next.stopReason;
+  delete next.openclawRunError;
+  if (diagnosticOnly) {
+    next.content = [];
+    delete next.text;
+  }
+  return hasVisibleAssistantDisplayContent(next) ? next : undefined;
+}
+
+/** Hidden retry prompts continue a turn; only a real user input ends recovery matching. */
+export function isChatHistoryRecoveryUserBoundary(value: unknown): boolean {
+  const message = asOptionalRecord(value);
+  return (
+    message?.role === "user" &&
+    !(message.display === false && asOptionalRecord(message.provenance)?.kind === "internal_system")
   );
 }
 
@@ -326,14 +368,26 @@ export function createChatHistoryRecoveryProjection(options?: ChatHistoryRecover
   let pendingIndexes: number[] = [];
   const repairedIndexes = new Set<number>();
   const append = (message: Record<string, unknown>) => {
+    const receiptRunId =
+      readSessionTranscriptFailureRunId(message) ?? readRunFailureNotice(message)?.runId;
+    if (receiptRunId) {
+      pendingIndexes = pendingIndexes.filter((pendingIndex) => {
+        if (readSessionTranscriptRunId(messages[pendingIndex]) !== receiptRunId) {
+          return true;
+        }
+        repairedIndexes.add(pendingIndex);
+        recoveryObserved = true;
+        return false;
+      });
+    }
     const index = messages.length;
     messages.push(message);
-    if (message.role === "user") {
+    if (isChatHistoryRecoveryUserBoundary(message)) {
       unseenPending = false;
       pendingIndexes = [];
       return;
     }
-    if (isPendingAssistantError(message)) {
+    if (isPendingAssistantError(message) || readRunFailureNotice(message)) {
       pendingIndexes.push(index);
       return;
     }
@@ -380,13 +434,42 @@ export function createChatHistoryRecoveryProjection(options?: ChatHistoryRecover
       return {
         messages:
           repairedIndexes.size > 0
-            ? messages.filter((_, index) => !repairedIndexes.has(index))
+            ? messages.flatMap((message, index) => {
+                if (!repairedIndexes.has(index)) {
+                  return [message];
+                }
+                const partial = projectAssistantAttemptContent(message);
+                return partial ? [partial] : [];
+              })
             : messages.slice(),
         pending: unseenPending || pendingIndexes.length > 0,
         recoveryObserved,
       };
     },
   };
+}
+
+/** Only the terminal lifecycle owner may turn attempt diagnostics into a notice. */
+function projectRunFailureNotices(
+  messages: Array<Record<string, unknown>>,
+): Array<Record<string, unknown>> {
+  return messages.flatMap((message) => {
+    if (message.role === "custom" && message.customType === "run-failed-before-reply") {
+      const runId =
+        readSessionTranscriptFailureRunId(message) ?? readSessionTranscriptRunId(message);
+      const summary =
+        readRunFailureNotice(message)?.summary ??
+        (typeof message.content === "string" ? message.content.trim() : undefined);
+      return runId && summary ? [{ ...message, openclawRunError: { runId, summary } }] : [message];
+    }
+    if (readSessionTranscriptRunId(message) && isPendingAssistantError(message)) {
+      // Legacy receipt-less attempts stay in the raw transcript. Inactivity or
+      // a bounded page cannot establish that the logical run exhausted recovery.
+      const partial = projectAssistantAttemptContent(message);
+      return partial ? [partial] : [];
+    }
+    return [message];
+  });
 }
 
 function projectEmptyAssistantErrorMessages(
@@ -431,7 +514,7 @@ export function prepareChatHistoryRecoveryMessages(
   options?: ChatHistoryRecoveryOptions,
 ) {
   const projectedMessages = messages.map((original) => {
-    const message = projectTranscriptImageArtifacts(original);
+    const message = projectTranscriptImageArtifacts(prepareAssistantHistoryMessage(original));
     const entry = asOptionalRecord(message);
     const failureRunId = readSessionTranscriptFailureRunId(entry);
     if (failureRunId) {
@@ -473,9 +556,12 @@ export function projectChatDisplayMessagesWithState(
 ): ChatDisplayProjectionResult {
   options?.subagentCoordination?.assertCurrent?.();
   const recovery = createChatHistoryRecoveryProjection(options);
-  recovery.append(messages);
+  const catalogDisplay = messages.flatMap(projectPreservedCatalogMessageForDisplay);
+  recovery.append(catalogDisplay);
   const recoveredErrors = recovery.result();
-  const projectedErrors = projectEmptyAssistantErrorMessages(recoveredErrors.messages);
+  const projectedErrors = projectEmptyAssistantErrorMessages(
+    projectRunFailureNotices(recoveredErrors.messages),
+  );
   const activity =
     options?.activity === false
       ? []
@@ -485,25 +571,43 @@ export function projectChatDisplayMessagesWithState(
             return typeof messageId === "string" ? [{ messageId, message }] : [];
           }),
         );
-  const sanitizedMessages = toProjectedMessages(
-    sanitizeChatHistoryMessages(projectedErrors, Number.MAX_SAFE_INTEGER, {
-      includeCommentaryFallbacks: options?.includeCommentaryFallbacks,
-    }),
-  );
+  // Imported catalog facts already own their presentation; stored reference text has no tool blocks.
+  if (options?.activity !== false) {
+    for (const message of catalogDisplay) {
+      const record = asOptionalRecord(message);
+      const id = asOptionalRecord(record?.["__openclaw"])?.id;
+      if (
+        asOptionalRecord(record?.["__openclaw"])?.catalogSource === true &&
+        typeof id === "string" &&
+        Array.isArray(record?.activity)
+      ) {
+        activity.push({ messageId: id, items: record.activity });
+      }
+    }
+  }
+  // Recovery already admitted records and consumed assistant display content.
+  const sanitizedMessages = sanitizeChatHistoryMessages(projectedErrors, Number.MAX_SAFE_INTEGER, {
+    includeCommentaryFallbacks: options?.includeCommentaryFallbacks,
+  });
   const commentaryFallbacksObserved =
     options?.includeCommentaryFallbacks === true &&
     sanitizedMessages.some(
       (message) => asOptionalRecord(message.openclawStreamFallback)?.source === "segment",
     );
   const filtered = filterVisibleProjectedHistoryMessages(
-    projectForwardedMessages(sanitizedMessages, options?.resolveCronJobName),
+    projectForwardedMessages(
+      options?.includePluginSteering
+        ? mapChatDisplayMessages(sanitizedMessages, projectPluginSteeringMessage)
+        : sanitizedMessages,
+      options?.resolveCronJobName,
+    ),
     options?.turnBoundaryPending,
   );
   const displayMessages = sanitizeChatHistoryMessages(
     mergeTtsSupplementMessages(filtered.messages),
     options?.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
     { toolResultMaxChars: options?.toolResultMaxChars },
-  ) as Array<Record<string, unknown>>;
+  );
   const result: ChatDisplayProjectionResult = {
     activity,
     messages: projectCurrentUserProfileAvatars(

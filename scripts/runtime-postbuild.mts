@@ -19,6 +19,7 @@ import { withDistArtifactOwnership } from "./lib/dist-artifact-ownership.mts";
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
+import { updateStandaloneSourceModuleUrlChunks } from "./lib/standalone-source-module-urls.mjs";
 import {
   copyStaticExtensionAssets,
   copyStaticExtensionAssetsToRuntimeOverlay,
@@ -29,7 +30,6 @@ import {
   isUpdateCompatibilityChunk,
   listUpdateCompatibilityChunkPaths,
   readUpdateCompatibilityInventory,
-  UPDATE_COMPATIBILITY_INVENTORY_FILE,
   writeUpdateCompatibilityChunks,
 } from "./lib/update-compat-chunks.mts";
 import { buildUpdateConfigRuntimeAlias } from "./lib/update-config-runtime-compat.mts";
@@ -244,7 +244,6 @@ export function listCoreRuntimePostBuildOutputs(params: RuntimeFsParams = {}) {
     ...listStableRootRuntimeAliasOutputs(params),
     ...listLegacyRootRuntimeCompatOutputs(params),
     ...LEGACY_CLI_EXIT_COMPAT_CHUNKS.map(({ dest }) => dest),
-    `dist/${UPDATE_COMPATIBILITY_INVENTORY_FILE}`,
     ...listUpdateCompatibilityChunkPaths(
       readUpdateCompatibilityInventory(UPDATE_COMPATIBILITY_INVENTORY),
     ).map((fileName) => `dist/${fileName}`),
@@ -390,6 +389,7 @@ export function writeStableRootRuntimeAliases(params: RuntimeFsParams = {}) {
   );
 
   const ownership = readRuntimeDependencyOwnership(rootDir, fsImpl);
+  const moduleUrlRewrites: { filename: string; original: string; rewritten: string }[] = [];
   using parser = createNativeTypeScriptParser({ cwd: rootDir });
   for (const [aliasFileName, candidates] of candidatesByAlias) {
     const aliasPath = path.join(distDir, aliasFileName);
@@ -430,8 +430,19 @@ export function writeStableRootRuntimeAliases(params: RuntimeFsParams = {}) {
     } else if (ownership) {
       delete ownership.chunks[aliasFileName];
     }
+    const original = fsImpl.existsSync(aliasPath)
+      ? fsImpl.readFileSync(aliasPath, "utf8")
+      : undefined;
     writeTextFileIfChanged(aliasPath, source);
+    if (original !== undefined && original !== source) {
+      moduleUrlRewrites.push({ filename: aliasPath, original, rewritten: source });
+    }
   }
+  updateStandaloneSourceModuleUrlChunks({
+    outputRoot: distDir,
+    rewrites: moduleUrlRewrites,
+    fsImpl,
+  });
   writeRuntimeDependencyOwnership(rootDir, ownership, fsImpl);
 }
 
@@ -464,6 +475,7 @@ export function rewriteRootRuntimeImportsToStableAliases(params: RuntimeFsParams
   }
 
   const ownership = readRuntimeDependencyOwnership(rootDir, fsImpl);
+  const moduleUrlRewrites: { filename: string; original: string; rewritten: string }[] = [];
   for (const entry of entries) {
     if (!entry.isFile() || !/\.m?js$/u.test(entry.name)) {
       continue;
@@ -498,8 +510,14 @@ export function rewriteRootRuntimeImportsToStableAliases(params: RuntimeFsParams
         owner.sha256 = createHash("sha256").update(rewritten).digest("hex");
       }
       writeTextFileIfChanged(filePath, rewritten);
+      moduleUrlRewrites.push({ filename: filePath, original: source, rewritten });
     }
   }
+  updateStandaloneSourceModuleUrlChunks({
+    outputRoot: distDir,
+    rewrites: moduleUrlRewrites,
+    fsImpl,
+  });
   writeRuntimeDependencyOwnership(rootDir, ownership, fsImpl);
 }
 

@@ -12,8 +12,6 @@
     "../../src/agents/sandbox/**/*.test.tsx",
     "../../src/agents/worktrees/**/*.test.ts",
     "../../src/agents/worktrees/**/*.test.tsx",
-    "../../src/security/**/*.test.ts",
-    "../../src/security/**/*.test.tsx",
     "../../src/secrets/**/*.test.ts",
     "../../src/secrets/**/*.test.tsx",
     "../../src/agents/bash-tools*.test.ts",
@@ -22,5 +20,12 @@
     "../../src/agents/code-mode*.test.tsx",
     "../../src/agents/tool-*.test.ts",
     "../../src/agents/tool-*.test.tsx"
+  ],
+  "exclude": [
+    "../../node_modules",
+    "../../dist",
+    "../../**/dist/**",
+    "../../src/agents/tools/cron-*.test.ts",
+    "../../src/agents/tools/cron-*.test.tsx"
   ]
 }

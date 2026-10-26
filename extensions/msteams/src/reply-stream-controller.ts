@@ -33,14 +33,8 @@ type MSTeamsNativeDeliveryFinalization = {
   postNativePayloads?: ReplyPayload[];
 };
 
-// The SDK throws StreamCancelledError synchronously from stream.emit/update
-// when the user pressed Stop in Teams (Teams replies 403 to the next chunk
-// update and the SDK flips _canceled). Match by `name` rather than importing
-// the class — tsgo can't resolve the re-export chain through
-// @microsoft/teams.apps/dist/types/streamer, and the SDK's own code at
-// utils/promises/retry.js falls back to this same name check.
-function isStreamCancelledError(err: unknown): boolean {
-  return err instanceof Error && err.name === "StreamCancelledError";
+function hasUnstreamedContent(payload: ReplyPayload): boolean {
+  return Boolean(payload.presentation || payload.mediaUrl || payload.mediaUrls?.length);
 }
 
 /** Bridge reply callbacks to the SDK stream; shared conversations use block delivery. */
@@ -67,9 +61,6 @@ export function createTeamsReplyStreamController(params: {
   let nativeDispatchStarted = false;
   let nativeDeliveryClaimed = false;
   let streamFinalizationPending = false;
-  let canceledLocally = false;
-  // Provider failures allow block fallback; user cancellation suppresses it.
-  let streamFailed = false;
   let pendingFinalPayload: ReplyPayload | undefined;
   // The SDK appends deltas to cumulative pipeline text. Retain the text, not just
   // its length, because later snapshots can normalize trailing whitespace.
@@ -78,12 +69,10 @@ export function createTeamsReplyStreamController(params: {
   let acknowledgedLogicalText = "";
   let acknowledgedStreamId: string | undefined;
   let replacementFinalPending = false;
-  let replacementEmitFailed = false;
   let replacementSettlementPending = false;
   let replacementTextAwaitingAcknowledgement: { text: string; logicalText: string } | undefined;
   let deferredReplacementEntries: { kind: "payload" | "replacement"; payload: ReplyPayload }[] = [];
   let queuedFinalActivity: ReturnType<typeof finalStreamActivity> | undefined;
-  let failedSegmentFallbackPrepared = false;
   const streamEvents = (stream as { events?: TeamsStreamChunkEvents } | undefined)?.events;
   let streamChunkSubscription: number | undefined;
 
@@ -121,7 +110,9 @@ export function createTeamsReplyStreamController(params: {
     });
   }
 
-  const wasCanceled = () => canceledLocally || Boolean(stream?.canceled);
+  // SDK emit/update check this same flag synchronously; no cancellation can
+  // arrive between this check and those calls without yielding.
+  const wasCanceled = () => Boolean(stream?.canceled);
 
   const releaseStreamChunkSubscription = (): void => {
     if (streamChunkSubscription === undefined) {
@@ -153,8 +144,7 @@ export function createTeamsReplyStreamController(params: {
       return payload;
     }
     const remainingText = payload.text.slice(acknowledgedLogicalText.length);
-    const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
-    if (!remainingText && !hasMedia) {
+    if (!remainingText && !hasUnstreamedContent(payload)) {
       return undefined;
     }
     return { ...payload, text: remainingText || undefined };
@@ -172,6 +162,14 @@ export function createTeamsReplyStreamController(params: {
     channelData: params.feedbackLoopEnabled ? { feedbackLoopEnabled: true } : {},
   });
 
+  const queueFinalReplacement = (activeStream: NonNullable<typeof stream>, text: string) => {
+    const activity = finalStreamActivity(text);
+    replacementTextAwaitingAcknowledgement = { text: activity.text!, logicalText: text };
+    activeStream.emit(activity);
+    queuedFinalActivity = activity;
+    emittedText = text;
+  };
+
   const deferredReplacementLogicalContent = (): string | undefined => {
     const content = deferredReplacementEntries
       .map((entry) => entry.payload.text)
@@ -187,9 +185,8 @@ export function createTeamsReplyStreamController(params: {
       if (entry.kind === "payload") {
         return [entry.payload];
       }
-      const hasMedia = Boolean(entry.payload.mediaUrl || entry.payload.mediaUrls?.length);
       const text = replacementFallback?.text;
-      if (!text && !hasMedia) {
+      if (!text && !hasUnstreamedContent(entry.payload)) {
         return [];
       }
       return [{ ...entry.payload, text: text || undefined }];
@@ -226,17 +223,8 @@ export function createTeamsReplyStreamController(params: {
       if (!stream || wasCanceled() || streamFinalizationPending) {
         return false;
       }
-      try {
-        stream.update(flattenInformativeStatus(text));
-        return true;
-      } catch (err) {
-        if (isStreamCancelledError(err)) {
-          canceledLocally = true;
-        } else {
-          params.log?.debug?.(`stream informative update failed: ${coerceErrorMessage(err)}`);
-        }
-        return false;
-      }
+      stream.update(flattenInformativeStatus(text));
+      return true;
     },
   });
 
@@ -281,13 +269,6 @@ export function createTeamsReplyStreamController(params: {
       // the authoritative final so a late provider Stop is still observed.
       if (previousRemainder.trim()) {
         stream.clearText();
-        if (streamFailed) {
-          // A prior provider failure already transferred this and later
-          // segments to block delivery. Preserve the pending close cleanup,
-          // but do not retry final text through a failed native stream.
-          streamFinalizationPending = true;
-          return;
-        }
         // The SDK can replace the same streamed activity after clearText().
         // Defer the authoritative final to preparePayload so this provider
         // round-trip also discovers a Stop before any fallback can escape.
@@ -297,23 +278,10 @@ export function createTeamsReplyStreamController(params: {
         streamFinalizationPending = true;
         return;
       }
-      try {
-        stream.emit(delta);
-        emittedText = fullText;
-        tokensEmitted = true;
-        nativeDispatchStarted = true;
-      } catch (err) {
-        if (isStreamCancelledError(err)) {
-          canceledLocally = true;
-          return;
-        }
-        // Preserve full fallback unless the SDK has proved exactly which
-        // cumulative prefix Teams accepted; failed emits prove no delivery.
-        streamFailed = true;
-        params.log?.warn?.(
-          `msteams stream emit failed, falling back to block delivery: ${coerceErrorMessage(err)}`,
-        );
-      }
+      stream.emit(delta);
+      emittedText = fullText;
+      tokensEmitted = true;
+      nativeDispatchStarted = true;
     },
 
     pushItemEvent: progressDraft.pushItemEvent.bind(progressDraft),
@@ -349,72 +317,35 @@ export function createTeamsReplyStreamController(params: {
         replacementFinalPending = false;
         deferredReplacementEntries.push({ kind: "replacement", payload });
         pendingFinalPayload = fallbackPayloadForSuppressedFinal(payload);
-        try {
-          const activity = finalStreamActivity(payload.text);
-          replacementTextAwaitingAcknowledgement = {
-            text: activity.text!,
-            logicalText: payload.text,
-          };
-          stream.emit(activity);
-          queuedFinalActivity = activity;
-          emittedText = payload.text;
-          tokensEmitted = false;
-          // Replacement delivery owns all later payloads until close() proves
-          // that Teams accepted the replacement or did not receive a Stop.
-          return undefined;
-        } catch (err) {
-          replacementTextAwaitingAcknowledgement = undefined;
-          tokensEmitted = false;
-          if (isStreamCancelledError(err)) {
-            canceledLocally = true;
-            pendingFinalPayload = undefined;
-            deferredReplacementEntries = [];
-            return undefined;
-          }
-          streamFailed = true;
-          replacementEmitFailed = true;
-          params.log?.warn?.(
-            `msteams stream replacement failed, falling back to block delivery: ${coerceErrorMessage(err)}`,
-          );
-          // Retain ownership until finalize so payloads held before this
-          // failed replacement cannot be overtaken by this or later blocks.
-          return undefined;
-        }
-      }
-      if (streamFailed) {
-        // Trim the provider-acknowledged prefix only from the failed segment.
-        // Retain its ID/text for final settlement while later tool rounds fall through whole.
-        const fallback = failedSegmentFallbackPrepared
-          ? payload
-          : fallbackPayloadAfterAcknowledgedText(payload);
-        failedSegmentFallbackPrepared = true;
-        pendingFinalPayload = undefined;
-        return fallback;
+        queueFinalReplacement(stream, payload.text);
+        tokensEmitted = false;
+        // Replacement delivery owns all later payloads until close() proves
+        // that Teams accepted the replacement or did not receive a Stop.
+        return undefined;
       }
       // A native stream owns one final segment. Later progress payloads use
       // block delivery, just like later partial-mode segments after tools.
       if (streamMode === "progress" && payload.text && !nativeDispatchStarted) {
-        try {
-          stream.emit(payload.text);
-          emittedText = payload.text;
-          nativeDispatchStarted = true;
-          tokensEmitted = true;
-        } catch (err) {
-          if (isStreamCancelledError(err)) {
-            canceledLocally = true;
-            return undefined;
-          }
-          // Non-cancel emit failure: fall through to block delivery as a
-          // safety net so the user still sees the final reply.
-          params.log?.debug?.(`progress-mode finalize failed: ${coerceErrorMessage(err)}`);
-        }
+        stream.emit(payload.text);
+        emittedText = payload.text;
+        nativeDispatchStarted = true;
+        tokensEmitted = true;
       }
       if (tokensEmitted) {
         const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
         pendingFinalPayload = fallbackPayloadForSuppressedFinal(payload);
         streamFinalizationPending = true;
         tokensEmitted = false;
-        return hasMedia ? { ...payload, text: undefined } : undefined;
+        if (!hasMedia) {
+          return undefined;
+        }
+        // Cards must wait for close() to observe Stop; media keeps its existing delivery path.
+        const {
+          presentation: _presentation,
+          presentationTextMode: _mode,
+          ...mediaPayload
+        } = payload;
+        return { ...mediaPayload, text: undefined };
       }
       return payload;
     },
@@ -448,15 +379,8 @@ export function createTeamsReplyStreamController(params: {
             kind: "replacement",
             payload: pendingFinalPayload,
           });
-          const activity = finalStreamActivity(pendingFinalPayload.text);
-          replacementTextAwaitingAcknowledgement = {
-            text: activity.text!,
-            logicalText: pendingFinalPayload.text,
-          };
           logicalContent = deferredReplacementLogicalContent();
-          stream.emit(activity);
-          queuedFinalActivity = activity;
-          emittedText = pendingFinalPayload.text;
+          queueFinalReplacement(stream, pendingFinalPayload.text);
         }
         logicalContent ??= replacementSettlementPending
           ? deferredReplacementLogicalContent()
@@ -483,42 +407,35 @@ export function createTeamsReplyStreamController(params: {
         if (!result) {
           return finalizeWithoutReceipt(logicalContent, wasCanceled());
         }
-        const replacementFallback =
-          replacementSettlementPending && replacementEmitFailed && pendingFinalPayload
-            ? fallbackPayloadAfterAcknowledgedText(pendingFinalPayload)
-            : undefined;
         const messageId = extractMessageId(result) ?? acknowledgedStreamId;
         const postNativePayloads = replacementSettlementPending
-          ? deferredReplacementPayloads(replacementFallback)
-          : [];
-        const nativeContent = replacementEmitFailed ? acknowledgedText || undefined : content;
+          ? deferredReplacementPayloads(undefined)
+          : pendingFinalPayload?.presentation
+            ? [{ ...pendingFinalPayload, text: undefined }]
+            : [];
         return {
-          visibleReplySent: replacementEmitFailed ? Boolean(nativeContent) : true,
-          ...(nativeContent === undefined ? {} : { content: nativeContent }),
+          visibleReplySent: true,
+          ...(content === undefined ? {} : { content }),
           ...(logicalContent ? { logicalContent } : {}),
-          ...(messageId && (!replacementEmitFailed || nativeContent) ? { messageId } : {}),
+          ...(messageId ? { messageId } : {}),
           ...(postNativePayloads.length > 0 ? { postNativePayloads } : {}),
         };
       } catch (err) {
-        if (isStreamCancelledError(err)) {
-          canceledLocally = true;
+        // Match SDK Stop failures by name: tsgo cannot resolve its error re-export
+        // chain, and the SDK retry helper uses the same check.
+        if (err instanceof Error && err.name === "StreamCancelledError") {
           return acknowledgedNativeDelivery();
         }
         // Non-cancel failure during the closing emit/close. Preserve only a
         // prefix acknowledged by Teams; queued bytes alone do not prove visibility.
-        // Latch streamFailed for parity with the mid-stream path and
-        // swallow the error — a thrown finalize would otherwise blow up
-        // the reply pipeline after the user already saw the response.
-        streamFailed = true;
+        // Preserve the receipt and recover the unacknowledged suffix.
         params.log?.warn?.(`msteams stream finalize failed: ${coerceErrorMessage(err)}`);
         return finalizeWithoutReceipt(logicalContent);
       } finally {
         // This segment's acknowledged-prefix fallback has been consumed.
         pendingFinalPayload = undefined;
         streamFinalizationPending = false;
-        failedSegmentFallbackPrepared = true;
         queuedFinalActivity = undefined;
-        replacementEmitFailed = false;
         replacementFinalPending = false;
         replacementSettlementPending = false;
         replacementTextAwaitingAcknowledgement = undefined;
@@ -532,7 +449,7 @@ export function createTeamsReplyStreamController(params: {
     },
 
     isStreamActive(): boolean {
-      return Boolean(stream) && tokensEmitted && !wasCanceled() && !streamFailed;
+      return Boolean(stream) && tokensEmitted && !wasCanceled();
     },
 
     wasCanceled,

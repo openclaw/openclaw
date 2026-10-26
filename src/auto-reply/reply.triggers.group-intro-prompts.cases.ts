@@ -8,7 +8,7 @@ import {
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
-import { buildGroupChatContext, buildGroupIntro } from "./reply/groups.js";
+import { buildSourceConversationContext, buildGroupIntro } from "./reply/groups.js";
 
 type GetReplyFromConfig = typeof import("./reply/get-reply.js").getReplyFromConfig;
 type InboundMessage = Parameters<GetReplyFromConfig>[0];
@@ -51,7 +51,7 @@ export function registerGroupIntroPromptCases(): void {
     const telegramGroupParticipationNote =
       "Be a good group participant: mostly lurk and follow the conversation; reply only when directly addressed or you can add clear value. Emoji reactions are welcome when available. Write like a human. Minimize empty lines and use normal chat conventions, not document-style spacing. Don't type literal \\n sequences; use real line breaks sparingly.";
     const groupSilentNote =
-      'If no text reply is needed, including after a reaction or other action, reply with exactly "NO_REPLY" as the entire final answer, without commentary, punctuation, or formatting.';
+      'If no text reply is needed, including after a reaction or other action, reply with exactly "NO_REPLY" as the entire final answer, without commentary, punctuation, or formatting. NO_REPLY discards anything written this turn that was not sent, so send confirmations before ending silently.';
     const automaticGroupDeliveryGuidance = [
       "Your text replies are automatically sent to this group chat unless the current-turn context says final replies stay private.",
       "For ordinary text, do not use the message tool to send to this same destination unless the current-turn context asks for visible output via message(action=send).",
@@ -174,10 +174,8 @@ export function registerGroupIntroPromptCases(): void {
         const cfg = makeCfg(`/tmp/group-intro-${testCase.name}`);
         testCase.setup?.(cfg);
         const extraSystemPrompt = [
-          buildGroupChatContext({
+          buildSourceConversationContext({
             sessionCtx: testCase.message,
-            silentReplyPolicy: "allow",
-            silentToken: "NO_REPLY",
           }),
           buildGroupIntro({
             defaultActivation: testCase.defaultActivation ?? "mention",

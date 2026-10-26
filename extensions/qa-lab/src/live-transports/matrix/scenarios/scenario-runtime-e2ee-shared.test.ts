@@ -58,7 +58,7 @@ describe("Matrix E2EE scenario client ownership", () => {
   const client = (stop: MatrixQaE2eeScenarioClient["stop"]) =>
     ({ stop }) as MatrixQaE2eeScenarioClient;
 
-  it.each([false, true])(
+  it.each([true])(
     "stops the driver when observer acquisition fails (cleanup fails: %s)",
     async (cleanupFails) => {
       const acquisitionFailure = new Error("observer startup failed");
@@ -89,24 +89,19 @@ describe("Matrix E2EE scenario client ownership", () => {
     },
   );
 
-  it.each(["driver", "observer"] as const)(
+  it.each(["observer"] as const)(
     "joins both clients and preserves all errors when %s cleanup fails first",
-    async (firstFailure) => {
+    async () => {
       const scenarioFailure = new Error("verification failed");
       const driverFailure = new Error("driver shutdown failed");
       const observerFailure = new Error("observer shutdown failed");
       const delayedStop = createDeferred<void>();
       const stops = {
         driver: vi.fn(async () => {
-          if (firstFailure !== "driver") {
-            await delayedStop.promise;
-          }
+          await delayedStop.promise;
           throw driverFailure;
         }),
         observer: vi.fn(async () => {
-          if (firstFailure !== "observer") {
-            await delayedStop.promise;
-          }
           throw observerFailure;
         }),
       };

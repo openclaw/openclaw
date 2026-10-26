@@ -1,17 +1,16 @@
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import type { ApplicationGatewayPhase } from "./gateway.ts";
-
-type PageActivationGateway = {
-  readonly snapshot: {
-    readonly client: Pick<GatewayBrowserClient, "needsWakeReconnect"> | null;
-    readonly phase: ApplicationGatewayPhase;
-  };
-  connect: () => void;
-};
 
 /** Revalidates process-backed browser state after Safari resumes a suspended tab. */
 export function startGatewayPageActivation(
-  gateway: PageActivationGateway,
+  gateway: {
+    readonly snapshot: {
+      readonly client: Pick<GatewayBrowserClient, "needsWakeReconnect"> | null;
+      readonly phase: ApplicationGatewayPhase;
+    };
+    connect: () => void;
+  },
   documentTarget: Document,
   windowTarget: Window,
 ): () => void {
@@ -70,13 +69,13 @@ export function startGatewayPageActivation(
   };
   const onOnline = () => schedule(false);
 
-  documentTarget.addEventListener("visibilitychange", onVisibilityChange);
-  windowTarget.addEventListener("pageshow", onPageShow);
-  windowTarget.addEventListener("online", onOnline);
+  const stops = [
+    listen(documentTarget, "visibilitychange", onVisibilityChange),
+    listen(windowTarget, "pageshow", onPageShow),
+    listen(windowTarget, "online", onOnline),
+  ];
   return () => {
     disposed = true;
-    documentTarget.removeEventListener("visibilitychange", onVisibilityChange);
-    windowTarget.removeEventListener("pageshow", onPageShow);
-    windowTarget.removeEventListener("online", onOnline);
+    stops.forEach((stop) => stop());
   };
 }

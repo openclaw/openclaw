@@ -9,6 +9,7 @@ import {
   listChannelPlugins,
   resolveChannelApprovalAdapter,
 } from "../../channels/plugins/index.js";
+import type { ChannelOutboundTargetRef } from "../../channels/plugins/outbound.types.js";
 import type { ExecApprovalRequest } from "../../infra/exec-approvals.js";
 import { dedupeByKey } from "../../shared/dedupe-by-key.js";
 import type { OriginatingChannelType } from "../templating.js";
@@ -16,12 +17,7 @@ import type { ReplyPayload } from "../types.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { routeReply } from "./route-reply.js";
 
-export type PrivateCommandRouteTarget = {
-  channel: string;
-  to: string;
-  accountId?: string | null;
-  threadId?: string | number | null;
-};
+export type PrivateCommandRouteTarget = ChannelOutboundTargetRef;
 
 const PRIVATE_COMMAND_APPROVAL_ROUTE_TTL_MS = 5 * 60_000;
 const EXPIRED_PRIVATE_COMMAND_APPROVAL_ROUTE_EXPIRES_AT_MS = 0;
@@ -57,21 +53,20 @@ export async function resolvePrivateCommandRouteTargets(params: {
   const originChannel = params.commandParams.command.channel;
   const targets: PrivateCommandRouteTarget[] = [];
   for (const candidate of listPrivateCommandRouteCandidateChannels(originChannel)) {
-    const native = resolveChannelApprovalAdapter(candidate.plugin)?.native;
+    const adapter = resolveChannelApprovalAdapter(candidate.plugin);
+    const native = adapter?.nativeAsync ?? adapter?.native;
     if (!native?.resolveApproverDmTargets) {
       continue;
     }
     const accountId =
-      candidate.channel === originChannel
-        ? (params.commandParams.ctx.AccountId ?? undefined)
-        : undefined;
+      candidate.channel === originChannel ? params.commandParams.ctx.AccountId : undefined;
     const approvalContext = () => ({
       cfg: params.commandParams.cfg,
       accountId,
       approvalKind: "exec" as const,
       request,
     });
-    const capabilities = native.describeDeliveryCapabilities(approvalContext());
+    const capabilities = await native.describeDeliveryCapabilities(approvalContext());
     if (!capabilities.enabled || !capabilities.supportsApproverDmSurface) {
       continue;
     }
@@ -154,10 +149,7 @@ export async function deliverPrivateCommandReply(params: {
 }
 
 function readCommandMessageThreadId(params: HandleCommandsParams): string | undefined {
-  return typeof params.ctx.MessageThreadId === "string" ||
-    typeof params.ctx.MessageThreadId === "number"
-    ? String(params.ctx.MessageThreadId)
-    : undefined;
+  return params.ctx.MessageThreadId !== undefined ? String(params.ctx.MessageThreadId) : undefined;
 }
 
 function readCommandDeliveryTarget(params: HandleCommandsParams): string | undefined {
@@ -198,7 +190,7 @@ export function buildCommandExecApprovalDefaults(
       : readCommandMessageThreadId(commandParams),
     accountId: privateApprovalTarget
       ? (privateApprovalTarget.accountId ?? undefined)
-      : (commandParams.ctx.AccountId ?? undefined),
+      : commandParams.ctx.AccountId,
     approvalReviewerDeviceId: normalizeOptionalString(commandParams.ctx.ApprovalReviewerDeviceId),
     notifyOnExit: commandParams.cfg.tools?.exec?.notifyOnExit,
     notifyOnExitEmptySuccess: commandParams.cfg.tools?.exec?.notifyOnExitEmptySuccess,

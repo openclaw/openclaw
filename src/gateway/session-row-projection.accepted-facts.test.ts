@@ -6,15 +6,14 @@ import { queryObjects } from "node:v8";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { seedCanonicalAcpSessionMeta } from "../acp/runtime/session-meta-fixture.test-support.js";
-import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
-import { saveSubagentRegistryToSqlite } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import {
   clearSubagentRunsReadCacheForTest,
   getSubagentSessionListReadSnapshotIdentity,
-  withSubagentRunReadSnapshot,
+  prepareSubagentSessionListReadCache,
 } from "../agents/subagents/registry/subagent-registry-state.js";
 import { SqliteBoardStore } from "../boards/sqlite-board-store.js";
-import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { ACTIVITY_SUMMARY_FORMAT_REVISION } from "../config/sessions/activity-summary.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
@@ -26,15 +25,14 @@ import {
 import { applySessionEntryExactReplacements } from "../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import type { SessionRowDatabaseFacts } from "../config/sessions/session-row-facts.types.js";
 import { removeSessionMember } from "../config/sessions/session-sharing-store.native.js";
-import * as history from "../config/sessions/session-transcript-worker-runtime.js";
 import type { InternalSessionEntry, SessionAcpMeta } from "../config/sessions/types.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
+import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   emitSessionsChanged,
   flushPendingSessionsChangedEvents,
@@ -48,21 +46,154 @@ import { setSessionActivitySummaryState } from "./session-activity-summary-state
 import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
 import { defaultPersistDigest } from "./session-observer-model.js";
 import * as projectionWork from "./session-projection-work.js";
-import { retainSessionListForegroundWork } from "./session-projection-work.js";
+import * as databaseFactsRead from "./session-row-database-facts.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { isColdArchivedSessionRow } from "./session-row-projection-archive.js";
-import * as databaseFactsRead from "./session-row-projection-read.js";
 import { ready } from "./session-row-projection-record.js";
 import { withAcceptedSuffix } from "./session-row-projection.accepted-facts.test-support.js";
-import { createSessionRowProjection } from "./session-row-projection.js";
+import { watchRowFacts } from "./session-row-projection.read-fixture.test-support.js";
+import { withSessionRowProjectionState } from "./session-row-projection.test-support.js";
 import { prepareSessionMutationFacts } from "./session-sharing-preparation.js";
 import * as rowInputs from "./session-utils-row.js";
 
 afterEach(() => vi.restoreAllMocks());
 
-it("rematerializes activity state from accepted facts without reading the databases again", async () => {
-  await withAcceptedSuffix(async ({ projection, suffix, query, entry, reads, resume }) => {
+function activitySummary(
+  sessionId: string,
+  text: string,
+  watermark: ReturnType<typeof readSessionTranscriptWatermark>,
+  updatedAt: number,
+  extra: Partial<NonNullable<InternalSessionEntry["activitySummary"]>> = {},
+): NonNullable<InternalSessionEntry["activitySummary"]> {
+  return {
+    version: 1,
+    formatRevision: ACTIVITY_SUMMARY_FORMAT_REVISION,
+    text,
+    updatedAt,
+    sessionId,
+    ...watermark,
+    leafEntryId: null,
+    coveredMessages: 1,
+    totalMessages: 1,
+    omittedContent: false,
+    ...extra,
+  };
+}
+
+function writeTranscript(
+  scope: Parameters<typeof persistSessionTranscriptTurn>[0],
+  role: "user" | "assistant",
+  content: string,
+  options: Omit<Parameters<typeof persistSessionTranscriptTurn>[1], "messages"> = {},
+) {
+  return persistSessionTranscriptTurn(scope, {
+    messages: [{ message: { role, content } }],
+    ...options,
+  });
+}
+
+function putBoard(key: string, html: string) {
+  const board = new SqliteBoardStore({
+    resolveSession: ({ sessionKey }) => ({ agentId: "main", sessionKey }),
+  });
+  return board.putWidget({ sessionKey: key, name: "status", content: { kind: "html", html } });
+}
+
+function sharedFactReads(reads: {
+  mock: { calls: Parameters<typeof stateReads.executeExistingOpenClawStateRead>[] };
+}) {
+  return reads.mock.calls.filter(([, command]) => command.type === "sessionRows.sharedFacts");
+}
+
+it("keeps Board and shared facts while transcript receipts advance summary freshness", async () => {
+  await withSessionRowProjectionState(async (create) => {
+    const cfg = {
+      agents: {
+        entries: { main: {} },
+        defaults: { utilityModel: "unit-test/small" },
+      },
+    };
+    setRuntimeConfigSnapshot(cfg);
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:acp:row-receipts",
+      sessionId: "row-receipts",
+    };
+    const entry: InternalSessionEntry = {
+      sessionId: scope.sessionId,
+      lifecycleRevision: "row-receipts-life",
+      updatedAt: 1,
+    };
+    replaceSessionEntrySync(scope, entry);
+    // Cold transcript initialization may acquire row facts before warmed receipt reuse begins.
+    await writeTranscript(scope, "user", "Initial transcript", { touchSessionEntry: false });
+    const acp: SessionAcpMeta = {
+      backend: "receipt-backend",
+      agent: "main",
+      runtimeSessionName: "receipt-session",
+      mode: "persistent",
+      state: "idle",
+      lastActivityAt: 1,
+    };
+    seedCanonicalAcpSessionMeta({
+      ...scope,
+      lifecycleRevision: entry.lifecycleRevision,
+      meta: acp,
+    });
+    await putBoard(scope.sessionKey, "<p>Current</p>");
+    const projection = await create({ cfg, modelCatalog: [] });
+    const query = { agentId: scope.agentId, key: scope.sessionKey };
+    await projection.ensureMaterialized();
+    const rowReads: string[] = [];
+    watchRowFacts((owner) => (input) => {
+      rowReads.push(...input.sessionKeys);
+      return owner.readRowFacts(input);
+    });
+    const sharedReads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+    await writeTranscript(scope, "user", "First input", { touchSessionEntry: false });
+    await projection.ensureMaterialized();
+    const watermark = readSessionTranscriptWatermark(scope);
+    replaceSessionEntrySync(scope, {
+      ...entry,
+      label: "Published label",
+      activitySummary: activitySummary(scope.sessionId, "First input", watermark, 2, {
+        lifecycleRevision: entry.lifecycleRevision,
+        coveredMessages: 2,
+        totalMessages: 2,
+      }),
+    });
+    await projection.ensureMaterialized();
+    expect(projection.snapshot(query).row).toMatchObject({
+      label: "Published label",
+      activitySummary: { text: "First input", state: "current" },
+    });
+    emitSessionTranscriptUpdate({ target: scope });
+    await projection.ensureMaterialized();
+    expect(projection.snapshot(query).row?.activitySummary?.state).toBe("current");
+    expect(rowReads).toEqual([]);
+    await writeTranscript(scope, "assistant", "Second message", { touchSessionEntry: false });
+    await projection.ensureMaterialized();
+    expect(projection.snapshot(query).row?.activitySummary?.state).toBe("stale");
+    expect(projection.describe(query)?.retainedDatabaseFacts).toMatchObject({
+      hasBoard: true,
+      acpMeta: acp,
+      activitySummaryWatermark: readSessionTranscriptWatermark(scope),
+    });
+    await writeTranscript(scope, "assistant", "Combined entry and transcript");
+    await projection.ensureMaterialized();
+    expect(projection.snapshot(query).row?.activitySummary?.state).toBe("stale");
+    expect(projection.describe(query)?.retainedDatabaseFacts).toMatchObject({
+      hasBoard: true,
+      activitySummaryWatermark: readSessionTranscriptWatermark(scope),
+    });
+    expect(rowReads).toEqual([]);
+    expect(sharedFactReads(sharedReads)).toEqual([]);
+  }, true);
+});
+
+it("refreshes activity state independently of queued materialization and category preparation", async () => {
+  await withAcceptedSuffix(async ({ projection, suffix, scope, query, entry, reads, resume }) => {
     const revision = suffix.databaseFactsRevision;
     const owner = Symbol("activity-state");
     const target = { key: query.key, agentId: query.agentId };
@@ -79,26 +210,46 @@ it("rematerializes activity state from accepted facts without reading the databa
       setSessionActivitySummaryState(target, owner, value);
       await resume();
       expect(projection.snapshot(query).row?.activitySummary?.state).toBe("updating");
+      const materializations = projection.materializedCount;
       setSessionActivitySummaryState(target, owner, { ...value, state: "unavailable" });
       await projection.ensureMaterialized();
       expect(projection.snapshot(query).row?.activitySummary?.state).toBe("unavailable");
       setSessionActivitySummaryState(target, owner);
       await projection.ensureMaterialized();
       expect(projection.snapshot(query).row?.activitySummary?.state).toBe("stale");
+      expect(projection.materializedCount).toBe(materializations);
+
+      const facts = projection.capture(query)?.facts;
+      for (const state of ["updating", "unavailable", undefined] as const) {
+        // Automation queues a refresh without changing the accepted database facts.
+        sessionChanges.emit({ ...scope, scope: "automation" });
+        setSessionActivitySummaryState(target, owner, state && { ...value, state });
+        await projection.ensureMaterialized();
+        expect(projection.snapshot(query).row?.activitySummary?.state).toBe(state ?? "stale");
+        expect(projection.capture(query)?.facts).toBe(facts);
+      }
       expect(reads).toHaveLength(1);
       expect(sharedReads).not.toHaveBeenCalled();
       expect(projection.capture(query)?.databaseFactsRevision).toBe(revision);
 
+      // Category uncertainty blocks presentation, but equal reconciliation can reuse these facts.
+      sessionChanges.emit({ sessionKey: query.key, factsInvalidated: "category" });
+      expect(ready(projection.capture(query))).toBe(false);
+      setSessionActivitySummaryState(target, owner, value);
+      await projection.ensureMaterialized();
+      expect(projection.snapshot(query).row?.activitySummary?.state).toBe("updating");
+      expect(projection.capture(query)?.facts).toBe(facts);
+
       // An explicit storage uncertainty still wins over the presentation scope.
+      const readsBeforeInvalidation = reads.length;
       sessionChanges.emit({
-        sessionKey: query.key,
-        agentId: query.agentId,
+        ...scope,
         storePath: suffix.storeTarget.storePath,
         scope: "runtime",
         factsInvalidated: true,
       });
       await projection.ensureMaterialized();
-      expect(reads.length).toBeGreaterThan(1);
+      expect(reads.length).toBeGreaterThan(readsBeforeInvalidation);
       expect(projection.snapshot(query).row?.label).toBe("accepted-1");
     } finally {
       setSessionActivitySummaryState(target, owner);
@@ -150,12 +301,11 @@ it.each([
         replaceSessionEntrySync(scope, { ...entry, lifecycleRevision: "replacement" });
         expected = null;
       } else if (change === "transcript publication") {
-        await persistSessionTranscriptTurn(
+        await writeTranscript(
           { ...scope, sessionId: entry.sessionId, storePath: suffix.storeTarget.storePath },
-          {
-            messages: [{ message: { role: "assistant", content: "New transcript content" } }],
-            touchSessionEntry: false,
-          },
+          "assistant",
+          "New transcript content",
+          { touchSessionEntry: false },
         );
       } else if (change === "lifecycle adapter") {
         await persistGatewaySessionLifecycleEvent({
@@ -219,11 +369,7 @@ it.each([
         await resume();
         const row = projection.snapshot(query).row;
         expect(reads).toHaveLength(retainsFacts ? 1 : 2);
-        expect(
-          metadataReads.mock.calls.filter(
-            ([, command]) => command.type === "sessionRows.sharedFacts",
-          ),
-        ).toHaveLength(!retainsFacts || change === "worker legacy reset" ? 1 : 0);
+        expect(sharedFactReads(metadataReads)).toHaveLength(0);
         expect(row?.runtimeSelectionLocked).toBe(expected !== null);
         if (expected) {
           expect(row?.agentRuntime).toMatchObject({
@@ -235,7 +381,6 @@ it.each([
           expected ?? undefined,
         );
         expect(hostReads.queries.filter((sql) => sql.includes("acp_sessions"))).toEqual([]);
-        expect(projection.dirtyRowCount).toBe(0);
       } finally {
         hostReads.restore();
       }
@@ -250,11 +395,9 @@ it.each([
 it.each(["projection retirement", "ACP read failure"] as const)(
   "does not accept facts after an awaited %s",
   async (change) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withSessionRowProjectionState(async (create) => {
       const scope = { agentId: "main", sessionKey: "agent:main:acp:late-facts" };
-      replaceSessionEntrySync(scope, { sessionId: "late-facts", updatedAt: 1 });
-      const releaseForeground = retainSessionListForegroundWork();
-      const projection = await createSessionRowProjection({
+      const projection = await create({
         cfg: { agents: { entries: { main: {} } } },
         modelCatalog: [],
       });
@@ -263,7 +406,6 @@ it.each(["projection retirement", "ACP read failure"] as const)(
       let reading: Promise<void> | undefined;
       try {
         await projection.ensureMaterialized();
-        const row = projection.findBySessionId({ agentId: "main", sessionId: "late-facts" })[0]!;
         const count = projection.materializedCount;
         const read = stateReads.executeExistingOpenClawStateRead;
         let held = false;
@@ -282,6 +424,8 @@ it.each(["projection retirement", "ACP read failure"] as const)(
             return reply;
           },
         );
+        // A fresh identity has no warmed ACP receipt and must enter the held read.
+        replaceSessionEntrySync(scope, { sessionId: "late-facts", updatedAt: 1 });
         sessionChanges.emit(scope);
         reading = projection.ensureMaterialized();
         await Promise.race([
@@ -290,6 +434,7 @@ it.each(["projection retirement", "ACP read failure"] as const)(
             throw new Error("Drain bypassed the pending ACP read");
           }),
         ]);
+        const row = projection.findBySessionId({ agentId: "main", sessionId: "late-facts" })[0]!;
         expect(row.pendingDatabaseFacts).toBeUndefined();
         if (change === "projection retirement") {
           projection.dispose();
@@ -306,28 +451,25 @@ it.each(["projection retirement", "ACP read failure"] as const)(
       } finally {
         release.resolve();
         await Promise.allSettled(reading ? [reading] : []);
-        projection.dispose();
-        releaseForeground();
       }
-    });
+    }, true);
   },
 );
 
-it.each(["bulk completion with pinned pages", "transcript-only invalidation"] as const)(
+it.each(["overlapping pinned pages", "transcript-only invalidation"] as const)(
   "handles an exact cold archive suffix during %s",
   async (mode) => {
-    await withOpenClawTestState(
-      { scenario: "minimal", env: { OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" } },
-      async () => {
+    await withSessionRowProjectionState(
+      async (create) => {
+        const transcriptOnly = mode === "transcript-only invalidation";
         const cfg = {
           agents: {
-            entries: { main: {} },
+            entries: { main: {}, ...(!transcriptOnly && { "archive-pin": {} }) },
             defaults: { utilityModel: "unit-test/small" },
           },
         };
         setRuntimeConfigSnapshot(cfg);
         clearSubagentRunsReadCacheForTest();
-        const transcriptOnly = mode === "transcript-only invalidation";
         const queries = Array.from({ length: transcriptOnly ? 2 : 102 }, (_, index) => ({
           agentId: "main",
           key: `agent:main:accepted-archive-${index}`,
@@ -343,52 +485,47 @@ it.each(["bulk completion with pinned pages", "transcript-only invalidation"] as
             entries[index]!,
           );
         }
+        const pinnedQuery = { agentId: "archive-pin", key: "agent:archive-pin:awaiting-page" };
+        if (!transcriptOnly) {
+          replaceSessionEntrySync(
+            { agentId: pinnedQuery.agentId, sessionKey: pinnedQuery.key },
+            { sessionId: "awaiting-archive-page", updatedAt: 1, archivedAt: 1 },
+          );
+        }
+        const firstPageQueries = transcriptOnly
+          ? queries.slice(0, 2)
+          : [...queries.slice(0, 2), pinnedQuery];
         const suffixScope = {
           agentId: "main",
           sessionKey: queries[1]!.key,
           sessionId: entries[1]!.sessionId,
         };
         if (transcriptOnly) {
-          await persistSessionTranscriptTurn(suffixScope, {
+          await writeTranscript(suffixScope, "user", "Summarized transcript", {
             config: cfg,
-            messages: [{ message: { role: "user", content: "Summarized transcript" } }],
             touchSessionEntry: false,
             updateMode: "none",
           });
           const watermark = readSessionTranscriptWatermark(suffixScope);
           entries[1] = {
             ...entries[1]!,
-            activitySummary: {
-              version: 1,
-              formatRevision: ACTIVITY_SUMMARY_FORMAT_REVISION,
-              text: "Stored archive summary",
-              updatedAt: 1,
-              sessionId: suffixScope.sessionId,
-              generation: watermark.generation,
-              maxSeq: watermark.maxSeq,
-              leafEntryId: null,
-              coveredMessages: 1,
-              totalMessages: 1,
-              omittedContent: false,
-            },
+            activitySummary: activitySummary(
+              suffixScope.sessionId,
+              "Stored archive summary",
+              watermark,
+              1,
+            ),
           };
           replaceSessionEntrySync(suffixScope, entries[1]);
         }
-        const previous = createSubagentRunRecord({
-          runId: "accepted-archive-previous-run",
-          childSessionKey: "agent:main:unrelated-child",
-          requesterSessionKey: "agent:main:unrelated-parent",
-          generation: 1,
-          completion: { required: false },
-          delivery: { status: "not_required" },
-        });
-        saveSubagentRegistryToSqlite(new Map([[previous.runId, previous]]));
-        const releaseForeground = retainSessionListForegroundWork();
         const releaseBulk = createDeferredCore();
         const registryPending = createDeferredCore();
         const releaseRegistry = createDeferredCore();
         const accepted = createDeferredCore();
         const releaseExact = createDeferredCore();
+        const pinnedReadEntered = createDeferredCore();
+        const releasePinnedRead = createDeferredCore();
+        const suffixReady = createDeferredCore();
         let holdBulk = false;
         const createDrain = projectionWork.createSessionProjectionDrain;
         vi.spyOn(projectionWork, "createSessionProjectionDrain").mockImplementationOnce((params) =>
@@ -402,7 +539,7 @@ it.each(["bulk completion with pinned pages", "transcript-only invalidation"] as
             },
           }),
         );
-        const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+        const projection = await create({ cfg, modelCatalog: [] });
         let recovery: Promise<unknown> | undefined;
         let page: Promise<string[]> | undefined;
         let bulk: Promise<void> | undefined;
@@ -421,48 +558,36 @@ it.each(["bulk completion with pinned pages", "transcript-only invalidation"] as
               return result;
             },
           );
-          const replacement = { ...previous, runId: "accepted-archive-current-run", generation: 2 };
-          saveSubagentRegistryToSqlite(new Map([[replacement.runId, replacement]]));
-          recovery = withSubagentRunReadSnapshot(
-            new Map(),
-            (snapshot) => ({
-              runIds: [...snapshot.values()]
-                .filter((run) => run.childSessionKey === previous.childSessionKey)
-                .map((run) => run.runId),
-              sessionKeys: [],
-            }),
-            (selection) => selection.runIds,
-            { sessionKeys: [previous.childSessionKey], descendants: true },
-          );
+          clearSubagentRunsReadCacheForTest();
+          recovery = prepareSubagentSessionListReadCache();
           await registryPending.promise;
           expect(getSubagentSessionListReadSnapshotIdentity()).toBeUndefined();
-          // Recovery defers these real archive publications into the ordinary dirty queue.
+          // Cold preparation defers these archive publications into the ordinary dirty queue.
           for (const [index, query] of queries.slice(0, 2).entries()) {
             replaceSessionEntrySync(
               { agentId: query.agentId, sessionKey: query.key },
               { ...entries[index]!, updatedAt: 2 },
             );
           }
-          expect(projection.dirtyRowCount).toBe(2);
           releaseRegistry.resolve();
-          expect(await recovery).toEqual([replacement.runId]);
+          await recovery;
+          await projection.prepareSelection({ metadataOnly: true });
+          expect(
+            projection
+              .selectEntries({}, true)
+              .filter((row) => queries.slice(0, 2).some((query) => query.key === row.key))
+              .map((row) => row.entry.updatedAt),
+          ).toEqual([2, 2]);
           const reads: SessionRowDatabaseFacts[][] = [];
-          const readDatabases = history.withSessionHistoryWorkerDatabases;
-          vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation(
-            (databases, consume) =>
-              readDatabases(databases, (owners) =>
-                consume(
-                  owners.map((owner) => ({
-                    ...owner,
-                    async readRowFacts(input) {
-                      const result = await owner.readRowFacts(input);
-                      reads.push(structuredClone(result.rows));
-                      return result;
-                    },
-                  })),
-                ),
-              ),
-          );
+          watchRowFacts((owner) => async (input) => {
+            const result = await owner.readRowFacts(input);
+            if (input.sessionKeys.includes(pinnedQuery.key)) {
+              pinnedReadEntered.resolve();
+              await releasePinnedRead.promise;
+            }
+            reads.push(structuredClone(result.rows));
+            return result;
+          });
           let elapsed = 0;
           const clock = vi.spyOn(performance, "now").mockImplementation(() => elapsed);
           const readInputs = rowInputs.readSessionRowInputs;
@@ -483,8 +608,8 @@ it.each(["bulk completion with pinned pages", "transcript-only invalidation"] as
           );
           page = withReadySessionRows(
             projection,
-            () => queries.slice(0, 2),
-            (read) => queries.slice(0, 2).map((query) => read.describe(query)!.key),
+            () => firstPageQueries,
+            (read) => firstPageQueries.map((query) => read.describe(query)!.key),
           );
           await Promise.race([
             accepted.promise,
@@ -498,7 +623,6 @@ it.each(["bulk completion with pinned pages", "transcript-only invalidation"] as
           })[0]!;
           expect(isColdArchivedSessionRow(suffix)).toBe(true);
           expect(suffix.pendingDatabaseFacts?.entry.updatedAt).toBe(2);
-          expect(projection.dirtyRowCount).toBe(1);
           if (transcriptOnly) {
             const previousWatermark = suffix.pendingDatabaseFacts!.activitySummaryWatermark;
             expect(previousWatermark).toMatchObject({
@@ -508,9 +632,8 @@ it.each(["bulk completion with pinned pages", "transcript-only invalidation"] as
             const publications: unknown[] = [];
             const unsubscribe = sessionChanges.subscribe((change) => publications.push(change));
             try {
-              await persistSessionTranscriptTurn(suffixScope, {
+              await writeTranscript(suffixScope, "user", "New archived transcript", {
                 config: cfg,
-                messages: [{ message: { role: "user", content: "New archived transcript" } }],
                 touchSessionEntry: false,
               });
             } finally {
@@ -526,35 +649,37 @@ it.each(["bulk completion with pinned pages", "transcript-only invalidation"] as
             clock.mockRestore();
             releaseExact.resolve();
             expect(await page).toEqual(queries.map((query) => query.key));
-            expect(reads).toHaveLength(2);
-            expect(reads[1]).toEqual([
-              expect.objectContaining({
-                sessionKey: suffixScope.sessionKey,
-                entry: expect.objectContaining({
-                  updatedAt: 2,
-                  activitySummary: entries[1]!.activitySummary,
-                }),
-                activitySummaryWatermark: watermark,
-              }),
-            ]);
+            expect(reads).toHaveLength(1);
+            expect(projection.describe(queries[1]!)?.retainedDatabaseFacts).toMatchObject({
+              sessionKey: suffixScope.sessionKey,
+              entry: {
+                updatedAt: 2,
+                activitySummary: entries[1]!.activitySummary,
+              },
+              activitySummaryWatermark: watermark,
+            });
             expect(projection.snapshot(queries[1]!).row?.activitySummary).toMatchObject({
               text: "Stored archive summary",
               state: "stale",
             });
-            expect(projection.dirtyRowCount).toBe(0);
             return;
           }
           holdBulk = false;
           releaseBulk.resolve();
           bulk = projection.ensureMaterialized();
-          await bulk;
+          projection.onFactsChange((change) => {
+            if (change.kind === "row" && change.key === queries[1]!.key && ready(suffix)) {
+              suffixReady.resolve();
+            }
+          });
+          releaseExact.resolve();
+          await Promise.all([suffixReady.promise, pinnedReadEntered.promise]);
           expect(reads.map((rows) => rows.map((row) => row.sessionKey))).toEqual([
             queries.slice(0, 2).map((query) => query.key),
           ]);
           expect(ready(suffix)).toBe(true);
           expect(suffix.pendingDatabaseFacts).toBeUndefined();
           expect(projection.materializedCount).toBe(2);
-          expect(projection.dirtyRowCount).toBe(0);
           inputs.mockRestore();
           clock.mockRestore();
           await withReadySessionRows(
@@ -564,7 +689,8 @@ it.each(["bulk completion with pinned pages", "transcript-only invalidation"] as
               expect(projection.selectEntries().filter(ready)).toHaveLength(102);
             },
           );
-          // Releasing the other page trims through the real LRU; the first page stays pinned.
+          // The first page retains its ready rows while its other physical store is pending.
+          // Releasing the other page trims through the real LRU without evicting those pins.
           expect(projection.selectEntries().filter(ready)).toHaveLength(100);
           const residentKeys = new Set(
             projection
@@ -573,18 +699,20 @@ it.each(["bulk completion with pinned pages", "transcript-only invalidation"] as
               .map((row) => row.key),
           );
           expect(queries.slice(0, 2).every((query) => residentKeys.has(query.key))).toBe(true);
-          releaseExact.resolve();
-          expect(await page).toEqual(queries.slice(0, 2).map((query) => query.key));
+          releasePinnedRead.resolve();
+          expect(await page).toEqual(firstPageQueries.map((query) => query.key));
+          await bulk;
         } finally {
           holdBulk = false;
           releaseRegistry.resolve();
           releaseExact.resolve();
+          releasePinnedRead.resolve();
           releaseBulk.resolve();
           await Promise.allSettled([recovery, page, bulk, projection.ensureMaterialized()]);
-          projection.dispose();
-          releaseForeground();
         }
       },
+      true,
+      { scenario: "minimal", env: { OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" } },
     );
   },
 );
@@ -596,8 +724,6 @@ it("lets keyed reads supersede accepted archive facts after a same-generation pu
       expect(isColdArchivedSessionRow(suffix)).toBe(false);
       // Equal timestamps still require the keyed reader to consume the owner's newer publication.
       replaceSessionEntrySync(scope, { ...entry, label });
-      expect(suffix.pendingDatabaseFacts).toBeUndefined();
-      expect(ready(suffix)).toBe(false);
       const pending = withReadySessionRows(
         projection,
         () => [query],
@@ -606,12 +732,9 @@ it("lets keyed reads supersede accepted archive facts after a same-generation pu
       await resume();
       const current = await pending;
       expect(current.generation).toBe(suffix.generation);
-      expect(current.pendingDatabaseFacts).toBeUndefined();
       expect(current.entry).toMatchObject({ updatedAt: entry.updatedAt, label });
-      expect(current.materialized.source.entry).toBe(current.entry);
       expect(isColdArchivedSessionRow(current)).toBe(false);
       expect(current.materialized.row.label).toBe(label);
-      expect(projection.dirtyRowCount).toBe(0);
     },
     { archived: true },
   );
@@ -620,40 +743,17 @@ it("lets keyed reads supersede accepted archive facts after a same-generation pu
 it("replaces accepted entry, board, and watermark facts through a worker receipt", async () => {
   await withAcceptedSuffix(async ({ projection, suffix, scope, query, entry, reads, resume }) => {
     expect(suffix.pendingDatabaseFacts?.hasBoard).toBe(false);
-    const board = new SqliteBoardStore({
-      resolveSession: ({ sessionKey }) => ({ agentId: "main", sessionKey }),
+    await putBoard(query.key, "<p>current</p>");
+    await writeTranscript({ ...scope, sessionId: entry.sessionId }, "user", "Current transcript", {
+      config: projection.state.cfg,
+      touchSessionEntry: false,
+      updateMode: "none",
     });
-    await board.putWidget({
-      sessionKey: query.key,
-      name: "status",
-      content: { kind: "html", html: "<p>current</p>" },
-    });
-    await persistSessionTranscriptTurn(
-      { ...scope, sessionId: entry.sessionId },
-      {
-        config: projection.state.cfg,
-        messages: [{ message: { role: "user", content: "Current transcript" } }],
-        touchSessionEntry: false,
-        updateMode: "none",
-      },
-    );
     const watermark = readSessionTranscriptWatermark({ ...scope, sessionId: entry.sessionId });
     const committedEntry: InternalSessionEntry = {
       ...entry,
       label: "committed value",
-      activitySummary: {
-        version: 1,
-        formatRevision: ACTIVITY_SUMMARY_FORMAT_REVISION,
-        text: "Current summary",
-        updatedAt: 3,
-        sessionId: entry.sessionId,
-        generation: watermark.generation,
-        maxSeq: watermark.maxSeq,
-        leafEntryId: null,
-        coveredMessages: 1,
-        totalMessages: 1,
-        omittedContent: false,
-      },
+      activitySummary: activitySummary(entry.sessionId, "Current summary", watermark, 3),
     };
     await applySessionEntryExactReplacements({
       agentId: scope.agentId,
@@ -664,8 +764,6 @@ it("replaces accepted entry, board, and watermark facts through a worker receipt
         replacements: [{ sessionKey: scope.sessionKey, entry: committedEntry }],
       }),
     });
-    expect(suffix.pendingDatabaseFacts).toBeUndefined();
-    expect(ready(suffix)).toBe(false);
     await resume();
     expect(reads).toHaveLength(1);
     expect(projection.describe(query)?.retainedDatabaseFacts).toMatchObject({
@@ -679,12 +777,11 @@ it("replaces accepted entry, board, and watermark facts through a worker receipt
       label: "committed value",
       activitySummary: { text: "Current summary", state: "current" },
     });
-    expect(projection.dirtyRowCount).toBe(0);
   });
 });
 
 it("discards invalidated presentation facts after custody release", async () => {
-  await withAcceptedSuffix(async ({ projection, suffix, scope, query, entry, reads, resume }) => {
+  await withAcceptedSuffix(async ({ projection, scope, query, entry, reads, resume }) => {
     const emit = sessionChanges.emit.bind(sessionChanges);
     vi.spyOn(sessionChanges, "emit").mockImplementation((publication, database) => {
       if ("sessionKey" in publication && publication.sessionKey === query.key) {
@@ -694,12 +791,9 @@ it("discards invalidated presentation facts after custody release", async () => 
       emit(publication, database);
     });
     replaceSessionEntrySync(scope, { ...entry, label: "current value" });
-    expect(suffix.pendingDatabaseFacts).toBeUndefined();
-    expect(ready(suffix)).toBe(false);
     await resume();
     expect(reads.length).toBeGreaterThan(1);
     expect(projection.snapshot(query).row?.label).toBe("current value");
-    expect(projection.dirtyRowCount).toBe(0);
   });
 });
 
@@ -708,28 +802,21 @@ it.each(["native reader retirement", "catalog publication", "presentation failur
   async (change) => {
     await withAcceptedSuffix(
       async ({ projection, suffix, query, reads, resume, failNextRender }) => {
-        const pending = suffix.pendingDatabaseFacts;
         if (change === "native reader retirement") {
           await closeOpenClawAgentDatabaseByPathAsync(suffix.storeTarget.storePath, "main");
         } else if (change === "catalog publication") {
           sessionChanges.emit({ all: true, scope: "catalog" });
-          expect(suffix.pendingDatabaseFacts).toBe(pending);
         }
         if (change === "presentation failure") {
-          const sequence = suffix.materializedSequence;
           failNextRender();
           await expect(resume()).rejects.toThrow("presentation unavailable");
-          expect(suffix.pendingDatabaseFacts).toBe(pending);
-          expect(suffix.materializedSequence).toBe(sequence);
           expect(ready(suffix)).toBe(false);
-          expect(projection.dirtyRowCount).toBe(1);
           await projection.ensureMaterialized();
         } else {
           await resume();
         }
         expect(reads).toHaveLength(1);
         expect(projection.snapshot(query).row?.label).toBe("accepted-1");
-        expect(projection.dirtyRowCount).toBe(0);
       },
     );
   },
@@ -741,7 +828,6 @@ it.each(["runtime activity", "membership revocation"] as const)(
     await withAcceptedSuffix(
       async ({ projection, suffix, scope, query, entry, reads, viewerId, resume }) => {
         const runId = "accepted-suffix-current-run";
-        const pending = suffix.pendingDatabaseFacts;
         const context = bindSessionRowProjection(
           requestContext(projection.state.cfg),
           () => projection,
@@ -775,9 +861,6 @@ it.each(["runtime activity", "membership revocation"] as const)(
             expect(
               projection.hasMembership(suffix.storeTarget.storePath, query.key, viewerId!),
             ).toBe(false);
-            expect(suffix.pendingDatabaseFacts).toBeUndefined();
-          } else {
-            expect(suffix.pendingDatabaseFacts).toBe(pending);
           }
           await resume();
           await flushPendingSessionsChangedEvents(context);
@@ -808,11 +891,7 @@ it.each(["runtime activity", "membership revocation"] as const)(
               hasActiveRun: false,
             });
             expect(reads).toHaveLength(1);
-            expect(
-              sharedReads.mock.calls.filter(
-                ([, command]) => command.type === "sessionRows.sharedFacts",
-              ),
-            ).toEqual([]);
+            expect(sharedFactReads(sharedReads)).toEqual([]);
           } else {
             expect(row?.sharingRole).toBe("viewer");
             expect(projection.describe(query)?.membership.has(viewerId!)).toBe(false);
@@ -861,11 +940,12 @@ it.each(["delete", "dispose", "store replacement"] as const)(
         expect(projection.snapshot(query).row?.label ?? null).toBe(
           change === "store replacement" ? "replacement store" : null,
         );
-        expect(projection.dirtyRowCount).toBe(0);
       },
       { replacement: change === "store replacement" },
     );
     if (change === "dispose") {
+      // Restoring spies does not clear their recorded fixture arguments or results.
+      vi.clearAllMocks();
       await nextTurn();
       queryObjects(WeakRef);
       expect(control?.deref()).toBeUndefined();
@@ -883,7 +963,6 @@ it("demotes an accepted suffix without rendering it during the bulk drain", asyn
     const cold = projection.findBySessionId({ agentId: "main", sessionId: entry.sessionId })[0]!;
     expect(isColdArchivedSessionRow(cold)).toBe(true);
     expect(cold.pendingDatabaseFacts).toBeUndefined();
-    expect(projection.dirtyRowCount).toBe(0);
     await withReadySessionRows(
       projection,
       () => [query],

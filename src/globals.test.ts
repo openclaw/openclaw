@@ -30,7 +30,7 @@ vi.mock("../packages/terminal-core/src/theme.js", () => ({
 }));
 
 import { isVerbose } from "./global-state.js";
-import { logVerbose, logVerboseConsole } from "./globals.js";
+import { logVerbose } from "./globals.js";
 import { isFileLogLevelEnabled } from "./logging/logger.js";
 
 beforeEach(() => {
@@ -64,16 +64,6 @@ describe("logVerbose", () => {
     expect(consoleSpy).not.toHaveBeenCalled();
   });
 
-  it("logs to the file logger and console when isVerbose is true", () => {
-    vi.mocked(isVerbose).mockReturnValue(true);
-    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-
-    logVerbose("test message");
-
-    expect(mocks.loggerDebug).toHaveBeenCalledWith({ message: "test message" }, "verbose");
-    expect(consoleSpy).toHaveBeenCalledWith("test message");
-  });
-
   it("still logs to console when the file logger throws", () => {
     vi.mocked(isVerbose).mockReturnValue(true);
     mocks.getLogger.mockImplementation(() => {
@@ -82,25 +72,6 @@ describe("logVerbose", () => {
     const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 
     expect(() => logVerbose("test message")).not.toThrow();
-    expect(consoleSpy).toHaveBeenCalledWith("test message");
-  });
-});
-
-describe("logVerboseConsole", () => {
-  it("does not log when isVerbose is false", () => {
-    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-
-    logVerboseConsole("test message");
-
-    expect(consoleSpy).not.toHaveBeenCalled();
-  });
-
-  it("logs to console when isVerbose is true", () => {
-    vi.mocked(isVerbose).mockReturnValue(true);
-    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-
-    logVerboseConsole("test message");
-
     expect(consoleSpy).toHaveBeenCalledWith("test message");
   });
 });

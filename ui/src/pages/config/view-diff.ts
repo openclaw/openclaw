@@ -3,9 +3,9 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isSensitiveConfigPath } from "../../../../src/config/sensitive-paths.js";
 import type { ConfigUiHints } from "../../api/types.ts";
 import { hasSensitiveConfigData, hintForPath } from "../../components/config-form.shared.ts";
-import { t } from "../../i18n/index.ts";
 import { isJson5Warm, parseJson5Text } from "../../lib/json5-runtime.ts";
-import type { ConfigDiffEntry, ConfigDiffPath, ConfigViewState } from "./view-types.ts";
+import { t } from "../../lib/reactive/i18n.ts";
+import type { ConfigDiffEntry, ConfigDiffPath, ConfigViewState } from "./view-state.ts";
 
 const MAX_CONFIG_DIFF_DEPTH = 64;
 const MAX_CONFIG_DIFF_NODES = 20_000;

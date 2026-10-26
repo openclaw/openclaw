@@ -220,17 +220,22 @@ export function createWorkerCredentialBroker(options: WorkerCredentialBrokerOpti
   const attachSession = async (
     request: WorkerCredentialBinding & {
       sessionId: string;
+      assertCurrent?: () => void;
       placementBinding?: PreparedEnvironmentPlacementBinding;
     },
   ): Promise<MintedWorkerCredential> => {
-    if (options.isStopping()) {
-      throw serviceError("invalid_state", "Worker environment service is stopping");
-    }
-    return withLock(request.environmentId, async () => {
-      await store.ready();
+    const { assertCurrent: assertCallerCurrent, placementBinding } = request;
+    const assertCurrent = () => {
       if (options.isStopping()) {
         throw serviceError("invalid_state", "Worker environment service is stopping");
       }
+      assertCallerCurrent?.();
+      placementBinding?.assertCurrent();
+    };
+    assertCurrent();
+    return withLock(request.environmentId, async () => {
+      await store.ready();
+      assertCurrent();
       const current = store.get(request.environmentId);
       if (!current) {
         throw serviceError(
@@ -247,6 +252,7 @@ export function createWorkerCredentialBroker(options: WorkerCredentialBrokerOpti
       } catch {
         throw serviceError("invalid_state", "Current worker build identity is unavailable");
       }
+      assertCurrent();
       if (!current.bootstrapReceipt || !sameWorkerBuild(current.bootstrapReceipt, currentBuild)) {
         throw new StaleWorkerBuildError();
       }
@@ -257,7 +263,8 @@ export function createWorkerCredentialBroker(options: WorkerCredentialBrokerOpti
           from: current.state,
           to: "attached",
           expectedOwnerEpoch: request.ownerEpoch,
-          placementBinding: request.placementBinding,
+          placementBinding,
+          assertCurrent,
           patch: {
             attachedSessionIds: [request.sessionId],
             credential: {
@@ -274,6 +281,7 @@ export function createWorkerCredentialBroker(options: WorkerCredentialBrokerOpti
         }
         throw error;
       }
+      // Commit transfers custody: caller closure cannot undo attachment or skip exact cleanup.
       pendingCredentials.delete(request.environmentId);
       await tunnels?.stop(request.environmentId, current.ownerEpoch);
       return stageCredential(

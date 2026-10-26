@@ -15,7 +15,6 @@ import {
   hasLegacyInteractiveReplyBlocks,
   hasMessagePresentationBlocks,
   hasReplyChannelData,
-  hasReplyPayloadContent,
   normalizeLegacyInteractiveReply,
   normalizeMessagePresentation,
   renderMessagePresentationChartFallbackText,
@@ -126,22 +125,12 @@ export function resolveOutboundPayloadMirrorText(payload: ReplyPayload): string 
   return lines.join("\n");
 }
 
-function isSuppressedRelayStatusText(text: string): boolean {
-  const normalized = text.trim();
-  // Prevent relay housekeeping text from leaking into user-visible channels.
-  return (
-    /^(?:no channel reply|replied in-thread|replied in #[-\w]+)\.?$/i.test(normalized) ||
-    /^updated\s+\[[^\]]*wiki\/[^\]]+\](?:\([^)]+\))?(?:\s+with\b[\s\S]*)?(?:\.\s*)?(?:no channel reply\.?)?$/i.test(
-      normalized,
-    )
-  );
-}
-
 function normalizeRawOutboundPayload(
   payload: ReplyPayload,
   context: Pick<OutboundPayloadPlanContext, "extractMarkdownImages"> = {},
+  admittedReasoning?: true,
 ): ReplyPayload | null {
-  if (shouldSuppressReasoningPayload(payload)) {
+  if (!admittedReasoning && shouldSuppressReasoningPayload(payload)) {
     return null;
   }
   const parsed = parseReplyDirectives(stripLeadingInboundMetadata(payload.text ?? ""), {
@@ -158,13 +147,10 @@ function normalizeRawOutboundPayload(
   const strippedParsed =
     strippedText === (parsed.text ?? "") ? parsed : parseReplyDirectives(strippedText);
   const parsedText = strippedParsed.text ?? "";
-  const suppressedText = strippedParsed.isSilent || isSuppressedRelayStatusText(parsedText);
   const normalizedPayload: ReplyPayload = applyReplyPayloadTargetPolicy(
     copyReplyPayloadMetadata(payload, {
       ...payload,
-      text:
-        formatBtwTextForExternalDelivery({ ...payload, text: suppressedText ? "" : parsedText }) ??
-        "",
+      text: formatBtwTextForExternalDelivery({ ...payload, text: parsedText }) ?? "",
       mediaUrls,
       mediaUrl: explicitMediaUrl,
       ...(payload.attachments
@@ -187,37 +173,7 @@ function normalizeRawOutboundPayload(
     ...(parsed.mediaFailures ?? []),
     ...(strippedParsed === parsed ? [] : (strippedParsed.mediaFailures ?? [])),
   ]);
-  return suppressedText && !hasReplyPayloadContent(normalizedPayload) ? null : normalizedPayload;
-}
-
-function createStructuredOutboundPayloadPlanEntry(
-  payload: ReplyPayload,
-): Omit<OutboundPayloadPlan, "sourceIndex"> | null {
-  const mediaEntries = indexFirstByKey(collectReplyMediaEntries(payload), ({ url }) => url.trim());
-  mediaEntries.delete("");
-  const mediaUrls = [...mediaEntries.keys()];
-  const attachments = payload.attachments
-    ? [...mediaEntries.values()].map(({ attachment }) => attachment ?? {})
-    : undefined;
-  const normalizedPayload = applyReplyPayloadTargetPolicy(
-    copyReplyPayloadMetadata(payload, {
-      ...payload,
-      text: payload.text ?? "",
-      mediaUrls: mediaUrls.length ? mediaUrls : undefined,
-      mediaUrl: mediaUrls.length > 1 ? undefined : payload.mediaUrl,
-      ...(attachments ? { attachments } : {}),
-    }),
-  );
-  if (!isRenderablePayload(normalizedPayload)) {
-    return null;
-  }
-  return {
-    payload: normalizedPayload,
-    parts: resolveSendableOutboundReplyParts(normalizedPayload),
-    hasPresentation: hasMessagePresentationBlocks(normalizedPayload.presentation),
-    hasInteractive: hasLegacyInteractiveReplyBlocks(normalizedPayload.interactive),
-    hasChannelData: hasReplyChannelData(normalizedPayload.channelData),
-  };
+  return normalizedPayload;
 }
 
 function buildOutboundPayloadPlan(
@@ -230,10 +186,37 @@ function buildOutboundPayloadPlan(
   const plan: OutboundPayloadPlan[] = [];
   for (const [sourceIndex, payload] of payloads.entries()) {
     const prepared = preparePayload ? preparePayload(payload) : payload;
-    const entry = prepared ? createStructuredOutboundPayloadPlanEntry(prepared) : null;
-    if (entry) {
-      plan.push({ sourceIndex, ...entry });
+    if (!prepared) {
+      continue;
     }
+    const mediaEntries = indexFirstByKey(collectReplyMediaEntries(prepared), ({ url }) =>
+      url.trim(),
+    );
+    mediaEntries.delete("");
+    const mediaUrls = [...mediaEntries.keys()];
+    const attachments = prepared.attachments
+      ? [...mediaEntries.values()].map(({ attachment }) => attachment ?? {})
+      : undefined;
+    const normalizedPayload = applyReplyPayloadTargetPolicy(
+      copyReplyPayloadMetadata(prepared, {
+        ...prepared,
+        text: prepared.text ?? "",
+        mediaUrls: mediaUrls.length ? mediaUrls : undefined,
+        mediaUrl: mediaUrls.length > 1 ? undefined : prepared.mediaUrl,
+        ...(attachments ? { attachments } : {}),
+      }),
+    );
+    if (!isRenderablePayload(normalizedPayload)) {
+      continue;
+    }
+    plan.push({
+      sourceIndex,
+      payload: normalizedPayload,
+      parts: resolveSendableOutboundReplyParts(normalizedPayload),
+      hasPresentation: hasMessagePresentationBlocks(normalizedPayload.presentation),
+      hasInteractive: hasLegacyInteractiveReplyBlocks(normalizedPayload.interactive),
+      hasChannelData: hasReplyChannelData(normalizedPayload.channelData),
+    });
   }
   return plan;
 }
@@ -245,6 +228,16 @@ export function createOutboundPayloadPlan(
 ): OutboundPayloadPlan[] {
   return buildOutboundPayloadPlan(payloads, (payload) =>
     normalizeRawOutboundPayload(payload, context),
+  );
+}
+
+/** Internal lane handoff: retain admitted reasoning while parsing raw reply controls normally. */
+export function createOutboundPayloadPlanWithAdmittedReasoning(
+  payloads: readonly ReplyPayload[],
+  context: OutboundPayloadPlanContext = {},
+): OutboundPayloadPlan[] {
+  return buildOutboundPayloadPlan(payloads, (payload) =>
+    normalizeRawOutboundPayload(payload, context, true),
   );
 }
 

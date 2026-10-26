@@ -1,10 +1,8 @@
 // Appearance-only controls operate on the canonical outbox; startup does not load them.
-import {
-  normalizeBackgroundPreference,
-  type BackgroundPreference,
-} from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
+import type { BackgroundPreference } from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import { requestServerUiPrefReset, requestServerUiPrefWrite } from "./server-prefs-intent.ts";
+import { readConfirmedPrefs, publishConfirmedPrefs } from "./server-prefs-confirmation.ts";
+import { requestServerUiPrefIntent } from "./server-prefs-intent.ts";
 import {
   invalidateProfileAppearanceReads,
   recordProfileAppearanceCommit,
@@ -21,15 +19,13 @@ import {
   type SyncedPrefKey,
 } from "./server-prefs-state.ts";
 import {
-  LAST_SEEN_KEY,
   PENDING_KEY,
   parseStoredPrefs,
   readRetainedLocalKeys,
   readStorage,
-  writeStorage,
 } from "./server-prefs-storage.ts";
 import { serverUiPrefsOutbox as outbox } from "./server-prefs.ts";
-import type { UiSettings } from "./settings.ts";
+import type { UiSettings } from "./settings-contract.ts";
 import { loadSettings, patchSettings } from "./settings.ts";
 import type { ThemeName } from "./theme.ts";
 import { invalidateUserPreferences } from "./user-prefs-cache.ts";
@@ -84,11 +80,7 @@ export function adoptCommittedBackgroundPreference(options: {
   ) {
     return false;
   }
-  const background =
-    options.preference === null ? undefined : normalizeBackgroundPreference(options.preference);
-  if (options.preference !== null && !background) {
-    return false;
-  }
+  const background = options.preference ?? undefined;
   const effectiveScope = resolveProfilePreferenceScope(scope, options.profileId);
   if (effectiveScope === outbox.pendingScope) {
     outbox.reconcilePersistedPendingPrefs();
@@ -109,13 +101,13 @@ export function adoptCommittedBackgroundPreference(options: {
   invalidateProfileAppearanceReads();
   invalidateUserPreferences(options.client);
   recordProfileAppearanceCommit(scope, options.profileId, { background: background ?? null });
-  const lastSeen = parseStoredPrefs(readStorage(LAST_SEEN_KEY, effectiveScope)) ?? {};
+  const lastSeen = { ...readConfirmedPrefs(outbox, effectiveScope) };
   if (background) {
     lastSeen.background = background;
   } else {
     delete lastSeen.background;
   }
-  writeStorage(LAST_SEEN_KEY, effectiveScope, JSON.stringify(lastSeen));
+  publishConfirmedPrefs(outbox, effectiveScope, lastSeen);
   outbox.preferenceWriteFailures.get(effectiveScope)?.delete("background");
   outbox.updateRetainedLocalKeys(effectiveScope, ["background"], false);
   outbox.lastReconciledConfigObject = null;
@@ -177,7 +169,6 @@ export function retryServerUiPrefWrite(
   outbox.updateRetainedLocalKeys(effectiveScope, [key], false);
   outbox.pendingPrefs = { ...outbox.pendingPrefs, [key]: retryValue };
   outbox.mergePendingIntoStorage();
-  outbox.clearConflictRedrain();
   outbox.publishPreferenceWrites();
   outbox.startPendingDrain(writer);
   return true;
@@ -219,11 +210,11 @@ export function resetServerUiPref<K extends ResettableServerUiPrefKey>(
     }
     outbox.updateRetainedLocalKeys(effectiveScope, keys, false);
     for (const resetKey of keys) {
-      requestServerUiPrefReset(resetKey, "device-local");
+      requestServerUiPrefIntent(resetKey, "device-local");
     }
     return applyReset(patch);
   }
-  requestServerUiPrefReset(key, "server");
+  requestServerUiPrefIntent(key, "server");
   // The resolved state owns the reset target, including the Gateway fallback
   // while the profile is still loading. Config preferences use product defaults.
   return applyReset(write(state?.resetValue));
@@ -241,9 +232,9 @@ export function selectThemeSettings(
   // that the server has no font override. Send these with the theme in one batch.
   // Carry the whole selection intent even if another tab already mirrors this
   // marker, so a read-only selection can cancel every older queued design edit.
-  requestServerUiPrefWrite("accent");
-  requestServerUiPrefReset("fontUi", "server");
-  requestServerUiPrefReset("fontChat", "server");
+  requestServerUiPrefIntent("accent", "write");
+  requestServerUiPrefIntent("fontUi", "server");
+  requestServerUiPrefIntent("fontChat", "server");
   return patchSettings({
     ...patch,
     theme,

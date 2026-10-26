@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createDirectorySync, createFileSync } from "@openclaw/fs-safe/advanced";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeEach, expect, vi } from "vitest";
 import * as sourceArtifactPreflight from "../../scripts/lib/source-update-artifact-preflight.mts";
@@ -13,12 +13,15 @@ import {
 import * as taskProbe from "../daemon/schtasks-state-probe.js";
 import { mockSystemAccountHome } from "../daemon/service.test-helpers.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
+import * as sqliteHeaderProbe from "../infra/sqlite-header-probe.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../infra/supervisor-markers.js";
 import * as updateTempRoot from "../infra/tmp-openclaw-dir.js";
+import * as stateMetadata from "../infra/update-candidate-state.sizes.js";
 import * as updateDatabaseRestore from "../infra/update-database-restore.js";
 import * as updateRecoveryBaseline from "../infra/update-recovery-baseline-capture.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import * as windowsPrivateDirectory from "../infra/windows-private-directory.js";
+import { closeDefaultRetainedNativeWorkerSource } from "../infra/worker-native-lifecycle.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -27,94 +30,28 @@ import { createCommandResult as commandResult } from "../test-utils/npm-spec-ins
 import { getFreePort } from "../test-utils/ports.js";
 import type { TempHomeEnv } from "../test-utils/temp-home.js";
 import { setupConfigMutationWithRetryMock } from "./update-cli-assertions.test-support.js";
-import {
-  candidateValidation,
-  checkShellCompletionStatus,
-  classifyPortListener,
-  commandTransport,
-  confirm,
-  databasePreflightMocks,
-  ensureCompletionCacheExists,
-  existingHostUri,
-  fixtureEnvSnapshot,
-  formatPortDiagnostics,
-  gatewayFixturePid,
-  httpReadiness,
-  immutableHostUri,
-  inferenceRepair,
-  inspectPortUsage,
-  installCompletion,
-  launchdUpdateCleanupMocks,
-  legacyConfigRepairMocks,
-  mockGetSelfAndAncestorPidsSync,
-  nodeVersionSatisfiesEngine,
-  pathExists,
-  pluginAvailabilityPreflight,
-  probePortUsage,
-  readPackageName,
-  readPackageVersion,
-  readPersistedInstalledPluginIndex,
-  resetRuntimeCapture,
-  resolveGlobalManager,
-  resolveNodeRuntimeInfo,
-  restartHealthTestControl,
-  restorePersistedInstalledPluginIndexIfCurrent,
-  resumeScheduledTaskAutoStartAfterUpdate,
-  retainUpdateRuntime,
-  select,
-  serviceDefinitionMutationCapability,
-  serviceEnabled,
-  serviceFixtureState,
-  serviceLoaded,
-  serviceReadCommand,
-  serviceReadRuntime,
-  serviceRestart,
-  serviceStart,
-  serviceStop,
-  sourceRuntimeCompletion,
-  spawn,
-  sqliteHostPlatform,
-  stateSchemaVersions,
-  suspendScheduledTaskAutoStartForUpdate,
-  syncPluginsForUpdateChannel,
-  systemdPolicy,
-  terminateStaleGatewayPids,
-  triageAfterFailure,
-  updateFailureActionMocks,
-  updateNpmInstalledPlugins,
-  writePersistedInstalledPluginIndexInstallRecordsWithLease,
-} from "./update-cli-mocks.test-support.js";
-import {
-  checkUpdateStatus,
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-  defaultRuntime,
-  doctorCommand,
-  fetchNpmPackageTargetStatus,
-  fetchNpmTagVersion,
-  makeOkUpdateResult,
-  readConfigFileSnapshot,
-  readSourceConfigBestEffort,
-  resolveExtendedStablePackage,
-  resolveOpenClawPackageRoot,
-  resolveUpdateInstallIdentity,
-  resolveUpdateInstallKind,
-  runCommandWithTimeout,
-  runDaemonInstall,
-  runDaemonRestart,
-  updateCliShared,
-  updateGitCheckout,
-} from "./update-cli-modules.test-support.js";
+import * as mocks from "./update-cli-mocks.test-support.js";
+import * as update from "./update-cli-modules.test-support.js";
 import {
   npmPluginUpdateResult,
   pluginSyncResult,
 } from "./update-cli/update-cli-config.test-support.js";
 import { reportUpdateCliHomeCleanupFailure } from "./update-cli/update-cli-failure-recovery.test-support.js";
+import { runtimeFixture } from "./update-cli/update-command-fixtures.test-support.js";
 import { getNodeRuntimeFixture } from "./update-cli/update-command-runtime-recovery.test-support.js";
 
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 
-function selectHostPlatform(): () => void {
+export const candidateStartupStep = (cwd: string, valid = true) => ({
+  name: "candidate-gateway-startup",
+  command: "openclaw gateway",
+  cwd,
+  durationMs: 1,
+  exitCode: valid ? 0 : 1,
+  ...(!valid ? { stderrTail: "candidate readiness failed" } : {}),
+});
+
+function selectHostPlatform() {
   const descriptor = expectDefined(
     Object.getOwnPropertyDescriptor(process, "platform"),
     "host platform descriptor",
@@ -122,18 +59,14 @@ function selectHostPlatform(): () => void {
   Object.defineProperty(process, "platform", {
     configurable: true,
     enumerable: descriptor.enumerable,
-    value: sqliteHostPlatform,
+    value: mocks.sqliteHostPlatform,
   });
-  return () => Object.defineProperty(process, "platform", descriptor);
+  return { [Symbol.dispose]: () => Object.defineProperty(process, "platform", descriptor) };
 }
 
 async function onHostPlatform<T>(operation: () => Promise<T>): Promise<T> {
-  const restore = selectHostPlatform();
-  try {
-    return await operation();
-  } finally {
-    restore();
-  }
+  using _ = selectHostPlatform();
+  return await operation();
 }
 
 type UpdateCliLifecycleFixture = {
@@ -155,38 +88,25 @@ type UpdateCliLifecycleFixture = {
 };
 
 export function registerUpdateCliLifecycle(fixture: UpdateCliLifecycleFixture): void {
-  const {
-    baseConfig,
-    baseSnapshot,
-    fixtureRoot,
-    globalNpmConfig,
-    initializeExistingUpdateProfile,
-    mockGatewayHealth,
-    primeNpmChannelTag,
-    reportCandidateSteps,
-    setStdoutTty,
-    setTty,
-    tempDirs,
-    tempDirsToCleanup,
-  } = fixture;
   let tempHome: TempHomeEnv | undefined;
 
   const invocationCwd = process.cwd();
   beforeEach(async () => {
     vi.spyOn(taskProbe, "probeScheduledTaskUpdateAccess").mockReturnValue({ status: "allowed" });
     // Default install roots use cwd; artifact admission must own the fixture, not the checkout.
-    process.chdir(path.join(fixtureRoot, "checkout"));
+    const checkoutRoot = path.join(fixture.fixtureRoot, "checkout");
+    process.chdir(checkoutRoot);
     process.exitCode = undefined;
     const { createTempHomeEnv } = await import("../test-utils/temp-home.js");
     tempHome = await createTempHomeEnv("openclaw-update-cli-home-");
     // Original-state capture must discover this simulated install's plugins.
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.join(fixtureRoot, "checkout", "extensions");
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.join(checkoutRoot, "extensions");
     process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
-    commandTransport.npmPrefix = tempDirs.make("openclaw-cli-npm-prefix-");
-    process.env.NPM_CONFIG_GLOBALCONFIG = globalNpmConfig;
-    process.env.npm_config_globalconfig = globalNpmConfig;
-    const executorTmp = tempDirs.make("update-cli-owner-");
-    serviceFixtureState.absentServicePort = await getFreePort();
+    mocks.commandTransport.npmPrefix = fixture.tempDirs.make("openclaw-cli-npm-prefix-");
+    process.env.NPM_CONFIG_GLOBALCONFIG = fixture.globalNpmConfig;
+    process.env.npm_config_globalconfig = fixture.globalNpmConfig;
+    const executorTmp = fixture.tempDirs.make("update-cli-owner-");
+    mocks.serviceFixtureState.absentServicePort = await getFreePort();
     delete process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
     delete process.env.OPENCLAW_SERVICE_MARKER;
     delete process.env.OPENCLAW_SERVICE_KIND;
@@ -198,8 +118,12 @@ export function registerUpdateCliLifecycle(fixture: UpdateCliLifecycleFixture): 
     ]) {
       delete process.env[key];
     }
-    restartHealthTestControl.snapshot = undefined;
+    mocks.restartHealthTestControl.snapshot = undefined;
     vi.resetAllMocks();
+    // Metadata process isolation has its own tests; keep real file and sidecar sizes here.
+    vi.spyOn(stateMetadata, "readUpdateStateDatabaseSizes").mockImplementation(
+      (files, { signal }) => stateMetadata.readUpdateStateDatabaseSizesInProcess(files, signal),
+    );
     // Service control is simulated; native artifact and database owners still run on the host OS.
     const inspectArtifacts = sourceArtifactPreflight.inspectSourceUpdateArtifacts;
     vi.spyOn(sourceArtifactPreflight, "inspectSourceUpdateArtifacts").mockImplementation(
@@ -229,83 +153,62 @@ export function registerUpdateCliLifecycle(fixture: UpdateCliLifecycleFixture): 
     vi.spyOn(updateDatabaseRestore, "restoreUpdateDatabaseBackup").mockImplementation((...args) =>
       onHostPlatform(() => restoreDatabaseBackup(...args)),
     );
-    retainUpdateRuntime.mockImplementation(async ({ assertCurrent }) => assertCurrent());
-    systemdPolicy.mockResolvedValue(false);
-    // Service simulations do not provide foreign-platform ACL libraries. Keep
-    // real exclusive host creation; actual Windows runs retain the native DACL path.
-    if (sqliteHostPlatform !== "win32") {
+    mocks.retainUpdateRuntime.mockImplementation(async ({ assertCurrent }) => assertCurrent());
+    mocks.systemdPolicy.mockResolvedValue({ kind: "unchanged" });
+    // Keep host file exclusivity; native Windows still tests DACL creation.
+    if (mocks.sqliteHostPlatform !== "win32") {
       vi.spyOn(windowsPrivateDirectory, "createPrivateWindowsDirectory").mockImplementation(
         (directoryPath) => {
-          fsSync.mkdirSync(directoryPath, { mode: 0o700 });
+          createDirectorySync(directoryPath, { mode: 0o700 });
         },
       );
-      vi.spyOn(windowsPrivateDirectory, "createPrivateWindowsFile").mockImplementation((filePath) =>
-        fsSync.openSync(
-          filePath,
-          fsSync.constants.O_RDWR |
-            fsSync.constants.O_CREAT |
-            fsSync.constants.O_EXCL |
-            fsSync.constants.O_NOFOLLOW,
-          0o600,
-        ),
+      vi.spyOn(windowsPrivateDirectory, "createPrivateWindowsFile").mockImplementation((file) =>
+        createFileSync(file, { mode: 0o600 }),
       );
     }
-    // Native-service platform simulations do not change the actual SQLite VFS.
+    // Service-platform doubles do not change host SQLite helpers or their Node resolution.
+    const probeSqliteHeaders = sqliteHeaderProbe.probeSqliteDatabaseHeaders;
+    vi.spyOn(sqliteHeaderProbe, "probeSqliteDatabaseHeaders").mockImplementation((...args) => {
+      using _ = selectHostPlatform();
+      return probeSqliteHeaders(...args);
+    });
     vi.spyOn(nodeSqlite, "resolveExistingSqliteFileUri").mockImplementation((file) =>
-      existingHostUri(file, sqliteHostPlatform),
+      mocks.existingHostUri(file, mocks.sqliteHostPlatform),
     );
     vi.spyOn(nodeSqlite, "resolveImmutableSqliteFileUri").mockImplementation((file) =>
-      immutableHostUri(file, sqliteHostPlatform),
+      mocks.immutableHostUri(file, mocks.sqliteHostPlatform),
     );
     vi.spyOn(updateTempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(executorTmp);
     const pidAlive = await import("../shared/pid-alive.js");
     const readHostProcessStartTime = pidAlive.getFileLockProcessStartTime;
-    // Service-platform doubles cannot change the OS that owns real fixture PIDs.
-    // Keep actual PID/start reads, switching only their synchronous platform dispatch.
+    // Read real PID/start identity using the host OS despite service-platform doubles.
     vi.spyOn(pidAlive, "getFileLockProcessStartTime").mockImplementation((...args) => {
-      if (process.platform === sqliteHostPlatform) {
-        return readHostProcessStartTime(...args);
-      }
-      const restore = selectHostPlatform();
-      try {
-        return readHostProcessStartTime(...args);
-      } finally {
-        restore();
-      }
+      using _ = selectHostPlatform();
+      return readHostProcessStartTime(...args);
     });
-    // Cache the real host process identity before cases spoof the native service
-    // platform. Lease ownership still uses the production PID/start checks.
-    const { getFileLockProcessStartTime } = await import("../shared/pid-alive.js");
-    expect(getFileLockProcessStartTime(process.pid)).not.toBeNull();
-    pluginAvailabilityPreflight.mockResolvedValue([]);
-    sourceRuntimeCompletion.mockResolvedValue({ changed: false });
-    triageAfterFailure.mockResolvedValue(undefined);
-    inferenceRepair.mockResolvedValue({
+    // Cache real PID/start identity before cases spoof the service platform.
+    expect(pidAlive.getFileLockProcessStartTime(process.pid)).not.toBeNull();
+    mocks.pluginAvailabilityPreflight.mockResolvedValue([]);
+    mocks.sourceRuntimeCompletion.mockResolvedValue({ changed: false });
+    mocks.triageAfterFailure.mockResolvedValue(undefined);
+    mocks.inferenceRepair.mockResolvedValue({
       status: "unavailable",
       attempts: [],
       finalValidation: { ok: false, score: 0, summary: "No fixture repair route." },
     });
-    candidateValidation.mockImplementation(async (options) =>
-      reportCandidateSteps(options, {
+    mocks.candidateValidation.mockImplementation(async (options) =>
+      fixture.reportCandidateSteps(options, {
         status: "ok",
         candidateSchemaVersions: {
           state: OPENCLAW_STATE_SCHEMA_VERSION,
           agent: OPENCLAW_AGENT_SCHEMA_VERSION,
         },
-        steps: [
-          {
-            name: "candidate-gateway-startup",
-            command: "openclaw gateway",
-            cwd: "/candidate",
-            durationMs: 1,
-            exitCode: 0,
-          },
-        ],
+        steps: [candidateStartupStep("/candidate")],
       }),
     );
-    httpReadiness.mockResolvedValue({ healthz: 200, readyz: 200 });
+    mocks.httpReadiness.mockResolvedValue({ healthz: 200, readyz: 200 });
 
-    stateSchemaVersions.mockImplementation(
+    mocks.stateSchemaVersions.mockImplementation(
       async ({ stateDir, env }: { stateDir: string; env?: NodeJS.ProcessEnv }) => [
         { path: resolveOpenClawStateSqlitePath(env), userVersion: OPENCLAW_STATE_SCHEMA_VERSION },
         {
@@ -314,97 +217,62 @@ export function registerUpdateCliLifecycle(fixture: UpdateCliLifecycleFixture): 
         },
       ],
     );
-    probePortUsage.mockResolvedValue("free");
-    serviceEnabled.mockResolvedValue(true);
-    serviceDefinitionMutationCapability.mockResolvedValue(undefined);
-    updateFailureActionMocks.runInteractiveUpdateFailureAction.mockResolvedValue("triage");
-    readPersistedInstalledPluginIndex.mockResolvedValue(null);
-    restorePersistedInstalledPluginIndexIfCurrent.mockResolvedValue(true);
-    writePersistedInstalledPluginIndexInstallRecordsWithLease.mockResolvedValue({
+    mocks.probePortUsage.mockResolvedValue("free");
+    mocks.serviceEnabled.mockResolvedValue(true);
+    mocks.serviceDefinitionMutationCapability.mockResolvedValue(undefined);
+    mocks.readPersistedInstalledPluginIndex.mockResolvedValue(null);
+    mocks.restorePersistedInstalledPluginIndexIfCurrent.mockResolvedValue(true);
+    mocks.writePersistedInstalledPluginIndexInstallRecordsWithLease.mockResolvedValue({
       previous: null,
       revision: 1,
     });
-    resetRuntimeCapture();
-    spawn.mockImplementation(() => {
-      const child = new EventEmitter() as EventEmitter & {
-        once: EventEmitter["once"];
-      };
+    mocks.resetRuntimeCapture();
+    mocks.spawn.mockImplementation(() => {
+      const child = new EventEmitter();
       queueMicrotask(() => {
         child.emit("exit", 0, null);
         child.emit("close", 0, null);
       });
       return child;
     });
-    vi.mocked(defaultRuntime.exit).mockImplementation(() => {});
-    databasePreflightMocks.preflightOpenClawDatabaseSchemas.mockReturnValue({
+    vi.mocked(update.defaultRuntime.exit).mockImplementation(() => {});
+    mocks.databasePreflightMocks.preflightOpenClawDatabaseSchemas.mockReturnValue({
       incompatible: [],
       indeterminate: [],
     });
-    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(process.cwd());
-    vi.mocked(readConfigFileSnapshot).mockResolvedValue(baseSnapshot);
-    vi.mocked(readSourceConfigBestEffort).mockResolvedValue(baseSnapshot.config);
+    vi.mocked(update.resolveOpenClawPackageRoot).mockResolvedValue(process.cwd());
+    vi.mocked(update.readConfigFileSnapshot).mockResolvedValue(fixture.baseSnapshot);
+    vi.mocked(update.readSourceConfigBestEffort).mockResolvedValue(fixture.baseSnapshot.config);
     setupConfigMutationWithRetryMock();
-    vi.mocked(fetchNpmTagVersion).mockResolvedValue({
+    vi.mocked(update.fetchNpmTagVersion).mockResolvedValue({
       tag: "latest",
       version: "9999.0.0",
     });
-    vi.mocked(fetchNpmPackageTargetStatus).mockImplementation(async ({ target }) => ({
+    vi.mocked(update.fetchNpmPackageTargetStatus).mockImplementation(async ({ target }) => ({
       version: /^\d/u.test(target) ? target : "9999.0.0",
       nodeEngine: ">=22.19.0",
     }));
-    vi.mocked(resolveExtendedStablePackage).mockResolvedValue({
+    vi.mocked(update.resolveExtendedStablePackage).mockResolvedValue({
       status: "resolved",
       selector: "extended-stable",
       version: "2026.6.33",
       packageSpec: "openclaw@2026.6.33",
     });
-    primeNpmChannelTag("latest", "9999.0.0");
-    nodeVersionSatisfiesEngine.mockReturnValue(true);
-    const nodeRuntime = getNodeRuntimeFixture();
-    resolveNodeRuntimeInfo.mockResolvedValue({
-      status: "supported",
-      version: nodeRuntime.versions.node,
-      sqliteVersion: nodeRuntime.versions.sqlite,
-      nodeSharedSqlite: false,
-      sqliteProbe: {
-        available: true,
-        version: nodeRuntime.versions.sqlite,
-        text: true,
-        blob: true,
-        json: true,
-      },
-    });
-    vi.mocked(resolveUpdateInstallKind).mockResolvedValue("git");
-    vi.mocked(resolveUpdateInstallIdentity).mockResolvedValue({
+    fixture.primeNpmChannelTag("latest", "9999.0.0");
+    mocks.nodeVersionSatisfiesEngine.mockReturnValue(true);
+    const { versions } = getNodeRuntimeFixture();
+    mocks.resolveNodeRuntimeInfo.mockResolvedValue(runtimeFixture(versions.node, versions.sqlite));
+    vi.mocked(update.resolveUpdateInstallKind).mockResolvedValue("git");
+    vi.mocked(update.resolveUpdateInstallIdentity).mockResolvedValue({
       installKind: "git",
       git: { tag: "v1.2.3", branch: "main" },
     });
-    vi.mocked(checkUpdateStatus).mockResolvedValue({
+    vi.mocked(update.checkUpdateStatus).mockResolvedValue({
       root: "/test/path",
       installKind: "git",
       packageManager: "pnpm",
-      git: {
-        root: "/test/path",
-        sha: "abcdef1234567890",
-        tag: "v1.2.3",
-        branch: "main",
-        upstream: "origin/main",
-        dirty: false,
-        ahead: 0,
-        behind: 0,
-        fetchOk: true,
-      },
-      deps: {
-        manager: "pnpm",
-        status: "ok",
-        lockfilePath: "/test/path/pnpm-lock.yaml",
-        markerPath: "/test/path/node_modules",
-      },
-      registry: {
-        latestVersion: "1.2.3",
-      },
     });
-    vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+    vi.mocked(update.runCommandWithTimeout).mockImplementation(async (argv) => {
       if (argv[1] === "--version") {
         return commandResult({ stdout: "12.0.0\n" });
       }
@@ -421,75 +289,82 @@ export function registerUpdateCliLifecycle(fixture: UpdateCliLifecycleFixture): 
       }
       return commandResult();
     });
-    vi.spyOn(updateCliShared, "readPackageName").mockImplementation(readPackageName);
-    vi.spyOn(updateCliShared, "readPackageVersion").mockImplementation(readPackageVersion);
-    vi.spyOn(updateCliShared, "resolveGlobalManager").mockImplementation(resolveGlobalManager);
-    readPackageName.mockResolvedValue("openclaw");
-    readPackageVersion.mockResolvedValue("1.0.0");
-    resolveGlobalManager.mockResolvedValue("npm");
-    serviceStart.mockResolvedValue(undefined);
-    serviceStop.mockResolvedValue(undefined);
-    terminateStaleGatewayPids.mockResolvedValue(undefined);
-    serviceRestart.mockResolvedValue({ outcome: "completed" });
-    mockSystemAccountHome();
-    suspendScheduledTaskAutoStartForUpdate.mockResolvedValue(false);
-    resumeScheduledTaskAutoStartAfterUpdate.mockResolvedValue(false);
-    serviceLoaded.mockResolvedValue(false);
-    serviceReadCommand.mockImplementation(async () =>
-      (await serviceLoaded()) ? { programArguments: ["openclaw", "gateway", "run"] } : null,
+    vi.spyOn(update.updateCliShared, "readPackageName").mockImplementation(mocks.readPackageName);
+    vi.spyOn(update.updateCliShared, "readPackageVersion").mockImplementation(
+      mocks.readPackageVersion,
     );
-    serviceReadRuntime.mockImplementation(async () =>
-      (await serviceLoaded())
-        ? { status: "running", pid: gatewayFixturePid, state: "running" }
+    vi.spyOn(update.updateCliShared, "resolveGlobalManager").mockImplementation(
+      mocks.resolveGlobalManager,
+    );
+    mocks.readPackageName.mockResolvedValue("openclaw");
+    mocks.readPackageVersion.mockResolvedValue("1.0.0");
+    mocks.resolveGlobalManager.mockResolvedValue("npm");
+    mocks.serviceStart.mockResolvedValue(undefined);
+    mocks.serviceStop.mockResolvedValue(undefined);
+    mocks.terminateStaleGatewayPids.mockResolvedValue(undefined);
+    mocks.serviceRestart.mockResolvedValue({ outcome: "completed" });
+    mockSystemAccountHome();
+    mocks.suspendScheduledTaskAutoStartForUpdate.mockResolvedValue(false);
+    mocks.resumeScheduledTaskAutoStartAfterUpdate.mockResolvedValue(false);
+    mocks.serviceLoaded.mockResolvedValue(false);
+    mocks.serviceReadCommand.mockImplementation(async () =>
+      (await mocks.serviceLoaded()) ? { programArguments: ["openclaw", "gateway", "run"] } : null,
+    );
+    mocks.serviceReadRuntime.mockImplementation(async () =>
+      (await mocks.serviceLoaded())
+        ? { status: "running", pid: mocks.gatewayFixturePid, state: "running" }
         : { status: "stopped", state: "stopped", missingUnit: true },
     );
-    mockGetSelfAndAncestorPidsSync.mockReturnValue(new Set<number>([process.pid, 1]));
-    inspectPortUsage.mockResolvedValue({
+    mocks.mockGetSelfAndAncestorPidsSync.mockReturnValue(new Set<number>([process.pid, 1]));
+    mocks.inspectPortUsage.mockResolvedValue({
       port: 18789,
       status: "busy",
-      listeners: [{ pid: gatewayFixturePid, command: "openclaw-gateway" }],
+      listeners: [{ pid: mocks.gatewayFixturePid, command: "openclaw-gateway" }],
       hints: [],
     });
-    classifyPortListener.mockReturnValue("gateway");
-    formatPortDiagnostics.mockReturnValue(["Port 18789 is already in use."]);
-    mockGatewayHealth("1.0.0", "conn-test");
+    mocks.classifyPortListener.mockReturnValue("gateway");
+    mocks.formatPortDiagnostics.mockReturnValue(["Port 18789 is already in use."]);
+    fixture.mockGatewayHealth("1.0.0", "conn-test");
     const installedEntrypoint = path.join(process.cwd(), "dist", "index.js");
-    pathExists.mockImplementation(async (candidate: string) => candidate === installedEntrypoint);
-    syncPluginsForUpdateChannel.mockResolvedValue(pluginSyncResult(baseConfig));
-    updateNpmInstalledPlugins.mockResolvedValue(npmPluginUpdateResult(baseConfig));
-    checkShellCompletionStatus.mockResolvedValue({
+    mocks.pathExists.mockImplementation(
+      async (candidate: string) => candidate === installedEntrypoint,
+    );
+    mocks.syncPluginsForUpdateChannel.mockResolvedValue(pluginSyncResult(fixture.baseConfig));
+    mocks.updateNpmInstalledPlugins.mockResolvedValue(npmPluginUpdateResult(fixture.baseConfig));
+    mocks.checkShellCompletionStatus.mockResolvedValue({
       shell: "zsh",
       profileInstalled: false,
       cacheExists: false,
       cachePath: "/tmp/openclaw-completion.zsh",
       usesSlowPattern: false,
     });
-    ensureCompletionCacheExists.mockResolvedValue(true);
-    installCompletion.mockResolvedValue(undefined);
-    vi.mocked(runDaemonInstall).mockResolvedValue(undefined);
-    vi.mocked(runDaemonRestart).mockResolvedValue(true);
-    vi.mocked(doctorCommand).mockResolvedValue(undefined);
-    legacyConfigRepairMocks.repairLegacyConfigForUpdateChannel.mockImplementation(
+    mocks.ensureCompletionCacheExists.mockResolvedValue(true);
+    mocks.installCompletion.mockResolvedValue(undefined);
+    vi.mocked(update.runDaemonInstall).mockResolvedValue(undefined);
+    vi.mocked(update.runDaemonRestart).mockResolvedValue(true);
+    vi.mocked(update.doctorCommand).mockResolvedValue(undefined);
+    mocks.legacyConfigRepairMocks.repairLegacyConfigForUpdateChannel.mockImplementation(
       async (params: { configSnapshot: ConfigFileSnapshot }) => ({
         snapshot: params.configSnapshot,
         repaired: false,
       }),
     );
-    launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob.mockReset();
-    launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob.mockResolvedValue(false);
-    confirm.mockResolvedValue(false);
-    select.mockResolvedValue("stable");
-    vi.mocked(updateGitCheckout).mockResolvedValue(makeOkUpdateResult());
-    setTty(false);
-    setStdoutTty(false);
-    initializeExistingUpdateProfile();
+    mocks.launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob.mockResolvedValue(false);
+    mocks.confirm.mockResolvedValue(false);
+    mocks.select.mockResolvedValue("stable");
+    vi.mocked(update.updateGitCheckout).mockResolvedValue(update.makeOkUpdateResult());
+    fixture.setTty(false);
+    fixture.setStdoutTty(false);
+    fixture.initializeExistingUpdateProfile();
     // Keep guard reads on the fixture connection instead of booting snapshots per read.
     openOpenClawStateDatabase();
   });
 
   afterAll(async () => {
-    fixtureEnvSnapshot.restore();
-    await fs.rm(fixtureRoot, { recursive: true, force: true });
+    mocks.fixtureEnvSnapshot.restore();
+    // Direct command fixtures also own the native broker started from their checkout.
+    await closeDefaultRetainedNativeWorkerSource();
+    await fs.rm(fixture.fixtureRoot, { recursive: true, force: true });
   });
 
   afterEach(async () => {
@@ -497,8 +372,8 @@ export function registerUpdateCliLifecycle(fixture: UpdateCliLifecycleFixture): 
     process.chdir(invocationCwd);
     process.exitCode = undefined;
     // Relocated stores can retain workers whose coordinator lives in this temporary home.
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
+    await update.closeOpenClawStateDatabaseAsync();
+    update.closeOpenClawStateDatabaseForTest();
     try {
       await tempHome?.restore();
     } catch (error) {
@@ -507,8 +382,8 @@ export function registerUpdateCliLifecycle(fixture: UpdateCliLifecycleFixture): 
     }
     tempHome = undefined;
     await Promise.allSettled(
-      [...tempDirsToCleanup].map((dir) => fs.rm(dir, { recursive: true, force: true })),
+      [...fixture.tempDirsToCleanup].map((dir) => fs.rm(dir, { recursive: true, force: true })),
     );
-    tempDirsToCleanup.clear();
+    fixture.tempDirsToCleanup.clear();
   });
 }

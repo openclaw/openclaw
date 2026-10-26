@@ -1,34 +1,38 @@
-import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
 import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
+import {
+  resetConfigRuntimeState,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import * as gitExec from "../../infra/git-exec.js";
 import * as commands from "../../process/exec.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
+import { withWorktreeGitConfig } from "./checkout-git-config.js";
 import { detectWorktreeFilesystemBackend } from "./filesystem-backend.js";
 import { createCopyWorktreeBackend } from "./filesystem-backend.test-support.js";
+import { git } from "./git-fixture.test-support.js";
 import { ManagedWorktreeService } from "./service.js";
 import { useManagedWorktreeTestRepository } from "./service.test-support.js";
+import { listTemplatesAsync } from "./template-registry-async.js";
 
 vi.mock("./filesystem-backend.js", () => ({ detectWorktreeFilesystemBackend: vi.fn() }));
-const exec = promisify(execFile);
 const sessionDirs = useSessionStoreTempDirs(afterAll, "source-only-filters-");
 afterEach(() => {
   vi.restoreAllMocks();
+  resetConfigRuntimeState();
   vi.unstubAllEnvs();
 });
 const initialize = useManagedWorktreeTestRepository();
-const git = async (cwd: string, ...args: string[]) =>
-  (await exec("git", ["-C", cwd, ...args])).stdout.trim();
 let root: string,
   repo: string,
   globalConfig: string,
   marker: string,
   script: string,
-  service: ManagedWorktreeService;
+  service: ManagedWorktreeService,
+  backend: ReturnType<typeof createCopyWorktreeBackend>;
 beforeEach(async () => {
   root = sessionDirs.make();
   globalConfig = path.join(root, "global-config");
@@ -38,6 +42,7 @@ beforeEach(async () => {
   vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
   vi.stubEnv("GIT_CONFIG_PARAMETERS", "");
   vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
+  setRuntimeConfigSnapshot({}, {});
   repo = await initialize(root);
   marker = path.join(root, "host-marker");
   script = path.join(root, "filter.cjs");
@@ -54,7 +59,8 @@ beforeEach(async () => {
   await fs.writeFile(path.join(repo, ".gitattributes"), "README.md filter=late\n");
   await git(repo, "add", ".gitattributes");
   await git(repo, "commit", "-qm", "filter attributes");
-  vi.mocked(detectWorktreeFilesystemBackend).mockResolvedValue(createCopyWorktreeBackend());
+  backend = createCopyWorktreeBackend();
+  vi.mocked(detectWorktreeFilesystemBackend).mockResolvedValue(backend);
   service = new ManagedWorktreeService({ getConfig: () => ({}) });
 });
 
@@ -96,6 +102,66 @@ async function configure(scope: string, kind: string, cwd: string) {
     await git(repo, "config", `filter.late.${kind}`, command);
   }
 }
+
+it.each(["sha1", "sha256"])(
+  "keeps source-only object writes in %s storage without requiring a HEAD commit",
+  async (format) => {
+    const empty = path.join(root, `empty-${format}`);
+    await git(root, "init", "--template=", `--object-format=${format}`, empty);
+    await fs.writeFile(path.join(empty, "source.txt"), "source-only object\n");
+    const expected = await git(empty, "hash-object", "source.txt");
+    const oid = await withWorktreeGitConfig(empty, true, {}, (policy) =>
+      policy.require(empty, ["hash-object", "-w", "source.txt"]),
+    );
+    expect(oid).toBe(expected);
+    expect(await git(empty, "cat-file", "blob", oid)).toBe("source-only object");
+    await expect(git(empty, "rev-parse", "--verify", "HEAD")).rejects.toThrow();
+  },
+);
+
+it("keeps source-only clones away from an inherited external Git index", async () => {
+  const externalIndex = path.join(root, "external-index");
+  vi.stubEnv("GIT_INDEX_FILE", externalIndex);
+  await git(repo, "read-tree", "HEAD");
+  const originalIndex = await fs.readFile(externalIndex);
+
+  const created = await createSourceOnly("external-index");
+  expect(backend.createTemplate).not.toHaveBeenCalled();
+  expect(await fs.readFile(externalIndex)).toEqual(originalIndex);
+  vi.stubEnv("GIT_INDEX_FILE", undefined);
+  expect(await git(created.path, "status", "--porcelain")).toBe("");
+  expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
+});
+
+it("reuses and refreshes source-only templates without running host filters", async () => {
+  await configure("repository", "smudge", repo);
+  const first = await createSourceOnly("template-first");
+  const [original] = await listTemplatesAsync(process.env);
+  expect(original?.status).toBe("ready");
+  await fs.writeFile(path.join(first.path, "README.md"), "independent edit\n");
+  const second = await createSourceOnly("template-second");
+  expect(await fs.readFile(path.join(second.path, "README.md"), "utf8")).toBe("base\n");
+  expect(backend.createTemplate).toHaveBeenCalledTimes(1);
+  expect(backend.cloneTemplate).toHaveBeenCalledTimes(2);
+  expect((await listTemplatesAsync(process.env))[0]?.id).toBe(original?.id);
+
+  await git(repo, "config", "core.autocrlf", "true");
+  const policy = await createSourceOnly("template-policy");
+  expect(await fs.readFile(path.join(policy.path, "README.md"), "utf8")).toBe("base\r\n");
+  expect(backend.createTemplate).toHaveBeenCalledTimes(2);
+  const policyId = (await listTemplatesAsync(process.env))[0]?.id;
+  expect(policyId).not.toBe(original?.id);
+
+  await fs.writeFile(path.join(repo, "README.md"), "new revision\n");
+  await git(repo, "add", "README.md");
+  await git(repo, "commit", "-qm", "advance source template");
+  const third = await createSourceOnly("template-third");
+  expect(await fs.readFile(path.join(third.path, "README.md"), "utf8")).toBe("new revision\r\n");
+  expect(backend.createTemplate).toHaveBeenCalledTimes(2);
+  expect(backend.cloneTemplate).toHaveBeenCalledTimes(4);
+  expect((await listTemplatesAsync(process.env))[0]?.id).toBe(policyId);
+  await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
+});
 
 it.each([
   ["repository", "smudge"],

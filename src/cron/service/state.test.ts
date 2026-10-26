@@ -22,7 +22,6 @@ describe("cron service state", () => {
       storePath: "/tmp/cron/jobs.json",
       cronEnabled: false,
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
 
@@ -41,7 +40,6 @@ describe("cron service state", () => {
       storePath: "/tmp/cron/jobs.json",
       cronEnabled: false,
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
       onEvent,
     });

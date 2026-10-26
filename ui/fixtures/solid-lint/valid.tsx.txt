@@ -1,17 +1,31 @@
-import { createEffect, createSignal } from "solid-js";
+import { dynamic, type JSX } from "@solidjs/web";
+import { createDeferred as defer, createEffect, createMemo, createSignal } from "solid-js";
 
 export function Good(props: { name: string }) {
   const [count, setCount] = createSignal(0);
+  const name = defer(() => props.name);
   createEffect(count, (value) => {
     document.title = String(value);
   });
   return (
     <button onClick={() => setCount((value) => value + 1)}>
-      {props.name} {count()}
+      {name()} {count()}
     </button>
   );
 }
 
 export function GoodNamespaces(props: { handler: (event: Event) => void }) {
   return <div onFoo={(event) => props.handler(event)} class={["base", { active: true }]} />;
+}
+
+export function GoodDynamicSelectors(props: { component: () => JSX.Element }) {
+  const selected = createMemo(() => props.component);
+  const FromProps = dynamic(() => props.component);
+  const FromMemo = dynamic(() => selected());
+  return (
+    <>
+      <FromProps />
+      <FromMemo />
+    </>
+  );
 }

@@ -39,10 +39,10 @@ afterEach(() => {
   vi.doUnmock("../../scripts/lib/sleep.mjs");
 });
 
-export function runWatch(params: WatchFixture): Promise<WatchExit> {
+export async function runWatch(params: WatchFixture): Promise<WatchExit> {
   const admission = createDeferred();
   ready = admission.promise;
-  const run = (async () => {
+  try {
     vi.resetModules();
     const cwd = params.cwd ?? createTempDir("openclaw-watch-boundary-");
     const fakeProcess = Object.assign(params.process, {
@@ -59,8 +59,8 @@ export function runWatch(params: WatchFixture): Promise<WatchExit> {
         }),
     });
     vi.doMock("node:process", () => ({ default: fakeProcess }));
-    vi.doMock("node:child_process", async () => ({
-      ...(await vi.importActual<typeof import("node:child_process")>("node:child_process")),
+    vi.doMock("node:child_process", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("node:child_process")>()),
       spawn: params.spawn,
     }));
     vi.doMock("../../scripts/watch-node-observation.mts", async () => {
@@ -91,10 +91,8 @@ export function runWatch(params: WatchFixture): Promise<WatchExit> {
       };
     });
     if (params.pathClassifier) {
-      vi.doMock("../../scripts/run-node-watch-paths.mts", async () => ({
-        ...(await vi.importActual<typeof import("../../scripts/run-node-watch-paths.mts")>(
-          "../../scripts/run-node-watch-paths.mts",
-        )),
+      vi.doMock("../../scripts/run-node-watch-paths.mts", async (importOriginal) => ({
+        ...(await importOriginal<typeof import("../../scripts/run-node-watch-paths.mts")>()),
         createRunNodePathClassifier: () => params.pathClassifier,
       }));
     }
@@ -113,10 +111,7 @@ export function runWatch(params: WatchFixture): Promise<WatchExit> {
     }
     const { runWatchMain } = await import("../../scripts/watch-node.mts");
     return await runWatchMain();
-  })();
-  void run.then(
-    () => admission.resolve(),
-    () => admission.resolve(),
-  );
-  return run;
+  } finally {
+    admission.resolve();
+  }
 }

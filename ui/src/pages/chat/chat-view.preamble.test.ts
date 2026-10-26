@@ -1,9 +1,11 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, expect, it } from "vitest";
 import type { ChatStreamSegment } from "../../lib/chat/chat-types.ts";
-import { resetChatViewState } from "./chat-view-state.ts";
+import { createComposerContainer } from "./chat-composer.test-support.ts";
+import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import { renderChatInto } from "./chat-view.test-helpers.ts";
 import {
+  flushDeferredRowPrune,
   installTranscriptDomMocks,
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
@@ -28,15 +30,22 @@ const preamble = (text: string, timestamp: number, itemId: string, owner = runId
   runId: owner,
   openclawStreamFallback: { source: "segment", itemId, runId: owner, replacementText: text },
 });
+const textBlock = (id: string, phase: string, text: string) => ({
+  type: "text",
+  text,
+  textSignature: JSON.stringify({ v: 1, id, phase }),
+});
+const draw = (container: HTMLElement, overrides: Parameters<typeof renderChatInto>[1]) =>
+  renderChatInto(container, { runActive: true, runId, streamStartedAt: 1, ...overrides });
 
 it("keeps successive commentary inline and formatted across the live-to-history handoff", () => {
-  const container = document.createElement("div");
+  const container = createComposerContainer();
   const earlier = preamble("Reading the files.", 2, "read");
   const detail = "Checking the caller and its lifecycle. ".repeat(25);
   const text = "**Checking** tests.\n\n" + detail + "End of the explanation.";
-  const props = { runActive: true, runId, messages: [user, earlier], streamStartedAt: 1 };
-  renderChatInto(container, {
-    ...props,
+  const messages = [user, earlier];
+  draw(container, {
+    messages,
     streamSegments: [{ text, ts: 3, runId, itemId: "test" }],
   });
   const narration = () => container.querySelectorAll(".chat-group.assistant .chat-text");
@@ -46,9 +55,8 @@ it("keeps successive commentary inline and formatted across the live-to-history 
   expect(narration()[1]?.textContent).toContain("End of the explanation.");
   expect(container.querySelector(".chat-working-indicator")?.textContent).not.toContain("Checking");
 
-  renderChatInto(container, {
-    ...props,
-    messages: [...props.messages, preamble(text, 3, "test")],
+  draw(container, {
+    messages: [...messages, preamble(text, 3, "test")],
     streamSegments: [{ text: "Reviewing the result.", ts: 4, runId, itemId: "review" }],
   });
   expect(content()).toEqual([
@@ -64,13 +72,11 @@ it("keeps successive commentary inline and formatted across the live-to-history 
 
 it.each(["explicit", "segment", "tool", "cached"] as const)(
   "keeps only active durable commentary with %s run identity when retention is off",
-  (source) => {
-    const container = document.createElement("div");
+  async (source) => {
+    const container = createComposerContainer();
     const props = {
-      runActive: true,
       runId: source === "explicit" ? runId : null,
       stream: source === "explicit" ? null : "Still checking.",
-      streamStartedAt: 1,
       persistCommentary: false,
       messages: [
         preamble("Older run's commentary.", 0, "old", "old-run"),
@@ -91,9 +97,10 @@ it.each(["explicit", "segment", "tool", "cached"] as const)(
     };
     const segment: ChatStreamSegment = { text: "", ts: 1, runId };
     if (source === "cached") {
-      renderChatInto(container, { ...props, messages: [user], streamSegments: [segment] });
+      draw(container, { ...props, messages: [user], streamSegments: [segment] });
+      await flushDeferredRowPrune();
     }
-    renderChatInto(container, {
+    draw(container, {
       ...props,
       streamSegments: source === "segment" ? [segment] : [],
       toolMessages:
@@ -109,6 +116,7 @@ it.each(["explicit", "segment", "tool", "cached"] as const)(
             ]
           : [],
     });
+    await flushDeferredRowPrune();
     if (source === "explicit") {
       expect(container.querySelector(".chat-group.assistant .chat-text")?.textContent?.trim()).toBe(
         "Checking the result.",
@@ -116,10 +124,12 @@ it.each(["explicit", "segment", "tool", "cached"] as const)(
     }
     expect(container.textContent).toContain("Checking the result.");
     expect(container.textContent).not.toContain("Older run's commentary.");
-    renderChatInto(container, { ...props, runActive: false, runId: null, stream: null });
+    draw(container, { ...props, runActive: false, runId: null, stream: null });
+    await flushDeferredRowPrune();
     expect(container.textContent).not.toContain("Checking the result.");
     if (source === "explicit") {
       renderChatInto(container, { messages: props.messages, persistCommentary: true });
+      await flushDeferredRowPrune();
       expect(container.textContent).toContain("Checking the result.");
       expect(props.messages).toHaveLength(3);
     }
@@ -127,7 +137,7 @@ it.each(["explicit", "segment", "tool", "cached"] as const)(
 );
 
 it("leaves unphased answers and mixed-phase narration and final text in the transcript", () => {
-  const container = document.createElement("div");
+  const container = createComposerContainer();
   renderChatInto(container, {
     runActive: true,
     runId,
@@ -140,16 +150,8 @@ it("leaves unphased answers and mixed-phase narration and final text in the tran
         runId,
         timestamp: 3,
         content: [
-          {
-            type: "text",
-            text: "Checking once more.",
-            textSignature: JSON.stringify({ v: 1, id: "check", phase: "commentary" }),
-          },
-          {
-            type: "text",
-            text: "The result is ready.",
-            textSignature: JSON.stringify({ v: 1, id: "answer", phase: "final_answer" }),
-          },
+          textBlock("check", "commentary", "Checking once more."),
+          textBlock("answer", "final_answer", "The result is ready."),
         ],
       },
     ],

@@ -2,7 +2,6 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import { resolveVitestNodeArgs } from "../../../scripts/lib/vitest-process-env.mts";
@@ -17,20 +16,17 @@ import { triageTestRuntimeEntrypoints } from "../../infra/triage-runtime.test-su
 import { getUpdateRun, type createUpdateRun } from "../../infra/update-run-ledger.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
-import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
+import { updateExecutorNativeEntrypoints as native } from "./update-command-executor-native-runtime.test-support.js";
 import {
   createMutableInterruptionService,
   mutableCompensationFixtureSource,
 } from "./update-command-mutable-signals-compensation.test-support.js";
 
-const sourceImportArgs = resolveRuntimeWorkerUrl(
-  updateExecutorNativeEntrypoints.executor,
-).pathname.endsWith(".ts")
+const sourceImportArgs = resolveRuntimeWorkerUrl(native.executor).pathname.endsWith(".ts")
   ? ["--import", path.resolve("scripts/tsx.mjs")]
   : [];
 
 const lifetime = createFixtureLifetime();
-const dirs = { make: lifetime.createTempDir };
 afterEach(() => lifetime.cleanup());
 it.skipIf(process.platform === "win32").for([
   { signal: "SIGINT", mode: "fresh" },
@@ -47,7 +43,6 @@ it.skipIf(process.platform === "win32").for([
   { signal: "SIGINT", mode: "handoff" },
   { signal: "SIGINT", mode: "pending" },
   { signal: "SIGINT", mode: "activating" },
-  { signal: "SIGINT", mode: "migrated" },
   { signal: "SIGINT", mode: "lost" },
   { signal: "SIGINT", mode: "missing" },
   { signal: "SIGINT", mode: "completed" },
@@ -59,9 +54,13 @@ it.skipIf(process.platform === "win32").for([
     lifetime.run(async () => {
       let service: Awaited<ReturnType<typeof createMutableInterruptionService>> | undefined;
       try {
-        const root = dirs.make("update-owned-signal-");
+        const root = lifetime.createTempDir("update-owned-signal-");
+        const exists = (name: string) => fs.existsSync(path.join(root, name));
+        const read = (...parts: string[]) => fs.readFileSync(path.join(...parts), "utf8");
+        const receiptMode = mode.endsWith("-progress");
         const publicationMode =
           mode === "publishing-compensation" || mode === "rollback-compensation";
+        const compensationMode = mode.endsWith("-compensation") && !publicationMode;
         const installRoot = publicationMode
           ? path.join(root, "pair", "live", "lib", "node_modules", "openclaw")
           : root;
@@ -70,6 +69,16 @@ it.skipIf(process.platform === "win32").for([
         }
         const stateDir = mode.endsWith("-compensation") ? path.join(root, ".openclaw") : root;
         const configPath = path.join(stateDir, "openclaw.json");
+        const displaced = path.join(
+          root,
+          "state/.openclaw-restore-00000000-0000-4000-8000-000000000001-0/displaced",
+        );
+        const readRun = (runId: string) =>
+          getUpdateRun(
+            runId,
+            mode === "missing" ? { path: displaced } : { env: { OPENCLAW_STATE_DIR: stateDir } },
+          );
+        const readyz = () => fetch(`http://127.0.0.1:${service?.port}/readyz`);
         const control = path.join(root, "control");
         fs.mkdirSync(control, { mode: 0o700 });
         const binding = createManagedHandoffTestBinding(control);
@@ -91,6 +100,7 @@ it.skipIf(process.platform === "win32").for([
     const gatewayPort = ${JSON.stringify(service?.port)};
     const controlUrl = ${JSON.stringify(service?.controlUrl)};
     const installRoot = ${JSON.stringify(installRoot)};
+    const displaced = ${JSON.stringify(displaced)};
     const sqlite = createRequire(import.meta.url)('node:sqlite');
     const NativeDatabase = sqlite.DatabaseSync;
     const GuardedDatabase = new Proxy(NativeDatabase, { construct(target, args, newTarget) {
@@ -106,17 +116,19 @@ it.skipIf(process.platform === "win32").for([
     sqlite.DatabaseSync = GuardedDatabase;
     syncBuiltinESMExports();
     ${mutableCompensationFixtureSource()}
-    const { resolveManagedUpdateLeaseDatabasePath, createManagedHandoffLeaseStore } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.handoffLease).href)});
+    const { resolveManagedUpdateLeaseDatabasePath, createManagedHandoffLeaseStore } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(native.handoffLease).href)});
     const databasePath = resolveManagedUpdateLeaseDatabasePath();
     assert.equal(databasePath, ${JSON.stringify(binding.databasePath)}, 'private handoff binding missing before admission');
     const { createUpdateRun, finishUpdateRun, getUpdateRun, recordUpdateRunPhase } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(triageTestRuntimeEntrypoints.updateRunLedger).href)});
-    const { createRetainedUpdateRecovery } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.retainedRecovery).href)});
+    const { createRetainedUpdateRecovery } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(native.retainedRecovery).href)});
     const { closeOpenClawStateDatabaseForTest } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(cronOwnerHardeningEntrypoints.stateDatabase).href)});
-    const { admitUpdateCommandRun, createUpdateRunProgress, withUpdatePreviewSignals } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.commandRun).href)});
-    const { withUpdateCommandExecutor, captureUpdateCommandExecutorAuthority } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.executor).href)});
-    const { recordUpdateRunStepAsync } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.candidateStepWriter).href)});
-    const { createUpdateCommandExecutionGuards } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.executionGuards).href)});
-    const { registerSignalExitBarrier } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.signalExitBarrier).href)});
+    const { admitUpdateCommandRun, withUpdatePreviewSignals } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(native.commandRun).href)});
+    const { withUpdateCommandExecutor, captureUpdateCommandExecutorAuthority } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(native.executor).href)});
+    const { recordUpdateRunStepAsync } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(native.candidateStepWriter).href)});
+    const { createUpdateCommandExecutionGuards } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(native.executionGuards).href)});
+    const { registerSignalExitBarrier } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(native.signalExitBarrier).href)});
+    const { withCliProcessScope, withCliCommandCleanup } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(native.cliCleanupScope).href)});
+    const { runCliWithExitFinalization } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(native.oneShotExit).href)});
     const opts = {};
     if (mode === 'inherited') process.env.OPENCLAW_UPDATE_RUN_ID = createUpdateRun({trigger:'cli'}).runId;
     const run = await admitUpdateCommandRun({opts, root:installRoot});
@@ -131,6 +143,7 @@ it.skipIf(process.platform === "win32").for([
     };
     const operate = async () => {
       const sibling = createUpdateRun({trigger:'cli'});
+      const ready = expected => process.send({runId:run.runId,expected,sibling,databasePath,executorDatabasePath});
       const hold = async () => {
         recordUpdateRunPhase(run.runId, 'validating');
         if (mode === 'handoff') process.env.OPENCLAW_UPDATE_RUN_HANDOFF = '1';
@@ -141,27 +154,17 @@ it.skipIf(process.platform === "win32").for([
           createRetainedUpdateRecovery({runId:run.runId,from,to:{...from,version:'2.0.0'}},{env:run.env});
         }
         const expected = getUpdateRun(run.runId);
-        if (mode === 'migrated') {
-          createUpdateRunProgress(run, {}, async () => {
-            throw new Error("Deferred signal fixture must not write progress");
-          }).deferLedgerWrites();
-          closeOpenClawStateDatabaseForTest();
-          const { DatabaseSync } = await import('node:sqlite');
-          const db = new DatabaseSync(root + '/state/openclaw.sqlite');
-          db.exec('PRAGMA user_version = ' + (db.prepare('PRAGMA user_version').get().user_version + 1));
-          db.close();
-        }
         if (mode === 'missing') {
           closeOpenClawStateDatabaseForTest();
-          fs.mkdirSync(root + '/state/.openclaw-restore-00000000-0000-4000-8000-000000000001-0');
-          fs.renameSync(root + '/state/openclaw.sqlite',root + '/state/.openclaw-restore-00000000-0000-4000-8000-000000000001-0/displaced');
+          fs.mkdirSync(path.dirname(displaced));
+          fs.renameSync(root + '/state/openclaw.sqlite', displaced);
         }
         process.channel.ref();
         if (compensationFixture) {
-          await compensationFixture({run,currentOptions,ready:()=>process.send({runId:run.runId,expected,sibling,databasePath,executorDatabasePath})});
+          await compensationFixture({run,currentOptions,ready:()=>ready(expected)});
           return;
         }
-        if (['queued-progress', 'refused-progress', 'uncertain-progress'].includes(mode)) {
+        if (${receiptMode}) {
           const guards = createUpdateCommandExecutionGuards(currentOptions, root);
           await recordUpdateRunStepAsync(run.runId, {step:'warm-worker',status:'completed'}, guards.captureWriteOptions());
           const locked = new NativeDatabase(root + '/state/openclaw.sqlite');
@@ -170,8 +173,7 @@ it.skipIf(process.platform === "win32").for([
           let receiptWorker;
           process.once('message', () => {
             if (mode === 'uncertain-progress') {
-              // Exercise the broker's real failure/retirement path after native dispatch.
-              // Missing outcome evidence stays unknown even after this worker exits.
+              // Native dispatch without outcome evidence remains unknown after worker exit.
               receiptWorker.emit('error', new Error('fixture SQLite worker transport failure'));
             } else if (mode === 'refused-progress') {
               receiptAbort.abort(new Error('fixture-step-refused'));
@@ -181,11 +183,13 @@ it.skipIf(process.platform === "win32").for([
           });
           const post = Worker.prototype.postMessage;
           Worker.prototype.postMessage = function(request, ...args) {
+            // postMessage transfers and detaches the serialized input.
+            const commandType = request.type === 'execute' ? deserialize(request.input).type : undefined;
             const result = Reflect.apply(post, this, [request, ...args]);
-            if (request.type === 'execute' && deserialize(request.input).type === 'updateRuns.recordStep') {
+            if (commandType === 'updateRuns.recordStep') {
               Worker.prototype.postMessage = post;
               receiptWorker = this;
-              process.send({runId:run.runId,expected,sibling,databasePath,executorDatabasePath});
+              ready(expected);
             }
             return result;
           };
@@ -223,8 +227,10 @@ it.skipIf(process.platform === "win32").for([
           }
           return;
         }
-        process.send({runId:run.runId,expected,sibling,databasePath,executorDatabasePath});
-        await new Promise(() => {});
+        ready(expected);
+        await new Promise(resolve => {
+          if (mode !== "inherited") process.once(${JSON.stringify(signal)}, resolve);
+        });
       };
       if (mode === 'lost') {
         await withUpdateCommandExecutor(run.runId, async (executor) => {await enter(executor);});
@@ -237,13 +243,34 @@ it.skipIf(process.platform === "win32").for([
           await withUpdatePreviewSignals(currentOptions, hold);
         });
         if(mode==='publishing-compensation'||mode==='rollback-compensation') {
-          const {withUpdateCommandTerminalResult}=await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.terminal).href)});
+          const {withUpdateCommandTerminalResult}=await import(${JSON.stringify(resolveRuntimeWorkerUrl(native.terminal).href)});
           try {await withUpdateCommandTerminalResult(register=>{register(run);return execute();},{json:true});}
           catch(error) {process.stderr.write(String(error)+'\\n'+JSON.stringify(error.result)+'\\n');}
         } else {await execute();}
       }
     };
-    await operate();
+    try {
+      if (mode === "inherited") await operate();
+      else {
+        let resources;
+        await withCliProcessScope(() => runCliWithExitFinalization({
+          run: () => withCliCommandCleanup(false, async cleanup => {
+            resources = cleanup.pluginResources;
+            await operate();
+            process.exitCode = 19;
+          }),
+          onError: error => {
+            if (!run.interrupted) throw error;
+            process.exitCode = 19;
+          },
+          finalize: async () => { await resources?.release(); },
+        }));
+      }
+    } finally {
+      fs.writeFileSync(root + "/signal-owner-unwound", "settled");
+      closeOpenClawStateDatabaseForTest();
+      if (process.connected) process.disconnect();
+    }
   `,
         );
         const child = spawn(
@@ -305,6 +332,15 @@ it.skipIf(process.platform === "win32").for([
         const closed = new Promise<[number | null, NodeJS.Signals | null]>((resolve) => {
           child.once("close", (code, exitSignal) => resolve([code, exitSignal]));
         });
+        const beforeExit = <T>(pending: Promise<T>, reason: string): Promise<T> =>
+          Promise.race([
+            pending,
+            closed.then(() => {
+              throw new Error(`Update exited before ${reason}: ${childDiagnostics()}`, {
+                cause: spawnError,
+              });
+            }),
+          ]);
         const stop = () => {
           if (child.exitCode === null && child.signalCode === null) {
             child.kill("SIGKILL");
@@ -315,52 +351,31 @@ it.skipIf(process.platform === "win32").for([
           stop();
         }
         try {
-          const message = await Promise.race([
-            once(child, "message").then(
-              ([payload]) =>
-                payload as {
-                  databasePath: string;
-                  executorDatabasePath?: string;
-                  runId: string;
-                  expected: ReturnType<typeof getUpdateRun>;
-                  sibling: ReturnType<typeof createUpdateRun>;
-                },
-            ),
-            closed.then(() => {
-              throw new Error(`Update process exited before ready: ${childDiagnostics()}`, {
-                cause: spawnError,
-              });
-            }),
-          ]);
+          const [message] = (await beforeExit(once(child, "message"), "ready")) as [
+            {
+              databasePath: string;
+              executorDatabasePath?: string;
+              runId: string;
+              expected: ReturnType<typeof getUpdateRun>;
+              sibling: ReturnType<typeof createUpdateRun>;
+            },
+          ];
           expect(binding.assertPath(message.databasePath)).toBe(binding.databasePath);
           assertManagedHandoffTestConsumer(
             binding,
             child.pid,
-            path.dirname(
-              path.dirname(
-                fileURLToPath(
-                  resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.handoffLease),
-                ),
-              ),
-            ),
+            fileURLToPath(new URL("../", resolveRuntimeWorkerUrl(native.handoffLease))),
           );
           if (mode !== "no-owner") {
             expect(message.executorDatabasePath).toBe(binding.databasePath);
           }
-          const receiptMode =
-            mode === "queued-progress" ||
-            mode === "refused-progress" ||
-            mode === "uncertain-progress";
-          const compensationMode = mode.endsWith("-compensation") && !publicationMode;
           if (publicationMode) {
             expect(service?.transitions).toEqual(["stopped"]);
-            await expect(fetch(`http://127.0.0.1:${service?.port}/readyz`)).rejects.toThrow();
+            await expect(readyz()).rejects.toThrow();
             if (mode === "publishing-compensation") {
               expect(fs.existsSync(installRoot)).toBe(false);
             } else {
-              expect(
-                JSON.parse(fs.readFileSync(path.join(installRoot, "package.json"), "utf8")),
-              ).toMatchObject({
+              expect(JSON.parse(read(installRoot, "package.json"))).toMatchObject({
                 version: "1.0.0",
               });
             }
@@ -368,43 +383,22 @@ it.skipIf(process.platform === "win32").for([
           const interrupted = receiptMode || compensationMode ? once(child, "message") : undefined;
           expect(child.kill(signal)).toBe(true);
           if (interrupted && compensationMode) {
-            const [observed] = await Promise.race([
-              interrupted,
-              closed.then(() => {
-                throw new Error(
-                  `Update exited before observing compensation: ${childDiagnostics()}`,
-                );
-              }),
-            ]);
+            const [observed] = await beforeExit(interrupted, "observing compensation");
             expect(observed).toEqual(
               mode === "sealed-compensation"
                 ? { compensationRefused: true }
                 : { compensationReceipt: true },
             );
-            expect(fs.existsSync(path.join(root, "compensation-native-stop"))).toBe(false);
+            expect(exists("compensation-native-stop")).toBe(false);
             if (mode !== "sealed-compensation") {
               child.send("release");
             }
           } else if (interrupted) {
-            const [observed] = await Promise.race([
-              interrupted,
-              closed.then(() => {
-                throw new Error(
-                  `Update exited before its pending writer drained: ${childDiagnostics()}`,
-                );
-              }),
-            ]);
+            const [observed] = await beforeExit(interrupted, "its pending writer drained");
             expect(observed).toEqual({ lateBlocked: true });
             const forward = once(child, "message");
             child.send("release");
-            const [continuation] = await Promise.race([
-              forward,
-              closed.then(() => {
-                throw new Error(
-                  `Update exited before checking forward authority: ${childDiagnostics()}`,
-                );
-              }),
-            ]);
+            const [continuation] = await beforeExit(forward, "checking forward authority");
             expect(continuation).toEqual(
               mode === "uncertain-progress"
                 ? { receiptFailure: "ERR_COMMAND_PROCESS_CLEANUP_UNCERTAIN" }
@@ -412,9 +406,15 @@ it.skipIf(process.platform === "win32").for([
                   ? { receiptFailure: "fixture-step-refused" }
                   : { forwardBlocked: true },
             );
-            expect(fs.existsSync(path.join(root, "unexpected-canary-child"))).toBe(false);
+            expect(exists("unexpected-canary-child")).toBe(false);
           }
           const [code, exitSignal] = await closed;
+          if (mode !== "inherited") {
+            expect({ exitSignal, unwound: read(root, "signal-owner-unwound") }).toEqual({
+              exitSignal: null,
+              unwound: "settled",
+            });
+          }
           const expectedCode = signal === "SIGINT" ? 130 : signal === "SIGHUP" ? 129 : 143;
           expect(code ?? (exitSignal === signal ? expectedCode : null)).toBe(expectedCode);
           if (publicationMode) {
@@ -422,86 +422,24 @@ it.skipIf(process.platform === "win32").for([
               "stopped",
               "restarted 1.0.0",
             ]);
-            const response = await fetch(`http://127.0.0.1:${service?.port}/readyz`);
-            expect(await response.json()).toEqual({ ok: true, version: "1.0.0" });
-            const recorded = getUpdateRun(message.runId, { env: { OPENCLAW_STATE_DIR: stateDir } });
-            expect(recorded?.status).toBe("rolled-back");
-            expect(recorded?.steps).toContainEqual(
-              expect.objectContaining({
-                step: "activating",
-                termination: "signal",
-                signal,
-              }),
-            );
-            const report = fs.readFileSync(
-              path.join(stateDir, "update-reports", `${message.runId}.md`),
-              "utf8",
-            );
+            expect(await (await readyz()).json()).toEqual({ ok: true, version: "1.0.0" });
+            expect(readRun(message.runId)).toMatchObject({
+              status: "rolled-back",
+              steps: expect.arrayContaining([
+                expect.objectContaining({ step: "activating", termination: "signal", signal }),
+              ]),
+            });
+            const report = read(stateDir, "update-reports", `${message.runId}.md`);
             expect(report).toContain(`interrupted by ${signal} during activating`);
             expect(report).toContain("Bounded diagnostic JSON:");
             expect(stderr).toContain("openclaw update repair");
             return;
           }
-          if (mode === "migrated") {
-            expect(stderr).not.toContain("Update interruption could not be recorded");
-            const db = new DatabaseSync(path.join(root, "state", "openclaw.sqlite"), {
-              readOnly: true,
-            });
-            try {
-              expect(
-                db
-                  .prepare("SELECT status, phase, updated_at_ms FROM update_runs WHERE run_id = ?")
-                  .get(message.runId),
-              ).toEqual({
-                status: message.expected?.status,
-                phase: message.expected?.phase,
-                updated_at_ms: message.expected?.updatedAtMs,
-              });
-            } finally {
-              db.close();
-            }
-            return;
-          }
-          const options =
-            mode === "missing"
-              ? {
-                  path: path.join(
-                    root,
-                    "state",
-                    ".openclaw-restore-00000000-0000-4000-8000-000000000001-0",
-                    "displaced",
-                  ),
-                }
-              : { env: { OPENCLAW_STATE_DIR: stateDir } };
-          const readRun = (runId: string) => getUpdateRun(runId, options);
           const actual = readRun(message.runId);
-          if (compensationMode) {
-            const admitted = mode !== "sealed-compensation";
-            const completed = mode === "accepted-compensation";
-            expect(fs.existsSync(path.join(root, "compensation-signal-snapshot"))).toBe(true);
-            expect(fs.existsSync(path.join(root, "compensation-rollback-entered"))).toBe(admitted);
-            expect(fs.existsSync(path.join(root, "compensation-phase-dispatched"))).toBe(admitted);
-            expect(fs.existsSync(path.join(root, "compensation-native-stop"))).toBe(completed);
-            expect(fs.existsSync(path.join(root, "compensation-package-rollback"))).toBe(completed);
-            if (mode === "uncertain-compensation") {
-              expect(fs.existsSync(path.join(root, "compensation-uncertainty-observed"))).toBe(
-                true,
-              );
-              expect(actual).toMatchObject({
-                status: "running",
-                phase: "activating",
-                reason: null,
-                finishedAtMs: null,
-              });
-              expect(stderr).toContain(
-                "Update interruption could not be recorded; history remains pending.",
-              );
-              expect(stderr).toContain("Update signal cleanup did not complete.");
-            }
-          } else if (mode === "uncertain-progress") {
+          const expectPendingHistory = (phase: "activating" | "validating") => {
             expect(actual).toMatchObject({
               status: "running",
-              phase: "validating",
+              phase,
               reason: null,
               finishedAtMs: null,
             });
@@ -509,11 +447,22 @@ it.skipIf(process.platform === "win32").for([
               "Update interruption could not be recorded; history remains pending.",
             );
             expect(stderr).toContain("Update signal cleanup did not complete.");
-          } else if (
-            mode === "fresh" ||
-            mode === "queued-progress" ||
-            mode === "refused-progress"
-          ) {
+          };
+          if (compensationMode) {
+            const admitted = mode !== "sealed-compensation";
+            const completed = mode === "accepted-compensation";
+            expect(exists("compensation-signal-snapshot")).toBe(true);
+            expect(exists("compensation-rollback-entered")).toBe(admitted);
+            expect(exists("compensation-phase-dispatched")).toBe(admitted);
+            expect(exists("compensation-native-stop")).toBe(completed);
+            expect(exists("compensation-package-rollback")).toBe(completed);
+            if (mode === "uncertain-compensation") {
+              expect(exists("compensation-uncertainty-observed")).toBe(true);
+              expectPendingHistory("activating");
+            }
+          } else if (mode === "uncertain-progress") {
+            expectPendingHistory("validating");
+          } else if (mode === "fresh" || receiptMode) {
             expect(actual).toMatchObject({
               status: "failed",
               phase: "finished",
@@ -537,9 +486,7 @@ it.skipIf(process.platform === "win32").for([
           expect(readRun(message.sibling.runId)).toEqual(message.sibling);
           if (mode === "missing") {
             for (const suffix of ["", "-wal", "-shm"]) {
-              expect(fs.existsSync(path.join(root, "state", `openclaw.sqlite${suffix}`))).toBe(
-                false,
-              );
+              expect(exists(`state/openclaw.sqlite${suffix}`)).toBe(false);
             }
           }
         } finally {

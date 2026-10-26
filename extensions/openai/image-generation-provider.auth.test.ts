@@ -1,5 +1,6 @@
+import type { ImageGenerationProviderConfiguredContext } from "openclaw/plugin-sdk/image-generation";
 import {
-  isProviderApiKeyConfigured,
+  isProviderApiKeyConfiguredAsync,
   listProfilesForProvider,
   type AuthProfileStore,
 } from "openclaw/plugin-sdk/provider-auth";
@@ -7,24 +8,35 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAIImageGenerationProvider } from "./image-generation-provider.js";
 import {
   createCodexOAuthAuthStore,
+  createOpenAIOAuthProfile,
   openAIImageConfig,
 } from "./image-generation-provider.test-support.js";
 
-const ensureAuthProfileStoreMock = vi.fn<() => AuthProfileStore>(() => ({
-  version: 1,
-  profiles: {},
-}));
-const isProviderApiKeyConfiguredMock = vi.fn<typeof isProviderApiKeyConfigured>(() => false);
+let authStore: AuthProfileStore = { version: 1, profiles: {} };
+let authConfigured = false;
+const ensureAuthProfileStoreAsyncMock = vi.fn(async () => authStore);
+const isProviderApiKeyConfiguredAsyncMock = vi.fn<typeof isProviderApiKeyConfiguredAsync>(
+  async () => authConfigured,
+);
 const provider = buildOpenAIImageGenerationProvider({
-  ensureAuthProfileStore: ensureAuthProfileStoreMock,
+  ensureAuthProfileStoreAsync: ensureAuthProfileStoreAsyncMock,
   listProfilesForProvider,
-  isProviderApiKeyConfigured: isProviderApiKeyConfiguredMock,
+  isProviderApiKeyConfiguredAsync: isProviderApiKeyConfiguredAsyncMock,
 });
+
+async function expectConfigured(
+  context: ImageGenerationProviderConfiguredContext,
+  configured: boolean,
+) {
+  expect(await provider.isConfiguredAsync?.(context)).toBe(configured);
+}
 
 beforeEach(() => {
   vi.stubEnv("OPENAI_API_KEY", "");
-  ensureAuthProfileStoreMock.mockReturnValue({ version: 1, profiles: {} });
-  isProviderApiKeyConfiguredMock.mockReturnValue(false);
+  authStore = { version: 1, profiles: {} };
+  authConfigured = false;
+  ensureAuthProfileStoreAsyncMock.mockImplementation(async () => authStore);
+  isProviderApiKeyConfiguredAsyncMock.mockImplementation(async () => authConfigured);
 });
 
 afterEach(() => {
@@ -33,121 +45,123 @@ afterEach(() => {
 });
 
 describe("OpenAI image generation auth availability", () => {
-  it("uses capability-aware credential availability before checking the image route", () => {
-    isProviderApiKeyConfiguredMock.mockReturnValue(true);
-    expect(provider.isConfigured?.({ agentDir: "/tmp/agent" })).toBe(true);
-    expect(isProviderApiKeyConfiguredMock).toHaveBeenCalledWith({
+  it("uses capability-aware credential availability before checking the image route", async () => {
+    authConfigured = true;
+    await expectConfigured({ agentDir: "/tmp/agent" }, true);
+    const authInput = {
       provider: "openai",
       agentDir: "/tmp/agent",
       cfg: undefined,
+      store: undefined,
       capability: "image-generation",
-    });
+    };
+    expect(isProviderApiKeyConfiguredAsyncMock).toHaveBeenCalledWith(authInput);
 
-    isProviderApiKeyConfiguredMock.mockReturnValue(false);
-    ensureAuthProfileStoreMock.mockReturnValue({ version: 1, profiles: {} });
-    expect(provider.isConfigured?.({ agentDir: "/tmp/agent" })).toBe(false);
+    authConfigured = false;
+    await expectConfigured({ agentDir: "/tmp/agent" }, false);
   });
 
-  it("reports configured from a config apiKey (gateway-routed openai) with no env/profile creds", () => {
-    isProviderApiKeyConfiguredMock.mockImplementation(isProviderApiKeyConfigured);
-    ensureAuthProfileStoreMock.mockReturnValue({ version: 1, profiles: {} });
+  it("reports configured from a config apiKey (gateway-routed openai) with no env/profile creds", async () => {
+    isProviderApiKeyConfiguredAsyncMock.mockImplementation(isProviderApiKeyConfiguredAsync);
 
-    expect(
-      provider.isConfigured?.({
+    await expectConfigured(
+      {
         cfg: openAIImageConfig({
           baseUrl: "https://gateway.example.test/openai/v1",
           apiKey: "gateway-token",
         }),
-      }),
-    ).toBe(true);
+      },
+      true,
+    );
+    expect(ensureAuthProfileStoreAsyncMock).not.toHaveBeenCalled();
   });
 
-  it("honors canonical auth rejection even when another Codex profile exists", () => {
-    isProviderApiKeyConfiguredMock.mockReturnValue(false);
-    ensureAuthProfileStoreMock.mockReturnValue(createCodexOAuthAuthStore());
-    expect(provider.isConfigured?.({ agentDir: "/tmp/agent" })).toBe(false);
+  it("honors canonical auth rejection even when another Codex profile exists", async () => {
+    authStore = createCodexOAuthAuthStore();
+    await expectConfigured({ agentDir: "/tmp/agent" }, false);
   });
 
   it.each([["whitespace-only", "   "]])(
     "treats a %s config apiKey as not configured",
-    (_label, apiKey) => {
+    async (_label, apiKey) => {
       // Blank placeholders resolve to no usable credential in the generate
       // path, so readiness must not count them either.
-      isProviderApiKeyConfiguredMock.mockReturnValue(false);
-      ensureAuthProfileStoreMock.mockReturnValue({ version: 1, profiles: {} });
-
-      expect(
-        provider.isConfigured?.({
+      await expectConfigured(
+        {
           agentDir: "/tmp/agent",
           cfg: openAIImageConfig({
             baseUrl: "https://gateway.example.test/openai/v1",
             apiKey,
           }),
-        }),
-      ).toBe(false);
+        },
+        false,
+      );
     },
   );
 
-  it("reports ChatGPT OAuth image auth as configured for ChatGPT routes", () => {
-    isProviderApiKeyConfiguredMock.mockReturnValue(true);
-    ensureAuthProfileStoreMock.mockReturnValue(createCodexOAuthAuthStore());
+  it("reports ChatGPT OAuth image auth as configured for ChatGPT routes", async () => {
+    authConfigured = true;
+    authStore = createCodexOAuthAuthStore();
 
-    expect(
-      provider.isConfigured?.({
+    await expectConfigured(
+      {
         agentDir: "/tmp/agent",
         cfg: openAIImageConfig({
           baseUrl: "https://chatgpt.com/backend-api/codex",
         }),
-      }),
-    ).toBe(true);
+      },
+      true,
+    );
 
-    expect(
-      provider.isConfigured?.({
+    expect(ensureAuthProfileStoreAsyncMock).toHaveBeenCalledTimes(1);
+    expect(isProviderApiKeyConfiguredAsyncMock).toHaveBeenCalledWith(
+      expect.objectContaining({ store: authStore }),
+    );
+
+    await expectConfigured(
+      {
         agentDir: "/tmp/agent",
         cfg: openAIImageConfig({
           api: "openai-chatgpt-responses",
           baseUrl: "https://openai-compatible.example.test/v1",
         }),
-      }),
-    ).toBe(true);
+      },
+      true,
+    );
   });
 
-  it("does not report OpenAI OAuth image auth as configured for custom OpenAI endpoints", () => {
-    isProviderApiKeyConfiguredMock.mockReturnValue(true);
-    ensureAuthProfileStoreMock.mockReturnValue({
+  it("does not report OpenAI OAuth image auth as configured for custom OpenAI endpoints", async () => {
+    authConfigured = true;
+    authStore = {
       version: 1,
       profiles: {
-        "openai:chatgpt": {
-          type: "oauth",
-          provider: "openai",
-          access: "chatgpt-access",
-          refresh: "chatgpt-refresh",
-          expires: Date.now() + 60_000,
-        },
+        "openai:chatgpt": createOpenAIOAuthProfile("chatgpt-access", "chatgpt-refresh"),
       },
-    });
+    };
 
-    expect(
-      provider.isConfigured?.({
+    await expectConfigured(
+      {
         agentDir: "/tmp/agent",
         cfg: openAIImageConfig({
           baseUrl: "https://openai-compatible.example.test/v1",
         }),
-      }),
-    ).toBe(false);
+      },
+      false,
+    );
   });
 
-  it("does not report Codex OAuth image auth as configured for non-exact public OpenAI URLs", () => {
-    isProviderApiKeyConfiguredMock.mockReturnValue(true);
-    ensureAuthProfileStoreMock.mockReturnValue(createCodexOAuthAuthStore());
+  it("does not report Codex OAuth image auth as configured for non-exact public OpenAI URLs", async () => {
+    authConfigured = true;
+    authStore = createCodexOAuthAuthStore();
 
-    expect(
-      provider.isConfigured?.({
+    await expectConfigured(
+      {
         agentDir: "/tmp/agent",
         cfg: openAIImageConfig({
           baseUrl: "https://api.openai.com/v1?proxy=1",
         }),
-      }),
-    ).toBe(false);
+      },
+      false,
+    );
   });
 });

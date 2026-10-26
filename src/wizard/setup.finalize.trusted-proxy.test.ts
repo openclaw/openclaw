@@ -2,63 +2,65 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withSetupHealthGateway } from "../../test/helpers/setup-health-gateway.js";
 import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import type * as AuthChoiceModelCheck from "../commands/auth-choice.model-check.js";
-import type { OpenClawConfig } from "../config/config.js";
-import type { GatewayTlsConfig } from "../config/types.gateway.js";
-import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
-import type { RuntimeEnv } from "../runtime.js";
+import { mockCall } from "../test-utils/mock-call-assertions.js";
 
-type DefaultModelAuthStatus = ReturnType<typeof AuthChoiceModelCheck.resolveDefaultModelAuthStatus>;
-type DefaultModelCatalogFacts = ReturnType<
-  typeof AuthChoiceModelCheck.resolveDefaultModelCatalogFacts
+type DefaultModelAuthStatus = Awaited<
+  ReturnType<typeof AuthChoiceModelCheck.resolveDefaultModelAuthStatus>
 >;
 
 const readPin = vi.hoisted(() => vi.fn());
-vi.mock("../daemon/runtime-pin-state.js", () => ({ readDaemonRuntimePinForInstall: readPin }));
+// mock-isolation: Service-planning fixtures replace pin admission without opening stores or native locks.
+vi.mock("../daemon/runtime-pin-state.js", () => ({
+  readDaemonRuntimePinForInstall: readPin,
+  withDaemonRuntimePinMigration: async <T>(_env: NodeJS.ProcessEnv, read: () => T): Promise<T> =>
+    read(),
+}));
 
-const runTui = vi.hoisted(() => vi.fn<(options: unknown) => Promise<void>>(async () => {}));
-const setupCleanupExitTimer = vi.hoisted(() => ({ unref: vi.fn() }));
-const scheduleProcessExitAfterTuiReturn = vi.hoisted(() => vi.fn(() => setupCleanupExitTimer));
-const resolveTuiShutdownHardExitMs = vi.hoisted(() => vi.fn(() => 122_000));
-const restoreTerminalState = vi.hoisted(() => vi.fn());
-const probeGatewayReachable = vi.hoisted(() =>
-  vi.fn<() => Promise<{ ok: boolean; detail?: string }>>(async () => ({ ok: true })),
-);
-const waitForGatewayReachable = vi.hoisted(() =>
-  vi.fn<() => Promise<{ ok: boolean; detail?: string }>>(async () => ({ ok: true })),
-);
-const resolveControlUiHandoffTarget = vi.hoisted(() =>
-  vi.fn(async (params: { config: OpenClawConfig }) => ({
-    documentUrl: "http://127.0.0.1:18789/",
-    tlsConfig: params.config.gateway?.tls,
-  })),
-);
-const waitForControlUiDocument = vi.hoisted(() =>
-  vi.fn(
-    async (_params: {
-      url: string;
-      tlsConfig?: GatewayTlsConfig;
-      onPending?: () => void;
-    }): Promise<{ ready: true } | { ready: false; reason: string }> => ({ ready: true }),
-  ),
-);
-const resolveAdvertisedControlUiLinks = vi.hoisted(() =>
-  vi.fn(async () => ({
-    httpUrl: "http://127.0.0.1:18789",
-    wsUrl: "ws://127.0.0.1:18789",
-  })),
-);
-const resolveLocalControlUiProbeLinks = vi.hoisted(() =>
-  vi.fn(() => ({
-    httpUrl: "http://127.0.0.1:18789",
-    wsUrl: "ws://127.0.0.1:18789",
-  })),
-);
-const setupWizardShellCompletion = vi.hoisted(() => vi.fn(async () => {}));
+const {
+  runTui,
+  restoreTerminalState,
+  probeGatewayReachable,
+  waitForGatewayReachable,
+  resolveControlUiHandoffTarget,
+  waitForControlUiDocument,
+  resolveAdvertisedControlUiLinks,
+  resolveLocalControlUiProbeLinks,
+  setupWizardShellCompletion,
+  loadModelCatalog,
+  gatewayServiceInstall,
+  gatewayServiceRestart,
+  gatewayServiceUninstall,
+  gatewayServiceIsLoaded,
+  gatewayServiceReadCommand,
+  startGatewayService,
+  resolveGatewayInstallToken,
+  isSystemdUserServiceAvailable,
+  resolveSystemdUserServiceAccount,
+  readSystemdUserLingerStatus,
+  resolveSetupSecretInputString,
+  resolveExistingKey,
+  hasExistingKey,
+  hasKeyInEnv,
+  listConfiguredWebSearchProviders,
+  hasAuthProfileForProvider,
+  isContainerEnvironment,
+  startOnboardingGatewayProcess,
+  describeGatewayServiceRestart,
+  resetFinalizeMocks,
+} = await vi.hoisted(async () => {
+  const { createFinalizeMocks } = await import("./setup.finalize.fixtures.test-support.js");
+  return createFinalizeMocks();
+});
+
 const healthCommand = vi.hoisted(() =>
   vi.fn<typeof import("../commands/health.js").healthCommandNonExiting>(async () => {}),
 );
 const resolveDefaultModelAuthStatus = vi.hoisted(() =>
-  vi.fn<() => DefaultModelAuthStatus>(() => ({
+  vi.fn<
+    (
+      ...args: Parameters<typeof AuthChoiceModelCheck.resolveDefaultModelAuthStatus>
+    ) => DefaultModelAuthStatus
+  >(() => ({
     provider: "anthropic",
     model: "test-model",
     status: "ready",
@@ -66,10 +68,7 @@ const resolveDefaultModelAuthStatus = vi.hoisted(() =>
   })),
 );
 const resolveDefaultModelCatalogFacts = vi.hoisted(() =>
-  vi.fn<() => DefaultModelCatalogFacts>(() => ({})),
-);
-const loadModelCatalog = vi.hoisted(() =>
-  vi.fn<(_params?: unknown) => Promise<unknown[]>>(async () => []),
+  vi.fn((): ReturnType<typeof AuthChoiceModelCheck.resolveDefaultModelCatalogFacts> => ({})),
 );
 const buildGatewayInstallPlan = vi.hoisted(() =>
   vi.fn(async (_params?: { warn?: (message: string, title?: string) => void }) => ({
@@ -79,60 +78,7 @@ const buildGatewayInstallPlan = vi.hoisted(() =>
     environmentValueSources: {},
   })),
 );
-const gatewayServiceInstall = vi.hoisted(() => vi.fn(async () => {}));
-const gatewayServiceRestart = vi.hoisted(() =>
-  vi.fn<() => Promise<{ outcome: "completed" } | { outcome: "scheduled" }>>(async () => ({
-    outcome: "completed",
-  })),
-);
-const gatewayServiceUninstall = vi.hoisted(() => vi.fn(async () => {}));
-const gatewayServiceIsLoaded = vi.hoisted(() => vi.fn(async () => false));
-const gatewayServiceReadCommand = vi.hoisted(() => vi.fn());
 const gatewayServiceReadRuntime = vi.hoisted(() => vi.fn());
-const startGatewayService = vi.hoisted(() => vi.fn());
-const resolveGatewayInstallToken = vi.hoisted(() =>
-  vi.fn(async () => ({
-    warnings: [],
-  })),
-);
-const isSystemdUserServiceAvailable = vi.hoisted(() => vi.fn(async () => true));
-const resolveSystemdUserServiceAccount = vi.hoisted(() =>
-  vi.fn(() => "test-user" as string | null),
-);
-const readSystemdUserLingerStatus = vi.hoisted(() =>
-  vi.fn(async () => ({ user: "test-user", linger: "yes" as const })),
-);
-const resolveSetupSecretInputString = vi.hoisted(() =>
-  vi.fn<() => Promise<string | undefined>>(async () => undefined),
-);
-const resolveExistingKey = vi.hoisted(() =>
-  vi.fn<(config: OpenClawConfig, provider: string) => string | undefined>(() => undefined),
-);
-const hasExistingKey = vi.hoisted(() =>
-  vi.fn<(config: OpenClawConfig, provider: string) => boolean>(() => false),
-);
-const hasKeyInEnv = vi.hoisted(() =>
-  vi.fn<(entry: Pick<PluginWebSearchProviderEntry, "envVars">) => boolean>(() => false),
-);
-const listConfiguredWebSearchProviders = vi.hoisted(() =>
-  vi.fn<(params?: { config?: OpenClawConfig }) => PluginWebSearchProviderEntry[]>(() => []),
-);
-const hasAuthProfileForProvider = vi.hoisted(() =>
-  vi.fn<
-    (params: {
-      provider: string;
-      agentDir?: string;
-      includeExternalCli?: boolean;
-      type?: string;
-    }) => boolean
-  >(() => false),
-);
-const isContainerEnvironment = vi.hoisted(() => vi.fn(() => false));
-const startGatewayServer = vi.hoisted(() =>
-  vi.fn(async () => ({
-    close: vi.fn(async () => {}),
-  })),
-);
 const inspectWindowsGatewayFirewall = vi.hoisted(() =>
   vi.fn<() => Promise<unknown>>(async () => ({
     applies: false,
@@ -174,14 +120,6 @@ vi.mock("../commands/gateway-install-token.js", () => ({
   resolveGatewayInstallToken,
 }));
 
-vi.mock("../commands/daemon-runtime.js", () => ({
-  DEFAULT_GATEWAY_DAEMON_RUNTIME: "node",
-  GATEWAY_DAEMON_RUNTIME_OPTIONS: [
-    { value: "node", label: "Node" },
-    { value: "bun", label: "Bun 1.4+" },
-  ],
-}));
-
 vi.mock("../commands/health-format.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../commands/health-format.js")>()),
   formatHealthCheckFailure: vi.fn(() => "health failed"),
@@ -207,22 +145,9 @@ vi.mock("../web-search/runtime.js", () => ({
   listConfiguredWebSearchProviders,
 }));
 
-vi.mock("../daemon/service.js", () => ({
-  describeGatewayServiceRestart: vi.fn((serviceNoun: string, result: { outcome: string }) =>
-    result.outcome === "scheduled"
-      ? {
-          scheduled: true,
-          daemonActionResult: "scheduled",
-          message: `restart scheduled, ${serviceNoun.toLowerCase()} will restart momentarily`,
-          progressMessage: `${serviceNoun} service restart scheduled.`,
-        }
-      : {
-          scheduled: false,
-          daemonActionResult: "restarted",
-          message: `${serviceNoun} service restarted.`,
-          progressMessage: `${serviceNoun} service restarted.`,
-        },
-  ),
+vi.mock("../daemon/service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/service.js")>()),
+  describeGatewayServiceRestart: vi.fn(describeGatewayServiceRestart),
   formatGatewayServiceStartRepairIssues: (issues: Array<{ message: string }>) =>
     issues.map((issue) => issue.message).join("; "),
   startGatewayService,
@@ -237,7 +162,8 @@ vi.mock("../daemon/service.js", () => ({
   })),
 }));
 
-vi.mock("../daemon/systemd.js", () => ({
+vi.mock("../daemon/systemd.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/systemd.js")>()),
   isSystemdUserServiceAvailable,
   resolveSystemdUserServiceAccount,
   readSystemdUserLingerStatus,
@@ -247,25 +173,24 @@ vi.mock("../infra/container-environment.js", () => ({
   isContainerEnvironment,
 }));
 
-vi.mock("../gateway/server.js", () => ({
-  startGatewayServer,
+vi.mock("../commands/onboard-gateway-process.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../commands/onboard-gateway-process.js")>()),
+  startOnboardingGatewayProcess,
 }));
 
 vi.mock("../../packages/terminal-core/src/restore.js", () => ({
   restoreTerminalState,
 }));
 
-// mock-isolation: Onboarding handoff fixtures isolate the interactive terminal graph and process-exit timers.
-vi.mock("../tui/tui.js", () => ({
-  resolveTuiShutdownHardExitMs,
-  runTui,
-  scheduleProcessExitAfterTuiReturn,
-}));
+// mock-isolation: Onboarding handoff fixtures isolate the interactive terminal graph.
+vi.mock("../tui/tui.js", () => ({ runTui }));
 
 vi.mock("../commands/auth-choice.js", () => ({
   applyAuthChoice: vi.fn(),
   resolveDefaultModelCatalogFacts,
-  resolveDefaultModelAuthStatus,
+  resolveDefaultModelAuthStatus: async (
+    ...args: Parameters<typeof AuthChoiceModelCheck.resolveDefaultModelAuthStatus>
+  ) => resolveDefaultModelAuthStatus(...args),
   resolvePreferredProviderForAuthChoice: vi.fn(),
   warnIfModelConfigLooksOff: vi.fn(),
 }));
@@ -286,155 +211,29 @@ vi.mock("./setup.completion.js", () => ({
   setupWizardShellCompletion,
 }));
 
+import { createFinalizeArgs, createRuntime } from "./setup.finalize.fixtures.test-support.js";
 import { finalizeSetupWizard } from "./setup.finalize.js";
-
-function createRuntime(): RuntimeEnv {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-  };
-}
-
-type FinalizeArgs = Parameters<typeof finalizeSetupWizard>[0];
-
-type FinalizeArgsOverrides = Omit<Partial<FinalizeArgs>, "flow" | "opts" | "settings"> & {
-  opts?: Partial<FinalizeArgs["opts"]>;
-  settings?: Partial<FinalizeArgs["settings"]>;
-};
-
-function createLaterPrompter() {
-  return buildWizardPrompter({
-    select: vi.fn(async () => "later") as never,
-    confirm: vi.fn(async () => false),
-  });
-}
-
-function createFinalizeArgs(
-  flow: FinalizeArgs["flow"],
-  overrides: FinalizeArgsOverrides = {},
-): FinalizeArgs {
-  const { opts, settings, ...rest } = overrides;
-  return {
-    flow,
-    opts: {
-      acceptRisk: true,
-      authChoice: "skip",
-      installDaemon: false,
-      skipHealth: true,
-      skipUi: flow === "advanced",
-      ...opts,
-    },
-    baseConfig: {},
-    nextConfig: {},
-    workspaceDir: "/tmp",
-    settings: {
-      port: 18789,
-      bind: "loopback",
-      authMode: "token",
-      gatewayToken: undefined,
-      ...settings,
-    },
-    prompter: createLaterPrompter(),
-    runtime: createRuntime(),
-    ...rest,
-  };
-}
-
-function requireMockArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0): unknown {
-  const call = mock.mock.calls[callIndex];
-  if (!call) {
-    throw new Error(`expected mock call ${callIndex}`);
-  }
-  return call[argIndex];
-}
 
 describe("finalizeSetupWizard", () => {
   beforeEach(() => {
     readPin.mockReset().mockReturnValue({ revision: "empty", stored: false });
-    runTui.mockClear();
-    setupCleanupExitTimer.unref.mockClear();
-    scheduleProcessExitAfterTuiReturn.mockReset();
-    scheduleProcessExitAfterTuiReturn.mockReturnValue(setupCleanupExitTimer);
-    resolveTuiShutdownHardExitMs.mockClear();
-    restoreTerminalState.mockClear();
-    probeGatewayReachable.mockReset();
-    probeGatewayReachable.mockResolvedValue({ ok: false, detail: "offline" });
-    waitForGatewayReachable.mockReset();
-    waitForGatewayReachable.mockResolvedValue({ ok: true });
-    resolveControlUiHandoffTarget.mockReset();
-    resolveControlUiHandoffTarget.mockImplementation(async ({ config }) => ({
-      documentUrl: "http://127.0.0.1:18789/",
-      tlsConfig: config.gateway?.tls,
-    }));
-    waitForControlUiDocument.mockReset();
-    waitForControlUiDocument.mockResolvedValue({ ready: true });
-    resolveAdvertisedControlUiLinks.mockReset();
-    resolveAdvertisedControlUiLinks.mockResolvedValue({
-      httpUrl: "http://127.0.0.1:18789",
-      wsUrl: "ws://127.0.0.1:18789",
-    });
-    resolveLocalControlUiProbeLinks.mockReset();
-    resolveLocalControlUiProbeLinks.mockReturnValue({
-      httpUrl: "http://127.0.0.1:18789",
-      wsUrl: "ws://127.0.0.1:18789",
-    });
-    setupWizardShellCompletion.mockClear();
-    healthCommand.mockReset();
-    healthCommand.mockResolvedValue(undefined);
+    resetFinalizeMocks();
+    healthCommand.mockReset().mockResolvedValue(undefined);
     buildGatewayInstallPlan.mockClear();
-    gatewayServiceInstall.mockClear();
-    gatewayServiceIsLoaded.mockReset();
-    gatewayServiceIsLoaded.mockResolvedValue(false);
-    gatewayServiceReadCommand.mockReset();
-    gatewayServiceReadCommand.mockResolvedValue(null);
     gatewayServiceReadRuntime.mockReset();
-    startGatewayService.mockReset();
-    gatewayServiceRestart.mockReset();
-    gatewayServiceRestart.mockResolvedValue({ outcome: "completed" });
-    gatewayServiceUninstall.mockReset();
-    resolveGatewayInstallToken.mockClear();
-    isSystemdUserServiceAvailable.mockReset();
-    isSystemdUserServiceAvailable.mockResolvedValue(true);
-    resolveSystemdUserServiceAccount.mockReset();
-    resolveSystemdUserServiceAccount.mockReturnValue("test-user");
-    readSystemdUserLingerStatus.mockReset();
-    readSystemdUserLingerStatus.mockResolvedValue({ user: "test-user", linger: "yes" });
-    resolveSetupSecretInputString.mockReset();
-    resolveSetupSecretInputString.mockResolvedValue(undefined);
-    resolveExistingKey.mockReset();
-    resolveExistingKey.mockReturnValue(undefined);
-    hasExistingKey.mockReset();
-    hasExistingKey.mockReturnValue(false);
-    hasKeyInEnv.mockReset();
-    hasKeyInEnv.mockReturnValue(false);
-    listConfiguredWebSearchProviders.mockReset();
-    listConfiguredWebSearchProviders.mockReturnValue([]);
-    hasAuthProfileForProvider.mockReset();
-    hasAuthProfileForProvider.mockReturnValue(false);
-    isContainerEnvironment.mockReset();
-    isContainerEnvironment.mockReturnValue(false);
-    startGatewayServer.mockReset();
-    startGatewayServer.mockResolvedValue({ close: vi.fn(async () => {}) });
-    inspectWindowsGatewayFirewall.mockReset();
-    inspectWindowsGatewayFirewall.mockResolvedValue({
+    inspectWindowsGatewayFirewall.mockReset().mockResolvedValue({
       applies: false,
       severity: "info",
       code: "windows_firewall_not_applicable",
       message: "Windows LAN firewall diagnostics do not apply.",
       details: [],
     });
-    resolveDefaultModelAuthStatus.mockReset();
-    resolveDefaultModelAuthStatus.mockReturnValue({
+    resolveDefaultModelAuthStatus.mockReset().mockReturnValue({
       provider: "anthropic",
       model: "test-model",
       status: "ready",
-      hasAuth: true,
     });
-    resolveDefaultModelCatalogFacts.mockReset();
-    resolveDefaultModelCatalogFacts.mockReturnValue({});
-    loadModelCatalog.mockReset();
-    loadModelCatalog.mockResolvedValue([]);
+    resolveDefaultModelCatalogFacts.mockReset().mockReturnValue({});
   });
 
   it("keeps real health authentication on the setup Gateway despite ambient endpoints", async ({
@@ -509,7 +308,7 @@ describe("finalizeSetupWizard", () => {
       }
     }
 
-    const probeParams = requireMockArg(probeGatewayReachable) as { password?: string };
+    const probeParams = mockCall(probeGatewayReachable)[0] as { password?: string };
     expect(probeParams.password).toBe("resolved-gateway-password"); // pragma: allowlist secret
     expect(healthCommand).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -553,7 +352,7 @@ describe("finalizeSetupWizard", () => {
       }
     }
 
-    const probeParams = requireMockArg(probeGatewayReachable) as { password?: string };
+    const probeParams = mockCall(probeGatewayReachable)[0] as { password?: string };
     expect(probeParams.password).toBe("ambient-gateway-password"); // pragma: allowlist secret
   });
 

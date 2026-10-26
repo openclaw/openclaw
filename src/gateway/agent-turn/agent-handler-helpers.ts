@@ -1,7 +1,5 @@
-import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { getCliSessionBinding } from "../../agents/cli-session.js";
-import { AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION } from "../../agents/internal-event-contract.js";
-import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import {
@@ -15,10 +13,11 @@ import {
   resolveAgentHarnessSessionContextError,
   resolveAgentHarnessSessionIdMismatchError,
 } from "../../sessions/agent-harness-session-key.js";
-import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { setSafeTimeout } from "../../utils/timer-delay.js";
+import { respondError } from "../server-methods/response.js";
 import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
-import { loadSessionEntry, prepareDeletedAgentSessionCheck } from "../session-utils.js";
+import type { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
+import { prepareDeletedAgentSessionCheck } from "../session-utils.js";
 
 export const CRON_CONTINUATION_RELEASE_RECOVERY_DELAYS_MS = [250, 1_000, 4_000, 15_000] as const;
 
@@ -75,13 +74,10 @@ export function respondDeletedAgentSession(params: {
     if (agentId === null) {
       return false;
     }
-    params.respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        `Agent "${agentId}" no longer exists in configuration`,
-      ),
+    respondError(
+      params.respond,
+      ErrorCodes.INVALID_REQUEST,
+      `Agent "${agentId}" no longer exists in configuration`,
     );
     return true;
   };
@@ -93,19 +89,14 @@ export function respondDeletedAgentSession(params: {
     : respond(deletedAgentId);
 }
 
-export function respondUnavailableAgentSessionForKey(params: {
-  sessionKey: string;
+export function respondUnavailableAgentSession(params: {
+  loaded: Awaited<ReturnType<typeof loadGatewaySessionEntryReadOnlyInWorker>>;
   requestedSessionId?: string;
   isRawModelRun: boolean;
-  agentId?: string;
   respond: GatewayRequestHandlerOptions["respond"];
   assertCurrent?: () => void;
 }): boolean | Promise<boolean> {
-  const { cfg, entry, canonicalKey, legacyKey } = loadSessionEntry(params.sessionKey, {
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    clone: false,
-    projection: "list",
-  });
+  const { cfg, entry, canonicalKey, legacyKey } = params.loaded;
   const deleted = respondDeletedAgentSession({
     cfg,
     canonicalKey,
@@ -128,7 +119,7 @@ export function respondUnavailableAgentSessionForKey(params: {
     if (!sessionError) {
       return false;
     }
-    params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, sessionError));
+    respondError(params.respond, ErrorCodes.INVALID_REQUEST, sessionError);
     return true;
   };
   return deleted instanceof Promise
@@ -164,20 +155,6 @@ export function withoutCronRunContinuation(entry: SessionEntry): SessionEntry {
   return baseEntry;
 }
 
-export function shouldSuppressAgentPromptPersistence(params: {
-  inputProvenance?: InputProvenance;
-  internalEvents?: AgentInternalEvent[];
-}): boolean {
-  return (
-    params.inputProvenance?.kind === "inter_session" &&
-    params.inputProvenance.sourceTool === "subagent_announce" &&
-    params.internalEvents?.some(
-      (event) =>
-        event.type === AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION && event.source === "subagent",
-    ) === true
-  );
-}
-
 export function yieldAfterAgentAcceptedAck(): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, 10);
@@ -186,7 +163,6 @@ export function yieldAfterAgentAcceptedAck(): Promise<void> {
 
 export function waitForCronContinuationReleaseRecovery(delayMs: number): Promise<void> {
   return new Promise((resolve) => {
-    const timer = setSafeTimeout(resolve, delayMs);
-    timer.unref?.();
+    setSafeTimeout(resolve, delayMs).unref();
   });
 }

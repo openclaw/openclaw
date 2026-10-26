@@ -1,6 +1,6 @@
 import { markdownToIR } from "openclaw/plugin-sdk/text-chunking";
 import { isEscaped, protectLiteral, protectLocalInlineSyntax } from "./text-styles-inline.js";
-import type { MarkdownIRWithBlockMetadata, TokenRegistry } from "./text-styles-shared.js";
+import type { MarkdownIRWithMetadata, TokenRegistry } from "./text-styles-shared.js";
 import {
   sourceBlockquotePrefixLength,
   sourceContainerProjection,
@@ -34,7 +34,7 @@ export function restoreLeadingBlankLines(
 }
 
 export function stripUnsupportedHeadingStyles(
-  ir: MarkdownIRWithBlockMetadata,
+  ir: MarkdownIRWithMetadata,
   { ir: sourceIR, lines: sourceLines }: MarkdownSource,
 ): void {
   const unsupportedLines = new Set(
@@ -78,7 +78,7 @@ function sourceAtxHasClosingRun(line: string, level: number): boolean {
   return /^[ \t]+#+[ \t]*$/u.test(line.slice(Math.max(0, markerOffset) + marker.length));
 }
 
-export function parseSharedIR(source: string): MarkdownIRWithBlockMetadata {
+export function parseSharedIR(source: string): MarkdownIRWithMetadata {
   return markdownToIR(source, {
     autolink: false,
     enableHtmlUnderline: true,
@@ -87,7 +87,7 @@ export function parseSharedIR(source: string): MarkdownIRWithBlockMetadata {
     linkify: false,
     preserveSourceBlockSpacing: true,
     tableMode: "off",
-  }) as MarkdownIRWithBlockMetadata;
+  });
 }
 
 export function protectInlineSyntaxOutsideCode(
@@ -223,66 +223,47 @@ export function protectInlineSyntaxOutsideCode(
         taskBrackets.get(lineIndex),
         structuralPaddingLines.has(lineIndex) || /^(?: {0,3}>[ \t]?)+[ \t]*$/u.test(rawLine),
       );
-      line = protectResidualBlockPadding(
-        line,
-        registry,
-        closingAtxLines.has(lineIndex) || emptyAtxMarkers.has(lineIndex),
-        !listLines.has(lineIndex),
-        blockquoteDepthByLine.get(lineIndex) ?? 0,
-      );
+      const atxHeading = closingAtxLines.has(lineIndex) || emptyAtxMarkers.has(lineIndex);
+      const protectQuotePadding = !listLines.has(lineIndex);
+      const blockquoteDepth = blockquoteDepthByLine.get(lineIndex) ?? 0;
+      let cursor = 0;
+      let consumedBlockquotes = 0;
+      if (protectQuotePadding) {
+        while (cursor < line.length) {
+          let marker = cursor;
+          while (marker < line.length && marker - cursor < 3 && line[marker] === " ") {
+            marker += 1;
+          }
+          if (line[marker] !== ">") {
+            break;
+          }
+          consumedBlockquotes += 1;
+          const whitespaceStart = marker + 1;
+          const whitespace = /^[ \t]+/u.exec(line.slice(whitespaceStart))?.[0] ?? "";
+          const remainingContent = line.slice(whitespaceStart + whitespace.length);
+          const structuralPadding = atxHeading || consumedBlockquotes < blockquoteDepth;
+          if (!structuralPadding && whitespace.length > 1 && remainingContent) {
+            line = `${line.slice(0, whitespaceStart + 1)}${protectLiteral(
+              registry,
+              whitespace.slice(1),
+            )}${line.slice(whitespaceStart + whitespace.length)}`;
+            break;
+          }
+          cursor = whitespaceStart + whitespace.length;
+        }
+      }
+      if (atxHeading) {
+        line = line.replace(/(#{1,6})([ \t]+)/u, (_match, marker, whitespace) =>
+          whitespace.length > 1
+            ? `${marker} ${protectLiteral(registry, whitespace.slice(1))}`
+            : `${marker}${whitespace}`,
+        );
+      }
       return thematicBreakLines.has(lineIndex)
         ? line
         : protectUnpairedDelimiterRuns(line, registry, listMarkerColumns.get(lineIndex));
     })
     .join("\n");
-}
-
-function protectResidualBlockPadding(
-  line: string,
-  registry: TokenRegistry,
-  atxHeading: boolean,
-  protectQuotePadding: boolean,
-  blockquoteDepth: number,
-): string {
-  let protectedLine = line;
-  let cursor = 0;
-  let consumedBlockquotes = 0;
-  if (protectQuotePadding) {
-    while (cursor < protectedLine.length) {
-      let marker = cursor;
-      while (
-        marker < protectedLine.length &&
-        marker - cursor < 3 &&
-        protectedLine[marker] === " "
-      ) {
-        marker += 1;
-      }
-      if (protectedLine[marker] !== ">") {
-        break;
-      }
-      consumedBlockquotes += 1;
-      const whitespaceStart = marker + 1;
-      const whitespace = /^[ \t]+/u.exec(protectedLine.slice(whitespaceStart))?.[0] ?? "";
-      const remainingContent = protectedLine.slice(whitespaceStart + whitespace.length);
-      const structuralPadding = atxHeading || consumedBlockquotes < blockquoteDepth;
-      if (!structuralPadding && whitespace.length > 1 && remainingContent) {
-        protectedLine = `${protectedLine.slice(0, whitespaceStart + 1)}${protectLiteral(
-          registry,
-          whitespace.slice(1),
-        )}${protectedLine.slice(whitespaceStart + whitespace.length)}`;
-        break;
-      }
-      cursor = whitespaceStart + whitespace.length;
-    }
-  }
-  if (atxHeading) {
-    protectedLine = protectedLine.replace(/(#{1,6})([ \t]+)/u, (_match, marker, whitespace) =>
-      whitespace.length > 1
-        ? `${marker} ${protectLiteral(registry, whitespace.slice(1))}`
-        : `${marker}${whitespace}`,
-    );
-  }
-  return protectedLine;
 }
 
 function protectUnpairedDelimiterRuns(

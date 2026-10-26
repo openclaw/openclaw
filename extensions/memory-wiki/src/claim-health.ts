@@ -8,6 +8,7 @@ export const WIKI_AGING_DAYS = 30;
 const WIKI_STALE_DAYS = 90;
 
 const CONTESTED_CLAIM_STATUSES = new Set(["contested", "contradicted", "refuted", "superseded"]);
+const CLAIM_FRESHNESS_ORDER = ["stale", "aging", "fresh"];
 
 export type WikiFreshnessLevel = "fresh" | "aging" | "stale" | "unknown";
 
@@ -19,10 +20,6 @@ export type WikiFreshness = {
 };
 
 export type WikiClaimHealth = ReturnType<typeof buildWikiClaimHealth>;
-
-export type WikiClaimContradictionCluster = ReturnType<
-  typeof buildClaimContradictionClusters
->[number];
 
 export type WikiPageContradictionCluster = {
   key: string;
@@ -40,9 +37,7 @@ function normalizeClaimTextKey(text: string): string {
 }
 
 function normalizeTextKey(text: string): string {
-  return normalizeLowercaseStringOrEmpty(text)
-    .replace(/[^\p{L}\p{N}\p{M}]+/gu, " ")
-    .replace(/\s+/g, " ");
+  return normalizeLowercaseStringOrEmpty(text).replace(/[^\p{L}\p{N}\p{M}]+/gu, " ");
 }
 
 function buildFreshnessFromTimestamp(params: { timestamp?: string; now?: Date }): WikiFreshness {
@@ -91,6 +86,18 @@ export function isClaimContestedStatus(status?: string): boolean {
   return CONTESTED_CLAIM_STATUSES.has(normalizeClaimStatus(status));
 }
 
+export function compareWikiClaimSummaries(
+  left: { text: string; confidence?: number; freshnessLevel?: string },
+  right: { text: string; confidence?: number; freshnessLevel?: string },
+): number {
+  return (
+    (right.confidence ?? -1) - (left.confidence ?? -1) ||
+    CLAIM_FRESHNESS_ORDER.indexOf(right.freshnessLevel ?? "") -
+      CLAIM_FRESHNESS_ORDER.indexOf(left.freshnessLevel ?? "") ||
+    left.text.localeCompare(right.text)
+  );
+}
+
 export function assessPageFreshness(page: WikiPageSummary, now?: Date): WikiFreshness {
   return buildFreshnessFromTimestamp({ timestamp: page.updatedAt, now });
 }
@@ -104,9 +111,7 @@ export function assessClaimFreshness(params: {
     params.claim.updatedAt,
     ...params.claim.evidence.map((entry) => entry.updatedAt),
   ];
-  const hasClaimTimestamp = candidates.some(
-    (value) => typeof value === "string" && value.trim().length > 0,
-  );
+  const hasClaimTimestamp = candidates.some((value) => value?.trim());
   const latestTimestamp = resolveLatestTimestamp(candidates);
   return buildFreshnessFromTimestamp({
     timestamp: latestTimestamp ?? (hasClaimTimestamp ? undefined : params.page.updatedAt),
@@ -129,7 +134,7 @@ function buildWikiClaimHealth(params: {
     ...(claimId ? { claimId } : {}),
     text: params.claim.text,
     status: normalizeClaimStatus(params.claim.status),
-    ...(typeof params.claim.confidence === "number" ? { confidence: params.claim.confidence } : {}),
+    ...(params.claim.confidence !== undefined ? { confidence: params.claim.confidence } : {}),
     evidenceCount: params.claim.evidence.length,
     missingEvidence: params.claim.evidence.length === 0,
     freshness: assessClaimFreshness({ page: params.page, claim: params.claim, now: params.now }),

@@ -741,6 +741,17 @@ extension OpenClawChatViewModel {
         syncThinkingOptions: Bool = false) -> Bool
     {
         guard self.canApplyHistory(request) else { return false }
+        if let reasoningLevel = payload.sessionInfo?.reasoningLevel {
+            if let key = self.currentSessionEntry()?.key,
+               let index = self.sessions.firstIndex(where: { $0.key == key })
+            {
+                self.sessions[index].reasoningLevel = reasoningLevel
+            } else {
+                var entry = self.retainedActiveSession ?? OpenClawChatSessionEntry(key: self.sessionKey)
+                entry.reasoningLevel = reasoningLevel
+                self.retainedActiveSession = entry
+            }
+        }
         let incoming = self.adoptingProvisionalFinalMessageIDs(
             in: Self.decodeMessages(payload.messages ?? [], activity: payload.activity))
         let unmatchedProvisionalFinalIDs = Set(provisionalFinalMessagesMissing(from: incoming).map(\.id))

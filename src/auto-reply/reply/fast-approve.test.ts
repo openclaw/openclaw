@@ -13,124 +13,90 @@ vi.mock("./commands-approve.js", () => ({
 
 const { tryFastApproveFromMessage } = await import("./fast-approve.js");
 
+const command = "/approve exec-1 allow-once";
+function approve(
+  ctx: ReturnType<typeof buildTestCtx>,
+  overrides: Partial<Parameters<typeof tryFastApproveFromMessage>[0]> = {},
+) {
+  return tryFastApproveFromMessage({ ctx, cfg: {}, ...overrides });
+}
+function expectDelegated(expected: {
+  commandBodyNormalized?: string;
+  isAuthorizedSender?: boolean;
+}) {
+  expect(handleApproveCommandFromContextMock).toHaveBeenCalledWith(
+    expect.objectContaining({ command: expect.objectContaining(expected) }),
+    true,
+  );
+}
+function approvalContext(overrides: Parameters<typeof buildTestCtx>[0] = {}) {
+  return buildTestCtx({
+    Body: command,
+    CommandBody: command,
+    CommandSource: "text",
+    CommandAuthorized: true,
+    Provider: "imessage",
+    Surface: "imessage",
+    ChatType: "direct",
+    ...overrides,
+  });
+}
+
 describe("tryFastApproveFromMessage", () => {
   beforeEach(() => {
     handleApproveCommandFromContextMock.mockReset();
-  });
-
-  it("delegates an external text /approve before session admission", async () => {
     handleApproveCommandFromContextMock.mockResolvedValue({
       shouldContinue: false,
       reply: { text: "Approval submitted." },
     });
-    const ctx = buildTestCtx({
-      Body: "/approve exec-1 allow-once",
-      BodyForCommands: "/approve exec-1 allow-once",
-      CommandBody: "/approve exec-1 allow-once",
-      CommandSource: "text",
-      CommandAuthorized: true,
-      Provider: "imessage",
-      Surface: "imessage",
-      ChatType: "direct",
-    });
+  });
 
-    await expect(
-      tryFastApproveFromMessage({
-        ctx,
-        cfg: {} as OpenClawConfig,
-        agentId: "main",
-        sessionKey: "agent:main:imessage:direct:peer",
-      }),
-    ).resolves.toEqual({ handled: true, reply: { text: "Approval submitted." } });
-    expect(handleApproveCommandFromContextMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        command: expect.objectContaining({
-          commandBodyNormalized: "/approve exec-1 allow-once",
-          isAuthorizedSender: true,
-        }),
-      }),
-      true,
+  it.each([true, false])("uses canonical approval text (external=%s)", async (external) => {
+    const ctx = approvalContext(
+      external
+        ? { BodyForCommands: command }
+        : { Body: "[Replying to an approval prompt]\nquoted approval text" },
     );
+    await expect(
+      approve(
+        ctx,
+        external ? { agentId: "main", sessionKey: "agent:main:imessage:direct:peer" } : {},
+      ),
+    ).resolves.toEqual({ handled: true, reply: { text: "Approval submitted." } });
+    expectDelegated({
+      commandBodyNormalized: command,
+      ...(external ? { isAuthorizedSender: true } : {}),
+    });
   });
 
   it("keeps authorization in the approval command owner", async () => {
     handleApproveCommandFromContextMock.mockResolvedValue({ shouldContinue: false });
-    const ctx = buildTestCtx({
-      Body: "/approve exec-1 allow-once",
-      CommandBody: "/approve exec-1 allow-once",
-      CommandSource: "text",
-      CommandAuthorized: false,
-      Provider: "imessage",
-      Surface: "imessage",
-      ChatType: "direct",
-    });
+    const ctx = approvalContext({ CommandAuthorized: false });
 
-    await expect(tryFastApproveFromMessage({ ctx, cfg: {} as OpenClawConfig })).resolves.toEqual({
-      handled: true,
-    });
-    expect(handleApproveCommandFromContextMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        command: expect.objectContaining({ isAuthorizedSender: false }),
-      }),
-      true,
-    );
+    await expect(approve(ctx)).resolves.toEqual({ handled: true });
+    expectDelegated({ isAuthorizedSender: false });
   });
 
   it("never submits a suppressed approval command even when command access allows it", async () => {
     const ctx = buildTestCtx({
-      Body: "/approve exec-1 allow-once",
-      CommandBody: "/approve exec-1 allow-once",
-      CommandInterpretationSuppressed: true,
+      Body: command,
+      CommandBody: command,
       CommandAuthorized: true,
+      CommandInterpretationSuppressed: true,
     });
     const cfg = { commands: { allowFrom: { "*": ["*"] } } } satisfies OpenClawConfig;
 
-    await expect(tryFastApproveFromMessage({ ctx, cfg })).resolves.toEqual({ handled: false });
+    await expect(approve(ctx, { cfg })).resolves.toEqual({ handled: false });
     expect(handleApproveCommandFromContextMock).not.toHaveBeenCalled();
   });
 
-  it("uses the canonical command text instead of iMessage reply context", async () => {
-    handleApproveCommandFromContextMock.mockResolvedValue({
-      shouldContinue: false,
-      reply: { text: "Approval submitted." },
-    });
-    const ctx = buildTestCtx({
-      Body: "[Replying to an approval prompt]\nquoted approval text",
-      CommandBody: "/approve exec-1 allow-once",
-      CommandSource: "text",
-      CommandAuthorized: true,
-      Provider: "imessage",
-      Surface: "imessage",
-      ChatType: "direct",
-    });
-
-    await expect(tryFastApproveFromMessage({ ctx, cfg: {} as OpenClawConfig })).resolves.toEqual({
-      handled: true,
-      reply: { text: "Approval submitted." },
-    });
-    expect(handleApproveCommandFromContextMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        command: expect.objectContaining({
-          commandBodyNormalized: "/approve exec-1 allow-once",
-        }),
-      }),
-      true,
-    );
-  });
-
   it("does not promote a quoted approval command from an arbitrary message line", async () => {
-    const ctx = buildTestCtx({
+    const ctx = approvalContext({
       Body: "Please explain this command:\n/approve exec-1 allow-once",
       CommandBody: "Please explain this command:\n/approve exec-1 allow-once",
-      CommandAuthorized: true,
-      Provider: "imessage",
-      Surface: "imessage",
-      ChatType: "direct",
     });
 
-    await expect(tryFastApproveFromMessage({ ctx, cfg: {} as OpenClawConfig })).resolves.toEqual({
-      handled: false,
-    });
+    await expect(approve(ctx)).resolves.toEqual({ handled: false });
     expect(handleApproveCommandFromContextMock).not.toHaveBeenCalled();
   });
 });

@@ -34,7 +34,7 @@ Fine-grained GitHub tokens are supported. Issue searches always specify
 Model-written summaries use an agent's configured model and credentials. The
 evidence sent to that model can include repository activity and opted-in
 Discord excerpts. Set `summaries.enabled: false` to generate reports with
-deterministic text and no summary model calls.
+fixed-template text and no summary model calls.
 
 ## Install and enable Team Reports
 
@@ -86,6 +86,10 @@ Then check the plugin:
 openclaw team-reports status --json
 openclaw dashboard
 ```
+
+Report storage initializes in the background without delaying Gateway connections.
+Reports requests wait for storage readiness; initialization failures appear in
+plugin service health. Shutdown joins initialization before closing storage.
 
 Startup does not trigger a report job. The first scheduled run collects yesterday's
 closed report and today's partial report, plus the day before startup when that run
@@ -143,7 +147,7 @@ filtered to that member before pagination.
 
 Members are matched case-insensitively using their configured and report GitHub
 aliases against linked GitHub identities on Gateway profiles. Merged profiles
-resolve to their canonical owner. Unlinked or ambiguous identities are labeled
+resolve to their primary owner. Unlinked or ambiguous identities are labeled
 separately from a linked member with no sessions visible to you. Display names
 are never used to infer ownership.
 
@@ -209,6 +213,10 @@ restarting the Gateway with the updated environment.
 | `summaries`       | defaults below            | Model selection and summary enablement.                                                                                                                                                                                                                                |
 | `schedule`        | defaults below            | UTC collection times and aggregate refreshes.                                                                                                                                                                                                                          |
 | `retention.days`  | `400`                     | Remove stored reports older than this many days after closed-day runs; `0` keeps all history.                                                                                                                                                                          |
+
+`peopleFile` supports symlinks to regular JSON files. FIFOs and other special
+files fail the regular-file check without waiting for a writer. Replace the
+input with a regular roster file before reloading the plugin.
 
 ### GitHub
 
@@ -291,7 +299,7 @@ people: [
 
 | Key                   | Default | Behavior                                                                                                                                                    |
 | --------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `summaries.enabled`   | `true`  | Generate model-written overview, highlights, and per-person summaries. `false` uses deterministic fallback text.                                            |
+| `summaries.enabled`   | `true`  | Generate model-written overview, highlights, and per-person summaries. `false` uses fixed-template fallback text.                                           |
 | `summaries.model`     | unset   | Requested `provider/model` reference; otherwise use the target agent's default model. Requires the host policy below to take effect.                        |
 | `summaries.reasoning` | unset   | Requested thinking level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `adaptive`, `max`, or `ultra`. The host normalizes it for the selected model. |
 | `summaries.agentId`   | unset   | Agent whose model and credentials are used. Cross-agent selection is subject to the host's `llm.allowAgentIdOverride` policy.                               |
@@ -326,20 +334,27 @@ or private facts. Quiet members remain in the report with a low-activity note.
 
 The plugin validates the model's JSON response and retries once to repair
 invalid output or missing members. If the retry fails, it keeps the collected
-report and shows deterministic summaries with a visible fallback banner.
+report and shows fixed-template summaries with a visible fallback banner.
 The output budget scales with roster size; failed model attempts include a bounded, credential-free reason in the report, Markdown export, latest-day status, and Gateway logs.
 Unchanged evidence reuses the stored summary instead of making another model
 call. Collection is stored before summarization, which may take several minutes.
 
 ### Schedule
 
-| Key                           | Default   | Behavior                                                                                                      |
-| ----------------------------- | --------- | ------------------------------------------------------------------------------------------------------------- |
-| `schedule.closedDayUtc`       | `"00:05"` | Daily run time in `HH:MM` UTC, before jitter. Generates yesterday's closed report and today's partial report. |
-| `schedule.intradayEveryHours` | `4`       | Refresh today's report on aligned UTC hour boundaries; integer from `0` to `24`. `0` disables intraday runs.  |
-| `schedule.jitterMinutes`      | `5`       | Maximum random delay added to scheduled runs; integer from `0` to `59`.                                       |
-| `schedule.weekly`             | `true`    | Refresh the current ISO week aggregate after daily collection.                                                |
-| `schedule.monthly`            | `true`    | Refresh the current month aggregate after daily collection.                                                   |
+| Key                           | Default   | Behavior                                                                                                             |
+| ----------------------------- | --------- | -------------------------------------------------------------------------------------------------------------------- |
+| `schedule.enabled`            | `true`    | Run automatic collection and catch-up. `false` keeps stored reports, work sessions, and manual generation available. |
+| `schedule.closedDayUtc`       | `"00:05"` | Daily run time in `HH:MM` UTC, before jitter. Generates yesterday's closed report and today's partial report.        |
+| `schedule.intradayEveryHours` | `4`       | Refresh today's report on aligned UTC hour boundaries; integer from `0` to `24`. `0` disables intraday runs.         |
+| `schedule.jitterMinutes`      | `5`       | Maximum random delay added to scheduled runs; integer from `0` to `59`.                                              |
+| `schedule.weekly`             | `true`    | Refresh the current ISO week aggregate after daily collection.                                                       |
+| `schedule.monthly`            | `true`    | Refresh the current month aggregate after daily collection.                                                          |
+
+To retain report readers without automatic collection, set `schedule.enabled: false`.
+Status reports `scheduleEnabled: false` and an empty `nextDue` object. Manual
+`generate` commands can still collect a requested day and refresh its configured
+weekly and monthly aggregates. This setting does not disable the plugin or change
+its source credential requirements.
 
 Only one run executes at a time. Scheduled work waits for an active run;
 manual generation is rejected while another run is active. Runs have a
@@ -382,7 +397,7 @@ count is nonzero.
 
 Reports keep at most 200 GitHub items and eight Discord excerpts per person,
 with at most 80 aggregate top items. Stored report JSON is capped at 2 MiB;
-item lists are truncated deterministically, keeping newest items first, and
+item lists are truncated using fixed rules, keeping newest items first, and
 the report indicates truncation. Counts can therefore exceed displayed items.
 
 ## CLI and exports
@@ -476,7 +491,7 @@ message content.
 
 **A member is missing or Discord activity is unmatched.** Check the GitHub
 team roster and identity entries. Put aliases in the same `github` array,
-use the person's Discord user ID, and ensure the entry is not archived.
+use the person's Discord user ID, and check that the entry is not archived.
 `discordUsername` alone does not map messages to a person.
 
 **Summaries show a fallback banner or ignore the requested model.** Check the

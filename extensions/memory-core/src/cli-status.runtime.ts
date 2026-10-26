@@ -1,10 +1,12 @@
 import {
   formatMemoryIndexRebuildGuidance,
+  readMemorySearchManagerStatus,
   resolveMemoryIndexIdentityDiagnostic,
   type MemoryEmbeddingProbeResult,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   defaultRuntime,
+  formatCliJsonFailure,
   formatErrorMessage,
   setVerbose,
   shortenHomePath,
@@ -12,7 +14,6 @@ import {
   withProgress,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-cli";
 import {
-  getRuntimeConfig,
   resolveMemorySearchIndexConfig,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
@@ -24,6 +25,7 @@ import {
   resolveMemoryVectorState,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { formatByteSize } from "openclaw/plugin-sdk/number-runtime";
+import { captureRuntimeConfigAsyncReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   readSelectedMemoryProviderStatus,
@@ -158,9 +160,11 @@ async function runSelectedMemoryProviderStatus(
   owner: string,
 ) {
   if (opts.deep || opts.index || opts.fix) {
-    defaultRuntime.error(
-      `memory status --deep, --index, and --fix inspect Memory Core's own index, but plugins.slots.memory selects "${owner}". Run "openclaw memory index" to maintain the Memory Core sidecar index.`,
-    );
+    const message = `memory status --deep, --index, and --fix inspect Memory Core's own index, but plugins.slots.memory selects "${owner}". Run "openclaw memory index" to maintain the Memory Core sidecar index.`;
+    defaultRuntime.error(message);
+    if (opts.json) {
+      defaultRuntime.writeJson(formatCliJsonFailure(message));
+    }
     process.exitCode = 1;
     return;
   }
@@ -192,7 +196,7 @@ export async function runMemoryStatus(
   hostOptions?: MemoryCoreRuntimeHost,
 ) {
   setVerbose(Boolean(opts.verbose));
-  const runtimeConfig = getRuntimeConfig({ skipPluginValidation: true });
+  const runtimeConfig = await captureRuntimeConfigAsyncReader({ skipPluginValidation: true })();
   const slotOwner = resolveForeignMemorySlotOwner(runtimeConfig);
   if (slotOwner) {
     await runSelectedMemoryProviderStatus(opts, runtimeConfig, slotOwner);
@@ -223,7 +227,7 @@ export async function runMemoryStatus(
       let indexError: string | undefined;
       const syncFn = manager.sync ? manager.sync.bind(manager) : undefined;
       if (deep) {
-        const initialStatus = manager.status();
+        const initialStatus = await readMemorySearchManagerStatus(manager);
         const hasVectorStoreProbe =
           initialStatus.backend === "builtin" &&
           typeof manager.probeVectorStoreAvailability === "function";
@@ -261,7 +265,7 @@ export async function runMemoryStatus(
           defaultRuntime.log("Memory backend does not support manual reindex.");
         }
       }
-      const status = manager.status();
+      const status = await readMemorySearchManagerStatus(manager);
       const scan = await scanMemoryManagerSources(status);
       const workspaceDir = status.workspaceDir;
       let audit: ShortTermAuditSummary | undefined;

@@ -13,7 +13,8 @@ vi.mock("./shared/guarded-json-api.js", async (importOriginal) => ({
 }));
 
 import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
-import { MediaStreamHandler } from "../media-stream.js";
+import type { MediaStreamHandler } from "../media-stream.js";
+import { createHandler } from "../media-stream.test-support.js";
 import { createTelephonyTtsProvider, type TelephonyTtsRuntime } from "../telephony-tts.js";
 import { connectWs, startUpgradeWsServer, withTimeout } from "../websocket-test-support.js";
 import { TwilioProvider } from "./twilio.js";
@@ -72,7 +73,7 @@ async function withStreamingProvider(
       },
     }),
   );
-  const handler = new MediaStreamHandler({
+  const handler = createHandler({
     transcriptionProvider: {
       id: "fixture",
       label: "Fixture",
@@ -371,11 +372,12 @@ describe("TwilioProvider", () => {
   it.each([false, true])(
     "preserves synthesis outcome after a failed keepalive (rejects=%s)",
     async (rejects) => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
       await withStreamingProvider(async (f) => {
         f.beforeSend.mockImplementationOnce(() => {
           throw new Error("keepalive socket failure");
         });
-        const synthesisError = new Error("synthesis failure");
+        const synthesisError = new Error("z22-private-speech-failure");
         if (rejects) {
           f.synthesize.mockRejectedValueOnce(synthesisError);
         }
@@ -383,6 +385,8 @@ describe("TwilioProvider", () => {
         if (rejects) {
           await expect(withTimeout(playback)).rejects.toBe(synthesisError);
           expect(f.marks()).toEqual([]);
+          expect(warn).toHaveBeenCalledWith("[voice-call] Telephony TTS failed callId=call-stream");
+          expect(warn.mock.calls.flat().join(" ")).not.toContain(synthesisError.message);
         } else {
           await vi.waitFor(() => expect(f.marks()).toHaveLength(1));
           expect(Buffer.concat(f.speech())).toEqual(Buffer.alloc(320, 0xce));
@@ -394,7 +398,7 @@ describe("TwilioProvider", () => {
           streamSid: "MZ-stream",
           media: { payload: Buffer.alloc(160, 0xff).toString("base64") },
         });
-      });
+      }).finally(() => warn.mockRestore());
     },
   );
 

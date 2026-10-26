@@ -34,19 +34,12 @@ type LegacyWorkspaceSourcePaths = {
   siblingAttestationPaths: string[];
 };
 
-type LegacyWorkspaceResetCleanup = {
-  removedPaths: string[];
-  warnings: string[];
-};
-
-type LegacyWorkspaceResetCandidate = {
-  rootDir: string;
-  sourcePath: string;
-  requireAttestationHeader: boolean;
-};
-
 type LegacyWorkspaceResetPlan = {
-  candidates: LegacyWorkspaceResetCandidate[];
+  candidates: {
+    rootDir: string;
+    sourcePath: string;
+    requireAttestationHeader: boolean;
+  }[];
 };
 
 function uniqueSiblingPaths(paths: readonly string[]): string[] {
@@ -216,39 +209,33 @@ function isOwnedAttestationBuffer(buffer: Buffer): boolean {
 }
 
 /** Capture canonical legacy paths before a destructive workspace removal. */
-export function prepareLegacyWorkspaceStateReset(
-  workspaceDir: string,
-  options?: { env?: NodeJS.ProcessEnv; homedir?: () => string },
-): LegacyWorkspaceResetPlan {
-  const sources = resolveLegacyWorkspaceSourcePaths(workspaceDir, options);
-  const candidates = [
-    ...sources.setupStatePaths.map((sourcePath) => ({
-      rootDir: path.dirname(sourcePath),
-      sourcePath,
-      requireAttestationHeader: false,
-    })),
-    ...sources.stateDirAttestationPaths.map((sourcePath) => ({
-      rootDir: path.dirname(path.dirname(sourcePath)),
-      sourcePath,
-      // Hashed paths inside OpenClaw-owned attestation directories are
-      // reserved state. Explicit reset must remove malformed blockers too.
-      requireAttestationHeader: false,
-    })),
-    ...sources.siblingAttestationPaths.map((sourcePath) => ({
-      rootDir: path.dirname(sourcePath),
-      sourcePath,
-      requireAttestationHeader: true,
-    })),
-  ].flatMap((candidate) => [
-    candidate,
-    {
-      ...candidate,
-      sourcePath: `${candidate.sourcePath}${WORKSPACE_DOCTOR_CLAIM_SUFFIX}`,
-      // Sibling claims remain outside OpenClaw-owned roots. Renaming a claimed
-      // marker preserves its header, so require that ownership proof there too.
-      requireAttestationHeader: candidate.requireAttestationHeader,
-    },
-  ]);
+export function prepareLegacyWorkspaceStateReset(workspaceDir: string): LegacyWorkspaceResetPlan {
+  const sources = resolveLegacyWorkspaceSourcePaths(workspaceDir);
+  // Hashed paths are reserved state; sibling markers outside owned roots need a header.
+  const groups = [
+    [sources.setupStatePaths, "workspace"],
+    [sources.stateDirAttestationPaths, "state-dir"],
+    [sources.siblingAttestationPaths, "sibling"],
+  ] as const;
+  const candidates = groups
+    .flatMap(([paths, kind]) =>
+      paths.map((sourcePath) => ({
+        rootDir:
+          kind === "state-dir" ? path.dirname(path.dirname(sourcePath)) : path.dirname(sourcePath),
+        sourcePath,
+        requireAttestationHeader: kind === "sibling",
+      })),
+    )
+    .flatMap((candidate) => [
+      candidate,
+      {
+        ...candidate,
+        sourcePath: `${candidate.sourcePath}${WORKSPACE_DOCTOR_CLAIM_SUFFIX}`,
+        // Sibling claims remain outside OpenClaw-owned roots. Renaming a claimed
+        // marker preserves its header, so require that ownership proof there too.
+        requireAttestationHeader: candidate.requireAttestationHeader,
+      },
+    ]);
   return { candidates };
 }
 
@@ -260,7 +247,10 @@ export async function removeLegacyWorkspaceStateForReset(
     assertCurrent?: () => void;
     assertCurrentAsync?: () => Promise<void>;
   },
-): Promise<LegacyWorkspaceResetCleanup> {
+): Promise<{
+  removedPaths: string[];
+  warnings: string[];
+}> {
   const removedPaths: string[] = [];
   const warnings: string[] = [];
   for (const candidate of plan.candidates) {

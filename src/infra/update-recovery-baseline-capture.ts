@@ -1,7 +1,6 @@
 import type { BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { isDeepStrictEqual } from "node:util";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   parseUpdateRecoveryBackupManifest,
@@ -9,24 +8,19 @@ import {
 } from "../commands/backup-verify-manifest.js";
 import { createDoctorRehearsalDatabaseCoverage } from "../commands/doctor-rehearsal-databases.js";
 import { createConfigIO } from "../config/io.factory.js";
+import { resolveConfigWidePluginMetadataSnapshotAsync } from "../config/io.plugin-metadata.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { PluginDoctorMigrationBackupWarning } from "../plugins/doctor-contract-module.js";
 import { preparePluginDoctorMigrationBackupResources } from "../plugins/doctor-contract-registry.js";
 import { ensurePrivateSnapshotRepositoryRoot } from "../snapshot/local-repository.js";
-import { isOpenClawAgentDatabaseOpen } from "../state/openclaw-agent-db.js";
-import { openClawStateDatabaseCache } from "../state/openclaw-state-db-cache.js";
 import {
   withArtifactPreservingStateReads,
   withOpenClawStateDatabaseReadSnapshot,
 } from "../state/openclaw-state-db-readonly.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import {
-  getOpenClawDatabaseMaintenanceScope,
-  maintenanceOwnerHasSourceCustody,
-} from "../state/openclaw-state-maintenance-context.js";
 import { resolveBackupConfigCapture } from "./backup-config-capture.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { sha256Hex } from "./crypto-digest.js";
+import { resolveDatabaseFamilyEngines } from "./database-engine/registry.js";
 import {
   pinDirectory,
   publishFileExclusive,
@@ -34,8 +28,8 @@ import {
   sha256File,
   syncDirectory,
 } from "./directory-durability.js";
-import { hasErrnoCode } from "./errno.js";
-import { formatErrorMessage } from "./errors.js";
+import { formatDiskSpaceBytes, tryReadDiskSpace } from "./disk-space.js";
+import { hasErrnoCode, ignoreMissingPath } from "./errno.js";
 import {
   copyFileHandle,
   hashFileMutationSnapshotSync,
@@ -45,25 +39,21 @@ import {
 import { root as safeRoot } from "./fs-safe.js";
 import { SQLITE_SIDECAR_SUFFIXES } from "./sqlite-files.js";
 import { createPrivateSqliteDirectory } from "./sqlite-private-directory.js";
-import { readUpdateDatabaseGenerationsIsolated } from "./update-candidate-state.js";
 import { isUpdateCapturePath, resolveUpdateCaptureRoot } from "./update-capture-paths.js";
 import {
   UPDATE_CAPTURE_PRIVACY_MARKER,
   UPDATE_CAPTURE_PRIVACY_MARKER_CONTENT,
 } from "./update-capture-privacy-marker.js";
+import { UpdateCaptureSpaceError } from "./update-capture-space.js";
 import { createUpdateDatabaseBackup } from "./update-database-backup.js";
-import { readUpdateDatabaseGenerations } from "./update-database-generations.js";
 import type { UpdateRecoveryCaptureAcquisition } from "./update-recovery-capture-acquisition.js";
-import { hasPendingUpdateRecoverySeal } from "./update-recovery-capture-seal.js";
 import { canonicalEntryPath } from "./update-recovery-path.js";
 import { readUpdateRunDriver, type UpdateRunDriver } from "./update-run-driver.js";
-import { getUpdateRunAsync } from "./update-run-reader.js";
 
 declare const SEALED_RUNTIME_BUILD: boolean;
 
 type Entry = UpdateRecoveryBackupManifest["entries"][number];
 type ResourceKind = "file" | "directory" | "sqlite";
-type CapturedPath = { stat?: BigIntStats; names?: string[]; target?: string };
 
 function matchesCapturedStat(
   pathname: string,
@@ -93,14 +83,7 @@ function within(candidate: string, root: string): boolean {
 }
 
 async function statOrMissing(value: string): Promise<BigIntStats | undefined> {
-  try {
-    return await fs.lstat(value, { bigint: true });
-  } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return undefined;
-    }
-    throw error;
-  }
+  return fs.lstat(value, { bigint: true }).catch(ignoreMissingPath);
 }
 
 async function markPrivateCapture(directory: string): Promise<void> {
@@ -124,24 +107,7 @@ async function markPrivateCapture(directory: string): Promise<void> {
   requireDirectorySync(await syncDirectory(directory), "Private update capture marker");
 }
 
-function maintenanceOwnerMayReadGenerationsInProcess(
-  sharedStatePath: string,
-  databasePaths: ReadonlySet<string>,
-): boolean {
-  const scope = getOpenClawDatabaseMaintenanceScope();
-  // An open process-local source handle requires a child: a raw close here could release its POSIX locks.
-  return (
-    maintenanceOwnerHasSourceCustody(scope, sharedStatePath) &&
-    !openClawStateDatabaseCache.isOpenClawStateDatabaseOpen(sharedStatePath) &&
-    [...databasePaths].every(
-      (pathname) =>
-        maintenanceOwnerHasSourceCustody(scope, pathname) && !isOpenClawAgentDatabaseOpen(pathname),
-    )
-  );
-}
-
-/** Capture for manual recovery under the original invocation's live custody.
- * Sources may remain active; final revalidation is not authority to restore them. */
+/** Capture chosen originals for manual recovery, not authority to restore active sources. */
 export function captureUpdateRecoveryBaseline(params: {
   runId: string;
   installRoot: string;
@@ -152,6 +118,7 @@ export function captureUpdateRecoveryBaseline(params: {
   nodeRunner?: string;
   timeoutMs?: number;
   acquisition?: UpdateRecoveryCaptureAcquisition;
+  fullIntegrityCheck?: boolean;
 }) {
   // Sealed helpers consume retained evidence; the installed CLI owns fresh capture.
   if (typeof SEALED_RUNTIME_BUILD === "boolean" && SEALED_RUNTIME_BUILD) {
@@ -163,7 +130,6 @@ export function captureUpdateRecoveryBaseline(params: {
       throw new Error("Invalid original update capture run identity.");
     }
     const env = { ...params.env };
-    const sharedStatePath = resolveOpenClawStateSqlitePath(env);
     const assertCaller = params.assertCurrent;
     const rehearsal = createDoctorRehearsalDatabaseCoverage(params.env);
     const assertCurrent = () => {
@@ -227,21 +193,32 @@ export function captureUpdateRecoveryBaseline(params: {
       configPaths.add(declare(file.sourcePath, "file"));
       configPaths.add(declare(file.canonicalPath, "file"));
     }
+    const collect = async () => {
+      const plugins = await preparePluginDoctorMigrationBackupResources({
+        config: snapshot.sourceConfig,
+        env,
+        stateDir,
+        warnings,
+        requireLocalResources: true,
+        ...(resolveDatabaseFamilyEngines(snapshot.sourceConfig).state === "postgres"
+          ? {
+              manifestRegistry: (
+                await resolveConfigWidePluginMetadataSnapshotAsync({
+                  config: snapshot.sourceConfig,
+                  env,
+                  stateDir,
+                })
+              ).manifestRegistry,
+            }
+          : {}),
+      });
+      plugins.assertCurrent();
+      return plugins.resources;
+    };
     const collectResources = () =>
-      withOpenClawStateDatabaseReadSnapshot(
-        async () => {
-          const plugins = await preparePluginDoctorMigrationBackupResources({
-            config: snapshot.sourceConfig,
-            env,
-            stateDir,
-            warnings,
-            requireLocalResources: true,
-          });
-          plugins.assertCurrent();
-          return plugins.resources;
-        },
-        { env },
-      );
+      resolveDatabaseFamilyEngines(snapshot.sourceConfig).state === "postgres"
+        ? collect()
+        : withOpenClawStateDatabaseReadSnapshot(collect, { env });
     const declared = await collectResources();
     assertCurrent();
     for (const resource of declared) {
@@ -250,9 +227,28 @@ export function captureUpdateRecoveryBaseline(params: {
     await configCapture.revalidate();
     assertCurrent();
 
-    const observed = new Map<string, CapturedPath>();
+    const observed = new Set<string>();
     const entries = new Map<string, Entry>();
     const files = new Map<string, BigIntStats>();
+    const capacityWarnings = new Set<string>();
+    const checkPayloadCapacity = () => {
+      const requiredBytes = [...files.values()].reduce(
+        (total, stat) => total + Number(stat.size),
+        64 * 1024 * 1024,
+      );
+      const space = tryReadDiskSpace(store);
+      if (space && space.availableBytes < requiredBytes) {
+        throw new UpdateCaptureSpaceError(
+          `Original update capture needs ${formatDiskSpaceBytes(requiredBytes)} near ${store}, but only ${formatDiskSpaceBytes(space.availableBytes)} is available. Free space on this volume, then retry; original state has not been changed.`,
+          { requiredBytes, availableBytes: space.availableBytes },
+        );
+      }
+      if (!space) {
+        capacityWarnings.add(
+          `Available disk space could not be measured near ${store}; original update capture will be attempted.`,
+        );
+      }
+    };
     const roots = new Set(resources.keys());
     const forcedSqlite = new Set<string>();
     const visit = async (pathname: string, declaredKind?: ResourceKind): Promise<void> => {
@@ -266,7 +262,7 @@ export function captureUpdateRecoveryBaseline(params: {
       assertCurrent();
       const stat = await statOrMissing(pathname);
       assertCurrent();
-      observed.set(pathname, { stat });
+      observed.add(pathname);
       if (!stat) {
         if (kind === "sqlite") {
           forcedSqlite.add(pathname);
@@ -281,7 +277,6 @@ export function captureUpdateRecoveryBaseline(params: {
       }
       if (stat.isSymbolicLink()) {
         const target = await fs.readlink(pathname);
-        observed.set(pathname, { stat, target });
         const entry: Extract<Entry, { kind: "symlink" }> = {
           kind: "symlink",
           sourcePath: pathname,
@@ -290,9 +285,7 @@ export function captureUpdateRecoveryBaseline(params: {
         entries.set(pathname, entry);
         if (kind) {
           const contentPath = await fs.realpath(pathname).catch((error: unknown) => {
-            if (!hasErrnoCode(error, "ENOENT")) {
-              throw error;
-            }
+            ignoreMissingPath(error);
             return canonicalEntryPath(path.resolve(path.dirname(pathname), target));
           });
           if (contentPath === pathname) {
@@ -318,7 +311,6 @@ export function captureUpdateRecoveryBaseline(params: {
           throw new Error(`Original update resource is unexpectedly a directory: ${pathname}`);
         }
         const names = (await fs.readdir(pathname)).toSorted();
-        observed.set(pathname, { stat, names });
         entries.set(pathname, {
           kind: "directory",
           sourcePath: pathname,
@@ -337,6 +329,8 @@ export function captureUpdateRecoveryBaseline(params: {
       await visit(pathname, kind);
     }
     assertCurrent();
+    // Plugin resource trees can exceed the database budget; refuse before the first capture write.
+    checkPayloadCapacity();
     await ensurePrivateSnapshotRepositoryRoot(store);
     await markPrivateCapture(store);
     assertCurrent();
@@ -356,16 +350,27 @@ export function captureUpdateRecoveryBaseline(params: {
         nodeRunner: params.nodeRunner,
         timeoutMs: params.timeoutMs,
         acquisition: params.acquisition,
+        purpose: "original-state",
+        integrityCheck: params.fullIntegrityCheck ? "full" : "quick",
         preserveSourceArtifacts: true,
         additionalPaths: [...forcedSqlite],
         additionalFiles: [...files.keys()].filter((pathname) => !configPaths.has(pathname)),
         rehearsal,
+        // Capture is best effort; its callers continue and own the next-step guidance.
+        retryAdvice: false,
       });
       assertCurrent();
       const databasePaths = new Set([
         ...databases.databases.map((file) => file.path),
         ...databases.missingPaths,
       ]);
+      for (const pathname of databases.missingPaths) {
+        for (const suffix of ["-wal", "-journal"]) {
+          if (await statOrMissing(pathname + suffix)) {
+            throw new Error(`Database is absent but retained journal data exists: ${pathname}`);
+          }
+        }
+      }
       const databaseSpellings = new Set([
         ...databasePaths,
         ...databases.sourcePaths.map(canonicalEntryPath),
@@ -406,10 +411,7 @@ export function captureUpdateRecoveryBaseline(params: {
           "Original database snapshot removal",
         );
         assertCurrent();
-        const content = await sha256File(payloadPath);
-        if (content.digest !== file.sha256 || content.bytes !== file.sizeBytes) {
-          throw new Error(`Original database payload changed: ${file.path}`);
-        }
+        // No-replace rename transfers the verified image without copying its bytes.
         const stat = files.get(file.path);
         if (!stat) {
           throw new Error(`Original database disappeared during capture: ${file.path}`);
@@ -424,14 +426,18 @@ export function captureUpdateRecoveryBaseline(params: {
           mode: Number(stat.mode & 0o777n),
         });
       }
-      for (const [pathname, before] of files) {
+      for (const pathname of files.keys()) {
         if (
           databaseSpellings.has(pathname) ||
           sidecars.has(pathname) ||
           rehearsal?.excludes(pathname)
         ) {
-          continue;
+          files.delete(pathname);
         }
+      }
+      // Database acquisition used this volume first; reserve remaining payload and metadata now.
+      checkPayloadCapacity();
+      for (const [pathname, before] of files) {
         assertCurrent();
         await pin.assertCurrent();
         assertCurrent();
@@ -474,55 +480,7 @@ export function captureUpdateRecoveryBaseline(params: {
         });
       }
       await configCapture.revalidate();
-      if (!isDeepStrictEqual(await collectResources(), declared)) {
-        throw new Error("Original update migration resource inventory changed during capture.");
-      }
       assertCurrent();
-      const generations =
-        params.acquisition?.mode === "maintenance-owner" &&
-        maintenanceOwnerMayReadGenerationsInProcess(sharedStatePath, databasePaths)
-          ? readUpdateDatabaseGenerations([...databasePaths])
-          : await readUpdateDatabaseGenerationsIsolated([...databasePaths], {
-              env,
-              signal: params.signal,
-              timeoutMs: params.timeoutMs,
-              acquisition: params.acquisition,
-            });
-      if (
-        [...databasePaths].some(
-          (pathname) =>
-            !Object.hasOwn(databases.sourceGenerations, pathname) ||
-            databases.sourceGenerations[pathname] !== generations[pathname],
-        )
-      ) {
-        throw new Error(
-          "Original database generation changed or could not be verified; capture is unsealed.",
-        );
-      }
-      for (const [pathname, before] of observed) {
-        if (databaseSpellings.has(pathname) || sidecars.has(pathname)) {
-          continue;
-        }
-        const current = await statOrMissing(pathname);
-        const entry = entries.get(pathname);
-        const sha256 = entry?.kind === "file" && !entry.sqlite ? entry.sha256 : undefined;
-        if (
-          before.stat
-            ? !current || !matchesCapturedStat(pathname, before.stat, current, sha256)
-            : current !== undefined
-        ) {
-          throw new Error(`Original update resource changed during capture: ${pathname}`);
-        }
-        if (
-          before.names &&
-          !isDeepStrictEqual((await fs.readdir(pathname)).toSorted(), before.names)
-        ) {
-          throw new Error(`Original update directory changed during capture: ${pathname}`);
-        }
-        if (before.target !== undefined && (await fs.readlink(pathname)) !== before.target) {
-          throw new Error(`Original update resource link changed during capture: ${pathname}`);
-        }
-      }
       const boundedWarnings = warnings.slice(0, 32).map((warning) => ({
         kind: warning.kind,
         pluginId: warning.pluginId,
@@ -600,7 +558,7 @@ export function captureUpdateRecoveryBaseline(params: {
           manifestSha256: sha256Hex(raw),
         } satisfies UpdateRecoveryBaselineRef,
         warnings: boundedWarnings,
-        diagnostics: { databaseWarnings: databases.warnings },
+        diagnostics: { databaseWarnings: [...capacityWarnings, ...databases.warnings] },
       };
     } catch (cause) {
       throw new Error(`Original update capture failed; evidence retained at ${directory}`, {
@@ -610,80 +568,4 @@ export function captureUpdateRecoveryBaseline(params: {
       await pin.close();
     }
   });
-}
-
-const STANDALONE_DOCTOR_CAPTURE_RETENTION_MS = 30 * 24 * 60 * 60_000;
-
-/** Only sealed, unassociated standalone originals are eligible for retirement. */
-export async function retireExpiredStandaloneDoctorCaptures(params: {
-  stateDir: string;
-  keepRunId: string;
-  now?: number;
-  assertCurrent: () => void;
-}): Promise<{ retired: string[]; warnings: string[] }> {
-  const retired: string[] = [];
-  const warnings: string[] = [];
-  const root = resolveUpdateCaptureRoot(params.stateDir);
-  const now = params.now ?? Date.now();
-  let names: string[];
-  try {
-    names = await fs.readdir(root);
-  } catch (error) {
-    if (!hasErrnoCode(error, "ENOENT")) {
-      warnings.push(
-        `Standalone Doctor capture retirement unavailable at ${root}: ${formatErrorMessage(error)}`,
-      );
-    }
-    return { retired, warnings };
-  }
-  for (const name of names.toSorted()) {
-    if (
-      name === params.keepRunId ||
-      !/^doctor-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(name)
-    ) {
-      continue;
-    }
-    const directory = path.join(root, name);
-    try {
-      const entry = await fs.lstat(directory);
-      if (!entry.isDirectory() || entry.isSymbolicLink()) {
-        continue;
-      }
-      if (
-        (await hasPendingUpdateRecoverySeal(directory)) ||
-        !(await statOrMissing(path.join(directory, "manifest.json")))
-      ) {
-        continue;
-      }
-      const source = await safeRoot(directory, { symlinks: "reject", hardlinks: "reject" });
-      const manifest = parseUpdateRecoveryBackupManifest(
-        await source.readText("manifest.json", { maxBytes: 128 * 1024 * 1024 }),
-      );
-      const createdAt = Date.parse(manifest.createdAt);
-      if (
-        manifest.runId !== name ||
-        manifest.schemaVersion !== 2 ||
-        manifest.generation?.kind !== "baseline" ||
-        !Number.isFinite(createdAt) ||
-        now - createdAt <= STANDALONE_DOCTOR_CAPTURE_RETENTION_MS ||
-        (await statOrMissing(path.join(directory, "outcome.json"))) ||
-        (await getUpdateRunAsync(manifest.runId, {
-          path: path.join(params.stateDir, "state", "openclaw.sqlite"),
-        })) !== undefined
-      ) {
-        continue;
-      }
-      if (await hasPendingUpdateRecoverySeal(directory)) {
-        continue;
-      }
-      params.assertCurrent();
-      await fs.rm(directory, { recursive: true });
-      retired.push(directory);
-    } catch (error) {
-      warnings.push(
-        `Standalone Doctor capture retained at ${directory}: ${formatErrorMessage(error)}`,
-      );
-    }
-  }
-  return { retired, warnings };
 }

@@ -1,6 +1,6 @@
 // Config facts about the `memory` section, with no rendering imports.
 //
-// The Memory page is behind the lazy `import("./config-page.ts")` route, but
+// The Memory page is behind the lazy `import("./config-page.tsx")` route, but
 // settings search runs from app-host at startup. Both need the same answers
 // about which `memory.*` children are reachable and where a match lives, so
 // those answers live here rather than in the view module — importing the view
@@ -72,7 +72,6 @@ export function canonicalMemoryRouteLocation(
   params.delete("tab");
   if (hadLegacySection) {
     params.delete("section");
-    params.delete("advanced");
   }
   const search = params.toString();
   const canonical: RouteLocation = {

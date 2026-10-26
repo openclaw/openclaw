@@ -4,7 +4,7 @@
  * so ACP sessions running Claude Code can use them.
  */
 import { pathToFileURL } from "node:url";
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import type { Server } from "@modelcontextprotocol/server";
 import { resolveEffectiveToolPolicy } from "../agents/agent-tools.policy.js";
 import { pickSandboxToolPolicy } from "../agents/sandbox-tool-policy.js";
 import {
@@ -18,7 +18,7 @@ import {
   resolveToolProfilePolicy,
 } from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
@@ -34,7 +34,6 @@ import { createToolsMcpServer, serveRegisteredToolsMcpServer } from "./tools-std
 
 export async function acquirePluginToolsForMcp(params: {
   config: OpenClawConfig;
-  agentSessionKey?: string;
   agentId?: string;
 }): Promise<PluginToolRegistryAcquisition> {
   const { config } = params;
@@ -98,8 +97,11 @@ export async function servePluginToolsMcp(): Promise<void> {
   routeLogsToStderr();
 
   await serveRegisteredToolsMcpServer({
-    acquireRegistry: () =>
-      acquirePluginToolsForMcp({ config: getRuntimeConfig(), agentId: resolveToolsMcpAgentId() }),
+    acquireRegistry: async () =>
+      acquirePluginToolsForMcp({
+        config: await captureRuntimeConfigAsyncReader()(),
+        agentId: resolveToolsMcpAgentId(),
+      }),
     createServer: (tools, sdkResourceHost) => {
       if (tools.length === 0) {
         process.stderr.write("plugin-tools-serve: no plugin tools found\n");
@@ -112,6 +114,6 @@ export async function servePluginToolsMcp(): Promise<void> {
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   servePluginToolsMcp().catch((err: unknown) => {
     process.stderr.write(`plugin-tools-serve: ${formatErrorMessage(err)}\n`);
-    process.exit(1);
+    process.exitCode = 1;
   });
 }

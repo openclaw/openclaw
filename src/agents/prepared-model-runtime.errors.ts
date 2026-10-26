@@ -1,17 +1,16 @@
 import { PluginInstanceUnavailableError } from "../plugins/plugin-instance-error.js";
+import { PreparedModelRuntimeOwnerNotPublishedError } from "./prepared-model-runtime-admission-errors.js";
 import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.js";
 
-/** Reports unavailable owner facts, distinguishing admission refusal from a missing owner. */
-export class PreparedModelRuntimeOwnerNotPublishedError extends Error {
-  readonly admissionBlocked: boolean;
+export { PreparedModelRuntimeOwnerNotPublishedError };
 
-  constructor(message?: string, options?: ErrorOptions & { admissionBlocked?: boolean }) {
-    super(message, options);
-    this.admissionBlocked = options?.admissionBlocked === true;
+/** The embedded runner refused its initial admission before executing a generation. */
+export class PreparedModelRuntimeInitialRunAdmissionError extends PreparedModelRuntimeOwnerNotPublishedError {
+  constructor(error: PreparedModelRuntimeOwnerNotPublishedError) {
+    super(error.message, { cause: error, admissionBlocked: true });
   }
 }
 
-/** Only missing owners permit activation or catalog fallback; refused admission must settle work. */
 export function isPreparedModelRuntimeMissingOwnerError(
   error: unknown,
 ): error is PreparedModelRuntimeOwnerNotPublishedError {

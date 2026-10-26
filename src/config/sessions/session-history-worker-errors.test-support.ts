@@ -91,6 +91,7 @@ vi.mock("../../infra/worker-task-pool.js", async (importOriginal) => {
                 await prepared.releaseResources?.();
               }
             }
+            poolOptions.onRotationComplete?.();
           } catch (error) {
             void Promise.resolve(poolOptions.onRetirementFailure?.(error)).catch(() => undefined);
             throw error;
@@ -109,7 +110,8 @@ vi.mock("../../infra/worker-task-pool.js", async (importOriginal) => {
     },
   };
 });
-vi.mock("../../state/openclaw-agent-db-resources.js", () => ({
+vi.mock("../../state/openclaw-agent-db-resources.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/openclaw-agent-db-resources.js")>()),
   matchesAgentDatabaseReadCandidatePath: (candidate: { path: string }, targetPath: string) =>
     candidate.path === targetPath,
   registerOpenClawAgentDatabaseReadCandidateResource: (resource: Resource) => {
@@ -142,11 +144,6 @@ vi.mock("./disk-budget-runtime.js", () => ({
 vi.mock("./session-accessor.sqlite-exact-read.js", () => ({
   loadSessionEntryReadOnlyInScope: () => observed.read(),
 }));
-vi.mock("./session-sharing-store.js", () => ({
-  listSessionMembers: () => {
-    throw new Error("Native membership reads are forbidden in these pure controls");
-  },
-}));
 vi.mock("../../gateway/session-history-readonly-reader.js", () => ({
   createReadonlySessionHistoryReader: () => ({
     readTranscriptDisplayDelta: observed.delta,
@@ -160,6 +157,12 @@ vi.mock("./session-cold-storage-read.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./session-cold-storage-read.js")>();
   return {
     ...actual,
+    readRestoredSessionTranscriptInWorker: (
+      ...args: Parameters<typeof actual.readRestoredSessionTranscriptInWorker>
+    ) =>
+      args[0].scope.sessionId === "delta"
+        ? args[1]()
+        : actual.readRestoredSessionTranscriptInWorker(...args),
     readRestoredSessionTranscript: (
       ...args: Parameters<typeof actual.readRestoredSessionTranscript>
     ) =>

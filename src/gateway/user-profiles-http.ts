@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { consumeResponseBytes } from "@openclaw/normalization-core";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { resolveHostAccountAvatar } from "../infra/host-account-avatar.js";
+import { readResponseWithLimit } from "../infra/http-response-body.js";
 import { LruCache } from "../infra/lru-cache.js";
 import { WorkerTaskError } from "../infra/worker-task-pool.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
@@ -13,9 +13,15 @@ import { formatUserProfileAvatarEtag, UserProfileNotFoundError } from "../state/
 import { parseControlUiUserAvatarPath } from "./control-ui-contract.js";
 import { setControlUiImageCorsHeaders } from "./control-ui-image-cors.js";
 import { authorizeControlUiReadRequestOrReply } from "./http-auth-utils.js";
-import { sendJson, sendMethodNotAllowed, watchClientDisconnect } from "./http-common.js";
+import {
+  sendJson,
+  sendMethodNotAllowed,
+  sendMissingScopeForbidden,
+  watchClientDisconnect,
+} from "./http-common.js";
 import { matchesHttpIfNoneMatch } from "./http-conditional.js";
 import type { GatewayHttpRequestAuthOptions } from "./http-request-authority.js";
+import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 
 const GRAVATAR_BASE_URL = "https://www.gravatar.com/avatar";
 const GRAVATAR_FETCH_TIMEOUT_MS = 5_000;
@@ -69,36 +75,6 @@ function cacheGravatar(
   gravatarCache.set(hash, { ...result, expiresAtMs: nowMs + ttlMs });
 }
 
-async function readBoundedGravatarBody(
-  body: ReadableStream<Uint8Array> | null,
-): Promise<Uint8Array | undefined> {
-  if (!body) {
-    return undefined;
-  }
-  const reader = body.getReader();
-  const chunks: Uint8Array[] = [];
-  let totalBytes = 0;
-  try {
-    const { size, truncated } = await consumeResponseBytes({
-      maxBytes: MAX_GRAVATAR_BYTES,
-      read: () => reader.read(),
-      onChunk: (chunk) => chunks.push(chunk),
-      onLimit: () => reader.cancel(),
-    });
-    if (truncated) {
-      return undefined;
-    }
-    totalBytes = size;
-  } finally {
-    reader.releaseLock();
-  }
-  if (totalBytes === 0) {
-    return undefined;
-  }
-  const bytes = Buffer.concat(chunks, totalBytes);
-  return new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-}
-
 async function cancelGravatarBody(body: ReadableStream<Uint8Array> | null): Promise<void> {
   try {
     await body?.cancel();
@@ -130,10 +106,11 @@ async function fetchGravatar(hash: string): Promise<GravatarResult> {
       await cancelGravatarBody(response.body);
       return { kind: "error" };
     }
-    const bytes = await readBoundedGravatarBody(response.body);
-    if (!bytes) {
+    const buffer = await readResponseWithLimit(response, MAX_GRAVATAR_BYTES);
+    if (buffer.byteLength === 0) {
       return { kind: "error" };
     }
+    const bytes = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
     const etag = `"gravatar-${createHash("sha256").update(bytes).digest("hex")}"`;
     return { kind: "hit", bytes, mime, etag };
   } catch {
@@ -227,7 +204,7 @@ export async function handleUserProfileAvatarHttpRequest(
     cfg,
     trustedProxies: opts.trustedProxies ?? cfg.gateway?.trustedProxies,
     allowRealIpFallback: opts.allowRealIpFallback ?? cfg.gateway?.allowRealIpFallback,
-    requiredOperatorMethod: "users.list",
+    requiredOperatorMethod: "users.self",
   });
   if (!authResult) {
     return true;
@@ -236,11 +213,20 @@ export async function handleUserProfileAvatarHttpRequest(
   // Cached misses would hide a later uploaded image behind the unversioned route.
   res.setHeader("Cache-Control", "no-store");
   const profileId = parsed.value;
+  const directoryAccess = authorizeOperatorScopesForMethod("users.list", authResult.operatorScopes);
+  if (
+    !directoryAccess.allowed &&
+    (!profileId || profileId !== authResult.authenticatedUserProfile?.profileId)
+  ) {
+    sendMissingScopeForbidden(res, directoryAccess.missingScope);
+    return true;
+  }
   if (!profileId) {
     sendJson(res, 404, { ok: false, error: { type: "not_found" } });
     return true;
   }
   let emails: string[];
+  let revision: string;
   try {
     const reader = createProfileAvatarReader(profileId);
     for (;;) {
@@ -280,6 +266,7 @@ export async function handleUserProfileAvatarHttpRequest(
         });
         return true;
       }
+      revision = String(profile.updatedAt);
       emails = prepared.emails;
       break;
     }
@@ -342,6 +329,12 @@ export async function handleUserProfileAvatarHttpRequest(
     return true;
   }
   authResult.assertCurrent();
+  if (
+    !transientFailure &&
+    new URL(req.url ?? "/", "http://localhost").searchParams.get("v") === revision
+  ) {
+    res.setHeader("Cache-Control", "private, max-age=60");
+  }
   sendJson(res, transientFailure ? 502 : 404, {
     ok: false,
     error: { type: transientFailure ? "avatar_upstream_unavailable" : "not_found" },

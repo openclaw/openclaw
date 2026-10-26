@@ -18,23 +18,44 @@ const retired = new FinalizationRegistry<string>((revision) => {
   }
 });
 
-export function getTextLexicalIndex(documents: readonly string[]) {
-  const revision = createHash("sha256").update(JSON.stringify(documents)).digest("hex");
+export function prepareTextLexicalDocument(text: string) {
+  return {
+    text,
+    // Preserve exact code units, including lone surrogates, in the content identity.
+    revision: createHash("sha256").update(text, "utf16le").digest("hex"),
+  } as const;
+}
+
+export function getTextLexicalIndex(
+  documents: readonly string[] | readonly ReturnType<typeof prepareTextLexicalDocument>[],
+) {
+  const prepared = typeof documents[0] === "object";
+  const revision = createHash("sha256")
+    .update(prepared ? "prepared:" : "")
+    .update(
+      JSON.stringify(
+        prepared
+          ? documents.map((document) =>
+              typeof document === "string" ? document : document.revision,
+            )
+          : documents,
+      ),
+    )
+    .digest("hex");
   const cached = indexes.get(revision)?.index ?? active.get(revision)?.deref();
   if (cached) {
     return cached;
   }
   let bytes = 0;
-  const index = Object.freeze(
-    buildLexicalIndex(
-      documents.map((text, value) => {
-        const terms = tokenizeDocument(text);
-        // Token slices can retain the full source; count repeated postings conservatively.
-        bytes += text.length * 2 + 64;
-        bytes += terms.reduce((size, term) => size + 64 + term.length * 2, 0);
-        return { value, terms };
-      }),
-    ),
+  const index = buildLexicalIndex(
+    documents.map((document, value) => {
+      const text = typeof document === "string" ? document : document.text;
+      const terms = tokenizeDocument(text);
+      // Token slices can retain the full source; count repeated postings conservatively.
+      bytes += text.length * 2 + 64;
+      bytes += terms.reduce((size, term) => size + 64 + term.length * 2, 0);
+      return { value, terms };
+    }),
   );
   indexes.set(revision, { index, bytes });
   active.set(revision, new WeakRef(index));

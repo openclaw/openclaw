@@ -10,6 +10,10 @@ How an authorized session reaches a cloud destination, what the Control UI requi
 
 Administrators can run an authorized session on a configured cloud profile, including a fresh workspace without a repository. Session ownership and participation checks are revalidated before placement lifecycle changes commit.
 
+Fresh workspaces can be created and dispatched concurrently. Creating another session's workspace does not invalidate a dispatch already in preparation; changes to the selected session's own workspace binding or archive status still prevent stale dispatch.
+
+If the session already has an active turn, `sessions.dispatch` returns a busy error without interrupting the turn or starting worker provisioning. Wait for the turn to finish and retry dispatch.
+
 In the Control UI, open **New Session** and choose a **Cloud** destination. A cloud destination is available when these eligibility gates pass:
 
 1. The connected operator has `operator.admin` scope.
@@ -19,6 +23,8 @@ In the Control UI, open **New Session** and choose a **Cloud** destination. A cl
 Without an explicitly selected folder, project, or worktree, remote sessions default to **New workspace**: an empty, isolated working directory. You can also choose **New workspace** from the project picker. No repository, initial commit, or Gateway folder is required. OpenClaw uses a private backing repository for each fresh session so workspace snapshots, recovery, and cleanup keep their normal behavior; sessions do not share Git remotes or history. Existing local files are not copied into the new workspace.
 
 With a repository selected, the branch picker shows **From main** (or the selected branch); before a ref is selected, it shows **Starting branch**. With a GitHub repository selected, it lets you choose the source ref without cloning on the Gateway. With a Gateway folder selected, cloud selection enables its managed worktree and still requires that folder to be a usable Git checkout. Selecting a destination does not discard an explicit source while Git discovery is pending; choose **New workspace** to start empty instead. The Gateway creates the session, finishes dispatch, and only then sends the first turn. The server badge in the session sidebar shows the durable placement state. Startup recovery retains the workspace selection along with the destination and first message.
+
+When preparing a Gateway folder on a node, OpenClaw preserves its credential-free HTTP, HTTPS, or Git transport `origin` if the node checkout has none. Existing node origins remain unchanged. Origins with embedded credentials, query strings, fragments, or other schemes are not forwarded. Full workspace replacement retains the existing [Git metadata recovery limits](/gateway/cloud-workers/session-lifecycle#accept-a-completed-turn).
 
 If the Gateway restarts during provisioning, the pending first message waits for recovery and continues automatically when its worker is ready. Temporary startup or suspension errors do not cancel setup. The first message stays before later recovery notices in the chat, including after reconnecting.
 
@@ -41,4 +47,4 @@ While that call is waiting, the parent remains an active turn under its existing
 
 The Control UI checks each cloud destination's advertised execution modes in both New Session and Move Session. One Crabbox **Cloud · profile** row is selectable for OpenClaw and Codex, while a genuinely single-mode provider stays disabled for the other runtime. An incompatible move is rejected before the active source starts draining or changes its durable placement.
 
-Other runtimes remain unavailable unless their harness explicitly declares a cloud placement mode. Cloud targets are not offered for external CLI session catalogs. Remote-exec fails closed if the selected provider or placement sandbox is unavailable; it never falls back to running the operation on the Gateway host.
+Other runtimes remain unavailable unless their harness explicitly declares a cloud placement mode. Cloud targets are not offered for external CLI session catalogs. Remote-exec refuses execution if the selected provider or placement sandbox is unavailable; it never falls back to running the operation on the Gateway host.

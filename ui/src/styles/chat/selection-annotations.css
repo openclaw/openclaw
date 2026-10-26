@@ -77,7 +77,6 @@ openclaw-chat-comment-pins {
   --openclaw-tooltip-background-color: var(--session-hovercard-surface);
   --openclaw-tooltip-border-color: var(--border);
   --openclaw-tooltip-border-radius: var(--radius-lg);
-  --openclaw-tooltip-shadow: var(--shadow-lg);
 }
 
 .chat-comment-preview__scroll {
@@ -288,4 +287,46 @@ openclaw-chat-comment-pins {
   .chat-comment-preview--editable .chat-comment-preview__actions {
     opacity: 1;
   }
+}
+
+.chat-sent-comments-inline {
+  width: 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.chat-sent-comments-inline__item + .chat-sent-comments-inline__item {
+  margin-top: 16px;
+}
+
+.chat-sent-comments-inline__item blockquote {
+  margin: 0;
+  padding-inline-start: 12px;
+  border-inline-start: 3px solid var(--border-strong);
+  color: var(--muted);
+}
+
+.chat-sent-comments-inline__comment {
+  margin-top: 10px;
+}
+
+.chat-sent-comments-inline__selection {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-sent-comments-inline__selection:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
 }

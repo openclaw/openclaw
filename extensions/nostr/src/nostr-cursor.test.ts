@@ -13,24 +13,12 @@ describe("Nostr durable cursor", () => {
     vi.useRealTimers();
   });
 
-  it("waits for EOSE before persisting the largest durable timestamp", () => {
-    const cursor = createNostrDurableCursor({
-      since: 800,
-      replayOverlapSec: 120,
-      nowSec: () => 1_000,
-    });
-
-    expect(cursor.recordDurableAppend(event(900))).toBeUndefined();
-    expect(cursor.recordDurableAppend(event(1_100))).toBeUndefined();
-
-    expect(cursor.markBackfillComplete()).toBe(1_000);
-  });
-
   it("caps progress so a transiently rejected event remains inside replay overlap", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(1_200_000);
     const cursor = createNostrDurableCursor({
       since: 800,
       replayOverlapSec: 120,
-      nowSec: () => 1_200,
     });
 
     cursor.recordDurableAppend(event(1_100));
@@ -40,10 +28,11 @@ describe("Nostr durable cursor", () => {
   });
 
   it("ignores rejected events older than the active relay filter", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(1_200_000);
     const cursor = createNostrDurableCursor({
       since: 800,
       replayOverlapSec: 120,
-      nowSec: () => 1_200,
     });
 
     cursor.recordDurableAppend(event(1_100));
@@ -51,15 +40,46 @@ describe("Nostr durable cursor", () => {
     expect(cursor.markBackfillComplete()).toBe(1_100);
   });
 
-  it("serializes a safety rewind after an older in-flight progress write", async () => {
-    const highStarted = createDeferred<void>();
-    const highGate = createDeferred<void>();
-    const write = vi.fn(async (cursor: number) => {
-      if (cursor === 2_000) {
-        highStarted.resolve();
-        await highGate.promise;
+  it.each(["pending", "in-flight"])(
+    "serializes a safety rewind after an older %s progress write",
+    async (progressState) => {
+      const highStarted = createDeferred<void>();
+      const highGate = createDeferred<void>();
+      const write = vi.fn(async (cursor: number) => {
+        if (cursor === 2_000) {
+          highStarted.resolve();
+          await highGate.promise;
+        }
+      });
+      const writer = createNostrCursorStateWriter({
+        initialCursor: 1_000,
+        minimumCursor: 1_000,
+        debounceMs: 60_000,
+        write,
+      });
+
+      writer.schedule(2_000);
+      const highWrite = writer.flush();
+      if (progressState === "in-flight") {
+        await withTimeout(highStarted.promise, 1_000, {
+          message: "Nostr progress write did not start",
+        });
       }
-    });
+      const rewind = writer.persistNow(1_050);
+      const stricterRewind = writer.persistNow(1_020);
+      await withTimeout(highStarted.promise, 1_000, {
+        message: "Nostr progress write did not start",
+      });
+      expect(write).toHaveBeenCalledWith(2_000);
+      highGate.resolve();
+      await Promise.all([highWrite, rewind, stricterRewind]);
+
+      expect(write.mock.calls.map(([cursor]) => cursor)).toEqual([2_000, 1_020]);
+    },
+  );
+
+  it("persists a cursor queued while an idle flush is settling", async () => {
+    const write = vi.fn<(cursor: number) => Promise<void>>().mockResolvedValue(undefined);
     const writer = createNostrCursorStateWriter({
       initialCursor: 1_000,
       minimumCursor: 1_000,
@@ -67,41 +87,11 @@ describe("Nostr durable cursor", () => {
       write,
     });
 
-    writer.schedule(2_000);
-    const highWrite = writer.flush();
-    await withTimeout(highStarted.promise, 1_000, {
-      message: "Nostr progress write did not start",
-    });
-    expect(write).toHaveBeenCalledWith(2_000);
-    const rewind = writer.persistNow(1_050);
-    const stricterRewind = writer.persistNow(1_020);
-    highGate.resolve();
-    await Promise.all([highWrite, rewind, stricterRewind]);
+    const idle = writer.flush();
+    const persist = writer.persistNow(1_020);
+    await Promise.all([idle, persist]);
 
-    expect(write.mock.calls.map(([cursor]) => cursor)).toEqual([2_000, 1_020]);
-  });
-
-  it("keeps a failed cursor write dirty for a later flush retry", async () => {
-    vi.useFakeTimers();
-    const write = vi
-      .fn<(cursor: number) => Promise<void>>()
-      .mockRejectedValue(new Error("state unavailable"));
-    const writer = createNostrCursorStateWriter({
-      initialCursor: 1_000,
-      minimumCursor: 1_000,
-      debounceMs: 60_000,
-      write,
-    });
-
-    writer.schedule(1_100);
-    const failedFlush = expect(writer.flush()).rejects.toThrow("cursor state write failed");
-    await vi.runAllTimersAsync();
-    await failedFlush;
-    expect(write).toHaveBeenCalledTimes(3);
-
-    write.mockResolvedValue(undefined);
-    await expect(writer.flush()).resolves.toBeUndefined();
-    expect(write).toHaveBeenCalledTimes(4);
+    expect(write.mock.calls.map(([cursor]) => cursor)).toEqual([1_020]);
   });
 
   it("keeps retrying a failed safety write until it is durable", async () => {

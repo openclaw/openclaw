@@ -1,19 +1,11 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { resolveRuntimeConversationBindingRoute } from "openclaw/plugin-sdk/conversation-runtime";
+import { resolveRuntimeConversationBindingRouteAsync } from "openclaw/plugin-sdk/conversation-binding-runtime";
 import { resolveAgentRoute, resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SlackMessageEvent } from "../types.js";
 import { normalizeSlackChannelType, resolveSlackChatType } from "./channel-type.js";
 import type { SlackEventScope } from "./event-scope.js";
 import { qualifySlackConversationId, resolveSlackAgentRoute } from "./workspace-routing.js";
-
-type SlackSystemEventSessionKeyParams = {
-  channelId?: string | null;
-  channelType?: string | null;
-  senderId?: string | null;
-  threadTs?: string | null;
-  eventScope?: SlackEventScope;
-};
 
 export function createSlackSystemEventRouteResolver(params: {
   cfg: OpenClawConfig;
@@ -26,7 +18,13 @@ export function createSlackSystemEventRouteResolver(params: {
     eventScope?: SlackEventScope,
   ) => SlackMessageEvent["channel_type"] | undefined;
 }) {
-  return (event: SlackSystemEventSessionKeyParams) => {
+  return async (event: {
+    channelId?: string | null;
+    channelType?: string | null;
+    senderId?: string | null;
+    threadTs?: string | null;
+    eventScope?: SlackEventScope;
+  }) => {
     const channelId = normalizeOptionalString(event.channelId) ?? "";
     const senderId = normalizeOptionalString(event.senderId) ?? "";
     // System events can omit channel_type too; prefer a type already seen on events
@@ -67,7 +65,7 @@ export function createSlackSystemEventRouteResolver(params: {
     );
     const threadBindingRoute =
       !event.eventScope && threadTs
-        ? resolveRuntimeConversationBindingRoute({
+        ? await resolveRuntimeConversationBindingRouteAsync({
             route,
             conversation: {
               channel: "slack",
@@ -81,7 +79,7 @@ export function createSlackSystemEventRouteResolver(params: {
       ? { route, bindingRecord: null, boundSessionKey: undefined }
       : threadBindingRoute?.boundSessionKey || threadBindingRoute?.bindingRecord
         ? threadBindingRoute
-        : resolveRuntimeConversationBindingRoute({
+        : await resolveRuntimeConversationBindingRouteAsync({
             route,
             conversation: {
               channel: "slack",

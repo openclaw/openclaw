@@ -6,18 +6,22 @@ import { createQaBusState, startQaBusServer } from "../../qa-lab/bus-api.js";
 import { sendQaChannelMediaBatch } from "./outbound.js";
 
 describe("QA media delivery limits", () => {
-  it.each(["channel", "account", "default-account", "agent"] as const)(
-    "rejects an oversized batch before publishing with the %s cap",
-    async (scope) => {
+  it.each(
+    (["channel", "account", "default-account", "agent"] as const).flatMap((scope) => [
+      { scope, capMb: 1 / 1024, capBytes: 1024 },
+      { scope, capMb: 0.3, capBytes: 314572 },
+    ]),
+  )(
+    "rejects an oversized batch before publishing with the $scope cap of $capMb MiB",
+    async ({ scope, capMb, capBytes }) => {
       const directory = await realpath(await mkdtemp(path.join(os.tmpdir(), "qa-media-cap-")));
       const small = path.join(directory, "small.txt");
       const large = path.join(directory, "large.txt");
       const state = createQaBusState();
       const bus = await startQaBusServer({ state });
       try {
-        await writeFile(small, "a".repeat(512));
-        await writeFile(large, "b".repeat(1536));
-        const capMb = 1 / 1024;
+        await writeFile(small, "a".repeat(capBytes));
+        await writeFile(large, "b".repeat(capBytes + 1));
         const cfg = {
           agents: { defaults: { mediaMaxMb: scope === "agent" ? capMb : 10 } },
           channels: {
@@ -51,7 +55,7 @@ describe("QA media delivery limits", () => {
         expect(delivered[0]?.accountId).toBe(params.accountId ?? "limited");
         expect(delivered[0]?.toolCalls).toEqual([{ name: "image" }]);
         expect(delivered[0]?.attachments?.[0]?.contentBase64).toBe(
-          Buffer.from("a".repeat(512)).toString("base64"),
+          Buffer.from("a".repeat(capBytes)).toString("base64"),
         );
         if (scope === "default-account") {
           await expect(
@@ -60,7 +64,7 @@ describe("QA media delivery limits", () => {
           await sendQaChannelMediaBatch({ ...params, accountId: "default", mediaUrls: [large] });
           expect(state.getSnapshot().messages.at(-1)?.accountId).toBe("default");
           expect(state.getSnapshot().messages.at(-1)?.attachments?.[0]?.contentBase64).toBe(
-            Buffer.from("b".repeat(1536)).toString("base64"),
+            Buffer.from("b".repeat(capBytes + 1)).toString("base64"),
           );
         }
       } finally {

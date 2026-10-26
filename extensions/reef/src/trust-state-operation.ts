@@ -4,29 +4,30 @@ import type {
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   matchesReefPeerIdentity,
-  ReefAutonomySchema,
-  ReefPeerTrustSchema,
-  sameReefPeerIdentity,
-  type ReefAutonomy,
   type ReefPeerIdentity,
   type ReefPeerTrust,
 } from "./friend-types.js";
-import { validateReefPeerIdentity } from "./trust-store-authority.js";
 import {
-  MESSAGE_ID_PATTERN,
+  overdueReefDeliveries,
+  pendingReefRejections,
+  rejectReefDelivery,
+  reserveReefRejection,
+} from "./trust-delivery-transition.js";
+import { transitionReefPeer, type ReefPeerMutations } from "./trust-peer-transition.js";
+import {
+  currentReefDeliveries,
+  listReefPeerTrust,
+  matchesReefDeliveryBinding,
+  mergeReefRejectionNotice,
+  parseReefPeerState,
   ReefOutboundDeliverySchema,
-  ReefOutboundRejectionSchema,
-  ReefPeerStateSchema,
-  ReefPeerTrustChangedError,
   ReefRejectionNoticeStateSchema,
   reefOutboundRequestStatus,
-  requirePeer,
-  withoutReefOutboundRequest,
   type ReefOutboundDelivery,
   type ReefOutboundDeliveryBinding,
   type ReefPeerStateSnapshot,
 } from "./trust-store-format.js";
-import type { ReefDeliveryRejection, ReefRejectionNoticeState, RelayFriend } from "./types.js";
+import type { ReefDeliveryRejection, ReefRejectionNoticeState } from "./types.js";
 
 type PeerKey = { key: string };
 export type ReefDeliveryOperationInput = {
@@ -43,32 +44,12 @@ type Reservation =
   | { kind: "peer-changed" }
   | { kind: "unavailable" };
 
-export type ReefTrustStateOperations = {
+export type ReefTrustStateOperations = ReefPeerMutations & {
   snapshot: { input: PeerKey; output: ReefPeerStateSnapshot };
   list: { input: { prefix: string }; output: Array<{ peer: string; trust: ReefPeerTrust }> };
-  set: { input: PeerKey & { trust: ReefPeerTrust }; output: void };
-  remove: { input: PeerKey; output: boolean };
-  setAutonomy: { input: PeerKey & { autonomy: ReefAutonomy }; output: boolean };
-  markSafetyNumberChanged: { input: PeerKey & { expectedRevision: number }; output: boolean };
-  commitPeerTrust: {
-    input: PeerKey & {
-      friend: RelayFriend;
-      expectedRevision: number;
-      expectedOutboundRequestId?: string;
-      approvedAt: number;
-    };
-    output: boolean;
-  };
-  beginRequest: { input: PeerKey & { requestId: string; requestedAt: number }; output: void };
   requestStatus: {
     input: PeerKey & { requestId: string };
     output: "current" | "superseded" | "revoked";
-  };
-  removeRequest: { input: PeerKey & { requestId?: string }; output: boolean };
-  prepareDelivery: { input: ReefDeliveryOperationInput; output: ReefPeerTrust | undefined };
-  recordDelivery: {
-    input: ReefDeliveryOperationInput & { delivery: ReefOutboundDelivery };
-    output: "recorded" | "peer-changed" | "duplicate";
   };
   readDelivery: { input: ReefDeliveryOperationInput; output: DeliveryRead | undefined };
   consumeDelivery: {
@@ -108,72 +89,9 @@ export type ReefTrustStateOperations = {
 
 function readReefPeerState(
   tx: PluginStateOperationTransaction,
-  { store, key }: { store: number; key: string },
+  key: string,
 ): ReefPeerStateSnapshot {
-  return parsePeerState(tx.lookup(store, key));
-}
-
-class ReefDuplicateOutboundDeliveryError extends Error {
-  constructor(id: string) {
-    super(`Duplicate outbound Reef delivery id ${id}`);
-    this.name = "ReefDuplicateOutboundDeliveryError";
-  }
-}
-
-function parsePeerState(value: unknown): ReefPeerStateSnapshot {
-  return value === undefined ? { revision: 0 } : ReefPeerStateSchema.parse(value);
-}
-
-export function recordReefOutboundDelivery(
-  tx: PluginStateOperationTransaction,
-  params: {
-    peers: number;
-    deliveries: number;
-    peerKey: string;
-    deliveryKey: string;
-    peer: string;
-    delivery: ReefOutboundDelivery;
-  },
-  prepared?: { peerState: ReefPeerStateSnapshot; delivery: unknown },
-): void {
-  // A composing worker may reuse facts read earlier in this same synchronous transaction.
-  const current =
-    prepared ??
-    (() => {
-      const [peerValue, delivery] = tx.lookupMany([
-        { store: params.peers, key: params.peerKey },
-        { store: params.deliveries, key: params.deliveryKey },
-      ]);
-      return { peerState: parsePeerState(peerValue), delivery };
-    })();
-  const delivery = ReefOutboundDeliverySchema.parse(params.delivery);
-  validateReefPeerIdentity(current.peerState.trust, params.peer, delivery.recipient);
-  if (current.delivery !== undefined) {
-    const id = params.deliveryKey.slice(params.deliveryKey.lastIndexOf(":") + 1);
-    throw new ReefDuplicateOutboundDeliveryError(id);
-  }
-  tx.set(params.deliveries, params.deliveryKey, delivery);
-}
-
-function matchesBinding(current: ReefOutboundDelivery, expected: ReefOutboundDeliveryBinding) {
-  return (
-    current.bodyHash === expected.bodyHash &&
-    current.textHash === expected.textHash &&
-    sameReefPeerIdentity(current.recipient, expected.recipient)
-  );
-}
-
-function listPeers(tx: PluginStateOperationTransaction, prefix: string) {
-  return tx
-    .entries(0)
-    .filter((entry) => entry.key.startsWith(prefix))
-    .flatMap((entry) => {
-      const state = ReefPeerStateSchema.parse(entry.value);
-      return state.trust
-        ? [{ peer: requirePeer(entry.key.slice(prefix.length)), trust: state.trust }]
-        : [];
-    })
-    .toSorted((left, right) => (left.peer < right.peer ? -1 : left.peer > right.peer ? 1 : 0));
+  return parseReefPeerState(tx.lookup(0, key));
 }
 
 function deliveriesForCurrentPeers(
@@ -181,26 +99,14 @@ function deliveriesForCurrentPeers(
   prefix: string,
   requireValid = false,
 ) {
-  const peers = new Map(listPeers(tx, prefix).map(({ peer, trust }) => [peer, trust]));
-  return tx
-    .entries(1)
-    .filter((entry) => entry.key.startsWith(prefix))
-    .flatMap((entry) => {
-      const parsed = ReefOutboundDeliverySchema.safeParse(entry.value);
-      if (!parsed.success) {
-        if (requireValid) {
-          throw parsed.error;
-        }
-        return [];
-      }
-      const separator = entry.key.lastIndexOf(":");
-      const peer = requirePeer(entry.key.slice(prefix.length, separator));
-      const id = entry.key.slice(separator + 1);
-      return MESSAGE_ID_PATTERN.test(id) &&
-        matchesReefPeerIdentity(peers.get(peer), parsed.data.recipient)
-        ? [{ peer, id, delivery: parsed.data }]
-        : [];
-    });
+  const deliveries = tx.entries(1);
+  if (deliveries.length === 0) {
+    return [];
+  }
+  const peers = new Map(
+    listReefPeerTrust(tx.entries(0), prefix).map(({ peer, trust }) => [peer, trust]),
+  );
+  return currentReefDeliveries(deliveries, prefix, (peer) => peers.get(peer), requireValid);
 }
 
 export function runReefTrustStateOperation(
@@ -209,117 +115,27 @@ export function runReefTrustStateOperation(
 ): ReefTrustStateOperations[keyof ReefTrustStateOperations]["output"] {
   switch (command.type) {
     case "snapshot":
-      return readReefPeerState(tx, { store: 0, key: command.input.key });
+      return readReefPeerState(tx, command.input.key);
     case "list":
-      return listPeers(tx, command.input.prefix);
-    case "set": {
-      const { key, trust } = command.input;
-      const current = readReefPeerState(tx, { store: 0, key });
-      tx.set(0, key, {
-        ...current,
-        revision: current.revision + 1,
-        trust: ReefPeerTrustSchema.parse(trust),
-      });
-      return;
-    }
-    case "remove": {
-      const { key } = command.input;
-      const current = readReefPeerState(tx, { store: 0, key });
-      tx.set(0, key, { revision: current.revision + 1 });
-      return true;
-    }
-    case "setAutonomy": {
-      const { key, autonomy } = command.input;
-      const current = readReefPeerState(tx, { store: 0, key });
-      if (!current.trust) {
-        return false;
+      return listReefPeerTrust(tx.entries(0), command.input.prefix);
+    case "set":
+    case "remove":
+    case "setAutonomy":
+    case "markSafetyNumberChanged":
+    case "commitPeerTrust":
+    case "beginRequest":
+    case "removeRequest": {
+      const next = transitionReefPeer(command, readReefPeerState(tx, command.input.key));
+      if (next) {
+        tx.set(0, command.input.key, next);
       }
-      tx.set(0, key, {
-        ...current,
-        trust: { ...current.trust, autonomy: ReefAutonomySchema.parse(autonomy) },
-      });
-      return true;
-    }
-    case "markSafetyNumberChanged": {
-      const { key, expectedRevision } = command.input;
-      const current = readReefPeerState(tx, { store: 0, key });
-      if (current.revision !== expectedRevision || !current.trust) {
-        return false;
-      }
-      tx.set(0, key, {
-        ...current,
-        revision: current.revision + 1,
-        trust: { ...current.trust, safetyNumberChanged: true },
-      });
-      return true;
-    }
-    case "commitPeerTrust": {
-      const { key, friend, expectedRevision, expectedOutboundRequestId, approvedAt } =
-        command.input;
-      const current = readReefPeerState(tx, { store: 0, key });
-      if (
-        current.revision !== expectedRevision ||
-        (expectedOutboundRequestId !== undefined &&
-          current.outboundRequests?.[expectedOutboundRequestId] === undefined)
-      ) {
-        return false;
-      }
-      tx.set(0, key, {
-        revision: current.revision + 1,
-        trust: ReefPeerTrustSchema.parse({
-          autonomy: current.trust?.autonomy ?? "bounded",
-          ed25519PublicKey: friend.ed25519_pub,
-          x25519PublicKey: friend.x25519_pub,
-          keyEpoch: friend.key_epoch,
-          safetyNumberChanged: false,
-          approvedAt,
-        }),
-        ...(current.rejectionNotice ? { rejectionNotice: current.rejectionNotice } : {}),
-      });
-      return true;
-    }
-    case "beginRequest": {
-      const { key, requestId, requestedAt } = command.input;
-      const current = readReefPeerState(tx, { store: 0, key });
-      tx.set(
-        0,
-        key,
-        ReefPeerStateSchema.parse({
-          ...current,
-          outboundRequests: { ...current.outboundRequests, [requestId]: requestedAt },
-        }),
-      );
-      return;
+      return command.type === "set" || command.type === "beginRequest" ? undefined : Boolean(next);
     }
     case "requestStatus":
       return reefOutboundRequestStatus(
-        readReefPeerState(tx, { store: 0, key: command.input.key }),
+        readReefPeerState(tx, command.input.key),
         command.input.requestId,
       );
-    case "removeRequest": {
-      const { key, requestId } = command.input;
-      const next = withoutReefOutboundRequest(readReefPeerState(tx, { store: 0, key }), requestId);
-      if (next === undefined) {
-        return false;
-      }
-      tx.set(0, key, next);
-      return true;
-    }
-    case "prepareDelivery":
-      return readReefPeerState(tx, { store: 0, key: command.input.peerKey }).trust;
-    case "recordDelivery":
-      try {
-        recordReefOutboundDelivery(tx, { peers: 0, deliveries: 1, ...command.input });
-        return "recorded";
-      } catch (error) {
-        if (error instanceof ReefPeerTrustChangedError) {
-          return "peer-changed";
-        }
-        if (error instanceof ReefDuplicateOutboundDeliveryError) {
-          return "duplicate";
-        }
-        throw error;
-      }
     case "readDelivery": {
       const [peer, value] = tx.lookupMany([
         { store: 0, key: command.input.peerKey },
@@ -327,13 +143,16 @@ export function runReefTrustStateOperation(
       ]);
       return value === undefined
         ? undefined
-        : { delivery: ReefOutboundDeliverySchema.parse(value), trust: parsePeerState(peer).trust };
+        : {
+            delivery: ReefOutboundDeliverySchema.parse(value),
+            trust: parseReefPeerState(peer).trust,
+          };
     }
     case "consumeDelivery":
     case "discardDelivery": {
       const { deliveryKey, expected } = command.input;
       const parsed = ReefOutboundDeliverySchema.safeParse(tx.lookup(1, deliveryKey));
-      const matches = parsed.success && matchesBinding(parsed.data, expected);
+      const matches = parsed.success && matchesReefDeliveryBinding(parsed.data, expected);
       if (command.type === "consumeDelivery" && parsed.success && parsed.data.rejection) {
         return "rejected";
       }
@@ -344,19 +163,12 @@ export function runReefTrustStateOperation(
     }
     case "rejectDelivery": {
       const { deliveryKey, expected, category, rejectedAt } = command.input;
-      const parsed = ReefOutboundDeliverySchema.safeParse(tx.lookup(1, deliveryKey));
-      if (!parsed.success || !matchesBinding(parsed.data, expected)) {
-        return undefined;
+      const current = tx.lookup(1, deliveryKey);
+      const next = rejectReefDelivery(current, expected, category, rejectedAt);
+      if (next?.changed) {
+        tx.set(1, deliveryKey, next.delivery);
       }
-      if (parsed.data.rejection) {
-        return parsed.data.rejection;
-      }
-      const rejection = ReefOutboundRejectionSchema.parse({
-        ...(category ? { category } : {}),
-        ...(parsed.data.resendDisabled ? { notice: { lastRejectionAt: rejectedAt } } : {}),
-      });
-      tx.set(1, deliveryKey, { ...parsed.data, rejection });
-      return rejection;
+      return next?.delivery.rejection;
     }
     case "reserveRejection": {
       const { peerKey, deliveryKey, recipient, notice } = command.input;
@@ -364,33 +176,16 @@ export function runReefTrustStateOperation(
         { store: 0, key: peerKey },
         { store: 1, key: deliveryKey },
       ]);
-      if (!matchesReefPeerIdentity(parsePeerState(peerValue).trust, recipient)) {
+      if (!matchesReefPeerIdentity(parseReefPeerState(peerValue).trust, recipient)) {
         return { kind: "peer-changed" };
       }
-      const parsed = ReefOutboundDeliverySchema.safeParse(value);
-      if (
-        !parsed.success ||
-        !parsed.data.rejection ||
-        !sameReefPeerIdentity(parsed.data.recipient, recipient)
-      ) {
+      const reservation = reserveReefRejection(value, recipient, notice);
+      if (!reservation) {
         return { kind: "unavailable" };
       }
-      const existing = parsed.data.rejection.notice;
       // Reservation renews retention; duplicate receipt processing above does not.
-      tx.set(
-        1,
-        deliveryKey,
-        existing
-          ? parsed.data
-          : {
-              ...parsed.data,
-              rejection: {
-                ...parsed.data.rejection,
-                notice: ReefRejectionNoticeStateSchema.parse(notice),
-              },
-            },
-      );
-      return existing ? { kind: "existing", state: existing } : { kind: "reserved" };
+      tx.set(1, deliveryKey, reservation.delivery);
+      return reservation.outcome;
     }
     case "completeRejection": {
       const { peerKey, deliveryKey } = command.input;
@@ -399,17 +194,10 @@ export function runReefTrustStateOperation(
         { store: 0, key: peerKey },
         { store: 1, key: deliveryKey },
       ]);
-      const current = parsePeerState(peerValue);
-      const previous = current.rejectionNotice;
-      const hasResendAt = previous?.lastResendAt !== undefined || notice.lastResendAt !== undefined;
+      const current = parseReefPeerState(peerValue);
       tx.set(0, peerKey, {
         ...current,
-        rejectionNotice: {
-          lastRejectionAt: Math.max(previous?.lastRejectionAt ?? 0, notice.lastRejectionAt),
-          ...(hasResendAt
-            ? { lastResendAt: Math.max(previous?.lastResendAt ?? 0, notice.lastResendAt ?? 0) }
-            : {}),
-        },
+        rejectionNotice: mergeReefRejectionNotice(current.rejectionNotice, notice),
       });
       const delivery = ReefOutboundDeliverySchema.safeParse(value);
       const consumed = delivery.success && delivery.data.rejection?.notice !== undefined;
@@ -419,14 +207,10 @@ export function runReefTrustStateOperation(
       return consumed || value === undefined;
     }
     case "overdueDeliveries":
-      return deliveriesForCurrentPeers(tx, command.input.prefix).flatMap(
-        ({ peer, id, delivery }) =>
-          delivery.rejection ||
-          delivery.overdueNotifiedAt !== undefined ||
-          delivery.sentAt === undefined ||
-          delivery.sentAt + command.input.olderThanMs > command.input.now
-            ? []
-            : [{ peer, id, sentAt: delivery.sentAt }],
+      return overdueReefDeliveries(
+        deliveriesForCurrentPeers(tx, command.input.prefix),
+        command.input.olderThanMs,
+        command.input.now,
       );
     case "markDeliveryOverdue": {
       const { deliveryKey, now } = command.input;
@@ -438,23 +222,6 @@ export function runReefTrustStateOperation(
       return true;
     }
     case "pendingRejections":
-      return deliveriesForCurrentPeers(tx, command.input.prefix, true)
-        .flatMap(({ peer, id, delivery }): ReefPendingRejection[] =>
-          delivery.rejection
-            ? [
-                {
-                  peer,
-                  id,
-                  recipient: delivery.recipient,
-                  ...(delivery.textHash ? { textHash: delivery.textHash } : {}),
-                  ...(delivery.rejection.category ? { category: delivery.rejection.category } : {}),
-                  ...(delivery.rejection.notice
-                    ? { reservedNotice: delivery.rejection.notice }
-                    : {}),
-                },
-              ]
-            : [],
-        )
-        .toSorted((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0));
+      return pendingReefRejections(deliveriesForCurrentPeers(tx, command.input.prefix, true));
   }
 }

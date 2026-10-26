@@ -2,26 +2,23 @@ import { replaceCompactionReplayOwnerContent } from "@openclaw/ai/transports";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
-import {
-  downgradeOpenAIFunctionCallReasoningPairs,
-  normalizeOpenAIResponsesToolCallIds,
-} from "../../embedded-agent-helpers/openai.js";
+import { normalizeOpenAIResponsesToolCallIds } from "../../embedded-agent-helpers/openai.js";
 import {
   mergeConsecutiveUserMessages,
   shouldAllowProviderOwnedThinkingReplay,
-  shouldMergeConsecutiveUserTurns,
+  shouldMergeConsecutiveTurns,
   validateAnthropicTurns,
   validateGeminiTurns,
 } from "../../embedded-agent-helpers/turns.js";
 import type { AgentMessage, StreamFn } from "../../runtime/index.js";
 import {
+  collectFollowingToolResults,
   sanitizeToolUseResultPairing,
   sanitizeToolUseResultPairingForModel,
 } from "../../session-transcript-repair.js";
 import { isThinkingLikeBlock } from "../../thinking-block.js";
 import {
   extractToolCallsFromAssistant,
-  extractToolResultIds,
   hasToolCallInput,
   sanitizeToolCallIdsForCloudCodeAssist,
   type ToolCallIdMode,
@@ -58,35 +55,6 @@ function isReplaySafeThinkingTurn(
     }
   }
   return true;
-}
-
-function collectFollowingToolResults(
-  messages: AgentMessage[],
-  index: number,
-): { ids: Set<string>; displaced: boolean } {
-  const ids = new Set<string>();
-  let sawNonToolResult = false;
-  let displaced = false;
-  for (let nextIndex = index + 1; nextIndex < messages.length; nextIndex += 1) {
-    const message = messages[nextIndex];
-    if (!message || typeof message !== "object") {
-      sawNonToolResult = true;
-      continue;
-    }
-    if (message.role === "assistant" && assistantTurnHasReplayToolCall(message)) {
-      break;
-    }
-    if (message.role === "toolResult") {
-      const resultIds = extractToolResultIds(message);
-      for (const id of resultIds) {
-        ids.add(id);
-      }
-      displaced ||= resultIds.length > 0 && sawNonToolResult;
-      continue;
-    }
-    sawNonToolResult = true;
-  }
-  return { ids, displaced };
 }
 
 function resolveReplayToolCallName(
@@ -135,7 +103,12 @@ function sanitizeReplayToolCallInputs(
     }
     if (allowProviderOwnedThinkingReplay && isSignedThinkingReplayAssistantSpan(message)) {
       const replaySafeToolCalls = extractToolCallsFromAssistant(message);
-      const followingToolResults = collectFollowingToolResults(messages, index);
+      const followingToolResults = collectFollowingToolResults(
+        messages,
+        index,
+        undefined,
+        assistantTurnHasReplayToolCall,
+      );
       if (
         isReplaySafeThinkingTurn(message.content, allowedToolNames, isCompleted) &&
         replaySafeToolCalls.every(
@@ -330,7 +303,7 @@ export function sanitizeReplayToolCallIdsForStream(params: {
 
 export function sanitizeOpenAIResponsesReplayForStream(messages: AgentMessage[]): AgentMessage[] {
   const repaired = sanitizeToolUseResultPairingForModel(messages, true);
-  return downgradeOpenAIFunctionCallReasoningPairs(normalizeOpenAIResponsesToolCallIds(repaired));
+  return normalizeOpenAIResponsesToolCallIds(repaired);
 }
 
 export function wrapStreamFnSanitizeMalformedToolCalls(
@@ -347,10 +320,7 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
   provider?: string | null,
 ): StreamFn {
   return (model, context, options) => {
-    const messages = context?.messages;
-    if (!Array.isArray(messages)) {
-      return baseFn(model, context, options);
-    }
+    const messages = context.messages;
     const modelApi = model.api;
     const allowProviderOwnedThinkingReplay = shouldAllowProviderOwnedThinkingReplay({
       modelApi,
@@ -404,7 +374,7 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
       }
       if (transcriptPolicy?.validateAnthropicTurns) {
         nextMessages = validateAnthropicTurns(nextMessages, {
-          mergeConsecutiveUserTurns: shouldMergeConsecutiveUserTurns(transcriptPolicy, modelApi),
+          mergeConsecutiveTurns: shouldMergeConsecutiveTurns(transcriptPolicy, modelApi),
         });
       }
     }

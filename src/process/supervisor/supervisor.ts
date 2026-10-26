@@ -12,6 +12,7 @@ import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatChildRuntimeSpawnWarning } from "../../infra/child-runtime-viability.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
+import { watchChildMemory } from "../child-memory.js";
 import { setProcessTimeout } from "../process-deadline.js";
 import { createChildAdapter } from "./adapters/child.js";
 import { createPtyAdapter } from "./adapters/pty.js";
@@ -254,6 +255,12 @@ export function createProcessSupervisor(): ProcessSupervisor & {
     if (owner.terminationReason) {
       return settleConstructionResult(owner.terminationReason);
     }
+    if (input.prepareSpawn) {
+      await input.prepareSpawn();
+      if (owner.terminationReason) {
+        return settleConstructionResult(owner.terminationReason);
+      }
+    }
     input.assertCurrent?.();
     input.beforeSpawn?.();
 
@@ -279,6 +286,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
       outputDetached = true;
     };
     let forceKillTimer: NodeJS.Timeout | null = null;
+    let stopMemoryWatch: (() => void) | undefined;
     let cancelRequested = false;
     const captureOutput = input.captureOutput !== false;
     const maxCapturedOutputChars = resolveIntegerOption(
@@ -402,12 +410,15 @@ export function createProcessSupervisor(): ProcessSupervisor & {
               })
             : createChildAdapter({
                 ...construction,
-                ...(requireProcessTree && !external ? { ownProcessTree: true as const } : {}),
+                ...((requireProcessTree || input.memoryLimitBytes !== undefined) && !external
+                  ? { ownProcessTree: true as const }
+                  : {}),
                 argv,
                 argv0: input.argv0,
                 exactEnv: input.exactEnv,
                 windowsVerbatimArguments: input.windowsVerbatimArguments,
                 input: input.input,
+                prepareInput: input.prepareInput,
                 stdinMode: input.stdinMode,
                 secretInput: input.secretInput,
               });
@@ -443,6 +454,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
         )
         .finally(() => {
           cleanupSettled = true;
+          stopMemoryWatch?.();
           if (forceKillTimer) {
             clearTimeout(forceKillTimer);
             forceKillTimer = null;
@@ -552,7 +564,9 @@ export function createProcessSupervisor(): ProcessSupervisor & {
       cancelAdapter = (reason: TerminationReason) => {
         if (
           cleanupSettled ||
-          (cancelRequested && (requireProcessTree || !(resultSettled && forceKillTimer)))
+          (cancelRequested &&
+            reason !== "memory-limit" &&
+            (requireProcessTree || !(resultSettled && forceKillTimer)))
         ) {
           return;
         }
@@ -570,7 +584,10 @@ export function createProcessSupervisor(): ProcessSupervisor & {
         // Windows has no catchable SIGTERM equivalent: the adapter implements it
         // with asynchronous taskkill, so waiting the cleanup grace only delays an
         // already-expired deadline before the same forced tree termination.
-        if (process.platform === "win32" && isTimeoutReason(reason)) {
+        if (
+          reason === "memory-limit" ||
+          (process.platform === "win32" && isTimeoutReason(reason))
+        ) {
           adapter.kill("SIGKILL");
           return;
         }
@@ -582,6 +599,25 @@ export function createProcessSupervisor(): ProcessSupervisor & {
         }, GRACEFUL_CANCEL_TIMEOUT_MS);
         forceKillTimer.unref?.();
       };
+
+      if (!external && !cleanupSettled) {
+        stopMemoryWatch = watchChildMemory({
+          pid: adapter.memoryRootPid ?? adapter.pid,
+          limitBytes: input.memoryLimitBytes,
+          onLimit: () => requestCancel("memory-limit"),
+          onDiagnostic: withOutputFence((chunk: string) => {
+            if (captureOutput) {
+              captured.stderr = appendCapturedOutput(
+                captured.stderr,
+                chunk,
+                "stderr",
+                maxCapturedOutputChars,
+              );
+            }
+            input.onStderr?.(chunk);
+          }, false),
+        });
+      }
 
       const waitPromise = (async (): Promise<RunExit> => {
         const result = await adapter.wait();
@@ -626,7 +662,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
         startedAtMs,
         stdin: adapter.stdin,
         wait: () => waitPromise,
-        ...(adapter.waitForExtinction && { waitForExtinction: () => cleanup.promise }),
+        waitForExtinction: () => cleanup.promise,
         cancel: (reason = "manual-cancel") => {
           requestCancel(reason);
         },

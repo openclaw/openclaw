@@ -10,12 +10,18 @@ import {
 import { listAgentIds, tryResolveAgentOperationAgentId } from "../agents/agent-scope-config.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import {
+  getAuthoredConfigSecretRef,
+  getResolvedConfigEnvSecretRef,
+  hasUnresolvedConfigPath,
+} from "../config/resolution-facts.js";
+import {
   type PersistedSessionStoreOwner,
   resolvePersistedSessionStoreOwnerForKey,
 } from "../config/sessions/session-store-owner.js";
 import type { HookSessionMode } from "../config/types.hooks.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readJsonBodyWithLimit, requestBodyErrorToText } from "../infra/http-body.js";
+import { setGatewayCredentialEnvKeys } from "../infra/host-env-security.js";
+import { readJsonBodyWithLimit } from "../infra/http-body.js";
 import {
   normalizeAgentId,
   normalizeAgentIdStrict,
@@ -39,6 +45,8 @@ const MAX_HOOK_IDEMPOTENCY_KEY_LENGTH = 256;
 export type HooksConfigResolved = {
   basePath: string;
   token: string;
+  /** Env name `hooks.token` was substituted from; host exec children must not inherit it. */
+  tokenEnvKey?: string;
   maxBodyBytes: number;
   /** Producer-derived per-path body bounds (mapping-owned), keyed by normalized match path. */
   maxBodyBytesByPath: ReadonlyMap<string, number>;
@@ -62,6 +70,23 @@ type HookSessionPolicyResolved = {
 
 export type HookSessionKeySource = "request" | "mapping-static" | "mapping-templated";
 
+export class UnresolvedHooksTokenError extends Error {
+  constructor() {
+    super(
+      "hooks.token has an unresolved environment reference; supply the configured secret or disable hooks",
+    );
+    this.name = "UnresolvedHooksTokenError";
+  }
+}
+
+/** Keep the active hook token's env source out of host exec children. */
+export function publishHooksTokenEnvKey(hooksConfig: HooksConfigResolved | null): void {
+  setGatewayCredentialEnvKeys(
+    "hooks.token",
+    hooksConfig?.tokenEnvKey ? [hooksConfig.tokenEnvKey] : [],
+  );
+}
+
 export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | null {
   if (cfg.hooks?.enabled !== true) {
     return null;
@@ -69,6 +94,13 @@ export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | n
   const token = normalizeOptionalString(cfg.hooks?.token);
   if (!token) {
     throw new Error("hooks.enabled requires hooks.token");
+  }
+  // Loaded literals may resemble references; only authored resolution facts can reject them.
+  if (
+    hasUnresolvedConfigPath(cfg, "hooks.token") ||
+    getAuthoredConfigSecretRef(cfg, "hooks.token")
+  ) {
+    throw new UnresolvedHooksTokenError();
   }
   const rawPath = normalizeOptionalString(cfg.hooks?.path) || DEFAULT_HOOKS_PATH;
   const withSlash = rawPath.startsWith("/") ? rawPath : `/${rawPath}`;
@@ -114,9 +146,11 @@ export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | n
       "hooks.allowedSessionKeyPrefixes is required when a hook mapping sessionKey uses templates, even if hooks.allowRequestSessionKey=true",
     );
   }
+  const tokenEnvKey = getResolvedConfigEnvSecretRef(cfg, "hooks.token")?.id;
   return {
     basePath: trimmed,
     token,
+    ...(tokenEnvKey ? { tokenEnvKey } : {}),
     maxBodyBytes: DEFAULT_HOOKS_MAX_BODY_BYTES,
     maxBodyBytesByPath: resolveHookBodyLimitsByPath(mappings),
     mappings,
@@ -191,9 +225,11 @@ export function extractHookToken(req: IncomingMessage): string | undefined {
 export async function readJsonBody(
   req: IncomingMessage,
   maxBytes: number,
+  timeoutMs?: number,
 ): Promise<Result<unknown, string>> {
   const result = await readJsonBodyWithLimit(req, {
     maxBytes,
+    timeoutMs,
     emptyObjectOnEmpty: true,
     destroyOnLimit: false,
   });
@@ -205,9 +241,6 @@ export async function readJsonBody(
   }
   if (result.code === "REQUEST_BODY_TIMEOUT") {
     return { ok: false, error: "request body timeout" };
-  }
-  if (result.code === "CONNECTION_CLOSED") {
-    return { ok: false, error: requestBodyErrorToText("CONNECTION_CLOSED") };
   }
   return { ok: false, error: result.error };
 }

@@ -9,52 +9,27 @@ import {
 } from "../../../test-helpers/application-context.ts";
 import { waitForFast } from "../../../test-helpers/wait-for.ts";
 import type { ModelSetupRouteData } from "../first-run-setup.ts";
-import "../model-setup-page.ts";
 import type { ModelSetupPageState } from "../state.ts";
+import { createPage, mountModelSetupPage } from "./solid-page.test-support.tsx";
+import { detected } from "./view.test-support.tsx";
 
-export type TestModelSetupPage = HTMLElement & {
-  routeData?: ModelSetupRouteData;
-  updateComplete: Promise<boolean>;
-};
+export type TestModelSetupPage = ReturnType<typeof createPage>;
 
-export const recommendedIconUrl = "https://cdn.simpleicons.org/ollama";
 export const customIconUrl = "https://cdn.example.com/acme.png";
+
+const subscribe = () => () => undefined;
+const selection = () => ({ state: { selectedId: "main", scopeId: "main" }, subscribe });
 
 export const detection: SystemAgentSetupDetectResult = {
   candidates: [],
   unavailableCandidates: [],
   manualProviders: [],
   authOptions: [],
-  prepareOptions: [
-    {
-      id: "ollama",
-      brandId: "ollama",
-      label: "Ollama",
-      hint: "Connect to an Ollama server and select a cloud or local model",
-    },
-    {
-      id: "llama-cpp",
-      brandId: "llama-cpp",
-      label: "llama.cpp",
-      hint: "Install a verified llama.cpp server and run a private GGUF model managed by OpenClaw",
-    },
-    {
-      id: "lmstudio",
-      brandId: "lmstudio",
-      label: "LM Studio",
-      hint: "Connect to a running LM Studio server and use an already loaded model",
-    },
-  ],
-  recommendedInstalls: [
-    {
-      id: "ollama",
-      brandId: "ollama",
-      label: "Ollama",
-      hint: "Run open models locally",
-      website: "https://ollama.com/download",
-      icon: recommendedIconUrl,
-    },
-  ],
+  prepareOptions: ["ollama", "llama-cpp", "lmstudio"].map((id) => {
+    const { brandId, label, hint } = detected.prepareOptions!.find((entry) => entry.id === id)!;
+    return { id, brandId, label, hint };
+  }),
+  recommendedInstalls: detected.recommendedInstalls!.map((install) => Object.assign({}, install)),
   workspace: "/tmp/workspace",
   setupComplete: false,
 };
@@ -94,14 +69,8 @@ export function createContext() {
       password: "",
       bootstrapToken: "",
     },
-    eventLog: [],
-    connect: () => undefined,
-    setSessionKey: () => undefined,
-    start: () => undefined,
-    stop: () => undefined,
-    subscribe: () => () => undefined,
-    subscribeEventLog: () => () => undefined,
-    subscribeEvents: () => () => undefined,
+    subscribe,
+    subscribeEvents: subscribe,
   } as unknown as ApplicationGateway;
   const runtimeConfig = createRuntimeConfigCapability(gateway);
   return {
@@ -111,14 +80,8 @@ export function createContext() {
     snapshot,
     context: {
       gateway,
-      agentSelection: {
-        state: { selectedId: "main", scopeId: "main" },
-        subscribe: () => () => undefined,
-      },
-      settingsAgentSelection: {
-        state: { selectedId: "main", scopeId: "main" },
-        subscribe: () => () => undefined,
-      },
+      agentSelection: selection(),
+      settingsAgentSelection: selection(),
       basePath: "/openclaw",
       resourceBasePath: "/openclaw",
       navigate: vi.fn(),
@@ -135,11 +98,12 @@ export async function mountPage(
   },
 ): Promise<{ page: TestModelSetupPage; provider: ApplicationContextProvider }> {
   const provider = createApplicationContextProvider(context);
-  const page = document.createElement("openclaw-model-setup-page") as TestModelSetupPage;
+  const page = createPage(context);
   vi.spyOn(fixture.client, "request").mockResolvedValueOnce(fixture.state.result);
   page.routeData = { firstRun: fixture.firstRun };
   provider.append(page);
   document.body.append(provider);
+  mountModelSetupPage(page);
   await page.updateComplete;
   await waitForFast(() => expect(page.querySelector(".model-setup__loading")).toBeNull());
   return { page, provider };

@@ -4,8 +4,8 @@ import type {
   WorkboardSessionsBoard,
   WorkboardSessionsBoardRead,
 } from "@openclaw/workboard-contract";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import type { ControlUiAgentPickerProps, ControlUiHost } from "openclaw/plugin-sdk/control-ui";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { mountPage } from "./workboard-page.test-support.ts";
 
@@ -214,10 +214,7 @@ it("restores the destination board's saved people filter when boards change whil
   const page = sessionsPage();
   const boardB = { ...page.board, id: "sessions-b", name: "Sessions B" };
   const previous = expectDefined(page.request.getMockImplementation(), "request");
-  let releaseIdentity = () => {};
-  const identityGate = new Promise<void>((resolve) => {
-    releaseIdentity = resolve;
-  });
+  const { promise: identityGate, resolve: releaseIdentity } = createDeferred();
   page.request.mockImplementation(async (method, params) => {
     if (method === "gateway.identity.get" || method === "users.self") {
       await identityGate;
@@ -311,6 +308,44 @@ function button(page: ReturnType<typeof mountPage>, label: string) {
   );
 }
 
+it("loads the next Sessions board page and refreshes the loaded window after a write receipt", async () => {
+  const page = sessionsPage();
+  const all = [...page.result.sessions];
+  const first = expectDefined(all[0], "first session");
+  const request = expectDefined(page.request.getMockImplementation(), "request");
+  page.request.mockImplementation(async (method, params) => {
+    if (method === "workboard.sessionsBoard.read") {
+      // SAFETY: this fixture handles the documented Sessions board request contract.
+      const input = params as { after?: string };
+      return {
+        ...page.result,
+        sessions: input.after ? all.slice(1) : all.slice(0, 1),
+        total: 2,
+        nextCursor: input.after ? undefined : first.key,
+      };
+    }
+    return request(method, params);
+  });
+  await page.connect();
+  expect(page.container.querySelectorAll(".workboard-session-tile")).toHaveLength(1);
+  expect(page.container.textContent).toContain("1 of 2 sessions loaded");
+  button(page, "Load more sessions").click();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(page.request).toHaveBeenCalledWith("workboard.sessionsBoard.read", {
+    boardId: "sessions",
+    view: { includePeople: true },
+    after: first.key,
+  });
+  expect(page.container.querySelectorAll(".workboard-session-tile")).toHaveLength(2);
+  expect(page.container.textContent).not.toContain("Load more sessions");
+  first.label = "Updated retries";
+  page.fixture.emit("plugin.workboard.changed", { epoch: "facts", revision: 2 });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(page.container.querySelectorAll(".workboard-session-tile")).toHaveLength(2);
+  expect(page.container.textContent).toContain("Updated retries");
+  page.dispose();
+});
+
 it("recovers empty-board facts through one plugin refresh of the selected people view", async () => {
   const page = sessionsPage();
   const sessions = page.result.sessions.splice(0);
@@ -348,6 +383,12 @@ it("skips unchanged board events, preserves tiles on conditional reads and rerea
   const revision = { epoch: "sessions", revision: 1, boardId: "sessions", scope: "everyone" };
   Object.assign(page.result, { revision });
   await page.connect();
+  const tile = expectDefined(
+    page.container.querySelector('[data-session-key="agent:main:working"]'),
+    "session tile",
+  );
+  const title = expectDefined(tile.querySelector<HTMLButtonElement>("button"), "session title");
+  title.focus();
   const request = expectDefined(page.request.getMockImplementation(), "request");
   page.request.mockImplementation(async (method, params) =>
     method === "workboard.sessionsBoard.read" &&
@@ -373,6 +414,8 @@ it("skips unchanged board events, preserves tiles on conditional reads and rerea
     sinceRevision: revision,
   });
   expect(page.container.querySelectorAll(".workboard-session-tile")).toHaveLength(2);
+  expect(page.container.querySelector('[data-session-key="agent:main:working"]')).toBe(tile);
+  expect(document.activeElement).toBe(title);
   expect(page.container.textContent).toContain("Checking reconnects");
 
   page.fixture.connection.connected = false;
@@ -567,9 +610,13 @@ it("links up to four pull requests by state without opening or dragging the sess
   });
 });
 
-it.each(["cards", "sessions"] as const)(
-  "registers and pins a created %s board before its catalog refresh completes",
-  async (kind) => {
+it.each(
+  (["cards", "sessions"] as const).flatMap((kind) =>
+    (["current", "another board", "hidden"] as const).map((destination) => ({ kind, destination })),
+  ),
+)(
+  "registers and pins a created $kind board while preserving $destination navigation",
+  async ({ kind, destination }) => {
     const page = sessionsPage();
     await page.connect();
     const savedBoard = {
@@ -627,12 +674,23 @@ it.each(["cards", "sessions"] as const)(
       vi.mocked(page.fixture.host.ui.pinNavigation).mock.invocationCallOrder[0]!,
     );
     expect(page.fixture.host.navigation.openPage).not.toHaveBeenCalled();
+    if (destination === "another board") {
+      page.navigate("another-board");
+    }
+    if (destination === "hidden") {
+      page.present(false);
+    }
+    await vi.advanceTimersByTimeAsync(0);
     refreshed.resolve({ cards: [], boards: [page.board] });
     await vi.advanceTimersByTimeAsync(0);
-    expect(page.fixture.host.navigation.openPage).toHaveBeenCalledWith(
-      { id: "workboard", path: [savedBoard.id] },
-      { replace: true, preserveSearch: true },
-    );
+    if (destination === "current") {
+      expect(page.fixture.host.navigation.openPage).toHaveBeenCalledWith(
+        { id: "workboard", path: [savedBoard.id] },
+        { replace: true, preserveSearch: true },
+      );
+    } else {
+      expect(page.fixture.host.navigation.openPage).not.toHaveBeenCalled();
+    }
   },
 );
 
@@ -818,3 +876,65 @@ it("reopens the saved dock conversation by exact read when it is absent from the
     context: { page: "workboard", detail: { boardId: "sessions" } },
   });
 });
+
+it.each(["resolved", "rejected"] as const)(
+  "allows dismissing the board editor after a disconnected save is %s",
+  async (outcome) => {
+    const page = sessionsPage();
+    await page.connect();
+    button(page, "Edit board").click();
+    await vi.advanceTimersByTimeAsync(0);
+    const form = expectDefined(
+      page.container.querySelector<HTMLFormElement>(".workboard-board-draft"),
+      "board editor",
+    );
+    const name = expectDefined(
+      form.querySelector<HTMLInputElement>(".workboard-board-draft__name input"),
+      "board name",
+    );
+    name.value = "Pending rename";
+    name.dispatchEvent(new Event("input", { bubbles: true }));
+    expectDefined(
+      form.querySelector<HTMLInputElement>('[data-column-id="working"] input[type="radio"]'),
+      "changed fallback",
+    ).click();
+    const pending = createDeferred<unknown>();
+    const request = expectDefined(page.request.getMockImplementation(), "request");
+    page.request.mockImplementation((method, params) =>
+      method === "workboard.boards.upsert" ? pending.promise : request(method, params),
+    );
+    const listsBeforeSave = page.request.mock.calls.filter(
+      ([method]) => method === "workboard.cards.list",
+    ).length;
+    form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(page.request).toHaveBeenCalledWith("workboard.boards.upsert", {
+      id: "sessions",
+      name: "Pending rename",
+    });
+    expect(button(page, "Close").disabled).toBe(true);
+    expect(button(page, "Cancel").disabled).toBe(true);
+    page.fixture.connection.connected = false;
+    page.fixture.notify();
+    await vi.advanceTimersByTimeAsync(0);
+    if (outcome === "resolved") {
+      pending.resolve({ board: { ...page.board, name: "Pending rename" } });
+    } else {
+      pending.reject(new Error("Save unavailable"));
+    }
+    await vi.advanceTimersByTimeAsync(0);
+    expect(page.container.querySelector(".workboard-board-draft")).toBe(form);
+    expect(button(page, "Close").disabled).toBe(false);
+    expect(button(page, "Cancel").disabled).toBe(false);
+    expect(
+      page.request.mock.calls.filter(([method]) => method === "workboard.cards.list"),
+    ).toHaveLength(listsBeforeSave);
+    expect(
+      page.request.mock.calls.some(([method]) => method === "workboard.sessionsBoard.update"),
+    ).toBe(false);
+    expect(page.fixture.host.navigation.openPage).not.toHaveBeenCalled();
+    button(page, outcome === "resolved" ? "Close" : "Cancel").click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(page.container.querySelector(".workboard-board-draft")).toBeNull();
+  },
+);

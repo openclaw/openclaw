@@ -10,6 +10,7 @@ import {
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   type CodexAppServerRuntimeOptions,
+  readCodexPluginConfig,
   resolveCodexAppServerRuntimeOptions,
   type CodexPluginConfig,
 } from "./src/app-server/config.js";
@@ -49,18 +50,15 @@ export async function createCodexSessionInitializationFixtureForTest(params: {
 export const loadCodexSettledFinalizerTestFixture = () =>
   import("./src/app-server/settled-turn-finalizer.test-support.js");
 
-export const loadCodexNativeSubagentMonitorTestFixture = () =>
-  import("./src/app-server/native-subagent-monitor.test-support.js");
-
 export const loadCodexAbortTranscriptTestFixture = () =>
   import("./src/app-server/transcript-abort.test-support.js");
 
 type CodexHarnessPromptSnapshot = {
   developerInstructions: string;
   parentLocalInstructions: string | null;
-  threadStartParams: ReturnType<typeof buildThreadStartParams>;
-  threadResumeParams: ReturnType<typeof buildThreadResumeParams>;
-  turnStartParams: ReturnType<typeof buildTurnStartParams>;
+  threadStartParams: Awaited<ReturnType<typeof buildThreadStartParams>>;
+  threadResumeParams: Awaited<ReturnType<typeof buildThreadResumeParams>>;
+  turnStartParams: Awaited<ReturnType<typeof buildTurnStartParams>>;
 };
 
 /** Resolves deterministic app-server options for prompt snapshot tests. */
@@ -68,14 +66,14 @@ export function resolveCodexPromptSnapshotAppServerOptions(
   pluginConfig?: unknown,
 ): CodexAppServerRuntimeOptions {
   return resolveCodexAppServerRuntimeOptions({
-    pluginConfig,
+    pluginConfig: readCodexPluginConfig(pluginConfig),
     env: {},
     requirementsToml: null,
   });
 }
 
 /** Builds thread/resume/turn prompt payload snapshots for a Codex harness attempt. */
-export function buildCodexHarnessPromptSnapshot(params: {
+export async function buildCodexHarnessPromptSnapshot(params: {
   attempt: EmbeddedRunAttemptParams;
   cwd: string;
   threadId: string;
@@ -83,12 +81,15 @@ export function buildCodexHarnessPromptSnapshot(params: {
   appServer: CodexAppServerRuntimeOptions;
   config?: JsonObject;
   promptText?: string;
+  nativeCodeModeEnabled?: boolean;
   developerInstructionAdditions?: string;
   personaInstructions?: string;
-}): CodexHarnessPromptSnapshot {
+}): Promise<CodexHarnessPromptSnapshot> {
   const developerInstructions = joinPresentSections(
     buildDeveloperInstructions(params.attempt, {
       dynamicTools: params.dynamicTools,
+      nativeCodeModeEnabled: params.nativeCodeModeEnabled !== false,
+      nativeCodeModeOnlyEnabled: params.appServer.codeModeOnly,
     }),
     params.developerInstructionAdditions,
   );
@@ -97,20 +98,24 @@ export function buildCodexHarnessPromptSnapshot(params: {
     parentLocalInstructions: buildCodexParentLocalInstructions(params.attempt, {
       personaInstructions: params.personaInstructions,
     }),
-    threadStartParams: buildThreadStartParams(params.attempt, {
+    threadStartParams: await buildThreadStartParams(params.attempt, {
       cwd: params.cwd,
       dynamicTools: params.dynamicTools,
       appServer: params.appServer,
+      nativeCodeModeEnabled: params.nativeCodeModeEnabled,
+      nativeCodeModeOnlyEnabled: params.appServer.codeModeOnly,
       developerInstructions,
       config: params.config,
     }),
-    threadResumeParams: buildThreadResumeParams(params.attempt, {
+    threadResumeParams: await buildThreadResumeParams(params.attempt, {
       threadId: params.threadId,
       appServer: params.appServer,
+      nativeCodeModeEnabled: params.nativeCodeModeEnabled,
+      nativeCodeModeOnlyEnabled: params.appServer.codeModeOnly,
       developerInstructions,
       config: params.config,
     }),
-    turnStartParams: buildTurnStartParams(params.attempt, {
+    turnStartParams: await buildTurnStartParams(params.attempt, {
       threadId: params.threadId,
       cwd: params.cwd,
       appServer: params.appServer,
@@ -150,3 +155,13 @@ export {
   CODEX_TOOL_POLICY_SAFE_DENY_NAMES,
 } from "./native-tool-policy.js";
 export { buildCodexRuntimeThreadConfigForRun } from "./src/app-server/thread-requests.js";
+
+export const loadCodexDynamicToolBuildTestFixture = () =>
+  import("./src/app-server/dynamic-tool-build.test-support.js");
+
+export const loadCodexNativeWebSearchTestFixture = () => import("./native-web-search.test-api.js");
+
+export const loadCodexAccountUsageTestFixture = () => import("./src/account-usage.test-support.js");
+
+export const loadCodexSubscriptionRoutingTestFixture = () =>
+  import("./src/app-server/subscription-routing.test-support.js");

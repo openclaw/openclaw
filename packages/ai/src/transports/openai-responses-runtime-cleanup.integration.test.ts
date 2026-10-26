@@ -21,20 +21,20 @@ vi.mock("openai/resources/responses/ws.js", async (importOriginal) => {
 
 import { WebSocketServer } from "ws";
 import { createApiRegistry, type ApiStreamFunction } from "../api-registry.js";
+import { makeProviderModel } from "../providers/provider-model.test-support.js";
 import { cleanupSessionResources } from "../session-resources.js";
 import { createNodeLlmRuntime } from "../stream.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
 import type { OpenAIResponsesOptions } from "./openai-responses-contracts.js";
+import { completedResponse } from "./openai-stream-cases.test-support.js";
 
 type Runtime = ReturnType<typeof createNodeLlmRuntime>;
 
 function completedFrame(responseId: string): string {
-  return JSON.stringify({
-    type: "response.completed",
-    response: {
-      id: responseId,
-      status: "completed",
-      output: [
+  return JSON.stringify(
+    completedResponse(
+      responseId,
+      [
         {
           id: `msg_${responseId}`,
           type: "message",
@@ -43,9 +43,9 @@ function completedFrame(responseId: string): string {
           role: "assistant",
         },
       ],
-      usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
-    },
-  });
+      { usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 } },
+    ),
+  );
 }
 
 function createRegistry() {
@@ -75,17 +75,12 @@ function isRuntimeStream(value: unknown): value is AssistantMessageEventStreamCo
 
 function model(params: { provider: string; baseUrl: string }): Model<"openai-responses"> {
   return {
-    id: "scripted-model",
-    name: "Scripted Model",
-    api: "openai-responses",
-    provider: params.provider,
-    baseUrl: params.baseUrl,
-    reasoning: true,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 200_000,
-    maxTokens: 8192,
-    compat: { supportsResponsesContinuation: true },
+    ...makeProviderModel("openai-responses", params.provider, "scripted-model", {
+      name: "Scripted Model",
+      baseUrl: params.baseUrl,
+      contextWindow: 200_000,
+      compat: { supportsResponsesContinuation: true },
+    }),
     [Symbol.for("openclaw.modelProviderRequestTransport")]: { allowPrivateNetwork: true },
   };
 }

@@ -7,13 +7,11 @@ const mocks = vi.hoisted(() => ({
   logDebug: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
-  saveRemoteMedia: mocks.saveRemoteMedia,
-}));
+// mock-isolation: Deferred avatar downloads exclude real network and media-storage effects.
+vi.mock("openclaw/plugin-sdk/media-runtime", () => ({ saveRemoteMedia: mocks.saveRemoteMedia }));
 
-vi.mock("openclaw/plugin-sdk/logging-core", () => ({
-  logDebug: mocks.logDebug,
-}));
+// mock-isolation: Capture resolver diagnostics without writing to runtime log sinks.
+vi.mock("openclaw/plugin-sdk/logging-core", () => ({ logDebug: mocks.logDebug }));
 
 const { createDiscordAvatarResolver } = await import("./message-avatar.js");
 
@@ -23,6 +21,17 @@ function discordUser(id: string, avatar: string | null): User {
 
 const emptyClient = { fetchGuild: vi.fn() } as unknown as Client;
 const DISCORD_API_URL_ENV = "DISCORD_API_URL";
+
+function avatarScenario(client = emptyClient, guildId?: string) {
+  const resolver = createDiscordAvatarResolver();
+  const params = {
+    client,
+    guildId,
+    conversationId: guildId ? "channel-1" : "dm-1",
+    author: discordUser("user-1", guildId ? "sender-hash" : "hash-1"),
+  };
+  return (author = params.author) => resolver.resolve({ ...params, author });
+}
 
 beforeEach(() => {
   mocks.saveRemoteMedia.mockReset();
@@ -37,15 +46,9 @@ describe("createDiscordAvatarResolver", () => {
   it("downloads a DM avatar in the background and reuses it until the hash changes", async () => {
     const firstDownload = createDeferred<{ path: string }>();
     mocks.saveRemoteMedia.mockReturnValueOnce(firstDownload.promise);
-    const resolver = createDiscordAvatarResolver();
-    const firstAuthor = discordUser("user-1", "hash-1");
-
-    expect(
-      resolver.resolve({ client: emptyClient, conversationId: "dm-1", author: firstAuthor }),
-    ).toBeUndefined();
-    expect(
-      resolver.resolve({ client: emptyClient, conversationId: "dm-1", author: firstAuthor }),
-    ).toBeUndefined();
+    const resolve = avatarScenario();
+    expect(resolve()).toBeUndefined();
+    expect(resolve()).toBeUndefined();
     expect(mocks.saveRemoteMedia).toHaveBeenCalledTimes(1);
     expect(mocks.saveRemoteMedia).toHaveBeenCalledWith({
       url: "https://cdn.discordapp.com/avatars/user-1/hash-1.png?size=128",
@@ -57,20 +60,10 @@ describe("createDiscordAvatarResolver", () => {
     });
 
     firstDownload.resolve({ path: "/media/inbound/dm-avatar.png" });
-    await vi.waitFor(() =>
-      expect(
-        resolver.resolve({ client: emptyClient, conversationId: "dm-1", author: firstAuthor }),
-      ).toBe("/media/inbound/dm-avatar.png"),
-    );
+    await vi.waitFor(() => expect(resolve()).toBe("/media/inbound/dm-avatar.png"));
 
     mocks.saveRemoteMedia.mockResolvedValueOnce({ path: "/media/inbound/dm-avatar-new.png" });
-    expect(
-      resolver.resolve({
-        client: emptyClient,
-        conversationId: "dm-1",
-        author: discordUser("user-1", "hash-2"),
-      }),
-    ).toBeUndefined();
+    expect(resolve(discordUser("user-1", "hash-2"))).toBeUndefined();
     expect(mocks.saveRemoteMedia).toHaveBeenCalledTimes(2);
   });
 
@@ -78,21 +71,10 @@ describe("createDiscordAvatarResolver", () => {
     const guildLookup = createDeferred<{ icon: string }>();
     const guildDownload = createDeferred<{ path: string }>();
     const fetchGuild = vi.fn(() => guildLookup.promise);
-    const client = {
-      fetchGuild,
-    } as unknown as Client;
+    const client = { fetchGuild } as unknown as Client;
     mocks.saveRemoteMedia.mockReturnValueOnce(guildDownload.promise);
-    const resolver = createDiscordAvatarResolver();
-    const author = discordUser("user-1", "sender-hash");
-
-    expect(
-      resolver.resolve({
-        client,
-        conversationId: "channel-1",
-        author,
-        guildId: "guild-1",
-      }),
-    ).toBeUndefined();
+    const resolve = avatarScenario(client, "guild-1");
+    expect(resolve()).toBeUndefined();
     expect(fetchGuild).toHaveBeenCalledTimes(1);
     expect(mocks.saveRemoteMedia).not.toHaveBeenCalled();
 
@@ -105,16 +87,7 @@ describe("createDiscordAvatarResolver", () => {
     );
 
     guildDownload.resolve({ path: "/media/inbound/guild-icon.png" });
-    await vi.waitFor(() =>
-      expect(
-        resolver.resolve({
-          client,
-          conversationId: "channel-1",
-          author,
-          guildId: "guild-1",
-        }),
-      ).toBe("/media/inbound/guild-icon.png"),
-    );
+    await vi.waitFor(() => expect(resolve()).toBe("/media/inbound/guild-icon.png"));
     expect(fetchGuild).toHaveBeenCalledTimes(1);
   });
 
@@ -122,14 +95,7 @@ describe("createDiscordAvatarResolver", () => {
     const guildLookup = createDeferred<{ icon: string }>();
     const client = { fetchGuild: vi.fn(() => guildLookup.promise) } as unknown as Client;
     process.env[DISCORD_API_URL_ENV] = "http://127.0.0.1:43210/api/v10";
-    const resolver = createDiscordAvatarResolver();
-
-    resolver.resolve({
-      client,
-      conversationId: "channel-1",
-      author: discordUser("user-1", "sender-hash"),
-      guildId: "guild-1",
-    });
+    avatarScenario(client, "guild-1")();
     guildLookup.resolve({ icon: "guild-hash" });
 
     await vi.waitFor(() =>
@@ -144,18 +110,13 @@ describe("createDiscordAvatarResolver", () => {
     mocks.saveRemoteMedia
       .mockRejectedValueOnce(new Error("download failed"))
       .mockResolvedValueOnce({ path: "/media/inbound/retried.png" });
-    const resolver = createDiscordAvatarResolver();
-    const params = {
-      client: emptyClient,
-      conversationId: "dm-1",
-      author: discordUser("user-1", "hash-1"),
-    };
+    const resolve = avatarScenario();
 
-    expect(resolver.resolve(params)).toBeUndefined();
+    expect(resolve()).toBeUndefined();
     await vi.waitFor(() =>
       expect(mocks.logDebug).toHaveBeenCalledWith(expect.stringContaining("download failed")),
     );
-    expect(resolver.resolve(params)).toBeUndefined();
+    expect(resolve()).toBeUndefined();
     await vi.waitFor(() => expect(mocks.saveRemoteMedia).toHaveBeenCalledTimes(2));
   });
 });

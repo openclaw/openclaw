@@ -1,5 +1,4 @@
-// Openai tests cover openclaw.plugin plugin behavior.
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import {
   OPENAI_GPT_55_MODEL_ID,
   OPENAI_GPT_55_PRO_MODEL_ID,
@@ -22,209 +21,168 @@ const WIZARD_METADATA_KEYS = [
   "groupHint",
 ] as const;
 
-function comparableWizardFields(choice: {
-  choiceId?: string;
-  choiceLabel?: string;
-  choiceHint?: string;
-  assistantPriority?: number;
-  assistantVisibility?: string;
-  onboardingFeatured?: boolean;
-  groupId?: string;
-  groupLabel?: string;
-  groupHint?: string;
-}) {
+type Wizard = NonNullable<ReturnType<typeof createOpenAIProvider>["auth"][number]["wizard"]>;
+function comparableWizardFields(choice: Wizard) {
   return Object.fromEntries(
     WIZARD_METADATA_KEYS.flatMap((key) => (choice[key] === undefined ? [] : [[key, choice[key]]])),
   );
 }
 
+function pick<T, K extends keyof T>(value: T, ...keys: K[]) {
+  return Object.fromEntries(keys.map((key) => [key, value[key]]));
+}
+
 function comparableProviderMetadata(provider: ReturnType<typeof createOpenAIProvider>) {
   return {
-    id: provider.id,
-    label: provider.label,
-    hookAliases: provider.hookAliases,
-    docsPath: provider.docsPath,
-    envVars: provider.envVars,
+    ...pick(provider, "id", "label", "hookAliases", "docsPath", "envVars"),
     auth: provider.auth.map((method) => ({
-      id: method.id,
-      kind: method.kind,
-      label: method.label,
-      hint: method.hint,
+      ...pick(method, "id", "kind", "label", "hint"),
       wizard: comparableWizardFields(method.wizard ?? {}),
     })),
   };
 }
 
-describe("OpenAI plugin manifest", () => {
-  it("owns canonical OpenAI session route state for Doctor cleanup", () => {
-    expect(manifest.sessionRouteStateOwners).toEqual([
-      {
-        id: "openai",
-        label: "OpenAI",
-        providerIds: ["openai"],
-        authProfilePrefixes: ["openai:"],
-      },
-    ]);
-  });
+const choices = manifest.providerAuthChoices ?? [];
+const choice = (id: string) => choices.find((entry) => entry.choiceId === id);
+const catalog = manifest.modelCatalog;
+const models = catalog?.providers?.openai?.models ?? [];
+const model = (id: string) => models.find((entry) => entry.id === id);
+const endpoint = (host: string) =>
+  manifest.providerEndpoints?.find((entry) => entry.hosts?.includes(host));
+const sparkSuppression = (provider: string) =>
+  catalog?.suppressions?.find(
+    (entry) => entry.provider === provider && entry.model === "gpt-5.3-codex-spark",
+  );
 
-  it("exposes only current OpenAI login choices", () => {
-    const openAiLogin = manifest.providerAuthChoices?.find(
-      (choice) => choice.choiceId === "openai",
-    );
+it("owns canonical OpenAI session route state for Doctor cleanup", () => {
+  expect(manifest.sessionRouteStateOwners).toEqual([
+    {
+      id: "openai",
+      label: "OpenAI",
+      providerIds: ["openai"],
+      authProfilePrefixes: ["openai:"],
+    },
+  ]);
+});
 
-    expect(openAiLogin && "deprecatedChoiceIds" in openAiLogin).toBe(false);
-  });
+it("routes setup through the OpenAI setup runtime", () => {
+  expect("legacyPluginIds" in manifest).toBe(false);
+  expect(manifest.setup?.providers?.map((provider) => provider.id)).toEqual(["openai"]);
+  expect("providerAuthAliases" in manifest).toBe(false);
+});
 
-  it("routes setup through the OpenAI setup runtime", () => {
-    expect("legacyPluginIds" in manifest).toBe(false);
-    expect(manifest.setup?.providers?.map((provider) => provider.id)).toEqual(["openai"]);
-    expect("providerAuthAliases" in manifest).toBe(false);
-  });
+it("classifies ChatGPT backend traffic with the supported OpenAI endpoint class", () => {
+  expect(endpoint("chatgpt.com")?.endpointClass).toBe("openai");
+});
 
-  it("classifies ChatGPT backend traffic with the supported OpenAI endpoint class", () => {
-    const chatGptEndpoint = manifest.providerEndpoints?.find((endpoint) =>
-      endpoint.hosts?.includes("chatgpt.com"),
-    );
-    expect(chatGptEndpoint?.endpointClass).toBe("openai");
-  });
-
-  it("classifies regional API hosts as public OpenAI endpoints", () => {
-    const publicEndpoint = manifest.providerEndpoints?.find((endpoint) =>
-      endpoint.hosts?.includes("api.openai.com"),
-    );
-    expect(publicEndpoint?.endpointClass).toBe("openai-public");
-    expect(publicEndpoint?.hostSuffixes).toContain(".api.openai.com");
-  });
-
-  it("keeps OpenAI media-understanding manifest metadata aligned with runtime audio support", () => {
-    const metadata = manifest.mediaUnderstandingProviderMetadata?.openai;
-    expect(metadata?.capabilities).toEqual(["image", "audio"]);
-    expect(metadata?.defaultModels?.image).toBe("gpt-6-astra");
-    expect(metadata?.defaultModels?.audio).toBe("gpt-4o-transcribe");
-    expect(metadata?.autoPriority?.image).toBe(20);
-    expect(metadata?.autoPriority?.audio).toBe(20);
-  });
-
-  it("keeps million-token OpenAI models on the ordinary runtime budget by default", () => {
-    const models = manifest.modelCatalog?.providers?.openai?.models ?? [];
-    for (const id of [
-      ...OPENAI_GPT_56_VARIANT_MODEL_IDS,
-      OPENAI_GPT_55_MODEL_ID,
-      OPENAI_GPT_55_PRO_MODEL_ID,
-    ]) {
-      expect(
-        models.find((model) => model.id === id),
-        id,
-      ).toMatchObject({
-        contextTokens: 272_000,
-        maxTokens: 128_000,
-      });
-    }
-  });
-
-  it("replaces deprecated GPT-5.5 models with canonical GPT-5.6 Sol", () => {
-    const models = manifest.modelCatalog?.providers?.openai?.models ?? [];
-    for (const id of [OPENAI_GPT_55_MODEL_ID, OPENAI_GPT_55_PRO_MODEL_ID]) {
-      expect(models.find((model) => model.id === id)?.replacedBy, id).toBe("gpt-5.6-sol");
-    }
-  });
-
-  it("labels and orders OpenAI authentication choices", () => {
-    const choices = manifest.providerAuthChoices ?? [];
-    const openAiLogin = choices.find((choice) => choice.choiceId === "openai");
-    const openAiDeviceCode = choices.find((choice) => choice.choiceId === "openai-device-code");
-    const signInWithChatGpt = choices.find((choice) => choice.choiceId === "openai-token-sharing");
-    const apiKey = choices.find(
-      (choice) => choice.provider === "openai" && choice.method === "api-key",
-    );
-
-    expect(openAiLogin?.choiceLabel).toBe("Codex login (browser)");
-    expect(openAiLogin?.choiceHint).toBe("Sign in to Codex locally with your ChatGPT account");
-    expect(openAiLogin && "assistantVisibility" in openAiLogin).toBe(false);
-    expect(openAiLogin?.groupId).toBe("openai");
-    expect(openAiLogin?.groupLabel).toBe("OpenAI");
-    expect(openAiLogin?.groupHint).toBe("Codex login, Sign in with ChatGPT (Beta), or API key");
-    expect(openAiDeviceCode?.choiceLabel).toBe("Codex login (device code)");
-    expect(openAiDeviceCode?.choiceHint).toBe(
-      "Use a browser code when OpenClaw runs on a remote VM",
-    );
-    expect(openAiDeviceCode && "assistantVisibility" in openAiDeviceCode).toBe(false);
-    expect(openAiDeviceCode?.onboardingFeatured).toBe(true);
-    expect(openAiLogin?.onboardingFeatured).not.toBe(true);
-    expect(openAiDeviceCode?.groupId).toBe("openai");
-    expect(openAiDeviceCode?.groupLabel).toBe("OpenAI");
-    expect(openAiDeviceCode?.groupHint).toBe(
-      "Codex login, Sign in with ChatGPT (Beta), or API key",
-    );
-    expect(signInWithChatGpt?.choiceLabel).toBe("Sign in with ChatGPT (Beta)");
-    expect(signInWithChatGpt?.choiceHint).toBe(
-      "Authorize OpenClaw for eligible Responses models using your Codex allowance",
-    );
-    expect(
-      choices
-        .toSorted((a, b) => (a.assistantPriority ?? 0) - (b.assistantPriority ?? 0))
-        .map((choice) => choice.choiceId),
-    ).toEqual(["openai-device-code", "openai", "openai-token-sharing", "openai-api-key"]);
-    expect(apiKey?.choiceLabel).toBe("OpenAI API Key");
-    expect(apiKey?.choiceHint).toBe("Use your OpenAI API key directly");
-    expect(apiKey?.groupId).toBe("openai");
-    expect(apiKey?.groupLabel).toBe("OpenAI");
-    expect(apiKey?.groupHint).toBe("Codex login, Sign in with ChatGPT (Beta), or API key");
-    expect(choices.map((choice) => choice.choiceLabel)).not.toContain(
-      "OpenAI Codex (ChatGPT OAuth)",
-    );
-    expect(choices.map((choice) => choice.groupHint)).not.toContain("Codex OAuth + API key");
-    expect(choices.map((choice) => choice.groupHint)).not.toContain("API key or Codex sign-in");
-  });
-
-  it("keeps Spark suppression conditional on direct OpenAI API rows", () => {
-    const sparkSuppression = manifest.modelCatalog?.suppressions?.find(
-      (suppression) =>
-        suppression.provider === "openai" && suppression.model === "gpt-5.3-codex-spark",
-    );
-
-    expect(sparkSuppression?.when).toEqual({
-      baseUrlHosts: ["api.openai.com"],
-    });
-  });
-
-  it("keeps the Azure transport alias and Spark suppression owned by the manifest", () => {
-    expect(manifest.modelCatalog?.aliases?.["azure-openai-responses"]).toEqual({
-      provider: "openai",
-      api: "azure-openai-responses",
-    });
-    const azureSparkSuppression = manifest.modelCatalog?.suppressions?.find(
-      (suppression) =>
-        suppression.provider === "azure-openai-responses" &&
-        suppression.model === "gpt-5.3-codex-spark",
-    );
-
-    expect(azureSparkSuppression).toMatchObject({
-      provider: "azure-openai-responses",
-      model: "gpt-5.3-codex-spark",
-    });
-    expect(azureSparkSuppression).not.toHaveProperty("when");
-  });
-
-  it("keeps manifest auth choices aligned with the lightweight provider descriptor", () => {
-    const provider = createOpenAIProvider();
-    for (const choice of manifest.providerAuthChoices ?? []) {
-      const key = `${choice.provider}:${choice.method}`;
-      const method = provider.auth.find((entry) => entry.id === choice.method);
-
-      expect(method, key).toBeDefined();
-      expect(comparableWizardFields(method?.wizard ?? {}), key).toEqual(
-        comparableWizardFields(choice),
-      );
-    }
-  });
-
-  it.each([
-    ["setup", buildOpenAISetupProvider],
-    ["full runtime", buildOpenAIProvider],
-  ])("keeps %s provider metadata on the lightweight descriptor", (_surface, buildProvider) => {
-    expect(comparableProviderMetadata(buildProvider())).toEqual(
-      comparableProviderMetadata(createOpenAIProvider()),
-    );
+it("classifies regional API hosts as public OpenAI endpoints", () => {
+  expect(endpoint("api.openai.com")).toMatchObject({
+    endpointClass: "openai-public",
+    hostSuffixes: expect.arrayContaining([".api.openai.com"]),
   });
 });
+
+it("keeps OpenAI media-understanding manifest metadata aligned with runtime audio support", () => {
+  expect(manifest.mediaUnderstandingProviderMetadata?.openai).toMatchObject({
+    capabilities: ["image", "audio"],
+    defaultModels: { image: "gpt-6-astra", audio: "gpt-4o-transcribe" },
+    autoPriority: { image: 20, audio: 20 },
+  });
+});
+
+const budget = { contextTokens: 272_000, maxTokens: 128_000 };
+it.each([
+  ...OPENAI_GPT_56_VARIANT_MODEL_IDS.map((id) => ({ id, expected: budget })),
+  ...[OPENAI_GPT_55_MODEL_ID, OPENAI_GPT_55_PRO_MODEL_ID].map((id) => ({
+    id,
+    expected: { ...budget, replacedBy: "gpt-5.6-sol" },
+  })),
+])("keeps runtime budget and replacement metadata for $id", ({ id, expected }) => {
+  expect(model(id), id).toMatchObject(expected);
+});
+
+it("labels and orders OpenAI authentication choices", () => {
+  expect(choice("openai")).not.toHaveProperty("deprecatedChoiceIds");
+  const group = {
+    groupId: "openai",
+    groupLabel: "OpenAI",
+    groupHint: "Codex login, Sign in with ChatGPT (Beta), or API key",
+  };
+  for (const [id, choiceLabel, choiceHint] of [
+    ["openai", "Codex login (browser)", "Sign in to Codex locally with your ChatGPT account"],
+    [
+      "openai-device-code",
+      "Codex login (device code)",
+      "Use a browser code when OpenClaw runs on a remote VM",
+    ],
+    ["openai-api-key", "OpenAI API Key", "Use your OpenAI API key directly"],
+    [
+      "openai-token-sharing",
+      "Sign in with ChatGPT (Beta)",
+      "Authorize OpenClaw for eligible Responses models using your Codex allowance",
+    ],
+  ] as const) {
+    expect(choice(id)).toMatchObject({ choiceLabel, choiceHint, ...group });
+  }
+  for (const id of ["openai", "openai-device-code"]) {
+    expect(choice(id)).not.toHaveProperty("assistantVisibility");
+  }
+  expect(choice("openai-device-code")?.onboardingFeatured).toBe(true);
+  expect(choice("openai")?.onboardingFeatured).not.toBe(true);
+  expect(choices.find((entry) => entry.provider === "openai" && entry.method === "api-key")).toBe(
+    choice("openai-api-key"),
+  );
+  expect(
+    choices
+      .toSorted((a, b) => (a.assistantPriority ?? 0) - (b.assistantPriority ?? 0))
+      .map((entry) => entry.choiceId),
+  ).toEqual(["openai-device-code", "openai", "openai-token-sharing", "openai-api-key"]);
+});
+
+it("keeps Spark suppression conditional on direct OpenAI API rows", () => {
+  expect(sparkSuppression("openai")?.when).toEqual({
+    baseUrlHosts: ["api.openai.com"],
+  });
+});
+
+it("keeps the Azure transport alias and Spark suppression owned by the manifest", () => {
+  expect(catalog?.aliases?.["azure-openai-responses"]).toEqual({
+    provider: "openai",
+    api: "azure-openai-responses",
+  });
+  const azureSparkSuppression = sparkSuppression("azure-openai-responses");
+  expect(azureSparkSuppression).toMatchObject({
+    provider: "azure-openai-responses",
+    model: "gpt-5.3-codex-spark",
+  });
+  expect(azureSparkSuppression).not.toHaveProperty("when");
+});
+
+it("keeps manifest auth choices aligned with the lightweight provider descriptor", () => {
+  const provider = createOpenAIProvider();
+  for (const entry of choices) {
+    const key = `${entry.provider}:${entry.method}`;
+    const method = provider.auth.find((candidate) => candidate.id === entry.method);
+
+    expect(comparableWizardFields(method?.wizard ?? {}), key).toEqual(
+      comparableWizardFields(entry),
+    );
+  }
+});
+
+it.each([
+  ["setup", buildOpenAISetupProvider],
+  ["full runtime", buildOpenAIProvider],
+])("keeps %s provider metadata on the lightweight descriptor", (_surface, buildProvider) => {
+  expect(comparableProviderMetadata(buildProvider())).toEqual(
+    comparableProviderMetadata(createOpenAIProvider()),
+  );
+});
+
+it.each(["gpt-daybreak-blue-latest", "gpt-daybreak-red-latest"])(
+  "deprecates %s without inventing an account-specific replacement",
+  (id) => {
+    expect(model(id)).toMatchObject({ status: "deprecated" });
+    expect(model(id)).not.toHaveProperty("replacedBy");
+  },
+);

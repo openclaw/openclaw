@@ -96,13 +96,6 @@ export type VideoGenerationResult = {
 /** Supported high-level video generation operation modes. */
 export type VideoGenerationMode = "generate" | "imageToVideo" | "videoToVideo";
 
-/**
- * Primitive type tag for a declared `providerOptions` key. Keep narrow —
- * plugins that need richer shapes should leave them out of the typed contract
- * and interpret the forwarded opaque value inside their own provider code.
- */
-export type VideoGenerationProviderOptionType = "number" | "boolean" | "string";
-
 /** Capability limits and supported options for one video generation mode. */
 export type VideoGenerationModeCapabilities = {
   maxVideos?: number;
@@ -131,7 +124,12 @@ export type VideoGenerationModeCapabilities = {
    * candidate provider at runtime so mis-typed or provider-specific options
    * never silently reach the wrong provider.
    */
-  providerOptions?: Readonly<Record<string, VideoGenerationProviderOptionType>>;
+  /**
+   * Primitive type tag for a declared `providerOptions` key. Keep narrow —
+   * plugins that need richer shapes should leave them out of the typed contract
+   * and interpret the forwarded opaque value inside their own provider code.
+   */
+  providerOptions?: Readonly<Record<string, "number" | "boolean" | "string">>;
 };
 
 /** Capability block for transform modes that may be independently enabled. */
@@ -163,7 +161,9 @@ export type VideoGenerationProvider = {
   models?: string[];
   capabilities: VideoGenerationProviderCapabilities;
   catalogByModel?: Readonly<Record<string, VideoGenerationCatalogModelEntry>>;
+  /** @deprecated Use isConfiguredAsync so credential reads run in the database worker. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   isConfigured?: (ctx: VideoGenerationProviderConfiguredContext) => boolean;
+  isConfiguredAsync?: (ctx: VideoGenerationProviderConfiguredContext) => Promise<boolean>;
   resolveModelCapabilities?: (
     ctx: VideoGenerationModelCapabilitiesContext,
   ) =>

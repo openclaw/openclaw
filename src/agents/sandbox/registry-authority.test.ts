@@ -1,36 +1,24 @@
 import "../../test-utils/prepare-compiled-subprocesses.js";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { resolveLocalWorkspaceOwner } from "../../gateway/worker-environments/local-workspace-projection.js";
 import * as nativeSqlite from "../../infra/node-sqlite.js";
 import type { SqliteWorkerAdmissionRequest } from "../../infra/sqlite-worker-operation-admission.js";
 import * as workerStore from "../../infra/sqlite-worker-store.js";
-import {
-  closeOpenClawAgentDatabasesAsync,
-  closeOpenClawAgentDatabasesForTest,
-} from "../../state/openclaw-agent-db.js";
-import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { insertRegistryWorktree } from "../worktrees/registry.js";
 import type { ManagedWorktreeRecord } from "../worktrees/types.js";
 import { readBrowserRegistry, updateBrowserRegistry } from "./registry.js";
+import { useSandboxRegistryState } from "./registry.test-support.js";
 
-const dirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    vi.restoreAllMocks();
-    await closeOpenClawAgentDatabasesAsync();
-    closeOpenClawAgentDatabasesForTest();
-    await closeStateDatabaseForTest();
-    vi.unstubAllEnvs();
-    cleanup();
-  }),
-);
+const state = useSandboxRegistryState("openclaw-browser-registry-authority-");
 
 it("retains local-workspace authority through browser transaction and commit grants", async () => {
-  const root = dirs.make("openclaw-browser-registry-authority-");
-  vi.stubEnv("OPENCLAW_STATE_DIR", root);
+  const { root } = state;
   const sessionKey = "agent:main:browser-authority";
   const worktree: ManagedWorktreeRecord = {
     id: "browser-worktree",
@@ -47,20 +35,19 @@ it("retains local-workspace authority through browser transaction and commit gra
   };
   await insertRegistryWorktree(process.env, worktree);
   const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
-  replaceSessionEntrySync(
-    { agentId: "main", sessionKey, storePath },
-    {
-      sessionId: "browser-session",
-      updatedAt: 1,
-      worktree: { id: worktree.id, branch: worktree.branch, repoRoot: worktree.repoRoot },
-    },
-  );
+  const sessionTarget = { agentId: "main", sessionKey, storePath };
+  const session = {
+    sessionId: "browser-session",
+    updatedAt: 1,
+    worktree: { id: worktree.id, branch: worktree.branch, repoRoot: worktree.repoRoot },
+  };
+  replaceSessionEntrySync(sessionTarget, session);
 
   class WorkspaceRevokedError extends Error {}
   const refusal = new WorkspaceRevokedError("Browser workspace authority revoked");
   let stage: SqliteWorkerAdmissionRequest["stage"] | undefined;
   let revokeAt: SqliteWorkerAdmissionRequest["stage"] | undefined;
-  const owner = await resolveLocalWorkspaceOwner({
+  const ownerParams = {
     cfg: { session: { store: storePath } },
     agentId: "main",
     sessionKey,
@@ -70,27 +57,26 @@ it("retains local-workspace authority through browser transaction and commit gra
         throw refusal;
       }
     },
-  });
+  };
+  const sql = observeHostDataSql();
+  using sqlObserver = { [Symbol.dispose]: () => sql.restore() };
+  void sqlObserver;
+  using owner = await resolveLocalWorkspaceOwner(ownerParams);
   expect(owner).toBeDefined();
   const grants: SqliteWorkerAdmissionRequest["stage"][] = [];
-  const coldOpens: SqliteWorkerAdmissionRequest["stage"][] = [];
-  const openNative = nativeSqlite.openNodeSqliteDatabase;
-  vi.spyOn(nativeSqlite, "openNodeSqliteDatabase").mockImplementation((...args) => {
-    if (stage !== undefined) {
-      coldOpens.push(stage);
-    }
-    return openNative(...args);
-  });
+  const openNative = vi.spyOn(nativeSqlite, "openNodeSqliteDatabase");
   const createAdmission = workerStore.createSqliteWorkerWriteAdmission;
   vi.spyOn(workerStore, "createSqliteWorkerWriteAdmission").mockImplementation(
     (assertCurrent, nativeLocations) =>
       createAdmission((request) => {
         stage = request.stage;
+        const opens = openNative.mock.calls.length;
         try {
           assertCurrent(request);
           grants.push(stage);
         } finally {
           stage = undefined;
+          expect(openNative.mock.calls).toHaveLength(opens);
         }
       }, nativeLocations),
   );
@@ -104,10 +90,9 @@ it("retains local-workspace authority through browser transaction and commit gra
     cdpPort: 9222,
   };
 
-  // Native owner reads are warm; this first upsert must open the worker independently.
+  // Session authority is worker-prepared; this upsert uses the registry's worker owner.
   await updateBrowserRegistry(entry, owner!.assertCurrent);
   expect(grants).toEqual(["transaction", "commit"]);
-  expect(coldOpens).toEqual([]);
   expect((await readBrowserRegistry()).entries).toEqual([entry]);
 
   for (const revokedStage of ["transaction", "commit"] as const) {
@@ -117,5 +102,19 @@ it("retains local-workspace authority through browser transaction and commit gra
     ).rejects.toBe(refusal);
     expect((await readBrowserRegistry()).entries).toEqual([entry]);
   }
-  expect(coldOpens).toEqual([]);
+  revokeAt = undefined;
+  await replaceSessionEntry(sessionTarget, {
+    ...session,
+    lifecycleRevision: "replacement",
+    updatedAt: 2,
+  });
+  expect(() => owner!.assertCurrent()).toThrow("Local sandbox workspace authority changed");
+  using released = await resolveLocalWorkspaceOwner(ownerParams);
+  released![Symbol.dispose]();
+  expect(() => released!.assertCurrent()).toThrow("Local sandbox workspace authority changed");
+  using closed = await resolveLocalWorkspaceOwner(ownerParams);
+  expect(sql.queries).toEqual([]);
+  // Explicit teardown seals the database and releases its lease on the host.
+  await closeOpenClawAgentDatabasesAsync();
+  expect(() => closed!.assertCurrent()).toThrow("Local sandbox workspace authority changed");
 });

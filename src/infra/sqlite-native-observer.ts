@@ -1,7 +1,9 @@
 import type { DatabaseSync, SQLInputValue, StatementSync } from "node:sqlite";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { hasErrnoCode } from "./errno.js";
+import { isSqliteLockError, sqlitePrimaryResultCode } from "./sqlite-error-diagnostics.js";
+import { discardSqliteTransactionState } from "./sqlite-post-commit.js";
 import { classifySqliteMutation } from "./sqlite-schema-mutation.js";
+import { wrapSqliteWorkerError } from "./sqlite-worker-error.js";
 
 declare module "node:sqlite" {
   interface StatementSync {
@@ -20,9 +22,9 @@ export type NativeSqlite = Pick<typeof import("node:sqlite"), "DatabaseSync" | "
 };
 
 /** The runtime owner reuses its prepared one-row library probe, once per process load. */
-export function probeSqliteIteratorBehavior(statement: StatementSync): SqliteIteratorBehavior {
+export function probeSqliteIteratorBehavior(statement: StatementSync) {
   const previous = statement.iterate();
-  previous.next();
+  const row = previous.next().value;
   previous.next();
   const nextAfterDoneIsTerminal = previous.next().done === true;
   previous.return?.();
@@ -30,7 +32,13 @@ export function probeSqliteIteratorBehavior(statement: StatementSync): SqliteIte
   try {
     current.next();
     previous.return?.();
-    return { nextAfterDoneIsTerminal, returnAfterDoneIsInert: current.next().done === true };
+    return {
+      row,
+      iteratorBehavior: {
+        nextAfterDoneIsTerminal,
+        returnAfterDoneIsInert: current.next().done === true,
+      },
+    };
   } finally {
     current.return?.();
   }
@@ -40,6 +48,41 @@ const pending = resolveGlobalSingleton(
   () => new WeakMap<DatabaseSync, number>(),
 );
 
+const preparedMutations = resolveGlobalSingleton(
+  Symbol.for("openclaw.sqlitePreparedNativeMutation"),
+  () =>
+    new WeakMap<
+      DatabaseSync,
+      { phase: "armed" | "observing" | "preparing" | "executing" | "finished"; prepare: () => void }
+    >(),
+);
+
+/** The writer certifies one default-ABORT statement without triggers or native callbacks. */
+export function withSqlitePreparedNativeMutation<T>(
+  database: DatabaseSync,
+  prepare: () => void,
+  statement: () => T,
+): T {
+  if (
+    database.isTransaction ||
+    hasPendingSqliteNativeExecution(database) ||
+    preparedMutations.has(database)
+  ) {
+    throw new Error("Prepared SQLite mutations require exclusive autocommit custody");
+  }
+  preparedMutations.set(database, { phase: "armed", prepare });
+  try {
+    return statement();
+  } finally {
+    preparedMutations.delete(database);
+  }
+}
+
+/** Only the native begin callback may consume the pending autocommit receipt. */
+export function isPreparingSqliteNativeMutation(database: DatabaseSync): boolean {
+  return preparedMutations.get(database)?.phase === "preparing";
+}
+
 /** Execution custody is not evidence of COMMIT or complete authority write-set coverage. */
 export function hasPendingSqliteNativeExecution(database: DatabaseSync): boolean {
   return (pending.get(database) ?? 0) > 0;
@@ -48,9 +91,8 @@ export function hasPendingSqliteNativeExecution(database: DatabaseSync): boolean
 export type SqliteNativeMutation = ReturnType<typeof classifySqliteMutation>;
 type NativePhase = "exec" | "execute" | "bind" | "iterate";
 type NativeOperation = {
-  finish: (succeeded: boolean, abandoned?: boolean) => void;
+  finish: (succeeded: boolean, abandoned?: boolean, noEffect?: boolean) => void;
   stepped?: () => void;
-  expire?: () => void;
 };
 type IteratorLifetime = {
   observed?: NativeOperation;
@@ -59,7 +101,6 @@ type IteratorLifetime = {
   finish: (succeeded?: boolean, abandoned?: boolean) => void;
   invalidate: () => void;
   pause: () => void;
-  expire: () => void;
   stopObservation: (succeeded?: boolean, abandoned?: boolean) => void;
 };
 
@@ -77,7 +118,6 @@ function createIteratorLifetime(
   const lifetime: IteratorLifetime = {
     finished: false,
     invalidated: false,
-    expire: () => lifetime.observed?.expire?.(),
     pause: () => lifetime.stopObservation(),
     invalidate: () => {
       lifetime.invalidated = true;
@@ -108,20 +148,6 @@ const bindingMutation: SqliteNativeMutation = {
   temporaryWriteTables: undefined,
   control: undefined,
 };
-
-function refusedBeforeReset(error: unknown): boolean {
-  // Node checks these native states before ResetStatement; bindings are checked afterward.
-  return (
-    error instanceof Error &&
-    hasErrnoCode(error, "ERR_INVALID_STATE") &&
-    [
-      "statement has been finalized",
-      "database cannot be accessed from an authorizer callback",
-      "statement is already being executed",
-      "iterator was invalidated",
-    ].includes(error.message)
-  );
-}
 
 /** Dispose callbacks may refuse close; native custody expires only after SQLite has closed. */
 export function observeSqliteNativeClose(database: DatabaseSync, onClose: () => void): void {
@@ -160,13 +186,26 @@ export function observeSqliteNativeOperations(
   observe: (mutation: SqliteNativeMutation, phase: NativePhase) => NativeOperation,
 ): <T>(operation: () => T, mutation: SqliteNativeMutation) => T {
   const begin = (mutation: SqliteNativeMutation, phase: NativePhase): NativeOperation => {
+    const prepared = preparedMutations.get(database);
+    if (prepared) {
+      if (
+        prepared.phase !== "armed" ||
+        phase !== "execute" ||
+        !mutation.dataChange ||
+        mutation.schemaChange ||
+        mutation.control
+      ) {
+        throw new Error("Prepared SQLite mutations must execute exactly one data statement");
+      }
+      prepared.phase = "observing";
+    }
     const observed = observe(mutation, phase);
     pending.set(database, (pending.get(database) ?? 0) + 1);
     return {
       ...observed,
-      finish(succeeded, abandoned) {
+      finish(succeeded, abandoned, noEffect) {
         try {
-          observed.finish(succeeded, abandoned);
+          observed.finish(succeeded, abandoned, noEffect);
         } finally {
           const remaining = (pending.get(database) ?? 1) - 1;
           if (remaining === 0) {
@@ -179,36 +218,53 @@ export function observeSqliteNativeOperations(
     };
   };
   const activeIterators = new Set<IteratorLifetime>();
-  // A callback can propagate a nested native refusal after its caller already reset SQLite.
-  const failures: Array<Set<unknown> | undefined> = [];
-  const isPreResetRefusal = (error: unknown) =>
-    refusedBeforeReset(error) && !failures.at(-1)?.has(error);
-  const propagate = (error: unknown) => {
-    if (failures.length > 1) {
-      (failures[failures.length - 2] ??= new Set()).add(error);
-    }
-  };
   const execute = <T>(
     operation: () => T,
     mutation: SqliteNativeMutation,
     phase: NativePhase = "execute",
   ): T => {
+    const prepared = preparedMutations.get(database);
     const observed = begin(mutation, phase);
     let succeeded = false;
-    failures.push(undefined);
+    let nativeCompleted = false;
+    let noEffect = false;
     try {
+      if (prepared) {
+        prepared.phase = "preparing";
+        prepared.prepare();
+        prepared.phase = "executing";
+      }
       const result = operation();
+      nativeCompleted = true;
       if (phase !== "bind") {
         observed.stepped?.();
       }
       succeeded = true;
       return result;
     } catch (error) {
-      propagate(error);
+      // The certified statement uses ABORT semantics. I/O and unknown failures
+      // retain the ordinary conservative receipt and crash-recovery behavior.
+      noEffect = Boolean(
+        prepared &&
+        (prepared.phase === "preparing" ||
+          (!nativeCompleted &&
+            (isSqliteLockError(error) || sqlitePrimaryResultCode(error) === 19))),
+      );
+      if (prepared && !noEffect) {
+        const failure = wrapSqliteWorkerError(
+          "Prepared SQLite mutation outcome is unknown",
+          "outcome-unknown",
+          error,
+        );
+        discardSqliteTransactionState(database, failure);
+        throw failure;
+      }
       throw error;
     } finally {
-      failures.pop();
-      observed.finish(succeeded);
+      if (prepared) {
+        prepared.phase = "finished";
+      }
+      observed.finish(succeeded, false, noEffect);
     }
   };
   database.exec = (sql) =>
@@ -233,24 +289,8 @@ export function observeSqliteNativeOperations(
         return operation();
       }
       const previous = [...active];
-      for (const lifetime of previous) {
-        lifetime.expire();
-      }
-      let result: T;
-      try {
-        result = operation();
-      } catch (error) {
-        if (kind === "reuse" && !isPreResetRefusal(error)) {
-          for (const lifetime of previous) {
-            try {
-              lifetime.invalidate();
-            } catch {
-              /* Preserve the native binding or execution error. */
-            }
-          }
-        }
-        throw error;
-      }
+      // A failed reset leaves its old cursor conservatively pending until reuse or close.
+      const result = operation();
       for (const lifetime of previous) {
         if (kind === "return") {
           lifetime.pause();
@@ -300,34 +340,20 @@ export function observeSqliteNativeOperations(
           lifetime.finished = false;
           active.add(lifetime);
         }
-        const alreadyObserved = lifetime.observed !== undefined;
         lifetime.observed ??= begin(mutation, "iterate");
         activeIterators.add(lifetime);
-        failures.push(undefined);
-        try {
-          const result = nativeNext.apply(this, args);
-          if (result.done) {
-            done = native.iteratorBehavior.nextAfterDoneIsTerminal;
-            if (done) {
-              lifetime.finish(true);
-            } else {
-              lifetime.stopObservation(true);
-            }
+        const result = nativeNext.apply(this, args);
+        if (result.done) {
+          done = native.iteratorBehavior.nextAfterDoneIsTerminal;
+          if (done) {
+            lifetime.finish(true);
           } else {
-            lifetime.observed?.stepped?.();
+            lifetime.stopObservation(true);
           }
-          return result;
-        } catch (error) {
-          if (!alreadyObserved && isPreResetRefusal(error)) {
-            lifetime.pause();
-          }
-          // Row conversion can fail after a successful step. Preserve the native cursor;
-          // ambiguous failures retain custody until return, reset, finalization, or close.
-          propagate(error);
-          throw error;
-        } finally {
-          failures.pop();
+        } else {
+          lifetime.observed?.stepped?.();
         }
+        return result;
       };
       if (nativeReturn) {
         rows.return = function (this: typeof rows, ...args) {

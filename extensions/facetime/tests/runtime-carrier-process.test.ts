@@ -4,25 +4,18 @@ import type { FaceTimeHelperPeer } from "../src/helper-rpc.js";
 import { terminateExactCarrierProcesses } from "../src/runtime-carrier-process.js";
 
 const startedAt = "Tue Nov 14 22:13:20 2023";
-const peers = new Map<number, FaceTimeHelperPeer>([
-  [
-    1001,
-    {
-      processId: 1001,
-      processStartedAtMs: Date.parse(startedAt) + 900,
-      bundleIdentifier: "com.apple.FaceTime",
-      connectionGeneration: 1,
-    },
-  ],
-  [
-    1002,
-    {
-      processId: 1002,
-      processStartedAtMs: Date.parse(startedAt) + 900,
-      bundleIdentifier: "com.apple.mobilephone",
-      connectionGeneration: 2,
-    },
-  ],
+const peer = (processId: number, bundleIdentifier: string): [number, FaceTimeHelperPeer] => [
+  processId,
+  {
+    processId,
+    bundleIdentifier,
+    connectionGeneration: processId - 1000,
+    processStartedAtMs: Date.parse(startedAt) + 900,
+  },
+];
+const peers = new Map([
+  peer(1001, "com.apple.FaceTime"),
+  peer(1002, "com.apple.FaceTime.FTConversationService"),
 ]);
 type RunCommand = PluginRuntime["system"]["runCommandWithTimeout"];
 type CommandResult = Awaited<ReturnType<RunCommand>>;
@@ -30,15 +23,18 @@ function result(code: number, stdout = "", stderr = ""): CommandResult {
   return { code, stdout, stderr, signal: null, killed: false, termination: "exit" };
 }
 
-function processFixture() {
+function processFixture(terminating = [...peers.keys()]) {
   const alive = new Set(peers.keys());
-  const terminates = new Set(peers.keys());
+  const terminates = new Set(terminating);
   const signals: Array<{ signal: string; pid: number }> = [];
   const runCommand = vi.fn<RunCommand>(async (argv) => {
     const pid = Number(argv[2]);
     if (argv[0] === "/bin/ps") {
       return alive.has(pid)
-        ? result(0, argv[4] === "comm=" ? (pid === 1001 ? "FaceTime" : "Phone") : startedAt)
+        ? result(
+            0,
+            argv[4] === "comm=" ? (pid === 1001 ? "FaceTime" : "FTConversationService") : startedAt,
+          )
         : result(1);
     }
     if (argv[0] !== "/bin/kill" || !argv[1]) {
@@ -54,11 +50,17 @@ function processFixture() {
     alive,
     terminates,
     signals,
-    intercept: (inspect: (argv: string[], response: CommandResult) => CommandResult) => {
+    intercept: (
+      field: string,
+      inspect: (argv: string[], response: CommandResult) => CommandResult,
+    ) => {
       const command = runCommand.getMockImplementation()!;
-      runCommand.mockImplementation(async (argv, options) =>
-        inspect(argv, await command(argv, options)),
-      );
+      runCommand.mockImplementation(async (argv, options) => {
+        const response = await command(argv, options);
+        return (argv[0] === "/bin/ps" ? argv[4] : argv[1]) === field
+          ? inspect(argv, response)
+          : response;
+      });
     },
     shutdown: (assertCurrent = () => {}) =>
       terminateExactCarrierProcesses({
@@ -84,71 +86,33 @@ describe("FaceTime exact carrier process termination", () => {
 
   it("does not signal a carrier that disappears during start-time inspection", async () => {
     const fixture = processFixture();
-    fixture.intercept((argv, response) => {
-      if (argv[0] === "/bin/ps" && argv[4] === "lstart=") {
-        fixture.alive.delete(Number(argv[2]));
-        return result(1);
-      }
-      return response;
+    fixture.intercept("lstart=", (argv) => {
+      fixture.alive.delete(Number(argv[2]));
+      return result(1);
     });
     await expect(fixture.shutdown()).resolves.toBeUndefined();
     expect(fixture.signals).toEqual([]);
   });
 
   it("does not mistake KILL permission failure for process absence", async () => {
-    const fixture = processFixture();
-    fixture.terminates.clear();
-    const permissionFailures: string[] = [];
-    fixture.intercept((argv, response) => {
-      if (argv[0] === "/bin/kill" && argv[1] === "-KILL") {
-        permissionFailures.push(argv[1]);
-        return result(1, "", "kill: Operation not permitted");
-      }
-      return response;
-    });
+    const fixture = processFixture([]);
+    const permissionFailure = vi.fn(() => result(1, "", "kill: Operation not permitted"));
+    fixture.intercept("-KILL", permissionFailure);
     await expect(fixture.shutdown()).rejects.toThrow("remains alive after force termination");
-    expect(permissionFailures).toContain("-KILL");
+    expect(permissionFailure).toHaveBeenCalled();
     expect([...fixture.alive]).toEqual([1001, 1002]);
   });
 
   it.each([
-    {
-      name: "executable inspection error",
-      field: "comm=",
-      response: result(1, "", "ps: permission denied"),
-      afterTerm: false,
-    },
-    {
-      name: "different executable",
-      field: "comm=",
-      response: result(0, "UnrelatedApp"),
-      afterTerm: false,
-    },
-    {
-      name: "adjacent-second PID reuse",
-      field: "lstart=",
-      response: result(0, "Tue Nov 14 22:13:21 2023"),
-      afterTerm: false,
-    },
-    {
-      name: "start inspection failure after TERM",
-      field: "lstart=",
-      response: result(1, "", "ps: permission denied"),
-      afterTerm: true,
-    },
-    {
-      name: "PID reuse after TERM",
-      field: "lstart=",
-      response: result(0, "Tue Nov 14 22:13:30 2023"),
-      afterTerm: true,
-    },
-  ])("stops signalling after $name", async ({ field, response, afterTerm }) => {
-    const fixture = processFixture();
-    fixture.terminates.clear();
-    fixture.intercept((argv, original) =>
-      argv[0] === "/bin/ps" && argv[4] === field && (!afterTerm || fixture.signals.length > 0)
-        ? response
-        : original,
+    ["inspection error", "comm=", result(1, "", "ps: permission denied"), false],
+    ["different executable", "comm=", result(0, "UnrelatedApp"), false],
+    ["adjacent-second PID reuse", "lstart=", result(0, "Tue Nov 14 22:13:21 2023"), false],
+    ["inspection failure after TERM", "lstart=", result(1, "", "ps: permission denied"), true],
+    ["PID reuse after TERM", "lstart=", result(0, "Tue Nov 14 22:13:30 2023"), true],
+  ] as const)("stops signalling after %s", async (_name, field, response, afterTerm) => {
+    const fixture = processFixture([]);
+    fixture.intercept(field, (_argv, original) =>
+      !afterTerm || fixture.signals.length > 0 ? response : original,
     );
     await expect(fixture.shutdown()).rejects.toThrow("process identity no longer matches");
     expect(fixture.signals).toEqual(afterTerm ? [{ signal: "-TERM", pid: 1001 }] : []);
@@ -157,16 +121,10 @@ describe("FaceTime exact carrier process termination", () => {
   it.each(["comm=", "lstart=", "-TERM"])(
     "stops when ownership changes during %s",
     async (field) => {
-      const fixture = processFixture();
-      fixture.terminates.clear();
+      const fixture = processFixture([]);
       let current = true;
-      fixture.intercept((argv, response) => {
-        if (
-          (argv[0] === "/bin/ps" && argv[4] === field) ||
-          (argv[0] === "/bin/kill" && argv[1] === field)
-        ) {
-          current = false;
-        }
+      fixture.intercept(field, (_argv, response) => {
+        current = false;
         return response;
       });
       await expect(

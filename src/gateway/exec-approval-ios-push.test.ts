@@ -1,79 +1,49 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import type { ExecApprovalRequest, ExecApprovalResolved } from "../infra/exec-approvals.js";
-import type { PluginApprovalRequest, PluginApprovalResolved } from "../infra/plugin-approvals.js";
-/**
- * Tests iOS push notification dispatch for exec approval requests.
- */
+import type { ExecApprovalRequest } from "../infra/exec-approvals.js";
+import type { PluginApprovalRequest } from "../infra/plugin-approvals.js";
 import {
   createExecApprovalIosPushDelivery,
   createPluginApprovalIosPushDelivery,
 } from "./exec-approval-ios-push.js";
 
-const {
-  listDevicePairingMock,
-  loadApnsRegistrationMock,
-  loadApnsRegistrationsMock,
-  resolveApnsAuthConfigFromEnvMock,
-  resolveApnsRelayConfigFromEnvMock,
-  sendApnsExecApprovalAlertMock,
-  sendApnsExecApprovalResolvedWakeMock,
-  sendApnsPluginApprovalAlertMock,
-  sendApnsPluginApprovalResolvedWakeMock,
-} = vi.hoisted(() => ({
-  listDevicePairingMock: vi.fn(),
-  loadApnsRegistrationMock: vi.fn(),
-  loadApnsRegistrationsMock: vi.fn(),
-  resolveApnsAuthConfigFromEnvMock: vi.fn(),
-  resolveApnsRelayConfigFromEnvMock: vi.fn(),
-  sendApnsExecApprovalAlertMock: vi.fn(),
-  sendApnsExecApprovalResolvedWakeMock: vi.fn(),
-  sendApnsPluginApprovalAlertMock: vi.fn(),
-  sendApnsPluginApprovalResolvedWakeMock: vi.fn(),
+const mocks = vi.hoisted(() => ({
+  pairing: vi.fn(),
+  registrations: vi.fn(),
+  directAuth: vi.fn(),
+  relayConfig: vi.fn(),
+  execAlert: vi.fn(),
+  execWake: vi.fn(),
+  pluginAlert: vi.fn(),
+  pluginWake: vi.fn(),
 }));
 
+const registrationDefaults = {
+  topic: "ai.openclaw.ios.test",
+  environment: "sandbox",
+  updatedAtMs: 1,
+};
+const directAuthConfig = { teamId: "team", keyId: "key", privateKey: "private-key" };
+
 function apnsRegistration(nodeId = "ios-device-1") {
-  return {
-    nodeId,
-    transport: "direct",
-    token: "apns-token",
-    topic: "ai.openclaw.ios.test",
-    environment: "sandbox",
-    updatedAtMs: 1,
-  };
+  return { nodeId, transport: "direct", token: "apns-token", ...registrationDefaults };
 }
 
 function relayApnsRegistration(nodeId = "ios-device-1") {
   return {
+    ...registrationDefaults,
     nodeId,
     transport: "relay",
     relayHandle: `relay-${nodeId}`,
     sendGrant: `grant-${nodeId}`,
     installationId: `installation-${nodeId}`,
-    topic: "ai.openclaw.ios.test",
-    environment: "sandbox",
     distribution: "official",
     relayOrigin: "https://relay.example.test",
-    updatedAtMs: 1,
   };
 }
 
 function successfulApnsPushResult() {
-  return {
-    ok: true,
-    status: 200,
-    environment: "sandbox",
-    topic: "ai.openclaw.ios.test",
-    tokenSuffix: "token",
-    transport: "direct",
-  };
-}
-
-function resolvedApnsAuthConfig() {
-  return {
-    ok: true,
-    value: { teamId: "team", keyId: "key", privateKey: "private-key" },
-  };
+  return { ok: true, status: 200 };
 }
 
 function approvalRequest(id: string): ExecApprovalRequest {
@@ -85,14 +55,6 @@ function approvalRequest(id: string): ExecApprovalRequest {
   };
 }
 
-function approvalResolved(id: string): ExecApprovalResolved {
-  return {
-    id,
-    decision: "allow-once",
-    ts: 1,
-  };
-}
-
 function pluginApprovalRequest(id: string): PluginApprovalRequest {
   return {
     id,
@@ -100,87 +62,77 @@ function pluginApprovalRequest(id: string): PluginApprovalRequest {
       title: "Install plugin update",
       description: "Allow the plugin to update its managed package.",
       detail: '{"package":"@openclaw/example","token":"review-only"}',
-      severity: "warning",
-      toolName: "plugins.update",
     },
     createdAtMs: 1,
     expiresAtMs: 2,
   };
 }
 
-function pluginApprovalResolved(id: string): PluginApprovalResolved {
-  return {
-    id,
-    decision: "allow-once",
-    ts: 1,
-  };
-}
+const approvalScopes = ["operator.approvals", "operator.read"];
 
-function pairedIosOperator(options: {
-  deviceId?: string;
-  scopes: string[];
-  approvedScopes?: string[];
-}) {
-  const deviceId = options.deviceId ?? "ios-device-1";
+function pairedIosOperator(
+  scopes = approvalScopes,
+  deviceId = "ios-device-1",
+  approvedScopes?: string[],
+) {
   return {
     deviceId,
-    publicKey: "pub",
     platform: "iOS 18",
     role: "operator",
     roles: ["operator"],
-    approvedScopes: options.approvedScopes,
-    createdAtMs: 1,
-    approvedAtMs: 1,
+    approvedScopes,
     tokens: {
-      operator: {
-        token: "operator-token",
-        role: "operator",
-        scopes: options.scopes,
-        createdAtMs: 1,
-      },
+      operator: { token: "operator-token", role: "operator", scopes, createdAtMs: 1 },
     },
   };
 }
 
 function mockPairedIosOperators(...paired: ReturnType<typeof pairedIosOperator>[]) {
-  listDevicePairingMock.mockResolvedValue({
-    pending: [],
-    paired,
-  });
+  mocks.pairing.mockResolvedValue({ pending: [], paired });
 }
 
-function mockPairedIosOperator(scopes: string[]) {
-  mockPairedIosOperators(pairedIosOperator({ scopes }));
+function mockPairedIosOperator(scopes = approvalScopes) {
+  mockPairedIosOperators(pairedIosOperator(scopes));
 }
 
-vi.mock("../config/config.js", () => ({
+async function expectRejectedRequest(
+  id: string,
+  options?: Parameters<ReturnType<typeof createExecApprovalIosPushDelivery>["handleRequested"]>[1],
+) {
+  const delivery = createExecApprovalIosPushDelivery({ log: {} });
+  expect(await delivery.handleRequested(approvalRequest(id), options)).toBe(false);
+  expect(mocks.registrations).not.toHaveBeenCalled();
+  expect(mocks.execAlert).not.toHaveBeenCalled();
+}
+
+function expectPluginAlert(expected: Record<string, unknown>) {
+  expect(mocks.pluginAlert).toHaveBeenCalledExactlyOnceWith(expect.objectContaining(expected));
+}
+
+vi.mock("../config/io.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/io.js")>()),
   getRuntimeConfig: () => ({ gateway: {} }),
 }));
 
-vi.mock("../infra/device-pairing.js", async () => {
-  const actual = await vi.importActual<typeof import("../infra/device-pairing.js")>(
-    "../infra/device-pairing.js",
-  );
-  return {
-    ...actual,
-    listDevicePairing: listDevicePairingMock,
-  };
-});
+vi.mock("../infra/device-pairing.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/device-pairing.js")>()),
+  listDevicePairing: mocks.pairing,
+}));
 
 vi.mock("../infra/device-identity-async.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/device-identity-async.js")>()),
   loadOrCreateProcessDeviceIdentityAsync: () => ({ deviceId: "gateway-device-1" }),
 }));
 
+// mock-isolation: Exercise approval routing with synthetic APNs registrations and no network delivery.
 vi.mock("../infra/push-apns.js", () => ({
-  loadApnsRegistration: loadApnsRegistrationMock,
-  loadApnsRegistrations: loadApnsRegistrationsMock,
-  resolveApnsAuthConfigFromEnv: resolveApnsAuthConfigFromEnvMock,
-  resolveApnsRelayConfigFromEnv: resolveApnsRelayConfigFromEnvMock,
-  sendApnsExecApprovalAlert: sendApnsExecApprovalAlertMock,
-  sendApnsExecApprovalResolvedWake: sendApnsExecApprovalResolvedWakeMock,
-  sendApnsPluginApprovalAlert: sendApnsPluginApprovalAlertMock,
-  sendApnsPluginApprovalResolvedWake: sendApnsPluginApprovalResolvedWakeMock,
+  loadApnsRegistrations: mocks.registrations,
+  resolveApnsAuthConfigFromEnv: mocks.directAuth,
+  resolveApnsRelayConfigFromEnv: mocks.relayConfig,
+  sendApnsExecApprovalAlert: mocks.execAlert,
+  sendApnsExecApprovalResolvedWake: mocks.execWake,
+  sendApnsPluginApprovalAlert: mocks.pluginAlert,
+  sendApnsPluginApprovalResolvedWake: mocks.pluginWake,
   clearApnsRegistrationIfCurrent: vi.fn(),
   shouldClearStoredApnsRegistration: vi.fn(() => false),
 }));
@@ -188,93 +140,55 @@ vi.mock("../infra/push-apns.js", () => ({
 describe("createExecApprovalIosPushDelivery", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    listDevicePairingMock.mockResolvedValue({ pending: [], paired: [] });
-    loadApnsRegistrationMock.mockResolvedValue(apnsRegistration());
-    loadApnsRegistrationsMock.mockImplementation(async (nodeIds: readonly string[]) => {
-      const registrations = [];
-      for (const nodeId of nodeIds) {
-        const registration = await loadApnsRegistrationMock(nodeId);
-        if (registration) {
-          registrations.push({ nodeId, registration });
-        }
-      }
-      return registrations;
-    });
-    resolveApnsAuthConfigFromEnvMock.mockResolvedValue(resolvedApnsAuthConfig());
-    resolveApnsRelayConfigFromEnvMock.mockReturnValue({ ok: false, error: "unused" });
-    sendApnsExecApprovalAlertMock.mockResolvedValue(successfulApnsPushResult());
-    sendApnsExecApprovalResolvedWakeMock.mockResolvedValue(successfulApnsPushResult());
-    sendApnsPluginApprovalAlertMock.mockResolvedValue(successfulApnsPushResult());
-    sendApnsPluginApprovalResolvedWakeMock.mockResolvedValue(successfulApnsPushResult());
+    mocks.pairing.mockResolvedValue({ pending: [], paired: [] });
+    mocks.registrations.mockImplementation(async (nodeIds: readonly string[]) =>
+      nodeIds.map((nodeId) => ({ nodeId, registration: apnsRegistration(nodeId) })),
+    );
+    mocks.directAuth.mockResolvedValue({ ok: true, value: directAuthConfig });
+    mocks.relayConfig.mockReturnValue({ ok: false, error: "unused" });
+    mocks.execAlert.mockResolvedValue(successfulApnsPushResult());
+    mocks.execWake.mockResolvedValue(successfulApnsPushResult());
+    mocks.pluginAlert.mockResolvedValue(successfulApnsPushResult());
+    mocks.pluginWake.mockResolvedValue(successfulApnsPushResult());
   });
 
   it("does not target iOS devices whose active operator token lacks operator.approvals", async () => {
-    mockPairedIosOperators(
-      pairedIosOperator({
-        scopes: ["operator.read"],
-        approvedScopes: ["operator.approvals"],
-      }),
-    );
+    mockPairedIosOperators(pairedIosOperator(["operator.read"], undefined, ["operator.approvals"]));
 
-    const delivery = createExecApprovalIosPushDelivery({ log: {} });
-
-    const accepted = await delivery.handleRequested(approvalRequest("approval-1"));
-
-    expect(accepted).toBe(false);
-    expect(loadApnsRegistrationsMock).not.toHaveBeenCalled();
-    expect(sendApnsExecApprovalAlertMock).not.toHaveBeenCalled();
+    await expectRejectedRequest("approval-1");
   });
 
   it("does not target approval-only iOS devices that cannot validate gateway ownership", async () => {
     mockPairedIosOperator(["operator.approvals"]);
 
-    const delivery = createExecApprovalIosPushDelivery({ log: {} });
-
-    const accepted = await delivery.handleRequested(approvalRequest("approval-no-read"));
-
-    expect(accepted).toBe(false);
-    expect(loadApnsRegistrationsMock).not.toHaveBeenCalled();
-    expect(sendApnsExecApprovalAlertMock).not.toHaveBeenCalled();
+    await expectRejectedRequest("approval-no-read");
   });
 
   it("does not target iOS devices rejected by the approval visibility filter", async () => {
-    mockPairedIosOperator(["operator.approvals", "operator.read"]);
+    mockPairedIosOperator();
     const isTargetVisible = vi.fn(() => false);
 
-    const delivery = createExecApprovalIosPushDelivery({ log: {} });
-
-    const accepted = await delivery.handleRequested(approvalRequest("approval-filtered"), {
-      isTargetVisible,
-    });
-
-    expect(accepted).toBe(false);
+    await expectRejectedRequest("approval-filtered", { isTargetVisible });
     expect(isTargetVisible).toHaveBeenCalledWith({
       deviceId: "ios-device-1",
       scopes: ["operator.approvals", "operator.read"],
     });
-    expect(loadApnsRegistrationsMock).not.toHaveBeenCalled();
-    expect(sendApnsExecApprovalAlertMock).not.toHaveBeenCalled();
   });
 
   it("does not treat iOS as a live approval route when every push fails", async () => {
     const warn = vi.fn();
-    mockPairedIosOperator(["operator.approvals", "operator.read"]);
-    sendApnsExecApprovalAlertMock.mockResolvedValue({
+    mockPairedIosOperator();
+    mocks.execAlert.mockResolvedValue({
+      ...successfulApnsPushResult(),
       ok: false,
       status: 410,
       reason: "Unregistered",
-      environment: "sandbox",
-      topic: "ai.openclaw.ios.test",
-      tokenSuffix: "token",
-      transport: "direct",
     });
 
     const delivery = createExecApprovalIosPushDelivery({ log: { warn } });
 
-    const accepted = await delivery.handleRequested(approvalRequest("approval-dead-route"));
-
-    expect(accepted).toBe(false);
-    expect(sendApnsExecApprovalAlertMock).toHaveBeenCalledTimes(1);
+    expect(await delivery.handleRequested(approvalRequest("approval-dead-route"))).toBe(false);
+    expect(mocks.execAlert).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledWith(
       "exec approvals: iOS request push failed node=ios-device-1 status=410 reason=Unregistered",
     );
@@ -284,117 +198,98 @@ describe("createExecApprovalIosPushDelivery", () => {
   });
 
   it("waits for request delivery to finish before sending cleanup pushes", async () => {
-    mockPairedIosOperator(["operator.approvals", "operator.read"]);
-    const requestedPush = createDeferred<{
-      ok: boolean;
-      status: number;
-      environment: string;
-      topic: string;
-      tokenSuffix: string;
-      transport: string;
-    }>();
-    sendApnsExecApprovalAlertMock.mockReturnValue(requestedPush.promise);
+    mockPairedIosOperator();
+    const requestedPush = createDeferred<ReturnType<typeof successfulApnsPushResult>>();
+    mocks.execAlert.mockReturnValue(requestedPush.promise);
 
     const delivery = createExecApprovalIosPushDelivery({ log: {} });
 
     const requested = delivery.handleRequested(approvalRequest("approval-ordered-cleanup"));
-    const resolved = delivery.handleResolved(approvalResolved("approval-ordered-cleanup"));
+    const resolved = delivery.handleResolved({ id: "approval-ordered-cleanup" });
 
     await Promise.resolve();
-    expect(sendApnsExecApprovalResolvedWakeMock).not.toHaveBeenCalled();
+    expect(mocks.execWake).not.toHaveBeenCalled();
 
     requestedPush.resolve(successfulApnsPushResult());
     await requested;
     await resolved;
 
-    expect(sendApnsExecApprovalResolvedWakeMock).toHaveBeenCalledTimes(1);
-    expect(listDevicePairingMock).toHaveBeenCalledTimes(1);
-    expect(loadApnsRegistrationsMock).toHaveBeenLastCalledWith(["ios-device-1"]);
+    expect(mocks.execWake).toHaveBeenCalledTimes(1);
+    expect(mocks.pairing).toHaveBeenCalledTimes(1);
+    expect(mocks.registrations).toHaveBeenLastCalledWith(["ios-device-1"]);
   });
 
   it("skips cleanup pushes when the original request target set is unknown", async () => {
     const debug = vi.fn();
     const delivery = createExecApprovalIosPushDelivery({ log: { debug } });
 
-    await delivery.handleResolved(approvalResolved("approval-missing-targets"));
+    await delivery.handleResolved({ id: "approval-missing-targets" });
 
     expect(debug).toHaveBeenCalledWith(
       "exec approvals: iOS cleanup push skipped approvalId=approval-missing-targets reason=missing-targets",
     );
-    expect(listDevicePairingMock).not.toHaveBeenCalled();
-    expect(loadApnsRegistrationsMock).not.toHaveBeenCalled();
-    expect(sendApnsExecApprovalResolvedWakeMock).not.toHaveBeenCalled();
+    expect(mocks.pairing).not.toHaveBeenCalled();
+    expect(mocks.registrations).not.toHaveBeenCalled();
+    expect(mocks.execWake).not.toHaveBeenCalled();
   });
 
   describe("createPluginApprovalIosPushDelivery", () => {
     it("targets only paired iOS operators with approval and read scopes", async () => {
       mockPairedIosOperators(
-        pairedIosOperator({
-          deviceId: "ios-approved",
-          scopes: ["operator.approvals", "operator.read"],
-        }),
-        pairedIosOperator({
-          deviceId: "ios-read-only",
-          scopes: ["operator.read"],
-        }),
+        pairedIosOperator(approvalScopes, "ios-approved"),
+        pairedIosOperator(["operator.read"], "ios-read-only"),
       );
 
       const delivery = createPluginApprovalIosPushDelivery({ log: {} });
       const accepted = await delivery.handleRequested(pluginApprovalRequest("plugin:direct"));
 
       expect(accepted).toBe(true);
-      expect(loadApnsRegistrationsMock).toHaveBeenCalledWith(["ios-approved"]);
-      expect(sendApnsPluginApprovalAlertMock).toHaveBeenCalledTimes(1);
-      expect(sendApnsPluginApprovalAlertMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          nodeId: "ios-approved",
-          approvalId: "plugin:direct",
-          gatewayDeviceId: "gateway-device-1",
-          title: "Install plugin update",
-          description: "Allow the plugin to update its managed package.",
-        }),
-      );
-      expect(sendApnsPluginApprovalAlertMock.mock.calls[0]?.[0]).not.toHaveProperty("detail");
+      expect(mocks.registrations).toHaveBeenCalledWith(["ios-approved"]);
+      expectPluginAlert({
+        nodeId: "ios-approved",
+        approvalId: "plugin:direct",
+        gatewayDeviceId: "gateway-device-1",
+        title: "Install plugin update",
+        description: "Allow the plugin to update its managed package.",
+      });
+      expect(mocks.pluginAlert.mock.calls[0]?.[0]).not.toHaveProperty("detail");
     });
 
     it("uses the shared relay delivery plan for plugin alerts", async () => {
       const relayConfig = { baseUrl: "https://relay.example.test", timeoutMs: 10_000 };
-      mockPairedIosOperator(["operator.approvals", "operator.read"]);
-      loadApnsRegistrationMock.mockResolvedValue(relayApnsRegistration());
-      resolveApnsRelayConfigFromEnvMock.mockReturnValue({ ok: true, value: relayConfig });
+      mockPairedIosOperator();
+      mocks.registrations.mockResolvedValue([
+        { nodeId: "ios-device-1", registration: relayApnsRegistration() },
+      ]);
+      mocks.relayConfig.mockReturnValue({ ok: true, value: relayConfig });
 
       const delivery = createPluginApprovalIosPushDelivery({ log: {} });
       const accepted = await delivery.handleRequested(pluginApprovalRequest("plugin:relay"));
 
       expect(accepted).toBe(true);
-      expect(sendApnsPluginApprovalAlertMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          registration: expect.objectContaining({ transport: "relay" }),
-          relayConfig,
-          approvalId: "plugin:relay",
-        }),
-      );
-      expect(resolveApnsAuthConfigFromEnvMock).not.toHaveBeenCalled();
+      expectPluginAlert({
+        registration: expect.objectContaining({ transport: "relay" }),
+        relayConfig,
+        approvalId: "plugin:relay",
+      });
+      expect(mocks.directAuth).not.toHaveBeenCalled();
     });
 
     it("sends plugin cleanup wakes for resolved and expired requests", async () => {
-      mockPairedIosOperator(["operator.approvals", "operator.read"]);
+      mockPairedIosOperator();
       const delivery = createPluginApprovalIosPushDelivery({ log: {} });
       const resolvedRequest = pluginApprovalRequest("plugin:resolved");
       const expiredRequest = pluginApprovalRequest("plugin:expired");
 
       await delivery.handleRequested(resolvedRequest);
       await delivery.handleRequested(expiredRequest);
-      await delivery.handleResolved(pluginApprovalResolved(resolvedRequest.id));
+      await delivery.handleResolved({ id: resolvedRequest.id });
       await delivery.handleExpired(expiredRequest);
 
-      expect(sendApnsPluginApprovalResolvedWakeMock).toHaveBeenCalledTimes(2);
-      expect(sendApnsPluginApprovalResolvedWakeMock).toHaveBeenCalledWith(
-        expect.objectContaining({ approvalId: "plugin:resolved" }),
-      );
-      expect(sendApnsPluginApprovalResolvedWakeMock).toHaveBeenCalledWith(
-        expect.objectContaining({ approvalId: "plugin:expired" }),
-      );
+      expect(mocks.pluginWake.mock.calls).toEqual([
+        [expect.objectContaining({ approvalId: "plugin:resolved" })],
+        [expect.objectContaining({ approvalId: "plugin:expired" })],
+      ]);
     });
   });
 });

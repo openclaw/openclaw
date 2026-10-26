@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   resolveCronJobEffectiveAgentId,
   tryResolveCronJobEffectiveAgentId,
@@ -9,6 +10,10 @@ import {
   createTrustedCronScheduledToolPolicy,
   type CronScheduledToolPolicy,
 } from "../../cron/scheduled-tool-policy.js";
+import {
+  CRON_STREAM_EXEC_AUTHORITY_ERROR,
+  type CronStreamExecPolicy,
+} from "../../cron/stream-exec-authority.js";
 import type {
   CronJob,
   CronJobCreate,
@@ -21,6 +26,8 @@ import { normalizeAgentId } from "../../routing/session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import {
   consumeCronCreatorAuthorityGrant,
+  resolveCronCreatorStreamExecPolicy,
+  getCronManagementStreamExecPolicy,
   getCronManagementAuthority,
   getCronManagementCallerOrigin,
   getCronManagementChannelRequester,
@@ -34,6 +41,27 @@ import type {
   GatewayRequestContext,
   GatewayRequestHandlerOptions,
 } from "./types.js";
+
+/** Check stored and requested kinds: metadata-only edits must not revive command jobs. */
+export function assertCronModelJobAllowed(
+  client: GatewayClient | null,
+  config: OpenClawConfig,
+  job: Pick<CronJobCreate, "payload" | "schedule">,
+  patch?: CronJobPatch,
+): void {
+  if (
+    client?.internal?.agentRuntimeIdentity &&
+    config.tools?.gatewayPolicy?.automations?.allowCommandJobs === false &&
+    (job.payload.kind === "command" ||
+      job.schedule.kind === "on-exit" ||
+      patch?.payload?.kind === "command" ||
+      patch?.schedule?.kind === "on-exit")
+  ) {
+    throw new TypeError(
+      "Gateway tool policy denies model changes to or runs of command automations.",
+    );
+  }
+}
 
 export function resolveCronCreatorAuthorityCapture(
   callerScope: CronCallerScope | undefined,
@@ -65,6 +93,27 @@ export function resolveCronCreatorAuthorityCapture(
   };
 }
 
+export function resolveCronStreamExecPolicy(
+  client: GatewayClient | null,
+  required: boolean,
+  context: GatewayRequestContext,
+): CronStreamExecPolicy | undefined {
+  const identity = client?.internal?.agentRuntimeIdentity;
+  if (!identity || !required) {
+    return undefined;
+  }
+  const execPolicy = getCronManagementAuthority(identity)
+    ? getCronManagementStreamExecPolicy(identity)
+    : identity.cronCreatorAuthorityGrant
+      ? resolveCronCreatorStreamExecPolicy(identity.cronCreatorAuthorityGrant)
+      : undefined;
+  if (!execPolicy) {
+    assertActiveAgentRuntimeAuthority(client, context);
+    throw new TypeError(CRON_STREAM_EXEC_AUTHORITY_ERROR);
+  }
+  return execPolicy;
+}
+
 export function resolveCronMutationCommitGuard(
   client: GatewayClient | null,
   context: GatewayRequestContext,
@@ -77,7 +126,7 @@ export function resolveCronMutationCommitGuard(
   callerAuthority?: Pick<
     GatewayRequestHandlerOptions,
     "sessionMutationCommitGuard" | "hasCurrentClientAuthority"
-  >,
+  > & { modelJobPolicy?: { config: OpenClawConfig; jobId: string; patch?: CronJobPatch } },
 ): (() => void) | undefined {
   const validatesAuthority =
     client?.internal?.agentRuntimeIdentity && context.validateAgentRuntimeApprovalAuthority;
@@ -108,6 +157,14 @@ export function resolveCronMutationCommitGuard(
       throw new TypeError("Gateway caller authority is no longer active.");
     }
     manageAll?.();
+    if (identity && callerAuthority?.modelJobPolicy) {
+      const { config, jobId, patch } = callerAuthority.modelJobPolicy;
+      const job = context.cron.getJob(jobId);
+      if (!job) {
+        throw new TypeError(`unknown cron job id: ${jobId}`);
+      }
+      assertCronModelJobAllowed(client, config, job, patch);
+    }
     if (validatesAuthority) {
       assertActiveAgentRuntimeAuthority(client, context);
     }
@@ -143,6 +200,8 @@ export function resolveCronMutationCommitGuard(
 
 export type CronCallerScope = {
   kind: "agentTool";
+  /** Attribution from the existing live creator grant, not management entitlement. */
+  creatorProfileId?: string;
   agentId: string;
   sessionKey?: string;
   accountId: string;
@@ -193,7 +252,7 @@ export function readCronCallerScope(
       ? requester
       : undefined;
   const surfaceProvenance: CronToolsAllowProvenance | undefined =
-    !manageAll && identity.cronToolsAllowCapture === "final-executable-surface"
+    identity.cronToolsAllowCapture === "final-executable-surface"
       ? { version: 1, source: "final-executable-surface", callerOrigin }
       : undefined;
   const authenticatedRequesterProvenance = authenticatedCallerOrigin
@@ -218,6 +277,9 @@ export function readCronCallerScope(
     : authenticatedRequesterProvenance;
   return {
     kind: "agentTool",
+    ...(grantProvenance?.creatorProfileId
+      ? { creatorProfileId: grantProvenance.creatorProfileId }
+      : {}),
     agentId: normalizeAgentId(identity.agentId),
     sessionKey: identity.sessionKey?.trim() || undefined,
     accountId: normalizeAccountId(identity.turnSourceAccountId),
@@ -232,7 +294,7 @@ export function readCronCallerScope(
           },
         }
       : {}),
-    ...(!manageAll && identity.cronCreatorAuthorityGrant
+    ...(identity.cronCreatorAuthorityGrant
       ? { cronCreatorAuthorityGrant: identity.cronCreatorAuthorityGrant }
       : {}),
   };
@@ -300,7 +362,7 @@ function isOperatorCommandCronJob(job: CronJob): boolean {
   return (
     job.payload.kind === "command" ||
     job.schedule.kind === "on-exit" ||
-    job.schedule.kind === "stream"
+    (job.schedule.kind === "stream" && job.scheduledToolPolicy?.mode !== "account")
   );
 }
 

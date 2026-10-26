@@ -1,8 +1,8 @@
 /** Auth cache identity and native CLI credential reads, without login or refresh. */
-import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { readSecretFile } from "openclaw/plugin-sdk/secret-file";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexAppServerStartOptions } from "./config-contracts.js";
@@ -13,20 +13,17 @@ export const CODEX_APP_SERVER_API_KEY_ENV_VARS = ["CODEX_API_KEY", "OPENAI_API_K
 
 export function resolveCodexAppServerFallbackApiKeyCacheKey(params: {
   startOptions: Pick<CodexAppServerStartOptions, "transport" | "env" | "clearEnv">;
-  baseEnv?: NodeJS.ProcessEnv;
-  platform?: NodeJS.Platform;
+  allowNativeAuthFile?: boolean;
 }): string | undefined {
   if (params.startOptions.transport !== "stdio") {
     return undefined;
   }
-  const env = resolveCodexAppServerSpawnEnv(
-    params.startOptions,
-    params.baseEnv ?? process.env,
-    params.platform ?? process.platform,
-  );
+  const env = resolveCodexAppServerSpawnEnv(params.startOptions);
   const apiKey = readFirstNonEmptyEnvEntry(env, CODEX_APP_SERVER_API_KEY_ENV_VARS);
   if (!apiKey) {
-    return resolveCodexCliAuthFileApiKeyCacheKey(params.baseEnv ?? process.env);
+    return params.allowNativeAuthFile === false
+      ? undefined
+      : resolveCodexCliAuthFileApiKeyCacheKey(process.env);
   }
   return fingerprintAuthCacheKey(apiKey.key, "env-api-key", apiKey.key, apiKey.value);
 }
@@ -48,10 +45,7 @@ export function fingerprintTokenAuthProfileCacheKey(accessToken: string): string
 }
 
 function fingerprintAuthCacheKey(prefix: string, domain: string, ...parts: string[]): string {
-  const hash = createHash("sha256")
-    .update(`openclaw:codex:app-server-${domain}:v1\0`)
-    .update(parts.join("\0"))
-    .digest("hex");
+  const hash = sha256Hex(`openclaw:codex:app-server-${domain}:v1\0${parts.join("\0")}`);
   return `${prefix}:sha256:${hash}`;
 }
 

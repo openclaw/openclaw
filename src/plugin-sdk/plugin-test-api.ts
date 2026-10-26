@@ -4,6 +4,7 @@ import {
   attachPluginApiFacades,
   type OpenClawPluginApiWithoutFacades,
 } from "../plugins/api-facades.js";
+import { createPluginInlineViewResult } from "../plugins/inline-view.js";
 import { createPluginServiceScheduler } from "../plugins/service-scheduler.js";
 import type { PluginServiceSchedulerV1 } from "../plugins/service-scheduler.types.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
@@ -24,6 +25,8 @@ export function createTestPluginApi(api: TestPluginApiInput = {}): OpenClawPlugi
   const { agent, lifecycle, runContext, session, ...flatApi } = api;
   const mergedApi = {
     id: "test-plugin",
+    inlineView: (viewId, payload, options) =>
+      createPluginInlineViewResult(api.id ?? "test-plugin", viewId, payload, options),
     name: "test-plugin",
     source: "test",
     registrationMode: "full",
@@ -33,7 +36,6 @@ export function createTestPluginApi(api: TestPluginApiInput = {}): OpenClawPlugi
     registerTool() {},
     registerHook() {},
     registerHttpRoute() {},
-    registerHostedMediaResolver() {},
     registerWidgetPresenter() {},
     registerMcpServerConnectionResolver() {},
     registerChannel() {},
@@ -43,7 +45,6 @@ export function createTestPluginApi(api: TestPluginApiInput = {}): OpenClawPlugi
     registerCli() {},
     registerNodeCliFeature() {},
     registerCliBackend() {},
-    registerTextTransforms() {},
     registerService() {},
     registerGatewayDiscoveryService() {},
     registerReload() {},
@@ -75,8 +76,6 @@ export function createTestPluginApi(api: TestPluginApiInput = {}): OpenClawPlugi
     registerCompactionProvider() {},
     registerDecisionProvider() {},
     registerAgentHarness() {},
-    registerAgentExecutorController() {},
-    registerCodexAppServerExtensionFactory() {},
     registerAgentToolResultMiddleware() {},
     registerSessionExtension() {},
     enqueueNextTurnInjection: async (injection) => ({
@@ -84,10 +83,10 @@ export function createTestPluginApi(api: TestPluginApiInput = {}): OpenClawPlugi
       id: "",
       sessionKey: injection.sessionKey,
     }),
+    steerActiveRun: async () => ({ steered: false as const, reason: "test api" }),
     registerTrustedToolPolicy() {},
     registerToolMetadata() {},
     registerControlUiDescriptor() {},
-    registerBoardWidgetContentKind() {},
     registerRuntimeLifecycle() {},
     registerAgentEventSubscription() {},
     emitAgentEvent: () => ({ emitted: false as const, reason: "test api" }),
@@ -109,9 +108,9 @@ export function createTestPluginApi(api: TestPluginApiInput = {}): OpenClawPlugi
     on() {},
     ...flatApi,
   } satisfies OpenClawPluginApiWithoutFacades;
-  // Facades derive nested `agent`, `lifecycle`, `runContext`, and `session`
-  // views from the flat API; explicit overrides below let tests replace only
-  // the nested surface under test without rebuilding every no-op method.
+  // Facades construct the supported namespaces and omit retired flat aliases.
+  // Explicit overrides replace only the nested surface under test without
+  // rebuilding every no-op method.
   const withFacades = attachPluginApiFacades(mergedApi);
   return {
     ...withFacades,

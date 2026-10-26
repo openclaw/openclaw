@@ -21,6 +21,7 @@ import {
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import {
+  equivalentLegacySessionHeaders,
   parseOpaqueLeafEntry,
   parseParentLinkedOpaqueEntry,
 } from "../config/sessions/session-entry-codec.js";
@@ -83,18 +84,19 @@ export function readLegacyPrimaryTranscriptIdentity(
   originalPath: string,
   retainedSharedAliasIds?: ReadonlySet<string>,
   registered = false,
-): { sessionId: string; updatedAt: number } | undefined {
+): { sessionId: string; filenameId: string; updatedAt: number } | undefined {
   const filename = path.basename(originalPath);
   const filenameId =
     extractGeneratedTranscriptSessionId(filename) ?? filename.slice(0, -".jsonl".length);
   let sessionId: string | undefined;
+  let header: Record<string, unknown> | undefined;
   let version = 1;
   let messages = 0;
   for (const { event: raw } of iterateTranscriptEvents(filePath, false)) {
     if (!isRecord(raw) || raw.traceSchema !== undefined) {
       return undefined;
     }
-    if (!sessionId) {
+    if (!header) {
       const id = raw.id ?? raw.sessionId;
       if (
         raw.type !== "session" ||
@@ -103,21 +105,22 @@ export function readLegacyPrimaryTranscriptIdentity(
       ) {
         return undefined;
       }
-      if (id !== filenameId) {
-        // Shared aliases retained by an earlier migration are not unregistered primaries.
-        if (retainedSharedAliasIds?.has(id)) {
-          return undefined;
-        }
-        throw new Error("Primary transcript header does not match its original filename");
+      // Shared aliases retained by an earlier migration are not unregistered primaries.
+      if (id !== filenameId && retainedSharedAliasIds?.has(id)) {
+        return undefined;
       }
       version = typeof raw.version === "number" ? raw.version : 1;
       if (!Number.isInteger(version) || version < 1 || version > 3) {
         throw new Error("Unsupported primary transcript version");
       }
       sessionId = id;
+      header = raw;
       continue;
     }
     if (raw.type === "session") {
+      if (equivalentLegacySessionHeaders(header, raw)) {
+        continue;
+      }
       throw new Error("Multiple primary transcript headers");
     }
     const classified = classifySessionFileEntry(raw, version);
@@ -136,7 +139,7 @@ export function readLegacyPrimaryTranscriptIdentity(
     }
   }
   return sessionId && (messages > 0 || registered)
-    ? { sessionId, updatedAt: Math.max(0, Math.floor(fs.statSync(filePath).mtimeMs)) }
+    ? { sessionId, filenameId, updatedAt: Math.max(0, Math.floor(fs.statSync(filePath).mtimeMs)) }
     : undefined;
 }
 

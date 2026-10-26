@@ -24,7 +24,6 @@ import {
   resolveToolUseId,
 } from "../../../../src/chat/tool-content.js";
 import { readBrowserTabTarget } from "../../components/browser/browser-target.ts";
-import { redactToolPayloadText } from "../browser-redact.ts";
 import type { ToolCard, ToolCardOutcome, ToolOutputMetadata } from "./chat-types.ts";
 import { isToolResultMessage } from "./message-normalizer.ts";
 import { readLiveDiffStat } from "./tool-call-diff.ts";
@@ -232,11 +231,7 @@ function serializeToolInput(args: unknown): string | undefined {
   if (typeof args === "string") {
     return args;
   }
-  try {
-    return JSON.stringify(args, null, 2);
-  } catch {
-    return typeof args === "bigint" ? String(args) : Object.prototype.toString.call(args);
-  }
+  return JSON.stringify(args, null, 2);
 }
 
 /** Rendering only: extraction and result retrieval retain the original card. */
@@ -300,18 +295,7 @@ export function resolveCollapsedToolArgumentPreview(args: unknown): string | und
     if (typeof value !== "string") {
       continue;
     }
-    const firstContent = value.search(/\S/);
-    let firstLine: string | undefined;
-    if (firstContent >= 0) {
-      const start =
-        Math.max(value.lastIndexOf("\r", firstContent), value.lastIndexOf("\n", firstContent)) + 1;
-      const lineEnd = /[\r\n]/g;
-      lineEnd.lastIndex = firstContent;
-      firstLine = value.slice(start, lineEnd.exec(value)?.index ?? value.length);
-    }
-    const preview = formatCollapsedToolPreviewText(
-      firstLine ? redactToolPayloadText(firstLine) : undefined,
-    );
+    const preview = formatCollapsedToolPreviewText(value.trimStart().split(/[\r\n]/, 1)[0]);
     if (preview) {
       return preview;
     }
@@ -337,6 +321,8 @@ export function isToolCallContentBlock(item: {
 
 function extractToolCards(message: unknown): ToolCard[] {
   const m = message as Record<string, unknown>;
+  const catalogMetadata = asNullableRecord(m["__openclaw"]);
+  const catalogSource = catalogMetadata?.catalogSource === true;
   const role = typeof m.role === "string" ? m.role.toLowerCase() : "";
   const isStandaloneToolMessage =
     isToolResultMessage(message) ||
@@ -360,17 +346,21 @@ function extractToolCards(message: unknown): ToolCard[] {
     const text = extractToolText(item);
     const details = item.details ?? m.details;
     const metadata = asNullableRecord(item["__openclaw"]);
-    const isError = readToolErrorFlag(item) ?? messageIsError;
+    // Recorded catalog prose cannot establish an execution outcome.
+    const isError =
+      readToolErrorFlag(item) ?? messageIsError ?? (catalogSource ? false : undefined);
     const exitCode = readToolExitCode(
       item,
       details,
-      text ? safeParseJsonRecord(text.trim()) : undefined,
+      !catalogSource && text ? safeParseJsonRecord(text.trim()) : undefined,
       standalone ? undefined : m,
     );
     return {
       outputText: text,
-      resultMessageId:
-        !standalone && metadata && Object.hasOwn(metadata, "id")
+      ...(catalogSource && metadata?.catalogTruncated === true ? { catalogTruncated: true } : {}),
+      resultMessageId: catalogSource
+        ? undefined
+        : !standalone && metadata && Object.hasOwn(metadata, "id")
           ? readNonBlankString(metadata.id)
           : transcriptMessageId,
       outputTruncated:
@@ -382,7 +372,7 @@ function extractToolCards(message: unknown): ToolCard[] {
       ...(details !== undefined ? { details } : {}),
       ...(isError !== undefined ? { isError } : {}),
       ...(exitCode !== undefined ? { exitCode } : {}),
-      ...extractToolPresentation(details, text, browserToolName),
+      ...(catalogSource ? {} : extractToolPresentation(details, text, browserToolName)),
     };
   };
 
@@ -492,6 +482,9 @@ function extractToolCards(message: unknown): ToolCard[] {
   );
   let revision: number | undefined;
   for (const [index, card] of cards.entries()) {
+    if (catalogSource && catalogMetadata?.catalogTruncated === true) {
+      card.catalogTruncated = true;
+    }
     const activity = card.callId ? activityByCall.get(card.callId) : undefined;
     if (activity) {
       card.activity = activity;

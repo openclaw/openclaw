@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { deferSqlitePostCommitPublication } from "../../infra/sqlite-post-commit.js";
 import {
   emitSessionIdentityMutation,
@@ -10,6 +11,7 @@ import {
   bindPreparedSessionEntryPublication,
   type PreparedSessionEntryChanges,
 } from "./session-accessor.sqlite-entry-cache-publication.js";
+import type { retainSessionEntryWorkerPublication } from "./session-accessor.sqlite-entry-worker-publication.js";
 import type {
   ProjectedLifecycleMutation,
   SessionEntryRemovalPlan,
@@ -168,6 +170,20 @@ export function publishCommittedSessionIdentity(
   }
 }
 
+export function createSessionIdentityResultPublisher(scope: { agentId: string }) {
+  return <Result>(
+    candidate: { result: Result },
+    published: ReturnType<ReturnType<typeof retainSessionEntryWorkerPublication>["settle"]>,
+    identity: string,
+  ) => {
+    if (published) {
+      const { previous, current, prepared } = published;
+      publishCommittedSessionIdentity(scope.agentId, identity, previous, current, prepared);
+    }
+    return candidate.result;
+  };
+}
+
 export function prepareSessionIdentityPublication(
   database: SessionIdentityDatabase,
   agentId: string,
@@ -178,7 +194,7 @@ export function prepareSessionIdentityPublication(
   const publish = () => publishCommittedSessionIdentity(agentId, identity, previous, current);
   // Savepoint success is not COMMIT; identity observers can cancel live work.
   return () => {
-    if (!deferSqlitePostCommitPublication(database.db, publish)) {
+    if (!deferSqlitePostCommitPublication(sqlPublicationAnchor(database.db), publish)) {
       publish();
     }
   };

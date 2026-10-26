@@ -23,8 +23,11 @@ const targets = [
   "test",
   "skills",
   "config",
+  "cli-invocation.mjs",
+  "cli-parent-lifetime.mjs",
   "cli-root-options.mjs",
   "docker-entrypoint.mjs",
+  "gateway-prewarm.mjs",
   "gateway-run-argv.mjs",
   "gateway-shutdown-budget.mjs",
   "node-compile-cache.mjs",
@@ -33,11 +36,16 @@ const targets = [
   "node-runtime-recovery.mjs",
   "node-runtime-env.mjs",
   "node-sqlite.mjs",
+  "node-sqlite-capabilities.mjs",
+  "runtime-process-bootstrap.generated.mjs",
+  "runtime-process-scripts.generated.mjs",
   "node-version.mjs",
   "openclaw.mjs",
+  "standalone-runtime-profile.mjs",
   "tsdown.ai.config.ts",
   "tsdown.config.ts",
   "vitest.config.ts",
+  "worker-heap-flag.mjs",
 ];
 
 const sourceExtensions = new Set([".ts", ".tsx", ".js", ".mjs", ".cjs"]);

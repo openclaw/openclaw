@@ -4,6 +4,7 @@ import type {
   WorkerInferenceStartParams,
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
+import { throwCollectedErrors } from "../../infra/error-graph-internal.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
@@ -16,13 +17,7 @@ export type WorkerInferenceSessionDrain = {
 };
 
 export type AcceptedWorkerInferenceSessionDrain = WorkerInferenceSessionDrain & {
-  start(): void;
-};
-
-type WorkerInferenceSessionDrainReservation = {
-  assertReserved(): void;
-  accept(): AcceptedWorkerInferenceSessionDrain;
-  release(): void;
+  start(assertCurrent?: () => void): void;
 };
 
 export class WorkerInferenceSessionDrainBusyError extends Error {
@@ -33,6 +28,9 @@ export class WorkerInferenceSessionDrainBusyError extends Error {
 
 export type WorkerInferenceCancellation = {
   readonly runIds: readonly string[];
+  /** Physical execution for precisely these captured registrations, not cancellation ACKs. */
+  readonly settled: Promise<void>;
+  readonly executing: boolean;
   cancel(control?: {
     assertCurrent?: () => void;
     onCancelled?: (runId: string) => void;
@@ -144,12 +142,7 @@ export async function joinInferenceOperations(
       ...retainedFailures,
     ]),
   ];
-  if (errors.length === 1) {
-    throw errors[0];
-  }
-  if (errors.length > 1) {
-    throw new AggregateError(errors, aggregateMessage);
-  }
+  throwCollectedErrors(errors, aggregateMessage);
 }
 
 export function createWorkerInferenceSessionControls(params: {
@@ -164,13 +157,7 @@ export function createWorkerInferenceSessionControls(params: {
   let stoppingPromise: Promise<void> | undefined;
 
   const captureCancellationEntries = (predicate: (entry: ActiveInference) => boolean) =>
-    [...active.values()].filter(predicate).map((entry) => ({
-      entry,
-      claimKey: entry.claimKey,
-      sessionId: entry.request.sessionId,
-      runId: entry.request.runId,
-      turnId: entry.request.turnId,
-    }));
+    [...active.values()].filter(predicate);
   const cancelCaptured = (
     captured: ReturnType<typeof captureCancellationEntries>,
     reason: WorkerInferenceErrorReason,
@@ -179,19 +166,13 @@ export function createWorkerInferenceSessionControls(params: {
     const settling: Promise<void>[] = [];
     let failure: { error: unknown } | undefined;
     try {
-      for (const { entry, claimKey, sessionId, runId, turnId } of captured) {
+      for (const entry of captured) {
         control?.assertCurrent?.();
-        if (
-          active.get(claimKey) !== entry ||
-          entry.claimKey !== claimKey ||
-          entry.request.sessionId !== sessionId ||
-          entry.request.runId !== runId ||
-          entry.request.turnId !== turnId
-        ) {
+        if (active.get(entry.claimKey) !== entry) {
           continue;
         }
         settling.push(settleAbort(entry, reason));
-        control?.onCancelled?.(runId);
+        control?.onCancelled?.(entry.request.runId);
       }
     } catch (error) {
       failure = { error };
@@ -215,8 +196,14 @@ export function createWorkerInferenceSessionControls(params: {
         entry.request.sessionId === sessionId &&
         (runId === undefined || entry.request.runId === runId),
     );
+    const executionSettled = joinInferenceOperations(
+      captured.flatMap((entry) => (entry.execution ? [entry.execution] : [])),
+    );
+    void executionSettled.catch(() => {});
     return {
-      runIds: [...new Set(captured.map((entry) => entry.runId))].toSorted(),
+      runIds: [...new Set(captured.map((entry) => entry.request.runId))].toSorted(),
+      settled: executionSettled,
+      executing: captured.some((entry) => entry.execution !== undefined && !entry.settled),
       cancel(control) {
         const cancelled = new Set<string>();
         const settled = cancelCaptured(captured, "cancelled", {
@@ -241,86 +228,55 @@ export function createWorkerInferenceSessionControls(params: {
   const hasSessionOperation = (sessionId: string): boolean =>
     [...operations.values()].some((owner) => owner.sessionId === sessionId);
 
-  const reserveSessionDrain = (sessionId: string): WorkerInferenceSessionDrainReservation => {
+  const reserveSessionDrain = (sessionId: string): AcceptedWorkerInferenceSessionDrain => {
+    if (drainingSessions.has(sessionId)) {
+      throw new WorkerInferenceSessionDrainBusyError(sessionId);
+    }
     const captured = captureCancellationEntries((entry) => entry.request.sessionId === sessionId);
-    const entries = new Set(captured.map(({ entry }) => entry));
     const sessionOperations = [...operations].filter(([, owner]) => owner.sessionId === sessionId);
-    const capturedOperations = new Set(sessionOperations.map(([operation]) => operation));
+    const capturedOperations = sessionOperations.map(([operation]) => operation);
     const capturedStoreKeys = new Set([
-      ...captured.map(({ entry }) => entry.storeKey),
+      ...captured.map((entry) => entry.storeKey),
       ...sessionOperations.map(([, owner]) => owner.storeKey),
     ]);
-    let reserved = true;
-    let accepted: ReturnType<WorkerInferenceSessionDrainReservation["accept"]> | undefined;
-    const assertReserved = () => {
-      if (!reserved) {
-        throw new Error("Worker inference drain reservation is no longer pending");
-      }
-      if (drainingSessions.has(sessionId)) {
-        throw new WorkerInferenceSessionDrainBusyError(sessionId);
-      }
-      if (
-        [...active.values()].some(
-          (entry) => entry.request.sessionId === sessionId && !entries.has(entry),
-        ) ||
-        [...operations].some(
-          ([operation, owner]) =>
-            owner.sessionId === sessionId && !capturedOperations.has(operation),
-        )
-      ) {
-        throw new Error("Worker inference registrations changed before drain acceptance");
+    let started = false;
+    let settled = false;
+    let releaseRequested = false;
+    const release = () => {
+      releaseRequested = true;
+      if (settled && drainingSessions.get(sessionId) === drained) {
+        drainingSessions.delete(sessionId);
       }
     };
+    const startedSignal = createDeferredCore();
+    let cancelling: Promise<void> | undefined;
+    const drained = startedSignal.promise.then(() =>
+      joinInferenceOperations(
+        [...capturedOperations, cancelling!],
+        [...capturedStoreKeys].flatMap((storeKey) =>
+          Array.from(unknownSettlements.get(storeKey) ?? []),
+        ),
+      ),
+    );
+    drainingSessions.set(sessionId, drained);
+    const settle = () => {
+      settled = true;
+      if (releaseRequested) {
+        release();
+      }
+    };
+    void drained.then(settle, settle);
     return {
-      assertReserved,
-      accept() {
-        assertReserved();
-        reserved = false;
-        let started = false;
-        let settled = false;
-        let releaseRequested = false;
-        const release = () => {
-          releaseRequested = true;
-          if (settled && drainingSessions.get(sessionId) === drained) {
-            drainingSessions.delete(sessionId);
-          }
-        };
-        const startedSignal = createDeferredCore();
-        let cancelling: Promise<void> | undefined;
-        const drained = startedSignal.promise.then(() =>
-          joinInferenceOperations(
-            [...capturedOperations, cancelling!],
-            [...capturedStoreKeys].flatMap((storeKey) =>
-              Array.from(unknownSettlements.get(storeKey) ?? []),
-            ),
-          ),
-        );
-        drainingSessions.set(sessionId, drained);
-        const settle = () => {
-          settled = true;
-          if (releaseRequested) {
-            release();
-          }
-        };
-        void drained.then(settle, settle);
-        accepted = {
-          drained,
-          hasWork: () => hasSession(sessionId) || hasSessionOperation(sessionId),
-          start() {
-            if (!started) {
-              started = true;
-              cancelling = cancelCaptured(captured, "cancelled");
-              startedSignal.resolve();
-            }
-          },
-          release,
-        };
-        return accepted;
+      drained,
+      hasWork: () => hasSession(sessionId) || hasSessionOperation(sessionId),
+      start(assertCurrent) {
+        if (!started) {
+          started = true;
+          cancelling = cancelCaptured(captured, "cancelled", { assertCurrent });
+          startedSignal.resolve();
+        }
       },
-      release() {
-        reserved = false;
-        accepted?.release();
-      },
+      release,
     };
   };
   const resolveSessionTargetForRunId = (runId: string): BoundAgentRunSessionTarget | undefined => {

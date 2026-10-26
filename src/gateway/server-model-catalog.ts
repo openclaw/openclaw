@@ -10,7 +10,6 @@ import {
   loadPreparedModelRuntimeAuth,
   type PreparedModelRuntimeAuthScope,
 } from "../agents/prepared-model-runtime-auth.js";
-import { PreparedModelRuntimePublicationSupersededError } from "../agents/prepared-model-runtime.errors.js";
 import { isPreparedModelCatalogFull } from "../agents/prepared-model-runtime.full-catalog.js";
 // Gateway catalog reads use the atomic prepared runtime generation.
 import { getRuntimeConfig } from "../config/io.js";
@@ -48,6 +47,9 @@ type LoadGatewayModelCatalogParams = {
 type LoadPreparedGatewayModelCatalogParams = LoadGatewayModelCatalogParams & {
   authScope?: PreparedModelRuntimeAuthScope;
   refreshAuth?: boolean;
+};
+type ReadPreparedGatewayModelCatalogParams = LoadGatewayModelCatalogParams & {
+  includeSessionRowPolicy?: boolean;
 };
 
 async function loadGatewayModelCatalogOwnerSnapshot(
@@ -111,34 +113,20 @@ function projectPreparedGatewayModelCatalogSnapshot(
 export async function loadPreparedGatewayModelCatalogSnapshot(
   params?: LoadPreparedGatewayModelCatalogParams,
 ): Promise<PreparedGatewayModelCatalogSnapshot> {
-  for (;;) {
-    let loaded: Awaited<ReturnType<typeof loadGatewayModelCatalogOwnerSnapshot>>;
-    let refreshedAuth: Awaited<ReturnType<typeof loadPreparedModelRuntimeAuth>>;
-    try {
-      loaded = await loadGatewayModelCatalogOwnerSnapshot(params);
-      refreshedAuth = params?.refreshAuth
-        ? await loadPreparedModelRuntimeAuth(
-            loaded.candidate,
-            params.authScope ?? {
-              providerIds: loaded.owner.modelCatalog.entries.map((entry) => entry.provider),
-            },
-          )
-        : undefined;
-    } catch (error) {
-      if (error instanceof PreparedModelRuntimePublicationSupersededError) {
-        // Supersession invalidates every captured owner fact. Reacquire the whole owner so
-        // replacement auth cannot be combined with stale catalog or metadata.
-        continue;
-      }
-      throw error;
-    }
-    const { owner } = loaded;
-    return projectPreparedGatewayModelCatalogSnapshot(
-      owner,
-      owner.authMaterializations,
-      refreshedAuth,
-    );
-  }
+  const { candidate, owner } = await loadGatewayModelCatalogOwnerSnapshot(params);
+  const refreshedAuth = params?.refreshAuth
+    ? await loadPreparedModelRuntimeAuth(
+        candidate,
+        params.authScope ?? {
+          providerIds: owner.modelCatalog.entries.map((entry) => entry.provider),
+        },
+      )
+    : undefined;
+  return projectPreparedGatewayModelCatalogSnapshot(
+    owner,
+    owner.authMaterializations,
+    refreshedAuth,
+  );
 }
 
 export async function loadGatewayModelCatalogSnapshot(
@@ -167,7 +155,7 @@ export async function loadGatewayModelCatalog(
 function readPreparedGatewayModelCatalogSync(
   getPreparedModelCatalogOwnerSnapshot: typeof import("../agents/prepared-model-catalog.js").getPreparedModelCatalogOwnerSnapshot,
   config: GatewayModelCatalogConfig,
-  params?: LoadGatewayModelCatalogParams,
+  params?: ReadPreparedGatewayModelCatalogParams,
 ): PreparedGatewayModelCatalog | undefined {
   const owner = getPreparedModelCatalogOwnerSnapshot({
     ...(params?.agentId ? { agentId: params.agentId } : {}),
@@ -181,16 +169,18 @@ function readPreparedGatewayModelCatalogSync(
   }
   const catalog = owner.readFullModelCatalog?.() ?? owner.modelCatalog;
   return createPreparedGatewayModelCatalog({
+    config,
     entries: catalog.entries,
     routeVariants: catalog.routeVariants,
     pluginRegistry: owner.pluginRegistry,
     metadataSnapshot: owner.metadataSnapshot,
+    includeSessionRowPolicy: params?.includeSessionRowPolicy,
   });
 }
 
 /** Reads the newest completed published catalog without starting provider discovery. */
 export async function readPreparedGatewayModelCatalog(
-  params?: LoadGatewayModelCatalogParams,
+  params?: ReadPreparedGatewayModelCatalogParams,
 ): Promise<PreparedGatewayModelCatalog | undefined> {
   const { getPreparedModelCatalogOwnerSnapshot } =
     await import("../agents/prepared-model-catalog.js");
@@ -203,7 +193,7 @@ export async function readPreparedGatewayModelCatalog(
 
 export async function readPreparedGatewayModelCatalogBatch(
   agentIds: readonly string[],
-  params?: Pick<LoadGatewayModelCatalogParams, "getConfig">,
+  params?: Pick<ReadPreparedGatewayModelCatalogParams, "getConfig" | "includeSessionRowPolicy">,
 ): Promise<PreparedGatewayModelCatalogReadResult[]> {
   if (agentIds.length === 0) {
     return [];
@@ -223,6 +213,7 @@ export async function readPreparedGatewayModelCatalogBatch(
               config,
               {
                 agentId,
+                includeSessionRowPolicy: params?.includeSessionRowPolicy,
               },
             ),
           };
@@ -243,12 +234,11 @@ export async function readPreparedGatewayModelCatalogOwnerSnapshot(
     getPendingPreparedModelRuntimeReplacement,
     materializePreparedModelCatalogOwner,
   } = await import("../agents/prepared-model-catalog.js");
-  const config = (params?.getConfig ?? getRuntimeConfig)();
   const replacement = getPendingPreparedModelRuntimeReplacement();
   if (replacement) {
     await replacement;
-    return readPreparedGatewayModelCatalogOwnerSnapshot(params);
   }
+  const config = (params?.getConfig ?? getRuntimeConfig)();
   const candidate = getPublishedPreparedModelCatalogOwnerSnapshot({
     ...(params?.agentId ? { agentId: params.agentId } : {}),
     ...(params?.agentDir ? { agentDir: params.agentDir } : {}),

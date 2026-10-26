@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { lstat, mkdir, readdir, realpath, rmdir, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, parse, resolve } from "node:path";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
@@ -6,6 +7,7 @@ import { root as fsSafeRoot } from "../infra/fs-safe.js";
 import { clawContainedRelativePath } from "./path-containment.js";
 import { readClawManifestFile } from "./reader.js";
 import { isCanonicalClawHubPackageName, portableClawPathKey } from "./schema-portability.js";
+import { MAX_MANAGED_FILE_BYTES } from "./source-limits.js";
 import type { ClawDiagnostic, ClawReadResult } from "./types.js";
 
 export const CLAW_PROJECT_RESULT_SCHEMA_VERSION = "openclaw.clawProject.v1" as const;
@@ -18,6 +20,7 @@ type ClawProjectPackageJson = {
   name: string;
   version: string;
   type?: string;
+  license?: string;
   openclaw: { claw: "CLAW.md" };
 };
 
@@ -27,6 +30,7 @@ type ClawProjectValidationResult =
       root: string;
       packageJson: ClawProjectPackageJson;
       claw: Extract<ClawReadResult, { ok: true }>;
+      license?: { byteLength: number; digest: string };
       excludedPaths: string[];
       diagnostics: ClawDiagnostic[];
     }
@@ -154,49 +158,6 @@ function isExcludedProjectSource(value: string): boolean {
     .some((segment) => segment === ".git" || segment === "node_modules");
 }
 
-async function isCaseInsensitiveProjectRoot(root: string): Promise<boolean> {
-  const [canonical, folded] = await Promise.all([
-    lstat(resolve(root, "CLAW.md")).catch(() => undefined),
-    lstat(resolve(root, "claw.md")).catch(() => undefined),
-  ]);
-  return Boolean(
-    canonical && folded && canonical.dev === folded.dev && canonical.ino === folded.ino,
-  );
-}
-
-async function collectExcludedPaths(root: string, selectedPaths: Set<string>): Promise<string[]> {
-  const excluded: string[] = [];
-  const caseInsensitive = await isCaseInsensitiveProjectRoot(root);
-  const selectedPathKeys = new Set(
-    [...selectedPaths].map((path) => projectPathKey(path, caseInsensitive)),
-  );
-  let entryCount = 0;
-  const visit = async (directory: string): Promise<void> => {
-    const entries = await readdir(resolve(root, directory), { withFileTypes: true });
-    for (const entry of entries) {
-      entryCount += 1;
-      if (entryCount > MAX_PROJECT_ENTRIES) {
-        throw new ClawProjectError(
-          "project_too_many_entries",
-          `Claw projects may contain at most ${MAX_PROJECT_ENTRIES} entries outside excluded dependency and source-control trees.`,
-        );
-      }
-      const path = directory ? `${directory}/${entry.name}` : entry.name;
-      if (entry.isDirectory()) {
-        if (entry.name === ".git" || entry.name === "node_modules") {
-          excluded.push(`${path}/`);
-        } else {
-          await visit(path);
-        }
-      } else if (!selectedPathKeys.has(projectPathKey(path, caseInsensitive))) {
-        excluded.push(path);
-      }
-    }
-  };
-  await visit("");
-  return excluded.toSorted((left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right)));
-}
-
 export async function createClawProject(
   projectPath: string,
   options: { name?: string; agentId?: string } = {},
@@ -221,7 +182,7 @@ export async function createClawProject(
   if (!isCanonicalClawHubPackageName(name)) {
     throw new ClawProjectError(
       "invalid_package_name",
-      `Package name ${JSON.stringify(name)} must be a canonical ClawHub package name.`,
+      `Package name ${JSON.stringify(name)} must be a valid ClawHub package name.`,
     );
   }
 
@@ -326,6 +287,18 @@ export async function validateClawProject(
       ),
     );
   }
+  if (
+    record?.license !== undefined &&
+    (typeof record.license !== "string" || record.license.trim().length === 0)
+  ) {
+    diagnostics.push(
+      diagnostic(
+        "project_license_invalid",
+        "package.json.license",
+        "Claw project license metadata must be a non-empty string.",
+      ),
+    );
+  }
   if (diagnostics.length > 0) {
     return { ok: false, root, diagnostics };
   }
@@ -365,9 +338,43 @@ export async function validateClawProject(
       `Workspace source ${JSON.stringify(reservedPackageSource.sourcePath)} collides with generated package metadata.`,
     );
   }
+  let license: { byteLength: number; digest: string } | undefined;
+  try {
+    const licenseEntry = await lstat(resolve(root, "LICENSE")).catch((error: unknown) => {
+      if (
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        error.code === "ENOENT"
+      ) {
+        return undefined;
+      }
+      throw error;
+    });
+    if (licenseEntry) {
+      const sourceRoot = await fsSafeRoot(root);
+      const read = await sourceRoot.read("LICENSE", {
+        hardlinks: "reject",
+        maxBytes: MAX_MANAGED_FILE_BYTES,
+        nonBlockingRead: true,
+        symlinks: "reject",
+      });
+      license = {
+        byteLength: read.buffer.byteLength,
+        digest: `sha256:${createHash("sha256").update(read.buffer).digest("hex")}`,
+      };
+    }
+  } catch (error) {
+    return failure(
+      "project_license_invalid",
+      "LICENSE",
+      `Package-root LICENSE must be a safe regular file: ${coerceErrorMessage(error)}`,
+    );
+  }
   const selectedPathList = [
     "package.json",
     "CLAW.md",
+    ...(license ? ["LICENSE"] : []),
     ...(claw.packageBootstrap ? ["BOOTSTRAP.md"] : []),
     ...(claw.snapshot.openClawProfile ? [claw.snapshot.openClawProfile.sourcePath] : []),
     ...claw.snapshot.workspaceSources.map((source) => source.sourcePath),
@@ -388,7 +395,44 @@ export async function validateClawProject(
   const selectedPaths = new Set(selectedPathList);
   let excludedPaths: string[];
   try {
-    excludedPaths = await collectExcludedPaths(root, selectedPaths);
+    const excluded: string[] = [];
+    const [canonical, folded] = await Promise.all([
+      lstat(resolve(root, "CLAW.md")).catch(() => undefined),
+      lstat(resolve(root, "claw.md")).catch(() => undefined),
+    ]);
+    const caseInsensitive = Boolean(
+      canonical && folded && canonical.dev === folded.dev && canonical.ino === folded.ino,
+    );
+    const selectedPathKeys = new Set(
+      [...selectedPaths].map((path) => projectPathKey(path, caseInsensitive)),
+    );
+    let entryCount = 0;
+    const visit = async (directory: string): Promise<void> => {
+      const entries = await readdir(resolve(root, directory), { withFileTypes: true });
+      for (const entry of entries) {
+        entryCount += 1;
+        if (entryCount > MAX_PROJECT_ENTRIES) {
+          throw new ClawProjectError(
+            "project_too_many_entries",
+            `Claw projects may contain at most ${MAX_PROJECT_ENTRIES} entries outside excluded dependency and source-control trees.`,
+          );
+        }
+        const path = directory ? `${directory}/${entry.name}` : entry.name;
+        if (entry.isDirectory()) {
+          if (entry.name === ".git" || entry.name === "node_modules") {
+            excluded.push(`${path}/`);
+          } else {
+            await visit(path);
+          }
+        } else if (!selectedPathKeys.has(projectPathKey(path, caseInsensitive))) {
+          excluded.push(path);
+        }
+      }
+    };
+    await visit("");
+    excludedPaths = excluded.toSorted((left, right) =>
+      Buffer.compare(Buffer.from(left), Buffer.from(right)),
+    );
   } catch (error) {
     return failure(
       error instanceof ClawProjectError ? error.code : "project_enumeration_failed",
@@ -403,9 +447,11 @@ export async function validateClawProject(
       name: claw.source.name,
       version: claw.source.version,
       ...(typeof record?.type === "string" ? { type: record.type } : {}),
+      ...(typeof record?.license === "string" ? { license: record.license } : {}),
       openclaw: { claw: "CLAW.md" },
     },
     claw,
+    license,
     excludedPaths,
     diagnostics: claw.diagnostics,
   };

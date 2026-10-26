@@ -65,19 +65,6 @@ export interface CollectBranchPathEntriesResult<TEntry extends BranchPathEntry> 
   commonAncestorId: string | null;
 }
 
-/** Options for generating a branch summary. */
-type GenerateBranchSummaryOptions = Pick<
-  SummarizationCompletionParams,
-  "model" | "headers" | "runtime" | "streamFn" | "customInstructions"
-> & {
-  apiKey: string;
-  signal: AbortSignal;
-  /** Replace the default prompt with custom instructions instead of appending them. */
-  replaceInstructions?: boolean;
-  /** Tokens reserved for prompt and model output. Defaults to 16384. */
-  reserveTokens?: number;
-};
-
 /** Collect entries that should be summarized before navigating to a different session tree entry. */
 export function collectEntriesForBranchSummaryFromBranches<TEntry extends BranchPathEntry>(
   oldBranch: readonly TEntry[],
@@ -151,7 +138,17 @@ const BRANCH_SUMMARY_PROMPT = buildSummaryCheckpointPrompt({
 /** Generate a summary for abandoned branch entries. */
 export async function generateBranchSummary(
   entries: SessionTreeEntry[],
-  options: GenerateBranchSummaryOptions,
+  options: Pick<
+    SummarizationCompletionParams,
+    "model" | "headers" | "runtime" | "streamFn" | "customInstructions"
+  > & {
+    apiKey: string;
+    signal: AbortSignal;
+    /** Replace the default prompt with custom instructions instead of appending them. */
+    replaceInstructions?: boolean;
+    /** Tokens reserved for prompt and model output. Defaults to 16384. */
+    reserveTokens?: number;
+  },
 ): Promise<Result<BranchSummaryResult, BranchSummaryError>> {
   const {
     model,
@@ -233,6 +230,15 @@ export async function generateBranchSummary(
       new BranchSummaryError(
         "summarization_failed",
         `Branch summary failed: ${response.errorMessage || "Unknown error"}`,
+      ),
+    );
+  }
+
+  if (response.stopReason === "length") {
+    return err(
+      new BranchSummaryError(
+        "summarization_failed",
+        "Branch summary failed: summary truncated at the output token limit",
       ),
     );
   }

@@ -65,6 +65,10 @@ describe("dispatchReplyFromConfig", () => {
           reason: "reply_operation_aborted",
         }),
       );
+      const preparedSignal = preparedLookup.mock.calls[0]?.[0].abortSignal;
+      expect(preparedSignal).toBeInstanceOf(AbortSignal);
+      expect(preparedSignal?.aborted).toBe(true);
+      expect(preparedSignal?.reason).toBe(abort.signal.reason);
       expect(preparedLookup).toHaveBeenCalledWith({
         agentId: "main",
         demand: "interactive",

@@ -1,5 +1,6 @@
 import { sql } from "kysely";
 import { z } from "zod";
+import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
 import { compileSqliteQueryBindings, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import {
@@ -13,34 +14,28 @@ const VOICE_SESSION_CACHE_SCOPE = "talk-client-voice-sessions";
 export const VOICE_SESSION_RECORD_VERSION = 1;
 export const VOICE_SESSION_STALE_AFTER_MS = 6 * 60 * 60_000;
 
-type ClientVoiceToolEffect = {
-  runId: string;
+type ClientVoiceToolEffect = SchemaContract<
+  Pick<z.output<typeof clientVoiceToolEffectSchema>, keyof typeof clientVoiceToolEffectSchema.shape>
+> & {
   toolCallId?: string;
-  toolName: string;
-  startedAt: number;
   finishedAt?: number;
-  status: "started" | "succeeded" | "failed" | "cancelled" | "blocked";
 };
 
-export type ClientVoiceSessionRecord = {
-  version: typeof VOICE_SESSION_RECORD_VERSION;
-  voiceSessionId: string;
-  agentId: string;
-  sessionKey: string;
-  provider?: string;
-  origin: "client" | "relay";
-  status: "open" | "closed";
-  createdAt: number;
-  updatedAt: number;
+export type ClientVoiceSessionRecord = SchemaContract<
+  Omit<
+    Pick<
+      z.output<typeof clientVoiceSessionRecordSchema>,
+      keyof typeof clientVoiceSessionRecordSchema.shape
+    >,
+    "effects"
+  >
+> & {
   closedAt?: number;
-  consultRunIds: string[];
   effects: ClientVoiceToolEffect[];
   digestDeliveredAt?: number;
-  /** Bounded hashes of transcript entries that must succeed before close can commit. */
-  transcriptFailureKeys: string[];
   /** Declared at create when the client speaks the transcript protocol (sent sessionKey). */
   transcriptCapable?: boolean;
-  /** Set once a finalized user utterance persisted; gates spoken confirmation capability. */
+  /** Set once a finalized user utterance persisted; records observed transcript capability. */
   hasUserTranscript?: boolean;
 };
 
@@ -92,6 +87,7 @@ const clientVoiceSessionRecordSchema = z.looseObject({
           })
         : [],
     ),
+  /** Bounded hashes of transcript entries that must succeed before close can commit. */
   transcriptFailureKeys: z
     .unknown()
     .optional()
@@ -156,22 +152,21 @@ type VoiceSessionFacts = Readonly<
   >
 >;
 /** Synchronous tool policy reads the current record without a separate freshness probe. */
-export function readVoiceSessionFacts(
+function readVoiceSessionFacts(
   agentId: string,
   voiceSessionId: string,
   options?: Pick<OpenClawAgentDatabaseOptions, "env" | "path">,
 ): VoiceSessionFacts | undefined {
   const record = readVoiceSessionRecord(agentId, voiceSessionId, options);
   return (
-    record &&
-    Object.freeze({
+    record && {
       agentId: record.agentId,
       sessionKey: record.sessionKey,
       origin: record.origin,
       status: record.status,
       transcriptCapable: record.transcriptCapable,
       hasUserTranscript: record.hasUserTranscript,
-    })
+    }
   );
 }
 

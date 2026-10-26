@@ -3,20 +3,16 @@
  */
 import type { CliSessionBinding } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { resolveAuthProfileOrderWithMetadata } from "./auth-profiles/order.js";
-import { loadAuthProfileStoreForRuntime } from "./auth-profiles/store-runtime.js";
-import type { AuthProfileCredential } from "./auth-profiles/types.js";
+import type { loadAuthProfileStoreForRuntimeAsync } from "./auth-profiles/store-runtime.js";
+import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
 import { resolveCliBackendConfig, resolveCliRuntimeCanonicalProvider } from "./cli-backends.js";
 import { resolveBundledCliBackendAuthPolicy } from "./cli-runner/cli-backend-auth-policy.js";
 
 const GOOGLE_GEMINI_CLI_PROVIDER_ID = "google-gemini-cli";
 const GOOGLE_PROVIDER_ID = "google";
 const CLAUDE_CLI_PROVIDER_ID = "claude-cli";
-
-type CliExecutionAuthProfileSelection = {
-  authProfileId?: string;
-  authProfileIdSource?: "auto" | "user";
-};
 
 class CliExecutionAuthProfileError extends Error {
   override name = "CliExecutionAuthProfileError";
@@ -37,28 +33,24 @@ export function cliBackendAcceptsAuthProfileForwarding(params: {
  * Preserve the session account unless the user selects another or it was removed.
  * A user-locked profile must fail closed rather than run as another user.
  */
-export function resolveCliExecutionAuthProfileId(params: {
+export function selectCliExecutionAuthProfile(params: {
   cliExecutionProvider: string;
   authProfileProvider: string;
   config: OpenClawConfig;
-  agentDir: string;
-  selected?: CliExecutionAuthProfileSelection;
+  store: AuthProfileStore;
+  selected?: {
+    authProfileId?: string;
+    authProfileIdSource?: "auto" | "user";
+  };
   sessionBinding?: CliSessionBinding;
-  loadAuthProfileStoreForRuntime?: typeof loadAuthProfileStoreForRuntime;
-}): string | undefined {
-  const loadStore = params.loadAuthProfileStoreForRuntime ?? loadAuthProfileStoreForRuntime;
+  readinessMode?: "execution" | "read-only";
+  metadataSnapshot?: PluginMetadataSnapshot;
+}): { profileId: string; provider: string } | undefined {
+  const { store } = params;
   const selectedAuthProfileId = params.selected?.authProfileId?.trim();
   const hasExplicitSelection =
     selectedAuthProfileId && params.selected?.authProfileIdSource !== "auto";
   const sessionAuthProfileId = params.sessionBinding?.authProfileId?.trim();
-  const store = loadStore(params.agentDir, {
-    readOnly: true,
-    allowKeychainPrompt: false,
-    externalCliProviderIds: [params.cliExecutionProvider],
-    profileId: hasExplicitSelection
-      ? selectedAuthProfileId
-      : (sessionAuthProfileId ?? selectedAuthProfileId),
-  });
   const nativeAuthProfileIds = resolveBundledCliBackendAuthPolicy(
     params.cliExecutionProvider,
   )?.nativeAuthProfileIds;
@@ -80,6 +72,7 @@ export function resolveCliExecutionAuthProfileId(params: {
     runtime: params.cliExecutionProvider,
     config: params.config,
     includeSetupRegistry: true,
+    metadataSnapshot: params.metadataSnapshot,
   });
   const acceptsCredential = (credential: AuthProfileCredential, explicitSelection: boolean) =>
     credential.provider === params.cliExecutionProvider ||
@@ -96,7 +89,7 @@ export function resolveCliExecutionAuthProfileId(params: {
       );
     }
     if (acceptsCredential(credential, true)) {
-      return retainedProfileId;
+      return { profileId: retainedProfileId, provider: credential.provider };
     }
     throw new CliExecutionAuthProfileError(
       `CLI backend "${params.cliExecutionProvider}" cannot use auth profile "${retainedProfileId}" owned by "${credential.provider}".`,
@@ -118,16 +111,44 @@ export function resolveCliExecutionAuthProfileId(params: {
       store,
       provider,
       preferredProfile: selectedAuthProfileId,
+      readinessMode: params.readinessMode,
+      authAliasLookupParams: { metadataSnapshot: params.metadataSnapshot },
     });
-    const profileId = order.profileIds.find((id) => {
-      const credential = store.profiles[id];
-      return (
-        credential && acceptsCredential(credential, false) && !nativeAuthProfileIds?.includes(id)
-      );
-    });
-    if (profileId || order.hasExplicitOrder) {
-      return profileId;
+    for (const profileId of order.profileIds) {
+      const credential = store.profiles[profileId];
+      if (
+        credential &&
+        acceptsCredential(credential, false) &&
+        !nativeAuthProfileIds?.includes(profileId)
+      ) {
+        return { profileId, provider: credential.provider };
+      }
+    }
+    if (order.hasExplicitOrder) {
+      return undefined;
     }
   }
   return undefined;
+}
+
+export async function resolveCliExecutionAuthProfileId(
+  params: Omit<Parameters<typeof selectCliExecutionAuthProfile>[0], "store" | "readinessMode"> & {
+    agentDir: string;
+    loadAuthProfileStoreForRuntimeAsync?: typeof loadAuthProfileStoreForRuntimeAsync;
+  },
+): Promise<string | undefined> {
+  const loadStore =
+    params.loadAuthProfileStoreForRuntimeAsync ??
+    (await import("./auth-profiles/store-runtime.js")).loadAuthProfileStoreForRuntimeAsync;
+  const selected = params.selected?.authProfileId?.trim();
+  const store = await loadStore(params.agentDir, {
+    readOnly: true,
+    allowKeychainPrompt: false,
+    externalCliProviderIds: [params.cliExecutionProvider],
+    profileId:
+      selected && params.selected?.authProfileIdSource !== "auto"
+        ? selected
+        : (params.sessionBinding?.authProfileId?.trim() ?? selected),
+  });
+  return selectCliExecutionAuthProfile({ ...params, store })?.profileId;
 }

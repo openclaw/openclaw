@@ -1,6 +1,7 @@
 import type { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const gatewayMocks = vi.hoisted(() => ({
   callGatewayFromCli: vi.fn<typeof callGatewayFromCli>(async () => ({ ok: true })),
@@ -10,7 +11,7 @@ vi.mock("openclaw/plugin-sdk/gateway-runtime", () => ({
   callGatewayFromCli: gatewayMocks.callGatewayFromCli,
 }));
 
-const { callBrowserRequest } = await import("./browser-cli-shared.js");
+const { callBrowserRequest, runBrowserCliRequest } = await import("./browser-cli-shared.js");
 
 describe("callBrowserRequest", () => {
   beforeEach(() => {
@@ -48,12 +49,11 @@ describe("callBrowserRequest", () => {
     await callBrowserRequest(
       { json: true },
       { method: "GET", path: "/status", query: { profile: "openclaw" } },
-      { progress: true },
     );
 
     const call = gatewayMocks.callGatewayFromCli.mock.calls[0];
     const extra = call?.[3];
-    expect(extra).toEqual({ progress: true, scopes: ["operator.admin"] });
+    expect(extra).toEqual({ scopes: ["operator.admin"] });
   });
 
   it("rejects partial parent timeout values before gateway dispatch", async () => {
@@ -61,18 +61,6 @@ describe("callBrowserRequest", () => {
       callBrowserRequest({ json: true, timeout: "60000ms" }, { method: "GET", path: "/status" }),
     ).rejects.toThrow("--timeout must be a positive integer.");
     expect(gatewayMocks.callGatewayFromCli).not.toHaveBeenCalled();
-  });
-
-  it("caps explicit request timeouts to Node's safe timer range", async () => {
-    await callBrowserRequest(
-      { json: true },
-      { method: "GET", path: "/status" },
-      { timeoutMs: 3_000_000_000 },
-    );
-
-    const call = gatewayMocks.callGatewayFromCli.mock.calls[0];
-    expect(call?.[1]).toMatchObject({ timeout: String(MAX_TIMER_TIMEOUT_MS) });
-    expect(call?.[2]).toMatchObject({ timeoutMs: MAX_TIMER_TIMEOUT_MS - 10_000 });
   });
 
   it("caps parent timeout values to Node's safe timer range", async () => {
@@ -83,17 +71,61 @@ describe("callBrowserRequest", () => {
 
     const call = gatewayMocks.callGatewayFromCli.mock.calls[0];
     expect(call?.[1]).toMatchObject({ timeout: String(MAX_TIMER_TIMEOUT_MS) });
-    expect(call?.[2]).toMatchObject({ timeoutMs: MAX_TIMER_TIMEOUT_MS - 10_000 });
+    expect(call?.[2]).toMatchObject({ timeoutMs: MAX_TIMER_TIMEOUT_MS - 130_000 });
+  });
+});
+
+describe("runBrowserCliRequest", () => {
+  const argv = process.argv;
+
+  beforeEach(() => {
+    gatewayMocks.callGatewayFromCli.mockReset().mockResolvedValue({ ok: true });
+    vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
+      throw new Error(`test exit:${code}`);
+    });
   });
 
-  it("accepts strict signed and zero-padded parent timeout values", async () => {
-    await callBrowserRequest(
-      { json: true, timeout: " +060000 " },
-      { method: "GET", path: "/status" },
-    );
+  afterEach(() => {
+    process.argv = argv;
+    vi.restoreAllMocks();
+  });
 
-    const call = gatewayMocks.callGatewayFromCli.mock.calls[0];
-    expect(call?.[1]).toMatchObject({ timeout: "70000" });
-    expect(call?.[2]).toMatchObject({ timeoutMs: 60_000 });
+  it.each(["inline", "runtime"] as const)(
+    "propagates %s JSON failures to the host",
+    async (errorPolicy) => {
+      process.argv = ["node", "openclaw", "browser", "--json", "resize", "640", "480"];
+      const failure = new Error("Request refused");
+      gatewayMocks.callGatewayFromCli.mockRejectedValueOnce(failure);
+
+      await expect(
+        runBrowserCliRequest({ parent: { json: true }, path: "/resize", errorPolicy }),
+      ).rejects.toBe(failure);
+      expect(defaultRuntime.error).not.toHaveBeenCalled();
+      expect(defaultRuntime.exit).not.toHaveBeenCalled();
+    },
+  );
+
+  it("retains local human diagnostics for inline requests", async () => {
+    process.argv = ["node", "openclaw", "browser", "resize", "640", "480"];
+    gatewayMocks.callGatewayFromCli.mockRejectedValueOnce(new Error("Request refused"));
+
+    await expect(
+      runBrowserCliRequest({ parent: {}, path: "/resize", errorPolicy: "inline" }),
+    ).rejects.toThrow("test exit:1");
+    expect(defaultRuntime.error).toHaveBeenCalledExactlyOnceWith("Error: Request refused");
+    expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
+  });
+
+  it("retains successful inline JSON payloads", async () => {
+    process.argv = ["node", "openclaw", "browser", "--json", "resize", "640", "480"];
+    const payload = { ok: true };
+    gatewayMocks.callGatewayFromCli.mockResolvedValueOnce(payload);
+
+    await runBrowserCliRequest({ parent: { json: true }, path: "/resize", errorPolicy: "inline" });
+
+    expect(defaultRuntime.writeJson).toHaveBeenCalledExactlyOnceWith(payload);
+    expect(defaultRuntime.exit).not.toHaveBeenCalled();
   });
 });

@@ -10,6 +10,8 @@ import {
   createPayloadPatchStreamWrapper,
   setQwenChatTemplateThinking,
 } from "openclaw/plugin-sdk/provider-stream-shared";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { wrapVllmPriorityStream } from "./priority.js";
 import {
   isVllmNemotronThinkingModel,
   resolveVllmEffortProfile,
@@ -61,14 +63,8 @@ function setChatTemplateDefaults(
   payload: Record<string, unknown>,
   defaults: Record<string, unknown>,
 ): void {
-  const existing = payload.chat_template_kwargs;
-  payload.chat_template_kwargs =
-    existing && typeof existing === "object" && !Array.isArray(existing)
-      ? {
-          ...defaults,
-          ...(existing as Record<string, unknown>),
-        }
-      : defaults;
+  const existing = asOptionalRecord(payload.chat_template_kwargs);
+  payload.chat_template_kwargs = existing ? { ...defaults, ...existing } : defaults;
 }
 
 export function createVllmQwenThinkingWrapper(params: {
@@ -79,11 +75,11 @@ export function createVllmQwenThinkingWrapper(params: {
   return createPayloadPatchStreamWrapper(
     params.baseStreamFn,
     ({ payload: payloadObj, model, options }) => {
-      if (!isCompletionsModel(model) || !(model.reasoning ?? true)) {
+      if (!isCompletionsModel(model) || !model.reasoning) {
         return;
       }
       const reasoning = resolveOpenAIRequestReasoning(
-        { ...model, reasoning: model.reasoning ?? true },
+        model,
         options?.reasoning ?? params.thinkingLevel,
       );
       const enableThinking = reasoning.thinkingEnabled ?? true;
@@ -117,10 +113,10 @@ export function wrapVllmProviderStream(ctx: ProviderWrapStreamFnContext): Stream
   const qwenFormat = resolveVllmQwenThinkingFormatFromCompat(ctx.model?.compat);
   const deepSeek = !qwenFormat && isVllmDeepSeekV4Model(ctx.modelId);
   if (!qwenFormat && !deepSeek && !isVllmNemotronThinkingModel(ctx.modelId)) {
-    return undefined;
+    return wrapVllmPriorityStream(ctx);
   }
   return composeProviderStreamWrappers(
-    ctx.streamFn,
+    wrapVllmPriorityStream(ctx),
     qwenFormat &&
       ((streamFn) =>
         createVllmQwenThinkingWrapper({

@@ -41,14 +41,16 @@ describe("SessionUnreadPatchGuard", () => {
     },
   );
 
-  it("re-acknowledges when new activity flags the open session unread again", () => {
+  it("reconsiders newer unread activity after a successful pending read", () => {
     const guard = new SessionUnreadPatchGuard();
     expect(guard.shouldPatch("agent:main:a", true)).toBe(true);
-    guard.settlePatch()(true);
-    // Server confirms the read, then a background run completes.
+    const settle = guard.settlePatch();
     expect(guard.shouldPatch("agent:main:a", false)).toBe(false);
-    expect(guard.shouldPatch("agent:main:a", true)).toBe(true);
     expect(guard.shouldPatch("agent:main:a", true)).toBe(false);
+
+    settle(true);
+
+    expect(guard.shouldPatch("agent:main:a", true)).toBe(true);
   });
 
   it("keeps an acknowledgement latched across an optimistic local read", () => {
@@ -60,25 +62,12 @@ describe("SessionUnreadPatchGuard", () => {
     expect(guard.shouldPatch("agent:main:a", true, 100)).toBe(true);
   });
 
-  it("treats a null marker as no manual marker", () => {
-    const guard = new SessionUnreadPatchGuard();
-    expect(guard.shouldPatch("agent:main:a", false)).toBe(false);
-    expect(guard.shouldPatch("agent:main:a", true, null)).toBe(true);
-  });
-
   it("does not patch read sessions and resets after changing sessions", () => {
     const guard = new SessionUnreadPatchGuard();
     expect(guard.shouldPatch("agent:main:a", false)).toBe(false);
     expect(guard.shouldPatch("agent:main:a", true)).toBe(true);
     expect(guard.shouldPatch("agent:main:b", true)).toBe(true);
     expect(guard.shouldPatch("agent:main:a", true)).toBe(true);
-  });
-
-  it("preserves a manual unread marker created after the active session was observed", () => {
-    const guard = new SessionUnreadPatchGuard();
-    expect(guard.shouldPatch("agent:main:a", false)).toBe(false);
-    expect(guard.shouldPatch("agent:main:a", true, 100)).toBe(false);
-    expect(guard.shouldPatch("agent:main:a", true, 100)).toBe(false);
   });
 
   it("acknowledges a manual unread marker on a later activation", () => {

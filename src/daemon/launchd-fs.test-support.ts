@@ -29,6 +29,16 @@ export function createLaunchdFileSystem(actual: typeof promises, state: LaunchdF
     }
     return target;
   };
+  const forget = (file: string) => {
+    materialized.delete(file);
+    state.files.delete(file);
+    state.fileModes.delete(file);
+  };
+  const applyMode = (target: string, mode: number | undefined) => {
+    if (mode !== undefined && (fs.statSync(target).mode & 0o777) !== mode) {
+      fs.chmodSync(target, mode);
+    }
+  };
   const readState = (file: string) => {
     const target = physical(file);
     const stat = fs.lstatSync(target);
@@ -55,16 +65,12 @@ export function createLaunchdFileSystem(actual: typeof promises, state: LaunchdF
     for (const directory of state.dirs) {
       const target = physical(directory);
       fs.mkdirSync(target, { recursive: true });
-      const mode = state.dirModes.get(directory);
-      if (mode !== undefined && (fs.statSync(target).mode & 0o777) !== mode) {
-        fs.chmodSync(target, mode);
-      }
+      applyMode(target, state.dirModes.get(directory));
     }
     for (const file of materialized.keys()) {
       if (!state.files.has(file)) {
         fs.rmSync(physical(file), { force: true });
-        materialized.delete(file);
-        state.fileModes.delete(file);
+        forget(file);
       }
     }
     for (const [file, contents] of state.files) {
@@ -82,13 +88,8 @@ export function createLaunchdFileSystem(actual: typeof promises, state: LaunchdF
         }
         materialized.set(file, contents);
       }
-      const mode = state.fileModes.get(file);
-      if (
-        contents !== "dangling-launchagent-symlink" &&
-        mode !== undefined &&
-        (fs.statSync(target).mode & 0o777) !== mode
-      ) {
-        fs.chmodSync(target, mode);
+      if (contents !== "dangling-launchagent-symlink") {
+        applyMode(target, state.fileModes.get(file));
       }
     }
   };
@@ -99,11 +100,6 @@ export function createLaunchdFileSystem(actual: typeof promises, state: LaunchdF
   const recordWrite = (file: string) => {
     readState(file);
     state.fileWrites.push({ path: file });
-  };
-  const forget = (file: string) => {
-    materialized.delete(file);
-    state.files.delete(file);
-    state.fileModes.delete(file);
   };
   return {
     ...actual,
@@ -142,17 +138,13 @@ export function createLaunchdFileSystem(actual: typeof promises, state: LaunchdF
       return handle;
     }),
     writeFile: vi.fn(async (...[file, data, options]: Parameters<typeof actual.writeFile>) => {
-      if (typeof file === "object" && "fd" in file) {
-        const logical = handles.get(file);
-        if (logical === undefined) {
-          throw new Error("Write used a descriptor outside the launchd filesystem fixture.");
-        }
-        await actual.writeFile(file, data, options);
-        recordWrite(logical);
-      } else {
-        await actual.writeFile(resolve(file), data, options);
-        recordWrite(key(file));
+      const descriptor = typeof file === "object" && "fd" in file;
+      const logical = descriptor ? handles.get(file) : key(file);
+      if (logical === undefined) {
+        throw new Error("Write used a descriptor outside the launchd filesystem fixture.");
       }
+      await actual.writeFile(descriptor ? file : resolve(file), data, options);
+      recordWrite(logical);
     }),
     unlink: vi.fn(async (file: PathLike) => {
       await actual.unlink(resolve(file));

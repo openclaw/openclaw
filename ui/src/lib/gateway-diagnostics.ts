@@ -2,17 +2,7 @@ import type { getCommandLaneDiagnostics } from "../../../src/process/command-lan
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { HealthSnapshot, ModelCatalogResult, StatusSummary } from "../api/types.ts";
 
-export type { CommandLaneSnapshot } from "../../../src/process/command-queue.types.js";
-
 export type CommandLaneDiagnostics = ReturnType<typeof getCommandLaneDiagnostics>;
-export type CommandLaneDynamicSummary = NonNullable<CommandLaneDiagnostics["dynamic"]>;
-
-type GatewayDiagnosticsSnapshot = CommandLaneDiagnostics & {
-  status: StatusSummary;
-  health: HealthSnapshot;
-  models: unknown[];
-  heartbeat: unknown;
-};
 
 export async function loadCommandLaneDiagnostics(
   client: GatewayBrowserClient,
@@ -25,7 +15,7 @@ export async function loadGatewayDiagnostics(
   client: GatewayBrowserClient,
   agentId: string | null,
   signal?: AbortSignal,
-): Promise<GatewayDiagnosticsSnapshot> {
+) {
   // Diagnostics sample the Gateway itself, independently of cached picker choices.
   const modelsRequest = agentId
     ? client.request<ModelCatalogResult>(

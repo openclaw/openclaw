@@ -3,21 +3,19 @@ import { asPositiveFiniteNumber as resolvePositiveContextTokens } from "@opencla
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { hasAcceptedSessionSpawn } from "../../agents/accepted-session-spawn.js";
 import {
-  buildAgentRunTerminalReplySnapshot,
-  normalizeAgentRunTerminalReplySnapshot,
-} from "../../agents/agent-run-terminal-reply.js";
-import {
   CODE_MODE_MCP_CATALOG_MISS_MESSAGE,
   isEmbeddedRunTerminalToolFailure,
 } from "../../agents/embedded-agent-runner/terminal-tool-failure.js";
-import { isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
+import { shouldSuppressReasoningPayload } from "../../auto-reply/reply-payload.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../../config/sessions.js";
 import {
   resolveProjectedSessionContextTokens,
   resolveTrustedSessionContextTokens,
 } from "../../config/sessions/context-token-provenance.js";
+import type { AutomationResult } from "../../infra/agent-run-registry.types.js";
 import { resolveSourceDeliveryOutcome } from "../../infra/outbound/source-delivery-plan.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { hasPendingAutomationContinuation } from "../automation-result.js";
 import {
   createCronRunDiagnosticsFromAgentResult,
   createCronRunDiagnosticsFromError,
@@ -47,6 +45,7 @@ const cronContextRuntimeLoader = createLazyImportLoader(() => import("./run-cont
 
 export async function finalizeCronRun(params: {
   prepared: PreparedCronRunContext;
+  automationResult?: AutomationResult;
   execution: CronExecutionResult;
   abortReason: () => string;
   isAborted: () => boolean;
@@ -56,15 +55,12 @@ export async function finalizeCronRun(params: {
 }): Promise<RunCronAgentTurnResult> {
   const { prepared, execution } = params;
   const finalRunResult = execution.runResult;
-  const replyDisposition = (
-    normalizeAgentRunTerminalReplySnapshot(finalRunResult.meta?.terminalReply) ??
-    buildAgentRunTerminalReplySnapshot({
-      visibleText: finalRunResult.meta?.finalAssistantVisibleText,
-      rawText: finalRunResult.meta?.finalAssistantRawText,
-      terminalReplyKind: finalRunResult.meta?.terminalReplyKind,
-    })
-  ).disposition;
-  const payloads = finalRunResult.payloads ?? [];
+  const replyDisposition = finalRunResult.meta?.terminalReply?.disposition ?? "empty";
+  const pendingContinuation = hasPendingAutomationContinuation(finalRunResult.meta);
+  const includeReasoning = prepared.agentPayload?.includeReasoning === true;
+  const payloads = (finalRunResult.payloads ?? []).filter(
+    (payload) => !shouldSuppressReasoningPayload(payload),
+  );
   const cleanupRunSession = async (reason: string) => {
     await cleanupCronRunSessionAfterRun({
       job: prepared.input.job,
@@ -189,9 +185,11 @@ export async function finalizeCronRun(params: {
   }
   const cronPayloadOutcome = resolveCronPayloadOutcome({
     payloads,
+    terminalReplyDisposition: replyDisposition,
     runLevelError: finalRunResult.meta?.error,
     failureSignal: finalRunResult.meta?.failureSignal,
-    finalAssistantVisibleText: finalRunResult.meta?.finalAssistantVisibleText,
+    finalAssistantVisibleText:
+      replyDisposition === "visible" ? finalRunResult.meta?.finalAssistantVisibleText : undefined,
     preferFinalAssistantVisibleText: (
       await resolveCronChannelOutputPolicy(prepared.resolvedDelivery.channel, {
         deliveryRequested: prepared.deliveryRequested,
@@ -214,12 +212,8 @@ export async function finalizeCronRun(params: {
       ...telemetry,
     });
   }
-  const {
-    deliveryDisposition,
-    deliveryPayloadHasStructuredContent,
-    hasFatalStructuredErrorPayload,
-    pendingPresentationWarningError,
-  } = cronPayloadOutcome;
+  const { deliveryDisposition, hasFatalStructuredErrorPayload, pendingPresentationWarningError } =
+    cronPayloadOutcome;
   let {
     synthesizedText,
     deliveryPayloads,
@@ -227,8 +221,13 @@ export async function finalizeCronRun(params: {
     outputText,
     hasFatalErrorPayload,
     embeddedRunError,
-    agentReportedFailure,
   } = cronPayloadOutcome;
+  if (includeReasoning && !hasFatalErrorPayload && deliveryDisposition.kind === "visible") {
+    deliveryPayloads = [
+      ...(finalRunResult.payloads ?? []).filter(shouldSuppressReasoningPayload),
+      ...deliveryPayloads,
+    ];
+  }
   const terminalToolFailure = finalRunResult.meta?.terminalToolFailure;
   const hasTerminalToolFailure = isEmbeddedRunTerminalToolFailure(terminalToolFailure);
   if (hasFatalErrorPayload && hasTerminalToolFailure) {
@@ -261,16 +260,26 @@ export async function finalizeCronRun(params: {
       ...(failure
         ? { error: failure.error, ...(failure.errorKind ? { errorKind: failure.errorKind } : {}) }
         : hasFatalErrorPayload
-          ? {
-              error: runError,
-              // The agent already judged the task blocked: rerunning it would repeat that turn,
-              // and its prose must not be text-classified into a transient retry reason.
-              ...(agentReportedFailure
-                ? { errorClassification: { kind: "permanent" as const, reportedByAgent: true } }
-                : {}),
-            }
+          ? { error: runError }
           : {}),
       ...output,
+      result:
+        pendingContinuation || spawnOnlyHandoff || disposition?.kind === "pending"
+          ? undefined
+          : params.automationResult,
+      ...(params.automationResult &&
+      !pendingContinuation &&
+      !spawnOnlyHandoff &&
+      !hasFatalErrorPayload &&
+      !failure &&
+      disposition?.kind !== "pending"
+        ? {
+            summary:
+              params.automationResult.outcome === "no_change"
+                ? undefined
+                : params.automationResult.summary,
+          }
+        : {}),
       replyDisposition,
       deliveryState: result?.deliveryState,
       delivered:
@@ -283,6 +292,7 @@ export async function finalizeCronRun(params: {
       delivery: result?.delivery,
       diagnostics: mergeCronRunDiagnostics(
         runDiagnostics,
+        result?.diagnostics,
         useRunFailure && !hasTerminalToolFailure
           ? createCronRunDiagnosticsFromError("agent-run", runError)
           : undefined,
@@ -294,49 +304,33 @@ export async function finalizeCronRun(params: {
     });
   };
   const acceptedSessionSpawn = hasAcceptedSessionSpawn(finalRunResult.acceptedSessionSpawns);
-  const heartbeatOnlyResponse =
-    prepared.deliveryRequested && !hasFatalErrorPayload && deliveryDisposition.kind !== "visible";
-  const heartbeatControlOnlyResponse =
-    heartbeatOnlyResponse &&
-    (deliveryDisposition.kind === "empty" ||
-      (deliveryDisposition.kind === "heartbeat" && deliveryDisposition.controlOnly));
+  const quietResponse = !hasFatalErrorPayload && deliveryDisposition.kind !== "visible";
   const spawnOnlyHandoff =
     acceptedSessionSpawn &&
-    (heartbeatControlOnlyResponse ||
+    (quietResponse ||
       (deliveryPayloads.length === 0 && normalizeOptionalString(synthesizedText) === undefined));
-  if (spawnOnlyHandoff && heartbeatControlOnlyResponse) {
-    // Parent heartbeat acknowledgments cannot fulfill child delivery; one-shot
+  if (spawnOnlyHandoff && quietResponse) {
+    // Parent control replies cannot fulfill child delivery; one-shot
     // cleanup must wait for actual descendant output before retiring the job.
     deliveryPayloads = [];
     synthesizedText = undefined;
     summary = undefined;
     outputText = undefined;
   }
-  const skipHeartbeatDelivery = heartbeatOnlyResponse && !spawnOnlyHandoff;
+  const skipQuietDelivery = prepared.deliveryRequested && quietResponse && !spawnOnlyHandoff;
+  const noChange =
+    params.automationResult?.outcome === "no_change" &&
+    !hasFatalErrorPayload &&
+    !pendingContinuation &&
+    !spawnOnlyHandoff;
+  const policySuppression = !prepared.resolvedDelivery.ok
+    ? prepared.resolvedDelivery.deliverySuppressionReason
+    : undefined;
   const sourceDeliveryOutcome = resolveSourceDeliveryOutcome(prepared.sourceDelivery, {
     didSendViaMessageTool: finalRunResult.didSendViaMessagingTool,
     messageToolSentTargets: finalRunResult.messagingToolSentTargets,
   });
-  let queueSourceSessionMessageToolAwareness: (() => Promise<void>) | undefined;
-  if (sourceDeliveryOutcome.visibleDeliveries.length > 0) {
-    const { queueCronMessageToolDeliveryAwareness } = await loadCronDeliveryRuntime();
-    queueSourceSessionMessageToolAwareness = await queueCronMessageToolDeliveryAwareness({
-      cfg: prepared.cfgWithAgentDefaults,
-      runSessionKey: prepared.runSessionKey,
-      job: prepared.input.job,
-      agentId: prepared.agentId,
-      agentSessionKey: prepared.agentSessionKey,
-      deferredTargetSessionKey:
-        prepared.input.job.sessionTarget === "current" ? prepared.sourceSessionKey : undefined,
-      runStartedAt: execution.runStartedAt,
-      resolvedDelivery: prepared.resolvedDelivery,
-      sourceDeliveryOutcome,
-    });
-  }
-  const hasIntentionalSilentReply =
-    finalRunResult.meta?.terminalReplyKind === "silent-empty" ||
-    isSilentReplyPayloadText(finalRunResult.meta?.finalAssistantRawText) ||
-    isSilentReplyPayloadText(finalRunResult.meta?.finalAssistantVisibleText);
+  const hasIntentionalSilentReply = replyDisposition === "silent";
   if (hasFatalStructuredErrorPayload && prepared.deliveryRequested) {
     // Structured run error payloads belong in cron state and failure alerts,
     // not the normal completion announce path where provider JSON can leak.
@@ -348,7 +342,6 @@ export async function finalizeCronRun(params: {
       fallbackUsed: false,
       delivered: sourceDeliveryOutcome.verifiedMessageToolDelivery,
     });
-    await queueSourceSessionMessageToolAwareness?.();
     return resolveRunOutcome({
       delivered: sourceDeliveryOutcome.verifiedMessageToolDelivery,
       deliveryAttempted: sourceDeliveryOutcome.verifiedMessageToolDelivery,
@@ -378,16 +371,18 @@ export async function finalizeCronRun(params: {
     deliveryPlan: prepared.deliveryPlan,
     deliveryRequested: prepared.deliveryRequested,
     undeliveredRunStatus: hasFatalErrorPayload || pendingPresentationWarningError ? "error" : "ok",
-    skipDelivery: skipHeartbeatDelivery
-      ? hasIntentionalSilentReply
+    skipDelivery:
+      policySuppression ??
+      (noChange
         ? "silent"
-        : deliveryDisposition.kind
-      : undefined,
+        : skipQuietDelivery
+          ? hasIntentionalSilentReply
+            ? "silent"
+            : deliveryDisposition.kind
+          : undefined),
     spawnOnlyHandoff,
     sourceDeliveryOutcome,
-    queueSourceSessionMessageToolAwareness,
     deliveryBestEffort: prepared.input.job.delivery?.bestEffort === true,
-    deliveryPayloadHasStructuredContent,
     deliveryPayloads,
     synthesizedText,
     ttsAuto: prepared.cronSession.sessionEntry.ttsAuto,
@@ -414,11 +409,6 @@ export async function finalizeCronRun(params: {
   if (pendingPresentationWarningError && deliveryResult.delivered !== true) {
     hasFatalErrorPayload = true;
     embeddedRunError = pendingPresentationWarningError;
-  }
-  if (deliveryResult.agentReportedFailure && !hasFatalErrorPayload) {
-    hasFatalErrorPayload = true;
-    embeddedRunError = deliveryResult.agentReportedFailure;
-    agentReportedFailure = true;
   }
   return resolveRunOutcome({ ...deliveryResult, delivery: deliveryTrace });
 }

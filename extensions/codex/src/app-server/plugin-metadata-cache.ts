@@ -50,10 +50,6 @@ type InFlightCodexPluginMetadataLoad = {
 export class CodexPluginMetadataCache {
   private readonly entries = new Map<string, CachedCodexPluginMetadataEntry>();
   private readonly inFlight = new Map<string, InFlightCodexPluginMetadataLoad>();
-  private readonly generations = new Map<string, number>();
-  private clearGeneration = 0;
-
-  constructor(private readonly nowMs: () => number = Date.now) {}
 
   read<QueryKind extends CodexPluginMetadataQueryKind>(
     appCacheKey: string,
@@ -71,7 +67,7 @@ export class CodexPluginMetadataCache {
     if (!entry) {
       return undefined;
     }
-    if (entry.expiresAtMs <= this.nowMs()) {
+    if (entry.expiresAtMs <= Date.now()) {
       this.entries.delete(entryKey);
       return undefined;
     }
@@ -100,35 +96,21 @@ export class CodexPluginMetadataCache {
     }
     const pending = this.inFlight.get(entryKey);
     if (pending) {
-      try {
-        return (await pending.promise) as CodexPluginMetadataResponse<QueryKind>;
-      } catch {
-        if (this.inFlight.get(entryKey) === pending) {
-          this.inFlight.delete(entryKey);
-        }
-        return await this.load(params);
-      }
+      return (await pending.promise) as CodexPluginMetadataResponse<QueryKind>;
     }
 
-    const generation = this.generations.get(params.appCacheKey) ?? 0;
-    const clearGeneration = this.clearGeneration;
     const promise = (async () => {
       const method = (
         params.queryKind === "installed" ? "plugin/installed" : "plugin/list"
       ) as CodexPluginMetadataMethod<QueryKind>;
       const response = await params.request(method, params.requestParams);
-      // Settled snapshots survive until install invalidation, identity change,
-      // TTL expiry, restart, or test reset — never a per-turn refresh.
-      if (
-        generation === (this.generations.get(params.appCacheKey) ?? 0) &&
-        clearGeneration === this.clearGeneration &&
-        response.marketplaceLoadErrors.length === 0 &&
-        (params.cacheable?.(response) ?? true)
-      ) {
+      // Invalidation during a load is best effort: a late snapshot may survive
+      // until the next invalidation or TTL expiry. This cache grants no authority.
+      if (response.marketplaceLoadErrors.length === 0 && (params.cacheable?.(response) ?? true)) {
         this.entries.set(entryKey, {
           appCacheKey: params.appCacheKey,
           response,
-          expiresAtMs: this.nowMs() + CODEX_PLUGIN_METADATA_CACHE_TTL_MS,
+          expiresAtMs: Date.now() + CODEX_PLUGIN_METADATA_CACHE_TTL_MS,
         });
       }
       return response;
@@ -137,14 +119,11 @@ export class CodexPluginMetadataCache {
     try {
       return await promise;
     } finally {
-      if (this.inFlight.get(entryKey)?.promise === promise) {
-        this.inFlight.delete(entryKey);
-      }
+      this.inFlight.delete(entryKey);
     }
   }
 
   invalidate(appCacheKey: string): void {
-    this.generations.set(appCacheKey, (this.generations.get(appCacheKey) ?? 0) + 1);
     for (const cache of [this.entries, this.inFlight]) {
       for (const [entryKey, entry] of cache) {
         if (entry.appCacheKey === appCacheKey) {
@@ -154,10 +133,7 @@ export class CodexPluginMetadataCache {
     }
   }
 
-  /** Clears snapshots and prevents late in-flight loads from repopulating them. */
   clear(): void {
-    this.clearGeneration += 1;
-    this.generations.clear();
     this.entries.clear();
     this.inFlight.clear();
   }

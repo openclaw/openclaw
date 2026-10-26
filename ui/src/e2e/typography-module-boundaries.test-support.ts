@@ -1,7 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import type WaTooltip from "@awesome.me/webawesome/dist/components/tooltip/tooltip.js";
 import { describe, expect, it } from "vitest";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import {
   type createControlUiE2eSuite,
   holdModuleResponse,
@@ -24,7 +24,7 @@ export function defineTypographyModuleBoundaryTests(
         }, platform);
         const popupModule = await holdModuleResponse(
           page,
-          moduleRequest("node_modules/@awesome.me/webawesome/dist/components/tooltip/tooltip.js"),
+          moduleRequest("ui/src/components/solid/tooltip.tsx"),
         );
         try {
           await page.goto(`${suite.server.baseUrl}chat`);
@@ -33,30 +33,38 @@ export function defineTypographyModuleBoundaryTests(
           expect(popupModule.requests()).toBe(0);
           await trigger.focus();
           await popupModule.request;
-          expect(await trigger.getAttribute("aria-describedby")).not.toBeNull();
-          await page.keyboard.press("Escape");
+          expect(popupModule.requests()).toBe(1);
+          const popupId = await trigger.evaluate(
+            (element) =>
+              element
+                .closest("openclaw-tooltip")
+                ?.shadowRoot?.querySelector(".tooltip-surface[popover]")?.id,
+          );
+          expect(popupId).toBeTruthy();
+          const popup = page.locator(`#${popupId}`);
+          expect(await popup.isVisible()).toBe(false);
+          await expect.poll(() => trigger.getAttribute("aria-describedby")).not.toBeNull();
           popupModule.release();
-          await page.waitForFunction(() => Boolean(customElements.get("wa-tooltip")));
-          const popup = trigger.locator("..").locator("wa-tooltip");
-          expect(
-            await popup.evaluate(async (element: WaTooltip) => {
-              await element.updateComplete;
-              return element.open;
-            }),
-          ).toBe(false);
+          await popup.waitFor({ state: "visible" });
+          await expect.poll(() => trigger.getAttribute("aria-describedby")).not.toBeNull();
+          expect(await popup.evaluate((element) => element.matches(":popover-open"))).toBe(true);
+          await page.keyboard.press("Escape");
+          await popup.waitFor({ state: "hidden" });
+          expect(await popup.evaluate((element) => element.matches(":popover-open"))).toBe(false);
+          expect(popupModule.requests()).toBe(1);
         } finally {
           popupModule.release();
         }
         const identity = page.locator(".sidebar-identity-card");
         await identity.focus();
         await page.keyboard.press("Enter");
-        const menu = page.locator("wa-dropdown.sidebar-identity-menu");
+        const menu = page.locator(".sidebar-identity-menu");
         await menu.waitFor();
-        const shortcut = menu
-          .locator('wa-dropdown-item[value="command:settings"]')
+        const settingsShortcut = menu
+          .locator('[data-value="command:settings"]')
           .locator(".session-menu__shortcut");
 
-        const report = await shortcut.evaluate((element) => ({
+        const report = await settingsShortcut.evaluate((element) => ({
           body: getComputedStyle(document.body).fontFamily,
           shortcut: getComputedStyle(element).fontFamily,
           text: element.textContent?.replace(/\s+/gu, ""),
@@ -67,46 +75,52 @@ export function defineTypographyModuleBoundaryTests(
         expect(report.text).toBe(applePlatform ? "⌘⇧," : "Ctrl+Shift+,");
 
         await page.keyboard.press("Escape");
-        await page.locator(".chat-side-panel-toggle").click();
-        const panelSelector = page.locator(".side-panel-empty--selector");
-        const panelShortcuts = panelSelector.locator(".side-panel-type-option__shortcut");
+        await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
+        const panelSelector = page.locator(".side-panel-launcher");
+        const panelShortcuts = [/^Review\b/u, /^Files\b/u, /^Side chat\b/u].map((name) =>
+          panelSelector.getByRole("button", { name }).locator(".side-panel-type-option__shortcut"),
+        );
         await panelSelector.waitFor();
         const labels = applePlatform
           ? ["⌘⌥⇧E", "⌘⇧B", "⌘⇧S"]
           : ["Ctrl+Alt+Shift+E", "Ctrl+Shift+B", "Ctrl+Shift+S"];
         expect(
-          await panelShortcuts.evaluateAll((keys) =>
-            keys.map((key) => ({
-              text: key.textContent?.replace(/\s+/gu, ""),
-              font: getComputedStyle(key).fontFamily,
-            })),
+          await Promise.all(
+            panelShortcuts.map((shortcut) =>
+              shortcut.evaluate((key) => ({
+                text: key.textContent?.replace(/\s+/gu, ""),
+                font: getComputedStyle(key).fontFamily,
+              })),
+            ),
           ),
         ).toEqual(labels.map((text) => ({ text, font: expect.stringMatching(/^system-ui,/u) })));
 
-        const inkOffsets = await panelShortcuts.evaluateAll((keys) =>
-          keys.map((key) => {
-            const letter = key.querySelector<HTMLElement>(".kbd__text");
-            const context = document.createElement("canvas").getContext("2d");
-            if (!letter || !context) {
-              throw new Error("Shortcut must have a measurable letter");
-            }
-            const style = getComputedStyle(letter);
-            context.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
-            const ink = context.measureText(letter.textContent ?? "");
-            // A zero-height inline box exposes the text baseline without replacing the glyph.
-            const baseline = document.createElement("span");
-            baseline.style.cssText = "display:inline-block;width:0;height:0";
-            letter.append(baseline);
-            const baselineY = baseline.getBoundingClientRect().y;
-            baseline.remove();
-            const box = key.getBoundingClientRect();
-            return (
-              baselineY +
-              (ink.actualBoundingBoxDescent - ink.actualBoundingBoxAscent) / 2 -
-              box.y -
-              box.height / 2
-            );
-          }),
+        const inkOffsets = await Promise.all(
+          panelShortcuts.map((shortcut) =>
+            shortcut.evaluate((key) => {
+              const letter = key.querySelector<HTMLElement>(".kbd__text");
+              const context = document.createElement("canvas").getContext("2d");
+              if (!letter || !context) {
+                throw new Error("Shortcut must have a measurable letter");
+              }
+              const style = getComputedStyle(letter);
+              context.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+              const ink = context.measureText(letter.textContent ?? "");
+              // A zero-height inline box exposes the text baseline without replacing the glyph.
+              const baseline = document.createElement("span");
+              baseline.style.cssText = "display:inline-block;width:0;height:0";
+              letter.append(baseline);
+              const baselineY = baseline.getBoundingClientRect().y;
+              baseline.remove();
+              const box = key.getBoundingClientRect();
+              return (
+                baselineY +
+                (ink.actualBoundingBoxDescent - ink.actualBoundingBoxAscent) / 2 -
+                box.y -
+                box.height / 2
+              );
+            }),
+          ),
         );
         // Font hinting rounds cap ink to device pixels; do not center the whole line box instead.
         for (const offset of inkOffsets) {

@@ -1,6 +1,8 @@
 {
   "extends": "./tsconfig.test.json",
   "compilerOptions": {
+    "jsx": "preserve",
+    "jsxImportSource": "@solidjs/web",
     "tsBuildInfoFile": "../../.artifacts/tsgo-cache/extensions-test.tsbuildinfo"
   },
   "include": [

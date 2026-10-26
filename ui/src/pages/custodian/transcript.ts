@@ -2,8 +2,6 @@ import type {
   SystemAgentChatHistoryResult,
   SystemAgentChatResult,
 } from "@openclaw/gateway-protocol";
-import { html, nothing } from "lit";
-import { SYSTEM_AGENT_ID } from "../../../../src/system-agent/agent-id.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { WizardStep } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
@@ -13,23 +11,13 @@ import {
   createPanelRefreshStatus,
   failPanelRefresh,
   type PanelRefreshStatus,
-} from "../../components/panel-refresh-status.ts";
-import { renderWizardStepControls } from "../../components/wizard-step-controls.ts";
+} from "../../components/panel-refresh-status-state.ts";
 import { t } from "../../i18n/index.ts";
-import type { MessageGroup } from "../../lib/chat/chat-types.ts";
-import { resolveMessageDisplayMarkdown } from "../../lib/chat/message-display.ts";
-import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
-import { resolveMessageVisibleContent } from "../../lib/chat/message-visibility.ts";
-import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
-import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
-import { renderChatDivider } from "../chat/components/chat-divider.ts";
-import { renderMessageGroup } from "../chat/components/chat-message.ts";
-import "../../components/option-card.ts";
 import { parseCustodianQuestion, type CustodianStructuredQuestion } from "./structured-question.ts";
 
 const CUSTODIAN_TRANSCRIPT_TIMEOUT_MS = 15_000;
-const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
 
 export type CustodianMessage = {
   id: number;
@@ -55,16 +43,13 @@ export function createCustodianMessage(
 export function createCustodianReplyMessage(
   id: number,
   result: SystemAgentChatResult,
-): CustodianMessage | null {
+): CustodianMessage {
   const step = result.step ?? null;
   const question = step ? null : parseCustodianQuestion(result.question);
-  const silentReply = SILENT_REPLY_PATTERN.test(result.reply);
-  return silentReply && !question && !step
-    ? null
-    : {
-        ...createCustodianMessage(id, "assistant", silentReply ? "" : result.reply, question, step),
-        optionalWelcome: result.optionalWelcome === true,
-      };
+  return {
+    ...createCustodianMessage(id, "assistant", result.reply, question, step),
+    optionalWelcome: result.optionalWelcome === true,
+  };
 }
 
 export function hasUnresolvedCustodianQuestion(
@@ -106,30 +91,6 @@ export function custodianErrorMessage(error: unknown): string {
   return formatUiError(error, t("custodian.requestFailed"));
 }
 
-function toCustodianMessageGroup(message: CustodianMessage): MessageGroup {
-  const key = `msg-${message.id}`;
-  const rawMessage = { role: message.role, content: message.text };
-  const normalized = normalizeMessage(rawMessage);
-  const visibleContent = resolveMessageVisibleContent(rawMessage, normalized);
-  return {
-    kind: "group",
-    key,
-    role: message.role,
-    messages: [
-      {
-        message: rawMessage,
-        key,
-        hasVisibleContent:
-          visibleContent === "non-text" ||
-          Boolean(resolveMessageDisplayMarkdown(rawMessage, normalized).trim()),
-      },
-    ],
-    visibleContent,
-    timestamp: message.at,
-    isStreaming: false,
-  };
-}
-
 type CustodianTranscriptResult =
   | { ok: true; turns: SystemAgentChatHistoryResult["turns"] }
   | { ok: false; error: unknown };
@@ -157,6 +118,8 @@ export class CustodianTranscriptLoader {
     client: GatewayBrowserClient;
     epoch: number;
     promise: Promise<CustodianTranscriptResult>;
+    completion: Promise<PanelRefreshStatus>;
+    settle: () => void;
   } | null = null;
 
   constructor(
@@ -168,12 +131,8 @@ export class CustodianTranscriptLoader {
     return this.inFlight !== null;
   }
 
-  get available(): boolean {
-    const snapshot = this.getGatewaySnapshot();
-    return (
-      snapshot !== undefined &&
-      isGatewayMethodAdvertised(snapshot, "openclaw.chat.history") === true
-    );
+  get completion(): Promise<PanelRefreshStatus> | null {
+    return this.inFlight?.completion ?? null;
   }
 
   deferRecovery(): void {
@@ -221,6 +180,7 @@ export class CustodianTranscriptLoader {
   invalidate(): void {
     // Normal turns invalidate reads, but keep the intent to recover once idle.
     this.generation += 1;
+    this.inFlight?.settle();
     this.inFlight = null;
   }
 
@@ -243,7 +203,9 @@ export class CustodianTranscriptLoader {
     const generation = ++this.generation;
     this.status = beginPanelRefresh(this.status, { clearError: false });
     const promise = readCustodianTranscript(client);
-    this.inFlight = { client, epoch, promise };
+    const { promise: completion, resolve } = Promise.withResolvers<PanelRefreshStatus>();
+    const receipt = { client, epoch, promise, completion, settle: () => resolve(this.status) };
+    this.inFlight = receipt;
     this.onStatusChange();
     try {
       const result = await promise;
@@ -255,6 +217,7 @@ export class CustodianTranscriptLoader {
         : failPanelRefresh(this.status, result.error, this.getGatewaySnapshot());
       return result;
     } finally {
+      receipt.settle();
       if (this.inFlight?.promise === promise) {
         this.inFlight = null;
         this.onStatusChange();
@@ -296,103 +259,3 @@ export class CustodianTranscriptLoader {
  * same display text live sensitive replies use.
  */
 const SERVER_SENSITIVE_MASK = "<redacted secret>";
-
-export function renderCustodianTranscriptEntry(params: {
-  message: CustodianMessage;
-  boundaryAfterId: number | null;
-  showQuestion: boolean;
-  questionDisabled: boolean;
-  showWizardStep: boolean;
-  wizardValue: unknown;
-  wizardDisabled: boolean;
-  wizardSecretVisible: boolean;
-  showWizardCancel: boolean;
-  onSelect: (label: string) => void;
-  onSkip: () => void;
-  onWizardValueChange: (value: unknown) => void;
-  onWizardAnswer: (value: unknown) => void;
-  onWizardCancel: () => void;
-  onToggleWizardSecretVisibility: () => void;
-}) {
-  const question = params.message.question;
-  const step = params.message.step;
-  return html`
-    ${
-      params.message.text
-        ? renderMessageGroup(toCustodianMessageGroup(params.message), {
-            showReasoning: false,
-            showToolCalls: false,
-            assistantName: t("custodian.title"),
-            agentId: SYSTEM_AGENT_ID,
-          })
-        : nothing
-    }
-    ${
-      params.message.id === params.boundaryAfterId
-        ? renderChatDivider({
-            kind: "divider",
-            key: "custodian-earlier",
-            label: t("custodian.earlier"),
-            timestamp: params.message.at,
-          })
-        : nothing
-    }
-    ${
-      params.showQuestion && question
-        ? html`<div class="custodian__option-card">
-            <openclaw-option-card
-              .props=${{
-                header: question.header,
-                question: question.question,
-                options: question.options.map((option) => ({
-                  value: option.label,
-                  label: option.label,
-                  description: option.description,
-                  recommended: option.recommended,
-                })),
-                disabled: params.questionDisabled,
-                onSelect: params.onSelect,
-                onSkip: params.onSkip,
-              }}
-            ></openclaw-option-card>
-          </div>`
-        : nothing
-    }
-    ${
-      params.showWizardStep && step
-        ? html`<section
-            class="custodian__wizard-step"
-            aria-label=${formatUiExternalText(step.title ?? step.message, "Setup")}
-          >
-            ${
-              step.title
-                ? html`<strong class="custodian__wizard-title"
-                    >${formatUiExternalText(step.title)}</strong
-                  >`
-                : nothing
-            }
-            ${renderWizardStepControls({
-              step,
-              value: params.wizardValue,
-              busy: params.wizardDisabled,
-              inputId: `custodian-wizard-input-${params.message.id}`,
-              sensitiveRevealed: params.wizardSecretVisible,
-              onValueChange: params.onWizardValueChange,
-              onAnswer: params.onWizardAnswer,
-              leadingAction: params.showWizardCancel
-                ? html`<button
-                    class="btn btn--ghost custodian__wizard-cancel"
-                    type="button"
-                    ?disabled=${params.wizardDisabled}
-                    @click=${params.onWizardCancel}
-                  >
-                    ${t("custodian.cancel")}
-                  </button>`
-                : undefined,
-              onToggleSensitiveVisibility: params.onToggleWizardSecretVisibility,
-            })}
-          </section>`
-        : nothing
-    }
-  `;
-}

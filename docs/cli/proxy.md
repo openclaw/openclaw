@@ -35,7 +35,7 @@ By default it runs:
 - one **allowed** check against `https://example.com/` (override/add with `--allowed-url`, repeatable)
 - one **denied** check against a temporary loopback canary (override with `--denied-url`, repeatable)
 
-Custom `--denied-url` targets are fail-closed: both HTTP responses and ambiguous transport failures count as failures unless you can independently verify a deployment-specific denial signal. The built-in loopback canary is the only target where a transport error is treated as proof of blocking.
+Custom `--denied-url` targets need a verified denial signal: both HTTP responses and ambiguous transport failures count as failures unless you can independently verify a deployment-specific denial signal. The built-in loopback canary is the only target where a transport error is treated as proof of blocking.
 
 Add `--apns-reachable` to also open an APNs HTTP/2 CONNECT tunnel through the proxy and confirm sandbox APNs responds. The check sends an intentionally invalid provider token, so an APNs `403 InvalidProviderToken` response counts as a successful reachability signal (not a failure).
 
@@ -78,7 +78,7 @@ The debug proxy's direct upstream forwarding opens upstream sockets for diagnost
 
 `sessions` lists recent capture sessions (`--limit`, default 20).
 
-`query --preset <name>` runs a built-in query against captured traffic, optionally scoped to `--session <id>`. Presets:
+`query --preset <name>` runs a built-in query against captured traffic, optionally scoped to `--session <id>`. Unknown or empty preset names exit with code 1 and list the accepted choices, including with `--json`. Presets:
 
 - `double-sends`
 - `retry-storms`

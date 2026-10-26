@@ -1,23 +1,20 @@
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as pidAlive from "../../shared/pid-alive.js";
-import * as stateDatabase from "../../state/openclaw-state-db.js";
+import * as state from "../../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { readWorktreeCleanupState } from "./registry-read.js";
-import { hasLiveWorktreeRunLeaseRow, insertRegistryWorktree } from "./registry.js";
-import { readWorktreeRunLeaseStateInDatabase, worktreeRunLeaseScope } from "./run-lease-owner.js";
+import {
+  readWorktreeRunLeaseStateInDatabase,
+  worktreeRunLeaseScope as scope,
+} from "./run-lease-owner.js";
 import { reapWorktreeRunLeases } from "./run-lease-store.js";
-import { admitWorktreeRunLeaseInDatabase } from "./run-lease-store.kernel.js";
+import { hasLiveWorktreeRunLease as hasLiveLease } from "./run-lease.test-support.js";
+import { makeWorktreeRecord, seedWorktreeRunLease } from "./service.test-support.js";
+import { useWorktreeStateRoots } from "./state-fixture.test-support.js";
 
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
-  afterEach(async () => {
-    vi.restoreAllMocks();
-    await stateDatabase.closeOpenClawStateDatabaseAsync();
-    stateDatabase.closeOpenClawStateDatabaseForTest();
-    cleanup();
-  });
-});
+const tempDirs = useWorktreeStateRoots();
 
 it("reads live, dead, reused, and unverifiable owners without reaping or writer admission", async () => {
   const root = tempDirs.make("openclaw-lease-read-");
@@ -29,73 +26,46 @@ it("reads live, dead, reused, and unverifiable owners without reaping or writer 
     { id: "foreign", pid: 12345, startTime: 1, live: true },
   ];
   for (const entry of cases) {
-    await insertRegistryWorktree(env, {
-      id: entry.id,
-      name: entry.id,
-      repoFingerprint: "0123456789abcdef",
-      repoRoot: root,
-      path: path.join(root, entry.id),
-      branch: entry.id,
-      baseRef: "HEAD",
-      ownerKind: "session",
-      createdAt: 1,
-      lastActiveAt: 1,
-    });
-    stateDatabase.runOpenClawStateWriteTransaction(
-      ({ db }) =>
-        admitWorktreeRunLeaseInDatabase(db, {
-          ...entry,
-          worktreeId: entry.id,
-          token: entry.id,
-          now: 1,
-        }),
-      { env },
-    );
+    const record = makeWorktreeRecord(root, entry.id, { path: path.join(root, entry.id) });
+    await seedWorktreeRunLease(env, record, entry);
   }
-  const { db } = stateDatabase.openOpenClawStateDatabase({ env });
-  const writes = vi.spyOn(stateDatabase, "runOpenClawStateWriteTransaction");
-  const deadPid = vi
-    .spyOn(pidAlive, "isPidDefinitelyDead")
-    .mockImplementation((pid) => pid === 2147483647);
-  const processStart = vi
-    .spyOn(pidAlive, "getFileLockProcessStartTime")
-    .mockImplementation((pid) => (pid === process.pid ? 2 : null));
+  const db = requireNativeSqliteDatabase(state.openOpenClawStateDatabase({ env }).db);
+  const query = (sql: string) => db.prepare(sql);
+  const writes = vi.spyOn(state, "runOpenClawStateWriteTransaction");
+  vi.spyOn(pidAlive, "isPidDefinitelyDead").mockImplementation((pid) => pid === 2147483647);
+  vi.spyOn(pidAlive, "getFileLockProcessStartTime").mockImplementation((pid) =>
+    pid === process.pid ? 2 : null,
+  );
   db.exec("PRAGMA query_only = ON");
   try {
     for (const entry of cases) {
-      expect(hasLiveWorktreeRunLeaseRow(env, entry.id), entry.id).toBe(entry.live);
+      expect(hasLiveLease(env, entry.id), entry.id).toBe(entry.live);
     }
     expect(writes).not.toHaveBeenCalled();
     const queries = trackSqliteStatementExecutions(db, ["leases"], (sql) =>
       sql.startsWith("select") && sql.includes('"state_leases"') ? "leases" : null,
     );
-    try {
-      const state = readWorktreeRunLeaseStateInDatabase(db);
-      expect(state.liveScopes).toContain(worktreeRunLeaseScope("live"));
-      expect(state.staleScopes).toContain(worktreeRunLeaseScope("dead"));
-      expect(queries.counts.leases).toBe(1);
-    } finally {
-      queries.restore();
-    }
-    expect(db.prepare("SELECT count(*) AS count FROM state_leases").get()?.count).toBe(4);
+    onTestFinished(queries.restore);
+    const leases = readWorktreeRunLeaseStateInDatabase(db);
+    expect(leases.liveScopes).toContain(scope("live"));
+    expect(leases.staleScopes).toContain(scope("dead"));
+    expect(queries.counts.leases).toBe(1);
+    queries.restore();
+    expect(query("SELECT count(*) AS count FROM state_leases").get()?.count).toBe(4);
   } finally {
     db.exec("PRAGMA query_only = OFF");
-    deadPid.mockRestore();
-    processStart.mockRestore();
+    vi.restoreAllMocks();
   }
 
   const { leases } = await readWorktreeCleanupState(env);
   // A renewed owner after discovery must survive the batched reap.
-  db.prepare("UPDATE state_leases SET payload_json = ? WHERE scope = ?").run(
+  query("UPDATE state_leases SET payload_json = ? WHERE scope = ?").run(
     JSON.stringify({ pid: process.pid }),
-    worktreeRunLeaseScope("dead"),
+    scope("dead"),
   );
   await reapWorktreeRunLeases(env, leases.staleScopes);
-  expect(hasLiveWorktreeRunLeaseRow(env, "dead")).toBe(true);
-  expect(hasLiveWorktreeRunLeaseRow(env, "live")).toBe(true);
-  expect(
-    db
-      .prepare("SELECT lease_key FROM state_leases WHERE scope = ?")
-      .all(worktreeRunLeaseScope("reused")),
-  ).toEqual([]);
+  expect(hasLiveLease(env, "dead")).toBe(true);
+  expect(hasLiveLease(env, "live")).toBe(true);
+  const reaped = query("SELECT lease_key FROM state_leases WHERE scope = ?").all(scope("reused"));
+  expect(reaped).toEqual([]);
 });

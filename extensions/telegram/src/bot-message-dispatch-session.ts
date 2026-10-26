@@ -1,14 +1,13 @@
 import path from "node:path";
+import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { getSessionEntryAsync, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   appendAssistantMirrorMessageByIdentity,
   readLatestAssistantTextByIdentity,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { resolveTelegramConfigReasoningDefault } from "./agent-config.js";
-import type { TelegramBotDeps } from "./bot-deps.js";
-import { getSessionEntry } from "./bot-message-dispatch.runtime.js";
 import type {
   CurrentTurnTranscriptFinal,
   FreshTelegramSessionEntryLoader,
@@ -19,38 +18,41 @@ import type {
 
 export function createFreshTelegramSessionEntryLoader(params: {
   cfg: OpenClawConfig;
-  telegramDeps: TelegramBotDeps;
 }): FreshTelegramSessionEntryLoader {
-  const entriesByPathAndKey = new Map<string, ReturnType<typeof getSessionEntry>>();
-  const load = (agentId: string, sessionKey: string) => {
-    const storePath = params.telegramDeps.resolveStorePath(params.cfg.session?.store, { agentId });
+  const entriesByPathAndKey = new Map<string, ReturnType<typeof getSessionEntryAsync>>();
+  const load = async (agentId: string, sessionKey: string) => {
+    const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
     const cacheKey = `${storePath}\0${sessionKey}`;
-    if (entriesByPathAndKey.has(cacheKey)) {
-      return { storePath, entry: entriesByPathAndKey.get(cacheKey) };
+    const cached = entriesByPathAndKey.get(cacheKey);
+    if (cached) {
+      return { storePath, entry: await cached };
     }
-    const entry = (params.telegramDeps.getSessionEntry ?? getSessionEntry)({
+    const entry = getSessionEntryAsync({
       storePath,
       sessionKey,
       readConsistency: "latest",
     });
     entriesByPathAndKey.set(cacheKey, entry);
-    return { storePath, entry };
+    return { storePath, entry: await entry };
   };
   return Object.assign(load, { clear: () => entriesByPathAndKey.clear() });
 }
 
-export function resolveTelegramReasoningLevel(params: {
+export async function resolveTelegramReasoningLevel(params: {
   cfg: OpenClawConfig;
   sessionKey?: string;
   agentId: string;
   loadFreshSessionEntry: FreshTelegramSessionEntryLoader;
-}): TelegramReasoningLevel {
-  const configDefault = resolveTelegramConfigReasoningDefault(params.cfg, params.agentId);
+}): Promise<TelegramReasoningLevel> {
+  const configDefault =
+    resolveAgentConfig(params.cfg, params.agentId)?.reasoningDefault ??
+    params.cfg.agents?.defaults?.reasoningDefault ??
+    "off";
   if (!params.sessionKey) {
     return configDefault;
   }
   try {
-    const { entry } = params.loadFreshSessionEntry(params.agentId, params.sessionKey);
+    const { entry } = await params.loadFreshSessionEntry(params.agentId, params.sessionKey);
     const level = entry?.reasoningLevel;
     return level === "on" || level === "stream" || level === "off" ? level : configDefault;
   } catch {
@@ -86,7 +88,7 @@ export function createTelegramTranscriptMirror(turn: Turn, sequenceOwner: Turn =
       return;
     }
     const agentId = turn.context.route.agentId;
-    const { entry, storePath } = turn.loadFreshSessionEntry(agentId, sessionKey);
+    const { entry, storePath } = await turn.loadFreshSessionEntry(agentId, sessionKey);
     const sessionId = entry?.sessionId?.trim();
     if (!sessionId) {
       return;
@@ -95,6 +97,7 @@ export function createTelegramTranscriptMirror(turn: Turn, sequenceOwner: Turn =
       agentId,
       config: turn.cfg,
       idempotencyKey,
+      ...(turn.transcriptMirrorRunId ? { sourceRunId: turn.transcriptMirrorRunId } : {}),
       deliveryMirror: { kind: "channel-final", sourceMessageId: idempotencyKey },
       sessionId,
       sessionKey,
@@ -118,7 +121,10 @@ export function createCurrentTurnTranscriptFinalResolver(params: {
       return undefined;
     }
     try {
-      const { entry, storePath } = params.loadFreshSessionEntry(params.agentId, params.sessionKey);
+      const { entry, storePath } = await params.loadFreshSessionEntry(
+        params.agentId,
+        params.sessionKey,
+      );
       if (!entry?.sessionId) {
         return undefined;
       }

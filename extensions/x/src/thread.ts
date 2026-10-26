@@ -16,6 +16,13 @@ export async function assembleXThread(options: {
   const posts = new Map<string, XPost>([[options.mention.id, options.mention]]);
   const users = new Map((options.users ?? []).map((user) => [user.id, user]));
   const fetched = new Set<string>();
+  const quotedIds = () =>
+    [...posts.values()].flatMap(
+      (post) =>
+        post.referenced_tweets
+          ?.filter((reference) => reference.type === "quoted")
+          .map((reference) => reference.id) ?? [],
+    );
   const merge = (page: XPage) => {
     for (const post of [...page.includes.tweets, ...page.data]) {
       posts.set(post.id, post);
@@ -70,14 +77,7 @@ export async function assembleXThread(options: {
       await fetchPosts([parentId]);
       ancestor = posts.get(parentId);
     }
-    await fetchPosts(
-      [...posts.values()].flatMap(
-        (post) =>
-          post.referenced_tweets
-            ?.filter((reference) => reference.type === "quoted")
-            .map((reference) => reference.id) ?? [],
-      ),
-    );
+    await fetchPosts(quotedIds());
   } catch (error) {
     if (!(error instanceof XBudgetExceededError)) {
       throw error;
@@ -91,27 +91,22 @@ export async function assembleXThread(options: {
     retained.set(root.id, root);
   }
   retained.set(options.mention.id, options.mention);
-  for (const post of [...posts.values()].toSorted(comparePosts).toReversed()) {
+  // oxlint-disable-next-line unicorn/no-array-sort, unicorn/no-array-reverse -- The Map spread creates a private array.
+  for (const post of [...posts.values()].sort(comparePosts).reverse()) {
     if (retained.size >= maxPosts) {
       break;
     }
     retained.set(post.id, post);
   }
-  const selected = [...retained.values()].toSorted(comparePosts);
+  // oxlint-disable-next-line unicorn/no-array-sort -- The Map spread creates a private array.
+  const selected = [...retained.values()].sort(comparePosts);
   const handle = (post: XPost) => `@${users.get(post.author_id)?.username ?? post.author_id}`;
-  const quotedIds = new Set(
-    [...posts.values()].flatMap(
-      (post) =>
-        post.referenced_tweets
-          ?.filter((reference) => reference.type === "quoted")
-          .map((reference) => reference.id) ?? [],
-    ),
-  );
+  const quotes = new Set(quotedIds());
   const lines = selected.map((post) => {
     const marker =
       post.id === options.mention.id
         ? " [triggering mention]"
-        : quotedIds.has(post.id)
+        : quotes.has(post.id)
           ? " [quoted post]"
           : "";
     return `${handle(post)} (${post.created_at ?? "time unavailable"})${marker}: ${post.text}`;

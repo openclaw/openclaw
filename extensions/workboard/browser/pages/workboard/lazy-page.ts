@@ -1,4 +1,3 @@
-import { html, nothing, render } from "lit";
 import type { ControlUiView } from "openclaw/plugin-sdk/control-ui";
 import { t } from "../../i18n/index.ts";
 
@@ -12,13 +11,10 @@ export function createLazyWorkboardPage(load: () => Promise<ControlUiView>): Con
     let disposed = false;
     let failure: { error: unknown } | undefined;
     let focusPending = false;
+    let loadingElement: HTMLDivElement | undefined;
     const alive = () => !disposed && !context.signal.aborted;
     const focus = () => {
-      if (handle?.focus) {
-        handle.focus();
-      } else {
-        container.querySelector<HTMLElement>("textarea, input, [contenteditable=true]")?.focus();
-      }
+      handle?.focus?.();
     };
     const update = () => {
       if (!alive()) {
@@ -33,13 +29,20 @@ export function createLazyWorkboardPage(load: () => Promise<ControlUiView>): Con
         if (mount) {
           // Mount inside the host's synchronous update: its failure path aborts
           // partial views and supplies retry. Async completions never own a view.
+          loadingElement?.remove();
+          loadingElement = undefined;
           handle = mount(container, context);
           mounted = true;
           if (focusPending) {
             focus();
           }
         } else {
-          render(html`<div role="status">${t("workboard.widget.loading")}</div>`, container);
+          if (!loadingElement) {
+            loadingElement = document.createElement("div");
+            loadingElement.setAttribute("role", "status");
+            container.append(loadingElement);
+          }
+          loadingElement.textContent = t("workboard.widget.loading");
           if (!loading) {
             loading = true;
             void load().then(
@@ -85,7 +88,8 @@ export function createLazyWorkboardPage(load: () => Promise<ControlUiView>): Con
         }
         disposed = true;
         handle?.dispose?.();
-        render(nothing, container);
+        loadingElement?.remove();
+        loadingElement = undefined;
       },
     };
   };

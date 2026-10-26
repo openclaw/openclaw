@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
 import type { Model } from "../llm/types.js";
+import { createEmptyPreparedModelRuntimeFixture } from "./embedded-agent-runner/model.fixture.test-support.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import {
   bindPreparedModelRuntimeAuth,
@@ -40,25 +41,18 @@ function fixture() {
     includePluginCatalogs: false,
     pluginMetadataSnapshot: metadataSnapshot,
   });
-  const createStores = vi.fn(() => {
+  const createStores = vi.fn((publishedModels?: ReadonlyMap<string, readonly Model[]>) => {
     const authStorage = AuthStorage.inMemory();
-    return { authStorage, modelRegistry: template.fork(authStorage) };
+    return { authStorage, modelRegistry: template.fork(authStorage, publishedModels) };
   });
   const source: PreparedModelRuntimeSnapshot = {
-    agentDir: "unused:agent",
-    activeProjectKeys: [],
-    catalogOwner: undefined,
-    config,
-    observationConfig: config,
-    isCurrent: () => true,
-    authModes: {},
-    metadataSnapshot,
-    allowGatewaySubagentBinding: false,
+    ...createEmptyPreparedModelRuntimeFixture({
+      agentDir: "unused:agent",
+      config,
+      metadataSnapshot,
+      createStores,
+    }),
     modelCatalog: catalog,
-    configuredRuntimeModels: [],
-    findConfiguredRuntimeModel: () => undefined,
-    inlineProviderModels: [],
-    createStores,
     readPublishedModels: () => models,
     readFullModelCatalog: () => catalog,
   };

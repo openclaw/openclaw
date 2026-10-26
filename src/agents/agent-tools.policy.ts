@@ -37,15 +37,15 @@ import {
   resolveProviderToolPolicyEntry,
 } from "./provider-tool-policy.js";
 import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
-import type { SandboxToolPolicy } from "./sandbox.js";
 import { resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
+import type { SandboxToolPolicy } from "./sandbox/types.js";
 import {
+  isVisibleSpawnedSession,
   resolveSubagentCapabilityStore,
   resolveStoredSubagentInheritedToolAllowlist,
   resolveStoredSubagentInheritedToolDenylist,
   resolveStoredSubagentCapabilities,
   type SessionCapabilityStore,
-  type SubagentSessionRole,
 } from "./subagents/spawn/subagent-capabilities.js";
 import { createToolPolicyMatcher } from "./tool-policy-match.js";
 import type { ConfiguredToolPolicySources } from "./tool-policy-pipeline.js";
@@ -55,8 +55,8 @@ import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 export { resolveProviderToolPolicy };
 
 /**
- * Tools always denied for sub-agents regardless of depth.
- * These are system-level or interactive tools that sub-agents should never use.
+ * Default hard denies for sub-agents regardless of depth. Visible spawned
+ * sessions retain message delivery; all other hard denies still apply.
  */
 const SUBAGENT_TOOL_DENY_ALWAYS = [
   // System admin - dangerous from subagent
@@ -84,13 +84,6 @@ const SUBAGENT_TOOL_DENY_LEAF = [
   "sessions_spawn",
 ];
 
-function resolveSubagentDenyListForRole(role: SubagentSessionRole): string[] {
-  if (role === "leaf") {
-    return [...SUBAGENT_TOOL_DENY_ALWAYS, ...SUBAGENT_TOOL_DENY_LEAF];
-  }
-  return [...SUBAGENT_TOOL_DENY_ALWAYS];
-}
-
 export function resolveSubagentToolPolicyForSession(
   cfg: OpenClawConfig | undefined,
   sessionKey: string,
@@ -107,11 +100,14 @@ export function resolveSubagentToolPolicyForSession(
     cfg,
     store,
   });
-  const allow = Array.isArray(configured?.allow) ? configured.allow : undefined;
-  const alsoAllow = Array.isArray(configured?.alsoAllow) ? configured.alsoAllow : undefined;
+  const allow = configured?.allow;
+  const alsoAllow = configured?.alsoAllow;
   const deny = [
-    ...resolveSubagentDenyListForRole(capabilities.role),
-    ...(Array.isArray(configured?.deny) ? configured.deny : []),
+    ...SUBAGENT_TOOL_DENY_ALWAYS.filter(
+      (tool) => tool !== "message" || !isVisibleSpawnedSession(sessionKey, { cfg, store }),
+    ),
+    ...(capabilities.role === "leaf" ? SUBAGENT_TOOL_DENY_LEAF : []),
+    ...(configured?.deny ?? []),
   ];
   const mergedAllow = allow && alsoAllow ? uniqueStrings([...allow, ...alsoAllow]) : allow;
   return { allow: mergedAllow, deny };
@@ -149,13 +145,11 @@ export function resolveConfiguredToolPolicies(params: {
   extraPolicies?: readonly (SandboxToolPolicy | undefined)[];
 }): SandboxToolPolicy[] {
   const profile = params.agentTools?.profile ?? params.cfg.tools?.profile;
-  const profileAlsoAllow =
-    resolveExplicitProfileAlsoAllow(params.agentTools) ??
-    resolveExplicitProfileAlsoAllow(params.cfg.tools);
+  const profileAlsoAllow = params.agentTools?.alsoAllow ?? params.cfg.tools?.alsoAllow;
   const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), profileAlsoAllow);
   const policies = [
     profilePolicy,
-    pickSandboxToolPolicy(params.cfg.tools ?? undefined),
+    pickSandboxToolPolicy(params.cfg.tools),
     pickSandboxToolPolicy(params.agentTools),
     ...(params.extraPolicies ?? []),
   ].filter((policy): policy is SandboxToolPolicy => Boolean(policy));
@@ -283,12 +277,6 @@ export function resolveTrustedGroupId(params: {
   });
 }
 
-function resolveExplicitProfileAlsoAllow(
-  tools?: Pick<AgentToolsConfig, "alsoAllow">,
-): string[] | undefined {
-  return Array.isArray(tools?.alsoAllow) ? tools.alsoAllow : undefined;
-}
-
 function profileAllowsGatewayConfigReads(profile?: string, alsoAllow?: string[]): boolean {
   const policy = resolveToolProfilePolicy(profile);
   if (!policy?.allow || policy.allow.includes("*")) {
@@ -324,10 +312,7 @@ export function resolveEffectiveToolPolicy(params: {
   modelProvider?: string;
   modelId?: string;
 }) {
-  const explicitAgentId =
-    typeof params.agentId === "string" && params.agentId.trim()
-      ? normalizeAgentId(params.agentId)
-      : undefined;
+  const explicitAgentId = params.agentId?.trim() ? normalizeAgentId(params.agentId) : undefined;
   const agentEntries = params.config ? listAgentEntriesWithSource(params.config) : [];
   const canResolveConfiguredAgent =
     params.config && (!hasAgentRosterProperty(params.config) || agentEntries.length > 0);
@@ -422,8 +407,7 @@ export function resolveEffectiveToolPolicy(params: {
   ).flatMap(([tools, path, active]) =>
     tools?.profile && path ? [{ profile: tools.profile, source: `${path}.profile`, active }] : [],
   );
-  const explicitProfileAlsoAllow =
-    resolveExplicitProfileAlsoAllow(agentTools) ?? resolveExplicitProfileAlsoAllow(globalTools);
+  const explicitProfileAlsoAllow = agentTools?.alsoAllow ?? globalTools?.alsoAllow;
   const agentPolicy = pickSandboxToolPolicy(agentTools);
   const clawToolPolicyConsent = resolveClawToolPolicyConsent({
     agentTools,
@@ -450,11 +434,7 @@ export function resolveEffectiveToolPolicy(params: {
     profileAlsoAllow: explicitProfileAlsoAllow
       ? uniqueStrings(explicitProfileAlsoAllow)
       : undefined,
-    providerProfileAlsoAllow: Array.isArray(agentProviderPolicy?.alsoAllow)
-      ? agentProviderPolicy?.alsoAllow
-      : Array.isArray(providerPolicy?.alsoAllow)
-        ? providerPolicy?.alsoAllow
-        : undefined,
+    providerProfileAlsoAllow: agentProviderPolicy?.alsoAllow ?? providerPolicy?.alsoAllow,
   };
 
   const gatewayConfigReadAllowed =
@@ -513,20 +493,14 @@ export function resolveEffectiveToolPolicy(params: {
   return { ...effectivePolicy, gatewayConfigReadAllowed };
 }
 
-type GroupToolPolicyOutcome =
-  | { kind: "resolved"; policy?: SandboxToolPolicy }
-  | { kind: "account-unavailable"; accountId: string; message: string };
-
-function unavailableScheduledAccount(accountId: string): GroupToolPolicyOutcome {
-  return {
-    kind: "account-unavailable",
-    accountId,
-    message: `Scheduled account "${accountId}" is unavailable. Re-add it to the channel configuration, or recreate this automation from the intended account.`,
-  };
+function throwUnavailableScheduledAccount(accountId: string): never {
+  throw new Error(
+    `Scheduled account "${accountId}" is unavailable. Re-add it to the channel configuration, or recreate this automation from the intended account.`,
+  );
 }
 
-/** Resolve policy without conflating unavailable scheduled authority with intentional denial. */
-export function resolveGroupToolPolicyOutcome(params: {
+/** Tool-building callers must stop before exposing a surface with unavailable authority. */
+export function resolveGroupToolPolicy(params: {
   config?: OpenClawConfig;
   sessionKey?: string;
   spawnedBy?: string | null;
@@ -542,9 +516,9 @@ export function resolveGroupToolPolicyOutcome(params: {
   senderName?: string | null;
   senderUsername?: string | null;
   senderE164?: string | null;
-}): GroupToolPolicyOutcome {
+}): SandboxToolPolicy | undefined {
   if (!params.config) {
-    return { kind: "resolved" };
+    return undefined;
   }
   const sessionContext = resolveGroupContextFromSessionKey(params.sessionKey);
   const spawnedContext = resolveGroupContextFromSessionKey(params.spawnedBy);
@@ -565,13 +539,14 @@ export function resolveGroupToolPolicyOutcome(params: {
   const accountId = normalizeAccountId(params.accountId);
   if (!channel) {
     return params.requireConfiguredAccount && accountId !== DEFAULT_ACCOUNT_ID
-      ? unavailableScheduledAccount(accountId)
-      : { kind: "resolved" };
+      ? throwUnavailableScheduledAccount(accountId)
+      : undefined;
   }
   let plugin;
   try {
     plugin = getLoadedChannelPlugin(channel);
   } catch {
+    // Plugin lookup failure leaves the canonical config policy fallback in charge.
     plugin = undefined;
   }
   if (params.requireConfiguredAccount && accountId !== DEFAULT_ACCOUNT_ID) {
@@ -582,14 +557,15 @@ export function resolveGroupToolPolicyOutcome(params: {
           .listAccountIds(params.config)
           .some((candidate) => normalizeAccountId(candidate) === accountId) === true;
     } catch {
+      // An unreadable account roster cannot authorize a scheduled named account.
       configured = false;
     }
     if (!configured) {
-      return unavailableScheduledAccount(accountId);
+      throwUnavailableScheduledAccount(accountId);
     }
   }
   if (groupIds.length === 0) {
-    return { kind: "resolved" };
+    return undefined;
   }
   for (const groupId of groupIds) {
     const toolsConfig = plugin?.groups?.resolveToolPolicy?.({
@@ -606,7 +582,7 @@ export function resolveGroupToolPolicyOutcome(params: {
     });
     const policy = pickSandboxToolPolicy(toolsConfig);
     if (policy) {
-      return { kind: "resolved", policy };
+      return policy;
     }
   }
   const configTools = resolveChannelGroupToolsPolicy({
@@ -622,16 +598,5 @@ export function resolveGroupToolPolicyOutcome(params: {
     senderUsername: params.senderUsername,
     senderE164: params.senderE164,
   });
-  return { kind: "resolved", policy: pickSandboxToolPolicy(configTools) };
-}
-
-/** Tool-building callers must stop before exposing a surface with unavailable authority. */
-export function resolveGroupToolPolicy(
-  params: Parameters<typeof resolveGroupToolPolicyOutcome>[0],
-): SandboxToolPolicy | undefined {
-  const outcome = resolveGroupToolPolicyOutcome(params);
-  if (outcome.kind === "account-unavailable") {
-    throw new Error(outcome.message);
-  }
-  return outcome.policy;
+  return pickSandboxToolPolicy(configTools);
 }

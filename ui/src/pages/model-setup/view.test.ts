@@ -1,12 +1,17 @@
 /* @vitest-environment jsdom */
 
-import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SystemAgentSetupDetectResult, WizardStep } from "../../api/types.ts";
 import { i18n } from "../../i18n/index.ts";
 import { activationTargetId } from "./state.ts";
-import { detected, mount, props, text } from "./test-helpers/view.test-support.ts";
-import { renderModelSetup } from "./view.ts";
+import {
+  detected,
+  mount,
+  props,
+  text,
+  renderSetup,
+  disposeViews,
+} from "./test-helpers/view.test-support.tsx";
 
 function wizardStep(step: WizardStep, value: unknown = step.initialValue): HTMLDivElement {
   return mount(
@@ -49,9 +54,7 @@ describe("renderModelSetup", () => {
   });
 
   afterEach(() => {
-    for (const container of document.body.querySelectorAll("div")) {
-      render(nothing, container);
-    }
+    disposeViews();
     document.body.replaceChildren();
     vi.unstubAllGlobals();
     delete (document as unknown as { execCommand?: unknown }).execCommand;
@@ -124,6 +127,68 @@ describe("renderModelSetup", () => {
     expect(withUsableOllama.querySelector('[data-prepare-choice="ollama"]')).toBeNull();
   });
 
+  it.each([
+    { family: "candidate", selector: '[data-candidate-kind="codex-cli"]' },
+    { family: "featured sign-in", selector: '[data-auth-choice="openai-oauth"]' },
+    { family: "additional sign-in", selector: '[data-auth-choice="other-device"]' },
+    { family: "prepare", selector: '[data-prepare-choice="ollama"]' },
+    { family: "recommendation", selector: '[data-recommended-install="ollama"]' },
+  ])("retains the $family control and reads its new rescan data", ({ family, selector }) => {
+    const result = structuredClone(detected);
+    if (family === "candidate") {
+      result.candidates.push({
+        ...result.candidates[0]!,
+        label: "Utility choice",
+        modelTarget: "utility",
+      });
+    } else if (family === "recommendation") {
+      result.candidates = [];
+      result.authOptions = [];
+    }
+    const onChoose = vi.fn();
+    const viewProps = props({
+      page: { phase: "ready", result },
+      moreSignInOpen: true,
+      onActivateCandidate: onChoose,
+      onStartAuth: onChoose,
+      onStartPrepare: onChoose,
+    });
+    const container = mount(viewProps);
+    const rows = [...container.querySelectorAll(selector)];
+    const control = rows[0]!.querySelector<HTMLButtonElement | HTMLAnchorElement>("button, a")!;
+    control.focus();
+    const rescanned = structuredClone(result);
+    const updated =
+      family === "candidate"
+        ? rescanned.candidates[0]!
+        : family === "prepare"
+          ? rescanned.prepareOptions![0]!
+          : family === "recommendation"
+            ? rescanned.recommendedInstalls![0]!
+            : rescanned.authOptions!.find((option) =>
+                family === "featured sign-in" ? option.featured : !option.featured,
+              )!;
+    updated.label = "Updated choice";
+    if (family === "recommendation") {
+      rescanned.recommendedInstalls![0]!.website = "https://example.com/install";
+    }
+    viewProps.page = { phase: "ready", result: rescanned };
+    renderSetup(viewProps, container);
+
+    const refreshedRows = [...container.querySelectorAll(selector)];
+    expect(refreshedRows).toHaveLength(family === "candidate" ? 2 : 1);
+    rows.forEach((row, index) => expect(refreshedRows[index]).toBe(row));
+    expect(refreshedRows[0]!.querySelector("button, a")).toBe(control);
+    expect(text(refreshedRows[0]!)).toContain("Updated choice");
+    expect(document.activeElement).toBe(control);
+    if (control instanceof HTMLAnchorElement) {
+      expect(control.href).toBe("https://example.com/install");
+    } else {
+      control.click();
+      expect(onChoose).toHaveBeenCalledExactlyOnceWith(updated);
+    }
+  });
+
   it("renders recommended install cards only when candidates and sign-ins are empty", () => {
     const container = mount(
       props({
@@ -135,8 +200,9 @@ describe("renderModelSetup", () => {
     );
 
     expect(text(container)).toContain("Recommended installs");
-    expect(text(container)).toContain("Ollama Run open models locally");
     const card = container.querySelector('[data-recommended-install="ollama"]');
+    expect(card?.querySelector("strong")?.textContent).toBe("Ollama");
+    expect(card?.querySelector(".muted")?.textContent).toBe("Run open models locally");
     const icon = card?.querySelector<HTMLElement>('[data-provider-icon="ollama"]');
     const link = card?.querySelector<HTMLAnchorElement>("a");
     expect(icon).not.toBeNull();
@@ -269,7 +335,12 @@ describe("renderModelSetup", () => {
     expect(container.querySelector('[data-candidate-kind="existing-model"]')).toBeNull();
     expect(container.querySelector('[data-candidate-kind="provider-auto:openai"]')).toBeNull();
     expect(container.querySelector('[data-candidate-kind="claude-cli"]')).not.toBeNull();
-    expect(text(container)).toContain("Selected model OpenAI gpt-5");
+    const current = container.querySelector(".model-setup__current")!;
+    expect(current.querySelector("h2")?.textContent).toBe("Selected model");
+    expect(current.querySelector("strong")?.textContent).toBe("OpenAI");
+    expect(current.querySelector(".model-setup__current-copy .muted")?.textContent).toContain(
+      "gpt-5",
+    );
     const retry = container.querySelector<HTMLButtonElement>(
       '[data-candidate-kind="saved-auth:openai:replacement"] button',
     );
@@ -313,12 +384,16 @@ describe("renderModelSetup", () => {
     const nonAdmin = mount(
       props({ page: { phase: "ready", result }, canAdmin: false, canVerify: false }),
     );
-    expect(text(nonAdmin)).toContain("Selected model OpenAI gpt-5");
-    expect(nonAdmin.querySelector(".model-setup__current button")).toBeNull();
-
     const unsupportedGateway = mount(props({ page: { phase: "ready", result }, canVerify: false }));
-    expect(text(unsupportedGateway)).toContain("Selected model OpenAI gpt-5");
-    expect(unsupportedGateway.querySelector(".model-setup__current button")).toBeNull();
+    for (const page of [nonAdmin, unsupportedGateway]) {
+      const current = page.querySelector(".model-setup__current")!;
+      expect(current.querySelector("h2")?.textContent).toBe("Selected model");
+      expect(current.querySelector("strong")?.textContent).toBe("OpenAI");
+      expect(current.querySelector(".model-setup__current-copy .muted")?.textContent).toContain(
+        "gpt-5",
+      );
+      expect(current.querySelector("button")).toBeNull();
+    }
   });
 
   it.each([true, false])("reports device-code fallback success: %s", async (copied) => {
@@ -349,9 +424,9 @@ describe("renderModelSetup", () => {
       expect(link?.target).toBe("_blank");
       expect(link?.rel).toBe("noreferrer");
       expect(text(container)).toContain("ABCD-EFGH");
-      expect(text(container)).toContain("Expires in 10 minutes");
+      expect(text(container)).not.toContain("Expires in");
     }
-    const copy = container.querySelector<HTMLButtonElement>(".wizard-step__sign-in button");
+    const copy = container.querySelector<HTMLButtonElement>(".wizard-sign-in__code button");
     copy?.click();
 
     const feedback = copied ? "Copied!" : "Copy failed";
@@ -370,25 +445,23 @@ describe("renderModelSetup", () => {
     ({ sensitive, expectedType }) => {
       const container = document.body.appendChild(document.createElement("div"));
       const renderStep = (validationError: string | null) =>
-        render(
-          renderModelSetup(
-            props({
-              wizard: {
-                phase: "step",
-                authChoice: "provider-auth",
-                step: {
-                  id: "access-value",
-                  type: "text",
-                  message: "Provider access value",
-                  sensitive,
-                  placeholder: "Enter value",
-                },
-                busy: false,
-                validationError,
+        renderSetup(
+          props({
+            wizard: {
+              phase: "step",
+              authChoice: "provider-auth",
+              step: {
+                id: "access-value",
+                type: "text",
+                message: "Provider access value",
+                sensitive,
+                placeholder: "Enter value",
               },
-              wizardValue: "initial value",
-            }),
-          ),
+              busy: false,
+              validationError,
+            },
+            wizardValue: "initial value",
+          }),
           container,
         );
       renderStep(null);
@@ -461,7 +534,7 @@ describe("renderModelSetup", () => {
         error: "No reply received",
       };
       viewProps.actionsDisabled = false;
-      render(renderModelSetup(viewProps), container);
+      renderSetup(viewProps, container);
       expect(container.querySelectorAll('[role="status"]')).toHaveLength(0);
       expect(container.querySelectorAll('[role="alert"]')).toHaveLength(1);
       expect(text(container.querySelector('[role="alert"]')!)).toContain("No reply received");
@@ -481,15 +554,15 @@ describe("renderModelSetup", () => {
 
       viewProps.page = { phase: "ready", result: { ...detected, candidates: [] } };
       viewProps.manualProviderId = "gemini-api-key";
-      render(renderModelSetup(viewProps), container);
+      renderSetup(viewProps, container);
       expect(container.querySelectorAll('[role="alert"]')).toHaveLength(1);
       expect(text(container.querySelector('[role="alert"]')!)).toContain("No reply received");
       viewProps.page = { phase: "loading" };
-      render(renderModelSetup(viewProps), container);
+      renderSetup(viewProps, container);
       expect(text(container.querySelector('[role="alert"]')!)).toContain("No reply received");
       viewProps.page = { phase: "ready", result: { ...detected, candidates: [] } };
       viewProps.activation = { phase: "testing", targetId };
-      render(renderModelSetup(viewProps), container);
+      renderSetup(viewProps, container);
       expect(container.querySelectorAll('[role="status"]')).toHaveLength(1);
       expect(container.querySelectorAll('[role="alert"]')).toHaveLength(0);
     },
@@ -555,6 +628,18 @@ describe("renderModelSetup", () => {
       }
     },
   );
+
+  it("notifies the discovery owner only when its own modal is shown", () => {
+    const onDiscoveryShown = vi.fn();
+    const container = mount(props({ embedded: true, onDiscoveryShown }));
+    const modal = container.querySelector("openclaw-modal-dialog")!;
+    const content = modal.querySelector(".model-setup-discovery")!;
+
+    content.dispatchEvent(new CustomEvent("overlay-after-show", { bubbles: true }));
+    expect(onDiscoveryShown).not.toHaveBeenCalled();
+    modal.dispatchEvent(new CustomEvent("overlay-after-show", { bubbles: true }));
+    expect(onDiscoveryShown).toHaveBeenCalledOnce();
+  });
 
   it.each(["wizard", "primary", "utility"] as const)(
     "leaves the %s dialog in control of its action",

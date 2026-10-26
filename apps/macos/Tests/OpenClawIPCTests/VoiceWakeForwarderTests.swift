@@ -32,7 +32,7 @@ import Testing
         let opts = VoiceWakeForwarder.makeInvocation(
             transcript: "hello world",
             sessionKey: entry.key,
-            routeEntry: entry,
+            routeEntries: [entry],
             voiceWakeTrigger: "open claw")
 
         #expect(opts.sessionKey == "agent:main:telegram:group:6812765697")
@@ -46,8 +46,7 @@ import Testing
     @Test func `selected forward options parse channel scoped session fallback`() {
         let opts = VoiceWakeForwarder.makeInvocation(
             transcript: "hello world",
-            sessionKey: "agent:main:discord:channel:123:456",
-            routeEntry: nil)
+            sessionKey: "agent:main:discord:channel:123:456")
 
         #expect(opts.channel == .discord)
         #expect(opts.to == "123:456")
@@ -57,11 +56,56 @@ import Testing
     @Test func `selected forward options keep internal sessions on webchat`() {
         let opts = VoiceWakeForwarder.makeInvocation(
             transcript: "hello world",
-            sessionKey: "agent:main:work",
-            routeEntry: nil)
+            sessionKey: "agent:main:work")
 
         #expect(opts.channel == .webchat)
         #expect(opts.to == nil)
         #expect(opts.deliver == false)
+    }
+
+    @Test func `selected forward options do not alias another agents main route`() {
+        let entry = VoiceWakeForwarder.SessionRouteEntry(
+            key: "agent:main:main",
+            channel: "telegram",
+            lastChannel: nil,
+            lastTo: nil,
+            deliveryContext: .init(channel: "telegram", to: "telegram:other-agent"))
+
+        let opts = VoiceWakeForwarder.makeInvocation(
+            transcript: "hello world",
+            sessionKey: "main",
+            routeEntries: [entry])
+
+        #expect(opts.sessionKey == "main")
+        #expect(opts.channel == .webchat)
+        #expect(opts.to == nil)
+        #expect(!opts.deliver)
+    }
+
+    @Test(arguments: ["main", "MAIN"])
+    func `selected forward options preserve opaque Signal group identity`(agent: String) {
+        let selectedKey = "agent:main:signal:group:AbC123="
+        let foreign = VoiceWakeForwarder.SessionRouteEntry(
+            key: "agent:main:signal:group:abc123=",
+            channel: "signal",
+            lastChannel: nil,
+            lastTo: nil,
+            deliveryContext: .init(channel: "signal", to: "group:foreign"))
+        let selected = VoiceWakeForwarder.SessionRouteEntry(
+            key: "agent:\(agent):signal:group:AbC123=",
+            channel: "signal",
+            lastChannel: nil,
+            lastTo: nil,
+            deliveryContext: .init(channel: "signal", to: "group:selected"))
+
+        let opts = VoiceWakeForwarder.makeInvocation(
+            transcript: "hello world",
+            sessionKey: selectedKey,
+            routeEntries: [foreign, selected])
+
+        #expect(opts.sessionKey == selectedKey)
+        #expect(opts.channel == .signal)
+        #expect(opts.to == "group:selected")
+        #expect(opts.deliver)
     }
 }

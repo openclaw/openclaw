@@ -1,9 +1,8 @@
-import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
-import { SESSION_VIEWER_PRESENCE_MAX_KEYS } from "../../../packages/gateway-protocol/src/schema/sessions-viewer-presence.js";
+import { SESSION_VIEWER_PRESENCE_MAX_KEYS } from "../../../packages/gateway-protocol/src/session-limits.js";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { isGatewayMethodAdvertised } from "./gateway-methods.ts";
 import { createGatewaySetSyncLifecycle } from "./gateway-set-sync-lifecycle.ts";
-import { resolveSessionKey } from "./sessions/index.ts";
+import { resolveSessionKey } from "./sessions/navigation.ts";
 
 const SESSION_VIEWERS_SET_METHOD = "sessions.viewers.set";
 
@@ -23,26 +22,7 @@ export function sessionViewerPresenceForGateway(
   }
   const watchedByOwner = new Map<object, Set<string>>();
   let knownClient = gateway.snapshot.client;
-  let lastHello: object | null = null;
-  let lastSignature: string | null = null;
-  let acknowledgedSignature: string | null = null;
-  let acknowledgedGeneration = 0;
-  let requestGeneration = 0;
-  let requestController: AbortController | null = null;
-
-  const retireRequest = () => {
-    requestController?.abort();
-    requestController = null;
-  };
-
   const isActive = () => watchedByOwner.size > 0;
-
-  const clearReceipt = () => {
-    lastHello = null;
-    lastSignature = null;
-    acknowledgedSignature = null;
-    acknowledgedGeneration = 0;
-  };
 
   const visibleSessionKeys = (): string[] => {
     const hello = gateway.snapshot.hello;
@@ -62,23 +42,17 @@ export function sessionViewerPresenceForGateway(
     sync,
     onAttach: () => {
       knownClient = gateway.snapshot.client;
-      clearReceipt();
-    },
-    onDetach: () => {
-      requestGeneration += 1;
-      retireRequest();
-      clearReceipt();
+      lifecycle.clearRequest();
     },
   });
-  const { retry } = lifecycle;
 
   function sync() {
     const snapshot = gateway.snapshot;
     const client = snapshot.client;
     if (client !== knownClient) {
-      retry.reset();
+      lifecycle.resetRetry();
       knownClient = client;
-      clearReceipt();
+      lifecycle.clearRequest();
     }
     const available =
       snapshot.phase === "connected" &&
@@ -86,8 +60,7 @@ export function sessionViewerPresenceForGateway(
       snapshot.hello !== null &&
       isGatewayMethodAdvertised(snapshot, SESSION_VIEWERS_SET_METHOD) === true;
     if (!available) {
-      clearReceipt();
-      retireRequest();
+      lifecycle.clearRequest();
       if (!isActive()) {
         lifecycle.detach();
       }
@@ -101,51 +74,26 @@ export function sessionViewerPresenceForGateway(
       ? snapshot.assistantAgentId
       : undefined;
     const signature = JSON.stringify({ agentId, sessionKeys });
-    if (snapshot.hello === lastHello && signature === lastSignature) {
-      if (
-        !isActive() &&
-        acknowledgedSignature === signature &&
-        acknowledgedGeneration === requestGeneration
-      ) {
+    if (lifecycle.matchesRequest(signature)) {
+      if (!isActive() && lifecycle.requestAcknowledged) {
         lifecycle.detach();
       }
       return;
     }
-    lastHello = snapshot.hello;
-    lastSignature = signature;
-    const currentGeneration = ++requestGeneration;
-    // Same-set churn keeps its attempt; only supersession retires the old waiter.
-    retireRequest();
-    requestController = new AbortController();
-    const isCurrentRequest = () =>
-      lifecycle.attached &&
-      currentGeneration === requestGeneration &&
-      snapshot.hello === lastHello &&
-      signature === lastSignature;
-    retry.cancel();
-    const request = client.request(
+    lifecycle.send(
+      client,
       SESSION_VIEWERS_SET_METHOD,
       { ...(agentId ? { agentId } : {}), sessionKeys },
-      { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS, signal: requestController.signal },
-    );
-    void request
-      .then(() => {
-        if (isCurrentRequest()) {
-          acknowledgedSignature = signature;
-          acknowledgedGeneration = currentGeneration;
-          retry.reset();
-          if (!isActive()) {
+      signature,
+      {
+        onSuccess: () => {
+          if (!isActive() && sessionKeys.length === 0) {
             lifecycle.detach();
           }
-        }
-      })
-      .catch(() => {
-        if (!isCurrentRequest()) {
-          return;
-        }
-        lastSignature = null;
-        retry.schedule(lifecycle.schedule);
-      });
+        },
+        onError: () => lifecycle.scheduleRetry(lifecycle.schedule),
+      },
+    );
   }
 
   const watch = (owner: object, sessionKeys: readonly string[]) => {
@@ -163,13 +111,11 @@ export function sessionViewerPresenceForGateway(
     } else {
       watchedByOwner.set(owner, next);
     }
-    retry.reset();
+    lifecycle.resetRetry();
     if (isActive()) {
       lifecycle.attach();
-      lifecycle.schedule();
-    } else if (lifecycle.attached) {
-      lifecycle.sync();
     }
+    lifecycle.schedule();
   };
 
   const store: SessionViewerPresenceStore = { watch, unwatch: (owner) => watch(owner, []) };

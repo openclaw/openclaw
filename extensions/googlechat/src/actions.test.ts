@@ -27,9 +27,7 @@ describe("googlechat message actions", () => {
     ({ googlechatMessageActions } = await import("./message-tool-api.js"));
   });
 
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
+  beforeEach(() => vi.clearAllMocks());
 
   afterAll(() => {
     vi.doUnmock("./accounts.js");
@@ -76,18 +74,6 @@ describe("googlechat message actions", () => {
     });
     expect(googlechatMessageActions.supportsAction?.({ action: "send" })).toBe(true);
     expect(googlechatMessageActions.supportsAction?.({ action: "upload-file" })).toBe(false);
-  });
-
-  it("does not expose actions for configured-unavailable file credentials", () => {
-    listGoogleChatAccountIds.mockReturnValueOnce(["default"]);
-    inspectGoogleChatAccount.mockReturnValueOnce({
-      enabled: true,
-      credentialSource: "file",
-      tokenStatus: "configured_unavailable",
-      config: {},
-    });
-
-    expect(googlechatMessageActions.describeMessageTool?.({ cfg: {} as never })).toBeNull();
   });
 
   it("keeps account-scoped discovery send-only", () => {
@@ -161,10 +147,6 @@ describe("googlechat message actions", () => {
         attachments: [{ url: "remote.png" }],
       },
     },
-    {
-      action: "upload-file",
-      params: { to: "spaces/AAA", message: "caption", path: "local.png" },
-    },
   ])(
     "rejects outbound attachment action $action before provider access",
     async ({ action, params }) => {
@@ -175,9 +157,7 @@ describe("googlechat message actions", () => {
           cfg: {},
           accountId: "default",
         } as never),
-      ).rejects.toThrow(
-        "Google Chat outbound attachments require user OAuth and are not supported by this service-account channel.",
-      );
+      ).rejects.toThrow("Google Chat outbound attachments require remote HTTP(S) URLs.");
 
       expect(resolveGoogleChatAccount).not.toHaveBeenCalled();
       expect(resolveGoogleChatOutboundSpace).not.toHaveBeenCalled();
@@ -199,5 +179,20 @@ describe("googlechat message actions", () => {
     ).rejects.toThrow(`Action ${action} is not supported for provider googlechat.`);
 
     expect(sendGoogleChatMessage).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, "caption"])("sends remote media with caption %s", async (message) => {
+    resolveGoogleChatAccount.mockReturnValue(buildAccount());
+    resolveGoogleChatOutboundSpace.mockResolvedValue("spaces/AAA");
+    await googlechatMessageActions.handleAction({
+      action: "send",
+      params: { to: "spaces/AAA", message, media: "https://example.invalid/image.png" },
+      cfg: {},
+    } as never);
+    expect(sendGoogleChatMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: `${message ? "caption\n\n" : ""}Attachment: https://example.invalid/image.png`,
+      }),
+    );
   });
 });

@@ -1,47 +1,58 @@
-// Feishu tests cover post plugin behavior.
 import { describe, expect, it } from "vitest";
 import { parseFeishuMarkdown } from "./markdown.js";
 import { parsePostContent } from "./post.js";
 
+function post(content: unknown[][], title = "", extra: Record<string, unknown> = {}) {
+  return JSON.stringify({ title, content, ...extra });
+}
+function file(file_key: string, file_name: string, is_folder = false) {
+  return { file_key, file_name, is_folder };
+}
+function topLevelFile(key: string, fileName: string) {
+  return { kind: "file", key, fileName, origin: "top-level" };
+}
+function localePost(content: unknown[][], extra: Record<string, unknown> = {}) {
+  return JSON.stringify({ post: { zh_cn: { title: "", content, ...extra } } });
+}
+function text(value: string, style?: string[]) {
+  return { tag: "text", text: value, ...(style ? { style } : {}) };
+}
+function image(image_key: string) {
+  return { tag: "img", image_key };
+}
+function media(file_key: string, file_name?: string) {
+  return { tag: "media", file_key, file_name };
+}
+function spaced(elements: unknown[]) {
+  return elements.flatMap((element, index) => (index ? [text(" "), element] : [element]));
+}
+function parsed(textContent: string, attachments: unknown[] = [], mentionedOpenIds: string[] = []) {
+  return { textContent, attachments, mentionedOpenIds };
+}
+
 describe("parsePostContent", () => {
   it("renders title and styled text as markdown", () => {
-    const content = JSON.stringify({
-      title: "Daily *Plan*",
-      content: [
-        [
-          { tag: "text", text: "Bold", style: ["bold"] },
-          { tag: "text", text: " " },
-          { tag: "text", text: "Italic", style: ["italic"] },
-          { tag: "text", text: " " },
-          { tag: "text", text: "Underline", style: ["underline"] },
-          { tag: "text", text: " " },
-          { tag: "text", text: "Strike", style: ["lineThrough"] },
-          { tag: "text", text: " " },
+    const content = post(
+      [
+        spaced([
+          text("Bold", ["bold"]),
+          text("Italic", ["italic"]),
+          text("Underline", ["underline"]),
+          text("Strike", ["lineThrough"]),
           { tag: "code", text: "Code" },
-        ],
+        ]),
       ],
-    });
-
-    const result = parsePostContent(content);
-
-    expect(result.textContent).toBe(
-      "Daily \\*Plan\\*\n\n**Bold** *Italic* <u>Underline</u> ~~Strike~~ `Code`",
+      "Daily *Plan*",
     );
-    expect(result.attachments).toStrictEqual([]);
-    expect(result.mentionedOpenIds).toStrictEqual([]);
+
+    expect(parsePostContent(content)).toStrictEqual(
+      parsed("Daily \\*Plan\\*\n\n**Bold** *Italic* <u>Underline</u> ~~Strike~~ `Code`"),
+    );
   });
 
   it("keeps boundary whitespace outside emphasis delimiters", () => {
     const result = parsePostContent(
-      JSON.stringify({
-        content: [
-          [
-            { tag: "text", text: "Before" },
-            { tag: "text", text: " styled ", style: ["bold"] },
-            { tag: "text", text: "after" },
-          ],
-        ],
-      }),
+      post([[text("Before"), text(" styled ", ["bold"]), text("after")]]),
     );
 
     expect(parseFeishuMarkdown(result.textContent)).toMatchObject({
@@ -59,55 +70,36 @@ describe("parsePostContent", () => {
   });
 
   it("renders styled links and mentions", () => {
-    const content = JSON.stringify({
-      title: "",
-      content: [
-        [
-          {
-            tag: "a",
-            text: "Docs [v2]",
-            href: "https://example.com/guide(a)",
-            style: ["lineThrough", "bold", "italic"],
-          },
-          { tag: "text", text: " " },
-          { tag: "at", user_name: "alice_bob", style: ["underline"] },
-          { tag: "text", text: " " },
-          { tag: "at", open_id: "ou_123" },
-          { tag: "text", text: " " },
-          { tag: "a", href: "https://example.com/no-text" },
-        ],
-      ],
+    const content = post([
+      spaced([
+        {
+          tag: "a",
+          text: "Docs [v2]",
+          href: "https://example.com/guide(a)",
+          style: ["lineThrough", "bold", "italic"],
+        },
+        { tag: "at", user_name: "alice_bob", style: ["underline"] },
+        { tag: "at", open_id: "ou_123" },
+        { tag: "a", href: "https://example.com/no-text" },
+      ]),
+    ]);
+
+    expect(parsePostContent(content)).toMatchObject({
+      textContent:
+        "~~***[Docs \\[v2\\]](https://example.com/guide(a))***~~ <u>@alice\\_bob</u> @ou\\_123 [https://example.com/no\\-text](https://example.com/no-text)",
+      mentionedOpenIds: ["ou_123"],
     });
-
-    const result = parsePostContent(content);
-
-    expect(result.textContent).toBe(
-      "~~***[Docs \\[v2\\]](https://example.com/guide(a))***~~ <u>@alice\\_bob</u> @ou\\_123 [https://example.com/no\\-text](https://example.com/no-text)",
-    );
-    expect(result.mentionedOpenIds).toEqual(["ou_123"]);
   });
 
   it("inserts image placeholders and collects image attachments", () => {
-    const content = JSON.stringify({
-      title: "",
-      content: [
-        [
-          { tag: "text", text: "Before " },
-          { tag: "img", image_key: "img_1" },
-          { tag: "text", text: " after" },
-        ],
-        [{ tag: "img", image_key: "img_2" }],
-      ],
-    });
+    const content = post([[text("Before "), image("img_1"), text(" after")], [image("img_2")]]);
 
-    const result = parsePostContent(content);
-
-    expect(result.textContent).toBe("Before ![image] after\n![image]");
-    expect(result.attachments).toEqual([
-      { kind: "image", key: "img_1" },
-      { kind: "image", key: "img_2" },
-    ]);
-    expect(result.mentionedOpenIds).toStrictEqual([]);
+    expect(parsePostContent(content)).toEqual(
+      parsed("Before ![image] after\n![image]", [
+        { kind: "image", key: "img_1" },
+        { kind: "image", key: "img_2" },
+      ]),
+    );
     expect(
       parsePostContent(content, { renderMediaPlaceholders: false, emptyTextFallback: "" })
         .textContent,
@@ -115,18 +107,18 @@ describe("parsePostContent", () => {
   });
 
   it("preserves interleaved rich-post attachment occurrences in their original order", () => {
-    const content = JSON.stringify({
-      title: "Attachments",
-      content: [
+    const content = post(
+      [
         [
-          { tag: "media", file_key: "file_first", file_name: "first.mov" },
-          { tag: "img", image_key: "img_shared" },
-          { tag: "media", file_key: "file_last", file_name: "last.mov" },
-          { tag: "img", image_key: "img_shared" },
-          { tag: "media", file_key: "invalid/key" },
+          media("file_first", "first.mov"),
+          image("img_shared"),
+          media("file_last", "last.mov"),
+          image("img_shared"),
+          media("invalid/key"),
         ],
       ],
-    });
+      "Attachments",
+    );
 
     expect(parsePostContent(content).attachments).toEqual([
       { kind: "file", key: "file_first", fileName: "first.mov" },
@@ -137,133 +129,51 @@ describe("parsePostContent", () => {
   });
 
   it("collects top-level files[] from captioned and multi-file posts", () => {
-    const captioned = JSON.stringify({
-      title: "",
-      content: [[{ tag: "text", text: "这是账本" }]],
-      content_v2: [[{ tag: "text", text: "这是账本" }]],
-      files: [
-        {
-          file_key: "file_v3_0015l_1a389bce-aabb-ccdd-eeff-1234567890ab",
-          file_name: "amount-2026-08-01_2026-08-31.csv",
-          is_folder: false,
-        },
-      ],
+    const captioned = post([[text("这是账本")]], "", {
+      content_v2: [[text("这是账本")]],
+      files: [file("file_v3_caption", "amount.csv")],
     });
 
-    expect(parsePostContent(captioned)).toEqual({
-      textContent: "这是账本",
-      attachments: [
-        {
-          kind: "file",
-          key: "file_v3_0015l_1a389bce-aabb-ccdd-eeff-1234567890ab",
-          fileName: "amount-2026-08-01_2026-08-31.csv",
-          origin: "top-level",
-        },
-      ],
-      mentionedOpenIds: [],
-    });
-
-    const multiFile = JSON.stringify({
-      title: "",
-      content: [[]],
+    expect(parsePostContent(captioned)).toEqual(
+      parsed("这是账本", [topLevelFile("file_v3_caption", "amount.csv")]),
+    );
+    const multiFile = post([[]], "", {
       content_v2: [[]],
       files: [
-        {
-          file_key: "file_v3_zip_aug",
-          file_name: "usage_data_2026-08-01_2026-08-31.zip",
-          is_folder: false,
-        },
-        {
-          file_key: "file_v3_zip_sep",
-          file_name: "usage_data_2026-09-01_2026-09-18.zip",
-          is_folder: false,
-        },
-        {
-          file_key: "file_v3_folder",
-          file_name: "ignored-folder",
-          is_folder: true,
-        },
-        {
-          file_key: "invalid/key",
-          file_name: "bad.csv",
-          is_folder: false,
-        },
+        file("file_v3_zip_aug", "aug.zip"),
+        file("file_v3_zip_sep", "sep.zip"),
+        file("file_v3_folder", "ignored-folder", true),
+        file("invalid/key", "bad.csv"),
       ],
     });
-
     expect(parsePostContent(multiFile).attachments).toEqual([
-      {
-        kind: "file",
-        key: "file_v3_zip_aug",
-        fileName: "usage_data_2026-08-01_2026-08-31.zip",
-        origin: "top-level",
-      },
-      {
-        kind: "file",
-        key: "file_v3_zip_sep",
-        fileName: "usage_data_2026-09-01_2026-09-18.zip",
-        origin: "top-level",
-      },
+      topLevelFile("file_v3_zip_aug", "aug.zip"),
+      topLevelFile("file_v3_zip_sep", "sep.zip"),
     ]);
-
-    expect(
-      parsePostContent(
-        JSON.stringify({
-          post: {
-            zh_cn: {
-              title: "",
-              content: [[{ tag: "text", text: "附件" }]],
-              files: [
-                {
-                  file_key: "file_v3_locale",
-                  file_name: "locale.csv",
-                  is_folder: false,
-                },
-              ],
-            },
-          },
-        }),
-      ).attachments,
-    ).toEqual([
-      { kind: "file", key: "file_v3_locale", fileName: "locale.csv", origin: "top-level" },
+    const localized = localePost([[text("附件")]], {
+      files: [file("file_v3_locale", "locale.csv")],
+    });
+    expect(parsePostContent(localized).attachments).toEqual([
+      topLevelFile("file_v3_locale", "locale.csv"),
     ]);
-
     expect(
-      parsePostContent(
-        JSON.stringify({
-          title: "",
-          content: [[]],
-          files: [{ file_key: "file_pdf" }],
-        }),
-      ).attachments,
+      parsePostContent(post([[]], "", { files: [{ file_key: "file_pdf" }] })).attachments,
     ).toEqual([{ kind: "file", key: "file_pdf", origin: "top-level" }]);
   });
 
-  it("supports locale wrappers", () => {
-    const wrappedByPost = JSON.stringify({
-      post: {
-        zh_cn: {
-          title: "标题",
-          content: [[{ tag: "text", text: "内容A" }]],
-        },
-      },
-    });
-    const wrappedByLocale = JSON.stringify({
-      zh_cn: {
-        title: "标题",
-        content: [[{ tag: "text", text: "内容B" }]],
-      },
-    });
+  it.each([true, false])("supports locale wrapper (nested post: %s)", (nested) => {
+    const payload = { zh_cn: { title: "标题", content: [[text("内容")]] } };
+    const content = JSON.stringify(nested ? { post: payload } : payload);
+    expect(parsePostContent(content)).toEqual(parsed("标题\n\n内容"));
+  });
+});
 
-    expect(parsePostContent(wrappedByPost)).toEqual({
-      textContent: "标题\n\n内容A",
-      attachments: [],
-      mentionedOpenIds: [],
-    });
-    expect(parsePostContent(wrappedByLocale)).toEqual({
-      textContent: "标题\n\n内容B",
-      attachments: [],
-      mentionedOpenIds: [],
-    });
+it("preserves code-block content containing Markdown fences through rich-post parsing", () => {
+  const code = "Before\n```markdown\n# literal heading\n```\nAfter";
+  const result = parsePostContent(
+    JSON.stringify({ content: [[{ tag: "code_block", language: "markdown", text: code }]] }),
+  );
+  expect(parseFeishuMarkdown(result.textContent)).toMatchObject({
+    children: [{ type: "code", lang: "markdown", value: code }],
   });
 });

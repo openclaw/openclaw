@@ -1,7 +1,8 @@
 import { Type, type Static } from "typebox";
+import { GatewayProtocolRequestTimeoutError } from "../../../packages/gateway-client/src/protocol-request.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isGatewayTransportError } from "../../gateway/transport-error.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
-import { redactToolPayloadText } from "../../logging/redact.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
@@ -47,10 +48,10 @@ const SESSIONS_SEARCH_MAX_QUERY_CHARS = 4096;
 const SESSIONS_SEARCH_MAX_BYTES = 32 * 1024;
 const SESSIONS_SEARCH_SNIPPET_MAX_CHARS = 300;
 const SESSIONS_SEARCH_INDEXING_WARNING =
-  "Transcript indexing is in progress; results may be incomplete. Retry sessions_search shortly.";
+  "Search completeness could not be confirmed; results may be incomplete. Retry sessions_search shortly.";
 
 const SessionsSearchToolSchema = Type.Object({
-  user: requesterProfileSchema(),
+  user: requesterProfileSchema({ defaultToTurnOwner: true }),
   query: Type.String({
     minLength: 1,
     maxLength: SESSIONS_SEARCH_MAX_QUERY_CHARS,
@@ -121,11 +122,10 @@ function sanitizeHit(params: {
   ) {
     return undefined;
   }
-  const sanitized = redactToolPayloadText(hit.snippet);
   const snippet =
-    sanitized.length > SESSIONS_SEARCH_SNIPPET_MAX_CHARS
-      ? `${truncateUtf16Safe(sanitized, SESSIONS_SEARCH_SNIPPET_MAX_CHARS)}…`
-      : sanitized;
+    hit.snippet.length > SESSIONS_SEARCH_SNIPPET_MAX_CHARS
+      ? `${truncateUtf16Safe(hit.snippet, SESSIONS_SEARCH_SNIPPET_MAX_CHARS)}…`
+      : hit.snippet;
   return {
     sessionKey: resolveDisplaySessionKey({
       key: hit.sessionKey,
@@ -195,6 +195,7 @@ async function listVisibleSearchSessions(params: {
             ownerSessionKey?: unknown;
             parentSessionKey?: unknown;
             spawnedBy?: unknown;
+            childOwnerSessionKeys?: string[];
           }>;
           hasMore?: boolean;
           nextOffset?: number;
@@ -216,6 +217,7 @@ async function listVisibleSearchSessions(params: {
           }
           const visibilityRow = {
             key: row.key,
+            childOwnerSessionKeys: row.childOwnerSessionKeys,
             ...(typeof row.agentId === "string"
               ? { agentId: row.agentId }
               : agentId
@@ -507,6 +509,8 @@ export function createSessionsSearchTool(opts?: {
               truncated?: boolean;
             }>({
               method: "sessions.search",
+              // Leave dispatch and authorization headroom around the reader's 60-second budget.
+              timeoutMs: 90_000,
               params: {
                 agentId,
                 query,
@@ -515,15 +519,31 @@ export function createSessionsSearchTool(opts?: {
               },
             });
           const scopedCandidate = chunk.length === 1 ? chunk[0] : undefined;
-          const result = scopedCandidate?.expectedSessionId
-            ? await runWithScopedSessionAccess({
-                cfg,
-                agentId,
-                expectedSessionId: scopedCandidate.expectedSessionId,
-                targetSessionKey: scopedCandidate.key,
-                run: runSearch,
-              })
-            : await runSearch();
+          let result: Awaited<ReturnType<typeof runSearch>>;
+          try {
+            result = scopedCandidate?.expectedSessionId
+              ? await runWithScopedSessionAccess({
+                  cfg,
+                  agentId,
+                  expectedSessionId: scopedCandidate.expectedSessionId,
+                  targetSessionKey: scopedCandidate.key,
+                  run: runSearch,
+                })
+              : await runSearch();
+          } catch (error) {
+            if (
+              error instanceof GatewayProtocolRequestTimeoutError ||
+              (isGatewayTransportError(error) &&
+                error.kind === "timeout" &&
+                error.requestDispatched === true)
+            ) {
+              throw new Error(
+                "Session transcript search timed out. Retry sessions_search with a sessionKey to search one session or more specific query keywords. A timeout does not mean that no matching conversation exists.",
+                { cause: error },
+              );
+            }
+            throw error;
+          }
           indexing ||= result.indexing === true;
           archivedTranscriptsExcluded += result.archivedTranscriptsExcluded ?? 0;
           backendTruncated ||= result.truncated === true;

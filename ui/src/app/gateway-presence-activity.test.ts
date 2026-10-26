@@ -24,7 +24,13 @@ function setup(visibility: DocumentVisibilityState = "visible") {
   store.current().request.mockResolvedValue({ ok: true });
   const stop = startGatewayPresenceActivity(store.gateway, target);
   disposers.push(stop);
-  const ready = () => store.current().opts.onHello?.(GATEWAY_STORE_TEST_HELLO);
+  const ready = () =>
+    store.current().testOptions.onHello?.({
+      ...GATEWAY_STORE_TEST_HELLO,
+      auth: { role: "operator", scopes: ["operator.read"] },
+    });
+  const activityCalls = () =>
+    store.current().request.mock.calls.filter(([method]) => method === "presence.activity");
   const input = (type: string, trusted = true) => {
     const callback = added.mock.calls.find(([event]) => event === type)?.[1];
     if (typeof callback === "function") {
@@ -32,7 +38,7 @@ function setup(visibility: DocumentVisibilityState = "visible") {
       callback.call(target, { isTrusted: trusted } as Event);
     }
   };
-  return { ...store, target, visible, ready, input, stop };
+  return { ...store, target, visible, ready, input, stop, activityCalls };
 }
 
 async function settle() {
@@ -41,12 +47,22 @@ async function settle() {
 }
 
 describe("Control UI presence activity", () => {
+  it("does not report visits or input without operator read access", async () => {
+    const store = setup();
+    store.current().testOptions.onHello?.({
+      ...GATEWAY_STORE_TEST_HELLO,
+      auth: { role: "operator", scopes: ["operator.sessions.read", "operator.sessions.write"] },
+    });
+    store.input("keydown");
+    await settle();
+    expect(store.current().request).not.toHaveBeenCalledWith("presence.activity", {});
+  });
+
   it.each(["visible", "hidden"] as const)(
     "reports one genuine visit per initially %s document",
     async (visibility) => {
       const store = setup(visibility);
-      const first = store.current();
-      expect(first.request).not.toHaveBeenCalled();
+      expect(store.activityCalls()).toHaveLength(0);
       store.ready();
       if (visibility === "hidden") {
         store.input("keydown");
@@ -54,27 +70,29 @@ describe("Control UI presence activity", () => {
         store.target.dispatchEvent(new Event("visibilitychange"));
         store.target.dispatchEvent(new Event("scroll"));
         store.input("pointerdown", false);
-        store
-          .current()
-          .opts.onEvent?.({ type: "event", event: "chat", payload: { text: "agent output" } });
-        store.current().opts.onEvent?.({ type: "event", event: "tick" });
-        expect(first.request).not.toHaveBeenCalled();
+        store.current().testOptions.onEvent?.({
+          type: "event",
+          event: "chat",
+          payload: { text: "agent output" },
+        });
+        store.current().testOptions.onEvent?.({ type: "event", event: "tick" });
+        expect(store.activityCalls()).toHaveLength(0);
         store.input("wheel");
       }
       await settle();
-      expect(first.request).toHaveBeenCalledExactlyOnceWith("presence.activity", {});
+      expect(store.activityCalls()).toEqual([["presence.activity", {}]]);
       store.gateway.connect();
       store.current().request.mockResolvedValue({ ok: true });
       store.ready();
-      expect(store.current().request).not.toHaveBeenCalled();
+      expect(store.activityCalls()).toHaveLength(0);
       store.stop();
       disposers.push(startGatewayPresenceActivity(store.gateway, store.target));
-      expect(store.current().request).not.toHaveBeenCalled();
+      expect(store.activityCalls()).toHaveLength(0);
     },
   );
 
   it("throttles continuous trusted input and reports immediately after idle without trailing work", async () => {
-    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const clock = vi.spyOn(performance, "now").mockReturnValue(1_000);
     const store = setup("hidden");
     store.ready();
     store.visible.mockReturnValue("visible");
@@ -89,18 +107,14 @@ describe("Control UI presence activity", () => {
       store.input(type);
       await settle();
       store.input(type);
-      expect(store.current().request).toHaveBeenCalledTimes(index + 1);
+      expect(store.activityCalls()).toHaveLength(index + 1);
     }
     clock.mockReturnValue(500_000);
     await settle();
-    expect(store.current().request).toHaveBeenCalledTimes(5);
+    expect(store.activityCalls()).toHaveLength(5);
     store.input("pointerdown");
     await settle();
-    expect(store.current().request).toHaveBeenCalledTimes(6);
-    clock.mockReturnValue(499_000);
-    store.input("keydown");
-    await settle();
-    expect(store.current().request).toHaveBeenCalledTimes(7);
+    expect(store.activityCalls()).toHaveLength(6);
   });
 
   it("drops disconnected and hidden input and retires listeners on disposal", async () => {
@@ -108,14 +122,14 @@ describe("Control UI presence activity", () => {
     store.input("keydown");
     store.ready();
     store.visible.mockReturnValue("visible");
-    store.current().opts.onClose?.({ code: 1006, reason: "closed", willRetry: true });
+    store.current().testOptions.onClose?.({ code: 1006, reason: "closed", willRetry: true });
     store.input("pointerdown");
     store.ready();
-    expect(store.current().request).not.toHaveBeenCalled();
+    expect(store.activityCalls()).toHaveLength(0);
     store.stop();
     store.input("keydown");
     store.ready();
-    expect(store.current().request).not.toHaveBeenCalled();
+    expect(store.activityCalls()).toHaveLength(0);
     const removed = vi.spyOn(store.target, "removeEventListener");
     const stop = startGatewayPresenceActivity(store.gateway, store.target);
     stop();
@@ -129,25 +143,26 @@ describe("Control UI presence activity", () => {
   });
 
   it("keeps one request in flight and never retries a failed interaction without new input", async () => {
-    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const clock = vi.spyOn(performance, "now").mockReturnValue(1_000);
     const store = setup();
     let reject!: (error: Error) => void;
-    store.current().request.mockImplementation(
-      () =>
-        new Promise((_resolve, rejectRequest) => {
-          reject = rejectRequest;
-        }),
+    store.current().request.mockImplementation((method) =>
+      method === "users.self"
+        ? Promise.resolve({ profile: null })
+        : new Promise((_resolve, rejectRequest) => {
+            reject = rejectRequest;
+          }),
     );
     store.ready();
     clock.mockReturnValue(61_000);
     store.input("keydown");
-    expect(store.current().request).toHaveBeenCalledOnce();
+    expect(store.activityCalls()).toHaveLength(1);
     reject(new Error("offline"));
     await settle();
-    expect(store.current().request).toHaveBeenCalledOnce();
+    expect(store.activityCalls()).toHaveLength(1);
     store.current().request.mockResolvedValue({ ok: true });
     store.input("keydown");
     await settle();
-    expect(store.current().request).toHaveBeenCalledTimes(2);
+    expect(store.activityCalls()).toHaveLength(2);
   });
 });

@@ -1,10 +1,9 @@
 // Feishu tests cover card ux launcher plugin behavior.
-import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { afterAll, describe, expect, it, vi, beforeEach } from "vitest";
-import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
+import { afterAll, afterEach, describe, expect, it, vi, beforeEach } from "vitest";
+import type { ClawdbotConfig } from "../runtime-api.js";
 import {
+  expectFeishuCardButtonRow,
   expectFirstSentCardUsesFillWidthOnly,
-  expectSentCardHasP2pAction,
 } from "./card-test-helpers.js";
 import { maybeHandleFeishuQuickActionMenu } from "./card-ux-launcher.js";
 
@@ -26,15 +25,17 @@ describe("feishu quick-action launcher", () => {
     vi.clearAllMocks();
   });
 
+  afterEach(() => vi.restoreAllMocks());
+
   it("opens the launcher from a supported bot menu event", async () => {
     sendCardFeishuMock.mockResolvedValue({ messageId: "m1", chatId: "c1" });
+    vi.spyOn(Date, "now").mockReturnValue(100);
 
     const handled = await maybeHandleFeishuQuickActionMenu({
       cfg,
       eventKey: "quick-actions",
       operatorOpenId: "u123",
       accountId: "main",
-      now: 100,
     });
 
     expect(handled).toBe(true);
@@ -46,26 +47,13 @@ describe("feishu quick-action launcher", () => {
     expect(sendArgs?.cfg).toBe(cfg);
     expect(sendArgs?.to).toBe("user:u123");
     expect(sendArgs?.accountId).toBe("main");
-    expectSentCardHasP2pAction(sendCardFeishuMock);
     expectFirstSentCardUsesFillWidthOnly(sendCardFeishuMock);
-  });
-
-  it("does not send launcher cards when expiry would exceed a valid Date", async () => {
-    const runtime: RuntimeEnv = createRuntimeEnv();
-
-    const handled = await maybeHandleFeishuQuickActionMenu({
-      cfg,
-      eventKey: "quick-actions",
-      operatorOpenId: "u123",
-      accountId: "main",
-      runtime,
-      now: 8_640_000_000_000_000,
-    });
-
-    expect(handled).toBe(false);
-    expect(sendCardFeishuMock).not.toHaveBeenCalled();
-    expect(runtime.log).toHaveBeenCalledWith(
-      "feishu[main]: failed to open quick-action launcher for u123: invalid expiry clock",
-    );
+    const buttons = expectFeishuCardButtonRow(sendArgs?.card);
+    expect(buttons).toHaveLength(3);
+    expect(buttons.map((button) => button.value)).toEqual([
+      expect.objectContaining({ q: "/help", c: { u: "u123", e: 600_100, t: "p2p" } }),
+      expect.objectContaining({ m: expect.objectContaining({ command: "/new" }) }),
+      expect.objectContaining({ m: expect.objectContaining({ command: "/reset" }) }),
+    ]);
   });
 });

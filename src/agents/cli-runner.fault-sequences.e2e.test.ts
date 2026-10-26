@@ -3,6 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import type { RunExit } from "../process/supervisor/types.js";
@@ -10,6 +14,7 @@ import {
   createTestAdmittedRunContext,
   withTestRunAdmission,
 } from "./admitted-run-context.test-support.js";
+import { createRunExit } from "./bash-tools.exec-runtime.test-support.js";
 import { runPreparedCliAgent } from "./cli-runner.js";
 import { buildPreparedCliRunContext } from "./cli-runner.test-helpers.js";
 import { createManagedRun, supervisorSpawnMock } from "./cli-runner/execute.test-support.js";
@@ -32,10 +37,11 @@ const testMocks = vi.hoisted(() => ({
   runCliAgent: vi.fn(),
 }));
 
+// mock-isolation: CLI fault sequences use synthetic OAuth state without reading host credentials.
 vi.mock("./model-auth.js", () => ({
   ensureAuthProfileStore: testMocks.ensureAuthProfileStore,
   resolveAuthProfileOrder: testMocks.resolveAuthProfileOrder,
-  resolveModelAuthMode: testMocks.resolveModelAuthMode,
+  resolveModelAuthModeAsync: testMocks.resolveModelAuthMode,
 }));
 
 vi.mock("../plugins/cli-backends.runtime.js", () => ({
@@ -73,7 +79,6 @@ type ScenarioHarness = {
 
 type OuterRunOptions = {
   fallbacks?: string[];
-  onError?: (error: unknown) => void;
   runCandidate?: (
     provider: string,
     model: string,
@@ -83,17 +88,15 @@ type OuterRunOptions = {
 
 const PRIMARY_MODEL = "sonnet-4.6";
 const FALLBACK_MODEL = "sonnet-4.5";
-const RESEED_PROMPT = [
-  "Continue this conversation using the OpenClaw transcript below as prior session history.",
-  "",
-  "<conversation_history>",
-  "User: earlier context",
-  "</conversation_history>",
-  "",
-  "<next_user_message>",
-  "latest ask",
-  "</next_user_message>",
-].join("\n");
+const RESEED_PROMPT = `Continue this conversation using the OpenClaw transcript below as prior session history.
+
+<conversation_history>
+User: earlier context
+</conversation_history>
+
+<next_user_message>
+latest ask
+</next_user_message>`;
 
 let runEmbeddedAgent: typeof import("./embedded-agent-runner/run.js").runEmbeddedAgent;
 let scenarioRoot = "";
@@ -125,6 +128,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  clearRuntimeConfigSnapshot();
   await fs.rm(scenarioRoot, { recursive: true, force: true });
 });
 
@@ -143,17 +147,7 @@ function fallbackConfig(fallbacks: string[] = []): OpenClawConfig {
 }
 
 function makeExit(overrides: Partial<RunExit> = {}): RunExit {
-  return {
-    reason: "exit",
-    exitCode: 0,
-    exitSignal: null,
-    durationMs: 10,
-    stdout: "",
-    stderr: "",
-    timedOut: false,
-    noOutputTimedOut: false,
-    ...overrides,
-  };
+  return createRunExit({ durationMs: 10, ...overrides });
 }
 
 function managedRun(overrides: Partial<RunExit> = {}) {
@@ -224,6 +218,7 @@ async function runOuter(options: OuterRunOptions = {}) {
   harness.wholeTurnRuns += 1;
   const runId = "run-cli-fault-e2e";
   const config = fallbackConfig(options.fallbacks);
+  setRuntimeConfigSnapshot(config);
   return withTestRunAdmission(
     {
       admittedRunContext: createTestAdmittedRunContext(runId),
@@ -241,7 +236,6 @@ async function runOuter(options: OuterRunOptions = {}) {
         sessionKey: "agent:main:cli-fault-e2e",
         skipAuthProfileRuntime: true,
         fallbacksOverride: options.fallbacks,
-        onError: ({ error }) => options.onError?.(error),
         run: async (provider, model) => {
           harness.outerCandidates.push({ provider, model });
           return options.runCandidate
@@ -263,22 +257,39 @@ async function runOuter(options: OuterRunOptions = {}) {
   );
 }
 
-function currentCounts(): ScenarioCounts {
-  return {
+function expectCounts(overrides: Partial<ScenarioCounts> = {}): void {
+  expect({
     childProcesses: harness.managedChildren,
     nativeRunBudgetAttempts: testMocks.nativeRunBudgetAttempt.mock.calls.length,
     outerCandidates: harness.outerCandidates.length,
     runCliAgentCalls: testMocks.runCliAgent.mock.calls.length,
     wholeTurnRetries: Math.max(0, harness.wholeTurnRuns - 1),
+  }).toEqual({
+    childProcesses: 1,
+    nativeRunBudgetAttempts: 0,
+    outerCandidates: 1,
+    runCliAgentCalls: 1,
+    wholeTurnRetries: 0,
+    ...overrides,
+  });
+}
+
+function toolUse(id: string) {
+  return {
+    type: "mcp_tool_use",
+    id,
+    name: "mcp__openclaw__memory_search",
+    input: { query: "wings" },
   };
 }
 
-function expectCounts(expected: ScenarioCounts): void {
-  expect(currentCounts()).toEqual(expected);
+function toolMessage(content: unknown[]) {
+  return { type: "assistant", message: { role: "assistant", content } };
 }
 
 describe("CLI runner fault sequences", () => {
   it("dispatches bridge mode through one fresh CLI child and bypasses the native run budget", async () => {
+    setRuntimeConfigSnapshot(fallbackConfig());
     supervisorSpawnMock.mockResolvedValueOnce(managedRun(successExit("bridge ok")));
 
     const outcome = await runOuter({
@@ -302,13 +313,7 @@ describe("CLI runner fault sequences", () => {
 
     expect(outcome.result.payloads).toEqual([{ text: "bridge ok" }]);
     expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
-    expectCounts({
-      childProcesses: 1,
-      nativeRunBudgetAttempts: 0,
-      outerCandidates: 1,
-      runCliAgentCalls: 1,
-      wholeTurnRetries: 0,
-    });
+    expectCounts();
   });
 
   it.each([
@@ -352,10 +357,8 @@ describe("CLI runner fault sequences", () => {
       expect(supervisorSpawnMock).toHaveBeenCalledTimes(2);
       expectCounts({
         childProcesses: testCase.expectedChildren,
-        nativeRunBudgetAttempts: 0,
         outerCandidates: 2,
         runCliAgentCalls: 2,
-        wholeTurnRetries: 0,
       });
     },
   );
@@ -368,25 +371,14 @@ describe("CLI runner fault sequences", () => {
       }
     });
     const stdout = claudeJsonl([
-      {
-        type: "assistant",
-        message: {
-          role: "assistant",
-          content: [
-            {
-              type: "mcp_tool_use",
-              id: "effect-1",
-              name: "mcp__openclaw__memory_search",
-              input: { query: "wings" },
-            },
-            {
-              type: "mcp_tool_result",
-              tool_use_id: "effect-1",
-              content: [{ type: "text", text: "found" }],
-            },
-          ],
+      toolMessage([
+        toolUse("effect-1"),
+        {
+          type: "mcp_tool_result",
+          tool_use_id: "effect-1",
+          content: [{ type: "text", text: "found" }],
         },
-      },
+      ]),
       {
         type: "result",
         subtype: "error_max_turns",
@@ -412,13 +404,7 @@ describe("CLI runner fault sequences", () => {
       expect.objectContaining({ name: "mcp__openclaw__memory_search" }),
     ]);
     expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
-    expectCounts({
-      childProcesses: 1,
-      nativeRunBudgetAttempts: 0,
-      outerCandidates: 1,
-      runCliAgentCalls: 1,
-      wholeTurnRetries: 0,
-    });
+    expectCounts();
   });
 
   it.each([
@@ -450,22 +436,7 @@ describe("CLI runner fault sequences", () => {
       context.params.onExecutionPhase = (event) => phases.push(event.phase);
       return context;
     };
-    const stdout = claudeJsonl([
-      {
-        type: "assistant",
-        message: {
-          role: "assistant",
-          content: [
-            {
-              type: "mcp_tool_use",
-              id: "active-effect",
-              name: "mcp__openclaw__memory_search",
-              input: { query: "wings" },
-            },
-          ],
-        },
-      },
-    ]);
+    const stdout = claudeJsonl([toolMessage([toolUse("active-effect")])]);
     supervisorSpawnMock.mockResolvedValueOnce(managedRun({ ...testCase.exit, stdout }));
 
     let error: unknown;
@@ -486,16 +457,10 @@ describe("CLI runner fault sequences", () => {
     });
     expect(phases.filter((phase) => phase === "tool_execution_started")).toHaveLength(1);
     expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
-    expectCounts({
-      childProcesses: 1,
-      nativeRunBudgetAttempts: 0,
-      outerCandidates: 1,
-      runCliAgentCalls: 1,
-      wholeTurnRetries: 0,
-    });
+    expectCounts();
   });
 
-  it("fresh-retries reused-session context overflow once and never crosses models", async () => {
+  it("fresh-retries reused-session context overflow once before advancing the outer model", async () => {
     harness.contextFor = buildReusableProcessContext;
     supervisorSpawnMock
       .mockResolvedValueOnce(
@@ -503,26 +468,38 @@ describe("CLI runner fault sequences", () => {
       )
       .mockResolvedValueOnce(
         managedRun(makeExit({ exitCode: 1, stderr: "Prompt is too long for this context window" })),
-      );
+      )
+      .mockResolvedValueOnce(managedRun(successExit("fallback after context overflow")));
 
-    let error: unknown;
-    try {
-      await runOuter({ fallbacks: [`claude-cli/${FALLBACK_MODEL}`] });
-    } catch (caught) {
-      error = caught;
-    }
+    const outcome = await runOuter({ fallbacks: [`claude-cli/${FALLBACK_MODEL}`] });
 
-    expect(error).toMatchObject({
-      reason: "context_overflow",
-      code: "cli_context_overflow",
-    });
-    expect(supervisorSpawnMock).toHaveBeenCalledTimes(2);
+    expect(outcome.model).toBe(FALLBACK_MODEL);
+    expect(outcome.result.payloads).toEqual([{ text: "fallback after context overflow" }]);
+    expect(outcome.attempts).toMatchObject([
+      {
+        provider: "claude-cli",
+        model: PRIMARY_MODEL,
+        reason: "context_overflow",
+        code: "cli_context_overflow",
+      },
+    ]);
+    expect(
+      supervisorSpawnMock.mock.calls.map(([params]) =>
+        params.mode === "child" ? params.argv : params.mode,
+      ),
+    ).toEqual([
+      expect.arrayContaining(["--model", PRIMARY_MODEL, "--resume", "source-cli-session"]),
+      expect.arrayContaining(["--model", PRIMARY_MODEL, "--session-id"]),
+      expect.arrayContaining(["--model", FALLBACK_MODEL]),
+    ]);
+    expect(harness.outerCandidates).toEqual([
+      { provider: "claude-cli", model: PRIMARY_MODEL },
+      { provider: "claude-cli", model: FALLBACK_MODEL },
+    ]);
     expectCounts({
-      childProcesses: 2,
-      nativeRunBudgetAttempts: 0,
-      outerCandidates: 1,
-      runCliAgentCalls: 1,
-      wholeTurnRetries: 0,
+      childProcesses: 3,
+      outerCandidates: 2,
+      runCliAgentCalls: 2,
     });
   });
 });

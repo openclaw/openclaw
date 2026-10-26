@@ -7,55 +7,47 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatErrorMessageWithCode } from "../../infra/errors.js";
 import { withSqliteReaderOwner } from "../../infra/sqlite-reader-lifecycle.js";
 import { getChildLogger } from "../../logging/logger.js";
-import {
-  isIncognitoSessionKey,
-  normalizeAgentId,
-  parseAgentSessionKey,
-  resolveAgentIdFromSessionKey,
-} from "../../routing/session-key.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
+import { assertAgentSessionWriteAdmission } from "../../sessions/session-agent-work-admission.js";
 import type { StoreWriterTiming } from "../../shared/store-writer-queue.js";
 import {
   getOpenClawAgentDatabaseIfOpen,
   openOpenClawAgentDatabase,
-  resolveIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
   withOpenClawAgentDatabaseRuntime,
   type OpenClawAgentDatabase,
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
-import { resolveExplicitIncognitoAgentSqliteTarget } from "../../state/openclaw-agent-db.paths.js";
 import {
   runOpenClawAgentWorkerWrite,
   runOpenClawAgentWriteAdmission,
 } from "../../state/openclaw-agent-write-admission.js";
+import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { resolveStateDir } from "../paths.js";
 import { formatSqliteSessionFileMarker } from "./legacy-sqlite-marker.js";
 import { resolveSessionArtifactDirectory } from "./paths.js";
 import type {
-  SessionTranscriptReadScope,
   SessionTranscriptWriteScope,
   SqliteSessionArtifactPreparationDiagnostics,
   SqliteSessionDatabaseAdmissionDiagnostics,
   SqliteSessionWriteDiagnostics,
 } from "./session-accessor.sqlite-contract.js";
 import {
-  resolveSqliteAgentId,
-  resolveSqliteSessionKey,
+  prepareSqliteScopeTarget,
+  resolveSqliteDatabaseScopeIdentity,
+  resolveSqliteScope,
+  type SqliteScopeInput,
+} from "./session-accessor.sqlite-read-scope.js";
+import {
   toDatabaseOptions,
   type ResolvedSqliteReadScope,
   type ResolvedSqliteScope,
-  type ResolvedTranscriptReadScope,
   type ResolvedTranscriptScope,
 } from "./session-accessor.sqlite-scope-helpers.js";
 import type { SqliteSessionWriteOperation } from "./session-accessor.sqlite-write-operation.js";
 import type { SessionEntryReadSource } from "./session-entry-read-source.types.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sqlite-target-paths.js";
-import {
-  prepareSqliteTargetFromSessionStorePath,
-  resolveSqliteTargetFromSessionStorePath,
-  type ResolvedSqliteStoreTarget,
-} from "./session-sqlite-target.js";
-import { normalizeStoreSessionKey } from "./store-entry.js";
+import type { ResolvedSqliteStoreTarget } from "./session-sqlite-target.js";
 import type { InternalSessionEntry } from "./types.js";
 
 export {
@@ -69,10 +61,15 @@ export {
   type ResolvedTranscriptScope,
 } from "./session-accessor.sqlite-scope-helpers.js";
 
-export type SessionSqliteTargetResolutionCache = Map<
-  NodeJS.ProcessEnv | undefined,
-  Map<string, ReturnType<typeof resolveSqliteTargetFromSessionStorePath>>
->;
+export {
+  prepareSqliteScope,
+  prepareSqliteTranscriptReadScope,
+  resolveSqliteReadScope,
+  resolveSqliteScope,
+  resolveSqliteStoreScope,
+  resolveSqliteTranscriptReadScope,
+  type SessionSqliteTargetResolutionCache,
+} from "./session-accessor.sqlite-read-scope.js";
 
 const SQLITE_SESSION_SLOW_WRITE_MS = 1_000;
 const SQLITE_SESSION_WRITE_ERROR_MAX_CHARS = 2_048;
@@ -169,6 +166,7 @@ export async function runExclusiveSqliteSessionWrite<T>(
   signal?: AbortSignal,
 ): Promise<T> {
   const databaseOptions = toDatabaseOptions(scope);
+  assertAgentSessionWriteAdmission(databaseOptions, scope.agentId);
   const timing: StoreWriterTiming = {};
   const storePath = resolveOpenClawAgentSqlitePath(databaseOptions);
   const startedAt = performance.now();
@@ -207,15 +205,19 @@ export async function runExclusiveSqliteSessionWrite<T>(
   });
   let completedAt = startedAt;
   let outcome: "ok" | "error" = "ok";
+  const admitted = () => {
+    assertAgentSessionWriteAdmission(databaseOptions, scope.agentId);
+    return fn();
+  };
   const owned = () =>
     withSqliteReaderOwner(
       { operation, ownerKind: isMainThread ? "main" : "worker", actorId: threadId },
       () =>
         writer === "worker"
-          ? runOpenClawAgentWorkerWrite(databaseOptions, fn, timing, signal)
+          ? runOpenClawAgentWorkerWrite(databaseOptions, admitted, timing, signal)
           : runOpenClawAgentWriteAdmission(
               databaseOptions,
-              fn,
+              admitted,
               writer === "foreground-reentrant",
               timing,
               signal,
@@ -251,147 +253,6 @@ export async function runExclusiveSqliteSessionWrite<T>(
       sessionWriteDiagnostics.publish({ ...timingFields(completedAt), writer, outcome });
     }
   }
-}
-
-type SqliteScopeInput = Pick<
-  SessionTranscriptReadScope,
-  "agentId" | "defaultAgentId" | "env" | "sessionKey" | "storePath"
->;
-
-function resolveSqliteDatabaseScopeIdentity(scope: SqliteScopeInput) {
-  const parsedAgentId = parseAgentSessionKey(scope.sessionKey)?.agentId;
-  const scopedAgentId = scope.agentId ? normalizeAgentId(scope.agentId) : parsedAgentId;
-  const incognitoAgentId = isIncognitoSessionKey(scope.sessionKey)
-    ? resolveAgentIdFromSessionKey(scope.sessionKey)
-    : undefined;
-  const explicitIncognito = resolveExplicitIncognitoAgentSqliteTarget(scope.storePath, {
-    agentId: incognitoAgentId ?? scopedAgentId,
-    env: scope.env,
-  });
-  if (explicitIncognito) {
-    return {
-      effectiveAgentId: explicitIncognito.agentId,
-      effectiveStorePath: explicitIncognito.path,
-      effectiveEnv: explicitIncognito.env,
-      explicitIncognito,
-    };
-  }
-  const effectiveStorePath = incognitoAgentId
-    ? resolveIncognitoOpenClawAgentSqlitePath({ agentId: incognitoAgentId, env: scope.env })
-    : scope.storePath;
-  const effectiveAgentId = incognitoAgentId ?? scopedAgentId;
-  return { effectiveAgentId, effectiveStorePath, effectiveEnv: scope.env };
-}
-
-function resolveSqliteDatabaseScope(
-  scope: SqliteScopeInput,
-  targetCache?: SessionSqliteTargetResolutionCache,
-  preparedStoreTarget?: ResolvedSqliteStoreTarget,
-) {
-  const { effectiveAgentId, effectiveStorePath, effectiveEnv, explicitIncognito } =
-    resolveSqliteDatabaseScopeIdentity(scope);
-  const storeTarget: ResolvedSqliteStoreTarget | undefined =
-    explicitIncognito ??
-    preparedStoreTarget ??
-    (effectiveStorePath
-      ? resolveCachedSqliteStoreTarget(
-          {
-            agentId: effectiveAgentId,
-            defaultAgentId: scope.defaultAgentId,
-            env: effectiveEnv,
-            storePath: effectiveStorePath,
-          },
-          targetCache,
-        )
-      : undefined);
-  const agentId = resolveSqliteAgentId({
-    scopedAgentId: effectiveAgentId,
-    sessionKey: scope.sessionKey,
-    storeAgentId: storeTarget?.agentId,
-    storeShared: storeTarget?.shared,
-  });
-  return {
-    agentId,
-    ...(storeTarget?.shared && storeTarget.agentId ? { databaseAgentId: storeTarget.agentId } : {}),
-    ...(effectiveEnv ? { env: effectiveEnv } : {}),
-    ...(effectiveStorePath ? { ownerStorePath: effectiveStorePath } : {}),
-    ...(storeTarget ? { path: storeTarget.path } : {}),
-  };
-}
-
-export function resolveSqliteScope(
-  scope: SqliteScopeInput & { sessionKey: string },
-  targetCache?: SessionSqliteTargetResolutionCache,
-  preparedStoreTarget?: ResolvedSqliteStoreTarget,
-): ResolvedSqliteScope {
-  const { agentId, ...database } = resolveSqliteDatabaseScope(
-    scope,
-    targetCache,
-    preparedStoreTarget,
-  );
-  if (!agentId) {
-    throw new Error("Cannot resolve SQLite session scope without an agent id");
-  }
-  return { agentId, ...database, sessionKey: resolveSqliteSessionKey(scope.sessionKey, agentId) };
-}
-
-export function resolveSqliteReadScope(
-  scope: SqliteScopeInput,
-  targetCache?: SessionSqliteTargetResolutionCache,
-  preparedStoreTarget?: ResolvedSqliteStoreTarget,
-): ResolvedSqliteReadScope {
-  const sessionKey = scope.sessionKey ? normalizeStoreSessionKey(scope.sessionKey) : undefined;
-  const { agentId, ...database } = resolveSqliteDatabaseScope(
-    { ...scope, sessionKey },
-    targetCache,
-    preparedStoreTarget,
-  );
-  if (!agentId) {
-    throw new Error("Cannot resolve SQLite transcript read scope without an agent id");
-  }
-  return { agentId, ...database, ...(sessionKey ? { sessionKey } : {}) };
-}
-
-function resolveCachedSqliteStoreTarget(
-  params: {
-    agentId?: string;
-    defaultAgentId?: string;
-    env?: NodeJS.ProcessEnv;
-    storePath: string;
-  },
-  targetCache: SessionSqliteTargetResolutionCache | undefined,
-): ReturnType<typeof resolveSqliteTargetFromSessionStorePath> {
-  // Store ownership is stable for this batch. Scope the cache to the caller so later requests
-  // still observe owner changes after migration, install, or doctor flows.
-  const envCache = targetCache && (targetCache.get(params.env) ?? new Map());
-  if (envCache) {
-    targetCache?.set(params.env, envCache);
-  }
-  const cacheKey = envCache
-    ? JSON.stringify([params.storePath, params.agentId, params.defaultAgentId])
-    : "";
-  const cached = envCache?.get(cacheKey);
-  if (cached) {
-    return cached;
-  }
-  const resolved = resolveSqliteTargetFromSessionStorePath(params.storePath, {
-    agentId: params.agentId,
-    defaultAgentId: params.defaultAgentId,
-    ...(params.env ? { env: params.env } : {}),
-  });
-  envCache?.set(cacheKey, resolved);
-  return resolved;
-}
-
-export function resolveSqliteStoreScope(
-  storePath: string,
-  options: { agentId?: string } = {},
-): ResolvedSqliteScope {
-  return resolveSqliteScope({
-    ...(options.agentId ? { agentId: options.agentId } : {}),
-    sessionKey: "",
-    storePath,
-  });
 }
 
 export function resolveSqliteTranscriptArchiveDirectory(
@@ -437,55 +298,10 @@ export function resolveSqliteTranscriptScope(
   };
 }
 
-export function resolveSqliteTranscriptReadScope(
-  scope: Pick<
-    SessionTranscriptReadScope,
-    "agentId" | "env" | "sessionId" | "sessionKey" | "storePath"
-  >,
-  targetCache?: SessionSqliteTargetResolutionCache,
-): ResolvedTranscriptReadScope {
-  return {
-    ...resolveSqliteReadScope(scope, targetCache),
-    sessionId: scope.sessionId,
-  };
-}
-
-/** Prepare file ownership once; the history resource and its kernel consume this same scope. */
-export async function prepareSqliteTranscriptReadScope(
-  scope: SessionTranscriptReadScope,
-  signal?: AbortSignal,
-): Promise<ResolvedTranscriptReadScope> {
-  const readScope = {
-    ...scope,
-    sessionKey: scope.sessionKey ? normalizeStoreSessionKey(scope.sessionKey) : undefined,
-  };
-  if (isIncognitoSessionKey(readScope.sessionKey)) {
-    return resolveSqliteTranscriptReadScope(readScope);
-  }
-  const { getOwnedSessionTranscriptReader } = await import("./transcript-write-context.js");
-  const reader = getOwnedSessionTranscriptReader(readScope);
-  if (reader) {
-    return {
-      agentId: reader.logicalAgentId,
-      databaseAgentId: reader.database.agentId,
-      path: reader.database.path,
-      ownerStorePath: readScope.storePath,
-      env: reader.database.env,
-      sessionKey: reader.sessionKey,
-      sessionId: readScope.sessionId,
-    };
-  }
-  const target = await prepareSqliteScopeTarget(readScope, signal);
-  return {
-    ...resolveSqliteReadScope(readScope, undefined, target),
-    sessionId: readScope.sessionId,
-  };
-}
-
 /** Exact locators can reserve their FIFO before worker-owned schema-owner discovery. */
 export function resolveSqliteWriteAdmissionScope(
   scope: SqliteScopeInput & { sessionKey: string },
-): ResolvedSqliteReadScope | undefined {
+): (ResolvedSqliteReadScope & { path: string; shared?: boolean }) | undefined {
   const { effectiveAgentId, effectiveStorePath, effectiveEnv, explicitIncognito } =
     resolveSqliteDatabaseScopeIdentity(scope);
   const target: ResolvedSqliteStoreTarget | undefined = effectiveStorePath
@@ -502,36 +318,32 @@ export function resolveSqliteWriteAdmissionScope(
     agentId,
     env: effectiveEnv,
     path: target?.path ?? resolveOpenClawAgentSqlitePath({ agentId, env: effectiveEnv }),
+    ...(target?.shared ? { shared: true } : {}),
   };
 }
 
-/** Writers resolve physical ownership in the existing read worker inside exact-path admission. */
-export async function prepareSqliteScope(
+/** Canonical writers must enter their existing FIFO before the first asynchronous yield. */
+export function withPreparedSqliteScope<T>(
   scope: SqliteScopeInput & { sessionKey: string },
-): Promise<ResolvedSqliteScope> {
-  return resolveSqliteScope(scope, undefined, await prepareSqliteScopeTarget(scope));
-}
-
-async function prepareSqliteScopeTarget(scope: SqliteScopeInput, signal?: AbortSignal) {
-  const { effectiveAgentId, effectiveStorePath, explicitIncognito } =
-    resolveSqliteDatabaseScopeIdentity(scope);
-  if (explicitIncognito) {
-    return explicitIncognito;
+  run: (resolved: ResolvedSqliteScope) => T | Promise<T>,
+): T | Promise<T> {
+  const env = cloneEnvWithPlatformSemantics(scope.env ?? process.env);
+  env.OPENCLAW_STATE_DIR = resolveStateDir(env);
+  const captured = { ...scope, env };
+  if (!isMainThread) {
+    return run(resolveSqliteScope(captured));
   }
-  if (isIncognitoSessionKey(scope.sessionKey)) {
-    return undefined;
-  }
-  return effectiveStorePath
-    ? await prepareSqliteTargetFromSessionStorePath(
-        effectiveStorePath,
-        {
-          agentId: effectiveAgentId,
-          defaultAgentId: scope.defaultAgentId,
-          env: scope.env,
-        },
-        signal,
-      )
+  const { effectiveStorePath, explicitIncognito } = resolveSqliteDatabaseScopeIdentity(captured);
+  const target = effectiveStorePath
+    ? (explicitIncognito ?? resolveUnsuffixedSqliteTargetFromSessionStorePath(effectiveStorePath))
     : undefined;
+  if (!effectiveStorePath || target?.agentId) {
+    return run(resolveSqliteScope(captured, undefined, target));
+  }
+  // Shared and custom locators need worker-owned discovery; the resolved writer owns admission.
+  return prepareSqliteScopeTarget(captured).then((prepared) =>
+    run(resolveSqliteScope(captured, undefined, prepared)),
+  );
 }
 
 /** Pin the environment and database locator before lifecycle work yields. */

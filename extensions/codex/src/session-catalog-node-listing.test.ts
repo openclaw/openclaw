@@ -1,7 +1,6 @@
-// Codex supervision tests cover passive listing and safe local session takeover.
 /* oxlint-disable typescript/unbound-method -- assertions inspect vi.fn-backed object methods, not unbound class methods. */
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
   nodeHostMocks,
   CODEX_APP_SERVER_THREADS_LIST_COMMAND,
@@ -9,7 +8,7 @@ import {
   CODEX_CATALOG_TRANSCRIPT_READ_COMMAND,
   tempDirs,
   listCodexSessionCatalog,
-  registerCodexSessionCatalog,
+  readCodexSessionTranscript,
   createCodexSessionCatalogNodeHostCommands,
   createCodexSessionCatalogControlFactory,
   config,
@@ -18,7 +17,7 @@ import {
   createControl,
   createEligibleControl,
   createRuntime,
-  createGatewayApi,
+  createCatalogTestProvider,
   fs,
   os,
   path,
@@ -29,914 +28,729 @@ import {
   type OpenClawConfig,
 } from "./session-catalog.test-helpers.js";
 
-describe("Codex supervision catalog", () => {
-  it("does not start paired hosts when retired during node inventory", async () => {
-    const inventory = createDeferred<Awaited<ReturnType<PluginRuntime["nodes"]["list"]>>>();
-    const inventoryStarted = createDeferred<void>();
-    const listNodes = vi.fn(() => {
-      inventoryStarted.resolve();
-      return inventory.promise;
-    });
-    const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async () => ({
-      payloadJSON: JSON.stringify({ sessions: [] }),
-    }));
-    const controller = new AbortController();
-    const reason = new Error("catalog retired during inventory");
-    const listed = listCodexSessionCatalog({
-      bindingStore: createCodexTestBindingStore(),
-      config,
-      runtime: createRuntime({ invoke }).runtime,
-      control: createControl(),
-      query: { hostIds: ["node:late"] },
-      listNodes,
-      signal: controller.signal,
-    }).catch((error: unknown) => error);
-    await inventoryStarted.promise;
-    controller.abort(reason);
-    inventory.resolve({
-      nodes: [
-        { nodeId: "late", connected: true, commands: [CODEX_APP_SERVER_THREADS_LIST_COMMAND] },
-      ],
-    });
-    const result = await listed;
-    expect(invoke).not.toHaveBeenCalled();
-    expect(result).toBe(reason);
+type CatalogNode = Awaited<ReturnType<PluginRuntime["nodes"]["list"]>>["nodes"][number];
+const nodePayload = (value: unknown) => ({ payloadJSON: JSON.stringify(value) });
+const node = (nodeId: string, overrides: Partial<CatalogNode> = {}): CatalogNode => ({
+  nodeId,
+  connected: true,
+  commands: [CODEX_APP_SERVER_THREADS_LIST_COMMAND],
+  ...overrides,
+});
+const session = (threadId: string, fields: Record<string, unknown> = {}) => ({
+  threadId,
+  status: "idle",
+  archived: false,
+  ...fields,
+});
+const nodePage = (sessions: unknown[], nextCursor?: string) =>
+  nodePayload({ sessions, nextCursor });
+const host = (hostId: string, fields: Record<string, unknown>) =>
+  expect.objectContaining({ hostId, ...fields });
+const failedHost = (name: string, code: string, message: unknown, connected = true) =>
+  host(`node:${name}`, { connected, sessions: [], error: { code, message } });
+const duplexIO = () => ({
+  signal: new AbortController().signal,
+  emitChunk: async () => {},
+  onInput: () => {},
+});
+function listCatalog(
+  runtime: PluginRuntime,
+  control: ReturnType<typeof createControl>,
+  options: Partial<Parameters<typeof listCodexSessionCatalog>[0]> = {},
+) {
+  return listCodexSessionCatalog({
+    bindingStore: createCodexTestBindingStore(),
+    config,
+    runtime,
+    control,
+    ...options,
+  });
+}
+function transcriptCommand(control: ReturnType<typeof createControl>, command: string) {
+  const found = createCodexSessionCatalogNodeHostCommands(control).find(
+    (entry) => entry.command === command,
+  );
+  if (!found) {
+    throw new Error(`Codex node command was not registered: ${command}`);
+  }
+  return {
+    ...found,
+    run: (params: Record<string, unknown>) => found.handle(JSON.stringify(params)),
+  };
+}
+
+it("does not start paired hosts when retired during node inventory", async () => {
+  const inventory = createDeferred<Awaited<ReturnType<PluginRuntime["nodes"]["list"]>>>();
+  const inventoryStarted = createDeferred<void>();
+  const listNodes = vi.fn(() => {
+    inventoryStarted.resolve();
+    return inventory.promise;
+  });
+  const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async () => nodePage([]));
+  const controller = new AbortController();
+  const reason = new Error("catalog retired during inventory");
+  const listed = listCatalog(createRuntime({ invoke }).runtime, createControl(), {
+    query: { hostIds: ["node:late"] },
+    listNodes,
+    signal: controller.signal,
+  }).catch((error: unknown) => error);
+  await inventoryStarted.promise;
+  controller.abort(reason);
+  inventory.resolve({
+    nodes: [node("late")],
+  });
+  const result = await listed;
+  expect(invoke).not.toHaveBeenCalled();
+  expect(result).toBe(reason);
+});
+
+it("filters managed threads and publishes websocket source continuation support", async () => {
+  const listPage = vi.fn(async ({ cursor }: { cursor?: string; limit: number }) =>
+    cursor
+      ? {
+          sessions: [session("native-2", { source: "cli" })],
+        }
+      : {
+          sessions: [
+            session("managed", { source: "vscode" }),
+            session("native-1", { source: "cli" }),
+          ],
+          nextCursor: "page-2",
+          backwardsCursor: "page-0",
+        },
+  );
+  const control = createControl({ listPage });
+  const bindingStore = Object.assign(createCodexTestBindingStore(), {
+    managedThreads: {
+      has: vi.fn(async () => false),
+      mark: vi.fn(async () => undefined),
+      snapshot: vi.fn(
+        async () => new Map<string, ReadonlySet<string>>([["home-main", new Set(["managed"])]]),
+      ),
+    },
+  });
+  const command = createCodexSessionCatalogNodeHostCommands(
+    {
+      hasActiveWork: () => false,
+      disconnect: async () => {},
+      forRequest: () => control,
+      forNode: async () => ({
+        control,
+        sourceHomeId: "home-main",
+        codexHome: "/node/.codex",
+        transport: "websocket",
+        assertCurrent: () => {},
+      }),
+      homesForAgent: async () => [],
+      forUpstream: async () => undefined,
+    },
+    bindingStore,
+  ).find((candidate) => candidate.command === CODEX_APP_SERVER_THREADS_LIST_COMMAND);
+  if (!command) {
+    throw new Error("Codex session catalog node command was not registered");
+  }
+
+  const result = await command.handle(
+    JSON.stringify({ limit: 2, agentId: "main", sourceHomeId: "home-main" }),
+  );
+  expect(JSON.parse(result)).toEqual({
+    sourceHomeId: "home-main",
+    canContinueCodex: false,
+    sessions: [session("native-1", { source: "cli" }), session("native-2", { source: "cli" })],
+    backwardsCursor: "page-0",
+  });
+  expect(bindingStore.managedThreads.snapshot).toHaveBeenCalledOnce();
+  expect(listPage.mock.calls.map(([request]) => request)).toEqual([
+    { limit: 2 },
+    { cursor: "page-2", limit: 1 },
+  ]);
+  await expect(
+    command.handle(JSON.stringify({ limit: 2, agentId: "main", sourceHomeId: "home-old" })),
+  ).rejects.toThrow("source home changed");
+  expect(listPage).toHaveBeenCalledTimes(2);
+});
+
+it("keeps paired-node catalogs non-archived and metadata-only", async () => {
+  const control = createControl({
+    listPage: vi.fn(async () => ({
+      sessions: [session("local")],
+    })),
+  });
+  const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async () =>
+    nodePage([
+      session("remote", {
+        fallbackName: "Remote task",
+        preview: "must be stripped",
+        turns: [{ private: true }],
+      }),
+    ]),
+  );
+  const { runtime } = createRuntime({
+    nodes: [node("devbox", { displayName: "Dev Box" })],
+    invoke,
   });
 
-  it.each(["stdio", "unix", "websocket"] as const)(
-    "filters managed threads and publishes source continuation support for %s",
-    async (transport) => {
-      const listPage = vi.fn(async ({ cursor }: { cursor?: string; limit: number }) =>
-        cursor
-          ? {
-              sessions: [{ threadId: "native-2", status: "idle", source: "cli", archived: false }],
-            }
-          : {
-              sessions: [
-                { threadId: "managed", status: "idle", source: "vscode", archived: false },
-                { threadId: "native-1", status: "idle", source: "cli", archived: false },
-              ],
-              nextCursor: "page-2",
-              backwardsCursor: "page-0",
-            },
-      );
-      const control = createControl({ listPage });
-      const bindingStore = Object.assign(createCodexTestBindingStore(), {
-        managedThreads: {
-          has: vi.fn(async () => false),
-          mark: vi.fn(async () => undefined),
-          snapshot: vi.fn(
-            async () => new Map<string, ReadonlySet<string>>([["home-main", new Set(["managed"])]]),
-          ),
-        },
-      });
-      const command = createCodexSessionCatalogNodeHostCommands(
-        {
-          hasActiveWork: () => false,
-          disconnect: async () => {},
-          forRequest: () => control,
-          forNode: async () => ({
-            control,
-            sourceHomeId: "home-main",
-            codexHome: "/node/.codex",
-            transport,
-            assertCurrent: () => {},
-          }),
-          homesForAgent: async () => [],
-          forUpstream: async () => undefined,
-        },
-        bindingStore,
-      ).find((candidate) => candidate.command === CODEX_APP_SERVER_THREADS_LIST_COMMAND);
-      if (!command) {
-        throw new Error("Codex session catalog node command was not registered");
-      }
+  const result = await listCatalog(runtime, control, { includeLocal: false });
 
-      const result = await command.handle(
-        JSON.stringify({ limit: 2, agentId: "main", sourceHomeId: "home-main" }),
-      );
-      expect(JSON.parse(result)).toEqual({
-        sourceHomeId: "home-main",
-        canContinueCodex: transport === "stdio",
-        sessions: [
-          { threadId: "native-1", status: "idle", source: "cli", archived: false },
-          { threadId: "native-2", status: "idle", source: "cli", archived: false },
-        ],
-        backwardsCursor: "page-0",
-      });
-      expect(bindingStore.managedThreads.snapshot).toHaveBeenCalledTimes(1);
-      expect(listPage).toHaveBeenNthCalledWith(1, { limit: 2 });
-      expect(listPage).toHaveBeenNthCalledWith(2, { cursor: "page-2", limit: 1 });
-      await expect(
-        command.handle(JSON.stringify({ limit: 2, agentId: "main", sourceHomeId: "home-old" })),
-      ).rejects.toThrow("source home changed");
-      expect(listPage).toHaveBeenCalledTimes(2);
+  expect(result.hosts).toEqual([
+    {
+      hostId: "node:devbox",
+      label: "Dev Box",
+      kind: "node",
+      nodeId: "devbox",
+      canContinueCodex: false,
+      canOpenTerminalCodex: false,
+      canStartTerminal: false,
+      connected: true,
+      sessions: [session("remote", { fallbackName: "Remote task" })],
     },
+  ]);
+  expect(control.listPage).not.toHaveBeenCalled();
+  expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ scopes: ["operator.write"] }));
+  expect(invoke.mock.calls[0]?.[0].params).not.toHaveProperty("archived");
+  expect(JSON.stringify(result)).not.toContain("private");
+
+  const [nodeCommand] = createCodexSessionCatalogNodeHostCommands(control);
+  expect(nodeCommand).toMatchObject({
+    command: CODEX_APP_SERVER_THREADS_LIST_COMMAND,
+    dangerous: false,
+  });
+  if (!nodeCommand) {
+    throw new Error("Codex session catalog node command was not registered");
+  }
+  await expect(nodeCommand.handle(JSON.stringify({ archived: true }))).rejects.toThrow(
+    "unknown Codex session catalog parameter: archived",
   );
 
-  it("keeps paired-node catalogs non-archived and metadata-only", async () => {
-    const control = createControl({
-      listPage: vi.fn(async () => ({
-        sessions: [{ threadId: "local", status: "idle", archived: false }],
-      })),
-    });
-    const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async () => ({
-      payloadJSON: JSON.stringify({
-        sessions: [
-          {
-            threadId: "remote",
-            fallbackName: "Remote task",
-            status: "idle",
-            archived: false,
-            preview: "must be stripped",
-            turns: [{ private: true }],
-          },
-        ],
-      }),
-    }));
-    const { runtime } = createRuntime({
-      nodes: [
-        {
-          nodeId: "devbox",
-          displayName: "Dev Box",
-          connected: true,
-          commands: [CODEX_APP_SERVER_THREADS_LIST_COMMAND],
-        },
-      ],
-      invoke,
-    });
-
-    const result = await listCodexSessionCatalog({
-      bindingStore: createCodexTestBindingStore(),
-      config,
-      runtime,
-      control,
-      includeLocal: false,
-    });
-
-    expect(result.hosts).toEqual([
-      {
-        hostId: "node:devbox",
-        label: "Dev Box",
-        kind: "node",
-        nodeId: "devbox",
-        canContinueCodex: false,
-        canOpenTerminalCodex: false,
-        canStartTerminal: false,
-        connected: true,
-        sessions: [
-          { threadId: "remote", fallbackName: "Remote task", status: "idle", archived: false },
-        ],
-      },
-    ]);
-    expect(control.listPage).not.toHaveBeenCalled();
-    expect(invoke).toHaveBeenCalledWith(
-      expect.objectContaining({
-        nodeId: "devbox",
-        command: CODEX_APP_SERVER_THREADS_LIST_COMMAND,
-        timeoutMs: 65_000,
-        scopes: ["operator.write"],
-      }),
-    );
-    expect(invoke.mock.calls[0]?.[0].params).not.toHaveProperty("archived");
-    expect(invoke.mock.calls[0]?.[0].params).toHaveProperty("agentId", "main");
-    expect(JSON.stringify(result)).not.toContain("private");
-
-    const [nodeCommand] = createCodexSessionCatalogNodeHostCommands(control);
-    expect(nodeCommand).toMatchObject({
-      command: CODEX_APP_SERVER_THREADS_LIST_COMMAND,
-      dangerous: false,
-    });
-    if (!nodeCommand) {
-      throw new Error("Codex session catalog node command was not registered");
-    }
-    await expect(nodeCommand.handle(JSON.stringify({ archived: true }))).rejects.toThrow(
-      "unknown Codex session catalog parameter: archived",
-    );
-
-    invoke.mockResolvedValueOnce({
-      payloadJSON: JSON.stringify({
-        sessions: [{ threadId: "archived", status: "idle", archived: true }],
-      }),
-    });
-    await expect(
-      listCodexSessionCatalog({
-        bindingStore: createCodexTestBindingStore(),
-        config,
-        runtime,
-        control,
-        query: { hostIds: ["node:devbox"] },
-      }),
-    ).resolves.toEqual({
-      hosts: [
-        expect.objectContaining({
-          hostId: "node:devbox",
-          sessions: [],
-          error: { code: "NODE_INVOKE_FAILED", message: expect.any(String) },
-        }),
-      ],
-    });
-  });
-
-  it("omits the Gateway's same-install node host from native discovery", async () => {
-    const control = createControl({
-      listPage: vi.fn(async () => ({
-        sessions: [{ threadId: "local", status: "idle", archived: false }],
-      })),
-    });
-    const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async ({ nodeId }) => ({
-      payloadJSON: JSON.stringify({
-        sessions: [{ threadId: `remote-${nodeId}`, status: "idle", archived: false }],
-      }),
-    }));
-    const { runtime } = createRuntime({
-      nodes: [
-        {
-          nodeId: "gateway-node",
-          displayName: "Gateway node",
-          gatewayLocal: true,
-          connected: true,
-          commands: [CODEX_APP_SERVER_THREADS_LIST_COMMAND],
-        },
-        {
-          nodeId: "remote-node",
-          displayName: "Remote node",
-          connected: true,
-          commands: [CODEX_APP_SERVER_THREADS_LIST_COMMAND],
-        },
-      ],
-      invoke,
-    });
-
-    const result = await listCodexSessionCatalog({
-      bindingStore: createCodexTestBindingStore(),
-      config,
-      runtime,
-      control,
-    });
-
-    expect(result.hosts.map((host) => host.hostId)).toEqual([
-      CODEX_LOCAL_SESSION_HOST_ID,
-      "node:remote-node",
-    ]);
-    expect(invoke).toHaveBeenCalledTimes(1);
-    expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ nodeId: "remote-node" }));
-  });
-
-  it("isolates federated host failures while preserving selected healthy hosts", async () => {
-    const control = createControl({
-      listPage: vi.fn(async () => ({
-        sessions: [
-          {
-            threadId: "local-match",
-            name: "Match locally",
-            status: "idle",
-            source: "cli",
-            archived: false,
-          },
-        ],
-        nextCursor: "local-page-3",
-      })),
-    });
-    const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async ({ nodeId }) => {
-      if (nodeId === "broken") {
-        throw new Error("node transport failed");
-      }
-      return {
-        payloadJSON: JSON.stringify({
-          sessions: [
-            {
-              threadId: "remote-match",
-              name: "Remote match",
-              status: "idle",
-              source: "vscode",
-              archived: false,
-            },
-            {
-              threadId: "preview-only",
-              name: "Other title",
-              preview: "match appears only in private transcript text",
-              status: "idle",
-              source: "cli",
-              archived: false,
-            },
-          ],
-          nextCursor: "healthy-page-3",
-        }),
-      };
-    });
-    const { runtime } = createRuntime({
-      nodes: [
-        {
-          nodeId: "healthy",
-          displayName: "A healthy node",
-          connected: true,
-          commands: [CODEX_APP_SERVER_THREADS_LIST_COMMAND],
-        },
-        {
-          nodeId: "broken",
-          displayName: "B broken node",
-          connected: true,
-          commands: [CODEX_APP_SERVER_THREADS_LIST_COMMAND],
-        },
-        {
-          nodeId: "offline",
-          displayName: "C offline node",
-          connected: false,
-          commands: [CODEX_APP_SERVER_THREADS_LIST_COMMAND],
-        },
-        {
-          nodeId: "unsupported",
-          connected: true,
-          commands: ["other.command"],
-        },
-        {
-          nodeId: "unselected",
-          connected: true,
-          commands: [CODEX_APP_SERVER_THREADS_LIST_COMMAND],
-        },
-      ],
-      invoke,
-    });
-
-    const result = await listCodexSessionCatalog({
-      bindingStore: createCodexTestBindingStore(),
-      config,
-      runtime,
-      control,
-      query: {
-        search: "match",
-        limitPerHost: 7,
-        hostIds: [
-          CODEX_LOCAL_SESSION_HOST_ID,
-          "node:healthy",
-          "node:broken",
-          "node:offline",
-          "node:unsupported",
-        ],
-        cursors: {
-          [CODEX_LOCAL_SESSION_HOST_ID]: "local-page-2",
-          "node:healthy": "healthy-page-2",
-          "node:broken": "broken-page-2",
-        },
-      },
-    });
-
-    expect(control.listPage).toHaveBeenCalledWith({
-      cursor: "local-page-2",
-      limit: 7,
-      searchTerm: "match",
-    });
-    expect(invoke).toHaveBeenCalledTimes(2);
-    expect(invoke).toHaveBeenCalledWith(
-      expect.objectContaining({
-        nodeId: "healthy",
-        params: { agentId: "main", cursor: "healthy-page-2", limit: 7, searchTerm: "match" },
-        scopes: ["operator.write"],
-      }),
-    );
-    expect(invoke).toHaveBeenCalledWith(
-      expect.objectContaining({
-        nodeId: "broken",
-        params: { agentId: "main", cursor: "broken-page-2", limit: 7, searchTerm: "match" },
-        scopes: ["operator.write"],
-      }),
-    );
-    expect(result.hosts).toEqual([
-      expect.objectContaining({
-        hostId: CODEX_LOCAL_SESSION_HOST_ID,
-        connected: true,
-        nextCursor: "local-page-3",
-        sessions: [expect.objectContaining({ threadId: "local-match" })],
-      }),
-      expect.objectContaining({
-        hostId: "node:healthy",
-        connected: true,
-        nextCursor: "healthy-page-3",
-        sessions: [expect.objectContaining({ threadId: "remote-match" })],
-      }),
-      expect.objectContaining({
-        hostId: "node:broken",
-        connected: true,
+  invoke.mockResolvedValueOnce(nodePage([session("archived", { archived: true })]));
+  await expect(
+    listCatalog(runtime, control, {
+      query: { hostIds: ["node:devbox"] },
+    }),
+  ).resolves.toEqual({
+    hosts: [
+      host("node:devbox", {
         sessions: [],
         error: { code: "NODE_INVOKE_FAILED", message: expect.any(String) },
       }),
-      expect.objectContaining({
-        hostId: "node:offline",
-        connected: false,
-        sessions: [],
-        error: { code: "NODE_OFFLINE", message: "Paired node is offline" },
-      }),
-    ]);
-    expect(JSON.stringify(result)).not.toContain("private transcript");
+    ],
+  });
+});
+
+it("isolates federated host failures while preserving selected healthy hosts", async () => {
+  const control = createControl({
+    listPage: vi.fn(async () => ({
+      sessions: [session("local-match", { name: "Match locally", source: "cli" })],
+      nextCursor: "local-page-3",
+    })),
+  });
+  const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async ({ nodeId }) => {
+    if (nodeId === "broken") {
+      throw new Error("node transport failed");
+    }
+    return nodePage(
+      [
+        session("remote-match", { name: "Remote match", source: "vscode" }),
+        session("preview-only", {
+          name: "Other title",
+          preview: "match appears only in private transcript text",
+          source: "cli",
+        }),
+      ],
+      "healthy-page-3",
+    );
+  });
+  const { runtime } = createRuntime({
+    nodes: [
+      node("healthy", { displayName: "A healthy node" }),
+      node("broken", { displayName: "B broken node" }),
+      node("offline", { displayName: "C offline node", connected: false }),
+      node("unsupported", { commands: ["other.command"] }),
+      node("unselected"),
+    ],
+    invoke,
   });
 
-  it.each(["completes", "is cancelled"] as const)(
-    "owns paired-node publication after the fail-soft response when discovery %s",
-    async (outcome) => {
-      vi.useFakeTimers();
-      try {
-        const invokeResult = createDeferred<unknown>();
-        const controller = new AbortController();
-        const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async ({ signal }) => {
-          const abort = () => invokeResult.reject(signal?.reason);
-          signal?.addEventListener("abort", abort, { once: true });
-          try {
-            return await invokeResult.promise;
-          } finally {
-            signal?.removeEventListener("abort", abort);
-          }
-        });
-        const { runtime } = createRuntime({
-          invoke,
-          nodes: [
-            {
-              nodeId: "slow-node",
-              displayName: "Slow node",
-              connected: true,
-              commands: [CODEX_APP_SERVER_THREADS_LIST_COMMAND],
-            },
-          ],
-        });
-        const { api, getProvider } = createGatewayApi(runtime);
-        registerCodexSessionCatalog({
-          api,
-          bindingStore: createCodexTestBindingStore(),
-          control: createControl(),
-          getRuntimeConfig: () => config,
-        });
-        const completions: Promise<void>[] = [];
-        const completed = vi.fn();
-        const onHost = vi.fn();
-        const pending = getProvider()!.list({
-          hostIds: ["node:slow-node"],
-          limitPerHost: 40,
-          signal: controller.signal,
-          waitUntil: (completion) => {
-            completions.push(
-              completion.then(() => {
-                expect(onHost).toHaveBeenCalledOnce();
-                completed();
-              }),
-            );
-          },
-          onHost,
-        });
-
-        await vi.advanceTimersByTimeAsync(8_000);
-        await expect(pending).resolves.toMatchObject([
-          { hostId: "node:slow-node", error: { code: "NODE_INVOKE_FAILED" } },
-        ]);
-        expect(completions).toHaveLength(1);
-        expect(completed).not.toHaveBeenCalled();
-        expect(onHost).not.toHaveBeenCalled();
-        expect(invoke).toHaveBeenCalledWith({
-          nodeId: "slow-node",
-          command: CODEX_APP_SERVER_THREADS_LIST_COMMAND,
-          params: { agentId: "main", cursor: undefined, limit: 40, searchTerm: undefined },
-          timeoutMs: 65_000,
-          scopes: ["operator.write"],
-          signal: controller.signal,
-        });
-
-        if (outcome === "is cancelled") {
-          controller.abort(new Error("catalog owner retired"));
-        } else {
-          invokeResult.resolve({
-            payloadJSON: JSON.stringify({
-              sessions: [{ threadId: "late-thread", status: "idle", archived: false }],
-            }),
-          });
-        }
-        await Promise.all(completions);
-
-        expect(onHost).toHaveBeenCalledWith(
-          expect.objectContaining({
-            hostId: "node:slow-node",
-            ...(outcome === "is cancelled"
-              ? { sessions: [], error: { code: "NODE_INVOKE_FAILED", message: expect.any(String) } }
-              : {
-                  sessions: [
-                    expect.objectContaining({
-                      threadId: "late-thread",
-                      canContinue: false,
-                      canArchive: false,
-                      canOpenTerminal: false,
-                    }),
-                  ],
-                }),
-          }),
-        );
-        expect(completed).toHaveBeenCalledOnce();
-      } finally {
-        vi.useRealTimers();
-      }
+  const result = await listCatalog(runtime, control, {
+    query: {
+      search: "match",
+      limitPerHost: 7,
+      hostIds: [
+        CODEX_LOCAL_SESSION_HOST_ID,
+        "node:healthy",
+        "node:broken",
+        "node:offline",
+        "node:unsupported",
+      ],
+      cursors: {
+        [CODEX_LOCAL_SESSION_HOST_ID]: "local-page-2",
+        "node:healthy": "healthy-page-2",
+        "node:broken": "broken-page-2",
+      },
     },
+  });
+
+  expect(control.listPage).toHaveBeenCalledWith({
+    cursor: "local-page-2",
+    limit: 7,
+    searchTerm: "match",
+  });
+  expect(invoke).toHaveBeenCalledTimes(2);
+  expect(invoke.mock.calls.map(([request]) => request.params)).toEqual(
+    expect.arrayContaining(
+      ["healthy", "broken"].map((id) => ({
+        agentId: "main",
+        cursor: `${id}-page-2`,
+        limit: 7,
+        searchTerm: "match",
+      })),
+    ),
+  );
+  expect(result.hosts).toEqual([
+    host(CODEX_LOCAL_SESSION_HOST_ID, {
+      connected: true,
+      nextCursor: "local-page-3",
+      sessions: [expect.objectContaining({ threadId: "local-match" })],
+    }),
+    host("node:healthy", {
+      connected: true,
+      nextCursor: "healthy-page-3",
+      sessions: [expect.objectContaining({ threadId: "remote-match" })],
+    }),
+    failedHost("broken", "NODE_INVOKE_FAILED", expect.any(String)),
+    failedHost("offline", "NODE_OFFLINE", "Paired node is offline", false),
+  ]);
+  expect(JSON.stringify(result)).not.toContain("private transcript");
+});
+
+it.each(["completes", "is cancelled"] as const)(
+  "owns paired-node publication after the fail-soft response when discovery %s",
+  async (outcome) => {
+    vi.useFakeTimers();
+    try {
+      const invokeResult = createDeferred<unknown>();
+      const controller = new AbortController();
+      const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async ({ signal }) => {
+        const abort = () => invokeResult.reject(signal?.reason);
+        signal?.addEventListener("abort", abort, { once: true });
+        try {
+          return await invokeResult.promise;
+        } finally {
+          signal?.removeEventListener("abort", abort);
+        }
+      });
+      const { runtime } = createRuntime({
+        invoke,
+        nodes: [node("slow-node", { displayName: "Slow node" })],
+      });
+      const completions: Promise<void>[] = [];
+      const completed = vi.fn();
+      const onHost = vi.fn();
+      const pending = createCatalogTestProvider({ runtime }).list({
+        hostIds: ["node:slow-node"],
+        limitPerHost: 40,
+        signal: controller.signal,
+        waitUntil: (completion) => {
+          completions.push(
+            completion.then(() => {
+              expect(onHost).toHaveBeenCalledOnce();
+              completed();
+            }),
+          );
+        },
+        onHost,
+      });
+
+      await vi.advanceTimersByTimeAsync(8_000);
+      await expect(pending).resolves.toMatchObject([
+        { hostId: "node:slow-node", error: { code: "NODE_INVOKE_FAILED" } },
+      ]);
+      expect(completions).toHaveLength(1);
+      expect(completed).not.toHaveBeenCalled();
+      expect(onHost).not.toHaveBeenCalled();
+
+      if (outcome === "is cancelled") {
+        controller.abort(new Error("catalog owner retired"));
+      } else {
+        invokeResult.resolve(nodePage([session("late-thread")]));
+      }
+      await Promise.all(completions);
+
+      expect(onHost).toHaveBeenCalledWith(
+        host(
+          "node:slow-node",
+          outcome === "is cancelled"
+            ? { sessions: [], error: { code: "NODE_INVOKE_FAILED", message: expect.any(String) } }
+            : {
+                sessions: [
+                  expect.objectContaining({
+                    threadId: "late-thread",
+                    canContinue: false,
+                    canArchive: false,
+                    canOpenTerminal: false,
+                  }),
+                ],
+              },
+        ),
+      );
+      expect(completed).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  },
+);
+
+it("preserves native catalog ownership in app-owned workers", () => {
+  vi.stubEnv("OPENCLAW_NODE_EXEC_HOST", "app");
+  const commands = createCodexSessionCatalogNodeHostCommands(createEligibleControl()).map(
+    (command) => command.command,
   );
 
-  it.each([
-    { mode: "app-owned", execHost: "app", boundedReader: false },
-    { mode: "standalone", execHost: undefined, boundedReader: true },
-  ])("preserves native catalog ownership in $mode workers", ({ execHost, boundedReader }) => {
-    vi.stubEnv("OPENCLAW_NODE_EXEC_HOST", execHost);
-    const commands = createCodexSessionCatalogNodeHostCommands(createEligibleControl()).map(
-      (command) => command.command,
-    );
+  expect(commands).toEqual(
+    expect.arrayContaining([
+      CODEX_APP_SERVER_THREADS_LIST_COMMAND,
+      CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
+    ]),
+  );
+  expect(commands.includes(CODEX_CATALOG_TRANSCRIPT_READ_COMMAND)).toBe(false);
+});
 
-    expect(commands).toEqual(
-      expect.arrayContaining([
-        CODEX_APP_SERVER_THREADS_LIST_COMMAND,
-        CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
-      ]),
-    );
-    expect(commands.includes(CODEX_CATALOG_TRANSCRIPT_READ_COMMAND)).toBe(boundedReader);
-  });
+it("serves one bounded transcript page from the node host command", async () => {
+  const item = catalogThreadItem("item-1", { text: "bounded answer" });
+  const page = {
+    data: [{ id: "turn-1", items: [item] }],
+    nextCursor: "turns-page-2",
+  };
+  const listTurnPage = vi.fn(async () => page);
+  const control = createEligibleControl({ listTurnPage });
+  const command = transcriptCommand(control, CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND);
 
-  it("serves one bounded transcript page from the node host command", async () => {
-    const item = catalogThreadItem("item-1", { text: "bounded answer" });
-    const listTurnPage = vi.fn(async () => ({
-      data: [
-        {
-          id: "turn-1",
-          items: [item],
-        },
-      ],
-      nextCursor: "turns-page-2",
-    }));
-    const control = createEligibleControl({ listTurnPage });
-    const command = createCodexSessionCatalogNodeHostCommands(control).find(
-      (candidate) => candidate.command === CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
-    );
-    if (!command) {
-      throw new Error("Codex transcript node command was not registered");
-    }
-
-    await expect(
-      command.handle(
-        JSON.stringify({
-          threadId: "thread-1",
-          cursor: "turns-page-1",
-          limit: 25,
-          sourceHomeId: "node-native",
-        }),
-      ),
-    ).resolves.toBe(
-      JSON.stringify({
-        data: [
-          {
-            id: "turn-1",
-            items: [item],
-          },
-        ],
-        nextCursor: "turns-page-2",
-      }),
-    );
-    expect(listTurnPage).toHaveBeenCalledWith({
+  await expect(
+    command.run({
       threadId: "thread-1",
       cursor: "turns-page-1",
       limit: 25,
-      sortDirection: "desc",
+      sourceHomeId: "node-native",
+    }),
+  ).resolves.toBe(JSON.stringify(page));
+  expect(listTurnPage).toHaveBeenCalledWith(
+    expect.objectContaining({
+      cursor: "turns-page-1",
+      limit: 25,
       itemsView: "full",
-    });
+    }),
+  );
+});
+
+it("serves bounded generic items through the optional node transcript command", async () => {
+  const output = "x".repeat(600 * 1024);
+  const source = catalogThreadItem("tool-1", {
+    type: "commandExecution",
+    aggregatedOutput: output,
+    command: "false",
+    status: "failed",
+    exitCode: 1,
   });
+  const listItemPage = vi.fn(async () => ({
+    data: [{ turnId: "turn-1", item: source }],
+    nextCursor: "native-older",
+  }));
+  const control = createEligibleControl({
+    requireEligibleThread: vi.fn(async () => idleThread({ historyMode: "paginated" })),
+    listItemPage,
+  });
+  const command = transcriptCommand(control, CODEX_CATALOG_TRANSCRIPT_READ_COMMAND);
 
-  it("serves bounded generic items through the optional node transcript command", async () => {
-    const output = "x".repeat(600 * 1024);
-    const source = catalogThreadItem("tool-1", {
-      type: "commandExecution",
-      aggregatedOutput: output,
-    });
-    const listItemPage = vi.fn(async () => ({
-      data: [{ turnId: "turn-1", item: source }],
-      nextCursor: "native-older",
-    }));
-    const control = createEligibleControl({
-      requireEligibleThread: vi.fn(async () => idleThread({ historyMode: "paginated" })),
-      listItemPage,
-    });
-    const command = createCodexSessionCatalogNodeHostCommands(control).find(
-      (candidate) => candidate.command === CODEX_CATALOG_TRANSCRIPT_READ_COMMAND,
-    );
-    if (!command) {
-      throw new Error("Codex bounded transcript node command was not registered");
-    }
-
-    const payload = await command.handle(
-      JSON.stringify({
-        threadId: "thread-1",
-        cursor: "native-start",
-        limit: 2,
-        sourceHomeId: "node-native",
-      }),
-    );
-    expect(JSON.parse(payload)).toEqual({
-      items: [
-        {
-          id: "tool-1",
-          type: "toolResult",
-          text: `${output.slice(0, 512 * 1024 - 3)}…`,
-          raw: source,
-          truncated: true,
-        },
-      ],
-      nextCursor: "native-older",
-    });
-    expect(Buffer.byteLength(JSON.stringify({ payloadJSON: payload }), "utf8")).toBeLessThan(
-      20 * 1024 * 1024,
-    );
-    expect(listItemPage).toHaveBeenCalledWith({
-      threadId: "thread-1",
+  const payload = await command.run({
+    threadId: "thread-1",
+    cursor: "native-start",
+    limit: 2,
+    sourceHomeId: "node-native",
+  });
+  expect(JSON.parse(payload)).toEqual({
+    items: [
+      {
+        id: "tool-1",
+        type: "toolResult",
+        text: `${output.slice(0, 512 * 1024 - 3)}…`,
+        raw: source,
+        truncated: true,
+      },
+    ],
+    nextCursor: "native-older",
+  });
+  expect(Buffer.byteLength(JSON.stringify({ payloadJSON: payload }), "utf8")).toBeLessThan(
+    20 * 1024 * 1024,
+  );
+  expect(listItemPage).toHaveBeenCalledWith(
+    expect.objectContaining({
       cursor: "native-start",
       limit: 2,
-      sortDirection: "desc",
-    });
+    }),
+  );
+  const { runtime } = createRuntime({
+    nodes: [
+      node("devbox", {
+        commands: [
+          CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
+          CODEX_CATALOG_TRANSCRIPT_READ_COMMAND,
+        ],
+      }),
+    ],
+    invoke: vi.fn(async () => ({ payloadJSON: payload })),
   });
+  const received = await readCodexSessionTranscript({
+    runtime,
+    control,
+    hostId: "node:devbox",
+    threadId: "thread-1",
+    limit: 2,
+  });
+  expect(received.nextCursor).toBe("native-older");
+  expect(received.items).toMatchObject([
+    {
+      activity: { name: "bash", status: "failed" },
+      toolName: "bash",
+      toolCallId: "tool-1",
+      toolInput: { command: "false" },
+      isError: true,
+      exitCode: 1,
+    },
+  ]);
+});
 
-  it("rejects malformed terminal resume thread ids before spawning", async () => {
-    const command = createCodexSessionCatalogNodeHostCommands(createEligibleControl()).find(
-      (candidate) => candidate.command === CODEX_TERMINAL_RESUME_COMMAND,
-    );
+it("bounds recovered display inputs from released nodes without losing their source or cursor", async () => {
+  const largeInput = { prompt: "x".repeat(11 * 1024 * 1024) };
+  const source = catalogThreadItem("large-input", {
+    type: "dynamicToolCall",
+    tool: "custom",
+    arguments: largeInput,
+    status: "completed",
+    success: true,
+  });
+  const { runtime } = createRuntime({
+    nodes: [
+      node("devbox", {
+        commands: [
+          CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
+          CODEX_CATALOG_TRANSCRIPT_READ_COMMAND,
+        ],
+      }),
+    ],
+    invoke: vi.fn(async () =>
+      nodePayload({
+        items: [{ id: source.id, type: "toolResult", text: "done", raw: source }],
+        nextCursor: "native-older",
+      }),
+    ),
+  });
+  const received = await readCodexSessionTranscript({
+    runtime,
+    control: createEligibleControl(),
+    hostId: "node:devbox",
+    threadId: "thread-1",
+    limit: 1,
+  });
+  expect(received.nextCursor).toBe("native-older");
+  expect(received.items).toEqual([
+    {
+      id: source.id,
+      type: "toolResult",
+      text: "done",
+      raw: source,
+      activity: expect.objectContaining({ name: "custom", status: "completed" }),
+      toolName: "custom",
+      toolCallId: source.id,
+      isError: false,
+      toolInputOmitted: true,
+    },
+  ]);
+  expect(
+    Buffer.byteLength(JSON.stringify({ payloadJSON: JSON.stringify(received) }), "utf8"),
+  ).toBeLessThanOrEqual(20 * 1024 * 1024);
+  const local = await readCodexSessionTranscript({
+    runtime,
+    control: createEligibleControl({
+      requireEligibleThread: vi.fn(async () => idleThread({ historyMode: "paginated" })),
+      listItemPage: vi.fn(async () => ({ data: [{ turnId: "turn-1", item: source }] })),
+    }),
+    hostId: CODEX_LOCAL_SESSION_HOST_ID,
+    threadId: "thread-1",
+    limit: 1,
+  });
+  expect(local.items).toEqual([{ ...received.items[0], text: "" }]);
+  expect(
+    Buffer.byteLength(JSON.stringify({ payloadJSON: JSON.stringify(local) }), "utf8"),
+  ).toBeLessThanOrEqual(20 * 1024 * 1024);
+});
+
+it("rejects malformed terminal resume thread ids before spawning", async () => {
+  const command = createCodexSessionCatalogNodeHostCommands(createEligibleControl()).find(
+    (candidate) => candidate.command === CODEX_TERMINAL_RESUME_COMMAND,
+  );
+  if (!command || command.duplex !== true) {
+    throw new Error("Codex terminal command was not registered as duplex");
+  }
+  await expect(
+    command.handle(JSON.stringify({ threadId: "not-a-uuid", cols: 80, rows: 24 }), duplexIO()),
+  ).rejects.toThrow("threadId must be a UUID");
+});
+
+it.each([
+  { transport: "stdio", reload: false },
+  { transport: "stdio", reload: true },
+  { transport: "unix", reload: false },
+  { transport: "websocket", reload: false },
+] as const)(
+  "resolves node terminal eligibility from $transport with config reload $reload",
+  async ({ transport, reload }) => {
+    const threadId = "123e4567-e89b-12d3-a456-426614174000";
+    const binDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-node-terminal-"));
+    tempDirs.push(binDir);
+    const executable = path.join(binDir, process.platform === "win32" ? "codex.cmd" : "codex");
+    if (process.platform === "win32") {
+      await fs.writeFile(path.join(binDir, "codex"), "#!/bin/sh\n");
+    }
+    await fs.writeFile(executable, process.platform === "win32" ? "@echo off\r\n" : "#!/bin/sh\n");
+    if (process.platform !== "win32") {
+      await fs.chmod(executable, 0o755);
+    }
+    process.env.PATH = binDir;
+    const codexHome = await fs.realpath(binDir);
+    let runtimeConfig: OpenClawConfig = {
+      agents: { ownership: "explicit", entries: { beta: {} } },
+    };
+    const factory = createCodexSessionCatalogControlFactory({
+      env: { CODEX_HOME: codexHome, OPENCLAW_STATE_DIR: binDir },
+      getRuntimeConfig: () => runtimeConfig,
+      getPluginConfig: () => ({
+        appServer: {
+          transport,
+          homeScope: transport === "websocket" ? "agent" : "user",
+          ...(transport === "websocket" ? { url: "ws://127.0.0.1:1234" } : {}),
+        },
+      }),
+    });
+    const command = createCodexSessionCatalogNodeHostCommands({
+      ...factory,
+      forNode: async (agentId) => {
+        const source = await factory.forNode(agentId);
+        vi.spyOn(source.control, "requireEligibleThread").mockImplementation(async () => {
+          vi.stubEnv("CODEX_HOME", "/changed/after/eligibility");
+          if (reload) {
+            runtimeConfig = { ...runtimeConfig };
+          }
+          return idleThread({
+            id: threadId,
+            source: { custom: "atlas" },
+            cwd: "/node/catalog/cwd",
+          });
+        });
+        return source;
+      },
+    }).find((candidate) => candidate.command === CODEX_TERMINAL_RESUME_COMMAND);
     if (!command || command.duplex !== true) {
       throw new Error("Codex terminal command was not registered as duplex");
     }
-    await expect(
-      command.handle(JSON.stringify({ threadId: "not-a-uuid", cols: 80, rows: 24 }), {
-        signal: new AbortController().signal,
-        emitChunk: async () => {},
-        onInput: () => {},
+
+    expect(
+      command.isAvailable?.({
+        config: { plugins: { entries: { codex: { config: { appServer: { transport } } } } } },
+        env: process.env,
       }),
-    ).rejects.toThrow("threadId must be a UUID");
-  });
-
-  it.each([
-    { transport: "stdio", reload: false },
-    { transport: "stdio", reload: true },
-    { transport: "unix", reload: false },
-    { transport: "websocket", reload: false },
-  ] as const)(
-    "resolves node terminal eligibility from $transport with config reload $reload",
-    async ({ transport, reload }) => {
-      const threadId = "123e4567-e89b-12d3-a456-426614174000";
-      const binDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-node-terminal-"));
-      tempDirs.push(binDir);
-      const executable = path.join(binDir, process.platform === "win32" ? "codex.cmd" : "codex");
-      if (process.platform === "win32") {
-        await fs.writeFile(path.join(binDir, "codex"), "#!/bin/sh\n");
-      }
-      await fs.writeFile(
-        executable,
-        process.platform === "win32" ? "@echo off\r\n" : "#!/bin/sh\n",
-      );
-      if (process.platform !== "win32") {
-        await fs.chmod(executable, 0o755);
-      }
-      process.env.PATH = binDir;
-      const codexHome = await fs.realpath(binDir);
-      let runtimeConfig: OpenClawConfig = {
-        agents: { ownership: "explicit", entries: { beta: {} } },
-      };
-      const factory = createCodexSessionCatalogControlFactory({
-        env: { CODEX_HOME: codexHome, OPENCLAW_STATE_DIR: binDir },
-        getRuntimeConfig: () => runtimeConfig,
-        getPluginConfig: () => ({
-          appServer: {
-            transport,
-            homeScope: transport === "websocket" ? "agent" : "user",
-            ...(transport === "websocket" ? { url: "ws://127.0.0.1:1234" } : {}),
-          },
-        }),
-      });
-      const command = createCodexSessionCatalogNodeHostCommands({
-        ...factory,
-        forNode: async (agentId) => {
-          const source = await factory.forNode(agentId);
-          vi.spyOn(source.control, "requireEligibleThread").mockImplementation(async () => {
-            vi.stubEnv("CODEX_HOME", "/changed/after/eligibility");
-            if (reload) {
-              runtimeConfig = { ...runtimeConfig };
-            }
-            return idleThread({
-              id: threadId,
-              source: { custom: "atlas" },
-              cwd: "/node/catalog/cwd",
-            });
-          });
-          return source;
-        },
-      }).find((candidate) => candidate.command === CODEX_TERMINAL_RESUME_COMMAND);
-      if (!command || command.duplex !== true) {
-        throw new Error("Codex terminal command was not registered as duplex");
-      }
-
-      expect(
-        command.isAvailable?.({
-          config: { plugins: { entries: { codex: { config: { appServer: { transport } } } } } },
-          env: process.env,
-        }),
-      ).toBe(transport === "stdio");
-      const invocation = command.handle(
-        JSON.stringify({ agentId: "beta", threadId, cwd: "/caller/cwd", cols: 80, rows: 24 }),
-        {
-          signal: new AbortController().signal,
-          emitChunk: async () => {},
-          onInput: () => {},
-        },
-      );
-      if (transport !== "stdio") {
-        await expect(invocation).rejects.toThrow("Native terminal requires a local Codex source");
-        expect(nodeHostMocks.runNodePtyCommand).not.toHaveBeenCalled();
-        return;
-      }
-      if (reload) {
-        await expect(invocation).rejects.toThrow("configuration changed");
-        expect(nodeHostMocks.runNodePtyCommand).not.toHaveBeenCalled();
-        return;
-      }
-      await invocation;
-
-      expect(command.dangerous).toBe(false);
-      expect(nodeHostMocks.runNodePtyCommand).toHaveBeenCalledWith(
-        expect.objectContaining({
-          file: executable,
-          cwd: "/node/catalog/cwd",
-          env: {
-            CODEX_HOME: codexHome,
-          },
-        }),
-        expect.any(Object),
-      );
-    },
-  );
-
-  it("rejects an oversized transcript page before returning it over node.invoke", async () => {
-    const control = createEligibleControl({
-      listTurnPage: vi.fn(async () => ({
-        data: [
-          {
-            id: "turn-1",
-            items: [
-              {
-                id: "item-1",
-                type: "commandExecution",
-                aggregatedOutput: "x".repeat(20 * 1024 * 1024),
-              },
-            ],
-          },
-        ] as never,
-      })),
-    });
-    const command = createCodexSessionCatalogNodeHostCommands(control).find(
-      (candidate) => candidate.command === CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
+    ).toBe(transport === "stdio");
+    const invocation = command.handle(
+      JSON.stringify({ agentId: "beta", threadId, cwd: "/caller/cwd", cols: 80, rows: 24 }),
+      duplexIO(),
     );
-    if (!command) {
-      throw new Error("Codex transcript node command was not registered");
+    if (transport !== "stdio") {
+      await expect(invocation).rejects.toThrow("Native terminal requires a local Codex source");
+      expect(nodeHostMocks.runNodePtyCommand).not.toHaveBeenCalled();
+      return;
     }
+    if (reload) {
+      await expect(invocation).rejects.toThrow("configuration changed");
+      expect(nodeHostMocks.runNodePtyCommand).not.toHaveBeenCalled();
+      return;
+    }
+    await invocation;
 
-    await expect(
-      command.handle(JSON.stringify({ threadId: "thread-1", limit: 50 })),
-    ).rejects.toThrow("Codex app-server transcript is unavailable");
-  });
+    expect(command.dangerous).toBe(false);
+    expect(nodeHostMocks.runNodePtyCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        file: executable,
+        cwd: "/node/catalog/cwd",
+        env: {
+          CODEX_HOME: codexHome,
+        },
+      }),
+      expect.any(Object),
+    );
+  },
+);
 
-  it("caps aggregate host results at the public wire bound", async () => {
-    const control = createControl();
-    const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async () => ({
-      payloadJSON: JSON.stringify({ sessions: [] }),
-    }));
-    const { runtime } = createRuntime({
-      nodes: Array.from({ length: 120 }, (_, index) => ({
-        nodeId: `node-${index.toString().padStart(3, "0")}`,
-        connected: true,
-        commands: [CODEX_APP_SERVER_THREADS_LIST_COMMAND],
-      })),
-      invoke,
-    });
-
-    const result = await listCodexSessionCatalog({
-      bindingStore: createCodexTestBindingStore(),
-      config,
-      runtime,
-      control,
-    });
-
-    expect(result.hosts).toHaveLength(100);
-    expect(result.hosts[0]?.hostId).toBe(CODEX_LOCAL_SESSION_HOST_ID);
-    expect(invoke).toHaveBeenCalledTimes(99);
-  });
-
-  it.each(["nextCursor", "backwardsCursor"] as const)(
-    "rejects an oversized Gateway-local %s before the public response",
-    async (cursorField) => {
-      const control = createControl({
-        listPage: vi.fn(async () => ({
-          sessions: [],
-          [cursorField]: "x".repeat(4097),
-        })),
-      });
-      const { runtime } = createRuntime();
-
-      const result = await listCodexSessionCatalog({
-        bindingStore: createCodexTestBindingStore(),
-        config,
-        runtime,
-        control,
-        query: { hostIds: [CODEX_LOCAL_SESSION_HOST_ID] },
-      });
-
-      expect(result).toEqual({
-        hosts: [
-          {
-            hostId: CODEX_LOCAL_SESSION_HOST_ID,
-            label: "Local Codex",
-            kind: "gateway",
-            connected: false,
-            sessions: [],
-            error: {
-              code: "APP_SERVER_UNAVAILABLE",
-              message: "Codex app-server is unavailable on this host",
+it("rejects an oversized transcript page before returning it over node.invoke", async () => {
+  const control = createEligibleControl({
+    listTurnPage: vi.fn(async () => ({
+      data: [
+        {
+          id: "turn-1",
+          items: [
+            {
+              id: "item-1",
+              type: "commandExecution",
+              aggregatedOutput: "x".repeat(20 * 1024 * 1024),
             },
-          },
-        ],
-      });
-      expect(JSON.stringify(result)).not.toContain("x".repeat(4097));
-    },
+          ],
+        },
+      ] as never,
+    })),
+  });
+  const command = transcriptCommand(control, CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND);
+
+  await expect(command.run({ threadId: "thread-1", limit: 50 })).rejects.toThrow(
+    "Codex app-server transcript is unavailable",
   );
+});
 
-  it.each([
-    {
-      name: "out-of-range page limit",
-      params: { limitPerHost: 101 },
-      error: "limitPerHost must be an integer from 1 to 100",
-    },
-    {
-      name: "non-string host id",
-      params: { hostIds: [42] },
-      error: "Codex session catalog host ids must be strings",
-    },
-    {
-      name: "invalid host id",
-      params: { hostIds: ["remote:devbox"] },
-      error: "invalid Codex session catalog host id: remote:devbox",
-    },
-    {
-      name: "oversized search",
-      params: { search: "x".repeat(501) },
-      error: "search must be at most 500 characters",
-    },
-    {
-      name: "oversized cursor",
-      params: { cursors: { [CODEX_LOCAL_SESSION_HOST_ID]: "x".repeat(4097) } },
-      error: `invalid cursor for Codex session catalog host: ${CODEX_LOCAL_SESSION_HOST_ID}`,
-    },
-    {
-      name: "too many hosts",
-      params: {
-        hostIds: Array.from({ length: 101 }, (_, index) => `node:host-${index}`),
-      },
-      error: "hostIds must contain at most 100 host ids",
-    },
-    {
-      name: "too many cursors",
-      params: {
-        cursors: Object.fromEntries(
-          Array.from({ length: 101 }, (_, index) => [`node:host-${index}`, `cursor-${index}`]),
-        ),
-      },
-      error: "cursors may contain at most 100 hosts",
-    },
-  ])("rejects $name at the provider boundary", async ({ params: requestParams, error }) => {
-    const control = createControl();
-    const { runtime } = createRuntime();
-    const { api, getProvider } = createGatewayApi(runtime);
-    registerCodexSessionCatalog({
-      api,
-      bindingStore: createCodexTestBindingStore(),
-      control,
-      getRuntimeConfig: () => config,
-    });
-    await expect(getProvider()?.list(requestParams as never)).rejects.toThrow(error);
-    expect(control.listPage).not.toHaveBeenCalled();
-    expect(runtime.nodes.list).not.toHaveBeenCalled();
+it("caps aggregate host results at the public wire bound", async () => {
+  const control = createControl();
+  const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async () => nodePage([]));
+  const { runtime } = createRuntime({
+    nodes: Array.from({ length: 120 }, (_, index) =>
+      node(`node-${index.toString().padStart(3, "0")}`),
+    ),
+    invoke,
   });
 
-  it("prefers the request node snapshot and retains the plugin runtime fallback", async () => {
-    const control = createControl();
-    const { runtime } = createRuntime();
-    const { api, getProvider } = createGatewayApi(runtime);
-    registerCodexSessionCatalog({
-      api,
-      bindingStore: createCodexTestBindingStore(),
-      control,
-      getRuntimeConfig: () => config,
-    });
-    const provider = getProvider();
-    const requestListNodes = vi.fn(async () => ({ nodes: [] }));
+  const result = await listCatalog(runtime, control);
 
-    await expect(
-      provider?.list({ hostIds: ["node:missing"], listNodes: requestListNodes }),
-    ).resolves.toEqual([]);
-    expect(requestListNodes).toHaveBeenCalledOnce();
-    expect(runtime.nodes.list).not.toHaveBeenCalled();
+  expect(result.hosts).toHaveLength(100);
+  expect(result.hosts[0]?.hostId).toBe(CODEX_LOCAL_SESSION_HOST_ID);
+  expect(invoke).toHaveBeenCalledTimes(99);
+});
 
-    await expect(provider?.list({ hostIds: ["node:missing"] })).resolves.toEqual([]);
-    expect(runtime.nodes.list).toHaveBeenCalledOnce();
-  });
+const tooManyHosts = Array.from({ length: 101 }, (_, index) => `node:host-${index}`);
+it.each([
+  [{ limitPerHost: 101 }, "limitPerHost must be an integer from 1 to 100"],
+  [{ hostIds: [42] }, "Codex session catalog host ids must be strings"],
+  [{ hostIds: ["remote:devbox"] }, "invalid Codex session catalog host id: remote:devbox"],
+  [{ search: "x".repeat(501) }, "search must be at most 500 characters"],
+  [
+    { cursors: { [CODEX_LOCAL_SESSION_HOST_ID]: "x".repeat(4097) } },
+    `invalid cursor for Codex session catalog host: ${CODEX_LOCAL_SESSION_HOST_ID}`,
+  ],
+  [{ hostIds: tooManyHosts }, "hostIds must contain at most 100 host ids"],
+  [
+    { cursors: Object.fromEntries(tooManyHosts.map((hostId) => [hostId, "cursor"])) },
+    "cursors may contain at most 100 hosts",
+  ],
+] as const)("rejects %j at the provider boundary", async (requestParams, error) => {
+  const control = createControl();
+  const { runtime } = createRuntime();
+  await expect(
+    createCatalogTestProvider({ runtime, control }).list(requestParams as never),
+  ).rejects.toThrow(error);
+  expect(control.listPage).not.toHaveBeenCalled();
+  expect(runtime.nodes.list).not.toHaveBeenCalled();
 });

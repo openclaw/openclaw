@@ -1,6 +1,7 @@
 import type { HumanMention } from "@openclaw/gateway-protocol";
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import type { AgentRunTerminalOutcome } from "../agents/agent-run-terminal-outcome.types.js";
+import type { RequesterOrigin } from "../agents/requester-origin.js";
 import type { MessageClientSource } from "../chat/message-client-source.js";
 import type { TranscriptSenderIdentity } from "../chat/sender-identity.js";
 import type { AttachedChatWorkContext } from "../chat/work-context.js";
@@ -8,14 +9,19 @@ import type {
   SessionTranscriptTurnMutation,
   SessionTranscriptTurnMutationResult,
 } from "../config/sessions/goals-operations.types.js";
+import type { SessionInputLifecycleAdmission } from "../config/sessions/restart-resume.js";
+import type { SessionMessageRewriteResult } from "../config/sessions/session-message-rewrite.types.js";
 import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type {
   SessionTranscriptTurnExpectedState,
   SessionTranscriptTurnLifecyclePatch,
 } from "../config/sessions/session-transcript-turn-lifecycle.types.js";
-import type { TranscriptEntryAnchor } from "../config/sessions/transcript-entry-anchor.js";
-import type { TranscriptTurnAdmission } from "../config/sessions/transcript-turn-admission.js";
+import type {
+  TranscriptEntryAnchor,
+  TranscriptTurnAdmission,
+} from "../config/sessions/transcript-entry-anchor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { MediaFactInput } from "../media/media-facts.js";
 import type { InputProvenance } from "./input-provenance.js";
 
@@ -44,7 +50,10 @@ export type PersistedUserTurnMessage = Extract<AgentMessage, { role: "user" }> &
   /** Private transcript correlation; never authorizes an execution. */
   idempotencyKey?: string;
   provenance?: InputProvenance;
-  __openclaw?: Record<string, unknown> & { humanMentions?: readonly HumanMention[] };
+  __openclaw?: Record<string, unknown> & {
+    humanMentions?: readonly HumanMention[];
+    requesterOrigin?: RequesterOrigin;
+  };
 };
 
 export type UserTurnInput = Pick<PersistedUserTurnMessage, "display" | "excludeFromContext"> & {
@@ -69,6 +78,8 @@ export type UserTurnInput = Pick<PersistedUserTurnMessage, "display" | "excludeF
   /** Bounded display fallback for replies whose target is outside loaded history. */
   replyToPreview?: { text: string; senderLabel?: string | null } | null;
   senderIsOwner?: boolean;
+  /** Host-captured requester facts; recovery still requires exact accepted-input custody. */
+  requesterOrigin?: RequesterOrigin;
   provenance?: InputProvenance;
   /** Identity is producer-owned attribution; labels remain editable display metadata. */
   sender?: {
@@ -120,7 +131,7 @@ export type UserTurnTranscriptTarget = {
   agentId: string;
   threadId?: string | number;
   cwd?: string;
-  config?: unknown;
+  config?: OpenClawConfig;
   beforeMessageWrite?: UserTurnBeforeMessageWrite;
 };
 
@@ -197,25 +208,37 @@ export type CreateUserTurnTranscriptRecorderParams = {
 
 type UserTurnPersistenceOptions = {
   target?: UserTurnTranscriptTargetResolver;
+  /** Pin admitted storage without replacing the recorder's target resolver or metadata. */
+  storageTarget?: Readonly<
+    Pick<UserTurnTranscriptTarget, "agentId" | "sessionKey" | "sessionId"> & { storePath: string }
+  >;
   updateMode?: UserTurnTranscriptUpdateMode;
   cwd?: string;
+};
+
+export type PreparedModelPromptProjection = {
+  intent: { anchor: TranscriptEntryAnchor; text: string };
+  onCommitted: (result: SessionMessageRewriteResult | null) => Promise<PersistedUserTurnMessage>;
 };
 
 export type UserTurnTranscriptRecorder = {
   readonly message: PersistedUserTurnMessage | undefined;
   resolveMessage: () => Promise<PersistedUserTurnMessage | undefined>;
-  /** Committed input, accepted pending custody, and blocked notices are exempt. */
+  /** Committed or delivered input, accepted pending custody, and blocked notices are exempt. */
   assertOriginalInputCommit?: SessionSourceAssertion;
   /** Durable input custody leaves the active transcript unchanged until execution owns it. */
   stageApproved?: (options: {
     runId: string;
+    retryInterrupted?: boolean;
+    storageTarget?: UserTurnPersistenceOptions["storageTarget"];
+    lifecycleAdmission?: SessionInputLifecycleAdmission;
     assertCurrent: () => void;
     assertAdmittedCurrent?: () => void;
     assertCompletionCurrent?: () => void;
     authority?: import("../config/sessions/session-pending-input-authority.js").SessionPendingInputAuthority;
   }) => Promise<boolean>;
   getProcessingCompletion?: () => AgentRunTerminalOutcome | undefined;
-  /** Released synchronous SDK contract; internal recorders use completeProcessingAsync. */
+  /** @deprecated Await completeProcessingAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   completeProcessing?: (outcome: AgentRunTerminalOutcome) => AgentRunTerminalOutcome | undefined;
   completeProcessingAsync?: (
     outcome: AgentRunTerminalOutcome,
@@ -238,6 +261,11 @@ export type UserTurnTranscriptRecorder = {
     text: string,
     assertCurrent: () => void,
   ) => Promise<PersistedUserTurnMessage>;
+  /** Prepare a projection for the carrier's actor commit without publishing it early. */
+  prepareModelPromptProjection?: (
+    text: string,
+    assertCurrent: () => void,
+  ) => Promise<PreparedModelPromptProjection | undefined>;
   getAdmissionReceipt: () => UserTurnTranscriptAdmissionReceipt | undefined;
   /** Persistence and `waitForRuntimePersistence` settle the handler's write and reject on its failure. */
   setAdmissionHandler?: (
@@ -260,6 +288,7 @@ export type UserTurnTranscriptRecorder = {
       expectedSessionId?: string;
       expectedSessionState?: SessionTranscriptTurnExpectedState;
       sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
+      beforeFreshMessageCommit?: SessionSourceAssertion;
       /** Allow a later explicit persistence attempt when this attempt appends nothing. */
       retryIfUnpersisted?: boolean;
     },

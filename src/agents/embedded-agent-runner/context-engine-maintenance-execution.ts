@@ -23,6 +23,7 @@ function buildContextEngineMaintenanceRuntimeContext(
     allowDeferredCompactionExecution?: boolean;
   },
 ): ContextEngineRuntimeContext {
+  const { abortSignal, assertActive } = params;
   return {
     ...params.runtimeContext,
     ...resolveContextEngineCapabilities({
@@ -36,7 +37,7 @@ function buildContextEngineMaintenanceRuntimeContext(
     ...(params.sessionTarget ? { sessionTarget: params.sessionTarget } : {}),
     ...(params.allowDeferredCompactionExecution ? { allowDeferredCompactionExecution: true } : {}),
     rewriteTranscriptEntries: async (request) => {
-      params.assertActive?.();
+      assertActive?.();
       const runtimeAgentId = params.sessionTarget?.agentId ?? params.agentId;
       const runtimeSessionKey = normalizeOptionalString(
         params.sessionTarget?.sessionKey ?? params.sessionKey,
@@ -63,15 +64,24 @@ function buildContextEngineMaintenanceRuntimeContext(
           });
           const { restoreSessionColdTranscript } =
             await import("../../config/sessions/session-cold-storage.js");
-          await restoreSessionColdTranscript({ ...runtimeTarget });
-          params.assertActive?.();
-          sessionManager = await SessionManager.openAsync(runtimeTarget);
-          params.assertActive?.();
+          await restoreSessionColdTranscript(
+            runtimeTarget,
+            assertActive,
+            undefined,
+            undefined,
+            abortSignal,
+          );
+          sessionManager = await SessionManager.openAsync(
+            runtimeTarget,
+            undefined,
+            undefined,
+            abortSignal,
+          );
         }
         const manager = sessionManager;
         return await withSessionManagerWrite(manager, () => {
-          params.abortSignal?.throwIfAborted();
-          params.assertActive?.();
+          abortSignal?.throwIfAborted();
+          assertActive?.();
           return rewriteTranscriptEntriesInSessionManager({
             sessionManager: manager,
             replacements: request.replacements,
@@ -81,10 +91,8 @@ function buildContextEngineMaintenanceRuntimeContext(
       const result = await (params.withSessionManagerRewriteLock
         ? params.withSessionManagerRewriteLock(rewriteSessionManagerEntries)
         : rewriteSessionManagerEntries());
-      params.assertActive?.();
       if (result.changed && runtimeTarget) {
         await publishTranscriptUpdate(runtimeTarget);
-        params.assertActive?.();
       }
       return result;
     },
@@ -117,8 +125,6 @@ export async function executeContextEngineMaintenance(
     }),
     ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
   });
-  params.abortSignal?.throwIfAborted();
-  params.assertActive?.();
   if (result.changed) {
     log.info(
       `[context-engine] maintenance(${params.reason}) changed transcript ` +

@@ -198,7 +198,7 @@ export function ownPreparedPluginGeneration(
         );
       }
     },
-    () => retainRuntimePluginWork(selectedRegistries),
+    () => retainRuntimePluginWork(selectedRegistries, "prepared-generation-lease"),
   );
   try {
     for (const registry of selectedRegistries) {
@@ -226,11 +226,6 @@ export function retainPreparedPluginGeneration(
   };
 }
 
-// Only configured publication grants fresh-admission authority. Parent-derived and run-owned
-// generations stay confined to their exact selections after a newer configured publication.
-export const configuredPreparedPluginGenerations =
-  new WeakSet<PreparedModelRuntimePluginGeneration>();
-
 /** Publishing replaces one reference, while admitted leases retain their exact generation. */
 export function publishPreparedPluginGeneration(
   owner: PreparedModelRuntimeOwner,
@@ -253,9 +248,6 @@ export function publishPreparedPluginGeneration(
     );
   }
   const release = ownPreparedPluginGeneration(generation).retain();
-  if (owner.provenance === "configured") {
-    configuredPreparedPluginGenerations.add(generation);
-  }
   const version = owner.generation;
   const gatewayLenders = new Set<PluginRegistry>();
   let signal: AbortSignal | undefined;
@@ -277,9 +269,6 @@ export function publishPreparedPluginGeneration(
           const registry = instance.owner?.registry;
           return !instance.acceptingCalls && registry !== undefined && gatewayLenders.has(registry);
         });
-        log.debug(
-          `Prepared plugin publication retired: metadataCacheRetired=${cacheSignal.aborted}, provenance=${owner.provenance}, pending=${Boolean(owner.pending)}, gatewayLoan=${retiredGatewayLoan}`,
-        );
         releasePreparedPluginPublication(owner);
         // Independent prepared instances and metadata caches retain their terminal
         // retirement contract; only a lost Gateway loan needs process publication.

@@ -1,6 +1,8 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 // Gateway startup config loads, repairs, validates, and activates runtime config
 // plus secrets snapshots before the server exposes user-facing surfaces.
 import { hasLegacyAuthProfileSourcesForStartup } from "../agents/auth-profiles/legacy-source-diagnostic.js";
+import { prepareSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
 import { getRuntimeAuthProfileStoreSnapshotsRevision } from "../agents/auth-profiles/runtime-snapshots.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { measureDiagnosticsTimelineSpan } from "../infra/diagnostics-timeline.js";
@@ -11,6 +13,7 @@ import {
   describeSecretResolutionOperatorRecovery,
   isSecretResolutionError,
 } from "../secrets/resolve-errors.js";
+import { listAuthProfileSecretOwnerIds } from "../secrets/runtime-auth-profile-owner.js";
 import {
   classifySecretResolutionErrorDegradations,
   isRetryableSecretDegradationReason,
@@ -20,12 +23,7 @@ import {
   collectCandidateAgentDirs,
   prepareSecretsRuntimeFastPathSnapshot,
 } from "../secrets/runtime-fast-path.js";
-import {
-  listProviderAuthDegradedOwners,
-  preparedDegradationSupportsSourceOnlyRecovery,
-  resolvePreparedSecretsStateScope,
-  type SecretsStateScope,
-} from "../secrets/runtime-provider-auth-scope.js";
+import { hasSameSecretReloadContract } from "../secrets/runtime-source-contract.js";
 import {
   activateSecretsRuntimeSnapshotState,
   clearSecretsRuntimeSnapshotState,
@@ -33,9 +31,9 @@ import {
   getActiveSecretsRuntimeSnapshotState,
   getActiveSecretsRuntimeSnapshotRevisionState,
   hasActiveSecretsRuntimeSnapshotLineage,
-  hasSameSecretReloadContract,
   hasCurrentAuthStoreCredentialsRevision,
   registerProviderAuthRuntimeSnapshotActivationOwner,
+  type PreparedSecretsRuntimeSnapshot,
 } from "../secrets/runtime-state.js";
 import { logRuntimeSecretWarnings } from "../secrets/runtime-warning-log.js";
 import {
@@ -53,6 +51,52 @@ import {
   logThrownSecretDegradations,
 } from "./server-startup-secret-diagnostics.js";
 import { resolveGatewayStartupSourceConfig } from "./server-startup-secret-surfaces.js";
+
+/** Classifies degradation state owned by provider and auth-profile refreshes. */
+type SecretsStateScope = "full" | "provider-auth";
+
+function listProviderAuthDegradedOwners(
+  snapshot: PreparedSecretsRuntimeSnapshot,
+): NonNullable<PreparedSecretsRuntimeSnapshot["degradedOwners"]> {
+  const modelProviderOwnerIds = new Set(
+    Object.keys(snapshot.sourceConfig.models?.providers ?? {}).map(
+      (providerId) => normalizeOptionalLowercaseString(providerId) ?? providerId,
+    ),
+  );
+  const authOwnerIds = listAuthProfileSecretOwnerIds(snapshot.authStores);
+  return (snapshot.degradedOwners ?? []).filter(
+    (owner) =>
+      (owner.ownerKind === "provider" && modelProviderOwnerIds.has(owner.ownerId)) ||
+      (owner.ownerKind === "account" && authOwnerIds.has(owner.ownerId)),
+  );
+}
+
+/** Whether a config-source repair may recover without replacing active auth-store state. */
+function preparedDegradationSupportsSourceOnlyRecovery(
+  snapshot: PreparedSecretsRuntimeSnapshot,
+): boolean {
+  const degradedOwners = snapshot.degradedOwners ?? [];
+  const authOwnerIds = listAuthProfileSecretOwnerIds(snapshot.authStores);
+  return (
+    degradedOwners.length > 0 &&
+    degradedOwners.every(
+      (owner) =>
+        owner.degradationState === "cold" &&
+        !(owner.ownerKind === "account" && authOwnerIds.has(owner.ownerId)),
+    )
+  );
+}
+
+function resolvePreparedSecretsStateScope(
+  snapshot: PreparedSecretsRuntimeSnapshot,
+): SecretsStateScope {
+  const degradedOwners = snapshot.degradedOwners ?? [];
+  return degradedOwners.length > 0 &&
+    listProviderAuthDegradedOwners(snapshot).length === degradedOwners.length
+    ? "provider-auth"
+    : "full";
+}
+
 export {
   applyGatewayAuthOverridesForStartupPreflight,
   loadGatewayStartupConfigSnapshot,
@@ -397,6 +441,7 @@ export function createRuntimeSecretsActivator(params: {
           activationParams.env ?? process.env,
         );
         activationSourceConfig = sourceConfig;
+        await prepareSharedAuthStoreOwnership(activationParams.env);
         const startupPreflight =
           activationParams.reason === "startup" || activationParams.reason === "restart-check";
         if (
@@ -440,7 +485,8 @@ export function createRuntimeSecretsActivator(params: {
           }
         }
         const loadAuthStore = startupPreflight
-          ? (await import("../agents/auth-profiles.js")).loadAuthProfileStoreWithoutExternalProfiles
+          ? (await import("../agents/auth-profiles.js"))
+              .loadAuthProfileStoreWithoutExternalProfilesAsync
           : undefined;
         const secretsRuntime =
           params.prepareRuntimeSecretsSnapshot && params.activateRuntimeSecretsSnapshot

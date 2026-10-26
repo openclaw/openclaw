@@ -1,19 +1,56 @@
 /** Validation helpers for cron schedules, targets, payloads, and delivery. */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { parseCodeModeScriptSyntax } from "../../agents/code-mode-script-syntax.js";
 import { resolveCronTriggerMinIntervalMs } from "../../config/cron-limits.js";
 import type { CronConfig } from "../../config/types.cron.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
 import { compileSafeRegexDetailed } from "../../security/safe-regex.js";
-import { resolveCronDeliveryPlan } from "../delivery-plan.js";
-import { isHeartbeatTaskCronJob } from "../heartbeat-task.js";
+import { normalizeMessageChannel } from "../../utils/message-channel-core.js";
+import { assertCronActiveHours } from "../active-hours.js";
+import { resolveCronDeliveryMode } from "../delivery-defaults.js";
 import { parseCronPacingBounds } from "../pacing.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
 import { assertSafeCronSessionTargetId } from "../session-target.js";
+import { isCronEventSchedule } from "../source-schedule.js";
 import { assertCanonicalCronDeliveryMode } from "../store/delivery-codec.js";
-import { isSystemOwnedCronPayloadKind, type CronJob, type CronJobPatch } from "../types.js";
+import { CronStreamPolicyDeniedError } from "../stream-exec-authority.js";
+import type { CronJob, CronJobPatch } from "../types.js";
 import { normalizeHttpWebhookUrl } from "../webhook-url.js";
 import { computeJobNextRunAtMs } from "./jobs-scheduling.js";
 import type { CronServiceState } from "./state.js";
+
+export function assertExecutionPolicy(job: Pick<CronJob, "activeHours" | "idleOnly" | "delivery">) {
+  if (job.activeHours !== undefined) {
+    assertCronActiveHours(job.activeHours);
+  }
+  if (job.idleOnly !== undefined && typeof job.idleOnly !== "boolean") {
+    throw new Error("cron idleOnly must be a boolean");
+  }
+  const delivery = job.delivery;
+  if (delivery?.target !== undefined && delivery.target !== "owner") {
+    throw new Error('cron delivery.target must be "owner"');
+  }
+  if (
+    delivery?.directPolicy !== undefined &&
+    delivery.directPolicy !== "allow" &&
+    delivery.directPolicy !== "block"
+  ) {
+    throw new Error('cron delivery.directPolicy must be "allow" or "block"');
+  }
+  if (
+    delivery?.target === "owner" &&
+    (delivery.to !== undefined || delivery.threadId !== undefined)
+  ) {
+    throw new Error(
+      "cron owner delivery cannot specify a recipient or thread; the owner DM is resolved at execution time",
+    );
+  }
+  if (
+    delivery?.mode === "webhook" &&
+    (delivery.target !== undefined || delivery.directPolicy !== undefined)
+  ) {
+    throw new Error("cron webhook delivery cannot specify target or directPolicy");
+  }
+}
 
 export async function resolveConfiguredChannelsForValidation(
   state: CronServiceState,
@@ -42,43 +79,50 @@ function assertCronScriptSyntax(script: string, subject: "script payload" | "tri
 
 /** Validates that session target and payload kind form a supported cron job shape. */
 export function assertSupportedJobSpec(
-  job: Pick<CronJob, "schedule" | "sessionTarget" | "payload">,
+  job: Pick<CronJob, "sessionTarget"> & { payload: Pick<CronJob["payload"], "kind"> },
 ) {
   if (typeof job.sessionTarget !== "string") {
     throw new Error(
       'cron job is missing sessionTarget; expected "main", "isolated", "current", or "session:<id>"',
     );
   }
-  const isIsolatedLike =
-    job.sessionTarget === "isolated" ||
-    job.sessionTarget === "current" ||
-    job.sessionTarget.startsWith("session:");
+  const isConversationTarget =
+    job.sessionTarget === "current" || job.sessionTarget.startsWith("session:");
   if (job.sessionTarget.startsWith("session:")) {
     assertSafeCronSessionTargetId(job.sessionTarget.slice(8));
   }
   if (
     job.sessionTarget === "main" &&
     job.payload.kind !== "systemEvent" &&
-    job.payload.kind !== "script" &&
-    !isSystemOwnedCronPayloadKind(job.payload.kind)
+    job.payload.kind !== "agentTurn" &&
+    job.payload.kind !== "script"
   ) {
-    throw new Error('main cron jobs require payload.kind="systemEvent" or "script"');
+    throw new Error(
+      'cron sessionTarget "main" requires payload.kind="systemEvent", "agentTurn", or "script"',
+    );
   }
   if (
     job.payload.kind === "script" &&
     job.sessionTarget !== "main" &&
     job.sessionTarget !== "isolated"
   ) {
-    throw new Error('script cron jobs require sessionTarget="main" or "isolated"');
+    throw new Error(
+      `cron sessionTarget "${job.sessionTarget}" cannot run script payloads: scripts run headless and support only "main" or "isolated"; to run a turn in an existing conversation use payload {kind:"agentTurn",message} with sessionTarget "session:<key>"`,
+    );
+  }
+  if (isConversationTarget && job.payload.kind !== "agentTurn" && job.payload.kind !== "command") {
+    throw new Error(
+      `cron sessionTarget "${job.sessionTarget}" cannot run ${job.payload.kind}: systemEvent only runs in the main session; for sessionTarget "${job.sessionTarget}" use payload {kind:"agentTurn",message}`,
+    );
   }
   if (
-    isIsolatedLike &&
+    job.sessionTarget === "isolated" &&
     job.payload.kind !== "agentTurn" &&
     job.payload.kind !== "command" &&
-    !(job.sessionTarget === "isolated" && job.payload.kind === "script")
+    job.payload.kind !== "script"
   ) {
     throw new Error(
-      'isolated cron jobs require payload.kind="agentTurn", "command", or "script"; script payloads do not support current/session targets',
+      'cron sessionTarget "isolated" requires payload.kind="agentTurn", "command", or "script"',
     );
   }
 }
@@ -145,17 +189,26 @@ export function assertPacingSupport(job: Pick<CronJob, "schedule" | "pacing">) {
   }
 }
 
-export function assertStreamScheduleSupport(
+export function assertExternalSourceScheduleSupport(
   job: Pick<CronJob, "schedule" | "payload">,
   opts?: { cronConfig?: CronConfig; requireEnabled?: boolean },
 ) {
-  if (job.schedule.kind !== "stream") {
+  if (job.schedule.kind !== "stream" && job.schedule.kind !== "event") {
     return;
   }
   if (opts?.requireEnabled && opts.cronConfig?.triggers?.enabled === false) {
-    throw new Error(
-      "cron stream schedules are disabled because the operator set cron.triggers.enabled: false; remove it or set it to true",
-    );
+    const message = `cron ${job.schedule.kind} schedules are disabled because the operator set cron.triggers.enabled: false; remove it or set it to true`;
+    throw job.schedule.kind === "stream"
+      ? new CronStreamPolicyDeniedError(message)
+      : new Error(message);
+  }
+  if (job.schedule.kind === "event") {
+    if (!isCronEventSchedule(job.schedule) || job.payload.kind !== "agentTurn") {
+      throw new Error(
+        "event schedules require a plugin source, options object, and agentTurn payload",
+      );
+    }
+    return;
   }
   const { command, mode = "line", match } = job.schedule;
   if (
@@ -205,43 +258,9 @@ export function assertTimeScheduleSatisfiable(job: CronJob, nowMs: number) {
   );
 }
 
-export function assertMainSessionAgentId(
-  job: CronJob,
-  defaultAgentId: string | undefined,
-  patch?: CronJobPatch,
+export function assertDeliverySupport(
+  job: Pick<CronJob, "sessionTarget" | "payload" | "delivery">,
 ) {
-  // A changed default must not strand stored jobs. Revalidate newly authored bindings and kinds.
-  if (
-    patch &&
-    !("agentId" in patch) &&
-    !("sessionTarget" in patch) &&
-    patch.payload?.kind === undefined
-  ) {
-    return;
-  }
-  if (job.sessionTarget !== "main") {
-    return;
-  }
-  if (!job.agentId) {
-    return;
-  }
-  if (
-    job.payload.kind === "script" ||
-    isSystemOwnedCronPayloadKind(job.payload.kind) ||
-    isHeartbeatTaskCronJob(job)
-  ) {
-    return;
-  }
-  const normalized = normalizeAgentId(job.agentId);
-  const normalizedDefault = normalizeAgentId(defaultAgentId);
-  if (normalized !== normalizedDefault) {
-    throw new Error(
-      `cron: sessionTarget "main" is only valid for the default agent. Use sessionTarget "isolated" with payload.kind "agentTurn" for non-default agents (agentId: ${job.agentId})`,
-    );
-  }
-}
-
-export function assertDeliverySupport(job: Pick<CronJob, "sessionTarget" | "delivery">) {
   assertCanonicalCronDeliveryMode(job.delivery);
   if (!job.delivery) {
     return;
@@ -283,7 +302,7 @@ export function assertDeliverySupport(job: Pick<CronJob, "sessionTarget" | "deli
     job.sessionTarget === "isolated" ||
     job.sessionTarget === "current" ||
     job.sessionTarget.startsWith("session:");
-  if (!isIsolatedLike) {
+  if (!isIsolatedLike && job.payload.kind !== "agentTurn") {
     throw new Error('cron channel delivery config is only supported for sessionTarget="isolated"');
   }
 }
@@ -296,18 +315,21 @@ export function assertAnnounceDeliveryChannelSupport(
   if (patch && !cronPatchTouchesDeliveryResolution(patch)) {
     return;
   }
-  const plan = resolveCronDeliveryPlan(job);
+  const mode = resolveCronDeliveryMode(job);
+  const channel = normalizeMessageChannel(job.delivery?.channel);
+  const to = normalizeOptionalString(job.delivery?.to);
   const channels = [...new Set(configuredChannels ?? [])].toSorted();
   // Provider-prefix recognition is plugin-backed and may not be loaded at this
   // seam. A prefixed target can still select its channel at runtime, so accept.
-  const targetMaySelectChannel = /^[a-z][a-z0-9_-]*:/i.test(plan.to ?? "");
+  const targetMaySelectChannel = /^[a-z][a-z0-9_-]*:/i.test(to ?? "");
   if (
     job.sessionTarget !== "isolated" ||
     job.sessionKey?.trim() ||
-    plan.mode !== "announce" ||
-    (plan.channel !== undefined && plan.channel !== "last") ||
+    mode !== "announce" ||
+    (channel !== undefined && channel !== "last") ||
     targetMaySelectChannel ||
     job.delivery?.bestEffort === true ||
+    job.delivery?.target === "owner" ||
     channels.length < 2
   ) {
     return;
@@ -328,7 +350,9 @@ export function cronPatchTouchesDeliveryResolution(patch: CronJobPatch): boolean
   );
 }
 
-export function assertFailureDestinationSupport(job: Pick<CronJob, "sessionTarget" | "delivery">) {
+export function assertFailureDestinationSupport(
+  job: Pick<CronJob, "sessionTarget" | "payload" | "delivery">,
+) {
   const failureDestination = job.delivery?.failureDestination;
   if (
     !failureDestination ||
@@ -339,7 +363,11 @@ export function assertFailureDestinationSupport(job: Pick<CronJob, "sessionTarge
   ) {
     return;
   }
-  if (job.sessionTarget === "main" && job.delivery?.mode !== "webhook") {
+  if (
+    job.sessionTarget === "main" &&
+    job.payload.kind !== "agentTurn" &&
+    job.delivery?.mode !== "webhook"
+  ) {
     throw new Error(
       'cron delivery.failureDestination is only supported for sessionTarget="isolated" unless delivery.mode="webhook"',
     );

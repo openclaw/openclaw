@@ -1,5 +1,8 @@
-// Creates channel-native approval runtimes and delivery flows.
-import type { ChannelApprovalNativeAdapter } from "../channels/plugins/approval-native.types.js";
+import type {
+  ChannelApprovalNativeAdapter,
+  ChannelApprovalNativeAdapterAsync,
+} from "../channels/plugins/approval-native.types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { getGatewayNativeApprovalRuntime } from "./approval-gateway-runtime-context.js";
 import {
@@ -12,7 +15,7 @@ import type {
   ChannelNativeApprovalDeliveryCallbacks,
   ChannelNativeApprovalTransportSpec,
 } from "./approval-native-runtime-types.js";
-import { classifyApprovalRequestChannelRoute } from "./approval-request-account-binding.js";
+import { classifyApprovalRequestChannelRouteAsync } from "./approval-request-account-binding.js";
 import type {
   ApprovalRequestInput,
   ApprovalResolved,
@@ -23,6 +26,7 @@ import {
   createExecApprovalChannelRuntime,
   type ExecApprovalChannelRuntime,
   type ExecApprovalChannelRuntimeAdapter,
+  type ExecApprovalChannelRuntimeAdapterAsync,
 } from "./exec-approval-channel-runtime.js";
 
 type ApprovalRequest = ApprovalRequestInput;
@@ -34,7 +38,7 @@ type ChannelNativeApprovalRuntimeAdapter<
   TRequest extends ApprovalRequest = ApprovalRequest,
   TResolved extends ApprovalResolved = ApprovalResolved,
 > = Omit<
-  ExecApprovalChannelRuntimeAdapter<TPendingEntry, TRequest, TResolved>,
+  ExecApprovalChannelRuntimeAdapterAsync<TPendingEntry, TRequest, TResolved>,
   "deliverRequested"
 > &
   ChannelNativeApprovalTransportSpec<TPendingEntry, TPreparedTarget, TPendingContent, TRequest> &
@@ -47,7 +51,7 @@ type ChannelNativeApprovalRuntimeAdapter<
     channel?: string;
     channelLabel?: string;
     accountId?: string | null;
-    nativeAdapter?: ChannelApprovalNativeAdapter | null;
+    nativeAdapter?: ChannelApprovalNativeAdapter | ChannelApprovalNativeAdapterAsync | null;
     /** @deprecated Trusted compatibility override; omit to derive ownership from the payload. */
     resolveApprovalKind?: (request: TRequest) => ChannelApprovalKind;
     buildPendingContent: (params: {
@@ -58,8 +62,34 @@ type ChannelNativeApprovalRuntimeAdapter<
     onStopped?: () => Promise<void> | void;
   };
 
-/** Creates the shared gateway approval runtime backed by channel-native delivery hooks. */
+/** Creates a channel-native approval runtime with synchronous availability callbacks. */
 export function createChannelNativeApprovalRuntime<
+  TPendingEntry,
+  TPreparedTarget,
+  TPendingContent,
+  TRequest extends ApprovalRequest = ApprovalRequest,
+  TResolved extends ApprovalResolved = ApprovalResolved,
+>(
+  adapter: Omit<
+    ChannelNativeApprovalRuntimeAdapter<
+      TPendingEntry,
+      TPreparedTarget,
+      TPendingContent,
+      TRequest,
+      TResolved
+    >,
+    "isConfigured" | "shouldHandle" | "nativeAdapter"
+  > &
+    Pick<
+      ExecApprovalChannelRuntimeAdapter<TPendingEntry, TRequest, TResolved>,
+      "isConfigured" | "shouldHandle"
+    > & { nativeAdapter?: ChannelApprovalNativeAdapter | null },
+): ExecApprovalChannelRuntime<TRequest, TResolved> {
+  return createChannelNativeApprovalRuntimeAsync(adapter);
+}
+
+/** Creates the shared gateway approval runtime backed by channel-native delivery hooks. */
+export function createChannelNativeApprovalRuntimeAsync<
   TPendingEntry,
   TPreparedTarget,
   TPendingContent,
@@ -72,7 +102,7 @@ export function createChannelNativeApprovalRuntime<
     TPendingContent,
     TRequest,
     TResolved
-  >,
+  > & { getRequestConfig?: (request: ApprovalRequest) => OpenClawConfig },
 ): ExecApprovalChannelRuntime<TRequest, TResolved> {
   const nowMs = adapter.nowMs ?? Date.now;
   const handledEventKinds = new Set<ChannelApprovalKind>(adapter.eventKinds ?? ["exec"]);
@@ -87,8 +117,8 @@ export function createChannelNativeApprovalRuntime<
     // SAFETY: the route coordinator receives only normalized requests from this runtime.
     shouldHandle: (request) => adapter.shouldHandle(request as NormalizedApprovalRequest<TRequest>),
     classifyRoute: (request) =>
-      classifyApprovalRequestChannelRoute({
-        cfg: adapter.cfg,
+      classifyApprovalRequestChannelRouteAsync({
+        cfg: adapter.getRequestConfig?.(request) ?? adapter.cfg,
         request,
         channel: adapter.channel ?? "",
       }),
@@ -128,9 +158,9 @@ export function createChannelNativeApprovalRuntime<
     gatewayUrl: adapter.gatewayUrl,
     eventKinds: adapter.eventKinds,
     isConfigured: adapter.isConfigured,
-    shouldHandle: (request) => {
+    shouldHandle: async (request) => {
       const approvalKind = adapter.resolveApprovalKind?.(request) ?? request.approvalKind;
-      const selection = routeReporter.selectRequest({
+      const selection = await routeReporter.selectRequest({
         approvalKind,
         request,
       });
@@ -171,7 +201,7 @@ export function createChannelNativeApprovalRuntime<
           nowMs: nowMs(),
         });
         const plannedDelivery = await resolveChannelNativeApprovalDeliveryPlan({
-          cfg: adapter.cfg,
+          cfg: adapter.getRequestConfig?.(request) ?? adapter.cfg,
           accountId: adapter.accountId,
           approvalKind,
           request,

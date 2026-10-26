@@ -1,5 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
+import type { Command } from "commander";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { runWithLocalStateOwner } from "openclaw/plugin-sdk/cli-state-owner";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
 import { readByteStreamWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
@@ -21,22 +23,22 @@ import type { MatrixVerificationSummary } from "./matrix/sdk/verification-manage
 import { getMatrixRuntime } from "./runtime.js";
 import type { CoreConfig } from "./types.js";
 
-let matrixCliExitScheduled = false;
 const MATRIX_CLI_RECOVERY_KEY_STDIN_MAX_BYTES = 1024 * 1024;
 
-function scheduleMatrixCliExit(): void {
-  if (matrixCliExitScheduled || process.env.VITEST) {
-    return;
-  }
-  matrixCliExitScheduled = true;
-  // matrix-js-sdk rust crypto can leave background async work alive after command completion.
-  setTimeout(() => {
-    process.stdout.write("", () => {
-      process.stderr.write("", () => {
-        process.exit(process.exitCode ?? 0);
-      });
-    });
-  }, 0);
+export function withMatrixVerificationBootstrapOptions(command: Command): Command {
+  return command
+    .option("--account <id>", "Account ID (for multi-account setups)")
+    .option(
+      "--recovery-key <key>",
+      "Recovery key to apply before bootstrap (prefer --recovery-key-stdin)",
+    )
+    .option("--recovery-key-stdin", "Read the Matrix recovery key from stdin")
+    .option(
+      "--force-reset-cross-signing",
+      "Force reset cross-signing identity before bootstrap (requires active recovery key)",
+    )
+    .option("--verbose", "Show detailed diagnostics")
+    .option("--json", "Output as JSON");
 }
 
 async function readMatrixCliRecoveryKeyFromStdin(): Promise<string> {
@@ -233,6 +235,11 @@ type MatrixCliCommandConfig<TResult> = {
   errorPrefix: string;
   onJsonError?: (message: string) => unknown;
   onTextError?: (message: string) => void;
+  gateway?: {
+    method: string;
+    params: () => Record<string, unknown> | Promise<Record<string, unknown>>;
+    onAccount?: (accountId: string) => void;
+  };
 };
 
 export async function runMatrixCliAccountCommand<TResult>(
@@ -242,13 +249,27 @@ export async function runMatrixCliAccountCommand<TResult>(
     onText: (result: TResult, verbose: boolean, accountId: string) => void;
   },
 ): Promise<void> {
-  const context = resolveMatrixCliAccountContext(options.account);
+  let accountId = normalizeAccountId(options.account);
   await runMatrixCliCommand(options, {
     ...config,
-    run: () => config.run(context),
+    ...(config.gateway
+      ? {
+          gateway: {
+            ...config.gateway,
+            onAccount: (id: string) => {
+              accountId = id;
+            },
+          },
+        }
+      : {}),
+    run: () => {
+      const context = resolveMatrixCliAccountContext(options.account);
+      accountId = context.accountId;
+      return config.run(context);
+    },
     onText: (result, verbose) => {
-      printAccountLabel(context.accountId);
-      config.onText(result, verbose, context.accountId);
+      printAccountLabel(accountId);
+      config.onText(result, verbose, accountId);
     },
   });
 }
@@ -262,7 +283,18 @@ export async function runMatrixCliCommand<TResult>(
   setMatrixSdkLogMode(verbose ? "default" : "quiet");
   setMatrixConsoleLogging(verbose);
   try {
-    const result = await config.run();
+    const outcome = await runWithLocalStateOwner<{ result: TResult; accountId?: string }>({
+      method: config.gateway?.method ?? "matrix.cli",
+      params: (await config.gateway?.params()) ?? {},
+      target: "Matrix account state",
+      // Even diagnostics can initialize crypto and persist its final snapshot.
+      ...(config.gateway ? {} : { onForeignOwner: "refuse" as const }),
+      runLocal: async () => ({ result: await config.run() }),
+    });
+    if (outcome.accountId) {
+      config.gateway?.onAccount?.(outcome.accountId);
+    }
+    const result = outcome.result;
     if (json) {
       printJson(config.onJson ? config.onJson(result) : result);
     } else {
@@ -280,8 +312,6 @@ export async function runMatrixCliCommand<TResult>(
       config.onTextError?.(message);
     }
     process.exitCode = 1;
-  } finally {
-    scheduleMatrixCliExit();
   }
 }
 
@@ -592,9 +622,7 @@ export function printVerificationStatus(
   if (verbose) {
     console.log("Diagnostics:");
     printVerificationIdentity(status);
-    if (status.serverDeviceKnown !== undefined) {
-      console.log(`Device present on server: ${yesNoUnknown(status.serverDeviceKnown ?? null)}`);
-    }
+    console.log(`Device present on server: ${yesNoUnknown(status.serverDeviceKnown)}`);
     printVerificationTrustDiagnostics(status);
     printBackupStatus(backup);
     printTimestamp("Recovery key created at", status.recoveryKeyCreatedAt);

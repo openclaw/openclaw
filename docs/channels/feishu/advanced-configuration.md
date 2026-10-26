@@ -59,7 +59,9 @@ media captions are sent as text/card chunks before the attachment.
 
 ### Streaming
 
-Feishu/Lark supports streaming replies via interactive cards (Card Kit streaming API). When enabled, the bot updates the card in real time as it generates text.
+Feishu/Lark supports streaming replies via interactive cards (Card Kit streaming API). When enabled, the bot updates the card in real time as it generates text. Text written before a tool call remains in the same card when the assistant continues afterward.
+
+If Card Kit rejects the completed answer after accepting a streaming preview, OpenClaw sends the complete answer as a separate static reply instead of leaving only the preview.
 
 ```json5
 {
@@ -107,7 +109,7 @@ Reduce the number of Feishu/Lark API calls with two optional flags:
 | `"group_topic"`        | One session per topic thread; falls back to the group session    |
 | `"group_topic_sender"` | One session per (topic + sender); falls back to (group + sender) |
 
-For the topic scopes, native Feishu/Lark topic groups use the event `thread_id` (`omt_*`) as the canonical topic session key. If a native topic starter event omits `thread_id`, OpenClaw hydrates it from Feishu before routing the turn. Normal group replies that OpenClaw turns into threads keep using the reply root message ID (`om_*`) so the first turn and follow-up turns stay in the same session.
+For the topic scopes, native Feishu/Lark topic groups use the event `thread_id` (`omt_*`) as the topic session key. If a native topic starter event omits `thread_id`, OpenClaw hydrates it from Feishu before routing the turn. Normal group replies that OpenClaw turns into threads keep using the reply root message ID (`om_*`) so the first turn and follow-up turns stay in the same session.
 
 Set `replyInThread: "enabled"` (top-level or per group) to make bot replies create or continue a Feishu topic thread instead of replying inline. `topicSessionMode` is the deprecated predecessor of `groupSessionScope`; prefer `groupSessionScope`.
 
@@ -136,6 +138,11 @@ Bitable operations use the application token from a `/base/` URL or returned
 but table metadata is not retrieved, keep the returned `app_token` and URL. Inspect
 that existing application rather than creating another one; a missing `table_id`
 does not mean creation failed.
+
+Bitable metadata discovery reads every table and field page. If table discovery
+fails after the application lookup succeeds, the result keeps the validated
+application token and name and reports `tables_error`; retry discovery or use a
+known table ID. Record listing remains paginated by the caller.
 
 `feishu_doc` creates title-only documents. To add Markdown, pass the returned
 `document_id` as `doc_token` in a separate `write` action. A `create` request
@@ -211,7 +218,6 @@ Use `bindings` to route Feishu/Lark DMs or groups to different agents.
   agents: {
     ownership: "explicit",
     defaults: {
-      heartbeat: { agentId: "main" },
       systemAgent: { agentId: "main" },
     },
     entries: {

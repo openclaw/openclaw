@@ -14,17 +14,6 @@ type MeetingPageScriptGlobals = {
 };
 
 type MeetingPageIdentity = { expectedIdentity?: string; pageIdentitySource: string };
-type MeetingStatusPreludeParams = Parameters<typeof createMeetingStatusPreludeSource>[0];
-type MeetingPageStatusParams = Omit<
-  MeetingStatusPreludeParams,
-  keyof MeetingPageIdentity | "selectors" | "toggleStateFunction"
-> & { meetingUrl: string };
-type MeetingPageLeaveParams = {
-  leaveInitiated: boolean;
-  meetingSessionId: string;
-  meetingUrl: string;
-};
-
 export function createMeetingPageScripts(options: {
   platform: Parameters<typeof createMeetingStatusPreludeSource>[1]["platform"] &
     Parameters<typeof createMeetingStatusCallSource>[0]["platform"];
@@ -67,7 +56,12 @@ export function createMeetingPageScripts(options: {
     `,
       });
     },
-    status: (params: MeetingPageStatusParams): string =>
+    status: (
+      params: Omit<
+        Parameters<typeof createMeetingStatusPreludeSource>[0],
+        keyof MeetingPageIdentity | "selectors" | "toggleStateFunction"
+      > & { meetingUrl: string },
+    ): string =>
       createMeetingStatusPreludeSource(
         {
           ...params,
@@ -85,7 +79,11 @@ export function createMeetingPageScripts(options: {
         meetingSessionId,
         platformDisplayName: options.platform.displayName,
       }),
-    leave: (params: MeetingPageLeaveParams): string =>
+    leave: (params: {
+      leaveInitiated: boolean;
+      meetingSessionId: string;
+      meetingUrl: string;
+    }): string =>
       createMeetingLeaveSource({
         ...options.leave,
         ...identity(params.meetingUrl),
@@ -149,8 +147,6 @@ export function createMeetingTranscriptSource(params: {
     return JSON.stringify({ urlMatched: true, sessionMatched: false, droppedLines: 0, lines: [] });
   }
   if (${JSON.stringify(params.finalize)} && Array.isArray(captions?.visible) && captions.visible.length > 0) {
-    if (captions.settleTimer !== undefined) clearTimeout(captions.settleTimer);
-    captions.settleTimer = undefined;
     captions.lines = Array.isArray(captions.lines) ? captions.lines : [];
     captions.lines.push(...captions.visible.map((entry) => ({
       at: entry.at,

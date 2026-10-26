@@ -1,6 +1,6 @@
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { getRuntimeConfig } from "../../../config/config.js";
-import { runWithoutOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context-store.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { callGateway } from "../../../gateway/call.js";
 import {
@@ -48,6 +48,7 @@ const WAIT_TIMEOUT_DEADLINE_SKEW_MS = 250;
 
 export type SubagentManagerOptions = {
   runs: Map<string, SubagentRunRecord>;
+  getChildSessionCandidates: (childSessionKey: string) => Iterable<SubagentRunRecord>;
   getRunsForChildSession: (
     childSessionKey: string,
     childAgentId?: string,
@@ -139,7 +140,7 @@ export abstract class SubagentWaitManager {
           return;
         }
         void this.waitForSubagentCompletion(runId, entry, waitTimeoutMs, true);
-      }, RECOVERABLE_WAIT_RETRY_DELAY_MS).unref?.();
+      }, RECOVERABLE_WAIT_RETRY_DELAY_MS).unref();
       log.info(reason, {
         runId,
         childSessionKey: entry.childSessionKey,
@@ -374,7 +375,7 @@ export abstract class SubagentWaitManager {
       if (!isAgentEventLifecycleGenerationCurrent(lifecycleGeneration)) {
         return;
       }
-      let current = this.options.runs.get(runId);
+      const current = this.options.runs.get(runId);
       if (!current || !isSameSubagentRunOwner(current, waitedEntry)) {
         return;
       }
@@ -384,13 +385,6 @@ export abstract class SubagentWaitManager {
         childSessionKey: current.childSessionKey,
         error,
       });
-      if (
-        !isAgentEventLifecycleGenerationCurrent(lifecycleGeneration) ||
-        !isSameSubagentRunOwner(this.options.runs.get(runId), current)
-      ) {
-        return;
-      }
-      current = currentEntry();
       if (
         typeof current.execution.endedAt === "number" &&
         !current.cleanupCompletedAt &&

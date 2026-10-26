@@ -1,5 +1,8 @@
-import type { PluginModuleLoader } from "./plugin-cache-artifacts.js";
-import type { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
+import type { InspectionNativeEsmRetention, PluginModuleLoader } from "./plugin-cache-artifacts.js";
+import type {
+  capturePluginGenerationArtifact,
+  PluginGenerationArtifact,
+} from "./plugin-generation-artifact.js";
 import type { PluginRecoverySource } from "./plugin-generation-source-lookup.js";
 import type {
   PluginModuleLoaderOwner,
@@ -21,6 +24,16 @@ export type PluginInstanceModuleLoaderParams = {
   createHostModuleLoader?: () => PluginModuleLoader;
   recoverySourceMap?: (source: string) => string;
   nativeRecovery?: PluginNativeRecovery;
+  /**
+   * Installer-proven identity of an immutable install, set only when the owner registry
+   * is an uncached inspection. Loads with the same identity may share evaluated code.
+   */
+  inspectionSourceIdentity?: string;
+  inspectionRetention?: InspectionNativeEsmRetention;
+  preparedArtifact?: {
+    artifact: PluginGenerationArtifact;
+    attachModuleSource: (resolve: (filename: string) => string) => void;
+  };
 };
 
 type RecoveryLoadFacts = Pick<
@@ -43,6 +56,7 @@ function createSourceModuleRecovery(
   bindInstance: (params: PluginInstanceModuleLoaderParams) => void,
 ): PluginModuleLoaderRecovery {
   let state: "available" | "bound" | "disposed" = "available";
+  let disposal: Promise<void> | undefined;
   return {
     bind(instance) {
       if (state !== "available") {
@@ -63,11 +77,12 @@ function createSourceModuleRecovery(
       });
       instance.sourceDigest = facts.sourceDigest;
     },
-    dispose() {
+    async dispose() {
       if (state === "available") {
         state = "disposed";
-        recovery.dispose();
+        disposal = recovery.disposeAsync();
       }
+      await disposal;
     },
   };
 }

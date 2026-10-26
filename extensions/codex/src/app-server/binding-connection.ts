@@ -22,7 +22,6 @@ type CodexAppServerRuntimeOptionsParams = NonNullable<
 export type CodexBindingAppServerConnection = {
   appServer: CodexAppServerRuntimeOptions;
   usesSupervisionConnection: boolean;
-  requestAuthProfileId: string | undefined;
   clientAuthProfileId: string | null | undefined;
 };
 
@@ -88,6 +87,7 @@ export type CodexBindingAppServerConnectionParams = CodexAppServerRuntimeOptions
   >;
   authProfileId?: string;
   assertCurrent?: () => void;
+  assertCurrentAsync?: () => Promise<void>;
 };
 
 /** Registration publishes the resolver; connection policy loads only for an actual request. */

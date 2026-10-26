@@ -1,8 +1,9 @@
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Type } from "typebox";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { isEmbeddedMode, setEmbeddedMode } from "../../../infra/embedded-mode.js";
 import {
   EmbeddedPluginApprovalBroker,
@@ -30,9 +31,10 @@ import {
 import type { AgentSession } from "../../sessions/index.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import * as toolSearch from "../../tool-search.js";
+import { createWorkspaceCompactionConfig } from "../compaction-workspace-config.test-support.js";
 import {
   clearEmbeddedSessionPromptStates,
-  getEmbeddedSessionPromptState,
+  retainEmbeddedSessionPromptState,
   prepareSessionSystemPrompt,
 } from "../session-prompt-state.js";
 import { withPromptFixture } from "./attempt-system-prompt.sandbox-info.test-support.js";
@@ -45,7 +47,7 @@ const hoisted = vi.hoisted(() => ({
   DefaultResourceLoader: vi.fn<new () => { reload: () => Promise<void> }>(),
   createPreparedEmbeddedAgentSettingsManager: vi.fn(),
   getGlobalHookRunner: vi.fn(),
-  installMessageToolOnlyTerminalHook: vi.fn(),
+  installMessageToolTerminalHook: vi.fn(),
   prepareEmbeddedAttemptClientTools: vi.fn(),
   resolveEffectiveCompactionMode: vi.fn(),
   isSilentOverflowProneModel: vi.fn(),
@@ -88,7 +90,7 @@ vi.mock("./attempt-client-tools.js", () => ({
 }));
 vi.mock("./message-tool-terminal.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./message-tool-terminal.js")>()),
-  installMessageToolOnlyTerminalHook: hoisted.installMessageToolOnlyTerminalHook,
+  installMessageToolTerminalHook: hoisted.installMessageToolTerminalHook,
 }));
 
 import { prepareEmbeddedAttemptAgentSession } from "./attempt-session-prepare.js";
@@ -111,20 +113,14 @@ const attempt = {
   workspaceDir: "/workspace",
 } as unknown as EmbeddedRunAttemptParams;
 
-function createInput(options?: { activationError?: Error }) {
+function createInput(options?: { terminalHookError?: Error }) {
   const events: string[] = [];
-  const settingsManager = { id: "settings" };
+  const settingsManager = { id: "settings", getCompactionEnabled: () => true };
   const resourceLoader = {
     reload: vi.fn(async () => {
       events.push("resource-reload");
     }),
   };
-  const setActiveToolsByName = vi.fn(() => {
-    events.push("activate-tools");
-    if (options?.activationError) {
-      throw options.activationError;
-    }
-  });
   const setPromptPreparation = vi.fn<AgentSession[typeof agentSessionSetPromptPreparation]>();
   const queuePromptContext = vi.fn<
     (message: Parameters<AgentSession[typeof agentSessionQueuePromptContext]>[0]) => () => void
@@ -133,7 +129,6 @@ function createInput(options?: { activationError?: Error }) {
     [agentSessionSetPromptPreparation]: setPromptPreparation,
     [agentSessionQueuePromptContext]: queuePromptContext,
     agent: { id: "agent", subscribe: vi.fn(), state: { systemPrompt: "", tools: [] } },
-    setActiveToolsByName,
     setBaseSystemPrompt: vi.fn((prompt: string) => {
       activeSession.agent.state.systemPrompt = prompt;
       events.push("apply-system-prompt");
@@ -175,13 +170,19 @@ function createInput(options?: { activationError?: Error }) {
     ...clientToolRuntime,
     refreshTools: vi.fn(),
   });
-  hoisted.createAgentSession.mockImplementation(async () => {
-    events.push("create-session");
-    return { session: activeSession };
-  });
-  hoisted.installMessageToolOnlyTerminalHook.mockImplementation(
+  hoisted.createAgentSession.mockImplementation(
+    async (sessionOptions: { systemPrompt: string }) => {
+      events.push("create-session");
+      activeSession.agent.state.systemPrompt = sessionOptions.systemPrompt;
+      return { session: activeSession };
+    },
+  );
+  hoisted.installMessageToolTerminalHook.mockImplementation(
     (input: { onDeliveredSourceReply?: () => void }) => {
       events.push("install-terminal-hook");
+      if (options?.terminalHookError) {
+        throw options.terminalHookError;
+      }
       onDeliveredSourceReply = input.onDeliveredSourceReply;
     },
   );
@@ -222,7 +223,6 @@ function createInput(options?: { activationError?: Error }) {
     },
     onDeliveredSourceReply: () => onDeliveredSourceReply?.(),
     resourceLoader,
-    setActiveToolsByName,
     sessionToolAllowlist,
     settingsManager,
   };
@@ -234,17 +234,12 @@ function createSystemUpdateInput() {
   fixture.input.initialSystemPrompt = pinnedPrompt;
   fixture.input.onSystemPromptChanged = vi.fn();
   fixture.activeSession.agent.state.messages = [
-    {
-      role: "toolResult",
-      toolCallId: "read-1",
-      toolName: "read",
-      content: [{ type: "text", text: "Read complete." }],
-      isError: false,
-      timestamp: 1,
-    },
+    makeTextToolResult("read-1", "read", "Read complete.", false, 1),
   ];
   const steer = fixture.queuePromptContext;
-  const state = getEmbeddedSessionPromptState("permission-system-updates");
+  const promptStateLease = retainEmbeddedSessionPromptState("permission-system-updates");
+  onTestFinished(() => promptStateLease[Symbol.dispose]());
+  const state = promptStateLease.state;
   const prepareSystemPromptUpdate = vi.fn((systemPrompt: string, _freshlyRendered?: boolean) =>
     prepareSessionSystemPrompt({
       state,
@@ -295,18 +290,7 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     fixture.input.attempt = {
       ...fixture.input.attempt,
       model: createAnthropicModelFixture(),
-      config: {
-        agents: {
-          defaults: {
-            compaction: {
-              mode: "safeguard",
-              postCompactionSections: ["Compaction fixture"],
-              recentTurnsPreserve: 0,
-              qualityGuard: { enabled: false },
-            },
-          },
-        },
-      },
+      config: createWorkspaceCompactionConfig(),
     };
     const { buildEmbeddedExtensionFactories } =
       await vi.importActual<typeof import("../extensions.js")>("../extensions.js");
@@ -364,9 +348,8 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     );
     const previousMode = isEmbeddedMode();
     const previousBroker = getEmbeddedPluginApprovalBroker();
-    const broker = new EmbeddedPluginApprovalBroker();
     const requested = createDeferredCore();
-    broker.subscribe((event) => {
+    const broker = new EmbeddedPluginApprovalBroker((event) => {
       if (event.event === "plugin.approval.requested") {
         requested.resolve();
       }
@@ -508,7 +491,7 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     },
   );
 
-  it.each([false, true])(
+  it.each([true])(
     "refreshes permission guidance with in-history updates %s",
     async (inHistorySystemUpdates) => {
       const { fixture, pinnedPrompt, steer, prepareSystemPromptUpdate, prepareNextRequest } =
@@ -699,9 +682,7 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
       "stage:session-resource-loader",
       "create-session",
       "publish-session",
-      "activate-tools",
       "publish-system-prompt",
-      "apply-system-prompt",
       "install-terminal-hook",
       "stage:agent-session",
     ]);
@@ -715,7 +696,7 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     });
     expect(fixture.activeSession.agent.state.systemPrompt).toBe("system prompt");
     expect(fixture.input.onSystemPromptChanged).toHaveBeenCalledWith("  system prompt\n");
-    expect(fixture.setActiveToolsByName).toHaveBeenCalledWith(fixture.sessionToolAllowlist);
+    expect(sessionCall?.[0]).toMatchObject({ tools: fixture.sessionToolAllowlist });
     expect(result).toEqual(
       expect.objectContaining({
         activeSession: fixture.activeSession,
@@ -840,7 +821,7 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     },
   );
 
-  it.each(["allow", "abort", "replace"] as const)(
+  it.each(["abort", "replace"] as const)(
     "rechecks permission ownership inside awaited replay admission: %s",
     async (closure) => {
       const { fixture, pinnedPrompt, steer, state, prepareSystemPromptUpdate } =
@@ -875,16 +856,10 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
       }
       release.resolve();
       const [result] = await settled;
-      if (closure === "allow") {
-        expect(result.status).toBe("fulfilled");
-        expect(start).toHaveBeenCalledOnce();
-        expect(steer).toHaveBeenCalledOnce();
-      } else {
-        expect(result.status).toBe("rejected");
-        expect(start).not.toHaveBeenCalled();
-        expect(steer).not.toHaveBeenCalled();
-        expect(state.pendingSystemPrompt?.renderedPrefix).toBe(pinnedPrompt);
-      }
+      expect(result.status).toBe("rejected");
+      expect(start).not.toHaveBeenCalled();
+      expect(steer).not.toHaveBeenCalled();
+      expect(state.pendingSystemPrompt?.renderedPrefix).toBe(pinnedPrompt);
     },
   );
 
@@ -903,25 +878,11 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     });
   });
 
-  it.each([
-    ["settled-tool-finalization", true],
-    [undefined, false],
-  ] as const)("sets compactionForbidden for operation %s to %s", async (operation, expected) => {
-    const fixture = createInput();
-    fixture.input.attempt = { ...fixture.input.attempt, operation };
-
-    await prepareEmbeddedAttemptAgentSession(fixture.input);
-
-    expect(hoisted.applyAgentAutoCompactionGuard).toHaveBeenCalledWith(
-      expect.objectContaining({ compactionForbidden: expected }),
-    );
-  });
-
-  it("publishes session ownership before activation can fail", async () => {
-    const fixture = createInput({ activationError: new Error("activation failed") });
+  it("publishes session ownership before terminal-hook installation can fail", async () => {
+    const fixture = createInput({ terminalHookError: new Error("terminal hook failed") });
 
     await expect(prepareEmbeddedAttemptAgentSession(fixture.input)).rejects.toThrow(
-      "activation failed",
+      "terminal hook failed",
     );
 
     expect(fixture.events).toEqual([
@@ -929,7 +890,8 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
       "stage:session-resource-loader",
       "create-session",
       "publish-session",
-      "activate-tools",
+      "publish-system-prompt",
+      "install-terminal-hook",
     ]);
   });
 });

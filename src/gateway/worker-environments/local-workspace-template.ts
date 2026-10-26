@@ -1,6 +1,6 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { sha256Hex as digest } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { parse as parseYaml } from "yaml";
 import {
@@ -21,7 +21,6 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { prepareLocalWorkspaceCheckout } from "./local-workspace-checkout.js";
 
 const log = createSubsystemLogger("agents/worktrees");
-const digest = (value: string) => createHash("sha256").update(value).digest("hex");
 
 async function hasContainedVirtualStore(directory: string, workdir: string): Promise<boolean> {
   try {
@@ -51,7 +50,7 @@ async function validateTemplate(
   directory: string,
   commit: string,
   guard: Pick<WorktreeAllocationGuard, "signal" | "commitGuard">,
-  trim = false,
+  mode: "validate" | "dependencies" | "source-only" = "validate",
 ) {
   return await withWorktreeGitConfig(
     directory,
@@ -106,7 +105,7 @@ async function validateTemplate(
         }
         const target = path.join(directory, ...parts);
         const modulesIndex = parts.indexOf("node_modules");
-        if (modulesIndex !== -1) {
+        if (modulesIndex !== -1 && mode !== "source-only") {
           const modules = await fs.lstat(path.join(directory, ...parts.slice(0, modulesIndex + 1)));
           // Git can report the directory, ignored children, or unignored packages.
           // The generated directory boundary owns eligibility, not its ignore spelling.
@@ -115,7 +114,7 @@ async function validateTemplate(
           }
           continue;
         }
-        if (!trim) {
+        if (mode === "validate") {
           return false;
         }
         guard.commitGuard();
@@ -222,22 +221,31 @@ export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTempla
         assertCurrent: templateGuard.commitGuard,
         rollbackGuard: templateOptions.rollbackGuard,
       });
-      let reason = result.installed ? undefined : result.reason;
-      if (result.installed) {
-        const contained = await hasContainedVirtualStore(preparing.path, identity.docker.workdir);
-        templateGuard.commitGuard();
-        if (
-          contained &&
-          (await validateTemplate(preparing.path, params.baseCommit, templateGuard, true))
-        ) {
-          log.info("sandbox dependency template prepared for the selected commit");
-          return;
-        }
-        reason = contained
-          ? "installation changed tracked source"
-          : "pnpm virtual store is outside node_modules or unavailable";
+      const contained =
+        result.installed &&
+        (await hasContainedVirtualStore(preparing.path, identity.docker.workdir));
+      templateGuard.commitGuard();
+      const valid = await validateTemplate(
+        preparing.path,
+        params.baseCommit,
+        templateGuard,
+        contained ? "dependencies" : "source-only",
+      );
+      if (contained && valid) {
+        log.info("sandbox dependency template prepared for the selected commit");
+        return;
       }
+      const reason = result.installed
+        ? contained
+          ? "installation changed tracked source"
+          : "pnpm virtual store is outside node_modules or unavailable"
+        : result.reason;
       log.warn(`sandbox dependency template using source-only fallback: ${reason}`);
+      // The builder has retired. Reuse its clean source only after removing every
+      // generated output; changed or unverified tracked bytes still need a fresh checkout.
+      if (valid) {
+        return;
+      }
       templateGuard.commitGuard();
       await fs.rm(preparing.path, { recursive: true, force: true });
       await prepareSource(preparing.path, templateGuard);

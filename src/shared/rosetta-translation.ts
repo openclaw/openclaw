@@ -5,10 +5,8 @@ let translated: boolean | undefined;
 /**
  * Whether this x86_64 Darwin process is running under Rosetta.
  *
- * Rosetta reads guest stack above rsp while translating some syscalls (macOS 27 reads
- * [rsp+0x18, rsp+0x20) for write, getattrlist, proc_info and sysctl). Koffi enters foreign
- * calls at the top of its private stack, so thin libc syscall wrappers called through it fault
- * when the next page is unmapped. Native arm64 and Intel processes never read that memory.
+ * Darwin process-argument inspection remains unavailable under translation in
+ * proc-safe. The census uses this fact to name the supported native runtime.
  */
 export function isRosettaTranslatedProcess(): boolean {
   if (process.platform !== "darwin" || process.arch !== "x64") {

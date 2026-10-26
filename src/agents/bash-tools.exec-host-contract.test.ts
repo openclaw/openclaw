@@ -1,8 +1,13 @@
 import { describe, expect, it } from "vitest";
+import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
 import { finalizeAgentTools } from "./agent-tools.finalize.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
-import { applyCodeModeCatalog, createCodeModeTools } from "./code-mode.js";
+import {
+  applyCodeModeCatalog,
+  buildCodeModeCatalogPrompt,
+  createCodeModeTools,
+} from "./code-mode.js";
 import { createLazyExecTool } from "./lazy-exec-tool.js";
 import {
   createToolSearchCatalogRef,
@@ -16,6 +21,36 @@ const sandbox = {
   workspaceDir: "/workspace",
   containerWorkdir: "/workspace",
 };
+
+it("reuses host and continuation schemas across interleaved sessions", () => {
+  const schemas = ["first", "second", "first"].map((sessionId) =>
+    [false, true].flatMap((hasProcess) =>
+      [undefined, sandbox].map((sessionSandbox) => {
+        const tool = createLazyExecTool({ sessionId, sandbox: sessionSandbox });
+        finalizeAgentToolAvailability([
+          tool,
+          ...(hasProcess
+            ? [{ name: "process", description: "Process control", parameters: {} }]
+            : []),
+        ]);
+        expect(tool.parameters).toMatchObject({
+          properties: {
+            host: { enum: sessionSandbox ? ["auto", "sandbox"] : ["auto", "gateway", "node"] },
+          },
+        });
+        if (hasProcess) {
+          expect(tool.parameters).toHaveProperty("properties.background");
+          expect(tool.parameters).toHaveProperty("properties.yieldMs");
+        } else {
+          expect(tool.parameters).not.toHaveProperty("properties.background");
+          expect(tool.parameters).not.toHaveProperty("properties.yieldMs");
+        }
+        return tool.parameters;
+      }),
+    ),
+  );
+  expect(new Set(schemas.flat()).size).toBe(4);
+});
 
 it("preserves the runtime rejection for an explicit unavailable sandbox through input validation", async () => {
   for (const createTool of [createExecTool, createLazyExecTool]) {
@@ -57,12 +92,12 @@ describe.each(["agent:main:main", "agent:main:subagent:child"])(
           });
           const catalogRef = createToolSearchCatalogRef();
           const ctx = { catalogRef, sessionKey, config: { tools: { codeMode: true } } };
-          const { tools } = applyCodeModeCatalog({
+          applyCodeModeCatalog({
             ...ctx,
             tools: [...createCodeModeTools(ctx), direct!],
           });
           const signature = `host?: ${hosts.map((host) => JSON.stringify(host)).join(" | ")}`;
-          expect(tools[0]!.description).toContain(signature);
+          expect(buildCodeModeCatalogPrompt(ctx, catalogRef.current!.entries)).toContain(signature);
           const described = await new ToolSearchRuntime(
             ctx,
             resolveToolSearchConfig(ctx.config),

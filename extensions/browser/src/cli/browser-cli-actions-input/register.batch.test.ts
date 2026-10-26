@@ -1,40 +1,31 @@
-// Browser tests cover register.batch plugin behavior.
-import { Command } from "commander";
+import fs from "node:fs/promises";
+import { expectDefined } from "@openclaw/normalization-core";
 import { createNonExitingRuntime, defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as browserCliSharedModule from "../browser-cli-shared.js";
 import {
   createBrowserProgram,
-  getBrowserCliRuntime,
+  mockBrowserCliRuntime,
   getBrowserCliRuntimeCapture,
+  mockBrowserGateway,
 } from "../browser-cli.test-support.js";
-import * as batchSharedModule from "./shared.js";
 
 const mocks = vi.hoisted(() => ({
   callBrowserRequest: vi.fn<
-    (
-      opts?: unknown,
-      req?: unknown,
-      extra?: { timeoutMs?: number },
-    ) => Promise<Record<string, unknown>>
+    typeof browserCliSharedModule.callBrowserRequest<Record<string, unknown>>
   >(async () => ({ results: [{ ok: true }] })),
-  readActionsPayload: vi.fn(async () => ""),
 }));
 
 vi.spyOn(browserCliSharedModule, "callBrowserRequest").mockImplementation(mocks.callBrowserRequest);
-vi.spyOn(batchSharedModule, "readActionsPayload").mockImplementation(mocks.readActionsPayload);
-const browserCliRuntime = getBrowserCliRuntime();
-vi.spyOn(defaultRuntime, "log").mockImplementation(browserCliRuntime.log);
-vi.spyOn(defaultRuntime, "writeJson").mockImplementation(browserCliRuntime.writeJson);
-vi.spyOn(defaultRuntime, "error").mockImplementation(browserCliRuntime.error);
-vi.spyOn(defaultRuntime, "exit").mockImplementation(browserCliRuntime.exit);
+const realpath = vi.spyOn(fs, "realpath");
+mockBrowserCliRuntime();
 
 const { registerBrowserActionInputCommands } = await import("./register.js");
 
-function createActionInputProgram(): Command {
+function run(...args: string[]) {
   const { program, browser, parentOpts } = createBrowserProgram();
   registerBrowserActionInputCommands(browser, parentOpts);
-  return program;
+  return program.parseAsync(["browser", ...args], { from: "user" });
 }
 
 function getLastActionBody(): Record<string, unknown> | undefined {
@@ -46,22 +37,27 @@ const SAMPLE_ACTIONS = [
   { kind: "open", url: "https://example.com" },
   { kind: "click", ref: "12" },
 ];
+const actionsJson = JSON.stringify(SAMPLE_ACTIONS);
+const capture = getBrowserCliRuntimeCapture();
+
+function runBatch(options: string[] = [], parentOptions: string[] = []) {
+  return run(...parentOptions, "batch", "--actions", actionsJson, ...options);
+}
+
+async function expectRejected(args: string[], message: string) {
+  await expect(run("batch", ...args)).rejects.toThrow("__exit__:1");
+  expect(capture.runtimeErrors.join("\n")).toContain(message);
+  expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
+}
 
 describe("browser action input batch command", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    getBrowserCliRuntimeCapture().resetRuntimeCapture();
+    capture.resetRuntimeCapture();
   });
 
   it("sends normalized batch body with inline actions and target id", async () => {
-    mocks.readActionsPayload.mockResolvedValueOnce(JSON.stringify(SAMPLE_ACTIONS));
-    const program = createActionInputProgram();
-
-    await program.parseAsync(
-      ["browser", "batch", "--actions", JSON.stringify(SAMPLE_ACTIONS), "--target-id", "tab-1"],
-      { from: "user" },
-    );
-
+    await runBatch(["--target-id", "tab-1"]);
     expect(getLastActionBody()).toMatchObject({
       kind: "batch",
       actions: SAMPLE_ACTIONS,
@@ -70,78 +66,55 @@ describe("browser action input batch command", () => {
     expect(mocks.callBrowserRequest.mock.calls.at(-1)?.[2]).toEqual({ timeoutMs: 65_000 });
   });
 
-  it("omits stopOnError by default so the route applies its fail-fast default", async () => {
-    mocks.readActionsPayload.mockResolvedValueOnce(JSON.stringify(SAMPLE_ACTIONS));
-    const program = createActionInputProgram();
-
-    await program.parseAsync(["browser", "batch", "--actions", JSON.stringify(SAMPLE_ACTIONS)], {
-      from: "user",
-    });
-
-    const body = getLastActionBody();
-    expect(body).toMatchObject({ kind: "batch" });
-    expect(body).not.toHaveProperty("stopOnError");
-  });
-
   it("sets stopOnError=false when --continue is passed", async () => {
-    mocks.readActionsPayload.mockResolvedValueOnce(JSON.stringify(SAMPLE_ACTIONS));
-    const program = createActionInputProgram();
-
-    await program.parseAsync(
-      ["browser", "batch", "--actions", JSON.stringify(SAMPLE_ACTIONS), "--continue"],
-      { from: "user" },
-    );
-
+    await runBatch(["--continue"]);
     expect(getLastActionBody()).toMatchObject({ kind: "batch", stopOnError: false });
   });
 
-  it("reports a failed batch action and exits nonzero in text mode", async () => {
-    mocks.readActionsPayload.mockResolvedValueOnce(JSON.stringify(SAMPLE_ACTIONS));
-    mocks.callBrowserRequest.mockResolvedValueOnce({
-      results: [{ ok: true }, { ok: false, error: "ref is stale" }],
-    });
-    const program = createActionInputProgram();
+  it.each([undefined, "work", " work ", "-work"])(
+    "keeps the selected profile %s when replaying a modal recovery hint",
+    async (profile) => {
+      const gateway = mockBrowserGateway();
+      mocks.callBrowserRequest.mockResolvedValueOnce({
+        ok: true,
+        blockedByDialog: true,
+        browserState: { dialogs: { pending: [{ id: "d1" }] } },
+      });
+      const args: string[] = [];
+      if (profile !== undefined) {
+        args.push("--browser-profile", profile);
+      }
+      await run(...args, "click", "e1");
 
-    await expect(
-      program.parseAsync(["browser", "batch", "--actions", JSON.stringify(SAMPLE_ACTIONS)], {
-        from: "user",
-      }),
-    ).rejects.toThrow("__exit__:1");
+      const hint = capture.runtimeLogs.join("\n");
+      const command = expectDefined(
+        hint.match(/Use (openclaw browser .+) to continue\./)?.[1],
+        "modal recovery command",
+      );
+      const replay = command
+        .replace("--accept or --dismiss", "--accept")
+        .replace("--dialog-id <id>", "--dialog-id d1");
+      await run(...replay.split(/\s+/).slice(2));
 
-    expect(getBrowserCliRuntimeCapture().runtimeErrors.join("\n")).toContain(
-      "batch failed: action 2: ref is stale",
-    );
-  });
+      expect(mocks.callBrowserRequest).toHaveBeenCalledTimes(1);
+      expect(gateway).toHaveBeenCalledTimes(1);
+      expect(gateway.mock.calls[0]?.[2]).toMatchObject({
+        method: "POST",
+        path: "/hooks/dialog",
+        query: profile ? { profile: profile.trim() } : undefined,
+        body: { accept: true, dialogId: "d1" },
+      });
+    },
+  );
 
-  it("preserves failed batch results in JSON mode before exiting nonzero", async () => {
-    const result = { results: [{ ok: false, error: "ref is stale" }] };
-    mocks.readActionsPayload.mockResolvedValueOnce(JSON.stringify(SAMPLE_ACTIONS));
-    mocks.callBrowserRequest.mockResolvedValueOnce(result);
-    const program = createActionInputProgram();
-
-    await expect(
-      program.parseAsync(
-        ["browser", "--json", "batch", "--actions", JSON.stringify(SAMPLE_ACTIONS)],
-        { from: "user" },
-      ),
-    ).rejects.toThrow("__exit__:1");
-
-    expect(getBrowserCliRuntimeCapture().defaultRuntime.writeJson).toHaveBeenCalledWith(result);
-  });
-
-  it.each(["navigation", "closed"])("reports actions skipped after %s", async (reason) => {
+  it("reports actions skipped after closed", async () => {
     const result = {
       ok: true,
       results: [{ ok: true }],
-      aborted: { reason, afterAction: 1, skipped: 1, url: "https://example.com/next" },
+      aborted: { reason: "closed", afterAction: 1, skipped: 1, url: "https://example.com/next" },
     };
-    mocks.readActionsPayload.mockResolvedValueOnce(JSON.stringify(SAMPLE_ACTIONS));
     mocks.callBrowserRequest.mockResolvedValueOnce(result);
-    await createActionInputProgram().parseAsync(
-      ["browser", "batch", "--actions", JSON.stringify(SAMPLE_ACTIONS)],
-      { from: "user" },
-    );
-    const capture = getBrowserCliRuntimeCapture();
+    await runBatch();
     const text = capture.runtimeLogs.join("\n");
     expect(text).toContain("stopped after action 1");
     expect(text).toContain("1 action(s) skipped");
@@ -150,12 +123,8 @@ describe("browser action input batch command", () => {
 
     capture.resetRuntimeCapture();
     vi.clearAllMocks();
-    mocks.readActionsPayload.mockResolvedValueOnce(JSON.stringify(SAMPLE_ACTIONS));
     mocks.callBrowserRequest.mockResolvedValueOnce(result);
-    await createActionInputProgram().parseAsync(
-      ["browser", "--json", "batch", "--actions", JSON.stringify(SAMPLE_ACTIONS)],
-      { from: "user" },
-    );
+    await runBatch([], ["--json"]);
     expect(capture.defaultRuntime.writeJson).toHaveBeenCalledExactlyOnceWith(result);
     expect(capture.runtimeLogs).toEqual([JSON.stringify(result, null, 2)]);
   });
@@ -171,128 +140,39 @@ describe("browser action input batch command", () => {
         url: "https://example.com/next",
       },
     };
-    mocks.readActionsPayload.mockResolvedValueOnce(JSON.stringify(SAMPLE_ACTIONS));
     mocks.callBrowserRequest.mockResolvedValueOnce(result);
     vi.mocked(defaultRuntime.exit).mockImplementationOnce(createNonExitingRuntime().exit);
-    await expect(
-      createActionInputProgram().parseAsync(
-        ["browser", "batch", "--actions", JSON.stringify(SAMPLE_ACTIONS)],
-        { from: "user" },
-      ),
-    ).rejects.toMatchObject({ name: "ExitError", code: 1 });
-    const capture = getBrowserCliRuntimeCapture();
+    await expect(runBatch()).rejects.toMatchObject({ name: "ExitError", code: 1 });
     expect(capture.runtimeErrors).toEqual(["batch failed: action 1: Synthetic failure"]);
     expect(capture.runtimeLogs.join("\n")).toContain("1 action(s) skipped");
     expect(capture.runtimeLogs.join("\n")).not.toContain("batch ran");
   });
 
-  it("reads actions from a file via --actions-file", async () => {
-    mocks.readActionsPayload.mockResolvedValueOnce(JSON.stringify(SAMPLE_ACTIONS));
-    const program = createActionInputProgram();
-
-    await program.parseAsync(
-      ["browser", "batch", "--actions-file", "/tmp/openclaw/batch-actions.json"],
-      { from: "user" },
-    );
-
-    expect(mocks.readActionsPayload).toHaveBeenCalledWith({
-      actions: undefined,
-      actionsFile: "/tmp/openclaw/batch-actions.json",
-    });
-    expect(getLastActionBody()).toMatchObject({ kind: "batch", actions: SAMPLE_ACTIONS });
-  });
-
   it("rejects conflicting inline and file actions before reading either source", async () => {
-    const program = createActionInputProgram();
-
     await expect(
-      program.parseAsync(
-        ["browser", "batch", "--actions", "[]", "--actions-file", "/tmp/browser-actions.json"],
-        { from: "user" },
-      ),
-    ).rejects.toThrow("__exit__:1");
-
-    expect(getBrowserCliRuntimeCapture().runtimeErrors.join("\n")).toContain(
-      "Specify only one of --actions or --actions-file",
-    );
-    expect(mocks.readActionsPayload).not.toHaveBeenCalled();
+      run("batch", "--actions", "[]", "--actions-file", "/tmp/browser-actions.json"),
+    ).rejects.toThrow("Specify only one of --actions or --actions-file");
     expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
+    expect(realpath).not.toHaveBeenCalled();
   });
 
   it("rejects malformed actions JSON before dispatch", async () => {
-    mocks.readActionsPayload.mockResolvedValueOnce("NOT JSON {{{");
-    const program = createActionInputProgram();
-
-    await expect(
-      program.parseAsync(["browser", "batch", "--actions", "NOT JSON {{{"], { from: "user" }),
-    ).rejects.toThrow("__exit__:1");
-
-    expect(getBrowserCliRuntimeCapture().runtimeErrors.join("\n")).toContain(
-      "actions must be valid JSON",
-    );
-    expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
+    await expectRejected(["--actions", "NOT JSON {{{"], "actions must be valid JSON");
   });
 
   it("rejects non-array actions before dispatch", async () => {
-    mocks.readActionsPayload.mockResolvedValueOnce(JSON.stringify({ kind: "click" }));
-    const program = createActionInputProgram();
-
-    await expect(
-      program.parseAsync(["browser", "batch", "--actions", JSON.stringify({ kind: "click" })], {
-        from: "user",
-      }),
-    ).rejects.toThrow("__exit__:1");
-
-    expect(getBrowserCliRuntimeCapture().runtimeErrors.join("\n")).toContain(
-      "actions must be a JSON array",
-    );
-    expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
+    const payload = JSON.stringify({ kind: "click" });
+    await expectRejected(["--actions", payload], "actions must be a JSON array");
   });
 
   it("rejects empty actions before dispatch", async () => {
-    mocks.readActionsPayload.mockResolvedValueOnce("[]");
-    const program = createActionInputProgram();
-
-    await expect(
-      program.parseAsync(["browser", "batch", "--actions", "[]"], { from: "user" }),
-    ).rejects.toThrow("__exit__:1");
-
-    expect(getBrowserCliRuntimeCapture().runtimeErrors.join("\n")).toContain(
-      "actions must contain at least one entry",
-    );
-    expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
+    await expectRejected(["--actions", "[]"], "actions must contain at least one entry");
   });
 
   it("requires actions from --actions, --actions-file, or stdin", async () => {
-    const program = createActionInputProgram();
-
-    await expect(program.parseAsync(["browser", "batch"], { from: "user" })).rejects.toThrow(
-      "__exit__:1",
-    );
-
-    expect(getBrowserCliRuntimeCapture().runtimeErrors.join("\n")).toContain(
+    await expect(run("batch")).rejects.toThrow(
       "Provide --actions, --actions-file, or --actions-file -",
     );
     expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
-  });
-
-  it("budgets the outer request from the batch execution budget", async () => {
-    mocks.readActionsPayload.mockResolvedValueOnce(
-      JSON.stringify([
-        { kind: "wait", timeMs: 5000 },
-        { kind: "wait", timeMs: 5000 },
-      ]),
-    );
-    const program = createActionInputProgram();
-
-    await program.parseAsync(
-      ["browser", "batch", "--actions", JSON.stringify([{ kind: "wait", timeMs: 5000 }])],
-      { from: "user" },
-    );
-
-    const options = mocks.callBrowserRequest.mock.calls.at(-1)?.[2] as
-      | { timeoutMs?: number }
-      | undefined;
-    expect(options?.timeoutMs).toBeGreaterThan(10_000);
   });
 });

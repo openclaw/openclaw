@@ -14,7 +14,6 @@ import type { RequestClient } from "./rest.js";
 type RawOrId<T> = T | string | { id: string; channelId?: string };
 export type StructureClient = {
   rest: RequestClient;
-  fetchUser(id: string): Promise<User>;
 };
 
 class Base {
@@ -33,16 +32,7 @@ class PartialEntity<Raw extends { id: string }, IsPartial extends boolean> exten
   }
 }
 
-export class User<IsPartial extends boolean = false> extends PartialEntity<APIUser, IsPartial> {
-  get rawData(): Readonly<APIUser> {
-    if (!this.rawDataValue) {
-      throw new Error("Partial Discord user has no raw data");
-    }
-    return this.rawDataValue;
-  }
-  get partial(): IsPartial {
-    return (this.rawDataValue === null) as IsPartial;
-  }
+export class User extends PartialEntity<APIUser, false> {
   get username() {
     return this.rawDataValue?.username ?? "";
   }
@@ -57,9 +47,6 @@ export class User<IsPartial extends boolean = false> extends PartialEntity<APIUs
   }
   get avatar() {
     return this.rawDataValue?.avatar;
-  }
-  async fetch(): Promise<User> {
-    return this.client.fetchUser(this.id);
   }
 }
 
@@ -89,7 +76,7 @@ export class GuildMember extends Base {
     return this.rawData.user ? new User(this.client, this.rawData.user) : null;
   }
   get roles() {
-    return (this.rawData.roles ?? []) as Array<string | Role>;
+    return this.rawData.roles ?? [];
   }
   get nickname() {
     return this.rawData.nick ?? undefined;
@@ -156,6 +143,9 @@ export class Message<IsPartial extends boolean = false> extends Base {
   }
   get embeds(): APIEmbed[] {
     return this.rawDataValue?.embeds ?? [];
+  }
+  get components() {
+    return this.rawDataValue?.components;
   }
   get attachments() {
     return this.rawDataValue?.attachments ?? [];

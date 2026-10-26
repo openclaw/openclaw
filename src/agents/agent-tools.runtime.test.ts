@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../test/helpers/promise.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
@@ -22,16 +23,6 @@ const emptyResult = () => ({ content: [], details: {} });
 
 function tool(execute: AnyAgentTool["execute"], name = "tool"): AnyAgentTool {
   return { ...stubTool(name), label: name, execute };
-}
-
-function deferred<T = void>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
 }
 
 async function flushMicrotasks() {
@@ -75,6 +66,46 @@ describe("wrapToolWithAbortSignal", () => {
     expect(result).not.toHaveProperty("details.message");
     await aborted;
   });
+
+  it.each(["direct", "prepared"] as const)(
+    "only preserves an explicit plugin reload handoff through %s execution",
+    async (mode) => {
+      for (const action of ["reloadAndResume", "reload", "list"]) {
+        const runAbort = new AbortController();
+        const result = emptyResult();
+        const execute = async () => {
+          runAbort.abort(handoffReason);
+          return result;
+        };
+        const source = tool(execute, "plugins");
+        if (mode === "prepared") {
+          attachInternalToolExecutionPreparer(source, async ({ args }) => ({
+            kind: "ready",
+            args,
+            execute,
+            dispose: () => undefined,
+          }));
+        }
+        const wrapped = wrapToolWithAbortSignal(source, runAbort.signal);
+        let execution: Promise<unknown>;
+        if (mode === "prepared") {
+          const prepare = expectDefined(getInternalToolExecutionPreparer(wrapped), "preparer");
+          const prepared = await prepare({ toolCallId: "reload", args: { action } });
+          if (prepared.kind !== "ready") {
+            throw new Error("expected ready tool execution");
+          }
+          execution = prepared.execute().finally(prepared.dispose);
+        } else {
+          execution = wrapped.execute("reload", { action });
+        }
+        if (action === "reloadAndResume") {
+          await expect(execution).resolves.toBe(result);
+        } else {
+          await expect(execution).rejects.toMatchObject(abortError);
+        }
+      }
+    },
+  );
 
   it("preserves the handoff when distinct run and per-call signals both yield", async () => {
     const runAbort = new AbortController();

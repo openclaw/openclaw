@@ -33,9 +33,6 @@ async function runOwnedUpdateCommand(phase, commandArgv, timeoutMs, cwd = params
   let outputOverflow = false;
   let outputFd;
   let timeout;
-  let continuation;
-  let stagedContinuation;
-  let continuationCancelled = false;
   let triageAdmitted = false;
   let leaseWatch;
   let admissionDeadline;
@@ -138,21 +135,10 @@ async function runOwnedUpdateCommand(phase, commandArgv, timeoutMs, cwd = params
             stopTriageScope();
           }
         }
-        if (stagedContinuation) {
-          appendLog("automatic triage skipped: updater disconnected before committing its request");
-          stagedContinuation = undefined;
-        }
+
       });
       child.on("message", async (message) => {
         try {
-          if (phase === "update" && message?.version === 2 &&
-            message.type === "triage-request-cancel" && Object.keys(message).length === 2 &&
-            !continuation) {
-            stagedContinuation = undefined;
-            continuationCancelled = true;
-            appendLog("automatic triage request cancelled before handoff");
-            return;
-          }
           if (
             !message ||
             message.version !== 2 ||
@@ -184,8 +170,6 @@ async function runOwnedUpdateCommand(phase, commandArgv, timeoutMs, cwd = params
             }
             return;
           }
-          const triageCommandIndex = Array.isArray(message.commandArgv) &&
-            message.commandArgv[1] === "--no-install" ? 3 : 2;
           if (
             params.action === "triage" &&
             message.type === "triage-ready" &&
@@ -224,39 +208,8 @@ async function runOwnedUpdateCommand(phase, commandArgv, timeoutMs, cwd = params
               },
               () => {},
             );
-          } else if (
-            phase === "update" &&
-            message.type === "triage-request" &&
-            !stagedContinuation && !continuation && !continuationCancelled &&
-            Object.keys(message).length === 4 &&
-            Array.isArray(message.commandArgv) &&
-            (message.commandArgv.length === triageCommandIndex + 1 ||
-              (message.commandArgv.length === triageCommandIndex + 3 &&
-                message.commandArgv[triageCommandIndex + 1] === "--update-result")) &&
-            message.commandArgv.every((arg) => typeof arg === "string" && arg.length < 4096) &&
-            message.commandArgv[triageCommandIndex] === "triage" &&
-            validTriageFailure(message.failure) &&
-            message.failure.kind === "update" &&
-            params.serviceRecovery?.kind === "systemd" &&
-            Buffer.byteLength(JSON.stringify(message)) <= 16384
-          ) {
-            stagedContinuation = message;
-            child.send({ type: "triage-queued", version: 2 }, () => {});
-          } else if (phase === "update" && message.type === "triage-commit" &&
-            Object.keys(message).length === 2 && stagedContinuation &&
-            !continuation && !continuationCancelled) {
-            // The same live updater transfers its request only after the queue ACK.
-            // Never infer this decision from its exit code or disconnected IPC.
-            continuation = stagedContinuation;
-            stagedContinuation = undefined;
-            // The updater stays alive until it receives this accepted transfer.
-            child.send({ type: "triage-committed", version: 2 }, () => {});
           } else throw new Error("invalid or repeated managed handoff continuation");
         } catch (error) {
-          if (!continuation) {
-            stagedContinuation = undefined;
-            continuationCancelled = true;
-          }
           appendLog("automatic triage admission failed: " + String(error));
           if (params.action === "triage") stopTriageScope();
           else if (child.connected) child.send({ type: "triage-refused", version: 2 }, () => {});
@@ -326,9 +279,9 @@ async function runOwnedUpdateCommand(phase, commandArgv, timeoutMs, cwd = params
       appendLog(
         "The installed update does not support automatic diagnostics. Run openclaw triage manually.",
       );
-      process.exitCode = 1;
+      finalExitCode = 1;
     }
-    return { ...exit, continuation, updaterOutput: Buffer.concat(updaterChunks).toString(), outputOverflow };
+    return { ...exit, updaterOutput: Buffer.concat(updaterChunks).toString(), outputOverflow };
   } finally {
     activeCommand = undefined;
     clearTimeout(timeout);

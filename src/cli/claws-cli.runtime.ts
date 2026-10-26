@@ -1,46 +1,23 @@
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
-import { filterStringEntries, stableStringify } from "@openclaw/normalization-core";
-import {
-  listAgentEntries,
-  listAgentIds,
-  resolveAgentWorkspaceDir,
-} from "../agents/agent-scope-config.js";
-import {
-  applyClawAddPlan,
-  CLAW_ADD_RESULT_SCHEMA_VERSION,
-  ClawAddMutationError,
-} from "../claws/add.js";
+import { filterStringEntries } from "@openclaw/normalization-core";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
+import { applyClawAddPlanStateless } from "../claws/add-stateless.js";
+import { CLAW_ADD_RESULT_SCHEMA_VERSION, ClawAddMutationError } from "../claws/add.js";
 import {
   findClawExtensionPackageCollisions,
   planClawExtensions,
 } from "../claws/application-plan.js";
-import { assertExperimentalClawsEnabled } from "../claws/experimental.js";
 import {
-  CLAW_EXPORT_RESULT_SCHEMA_VERSION,
-  ClawExportError,
-  exportClawAgent,
-} from "../claws/export.js";
-import {
-  applyClawRemovePlan,
-  buildClawRemovePlan,
-  CLAW_REMOVE_PLAN_SCHEMA_VERSION,
-  CLAW_REMOVE_RESULT_SCHEMA_VERSION,
-  ClawRemoveError,
-  readClawStatus,
-} from "../claws/lifecycle-state.js";
+  assertClawsLabsEnabled,
+  CLAWS_LABS_DISABLED_MESSAGE,
+  ClawsLabsDisabledError,
+  isClawsLabsEnabled,
+} from "../claws/labs-gate.js";
 import { buildClawAddPlan } from "../claws/lifecycle.js";
-import {
-  findResumableIntroducedPluginRequirement,
-  readClawResumeStateReadOnly,
-} from "../claws/package-resume.js";
-import { preflightClawPackage } from "../claws/packages.js";
-import {
-  clawInstallRecordMatchesPlan,
-  readClawInstallRecord,
-  readClawPackageRefs,
-  type PersistedClawInstall,
-} from "../claws/provenance.js";
+import { preflightClawPackage, type ClawSkillInstallConsent } from "../claws/packages.js";
 import { readClawManifestFile } from "../claws/reader.js";
+import { collectClawSkillWarningReviews } from "../claws/skill-warning-review.js";
 import {
   CLAW_INSPECT_RESULT_SCHEMA_VERSION,
   CLAW_ADD_PLAN_SCHEMA_VERSION,
@@ -48,41 +25,51 @@ import {
   type ClawAddPlan,
 } from "../claws/types.js";
 import { getRuntimeConfig } from "../config/config.js";
+import { readCurrentConfigForPolicyCheck } from "../config/io.js";
 import { listConfiguredMcpServers } from "../config/mcp-config.js";
+import { resolveConfigPath } from "../config/paths.js";
 import { redactSensitiveArgv } from "../config/redact-argv.js";
-import {
-  loadCronJobsStoreWithConfigJobsReadOnly,
-  resolveCronJobsStorePath,
-} from "../cron/store.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { redactSensitiveText } from "../logging/redact.js";
-import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
-import { authorizeLegacyV1Resume } from "./claws-cli-legacy-resume.js";
+import { defaultRuntime as runtime, writeRuntimeJson } from "../runtime.js";
+import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
+import { sleep } from "../utils/sleep.js";
 import {
   emitClawFailure,
   formatClawDiagnostics,
   logClawAgentConfiguration,
-  logClawExperimentalWarning,
 } from "./claws-cli-output.js";
-import { waitUntilGatewayAgentAvailable } from "./claws-cli.gateway-readiness.js";
-import type {
-  ClawsAddOptions,
-  ClawsExportOptions,
-  ClawsInspectOptions,
-  ClawsRemoveOptions,
-  ClawsStatusOptions,
-} from "./claws-cli.js";
-import { clawMonitorCleanupGateway } from "./claws-cli.monitor-cleanup.js";
-import { clawPackageRemovalGateway } from "./claws-cli.package-removal.js";
-import { clawRemovalJournalGateway } from "./claws-cli.removal-journal.js";
-import { offlineClawAction } from "./claws-cli.state-owner.js";
+import type { ClawsAddOptions, ClawsInspectOptions } from "./claws-cli.js";
 import { listCronJobsFromGateway } from "./cron-cli/list-jobs.js";
-import { callGatewayFromCli } from "./gateway-rpc.js";
+import { callGatewayFromCli, callGatewayFromCliWithTransport } from "./gateway-rpc.js";
+import { runWithLocalStateOwner } from "./local-state-owner.js";
+import { resolvePluginCapabilityConsentCliOptions } from "./plugin-capability-consent.js";
 import { resolvePluginBatchReload } from "./plugins-lifecycle-client.js";
+import { promptYesNo } from "./prompt.js";
 
-function logClawAddPlanSummary(plan: ClawAddPlan, runtime: RuntimeEnv): void {
+type ClawCliSkillWarning = {
+  ref: string;
+  version: string;
+  integrity: string;
+  riskWarning: string;
+};
+
+function addPlanSkillWarnings(plan: ClawAddPlan): ClawCliSkillWarning[] {
+  return collectClawSkillWarningReviews(plan).map(({ actionId, ...warning }) => {
+    if (actionId !== `skill:${warning.ref}`) {
+      throw new Error("The Claw skill trust review is incomplete.");
+    }
+    return warning;
+  });
+}
+
+const CLAW_AGENT_RELOAD_TIMEOUT_MS = 15_000;
+const CLAW_AGENT_RELOAD_POLL_MS = 100;
+
+function logClawAddPlanSummary(plan: ClawAddPlan): void {
   runtime.log(`Agent: ${plan.agent.finalId}`);
   runtime.log(`Workspace: ${plan.agent.workspace}`);
-  logClawAgentConfiguration(plan, runtime);
+  logClawAgentConfiguration(plan);
   runtime.log(`Actions: ${plan.summary.totalActions}`);
   runtime.log(`Packages: ${plan.summary.packageActions}`);
   for (const action of plan.actions.filter((candidate) => candidate.kind === "package")) {
@@ -90,9 +77,18 @@ function logClawAddPlanSummary(plan: ClawAddPlan, runtime: RuntimeEnv): void {
       typeof action.details?.requirementState === "string"
         ? action.details.requirementState
         : "unresolved";
-    runtime.log(
-      `  Requirement ${action.target}: ${requirementState}${action.action === "install" ? " (installation requires this exact plan consent)" : ""}`,
-    );
+    runtime.log(`  Requirement ${action.target}: ${requirementState}`);
+  }
+  const skillWarnings = addPlanSkillWarnings(plan);
+  if (skillWarnings.length > 0) {
+    runtime.log(`Skill trust warnings (${skillWarnings.length}):`);
+    for (const warning of skillWarnings) {
+      runtime.log(
+        redactSensitiveText(`  ${warning.ref}@${warning.version} (${warning.integrity})`),
+      );
+      runtime.log(redactSensitiveText(`    ${warning.riskWarning}`));
+    }
+    runtime.log("These warnings require explicit acknowledgement before Add.");
   }
   runtime.log(`MCP servers: ${plan.summary.mcpServerActions}`);
   for (const action of plan.actions.filter((candidate) => candidate.kind === "mcpServer")) {
@@ -113,66 +109,19 @@ function logClawAddPlanSummary(plan: ClawAddPlan, runtime: RuntimeEnv): void {
         redactSensitiveText(`  ! ${change.kind}:${change.id} ${JSON.stringify(change.effect)}`),
       );
     }
-    runtime.log("The plan integrity binds every capability line above.");
   }
   if (plan.summary.blockedActions > 0) {
     runtime.log(`Blocked actions: ${plan.summary.blockedActions}`);
   }
 }
 
-async function matchingResumeState(plan: ClawAddPlan, opts: ClawsAddOptions) {
-  const readOnlyState = opts.dryRun
-    ? await readClawResumeStateReadOnly(plan.agent.finalId)
-    : undefined;
-  const record = opts.dryRun ? readOnlyState?.record : readClawInstallRecord(plan.agent.finalId);
-  if (
-    !record ||
-    record.status === "complete" ||
-    record.workspace !== plan.agent.workspace ||
-    record.claw.kind !== plan.claw.kind ||
-    record.claw.name !== plan.claw.name ||
-    record.claw.version !== plan.claw.version ||
-    record.claw.integrity !== plan.claw.integrity
-  ) {
-    return undefined;
-  }
-  return {
-    record,
-    packageRefs: readOnlyState?.packageRefs ?? readClawPackageRefs({ agentId: plan.agent.finalId }),
-  };
-}
-
-function requireClawPlanConsent(
-  action: "add" | "remove",
-  opts: ClawsAddOptions | ClawsRemoveOptions,
-  runtime: RuntimeEnv,
-): boolean {
-  if (opts.dryRun || (opts.yes && opts.planIntegrity)) {
-    return false;
-  }
-  const code = opts.yes ? "plan_integrity_required" : "consent_required";
-  const message = opts.yes
-    ? `Claw ${action} consent must include --plan-integrity from the exact dry-run plan.`
-    : `Claw ${action} requires explicit consent; pass --dry-run to preview or --yes with --plan-integrity to ${action === "add" ? "create the new agent and workspace" : "remove owned state"}.`;
-  emitClawFailure(runtime, opts.json, message, {
-    schemaVersion:
-      action === "add" ? CLAW_ADD_PLAN_SCHEMA_VERSION : CLAW_REMOVE_PLAN_SCHEMA_VERSION,
-    stability: CLAW_OUTPUT_STABILITY,
-    ok: false,
-    error: { code, message },
-  });
-  return true;
-}
-
 export async function runClawsInspectCommand(
   sourcePath: string,
   opts: ClawsInspectOptions,
-  runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
-  assertExperimentalClawsEnabled();
   const result = await readClawManifestFile(sourcePath);
   if (!result.ok) {
-    emitClawFailure(runtime, opts.json, formatClawDiagnostics(result.diagnostics), {
+    emitClawFailure(opts.json, formatClawDiagnostics(result.diagnostics), {
       schemaVersion: CLAW_INSPECT_RESULT_SCHEMA_VERSION,
       stability: CLAW_OUTPUT_STABILITY,
       valid: false,
@@ -181,10 +130,11 @@ export async function runClawsInspectCommand(
     return;
   }
 
+  const config = getRuntimeConfig();
   const extensionPlan = await planClawExtensions({
     extensions: result.openClawProfile?.extensions ?? [],
     workspace: result.source.packageRoot,
-    packagePreflight: preflightClawPackage,
+    packagePreflight: (pkg, workspace) => preflightClawPackage(pkg, workspace, { config }),
   });
   const extensionCollisions = findClawExtensionPackageCollisions({
     packages: result.manifest.packages,
@@ -213,9 +163,10 @@ export async function runClawsInspectCommand(
     }
     return;
   }
-  logClawExperimentalWarning(runtime);
   runtime.log(`Claw: ${result.source.name}@${result.source.version}`);
-  runtime.log(`Agent: ${result.manifest.agent.name ?? result.manifest.agent.id}`);
+  runtime.log(
+    `Agent: ${sanitizeTerminalText(result.manifest.agent.name ?? result.manifest.agent.id)}`,
+  );
   runtime.log(`Packages: ${result.manifest.packages.length}`);
   runtime.log(`Extension requirements: ${extensionPlan.extensions.length}`);
   for (const extension of extensionPlan.extensions) {
@@ -231,426 +182,304 @@ export async function runClawsInspectCommand(
   }
 }
 
-export const runClawsAddCommand = offlineClawAction("add", runClawsAddCommandLocal);
+// Add's planning and application both read or mutate Gateway-owned state.
+export async function runClawsAddCommand(sourcePath: string, opts: ClawsAddOptions): Promise<void> {
+  return await runWithLocalStateOwner({
+    method: "claws.add",
+    params: {},
+    target: "Claw configuration and provenance",
+    onForeignOwner: "refuse",
+    runLocal: async () => {
+      const config = getRuntimeConfig();
+      if (!isClawsLabsEnabled(config)) {
+        emitClawFailure(opts.json, CLAWS_LABS_DISABLED_MESSAGE, {
+          schemaVersion: CLAW_ADD_PLAN_SCHEMA_VERSION,
+          stability: CLAW_OUTPUT_STABILITY,
+          ok: false,
+          error: { code: "claws_labs_disabled", message: CLAWS_LABS_DISABLED_MESSAGE },
+        });
+        return;
+      }
 
-async function runClawsAddCommandLocal(
-  sourcePath: string,
-  opts: ClawsAddOptions,
-  runtime: RuntimeEnv = defaultRuntime,
-): Promise<void> {
-  assertExperimentalClawsEnabled();
-  if (requireClawPlanConsent("add", opts, runtime)) {
-    return;
-  }
-  let legacyV1ResumeRecord: PersistedClawInstall | undefined;
-  const result = await readClawManifestFile(sourcePath, {
-    authorizeLegacyDynamicToolProfile: ({ manifest, source }) => {
-      legacyV1ResumeRecord = authorizeLegacyV1Resume({ manifest, source, opts });
-      return legacyV1ResumeRecord !== undefined;
+      const result = await readClawManifestFile(sourcePath);
+      if (!result.ok) {
+        emitClawFailure(opts.json, formatClawDiagnostics(result.diagnostics), {
+          schemaVersion: CLAW_ADD_PLAN_SCHEMA_VERSION,
+          stability: CLAW_OUTPUT_STABILITY,
+          valid: false,
+          diagnostics: result.diagnostics,
+        });
+        return;
+      }
+
+      const listedMcpServers = await listConfiguredMcpServers();
+      if (!listedMcpServers.ok) {
+        runtime.error(listedMcpServers.error);
+        runtime.exit(1);
+        return;
+      }
+      const existingAgentIds = listAgentIds(config);
+      const plan = await buildClawAddPlan({
+        manifest: result.manifest,
+        clawMarkdownBody: result.clawMarkdownBody,
+        packageBootstrap: result.packageBootstrap,
+        openClawProfile: result.openClawProfile,
+        source: result.source,
+        diagnostics: result.diagnostics,
+        context: {
+          config,
+          ...(opts.agentId ? { agentId: opts.agentId } : {}),
+          ...(opts.workspace ? { workspace: opts.workspace } : {}),
+          existingAgentIds,
+          existingWorkspacePaths: existingAgentIds.map((agentId) =>
+            resolveAgentWorkspaceDir(config, agentId),
+          ),
+          existingMcpServers: listedMcpServers.mcpServers,
+          packagePreflight: (pkg: Parameters<typeof preflightClawPackage>[0], workspace: string) =>
+            preflightClawPackage(pkg, workspace, { config }),
+        },
+      });
+
+      if (plan.blockers.length > 0) {
+        if (opts.json) {
+          writeRuntimeJson(runtime, plan);
+        } else {
+          logClawAddPlanSummary(plan);
+          runtime.error(formatClawDiagnostics(plan.blockers));
+        }
+        runtime.exit(1);
+        return;
+      }
+
+      if (opts.dryRun) {
+        if (opts.json) {
+          writeRuntimeJson(runtime, plan);
+        } else {
+          runtime.log(`Claw add preview: ${plan.claw.name}@${plan.claw.version}`);
+          logClawAddPlanSummary(plan);
+        }
+        return;
+      }
+
+      const warnedPackages = plan.actions.flatMap((action) => {
+        const details = action.details;
+        return action.kind === "package" &&
+          details?.ownerAction === "install" &&
+          typeof details.riskWarning === "string" &&
+          details.riskWarning
+          ? [{ target: action.target, warning: details.riskWarning }]
+          : [];
+      });
+      let riskApproved = Boolean(opts.acknowledgeClawhubRisk);
+      if (warnedPackages.length > 0 && !riskApproved) {
+        if (process.stdin.isTTY && process.stdout.isTTY && !opts.json) {
+          runtime.log("ClawHub trust warnings:");
+          for (const { target, warning } of warnedPackages) {
+            runtime.log(redactSensitiveText(`  ${target}: ${warning}`));
+          }
+          riskApproved = await promptYesNo("Acknowledge these warnings and Add the Claw?");
+        }
+        if (!riskApproved) {
+          const message =
+            "ClawHub trust warnings require --acknowledge-clawhub-risk or interactive confirmation.";
+          emitClawFailure(opts.json, message, {
+            schemaVersion: CLAW_ADD_RESULT_SCHEMA_VERSION,
+            stability: CLAW_OUTPUT_STABILITY,
+            status: "failed",
+            error: { code: "clawhub_risk_acknowledgement_required", message },
+            warnings: warnedPackages,
+          });
+          return;
+        }
+      }
+
+      const hasPluginInstall = plan.actions.some(
+        (action) =>
+          action.kind === "package" &&
+          action.details?.kind === "plugin" &&
+          action.details.ownerAction === "install",
+      );
+      if (
+        hasPluginInstall &&
+        !opts.acceptCapabilities &&
+        (!process.stdin.isTTY || !process.stdout.isTTY || opts.json)
+      ) {
+        const message =
+          "Plugin capabilities require --accept-capabilities in a non-interactive Add.";
+        emitClawFailure(opts.json, message, {
+          schemaVersion: CLAW_ADD_RESULT_SCHEMA_VERSION,
+          stability: CLAW_OUTPUT_STABILITY,
+          status: "failed",
+          error: { code: "plugin_capability_consent_required", message },
+        });
+        return;
+      }
+
+      const warnings = addPlanSkillWarnings(plan);
+      let skillConsent: ClawSkillInstallConsent | undefined;
+      if (warnings.length > 0) {
+        const byRef = new Map<string, ClawCliSkillWarning>();
+        for (const warning of warnings) {
+          if (byRef.has(warning.ref)) {
+            throw new Error("The Claw skill trust review contains a duplicate package.");
+          }
+          byRef.set(warning.ref, warning);
+        }
+        skillConsent = {
+          assertApproved: (pkg) => {
+            const reviewed = byRef.get(pkg.ref);
+            if (
+              !reviewed ||
+              reviewed.version !== pkg.version ||
+              reviewed.integrity !== pkg.integrity ||
+              reviewed.riskWarning !== pkg.riskWarning
+            ) {
+              throw new Error("Skill trust state changed; review the Claw again.");
+            }
+          },
+        };
+      }
+      let addResult;
+      try {
+        const configPath = resolveConfigPath();
+        const configEnv = process.env;
+        const assertCurrentLab = () =>
+          assertClawsLabsEnabled(readCurrentConfigForPolicyCheck({ configPath, env: configEnv }));
+        assertCurrentLab();
+        addResult = await withOpenClawStateLease(
+          {
+            scope: "core:agent-deletion",
+            key: plan.agent.finalId,
+            database: { scope: "shared", options: {} },
+            leaseMs: 60_000,
+            waitMs: 5_000,
+            heartbeat: "worker",
+            leaseLabel: "Claw add",
+            operationLabel: "claw.add.lease",
+          },
+          async (lease) => {
+            assertCurrentLab();
+            const onCapabilityConsent = resolvePluginCapabilityConsentCliOptions({
+              action: "install",
+              acceptCapabilities: opts.acceptCapabilities,
+              runtime,
+            }).onCapabilityConsent;
+            return await applyClawAddPlanStateless(plan, {
+              config,
+              assertCurrent: () => lease.assertOwned(),
+              assertForwardCurrent: assertCurrentLab,
+              pluginConsent: {
+                onCapabilityConsent: async (review) => await onCapabilityConsent?.(review),
+                confirmInstall: async (_pluginId, warning) =>
+                  !warning || (riskApproved && warnedPackages.length > 0),
+              },
+              ...(skillConsent ? { skillConsent } : {}),
+              reloadPlugins: await resolvePluginBatchReload(),
+              consentPlanIntegrity: plan.planIntegrity,
+              runtime: opts.json ? { ...runtime, log: () => undefined } : runtime,
+              cronGateway: {
+                add: async (input) => await callGatewayFromCli("cron.add", {}, input),
+                list: async (agentId) =>
+                  await listCronJobsFromGateway({}, { agentId, includeDisabled: true }),
+                get: async (id) => await callGatewayFromCli("cron.get", {}, { id }),
+                writeScratch: async (id, content, commitGuard) => {
+                  commitGuard();
+                  const scratchResult = await callGatewayFromCli(
+                    "cron.scratch.set",
+                    {},
+                    {
+                      id,
+                      content,
+                      expectedRevision: 0,
+                    },
+                  );
+                  if (!scratchResult.ok) {
+                    throw new Error("Claw automation scratch changed before import.");
+                  }
+                },
+                enable: async (id, expectedConfigRevision, commitGuard) => {
+                  commitGuard();
+                  await callGatewayFromCli(
+                    "cron.update",
+                    {},
+                    {
+                      id,
+                      patch: { enabled: true },
+                      expectedConfigRevision,
+                    },
+                  );
+                },
+                remove: async (id, options) =>
+                  await callGatewayFromCli(
+                    "cron.remove",
+                    {},
+                    {
+                      id,
+                      expectedConfigRevision: options.expectedConfigRevision,
+                    },
+                  ),
+                waitUntilAgentAvailable: async (agentId) => {
+                  const deadline = Date.now() + CLAW_AGENT_RELOAD_TIMEOUT_MS;
+                  let lastError: unknown;
+                  while (Date.now() < deadline) {
+                    try {
+                      const response = await callGatewayFromCliWithTransport<{
+                        config?: OpenClawConfig;
+                        configRevisionHash?: unknown;
+                        appliedConfigHash?: unknown;
+                      }>("config.get", { timeout: "5000" }, {});
+                      // Matching tokens can describe a cached roster from before this agent was added.
+                      if (
+                        Object.hasOwn(response.config?.agents?.entries ?? {}, agentId) &&
+                        typeof response.configRevisionHash === "string" &&
+                        response.configRevisionHash === response.appliedConfigHash
+                      ) {
+                        return;
+                      }
+                      lastError = undefined;
+                    } catch (error) {
+                      lastError = error;
+                    }
+                    await sleep(CLAW_AGENT_RELOAD_POLL_MS);
+                  }
+                  const suffix = lastError instanceof Error ? `: ${lastError.message}` : "";
+                  throw new Error(
+                    `Gateway did not apply the Claw agent configuration in time${suffix}`,
+                  );
+                },
+              },
+            });
+          },
+        );
+      } catch (error) {
+        const code =
+          error instanceof ClawsLabsDisabledError
+            ? "claws_labs_disabled"
+            : error instanceof ClawAddMutationError
+              ? error.code
+              : "add_failed";
+        const message = error instanceof Error ? error.message : String(error);
+        emitClawFailure(opts.json, message, {
+          schemaVersion: CLAW_ADD_RESULT_SCHEMA_VERSION,
+          stability: CLAW_OUTPUT_STABILITY,
+          status: "failed",
+          error: { code, message },
+        });
+        return;
+      }
+
+      if (opts.json) {
+        writeRuntimeJson(runtime, addResult);
+      } else {
+        runtime.log(`Added agent: ${addResult.agent.finalId}`);
+        runtime.log(`Workspace: ${addResult.agent.workspace}`);
+        if (addResult.error) {
+          runtime.error(addResult.error.message);
+        }
+      }
+      if (addResult.status !== "complete") {
+        runtime.exit(1);
+      }
     },
   });
-  if (!result.ok) {
-    emitClawFailure(runtime, opts.json, formatClawDiagnostics(result.diagnostics), {
-      schemaVersion: CLAW_ADD_PLAN_SCHEMA_VERSION,
-      stability: CLAW_OUTPUT_STABILITY,
-      valid: false,
-      diagnostics: result.diagnostics,
-    });
-    return;
-  }
-
-  const config = getRuntimeConfig();
-  const listedMcpServers = await listConfiguredMcpServers();
-  if (!listedMcpServers.ok) {
-    runtime.error(listedMcpServers.error);
-    runtime.exit(1);
-    return;
-  }
-  const existingAgentIds = listAgentIds(config);
-  const existingWorkspacePaths = existingAgentIds.map((agentId) =>
-    resolveAgentWorkspaceDir(config, agentId),
-  );
-  const cronStore = await loadCronJobsStoreWithConfigJobsReadOnly(resolveCronJobsStorePath());
-  const basePlanContext = {
-    config,
-    ...(opts.agentId ? { agentId: opts.agentId } : {}),
-    ...(opts.workspace ? { workspace: opts.workspace } : {}),
-    existingAgentIds,
-    existingWorkspacePaths,
-    existingMcpServers: listedMcpServers.mcpServers,
-    existingCronJobIds: cronStore.store.jobs.map((job) => job.id),
-    packagePreflight: preflightClawPackage,
-  };
-  const planInput = {
-    manifest: result.manifest,
-    clawMarkdownBody: result.clawMarkdownBody,
-    packageBootstrap: result.packageBootstrap,
-    openClawProfile: result.openClawProfile,
-    source: result.source,
-    diagnostics: result.diagnostics,
-  };
-  let plan = await buildClawAddPlan({ ...planInput, context: basePlanContext });
-  let legacyResumePlan = result.legacyOpenClawProfile
-    ? await buildClawAddPlan({
-        ...planInput,
-        openClawProfile: result.legacyOpenClawProfile,
-        reconstructLegacyDynamicToolProfilePlan: true,
-        context: basePlanContext,
-      })
-    : undefined;
-  let resumableInstallRecord: PersistedClawInstall | undefined;
-  const resumeState = await matchingResumeState(legacyResumePlan ?? plan, opts);
-  if (result.legacyOpenClawProfile && !resumeState) {
-    plan = {
-      ...plan,
-      blockers: [
-        ...plan.blockers,
-        {
-          level: "error",
-          code: "claw_resume_plan_mismatch",
-          phase: "plan",
-          path: "$",
-          message:
-            "The incomplete Claw add no longer matches the previously consented plan; remove its partial state before retrying.",
-        },
-      ],
-    };
-  }
-  if (resumeState) {
-    const { record: resumeRecord, packageRefs: resumePackageRefs } = resumeState;
-    resumableInstallRecord = resumeRecord;
-    const packagePreflight = async (
-      pkg: Parameters<typeof preflightClawPackage>[0],
-      workspace: string,
-    ) => {
-      const preflight = await preflightClawPackage(pkg, workspace);
-      return findResumableIntroducedPluginRequirement({
-        agentId: resumeRecord.agentId,
-        pkg,
-        preflight,
-        refs: resumePackageRefs,
-      })
-        ? { ...preflight, action: "install" as const }
-        : preflight;
-    };
-    const canResumeWorkspace =
-      resumeRecord.status === "workspace_ready" || resumeRecord.status === "config_committed";
-    const expectedCommittedAgentConfigs = legacyResumePlan
-      ? [legacyResumePlan.agent.config, plan.agent.config]
-      : [plan.agent.config];
-    const committedAgent = listAgentEntries(config).find(
-      (agent) =>
-        agent.id === resumeRecord.agentId &&
-        expectedCommittedAgentConfigs.some(
-          (expected) => stableStringify(agent) === stableStringify(expected),
-        ),
-    );
-    const canResumeAgent =
-      resumeRecord.status === "config_committed" ||
-      (resumeRecord.status === "workspace_ready" && committedAgent !== undefined);
-    const resumePlanContext = {
-      ...basePlanContext,
-      packagePreflight,
-      existingAgentIds: canResumeAgent
-        ? existingAgentIds.filter((agentId) => agentId !== resumeRecord.agentId)
-        : existingAgentIds,
-      existingWorkspacePaths: canResumeWorkspace
-        ? existingAgentIds
-            .filter((agentId) => agentId !== resumeRecord.agentId)
-            .map((agentId) => resolveAgentWorkspaceDir(config, agentId))
-        : existingWorkspacePaths,
-      ...(canResumeWorkspace ? { resumableWorkspace: resumeRecord.workspace } : {}),
-    };
-    plan = await buildClawAddPlan({ ...planInput, context: resumePlanContext });
-    if (result.legacyOpenClawProfile) {
-      legacyResumePlan = await buildClawAddPlan({
-        ...planInput,
-        openClawProfile: result.legacyOpenClawProfile,
-        reconstructLegacyDynamicToolProfilePlan: true,
-        context: resumePlanContext,
-      });
-    }
-    const expectedResumePlan = legacyResumePlan ?? plan;
-    const exactLegacyResume =
-      !legacyResumePlan ||
-      (legacyV1ResumeRecord !== undefined &&
-        stableStringify(legacyV1ResumeRecord) === stableStringify(resumeRecord));
-    if (
-      plan.blockers.length === 0 &&
-      (!exactLegacyResume || !clawInstallRecordMatchesPlan(resumeRecord, expectedResumePlan))
-    ) {
-      plan = {
-        ...plan,
-        blockers: [
-          ...plan.blockers,
-          {
-            level: "error",
-            code: "claw_resume_plan_mismatch",
-            phase: "plan",
-            path: "$",
-            message:
-              "The incomplete Claw add no longer matches the current plan; remove its partial state before retrying.",
-          },
-        ],
-      };
-    }
-  }
-
-  if (opts.dryRun || plan.blockers.length > 0) {
-    if (opts.json) {
-      writeRuntimeJson(runtime, plan);
-    } else {
-      logClawExperimentalWarning(runtime);
-      if (plan.blockers.length === 0) {
-        runtime.log(`Claw add plan: ${plan.claw.name}@${plan.claw.version}`);
-      }
-      logClawAddPlanSummary(plan, runtime);
-      if (plan.blockers.length > 0) {
-        runtime.error(formatClawDiagnostics(plan.blockers));
-      }
-    }
-    if (plan.blockers.length > 0) {
-      runtime.exit(1);
-    }
-    return;
-  }
-
-  const consentPlanIntegrity = legacyResumePlan?.planIntegrity ?? plan.planIntegrity;
-  if (opts.planIntegrity !== consentPlanIntegrity) {
-    const message = "The consented Claw plan no longer matches; run add --dry-run again.";
-    emitClawFailure(runtime, opts.json, message, {
-      schemaVersion: CLAW_ADD_RESULT_SCHEMA_VERSION,
-      stability: CLAW_OUTPUT_STABILITY,
-      status: "failed",
-      planIntegrity: plan.planIntegrity,
-      error: { code: "plan_integrity_mismatch", message },
-    });
-    return;
-  }
-
-  let addResult;
-  if (!opts.json) {
-    logClawExperimentalWarning(runtime);
-  }
-  try {
-    addResult = await applyClawAddPlan(plan, {
-      reloadPlugins: await resolvePluginBatchReload(),
-      consentPlanIntegrity: opts.planIntegrity,
-      resumeRecord: resumableInstallRecord,
-      resumePlan: legacyResumePlan,
-      runtime: opts.json ? { ...runtime, log: () => undefined } : runtime,
-      cronGateway: {
-        add: async (input) => await callGatewayFromCli("cron.add", {}, input),
-        list: async (agentId) =>
-          await listCronJobsFromGateway({}, { agentId, includeDisabled: true }),
-        waitUntilAgentAvailable: waitUntilGatewayAgentAvailable,
-      },
-    });
-  } catch (error) {
-    const code = error instanceof ClawAddMutationError ? error.code : "add_failed";
-    const message = (error as Error).message;
-    emitClawFailure(runtime, opts.json, message, {
-      schemaVersion: CLAW_ADD_RESULT_SCHEMA_VERSION,
-      stability: CLAW_OUTPUT_STABILITY,
-      status: "failed",
-      error: { code, message },
-    });
-    return;
-  }
-
-  if (opts.json) {
-    writeRuntimeJson(runtime, addResult);
-  } else {
-    runtime.log(`Added agent: ${addResult.agent.finalId}`);
-    runtime.log(`Workspace: ${addResult.agent.workspace}`);
-    runtime.log(`Status: ${addResult.status}`);
-    if (addResult.error) {
-      runtime.error(addResult.error.message);
-    }
-  }
-  if (addResult.status !== "complete") {
-    runtime.exit(1);
-  }
-}
-
-export const runClawsStatusCommand = offlineClawAction("status", runClawsStatusCommandLocal);
-
-async function runClawsStatusCommandLocal(
-  target: string | undefined,
-  opts: ClawsStatusOptions,
-  runtime: RuntimeEnv = defaultRuntime,
-): Promise<void> {
-  assertExperimentalClawsEnabled();
-  const status = await readClawStatus(target);
-  if (opts.json) {
-    writeRuntimeJson(runtime, status);
-  } else {
-    logClawExperimentalWarning(runtime);
-    runtime.log(`Installed Claws: ${status.summary.claws}`);
-    for (const record of status.records) {
-      runtime.log(
-        `${record.install.agentId}: ${record.install.claw.name}@${record.install.claw.version} (${record.install.status})`,
-      );
-      runtime.log(
-        `  Agent: ${record.agentState}; bootstrap: ${record.bootstrapState}; files: ${record.workspaceFiles.length}; packages: ${record.packages.length}`,
-      );
-    }
-  }
-  if (target && status.records.length === 0) {
-    runtime.exit(1);
-  }
-}
-
-export const runClawsRemoveCommand = offlineClawAction("remove", runClawsRemoveCommandLocal);
-
-async function runClawsRemoveCommandLocal(
-  target: string,
-  opts: ClawsRemoveOptions,
-  runtime: RuntimeEnv = defaultRuntime,
-): Promise<void> {
-  assertExperimentalClawsEnabled();
-  if (requireClawPlanConsent("remove", opts, runtime)) {
-    return;
-  }
-  const selected = opts.removeReferenced ?? [];
-  if (opts.removeUnused && selected.length > 0) {
-    runtime.error("Choose either --remove-unused or --remove-referenced, not both.");
-    runtime.exit(1);
-    return;
-  }
-  if (opts.forceReferenced && selected.length === 0) {
-    runtime.error("--force-referenced requires at least one --remove-referenced selector.");
-    runtime.exit(1);
-    return;
-  }
-  const referencedCleanup = selected.length
-    ? {
-        mode: "remove-selected" as const,
-        selected,
-        allowConflicts: Boolean(opts.forceReferenced),
-      }
-    : opts.removeUnused
-      ? { mode: "remove-if-unused" as const }
-      : { mode: "retain" as const };
-  const plan = await buildClawRemovePlan(target, {
-    referencedCleanup,
-    monitorGateway: clawMonitorCleanupGateway,
-  });
-  if (opts.dryRun || plan.blockers.length > 0) {
-    if (opts.json) {
-      writeRuntimeJson(runtime, plan);
-    } else {
-      logClawExperimentalWarning(runtime);
-      runtime.log(`Remove actions: ${plan.actions.length}`);
-      runtime.log(`Plan integrity: ${plan.planIntegrity}`);
-      for (const action of plan.actions.filter((candidate) => candidate.kind === "packageRef")) {
-        runtime.log(
-          `  Package ${action.target}: ${action.action}${action.reason ? ` (${action.reason})` : ""}`,
-        );
-      }
-      for (const action of plan.actions.filter((candidate) => candidate.kind === "mcpServer")) {
-        runtime.log(
-          `  MCP ${action.id}: ${action.action}${action.reason ? ` (${action.reason})` : ""}`,
-        );
-      }
-      if (plan.blockers.length > 0) {
-        runtime.error(plan.blockers.map((blocker) => blocker.message).join("\n"));
-      }
-    }
-    if (plan.blockers.length > 0) {
-      runtime.exit(1);
-    }
-    return;
-  }
-  try {
-    const result = await applyClawRemovePlan(plan, {
-      journalGateway: clawRemovalJournalGateway,
-      monitorGateway: clawMonitorCleanupGateway,
-      packageGateway: clawPackageRemovalGateway,
-      consentPlanIntegrity: opts.planIntegrity,
-      referencedCleanup,
-      cronGateway: {
-        get: async (id) => await callGatewayFromCli("cron.get", {}, { id }),
-        remove: async (id) => await callGatewayFromCli("cron.remove", {}, { id }),
-      },
-    });
-    if (opts.json) {
-      writeRuntimeJson(runtime, result);
-    } else {
-      logClawExperimentalWarning(runtime);
-      runtime.log(`${result.agentRemoved ? "Removed agent" : "Agent"}: ${result.agentId}`);
-      runtime.log(`Status: ${result.status}`);
-      for (const pkg of result.packages) {
-        runtime.log(
-          `  Package ${pkg.kind}:${pkg.ref}@${pkg.version}: ${pkg.action}${pkg.reason ? ` (${pkg.reason})` : ""}`,
-        );
-      }
-      runtime.log(`Package references released: ${result.packageRefsReleased}`);
-      if (result.error) {
-        runtime.error(result.error.message);
-      }
-      for (const warning of result.warnings ?? []) {
-        runtime.log(`Warning: ${warning}`);
-      }
-      if (result.pluginRuntime) {
-        runtime.log(
-          `Plugin runtime changed in Gateway generation ${result.pluginRuntime.generation}.`,
-        );
-      }
-    }
-    if (result.status !== "complete") {
-      runtime.exit(1);
-    }
-  } catch (error) {
-    const code = error instanceof ClawRemoveError ? error.code : "remove_failed";
-    const message = error instanceof Error ? error.message : String(error);
-    emitClawFailure(runtime, opts.json, message, {
-      schemaVersion: CLAW_REMOVE_RESULT_SCHEMA_VERSION,
-      stability: CLAW_OUTPUT_STABILITY,
-      status: "failed",
-      error: { code, message },
-    });
-  }
-}
-
-export const runClawsExportCommand = offlineClawAction("export", runClawsExportCommandLocal);
-
-async function runClawsExportCommandLocal(
-  agentId: string,
-  opts: ClawsExportOptions,
-  runtime: RuntimeEnv = defaultRuntime,
-): Promise<void> {
-  assertExperimentalClawsEnabled();
-  try {
-    const listedMcpServers = await listConfiguredMcpServers();
-    if (!listedMcpServers.ok) {
-      throw new ClawExportError("mcp_config_unavailable", listedMcpServers.error);
-    }
-    const result = await exportClawAgent(agentId, opts.out, {
-      config: getRuntimeConfig(),
-      sourceMcpServers: listedMcpServers.mcpServers,
-      ...(opts.bootstrap ? { bootstrapPath: opts.bootstrap } : {}),
-    });
-    if (opts.json) {
-      writeRuntimeJson(runtime, result);
-      return;
-    }
-    logClawExperimentalWarning(runtime);
-    runtime.log(`Exported agent: ${result.agentId}`);
-    runtime.log(`Package directory: ${result.outputDirectory}`);
-    runtime.log(
-      `Workspace files: ${result.manifest.workspace.files.length + Object.keys(result.manifest.workspace.bootstrapFiles).length}`,
-    );
-    runtime.log(`Packages: ${result.manifest.packages.length}`);
-    runtime.log(`Bootstrap: ${result.filesWritten.includes("BOOTSTRAP.md") ? "included" : "none"}`);
-  } catch (error) {
-    const code = error instanceof ClawExportError ? error.code : "export_failed";
-    const message = error instanceof Error ? error.message : String(error);
-    emitClawFailure(runtime, opts.json, message, {
-      schemaVersion: CLAW_EXPORT_RESULT_SCHEMA_VERSION,
-      stability: CLAW_OUTPUT_STABILITY,
-      status: "failed",
-      error: { code, message },
-    });
-  }
 }

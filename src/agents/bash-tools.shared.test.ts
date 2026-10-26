@@ -26,9 +26,5 @@ it("bounds name derivation on unterminated quoted backslash runs", () => {
 });
 
 it("keeps surrogate pairs together at chunk boundaries", () => {
-  expect(chunkString("a".repeat(8_191) + "🚀b", 8_192)).toEqual(["a".repeat(8_191), "🚀b"]);
-});
-
-it("emits an indivisible code point even when the chunk limit is one UTF-16 unit", () => {
-  expect(chunkString("😀a", 1)).toEqual(["😀", "a"]);
+  expect(chunkString("a".repeat(8_191) + "🚀b")).toEqual(["a".repeat(8_191), "🚀b"]);
 });

@@ -21,20 +21,6 @@ import { googlechatSetupWizard } from "./setup-surface.js";
 
 export const GOOGLECHAT_CHANNEL_ID = "googlechat" as const;
 
-const googlechatMeta = {
-  id: GOOGLECHAT_CHANNEL_ID,
-  label: "Google Chat",
-  selectionLabel: "Google Chat (Chat API)",
-  docsPath: "/channels/googlechat",
-  docsLabel: "googlechat",
-  blurb: "Google Workspace Chat app with HTTP webhook.",
-  aliases: ["gchat", "google-chat"],
-  order: 55,
-  detailLabel: "Google Chat",
-  systemImage: "message.badge",
-  markdownCapable: true,
-};
-
 export const formatGoogleChatAllowFromEntry = (entry: string) =>
   normalizeLowercaseStringOrEmpty(
     entry
@@ -72,56 +58,48 @@ const googleChatConfigAdapter = createScopedChannelConfigAdapter<
   resolveDefaultTo: (account) => account.config.defaultTo,
 });
 
-type GoogleChatPluginBase = Pick<
-  ChannelPlugin<ResolvedGoogleChatAccount>,
-  | "id"
-  | "meta"
-  | "setupContract"
-  | "setupWizard"
-  | "capabilities"
-  | "streaming"
-  | "reload"
-  | "configSchema"
-  | "config"
->;
-
-export function createGoogleChatPluginBase(
-  params: {
-    configSchema?: ChannelPlugin<ResolvedGoogleChatAccount>["configSchema"];
-  } = {},
-): GoogleChatPluginBase {
-  return {
+export const googlechatSetupPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
+  id: GOOGLECHAT_CHANNEL_ID,
+  meta: {
     id: GOOGLECHAT_CHANNEL_ID,
-    meta: { ...googlechatMeta },
-    setupContract: googlechatSetupContract,
-    setupWizard: googlechatSetupWizard,
-    capabilities: {
-      chatTypes: ["direct", "group", "thread"],
-      threads: true,
-      // Inbound attachment download remains supported even though service-account
-      // authentication cannot use Google Chat's user-auth-only upload endpoint.
-      media: true,
-      nativeCommands: false,
-      blockStreaming: true,
-    },
-    streaming: {
-      blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
-    },
-    reload: { configPrefixes: ["channels.googlechat"] },
-    ...(params.configSchema ? { configSchema: params.configSchema } : {}),
-    config: {
-      ...googleChatConfigAdapter,
-      inspectAccount: adaptScopedAccountAccessor(inspectGoogleChatAccount),
-      isConfigured: isGoogleChatAccountConfigured,
-      describeAccount: (account) =>
-        describeAccountSnapshot({
-          account,
-          configured: isGoogleChatAccountConfigured(account),
-          extra: {
-            credentialSource: account.credentialSource,
-            tokenStatus: account.tokenStatus,
-          },
-        }),
-    },
-  };
-}
+    label: "Google Chat",
+    selectionLabel: "Google Chat (Chat API)",
+    docsPath: "/channels/googlechat",
+    docsLabel: "googlechat",
+    blurb: "Google Workspace Chat app with HTTP webhook.",
+    aliases: ["gchat", "google-chat"],
+    order: 55,
+    detailLabel: "Google Chat",
+    systemImage: "message.badge",
+    markdownCapable: true,
+  },
+  setupContract: googlechatSetupContract,
+  setupWizard: googlechatSetupWizard,
+  capabilities: {
+    chatTypes: ["direct", "group", "thread"],
+    threads: true,
+    // Inbound attachment download remains supported even though service-account
+    // authentication cannot use Google Chat's user-auth-only upload endpoint.
+    media: true,
+    nativeCommands: false,
+    blockStreaming: true,
+  },
+  streaming: {
+    blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
+  },
+  reload: { configPrefixes: ["channels.googlechat"] },
+  config: {
+    ...googleChatConfigAdapter,
+    inspectAccount: adaptScopedAccountAccessor(inspectGoogleChatAccount),
+    isConfigured: isGoogleChatAccountConfigured,
+    describeAccount: (account) =>
+      describeAccountSnapshot({
+        account,
+        configured: isGoogleChatAccountConfigured(account),
+        extra: {
+          credentialSource: account.credentialSource,
+          tokenStatus: account.tokenStatus,
+        },
+      }),
+  },
+};

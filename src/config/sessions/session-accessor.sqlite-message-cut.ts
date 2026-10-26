@@ -1,11 +1,7 @@
-import { randomUUID } from "node:crypto";
 import { isMainThread } from "node:worker_threads";
-import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { readMessageWorkContext } from "../../chat/work-context.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
-import { assertModelSelectionUnlocked } from "../../sessions/model-overrides.js";
-import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
 import {
   openOpenClawAgentDatabase,
   type OpenClawAgentDatabase,
@@ -13,7 +9,6 @@ import {
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { supportsOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { invalidateSessionBranchCache } from "./session-accessor.sqlite-branches.js";
-import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import {
   commitSqliteSessionDeletion,
   runSqliteSessionDeletionTransaction,
@@ -41,15 +36,12 @@ import type {
   SessionMessageCutMutationParams,
   SessionMessageCutMutationResult,
 } from "./session-accessor.types.js";
-import { findSessionTranscriptHeader } from "./session-entry-codec.js";
-import { buildSessionCreationStamp } from "./session-entry-provenance.js";
-import { inheritSessionSelection } from "./session-entry-selection.js";
 import {
-  captureIncognitoSessionSource,
-  publishIncognitoSessionEntry,
-} from "./session-incognito-binding.js";
-import type { IncognitoSessionAuthority } from "./session-incognito-contract.js";
-import { extractEditorText } from "./session-message-cut-content.js";
+  captureSessionActorStorageOwner,
+  withSessionActorStorage,
+} from "./session-actor-storage-binding.js";
+import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
+import { planSessionMessageCut } from "./session-message-cut-plan.js";
 import type {
   SessionMessageCutIntent,
   SessionMessageCutPreconditions,
@@ -61,27 +53,12 @@ import {
   SYNC_REBUILD_MAX_BYTES,
   SYNC_REBUILD_MAX_ROWS,
 } from "./session-transcript-index.js";
-import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 import { collectSessionEntryLookupKeys, normalizeStoreSessionKey } from "./store-entry.js";
-import { createSessionTranscriptHeader } from "./transcript-header.js";
-import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 import {
-  isSessionTranscriptLeafControl,
-  scanSessionTranscriptTree,
-  selectSessionTranscriptTreePathNodes,
-  selectSessionTranscriptTreeTipNodes,
-} from "./transcript-tree.js";
+  captureSessionTranscriptStorageEnvironment,
+  captureSessionTranscriptTargetBinding,
+} from "./transcript-target-binding.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
-import { MIN_READABLE_SESSION_VERSION } from "./version.js";
-
-type MessageCut = {
-  status: "cut";
-  editorText?: string;
-  editorAttachments?: Array<{ mimeType: string; data: string }>;
-  editorMediaRefs?: Array<{ path: string; contentType: string }>;
-  parentId: string | null;
-  prefix: TranscriptEvent[];
-};
 
 type SessionTranscriptMutationMode = "fork" | "rewind" | "switch";
 type SessionEntryExpectedState = Pick<SessionEntry, "lifecycleRevision" | "sessionId">;
@@ -100,16 +77,6 @@ export async function forkSessionAtMessage(
   return await mutateSqliteSessionAtMessage(params, "fork", expectedState);
 }
 
-/** Gateway-owned source predicates are checked beside the transaction's fresh session row. */
-export async function mutateSessionAtMessageWithPreconditions(
-  params: SessionMessageCutMutationParams,
-  mode: SessionTranscriptMutationMode,
-  expectedState: SessionEntryExpectedState | undefined,
-  preconditions: SessionMessageCutPreconditions,
-): Promise<SessionMessageCutResult> {
-  return mutateSqliteSessionAtMessage(params, mode, expectedState, preconditions);
-}
-
 export async function switchSessionBranch(
   params: SessionBranchSwitchMutationParams,
   expectedState?: SessionEntryExpectedState,
@@ -121,26 +88,27 @@ export async function switchSessionBranch(
   );
 }
 
-function mutateSqliteSessionAtMessage(
+export function mutateSqliteSessionAtMessage(
   params: SessionMessageCutMutationParams,
   mode: "fork" | "rewind",
   expectedState?: SessionEntryExpectedState,
   preconditions?: SessionMessageCutPreconditions,
 ): Promise<SessionMessageCutMutationResult | { status: "conflict" }>;
-function mutateSqliteSessionAtMessage(
+export function mutateSqliteSessionAtMessage(
   params: SessionMessageCutMutationParams,
   mode: "switch",
   expectedState?: SessionEntryExpectedState,
   preconditions?: SessionMessageCutPreconditions,
 ): Promise<SessionBranchSwitchMutationResult | { status: "conflict" }>;
-function mutateSqliteSessionAtMessage(
+export function mutateSqliteSessionAtMessage(
   params: SessionMessageCutMutationParams,
   mode: SessionTranscriptMutationMode,
   expectedState?: SessionEntryExpectedState,
   preconditions?: SessionMessageCutPreconditions,
 ): Promise<SessionMessageCutResult>;
 
-async function mutateSqliteSessionAtMessage(
+/** Gateway-owned source predicates are checked beside the transaction's fresh session row. */
+export async function mutateSqliteSessionAtMessage(
   params: SessionMessageCutMutationParams,
   mode: SessionTranscriptMutationMode,
   expectedState?: SessionEntryExpectedState,
@@ -150,12 +118,6 @@ async function mutateSqliteSessionAtMessage(
   const sourceKey = normalizeStoreSessionKey(params.sessionStoreKey ?? params.sessionKey);
   const targetKey =
     mode === "fork" ? normalizeStoreSessionKey(params.targetKey ?? params.sessionKey) : sourceKey;
-  const resolved = resolveSqliteScope({
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    ...(params.env ? { env: params.env } : {}),
-    sessionKey: sourceKey,
-    ...(params.storePath ? { storePath: params.storePath } : {}),
-  });
   const intent: SessionMessageCutIntent = {
     canonicalSourceKey,
     creation: params.creation ? structuredClone(params.creation) : undefined,
@@ -167,121 +129,108 @@ async function mutateSqliteSessionAtMessage(
     sourceKey,
     targetKey,
   };
-  const options = toDatabaseOptions(resolved);
-  const binding = isMainThread ? captureIncognitoSessionSource(params) : undefined;
-  if (binding && "kind" in binding) {
-    binding.assertCurrent();
-    return { status: "missing-session" };
-  }
-  if (binding) {
-    const { actor } = binding;
-    binding.admissionSignal?.throwIfAborted();
-    return actor.sessions.withSharedState(async () => {
-      const authority = {
-        assertCurrent() {
-          actor.assertCurrent();
-          params.commitGuard?.();
+  const memoryScope = { ...params, sessionKey: sourceKey };
+  const assertCurrent = () => {
+    params.commitGuard?.();
+    preconditions?.assertUpstreamCurrent?.();
+  };
+  const authority = { assertCurrent, authorize() {} };
+  const owner = captureSessionActorStorageOwner(memoryScope, authority);
+  if (owner) {
+    return (
+      (await withSessionActorStorage(
+        memoryScope,
+        {
+          authority,
+          lifetime: { assertCurrent, assertReadable: assertCurrent },
         },
-      };
-      const { entry } = await actor.sessions.read(
-        authority,
-        { sessionKey: sourceKey },
-        binding.admissionSignal,
-      );
-      binding.admissionSignal?.throwIfAborted();
-      if (!entry) {
-        return { status: "missing-session" };
-      }
-      intent.expectedState ??= {
-        sessionId: entry.sessionId,
-        lifecycleRevision: entry.lifecycleRevision,
-      };
-      const target = { sessionKey: sourceKey, entry };
-      const mutate = async (
-        assertResetCurrent: () => void,
-        capture?: Parameters<Parameters<typeof withSqliteSessionContextReset>[2]>[1],
-      ) => {
-        // Preparation can be cancelled; an admitted native write must settle.
-        binding.admissionSignal?.throwIfAborted();
-        let transactionSessionId: string | undefined;
-        let changed = false;
-        const current: IncognitoSessionAuthority = {
-          assertCurrent() {
-            authority.assertCurrent();
-            assertResetCurrent();
-          },
-          authorize(stage, facts) {
-            if (facts.sessionKey === sourceKey) {
-              if (stage === "transaction") {
-                transactionSessionId = facts.sharing?.entry?.sessionId;
-              } else {
-                changed = facts.sharing?.entry?.sessionId !== transactionSessionId;
-              }
-            }
-          },
-        };
-        const settlement = capture?.([target]);
-        return actor.sessions.lifecycle(
-          current,
-          {
-            type: "session.lifecycle.messageCut",
-            input: {
-              intent,
-              sourceRepositoryWorkspaceId: preconditions?.sourceRepositoryWorkspaceId,
-              ...(mode !== "fork" ? { target } : {}),
-            },
-          },
-          undefined,
-          settlement
-            ? () => ({
-                beforeCommit() {
-                  if (changed) {
-                    settlement.beforeCommit();
+        async (memory) => {
+          const mutate = async (
+            assertResetCurrent = () => {},
+            capture?: Parameters<Parameters<typeof withSqliteSessionContextReset>[2]>[1],
+          ) => {
+            let authorityError: unknown;
+            const companions: { settlement?: ReturnType<NonNullable<typeof capture>> } = {};
+            const outcome = await memory.actor.storage.mutate(
+              {
+                type: "session.messageCut",
+                input: {
+                  intent,
+                  sourceRepositoryWorkspaceId: preconditions?.sourceRepositoryWorkspaceId,
+                },
+              },
+              {
+                authorize: (stage, facts, publication) =>
+                  memory.authority.authorize(stage, facts, publication),
+                assertCurrent() {
+                  try {
+                    memory.authority.assertCurrent();
+                    assertResetCurrent();
+                  } catch (error) {
+                    authorityError = error;
+                    throw error;
                   }
                 },
-                settle: (outcome) => settlement.settle(outcome),
-              })
-            : undefined,
-          ({ result }) => {
-            if (result.status === "created") {
-              invalidateSessionBranchCache(actor.path, [entry.sessionId, result.entry.sessionId]);
-              publishIncognitoSessionEntry(
-                actor,
-                result.key,
-                mode === "fork" ? undefined : entry,
-                result.entry,
+              },
+              {
+                beforeCommit(receipt) {
+                  const entry = receipt.changes.find((change) => change.sessionKey === sourceKey)
+                    ?.before?.entry;
+                  if (capture && receipt.value.status === "created" && entry) {
+                    companions.settlement = capture([{ sessionKey: sourceKey, entry }]);
+                    return companions.settlement.beforeCommit();
+                  }
+                  return undefined;
+                },
+                settled: (settledOutcome) => companions.settlement?.settle(settledOutcome.kind),
+              },
+            );
+            if (outcome.kind === "rolled-back" && authorityError) {
+              throw toErrorObject(
+                authorityError,
+                "Session message cut authority rejected the operation",
               );
             }
-          },
-        );
-      };
-      const { result, projectionNeedsReconcile } =
-        mode === "fork"
-          ? await mutate(() => {})
-          : await withSqliteSessionContextReset(
-              { ...resolved, path: actor.path },
-              target,
-              mutate,
-              preconditions?.assertUpstreamCurrent,
-              actor,
-            );
-      if (result.status === "created" && projectionNeedsReconcile) {
-        startSessionTranscriptIndexReconcile(
-          { ...options, path: actor.path, preferredSessionId: result.entry.sessionId },
-          {
-            actor,
-            authority,
-            target: {
-              sessionKey: result.key,
-              sessionId: result.entry.sessionId,
-              lifecycleRevision: result.entry.lifecycleRevision,
+            return readSessionActorStorageResult(outcome);
+          };
+          if (mode === "fork") {
+            return mutate();
+          }
+          const entry = await memory.actor.storage.read(
+            { type: "session.entry.read", input: {} },
+            memory.authority,
+          );
+          if (!entry) {
+            return { status: "missing-session" } as const;
+          }
+          const target = captureSessionTranscriptTargetBinding({
+            agentId: memory.agentId,
+            storePath: memory.path,
+            env: params.env,
+          });
+          return withSqliteSessionContextReset(
+            {
+              agentId: memory.agentId,
+              path: memory.path,
+              env: target.env,
+              ownerStorePath: params.storePath,
             },
-          },
-        );
-      }
-      return result;
-    });
+            { sessionKey: sourceKey, entry },
+            mutate,
+            preconditions?.assertUpstreamCurrent,
+            owner.owner,
+          );
+        },
+      )) ?? { status: "missing-session" }
+    );
   }
+  const resolved = resolveSqliteScope({
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    ...(params.env ? { env: params.env } : {}),
+    sessionKey: sourceKey,
+    ...(params.storePath ? { storePath: params.storePath } : {}),
+  });
+  const options = toDatabaseOptions(resolved);
   if (isMainThread && supportsOpenClawAgentDatabaseExecution(options)) {
     const pathname = resolveOpenClawAgentSqlitePath(options);
     const source = readDatabasePathIdentitySync(pathname);
@@ -301,12 +250,12 @@ async function mutateSqliteSessionAtMessage(
         { ...resolved, env, path: pathname },
         { ...intent, mode },
         source,
-        (prepared, assertCurrent) =>
+        (prepared, assertPreparedCurrent) =>
           mutatePreparedSqliteSessionAtMessage(
             { ...params, env },
             { ...resolved, env },
             prepared,
-            assertCurrent,
+            assertPreparedCurrent,
             preconditions,
           ),
         selection,
@@ -425,311 +374,40 @@ export function mutateSqliteSessionAtMessageInTransaction(
   },
 ): SessionMessageCutResult {
   const currentEntry = readSessionEntryRow(database, params.sourceKey)?.entry;
-  if (!currentEntry?.sessionId) {
-    return { status: "missing-session" };
-  }
-  if (
-    !params.expectedState ||
-    currentEntry.sessionId !== params.expectedState.sessionId ||
-    currentEntry.lifecycleRevision !== params.expectedState.lifecycleRevision
-  ) {
-    return { status: "conflict" };
-  }
-  if (
-    projection?.sourceRepositoryWorkspaceId !== undefined &&
-    currentEntry.repositoryWorkspaceId !== projection.sourceRepositoryWorkspaceId
-  ) {
-    throw new Error("Repository workspace changed before session fork");
-  }
-  // Local cuts rotate transcript identity and clear harness ownership. Locked
-  // history must instead stay with its native owner, even without an upstream link.
-  assertModelSelectionUnlocked(
+  const plan = planSessionMessageCut(
     currentEntry,
-    "Session history changes are unavailable while model selection is locked.",
+    currentEntry?.sessionId
+      ? loadTranscriptEventsFromDatabase(database, currentEntry.sessionId)
+      : [],
+    params,
+    projection?.sourceRepositoryWorkspaceId,
   );
-  const events = loadTranscriptEventsFromDatabase(database, currentEntry.sessionId);
-  const cut = params.mode === "switch" ? undefined : resolveMessageCut(events, params.entryId);
-  if (cut && cut.status !== "cut") {
-    return cut;
+  if (plan.status !== "prepared") {
+    return plan;
   }
-  if (params.mode === "switch") {
-    const tipStatus = validateBranchTip(events, params.entryId);
-    if (tipStatus) {
-      return { status: tipStatus };
-    }
-  }
-  if (
-    params.mode === "fork" &&
-    currentEntry.repositoryWorkspaceId &&
-    (!params.repositoryWorkspaceId ||
-      params.repositoryWorkspaceId === currentEntry.repositoryWorkspaceId)
-  ) {
-    throw new Error("Repository session fork requires its own prepared workspace");
-  }
-
-  if (params.mode !== "fork") {
+  if (params.mode !== "fork" && currentEntry) {
     commitSqliteSessionDeletion(params.sourceKey, currentEntry);
   }
-
-  const nextSessionId = randomUUID();
-  const targetScope = {
-    ...resolved,
-    sessionId: nextSessionId,
-    sessionKey: params.targetKey,
-  };
-  const header = createSessionTranscriptHeader({
-    cwd: readTranscriptHeaderCwd(events),
-    sessionId: nextSessionId,
-    version: findSessionTranscriptHeader(events)?.version ?? MIN_READABLE_SESSION_VERSION,
-  });
-  const nextEvents =
-    params.mode === "fork" && cut
-      ? [header, ...cut.prefix]
-      : [
-          header,
-          ...events.filter((event) => !isSessionHeader(event)),
-          {
-            type: "leaf",
-            id: uniqueEntryId(events),
-            parentId: readLastEventId(events),
-            timestamp: new Date().toISOString(),
-            targetId: params.mode === "switch" ? params.entryId : (cut?.parentId ?? null),
-          },
-        ];
+  const nextSessionId = plan.result.entry.sessionId;
+  const targetScope = { ...resolved, sessionId: nextSessionId, sessionKey: params.targetKey };
   let copiedBytes = 0;
   const rebuildSynchronously =
     params.mode !== "fork" &&
-    nextEvents.length <= SYNC_REBUILD_MAX_ROWS &&
-    nextEvents.every((event) => {
+    plan.events.length <= SYNC_REBUILD_MAX_ROWS &&
+    plan.events.every((event) => {
       copiedBytes += JSON.stringify(event).length;
       return copiedBytes <= SYNC_REBUILD_MAX_BYTES;
     });
   if (params.mode !== "fork" && !rebuildSynchronously) {
-    ensureTranscriptSessionRoot(database, targetScope, Date.parse(header.timestamp));
+    ensureTranscriptSessionRoot(database, targetScope, Date.parse(plan.header.timestamp));
     markSessionTranscriptIndexDirtyInTransaction(database.db, nextSessionId);
   }
-  appendTranscriptEventsInTransaction(database, targetScope, nextEvents, projection);
+  appendTranscriptEventsInTransaction(database, targetScope, plan.events, projection);
   if (rebuildSynchronously) {
     reconcileSessionTranscriptIndexInTransaction(database.db, nextSessionId);
   } else if (params.mode !== "fork") {
     projection?.onProjectionReconcileNeeded?.();
   }
-
-  // Rotating transcript identity fences stale live managers: later snapshot-replace writes
-  // target the old session and cannot erase this leaf repoint from the active session.
-  const forked = params.mode === "fork";
-  const nextEntry: SessionEntry = {
-    // Rewind keeps retired history references so cleanup cannot orphan old transcripts.
-    ...(forked ? inheritSessionSelection(currentEntry) : currentEntry),
-    sessionId: nextSessionId,
-    lifecycleRevision: forked ? randomUUID() : currentEntry.lifecycleRevision,
-    updatedAt: Date.now(),
-    systemSent: false,
-    abortedLastRun: false,
-    lifecycleRunId: undefined,
-    lastRunId: undefined,
-    startedAt: undefined,
-    endedAt: undefined,
-    runtimeMs: undefined,
-    status: undefined,
-    inputTokens: undefined,
-    outputTokens: undefined,
-    cacheRead: undefined,
-    cacheWrite: undefined,
-    estimatedCostUsd: undefined,
-    totalTokens: undefined,
-    totalTokensFresh: undefined,
-    totalTokensVersion: undefined,
-    // A rotated transcript cannot resume provider/runtime identity from the old tail.
-    // Clear transcript-derived accounting too so the next turn rebuilds canonical state.
-    contextTokens: undefined,
-    contextTokensSource: undefined,
-    contextBudgetStatus: undefined,
-    compactionCount: undefined,
-    transcriptByteCompactionLatch: undefined,
-    memoryFlush: undefined,
-    cliSessionBindings: undefined,
-    cliSessionIds: undefined,
-    claudeCliSessionId: undefined,
-    agentHarnessId: undefined,
-    modelSelectionLocked: undefined,
-    skillsSnapshot: undefined,
-    systemPromptReport: undefined,
-    restartRecoveryRuns: undefined,
-    restartRecoveryForceSafeTools: undefined,
-    abortCutoffMessageSid: undefined,
-    abortCutoffTimestamp: undefined,
-    usageFamilyKey: forked ? undefined : currentEntry.usageFamilyKey,
-    usageFamilySessionIds: forked ? undefined : currentEntry.usageFamilySessionIds,
-    previousSessionId: forked ? undefined : currentEntry.sessionId,
-    ...(forked
-      ? {
-          forkSource: {
-            sessionKey: params.canonicalSourceKey,
-            sessionId: currentEntry.sessionId,
-            entryId: params.entryId,
-          },
-          parentSessionKey: params.canonicalSourceKey,
-        }
-      : {}),
-    ...(params.mode === "fork" ? params.forkWorkspace : {}),
-    ...(params.mode === "fork" && params.creation
-      ? buildSessionCreationStamp(params.creation)
-      : {}),
-    ...(params.mode === "fork" && params.repositoryWorkspaceId
-      ? { repositoryWorkspaceId: params.repositoryWorkspaceId }
-      : {}),
-    ...(currentEntry.incognito === true || isIncognitoSessionKey(params.canonicalSourceKey)
-      ? { incognito: true as const }
-      : {}),
-  };
-  writeSessionEntry(database, params.targetKey, nextEntry);
-  return {
-    status: "created",
-    key: params.targetKey,
-    entry: nextEntry,
-    ...(cut?.editorText ? { editorText: cut.editorText } : {}),
-    ...(cut?.editorAttachments ? { editorAttachments: cut.editorAttachments } : {}),
-    ...(cut?.editorMediaRefs ? { editorMediaRefs: cut.editorMediaRefs } : {}),
-  };
-}
-
-function validateBranchTip(
-  events: readonly TranscriptEvent[],
-  entryId: string,
-): "missing-entry" | "not-branch-tip" | "already-active" | undefined {
-  const tree = scanSessionTranscriptTree(events);
-  const target = tree.byId.get(entryId);
-  if (!target) {
-    return "missing-entry";
-  }
-  if (isSessionTranscriptLeafControl(target.entry)) {
-    return "not-branch-tip";
-  }
-  if (!selectSessionTranscriptTreeTipNodes(tree).some((node) => node.id === entryId)) {
-    return "not-branch-tip";
-  }
-  return tree.leafId === entryId ? "already-active" : undefined;
-}
-
-function resolveMessageCut(
-  events: readonly TranscriptEvent[],
-  entryId: string,
-): MessageCut | Exclude<SessionMessageCutMutationResult, { status: "created" }> {
-  const tree = scanSessionTranscriptTree(events);
-  const target = tree.byId.get(entryId);
-  if (!target) {
-    return { status: "missing-entry" };
-  }
-  const record = asRecord(target.entry);
-  const message = asRecord(record?.message);
-  if (record?.type !== "message" || message?.role !== "user") {
-    return { status: "not-user-message" };
-  }
-  const activePath = selectSessionTranscriptTreePathNodes(tree, tree.leafId);
-  const targetIndex = activePath.findIndex((node) => node.id === entryId);
-  if (targetIndex < 0) {
-    return { status: "off-active-path" };
-  }
-  const prefix: TranscriptEvent[] = [];
-  for (const node of activePath.slice(0, targetIndex)) {
-    const entry = asRecord(node.entry);
-    // Spread (not Object.assign) so a parsed own `__proto__` key stays an inert
-    // data property instead of rebinding the copy's prototype.
-    prefix.push(
-      entry && entry.parentId !== node.parentId
-        ? ({ ...entry, parentId: node.parentId } as TranscriptEvent)
-        : node.entry,
-    );
-  }
-  const editorAttachments = extractEditorAttachments(message.content);
-  const editorMediaRefs = extractEditorMediaRefs(message);
-  return {
-    status: "cut",
-    editorText: readMessageWorkContext(message)?.text ?? extractEditorText(message.content),
-    ...(editorAttachments ? { editorAttachments } : {}),
-    ...(editorMediaRefs ? { editorMediaRefs } : {}),
-    parentId: target.parentId,
-    prefix,
-  };
-}
-
-// Gateway-written inline images are already size-capped at send time; these bounds
-// only keep a corrupted transcript from ballooning the rewind/fork response.
-const EDITOR_ATTACHMENT_LIMIT = 10;
-const EDITOR_ATTACHMENT_MAX_BASE64_CHARS = Math.ceil((5 * 1024 * 1024) / 3) * 4;
-
-function extractEditorAttachments(
-  content: unknown,
-): Array<{ mimeType: string; data: string }> | undefined {
-  if (!Array.isArray(content)) {
-    return undefined;
-  }
-  const attachments = content.flatMap((block) => {
-    const record = asRecord(block);
-    return record?.type === "image" &&
-      typeof record.data === "string" &&
-      record.data.trim() &&
-      record.data.length <= EDITOR_ATTACHMENT_MAX_BASE64_CHARS &&
-      typeof record.mimeType === "string" &&
-      record.mimeType.startsWith("image/")
-      ? [{ mimeType: record.mimeType, data: record.data }]
-      : [];
-  });
-  return attachments.length > 0 ? attachments.slice(0, EDITOR_ATTACHMENT_LIMIT) : undefined;
-}
-
-function extractEditorMediaRefs(
-  message: Record<string, unknown>,
-): Array<{ path: string; contentType: string }> | undefined {
-  const media = asRecord(message["__openclaw"])?.media;
-  if (!Array.isArray(media)) {
-    return undefined;
-  }
-  const refs = media.flatMap((entry) => {
-    const record = asRecord(entry);
-    const mediaUrl = typeof record?.url === "string" ? record.url.trim() : undefined;
-    const mediaPath =
-      mediaUrl === undefined
-        ? typeof record?.path === "string"
-          ? record.path.trim()
-          : ""
-        : /^media:\/\//i.test(mediaUrl)
-          ? mediaUrl
-          : "";
-    const contentType = record?.contentType;
-    return mediaPath && typeof contentType === "string" && contentType.startsWith("image/")
-      ? [{ path: mediaPath, contentType }]
-      : [];
-  });
-  return refs.length > 0 ? refs : undefined;
-}
-
-function isSessionHeader(event: unknown): boolean {
-  return asRecord(event)?.type === "session";
-}
-
-function readTranscriptHeaderCwd(events: readonly TranscriptEvent[]): string | undefined {
-  const cwd = asRecord(events.find(isSessionHeader))?.cwd;
-  return typeof cwd === "string" && cwd.trim() ? cwd : undefined;
-}
-
-function readLastEventId(events: readonly TranscriptEvent[]): string | null {
-  const id = asRecord(events.findLast((event) => !isSessionHeader(event)))?.id;
-  return typeof id === "string" && id.trim() ? id : null;
-}
-
-function uniqueEntryId(events: readonly TranscriptEvent[]): string {
-  const ids = new Set(
-    events.flatMap((event) => {
-      const id = asRecord(event)?.id;
-      return typeof id === "string" ? [id] : [];
-    }),
-  );
-  for (;;) {
-    const id = randomUUID().slice(0, 8);
-    if (!ids.has(id)) {
-      return id;
-    }
-  }
+  writeSessionEntry(database, params.targetKey, plan.result.entry);
+  return plan.result;
 }

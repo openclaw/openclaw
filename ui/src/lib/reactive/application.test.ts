@@ -1,35 +1,22 @@
 /* @vitest-environment jsdom */
+import { createEffect, createRoot, flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
-import { AssistantDock } from "../../app/assistant-dock.ts";
-import { createApplicationNavigationPreferences } from "../../app/bootstrap-navigation-preferences.ts";
-import { chatInputOwnerForContext } from "../../app/chat-input-owner.ts";
-import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import { createApplicationConfigCapability } from "../../app/config.ts";
 import {
-  createGatewayEvent,
   createGatewayStoreTestStore,
   stubGatewayStoreTestGlobals,
 } from "../../app/gateway-store.test-support.ts";
-import { loadSettings } from "../../app/settings.ts";
+import { createGatewayHarness } from "../../test-helpers/app-sidebar.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { verifyApplicationProjection } from "./application-test-support.ts";
-import {
-  projectAgentSelection,
-  projectApplicationConfig,
-  projectAssistantDock,
-  projectChatCreation,
-  projectChatInputOwner,
-  projectGateway,
-  projectGatewayEventLog,
-  projectGatewayEvents,
-  projectNavigationPreferences,
-} from "./application.ts";
+import { projectAgentSelection, projectApplicationConfig, projectGateway } from "./application.ts";
 
 beforeEach(() => stubGatewayStoreTestGlobals());
 afterEach(() => vi.unstubAllGlobals());
 
 describe("application projections", () => {
-  it("reads and replaces the Gateway owner without retaining its old selection", async () => {
+  it("isolates Gateway owners and releases each consumer independently", async () => {
     await verifyApplicationProjection({
       create: () => {
         const { gateway } = createGatewayStoreTestStore();
@@ -46,52 +33,61 @@ describe("application projections", () => {
     });
   });
 
-  it("acquires raw diagnostic history only while observed and releases its buffer", () => {
-    const first = createGatewayStoreTestStore();
-    const second = createGatewayStoreTestStore();
-    const projection = projectGatewayEventLog(first.gateway);
+  it("shares one Gateway observation across independent render consumers", () => {
+    const initialClient = createTestGatewayClient(async () => ({}));
+    const replacementClient = createTestGatewayClient(async () => ({}));
+    const harness = createGatewayHarness(initialClient);
+    const { gateway } = harness;
+    const nativeSubscribe = gateway.subscribe.bind(gateway);
+    const release = vi.fn();
+    const subscribe = vi.spyOn(gateway, "subscribe").mockImplementation((notify) => {
+      const stop = nativeSubscribe(notify);
+      return () => {
+        release();
+        stop();
+      };
+    });
+    const first = projectGateway(gateway);
+    const second = projectGateway(gateway);
+    const seen: Array<typeof initialClient | null> = [];
+    const stopFirst = createRoot((dispose) => {
+      createEffect(
+        () => first.read().snapshot.client,
+        () => {},
+      );
+      return dispose;
+    });
+    const stopSecond = createRoot((dispose) => {
+      createEffect(
+        () => second.read().snapshot.client,
+        (client) => {
+          seen.push(client);
+        },
+      );
+      return dispose;
+    });
+    flush();
     try {
-      first.gateway.start();
-      second.gateway.start();
-      first.current().opts.onEvent?.(createGatewayEvent("first"));
-      expect(projection.read().entries).toEqual([]);
-      const stop = projection.subscribe(() => {});
-      first.current().opts.onEvent?.(createGatewayEvent("captured"));
-      expect(projection.read().entries.map((entry) => entry.event)).toEqual(["captured"]);
-      projection.replaceSource(second.gateway);
-      expect(first.gateway.eventLog).toEqual([]);
-      expect(projection.read().entries).toEqual([]);
-      second.current().opts.onEvent?.(createGatewayEvent("replacement"));
-      expect(projection.read().entries.map((entry) => entry.event)).toEqual(["replacement"]);
-      stop();
-      expect(second.gateway.eventLog).toEqual([]);
-      projection.dispose();
+      expect(second).toBe(first);
+      expect(subscribe).toHaveBeenCalledOnce();
+      harness.publish({ client: replacementClient });
+      expect(second.read().snapshot.client).toBe(replacementClient);
+      flush();
+      expect(seen).toEqual([initialClient, replacementClient]);
+      stopFirst();
+      flush();
+      expect(release).not.toHaveBeenCalled();
+      harness.publish({ client: initialClient });
+      flush();
+      expect(seen.at(-1)).toBe(initialClient);
+      stopSecond();
+      flush();
+      expect(release).toHaveBeenCalledOnce();
     } finally {
-      projection.dispose();
-      first.gateway.stop();
-      second.gateway.stop();
+      stopFirst();
+      stopSecond();
+      subscribe.mockRestore();
     }
-  });
-
-  it("delivers repeated Gateway events and fences the replaced transport", () => {
-    const first = createGatewayStoreTestStore();
-    const second = createGatewayStoreTestStore();
-    first.gateway.start();
-    second.gateway.start();
-    const projection = projectGatewayEvents(first.gateway);
-    const received: string[] = [];
-    projection.subscribe((event) => received.push(event.event));
-    const emit = () => first.current().opts.onEvent?.(createGatewayEvent("repeat"));
-    emit();
-    emit();
-    projection.replaceSource(second.gateway);
-    emit();
-    second.current().opts.onEvent?.(createGatewayEvent("next"));
-    projection.dispose();
-    second.current().opts.onEvent?.(createGatewayEvent("retired"));
-    expect(received).toEqual(["repeat", "repeat", "next"]);
-    first.gateway.stop();
-    second.gateway.stop();
   });
 
   it("projects accepted bootstrap configuration", async () => {
@@ -128,80 +124,6 @@ describe("application projections", () => {
       select: (value) => ({ id: value.state.selectedId, intent: value.intentRevision }),
       initial: { id: null, intent: 0 },
       updated: { id: null, intent: 1 },
-    });
-  });
-
-  it("keeps local navigation presentation with its preference owner", async () => {
-    await verifyApplicationProjection({
-      create: () => {
-        const source = createApplicationNavigationPreferences({
-          settings: loadSettings(),
-          subscribe: () => () => {},
-        });
-        return { source, update: () => source.update({ navCollapsed: true }) };
-      },
-      project: projectNavigationPreferences,
-      select: (value) => value.navCollapsed,
-      initial: false,
-      updated: true,
-    });
-  });
-
-  it("reads dock ownership changes without issuing dock commands", async () => {
-    await verifyApplicationProjection({
-      create: () => {
-        const source = new AssistantDock();
-        return {
-          source,
-          update: () => {
-            source.attach({
-              openSessionKey: "agent:main:dock",
-              openSession() {},
-              closeSession() {},
-            });
-          },
-        };
-      },
-      project: projectAssistantDock,
-      select: (value) => value,
-      initial: null,
-      updated: "agent:main:dock",
-    });
-  });
-
-  it("follows the application-scoped composer owner", async () => {
-    await verifyApplicationProjection({
-      create: () => {
-        const source = chatInputOwnerForContext({});
-        return { source, update: () => source.claim("dock") };
-      },
-      project: projectChatInputOwner,
-      select: (value) => value,
-      initial: "page",
-      updated: "dock",
-    });
-  });
-
-  it("projects only creation metadata, leaving revocable message access at its owner", async () => {
-    await verifyApplicationProjection({
-      create: () => {
-        const source = createChatSubmissions();
-        return {
-          source,
-          update: () => {
-            source.beginCreate({
-              creation: { sessionKey: "agent:main:create", admitted: false },
-              message: null,
-              canDisplay: () => false,
-            });
-          },
-          dispose: () => source.clear(),
-        };
-      },
-      project: projectChatCreation,
-      select: (value) => value?.sessionKey,
-      initial: undefined,
-      updated: "agent:main:create",
     });
   });
 });

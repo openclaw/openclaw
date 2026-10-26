@@ -27,21 +27,15 @@ async function readGatewayServiceLingerStatus(env: NodeJS.ProcessEnv) {
 export async function ensureSystemdUserLingerInteractive(params: {
   runtime: RuntimeEnv;
   prompter?: LingerPrompter;
-  env?: NodeJS.ProcessEnv;
-  title?: string;
   reason?: string;
-  prompt?: boolean;
   requireConfirm?: boolean;
 }): Promise<void> {
   if (process.platform !== "linux") {
     return;
   }
-  if (params.prompt === false) {
-    return;
-  }
-  const env = params.env ?? process.env;
+  const env = process.env;
   const prompter: LingerPrompter = params.prompter ?? { note };
-  const title = params.title ?? "Systemd";
+  const title = "Systemd";
   if (!(await isSystemdUserServiceAvailable())) {
     await prompter.note("Systemd user services are unavailable. Skipping lingering checks.", title);
     return;
@@ -49,7 +43,7 @@ export async function ensureSystemdUserLingerInteractive(params: {
   const status = await readGatewayServiceLingerStatus(env);
   if (!status) {
     await prompter.note(
-      "Unable to read loginctl linger status. Ensure systemd + loginctl are available.",
+      "Unable to read loginctl linger status. Check that systemd + loginctl are available.",
       title,
     );
     return;
@@ -97,12 +91,11 @@ export async function ensureSystemdUserLingerInteractive(params: {
 
 export async function ensureSystemdUserLingerNonInteractive(params: {
   runtime: RuntimeEnv;
-  env?: NodeJS.ProcessEnv;
 }): Promise<void> {
   if (process.platform !== "linux") {
     return;
   }
-  const env = params.env ?? process.env;
+  const env = process.env;
   if (!(await isSystemdUserServiceAvailable())) {
     return;
   }

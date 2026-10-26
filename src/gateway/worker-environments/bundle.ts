@@ -7,6 +7,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import * as tar from "tar";
 import { resolveStateDir } from "../../config/paths.js";
 import { sha256File } from "../../infra/directory-durability.js";
+import { FsSafeError, root } from "../../infra/fs-safe.js";
 import { isExactSemverVersion, resolveNpmJsonEntries } from "../../infra/npm-registry-spec.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
@@ -22,11 +23,17 @@ import {
   WORKER_BUNDLE_ARTIFACT_MODE,
   WORKER_BUNDLE_ARTIFACT_PATHS,
   WORKER_BUNDLE_CHUNK_PATH_PATTERN,
+  WORKER_BUNDLE_ENTRY_PATH,
   type WorkerBundleHashEntry,
 } from "../../shared/worker-bundle-hash.js";
+import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { VERSION } from "../../version.js";
 import type { ExpectedWorkerBuild } from "../../worker/worker-build-identity.js";
-import { collectWorkerBundleManifest } from "./bundle-staging.js";
+import type {
+  WorkerBundleArtifact,
+  WorkerBundleBuildOptions,
+} from "./node-bootstrap-artifact-contract.js";
+import { prepareNodeArtifactInWorker } from "./node-bootstrap-artifact-worker.js";
 
 const OPENCLAW_NPM_REGISTRY = "https://registry.npmjs.org/";
 const NPM_RELEASE_PROOF_TIMEOUT_MS = 60_000;
@@ -36,13 +43,6 @@ const BUNDLE_STAGING_NAME_PATTERN = /^\.staging-[A-Za-z0-9_-]+$/u;
 const BUNDLE_TEMP_NAME_PATTERN = /^[a-f0-9]{64}\.tgz\.[0-9]+\.[0-9a-f-]{36}\.tmp$/u;
 const PACKAGED_BUNDLE_NAME_PATTERN = /^([a-f0-9]{64})\.tar\.gz$/u;
 const PACKAGED_BUNDLE_DIRECTORY = "dist/worker-artifacts";
-type WorkerBundleArtifact = ExpectedWorkerBuild & {
-  install: "bundle";
-  tarballBytes: number;
-  tarballSha256: string;
-  tarballPath: string;
-};
-
 export type WorkerNpmArtifact = ExpectedWorkerBuild & {
   install: "npm";
   packageIntegrity: string;
@@ -53,7 +53,9 @@ export type WorkerInstallationArtifact = WorkerBundleArtifact | WorkerNpmArtifac
 
 export type WorkerBundleProducer = {
   prepare: () => Promise<WorkerBundleArtifact>;
-  prune: (readRetainedBundleHashes: () => readonly string[]) => Promise<void>;
+  prune: (
+    readRetainedBundleHashes: () => readonly string[] | Promise<readonly string[]>,
+  ) => Promise<void>;
 };
 
 type WorkerBundleProducerOptions = {
@@ -61,11 +63,9 @@ type WorkerBundleProducerOptions = {
   cacheDir?: string;
   openclawVersion?: string;
   protocolFeatures?: readonly string[];
-  cacheOwnership?: "exclusive";
   onCacheCleanupError?: (error: unknown) => void;
 };
 
-type WorkerNpmPackageInstallCheck = (packageRoot: string) => Promise<boolean>;
 type WorkerNpmReleaseVerifier = (params: {
   bundleHash: string;
   version: string;
@@ -242,10 +242,11 @@ async function verifyPublishedNpmRelease(params: {
       strict: true,
       strip: 1,
     });
-    const packedBundle = await prepareWorkerBundle({
+    const packedBundle = await prepareNodeArtifactInWorker("bundle", {
       packageRoot: extractedRoot,
       cacheDir: path.join(temporaryRoot, "bundle-cache"),
       openclawVersion: params.version,
+      protocolFeatures: [],
     });
     if (packedBundle.bundleHash !== params.bundleHash) {
       throw new Error(
@@ -346,7 +347,7 @@ async function writeTarball(params: {
 async function pruneWorkerBundleCache(params: {
   cacheDir: string;
   currentBundleHash: string;
-  readRetainedBundleHashes: () => readonly string[];
+  readRetainedBundleHashes: () => readonly string[] | Promise<readonly string[]>;
   onError?: (error: unknown) => void;
 }): Promise<void> {
   let entries: Dirent[];
@@ -358,32 +359,31 @@ async function pruneWorkerBundleCache(params: {
     }
     return;
   }
-  if (
-    !entries.some((entry) => {
-      const bundleHash = BUNDLE_TARBALL_NAME_PATTERN.exec(entry.name)?.[1];
-      return (
+  const candidates = entries
+    .map(({ name }) => ({
+      name,
+      bundleHash: BUNDLE_TARBALL_NAME_PATTERN.exec(name)?.[1],
+      staging: BUNDLE_STAGING_NAME_PATTERN.test(name),
+    }))
+    .filter(
+      ({ name, bundleHash, staging }) =>
         (bundleHash !== undefined && bundleHash !== params.currentBundleHash) ||
-        BUNDLE_STAGING_NAME_PATTERN.test(entry.name) ||
-        BUNDLE_TEMP_NAME_PATTERN.test(entry.name)
-      );
-    })
-  ) {
+        staging ||
+        BUNDLE_TEMP_NAME_PATTERN.test(name),
+    );
+  if (candidates.length === 0) {
     return;
   }
   // Read current references only after this queued prune finds possible cleanup work.
   const retained = new Set(
-    [params.currentBundleHash, ...params.readRetainedBundleHashes()].filter((hash) =>
+    [params.currentBundleHash, ...(await params.readRetainedBundleHashes())].filter((hash) =>
       /^[a-f0-9]{64}$/u.test(hash),
     ),
   );
-  for (const entry of entries.toSorted((left, right) =>
+  for (const entry of candidates.toSorted((left, right) =>
     compareWorkerBundlePaths(left.name, right.name),
   )) {
-    const tarball = BUNDLE_TARBALL_NAME_PATTERN.exec(entry.name);
-    const removableTarball = tarball && !retained.has(tarball[1]!);
-    const removableStaging = BUNDLE_STAGING_NAME_PATTERN.test(entry.name);
-    const removableTemp = BUNDLE_TEMP_NAME_PATTERN.test(entry.name);
-    if (!removableTarball && !removableStaging && !removableTemp) {
+    if (entry.bundleHash !== undefined && retained.has(entry.bundleHash)) {
       continue;
     }
     const target = path.join(params.cacheDir, entry.name);
@@ -392,10 +392,10 @@ async function pruneWorkerBundleCache(params: {
       if (stats.isSymbolicLink()) {
         continue;
       }
-      if (removableStaging ? !stats.isDirectory() : !stats.isFile()) {
+      if (entry.staging ? !stats.isDirectory() : !stats.isFile()) {
         continue;
       }
-      await fs.rm(target, { recursive: removableStaging, force: true });
+      await fs.rm(target, { recursive: entry.staging, force: true });
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         params.onError?.(error);
@@ -404,15 +404,10 @@ async function pruneWorkerBundleCache(params: {
   }
 }
 
-async function prepareWorkerBundle(
-  options: WorkerBundleProducerOptions,
+export async function prepareWorkerBundle(
+  options: WorkerBundleBuildOptions,
 ): Promise<WorkerBundleArtifact> {
-  const packageRoot = resolvePackageRoot(options.packageRoot);
-  const openclawVersion = (options.openclawVersion ?? VERSION).trim();
-  if (!openclawVersion) {
-    throw new Error("Worker bundle requires a non-empty OpenClaw version");
-  }
-  const protocolFeatures = normalizeProtocolFeatures(options.protocolFeatures ?? []);
+  const { packageRoot, cacheDir, openclawVersion, protocolFeatures } = options;
   const packaged = await resolvePackagedWorkerBundle({
     packageRoot,
     openclawVersion,
@@ -421,13 +416,57 @@ async function prepareWorkerBundle(
   if (packaged) {
     return packaged;
   }
-  const cacheDir = resolveBundleCacheDir(options.cacheDir);
   await fs.mkdir(cacheDir, { recursive: true });
   const stagingRoot = await fs.mkdtemp(path.join(cacheDir, ".staging-"));
   try {
-    // Stage the exact bytes and modes first so a concurrent dev rebuild cannot make the
-    // archived payload diverge from its content hash.
-    const manifest = await collectWorkerBundleManifest(packageRoot, stagingRoot);
+    const [source, artifacts] = await Promise.all([
+      root(packageRoot, { maxBytes: Infinity }),
+      fs.readdir(path.join(packageRoot, "dist/worker")),
+    ]).catch((error: unknown) => {
+      throw new Error(
+        `OpenClaw worker deploy artifact is missing; build the running package at ${packageRoot}`,
+        { cause: error },
+      );
+    });
+    const chunks = artifacts.filter((name) => WORKER_BUNDLE_CHUNK_PATH_PATTERN.test(name));
+    // Drain in-flight writes before cleanup can remove staging and mask the original error.
+    const { results, hasError, firstError } = await runTasksWithConcurrency({
+      tasks: [...WORKER_BUNDLE_ARTIFACT_PATHS, ...chunks].map((artifactPath) => async () => {
+        const relativeSourcePath = `dist/worker/${artifactPath}`;
+        const { buffer } = await source
+          .read(relativeSourcePath, { symlinks: "reject", hardlinks: "allow" })
+          .catch((error: unknown) => {
+            if (error instanceof FsSafeError && error.category === "policy") {
+              throw new Error(`Unsafe worker deploy artifact: ${relativeSourcePath}`, {
+                cause: error,
+              });
+            }
+            throw new Error(
+              `OpenClaw worker deploy artifact is missing; build the running package at ${packageRoot}`,
+              { cause: error },
+            );
+          });
+        // Stage exactly the hashed bytes so a concurrent rebuild cannot diverge archive and hash.
+        await fs.writeFile(path.join(stagingRoot, artifactPath), buffer, {
+          flag: "wx",
+          mode: WORKER_BUNDLE_ARTIFACT_MODE,
+        });
+        return {
+          path: artifactPath,
+          mode: WORKER_BUNDLE_ARTIFACT_MODE,
+          size: buffer.byteLength,
+          sha256: createHash("sha256").update(buffer).digest("hex"),
+        };
+      }),
+      limit: 16,
+      errorMode: "stop",
+    });
+    if (hasError) {
+      throw firstError;
+    }
+    const manifest = results.toSorted((left, right) =>
+      compareWorkerBundlePaths(left.path, right.path),
+    );
     const bundleHash = hashWorkerBundleManifest(manifest);
     const tarballPath = path.join(cacheDir, `${bundleHash}.tgz`);
     if (!(await cachedTarballMatches(tarballPath, manifest))) {
@@ -454,7 +493,7 @@ async function resolvePackagedWorkerBundle(params: {
   protocolFeatures: string[];
 }): Promise<WorkerBundleArtifact | null> {
   try {
-    await fs.access(path.join(params.packageRoot, "dist/worker"));
+    await fs.access(path.join(params.packageRoot, "dist/worker", WORKER_BUNDLE_ENTRY_PATH));
     return null;
   } catch (error) {
     if (!isRecord(error) || error.code !== "ENOENT") {
@@ -519,12 +558,21 @@ export function createWorkerBundleProducer(
   let pruning = Promise.resolve();
   return {
     prepare: createLazyPromise(async () => {
-      currentArtifact = await prepareWorkerBundle(options);
+      const openclawVersion = (options.openclawVersion ?? VERSION).trim();
+      if (!openclawVersion) {
+        throw new Error("Worker bundle requires a non-empty OpenClaw version");
+      }
+      currentArtifact = await prepareNodeArtifactInWorker("bundle", {
+        packageRoot: resolvePackageRoot(options.packageRoot),
+        cacheDir: resolveBundleCacheDir(options.cacheDir),
+        openclawVersion,
+        protocolFeatures: normalizeProtocolFeatures(options.protocolFeatures ?? []),
+      });
       return currentArtifact;
     }),
     async prune(readRetainedBundleHashes) {
       const artifact = currentArtifact;
-      if (options.cacheOwnership !== "exclusive" || !artifact) {
+      if (!artifact) {
         return;
       }
       const operation = pruning.then(async () => {
@@ -548,7 +596,6 @@ export function createWorkerBundleProducer(
 export async function resolveWorkerNpmInstallationArtifact(params: {
   bundle: WorkerBundleArtifact;
   packageRoot?: string;
-  isPackageInstall?: WorkerNpmPackageInstallCheck;
   verifyRelease?: WorkerNpmReleaseVerifier;
 }): Promise<WorkerNpmArtifact> {
   const version = params.bundle.openclawVersion.trim();
@@ -558,9 +605,7 @@ export async function resolveWorkerNpmInstallationArtifact(params: {
     );
   }
   const packageRoot = resolvePackageRoot(params.packageRoot);
-  const packageInstall = params.isPackageInstall
-    ? await params.isPackageInstall(packageRoot)
-    : await isReleasedPackageInstall(packageRoot);
+  const packageInstall = await isReleasedPackageInstall(packageRoot);
   if (!packageInstall) {
     throw new Error(
       "Worker npm install requires the gateway to run from a packaged release install",

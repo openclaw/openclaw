@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import { resolveStateDir } from "../../config/paths.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
+import { readGatewayLockProcessNamespace } from "../../infra/gateway-lock-payload.js";
 import { runGitWorkerOperation, type GitWorkerOperationOptions } from "../../infra/git-worker.js";
 import { getFileLockProcessStartTime } from "../../shared/pid-alive.js";
 import { releaseOpenClawStateLeaseBestEffort } from "../../state/openclaw-state-lease-storage.js";
@@ -10,6 +11,7 @@ import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-work
 import { WORKTREE_CAPACITY_RESERVATION_SCOPE } from "./capacity-contract.js";
 import { reserveWorktreeCapacity, releaseWorktreeCapacity } from "./capacity-store.js";
 import type { GitWorktreeOperations } from "./git-worktree-operations.js";
+import { timeWorktreePreparationPhase } from "./preparation-timing.js";
 import { captureWorktreeRunEndContext } from "./run-end-lifecycle.js";
 import type { WorktreeLeaseSet, WorktreeWorkerAuthority } from "./types.js";
 
@@ -60,14 +62,16 @@ export async function requireAllocationSpace(
   repository: { commonDir: string; sourceRoot: string },
   bytes = 0,
 ) {
-  await guard.requireDiskSpace(
-    [
-      { path: target, bytes },
-      { path: repository.commonDir, bytes: 0 },
-      { path: repository.sourceRoot, bytes: 0 },
-      { path: resolveStateDir(env), bytes: 0 },
-    ],
-    "worktree allocation",
+  await timeWorktreePreparationPhase("diskAdmission", () =>
+    guard.requireDiskSpace(
+      [
+        { path: target, bytes },
+        { path: repository.commonDir, bytes: 0 },
+        { path: repository.sourceRoot, bytes: 0 },
+        { path: resolveStateDir(env), bytes: 0 },
+      ],
+      "worktree allocation",
+    ),
   );
 }
 
@@ -79,12 +83,12 @@ export function createWorktreeDiskAdmission(params: {
 }) {
   const key = randomUUID();
   const context = captureWorktreeRunEndContext(params.env);
-  const { leaseSet, assertCurrent: assertWorkerCurrent } = params.workerAuthority;
-  const predicates = structuredClone(params.workerAuthority.predicates);
+  const { leaseSet, predicates, assertCurrent: assertWorkerCurrent } = params.workerAuthority;
   const owner = {
     pid: process.pid,
     host: hostname(),
     startedAt: getFileLockProcessStartTime(process.pid),
+    processNamespace: readGatewayLockProcessNamespace(),
   };
   let reserved = false;
   let closed = false;
@@ -217,11 +221,7 @@ export async function estimateWorktreeCheckoutTransitionBytes(
 /** Each call measures current files; allocation cannot use a settled directory-size cache. */
 export async function directorySizeBytes(
   root: string,
-  excludeGit = false,
   options: Pick<GitWorkerOperationOptions, "signal" | "assertCurrent"> = {},
 ): Promise<number> {
-  return await runGitWorkerOperation(
-    { type: "worktree.directory-size", input: { root, excludeGit } },
-    options,
-  );
+  return await runGitWorkerOperation({ type: "worktree.directory-size", input: { root } }, options);
 }

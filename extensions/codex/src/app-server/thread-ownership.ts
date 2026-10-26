@@ -219,13 +219,13 @@ export async function retireCodexConversationThreadBinding(params: {
   afterClear?: () => Promise<void>;
 }): Promise<boolean> {
   const assertCurrent = params.assertCurrent;
-  const expected = params.bindingStore.read(params.identity);
+  const expected = await params.bindingStore.readAsync(params.identity);
   if (!expected || (params.expectedThreadId && expected.threadId !== params.expectedThreadId)) {
     return false;
   }
   return await withCodexAppServerThreadMutation(expected.threadId, () =>
     params.bindingStore.withLease(params.identity, async () => {
-      const current = params.bindingStore.read(params.identity);
+      const current = await params.bindingStore.readAsync(params.identity);
       if (
         !current ||
         !isSameCodexAppServerThreadOwner(current, expected) ||

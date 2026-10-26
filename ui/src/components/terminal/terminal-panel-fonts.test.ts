@@ -3,25 +3,27 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { TerminalConnection, type TerminalGatewayClient } from "./terminal-connection.ts";
 import { updateTerminalFont } from "./terminal-fonts.ts";
-import { bootTerminalPanelSession } from "./terminal-panel-session-boot.ts";
 import {
   createTerminalController,
+  createTestTerminalPanel,
   defineTestTerminalPanelElement,
+  registerTestTerminalViewport,
   type CreateGhosttyTerminalMock,
 } from "./terminal-panel.test-support.ts";
-import type { OpenClawTerminalPanel } from "./terminal-panel.ts";
 
 const create: CreateGhosttyTerminalMock = vi.fn();
 const tag = defineTestTerminalPanelElement(create);
 
-afterEach(() => {
+afterEach(async () => {
   document.body.replaceChildren();
+  await Promise.resolve();
   vi.restoreAllMocks();
   vi.useRealTimers();
   create.mockReset();
 });
 
 it("adopts the newest font after asynchronous recovery without another panel render", async () => {
+  const { bootTerminalPanelSession } = await import("./terminal-panel-session-boot.ts");
   const original = createTerminalController();
   const replacement = createTerminalController();
   const creating = createDeferred();
@@ -36,12 +38,11 @@ it("adopts the newest font after asynchronous recovery without another panel ren
     }
     return controller;
   });
-  const panel = document.createElement(tag) as OpenClawTerminalPanel;
+  const panel = createTestTerminalPanel(tag);
   document.body.append(panel);
   await panel.updateComplete;
   const viewport = document.body.appendChild(document.createElement("div"));
-  vi.spyOn(panel, "findTerminalPanelViewport").mockReturnValue(viewport);
-  vi.spyOn(panel, "terminalFontFamily", "get").mockImplementation(() => family);
+  registerTestTerminalViewport(viewport, create);
   const client: TerminalGatewayClient = {
     forceReconnect: vi.fn(),
     request: vi.fn(),
@@ -50,13 +51,21 @@ it("adopts the newest font after asynchronous recovery without another panel ren
   const connection = new TerminalConnection(client);
   const signal = new AbortController().signal;
   const boot = await bootTerminalPanelSession({
-    panel,
+    panel: {
+      inputs: panel,
+      updateComplete: Promise.resolve(),
+      findTerminalPanelViewport: () => viewport,
+      get terminalFontFamily() {
+        return family;
+      },
+    },
     connection,
     sequence: 1,
     awaitFirstOutput: false,
     isCurrent: () => true,
     onReady: vi.fn(),
     onExit: vi.fn(),
+    captureDeliveryError: () => () => undefined,
   });
   boot.tab.status = "live";
   vi.useFakeTimers();

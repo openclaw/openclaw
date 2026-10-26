@@ -8,12 +8,26 @@ import {
   type AgentDeletionJournalInput,
   beginAgentDeletionJournalInDatabase,
   deleteAgentDeletionJournalInDatabase,
+  readAgentDeletionJournalInDatabase,
   updateAgentDeletionJournalPathsInDatabase,
 } from "../state/agent-deletion-journal.js";
+import type { AgentDeletionJournalPurpose } from "../state/agent-deletion-journal.types.js";
 import { ensureAgentProvenanceSchema } from "../state/agent-provenance.schema.js";
 import { requireOpenClawStateDatabaseIdentity } from "../state/openclaw-state-db-cache.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
+import { withExistingOpenClawStateDatabaseCurrentReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+
+export function readAgentDeletionJournal(
+  agentId: string,
+  options: OpenClawStateDatabaseOptions = {},
+  purpose: AgentDeletionJournalPurpose = "maintenance",
+): AgentDeletionJournalEntry | undefined {
+  return withExistingOpenClawStateDatabaseCurrentReadOnly(
+    (database) => readAgentDeletionJournalInDatabase(database, agentId, purpose),
+    options,
+  );
+}
 
 /** Seed a deletion journal while preserving native admission invalidation for fixtures. */
 export function beginAgentDeletionJournal(
@@ -51,9 +65,9 @@ export function updateAgentDeletionJournalCleanupPaths(
   return updateAgentDeletionJournalPaths(
     normalizeAgentId(agentId),
     operationId,
+    options,
     "cleanup_paths_json",
     cleanupPaths,
-    options,
   );
 }
 
@@ -68,22 +82,23 @@ export function updateAgentDeletionJournalDatabasePaths(
   return updateAgentDeletionJournalPaths(
     id,
     operationId,
+    options,
     "database_paths_json",
     normalizedPaths,
-    options,
   );
 }
 
 function updateAgentDeletionJournalPaths(
   agentId: string,
   operationId: string,
-  column: "cleanup_paths_json" | "database_paths_json",
-  paths: readonly AgentDeletionJournalCleanupPath[] | readonly string[],
   options: OpenClawStateDatabaseOptions,
+  ...change:
+    | [column: "cleanup_paths_json", paths: readonly AgentDeletionJournalCleanupPath[]]
+    | [column: "database_paths_json", paths: readonly string[]]
 ): boolean {
   return runOpenClawStateWriteTransaction(
     (database) =>
-      updateAgentDeletionJournalPathsInDatabase(database, agentId, operationId, column, paths),
+      updateAgentDeletionJournalPathsInDatabase(database, agentId, operationId, ...change),
     options,
   );
 }

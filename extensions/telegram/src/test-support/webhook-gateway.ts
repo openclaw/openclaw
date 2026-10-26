@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { once } from "node:events";
 import { createServer, type Server } from "node:http";
 import {
@@ -10,12 +11,11 @@ import * as telegramIngressFactory from "../telegram-ingress-drain-factory.js";
 
 type StartWebhook = typeof import("../webhook.js").startTelegramWebhook;
 type StartWebhookOptions = Omit<Parameters<StartWebhook>[0], "token" | "abortSignal">;
+type Ingress = ReturnType<typeof telegramIngressFactory.createTelegramTransportIngressMonitor>;
 
 export function getServerPort(server: Server): number {
   const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("no addr");
-  }
+  assert(address && typeof address !== "string", "no addr");
   return address.port;
 }
 
@@ -38,16 +38,12 @@ export function createTelegramWebhookTestGateway(options: {
     if (route) {
       const requestTask = Promise.resolve(route.handler(req, res)).then(
         () => undefined,
-        () => {
-          res.writeHead(500);
-          res.end();
-        },
+        () => void res.writeHead(500).end(),
       );
       pendingRequests.add(requestTask);
       void requestTask.finally(() => pendingRequests.delete(requestTask));
     } else {
-      res.writeHead(404);
-      res.end();
+      res.writeHead(404).end();
     }
   });
   const startWebhook = async (params: Parameters<StartWebhook>[0]) => ({
@@ -82,36 +78,26 @@ export function createTelegramWebhookTestGateway(options: {
     startWebhook,
     withWebhook: async <T>(
       params: StartWebhookOptions,
-      run: (ctx: {
-        server: Server;
-        port: number;
-        ingress: ReturnType<typeof telegramIngressFactory.createTelegramTransportIngressMonitor>;
-      }) => Promise<T>,
+      run: (ctx: { server: Server; port: number; ingress: Ingress }) => Promise<T>,
     ): Promise<T> => {
-      const createIngress = telegramIngressFactory.createTelegramTransportIngressMonitor;
-      let ingress: ReturnType<typeof createIngress> | undefined;
-      const ingressFactory = vi
-        .spyOn(telegramIngressFactory, "createTelegramTransportIngressMonitor")
-        .mockImplementation((ingressParams) => (ingress = createIngress(ingressParams)));
+      using createIngress = vi.spyOn(
+        telegramIngressFactory,
+        "createTelegramTransportIngressMonitor",
+      );
+      const abort = new AbortController();
+      const started = await startWebhook({
+        token: options.token,
+        abortSignal: abort.signal,
+        ...options.queueScope(),
+        ...params,
+      });
       try {
-        const abort = new AbortController();
-        const started = await startWebhook({
-          token: options.token,
-          abortSignal: abort.signal,
-          ...options.queueScope(),
-          ...params,
-        });
-        try {
-          if (!ingress) {
-            throw new Error("Expected the started webhook's ingress monitor");
-          }
-          return await run({ server, port: getServerPort(server), ingress });
-        } finally {
-          await started.stop();
-          abort.abort();
-        }
+        const result = createIngress.mock.results.at(-1);
+        assert(result?.type === "return", "Expected the started webhook's ingress monitor");
+        return await run({ server, port: getServerPort(server), ingress: result.value });
       } finally {
-        ingressFactory.mockRestore();
+        await started.stop();
+        abort.abort();
       }
     },
   };

@@ -1,9 +1,8 @@
-// Normalizes direct cron payloads before TTS, custody, transport, or mirroring.
+// Normalizes cron result and notification payloads before custody, TTS, or transport.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { copyReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { NormalizeReplyOutcome } from "../../auto-reply/reply/normalize-reply.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
-import { normalizeSilentReplyText } from "./delivery-dispatch-policy.js";
 
 type CronChannelTransform = {
   apply: (payload: ReplyPayload) => ReplyPayload | null;
@@ -16,16 +15,6 @@ function shouldAttachDirectCronFallbackText(payload: ReplyPayload): boolean {
   );
 }
 
-function normalizeDirectPayload(payload: ReplyPayload): ReplyPayload {
-  const normalized = payload.text ? normalizeSilentReplyText(payload.text) : undefined;
-  return normalized
-    ? copyReplyPayloadMetadata(payload, {
-        ...payload,
-        text: normalized.strippedTrailingSilentToken ? undefined : normalized.text,
-      })
-    : payload;
-}
-
 export function normalizeDirectCronDeliveryPayloads(params: {
   deliveryPayloads: ReplyPayload[];
   outputText?: string;
@@ -33,15 +22,13 @@ export function normalizeDirectCronDeliveryPayloads(params: {
   synthesizedText?: string;
   channelTransform?: CronChannelTransform;
 }): NormalizeReplyOutcome<ReplyPayload[]> {
-  const fallback = normalizeSilentReplyText(
+  const fallbackText =
     normalizeOptionalString(params.outputText) ??
-      normalizeOptionalString(params.summary) ??
-      normalizeOptionalString(params.synthesizedText),
+    normalizeOptionalString(params.summary) ??
+    normalizeOptionalString(params.synthesizedText);
+  const candidates = params.deliveryPayloads.filter((payload) =>
+    hasReplyPayloadContent(payload, { trimText: true }),
   );
-  const fallbackText = fallback.strippedTrailingSilentToken ? undefined : fallback.text;
-  const candidates = params.deliveryPayloads
-    .map(normalizeDirectPayload)
-    .filter((payload) => hasReplyPayloadContent(payload, { trimText: true }));
   if (candidates.length === 0 && fallbackText) {
     candidates.push({ text: fallbackText });
   }
@@ -80,7 +67,10 @@ export function normalizeDirectCronDeliveryPayloads(params: {
     }
   }
   if (accepted.length === 0) {
-    return { kind: "suppress", reason: channelSuppressed ? "channel_transform" : "empty" };
+    return {
+      kind: "suppress",
+      reason: channelSuppressed ? "channel_transform" : "empty",
+    };
   }
 
   const acceptedFallbackIndex = accepted.findIndex(
@@ -114,15 +104,23 @@ export function normalizeDirectCronDeliveryPayloads(params: {
 export function appendCronRunInspectionLink(
   payloads: ReplyPayload[],
   inspectionUrl: string | undefined,
+  channel: string,
 ): ReplyPayload[] {
   const index = payloads.findLastIndex((payload) => payload.text?.trim());
   if (!inspectionUrl || index < 0) {
     return payloads;
   }
   const payload = payloads[index]!;
+  // These channels render Markdown links natively without replacing the reply
+  // with a card or competing with its existing interactive controls. Encode
+  // Markdown URL delimiters so configured origins/base paths stay one link.
+  const link =
+    channel === "telegram" || channel === "discord"
+      ? `[Inspect run](${inspectionUrl.replace(/[()]/g, (char) => (char === "(" ? "%28" : "%29"))})`
+      : `Inspect: ${inspectionUrl}`;
   const linked = copyReplyPayloadMetadata(payload, {
     ...payload,
-    text: `${payload.text}\nInspect: ${inspectionUrl}`,
+    text: `${payload.text}\n${link}`,
   });
   return payloads.map((entry, at) => (at === index ? linked : entry));
 }

@@ -1,7 +1,5 @@
-import { prepareGitHubPublicationAvailability } from "../../../gateway/github-publication-availability.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { agentHarnessExposesOpenClawTools } from "../../harness/tool-surface.js";
-import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
@@ -9,7 +7,7 @@ import {
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 /** Prepare Gateway tools once at the shared dispatch boundary, including internal continuations. */
-export async function withPreparedEmbeddedGatewayTools<T>(
+export function withPreparedEmbeddedGatewayTools<T>(
   attempt: Pick<
     EmbeddedRunAttemptParams,
     | "admittedRunContext"
@@ -25,9 +23,7 @@ export async function withPreparedEmbeddedGatewayTools<T>(
     | "sessionPersistence"
     | "githubPublicationAvailable"
   > & { agentId: string; sessionKey: string; agentHarnessId: string },
-  isAttemptCurrent: () => boolean,
   run: () => Promise<T>,
-  sessionTarget?: AgentRunSessionTarget,
 ): Promise<T> {
   const callerIdentity = createAdmittedGatewayToolCallerIdentity({
     admittedRunContext: attempt.admittedRunContext,
@@ -44,7 +40,7 @@ export async function withPreparedEmbeddedGatewayTools<T>(
     turnSourceAccountId: attempt.agentAccountId,
     turnSourceThreadId: attempt.currentThreadTs,
   });
-  return withGatewayToolCallerIdentity(callerIdentity, async () => {
+  return withGatewayToolCallerIdentity(callerIdentity, () => {
     const resolveGatewayContext = getGatewayContextResolver(attempt.admittedRunContext);
     const gateway = resolveGatewayContext?.();
     if (
@@ -54,19 +50,9 @@ export async function withPreparedEmbeddedGatewayTools<T>(
       gateway &&
       !gateway.localEmbedded
     ) {
-      // Yield, compaction, and retries recheck the current session and exact live host;
-      // an earlier attempt's availability must not determine its successor's tool catalog.
-      const isCurrent = () => isAttemptCurrent() && resolveGatewayContext?.() === gateway;
-      attempt.githubPublicationAvailable = await prepareGitHubPublicationAvailability({
-        sessionId: attempt.sessionId,
-        sessionKey: attempt.sessionKey,
-        agentId: attempt.agentId,
-        ...(sessionTarget?.storePath ? { sessionTarget } : {}),
-        assertCurrent: isCurrent,
-      });
-      if (!isCurrent()) {
-        throw new Error("GitHub tool preparation outlived its admitted Gateway run");
-      }
+      // This is a brokered request capability, not a credential or workspace grant.
+      // The publisher qualifies the current target and identity when invoked.
+      attempt.githubPublicationAvailable = true;
     }
     return run();
   });

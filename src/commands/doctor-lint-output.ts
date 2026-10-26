@@ -10,6 +10,7 @@ import { formatUpdateDoctorLintFinding } from "../infra/update-doctor-lint.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { DoctorLintCliOptions } from "./doctor-lint-options.js";
 import { isUpdateDoctorLintPass } from "./doctor/shared/update-phase.js";
+import type { RecoveryDiskUsage } from "./recovery-disk-usage.js";
 
 const DOCTOR_LINT_JSON_SCHEMA_VERSION = 1;
 
@@ -19,6 +20,8 @@ function formatJsonResult(result: {
   checksSkipped: number;
   findings: readonly HealthFinding[];
   warnings?: readonly HealthFinding[];
+  databaseStores?: readonly Record<string, unknown>[];
+  recoveryCopies?: RecoveryDiskUsage;
 }) {
   return {
     schemaVersion: DOCTOR_LINT_JSON_SCHEMA_VERSION,
@@ -26,6 +29,8 @@ function formatJsonResult(result: {
     checksRun: result.checksRun,
     checksSkipped: result.checksSkipped,
     findings: result.findings.map(toJsonFinding),
+    ...(result.databaseStores ? { databaseStores: result.databaseStores } : {}),
+    ...(result.recoveryCopies ? { recoveryCopies: result.recoveryCopies } : {}),
     // Shipped updater gates require findings to be empty on success.
     ...(result.warnings?.length ? { warnings: result.warnings.map(toJsonFinding) } : {}),
   };
@@ -79,6 +84,7 @@ function toJsonFinding(f: HealthFinding): Record<string, unknown> {
     ...(f.target !== undefined ? { target: f.target } : {}),
     ...(f.requirement !== undefined ? { requirement: f.requirement } : {}),
     ...(f.fixHint !== undefined ? { fixHint: f.fixHint } : {}),
+    ...(f.details !== undefined ? { details: f.details } : {}),
   };
 }
 
@@ -86,6 +92,8 @@ export type DoctorLintExecution = {
   checksRun: number;
   checksSkipped: number;
   cleanupWarnings?: readonly HealthFinding[];
+  databaseStores?: readonly Record<string, unknown>[];
+  recoveryCopies?: RecoveryDiskUsage;
   exitCode: number;
   findings: readonly HealthFinding[];
   warnings?: readonly HealthFinding[];
@@ -94,6 +102,30 @@ export type DoctorLintExecution = {
 
 export function detectDoctorLintOutputMode(opts: DoctorLintCliOptions): "human" | "json" {
   return opts.json === true || !process.stdout.isTTY ? "json" : "human";
+}
+
+/** Rehearsal lint deferred by the update budget: no checks ran, and the deferral is the report. */
+export function createDeferredInspectionExecution(
+  runtime: RuntimeEnv,
+  opts: DoctorLintCliOptions,
+  warnings: HealthFinding[],
+): DoctorLintExecution {
+  return {
+    checksRun: 0,
+    checksSkipped: 0,
+    exitCode: 0,
+    findings: warnings,
+    writeOutput() {
+      if (detectDoctorLintOutputMode(opts) === "json") {
+        writeJsonResult({ ok: true, checksRun: 0, checksSkipped: 0, findings: [], warnings });
+      } else {
+        for (const finding of warnings) {
+          runtime.log(`[warning] ${finding.checkId} [${finding.errorCode}]: ${finding.message}`);
+          runtime.log(finding.fixHint ?? "Run `openclaw doctor` after activation.");
+        }
+      }
+    },
+  };
 }
 
 export function createStateSnapshotFailureFinding(error: Error): HealthFinding {
@@ -132,6 +164,8 @@ export async function createStateSnapshotFailureExecution(
     exitCode: exitCodeFromFindings(visible, sevMin),
     findings: visible,
     cleanupWarnings: completed?.cleanupWarnings,
+    databaseStores: completed?.databaseStores,
+    recoveryCopies: completed?.recoveryCopies,
     warnings: completed?.warnings,
     writeOutput() {
       if (detectDoctorLintOutputMode(opts) === "json") {
@@ -140,6 +174,8 @@ export async function createStateSnapshotFailureExecution(
           checksRun,
           checksSkipped,
           findings: visible,
+          databaseStores: completed?.databaseStores,
+          recoveryCopies: completed?.recoveryCopies,
           warnings: [...(completed?.warnings ?? []), ...(completed?.cleanupWarnings ?? [])],
         });
         return;

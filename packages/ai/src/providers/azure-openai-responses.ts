@@ -3,10 +3,12 @@ import type { ResponseCreateParamsStreaming } from "openai/resources/responses/r
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
 import type { BaseOpenAIStreamOptions } from "../provider-options.js";
-import type { OpenAIResponsesReplayMode } from "../transports/openai-responses-compaction-replay.js";
 import type { OpenAIResponsesRequestParams } from "../transports/openai-responses-contracts.js";
-import { resolvePromptCacheKey } from "../transports/openai-transport-shared.js";
-import type { Context, Model, SimpleStreamOptions, StreamFunction } from "../types.js";
+import {
+  resolvePromptCacheKey,
+  withOpenAIErrorResponseHook,
+} from "../transports/openai-transport-shared.js";
+import type { Model, SimpleStreamOptions, StreamFunction } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { requireApiKey } from "../utils/required-api-key.js";
 import { resolveAzureDeploymentNameFromMap } from "./azure-deployment-map.js";
@@ -29,19 +31,6 @@ import { buildBaseOptions } from "./simple-options.js";
 const DEFAULT_AZURE_API_VERSION = "v1";
 const AZURE_TOOL_CALL_PROVIDERS = new Set(["openai", "opencode", "azure-openai-responses"]);
 
-function resolveDeploymentName(
-  model: Model<"azure-openai-responses">,
-  options?: AzureOpenAIResponsesOptions,
-): string {
-  if (options?.azureDeploymentName) {
-    return options.azureDeploymentName;
-  }
-  return resolveAzureDeploymentNameFromMap({
-    modelId: model.id,
-    deploymentMap: process.env.AZURE_OPENAI_DEPLOYMENT_NAME_MAP,
-  });
-}
-
 interface AzureOpenAIResponsesOptions extends BaseOpenAIStreamOptions {
   reasoningEffort?: OpenAIRequestReasoningEffort;
   reasoningSummary?: "auto" | "detailed" | "concise" | null;
@@ -62,23 +51,68 @@ export const streamAzureOpenAIResponses: StreamFunction<
     stream,
     model,
     output,
+    context,
     options,
     resolveRequestModel: (requestModel) => {
       const { baseUrl } = resolveAzureConfig(requestModel, options);
       return baseUrl === requestModel.baseUrl ? requestModel : { ...requestModel, baseUrl };
     },
     createClient: (requestModel) => {
-      const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
-      return createClient(requestModel, apiKey, options);
+      const apiKeyInput = options?.apiKey || getEnvApiKey(model.provider) || "";
+      const apiKey = apiKeyInput.trim();
+      if (!apiKey) {
+        throw new Error(
+          "Azure OpenAI API key is required. Set AZURE_OPENAI_API_KEY environment variable or pass it as an argument.",
+        );
+      }
+
+      const headers = { ...requestModel.headers };
+      if (options?.headers) {
+        Object.assign(headers, options.headers);
+      }
+      const { baseUrl, apiVersion } = resolveAzureConfig(requestModel, options);
+      // Both OpenAI clients support custom fetch, so sentinels stay opaque until guarded egress.
+      const clientOptions = {
+        apiKey,
+        dangerouslyAllowBrowser: true,
+        defaultHeaders: headers,
+        baseURL: baseUrl,
+        fetch: withOpenAIErrorResponseHook(
+          getAiTransportHost().buildModelFetch({ ...requestModel, baseUrl }) ?? globalThis.fetch,
+          options?.onResponse,
+          requestModel,
+        ),
+        maxRetries: 0,
+      };
+      return isOpenAICompatibleAzureResponsesBaseUrl(baseUrl)
+        ? new OpenAI(clientOptions)
+        : new AzureOpenAI({ ...clientOptions, apiVersion });
     },
-    buildParams: (requestModel, replayMode) =>
-      buildParams(
-        requestModel,
-        context,
-        options,
-        resolveDeploymentName(model, options),
+    buildParams: (requestModel, replayMode) => {
+      const deploymentName = options?.azureDeploymentName
+        ? options.azureDeploymentName
+        : resolveAzureDeploymentNameFromMap({
+            modelId: model.id,
+            deploymentMap: process.env.AZURE_OPENAI_DEPLOYMENT_NAME_MAP,
+          });
+      const messages = convertResponsesMessages(requestModel, context, AZURE_TOOL_CALL_PROVIDERS, {
+        sessionId: options?.sessionId,
+        authProfileId: options?.authProfileId,
         replayMode,
-      ),
+      });
+
+      const params: ResponseCreateParamsStreaming & OpenAIResponsesRequestParams = {
+        model: deploymentName,
+        input: messages,
+        stream: true,
+        prompt_cache_key: resolvePromptCacheKey(options, options?.cacheRetention ?? "short"),
+        store: false,
+      };
+
+      applyCommonResponsesParams(params, requestModel, context, options);
+
+      return params;
+    },
   });
 
   return stream;
@@ -147,61 +181,4 @@ function resolveAzureConfig(
     baseUrl: normalizeAzureBaseUrl(resolvedBaseUrl),
     apiVersion,
   };
-}
-
-function createClient(
-  model: Model<"azure-openai-responses">,
-  apiKeyInput: string,
-  options?: AzureOpenAIResponsesOptions,
-) {
-  const apiKey = apiKeyInput.trim();
-  if (!apiKey) {
-    throw new Error(
-      "Azure OpenAI API key is required. Set AZURE_OPENAI_API_KEY environment variable or pass it as an argument.",
-    );
-  }
-
-  const headers = { ...model.headers };
-  if (options?.headers) {
-    Object.assign(headers, options.headers);
-  }
-  const { baseUrl, apiVersion } = resolveAzureConfig(model, options);
-  // Both OpenAI clients support custom fetch, so sentinels stay opaque until guarded egress.
-  const clientOptions = {
-    apiKey,
-    dangerouslyAllowBrowser: true,
-    defaultHeaders: headers,
-    baseURL: baseUrl,
-    fetch: getAiTransportHost().buildModelFetch({ ...model, baseUrl }),
-    maxRetries: 0,
-  };
-  return isOpenAICompatibleAzureResponsesBaseUrl(baseUrl)
-    ? new OpenAI(clientOptions)
-    : new AzureOpenAI({ ...clientOptions, apiVersion });
-}
-
-function buildParams(
-  model: Model<"azure-openai-responses">,
-  context: Context,
-  options: AzureOpenAIResponsesOptions | undefined,
-  deploymentName: string,
-  replayMode: OpenAIResponsesReplayMode,
-) {
-  const messages = convertResponsesMessages(model, context, AZURE_TOOL_CALL_PROVIDERS, {
-    sessionId: options?.sessionId,
-    authProfileId: options?.authProfileId,
-    replayMode,
-  });
-
-  const params: ResponseCreateParamsStreaming & OpenAIResponsesRequestParams = {
-    model: deploymentName,
-    input: messages,
-    stream: true,
-    prompt_cache_key: resolvePromptCacheKey(options, options?.cacheRetention ?? "short"),
-    store: false,
-  };
-
-  applyCommonResponsesParams(params, model, context, options);
-
-  return params;
 }

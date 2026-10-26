@@ -1,10 +1,9 @@
 /** Durable malformed-cron recovery records stored in the shared SQLite database. */
-import { createSqliteWorkerWriteAdmission } from "../../infra/sqlite-worker-store.js";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
 import type { CronQuarantinedJob, QuarantinedCronConfigJob } from "../types-shared.js";
-import { cronStoreKey } from "./key.js";
+import { prepareMutableCronStoreKey, resolveCronStoreKeyAsync } from "./paths.js";
 import { prepareCronQuarantineRegistration } from "./quarantine.kernel.js";
 
 /** Reads quarantined cron rows without creating or migrating a state database. */
@@ -12,13 +11,13 @@ export async function loadCronQuarantinedJobs(
   storePath: string,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<CronQuarantinedJob[]> {
+  const context = captureOpenClawStateWorkerContext({ env });
+  const storeKey = await resolveCronStoreKeyAsync(storePath, env, context);
   const reply = await executeExistingOpenClawStateRead(
-    { env },
-    { type: "cron.quarantine", storeKey: cronStoreKey(storePath) },
+    { env: context.environment, path: context.admission.databasePath },
+    { type: "cron.quarantine", storeKey },
+    { context, current: true },
   );
-  if (reply && (!reply.ok || reply.type !== "cron.quarantine")) {
-    throw new Error("Unexpected cron quarantine observation result");
-  }
   return reply?.entries ?? [];
 }
 
@@ -32,20 +31,17 @@ export async function saveCronQuarantinedJobs(params: {
     return;
   }
   const context = captureOpenClawStateWorkerContext();
-  const input = prepareCronQuarantineRegistration(params);
+  const captured = structuredClone(params);
+  const storeKey = await prepareMutableCronStoreKey(captured.storePath, context);
+  const input = prepareCronQuarantineRegistration({ ...captured, storePath: storeKey });
   const assertCurrent = () => {
     context.admission.assertCurrent();
     context.maintenanceScope?.assertAdmission();
   };
-  await runOpenClawStateWorkerOperation(
-    context,
-    (scope) => scope.execute({ type: "cron.registerQuarantine", input }),
-    {
-      assertCurrent,
-      createAdmission: createSqliteWorkerWriteAdmission(assertCurrent, [
-        context.admission.databasePath,
-      ]),
-    },
-  );
+  await runOpenClawStateWorkerOperation(context, (scope) => {
+    assertCurrent();
+    // Retirement may race dispatch; the worker commits without consulting the host.
+    return scope.execute({ type: "cron.registerQuarantine", input });
+  });
   assertCurrent();
 }

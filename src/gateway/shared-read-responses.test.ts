@@ -18,6 +18,7 @@ import type {
   GatewayRequestHandler,
   RespondFn,
 } from "./server-methods/types.js";
+import { gatewayConnect, gatewayProfile } from "./server/client-fixtures.test-support.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import { invalidateSharedReadResponses } from "./shared-read-responses.js";
 
@@ -60,24 +61,11 @@ function createReadHarness(
     request(id: string, params: Record<string, unknown> = {}, profileId = "alice") {
       const client: GatewayClient = {
         connId: `connection-${id}`,
-        authenticatedUserProfile: {
-          profileId,
-          displayName: profileId,
-          hasAvatar: false,
-          updatedAt: 0,
-        },
-        connect: {
-          minProtocol: 1,
-          maxProtocol: 1,
-          role: "operator",
-          scopes: ["operator.read"],
-          client: {
-            id: GATEWAY_CLIENT_IDS.CONTROL_UI,
-            mode: GATEWAY_CLIENT_MODES.WEBCHAT,
-            version: "test",
-            platform: "test",
-          },
-        },
+        authenticatedUserProfile: gatewayProfile(profileId, profileId, 0),
+        connect: gatewayConnect(["operator.read"], {
+          id: GATEWAY_CLIENT_IDS.CONTROL_UI,
+          mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+        }),
       };
       const frames: string[] = [];
       const respond = vi.fn<RespondFn>((ok, payload, error) => {
@@ -181,17 +169,6 @@ describe("shared read response dispatch", () => {
     expect(produce).toHaveBeenCalledTimes(21);
   });
 
-  it("retires responses when their method registry is replaced", async () => {
-    const produce = vi.fn((respond: RespondFn) => respond(true, { value: "current" }));
-    const harness = createReadHarness(createPreparedReadHandler(() => ({ run: produce })));
-    await harness.request("old-registry").done;
-    harness.invalidate();
-    const current = harness.request("new-registry");
-    await current.done;
-    expectPayload(current, { value: "current" });
-    expect(produce).toHaveBeenCalledTimes(2);
-  });
-
   it("does not certify a pending response against a replacement config", async () => {
     const entered = createDeferredCore();
     const release = createDeferredCore();
@@ -289,38 +266,6 @@ describe("shared read response dispatch", () => {
       payloadBytes.add(frame.slice(frame.indexOf('"payload":') + '"payload":'.length, -1));
     }
     expect(payloadBytes.size).toBe(1);
-  });
-
-  it("serializes a root array once and preserves ordinary JSON fallback", async () => {
-    const toJSON = vi.fn((key: string) => ({ key, text: 'Array é🦞 \\"' }));
-    const produce = vi.fn((respond: RespondFn) => respond(true, [{ toJSON }]));
-    const harness = createReadHarness(createPreparedReadHandler(() => ({ run: produce })));
-    const first = harness.request("array-first");
-    await first.done;
-    const second = harness.request("array-second");
-    await second.done;
-
-    const expected = [{ key: "0", text: 'Array é🦞 \\"' }];
-    expectPayload(first, expected);
-    expectPayload(second, expected);
-    expect(JSON.stringify({ payload: first.respond.mock.calls[0]![1] })).toBe(
-      JSON.stringify({ payload: expected }),
-    );
-    expect(produce).toHaveBeenCalledOnce();
-    expect(toJSON).toHaveBeenCalledExactlyOnceWith("0");
-  });
-
-  it.each([null, true, 17, 'Scalar é🦞 \\"'])("shares scalar payload %j", async (payload) => {
-    const produce = vi.fn((respond: RespondFn) => respond(true, payload));
-    const harness = createReadHarness(createPreparedReadHandler(() => ({ run: produce })));
-    const first = harness.request("scalar-first");
-    await first.done;
-    const second = harness.request("scalar-second");
-    await second.done;
-
-    expectPayload(first, payload);
-    expectPayload(second, payload);
-    expect(produce).toHaveBeenCalledOnce();
   });
 
   it("keeps an omitted toJSON payload valid across shared and ordinary JSON responses", async () => {

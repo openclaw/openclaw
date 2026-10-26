@@ -2,7 +2,6 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 // Stream-json output limits and raw-line framing for the CLI streaming parser.
 // Kept beside `cli-output-stream.ts` so the parser stays within the file-size
 // budget; the limits are process constants, not per-backend configuration.
-import type { CliStreamJsonOutputLimits } from "./cli-output-contracts.js";
 import { normalizeClaudeCliStreamJsonRecord } from "./cli-output-echoed-binary.js";
 import { readClaudeAttributedSubagentProgressId } from "./cli-output-records.js";
 
@@ -12,7 +11,7 @@ export const CLI_STREAM_JSON_OUTPUT_LIMITS = Object.freeze({
   maxTurnRawChars: CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS,
   maxPendingLineChars: CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS,
   maxTurnLines: CLI_STREAM_JSON_DEFAULT_MAX_TURN_LINES,
-} satisfies CliStreamJsonOutputLimits);
+});
 
 const PARTIAL_RECORD_KEYS = new Set(["type", "event", "uuid", "session_id", "parent_tool_use_id"]);
 const PARTIAL_EVENT_KEYS = new Set(["type", "index", "delta"]);
@@ -125,13 +124,12 @@ export function chargeClaudeStreamJsonLine(
 export function frameBoundedCliJsonlChunk(
   state: { pending: string },
   chunk: string,
-  maxLineChars: number,
   onLine: (line: string) => boolean | void,
 ): boolean {
   for (let offset = 0; offset < chunk.length;) {
     const newlineIndex = chunk.indexOf("\n", offset);
     const lineEnd = newlineIndex === -1 ? chunk.length : newlineIndex;
-    if (state.pending.length + (lineEnd - offset) > maxLineChars) {
+    if (state.pending.length + (lineEnd - offset) > CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS) {
       state.pending = "";
       return false;
     }

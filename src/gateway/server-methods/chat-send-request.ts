@@ -1,5 +1,5 @@
+import { createHmac } from "node:crypto";
 import { performance } from "node:perf_hooks";
-import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import type { Static } from "typebox";
 import {
   GATEWAY_CLIENT_CAPS,
@@ -15,6 +15,8 @@ import type {
   ChatSendParamsSchema,
   QueueMode,
 } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type { createOperatorInputRecoverySource } from "../../agents/operator-run-recovery-source.js";
+import { hasCommandSyntax } from "../../auto-reply/command-detection.js";
 import { isAbortRequestText } from "../../auto-reply/reply/abort-primitives.js";
 import { isBtwRequestText } from "../../auto-reply/reply/btw-command.js";
 import {
@@ -23,6 +25,8 @@ import {
   type AttachedChatWorkContext,
 } from "../../chat/work-context.js";
 import type { SessionGoalOperation } from "../../config/sessions/goals-operations.js";
+import type { SessionRestartResume } from "../../config/sessions/restart-resume.js";
+import { loadChatRequestIdentityKeyAsync } from "../../infra/device-identity-async.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import {
   isProgressCardRefreshInputProvenance,
@@ -38,6 +42,7 @@ import {
   isOperatorUiClient,
 } from "../../utils/message-channel.js";
 import type { ChatAttachment } from "../chat-attachments.js";
+import { readChatInputRecoveryAdmission } from "../chat-input-recovery-source.js";
 import { sanitizeChatSendMessageInput } from "../chat-input-sanitize.js";
 import { hasGatewayAdminScope } from "../operator-scopes.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
@@ -61,6 +66,7 @@ type ChatSendRequestParams = Omit<
 };
 
 export type NormalizedChatSendRequest = {
+  restartResume?: SessionRestartResume;
   providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
   goalOperation?: SessionGoalOperation & { action: "start" | "resume" };
   chatSendReceivedAtMs: number;
@@ -78,7 +84,7 @@ export type NormalizedChatSendRequest = {
   normalizedAttachments: ChatAttachment[];
   rawMessage: string;
   /** Submitted annotation identity is immutable even when profile aliases later merge. */
-  requestIdentity: string;
+  requestIdentity?: string;
   mentions?: HumanMention[];
   workContext?: AttachedChatWorkContext;
   reconnectResumeRequested: boolean;
@@ -94,11 +100,16 @@ export function normalizeChatSendRequest(params: {
   client: GatewayRequestHandlerOptions["client"];
   trustedSystemInput?: boolean;
   goalResume?: SessionGoalOperation & { action: "resume" };
+  restartResume?: SessionRestartResume;
   providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
 }): NormalizeChatSendRequestResult | Promise<NormalizeChatSendRequestResult> {
   const chatSendReceivedAtMs = performance.now();
   const reject = (error: string) => ({ ok: false as const, error });
   const client = params.client;
+  const recoveredInput =
+    typeof params.params.idempotencyKey === "string"
+      ? readChatInputRecoveryAdmission(params.params.idempotencyKey)
+      : undefined;
   const clientInfo = client?.connect?.client;
   const supportsTaskSuggestions =
     isOperatorUiClient(clientInfo) &&
@@ -201,7 +212,10 @@ export function normalizeChatSendRequest(params: {
 
   const hasGoalOperation = params.goalResume !== undefined || p.intent !== undefined;
   const commandInterpretationSuppressed =
-    suppressCommandInterpretation || hasGoalOperation || providerReview !== undefined;
+    suppressCommandInterpretation ||
+    recoveredInput?.suppressCommandInterpretation === true ||
+    hasGoalOperation ||
+    providerReview !== undefined;
   // This text comes from the current provider review, not a browser-supplied command.
   const inboundMessage = p.intent || providerReview ? p.message : sanitizedMessageResult.message;
   const systemInputProvenance = params.goalResume
@@ -282,14 +296,12 @@ export function normalizeChatSendRequest(params: {
   const modelMessage = workContext
     ? [rawMessage, formatChatWorkContext(workContext.snapshot)].filter(Boolean).join("\n\n")
     : rawMessage;
-  const requestIdentity = sha256Hex(
-    JSON.stringify([
-      p.message,
-      p.mentions?.map(({ profileId, start, end }) => [profileId, start, end]) ?? [],
-      ...(workContext ? [workContext.snapshot] : []),
-      ...(providerReview ? [providerReview.review.id, providerReview.target.sessionId] : []),
-    ]),
-  );
+  const requestInput = JSON.stringify([
+    p.message,
+    p.mentions?.map(({ profileId, start, end }) => [profileId, start, end]) ?? [],
+    ...(workContext ? [workContext.snapshot] : []),
+    ...(providerReview ? [providerReview.review.id, providerReview.target.sessionId] : []),
+  ]);
 
   const value: NormalizedChatSendRequest = {
     chatSendReceivedAtMs,
@@ -300,8 +312,9 @@ export function normalizeChatSendRequest(params: {
       ? { providerReviewAcknowledgment: params.providerReviewAcknowledgment }
       : {}),
     ...(params.goalResume ? { goalOperation: params.goalResume } : {}),
+    ...(params.restartResume ? { restartResume: params.restartResume } : {}),
     explicitOrigin: explicitOriginResult.value,
-    inboundMessage: workContext ? modelMessage : inboundMessage,
+    inboundMessage: modelMessage,
     ...(workContext ? { workContext } : {}),
     systemInputProvenance,
     systemProvenanceReceipt,
@@ -311,23 +324,82 @@ export function normalizeChatSendRequest(params: {
     turnKind,
     normalizedAttachments,
     rawMessage: modelMessage,
-    requestIdentity,
     ...(mentions.value ? { mentions: mentions.value } : {}),
     reconnectResumeRequested: controlUiReconnectResume.resumeRequested,
   };
-  if (p.intent && !params.goalResume) {
-    const goalStart = {
-      action: "start" as const,
-      operationId: p.idempotencyKey,
-      issuedAtMs: p.intent.issuedAtMs,
-      objective: p.message,
-    };
-    return fingerprintSessionGoalRequest([p, hasGatewayAdminScope(client)]).then(
-      (requestFingerprint) => ({
-        ok: true,
-        value: { ...value, goalOperation: { ...goalStart, requestFingerprint } },
-      }),
-    );
+  if (stopCommand) {
+    return { ok: true, value };
   }
-  return { ok: true, value };
+  if (recoveredInput) {
+    // Approved text may differ from the submitted bytes; retries keep their original identity.
+    const requestIdentity = recoveredInput.target.message["__openclaw"]?.chatRequestIdentity;
+    return {
+      ok: true,
+      value: { ...value, ...(typeof requestIdentity === "string" ? { requestIdentity } : {}) },
+    };
+  }
+  return loadChatRequestIdentityKeyAsync().then((key) => {
+    // A keyed verifier survives redaction without storing an offline prompt digest.
+    const request: NormalizedChatSendRequest = key
+      ? { ...value, requestIdentity: createHmac("sha256", key).update(requestInput).digest("hex") }
+      : value;
+    if (p.intent && !params.goalResume) {
+      const goalStart = {
+        action: "start" as const,
+        operationId: p.idempotencyKey,
+        issuedAtMs: p.intent.issuedAtMs,
+        objective: p.message,
+      };
+      return fingerprintSessionGoalRequest([p, hasGatewayAdminScope(client)]).then(
+        (requestFingerprint) => ({
+          ok: true,
+          value: { ...request, goalOperation: { ...goalStart, requestFingerprint } },
+        }),
+      );
+    }
+    return { ok: true as const, value: request };
+  });
+}
+
+/** Keep only execution options; approved text and media live in the input itself. */
+export function createChatInputRecovery(params: {
+  request: NormalizedChatSendRequest;
+  source: ReturnType<typeof createOperatorInputRecoverySource>;
+}) {
+  const { request, source } = params;
+  // Process-local capabilities cannot be re-created after restart.
+  if (
+    !source ||
+    request.toolBindings ||
+    request.providerReviewAcknowledgment ||
+    request.goalOperation ||
+    request.turnKind !== "main" ||
+    (request.systemInputProvenance && request.systemInputProvenance.kind !== "external_user")
+  ) {
+    return undefined;
+  }
+  const p = request.p;
+  return {
+    version: 1 as const,
+    source,
+    clientInfo: request.clientInfo,
+    suppressCommandInterpretation:
+      request.suppressCommandInterpretation || !hasCommandSyntax(request.inboundMessage),
+    request: {
+      ...(request.reconnectResumeRequested ? { __controlUiReconnectResume: true } : {}),
+      thinking: p.thinking,
+      fastMode: p.fastMode,
+      fastAutoOnSeconds: p.fastAutoOnSeconds,
+      timeoutMs: p.timeoutMs,
+      deliver: p.deliver,
+      queueMode: p.queueMode,
+      replyToId: p.replyToId,
+      originatingChannel: p.originatingChannel,
+      originatingTo: p.originatingTo,
+      originatingAccountId: p.originatingAccountId,
+      originatingThreadId: p.originatingThreadId,
+      systemInputProvenance: request.systemInputProvenance,
+      systemProvenanceReceipt: request.systemProvenanceReceipt,
+    },
+  };
 }

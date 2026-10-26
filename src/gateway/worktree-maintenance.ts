@@ -62,13 +62,11 @@ export function startWorktreeMaintenance(params: {
   getRuntimeConfig: () => OpenClawConfig;
   onComplete: (result: ManagedWorktreeGcResult) => void;
   onError: (message: string) => void;
-  runGc?: () => Promise<ManagedWorktreeGcResult | void>;
 }): MaintenanceOwner {
   const previousDrain = owners.get(params.getRuntimeConfig)?.stop();
   const scheduler = params.scheduler.scope();
   const inOwnerContext = AsyncLocalStorage.snapshot();
   let receipt: ManagedWorktreeGcReceipt | undefined;
-  let inFlight: Promise<void> | undefined;
   let archivePending = false;
   const isActive = () =>
     !scheduler.signal.aborted &&
@@ -82,7 +80,8 @@ export function startWorktreeMaintenance(params: {
     }
   };
   const owner: MaintenanceOwner = {
-    request: ({ jobId, retryDeferred } = {}) => {
+    request: (options = {}) => {
+      const { jobId, retryDeferred } = options;
       assertActive();
       if (jobId) {
         if (!receipt || receipt.jobId !== jobId) {
@@ -132,48 +131,42 @@ export function startWorktreeMaintenance(params: {
             let batchItems = 0;
             // The scheduler already detaches this job and joins its tracked cleanup.
             // Preserve that work scope when admitting the maintenance root.
-            inFlight = runWithGatewayIndependentRootWorkAdmission(
+            return runWithGatewayIndependentRootWorkAdmission(
               async () => {
                 await previousDrain;
                 assertCurrent();
-                const result = await (params.runGc
-                  ? params.runGc()
-                  : managedWorktrees.gc({
-                      ...createManagedWorktreeOwnerPolicy(config),
-                      retryDeferred,
-                      signal: scheduler.signal,
-                      commitGuard: assertCurrent,
-                      checkpoint: async (progress) => {
-                        Object.assign(current, progress);
-                        assertCurrent();
-                        if (++batchItems < 8 && scheduler.now() - batchStartedAt < 5_000) {
-                          return;
-                        }
-                        await new Promise<void>((resolve, reject) => {
-                          const abort = () =>
-                            reject(
-                              toErrorObject(scheduler.signal.reason, "Worktree cleanup canceled"),
-                            );
-                          scheduler.signal.addEventListener("abort", abort, { once: true });
-                          scheduler.schedule({
-                            id: "maintenance:worktrees:resume",
-                            delayMs: 1_000,
-                            run: () => {
-                              scheduler.signal.removeEventListener("abort", abort);
-                              resolve();
-                            },
-                          });
-                        });
-                        assertCurrent();
-                        batchItems = 0;
-                        batchStartedAt = scheduler.now();
-                      },
-                    }));
+                const result = await managedWorktrees.gc({
+                  ...createManagedWorktreeOwnerPolicy(config),
+                  retryDeferred,
+                  signal: scheduler.signal,
+                  commitGuard: assertCurrent,
+                  checkpoint: async (progress) => {
+                    Object.assign(current, progress);
+                    assertCurrent();
+                    if (++batchItems < 8 && scheduler.now() - batchStartedAt < 5_000) {
+                      return;
+                    }
+                    await new Promise<void>((resolve, reject) => {
+                      const abort = () =>
+                        reject(toErrorObject(scheduler.signal.reason, "Worktree cleanup canceled"));
+                      scheduler.signal.addEventListener("abort", abort, { once: true });
+                      scheduler.schedule({
+                        id: "maintenance:worktrees:resume",
+                        delayMs: 1_000,
+                        run: () => {
+                          scheduler.signal.removeEventListener("abort", abort);
+                          resolve();
+                        },
+                      });
+                    });
+                    assertCurrent();
+                    batchItems = 0;
+                    batchStartedAt = scheduler.now();
+                  },
+                });
                 assertCurrent();
-                if (result) {
-                  Object.assign(current, result);
-                  params.onComplete(result);
-                }
+                Object.assign(current, result);
+                params.onComplete(result);
                 current.state = "completed";
               },
               "runtime:worktree-cleanup",
@@ -186,13 +179,11 @@ export function startWorktreeMaintenance(params: {
               })
               .finally(() => {
                 current.completedAt = scheduler.now();
-                inFlight = undefined;
                 if (archivePending && isActive()) {
                   archivePending = false;
                   owner.request();
                 }
               });
-            return inFlight;
           },
         }),
       );
@@ -212,7 +203,6 @@ export function startWorktreeMaintenance(params: {
     stop: async () => {
       // Aborting also wakes a paused batch before joining worker settlement.
       await scheduler.stop();
-      await inFlight;
       await previousDrain;
       if (owners.get(params.getRuntimeConfig) === owner) {
         owners.delete(params.getRuntimeConfig);
@@ -224,6 +214,7 @@ export function startWorktreeMaintenance(params: {
     id: "maintenance:worktrees",
     delayMs: WORKTREE_GC_INTERVAL_MS,
     everyMs: WORKTREE_GC_INTERVAL_MS,
+    phase: "maintenance",
     run: () => {
       if (!isGatewayWorkAdmissionClosed()) {
         owner.request();

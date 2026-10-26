@@ -5,7 +5,6 @@ import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vite
 import * as configRuntime from "../config/config.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createRequestGatewayMethodRegistry } from "../gateway/server-methods.js";
 import { flushPendingSessionsChangedEvents } from "../gateway/server-methods/session-change-event.js";
@@ -18,7 +17,7 @@ import { withOperatorToolGatewayAuthority } from "../gateway/server-plugin-in-pr
 import { createGatewayRequestContext } from "../gateway/server-request-context.js";
 import { makeContextParams } from "../gateway/server-request-context.test-support.js";
 import { sharingPolicyClient } from "../gateway/session-sharing.test-utils.js";
-import type { WorkerSessionPlacementRecord } from "../gateway/worker-environments/placement-record.js";
+import { activePlacement } from "../gateway/worker-environments/placement-suite.test-support.js";
 import { registerInternalHook, unregisterInternalHook } from "../hooks/internal-hooks.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
@@ -35,6 +34,7 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import { registerAgentHarness } from "./harness/registry.js";
 import type { AgentHarness } from "./harness/types.js";
+import { configFor, modelDefinition } from "./model-auth.fixtures.test-support.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
 import * as preparedCatalog from "./prepared-model-catalog.js";
 import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
@@ -52,17 +52,16 @@ vi.mock("./model-catalog.runtime.js", () => ({
 }));
 vi.mock("../status/status-text.js", () => ({ buildStatusText: async () => "Session status" }));
 
-const catalog: ModelCatalogEntry[] = [
-  { provider: "fixture", id: "default", name: "Default", reasoning: false },
-  { provider: "fixture", id: "chosen", name: "Chosen", reasoning: false },
-  {
+function modelEntry(id: string): ModelCatalogEntry {
+  return {
     provider: "fixture",
-    id: "native",
-    name: "Native",
+    id,
+    name: id,
     reasoning: false,
-    nativeRuntime: "status-native",
-  },
-];
+    ...(id === "native" ? { nativeRuntime: "status-native" } : {}),
+  };
+}
+const catalog = ["default", "chosen", "native"].map(modelEntry);
 const nativeHarness: AgentHarness = {
   id: "status-native",
   label: "Status native fixture",
@@ -78,39 +77,31 @@ let state: OpenClawTestState;
 let cfg: OpenClawConfig;
 let nextSession = 0;
 
-function modelConfig(
-  entries: ModelCatalogEntry[],
-  selection: Pick<
-    NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>,
-    "model" | "models" | "modelPolicy"
-  >,
-): OpenClawConfig {
+function modelConfig(policy = false): OpenClawConfig {
+  const primary = policy ? "blocked" : "default";
+  const fallback = policy ? "allowed" : "chosen";
+  const entries = policy ? [primary, fallback].map(modelEntry) : catalog;
   return {
     agents: {
-      entries: { main: {}, support: {} },
+      entries: policy ? { main: {} } : { main: {}, support: {} },
       defaults: {
-        ...selection,
+        model: { primary: `fixture/${primary}`, fallbacks: [`fixture/${fallback}`] },
+        models: Object.fromEntries(
+          entries.map(({ id }) => [
+            `fixture/${id}`,
+            id === fallback ? { alias: "chosen" } : policy ? { alias: id } : {},
+          ]),
+        ),
+        ...(policy ? { modelPolicy: { allow: ["fixture/*"] } } : {}),
         modelSelectionScope: "global",
         sandbox: { mode: "off", sessionToolsVisibility: "all" },
       },
     },
-    models: {
-      providers: {
-        fixture: {
-          api: "openai-completions",
-          baseUrl: "https://fixture.invalid/v1",
-          agentRuntime: { id: "openclaw" },
-          models: entries.map<ModelDefinitionConfig>((entry) => ({
-            id: entry.id,
-            name: entry.name,
-            reasoning: false,
-            input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            maxTokens: 1024,
-          })),
-        },
-      },
-    },
+    ...configFor("fixture", "https://fixture.invalid/v1", {
+      api: "openai-completions",
+      agentRuntime: { id: "openclaw" },
+      models: entries.map(({ id }) => modelDefinition(id, { reasoning: false, maxTokens: 1024 })),
+    }),
   };
 }
 
@@ -118,14 +109,7 @@ beforeAll(async () => {
   state = await createOpenClawTestState({ scenario: "minimal" });
 });
 beforeEach(() => {
-  cfg = modelConfig(catalog, {
-    model: { primary: "fixture/default", fallbacks: ["fixture/chosen"] },
-    models: {
-      "fixture/default": {},
-      "fixture/chosen": { alias: "chosen" },
-      "fixture/native": {},
-    },
-  });
+  cfg = modelConfig();
   configRuntime.setRuntimeConfigSnapshot(cfg);
   setActivePluginRegistry(createEmptyPluginRegistry(), "status-model-test", "default");
   registerAgentHarness(nativeHarness);
@@ -217,6 +201,13 @@ async function fixture(
       },
       run,
     );
+  const execute = (params: { model: string; sessionKey?: string }) =>
+    withPluginRuntimeGatewayRequestScope(gatewayScope, () =>
+      withOperatorToolGatewayAuthority(
+        { scopes: ["operator.admin"], operatorRoleActor: { kind: "system" } },
+        () => withCaller(() => tool.execute("status-selection", params)),
+      ),
+    );
   return {
     scope,
     context,
@@ -228,13 +219,13 @@ async function fixture(
     retireGateway: () => {
       current = false;
     },
-    execute: (params: { model: string; sessionKey?: string }) =>
-      withPluginRuntimeGatewayRequestScope(gatewayScope, () =>
-        withOperatorToolGatewayAuthority(
-          { scopes: ["operator.admin"], operatorRoleActor: { kind: "system" } },
-          () => withCaller(() => tool.execute("status-selection", params)),
-        ),
-      ),
+    execute,
+    select: async (model: string, changedModel: boolean, sessionKey?: string) => {
+      expect((await execute({ model, sessionKey })).details).toMatchObject({
+        agentId,
+        changedModel,
+      });
+    },
   };
 }
 
@@ -254,10 +245,7 @@ it.each([false, true])(
     const configWrite = vi.spyOn(configRuntime, "mutateConfigFileWithRetry");
     const configBefore = structuredClone(cfg);
 
-    expect((await target.execute({ sessionKey: "main", model: "chosen" })).details).toMatchObject({
-      agentId: "support",
-      changedModel: true,
-    });
+    await target.select("chosen", true, "main");
     const selected = target.read();
     expect(selected.sessionId).not.toBe("");
     expect(selected).toMatchObject({ providerOverride: "fixture", modelOverride: "chosen" });
@@ -267,25 +255,19 @@ it.each([false, true])(
     await flushPendingSessionsChangedEvents(target.context);
     target.broadcast.mockClear();
 
-    expect((await target.execute({ sessionKey: "main", model: "chosen" })).details).toMatchObject({
-      changedModel: false,
-    });
+    await target.select("chosen", false, "main");
     expect(target.read()).toEqual(selected);
     await flushPendingSessionsChangedEvents(target.context);
     expect(onPatch).toHaveBeenCalledOnce();
     expect(target.broadcast).not.toHaveBeenCalled();
 
-    expect((await target.execute({ model: "default" })).details).toMatchObject({
-      changedModel: true,
-    });
+    await target.select("default", true);
     const reset = target.read();
     expect(reset).toMatchObject({ modelOverrideSource: "default", liveModelSwitchPending: true });
     expect(reset.providerOverride).toBeUndefined();
     expect(reset.modelOverride).toBeUndefined();
     expect(reset.modelFallback).toBeUndefined();
-    expect((await target.execute({ model: "fixture/default" })).details).toMatchObject({
-      changedModel: false,
-    });
+    await target.select("fixture/default", false);
     expect(target.read()).toEqual(reset);
     expect(onPatch).toHaveBeenCalledTimes(2);
     expect(configWrite).not.toHaveBeenCalled();
@@ -302,45 +284,32 @@ it.each([
     entry: availability === "sandbox" ? { sandbox: "required" } : {},
   });
   const before = target.read();
-  if (availability === "unavailable" || availability === "retired before commit") {
-    runtime.prepare.mockResolvedValue(
-      availability === "unavailable"
-        ? { kind: "unavailable", message }
-        : {
-            kind: "ready",
-            runtimeId: nativeHarness.id,
-            harness: nativeHarness,
-            validate: vi
-              .fn<() => string | undefined>()
-              .mockReturnValueOnce(undefined)
-              .mockReturnValue(message),
-          },
-    );
+  if (availability === "retired before commit") {
+    runtime.prepare.mockResolvedValue({
+      kind: "ready",
+      runtimeId: nativeHarness.id,
+      harness: nativeHarness,
+      validate: vi
+        .fn<() => string | undefined>()
+        .mockReturnValueOnce(undefined)
+        .mockReturnValue(message),
+    });
   } else if (availability === "worker") {
-    const placement: WorkerSessionPlacementRecord = {
-      sessionId: before.sessionId,
+    const placement = activePlacement(before.sessionId, {
       sessionKey: target.scope.sessionKey,
       agentId: target.scope.agentId,
-      state: "active",
-      executionMode: "worker-turn",
       generation: 1,
-      createdAtMs: 1,
-      updatedAtMs: 1,
-      stateChangedAtMs: 1,
       environmentId: "status-worker",
       activeOwnerEpoch: 1,
       workspaceBaseManifestRef: `sha256:${"b".repeat(64)}`,
-      remoteWorkspaceDir: "/workspace",
-      workerBundleHash: "a".repeat(64),
-      lastTranscriptAckCursor: null,
-      lastLiveEventAckCursor: null,
-      recoveryError: null,
-      terminalReason: null,
-      terminalAtMs: null,
-      turnClaim: null,
-    };
+    });
     target.context.workerSessionPlacementService = {
       getMany: () => new Map([[before.sessionId, placement]]),
+      prepareSessionPlacement: async () => ({
+        prepareRead: () => undefined,
+        current: () => placement,
+        release: () => {},
+      }),
     };
   }
   await expect(target.execute({ model: "fixture/native" })).rejects.toThrow(message);
@@ -378,18 +347,8 @@ it("routes status model changes through the original operator policy and preserv
   const limited = ensureProfileForEmail("limited-model@example.test");
   const unrestricted = ensureProfileForEmail("unrestricted-model@example.test");
   setUserProfileRole(unrestricted.id, "unrestricted");
-  const policyCatalog = ["blocked", "allowed"].map((id) => ({
-    provider: "fixture",
-    id,
-    name: id,
-    reasoning: false,
-  }));
-  cfg = modelConfig(policyCatalog, {
-    model: { primary: "fixture/blocked", fallbacks: ["fixture/allowed"] },
-    models: { "fixture/blocked": { alias: "blocked" }, "fixture/allowed": { alias: "chosen" } },
-    modelPolicy: { allow: ["fixture/*"] },
-  });
-  cfg.agents = { ...cfg.agents, entries: { main: {} } };
+  const policyCatalog = ["blocked", "allowed"].map(modelEntry);
+  cfg = modelConfig(true);
   cfg.gateway = {
     roles: {
       default: "limited",
@@ -426,6 +385,11 @@ it("routes status model changes through the original operator policy and preserv
     },
   });
   await withPluginRuntimeGatewayRequestScope(target.gatewayScope, async () => {
+    const select = async (model: string, changedModel: boolean) => {
+      expect((await target.tool.execute("selection", { model })).details).toMatchObject({
+        changedModel,
+      });
+    };
     const runAs = <T>(profileId: string, run: () => Promise<T>) => {
       const client = sharingPolicyClient({ user: profileId, scopes: ["operator.admin"] });
       return withPluginRuntimeGatewayRequestScope({ ...target.gatewayScope, client }, () =>
@@ -450,18 +414,12 @@ it("routes status model changes through the original operator policy and preserv
           );
           expect(target.read()).toEqual(before);
         }
-        expect(
-          (await target.tool.execute("allowed-selection", { model: "chosen" })).details,
-        ).toMatchObject({ changedModel: true });
+        await select("chosen", true);
         const selected = target.read();
         expect(selected).toMatchObject({ providerOverride: "fixture", modelOverride: "allowed" });
-        expect(
-          (await target.tool.execute("same-selection", { model: "chosen" })).details,
-        ).toMatchObject({ changedModel: false });
+        await select("chosen", false);
         expect(target.read()).toEqual(selected);
-        expect(
-          (await target.tool.execute("default-selection", { model: "default" })).details,
-        ).toMatchObject({ changedModel: true });
+        await select("default", true);
         expect(target.read().modelOverride).toBeUndefined();
         expect(target.context.getRuntimeConfig().agents?.defaults?.model).toEqual(
           cfg.agents?.defaults?.model,

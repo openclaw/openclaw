@@ -35,11 +35,12 @@ Gateway, see [Personal library authoring](/tools/skill-workshop/personal-library
   incomplete, it views the skill and patches the misleading step. After hard
   multi-step work you are likely to repeat, it saves the working procedure,
   patching the skill that covers that kind of task or creating one when none does.
-- **Background review:** after enough model work in a conversation, or right
-  after a turn that used a learned skill, a background run reviews it and saves
-  anything worth keeping. See [Self-learning](/tools/self-learning).
-- **`/learn [request]`:** asks the agent to save a skill now, from the current
-  conversation or from sources you name. See [`/learn`](#learn).
+- **Background review:** after 10 accumulated model iterations in a conversation,
+  a background run reviews it and saves anything worth keeping.
+  See [Self-learning](/tools/self-learning).
+- **`/learn [request]`:** asks the agent to learn now, from the current
+  conversation or from sources you name. Procedures become skills; facts and
+  preferences go to memory when the memory plugin supports it. See [`/learn`](#learn).
 - **Learn from history:** the Control UI button opens a normal chat
   in which the agent reviews earlier conversations and saves what it finds.
 - **Unused-skill cleanup:** learned skills nobody used for 30 days are archived.
@@ -52,25 +53,28 @@ it started with.
 
 ## Undo
 
-When a background run changes a skill, OpenClaw posts one line to the
-conversation that triggered it:
+When a background run changes a skill, the Control UI chat shows a compact
+**Learned** row; each skill name opens that skill in the Workshop. Channel
+messages are off by default. Set `skills.workshop.autonomous.channelNotices:
+true` to post the notice to the conversation that triggered the review
+instead; that session's Control UI chat then shows it as plain text:
 
 ```text
 💾 Learned: updated `deploy-staging` (tightened the rollback step). Say "undo" to revert this skill change.
 ```
 
-Reply "undo" and the agent restores the previous version with `skill_workshop`.
-Nothing is posted when the review changed nothing. Channel-less Control UI
-sessions show the change as a compact **Learned** card; each skill name in it
-opens that skill in the Workshop.
+Say "undo" in the conversation and the agent restores the previous version
+with `skill_workshop`, whether channel notices are on or off. Nothing appears
+when the review changed nothing. Slack never gets a channel message; its
+sessions still get the Control UI row.
 
 To revert everything one review changed without asking the agent:
 
 - Press **Undo** on the notice. Channels with buttons render it under the
   line; plain-text channels show the command to copy instead.
-- Press **Undo** on the Control UI **Learned** card.
-- Send `/learn undo <id>`, where `<id>` is the review id in the notice's
-  command.
+- Press **Undo** on the Control UI **Learned** row.
+- Send `/learn undo <id>`, where `<id>` is the review id in the channel
+  notice's command.
 
 Each restores the version saved before the review's first change of a skill
 and archives skills the review created. Pressing it again reports that the
@@ -129,9 +133,17 @@ umbrella skill: it patches the survivor and archives the rest with
 `absorbed_into`. Then it tells you which skill changed. If there is nothing
 durable to learn, it changes nothing.
 
+When the selected memory plugin supports learning (see
+[provider-neutral memory runtime](/plugins/sdk-overview/memory-and-context#provider-neutral-memory-runtime)),
+`/learn` covers both media: procedures for a
+repeatable class of task go to learned skills, and facts, preferences,
+decisions, and knowledge about one codebase or person go to memory, following
+the memory plugin's guidance. With `skill_workshop` hidden, `/learn` learns into
+memory alone.
+
 `/learn` works in both learning modes. It replies with an explanation instead
-when `skill_workshop` is unavailable, for example in a sandboxed session or
-when tool policy hides the tool.
+when neither `skill_workshop` nor the memory plugin's learning tools are
+available, for example in a sandboxed session or when tool policy hides them.
 
 `/learn undo <id>` is the one exception: with a review id, it reverts that
 background review without a model turn. See [Undo](#undo). Any other text after
@@ -193,10 +205,11 @@ one and should be merged.
 }
 ```
 
-| Setting                           | Default  | Effect                                                                                  |
-| --------------------------------- | -------- | --------------------------------------------------------------------------------------- |
-| `skills.workshop.autonomous.mode` | `"auto"` | `"auto"` enables the background review and unused-skill cleanup. `"off"` disables both. |
-| `skills.workshop.maxSkillBytes`   | `40000`  | Maximum `SKILL.md` size in bytes (1024-200000).                                         |
+| Setting                                     | Default  | Effect                                                                                  |
+| ------------------------------------------- | -------- | --------------------------------------------------------------------------------------- |
+| `skills.workshop.autonomous.mode`           | `"auto"` | `"auto"` enables the background review and unused-skill cleanup. `"off"` disables both. |
+| `skills.workshop.autonomous.channelNotices` | `false`  | Also post background review notices to channel conversations, except Slack.             |
+| `skills.workshop.maxSkillBytes`             | `40000`  | Maximum `SKILL.md` size in bytes (1024-200000).                                         |
 
 ```bash
 openclaw config set skills.workshop.autonomous.mode off

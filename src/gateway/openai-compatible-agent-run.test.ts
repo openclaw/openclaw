@@ -24,6 +24,7 @@ import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
 import { makeContextParams } from "./server-request-context.test-support.js";
+import { gatewayProfile } from "./server/client-fixtures.test-support.js";
 
 vi.mock("../commands/agent.js", () => ({ agentCommandFromGatewayIngress: vi.fn() }));
 
@@ -64,12 +65,7 @@ function createOperatorRunFixture() {
     requestAuth: {
       authMethod: "trusted-proxy",
       trustDeclaredOperatorScopes: true,
-      authenticatedUserProfile: {
-        profileId: person.id,
-        displayName: person.displayName,
-        hasAvatar: false,
-        updatedAt: person.updatedAt,
-      },
+      authenticatedUserProfile: gatewayProfile(person.id, person.displayName, person.updatedAt),
       operatorAccessAuthority: {
         signal: source.signal,
         assertCurrent: () => source.signal.throwIfAborted(),
@@ -351,7 +347,10 @@ describe("OpenAI-compatible command admission", () => {
           await opts.onAdmittedRunContext?.(context);
         }
         executed();
-        return { payloads: [{ text: "settled", mediaUrl: null }], meta: { durationMs: 0 } };
+        return {
+          payloads: [{ text: "settled", mediaUrl: null }],
+          meta: { durationMs: 0, terminalReply: { disposition: "visible", text: "settled" } },
+        };
       });
       const pending = runOpenAiCompatibleAgentCommand({
         message: "probe",
@@ -418,6 +417,22 @@ describe("OpenAI-compatible agent run terminal metadata", () => {
 });
 
 describe("OpenAI-compatible agent error envelopes", () => {
+  it("gives certificate failure guidance while retaining the native diagnostic code", () => {
+    const error = new FailoverError("Connection error.", {
+      reason: "tls_certificate",
+      code: "CERT_REVOKED",
+    });
+    expect(resolveOpenAiCompatibleAgentError(error)).toEqual({
+      status: 502,
+      error: {
+        message:
+          "Couldn't connect securely to the AI service. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
+        type: "api_error",
+        code: "CERT_REVOKED",
+      },
+    });
+  });
+
   it.each([
     {
       name: "a Gateway-cancelled run",

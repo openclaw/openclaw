@@ -11,7 +11,7 @@ import {
   removeAckReactionHandleAfterReply,
   shouldAckReaction,
 } from "../../channels/ack-reactions.js";
-import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../../config/types.openclaw.js";
 import { createChannelRuntimeContextRegistry } from "../../plugins/runtime/channel-runtime-contexts.js";
 import { resolveAgentCatalogCreateTarget } from "../../plugins/runtime/runtime-agent-session-catalog.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
@@ -29,6 +29,7 @@ import {
 import { createPluginModelRuntimeMock } from "./plugin-runtime-model-mock.js";
 import { createPluginSessionRuntimeMock } from "./plugin-runtime-session-mock.js";
 import { createPluginStateRuntimeMock } from "./plugin-runtime-state-mock.js";
+import { createPluginSystemRuntimeMock } from "./plugin-runtime-system-mock.js";
 import { createPluginThreadBindingsRuntimeMock } from "./plugin-runtime-thread-bindings-mock.js";
 
 type InboundDebounceFlush = ReturnType<InboundDebounceCreateParams<unknown>["onFlush"]>;
@@ -92,6 +93,7 @@ export function createPluginRuntimeMediaMock(
     saveMediaBuffer: vi
       .fn<PluginRuntimeMediaMock["saveMediaBuffer"]>()
       .mockResolvedValue(TEST_SAVED_MEDIA),
+    deleteMediaBuffer: vi.fn<PluginRuntimeMediaMock["deleteMediaBuffer"]>().mockResolvedValue(),
     ...overrides,
   };
 }
@@ -111,7 +113,7 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
     ...createPluginModelRuntimeMock({ provider: DEFAULT_PROVIDER, model: DEFAULT_MODEL }),
     gateway: createPluginGatewayRuntimeMock(),
     config: {
-      current: vi.fn<PluginRuntime["config"]["current"]>(() => ({})),
+      current: vi.fn((): OpenClawConfig => ({})),
       mutateConfigFile: createGenericMock<PluginRuntime["config"]["mutateConfigFile"]>(
         async () => ({
           path: "/tmp/openclaw.json",
@@ -155,6 +157,9 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
       resolveCliBackendDispatchEligibility: vi.fn<
         PluginRuntime["agent"]["resolveCliBackendDispatchEligibility"]
       >(() => undefined),
+      resolveCliBackendDispatchEligibilityAsync: vi.fn<
+        PluginRuntime["agent"]["resolveCliBackendDispatchEligibilityAsync"]
+      >(async () => undefined),
       normalizeThinkingLevel:
         vi.fn<PluginRuntime["agent"]["normalizeThinkingLevel"]>(normalizeThinkLevel),
       resolveThinkingPolicy: vi.fn<PluginRuntime["agent"]["resolveThinkingPolicy"]>(() => ({
@@ -250,6 +255,9 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
         listSessionEntries: vi.fn<PluginRuntime["agent"]["session"]["listSessionEntries"]>(
           () => [],
         ),
+        listSessionEntriesAsync: vi
+          .fn<PluginRuntime["agent"]["session"]["listSessionEntriesAsync"]>()
+          .mockResolvedValue([]),
         createSessionEntryListReader: vi
           .fn<PluginRuntime["agent"]["session"]["createSessionEntryListReader"]>()
           .mockResolvedValue(async () => ({ entries: [], assertCurrent: () => {} })),
@@ -270,19 +278,7 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
           .mockResolvedValue(null),
       },
     },
-    system: {
-      enqueueSystemEvent: vi.fn<PluginRuntime["system"]["enqueueSystemEvent"]>(),
-      requestHeartbeat: vi.fn<PluginRuntime["system"]["requestHeartbeat"]>(),
-      requestHeartbeatNow: vi.fn<PluginRuntime["system"]["requestHeartbeatNow"]>(),
-      runHeartbeatOnce: vi.fn<PluginRuntime["system"]["runHeartbeatOnce"]>(async () => ({
-        status: "ran" as const,
-        durationMs: 0,
-      })),
-      runCommandWithTimeout: vi.fn<PluginRuntime["system"]["runCommandWithTimeout"]>(),
-      formatNativeDependencyHint: vi.fn<PluginRuntime["system"]["formatNativeDependencyHint"]>(
-        () => "",
-      ),
-    },
+    system: createPluginSystemRuntimeMock(),
     media: {
       loadWebMedia: vi.fn<PluginRuntime["media"]["loadWebMedia"]>(),
       detectMime: vi.fn<PluginRuntime["media"]["detectMime"]>(),
@@ -325,6 +321,7 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
     },
     webSearch: {
       listProviders: vi.fn<PluginRuntime["webSearch"]["listProviders"]>(),
+      listProvidersAsync: vi.fn<PluginRuntime["webSearch"]["listProvidersAsync"]>(),
       search: vi.fn<PluginRuntime["webSearch"]["search"]>(),
     },
     channel: {
@@ -545,6 +542,7 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
     state: createPluginStateRuntimeMock(),
     subagent: {
       complete: vi.fn(),
+      forkSession: vi.fn(),
       run: vi.fn(),
       waitForRun: vi.fn(),
       getSessionMessages: vi.fn(),

@@ -1,9 +1,9 @@
-import type { DatabaseSync } from "node:sqlite";
 import {
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import {
   hasSessionPendingInputsSchema,
@@ -11,13 +11,12 @@ import {
 } from "../../state/openclaw-agent-pending-inputs-schema.js";
 import { readLegacyCompactionHistory } from "./legacy-compaction-history.js";
 import { hasMainSessionRecoveryClaim } from "./restart-recovery-state.js";
-import { parseSqliteSessionEntryRecord } from "./session-entry-json.js";
-import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
+import { parseCanonicalSqliteSessionEntry } from "./session-entry-json.js";
 import type { InternalSessionEntry } from "./types.js";
 
 /** Cold storage preserves logical owners; only activity and explicit cross-generation references protect bytes. */
 export function readSessionColdStorageProtection(
-  database: { db: DatabaseSync },
+  database: { db: EngineConnection },
   beforeMs: number,
   liveSessionKeys: ReadonlySet<string>,
 ): Set<string> {
@@ -38,10 +37,8 @@ export function readSessionColdStorageProtection(
         "entry_json",
       ]),
   )) {
-    const record = parseSqliteSessionEntryRecord(row);
-    const entry: InternalSessionEntry | undefined = record
-      ? projectCanonicalSessionEntryShape(record)
-      : undefined;
+    const entry: InternalSessionEntry | undefined =
+      parseCanonicalSqliteSessionEntry(row) ?? undefined;
     const recoveryPending =
       !entry?.mainRestartRecovery?.tombstone &&
       (entry?.restartRecoveryBeforeAgentReplyState === "admitted" ||

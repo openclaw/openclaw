@@ -18,7 +18,7 @@ import {
 import { isTransientSqliteBackupPath } from "./backup-volatile-filter.js";
 import { hasErrnoCode } from "./errno.js";
 import { isPathInside } from "./path-guards.js";
-import { resolveSqliteDatabaseFilePaths } from "./sqlite-files.js";
+import { resolveSqliteDatabaseFilePaths, SQLITE_SIDECAR_SUFFIXES } from "./sqlite-files.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
 
 export type AgentDatabaseMigrationTarget = {
@@ -32,6 +32,8 @@ type CandidateTarget = Omit<AgentDatabaseMigrationTarget, "realPath">;
 
 export type PreparedAgentDatabaseMigrationDiscovery = {
   preparedTranscriptArchives?: Set<string>;
+  /** Earlier committed version steps defer historical content repair for this invocation. */
+  versionMigrations?: readonly { path: string; foundVersion: number }[];
   stateDir: string;
   configuredAgentDatabaseTargets: readonly { agentId: string; path: string }[];
   registeredAgentDatabases: readonly { agentId: string; path: string }[];
@@ -42,7 +44,6 @@ export function prepareAgentDatabaseMigrationDiscovery(params: {
   env: NodeJS.ProcessEnv;
   configuredAgentDatabaseTargets: readonly { agentId: string; path: string }[];
   registeredAgentDatabases?: readonly { agentId: string; path: string }[];
-  deletionJournal?: AgentDeletionJournalDisposition;
   preparedDiscovery?: PreparedAgentDatabaseMigrationDiscovery;
 }): PreparedAgentDatabaseMigrationDiscovery {
   const stateDir = resolveStateDir(params.env);
@@ -50,7 +51,7 @@ export function prepareAgentDatabaseMigrationDiscovery(params: {
     params.preparedDiscovery?.stateDir === stateDir &&
     params.preparedDiscovery.discovery.deletionJournal.status === "unavailable"
       ? params.preparedDiscovery.discovery.deletionJournal
-      : params.deletionJournal;
+      : undefined;
   const snapshot =
     params.registeredAgentDatabases && preparedJournal
       ? undefined
@@ -73,7 +74,10 @@ export function prepareAgentDatabaseMigrationDiscovery(params: {
       deletionJournal,
     }),
     ...(params.preparedDiscovery?.stateDir === stateDir
-      ? { preparedTranscriptArchives: params.preparedDiscovery.preparedTranscriptArchives }
+      ? {
+          preparedTranscriptArchives: params.preparedDiscovery.preparedTranscriptArchives,
+          versionMigrations: params.preparedDiscovery.versionMigrations,
+        }
       : {}),
   };
 }
@@ -131,13 +135,22 @@ export function discoverAgentDatabaseMigrationTargets(params: {
       ...entry,
       source: "registry" as const,
     })),
-    ...retainedDeletions.flatMap((entry) =>
-      entry.databasePaths.map((pathname) => ({
-        agentId: entry.agentId,
-        path: pathname,
-        source: "disk" as const,
-      })),
-    ),
+    ...retainedDeletions.flatMap((entry) => {
+      const recordedPaths = new Set(entry.databasePaths);
+      return entry.databasePaths
+        .filter(
+          (pathname) =>
+            !SQLITE_SIDECAR_SUFFIXES.some(
+              (suffix) =>
+                pathname.endsWith(suffix) && recordedPaths.has(pathname.slice(0, -suffix.length)),
+            ),
+        )
+        .map((pathname) => ({
+          agentId: entry.agentId,
+          path: pathname,
+          source: "disk" as const,
+        }));
+    }),
     ...(knownDeletions?.held ?? []).map((target) => ({
       agentId: target.agentId,
       path: target.path,
@@ -175,6 +188,7 @@ export function discoverAgentDatabaseMigrationTargets(params: {
   }
   const configuredPathMatcher = createOpenClawAgentDatabasePathMatcher();
   const targets: AgentDatabaseMigrationTarget[] = [];
+  const pendingDeletionTargets: AgentDatabaseMigrationTarget[] = [];
   const retainedTargets: AgentDatabaseMigrationTarget[] = [];
   const unverifiedTargets: AgentDatabaseMigrationTarget[] = [];
   const seenTargets = new Set<string>();
@@ -287,11 +301,22 @@ export function discoverAgentDatabaseMigrationTargets(params: {
         if (typeof deletion === "string") {
           unverifiedTargets.push({ ...candidate, realPath });
         } else {
-          retainedTargets.push({ ...candidate, agentId: deletion.agentId, realPath });
+          const target = { ...candidate, agentId: deletion.agentId, realPath };
+          if (!deletion.cleanupCompleted && !deletion.manualClawRemoval) {
+            pendingDeletionTargets.push(target);
+          } else {
+            retainedTargets.push(target);
+          }
         }
-        warnings.push(
-          `Held agent ${sanitizeForLog(typeof deletion === "string" ? candidate.agentId : deletion.agentId)} database ${sanitizeForLog(pathname)} (${typeof deletion === "string" ? (deletion === "held" ? "deletion journal reconstructed" : "deletion journal unavailable") : "retained-by-deletion"}); run ${formatCliCommand("openclaw doctor --fix", params.env)} to inspect restoration.`,
-        );
+        if (
+          typeof deletion === "string" ||
+          deletion.cleanupCompleted ||
+          deletion.manualClawRemoval
+        ) {
+          warnings.push(
+            `Held agent ${sanitizeForLog(typeof deletion === "string" ? candidate.agentId : deletion.agentId)} database ${sanitizeForLog(pathname)} (${typeof deletion === "string" ? (deletion === "held" ? "deletion journal reconstructed" : "deletion journal unavailable") : "retained-by-deletion"}); run ${formatCliCommand("openclaw doctor --fix", params.env)} to inspect restoration.`,
+          );
+        }
       }
       continue;
     }
@@ -305,6 +330,8 @@ export function discoverAgentDatabaseMigrationTargets(params: {
   }
   return {
     targets,
+    pendingDeletionTargets,
+    schemaTargets: [...targets, ...pendingDeletionTargets],
     retainedTargets,
     unverifiedTargets,
     deletionJournal,
@@ -323,6 +350,7 @@ export function agentDatabaseMigrationAdvisory(
   if (
     discovery.deletionJournal.status !== "unavailable" &&
     (discovery.targets.length > 0 ||
+      discovery.pendingDeletionTargets.length > 0 ||
       discovery.registryRemovals.length > 0 ||
       discovery.failures.length > 0)
   ) {
@@ -342,7 +370,11 @@ export function resolveAgentDatabaseMigrationTargets(params: {
   env: NodeJS.ProcessEnv;
   warnings: string[];
   preparedDiscovery?: PreparedAgentDatabaseMigrationDiscovery;
-}): { targets: AgentDatabaseMigrationTarget[]; recoverableWarningCount: number } {
+}): {
+  targets: AgentDatabaseMigrationTarget[];
+  pendingDeletionTargets: AgentDatabaseMigrationTarget[];
+  recoverableWarningCount: number;
+} {
   const snapshot = readAgentDatabaseDeletionSnapshot(params.env);
   // Rediscover after schema repair and admission; initialization cannot replace unknown history.
   const deletionJournal: AgentDeletionJournalDisposition =
@@ -370,6 +402,7 @@ export function resolveAgentDatabaseMigrationTargets(params: {
   // Failed discovery never grants that disposition, even if it also omitted a foreign entry.
   return {
     targets: discovery.targets,
+    pendingDeletionTargets: discovery.pendingDeletionTargets,
     recoverableWarningCount: discovery.failures.length > 0 ? 0 : discovery.warnings.length,
   };
 }

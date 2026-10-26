@@ -1,9 +1,15 @@
 import fs from "node:fs";
 import type { MessagePort } from "node:worker_threads";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import { requestCliParentTermination } from "../../cli-parent-lifetime.mjs";
 import { hasErrnoCode } from "./errno.js";
+import {
+  isGatewayMaintenanceParentStale,
+  parseGatewayLockPayload,
+} from "./gateway-lock-payload.js";
 
 export type GatewayStateOwnerHeartbeatData = {
+  clock?: "epoch";
   locks: Record<string, string>;
   intervalMs: number;
   failureMs: number;
@@ -11,22 +17,64 @@ export type GatewayStateOwnerHeartbeatData = {
   events: MessagePort;
 };
 
-/** Native main-thread work cannot stall renewal; an expired worker never resumes custody. */
+function selectHeartbeatClock(data: GatewayStateOwnerHeartbeatData, seed: bigint) {
+  if (data.clock === "epoch") {
+    return "epoch";
+  }
+  const payload = parseGatewayLockPayload(Object.values(data.locks)[0] ?? "");
+  const createdAt = Date.parse(payload?.createdAt ?? "");
+  const epoch = Date.now();
+  const monotonic = process.hrtime.bigint() / 1_000_000n;
+  if (!Number.isFinite(createdAt) || createdAt > epoch || monotonic >= BigInt(createdAt)) {
+    return undefined;
+  }
+  // Shipped drivers omitted the clock. Classify its domain once without refreshing custody.
+  const processStart = monotonic - BigInt(Math.ceil(process.uptime() * 1_000));
+  if (!process.versions.bun && seed >= processStart && seed <= monotonic) {
+    return "monotonic";
+  }
+  return seed >= BigInt(createdAt) && seed <= BigInt(epoch) ? "epoch" : undefined;
+}
+
+/** Verify the held inode and exact acquisition bytes before touching it. */
+export function renewGatewayStateOwnerLock(fd: number, lockPath: string, raw: string, stamp: Date) {
+  const held = fs.fstatSync(fd, { bigint: true });
+  const current = fs.statSync(lockPath, { bigint: true });
+  const bytes = Buffer.alloc(Buffer.byteLength(raw) + 1);
+  const length = fs.readSync(fd, bytes, 0, bytes.length, 0);
+  if (
+    held.nlink === 0n ||
+    held.dev !== current.dev ||
+    held.ino !== current.ino ||
+    bytes.subarray(0, length).toString("utf8") !== raw
+  ) {
+    return false;
+  }
+  // Suspension can only touch this held inode, never its successor.
+  fs.futimesSync(fd, stamp, stamp);
+  return true;
+}
+
+/** Native main-thread work cannot stall renewal; clock gaps require physical custody checks. */
 export function runGatewayStateOwnerHeartbeat(
   data: GatewayStateOwnerHeartbeatData,
   parent: MessagePort | null,
 ) {
   const lastBeat = new BigInt64Array(data.lastBeat);
-  const now = () => BigInt(Date.now());
   const rootPath = Object.keys(data.locks)[0];
-  const remainingMs = (at = now()) => {
-    const renewedAt = Atomics.load(lastBeat, 0);
-    const age = Number(at - renewedAt);
-    if (age < 0) {
-      data.events.postMessage(`${rootPath}: heartbeat clock moved backwards`, []);
-      return 0;
-    }
-    return data.failureMs - age;
+  const owner = parseGatewayLockPayload(rootPath === undefined ? "" : (data.locks[rootPath] ?? ""));
+  const clock = selectHeartbeatClock(data, Atomics.load(lastBeat, 0));
+  if (!clock) {
+    data.events.postMessage(`${rootPath}: heartbeat clock could not be identified`, []);
+    data.events.close();
+    parent?.close();
+    return;
+  }
+  const now =
+    clock === "epoch" ? () => BigInt(Date.now()) : () => process.hrtime.bigint() / 1_000_000n;
+  const remainingMs = () => {
+    const age = Number(now() - Atomics.load(lastBeat, 0));
+    return age < 0 ? 0 : data.failureMs - age;
   };
   const descriptors = new Map<string, number>();
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -52,11 +100,12 @@ export function runGatewayStateOwnerHeartbeat(
     data.events.close();
     parent?.close();
   };
+  let parentLost = false;
   const beat = () => {
-    const remaining = remainingMs();
-    if (remaining <= 0) {
-      stop();
-      return;
+    // Keep renewing custody while cancellation settles; peers must not race its rollback.
+    if (!parentLost && owner?.pid === process.pid && isGatewayMaintenanceParentStale(owner)) {
+      parentLost = true;
+      requestCliParentTermination(() => data.events.postMessage("parent-lost", []));
     }
     let failure: string | null = null;
     let renewedAt: bigint | undefined;
@@ -67,16 +116,9 @@ export function runGatewayStateOwnerHeartbeat(
           fd = fs.openSync(lockPath, "r+");
           descriptors.set(lockPath, fd);
         }
-        const held = fs.fstatSync(fd, { bigint: true });
-        const current = fs.statSync(lockPath, { bigint: true });
-        const bytes = Buffer.alloc(Buffer.byteLength(raw) + 1);
-        const length = fs.readSync(fd, bytes, 0, bytes.length, 0);
-        if (
-          held.nlink === 0n ||
-          held.dev !== current.dev ||
-          held.ino !== current.ino ||
-          bytes.subarray(0, length).toString("utf8") !== raw
-        ) {
+        const renewalStartedAt = now();
+        const stamp = new Date(clock === "epoch" ? Number(renewalStartedAt) : Date.now());
+        if (!renewGatewayStateOwnerLock(fd, lockPath, raw, stamp)) {
           if (lockPath === rootPath) {
             data.events.postMessage(`${lockPath}: owner lock was removed or replaced`, []);
             stop();
@@ -85,15 +127,6 @@ export function runGatewayStateOwnerHeartbeat(
           forget(lockPath);
           continue;
         }
-        const renewalStartedAt = now();
-        // A recovered clock cannot make an older captured timestamp safe to write.
-        if (remainingMs(renewalStartedAt) <= 0 || remainingMs() <= 0) {
-          stop();
-          return;
-        }
-        // A suspension after verification can only touch this held inode, never its successor.
-        const stamp = new Date(Number(renewalStartedAt));
-        fs.futimesSync(fd, stamp, stamp);
         if (renewedAt === undefined || renewalStartedAt < renewedAt) {
           renewedAt = renewalStartedAt;
         }
@@ -110,16 +143,16 @@ export function runGatewayStateOwnerHeartbeat(
         failure ??= `${lockPath}: utimes renewal failed: ${coerceErrorMessage(error)}`;
       }
     }
-    if (remainingMs() <= 0) {
+    data.events.postMessage(failure, []);
+    if (failure && remainingMs() <= 0) {
       stop();
       return;
     }
-    data.events.postMessage(failure, []);
     if (!failure && renewedAt !== undefined) {
       // A slow syscall must not publish authority newer than the mtime supplied to it.
       Atomics.store(lastBeat, 0, renewedAt);
     }
-    backoff = failure ? Math.min(backoff ? backoff * 2 : 1_000, data.intervalMs, remaining) : 0;
+    backoff = failure ? Math.min(backoff ? backoff * 2 : 1_000, data.intervalMs, remainingMs()) : 0;
     timer = setTimeout(beat, backoff || data.intervalMs);
     timer.unref();
   };

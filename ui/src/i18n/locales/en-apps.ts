@@ -26,6 +26,7 @@ const enApps = {
     ctaBrowseClawHub: "Browse ClawHub",
     linkDiscord: "Discord community",
     linkDocs: "Docs",
+    linkSupport: "Support",
     cards: {
       ios: {
         title: "iPhone",

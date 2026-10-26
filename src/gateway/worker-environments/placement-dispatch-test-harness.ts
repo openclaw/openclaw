@@ -1,5 +1,5 @@
 import { vi } from "vitest";
-import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
+import { runSessionMutation } from "../../sessions/session-controller.lifecycle.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import type { MintedWorkerCredential } from "./credential.js";
 import type {
@@ -49,7 +49,7 @@ import {
 
 type DispatchOptions = Parameters<typeof createWorkerPlacementDispatchService>[0];
 
-export function createHarness(
+export async function createHarness(
   database: OpenClawStateDatabase,
   placementStore: PlacementStore,
   options: {
@@ -365,12 +365,20 @@ export function createHarness(
     recordError: vi.fn((record) => record),
     supportsProviderExecutionMode: vi.fn(() => true),
     assertPreparedIntentCurrent: vi.fn(),
-    prepareProjectIntent: vi.fn(async (_profileId, request) => ({
-      providerId: request?.inherited?.providerId ?? ready.providerId,
-      profileSnapshot: request?.inherited?.profileSnapshot ?? ready.profileSnapshot,
-    })),
+    prepareProjectIntent: vi.fn(async (_profileId, request) => {
+      const {
+        project: _project,
+        runtimePreparation: _runtimePreparation,
+        ...profileSnapshot
+      } = request?.inherited?.profileSnapshot ?? ready.profileSnapshot;
+      return {
+        providerId: request?.inherited?.providerId ?? ready.providerId,
+        profileSnapshot,
+      };
+    }),
     getPreparedCandidates: vi.fn(() => []),
     bindPreparedWorkspace: vi.fn(async (request) => ({
+      assertCurrent: request.assertCurrent,
       gatewayNamespace: "dispatch-fixture",
       environmentId: request.environmentId,
       preparationKey: request.preparationKey,
@@ -429,6 +437,11 @@ export function createHarness(
       },
     ),
     requestDestroy: (requestedEnvironmentId) => environments.destroy(requestedEnvironmentId),
+    reclaim: async (requestedEnvironmentId) => {
+      const ownerEpoch = environments.get(requestedEnvironmentId)?.ownerEpoch;
+      await environments.stopTunnel(requestedEnvironmentId, ownerEpoch);
+      return environments.destroy(requestedEnvironmentId);
+    },
     reconcileOnce: vi.fn(async () => {
       log.push("environment:reconcile");
     }),
@@ -440,6 +453,7 @@ export function createHarness(
     Object.assign(environments, options.environmentService);
   }
   const service = createWorkerPlacementDispatchService({
+    initialPlacements: await placementStore.listAsync(),
     placements,
     environments,
     isShuttingDown: options.isShuttingDown,
@@ -514,7 +528,8 @@ export function createHarness(
     runReclaimBarrier:
       options.runReclaimBarrier ??
       (async ({ sessionId, sessionKey, authorize, beforeDrain, begin, reclaim }) =>
-        await runExclusiveSessionLifecycleMutation("placement-reclaim", {
+        await runSessionMutation({
+          diagnosticLabel: "placement-reclaim",
           scope: options.workspacePath ?? "/gateway/workspace",
           identities: [sessionId, sessionKey],
           run: async () => {
@@ -533,7 +548,8 @@ export function createHarness(
     runFailedReclaimBarrier:
       options.runFailedReclaimBarrier ??
       (async ({ sessionId, sessionKey, authorize, reclaim }) =>
-        await runExclusiveSessionLifecycleMutation("placement-failed-reclaim", {
+        await runSessionMutation({
+          diagnosticLabel: "placement-failed-reclaim",
           scope: options.workspacePath ?? "/gateway/workspace",
           identities: [sessionId, sessionKey],
           run: async () => {
@@ -639,12 +655,13 @@ export function createHarness(
   };
 }
 
-export const createRecoveryService = (
+export const createRecoveryService = async (
   placements: PlacementStore,
   environments: WorkerEnvironmentService,
   isShuttingDown: () => boolean = () => false,
 ) =>
   createWorkerPlacementDispatchService({
+    initialPlacements: await placements.listAsync(),
     placements,
     environments,
     isShuttingDown,

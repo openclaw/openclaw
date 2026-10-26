@@ -6,7 +6,7 @@ export type SlackUnfurlOptions = {
   unfurlMedia?: boolean;
 };
 
-type SlackPostThreadPayload =
+export type SlackBasePostMessagePayload = (
   | {
       thread_ts: string;
       reply_broadcast: true;
@@ -14,9 +14,8 @@ type SlackPostThreadPayload =
   | {
       thread_ts?: string;
       reply_broadcast?: never;
-    };
-
-export type SlackBasePostMessagePayload = SlackPostThreadPayload & {
+    }
+) & {
   channel: string;
   text: string;
   blocks?: (Block | KnownBlock)[];
@@ -51,13 +50,13 @@ export function buildSlackPostMessagePayload(params: {
     text: params.text,
     ...(params.blocks?.length ? { blocks: params.blocks } : {}),
     ...(params.metadata ? { metadata: params.metadata } : {}),
-    ...(typeof params.mrkdwn === "boolean" ? { mrkdwn: params.mrkdwn } : {}),
+    ...(params.mrkdwn !== undefined ? { mrkdwn: params.mrkdwn } : {}),
     ...threadPayload,
     // Default unfurl_links to false so bot messages don't expand inline
     // link previews (Slack message links, URLs, etc.) unless the operator
     // explicitly opts in via `channels.slack.unfurlLinks: true`.
     unfurl_links: params.unfurl?.unfurlLinks ?? false,
-    ...(typeof params.unfurl?.unfurlMedia === "boolean"
+    ...(params.unfurl?.unfurlMedia !== undefined
       ? { unfurl_media: params.unfurl.unfurlMedia }
       : {}),
   };

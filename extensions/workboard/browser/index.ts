@@ -1,6 +1,6 @@
 import { defineControlUiPlugin } from "openclaw/plugin-sdk/control-ui";
 import { WorkboardCatalog } from "./catalog.ts";
-import { deleteWorkboardBoard } from "./delete-board.ts";
+import { deleteWorkboardBoard } from "./delete-board.tsx";
 import { bindWorkboardHost } from "./host.ts";
 import { t } from "./i18n/index.ts";
 import { workboardBoardName } from "./lib/workboard/board-presentation.ts";
@@ -8,18 +8,20 @@ import { createWorkboardCapability } from "./lib/workboard/capability.ts";
 import { WORKBOARD_CHANGED_EVENT, type WorkboardBoardSummary } from "./lib/workboard/types.ts";
 import { createLazyWorkboardPage } from "./pages/workboard/lazy-page.ts";
 import { workboardPageTarget } from "./pages/workboard/page-target.ts";
-import { createWorkboardSessionAccessory } from "./session-accessory.ts";
-import { createWorkboardWidget } from "./widgets.ts";
+import { createWorkboardSessionAccessory } from "./session-accessory.tsx";
+import { createWorkboardWidget } from "./widgets.tsx";
+import "./components/toast.css";
 import "./styles/workboard.css";
 import "./styles/widgets.css";
 import "./styles/session-chip.css";
+import "./styles/sessions-board.css";
 
 type NavigationBoard = Pick<WorkboardBoardSummary, "id" | "name" | "kind" | "icon" | "color">;
 
 export default defineControlUiPlugin({
   id: "workboard",
   activate(host) {
-    const unbind = bindWorkboardHost(host);
+    const unbind = bindWorkboardHost(host, () => syncBoardNavigation(workboard.state.boards));
     const workboard = createWorkboardCapability();
     const client = host;
     let pendingDeletion: Promise<void> | undefined;
@@ -102,13 +104,13 @@ export default defineControlUiPlugin({
         });
       }
     };
-    const catalog = new WorkboardCatalog(({ boards }) => syncBoardNavigation(boards), workboard);
+    const catalog = new WorkboardCatalog(syncBoardNavigation, workboard);
     const registrations = [
       host.ui.registerPage({
         id: "workboard",
         label: "Workboard",
         mount: createLazyWorkboardPage(async () => {
-          const { createWorkboardPage } = await import("./pages/workboard/workboard-page.ts");
+          const { createWorkboardPage } = await import("./pages/workboard/workboard-page.tsx");
           return createWorkboardPage(workboard, (board) => {
             const boards = [...navigation.values()]
               .toSorted((left, right) => left.order - right.order)
@@ -116,6 +118,7 @@ export default defineControlUiPlugin({
             const index = boards.findIndex((entry) => entry.id === board.id);
             boards[index < 0 ? boards.length : index] = board;
             syncBoardNavigation(boards);
+            catalog.refresh();
           });
         }),
       }),
@@ -129,7 +132,7 @@ export default defineControlUiPlugin({
       host.ui.registerAccessory({
         id: "linked-card",
         placement: "session-header",
-        mount: createWorkboardSessionAccessory(workboard),
+        mount: createWorkboardSessionAccessory(),
       }),
       ...(["mini", "card", "board"] as const).map((id) =>
         host.ui.registerWidget({

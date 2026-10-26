@@ -1,8 +1,5 @@
 import { resolvePositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { readResponseBodySnippet } from "../infra/http-error-body.js";
-/**
- * Adapts MiniMax VLM image-understanding requests for agent image inputs.
- */
 import {
   postJsonRequest,
   resolveProviderHttpRequestConfigWithOriginTrust,
@@ -13,8 +10,8 @@ import {
   createProviderErrorTextRedactor,
   readProviderJsonResponse,
 } from "./provider-http-errors.js";
+import { resolveProviderTransportSsrFPolicy } from "./provider-network-policy.js";
 import type { ModelProviderRequestTransportOverrides } from "./provider-request-config.types.js";
-import { resolveProviderTransportSsrFPolicy } from "./provider-transport-fetch.js";
 
 type MinimaxBaseResp = {
   status_code?: number;
@@ -27,12 +24,7 @@ const DEFAULT_MINIMAX_VLM_TIMEOUT_MS = 60_000;
 
 export function isMinimaxVlmProvider(provider: string): boolean {
   const normalized = provider.trim().toLowerCase();
-  return (
-    normalized === "minimax" ||
-    normalized === "minimax-cn" ||
-    normalized === "minimax-portal" ||
-    normalized === "minimax-portal-cn"
-  );
+  return ["minimax", "minimax-cn", "minimax-portal", "minimax-portal-cn"].includes(normalized);
 }
 
 export function isMinimaxVlmModel(provider: string, modelId: string): boolean {
@@ -46,19 +38,9 @@ function resolveDefaultApiHost(provider: string | undefined): string {
     : "https://api.minimax.io";
 }
 
-function coerceApiHost(params: {
-  apiHost?: string;
-  modelBaseUrl?: string;
-  provider?: string;
-  env?: NodeJS.ProcessEnv;
-}): string {
-  const env = params.env ?? process.env;
+function coerceApiHost(params: { modelBaseUrl?: string; provider?: string }): string {
   const defaultHost = resolveDefaultApiHost(params.provider);
-  const raw =
-    params.apiHost?.trim() ||
-    env.MINIMAX_API_HOST?.trim() ||
-    params.modelBaseUrl?.trim() ||
-    defaultHost;
+  const raw = process.env.MINIMAX_API_HOST?.trim() || params.modelBaseUrl?.trim() || defaultHost;
 
   const url = URL.parse(raw);
   if (url) {
@@ -76,7 +58,6 @@ export async function minimaxUnderstandImage(params: {
   apiKey: string;
   prompt: string;
   imageDataUrl: string;
-  apiHost?: string;
   modelBaseUrl?: string;
   provider?: string;
   timeoutMs?: number;
@@ -102,11 +83,7 @@ export async function minimaxUnderstandImage(params: {
     throw new Error("MiniMax VLM: imageDataUrl must be a base64 data:image/(png|jpeg|webp) URL");
   }
 
-  const configuredHost = coerceApiHost({
-    apiHost: params.apiHost,
-    modelBaseUrl: params.modelBaseUrl,
-    provider: params.provider,
-  });
+  const configuredHost = coerceApiHost(params);
   const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy, trustConfiguredBaseUrlOrigin } =
     resolveProviderHttpRequestConfigWithOriginTrust({
       baseUrl: configuredHost,

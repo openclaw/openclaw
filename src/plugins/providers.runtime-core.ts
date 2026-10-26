@@ -27,6 +27,7 @@ import {
   buildDeclaredProviderOwnerIndex,
   matchesDeclaredProviderOwner,
 } from "./provider-owner-index.js";
+import { projectRegisteredProvider } from "./provider-registration-projection.js";
 import {
   matchesProviderPluginRef,
   resolveProviderRuntimeWorkspaceDir,
@@ -46,8 +47,8 @@ import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-s
 import { getPluginRuntimeGenerationRegistry } from "./runtime/generation-state.js";
 import {
   buildPluginRuntimeLoadOptions,
-  createPluginRuntimeLoaderLogger,
   getPluginRuntimeLoadContext,
+  pluginRuntimeLoaderLogger,
 } from "./runtime/load-context.js";
 import type { ProviderPlugin } from "./types.js";
 
@@ -291,7 +292,7 @@ export function createProviderRegistryResolver(dependencies: {
         ...activation,
         workspaceDir: params.workspaceDir,
         env: params.env,
-        logger: createPluginRuntimeLoaderLogger(),
+        logger: pluginRuntimeLoaderLogger,
         manifestRegistry: snapshot.manifestRegistry,
         installRecords: extractPluginInstallRecordsFromInstalledPluginIndex(snapshot.index),
       },
@@ -396,7 +397,7 @@ export function createProviderRegistryResolver(dependencies: {
     workspaceDir?: string;
     /** Use an explicit env when plugin roots should resolve independently from process.env. */
     env?: PluginLoadOptions["env"];
-    onlyPluginIds?: string[];
+    onlyPluginIds?: readonly string[];
     providerRefs?: readonly string[];
     modelRefs?: readonly string[];
     activate?: boolean;
@@ -588,9 +589,7 @@ export function createProviderRegistryResolver(dependencies: {
       return [];
     }
     const { registry, onlyPluginIds } = resolved;
-    const project =
-      onSelectedRegistry?.(registry) ??
-      ((provider: ProviderPlugin, pluginId: string) => Object.assign({}, provider, { pluginId }));
+    const project = onSelectedRegistry?.(registry) ?? projectRegisteredProvider;
     return registry.providers
       .filter((entry) => !onlyPluginIds || onlyPluginIds.includes(entry.pluginId))
       .map((entry) => project(entry.provider, entry.pluginId));

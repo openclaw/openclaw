@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { createStandardCloudProfile } from "../test-helpers/session-placement.ts";
 import {
   WORKSPACE,
   captureUiProof,
@@ -27,17 +28,7 @@ suite.define(() => {
           },
           "environments.list": {
             environments: [],
-            profiles: [
-              {
-                id: "aws",
-                providerId: "crabbox",
-                machines: [
-                  { id: "standard", label: "Standard", default: true },
-                  { id: "fast", label: "Fast" },
-                ],
-              },
-              { id: "machine0", providerId: "crabbox" },
-            ],
+            profiles: [createStandardCloudProfile(), { id: "machine0", providerId: "crabbox" }],
           },
           "worktrees.branches": {
             branches: [{ kind: "local", name: "main" }],
@@ -52,7 +43,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("environments.list");
       const trigger = page.locator("#new-session-where-trigger");
-      const place = page.locator("wa-popover.new-session-page__where-popover");
+      const place = page.locator(".oc-popover.new-session-page__where-popover");
       await trigger.click();
       await place.getByRole("button", { name: "aws", exact: true }).click();
       await place.getByRole("button", { name: "Fast", exact: true }).click();

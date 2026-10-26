@@ -1,5 +1,3 @@
-// Channel action schemas describe plugin-declared actions available through channel UIs.
-
 export {
   createUnionActionGate,
   listTokenSourcedAccounts,

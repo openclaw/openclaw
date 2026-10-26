@@ -1,19 +1,28 @@
-import { mkdir, symlink } from "node:fs/promises";
+import { symlink } from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import * as pluginState from "../plugin-state/plugin-state-store.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
-import { createDeferredCore } from "../shared/deferred.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import {
-  clearMemoryArtifactProvenance,
-  listMemoryArtifactProvenance,
-  normalizeMemoryArtifactRelativePath,
-  readMemoryArtifactProvenance,
-  recordMemoryArtifactWriteProvenance,
+  clearMemoryArtifactProvenance as clear,
+  listMemoryArtifactProvenance as list,
+  normalizeMemoryArtifactRelativePath as normalizePath,
+  readMemoryArtifactProvenance as read,
+  recordMemoryArtifactWriteProvenance as recordWrite,
 } from "./memory-artifact-provenance.js";
+
+type Address = Parameters<typeof read>[0];
+const test = it.extend<{ tempRoot: string; address: Address }>({
+  tempRoot: async ({ task }, use) =>
+    withStateDirEnv(`openclaw-memory-artifact-${task.id}-`, ({ tempRoot }) => use(tempRoot)),
+  address: async ({ tempRoot }, use) => use({ workspaceDir: tempRoot, relativePath: "MEMORY.md" }),
+});
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -21,247 +30,150 @@ afterEach(() => {
 });
 
 function write(
-  address: { workspaceDir: string; relativePath: string },
+  address: Address,
   contentBefore: string,
   contentAfter: string,
   observedAt: number,
   originClass: "agent" | "untrusted" = "agent",
 ) {
-  return recordMemoryArtifactWriteProvenance({
-    ...address,
-    contentBefore,
-    contentAfter,
-    observedAt,
-    originClass,
+  return recordWrite({ ...address, contentBefore, contentAfter, observedAt, originClass });
+}
+
+function beforeNextPersist(before: () => Promise<void>) {
+  const next = vi.fn().mockImplementationOnce(before);
+  const createStore = pluginState.createCorePluginStateKeyedStore;
+  vi.spyOn(pluginState, "createCorePluginStateKeyedStore").mockImplementation((options) => {
+    const store = createStore(options);
+    return {
+      ...store,
+      compareAndApply: async (...args) => {
+        await next();
+        return store.compareAndApply(...args);
+      },
+    };
   });
 }
 
-describe("memory artifact provenance", () => {
-  it("reads only the selected workspace while preserving order and corruption errors", async () => {
-    await withStateDirEnv("openclaw-memory-artifact-", async ({ tempRoot }) => {
-      const workspaceDir = path.join(tempRoot, "workspace");
-      for (const relativePath of [
-        "memory/late.md",
-        "MEMORY.md",
-        "memory/first.md",
-        "memory/expired.md",
-      ]) {
-        await recordMemoryArtifactWriteProvenance({
-          workspaceDir,
-          relativePath,
-          contentBefore: "",
-          contentAfter: "synthetic note",
-          originClass: "untrusted",
-          observedAt: 1,
-        });
-      }
-      await recordMemoryArtifactWriteProvenance({
-        workspaceDir: path.join(tempRoot, "other-workspace"),
-        relativePath: "memory/other.md",
-        contentBefore: "",
-        contentAfter: "synthetic other note",
-        originClass: "agent",
-        observedAt: 1,
-      });
-      const { db } = openOpenClawStateDatabase();
-      // sqlite-allow-raw -- Seed historical ordering, expiry, and corruption at the storage boundary.
-      db.prepare(
-        `UPDATE plugin_state_entries SET
+async function expectOrigin(address: Address, originClass: string, observedAt: number) {
+  await expect(read(address)).resolves.toMatchObject({ originClass, observedAt });
+}
+
+test("lists one workspace in order and preserves corruption", async ({ tempRoot }) => {
+  const workspaceDir = path.join(tempRoot, "workspace");
+  const seed = (dir: string, relativePath: string) =>
+    write({ workspaceDir: dir, relativePath }, "", "synthetic note", 1, "untrusted");
+  const expectedPaths = ["memory/first.md", "MEMORY.md", "memory/late.md"];
+  for (const relativePath of [...expectedPaths.toReversed(), "memory/expired.md"]) {
+    await seed(workspaceDir, relativePath);
+  }
+  await seed(path.join(tempRoot, "other"), "memory/other.md");
+  // Raw fault injection models cold storage, outside the resident owner's lifetime.
+  await closeOpenClawStateDatabaseAsync();
+  let { db } = openOpenClawStateDatabase();
+  const update = (assignment: string, condition = "") =>
+    // sqlite-allow-raw -- Seed ordering, expiry, and corruption at the storage boundary.
+    db
+      .prepare(`UPDATE plugin_state_entries SET ${assignment}
+      WHERE plugin_id = ? AND namespace = ? ${condition}`)
+      .run("core:memory-artifact-provenance", "workspace-files");
+  update(`
          created_at = CASE json_extract(value_json, '$.relativePath') WHEN 'memory/late.md' THEN 20 ELSE 10 END,
          expires_at = CASE json_extract(value_json, '$.relativePath') WHEN 'memory/expired.md' THEN 1 ELSE NULL END
-         WHERE plugin_id = ? AND namespace = ?`,
-      ).run("core:memory-artifact-provenance", "workspace-files");
-      const materializedKeys: string[] = [];
-      const createStore = pluginState.createCorePluginStateKeyedStore;
-      vi.spyOn(pluginState, "createCorePluginStateKeyedStore").mockImplementation((options) => {
-        const store = createStore(options);
-        return {
-          ...store,
-          entries: async () => {
-            const entries = await store.entries();
-            materializedKeys.push(...entries.map((entry) => entry.key));
-            return entries;
-          },
-          entriesInKeyRange: async (range) => {
-            const entries = await store.entriesInKeyRange(range);
-            materializedKeys.push(...entries.map((entry) => entry.key));
-            return entries;
-          },
-        };
-      });
-      const selected = await listMemoryArtifactProvenance({ workspaceDir });
-      expect(selected.map((entry) => entry.relativePath)).toEqual([
-        "memory/first.md",
-        "MEMORY.md",
-        "memory/late.md",
-      ]);
-      expect(materializedKeys).toHaveLength(3);
-      const selectedKey = expectDefined(materializedKeys[0], "selected provenance key");
-      // sqlite-allow-raw -- Unrelated and expired malformed JSON must not poison this workspace.
-      db.prepare(
-        "UPDATE plugin_state_entries SET value_json = ? WHERE plugin_id = ? AND namespace = ? AND entry_key NOT IN (?, ?, ?)",
-      ).run(
-        "{malformed",
-        "core:memory-artifact-provenance",
-        "workspace-files",
-        ...materializedKeys,
-      );
-      await expect(listMemoryArtifactProvenance({ workspaceDir })).resolves.toEqual(selected);
-      // sqlite-allow-raw -- A selected corrupt row must still fail through the real worker reader.
-      db.prepare(
-        "UPDATE plugin_state_entries SET value_json = ? WHERE plugin_id = ? AND namespace = ? AND entry_key = ?",
-      ).run("{malformed", "core:memory-artifact-provenance", "workspace-files", selectedKey);
-      await expect(listMemoryArtifactProvenance({ workspaceDir })).rejects.toMatchObject({
-        code: "PLUGIN_STATE_CORRUPT",
-      });
-    });
-  });
-
-  it.each(["write", "restore", "remove", "clear"] as const)(
-    "awaits %s persistence and propagates rejection",
-    async (operation) => {
-      await withStateDirEnv("openclaw-memory-artifact-", async ({ tempRoot }) => {
-        const address = { workspaceDir: tempRoot, relativePath: "MEMORY.md" };
-        let rollback: (() => Promise<void>) | undefined;
-        if (operation !== "write") {
-          rollback = await write(address, "", "first", 1);
-          if (operation === "restore") {
-            rollback = await write(address, "first", "second", 2);
-          }
-        }
-        const entered = createDeferredCore();
-        const release = createDeferredCore();
-        const createStore = pluginState.createCorePluginStateKeyedStore;
-        vi.spyOn(pluginState, "createCorePluginStateKeyedStore").mockImplementation((options) => {
-          const store = createStore(options);
-          const delay = async <T>(persist: () => Promise<T>) => {
-            entered.resolve();
-            await release.promise;
-            return persist();
-          };
-          return {
-            ...store,
-            update: (...args) => delay(() => store.update(...args)),
-            deleteIf: (...args) => delay(() => store.deleteIf(...args)),
-          };
-        });
-        const pending =
-          operation === "write"
-            ? write(address, "", "first", 1)
-            : operation === "clear"
-              ? clearMemoryArtifactProvenance({ ...address, contentBefore: "first" })
-              : expectDefined(rollback, "provenance rollback")();
-        const settled = pending.then(
-          () => "settled",
-          () => "settled",
-        );
-        try {
-          expect(await Promise.race([entered.promise.then(() => "waiting"), settled])).toBe(
-            "waiting",
-          );
-          const error = new Error("synthetic persistence rejection");
-          release.reject(error);
-          await expect(pending).rejects.toBe(error);
-        } finally {
-          release.resolve();
-          await settled;
-        }
-      });
-    },
+  `);
+  const selected = await list({ workspaceDir });
+  expect(selected.map((entry) => entry.relativePath)).toEqual(expectedPaths);
+  await closeOpenClawStateDatabaseAsync();
+  ({ db } = openOpenClawStateDatabase());
+  update(
+    "value_json = '{malformed'",
+    "AND (expires_at = 1 OR json_extract(value_json, '$.relativePath') = 'memory/other.md')",
   );
+  await expect(list({ workspaceDir })).resolves.toEqual(selected);
+  await closeOpenClawStateDatabaseAsync();
+  ({ db } = openOpenClawStateDatabase());
+  update("value_json = '{malformed'", "AND json_valid(value_json)");
+  await expect(list({ workspaceDir })).rejects.toMatchObject({ code: "PLUGIN_STATE_CORRUPT" });
+});
 
-  it("restores the previous provenance on rollback", async () => {
-    await withStateDirEnv("openclaw-memory-artifact-", async ({ tempRoot }) => {
-      const address = { workspaceDir: tempRoot, relativePath: "MEMORY.md" };
-      await write(address, "", "first", 1);
-      const rollback = await write(address, "first", "second", 2);
-      await expectDefined(rollback, "provenance rollback")();
-      await expect(readMemoryArtifactProvenance(address)).resolves.toMatchObject({ observedAt: 1 });
+test.for(["write", "restore", "remove", "clear"] as const)(
+  "awaits %s persistence and propagates rejection",
+  async (operation, { address }) => {
+    const first = operation === "write" ? undefined : await write(address, "", "first", 1);
+    const rollback = operation === "restore" ? await write(address, "first", "second", 2) : first;
+    const error = new Error("synthetic persistence rejection");
+    beforeNextPersist(async () => {
+      throw error;
     });
-  });
+    const pending =
+      operation === "write"
+        ? write(address, "", "first", 1)
+        : operation === "clear"
+          ? clear({ ...address, contentBefore: "first" })
+          : expectDefined(rollback, "provenance rollback")();
+    await expect(pending).rejects.toBe(error);
+  },
+);
 
-  it("uses the same workspace identity through symlink aliases", async () => {
-    await withStateDirEnv("openclaw-memory-artifact-", async ({ tempRoot }) => {
-      const workspaceDir = path.join(tempRoot, "workspace");
-      const workspaceAlias = path.join(tempRoot, "workspace-alias");
-      const relativePath = "memory/2026-08-20.md";
-      await mkdir(workspaceDir);
-      await symlink(
-        workspaceDir,
-        workspaceAlias,
-        process.platform === "win32" ? "junction" : "dir",
-      );
+test("uses the same workspace identity through symlink aliases", async ({ tempRoot, address }) => {
+  const { workspaceDir, relativePath } = address;
+  const workspaceAlias = path.join(tempRoot, "workspace-alias");
+  await symlink(workspaceDir, workspaceAlias, process.platform === "win32" ? "junction" : "dir");
+  await write({ workspaceDir: workspaceAlias, relativePath }, "", "restricted", 1, "untrusted");
+  await expectOrigin({ workspaceDir, relativePath }, "untrusted", 1);
+  await expect(list({ workspaceDir })).resolves.toMatchObject([{ relativePath }]);
+});
 
-      await write({ workspaceDir: workspaceAlias, relativePath }, "", "restricted", 1, "untrusted");
+test.for(["agent", "untrusted"] as const)(
+  "preserves %s origin through later writes, stale rollback, and reload",
+  async (origin, { address }) => {
+    const rollback = expectDefined(await write(address, "", "first", 1, origin), "rollback");
+    await write(address, "first", "second", 2);
+    await rollback();
+    resetPluginStateStoreForTests();
+    await expectOrigin(address, origin, 2);
+  },
+);
 
-      await expect(
-        readMemoryArtifactProvenance({ workspaceDir, relativePath }),
-      ).resolves.toMatchObject({ originClass: "untrusted" });
-      await expect(listMemoryArtifactProvenance({ workspaceDir })).resolves.toEqual([
-        expect.objectContaining({ relativePath }),
-      ]);
+test.for(["write", "rollback", "clear"] as const)(
+  "preserves concurrent provenance when %s conflicts",
+  async (operation, { address }) => {
+    const firstRollback = expectDefined(await write(address, "", "first", 1), "first rollback");
+    beforeNextPersist(async () => {
+      await write(address, "first", "concurrent", 3, "untrusted");
     });
-  });
-
-  it("keeps the least-trusted origin sticky across later writes", async () => {
-    await withStateDirEnv("openclaw-memory-artifact-", async ({ tempRoot }) => {
-      const address = { workspaceDir: tempRoot, relativePath: "memory/2026-08-20.md" };
-      await write(address, "", "restricted", 1, "untrusted");
-      await write(address, "restricted", "restricted\ntrusted", 2);
-
-      resetPluginStateStoreForTests();
-
-      await expect(readMemoryArtifactProvenance(address)).resolves.toMatchObject({
-        originClass: "untrusted",
-        observedAt: 2,
-      });
-    });
-  });
-
-  it("does not let an older rollback erase a later reservation", async () => {
-    await withStateDirEnv("openclaw-memory-artifact-", async ({ tempRoot }) => {
-      const address = { workspaceDir: tempRoot, relativePath: "MEMORY.md" };
-      const rollback = await write(address, "", "first", 1);
-      await write(address, "first", "second", 2);
-
-      await rollback?.();
-
-      await expect(readMemoryArtifactProvenance(address)).resolves.toMatchObject({
-        originClass: "agent",
-        observedAt: 2,
-      });
-    });
-  });
-
-  it("clears only matching deleted content", async () => {
-    await withStateDirEnv("openclaw-memory-artifact-", async ({ tempRoot }) => {
-      const address = { workspaceDir: tempRoot, relativePath: "users/person/USER.md" };
-      await write(address, "", "current", 1);
-
-      await clearMemoryArtifactProvenance({ ...address, contentBefore: "stale" });
-      await expect(readMemoryArtifactProvenance(address)).resolves.toBeDefined();
-      await clearMemoryArtifactProvenance({ ...address, contentBefore: "current" });
-      await expect(readMemoryArtifactProvenance(address)).resolves.toBeUndefined();
-    });
-  });
-
-  it("accepts only host-owned memory artifact paths", () => {
-    expect(normalizeMemoryArtifactRelativePath("memory/2026-08-20.md")).toBe(
-      "memory/2026-08-20.md",
-    );
-    expect(normalizeMemoryArtifactRelativePath("MEMORY.md")).toBe("MEMORY.md");
-    expect(normalizeMemoryArtifactRelativePath("USER.md")).toBe("USER.md");
-    expect(normalizeMemoryArtifactRelativePath("users/person/USER.md")).toBe(
-      "users/person/USER.md",
-    );
-    for (const invalid of [
-      "users/../USER.md",
-      "users/person/nested/USER.md",
-      "users/person/notes.md",
-    ]) {
-      expect(normalizeMemoryArtifactRelativePath(invalid)).toBeUndefined();
+    if (operation === "write") {
+      const rollback = expectDefined(await write(address, "first", "second", 2), "rollback");
+      await expectOrigin(address, "untrusted", 2);
+      await rollback();
+    } else if (operation === "rollback") {
+      await firstRollback();
+    } else {
+      await clear({ ...address, contentBefore: "first" });
     }
-    expect(normalizeMemoryArtifactRelativePath("memory/dreaming/state.md")).toBeUndefined();
-    expect(normalizeMemoryArtifactRelativePath("../memory/escape.md")).toBeUndefined();
-  });
+    await expectOrigin(address, "untrusted", 3);
+  },
+);
+
+test("clears only matching deleted content", async ({ tempRoot }) => {
+  const address = { workspaceDir: tempRoot, relativePath: "users/person/USER.md" };
+  await write(address, "", "current", 1);
+  await clear({ ...address, contentBefore: "stale" });
+  await expect(read(address)).resolves.toBeDefined();
+  await clear({ ...address, contentBefore: "current" });
+  await expect(read(address)).resolves.toBeUndefined();
+});
+
+it("accepts only host-owned memory artifact paths", () => {
+  for (const valid of ["memory/2026-08-20.md", "MEMORY.md", "USER.md", "users/person/USER.md"]) {
+    expect(normalizePath(valid)).toBe(valid);
+  }
+  for (const invalid of [
+    "users/../USER.md",
+    "users/person/nested/USER.md",
+    "users/person/notes.md",
+    "memory/dreaming/state.md",
+    "../memory/escape.md",
+  ]) {
+    expect(normalizePath(invalid)).toBeUndefined();
+  }
 });

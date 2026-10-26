@@ -1,6 +1,8 @@
 /** Best-effort shared-state registry for adopted upstream sessions. */
+import { getOrLoadSqliteDatabaseAdmissionForPath } from "../infra/sqlite-database-admission.js";
 import { createSqliteWorkerWriteAdmission } from "../infra/sqlite-worker-store.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
@@ -10,7 +12,9 @@ import {
   executeOpenClawStateWorker,
   runOpenClawStateWorkerOperation,
 } from "../state/openclaw-state-worker-store.js";
+import { withSessionUpstreamPublication } from "./session-upstream-links-publication.js";
 import {
+  emptyWatchedSessionUpstreamLinksAdmission,
   upsertSessionUpstreamLinkInDatabase,
   deleteSessionUpstreamLinkInDatabase,
   type SessionUpstreamLink,
@@ -22,7 +26,7 @@ export type { SessionUpstreamLink } from "./session-upstream-links.kernel.js";
 
 const log = createSubsystemLogger("sessions/upstream-links");
 
-/** @deprecated Use upsertSessionUpstreamLinkAsync. Removed at the next Plugin SDK major. */
+/** @deprecated Await upsertSessionUpstreamLinkAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function upsertSessionUpstreamLink(
   input: SessionUpstreamLinkInput,
   options: OpenClawStateDatabaseOptions & {
@@ -31,14 +35,17 @@ export function upsertSessionUpstreamLink(
     assertCommitAllowed?: () => void;
   } = {},
 ): boolean {
+  warnPluginSdkDeprecation({
+    family: "session-upstream-links",
+    method: "session-catalog.upsertSessionUpstreamLink",
+    replacement: "await upsertSessionUpstreamLinkAsync",
+    code: "DEP_SESSION_PERSISTENCE",
+  });
   const now = options.now ?? Date.now();
   try {
     return runOpenClawStateWriteTransaction(({ db }) => {
       options.assertCommitAllowed?.();
-      const written = upsertSessionUpstreamLinkInDatabase(db, input, now, options.ifAbsent);
-      // Revalidate before COMMIT: a lifecycle change must roll back this link write.
-      options.assertCommitAllowed?.();
-      return written;
+      return upsertSessionUpstreamLinkInDatabase(db, input, now, options.ifAbsent);
     }, options);
   } catch (error) {
     if (options.ifAbsent) {
@@ -49,7 +56,7 @@ export function upsertSessionUpstreamLink(
   }
 }
 
-/** @deprecated Use deleteSessionUpstreamLinkAsync. Removed at the next Plugin SDK major. */
+/** @deprecated Await deleteSessionUpstreamLinkAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function deleteSessionUpstreamLink(
   sessionKey: string,
   agentId: string,
@@ -58,14 +65,16 @@ export function deleteSessionUpstreamLink(
     assertCommitAllowed?: () => void;
   } = {},
 ): "deleted" | "absent" | "changed" | undefined {
+  warnPluginSdkDeprecation({
+    family: "session-upstream-links",
+    method: "session-catalog.deleteSessionUpstreamLink",
+    replacement: "await deleteSessionUpstreamLinkAsync",
+    code: "DEP_SESSION_PERSISTENCE",
+  });
   try {
     return runOpenClawStateWriteTransaction(({ db }) => {
       options.assertCommitAllowed?.();
-      const result = deleteSessionUpstreamLinkInDatabase(db, sessionKey, agentId, options.expected);
-      if (result === "deleted") {
-        options.assertCommitAllowed?.();
-      }
-      return result;
+      return deleteSessionUpstreamLinkInDatabase(db, sessionKey, agentId, options.expected);
     }, options);
   } catch (error) {
     // Exact creation compensation must report an unverified cleanup, not claim success.
@@ -120,9 +129,10 @@ export async function upsertSessionUpstreamLinkWithCurrentSource(
     };
     return await runOpenClawStateWorkerOperation(context, (scope) => scope.execute(command), {
       assertCurrent,
-      createAdmission: createSqliteWorkerWriteAdmission(assertCurrent, [
-        context.admission.databasePath,
-      ]),
+      createAdmission: withSessionUpstreamPublication(
+        createSqliteWorkerWriteAdmission(assertCurrent, [context.admission.databasePath]),
+        context,
+      ),
     });
   } catch (error) {
     if (options.ifAbsent) {
@@ -153,9 +163,10 @@ export async function deleteSessionUpstreamLinkAsync(
       (scope) => scope.execute({ type: "sessionUpstream.delete", input }),
       {
         assertCurrent,
-        createAdmission: createSqliteWorkerWriteAdmission(assertCurrent, [
-          context.admission.databasePath,
-        ]),
+        createAdmission: withSessionUpstreamPublication(
+          createSqliteWorkerWriteAdmission(assertCurrent, [context.admission.databasePath]),
+          context,
+        ),
       },
     );
   } catch (error) {
@@ -172,7 +183,17 @@ export async function listWatchedSessionUpstreamLinks(
 ): Promise<Map<string, SessionUpstreamLink[]>> {
   const grouped = new Map<string, SessionUpstreamLink[]>();
   try {
-    const links = await executeOpenClawStateWorker(captureOpenClawStateWorkerContext(options), {
+    const context = captureOpenClawStateWorkerContext(options);
+    if (
+      getOrLoadSqliteDatabaseAdmissionForPath(
+        context.admission.databasePath,
+        emptyWatchedSessionUpstreamLinksAdmission,
+        () => undefined,
+      )
+    ) {
+      return grouped;
+    }
+    const links = await executeOpenClawStateWorker(context, {
       type: "sessionUpstream.listWatched",
       input: undefined,
     });

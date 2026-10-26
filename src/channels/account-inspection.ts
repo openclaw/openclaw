@@ -93,8 +93,7 @@ export async function resolveInspectedChannelAccount(params: {
     plugin: params.plugin,
     account,
     cfg: params.cfg,
-    readAccountConfiguredField: true,
   });
-  const snapshot = buildChannelAccountSummary({ ...params, account, enabled, configured });
+  const snapshot = await buildChannelAccountSummary({ ...params, account, enabled, configured });
   return { kind: "resolved", account, enabled, configured, snapshot };
 }

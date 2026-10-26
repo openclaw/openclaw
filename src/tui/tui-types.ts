@@ -29,11 +29,6 @@ export type TuiOptions = {
   message?: string;
   /** Overrides timeoutMs only for the message sent automatically at startup. */
   initialMessageTimeoutMs?: number;
-  /**
-   * Internal CLI guard: after the standalone TUI returns, force the child
-   * process out if imported runtime handles keep the event loop alive.
-   */
-  forceProcessExitOnReturn?: boolean;
 };
 
 export type TuiGatewayConnectionOptions = Pick<
@@ -44,10 +39,8 @@ export type TuiGatewayConnectionOptions = Pick<
   suppressEnvAuthFallback?: boolean;
 };
 
-type TuiExitReason = "exit" | "return-to-system-agent";
-
 export type TuiResult = {
-  exitReason: TuiExitReason;
+  exitReason: "exit" | "return-to-system-agent";
   systemAgentMessage?: string;
 };
 
@@ -70,6 +63,7 @@ export type ChatEvent = {
   deltaText?: string;
   replace?: boolean;
   errorMessage?: string;
+  localModelMayStillBeFinishing?: boolean;
 };
 
 export type BtwEvent = {
@@ -105,6 +99,8 @@ export type SessionMessageEvent = {
   message?: unknown;
   messageId?: string;
   messageSeq?: number;
+  /** Recipient-authorized session row the Gateway attaches to each message. */
+  session?: TuiSessionRow;
 };
 
 export type AgentEvent = {
@@ -146,6 +142,32 @@ export type SessionInfo = {
   effectiveResponseUsage?: ResponseUsageMode;
   updatedAt?: number | null;
   displayName?: string;
+};
+
+/** Session row the Gateway lists, describes and attaches to session messages. */
+export type TuiSessionRow = Omit<SessionInfo, "effectiveResponseUsage"> & {
+  key: string;
+  sessionId?: string;
+  archived?: boolean;
+  incognito?: boolean;
+  sendPolicy?: string;
+  label?: string;
+  provider?: string;
+  groupChannel?: string;
+  space?: string;
+  subject?: string;
+  chatType?: string;
+  origin?: {
+    label?: string;
+    provider?: string;
+    surface?: string;
+  };
+  lastChannel?: string;
+  lastProvider?: string;
+  lastTo?: string;
+  lastAccountId?: string;
+  derivedTitle?: string;
+  lastMessagePreview?: string;
 };
 
 export type { SessionScope } from "../config/types.base.js";

@@ -12,30 +12,6 @@ export class PromptInputClosedError extends Error {
   }
 }
 
-type ReadlineInterface = ReturnType<typeof readline.createInterface>;
-
-function questionUntilClose(rl: ReadlineInterface, question: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const finish = (complete: () => void) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      rl.off("close", onClose);
-      complete();
-    };
-    const onClose = () => finish(() => reject(new PromptInputClosedError()));
-
-    // readline.question does not reject on interface close, so race it with the close event.
-    rl.once("close", onClose);
-    void rl.question(question).then(
-      (answer) => finish(() => resolve(answer)),
-      (error: unknown) => finish(() => reject(toErrorObject(error, "Non-Error rejection"))),
-    );
-  });
-}
-
 /** Prompts for yes/no input, honoring global `--yes` before opening stdin. */
 export async function promptYesNo(question: string, defaultYes = false): Promise<boolean> {
   if (isYes()) {
@@ -49,9 +25,22 @@ export async function promptYesNo(question: string, defaultYes = false): Promise
   return answer.startsWith("y");
 }
 
-export async function promptText(question: string): Promise<string> {
+export function promptText(question: string): Promise<string> {
   const rl = readline.createInterface({ input, output });
-  return await questionUntilClose(rl, question).finally(() => {
+  return new Promise<string>((resolve, reject) => {
+    const finish = (complete: () => void) => {
+      rl.off("close", onClose);
+      complete();
+    };
+    const onClose = () => finish(() => reject(new PromptInputClosedError()));
+
+    // readline.question does not reject on interface close, so race it with the close event.
+    rl.once("close", onClose);
+    void rl.question(question).then(
+      (answer) => finish(() => resolve(answer)),
+      (error: unknown) => finish(() => reject(toErrorObject(error, "Non-Error rejection"))),
+    );
+  }).finally(() => {
     rl.close();
   });
 }

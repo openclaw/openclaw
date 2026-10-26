@@ -1,11 +1,12 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { WorkerConnectionIdentity } from "./worker-environments/connection-identity.js";
+import { createWorkerConnectionIdentity } from "./worker-environments/connection-identity.test-support.js";
 import { createWorkerLiveEventReceiver } from "./worker-environments/live-events.js";
 import { captureWorkerTranscriptSource } from "./worker-environments/live-events.test-support.js";
 import type { WorkerTranscriptCommitStore } from "./worker-environments/transcript-commit-ledger.js";
 import { createWorkerTranscriptCommitter } from "./worker-environments/transcript-commit.js";
 
-export function createWorkerFanoutFixture({
+export async function createWorkerFanoutFixture({
   storePath,
   sessionId,
   sessionKey,
@@ -24,25 +25,20 @@ export function createWorkerFanoutFixture({
     discardUncommitted: async () => {},
   };
   const committer = createWorkerTranscriptCommitter({ getConfig: () => config, store: ledger });
-  const identity: WorkerConnectionIdentity = {
-    environmentId: "environment-fanout",
+  const turnClaim: NonNullable<WorkerConnectionIdentity["turnClaim"]> = {
+    sessionId,
+    claimId: "claim-fanout",
+    runId: "run-fanout",
+    placementGeneration: 4,
+    owner: { kind: "worker", environmentId: "environment-fanout", ownerEpoch: 4 },
+  };
+  const identity = createWorkerConnectionIdentity(turnClaim, {
     credentialHash: ["fanout", "credential", "hash"].join("-"),
     bundleHash: "f".repeat(64),
-    sessionId,
-    runId: "run-fanout",
-    turnClaim: {
-      sessionId,
-      claimId: "claim-fanout",
-      runId: "run-fanout",
-      placementGeneration: 4,
-      owner: { kind: "worker", environmentId: "environment-fanout", ownerEpoch: 4 },
-    },
-    ownerEpoch: 4,
-    rpcSetVersion: 1,
     protocolFeatures: ["worker-live-event-v1", "worker-transcript-commit-v1"],
     credentialExpiresAtMs: Date.now() + 10_000,
-  };
-  const source = captureWorkerTranscriptSource({
+  });
+  const source = await captureWorkerTranscriptSource({
     agentId: "main",
     sessionId,
     sessionKey,

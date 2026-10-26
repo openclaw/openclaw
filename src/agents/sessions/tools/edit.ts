@@ -8,8 +8,12 @@ import { repairJson } from "@openclaw/ai/internal/runtime";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { hasErrnoCode } from "../../../infra/errno.js";
-import { captureAgentToolSourceExecutionGuard } from "../../agent-tool-source-execution-guard.js";
+import {
+  captureAgentToolSourceExecutionGuard,
+  runWithAgentToolSourceExecutionScope,
+} from "../../agent-tool-source-execution-guard.js";
 import type { AgentTool } from "../../runtime/index.js";
+import { ToolInputError } from "../../tool-input-error.js";
 import { textResult } from "../../tools/tool-results.js";
 import { decodeUtf8File } from "../../utf8-file.js";
 import {
@@ -77,7 +81,7 @@ function prepareEditArguments(input: unknown): EditToolInput {
       }
     } catch {
       if (typeof args.oldText !== "string" || typeof args.newText !== "string") {
-        throw new Error(
+        throw new ToolInputError(
           "Could not parse edits as JSON. Provide a complete JSON array of replacements.",
         );
       }
@@ -115,9 +119,8 @@ function appendMismatchHint(error: Error, currentContent: string): Error {
     currentContent.length <= EDIT_MISMATCH_HINT_LIMIT
       ? currentContent
       : `${truncateUtf16Safe(currentContent, EDIT_MISMATCH_HINT_LIMIT)}\n... (truncated)`;
-  const enhanced = new Error(`${error.message}\nCurrent file contents:\n${snippet}`, {
-    cause: error,
-  });
+  const enhanced = new ToolInputError(`${error.message}\nCurrent file contents:\n${snippet}`);
+  enhanced.cause = error;
   enhanced.stack = error.stack;
   return enhanced;
 }
@@ -139,7 +142,9 @@ export function createEditTool(
     async execute(_toolCallId, input, signal, _onUpdate, _ctx) {
       const assertCurrent = captureAgentToolSourceExecutionGuard();
       if (!Array.isArray(input.edits) || input.edits.length === 0) {
-        throw new Error("Edit tool input is invalid. edits must contain at least one replacement.");
+        throw new ToolInputError(
+          "Edit tool input is invalid. edits must contain at least one replacement.",
+        );
       }
       const { path, edits: originalEdits } = input;
       const absolutePath = resolvePath(path, cwd);
@@ -147,13 +152,15 @@ export function createEditTool(
 
       return withFileMutationQueueKeyResolution(queueKey, async () => {
         assertFileToolNotAborted(signal);
-        assertCurrent();
 
         let editCount = 0;
         let expectedContent: string | undefined;
 
         try {
-          await ops.access(absolutePath);
+          await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
+            assertCurrent();
+            await ops.access(absolutePath);
+          });
         } catch (error: unknown) {
           const errorMessage =
             error instanceof Error && "code" in error
@@ -164,56 +171,64 @@ export function createEditTool(
           });
         }
 
-        const buffer = await ops.readFile(absolutePath);
+        const buffer = await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
+          assertCurrent();
+          return ops.readFile(absolutePath);
+        });
         const rawContent = decodeUtf8File(buffer, absolutePath);
         try {
           assertFileToolNotAborted(signal);
-          assertCurrent();
 
           const plan = await planFileEdit(
             { path, content: rawContent, edits: originalEdits },
             signal,
           );
           assertFileToolNotAborted(signal);
-          assertCurrent();
           if (!plan.changed) {
             return textResult(plan.message, { changed: false } satisfies EditToolDetails);
           }
           editCount = plan.editCount;
           expectedContent = plan.content;
-          await ops.writeFile(absolutePath, expectedContent);
+          await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
+            assertCurrent();
+            await ops.writeFile(absolutePath, plan.content);
+          });
           assertFileToolNotAborted(signal);
-          assertCurrent();
-          if (!(await verifyPersistedUtf8File(absolutePath, expectedContent, ops))) {
+          if (
+            !(await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
+              assertCurrent();
+              return verifyPersistedUtf8File(absolutePath, plan.content, ops);
+            }))
+          ) {
             throw new Error(
               `Edit verification failed for ${path}: the persisted regular file does not match the requested content. Inspect the target and retry.`,
             );
           }
 
-          assertCurrent();
           return textResult<EditToolDetails>(
             `Successfully replaced ${editCount} block(s) in ${path}.`,
             { changed: true, ...plan.receipt },
           );
         } catch (error: unknown) {
-          assertCurrent();
-          const normalizedError = error instanceof Error ? error : new Error(String(error));
-          const currentContent = await ops
-            .readFile(absolutePath)
-            .then((current) => current.toString("utf-8"))
-            .catch(() => rawContent);
-          if (
-            expectedContent !== undefined &&
-            (await verifyPersistedUtf8File(absolutePath, expectedContent, ops))
-          ) {
+          await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
             assertCurrent();
+          });
+          const normalizedError = error instanceof Error ? error : new Error(String(error));
+          const recoveryContent = expectedContent;
+          if (
+            recoveryContent !== undefined &&
+            (await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
+              assertCurrent();
+              return verifyPersistedUtf8File(absolutePath, recoveryContent, ops);
+            }))
+          ) {
             return textResult<EditToolDetails>(
               `Successfully replaced ${editCount} block(s) in ${path}.`,
               { changed: true, diff: "", patch: "" },
             );
           }
           if (normalizedError.message.includes(EDIT_MISMATCH_MESSAGE)) {
-            throw appendMismatchHint(normalizedError, currentContent);
+            throw appendMismatchHint(normalizedError, rawContent);
           }
           throw normalizedError;
         }

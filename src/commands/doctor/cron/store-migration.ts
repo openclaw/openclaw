@@ -17,6 +17,7 @@ import { coerceFiniteScheduleNumber } from "../../../cron/schedule-number.js";
 import { inferCronJobName } from "../../../cron/service/normalize.js";
 import { resolveCronCurrentSessionTarget } from "../../../cron/session-target.js";
 import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "../../../cron/stagger.js";
+import { decodeStoredCronJobConfig } from "../../../cron/store/job-config-codec.js";
 import type { CronQuarantinedJob, QuarantinedCronConfigJob } from "../../../cron/types-shared.js";
 import {
   hasLegacyToolNameList,
@@ -216,23 +217,24 @@ export function normalizeStoredCronJobs(
       trackIssue("legacyScheduleString");
     }
 
-    const nameRaw = raw.name;
-    if (typeof nameRaw !== "string" || nameRaw.trim().length === 0) {
+    let name = normalizeOptionalString(raw.name);
+    if (!name) {
       raw.name = inferCronJobName({
         schedule: raw.schedule as never,
         payload: raw.payload as never,
       });
+      name = normalizeOptionalString(raw.name);
       mutated = true;
     } else {
-      raw.name = nameRaw.trim();
+      raw.name = name;
     }
 
+    const jobName = name ?? normalizeOptionalString(raw.id);
     const trigger = raw.trigger;
     if (isRecord(trigger) && typeof trigger.script === "string") {
       const migration = migrateLegacyCronTriggerScript(trigger.script);
       const id = normalizeOptionalString(raw.id);
-      const name = normalizeOptionalString(raw.name);
-      const jobIdentity = name && id && name !== id ? `${name} (${id})` : (name ?? id);
+      const jobIdentity = name && id && name !== id ? `${name} (${id})` : jobName;
       if (migration.kind === "supported") {
         trigger.script = migration.script;
         mutated = true;
@@ -300,11 +302,8 @@ export function normalizeStoredCronJobs(
           (tool) =>
             typeof tool === "string" && normalizeOptionalLowercaseString(tool) === "gateway_exec",
         );
-      if (hasLegacyGatewayExec) {
-        const name = normalizeOptionalString(raw.name) ?? normalizeOptionalString(raw.id);
-        if (name) {
-          legacyGatewayExecJobs.push(name);
-        }
+      if (hasLegacyGatewayExec && jobName) {
+        legacyGatewayExecJobs.push(jobName);
       }
       const hadLegacyPayloadProvider = Boolean(normalizeOptionalString(payloadRecord.provider));
       const legacyCodexModelRoutes = collectLegacyOpenAICodexCronModelRoutes(payloadRecord);
@@ -356,9 +355,8 @@ export function normalizeStoredCronJobs(
         const unresolvedPromptKind = classifyCronAgentTurnShellPrompt(payloadRecord);
         if (unresolvedPromptKind) {
           trackIssue("unresolvedAgentTurnShellToolPrompt");
-          const name = normalizeOptionalString(raw.name) ?? normalizeOptionalString(raw.id);
-          if (name) {
-            unresolvedAgentTurnPromptJobsByKind[unresolvedPromptKind].push(name);
+          if (jobName) {
+            unresolvedAgentTurnPromptJobsByKind[unresolvedPromptKind].push(jobName);
           }
         }
       }
@@ -395,7 +393,7 @@ export function normalizeStoredCronJobs(
       const normalizedAt =
         timestampMsToIsoString(parsedAtMs) ??
         timestampMsToIsoString(parseAbsoluteTimeMs(normalizeOptionalString(sched.at) ?? ""));
-      if (normalizedAt) {
+      if (normalizedAt && (sched.at !== normalizedAt || "atMs" in sched)) {
         sched.at = normalizedAt;
         delete sched.atMs;
         mutated = true;
@@ -507,7 +505,6 @@ export function normalizeStoredCronJobs(
     if (policyMigration.ownerReconciled) {
       trackIssue("reconciledOwnerAccount");
     }
-    const jobName = normalizeOptionalString(raw.name) ?? normalizeOptionalString(raw.id);
     if (jobName && policyMigration.status === "legacy") {
       legacyScheduledToolPolicyJobs.push(jobName);
     } else if (jobName && policyMigration.status === "invalid") {
@@ -581,7 +578,7 @@ export function recoverValidQuarantinedCronScheduleJobs(
       retainedEntries.push(entry);
       continue;
     }
-    const candidate = structuredClone(entry.job);
+    const candidate = decodeStoredCronJobConfig(structuredClone(entry.job));
     const jobId = storedCronJobId(candidate);
     if (jobId && (activeJobIds.has(jobId) || recoveredJobIds.has(jobId))) {
       retainedEntries.push(entry);

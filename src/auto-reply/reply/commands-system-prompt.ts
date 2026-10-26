@@ -4,13 +4,11 @@ import { createOpenClawCodingToolsAsync } from "../../agents/agent-tools.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../../agents/bootstrap-files.js";
 import { resolveEmbeddedFullAccessState } from "../../agents/embedded-agent-runner/sandbox-info.js";
 import { resolveRuntimeSkillsPrompt } from "../../agents/embedded-agent-runner/skills-prompt.js";
-import { resolveNodeExecEligibility } from "../../agents/exec-defaults.js";
+import { resolveNodeExecEligibilityAsync } from "../../agents/exec-defaults.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "../../agents/prompt-surface.js";
 import { resolveAgentRuntimePrompt } from "../../agents/runtime-prompt.js";
-import {
-  ensureSandboxWorkspaceForSession,
-  resolveSandboxRuntimeStatus,
-} from "../../agents/sandbox.js";
+import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox/context.js";
+import { resolveSandboxRuntimeStatusAsync } from "../../agents/sandbox/runtime-status.js";
 import { buildConfiguredAgentSystemPrompt } from "../../agents/system-prompt-config.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -18,117 +16,12 @@ import { listRegisteredPluginAgentPromptGuidance } from "../../plugins/command-r
 import { resolveSessionSkillExecutionWorkspace } from "../../skills/loading/workspace-skill-roots.js";
 import { getRemoteSkillEligibility } from "../../skills/runtime/remote.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "../../skills/runtime/session-snapshot.js";
-import type { SkillEligibilityContext, SkillSnapshot } from "../../skills/types.js";
+import type { SkillSnapshot } from "../../skills/types.js";
 import { prepareTtsPreferences } from "../../tts/tts-preferences.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 
 const log = createSubsystemLogger("auto-reply/commands-system-prompt");
-
-function resolveCommandSkillsEligibility(params: {
-  agentId: string;
-  config: HandleCommandsParams["cfg"];
-  sessionEntry: HandleCommandsParams["sessionEntry"] | undefined;
-  sessionKey: string | undefined;
-}): SkillEligibilityContext {
-  const withRemote = (nodeSkills: NonNullable<SkillEligibilityContext["nodeSkills"]>) => ({
-    nodeSkills,
-    remote: getRemoteSkillEligibility({ advertiseExecNode: nodeSkills.canExec }),
-  });
-  try {
-    return withRemote(
-      resolveNodeExecEligibility({
-        cfg: params.config,
-        sessionEntry: params.sessionEntry,
-        sessionKey: params.sessionKey,
-        agentId: params.agentId,
-      }),
-    );
-  } catch {
-    try {
-      return withRemote({ canExec: false });
-    } catch {
-      return { nodeSkills: { canExec: false } };
-    }
-  }
-}
-
-async function resolveCommandSkillsPrompt(params: {
-  agentId: string;
-  config: HandleCommandsParams["cfg"];
-  eligibility: SkillEligibilityContext;
-  sandboxAgentId: string;
-  sandboxed: boolean;
-  sessionKey: string | undefined;
-  workspaceDir: string; // Preserve the caller's sandbox task root.
-  executionWorkspaceDir?: string;
-  executionWorkspaceFileHost?: "gateway";
-  skillsSnapshot?: SkillSnapshot;
-}): Promise<string> {
-  let skillsSnapshot: SkillSnapshot;
-  try {
-    skillsSnapshot = (
-      await resolveReusableWorkspaceSkillSnapshot({
-        workspaceDir: resolveAgentWorkspaceDir(params.config, params.agentId),
-        executionWorkspaceDir: params.executionWorkspaceDir,
-        executionWorkspaceFileHost: params.executionWorkspaceFileHost,
-        config: params.config,
-        agentId: params.agentId,
-        resolveEligibility: () => ({
-          ...params.eligibility,
-          remote: getRemoteSkillEligibility({
-            advertiseExecNode: params.eligibility?.nodeSkills?.canExec ?? false,
-          }),
-        }),
-        existingSnapshot: params.skillsSnapshot,
-        skillFilter: params.skillsSnapshot?.skillFilter,
-        skillOverrides: params.skillsSnapshot?.skillOverrides,
-        watch: false,
-      })
-    ).snapshot;
-  } catch {
-    return "";
-  }
-  if (params.sandboxed) {
-    try {
-      // Sandboxed prompt inspection must not fall back to host skill snapshots:
-      // those paths can be unreadable inside the container.
-      const sandboxWorkspace = await ensureSandboxWorkspaceForSession({
-        skillsSnapshot,
-        config: params.config,
-        agentId: params.sandboxAgentId,
-        sessionKey: params.sessionKey,
-        workspaceDir: params.workspaceDir,
-      });
-      if (!sandboxWorkspace) {
-        return "";
-      }
-      if (sandboxWorkspace.containerWorkdir) {
-        const { prompt } = await resolveRuntimeSkillsPrompt({
-          sandbox: {
-            enabled: true,
-            containerWorkdir: sandboxWorkspace.containerWorkdir,
-            skillsEligibility: sandboxWorkspace.skillsEligibility,
-            skillsWorkspaceDir: sandboxWorkspace.skillsWorkspaceDir || undefined,
-            skillUsagePaths: sandboxWorkspace.skillUsagePaths,
-            workspaceAccess: sandboxWorkspace.workspaceAccess,
-          },
-          skillsAnchorWorkspace: sandboxWorkspace.workspaceDir,
-          skillsSnapshot,
-          config: params.config,
-          agentId: params.agentId,
-        });
-        return prompt;
-      }
-      // Existing third-party backends may not expose the optional workdir
-      // resolver yet. Preserve their previous host-snapshot inspection path.
-    } catch {
-      return "";
-    }
-  }
-
-  return skillsSnapshot.prompt;
-}
 
 export async function resolveCommandsSystemPromptBundle(params: HandleCommandsParams) {
   const workspaceDir = params.workspaceDir;
@@ -153,55 +46,99 @@ export async function resolveCommandsSystemPromptBundle(params: HandleCommandsPa
     ctx: params.ctx,
     sessionKey: params.sessionKey,
   });
-  const sandboxRuntime = resolveSandboxRuntimeStatus({
+  const sandboxRuntime = await resolveSandboxRuntimeStatusAsync({
     cfg: params.cfg,
     agentId: sessionAgentId,
     sessionKey: params.sessionKey,
     classificationSessionKey: toolPolicySessionKey,
+    ...(toolPolicySessionKey === params.sessionKey
+      ? { preparedSessionEntry: targetSessionEntry ?? null }
+      : {}),
   });
-  const skillsEligibility = resolveCommandSkillsEligibility({
+  const nodeSkills = await resolveNodeExecEligibilityAsync({
     agentId: sessionAgentId,
-    config: params.cfg,
-    sessionEntry: targetSessionEntry,
+    cfg: params.cfg,
+    sessionEntry: targetSessionEntry ?? null,
     sessionKey: params.sessionKey,
   });
-  const skillsPrompt = await resolveCommandSkillsPrompt({
-    agentId: sessionAgentId,
-    config: params.cfg,
-    eligibility: skillsEligibility,
-    sandboxAgentId: sandboxRuntime.classificationAgentId,
-    sandboxed: sandboxRuntime.sandboxed,
-    sessionKey: toolPolicySessionKey,
+  const config = params.cfg;
+  const skillsEligibility = {
+    nodeSkills,
+    remote: getRemoteSkillEligibility({ advertiseExecNode: nodeSkills.canExec }),
+  };
+  const { classificationAgentId: sandboxAgentId, sandboxed } = sandboxRuntime;
+  const executionWorkspace = resolveSessionSkillExecutionWorkspace(
+    targetSessionEntry?.worktree?.canonicalWorkspaceDir,
     workspaceDir,
-    ...resolveSessionSkillExecutionWorkspace(
-      targetSessionEntry?.worktree?.canonicalWorkspaceDir,
-      workspaceDir,
-    ),
-    skillsSnapshot: targetSessionEntry?.skillsSnapshot,
-  });
-  let tools: Awaited<ReturnType<typeof createOpenClawCodingToolsAsync>>;
-  try {
-    tools = await createOpenClawCodingToolsAsync({
-      config: params.cfg,
+  );
+  const existingSkillsSnapshot: SkillSnapshot | undefined = targetSessionEntry?.skillsSnapshot;
+  const skillsPrompt = await (async () => {
+    const { snapshot: skillsSnapshot } = await resolveReusableWorkspaceSkillSnapshot({
+      workspaceDir: resolveAgentWorkspaceDir(config, sessionAgentId),
+      executionWorkspaceDir: executionWorkspace.executionWorkspaceDir,
+      executionWorkspaceFileHost: executionWorkspace.executionWorkspaceFileHost,
+      config,
       agentId: sessionAgentId,
-      workspaceDir,
-      sessionKey: toolPolicySessionKey,
-      allowGatewaySubagentBinding: true,
-      messageProvider: params.command.channel,
-      groupId: targetSessionEntry?.groupId ?? undefined,
-      groupChannel: targetSessionEntry?.groupChannel ?? undefined,
-      groupSpace: targetSessionEntry?.space ?? undefined,
-      spawnedBy: targetSessionEntry?.spawnedBy ?? undefined,
-      senderId: params.command.senderId,
-      senderName: params.ctx.SenderName,
-      senderUsername: params.ctx.SenderUsername,
-      senderE164: params.ctx.SenderE164,
-      modelProvider: params.provider,
-      modelId: params.model,
+      resolveEligibility: () => skillsEligibility,
+      existingSnapshot: existingSkillsSnapshot,
+      skillFilter: existingSkillsSnapshot?.skillFilter,
+      skillOverrides: existingSkillsSnapshot?.skillOverrides,
+      watch: false,
     });
-  } catch {
-    tools = [];
-  }
+    if (sandboxed) {
+      // Sandboxed prompt inspection must not fall back to host skill snapshots:
+      // those paths can be unreadable inside the container.
+      const sandboxWorkspace = await ensureSandboxWorkspaceForSession({
+        skillsSnapshot,
+        config,
+        agentId: sandboxAgentId,
+        sessionKey: toolPolicySessionKey,
+        workspaceDir,
+      });
+      if (!sandboxWorkspace) {
+        return "";
+      }
+      if (sandboxWorkspace.containerWorkdir) {
+        const { prompt } = await resolveRuntimeSkillsPrompt({
+          sandbox: {
+            enabled: true,
+            containerWorkdir: sandboxWorkspace.containerWorkdir,
+            skillsEligibility: sandboxWorkspace.skillsEligibility,
+            skillsWorkspaceDir: sandboxWorkspace.skillsWorkspaceDir || undefined,
+            skillUsagePaths: sandboxWorkspace.skillUsagePaths,
+            workspaceAccess: sandboxWorkspace.workspaceAccess,
+          },
+          skillsAnchorWorkspace: sandboxWorkspace.workspaceDir,
+          skillsSnapshot,
+          config,
+          agentId: sessionAgentId,
+        });
+        return prompt;
+      }
+      // Existing third-party backends may not expose the optional workdir
+      // resolver yet. Preserve their previous host-snapshot inspection path.
+    }
+
+    return skillsSnapshot.prompt;
+  })();
+  const tools = await createOpenClawCodingToolsAsync({
+    config: params.cfg,
+    agentId: sessionAgentId,
+    workspaceDir,
+    sessionKey: toolPolicySessionKey,
+    allowGatewaySubagentBinding: true,
+    messageProvider: params.command.channel,
+    groupId: targetSessionEntry?.groupId,
+    groupChannel: targetSessionEntry?.groupChannel,
+    groupSpace: targetSessionEntry?.space,
+    spawnedBy: targetSessionEntry?.spawnedBy,
+    senderId: params.command.senderId,
+    senderName: params.ctx.SenderName,
+    senderUsername: params.ctx.SenderUsername,
+    senderE164: params.ctx.SenderE164,
+    modelProvider: params.provider,
+    modelId: params.model,
+  });
   const toolNames = tools.map((t) => t.name);
   const promptSurface = resolveAgentPromptSurfaceForSessionKey(params.sessionKey);
   const accountId = params.command.accountId ?? params.ctx.AccountId;
@@ -212,9 +149,11 @@ export async function resolveCommandsSystemPromptBundle(params: HandleCommandsPa
     cwd: process.cwd(),
     sessionKey: params.sessionKey,
     sessionId: targetSessionEntry?.sessionId,
+    preparedSessionEntry: targetSessionEntry,
     model: `${params.provider}/${params.model}`,
     channel: params.command.channel,
     accountId,
+    requester: { agentTo: params.ctx.To, agentThreadId: params.ctx.MessageThreadId },
     chatType: normalizeChatType(params.ctx.ChatType ?? targetSessionEntry?.chatType),
   });
   const fullAccessState = resolveEmbeddedFullAccessState({

@@ -327,6 +327,7 @@ function inspectLoadedRuntime(args) {
     }
   }
   const runtime = nativeRuntime();
+  const includeTransitionTimestamps = request.includes("ActiveEnterTimestampMonotonic");
   const unitRuntimeQuery = [
     "get-property",
     paths.owner,
@@ -337,8 +338,9 @@ function inspectLoadedRuntime(args) {
     "ActiveState",
     "SubState",
     "StartLimitBurst",
-    "ActiveEnterTimestampMonotonic",
-    "InactiveEnterTimestampMonotonic",
+    ...(includeTransitionTimestamps
+      ? ["ActiveEnterTimestampMonotonic", "InactiveEnterTimestampMonotonic"]
+      : []),
   ];
   const runtimeStartPolicy = matches([
     ...unitRuntimeQuery,
@@ -353,8 +355,12 @@ function inspectLoadedRuntime(args) {
       ["s", runtime.active],
       ["s", runtime.sub],
       ["u", 5],
-      ["t", runtime.pid ? runtime.generation : 0],
-      ["t", runtime.pid ? 0 : runtime.generation],
+      ...(includeTransitionTimestamps
+        ? [
+            ["t", runtime.pid ? runtime.generation : 0],
+            ["t", runtime.pid ? 0 : runtime.generation],
+          ]
+        : []),
       ...(runtimeStartPolicy
         ? [
             ["s", "disabled"],

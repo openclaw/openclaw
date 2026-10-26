@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import type { Bot } from "grammy";
 import type { LanguageCode } from "grammy/types";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
   asOptionalObjectRecord,
@@ -12,7 +11,6 @@ import {
 import { truncateCodePoints } from "openclaw/plugin-sdk/text-utility-runtime";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
-  enqueueTelegramMenuSync,
   getProcessKnownTelegramMenuLocales,
   normalizeTelegramMenuLanguageCode,
   persistTelegramMenuLocaleLedger,
@@ -65,11 +63,7 @@ function truncateTelegramCommandText(value: string, maxLength: number): string {
   return maxLength > 1 ? `${truncateCodePoints(prefix, maxLength - 1)}…` : prefix;
 }
 
-function fitTelegramCommandsWithinTextBudget(commands: TelegramMenuCommand[]): {
-  commands: TelegramMenuCommand[];
-  descriptionTrimmed: boolean;
-  textBudgetDropCount: number;
-} {
+function fitTelegramCommandsWithinTextBudget(commands: TelegramMenuCommand[]) {
   let commandCount = 0;
   let commandNameChars = 0;
   for (const { command } of commands) {
@@ -207,16 +201,7 @@ function buildDirectSkillFallbackCommands(commands: TelegramMenuCommand[]): Tele
   return fallback ? [fallback, ...remaining] : remaining;
 }
 
-function buildUncachedCappedTelegramMenuCommands(allCommands: TelegramMenuCommand[]): {
-  commandsToRegister: TelegramMenuCommand[];
-  totalCommands: number;
-  maxCommands: number;
-  overflowCount: number;
-  maxTotalChars: number;
-  descriptionTrimmed: boolean;
-  textBudgetDropCount: number;
-  skillCommandsOmitted: boolean;
-} {
+function buildUncachedCappedTelegramMenuCommands(allCommands: TelegramMenuCommand[]) {
   const maxCommands = TELEGRAM_MAX_COMMANDS;
   const maxTotalChars = TELEGRAM_TOTAL_COMMAND_TEXT_BUDGET;
   const fitCommands = (commands: TelegramMenuCommand[]) => {
@@ -403,17 +388,18 @@ async function applyTelegramMenuCommandsForScopes(params: {
   return allCleared;
 }
 
-export function syncTelegramMenuCommands(params: {
+export async function syncTelegramMenuCommands(params: {
   bot: Bot;
   runtime: RuntimeEnv;
   commandsToRegister: TelegramMenuCommand[];
   accountId?: string;
   botId?: number;
   botToken?: string;
-}): void {
+}): Promise<void> {
   const { bot, runtime, commandsToRegister } = params;
   const owner = resolveTelegramMenuRemoteOwner(params);
-  const sync = async () => {
+  // A reload that overlaps this sync is best effort; the next sync reconciles it.
+  try {
     // Skip sync if the command list hasn't changed since the last successful
     // sync. This prevents hitting Telegram's 429 rate limit when the gateway
     // is restarted several times in quick succession.
@@ -421,7 +407,6 @@ export function syncTelegramMenuCommands(params: {
     const currentHash = hashCommandList(commandsToRegister);
     const cachedHash = syncedCommandHashes.get(owner.hashKey);
     if (cachedHash === currentHash) {
-      logVerbose("telegram: command menu unchanged; skipping sync");
       return;
     }
 
@@ -555,13 +540,7 @@ export function syncTelegramMenuCommands(params: {
       });
     }
     recordSuccess(ledgerComplete);
-  };
-
-  enqueueTelegramMenuSync({
-    ownerKey: owner.queueKey,
-    sync,
-    onError: (error) => {
-      runtime.error?.(`Telegram command sync failed: ${String(error)}`);
-    },
-  });
+  } catch (error) {
+    runtime.error?.(`Telegram command sync failed: ${String(error)}`);
+  }
 }

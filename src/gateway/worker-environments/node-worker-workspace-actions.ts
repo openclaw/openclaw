@@ -1,64 +1,64 @@
 import fsp from "node:fs/promises";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { DEVICE_FOLDER_MANIFEST_REF } from "../../worker/device-folder.js";
 import {
   NODE_WORKER_WORKSPACE_STDOUT_MAX_BYTES,
+  NODE_WORKSPACE_VALIDATE_DEVICE_FOLDER_COMMAND,
   type NodeWorkerWorkspaceExecResult,
 } from "../../worker/node-workspace-protocol.js";
 import { NODE_WORKSPACE_EMPTY_MANIFEST_REF } from "../../worker/node-workspace-transfer-protocol.js";
-import { prepareRepositoryPublicationRestore } from "../github-repository-publication-restore.js";
-import { createNodeWorkerRepositoryPreparation } from "./node-worker-repository-preparation.js";
+import {
+  createNodeWorkerRepositoryPreparation,
+  restoreNodeWorkerRepositoryCheckpoint,
+} from "./node-worker-repository-preparation.js";
+import type { NodeWorkerWorkspaceBinding } from "./node-worker-tunnel.types.js";
 import {
   createNodeWorkerWorkspaceFallback,
   recordNodeSyncPath,
 } from "./node-worker-workspace-fallback.js";
 import { createNodeWorkspaceTransferCommand } from "./node-workspace-transfer-command.js";
 import type { NodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
+import { removeNodeWorkspaceUpload } from "./node-workspace-upload-reader.js";
 import type {
   WorkerLocalWorkspaceReconcileRequest,
   WorkerLocalWorkspaceSyncRequest,
   WorkerWorkspaceReconcileRequest,
+  WorkerWorkspaceReconcileResult,
   WorkerWorkspaceCommand,
   WorkerWorkspaceSyncResult,
   WorkerWorkspaceSyncRequest,
   WorkerWorkspaceTunnelHandle,
 } from "./tunnel-contract.js";
 import { boundedWorkerError } from "./worker-error.js";
-import { runInstrumentedWorkspaceReconcile } from "./workspace-finalize.js";
 import { workerProjectSeedKey } from "./workspace-git-base.js";
-import type { WorkspaceHashMemo, WorkspaceReconcileMetrics } from "./workspace-hash-memo.js";
+import type { WorkspaceHashMemo } from "./workspace-hash-memo.js";
 import { prepareLocalWorkspaceReconciliation } from "./workspace-local-reconciliation.js";
-import {
-  decodeWorkspaceManifest,
-  serializeWorkspaceManifest,
-} from "./workspace-manifest-worker.js";
+import { serializeWorkspaceManifest } from "./workspace-manifest-worker.js";
 import { createWorkerWorkspaceQuiescence } from "./workspace-quiescence.js";
-import { workerWorkspaceTransferPaths } from "./workspace-result-staging.js";
 import { captureRemoteWorkspaceManifest } from "./workspace-sync-helpers.js";
 
 const workspaceLog = createSubsystemLogger("gateway/worker-workspace");
 // Leave room for the manifest reference and bounded numeric metrics in the result envelope.
 const NODE_WORKSPACE_HASH_MEMO_BYTES = NODE_WORKER_WORKSPACE_STDOUT_MAX_BYTES - 4 * 1024;
 
-export type NodeWorkerWorkspaceBinding = {
-  source:
-    | { kind: "local"; path: string }
-    | { kind: "repository"; baseCommit: string; baseManifestRef: string };
-  manifestRef: string;
-  remoteWorkspaceDir: string;
-  sessionKey?: string;
-};
-
 export function createNodeWorkerWorkspaceActions(params: {
   environmentId: string;
   ownerEpoch: number;
   sessionId: string;
+  deviceId?: string;
+  onDeviceFolderBound?: (path: string | undefined) => void;
   ownerSignal: AbortSignal;
   isOwnerCurrent: () => boolean;
   restoredWorkspace?: NodeWorkerWorkspaceBinding;
   supportsNativeQuiescence?: () => Promise<boolean>;
+  supportsGitResults?: () => Promise<boolean>;
   workspaceTransfer: NodeWorkspaceTransferService;
   runWorkspaceCommand: (
-    command: WorkerWorkspaceCommand & { resetWorkspace?: boolean; sessionKey?: string },
+    command: WorkerWorkspaceCommand & {
+      resetWorkspace?: boolean;
+      sessionKey?: string;
+      deviceFolder?: string;
+    },
   ) => Promise<NodeWorkerWorkspaceExecResult>;
 }) {
   const { restoredWorkspace } = params;
@@ -67,12 +67,15 @@ export function createNodeWorkerWorkspaceActions(params: {
     environmentId: params.environmentId,
     ownerEpoch: params.ownerEpoch,
     sessionId: params.sessionId,
-    generation: params.ownerEpoch,
     isAuthorized: params.isOwnerCurrent,
     signal: params.ownerSignal,
   };
   let workspaceReady = restoredWorkspace !== undefined;
   let sessionKey = restoredWorkspace?.sessionKey;
+  let deviceFolder =
+    restoredWorkspace?.source.kind === "device-folder"
+      ? restoredWorkspace.remoteWorkspaceDir
+      : undefined;
   const exec = async (command: WorkerWorkspaceCommand & { resetWorkspace?: boolean }) => {
     if (!workspaceReady) {
       throw new Error("node worker workspace is unavailable before sync");
@@ -80,6 +83,7 @@ export function createNodeWorkerWorkspaceActions(params: {
     return await params.runWorkspaceCommand({
       ...command,
       ...(sessionKey === undefined ? {} : { sessionKey }),
+      ...(deviceFolder === undefined ? {} : { deviceFolder }),
     });
   };
   const transfer = createNodeWorkspaceTransferCommand(exec);
@@ -90,8 +94,53 @@ export function createNodeWorkerWorkspaceActions(params: {
     nativeWatchdog: params.supportsNativeQuiescence,
     runWorkspaceCommand: exec,
   });
+  const bindDeviceFolder = async (
+    source: { deviceId: string; path: string },
+    authorize?: () => void,
+    expectedFolder?: string,
+  ): Promise<WorkerWorkspaceSyncResult> => {
+    if (source.deviceId !== params.deviceId) {
+      throw new Error("Device folder does not belong to this workspace runner");
+    }
+    const previousFolder = deviceFolder;
+    deviceFolder = source.path;
+    params.onDeviceFolderBound?.(deviceFolder);
+    try {
+      const result = await exec({
+        argv: [NODE_WORKSPACE_VALIDATE_DEVICE_FOLDER_COMMAND],
+        transportRetry: "idempotent",
+        assertCurrent: authorize,
+      });
+      authorize?.();
+      if (result.termination !== "exit" || result.code !== 0) {
+        throw new Error("Device folder validation failed");
+      }
+      if (result.workspaceDir !== (expectedFolder ?? source.path)) {
+        throw new Error("Device folder target changed since the session was bound");
+      }
+      deviceFolder = result.workspaceDir;
+      params.onDeviceFolderBound?.(deviceFolder);
+      return {
+        mode: "device-folder",
+        remoteWorkspaceDir: deviceFolder,
+        manifestRef: DEVICE_FOLDER_MANIFEST_REF,
+      };
+    } catch (error) {
+      deviceFolder = previousFolder;
+      params.onDeviceFolderBound?.(previousFolder);
+      throw error;
+    }
+  };
   const validateRestoredWorkspace = async (authorize?: () => void): Promise<void> => {
     if (!restoredWorkspace) {
+      return;
+    }
+    if (restoredWorkspace.source.kind === "device-folder") {
+      await bindDeviceFolder(
+        restoredWorkspace.source,
+        authorize,
+        restoredWorkspace.remoteWorkspaceDir,
+      );
       return;
     }
     if (restoredWorkspace.source.kind === "repository") {
@@ -116,42 +165,44 @@ export function createNodeWorkerWorkspaceActions(params: {
   // keys self-invalidate on change, and without this owner every turn re-hashes
   // the full managed worktree during prepare/apply/verify.
   const placementHashMemo: WorkspaceHashMemo = new Map();
-  const reconcileWorkspace = (request: WorkerWorkspaceReconcileRequest) =>
-    runInstrumentedWorkspaceReconcile((metrics) =>
-      request.source.kind === "repository"
-        ? reconcileRepository(request, metrics)
-        : reconcileWorkspaceRun(
-            {
-              remoteWorkspaceDir: request.remoteWorkspaceDir,
-              baseManifestRef: request.baseManifestRef,
-              localPath: request.source.path,
-              journal: request.source.journal,
-              assertCurrent: request.source.assertCurrent,
-              stagedResult: request.source.stagedResult,
-            },
-            metrics,
-          ),
-    );
-  const reconcileRepository = async (
+  const reconcileWorkspace = (
     request: WorkerWorkspaceReconcileRequest,
-    metrics: WorkspaceReconcileMetrics,
-  ) => {
+  ): Promise<WorkerWorkspaceReconcileResult> => {
+    if (deviceFolder !== undefined) {
+      return Promise.reject(new Error("Device folders cannot be synchronized or reconciled"));
+    }
+    return request.source.kind === "repository"
+      ? reconcileRepository(request)
+      : reconcileWorkspaceRun({
+          remoteWorkspaceDir: request.remoteWorkspaceDir,
+          baseManifestRef: request.baseManifestRef,
+          localPath: request.source.path,
+          journal: request.source.journal,
+          assertCurrent: request.source.assertCurrent,
+          stagedResult: request.source.stagedResult,
+        });
+  };
+  const reconcileRepository = async (request: WorkerWorkspaceReconcileRequest) => {
     if (request.source.kind !== "repository") {
       throw new Error("Repository checkpoint source is required");
     }
-    const { authorize } = request.source;
+    const { authorize, markPhase } = request.source;
+    const resultVersion = (await params.supportsGitResults?.()) ? 2 : undefined;
     authorize?.();
     const token = params.workspaceTransfer.prepareUpload(
       params.environmentId,
       request.baseManifestRef,
       authorize,
+      resultVersion,
     );
     let preparedCheckpoint: { discard: () => Promise<void> } | undefined;
     try {
+      markPhase?.("repositoryCheckpointUpload");
       await transfer(
         {
           direction: "upload",
           token,
+          ...(resultVersion ? { resultVersion } : {}),
           baseManifestRef: request.baseManifestRef,
           referenceManifestRef: request.source.referenceManifestRef,
         },
@@ -164,6 +215,7 @@ export function createNodeWorkerWorkspaceActions(params: {
       );
       try {
         const verifyStable = async () => {
+          markPhase?.("repositoryVerification");
           authorize?.();
           const observed = await captureRemoteWorkspaceManifest({
             runWorkspaceCommand: (command) => exec({ ...command, assertCurrent: authorize }),
@@ -174,12 +226,21 @@ export function createNodeWorkerWorkspaceActions(params: {
               uploaded.baseManifestRef.slice(7),
             ],
             hashMemo: placementHashMemo,
-            metrics,
             maxHashMemoBytes: NODE_WORKSPACE_HASH_MEMO_BYTES,
           });
           authorize?.();
           if (observed !== uploaded.currentManifestRef) {
             throw new Error("Repository workspace changed during checkpoint capture");
+          }
+          if (uploaded.gitHistory && !uploaded.gitHistory.unavailableReason) {
+            const head = await exec({
+              argv: ["git", "rev-parse", "--verify", "HEAD^{commit}"],
+              transportRetry: "never",
+              assertCurrent: authorize,
+            });
+            if (head.code !== 0 || head.stdout.trim() !== uploaded.gitHistory.headCommit) {
+              throw new Error("Repository Git HEAD changed during checkpoint capture");
+            }
           }
         };
         await verifyStable();
@@ -196,6 +257,7 @@ export function createNodeWorkerWorkspaceActions(params: {
               NODE_WORKSPACE_EMPTY_MANIFEST_REF,
               authorize,
             );
+            markPhase?.("repositoryPublicationUpload");
             await transfer(
               {
                 direction: "upload",
@@ -236,6 +298,7 @@ export function createNodeWorkerWorkspaceActions(params: {
           // stability, live owner and final quiescence fences still run below.
           await verifyStable();
           authorize?.();
+          markPhase?.("repositoryCheckpointStage");
           const prepared = await request.source.prepareCheckpoint({
             stagingRoot: uploaded.stagingRoot,
             ...(publication && publicationDigest
@@ -245,6 +308,8 @@ export function createNodeWorkerWorkspaceActions(params: {
             currentManifestRaw: uploaded.currentRaw,
             baseManifestRef: uploaded.baseManifestRef,
             currentManifestRef: uploaded.currentManifestRef,
+            gitHistory: uploaded.gitHistory,
+            gitPackPath: uploaded.gitPackPath,
           });
           preparedCheckpoint = prepared;
           return {
@@ -263,11 +328,11 @@ export function createNodeWorkerWorkspaceActions(params: {
           };
         } finally {
           if (publication) {
-            await fsp.rm(publication.stagingRoot, { recursive: true, force: true });
+            await removeNodeWorkspaceUpload(publication);
           }
         }
       } finally {
-        await fsp.rm(uploaded.stagingRoot, { recursive: true, force: true });
+        await removeNodeWorkspaceUpload(uploaded);
       }
     } catch (error) {
       // Finalizers can reject before the caller receives the checkpoint's disposer.
@@ -285,25 +350,26 @@ export function createNodeWorkerWorkspaceActions(params: {
       await params.workspaceTransfer.revoke(params.environmentId, token);
     }
   };
-  const reconcileWorkspaceRun = async (
-    request: WorkerLocalWorkspaceReconcileRequest,
-    metrics: WorkspaceReconcileMetrics,
-  ) => {
+  const reconcileWorkspaceRun = async (request: WorkerLocalWorkspaceReconcileRequest) => {
+    const resultVersion = (await params.supportsGitResults?.()) ? 2 : undefined;
+    request.assertCurrent?.();
     const uploadToken = params.workspaceTransfer.prepareUpload(
       params.environmentId,
       request.baseManifestRef,
       request.assertCurrent,
+      resultVersion,
     );
     let uploaded: ReturnType<NodeWorkspaceTransferService["takeUpload"]>;
     let acceptLocal: Awaited<ReturnType<typeof prepareLocalWorkspaceReconciliation>>;
     try {
       // Local recovery and remote upload must settle before releasing custody.
       const [local, upload] = await Promise.allSettled([
-        prepareLocalWorkspaceReconciliation({ request, hashMemo: placementHashMemo, metrics }),
+        prepareLocalWorkspaceReconciliation({ request, hashMemo: placementHashMemo }),
         transfer(
           {
             direction: "upload",
             token: uploadToken,
+            ...(resultVersion ? { resultVersion } : {}),
             baseManifestRef: request.baseManifestRef,
             referenceManifestRef: request.baseManifestRef,
           },
@@ -331,11 +397,20 @@ export function createNodeWorkerWorkspaceActions(params: {
           baseCommit: uploaded.base.baseCommit,
           priorManifestDigests: [expectedRemoteRef.slice(7), uploaded.baseManifestRef.slice(7)],
           hashMemo: placementHashMemo,
-          metrics,
           maxHashMemoBytes: NODE_WORKSPACE_HASH_MEMO_BYTES,
         });
         if (observed !== expectedRemoteRef) {
           throw new Error("Cloud workspace changed during final reconciliation");
+        }
+        if (uploaded.gitHistory && !uploaded.gitHistory.unavailableReason) {
+          const head = await exec({
+            argv: ["git", "rev-parse", "--verify", "HEAD^{commit}"],
+            transportRetry: "never",
+            assertCurrent: request.assertCurrent,
+          });
+          if (head.code !== 0 || head.stdout.trim() !== uploaded.gitHistory.headCommit) {
+            throw new Error("Cloud workspace Git HEAD changed during final reconciliation");
+          }
         }
       };
       const publishAcceptedManifest = async (accepted: {
@@ -370,7 +445,7 @@ export function createNodeWorkerWorkspaceActions(params: {
         verifyStable,
       });
     } finally {
-      await fsp.rm(uploaded.stagingRoot, { recursive: true, force: true });
+      await removeNodeWorkspaceUpload(uploaded);
     }
   };
   const syncRepository = async (request: WorkerWorkspaceSyncRequest) => {
@@ -410,7 +485,7 @@ export function createNodeWorkerWorkspaceActions(params: {
     const baseCommit = baseline.baseCommit;
     const remoteWorkspaceDir = baseline.remoteWorkspaceDir;
     if (request.gitAuthor && !source.prepared) {
-      await repository.configureAuthor(remoteWorkspaceDir, request.gitAuthor);
+      await repository.configureCheckout(remoteWorkspaceDir, request.gitAuthor);
     }
     await params.workspaceTransfer.prepareRepository({
       ...transferOwner,
@@ -420,64 +495,16 @@ export function createNodeWorkerWorkspaceActions(params: {
     });
     let manifestRef = baseline.manifestRef;
     if (source.checkpoint) {
-      const checkpoint = source.checkpoint;
-      const decodedBase = await decodeWorkspaceManifest(
-        checkpoint.baseManifestRaw,
-        undefined,
-        params.ownerSignal,
-      );
-      if (decodedBase.manifestRef !== baseManifestRef) {
-        throw new Error("Repository checkpoint baseline differs from its cloned commit");
-      }
-      const decoded = await decodeWorkspaceManifest(
-        checkpoint.currentManifestRaw,
-        undefined,
-        params.ownerSignal,
-      );
-      manifestRef = decoded.manifestRef;
-      const manifest = decoded.manifest;
-      const base = decodedBase.manifest;
-      const token = params.workspaceTransfer.publishSnapshot(
-        params.environmentId,
-        {
-          manifest,
-          manifestRef,
-          rawManifest: checkpoint.currentManifestRaw,
-          root: checkpoint.stagingRoot,
-          blobPaths: new Set(workerWorkspaceTransferPaths(manifest, base, params.ownerSignal)),
-        },
-        request.authorize,
-      );
-      try {
-        await transfer(
-          {
-            direction: "download",
-            token,
-            manifestRef,
-            checkpointBaseManifestRef: baseManifestRef,
-          },
-          "Repository checkpoint restore failed",
-          { assertCurrent: request.authorize },
-        );
-        for (const command of await prepareRepositoryPublicationRestore({
-          ...checkpoint,
-          current: manifest,
-        })) {
-          const restored = await exec({
-            ...command,
-            timeoutMs: 60_000,
-            transportRetry: "never",
-            assertCurrent: request.authorize,
-          });
-          if (restored.code !== 0 || restored.termination !== "exit") {
-            throw new Error(
-              "Repository publication paths could not be restored; retry workspace preparation",
-            );
-          }
-        }
-      } finally {
-        await params.workspaceTransfer.revoke(params.environmentId, token);
-      }
+      manifestRef = await restoreNodeWorkerRepositoryCheckpoint({
+        checkpoint: source.checkpoint,
+        baseManifestRef,
+        environmentId: params.environmentId,
+        workspaceTransfer: params.workspaceTransfer,
+        signal: params.ownerSignal,
+        authorize: request.authorize,
+        exec,
+        transfer,
+      });
     } else if (source.runSetupScript) {
       const setup = await exec({
         argv: [
@@ -527,6 +554,9 @@ if (stat?.isFile() && (stat.mode & 0o111)) {
     stageAttachments: async (
       request: Parameters<NonNullable<WorkerWorkspaceTunnelHandle["stageAttachments"]>>[0],
     ) => {
+      if (deviceFolder !== undefined) {
+        throw new Error("Attachment staging is not supported for device-folder sessions");
+      }
       const prepared = await params.workspaceTransfer.prepareAttachments({
         ...request,
         environmentId: params.environmentId,
@@ -561,9 +591,19 @@ if (stat?.isFile() && (stat.mode & 0o111)) {
       ) {
         throw new Error("Node workspace sync does not match its bound session");
       }
+      if (deviceFolder !== undefined && request.source.kind !== "device-folder") {
+        throw new Error("A device-folder session cannot be replaced by a synced workspace");
+      }
       sessionKey = request.sessionKey;
+      const wasReady = workspaceReady;
       workspaceReady = true;
       try {
+        if (request.source.kind === "device-folder") {
+          if (deviceFolder !== undefined && request.source.path !== deviceFolder) {
+            throw new Error("A device-folder session cannot change its bound folder");
+          }
+          return await bindDeviceFolder(request.source, request.authorize);
+        }
         if (request.source.kind === "repository") {
           return await syncRepository(request);
         }
@@ -618,11 +658,16 @@ if (stat?.isFile() && (stat.mode & 0o111)) {
           await params.workspaceTransfer.revoke(params.environmentId, prepared.token);
         }
       } catch (error) {
-        workspaceReady = restoredWorkspace !== undefined;
+        workspaceReady = wasReady;
         throw error;
       }
     },
-    quiesceWorkspace,
+    quiesceWorkspace: (remoteWorkspaceDir: string) => {
+      if (deviceFolder !== undefined) {
+        return Promise.reject(new Error("Device folders do not support workspace quiescence"));
+      }
+      return quiesceWorkspace(remoteWorkspaceDir);
+    },
     reconcileWorkspace,
   };
 }

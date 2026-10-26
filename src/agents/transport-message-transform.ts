@@ -3,6 +3,7 @@
  * unsafe failed turns, maps tool-call ids across model boundaries, and fills
  * strict provider tool-result gaps when supported.
  */
+import type { AiTransformTransportMessages } from "@openclaw/ai";
 import { resolveModelBoundThinkingReplayMode } from "@openclaw/ai/internal/anthropic";
 import { OPENAI_RESPONSES_APIS } from "@openclaw/ai/internal/openai-responses-payload-policy";
 import {
@@ -16,8 +17,8 @@ import {
   isSyntheticMissingToolResult,
   SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY,
 } from "../../packages/agent-core/src/harness/session/tool-result-pairing.js";
-import type { Api, Context, Model } from "../llm/types.js";
-import { repairToolUseResultPairing } from "./session-transcript-repair.js";
+import type { Context } from "../llm/types.js";
+import { sanitizeToolUseResultPairing } from "./session-transcript-repair.js";
 
 const SYNTHETIC_TOOL_RESULT_APIS = new Set<string>([
   "anthropic-messages",
@@ -29,20 +30,11 @@ const SYNTHETIC_TOOL_RESULT_APIS = new Set<string>([
 ]);
 
 // Responses-family APIs retain their inherited "aborted" synthetic-result convention.
-/** Transforms transcript messages into a provider-safe replay context. */
 export function transformTransportMessages(
-  messages: Context["messages"],
-  model: Model,
-  normalizeToolCallId?: (
-    id: string,
-    targetModel: Model,
-    source: { provider: string; api: Api; model: string },
-  ) => string,
-  options?: {
-    normalizeSameModelToolCallIds?: boolean;
-    preserveCrossModelToolCallThoughtSignature?: boolean;
-    preserveUnframedToolResults?: boolean;
-  },
+  messages: Parameters<AiTransformTransportMessages>[0],
+  model: Parameters<AiTransformTransportMessages>[1],
+  normalizeToolCallId?: Parameters<AiTransformTransportMessages>[2],
+  options?: Parameters<AiTransformTransportMessages>[3],
 ): Context["messages"] {
   const syntheticToolResultText = OPENAI_RESPONSES_APIS.has(model.api)
     ? "aborted"
@@ -106,20 +98,13 @@ export function transformTransportMessages(
         if (modelBoundThinkingReplayMode === "drop") {
           continue;
         }
-        if (block.redacted) {
-          if (isSameModel) {
-            content.push(block);
-          }
-          continue;
+        if (
+          block.redacted
+            ? isSameModel
+            : (isSameModel && block.thinkingSignature) || block.thinking.trim()
+        ) {
+          content.push(isSameModel ? block : { type: "text", text: block.thinking });
         }
-        if (isSameModel && block.thinkingSignature) {
-          content.push(block);
-          continue;
-        }
-        if (!block.thinking.trim()) {
-          continue;
-        }
-        content.push(isSameModel ? block : { type: "text", text: block.thinking });
         continue;
       }
       if (block.type === "text") {
@@ -187,9 +172,9 @@ export function transformTransportMessages(
   // The local transport transform can synthesize missing results, but it does not move
   // displaced real results back before an intervening user turn. Shared repair
   // handles both and drops aborted/error turns together with their owned results.
-  return repairToolUseResultPairing(transformed, {
+  return sanitizeToolUseResultPairing(transformed, {
     erroredAssistantResultPolicy: "drop",
     missingToolResultText: syntheticToolResultText,
     preserveUnframedToolResults: options?.preserveUnframedToolResults,
-  }).messages as Context["messages"];
+  }) as Context["messages"];
 }

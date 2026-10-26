@@ -1,192 +1,149 @@
-import { describe, expect, it, vi } from "vitest";
-import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { HeartbeatRunOptions } from "../infra/heartbeat-runner-execution.js";
-import {
-  resolveHeartbeatPreflight,
-  resolveHeartbeatRunPrompt,
-} from "../infra/heartbeat-runner-prompt.js";
-import { startHeartbeatRunner } from "../infra/heartbeat-runner-scheduler.js";
-import { requestHeartbeatAndWait } from "../infra/heartbeat-wake.js";
-import {
-  drainSystemEvents,
-  enqueueSystemEvent,
-  peekSystemEventEntries,
-} from "../infra/system-events.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { expect, it, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
+import { admitModelTurn, completionConfig } from "../agents/bash-tools.lifecycle.test-support.js";
+import { runEmbeddedAgent } from "../agents/embedded-agent.js";
+import type { SessionEventReceipt } from "../auto-reply/reply/session-event-contract.js";
+import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { createGatewayCronTargetResolver } from "../gateway/server-cron-targets.js";
+import { peekSystemEventEntries, resetSystemEventsForTest } from "../infra/system-events.js";
+import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
+import { cronTestDeps, cronTestInput } from "./service.fixture-builders.test-support.js";
 import { CronService } from "./service.js";
-import { setupCronServiceSuite } from "./service.test-harness.js";
+import { createNoopLogger } from "./service.test-harness.js";
+import type { CronServiceDeps } from "./service/state.js";
 
-const { logger, makeStorePath } = setupCronServiceSuite({
-  prefix: "openclaw-cron-failure-notification-",
-  baseTimeIso: "2026-01-01T00:00:00.000Z",
-});
+// mock-isolation: Only model output is synthetic; fallback admission and session execution are real.
+vi.mock("../agents/embedded-agent-runner/run.js", () => ({
+  runEmbeddedAgent: vi.fn(),
+}));
+const runEmbeddedAgentMock = vi.mocked(runEmbeddedAgent);
+await Promise.all([
+  import("../auto-reply/dispatch.js"),
+  import("../auto-reply/reply/get-reply-from-config.runtime.js").then((runtime) =>
+    runtime.prewarmConfigDrivenReplyRuntime(),
+  ),
+]);
 
-describe("CronService failure notification delivery", () => {
-  it.each([
-    {
-      name: "a persistent target instead of its creation conversation",
-      agentId: "ops",
-      sessionKey: "agent:ops:telegram:group:42:topic:77",
-      creationSessionKey: "agent:ops:discord:channel:other",
-      sessionTarget: "session:agent:ops:telegram:group:42:topic:77" as const,
-      wakeMode: "now" as const,
-      carriesOrigin: true,
-      wakesNow: true,
-    },
-    {
-      name: "a targeted next-heartbeat conversation immediately",
-      agentId: "ops",
-      sessionKey: "agent:ops:telegram:group:42:topic:77",
-      creationSessionKey: "agent:ops:telegram:group:42:topic:77",
-      sessionTarget: "isolated" as const,
-      wakeMode: "next-heartbeat" as const,
-      carriesOrigin: true,
-      wakesNow: true,
-    },
-    {
-      name: "the default owner without exposing its last group",
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      sessionTarget: "isolated" as const,
-      wakeMode: "now" as const,
-      carriesOrigin: false,
-      wakesNow: true,
-    },
-  ])("routes a rejected failure alert to $name with cadence disabled", async (testCase) => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: { heartbeat: { every: "0m" } },
-        entries: { main: {}, ops: {} },
+const target = "agent:ops:telegram:group:42:topic:77";
+const otherConversation = "agent:ops:discord:channel:other";
+const deliveryContext: DeliveryContext = { channel: "telegram", to: "-10042", threadId: 77 };
+
+it.for([
+  ["persistent target", `session:${target}`, otherConversation, "now", true],
+  ["targeted next-heartbeat", "isolated", target, "next-heartbeat", true],
+  ["default owner", "isolated", undefined, "now", false],
+  ["deferred default owner", "isolated", undefined, "next-heartbeat", false],
+] as const)(
+  "routes a rejected failure alert to %s with scheduling disabled",
+  async ([_name, sessionTarget, creationSessionKey, wakeMode, carriesOrigin], { signal }) => {
+    await withOpenClawTestState(
+      { label: "cron-failure-notification", env: { OPENCLAW_TEST_FAST: "0" } },
+      async (state) => {
+        const agentId = carriesOrigin ? "ops" : "main";
+        const expectedSessionKey = carriesOrigin ? target : "agent:main:main";
+        const cfg = completionConfig(state.workspaceDir);
+        cfg.agents!.entries!.ops = { workspace: state.workspaceDir };
+        setRuntimeConfigSnapshot(cfg);
+        await state.writeConfig(cfg);
+        openOpenClawStateDatabase();
+        await replaceSessionEntry(
+          { agentId, sessionKey: expectedSessionKey },
+          {
+            sessionId: "failure-notification-session",
+            lifecycleRevision: "original",
+            permissionMode: "full",
+            updatedAt: Date.now(),
+          },
+        );
+        const receipts: SessionEventReceipt[] = [];
+        const enqueue = sessionEvents.enqueueSessionEventForHost;
+        const observer = vi
+          .spyOn(sessionEvents, "enqueueSessionEventForHost")
+          .mockImplementation((...args) => {
+            const receipt = enqueue(...args);
+            receipts.push(receipt);
+            return receipt;
+          });
+        runEmbeddedAgentMock.mockReset().mockImplementation(async (params) => {
+          await admitModelTurn(params);
+          return { payloads: [{ text: "NO_REPLY" }], meta: { durationMs: 1 } };
+        });
+        const logger = createNoopLogger();
+        const adapter = createGatewayCronTargetResolver(state.env, logger);
+        const sendCronFailureAlert: NonNullable<CronServiceDeps["sendCronFailureAlert"]> = async (
+          params,
+        ) => {
+          await params.onDeliverySettled({
+            delivered: false,
+            status: "not-delivered",
+            error: "failure alert channel unavailable",
+          });
+          throw new Error("failure alert channel unavailable");
+        };
+        const failRun = async () => ({
+          status: "error" as const,
+          error: "temporary upstream error",
+        });
+        const deps = cronTestDeps({
+          storePath: state.statePath("cron", "jobs.json"),
+          cronEnabled: false,
+          cronConfig: { failureAlert: { enabled: true, after: 1 } },
+          defaultAgentId: "main",
+          log: logger,
+          resolveOriginDeliveryContext: async () => deliveryContext,
+          enqueueSessionEvent: adapter.enqueueSessionEvent,
+          sendCronFailureAlert,
+          runIsolatedAgentJob: failRun,
+          runSessionEvent: failRun,
+        });
+        const cron = new CronService(deps);
+        try {
+          await cron.start();
+          const job = await cron.add({
+            ...cronTestInput(),
+            name: "Important report",
+            sessionTarget,
+            sessionKey: creationSessionKey,
+            wakeMode,
+          });
+
+          await cron.run(job.id, "force");
+          expect(receipts).toHaveLength(1);
+          await expect(withinTest(receipts[0]!.accepted, signal)).resolves.toEqual({ ok: true });
+          await expect(withinTest(receipts[0]!.settled, signal)).resolves.toMatchObject({
+            status: "completed",
+            executionStarted: true,
+          });
+          expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+          const turn = runEmbeddedAgentMock.mock.calls[0]![0];
+          expect(turn).toMatchObject({
+            sessionKey: expectedSessionKey,
+            trigger: "event",
+          });
+          expect(turn.prompt).toContain('Automation "Important report" failed 1 times');
+          expect(turn.messageTo).toBe(carriesOrigin ? deliveryContext.to : undefined);
+          expect(turn.messageThreadId).toBe(carriesOrigin ? deliveryContext.threadId : undefined);
+          expect(deps.enqueueSystemEvent).not.toHaveBeenCalled();
+          expect(peekSystemEventEntries(expectedSessionKey)).toEqual([]);
+        } finally {
+          cron.stop();
+          for (const receipt of receipts) {
+            receipt.cancel();
+          }
+          await Promise.allSettled([
+            cron.waitForIdle(),
+            ...receipts.map((receipt) => receipt.settled),
+          ]);
+          observer.mockRestore();
+          await drainGlobalSingletonLifecycleState("restart");
+          resetSystemEventsForTest();
+        }
       },
-    };
-    const deliveryContext: DeliveryContext = {
-      channel: "telegram",
-      to: "-10042",
-      threadId: 77,
-    };
-    const observed: Array<{ prompt: string; deliveryContext?: DeliveryContext }> = [];
-    const pendingWakes: Array<ReturnType<typeof requestHeartbeatAndWait>> = [];
-    const runOnce = vi.fn(async (options: HeartbeatRunOptions) => {
-      const pendingEventEntries = peekSystemEventEntries(options.sessionKey ?? "");
-      const preflight = await resolveHeartbeatPreflight({
-        cfg,
-        agentId: testCase.agentId,
-        sessionKey: options.sessionKey,
-        heartbeat: options.heartbeat,
-        source: options.source,
-        reason: options.reason,
-      });
-      observed.push({
-        prompt: resolveHeartbeatRunPrompt({
-          cfg,
-          preflight,
-          canRelayToUser: true,
-          scheduledTasks: [],
-          useHeartbeatResponseTool: false,
-        }).prompt,
-        deliveryContext: pendingEventEntries[0]?.deliveryContext,
-      });
-      return { status: "ran" as const, durationMs: 1 };
-    });
-    const runner = startHeartbeatRunner({ cfg, readCurrentConfig: () => cfg, runOnce });
-    const store = await makeStorePath();
-    const resolveOriginDeliveryContext = vi.fn(() => deliveryContext);
-    const sendCronFailureAlert = vi.fn(async (params) => {
-      await params.onDeliverySettled({
-        delivered: false,
-        status: "not-delivered",
-        error: "failure alert channel unavailable",
-      });
-      throw new Error("failure alert channel unavailable");
-    });
-    const cron = new CronService({
-      scheduler: createTestGatewayScheduler(),
-      storePath: store.storePath,
-      cronEnabled: true,
-      cronConfig: { failureAlert: { enabled: true, after: 1 } },
-      defaultAgentId: "main",
-      log: logger,
-      resolveOriginDeliveryContext,
-      enqueueSystemEvent: (text, options) =>
-        enqueueSystemEvent(text, {
-          sessionKey:
-            options?.sessionKey ??
-            resolveAgentMainSessionKey({ cfg, agentId: options?.agentId ?? "main" }),
-          contextKey: options?.contextKey,
-          deliveryContext: options?.deliveryContext,
-        }),
-      requestHeartbeat: (wake) => {
-        pendingWakes.push(
-          requestHeartbeatAndWait({
-            ...wake,
-            sessionKey:
-              wake.sessionKey ??
-              resolveAgentMainSessionKey({ cfg, agentId: wake.agentId ?? "main" }),
-            coalesceMs: 0,
-          }),
-        );
-      },
-      sendCronFailureAlert,
-      runIsolatedAgentJob: async () => ({
-        status: "error",
-        error: "temporary upstream error",
-      }),
-    });
-    try {
-      await cron.start();
-      const job = await cron.add({
-        name: "Important report",
-        enabled: true,
-        schedule: { kind: "every", everyMs: 60_000 },
-        sessionTarget: testCase.sessionTarget,
-        ...("creationSessionKey" in testCase ? { sessionKey: testCase.creationSessionKey } : {}),
-        wakeMode: testCase.wakeMode,
-        payload: { kind: "agentTurn", message: "run report" },
-      });
-
-      await cron.run(job.id, "force");
-      expect(sendCronFailureAlert).toHaveBeenCalledOnce();
-      await expect(sendCronFailureAlert.mock.results[0]?.value).rejects.toThrow(
-        "failure alert channel unavailable",
-      );
-      await vi.advanceTimersByTimeAsync(1);
-      await Promise.all(pendingWakes);
-
-      expect(peekSystemEventEntries(testCase.sessionKey)).toHaveLength(1);
-      expect(runOnce).toHaveBeenCalledTimes(testCase.wakesNow ? 1 : 0);
-      if (testCase.wakesNow) {
-        expect(runOnce).toHaveBeenCalledWith(
-          expect.objectContaining({
-            agentId: testCase.agentId,
-            sessionKey: testCase.sessionKey,
-            source: "notifications-event",
-            intent: "immediate",
-            reason: "wake",
-          }),
-        );
-        expect(observed[0]?.prompt).toContain('Automation "Important report" failed 1 times');
-        expect(observed[0]?.prompt).toContain("Please relay this reminder to the user");
-        expect(observed[0]?.deliveryContext).toEqual(
-          testCase.carriesOrigin ? deliveryContext : undefined,
-        );
-      }
-      if (testCase.carriesOrigin) {
-        expect(resolveOriginDeliveryContext).toHaveBeenCalledOnce();
-      } else {
-        expect(resolveOriginDeliveryContext).not.toHaveBeenCalled();
-      }
-    } finally {
-      cron.stop();
-      try {
-        // Stopping the runner retains unfinished notifications for its successor.
-        await vi.advanceTimersByTimeAsync(1);
-        await Promise.all(pendingWakes);
-      } finally {
-        runner.stop();
-        drainSystemEvents(testCase.sessionKey);
-      }
-    }
-  });
-});
+    );
+  },
+);

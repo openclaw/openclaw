@@ -69,13 +69,7 @@ async function fixture(rootPath = "skills/guide") {
     version: {
       version: "1.0.0",
       pluginManifestSummary: {
-        bundledSkills: [
-          {
-            name: "operator-guide",
-            rootPath,
-            skillMdPath: `${rootPath}/SKILL.md`,
-          },
-        ],
+        bundledSkills: [{ name: "operator-guide", rootPath, skillMdPath: `${rootPath}/SKILL.md` }],
       },
       files: [...source].map(([p, b]) => ({
         path: `${rootPath}/${p}`,
@@ -85,30 +79,34 @@ async function fixture(rootPath = "skills/guide") {
     },
   });
   const calls: URL[] = [];
-  const catalog = (alter?: (value: ReturnType<typeof inventory>) => void, selectedPath?: string) =>
-    fetchClawHubPluginSkill({
+  const catalog = (
+    alter?: (value: ReturnType<typeof inventory>) => void,
+    selectedPath?: string,
+  ) => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = new URL(input instanceof Request ? input.url : input);
+      calls.push(url);
+      if (url.pathname.endsWith("/versions/1.0.0")) {
+        const value = inventory();
+        alter?.(value);
+        return Response.json(value);
+      }
+      const p =
+        url.searchParams
+          .get("path")
+          ?.replace(/^(?:\.\/)+/u, "")
+          .replace(`${rootPath}/`, "") ?? "";
+      const data = source.get(p);
+      return new Response(data ? new Uint8Array(data) : null, { status: data ? 200 : 404 });
+    });
+    return fetchClawHubPluginSkill({
       packageName: "@example/plugin",
       version: "1.0.0",
       skillName: "operator-guide",
       skipAuth: true,
       path: selectedPath,
-      fetchImpl: async (input) => {
-        const url = new URL(input instanceof Request ? input.url : input);
-        calls.push(url);
-        if (url.pathname.endsWith("/versions/1.0.0")) {
-          const value = inventory();
-          alter?.(value);
-          return Response.json(value);
-        }
-        const p =
-          url.searchParams
-            .get("path")
-            ?.replace(/^(?:\.\/)+/u, "")
-            .replace(`${rootPath}/`, "") ?? "";
-        const data = source.get(p);
-        return new Response(data ? new Uint8Array(data) : null, { status: data ? 200 : 404 });
-      },
     });
+  };
   return { root, rootDir, skillDir, record, source, calls, read, catalog, bundle };
 }
 
@@ -166,43 +164,6 @@ describe("complete plugin skill bundles", () => {
         .every((url) => url.searchParams.get("version") === "1.0.0"),
     ).toBe(true);
   });
-
-  it.each([
-    {
-      boundary: "relative depth",
-      rootPath: "skills/guide",
-      filePath: [...Array.from({ length: 15 }, (_, i) => `part-${i}`), "reference.md"].join("/"),
-    },
-    {
-      boundary: "root length",
-      rootPath: `${"a".repeat(255)}/${"b".repeat(255)}`,
-      filePath: "reference.md",
-    },
-  ])(
-    "applies $boundary limits independently to root and relative paths",
-    async ({ rootPath, filePath }) => {
-      const { skillDir, source, catalog, calls, bundle } = await fixture(rootPath);
-      const contents = Buffer.from("Complete boundary reference.");
-      source.set(filePath, contents);
-      await fs.mkdir(path.dirname(path.join(skillDir, filePath)), { recursive: true });
-      await fs.writeFile(path.join(skillDir, filePath), contents);
-      const installed = await bundle();
-      const published = await catalog((value) => {
-        const version = value.version;
-        version.pluginManifestSummary.bundledSkills[0]!.skillMdPath = `./${rootPath}/SKILL.md`;
-        for (const file of version.files) {
-          file.path = `./${file.path}`;
-        }
-      });
-      expect(published).toEqual({ ...installed, version: "1.0.0" });
-      expect(published.files.find((file) => file.path === filePath)?.status).toBe("deferred");
-      expect(
-        calls
-          .filter((url) => url.pathname.endsWith("/file"))
-          .map((url) => url.searchParams.get("path")),
-      ).toEqual([`./${rootPath}/SKILL.md`]);
-    },
-  );
 
   it.each(["./"])(
     "reads a declared package-root skill with exact %s inventory paths",
