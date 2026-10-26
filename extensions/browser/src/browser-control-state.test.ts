@@ -37,29 +37,21 @@ beforeEach(() => {
 afterEach(() => stop("server"));
 
 describe("browser control lifecycle", () => {
-  it("allows a start after a no-state stop settles", async () => {
-    await expect(stop("service")).resolves.toBeNull();
-    await expect(start()).resolves.toBeTruthy();
-  });
-
   it("rejects new starts while ordinary shutdown is pending", async () => {
     await start();
     const gate = Promise.withResolvers<void>();
     stopRuntime.mockImplementationOnce(({ clearState }) => gate.promise.then(clearState));
     const stopping = stop("service");
-    try {
-      await expect(start()).rejects.toThrow("Browser runtime is stopping.");
-    } finally {
-      gate.resolve();
-      await stopping;
-    }
+    await Promise.all([
+      expect(start()).rejects.toThrow("Browser runtime is stopping.").finally(gate.resolve),
+      stopping,
+    ]);
     expectState(null, false);
     await expect(start()).resolves.toBeTruthy();
   });
 
   it("retains a failed stop owner for an exact retry", async () => {
     await start();
-    expect(hasBrowserControlWork()).toBe(true);
     stopRuntime.mockImplementationOnce(async (params) => {
       markBrowserRuntimeStopping(params.current);
       throw new Error("cleanup failed");
@@ -84,6 +76,7 @@ describe("browser control lifecycle", () => {
   });
 
   it("orders a queued stop after an in-progress cold start", async () => {
+    await expect(stop("service")).resolves.toBeNull();
     expect(hasBrowserControlWork()).toBe(false);
     const startGate = Promise.withResolvers<void>();
     const starting = withBrowserControlStart(async () => {

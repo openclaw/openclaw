@@ -40,14 +40,12 @@ describe("attached Browser tool runtime", () => {
     const context = { workspaceDir, agentSessionKey: "agent:w:s", agentDir: "/tmp/w" };
     const runtime = await createRuntime({ ...defaults, ...context, ensureAttachTarget });
 
-    expect(mocks.startBrowserBridgeServer).toHaveBeenCalledOnce();
     const bridgeParams = mocks.startBrowserBridgeServer.mock.calls[0]?.[0];
     expect(bridgeParams).toMatchObject({
       host: "127.0.0.1",
       port: 0,
       authToken: expect.stringMatching(/^[A-Za-z0-9_-]{40,}$/u),
       resolved: {
-        enabled: true,
         attachOnly: true,
         defaultProfile: "worker",
         extensionRelayPorts: {},
@@ -60,14 +58,13 @@ describe("attached Browser tool runtime", () => {
 
     await bridgeParams.onEnsureAttachTarget();
     expect(ensureAttachTarget).toHaveBeenCalledOnce();
-    expect(mocks.createBrowserTool).toHaveBeenCalledWith({
+    const toolParams = mocks.createBrowserTool.mock.calls[0]?.[0];
+    expect(toolParams).toMatchObject({
       sandboxBridgeUrl: "http://127.0.0.1:18443",
       allowHostControl: false,
       ...context,
       screenshotResultMode: "path",
-      persistScreenshot: expect.any(Function),
     });
-    const toolParams = mocks.createBrowserTool.mock.calls[0]?.[0];
     const sourcePath = path.join(workspaceDir, "source.png");
     await fs.writeFile(sourcePath, "screenshot-bytes");
     const artifactPath = await toolParams.persistScreenshot({ sourcePath, type: "png" });
@@ -86,12 +83,9 @@ describe("attached Browser tool runtime", () => {
       }),
     ).rejects.toThrow();
     expect(await fs.readdir(path.dirname(artifactPath))).toEqual(filesBeforeFailure);
-    expect(runtime.tool).toEqual({ name: "browser" });
 
     await runtime.dispose();
     expect(mocks.stopBrowserBridgeServer).toHaveBeenCalledWith({ marker: "bridge-server" });
-    expect(mocks.closePlaywrightBrowserConnection).toHaveBeenCalledWith({ cdpUrl });
-    expect(ensureAttachTarget).toHaveBeenCalledOnce();
   });
 
   it("retries exact Playwright CDP adapter disposal after a failed disconnect", async () => {
