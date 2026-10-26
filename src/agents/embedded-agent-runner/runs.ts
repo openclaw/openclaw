@@ -721,7 +721,7 @@ async function abortAndDrainCapturedEmbeddedAgentRun(
   registration: ActiveEmbeddedRunAttachment | undefined,
 ): Promise<AbortAndDrainEmbeddedAgentRunResult> {
   const settleMs = params.settleMs ?? 15_000;
-  const settleDeadline = Date.now() + resolveTimerTimeoutMs(settleMs, 100, 100);
+  const settleDeadline = performance.now() + resolveTimerTimeoutMs(settleMs, 100, 100);
   const handle = registration?.handle;
   let aborted = false;
   if (params.reason === "stuck_recovery" && operation) {
@@ -762,7 +762,7 @@ async function abortAndDrainCapturedEmbeddedAgentRun(
       diag.warn(`abort failed: sessionId=${params.sessionId} err=${String(err)}`);
     }
   }
-  const remainingMs = Math.max(0, settleDeadline - Date.now());
+  const remainingMs = Math.max(0, settleDeadline - performance.now());
   const nativeSettlement = waitForCapturedSessionNativeAttemptEnd(
     params.sessionId,
     remainingMs,

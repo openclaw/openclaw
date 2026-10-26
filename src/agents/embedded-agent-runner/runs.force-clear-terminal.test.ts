@@ -148,3 +148,19 @@ it("cannot cancel or clear a successor installed by the captured owner's synchro
   detachActiveEmbeddedRun(sessionId, successor!.handle, key);
   successor!.operation.complete();
 });
+
+it("settles a stuck recovery within the bounded budget despite a wall-clock rollback", async () => {
+  // The captured owners never settle; recovery must return drained:false on its
+  // own bounded budget instead of stretching it across the wall-clock rollback.
+  const { operation, handle } = begin(() => {});
+  vi.setSystemTime(stalledAt);
+  const recovery = recover();
+  // Roll the wall clock back immediately after the settle deadline is seeded,
+  // before the remaining budget is computed. A Date.now()-based deadline would
+  // inflate the budget by the skew (60_000) and hold the wait open past 1s.
+  vi.setSystemTime(stalledAt - 60_000);
+  await vi.advanceTimersByTimeAsync(1_000);
+  await expect(recovery).resolves.toMatchObject({ drained: false, forceCleared: false });
+  detachActiveEmbeddedRun(sessionId, handle, key);
+  operation.complete();
+});
