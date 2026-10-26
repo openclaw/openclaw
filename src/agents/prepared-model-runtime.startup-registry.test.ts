@@ -6,7 +6,7 @@ import { queryObjects } from "node:v8";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { handlePluginCommand } from "../auto-reply/reply/commands-plugin.js";
-import type { HandleCommandsParams } from "../auto-reply/reply/commands-types.js";
+import { buildCommandTestParams } from "../auto-reply/reply/commands.test-harness.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createHookRunner } from "../plugins/hooks.js";
 import { loadAndActivateRootPluginRegistry } from "../plugins/loader.js";
@@ -435,27 +435,18 @@ it("dispatches registerFull commands when a multi-agent Gateway has no defaults.
     },
   };
   expect(tryResolveConfiguredAgentWorkspaceDir(config)).toBeUndefined();
-  const commandParams = {
-    cfg: config,
-    ctx: { Provider: "telegram", Surface: "telegram", CommandSource: "text" },
-    command: {
-      commandBodyNormalized: "/fullonly",
-      isAuthorizedSender: true,
-      senderId: "owner",
-      channel: "telegram",
-      channelId: "telegram",
-      from: "owner",
-      to: "bot",
-    },
-    sessionKey: "agent:ops:telegram:direct:owner",
-    agentId: "ops",
-    provider: "openai",
-    model: "gpt-5.4",
-    workspaceDir: opsWorkspace,
-    contextTokens: 1_000,
-    isGroup: false,
-    resolveDefaultThinkingLevel: async () => "off",
-  } as unknown as HandleCommandsParams;
+  const commandParams = buildCommandTestParams(
+    "/fullonly",
+    config,
+    { Provider: "telegram", Surface: "telegram", CommandSource: "text" },
+    { workspaceDir: opsWorkspace },
+  );
+  commandParams.agentId = "ops";
+  commandParams.sessionKey = "agent:ops:telegram:direct:owner";
+  commandParams.provider = "openai";
+  commandParams.model = "gpt-5.4";
+  commandParams.contextTokens = 1_000;
+  commandParams.resolveDefaultThinkingLevel = async () => "off";
   const loadInbound = (
     metadataSnapshot: ReturnType<typeof loadPluginMetadataSnapshot>,
     gateway: PluginRegistry,
