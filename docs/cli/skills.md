@@ -374,6 +374,10 @@ Every Workshop command accepts `--agent <id>` and `--json`. `archive` and
 includes the archived agent's `--agent <id>`, so it restores that agent even
 when your current directory selects a different agent.
 
+The human-readable `workshop list` root path neutralizes terminal controls and
+shows embedded line breaks and tabs as visible escapes. `--json` retains the
+original path, and the directory used on disk is unchanged.
+
 ## Related
 
 - [CLI reference](/cli)

@@ -374,7 +374,7 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
 export function formatSkillsWorkshopList(result: SkillsWorkshopListResult): string {
   const lines = [
     `${theme.muted("Agent:")} ${sanitizeForLog(result.agentId)}  ${theme.muted("Mode:")} ${result.mode}`,
-    `${theme.muted("Root:")} ${shortenHomePath(result.root)}`,
+    `${theme.muted("Root:")} ${sanitizeTerminalText(shortenHomePath(result.root))}`,
     "",
   ];
   if (result.skills.length === 0) {
