@@ -86,13 +86,18 @@ export function rosterReadFixture(
 }
 
 export function queuedLists(lists: Record<string, PendingList>) {
-  return rosterReadFixture((params?: { agentId?: string }) => {
+  const request = vi.fn((method: string, params?: ReturnType<typeof listParams>) => {
+    expect(method).toBe("sessions.list");
     const pending = params?.agentId ? lists[params.agentId] : undefined;
     if (!pending) {
       throw new Error(`Unexpected refresh: ${params?.agentId}`);
     }
     return pending.promise;
   });
+  const client = createTestGatewayClient((method, params) =>
+    request(method, listParams(method, params)),
+  );
+  return { request, ...rosterFixture(client.request.bind(client)) };
 }
 
 export function listRequest<P = unknown>(

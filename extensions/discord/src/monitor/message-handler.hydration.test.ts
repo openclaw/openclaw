@@ -118,7 +118,11 @@ it.each(["missing", "mismatched"])("handles failed %s reply hydration", async (s
   if (state === "missing") {
     expect(message).toBe(test.message);
   } else {
-    expect(await context(message)).toMatchObject({ ReplyToId: "1000", ReplyToBody: undefined });
+    const result = await context(message);
+    expect({ id: result.ReplyToId, body: result.ReplyToBody }).toEqual({
+      id: "1000",
+      body: undefined,
+    });
   }
 });
 
