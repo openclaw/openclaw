@@ -1,5 +1,4 @@
-// Drives the bundled OpenAI realtime voice socket through the real managed proxy
-// lifecycle, so Bun runs prove these sockets reach Proxyline's Gateway hooks.
+// Real OpenAI voice sockets must use Proxyline's managed routing, including on Bun.
 import { once } from "node:events";
 import { createServer } from "node:http";
 import { connect, type AddressInfo, type Socket } from "node:net";
@@ -37,19 +36,15 @@ afterEach(async () => {
 it.each([true, false])(
   "routes realtime voice through the managed proxy (admit=%s), without direct fallback",
   async (admit) => {
-    const target = await startRealtimeTarget();
-    const proxy = await startForwardProxy(admit);
+    const { port, proxyUrl, connects, authorizations } = await startNetwork(admit);
     for (const key of ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"]) {
       vi.stubEnv(key, undefined);
     }
     vi.stubEnv("OPENCLAW_DEBUG_PROXY_ENABLED", undefined);
-    const handle = await startProxy({
-      proxyUrl: proxy.url,
-      loopbackMode: admit ? "gateway-only" : "proxy",
-    });
+    const handle = await startProxy({ proxyUrl, loopbackMode: admit ? "gateway-only" : "proxy" });
     closers.push(() => stopProxy(handle));
     // Admission needs proxy DNS; refusal uses a directly reachable target to detect bypass.
-    const authority = `${admit ? "realtime.openai.test" : "127.0.0.1"}:${target.port}`;
+    const authority = `${admit ? "realtime.openai.test" : "127.0.0.1"}:${port}`;
     const bridge = buildOpenAIRealtimeVoiceProvider().createBridge({
       providerConfig: { apiKey: "test-realtime-key", baseUrl: `ws://${authority}/v1/realtime` },
       onAudio: vi.fn(),
@@ -62,26 +57,25 @@ it.each([true, false])(
     } else {
       await expect(bridge.connect()).rejects.toThrow();
     }
-    expect(proxy.connects).toEqual([authority]);
-    expect(target.authorizations).toEqual(admit ? ["Bearer test-realtime-key"] : []);
+    expect(connects).toEqual([authority]);
+    expect(authorizations).toEqual(admit ? ["Bearer test-realtime-key"] : []);
   },
   15_000,
 );
 
 function closeAfterEach(server: { close(callback: () => void): unknown }, disconnect: () => void) {
-  closers.push(
-    () =>
-      new Promise<void>((resolve) => {
-        disconnect();
-        server.close(() => resolve());
-      }),
-  );
+  closers.push(async () => {
+    disconnect();
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
+  });
 }
 
-async function startRealtimeTarget() {
-  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+async function startNetwork(admit: boolean) {
+  const target = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   const authorizations: string[] = [];
-  server.on("connection", (socket, request) => {
+  target.on("connection", (socket, request) => {
     authorizations.push(request.headers.authorization ?? "");
     socket.on("message", (data) => {
       const event = JSON.parse(rawDataToString(data)) as { type?: string };
@@ -90,16 +84,9 @@ async function startRealtimeTarget() {
       }
     });
   });
-  await once(server, "listening");
-  closeAfterEach(server, () => {
-    for (const client of server.clients) {
-      client.terminate();
-    }
-  });
-  return { port: (server.address() as AddressInfo).port, authorizations };
-}
-
-async function startForwardProxy(admit: boolean) {
+  await once(target, "listening");
+  closeAfterEach(target, () => target.clients.forEach((client) => client.terminate()));
+  const port = (target.address() as AddressInfo).port;
   const connects: string[] = [];
   const sockets = new Set<Socket>();
   const server = createServer((_request, response) => response.writeHead(405).end());
@@ -123,10 +110,7 @@ async function startForwardProxy(admit: boolean) {
   });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
-  closeAfterEach(server, () => {
-    for (const socket of sockets) {
-      socket.destroy();
-    }
-  });
-  return { connects, url: `http://127.0.0.1:${(server.address() as AddressInfo).port}` };
+  closeAfterEach(server, () => sockets.forEach((socket) => socket.destroy()));
+  const proxyUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  return { port, proxyUrl, connects, authorizations };
 }
