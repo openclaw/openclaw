@@ -4,12 +4,9 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, expect, it, vi } from "vitest";
 import plugin from "./index.js";
-import { MEET_URL } from "./src/test-support/fixtures.test-helpers.js";
+import { MEET_URL, meetLaunchedTab } from "./src/test-support/fixtures.test-helpers.js";
 import { setupParticipationHarness } from "./src/test-support/participation-harness.js";
-import {
-  getMeetTool,
-  invokeGoogleMeetGatewayMethodForTest,
-} from "./src/test-support/plugin-harness.js";
+import { getMeetTool } from "./src/test-support/plugin-harness.js";
 import * as chromeTransport from "./src/transports/chrome.js";
 
 const requireRecord = createRequireRecord("record", "expected-label-object-capitalized");
@@ -27,11 +24,8 @@ it("persists unsupported results and replays them without restoring ended sessio
   withOpenClawTestState(
     { label: "google-meet-participation-registration", applyEnv: false },
     async (state) => {
-      const launch = vi.spyOn(chromeTransport, "launchChromeMeet").mockResolvedValue({
-        launched: true,
-        tab: { targetId: "participation-tab", openedByPlugin: true },
-        browser: { inCall: true, micMuted: true },
-      });
+      const launched = meetLaunchedTab("participation-tab");
+      const launch = vi.spyOn(chromeTransport, "launchChromeMeet").mockResolvedValue(launched);
       const leave = vi.spyOn(chromeTransport, "leaveChromeMeet").mockResolvedValue({
         left: true,
         note: "Left the test meeting",
@@ -74,7 +68,7 @@ it("persists unsupported results and replays them without restoring ended sessio
           expect.objectContaining({
             meetingSessionId: sessionId,
             meetingUrl: MEET_URL,
-            tab: { targetId: "participation-tab", openedByPlugin: true },
+            tab: launched.tab,
           }),
         );
         const expectEnded = async (owner: typeof harness, requestId: string) => {
@@ -97,9 +91,7 @@ it("persists unsupported results and replays them without restoring ended sessio
         expect(leave).toHaveBeenCalledOnce();
       } finally {
         if (sessionId) {
-          await invokeGoogleMeetGatewayMethodForTest(harness.methods, "googlemeet.leave", {
-            sessionId,
-          });
+          await harness.gatewayRequest("googlemeet.leave", { sessionId });
         }
         await closeOpenClawStateDatabaseAsync();
         resetPluginStateStoreForTests();
