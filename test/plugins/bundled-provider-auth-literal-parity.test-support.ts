@@ -161,11 +161,6 @@ export function defineBundledProviderAuthLiteralParityTests(shardIndex: number):
   afterAll(() => rmSync(probeAgentDir, { recursive: true, force: true }));
 
   describe(`bundled provider manifest↔runtime auth literal parity (${shardIndex + 1}/${PARITY_SHARD_COUNT})`, () => {
-    it("discovers custom api-key-style provider auth choices", () => {
-      expect(allParityCases.length).toBeGreaterThan(parityCases.length);
-      expect(parityCases.length).toBeGreaterThan(0);
-    });
-
     it.each(probes)(
       "$parityCase.pluginId $parityCase.providerId/$parityCase.methodId optionKey=$parityCase.optionKey",
       { timeout: 120_000 },

@@ -81,18 +81,15 @@ it.each(
 )("OpenRouter preserves optional inputs for $mode $route.name", async ({ mode, route }) => {
   const { native, omitStrict, ...input } = route;
   const model = { ...normalizeModelCompat(input), api: input.api };
-  const properties = {
-    action: Type.String(),
-    targetId: native ? Type.String() : Type.Optional(Type.String()),
-  };
   const parameters = Type.Object(
-    native
-      ? properties
-      : {
-          ...properties,
-          timeoutMs: Type.Optional(Type.Number()),
-          fullPage: Type.Optional(Type.Boolean()),
-        },
+    {
+      action: Type.String(),
+      targetId: native ? Type.String() : Type.Optional(Type.String()),
+      ...(!native && {
+        timeoutMs: Type.Optional(Type.Number()),
+        fullPage: Type.Optional(Type.Boolean()),
+      }),
+    },
     { additionalProperties: false },
   );
   const tools = [
@@ -104,16 +101,15 @@ it.each(
       execute: async () => ({ content: [], details: {} }),
     },
   ];
+  const providerContext = { provider: model.provider, modelId: model.id, model };
   // Run the bundled plugin's schema and payload hooks before the managed transport.
   const context: Context = {
     messages: [{ role: "user", content: "List the open browser tabs.", timestamp: 1 }],
     tools: native
       ? tools
       : (provider.normalizeToolSchemas?.({
-          provider: model.provider,
-          modelId: model.id,
+          ...providerContext,
           modelApi: model.api,
-          model,
           tools,
         }) ?? tools),
   };
@@ -129,9 +125,7 @@ it.each(
   const streamFn = native
     ? baseStream
     : (provider.wrapStreamFn?.({
-        provider: model.provider,
-        modelId: model.id,
-        model,
+        ...providerContext,
         streamFn: baseStream,
       }) ?? baseStream);
   const result = await (await streamFn(model, context, { apiKey: "synthetic-key" })).result();
