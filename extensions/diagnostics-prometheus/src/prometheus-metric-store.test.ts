@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { queryObjects } from "node:v8";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import renderShape from "../benchmarks/render-shape.json" with { type: "json" };
 import {
   PROMETHEUS_FAMILY_RESERVES,
@@ -9,6 +9,18 @@ import {
 } from "./prometheus-family-budget.js";
 import * as prometheusFormat from "./prometheus-format.js";
 import { createPrometheusMetricStore } from "./prometheus-metric-store.js";
+
+const runs = "openclaw_run_completed_total";
+const duration = "openclaw_run_duration_seconds";
+const depth = "openclaw_worker_queue_depth";
+const samples = (text: string, prefix: string) =>
+  text.split("\n").filter((line) => line.startsWith(prefix));
+function expectLines(text: string, ...lines: string[]) {
+  for (const line of lines) {
+    expect(text).toContain(`${line}\n`);
+  }
+}
+afterEach(() => vi.restoreAllMocks());
 
 it("preserves the observed registry's golden exposition across cold and warm scrapes", () => {
   const store = createPrometheusMetricStore();
@@ -44,70 +56,59 @@ it("preserves the observed registry's golden exposition across cold and warm scr
   }
 });
 
-it("formats unchanged family headers once across interleaved scrapes and value updates", () => {
+it("caches headers and series independently across interleaved scrapes and updates", () => {
   const first = createPrometheusMetricStore();
   const second = createPrometheusMetricStore();
-  first.counter("openclaw_run_completed_total", "Runs.", { worker: "z" });
-  first.gauge("openclaw_worker_queue_depth", "Runs.", {}, 1);
-  first.histogram("openclaw_run_duration_seconds", "Duration.", {}, 0.5, [1]);
-  second.counter("openclaw_run_completed_total", "Other runs.", {});
+  for (const worker of ["z", "m"]) {
+    first.counter(runs, "Runs.", { worker });
+    first.histogram(duration, "Duration.", { worker }, 1, [1]);
+  }
+  first.gauge(depth, "Runs.", {}, 0.125);
+  first.histogram(duration, "Duration.", {}, 0.015, [1]);
+  second.histogram(duration, "Duration.", {}, 0.025, [1]);
+  second.counter(runs, "Other runs.", {});
   const format = vi.spyOn(prometheusFormat, "escapeHelp");
-  try {
-    expect(first.render().toString()).toContain(
-      "# HELP openclaw_worker_queue_depth Runs.\n# TYPE openclaw_worker_queue_depth gauge\n",
-    );
-    second.render();
-    expect(format).toHaveBeenCalledTimes(4);
-    format.mockClear();
+  const numbers = vi.spyOn(Number.prototype, "toPrecision");
+  expect(first.render().toString()).toContain(`# HELP ${depth} Runs.\n# TYPE ${depth} gauge\n`);
+  second.render();
+  expect(format).toHaveBeenCalledTimes(5);
+  expect(numbers).toHaveBeenCalledTimes(3);
+  format.mockClear();
+  numbers.mockClear();
 
-    first.counter("openclaw_run_completed_total", "Ignored replacement help.", { worker: "z" });
-    first.gauge("openclaw_worker_queue_depth", "Runs.", {}, 2);
-    first.histogram("openclaw_run_duration_seconds", "Duration.", {}, 0.5, [1]);
-    first.render();
-    second.render();
-    first.render();
-    expect(format).not.toHaveBeenCalled();
-
-    // A newly admitted series can sort ahead of the previous header owner.
-    first.counter("openclaw_run_completed_total", "Earlier runs.\n", { worker: "a" });
-    format.mockClear();
-    expect(first.render().toString()).toContain(
-      "# HELP openclaw_run_completed_total Earlier runs.\\n\n",
-    );
-    expect(format).toHaveBeenCalledTimes(1);
-    format.mockClear();
-    expect(second.render().toString()).toContain(
-      "# HELP openclaw_run_completed_total Other runs.\n",
-    );
-    first.render();
-    expect(format).not.toHaveBeenCalled();
-  } finally {
-    format.mockRestore();
-  }
-});
-
-it("checks header membership once per consecutive family across warm scrapes", () => {
-  const store = createPrometheusMetricStore();
-  for (const worker of ["z", "a", "m"]) {
-    store.counter("openclaw_run_completed_total", "Runs.", { worker });
-    store.histogram("openclaw_run_duration_seconds", "Duration.", { worker }, 0.5, [1]);
-  }
-  store.render();
-  store.counter("openclaw_run_completed_total", "Runs.", { worker: "a" });
+  first.counter(runs, "Ignored replacement help.", { worker: "z" });
+  first.gauge(depth, "Runs.", {}, 0.125);
+  first.render();
+  second.render();
   const membership = vi.spyOn(Set.prototype, "has");
-  let checks: unknown[][];
-  try {
-    store.render();
-    checks = membership.mock.calls.slice();
-  } finally {
-    membership.mockRestore();
-  }
-  expect(checks).toEqual([["openclaw_run_completed_total"], ["openclaw_run_duration_seconds"]]);
+  first.render();
+  const checks = membership.mock.calls.slice();
+  membership.mockRestore();
+  expect(checks).toEqual([[runs], [depth], [duration]]);
+  expect(format).not.toHaveBeenCalled();
+  expect(numbers).not.toHaveBeenCalled();
+
+  first.gauge(depth, "Runs.", {}, 2);
+  first.histogram(duration, "Duration.", {}, 0.02, [1]);
+  expectLines(first.render().toString(), `${duration}_sum 0.035`, `${depth} 2`);
+  expectLines(second.render().toString(), `${duration}_sum 0.025`);
+  expect(numbers).toHaveBeenCalledTimes(1);
+  expect(format).not.toHaveBeenCalled();
+
+  // A newly admitted series can sort ahead of the previous header owner.
+  first.counter(runs, "Earlier runs.\n", { worker: "a" });
+  format.mockClear();
+  expectLines(first.render().toString(), `# HELP ${runs} Earlier runs.\\n`);
+  expect(format).toHaveBeenCalledTimes(1);
+  format.mockClear();
+  expectLines(second.render().toString(), `# HELP ${runs} Other runs.`);
+  first.render();
+  expect(format).not.toHaveBeenCalled();
 });
 
 it("selects header help and type after gauge removal, cross-type admission, and reset", () => {
   const store = createPrometheusMetricStore();
-  const name = "openclaw_run_duration_seconds";
+  const name = duration;
   const header = (help: string, type: string) => `# HELP ${name} ${help}\n# TYPE ${name} ${type}\n`;
   store.histogram(name, "Duration.", {}, 0.5, [1]);
   expect(store.render().toString()).toContain(header("Duration.", "histogram"));
@@ -123,82 +124,47 @@ it("selects header help and type after gauge removal, cross-type admission, and 
   expect(store.render().toString()).toBe(`${header("Restarted duration.", "gauge")}${name} 4\n`);
 });
 
-it("formats unchanged series only once across interleaved scrapes and updates", () => {
-  const first = createPrometheusMetricStore();
-  const second = createPrometheusMetricStore();
-  first.histogram("openclaw_run_duration_seconds", "Duration.", {}, 0.015, [1]);
-  second.histogram("openclaw_run_duration_seconds", "Duration.", {}, 0.025, [1]);
-  first.gauge("openclaw_worker_queue_depth", "Depth.", {}, 0.125);
-  const format = vi.spyOn(Number.prototype, "toPrecision");
-  try {
-    first.render();
-    second.render();
-    expect(format).toHaveBeenCalledTimes(3);
-    format.mockClear();
-    first.gauge("openclaw_worker_queue_depth", "Depth.", {}, 0.125);
-    first.render();
-    second.render();
-    expect(format).not.toHaveBeenCalled();
-
-    first.histogram("openclaw_run_duration_seconds", "Duration.", {}, 0.02, [1]);
-    expect(first.render().toString()).toContain("openclaw_run_duration_seconds_sum 0.035\n");
-    expect(second.render().toString()).toContain("openclaw_run_duration_seconds_sum 0.025\n");
-    expect(format).toHaveBeenCalledTimes(1);
-  } finally {
-    format.mockRestore();
-  }
-});
-
 it("keeps earlier scrape bytes stable across value changes, gauge removal, and reset", () => {
   const store = createPrometheusMetricStore();
   const labels = { z: '雪"\\\n', a: "first", le: "replaced" };
-  store.histogram("openclaw_run_duration_seconds", "Duration.", labels, 0.5, [1, 10]);
-  store.counterValue("openclaw_run_completed_total", "Runs.", {}, 2);
-  store.gauge("openclaw_worker_queue_depth", "Depth.", {}, 3);
+  const escaped = 'z="雪\\"\\\\\\n"';
+  const bucket = (le: number) => `${duration}_bucket{a="first",le="${le}",${escaped}}`;
+  const suffix = `{a="first",le="replaced",${escaped}}`;
+  store.histogram(duration, "Duration.", labels, 0.5, [1, 10]);
+  store.counterValue(runs, "Runs.", {}, 2);
+  store.gauge(depth, "Depth.", {}, 3);
   const first = store.render();
   const before = first.toString();
-  expect(before).toContain(
-    'openclaw_run_duration_seconds_bucket{a="first",le="1",z="雪\\"\\\\\\n"} 1\n',
-  );
-  expect(before).toContain(
-    'openclaw_run_duration_seconds_count{a="first",le="replaced",z="雪\\"\\\\\\n"} 1\n',
-  );
+  expectLines(before, `${bucket(1)} 1`, `${duration}_count${suffix} 1`);
 
-  store.histogram("openclaw_run_duration_seconds", "Duration.", labels, 2, [1, 10]);
-  store.counterValue("openclaw_run_completed_total", "Runs.", {}, 1);
-  store.counter("openclaw_run_completed_total", "Runs.", {}, 4);
-  store.gauge("openclaw_worker_queue_depth", "Depth.", {}, 0);
+  store.histogram(duration, "Duration.", labels, 2, [1, 10]);
+  store.counterValue(runs, "Runs.", {}, 1);
+  store.counter(runs, "Runs.", {}, 4);
+  store.gauge(depth, "Depth.", {}, 0);
   const updated = store.render().toString();
-  expect(updated).toContain("openclaw_run_completed_total 6\n");
-  expect(updated).toContain("openclaw_worker_queue_depth 0\n");
-  expect(updated).toContain(
-    'openclaw_run_duration_seconds_bucket{a="first",le="1",z="雪\\"\\\\\\n"} 1\n',
-  );
-  expect(updated).toContain(
-    'openclaw_run_duration_seconds_bucket{a="first",le="10",z="雪\\"\\\\\\n"} 2\n',
-  );
-  expect(updated).toContain(
-    'openclaw_run_duration_seconds_sum{a="first",le="replaced",z="雪\\"\\\\\\n"} 2.5\n',
+  expectLines(
+    updated,
+    `${runs} 6`,
+    `${depth} 0`,
+    `${bucket(1)} 1`,
+    `${bucket(10)} 2`,
+    `${duration}_sum${suffix} 2.5`,
   );
   for (const value of [12345, -1234, 7]) {
-    store.gauge("openclaw_worker_queue_depth", "Depth.", {}, value);
+    store.gauge(depth, "Depth.", {}, value);
     const rendered = store.render();
-    expect(rendered.toString()).toContain(`openclaw_worker_queue_depth ${value}\n`);
+    expectLines(rendered.toString(), `${depth} ${value}`);
     rendered.buffer.transfer(0);
   }
   for (let index = 0; index < 8; index++) {
-    store.histogram("openclaw_run_duration_seconds", "Duration.", labels, 1, [1, 10]);
+    store.histogram(duration, "Duration.", labels, 1, [1, 10]);
   }
-  expect(store.render().toString()).toContain(
-    'openclaw_run_duration_seconds_count{a="first",le="replaced",z="雪\\"\\\\\\n"} 10\n',
-  );
+  expectLines(store.render().toString(), `${duration}_count${suffix} 10`);
   const largeLabel = "雪😀".repeat(1024);
-  store.gauge("openclaw_worker_queue_depth", "Depth.", { label: largeLabel }, 7);
-  expect(store.render().toString()).toContain(
-    `openclaw_worker_queue_depth{label="${largeLabel}"} 7\n`,
-  );
-  store.clearGauges("openclaw_worker_queue_depth");
-  expect(store.render().toString()).not.toContain("openclaw_worker_queue_depth");
+  store.gauge(depth, "Depth.", { label: largeLabel }, 7);
+  expectLines(store.render().toString(), `${depth}{label="${largeLabel}"} 7`);
+  store.clearGauges(depth);
+  expect(store.render().toString()).not.toContain(depth);
   store.reset();
   expect(store.render().length).toBe(0);
   expect(first.toString()).toBe(before);
@@ -207,28 +173,22 @@ it("keeps earlier scrape bytes stable across value changes, gauge removal, and r
 it("preserves label identity across property order, label shapes, and separator values", () => {
   const store = createPrometheusMetricStore();
   const labels = { a: "one", b: "two|three" };
-  store.counter("openclaw_run_completed_total", "Requests.", labels, 2);
-  store.counter("openclaw_run_completed_total", "Requests.", { b: "two|three", a: "one" }, 3);
-  store.counter("openclaw_run_completed_total", "Requests.", { a: "one|two", b: "three" }, 7);
-  store.counter("openclaw_run_completed_total", "Requests.", { a: "one" }, 11);
-  store.counter("openclaw_run_completed_total", "Requests.", { b: "one" }, 13);
-  store.counter("openclaw_run_completed_total", "Requests.", {}, 17);
+  store.counter(runs, "Requests.", labels, 2);
+  store.counter(runs, "Requests.", { b: "two|three", a: "one" }, 3);
+  store.counter(runs, "Requests.", { a: "one|two", b: "three" }, 7);
+  store.counter(runs, "Requests.", { a: "one" }, 11);
+  store.counter(runs, "Requests.", { b: "one" }, 13);
+  store.counter(runs, "Requests.", {}, 17);
   labels.a = "changed";
 
-  const samples = store
-    .render()
-    .toString()
-    .split("\n")
-    .filter((line) => line.startsWith("openclaw_run_completed_total"));
-  expect(samples).toHaveLength(5);
-  expect(samples).toEqual(
-    expect.arrayContaining([
-      'openclaw_run_completed_total{a="one",b="two|three"} 5',
-      'openclaw_run_completed_total{a="one|two",b="three"} 7',
-      'openclaw_run_completed_total{a="one"} 11',
-      'openclaw_run_completed_total{b="one"} 13',
-      "openclaw_run_completed_total 17",
-    ]),
+  expect(samples(store.render().toString(), runs).toSorted()).toEqual(
+    [
+      `${runs}{a="one",b="two|three"} 5`,
+      `${runs}{a="one|two",b="three"} 7`,
+      `${runs}{a="one"} 11`,
+      `${runs}{b="one"} 13`,
+      `${runs} 17`,
+    ].toSorted(),
   );
 });
 
@@ -246,22 +206,19 @@ it("bounds retained entries while reserving every family and releasing cleared g
       "# TYPE openclaw_prometheus_family_series_dropped_total counter\n" +
       'openclaw_prometheus_family_series_dropped_total{family="openclaw_chat_history_requests_total"} 1\n',
   );
-  const samples = rendered.split("\n").filter((line) => line.includes('{index="'));
-  expect(samples).toHaveLength(16384);
+  const admitted = rendered.split("\n").filter((line) => line.includes('{index="'));
+  const count = (name: string) => admitted.filter((line) => line.startsWith(`${name}{`)).length;
+  expect(admitted).toHaveLength(16384);
   for (const name of families) {
-    const count = samples.filter((line) => line.startsWith(`${name}{`)).length;
-    expect(count).toBeGreaterThanOrEqual(PROMETHEUS_FAMILY_RESERVES[name]);
-    expect(count).toBeLessThanOrEqual(Math.max(128, PROMETHEUS_FAMILY_RESERVES[name]));
+    const size = count(name);
+    expect(size).toBeGreaterThanOrEqual(PROMETHEUS_FAMILY_RESERVES[name]);
+    expect(size).toBeLessThanOrEqual(Math.max(128, PROMETHEUS_FAMILY_RESERVES[name]));
     if (name.startsWith("openclaw_gateway_rpc_")) {
-      expect(count).toBeGreaterThanOrEqual(256);
+      expect(size).toBeGreaterThanOrEqual(256);
     }
   }
-  expect(
-    samples.filter((line) => line.startsWith("openclaw_worker_request_phase_seconds{")),
-  ).toHaveLength(1024);
-  expect(
-    samples.filter((line) => line.startsWith("openclaw_gateway_ws_event_frame_bytes{")),
-  ).toHaveLength(2048);
+  expect(count("openclaw_worker_request_phase_seconds")).toBe(1024);
+  expect(count("openclaw_gateway_ws_event_frame_bytes")).toBe(2048);
   // This late family only used its reserve. Clearing it must not make that
   // capacity available to another family whose shared admission is exhausted.
   const late = "openclaw_worktree_preparation_seconds";
@@ -273,28 +230,22 @@ it("bounds retained entries while reserving every family and releasing cleared g
   }
   const rebuilt = store.render().toString();
   expect(rebuilt).not.toContain(`${competing}{index="late"}`);
-  expect(rebuilt.split("\n").filter((line) => line.startsWith(`${late}{`))).toHaveLength(32);
+  expect(samples(rebuilt, `${late}{`)).toHaveLength(32);
   expect(rebuilt.split("\n").filter((line) => line.includes('{index="'))).toHaveLength(16384);
   store.reset();
   expect(store.render().toString()).toBe("");
   for (let index = 0; index < 128; index++) {
     store.counter(late, "After reset.", { index: String(index) });
   }
-  expect(
-    store
-      .render()
-      .toString()
-      .split("\n")
-      .filter((line) => line.startsWith(`${late}{`)),
-  ).toHaveLength(128);
+  expect(samples(store.render().toString(), `${late}{`)).toHaveLength(128);
 });
 
 it("renders exact UTF-8 exposition bytes, including help, all sample kinds, and empty values", () => {
   const store = createPrometheusMetricStore();
   const labels = { label: '雪😀"\\\n', empty: "" };
-  store.counter("openclaw_run_completed_total", "Runs 雪\\\n.", labels, 2);
-  store.gauge("openclaw_worker_queue_depth", "Depth.", {}, -1.25);
-  store.histogram("openclaw_run_duration_seconds", "Duration.", labels, 0.5, [1]);
+  store.counter(runs, "Runs 雪\\\n.", labels, 2);
+  store.gauge(depth, "Depth.", {}, -1.25);
+  store.histogram(duration, "Duration.", labels, 0.5, [1]);
   const suffix = '{empty="",label="雪😀\\"\\\\\\n"}';
   const expected = [
     "# HELP openclaw_run_completed_total Runs 雪\\\\\\n.",
@@ -323,7 +274,7 @@ it("does not retain unrelated pool slabs between scrapes while series stay live"
     Buffer.from(churn);
     Buffer.from(churn);
     const before = Buffer.from("marker");
-    store.gauge("openclaw_worker_queue_depth", "Depth.", { index: String(index) }, index);
+    store.gauge(depth, "Depth.", { index: String(index) }, index);
     store.render().buffer.transfer(0);
     const after = Buffer.from("marker");
     return [new WeakRef(before.buffer), new WeakRef(after.buffer)];
@@ -338,5 +289,5 @@ it("does not retain unrelated pool slabs between scrapes while series stay live"
   queryObjects(WeakRef);
   expect(control.deref()).toBeUndefined();
   expect(references.filter((reference) => reference.deref() !== undefined)).toHaveLength(0);
-  expect(store.render().toString()).toContain('openclaw_worker_queue_depth{index="31"} 31\n');
+  expectLines(store.render().toString(), `${depth}{index="31"} 31`);
 });
