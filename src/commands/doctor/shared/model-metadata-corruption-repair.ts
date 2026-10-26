@@ -122,8 +122,8 @@ export function repairGeneratedModelMetadataCorruption(params: {
       );
       continue;
     }
-    const repairedModel = (next ??= structuredClone(params.config)).models!.providers![providerId]
-      .models[modelIndex];
+    const repairedModel = (next ??= structuredClone(params.config)).models!.providers![providerId]!
+      .models[modelIndex]!;
     for (const field of GENERATED_MODEL_FIELDS) {
       Reflect.deleteProperty(repairedModel, field);
     }
