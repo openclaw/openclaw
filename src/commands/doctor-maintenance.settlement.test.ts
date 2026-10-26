@@ -899,6 +899,8 @@ it("carries an actual typed lease refusal through Doctor IPC, finalization and p
     "typed-refusal-run",
     { status: "failed" },
     expect.anything(),
+    // The finalization owner also hands its settled outcome to the update-result reporter.
+    expect.any(Function),
   );
   const failed = boundary.step.mock.calls
     .map((call) => call[1])

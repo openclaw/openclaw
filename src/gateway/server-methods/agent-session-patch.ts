@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { clearAllCliSessions } from "../../agents/cli-session.js";
 import { buildMainSessionRecoveryClearPatch } from "../../agents/main-session-recovery/main-session-recovery-clear.js";
+import { clearRotatedSessionMetadata } from "../../agents/session-reset-metadata.js";
 import { evaluateSessionFreshness, type SessionFreshness } from "../../config/sessions.js";
 import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.js";
 import { resolveSessionLifecycleTimestampsAsync } from "../../config/sessions/lifecycle-read.js";
@@ -37,6 +38,7 @@ import {
 
 export type AgentSessionPatchBuild = {
   patch: Partial<SessionEntry>;
+  automaticResetReason?: "idle" | "daily";
   spawnedBy: string | undefined;
   groupId: string | undefined;
   groupChannel: string | undefined;
@@ -147,8 +149,16 @@ export async function buildAgentSessionPatch(params: {
     params.requestedSessionId && (!params.freshEntry?.sessionId || canReuseSession)
       ? params.requestedSessionId
       : undefined;
+  const automaticResetReason =
+    !canReuseSession &&
+    !usableRequestedSessionId &&
+    !(failedSession && !metadata?.present) &&
+    !terminalMainTranscriptNewerThanRegistry
+      ? freshness?.staleReason
+      : undefined;
   const sessionId =
-    usableRequestedSessionId ?? (canReuseSession ? params.freshEntry?.sessionId : undefined);
+    usableRequestedSessionId ??
+    (canReuseSession || automaticResetReason ? params.freshEntry?.sessionId : undefined);
   const isNewSession =
     !params.freshEntry ||
     (!canReuseSession && !usableRequestedSessionId) ||
@@ -236,6 +246,9 @@ export async function buildAgentSessionPatch(params: {
     ? buildMainSessionRecoveryClearPatch(params.freshEntry)
     : {};
   const patch: Partial<SessionEntry> = {
+    ...(automaticResetReason && params.freshEntry
+      ? { ...clearRotatedSessionMetadata(params.freshEntry), agentHarnessId: undefined }
+      : {}),
     sessionId: patchSessionId,
     updatedAt: params.now,
     ...(isNewSession && !freshSessionRotatedSinceLoad
@@ -284,6 +297,7 @@ export async function buildAgentSessionPatch(params: {
   }
   return {
     patch,
+    ...(automaticResetReason ? { automaticResetReason } : {}),
     spawnedBy: freshSpawnedBy,
     ...nextGroup,
     freshSessionRotatedSinceLoad,

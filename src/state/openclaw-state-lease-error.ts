@@ -106,3 +106,19 @@ export function createOpenClawStateLeaseAbortError(
     signal.reason,
   );
 }
+
+export function resolveOpenClawStateLeaseOperationError(
+  operationError: unknown,
+  settledError: unknown,
+  authorityError: unknown,
+): unknown {
+  if (!(authorityError instanceof Error)) {
+    return settledError;
+  }
+  if (settledError !== operationError && authorityError instanceof OpenClawStateLeaseError) {
+    // Nested owners retain the caller's authority code and all operation/drainage causes.
+    const { code, message, loss } = authorityError;
+    return createOpenClawStateLeaseError(code, message, settledError, loss);
+  }
+  return authorityError;
+}

@@ -196,6 +196,24 @@ describe("memory search config", () => {
       { queryInstruction: undefined },
     ],
     [
+      "literal input format inheritance",
+      { inputFormat: { query: "query: ", document: "passage: " } },
+      undefined,
+      { inputFormat: { query: "query: ", document: "passage: " } },
+    ],
+    [
+      "complete input format override",
+      { inputFormat: { query: "query: ", document: "passage: " } },
+      { inputFormat: { query: "Instruct: Retrieve notes\nQuery: ", document: "" } },
+      { inputFormat: { query: "Instruct: Retrieve notes\nQuery: ", document: "" } },
+    ],
+    [
+      "empty prefixes override inherited format",
+      { inputFormat: { query: "query: ", document: "passage: " } },
+      { inputFormat: { query: "", document: "" } },
+      { inputFormat: { query: "", document: "" } },
+    ],
+    [
       "session source exclusion",
       { provider: "openai", sources: ["memory", "sessions"] },
       { rememberAcrossConversations: false },

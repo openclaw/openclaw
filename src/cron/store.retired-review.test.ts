@@ -3,10 +3,9 @@ import { expect, it } from "vitest";
 import { runDoctorConfigPreflight } from "../commands/doctor-config-preflight.js";
 import { prepareCronOwnerWriteRefusal } from "../config/io.cron-owner-refusal.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { writeCronJobScratch } from "./scratch-store.js";
 import { saveCronJobsStore } from "./store.js";
 import { createReloadCronJob } from "./store.test-support.js";
-import { withCronStore } from "./store.worker.test-support.js";
+import { withCronStore, writeCronJobScratch } from "./store.worker.test-support.js";
 import { cronStoreKey } from "./store/key.js";
 
 const job = (id: string) => createReloadCronJob({ id, agentId: "main" });

@@ -204,6 +204,109 @@ it("refuses unarchive after an interrupted removal releases its process claim", 
   expect(getRegistryWorktree(env, record.id)?.removedAt).toBeUndefined();
 });
 
+it("records failed deleted-session cleanup and replaces it only after preserving the snapshot", async () => {
+  const { repoRoot, env, sessionKey, storePath, cfg, record } =
+    await archivedSession("deleted-cleanup");
+  await fs.writeFile(path.join(record.path, "draft.txt"), "recoverable deleted-session work\n");
+  await deleteSessionEntryLifecycle({
+    agentId: "main",
+    storePath,
+    env,
+    archiveTranscript: false,
+    target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+  });
+  const service = new ManagedWorktreeService({ env });
+  const capture = vi
+    .spyOn(snapshots, "captureManagedWorktreeSnapshot")
+    .mockRejectedValueOnce(new Error("snapshot storage unavailable"));
+  const failed = await service.gc(createManagedWorktreeOwnerPolicy(cfg));
+  expect(failed.removed).not.toContain(record.id);
+  expect(await fs.readFile(path.join(record.path, "draft.txt"), "utf8")).toBe(
+    "recoverable deleted-session work\n",
+  );
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
+  const retained = (await service.listRegistryRecords()).find((entry) => entry.id === record.id);
+  expect(retained).toMatchObject({
+    runEndCleanup: {
+      outcome: "failed",
+      reason: expect.stringContaining("snapshot storage unavailable"),
+    },
+  });
+  expect(retained?.removedAt).toBeUndefined();
+  capture.mockRestore();
+
+  expect((await service.gc(createManagedWorktreeOwnerPolicy(cfg))).removed).toContain(record.id);
+  const removed = (await service.listRegistryRecords()).find((entry) => entry.id === record.id)!;
+  expect(removed).toMatchObject({
+    removedAt: expect.any(Number),
+    runEndCleanup: { outcome: "removed-lossless" },
+  });
+  expect(removed.runEndCleanup?.reason).toBeUndefined();
+  await expect(fs.access(record.path)).rejects.toMatchObject({ code: "ENOENT" });
+  expect(await requireGit(repoRoot, ["show", `${removed.snapshotRef}:draft.txt`])).toBe(
+    "recoverable deleted-session work",
+  );
+});
+
+it("continues cleanup when a failed snapshot's session was deleted before outcome recording", async () => {
+  const { repoRoot, env, sessionKey, storePath, cfg, record } =
+    await archivedSession("changed-cleanup-owner");
+  const nextKey = `${sessionKey}-next`;
+  const next = await materializeManagedWorktreeFixture({
+    env,
+    stateDir: env.OPENCLAW_STATE_DIR,
+    repoRoot,
+    name: "next-cleanup-owner",
+    now: 0,
+    ownerKind: "session",
+    ownerId: nextKey,
+  });
+  await replaceSessionEntry(
+    { agentId: "main", sessionKey: nextKey, storePath, env },
+    {
+      sessionId: "next-cleanup-session",
+      updatedAt: 1,
+      archivedAt: 1,
+      worktree: { id: next.id, branch: next.branch, repoRoot },
+    },
+  );
+  await fs.writeFile(path.join(record.path, "draft.txt"), "preserve the failed checkout\n");
+  await fs.writeFile(path.join(next.path, "draft.txt"), "snapshot the next checkout\n");
+  const capture = snapshots.captureManagedWorktreeSnapshot;
+  const captured: string[] = [];
+  vi.spyOn(snapshots, "captureManagedWorktreeSnapshot").mockImplementation(async (params) => {
+    captured.push(params.record.id);
+    if (params.record.id === record.id) {
+      await deleteSessionEntryLifecycle({
+        agentId: "main",
+        storePath,
+        env,
+        archiveTranscript: false,
+        target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+      });
+      throw new Error("snapshot failed after owner deletion");
+    }
+    return capture(params);
+  });
+  const service = new ManagedWorktreeService({ env });
+  const result = await service.gc(createManagedWorktreeOwnerPolicy(cfg));
+  expect(captured).toEqual([record.id, next.id]);
+  expect(result.removed).toEqual([next.id]);
+  expect(result.issues).toContainEqual(
+    expect.objectContaining({ id: record.id, reason: expect.stringContaining("snapshot failed") }),
+  );
+  expect(await fs.readFile(path.join(record.path, "draft.txt"), "utf8")).toBe(
+    "preserve the failed checkout\n",
+  );
+  const records = await service.listRegistryRecords();
+  expect(records.find((entry) => entry.id === record.id)?.runEndCleanup).toBeUndefined();
+  const removed = records.find((entry) => entry.id === next.id)!;
+  expect(await requireGit(repoRoot, ["show", `${removed.snapshotRef}:draft.txt`])).toBe(
+    "snapshot the next checkout",
+  );
+});
+
 it(
   "lets admitted content writers publish refs while pack maintenance waits for a slot",
   { timeout: 5_000 },

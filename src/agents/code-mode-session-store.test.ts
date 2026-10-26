@@ -125,3 +125,70 @@ it("retires old accesses on catalog restriction while keeping the session availa
   owner.close();
   await expect(owner.cell().load("new")).rejects.toThrow("active session-bound run");
 });
+
+it("replays overwrite history without rescanning every retained value per entry", async () => {
+  const manager = SessionManager.inMemory();
+  for (let index = 0; index < 100; index++) {
+    const key = `key-${index % 20}`;
+    await manager.appendCustomEntryAsync("openclaw.code-mode-store", {
+      set: { [key]: { index } },
+      delete: [],
+      networkContent: { [key]: index % 2 === 0 },
+    });
+  }
+  const owner = run(manager);
+  const scan = vi.spyOn(Map.prototype, "values");
+  const loaded = await owner.cell().load("key-19");
+  const scannedValues = scan.mock.contexts.reduce<number>(
+    (total, map) => total + (map instanceof Map ? map.size : 0),
+    0,
+  );
+  scan.mockRestore();
+  expect(loaded).toEqual({ value: { index: 99 }, networkContent: false });
+  expect(scannedValues).toBeLessThanOrEqual(100);
+});
+
+it.each(["value", "total"] as const)(
+  "rejects historical %s overflow even when a later entry deletes it",
+  async (kind) => {
+    const manager = SessionManager.inMemory();
+    const set =
+      kind === "value"
+        ? { a: "x".repeat(256 * 1024) }
+        : Object.fromEntries(
+            ["a", "b", "c", "d", "e"].map((key) => [key, "x".repeat(256 * 1024 - 2)]),
+          );
+    await manager.appendCustomEntryAsync("openclaw.code-mode-store", {
+      set,
+      delete: [],
+      networkContent: Object.fromEntries(Object.keys(set).map((key) => [key, false])),
+    });
+    await manager.appendCustomEntryAsync("openclaw.code-mode-store", {
+      set: {},
+      delete: Object.keys(set),
+      networkContent: {},
+    });
+    await expect(run(manager).cell().load("a")).rejects.toMatchObject({
+      message: "Code Mode session store replay failed; repair the session before using store/load.",
+      cause: expect.any(RangeError),
+    });
+  },
+);
+
+it("checks total replay capacity after the whole entry, including deletions", async () => {
+  const manager = SessionManager.inMemory();
+  const value = "x".repeat(256 * 1024 - 2);
+  await manager.appendCustomEntryAsync("openclaw.code-mode-store", {
+    set: { a: value, b: value, c: value, d: value },
+    delete: [],
+    networkContent: { a: false, b: false, c: false, d: false },
+  });
+  await manager.appendCustomEntryAsync("openclaw.code-mode-store", {
+    set: { e: value, a: value },
+    delete: ["a", "a", "missing"],
+    networkContent: { e: true, a: false },
+  });
+  const cell = run(manager).cell();
+  await expect(cell.load("e")).resolves.toEqual({ value, networkContent: true });
+  await expect(cell.load("a")).resolves.toEqual({ networkContent: false });
+});

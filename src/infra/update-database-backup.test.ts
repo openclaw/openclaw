@@ -27,6 +27,7 @@ import {
   createUpdateDatabaseBackup,
   createUpdateDatabaseBackupInProcess,
 } from "./update-database-backup.js";
+import * as generationReads from "./update-database-generations.js";
 import * as databaseGenerations from "./update-physical-database-generations.js";
 import type { UpdateRecoveryBaselineRef } from "./update-recovery-baseline-capture.js";
 import type { UpdateRecoveryCaptureAcquisition } from "./update-recovery-capture-acquisition.js";
@@ -213,10 +214,12 @@ it.each(["auto", "off"] as const)(
     const f = await fixture(true);
     const previous = getFsSafeNativeConfig();
     const audit = vi.spyOn(sqliteIntegrity, "assertSqliteIntegrity");
+    const generations = vi.spyOn(generationReads, "readUpdateDatabaseGenerations");
     try {
       configureFsSafeNative({ mode });
       const backup = await f.capture({ stopped: true });
       expect(audit).not.toHaveBeenCalled();
+      expect(generations).not.toHaveBeenCalled();
       expect(backup.databases).toHaveLength(3);
       for (const entry of backup.databases) {
         const bytes = await fs.readFile(entry.snapshotPath);
@@ -327,6 +330,7 @@ it.each(["original-custody", "rollback", "ordinary", "maintenance"] as const)(
       "INSERT INTO payload VALUES ('checkpoint pending');",
     );
     const parentImages = vi.spyOn(sqliteSource, "prepareSqliteReadOnlyLocationSync");
+    const generations = vi.spyOn(generationReads, "readUpdateDatabaseGenerations");
     await using scope =
       mode === "ordinary" || mode === "maintenance" ? maintenanceScope() : undefined;
     const input = { ...f.input, preserveSourceArtifacts: true };
@@ -348,6 +352,15 @@ it.each(["original-custody", "rollback", "ordinary", "maintenance"] as const)(
         mode === "maintenance" ? [f.shared] : [],
       );
       expect(backup.originalCaptureSourcePaths).toBeUndefined();
+    } else {
+      // Automatic capture classifies its generation image; manual originals acquire
+      // only the engine image and never perform generation work.
+      expect(parentImages.mock.calls.map(([file]) => file)).toEqual(
+        mode === "original-custody" ? [f.shared] : [],
+      );
+      expect(generations.mock.calls.flatMap(([paths]) => paths)).toEqual(
+        mode === "original-custody" ? [] : [f.shared, f.shared],
+      );
     }
     expect(await readFiles(files)).toEqual(family);
     expect(backup.databases).toHaveLength(1);

@@ -13,11 +13,28 @@ import { cacheChatSessionSnapshot, readChatSessionSnapshot } from "./session-mes
 const saved = { id: "saved", provider: "openai", name: "Saved model" };
 const sessionKey = "agent:main:restored";
 
-it.each([true, false])(
-  "retains the selection when catalog arrives before history (default: %s)",
-  async (inherited) => {
+it.each([
+  { inherited: true, supported: false, tiers: ["default"], speed: "Standard", active: false },
+  {
+    inherited: false,
+    supported: true,
+    tiers: ["default", "priority"],
+    speed: "Fast",
+    active: true,
+  },
+])(
+  "retains selection and effective speed before history ($speed)",
+  async ({ inherited, supported, tiers, speed: expectedSpeed, active }) => {
     const catalog = {
-      models: [saved, { id: "default", provider: "openai", name: "Default model" }],
+      models: [
+        {
+          ...saved,
+          supportsFastMode: supported,
+          supportsServiceTierRecovery: true,
+          serviceTiers: tiers,
+        },
+        { id: "default", provider: "openai", name: "Default model" },
+      ],
     };
     const history = Promise.withResolvers<ChatHistoryResult>();
     const state = makeChatPageHost({
@@ -59,6 +76,7 @@ it.each([true, false])(
           sessionId: "session",
           kind: "direct",
           updatedAt: 1,
+          fastMode: "ultrafast",
           ...(inherited ? {} : { model: "saved", modelProvider: "openai" }),
         },
         defaults: { model: "saved", modelProvider: "openai", contextTokens: 8192 },
@@ -68,6 +86,33 @@ it.each([true, false])(
       });
       await pending;
       await vi.waitFor(() => expect(composer()?.name).toBe("Saved model"));
+      const remembered = composer();
+      const liveModel = {
+        ...createComposerControlsFixture().model,
+        connected: true,
+        gatewayAvailable: true,
+        sessionKey,
+        modelCatalog: catalog.models,
+        modelCatalogState: { hasSnapshot: true, status: "ready" as const },
+        selectedSession: state.sessionsResult?.sessions[0],
+        fastModeTarget: state.sessionsResult?.sessions[0],
+        sessionsResult: state.sessionsResult,
+      };
+      const [model, setModel] = createSignal<Parameters<typeof ChatPaneModelControl>[0]["model"]>({
+        ...liveModel,
+        snapshot: remembered ?? undefined,
+      });
+      const view = mountSolid(() => <ChatPaneModelControl model={model()} />);
+      const speed = () => view.container.querySelector("[data-chat-fast-mode]");
+      await waitForSolid(() =>
+        expect(speed()?.getAttribute("aria-label")).toContain(expectedSpeed),
+      );
+      expect(speed()?.getAttribute("data-chat-fast-mode")).toBe(String(active));
+      setModel(liveModel);
+      await waitForSolid(() =>
+        expect(speed()?.getAttribute("aria-label")).toContain(expectedSpeed),
+      );
+      expect(speed()?.getAttribute("data-chat-fast-mode")).toBe(String(active));
     } finally {
       retireChatMetadataRequests(state);
       state.sessions.dispose();
@@ -76,14 +121,26 @@ it.each([true, false])(
 );
 
 it("presents the saved selection before admission and replaces it with the live catalog", async () => {
+  const savedWithEffort = {
+    id: "saved",
+    provider: "openai",
+    name: "Saved model",
+    reasoning: true,
+    thinkingLevel: "high",
+    thinkingDefault: "medium",
+    thinkingLevels: [{ id: "high", label: "High" }],
+  };
   const [model, setModel] = createSignal<Parameters<typeof ChatPaneModelControl>[0]["model"]>({
     ...createComposerControlsFixture().model,
-    snapshot: saved,
+    snapshot: savedWithEffort,
   });
   const view = mountSolid(() => <ChatPaneModelControl model={model()} />);
   const trigger = () => view.container.querySelector<HTMLElement>("[data-chat-model-select]");
   await waitForSolid(() => expect(trigger()?.textContent).toContain("Saved model"));
   expect(trigger()?.getAttribute("aria-disabled")).toBe("true");
+  const effort = () => view.container.querySelector<HTMLElement>("[data-chat-thinking-select]");
+  expect(effort()?.textContent).toContain("High");
+  expect(effort()?.getAttribute("aria-disabled")).toBe("true");
   expect(view.container.querySelector("[data-composer-catalog-state=stale]")).not.toBeNull();
   setModel({
     ...createComposerControlsFixture().model,

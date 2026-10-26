@@ -87,11 +87,7 @@ export function createMatrixQaE2eeObservedEventRecorder(params: {
   };
 }
 
-function buildMatrixQaE2eeStoragePaths(params: {
-  actorId: MatrixQaE2eeActorId;
-  outputDir: string;
-  scenarioId: string;
-}) {
+function buildMatrixQaE2eeStoragePaths(params: Parameters<typeof prepareMatrixQaE2eeStorage>[0]) {
   const rootDir = path.join(params.outputDir, "matrix-e2ee", "accounts", params.actorId);
   const accountDir = path.join(rootDir, "account");
   const runKey = path

@@ -1,5 +1,6 @@
 import childProcess from "node:child_process";
-// Diagnostic-only phase/fsync attribution for session-delete-measure.ts. Never delays syscalls.
+// Diagnostic-only phase/fsync attribution for session-delete-measure.ts.
+// The explicit crash-proof barrier pauses before snapshotting; ordinary measurements never delay syscalls.
 // Async phases overlap: CPU/memory are context, and phase totals must not be summed.
 import fs from "node:fs";
 import { registerHooks, syncBuiltinESMExports } from "node:module";
@@ -287,6 +288,10 @@ if (output) {
     fs.appendFileSync(`${output}/phases-${threadId}.jsonl`, `${JSON.stringify(row)}\n`);
   };
   globalThis[key] = async (name, run, gitArgs) => {
+    if (name === "snapshotWorktree" && process.env.OPENCLAW_DELETE_SNAPSHOT_BARRIER) {
+      fs.writeFileSync(process.env.OPENCLAW_DELETE_SNAPSHOT_BARRIER, "snapshot not started\n");
+      await new Promise(() => {});
+    }
     const started = beginPhase(name);
     let result;
     try {

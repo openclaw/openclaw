@@ -4,7 +4,8 @@ import {
   reduceSessionProjection,
 } from "@openclaw/gateway-client/browser";
 import type { MessageReactionSummary, ProgressCard } from "@openclaw/gateway-protocol";
-import type { GatewaySessionRow } from "../../api/types.ts";
+import type { GatewaySessionRow, ModelCatalogEntry } from "../../api/types.ts";
+import type { ChatFastModePresentation } from "../../lib/chat/model-select-state.ts";
 import { readPairingQrContent } from "../../lib/chat/pairing-qr.ts";
 import type { ChatHistoryCursor, ChatHistoryPagination } from "./chat-history-pagination.ts";
 import type { ChatHistoryState, ChatTranscriptMetadata } from "./chat-transcript-metadata.ts";
@@ -51,7 +52,17 @@ export function projectChatTranscriptMetadata(row: GatewaySessionRow): ChatTrans
 }
 
 // Display only: the live catalog and session owners still admit every action.
-export type ChatComposerSnapshot = { id: string; provider: string; name: string };
+export type ChatComposerSnapshot = Pick<
+  ModelCatalogEntry,
+  "id" | "provider" | "name" | "reasoning"
+> &
+  Pick<
+    GatewaySessionRow,
+    "thinkingLevel" | "thinkingLevels" | "thinkingDefault" | "permissionMode"
+  > & {
+    defaultPermissionMode?: GatewaySessionRow["permissionMode"];
+    speed?: ChatFastModePresentation;
+  };
 
 export type ChatSessionSnapshot = {
   composer?: ChatComposerSnapshot | null;
@@ -327,7 +338,9 @@ export function cacheChatSessionSnapshot(
       ? { ...withWidgetHeights, board: existing.snapshot.board }
       : withWidgetHeights;
   const snapshot =
-    withBoard.composer === undefined && existing?.snapshot.composer !== undefined
+    withBoard.composer === undefined &&
+    existing?.snapshot.composer !== undefined &&
+    existing.snapshot.sessionId === incoming.sessionId
       ? { ...withBoard, composer: existing.snapshot.composer }
       : withBoard;
   if (

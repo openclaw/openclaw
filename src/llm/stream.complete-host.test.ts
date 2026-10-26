@@ -175,15 +175,19 @@ it("leaves unkeyed and inherited stream consumers intact while gating a changed 
     model,
     { apiKey: "synthetic-outer-account" },
     async (admittedOptions) => {
-      const inherited = await admitProviderRateLimitStream(model, admittedOptions, () => source);
+      const inherited = await admitProviderRateLimitStream(model, admittedOptions, (forwarded) => {
+        expect(forwarded).toBe(admittedOptions);
+        return source;
+      });
       expect(inherited[Symbol.asyncIterator]).toBe(sourceIterate);
       expect(inherited).toHaveProperty("result", sourceResult);
       // A delegated request using a different account still owns its observation.
-      return admitProviderRateLimitStream(
-        model,
-        { ...admittedOptions, apiKey: "synthetic-changed-account" },
-        () => inherited,
-      );
+      const changedOptions = { ...admittedOptions, apiKey: "synthetic-changed-account" };
+      return admitProviderRateLimitStream(model, changedOptions, (forwarded) => {
+        expect(forwarded).not.toBe(changedOptions);
+        expect(forwarded.apiKey).toBe(changedOptions.apiKey);
+        return inherited;
+      });
     },
   );
   const events = [];

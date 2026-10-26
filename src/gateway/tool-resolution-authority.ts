@@ -11,8 +11,16 @@ import { withPreparedSessionCapabilityRead } from "../agents/subagents/spawn/sub
 import { normalizeToolPolicyName } from "../agents/tool-policy.js";
 import { AUTOMATIONS_TOOL_NAME } from "../agents/tools/automations-tool-name.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readScheduledSenderBit } from "../cron/execution-context-registry.js";
-import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "../security/dangerous-tools.js";
+import {
+  readScheduledAutomationsSelfJobId,
+  readScheduledOccurrenceAutomationsScope,
+  readScheduledSenderBit,
+  readScheduledToolOptions,
+} from "../cron/execution-context-registry.js";
+import {
+  DEFAULT_GATEWAY_HTTP_TOOL_DENY,
+  resolveGatewayOwnerOnlyToolDenylist,
+} from "../security/dangerous-tools.js";
 import type { McpLoopbackRequestContext } from "./mcp-grant-store.js";
 
 /** Preserve trusted channel policy and require verified lineage for completion grants. */
@@ -124,21 +132,66 @@ export function captureGatewayToolResolutionAuthority(
 }
 
 /**
- * The sender bit a Gateway-resolved surface applies, and owner-only tools it
- * adds to the denial. A scheduled CLI run takes the same sender bit as its
- * embedded twin from its context; the grant coerces an absent bit to `false`.
- * The loopback carries no self-scoped automations grant, so a scheduled CLI run
- * keeps the automations denial whatever its owner bit.
+ * The sender bit a Gateway-resolved surface applies, and what a scheduled run's
+ * tools take from its execution context. A scheduled CLI run takes the same
+ * sender bit as its embedded twin; the grant coerces an absent bit to `false`.
  */
 export function resolveGatewaySenderAuthority(
-  params: { senderIsOwner?: boolean; admittedRunContext?: AdmittedRunContext },
+  params: {
+    senderIsOwner?: boolean;
+    admittedRunContext?: AdmittedRunContext;
+    toolsAllow?: readonly string[];
+  },
   surface: "http" | "loopback",
-): { senderIsOwner?: boolean; scheduledOwnerDeny: string[] } {
+): { senderIsOwner?: boolean; scheduledTools: GatewayScheduledToolAccess } {
   const scheduled =
     surface === "loopback" ? readScheduledSenderBit(params.admittedRunContext) : undefined;
-  return scheduled
-    ? { senderIsOwner: scheduled.senderIsOwner, scheduledOwnerDeny: [AUTOMATIONS_TOOL_NAME] }
-    : { senderIsOwner: params.senderIsOwner, scheduledOwnerDeny: [] };
+  const senderIsOwner = scheduled ? scheduled.senderIsOwner : params.senderIsOwner;
+  return { senderIsOwner, scheduledTools: resolveGatewayScheduledToolAccess(params, surface) };
+}
+
+type GatewayScheduledToolAccess = Readonly<{
+  /** Tool-construction options read from the run's context. */
+  toolOptions: ReturnType<typeof readScheduledToolOptions> & { cronSelfRemoveOnlyJobId?: string };
+  /** Owner-only tools the surface denies for a sender bit. */
+  ownerOnlyDeny: (senderIsOwner: boolean | undefined, sessionPortal: boolean) => string[];
+}>;
+
+/**
+ * A scheduled occurrence on the CLI loopback takes its automations scope from
+ * its context, as the embedded run does: a tool restricted to the run's own
+ * job, exempt from the owner-only denial, or no tool when the scope is `none`.
+ * Ingress turns and runs without a context keep the owner-only rule.
+ */
+function resolveGatewayScheduledToolAccess(
+  params: { admittedRunContext?: AdmittedRunContext; toolsAllow?: readonly string[] },
+  surface: "http" | "loopback",
+): GatewayScheduledToolAccess {
+  const scope =
+    surface === "loopback"
+      ? readScheduledOccurrenceAutomationsScope(params.admittedRunContext)
+      : undefined;
+  const selfJobId = readScheduledAutomationsSelfJobId(scope);
+  const automationsDenied = scope !== undefined && !selfJobId;
+  return {
+    toolOptions: {
+      ...readScheduledToolOptions(params.admittedRunContext, params.toolsAllow),
+      ...(selfJobId ? { cronSelfRemoveOnlyJobId: selfJobId } : {}),
+    },
+    ownerOnlyDeny: (senderIsOwner, sessionPortal) => [
+      // Sessions owns its own action gates; portal and a self-scoped automations
+      // tool are scoped exceptions.
+      ...resolveGatewayOwnerOnlyToolDenylist(
+        surface === "http" ? senderIsOwner === true : senderIsOwner,
+      ).filter(
+        (name) =>
+          name !== "sessions" &&
+          (name !== "portal" || !sessionPortal) &&
+          (name !== AUTOMATIONS_TOOL_NAME || !selfJobId),
+      ),
+      ...(automationsDenied ? [AUTOMATIONS_TOOL_NAME] : []),
+    ],
+  };
 }
 
 /** HTTP callers start with the default surface denies that `gateway.tools.allow` has not lifted. */
