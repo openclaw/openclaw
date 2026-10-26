@@ -139,9 +139,7 @@ suite.define(() => {
     const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
     const context = await suite.browser.newContext({
       colorScheme: "dark",
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
+      ...createControlUiE2eContextOptions(),
     });
     const automationPage: CronJobsListResult = {
       jobs: [

@@ -40,7 +40,7 @@ import { deliverReplies } from "./monitor/replies.js";
 import { slackOutbound } from "./outbound-adapter.js";
 import { SLACK_QUESTION_FINALIZATION_BLOCKS } from "./reply-action-ids.js";
 import { prepareSlackReply } from "./reply-blocks.js";
-import { sendMessageSlack } from "./send.js";
+import { sendMessageSlack, type SlackSendResult } from "./send.js";
 
 function jsonRoundTrip<T>(value: T): T {
   // oxlint-disable-next-line unicorn/prefer-structured-clone -- This test exercises JSON transport.
@@ -48,7 +48,6 @@ function jsonRoundTrip<T>(value: T): T {
 }
 
 const questionId = "ask_0123456789abcdef0123456789abcdef";
-const questionActionId = "openclaw:question_button:1:1";
 const cfg = { channels: { slack: { botToken: "xoxb-test" } } };
 type DisplayBlock = { type?: string; elements?: Array<{ action_id?: string }> };
 const hasQuestion = (blocks?: DisplayBlock[], prefix = "openclaw:question_button") =>
@@ -59,6 +58,60 @@ const hasQuestion = (blocks?: DisplayBlock[], prefix = "openclaw:question_button
   );
 function expectUpdate(fields: Record<string, unknown>) {
   expect(hoisted.update).toHaveBeenCalledWith(expect.objectContaining(fields));
+}
+const context = (text: string) => ({ type: "context", elements: [{ type: "mrkdwn", text }] });
+const button = (actionId: string, value: string, label: string) => ({
+  type: "button" as const,
+  action_id: actionId,
+  text: { type: "plain_text" as const, text: label },
+  value,
+});
+function fallbackClient() {
+  const client = createSlackSendTestClient();
+  const accepted = {
+    questionMessageId: undefined as string | undefined,
+    trailingMessageId: undefined as string | undefined,
+    questionBlocks: undefined as DisplayBlock[] | undefined,
+  };
+  let count = 0;
+  client.chat.postMessage = vi.fn(async (request: unknown) => {
+    const blocks = (request as { blocks?: DisplayBlock[] }).blocks;
+    if (blocks?.some((block) => block.type === "data_table")) {
+      throw Object.assign(new Error("invalid_blocks"), { data: { error: "invalid_blocks" } });
+    }
+    const ts = `171234.${String(++count).padStart(3, "0")}`;
+    if (hasQuestion(blocks)) {
+      accepted.questionMessageId = ts;
+      accepted.questionBlocks = blocks;
+    } else if (accepted.questionMessageId) {
+      accepted.trailingMessageId = ts;
+    }
+    return { ok: true, channel: "C123", ts };
+  });
+  return { client, accepted };
+}
+function expectAcceptedQuestion(accepted: ReturnType<typeof fallbackClient>["accepted"]) {
+  expect(accepted.questionMessageId).toBeDefined();
+  expect(accepted.trailingMessageId).toBeDefined();
+  expect(accepted.trailingMessageId).not.toBe(accepted.questionMessageId);
+  expect(hoisted.registration?.deliveryId).toBe(`slack:default:C123:${accepted.questionMessageId}`);
+}
+function deliverNative(
+  payload: ReplyPayload,
+  client: ReturnType<typeof createSlackSendTestClient>,
+  options: Partial<Parameters<typeof deliverReplies>[0]> = {},
+) {
+  return deliverReplies({
+    cfg,
+    replies: [prepareSlackReply(payload)],
+    target: "C123",
+    token: "xoxb-test",
+    runtime: { log: () => {}, error: () => {}, exit: () => {} },
+    textLimit: 4000,
+    replyToMode: "off",
+    eventScope: { teamId: "T123", client, writeClient: client },
+    ...options,
+  });
 }
 const questionButtons = (labels = ["One"]): MessagePresentationBlock => ({
   type: "buttons",
@@ -86,6 +139,18 @@ function questionPayload(
     ...extra,
   };
 }
+function fallbackQuestionPayload() {
+  return questionPayload(
+    [
+      { type: "text", text: "Before" },
+      { type: "table", caption: "Choices", headers: ["Label"], rows: [["A useful answer"]] },
+      questionButtons(),
+      { type: "text", text: "Trailing context intentionally arrives after the question card." },
+    ],
+    { text: "Pick one" },
+  );
+}
+
 async function render(payload: ReplyPayload, text = payload.text ?? "") {
   const rendered = await slackOutbound.renderPresentation?.({
     payload,
@@ -116,6 +181,24 @@ function capture(payload: ReplyPayload, results: OutboundDeliveryResult[], to = 
     results,
   });
 }
+async function deliverGeneric(
+  payload: ReplyPayload,
+  sendSlack: typeof sendMessageSlack,
+  to = "C123",
+) {
+  const results: OutboundDeliveryResult[] = [];
+  await slackOutbound.sendPayload?.({
+    cfg,
+    to,
+    text: payload.text ?? "",
+    payload,
+    deps: { sendSlack },
+    onDeliveryResult: (result) => {
+      results.push(result);
+    },
+  });
+  return results;
+}
 
 describe("Slack question finalization", () => {
   beforeEach(() => {
@@ -129,43 +212,14 @@ describe("Slack question finalization", () => {
   });
 
   it("finalizes the accepted native question card before a later delivery observer fails", async () => {
-    const payload = questionPayload(
-      [
-        { type: "table", caption: "Choices", headers: ["Label"], rows: [["A useful answer"]] },
-        questionButtons(),
-        { type: "text", text: "Trailing context intentionally arrives after the question card." },
-      ],
-      { text: "Pick one" },
-    );
-    const client = createSlackSendTestClient();
+    const { client, accepted } = fallbackClient();
     const update = vi.fn(async () => ({ ok: true }));
     client.chat.update = update;
-    let messageCount = 0;
-    let questionMessageId: string | undefined;
-    let trailingMessageId: string | undefined;
-    client.chat.postMessage = vi.fn(async (request: unknown) => {
-      const blocks = (request as { blocks?: DisplayBlock[] }).blocks;
-      if (blocks?.some((block) => block.type === "data_table")) {
-        throw Object.assign(new Error("invalid_blocks"), { data: { error: "invalid_blocks" } });
-      }
-      const ts = `171234.${String(++messageCount).padStart(3, "0")}`;
-      if (hasQuestion(blocks)) {
-        questionMessageId = ts;
-      } else if (questionMessageId) {
-        trailingMessageId = ts;
-      }
-      return { ok: true, channel: "C123", ts };
-    });
     const actualSend = await vi.importActual<typeof import("./send.js")>("./send.js");
     hoisted.update.mockImplementation(actualSend.updateMessageSlack);
     const observerError = new Error("delivery observer failed");
-    const eventScope = { teamId: "T123", client, writeClient: client };
-
     await expect(
-      deliverReplies({
-        cfg,
-        replies: [prepareSlackReply(payload)],
-        target: "C123",
+      deliverNative(fallbackQuestionPayload(), client, {
         token: "xoxp-authoring-user",
         runtime: {
           log: () => {
@@ -175,20 +229,15 @@ describe("Slack question finalization", () => {
           exit: () => {},
         },
         textLimit: 72,
-        replyToMode: "off",
-        eventScope,
       }),
     ).rejects.toBe(observerError);
 
-    expect(questionMessageId).toBeDefined();
-    expect(trailingMessageId).toBeDefined();
-    expect(trailingMessageId).not.toBe(questionMessageId);
-    expect(hoisted.registration?.deliveryId).toBe(`slack:default:C123:${questionMessageId}`);
+    expectAcceptedQuestion(accepted);
     await hoisted.registration?.finalize("Answered: <!channel>");
     expect(update).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         channel: "C123",
-        ts: questionMessageId,
+        ts: accepted.questionMessageId,
         text: expect.stringContaining("Answered: &lt;!channel&gt;"),
       }),
     );
@@ -196,13 +245,7 @@ describe("Slack question finalization", () => {
 
   it("matches the current question and preserves unrelated controls in both delivery paths", async () => {
     const foreignQuestionId = "ask_abcdef0123456789abcdef0123456789";
-    const button = (actionId: string, value: string, label: string) => ({
-      type: "button" as const,
-      action_id: actionId,
-      text: { type: "plain_text" as const, text: label },
-      value,
-    });
-    const callback = button("openclaw:callback_button:1:1", "refresh", "Refresh");
+    const callback = button("openclaw:callback_button:1:1", "private-value", "Refresh");
     const foreign = button("openclaw:question_button:2:1", `slq1:${foreignQuestionId}:0`, "Other");
     const current = button("openclaw:question_button:3:1", `slq1:${questionId}:0`, "One");
     const callbackRow = { type: "actions" as const, block_id: "callback", elements: [callback] };
@@ -218,32 +261,15 @@ describe("Slack question finalization", () => {
         });
         const client = createSlackSendTestClient();
         if (mode === "native") {
-          await deliverReplies({
-            cfg,
-            replies: [prepareSlackReply(payload)],
-            target: "C123",
-            token: "xoxb-test",
-            runtime: { log: () => {}, error: () => {}, exit: () => {} },
-            textLimit: 4000,
-            replyToMode: "off",
-            eventScope: { teamId: "T123", client, writeClient: client },
-          });
+          await deliverNative(payload, client);
         } else {
           const rendered = await render(payload);
-          const results: OutboundDeliveryResult[] = [];
           const sendSlack: typeof sendMessageSlack = async (to, text, options) =>
             await sendMessageSlack(to, text, { ...options, client, token: "xoxb-test" });
-          await slackOutbound.sendPayload?.({
-            cfg,
-            to: "C123",
-            text: "",
-            payload: rendered,
-            deps: { sendSlack },
-            onDeliveryResult: (result) => {
-              results.push(result);
-            },
-          });
-          await capture(rendered, results);
+          await capture(rendered, await deliverGeneric(rendered, sendSlack));
+        }
+        for (const [post] of client.chat.postMessage.mock.calls) {
+          expect(post.text).not.toMatch(/private-value|openclaw:question_|slq1:/u);
         }
       };
 
@@ -258,77 +284,20 @@ describe("Slack question finalization", () => {
         callbackRow,
         foreignRow,
         { ...mixedRow, elements: [callback] },
-        { type: "context", elements: [{ type: "mrkdwn", text: "Answered: One" }] },
+        context("Answered: One"),
       ]);
     }
   });
 
-  it("removes action blocks and appends terminal context", async () => {
-    const payload = questionPayload([
-      wideTable(),
-      { type: "text", text: "Pick one" },
-      questionButtons(["One", "Two"]),
-    ]);
-    const rendered = await render(payload, "Pick one");
-    const renderedAfterTransport = jsonRoundTrip(rendered);
-    const renderedSegments = (
-      renderedAfterTransport?.channelData?.slack as
-        | { renderedPresentationSegments?: unknown[] }
-        | undefined
-    )?.renderedPresentationSegments;
-    expect(renderedSegments?.map((segment) => (segment as { kind?: unknown }).kind)).toEqual([
-      "text",
-      "blocks",
-    ]);
-    await capture(
-      renderedAfterTransport,
-      [
-        delivery("44"),
-        delivery("another-question", { slackQuestionActionIds: ["openclaw:question_button:9:1"] }),
-        delivery("55", {
-          slackQuestionActionIds: [questionActionId],
-          [SLACK_QUESTION_FINALIZATION_BLOCKS]: [
-            {
-              type: "actions",
-              elements: [
-                {
-                  type: "button",
-                  action_id: questionActionId,
-                  text: { type: "plain_text", text: "One" },
-                  value: `slq1:${questionId}:0`,
-                },
-              ],
-            },
-          ],
-        }),
-      ],
-      "team:T123:channel:C123",
-    );
-
-    expect(hoisted.registration?.deliveryId).toBe("slack:default:C123:55");
-    await hoisted.registration?.finalize("Answered: <!channel>");
-    expectUpdate({
-      channelId: "C123",
-      teamId: "T123",
-      messageTs: "55",
-      text: expect.stringContaining("Answered: &lt;!channel&gt;"),
-      blocks: expect.arrayContaining([
-        {
-          type: "context",
-          elements: [{ type: "mrkdwn", text: "Answered: &lt;!channel&gt;" }],
-        },
-      ]),
-    });
-    const blocks = hoisted.update.mock.calls[0]?.[0]?.blocks as Array<{ type?: string }>;
-    expect(blocks.some((block) => block.type === "actions")).toBe(false);
-  });
-
   it("carries the real WebClient question-card identity through upload and chunk progress", async () => {
-    const payload = questionPayload([wideTable(), questionButtons()], {
-      text: "Pick one",
-      mediaUrl: "https://example.invalid/question-context.png",
+    const payload = questionPayload(
+      [wideTable(), { type: "text", text: "Pick one" }, questionButtons(["One", "Two"])],
+      { text: "Pick one", mediaUrl: "https://example.invalid/question-context.png" },
+    );
+    const rendered = jsonRoundTrip(await render(payload));
+    expect(rendered.channelData?.slack).toMatchObject({
+      renderedPresentationSegments: [{ kind: "text" }, { kind: "blocks" }],
     });
-    const rendered = await render(payload);
 
     const client = createSlackSendTestClient();
     let messageCount = 0;
@@ -336,7 +305,6 @@ describe("Slack question finalization", () => {
       ok: true,
       ts: `171234.${String(++messageCount).padStart(3, "0")}`,
     }));
-    const results: OutboundDeliveryResult[] = [];
     const sendSlack: typeof sendMessageSlack = async (to, text, options) => {
       if (options.mediaUrl) {
         const upload = {
@@ -360,81 +328,64 @@ describe("Slack question finalization", () => {
       });
     };
 
-    await slackOutbound.sendPayload?.({
-      cfg,
-      to: "channel:C123",
-      text: "Pick one",
-      payload: rendered,
-      deps: { sendSlack },
-      onDeliveryResult: (result) => {
-        results.push(result);
-      },
-    });
+    const results = await deliverGeneric(rendered, sendSlack, "channel:C123");
     const questionDelivery = results.find((result) => result.meta?.slackQuestionActionIds);
     expect(results.map((result) => result.receipt?.parts[0]?.kind)).toEqual(
       expect.arrayContaining(["media", "text", "card"]),
     );
     expect(questionDelivery?.messageId).not.toBe("F001");
 
-    await capture(rendered, results);
-    await hoisted.registration?.finalize("Answered: One");
+    await capture(
+      rendered,
+      [
+        delivery("another-question", { slackQuestionActionIds: ["openclaw:question_button:9:1"] }),
+        ...results,
+      ],
+      "team:T123:channel:C123",
+    );
+    expect(hoisted.registration?.deliveryId).toBe(
+      `slack:default:C123:${questionDelivery?.messageId}`,
+    );
+    await hoisted.registration?.finalize("Answered: <!channel>");
 
     expectUpdate({
       channelId: "C123",
+      teamId: "T123",
       messageTs: questionDelivery?.messageId,
+      text: expect.stringContaining("Answered: &lt;!channel&gt;"),
+      blocks: expect.arrayContaining([context("Answered: &lt;!channel&gt;")]),
     });
+    const blocks = hoisted.update.mock.calls[0]?.[0]?.blocks as Array<{ type?: string }>;
+    expect(blocks.some((block) => block.type === "actions")).toBe(false);
   });
 
   it("keeps the actual fallback question card through durable result reconciliation", async () => {
-    const payload = questionPayload(
-      [
-        {
-          type: "table" as const,
-          caption: "Choices",
-          headers: ["Label"],
-          rows: [["A useful answer"]],
-        },
-        questionButtons(),
-        {
-          type: "text" as const,
-          text: "Trailing context intentionally arrives after the question card.",
-        },
-      ],
-      { text: "Pick one" },
-    );
+    const payload = fallbackQuestionPayload();
     const plugins = [{ pluginId: "slack", plugin: slackPlugin, source: "test" as const }];
     setActivePluginRegistry(createTestRegistry(plugins));
 
-    const client = createSlackSendTestClient();
-    let messageCount = 0;
-    let questionMessageId: string | undefined;
-    let acceptedQuestionBlocks: DisplayBlock[] | undefined;
-    let trailingMessageId: string | undefined;
-    client.chat.postMessage = vi.fn(async (request: unknown) => {
-      const blocks = (request as { blocks?: DisplayBlock[] }).blocks;
-      if (blocks?.some((block) => block.type === "data_table")) {
-        throw Object.assign(new Error("invalid_blocks"), { data: { error: "invalid_blocks" } });
-      }
-      const ts = `171234.${String(++messageCount).padStart(3, "0")}`;
-      if (hasQuestion(blocks)) {
-        questionMessageId = ts;
-        acceptedQuestionBlocks = blocks;
-      } else if (questionMessageId) {
-        trailingMessageId = ts;
-      }
-      return { ok: true, channel: "C123", ts };
-    });
+    const { client, accepted } = fallbackClient();
+    const questionSends: Array<{ result: SlackSendResult; progress: SlackSendResult[] }> = [];
     const sendSlack: typeof sendMessageSlack = async (to, text, options) => {
+      const progress: SlackSendResult[] = [];
       const sendOptions = {
         ...options,
         cfg,
         token: "xoxb-test",
         client,
         textLimit: 72,
+        onDeliveryResult: async (result: SlackSendResult) => {
+          progress.push(result);
+          await options.onDeliveryResult?.(result);
+        },
       };
       // This presentation test uses method mocks rather than the real request boundary.
       delete sendOptions.assertDirectAdapterHandoff;
-      return await sendMessageSlack(to, text, sendOptions);
+      const result = await sendMessageSlack(to, text, sendOptions);
+      if (result.meta) {
+        questionSends.push({ result, progress });
+      }
+      return result;
     };
 
     const batch = await sendDurableMessageBatch({
@@ -451,27 +402,57 @@ describe("Slack question finalization", () => {
         ? batch.error
         : new Error("Expected the Slack question fallback to be delivered");
     }
-    expect(questionMessageId).toBeDefined();
-    expect(trailingMessageId).toBeDefined();
-    expect(trailingMessageId).not.toBe(questionMessageId);
+    expectAcceptedQuestion(accepted);
+    expect(questionSends).toHaveLength(1);
+    const { result: aggregate, progress } = questionSends[0]!;
+    const questionDelivery = progress.find((result) => result.meta);
+    expect(progress.length).toBeGreaterThan(1);
+    expect(progress.filter((result) => result.meta)).toEqual([
+      expect.objectContaining({
+        meta: expect.objectContaining({
+          slackQuestionActionIds: ["openclaw:question_button:1:1"],
+        }),
+      }),
+    ]);
+    expect(
+      progress.some((result) => result.receipt.parts[0]?.kind === "card" && !result.meta),
+    ).toBe(true);
+    expect(aggregate.receipt.parts).toMatchObject(
+      progress.map((result, index) => ({
+        platformMessageId: result.messageId,
+        kind: result.receipt.parts[0]?.kind,
+        index,
+      })),
+    );
+    expect(questionDelivery?.messageId).not.toBe(aggregate.messageId);
+    expect(jsonRoundTrip(aggregate.meta)).toEqual({
+      slackQuestionActionIds: ["openclaw:question_button:1:1"],
+      slackQuestionMessageId: questionDelivery?.messageId,
+    });
+    expect(aggregate.meta?.[SLACK_QUESTION_FINALIZATION_BLOCKS]).toBe(
+      questionDelivery?.meta?.[SLACK_QUESTION_FINALIZATION_BLOCKS],
+    );
+    expect(
+      aggregate.meta?.[SLACK_QUESTION_FINALIZATION_BLOCKS]?.some(
+        (block) => block.type === "data_table",
+      ),
+    ).toBe(false);
     expect(batch.results).toHaveLength(1);
     expect(batch.results[0]).toMatchObject({
-      messageId: trailingMessageId,
+      messageId: accepted.trailingMessageId,
       meta: {
         slackQuestionActionIds: ["openclaw:question_button:1:1"],
-        slackQuestionMessageId: questionMessageId,
+        slackQuestionMessageId: accepted.questionMessageId,
       },
     });
-    expect(hoisted.registration?.deliveryId).toBe(`slack:default:C123:${questionMessageId}`);
-
     await hoisted.registration?.finalize("Answered: One");
 
     expect(hoisted.update).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ channelId: "C123", messageTs: questionMessageId }),
+      expect.objectContaining({ channelId: "C123", messageTs: accepted.questionMessageId }),
     );
     expect(hoisted.update.mock.calls[0]?.[0]?.blocks).toEqual([
-      ...(acceptedQuestionBlocks ?? []).filter((block) => block.type !== "actions"),
-      { type: "context", elements: [{ type: "mrkdwn", text: "Answered: One" }] },
+      ...(accepted.questionBlocks ?? []).filter((block) => block.type !== "actions"),
+      context("Answered: One"),
     ]);
     expect(
       client.chat.postMessage.mock.calls.filter(([request]) =>

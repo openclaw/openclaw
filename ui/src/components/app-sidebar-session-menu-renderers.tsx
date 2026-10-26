@@ -15,6 +15,17 @@ import {
   SIDEBAR_SESSION_STATUS_OPTIONS,
 } from "./app-sidebar-session-types.ts";
 import type { PickerFocusHandle } from "./select-picker-types.ts";
+import {
+  createSessionGroup,
+  renameSessionGroupFromMenu,
+  deleteSessionGroupFromMenu,
+  editSessionGroupDefaults,
+  setSessionsGrouping,
+  setSessionsShowCron,
+  setSessionsShowPreview,
+  setSessionsShowSystem,
+  setSessionsStatusFilter,
+} from "./session-organizer-menu.runtime.ts";
 import type { SidebarMenusOwner } from "./sidebar-menus-types.ts";
 import type { SidebarFilterMenuView, SidebarMenus } from "./sidebar-menus.tsx";
 import { SidebarSessionFilterPopover } from "./sidebar-session-filter-popover.tsx";
@@ -130,16 +141,16 @@ export function renderSidebarSessionGroupMenuForMenus(
                 void host.sessionDataContext?.sessions.groupsLoad();
                 break;
               }
-              void host.sessionOrganizer.editSessionGroupDefaults(menu.group);
+              void editSessionGroupDefaults(host.sessionOrganizer, menu.group);
               break;
             case "rename-group":
-              void host.sessionOrganizer.renameSessionGroupFromMenu(menu.group);
+              void renameSessionGroupFromMenu(host.sessionOrganizer, menu.group);
               break;
             case "new-group":
-              void host.sessionOrganizer.createSessionGroup();
+              void createSessionGroup(host.sessionOrganizer);
               break;
             case "delete-group":
-              void host.sessionOrganizer.deleteSessionGroupFromMenu(menu.group);
+              void deleteSessionGroupFromMenu(host.sessionOrganizer, menu.group);
               break;
           }
         }
@@ -280,32 +291,6 @@ export function renderSidebarSessionSortMenuForMenus(
   );
   // The mobile sheet has no hover or room for flyouts: choices open as sheet pages.
   const sheet = () => isMobileNavLayout();
-  const segmented = <T extends string>(
-    id: string,
-    label: () => string,
-    value: () => T,
-    options: () => ReadonlyArray<{ value: T; label: string }>,
-    onChange: (value: T) => void,
-    inputRef?: (value: T, element: HTMLInputElement) => void,
-  ) => (
-    <div id={id} class="sidebar-session-menu-row sidebar-session-menu-row--segmented">
-      <span aria-hidden="true" title={label()}>
-        {label()}
-      </span>
-      <SettingsSegmented
-        value={value()}
-        inputRef={inputRef}
-        options={options().map((option) => ({
-          value: option.value,
-          label: option.label,
-          title: option.label,
-        }))}
-        ariaLabel={label()}
-        class="sidebar-session-menu-segmented"
-        onChange={onChange}
-      />
-    </div>
-  );
   const switchItem = (
     id: string,
     label: () => string,
@@ -355,15 +340,15 @@ export function renderSidebarSessionSortMenuForMenus(
                   class="sidebar-session-menu-reset"
                   onClick={() => {
                     defaultStatus?.focus();
-                    host.sessionOrganizer.setSessionsStatusFilter("active");
-                    host.sessionOrganizer.setSessionsShowCron(false);
-                    host.sessionOrganizer.setSessionsShowSystem(false);
-                    host.sessionOrganizer.setSessionsShowPreview(false);
+                    setSessionsStatusFilter(host.sessionOrganizer, "active");
+                    setSessionsShowCron(host.sessionOrganizer, false);
+                    setSessionsShowSystem(host.sessionOrganizer, false);
+                    setSessionsShowPreview(host.sessionOrganizer, false);
                     host.setSessionSortMode("created");
                     if (!rosterMode()) {
                       // A displayed default can hide a saved Person choice until owners return.
                       if (grouping() !== "category") {
-                        host.sessionOrganizer.setSessionsGrouping("category");
+                        setSessionsGrouping(host.sessionOrganizer, "category");
                       }
                       host.setSessionsEmptyGroupsMode("filtering");
                     }
@@ -373,34 +358,44 @@ export function renderSidebarSessionSortMenuForMenus(
                 </button>
               ) : undefined}
             </div>
-            {segmented(
-              "sidebar-sessions-status",
-              () => t("sessionsView.status"),
-              () => host.sessionsStatusFilter,
-              () =>
-                SIDEBAR_SESSION_STATUS_OPTIONS.map((value) => ({
-                  value,
-                  label: value === "active" ? t("common.active") : t(`sessionsView.${value}`),
-                })),
-              (statusFilter) => host.sessionOrganizer.setSessionsStatusFilter(statusFilter),
-              (value, element) => {
-                statusInputs.set(value, element);
-                if (value === "active") {
-                  defaultStatus = element;
+            <div
+              id="sidebar-sessions-status"
+              class="sidebar-session-menu-row sidebar-session-menu-row--segmented"
+            >
+              <span aria-hidden="true" title={t("sessionsView.status")}>
+                {t("sessionsView.status")}
+              </span>
+              <SettingsSegmented
+                value={host.sessionsStatusFilter}
+                inputRef={(value, element) => {
+                  statusInputs.set(value, element);
+                  if (value === "active") {
+                    defaultStatus = element;
+                  }
+                }}
+                options={SIDEBAR_SESSION_STATUS_OPTIONS.map((value) => {
+                  const label =
+                    value === "active" ? t("common.active") : t(`sessionsView.${value}`);
+                  return { value, label, title: label };
+                })}
+                ariaLabel={t("sessionsView.status")}
+                class="sidebar-session-menu-segmented"
+                onChange={(statusFilter) =>
+                  setSessionsStatusFilter(host.sessionOrganizer, statusFilter)
                 }
-              },
-            )}
+              />
+            </div>
             {switchItem(
               "sidebar-sessions-cron",
               () => t("sessionsView.showCronSessions"),
               () => host.sessionsShowCron,
-              (show) => host.sessionOrganizer.setSessionsShowCron(show),
+              (show) => setSessionsShowCron(host.sessionOrganizer, show),
             )}
             {switchItem(
               "sidebar-sessions-system",
               () => t("sessionsView.showSystemSessions"),
               () => host.sessionsShowSystem,
-              (show) => host.sessionOrganizer.setSessionsShowSystem(show),
+              (show) => setSessionsShowSystem(host.sessionOrganizer, show),
             )}
           </section>
           <section
@@ -429,7 +424,7 @@ export function renderSidebarSessionSortMenuForMenus(
                 ]}
                 onChange={(value) => {
                   // SAFETY: This picker emits only the category, project, person, and none options above.
-                  host.sessionOrganizer.setSessionsGrouping(value as SidebarSessionsGrouping);
+                  setSessionsGrouping(host.sessionOrganizer, value as SidebarSessionsGrouping);
                 }}
               />
             )}
@@ -476,7 +471,7 @@ export function renderSidebarSessionSortMenuForMenus(
               "sidebar-sessions-preview",
               () => t("sessionsView.showSessionPreview"),
               () => host.sessionsShowPreview,
-              (show) => host.sessionOrganizer.setSessionsShowPreview(show),
+              (show) => setSessionsShowPreview(host.sessionOrganizer, show),
             )}
           </section>
           <footer class="sidebar-session-menu-footer">

@@ -13,7 +13,7 @@ import {
   type VitestWorkerManifest,
 } from "./vitest-worker-artifacts.mts";
 import { useVitestWorkerCache } from "./vitest-worker-cache-policy.mts";
-import type { VitestWorkerDescriptor } from "./vitest-worker-descriptor.mts";
+import type { VitestWorkerDescriptor, VitestWorkerPreset } from "./vitest-worker-descriptor.mts";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 
@@ -45,7 +45,12 @@ function createVitestWorkerDirectory(env: NodeJS.ProcessEnv) {
 export function createVitestWorkerRun(
   env: NodeJS.ProcessEnv = process.env,
   parent?: VitestWorkerDescriptor,
+  requestedPreset?: VitestWorkerPreset,
 ) {
+  const preset = parent ? (parent.preset ?? "full") : (requestedPreset ?? "full");
+  if (preset === "runtime" && requestedPreset === "full") {
+    throw new Error("Runtime compiled subprocess owner cannot serve a full preset borrower");
+  }
   const directory = parent?.directory ?? createVitestWorkerDirectory(env);
   let preparation: Promise<VitestWorkerManifest> | undefined;
   let retainArtifacts:
@@ -96,7 +101,11 @@ export function createVitestWorkerRun(
       compilerJoined = false;
       const code = await runManagedCommand({
         bin: process.execPath,
-        args: [fileURLToPath(new URL("./vitest-worker-compiler.mts", import.meta.url)), directory],
+        args: [
+          fileURLToPath(new URL("./vitest-worker-compiler.mts", import.meta.url)),
+          directory,
+          ...(preset === "runtime" ? ["--preset=runtime"] : []),
+        ],
         cwd: root,
         env,
         shell: false,
@@ -139,7 +148,7 @@ export function createVitestWorkerRun(
     })());
   }
   return {
-    descriptor: { directory } satisfies VitestWorkerDescriptor,
+    descriptor: { directory, preset } satisfies VitestWorkerDescriptor,
     prepare,
     borrow<T>(
       child: ChildProcess,

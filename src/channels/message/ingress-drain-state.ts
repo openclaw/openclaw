@@ -123,7 +123,3 @@ export function resolveLaneKey<TPayload, TMetadata>(
     ? derivedLaneKey
     : storedLaneKey;
 }
-
-export function sortedKeys(keys: Iterable<string>): string[] {
-  return [...keys].toSorted((a, b) => a.localeCompare(b));
-}

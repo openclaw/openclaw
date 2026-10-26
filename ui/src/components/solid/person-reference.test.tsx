@@ -1,12 +1,17 @@
 /* @vitest-environment jsdom */
 import { getQueriesForElement } from "@solidjs/testing-library";
 import { flush } from "solid-js";
-import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, assert, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { captureI18nStateForTesting } from "../../i18n/lib/translate.test-support.ts";
 import { i18n } from "../../i18n/lib/translate.ts";
 import * as idleImport from "../../lib/idle-import.ts";
 import { ApplicationProvider } from "../../lib/reactive/context.ts";
+import {
+  SESSION_NAVIGATION_INTENT_EVENT,
+  type SessionNavigationIntent,
+} from "../../lib/sessions/navigation-handoff.ts";
 import { createSidebarTestRouter } from "../../test-helpers/app-sidebar-router.ts";
+import { sessionListResult } from "../../test-helpers/chat-model.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import {
   createSessionOwnerMenuHarness,
@@ -83,6 +88,7 @@ it("shares the admitted directory read and only resolves the currently open card
       expect(request.mock.calls.filter(([method]) => method === "users.list")).toHaveLength(1),
     );
 
+    await vi.dynamicImportSettled();
     pending.resolve(sessionOwnerProfiles("Alice", "Bob"));
     await waitForSolid(() =>
       expect(queries(second.card).getByRole("heading", { name: "Bob" })).toBeTruthy(),
@@ -97,6 +103,134 @@ it("shares the admitted directory read and only resolves the currently open card
     await settle();
   }
 });
+
+it("observes the connection only for the open card and samples reconnects before reopening", async () => {
+  const { context: ownerContext, publish } = createSessionOwnerMenuHarness();
+  const context = { ...ownerContext, router: createSidebarTestRouter() };
+  const subscribe = context.gateway.subscribe.bind(context.gateway);
+  const activeListeners = new Set<Parameters<typeof subscribe>[0]>();
+  const subscription = vi.spyOn(context.gateway, "subscribe").mockImplementation((listener) => {
+    activeListeners.add(listener);
+    const stop = subscribe(listener);
+    return () => {
+      activeListeners.delete(listener);
+      stop();
+    };
+  });
+  onTestFinished(() => subscription.mockRestore());
+  const provider = document.createElement("div");
+  const view = mountSolid(() => <ApplicationProvider host={provider} value={context} />, {
+    container: provider,
+  });
+  document.body.append(provider);
+  try {
+    const alice = await createReference("profile-alice", "Alice", provider);
+    const idleListeners = activeListeners.size;
+    const bob = await createReference("profile-bob", "Bob", provider);
+    expect(activeListeners.size).toBe(idleListeners);
+    const first = openReference(alice);
+    expect(activeListeners.size).toBe(idleListeners + 1);
+    const second = openReference(bob);
+    expect(first.card.isConnected).toBe(false);
+    expect(activeListeners.size).toBe(idleListeners + 1);
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(second.card.isConnected).toBe(false);
+    expect(activeListeners.size).toBe(idleListeners);
+
+    publish({ phase: "reconnecting" });
+    publish({ phase: "connected" });
+    const reopened = openReference(alice);
+    expect(activeListeners.size).toBe(idleListeners + 1);
+    await vi.dynamicImportSettled();
+    expect(dialog()).toBe(reopened.card);
+    publish({ phase: "reconnecting" });
+    expect(reopened.card.isConnected).toBe(false);
+    expect(activeListeners.size).toBe(idleListeners);
+  } finally {
+    provider.remove();
+    view.unmount();
+    await settle();
+  }
+  expect(activeListeners.size).toBe(0);
+});
+
+it.each(["immediate", "deferred", "reconnected"] as const)(
+  "keeps session navigation independent of card retirement: %s",
+  async (mode) => {
+    const { context: ownerContext, publish } = createSessionOwnerMenuHarness();
+    const sessionResult = ownerContext.sessions.state.result;
+    assert(sessionResult, "The session owner harness provides a canonical roster");
+    Object.assign(
+      sessionResult,
+      sessionListResult(1, [
+        {
+          key: "agent:main:review",
+          label: "Review launch notes",
+          kind: "direct",
+          updatedAt: 1,
+          createdActor: {
+            type: "human",
+            id: "profile-ada",
+            identity: { type: "profile", id: "profile-ada" },
+          },
+        },
+      ]),
+    );
+    const context = {
+      ...ownerContext,
+      basePath: "",
+      router: createSidebarTestRouter(),
+      navigate: vi.fn(),
+    };
+    let pending: SessionNavigationIntent | undefined;
+    const hold = (event: Event) => {
+      event.preventDefault();
+      pending = (event as CustomEvent<SessionNavigationIntent>).detail;
+    };
+    if (mode !== "immediate") {
+      globalThis.addEventListener(SESSION_NAVIGATION_INTENT_EVENT, hold);
+      onTestFinished(() => globalThis.removeEventListener(SESSION_NAVIGATION_INTENT_EVENT, hold));
+    }
+    const provider = document.createElement("div");
+    const view = mountSolid(() => <ApplicationProvider host={provider} value={context} />, {
+      container: provider,
+    });
+    document.body.append(provider);
+    try {
+      const host = await createReference("profile-ada", "Ada", provider);
+      const { card } = openReference(host);
+      await waitForSolid(() =>
+        expect(queries(card).queryByRole("link", { name: /Review launch notes/ })).not.toBeNull(),
+      );
+      queries(card)
+        .getByRole("link", { name: /Review launch notes/ })
+        .click();
+      expect(card.isConnected).toBe(false);
+      if (mode !== "immediate") {
+        expect(context.navigate).not.toHaveBeenCalled();
+        expect(pending).toBeDefined();
+        if (mode === "reconnected") {
+          const { client, hello } = context.gateway.snapshot;
+          publish({ phase: "reconnecting" });
+          publish({ phase: "connected", hello: { ...hello! } });
+          expect(context.gateway.snapshot.client).toBe(client);
+        }
+        expect(pending!.commit()).toBe(mode === "deferred");
+      }
+      if (mode === "reconnected") {
+        expect(context.navigate).not.toHaveBeenCalled();
+      } else {
+        expect(context.navigate).toHaveBeenCalledExactlyOnceWith("chat", {
+          pathname: "/chat/main/review",
+        });
+      }
+    } finally {
+      provider.remove();
+      view.unmount();
+      await settle();
+    }
+  },
+);
 
 it("routes label and profile changes to their active mention only", async () => {
   const alice = await createReference("alice", "Alice");

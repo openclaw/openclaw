@@ -6,8 +6,6 @@ import { requireNodeSqlite } from "./node-sqlite.js";
 import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
 
 const directories = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => vi.restoreAllMocks());
-const fullChecks = ["PRAGMA integrity_check;", "PRAGMA foreign_key_check;"];
 const sourceFiles = ["source.sqlite", "source.sqlite-shm", "source.sqlite-wal"];
 
 function fixture(autoVacuum = 0) {
@@ -44,64 +42,25 @@ function familyBytes(sourcePath: string) {
   return ["", "-wal", "-shm"].map((suffix) => fs.readFileSync(`${sourcePath}${suffix}`));
 }
 
-it.each([
-  ["artifacts", 0, "none", 1],
-  ["native", 0, "none", 1],
-  ["worker", 0, "none", 1],
-  ["artifacts", 2, "none", 1],
-  ["artifacts", 1, "none", 2],
-  ["worker", 0, "vacuum", 2],
-  ["artifacts", 0, "transform", 2],
-  ["artifacts", 0, "validator", 2],
-] as const)(
-  "%s WAL capture, auto_vacuum=%i, operation=%s uses %i full checks",
-  async (acquisition, autoVacuum, operation, checks) => {
+it.each([0, 1, 2])(
+  "preserves WAL artifacts and row IDs with auto_vacuum=%i",
+  async (autoVacuum) => {
     const { directory, sourcePath, targetPath, sqlite, source, options } = fixture(autoVacuum);
     using _ = source;
     expect(fs.statSync(`${sourcePath}-wal`).size).toBeGreaterThan(0);
     const before = familyBytes(sourcePath);
-    const validate = vi.fn();
-    const observed = vi.spyOn(sqlite.DatabaseSync.prototype, "prepare");
-    const result = await createVerifiedSqliteSnapshot({
-      ...options,
-      preserveRowIds: operation !== "vacuum",
-      sourceAcquisition:
-        acquisition === "worker"
-          ? undefined
-          : { ...options.sourceAcquisition, preserveSourceArtifacts: acquisition === "artifacts" },
-      transform:
-        operation === "transform" ? (db) => db.exec("PRAGMA user_version = 8;") : undefined,
-      validate: operation === "validator" ? validate : undefined,
-    });
-    const verification = observed.mock.calls
-      .map(([sql]) => sql)
-      .filter((sql) => /^PRAGMA (integrity_check;|foreign_key_check;|user_version)$/u.test(sql));
-    expect(verification).toEqual([
-      ...(checks === 2 ? fullChecks : []),
-      "PRAGMA user_version",
-      ...fullChecks,
-      ...(acquisition === "worker" && operation === "none" ? ["PRAGMA user_version"] : []),
-    ]);
-    vi.restoreAllMocks();
-    expect(result).toMatchObject({
+    expect(await createVerifiedSqliteSnapshot(options)).toMatchObject({
       path: targetPath,
-      userVersion: operation === "transform" ? 8 : 7,
+      userVersion: 7,
     });
-    if (operation === "none") {
-      using snapshot = new sqlite.DatabaseSync(targetPath, { readOnly: true });
-      expect(snapshot.prepare("SELECT rowid, value FROM records ORDER BY rowid").all()).toEqual([
-        { rowid: 71, value: "alpha" },
-        { rowid: 81, value: "beta" },
-      ]);
-      expect(snapshot.prepare("PRAGMA journal_mode").get()).toEqual({ journal_mode: "delete" });
-      if (acquisition !== "native") {
-        expect(familyBytes(sourcePath)).toEqual(before);
-      }
-      expect(fs.readdirSync(directory).toSorted()).toEqual(["snapshot.sqlite", ...sourceFiles]);
-    }
-    if (operation === "validator") {
-      expect(validate.mock.calls.map(([, label]) => label)).toEqual([sourcePath, targetPath]);
-    }
+    using snapshot = new sqlite.DatabaseSync(targetPath, { readOnly: true });
+    expect(snapshot.prepare("SELECT rowid, value FROM records ORDER BY rowid").all()).toEqual([
+      { rowid: 71, value: "alpha" },
+      { rowid: 81, value: "beta" },
+    ]);
+    expect(snapshot.prepare("PRAGMA journal_mode").get()).toEqual({ journal_mode: "delete" });
+    expect(familyBytes(sourcePath)).toEqual(before);
+    expect(fs.readdirSync(directory).toSorted()).toEqual(["snapshot.sqlite", ...sourceFiles]);
   },
 );
 

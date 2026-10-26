@@ -161,6 +161,7 @@ import { makeCfg, withTempCronHome } from "../isolated-agent.test-harness.js";
 import type { CronDelivery } from "../types.js";
 import type { DispatchCronDeliveryParams } from "./delivery-dispatch-types.js";
 import { dispatchCronDelivery } from "./delivery-dispatch.js";
+import { registerPersistentSessionDeliveryTests } from "./delivery-dispatch.persistent-session.test-support.js";
 import {
   makeBaseParams,
   makeResolvedDelivery,
@@ -301,6 +302,13 @@ describe("dispatchCronDelivery", () => {
     vi.restoreAllMocks();
     vi.useRealTimers();
     vi.unstubAllEnvs();
+  });
+
+  registerPersistentSessionDeliveryTests({
+    commitBackgroundResultToSessionMock,
+    deliverOutboundPayloads,
+    appendAssistantMessageToSessionTranscript,
+    expectDeliveryCall,
   });
 
   it("suppresses incomplete descendant output while settlement is queued", async () => {
@@ -1302,68 +1310,6 @@ describe("dispatchCronDelivery", () => {
       ),
     });
   });
-
-  it.each([
-    {
-      name: "normalized execution destination",
-      executionKey: "telegram:group:-100123:topic:42",
-      destinationThread: "42",
-      commits: 0,
-    },
-    {
-      name: "different destination thread",
-      executionKey: "agent:main:telegram:group:-100123:topic:42",
-      destinationThread: "43",
-      commits: 1,
-    },
-  ])(
-    "avoids duplicate transcript writes for $name",
-    async ({ executionKey, destinationThread, commits }) => {
-      const params = makeBaseParams({
-        synthesizedText: "Persistent session report",
-        sessionTarget: `session:${executionKey}`,
-      });
-      params.agentSessionKey = executionKey;
-      params.sourceSessionKey = "agent:main:telegram:group:-100123:topic:42";
-      params.sourceSessionGeneration = {
-        sessionId: "execution-session-id",
-        lifecycleRevision: "execution-lifecycle-revision",
-      };
-      const destinationKey = `agent:main:telegram:group:-100123:topic:${destinationThread}`;
-      params.resolvedDelivery = makeResolvedDelivery({
-        to: "-100123",
-        threadId: destinationThread,
-        sessionRoute: {
-          sessionKey: destinationKey,
-          baseSessionKey: "agent:main:telegram:group:-100123",
-          peer: { kind: "group", id: "-100123" },
-          chatType: "group",
-          from: "telegram:-100123",
-          to: "-100123",
-          threadId: destinationThread,
-        },
-      });
-
-      expectDelivered(await dispatchCronDelivery(params));
-      expect(deliverOutboundPayloads).toHaveBeenCalledOnce();
-      expectDeliveryCall(0, {
-        channel: "telegram",
-        to: "-100123",
-        threadId: destinationThread,
-        payloads: [{ text: "Persistent session report" }],
-      });
-      expect(commitBackgroundResultToSessionMock).toHaveBeenCalledTimes(commits);
-      if (commits) {
-        expect(commitBackgroundResultToSessionMock).toHaveBeenCalledWith(
-          expect.objectContaining({
-            sessionKey: destinationKey,
-            text: "Persistent session report",
-          }),
-        );
-      }
-      expect(appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
-    },
-  );
 
   it.each([
     ["literal skip token", "ANNOUNCE_SKIP", false, true],

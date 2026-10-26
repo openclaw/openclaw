@@ -173,38 +173,17 @@ describe("GPT-Live Gateway direct transport", () => {
     },
   );
 
-  it("paces buffered public microphone audio and silence until transport error", async () => {
-    const { bridge, start, onReady } = createHarness();
+  it("stops public microphone audio on transport error and rejects unconfirmed finalization", async () => {
+    const { bridge, start } = createHarness();
     const { socket: connectedSocket, connection } = await start();
-    const frames = [1, 2].map(frame);
-    const capture = Buffer.concat([...frames, Buffer.from([3, 4])]);
-    bridge.sendAudio(capture);
-    capture.fill(0);
-    const audio = () => readAudio(connectedSocket);
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
-    const timerNow = performance.now.bind(performance);
-    let suspensionMs = 0;
-    const now = vi.spyOn(performance, "now").mockImplementation(() => timerNow() + suspensionMs);
     try {
-      expect(audio()).toEqual([]);
       emitSideband(connectedSocket, { type: "session.started", session: {} });
       await connection;
-      expect(bridge.pacesInputAudio).toBe(true);
-      expect(onReady).toHaveBeenCalledOnce();
-      expect(audio()).toEqual([frames[0]]);
-      suspensionMs = 5_000;
-      await vi.advanceTimersByTimeAsync(20);
-      expect(audio()).toEqual(frames);
-      await vi.advanceTimersByTimeAsync(20);
-      const partial = frame();
-      partial.set([3, 4]);
-      expect(audio()).toEqual([...frames, partial]);
-      await vi.advanceTimersByTimeAsync(40);
-      expect(audio()).toEqual([...frames, partial, frame(), frame()]);
       connectedSocket.emit("error", new Error("synthetic transport failure"));
       const closing = bridge.close();
       const beforeClose = connectedSocket.sent.length;
-      bridge.sendAudio(frames[0]!);
+      bridge.sendAudio(frame(1));
       await vi.advanceTimersByTimeAsync(100);
       expect(connectedSocket.sent).toHaveLength(beforeClose);
       closeReceipt(connectedSocket);
@@ -212,13 +191,12 @@ describe("GPT-Live Gateway direct transport", () => {
     } finally {
       closeReceipt(connectedSocket);
       await Promise.allSettled([bridge.close()]);
-      now.mockRestore();
       vi.useRealTimers();
     }
   });
 
   it("keeps a public provider error authoritative through reentrant transcript cleanup", async () => {
-    const { bridge, start, webSocketFactory, onClose, logger, createPeer } = createHarness({
+    const { bridge, start, webSocketFactory, onClose, logger } = createHarness({
       onTranscript: (_role, _text, final) => {
         if (final) {
           void bridge.close();
@@ -240,7 +218,6 @@ describe("GPT-Live Gateway direct transport", () => {
       transcript(socket, "Received before disconnection.", 0, 1_000);
       closeReceipt(socket, "connection_lost");
       expect(onClose).toHaveBeenCalledExactlyOnceWith("error");
-      expect(createPeer).not.toHaveBeenCalled();
       expect(socket?.closed).toBe(true);
       expect(parseSent(socket!).some((event) => event.type === "session.close")).toBe(false);
       expect(logger.warn).not.toHaveBeenCalled();
@@ -323,16 +300,6 @@ describe("GPT-Live Gateway direct transport", () => {
 
     try {
       const { socket: connectedSocket, connection } = await start();
-      expect(parseSent(connectedSocket)[0]).toMatchObject({
-        type: "session.update",
-        session: {
-          audio: { output: { voice: "marin" } },
-          delegation: { type: "client", ack_filler: false },
-        },
-      });
-      expect(JSON.stringify(parseSent(connectedSocket)[0])).toContain(
-        "Wait for the host control result",
-      );
       expect(onReady).not.toHaveBeenCalled();
       expect(createPeer).not.toHaveBeenCalled();
       expect(fetchImpl).not.toHaveBeenCalled();

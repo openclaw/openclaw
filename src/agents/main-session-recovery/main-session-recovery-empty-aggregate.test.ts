@@ -5,22 +5,14 @@ import type {
 } from "../../config/sessions.js";
 import { projectMainSessionRecoveryLifecycle } from "./main-session-recovery-lifecycle.js";
 import { transitionMainSessionRecovery } from "./main-session-recovery-state.js";
+import {
+  recoveryEntry as entry,
+  prepareRecoveryAttempt,
+  observeRecovery,
+  recoveryState,
+} from "./main-session-recovery-state.test-support.js";
 
 const sessionKey = "agent:main:main";
-function recoveryState(
-  overrides: Partial<MainRestartRecoveryState> = {},
-): MainRestartRecoveryState {
-  return { cycleId: "cycle-1", revision: 1, chargedAttempts: 0, ...overrides };
-}
-function entry(overrides: Partial<SessionEntry> = {}): SessionEntry {
-  return {
-    sessionId: "session-1",
-    updatedAt: 100,
-    abortedLastRun: false,
-    mainRestartRecovery: recoveryState(),
-    ...overrides,
-  };
-}
 function claimForeground(
   session: SessionEntry,
   options: { sessionId?: string; sessionKey?: string; runId?: string } = {},
@@ -36,16 +28,13 @@ function claimForeground(
   });
 }
 
-const ownershipControls: Array<{
-  label: string;
-  state: Partial<MainRestartRecoveryState>;
-  entry?: Partial<SessionEntry>;
-}> = [
-  { label: "a charged attempt", state: { chargedAttempts: 1 } },
-  { label: "a started attempt", state: { startedAttempt: 1 } },
-  {
-    label: "an execution identity",
-    state: {
+const reservation = { attempt: 1, lifecycleGeneration: "generation-1", runId: "recovery-1" };
+const ownershipControls: [string, Partial<MainRestartRecoveryState>, Partial<SessionEntry>?][] = [
+  ["a charged attempt", { chargedAttempts: 1 }],
+  ["a started attempt", { startedAttempt: 1 }],
+  [
+    "an execution identity",
+    {
       executionIdentity: {
         tokenVersion: 1,
         contextId: "context-1",
@@ -54,47 +43,46 @@ const ownershipControls: Array<{
         createdAt: 100,
       },
     },
-  },
-  {
-    label: "a reservation",
-    state: {
-      reservation: { attempt: 1, lifecycleGeneration: "generation-1", runId: "recovery-1" },
+  ],
+  ["a reservation", { reservation }],
+  [
+    "a foreground claim",
+    {
+      foregroundClaims: {
+        lifecycleGeneration: "generation-1",
+        tokens: ["foreground-1"],
+      },
     },
-  },
-  {
-    label: "a foreground claim",
-    state: { foregroundClaims: { lifecycleGeneration: "generation-1", tokens: ["foreground-1"] } },
-  },
-  { label: "a tombstone", state: { tombstone: { reason: "exhausted" } } },
-  {
-    label: "a recovery run",
-    state: {},
-    entry: { restartRecoveryRuns: [{ runId: "recovery-1", lifecycleGeneration: "generation-1" }] },
-  },
-  {
-    label: "a pending delivery run",
-    state: {},
-    entry: { restartRecoveryDeliveryRunId: "delivery-1" },
-  },
-  {
-    label: "a pending final delivery",
-    state: {},
-    entry: { pendingFinalDelivery: { kind: "replayable", text: "result", createdAt: 100 } },
-  },
+  ],
+  ["a tombstone", { tombstone: { reason: "exhausted" } }],
+  [
+    "a recovery run",
+    {},
+    { restartRecoveryRuns: [{ runId: "recovery-1", lifecycleGeneration: "generation-1" }] },
+  ],
+  ["a pending delivery run", {}, { restartRecoveryDeliveryRunId: "delivery-1" }],
+  [
+    "a pending final delivery",
+    {},
+    {
+      pendingFinalDelivery: { kind: "replayable", text: "result", createdAt: 100 },
+    },
+  ],
 ];
+
+function expectUnchanged(
+  session: SessionEntry,
+  options: Parameters<typeof claimForeground>[1] = {},
+) {
+  const before = structuredClone(session);
+  expect(claimForeground(session, options)).toEqual({ kind: "no_change" });
+  expect(session).toEqual(before);
+}
 
 describe("empty main session recovery aggregate", () => {
   it("clears the last cancelled reservation after a foreground turn settles", () => {
     const session = entry({ abortedLastRun: true });
-    const reserved = transitionMainSessionRecovery(session, {
-      kind: "prepare_attempt",
-      attempt: 1,
-      executionIdentity: { state: "disabled" },
-      lifecycleGeneration: "generation-1",
-      now: 100,
-      observation: { sessionId: session.sessionId, cycleId: "cycle-1", revision: 1 },
-      runId: "recovery-1",
-    });
+    const reserved = prepareRecoveryAttempt(session, { now: 100 });
     if (reserved.kind !== "reserved") {
       throw new Error("expected recovery reservation");
     }
@@ -130,7 +118,6 @@ describe("empty main session recovery aggregate", () => {
   });
 
   it("keeps an interrupted cycle recoverable after cancelling its first reservation", () => {
-    const reservation = { attempt: 1, lifecycleGeneration: "generation-1", runId: "recovery-1" };
     const session = entry({
       abortedLastRun: true,
       mainRestartRecovery: recoveryState({ chargedAttempts: 1, reservation }),
@@ -148,17 +135,7 @@ describe("empty main session recovery aggregate", () => {
 
   it.each([false, true])("reconciles existing empty residue (interrupted=%s)", (interrupted) => {
     const session = entry({ abortedLastRun: interrupted });
-    expect(
-      transitionMainSessionRecovery(session, {
-        kind: "observe",
-        cycleId: "unused",
-        lifecycleGeneration: "generation-1",
-        sessionKey,
-      }),
-    ).toMatchObject({
-      kind: "observed",
-      view: { status: interrupted ? "recoverable" : "inactive" },
-    });
+    expect(observeRecovery(session).status).toBe(interrupted ? "recoverable" : "inactive");
     expect(Boolean(session.mainRestartRecovery)).toBe(interrupted);
     expect(session.abortedLastRun).toBe(interrupted);
   });
@@ -193,38 +170,23 @@ describe("empty main session recovery aggregate", () => {
     expect(session.restartRecoveryRuns).toBeUndefined();
   });
 
-  it("preserves an empty aggregate when the foreground claim names another session", () => {
-    const session = entry({ restartRecoveryRuns: undefined });
-    const before = structuredClone(session);
-
-    expect(claimForeground(session, { sessionId: "replacement-session" })).toEqual({
-      kind: "no_change",
-    });
-    expect(session).toEqual(before);
-  });
-
-  it("preserves an empty aggregate owned by cron", () => {
-    const session = entry({ restartRecoveryRuns: undefined });
-    const before = structuredClone(session);
-
-    expect(claimForeground(session, { sessionKey: "agent:main:cron:nightly" })).toEqual({
-      kind: "no_change",
-    });
-    expect(session).toEqual(before);
-  });
+  it.each([{ sessionId: "replacement-session" }, { sessionKey: "agent:main:cron:nightly" }])(
+    "preserves an empty aggregate outside the foreground target: %j",
+    (options) => {
+      expectUnchanged(entry({ restartRecoveryRuns: undefined }), options);
+    },
+  );
 
   it.each(ownershipControls)(
-    "preserves an empty aggregate while $label remains",
-    ({ state, entry: overrides }) => {
-      const session = entry({
-        mainRestartRecovery: recoveryState(state),
-        restartRecoveryRuns: undefined,
-        ...overrides,
-      });
-      const before = structuredClone(session);
-
-      expect(claimForeground(session)).toEqual({ kind: "no_change" });
-      expect(session).toEqual(before);
+    "preserves an empty aggregate while %s remains",
+    (_label, state, overrides) => {
+      expectUnchanged(
+        entry({
+          mainRestartRecovery: recoveryState(state),
+          restartRecoveryRuns: undefined,
+          ...overrides,
+        }),
+      );
     },
   );
 });

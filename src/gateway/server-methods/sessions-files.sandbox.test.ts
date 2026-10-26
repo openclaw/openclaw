@@ -73,34 +73,28 @@ it("keeps real guest file requests in their session's private sandbox", async ()
         sessionRoot: state.workspaceDir,
       };
       await save(key, entry);
-      const sessionLayout = (sessionKey: string) =>
-        resolveSandboxWorkspaceLayoutPaths({
-          cfg: resolveSandboxConfigForAgent(cfg, "main"),
-          rawSessionKey: key,
-          agentId: "main",
-          isolationSubject: { kind: "session", sessionKey },
-          workspaceDir: state.workspaceDir,
-        });
-      const layoutFor = (selected: InternalSessionEntry) => {
-        const runtime = resolveSandboxRuntimeStatus({
-          cfg,
-          agentId: "main",
-          sessionKey: key,
-          preparedSessionEntry: selected,
-        });
+      const layoutFor = (sessionKey: string, selected?: InternalSessionEntry) => {
+        const runtime =
+          selected &&
+          resolveSandboxRuntimeStatus({
+            cfg,
+            agentId: "main",
+            sessionKey: key,
+            preparedSessionEntry: selected,
+          });
         const sandbox = resolveSandboxConfigForAgent(cfg, "main");
         return resolveSandboxWorkspaceLayoutPaths({
-          cfg: runtime.sandboxRequired
+          cfg: runtime?.sandboxRequired
             ? { ...sandbox, scope: "agent", workspaceAccess: runtime.workspaceAccess }
             : sandbox,
           rawSessionKey: key,
           agentId: "main",
-          isolationSubject: runtime.isolationSubject,
+          isolationSubject: runtime?.isolationSubject ?? { kind: "session", sessionKey },
           workspaceDir: state.workspaceDir,
         });
       };
-      const layout = layoutFor(entry);
-      const foreign = layoutFor({
+      const layout = layoutFor(key, entry);
+      const foreign = layoutFor(key, {
         ...entry,
         createdActor: createdBy(viewer),
       });
@@ -122,12 +116,11 @@ it("keeps real guest file requests in their session's private sandbox", async ()
         });
         return respond.mock.calls.map(([ok, payload, error]) => ({ ok, payload, error }));
       };
-      const expectSuccess = (calls: Awaited<ReturnType<typeof request>>) => {
+      const ok = async (...args: Parameters<typeof request>) => {
+        const calls = await request(...args);
         expect(calls[0]?.error).toBeUndefined();
         return expectOkPayload(calls);
       };
-      const ok = async (...args: Parameters<typeof request>) =>
-        expectSuccess(await request(...args));
       const error = async (...args: Parameters<typeof request>) =>
         expectError(await request(...args));
       const expectContent = async (
@@ -243,7 +236,7 @@ it("keeps real guest file requests in their session's private sandbox", async ()
           childSessionKey: key,
         });
         await fs.mkdir(attachmentRoot, { recursive: true });
-        const childLayout = sessionLayout(key);
+        const childLayout = layoutFor(key);
         await fs.mkdir(childLayout.workspaceDir, { recursive: true });
         await write(childLayout.workspaceDir, "child.txt", "child work");
         await expectContent("child.txt", "child work");
@@ -261,7 +254,7 @@ it("keeps real guest file requests in their session's private sandbox", async ()
           skillsSnapshot: { prompt: "", skills: [], librarySelections },
         };
         await save(key, libraryEntry);
-        const libraryLayout = sessionLayout(
+        const libraryLayout = layoutFor(
           `${key}:skills:${hashTextSha256(JSON.stringify(librarySelections))}`,
         );
         await fs.mkdir(libraryLayout.workspaceDir, { recursive: true });

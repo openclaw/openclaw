@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, createUniqueId, For, Show } from "solid-js";
+import { createMemo, For } from "solid-js";
 import type { AgentIdentityResult, GatewayAgentRow } from "../api/types.ts";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import { pathForAgentPanel } from "../app-route-paths.ts";
@@ -256,7 +256,6 @@ export function renderSidebarAgentMenu(
   },
 ): JSX.Element {
   const controls = createMenuControls();
-  const creationReasonId = createUniqueId();
   const hasMultipleAgents = () =>
     params.agents.length +
       Number(
@@ -275,20 +274,17 @@ export function renderSidebarAgentMenu(
     get label() {
       return t("agentChip.createAgent");
     },
-    get class() {
-      return [
-        "sidebar-customize-menu__item sidebar-agent-menu__create",
-        { "session-menu__item--described": Boolean(params.creationDisabledReason) },
-      ];
-    },
+    class: "sidebar-customize-menu__item sidebar-agent-menu__create",
     get disabled() {
       return Boolean(params.creationDisabledReason || params.pendingAgent);
     },
+    get focusableWhenDisabled() {
+      return Boolean(params.creationDisabledReason && !params.pendingAgent);
+    },
     get attributes() {
       return {
-        "aria-disabled":
-          params.creationDisabledReason || params.pendingAgent ? ("true" as const) : undefined,
-        "aria-describedby": params.creationDisabledReason ? creationReasonId : undefined,
+        "aria-description": params.creationDisabledReason ?? undefined,
+        title: params.creationDisabledReason ?? undefined,
       };
     },
     closeOnSelect: false,
@@ -304,13 +300,6 @@ export function renderSidebarAgentMenu(
           >
             {t(params.pendingAgent ? "agentChip.creatingAgent" : "agentChip.createAgent")}
           </span>
-          <Show when={params.creationDisabledReason}>
-            {(reason) => (
-              <span id={creationReasonId} class="session-menu__description">
-                {reason()}
-              </span>
-            )}
-          </Show>
         </span>
       </span>
     ),

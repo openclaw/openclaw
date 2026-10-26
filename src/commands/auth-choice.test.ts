@@ -4,7 +4,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import {
   createAuthTestLifecycle,
   createExitThrowingRuntime,
-  createWizardPrompter,
+  createWizardPrompter as createPrompter,
   setupAuthTestEnv,
 } from "../../test/helpers/auth-wizard.js";
 import { resolveAgentDir } from "../agents/agent-scope.js";
@@ -326,9 +326,6 @@ describe("applyAuthChoice", () => {
     const agentDir = path.join(stateDir, "agent");
     process.env.OPENCLAW_STATE_DIR = stateDir;
     process.env.OPENCLAW_AGENT_DIR = agentDir;
-  }
-  function createPrompter(overrides: Partial<WizardPrompter>): WizardPrompter {
-    return createWizardPrompter(overrides, { defaultSelect: "" });
   }
   function createSelectFirstOption(): WizardPrompter["select"] {
     return vi.fn(async (params) => params.options[0]?.value as never);

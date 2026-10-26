@@ -11,6 +11,7 @@ import { drainSystemEvents } from "../infra/system-events.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { pluginFixtureConfig } from "./loader-fixture-builders.test-support.js";
 import { resolvePluginLoadCacheContext } from "./loader-load-context.js";
 import {
   resolveNativePluginModelAuth,
@@ -394,13 +395,7 @@ it("reuses discovered registrations through prepared load options until invalida
     body: 'module.exports = { id: "prepared-cache", register() {} };',
   });
   const options = {
-    config: {
-      plugins: {
-        allow: [plugin.id],
-        load: { paths: [plugin.file] },
-        slots: { memory: "none" },
-      },
-    },
+    config: pluginFixtureConfig(plugin),
   };
   const first = loadPluginRegistryHandle(options);
   expect(first.plugins).toContainEqual(
@@ -438,13 +433,7 @@ describe("cached plugin load failures", () => {
       body: 'module.exports = { id: "cached-load-failure", register() { throw new Error("cached registration failed"); } };',
     });
     const options = {
-      config: {
-        plugins: {
-          allow: [plugin.id],
-          load: { paths: [plugin.file] },
-          slots: { memory: "none" },
-        },
-      },
+      config: pluginFixtureConfig(plugin),
     };
     const cached = await load(options);
     expect(cached.plugins).toContainEqual(
@@ -651,13 +640,7 @@ describe("clearPluginRegistryLoadCache", () => {
         }),
       );
       const options = {
-        config: {
-          plugins: {
-            allow: [plugin.id],
-            load: { paths: [plugin.file] },
-            slots: { memory: "none" },
-          },
-        },
+        config: pluginFixtureConfig(plugin),
       };
       const resolveTool = (registry: ReturnType<typeof loadOpenClawPlugins>) => {
         const tool = registry.tools[0]!.factory({ config: options.config });

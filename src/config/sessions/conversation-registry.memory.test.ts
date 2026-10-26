@@ -1,26 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { assertConversationAuthority } from "./conversation-authority.js";
-import {
-  beginConversationDeliveryOperation,
-  ConversationDeliveryInputError,
-  findConversationTurnDeliveryByReplyTarget,
-  getConversationDeliveryOperation,
-  markConversationDeliveryQueued,
-  markConversationDeliveryReplied,
-  markConversationDeliverySent,
-} from "./conversation-delivery-store.js";
+import * as deliveryStore from "./conversation-delivery-store.js";
 import { conversationEntry, conversationRef } from "./conversation-delivery-store.test-support.js";
 import { buildConversationIdentity } from "./conversation-identity.js";
-import {
-  captureConversationBindingFacts,
-  listConversations,
-  readConversation,
-  registerConversationAddresses,
-  resolveCurrentConversationSession,
-  resolveCurrentSessionPrimaryConversation,
-  withConversationAuthority,
-} from "./conversation-registry.js";
+import * as registry from "./conversation-registry.js";
 import { resolveConversationRouteFingerprint } from "./conversation-route-fingerprint.js";
 import type { SessionActor, SessionActorAuthority } from "./session-actor-contract.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
@@ -73,12 +57,15 @@ const scope = {
   storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env }),
 };
 const sessionKey = "agent:main:dashboard:incognito-conversation-registry";
-const read = (ref: string) => readConversation(scope, ref);
+const read = (ref: string) => registry.readConversation(scope, ref);
+const register = registry.registerConversationAddresses.bind(null, scope);
+const current = (ref: string) => registry.resolveCurrentConversationSession(scope, ref);
+const list = () => registry.listConversations(scope);
 const ownerTarget = { agentId: scope.agentId, path: scope.storePath };
 const readOwner = () => memorySessionActorOwners.read(ownerTarget)!;
 afterEach(() => memorySessionActorOwners.reset());
 const primary = (sessionId: string) =>
-  resolveCurrentSessionPrimaryConversation({ ...scope, sessionKey, sessionId });
+  registry.resolveCurrentSessionPrimaryConversation({ ...scope, sessionKey, sessionId });
 const address = (peerId: string) =>
   buildConversationIdentity({
     channel: "reef",
@@ -110,13 +97,12 @@ async function createMemoryConversation(
       { authority, lifetime, create: true },
     ))!;
   const binding = await acquireBinding();
-  const actor = binding.actor;
+  const { actor } = binding;
   const created = await commitMemory(actor.storage!, "session.entry.create", input, authority);
   return {
     binding,
     actor,
     created,
-    entry: created,
     owner: readOwner(),
     acquire: async () => (await acquireBinding()).actor,
   };
@@ -136,7 +122,9 @@ describe("memory conversation registry", () => {
       peerId: "canonical-ops",
       deliveryTarget: "channel:ops",
     })!;
-    const captured = await captureConversationBindingFacts(scope, [identity.conversationRef]);
+    const captured = await registry.captureConversationBindingFacts(scope, [
+      identity.conversationRef,
+    ]);
     try {
       expect(captured.currentSessionKey(identity.conversationRef)).toBeNull();
       await fixture();
@@ -148,7 +136,7 @@ describe("memory conversation registry", () => {
 
   it("registers an address catalogue without manufacturing a session", async () => {
     const identity = address("catalogue");
-    await registerConversationAddresses(scope, [identity], 1);
+    await register([identity], 1);
     expect(await read(identity.conversationRef)).toHaveProperty("target", "reef:catalogue");
     expect(readOwner().listSessions(authority)).toEqual([]);
   });
@@ -180,16 +168,16 @@ describe("memory conversation registry", () => {
       expected: updated,
       entry: entry("channel:other", 3),
     });
-    expect(resolveCurrentConversationSession(scope, initial!.conversationRef)).toBeUndefined();
-    const current = await primary("first");
-    expect(current).toMatchObject({ target: "channel:other", role: "primary" });
+    expect(current(initial!.conversationRef)).toBeUndefined();
+    const reboundConversation = await primary("first");
+    expect(reboundConversation).toMatchObject({ target: "channel:other", role: "primary" });
     expect(await read(initial!.conversationRef)).toHaveProperty("role", "related");
     await commit(actor, "session.lifecycle.reset", {
       expected: rebound,
       nextEntry: { ...rebound!, sessionId: "second", updatedAt: 4 },
     });
     await acquire();
-    expect(resolveCurrentConversationSession(scope, current!.conversationRef)).toEqual({
+    expect(current(reboundConversation!.conversationRef)).toEqual({
       sessionKey,
       sessionId: "second",
     });
@@ -198,7 +186,7 @@ describe("memory conversation registry", () => {
 
   it("uses stored associations for source predicates and the route fingerprint at external effects", async () => {
     const { actor, owner } = await fixture();
-    const conversation = (await listConversations(scope))[0]!;
+    const conversation = (await list())[0]!;
     const expected = {
       conversationRef: conversation.conversationRef,
       expectedRouteFingerprint: resolveConversationRouteFingerprint(conversation),
@@ -224,7 +212,7 @@ describe("memory conversation registry", () => {
     expect((await guardedPatch()).kind).toBe("committed");
     const sent = vi.fn();
     const send = () =>
-      withConversationAuthority(
+      registry.withConversationAuthority(
         scope,
         { conversationRef: conversation.conversationRef },
         (facts) => {
@@ -246,7 +234,7 @@ describe("memory conversation registry", () => {
       peerId: conversation.peerId,
       deliveryTarget: "channel:retargeted",
     })!;
-    await registerConversationAddresses(scope, [changedAddress], 20);
+    await register([changedAddress], 20);
     expect(
       await mutate(actor, "session.entry.patch", {
         operation: { kind: "fields", patch: { label: "stale" } },
@@ -262,20 +250,14 @@ describe("memory conversation registry", () => {
     const eligible = address("yes");
     const excluded = address("no");
     const select = vi.fn(() => [true, false]);
-    const registered = await registerConversationAddresses(
-      scope,
-      [eligible, excluded],
-      100,
-      select,
-      { channel: "reef" },
-    );
+    const registered = await register([eligible, excluded], 100, select, { channel: "reef" });
     expect(select).toHaveBeenCalledOnce();
     expect(registered).toHaveLength(1);
     registered![0]!.target = "changed-by-reader";
     expect(await read(eligible.conversationRef)).toHaveProperty("target", "reef:yes");
     expect(await read(excluded.conversationRef)).toBeUndefined();
     await expect(read(" ")).rejects.toThrow("Invalid conversationRef");
-    const pending = registerConversationAddresses(scope, [excluded], 200, () => {
+    const pending = register([excluded], 200, () => {
       throw new Error("transport closed");
     });
     await expect(pending).rejects.toThrow("transport closed");
@@ -283,9 +265,9 @@ describe("memory conversation registry", () => {
     expect((await actor.read(authority)).entry?.sessionId).toBe("first");
     await commit(actor, "session.lifecycle.delete", {});
     expect(await read(eligible.conversationRef)).toHaveProperty("target", "reef:yes");
-    expect(resolveCurrentConversationSession(scope, eligible.conversationRef)).toBeUndefined();
+    expect(current(eligible.conversationRef)).toBeUndefined();
     memorySessionActorOwners.closeDatabase(ownerTarget);
-    expect(await listConversations(scope)).toEqual([]);
+    expect(await list()).toEqual([]);
   });
 });
 
@@ -301,20 +283,20 @@ describe("memory conversation delivery", () => {
   };
   const turnInput = { operationKind: "turn" as const, conversationRef, message: "question" };
   const delivery = {
-    get: getConversationDeliveryOperation.bind(null, scope),
-    begin: beginConversationDeliveryOperation.bind(null, scope),
-    queue: markConversationDeliveryQueued.bind(null, scope),
-    send: markConversationDeliverySent.bind(null, scope),
-    reply: markConversationDeliveryReplied.bind(null, scope),
+    get: deliveryStore.getConversationDeliveryOperation.bind(null, scope),
+    begin: deliveryStore.beginConversationDeliveryOperation.bind(null, scope),
+    queue: deliveryStore.markConversationDeliveryQueued.bind(null, scope),
+    send: deliveryStore.markConversationDeliverySent.bind(null, scope),
+    reply: deliveryStore.markConversationDeliveryReplied.bind(null, scope),
     find: (replyToId: string) =>
-      findConversationTurnDeliveryByReplyTarget(scope, { conversationRef, replyToId }),
+      deliveryStore.findConversationTurnDeliveryByReplyTarget(scope, {
+        conversationRef,
+        replyToId,
+      }),
   };
 
   const deliveryFixture = () =>
-    createMemoryConversation(key, {
-      entry: conversationEntry(sessionId, 1),
-      cwd: "/synthetic",
-    });
+    createMemoryConversation(key, { entry: conversationEntry(sessionId, 1), cwd: "/synthetic" });
 
   it("reports a bound publication failure while retaining the delivery receipt", async () => {
     const { binding } = await deliveryFixture();
@@ -343,10 +325,10 @@ describe("memory conversation delivery", () => {
     expect(first).toMatchObject({ created: true, record: { status: "created", channel: "reef" } });
     expect(retry).toEqual({ created: false, record: first.record });
     await expect(delivery.begin({ ...input, message: "different" })).rejects.toBeInstanceOf(
-      ConversationDeliveryInputError,
+      deliveryStore.ConversationDeliveryInputError,
     );
     await expect(delivery.get("send-1", { ...input, message: "different" })).rejects.toBeInstanceOf(
-      ConversationDeliveryInputError,
+      deliveryStore.ConversationDeliveryInputError,
     );
     expect(await delivery.get("send-1", input)).toEqual(first.record);
     first.record.status = "replied";
@@ -376,20 +358,13 @@ describe("memory conversation delivery", () => {
   });
 
   it("refuses captured replies to a replaced conversation and retains effect-time authority", async () => {
-    const { actor, entry: currentEntry } = await deliveryFixture();
+    const { actor, created: currentEntry } = await deliveryFixture();
     await delivery.begin({ ...turnInput, operationId: "turn-reset" });
     await delivery.queue("turn-reset", "queue-reset");
-    const nextEntry = {
-      ...currentEntry,
-      sessionId: "conversation-2",
-      lifecycleRevision: "reset-2",
-    };
-    await commitMemory(
-      actor.storage!,
-      "session.lifecycle.reset",
-      { expected: currentEntry, nextEntry },
-      authority,
-    );
+    await commit(actor, "session.lifecycle.reset", {
+      expected: currentEntry,
+      nextEntry: { ...currentEntry, sessionId: "conversation-2", lifecycleRevision: "reset-2" },
+    });
     const params = {
       operationId: "turn-reset",
       reply: { messageId: "reply-reset", text: "answer", timestamp: 200 },

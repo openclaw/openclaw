@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import * as announceDelivery from "./subagent-announce-delivery.js";
+import { privateRequesterRouteCases } from "./subagent-announce-fixtures.test-support.js";
 
 type Runtime = typeof import("./subagent-announce.runtime.js");
 type SessionEntry = Awaited<ReturnType<Runtime["readSubagentSessionEntry"]>>;
@@ -272,16 +273,7 @@ describe("subagent announce seam flow", () => {
     expect(agentSpy).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { name: "channel-less", origin: undefined, canDeliver: false },
-    {
-      name: "internal session target",
-      origin: { channel: "internal", to: "agent:main:main" },
-      canDeliver: false,
-    },
-    { name: "channel", origin: { channel: "discord", to: "channel:123" }, canDeliver: true },
-    { name: "WebChat", origin: { channel: "webchat" }, canDeliver: true },
-  ])(
+  it.each(privateRequesterRouteCases())(
     "guides private $name completions according to the requester route",
     async ({ origin, canDeliver }) => {
       expect(

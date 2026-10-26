@@ -22,6 +22,7 @@ import { buildScheduledTaskXml } from "./schtasks-xml.js";
 import { auditGatewayInstallPreservation } from "./service-audit-preservation.js";
 import type { ServiceDefinitionDrift } from "./service-audit-types.js";
 import { auditGatewayServiceConfig as inspectGatewayServiceConfig } from "./service-audit.js";
+import { nativeExit } from "./systemd-exec.test-support.js";
 import { buildSystemdUnit } from "./systemd-unit.js";
 import {
   execSystemctlUserMock,
@@ -125,13 +126,11 @@ async function systemdFixture(
 
 it("audits missing KillMode separately from effective manager policy", async () => {
   const fixture = await systemdFixture((unit) => unit.replace("KillMode=mixed\n", ""));
-  execSystemctlUserMock.mockResolvedValue({
-    code: 0,
-    stderr: "",
-    termination: "exit",
-    stdout:
+  execSystemctlUserMock.mockResolvedValue(
+    nativeExit(
       "LoadState=loaded\nAfter=network-online.target\nWants=network-online.target\nRestartUSec=5s\nKillMode=mixed\nTimeoutStopUSec=330s\n",
-  });
+    ),
+  );
   const result = await auditGatewayServiceConfig(fixture);
   expect(result.ok).toBe(true);
   expect(result.issues).toEqual([]);
@@ -489,6 +488,100 @@ it("accepts retained heap aliases, custom environment and owned environment rege
   });
   expect(result.definitionDrift).toBeUndefined();
 });
+
+it("allows the installer to replace a macOS Node runtime and retire the legacy CA bundle", async () => {
+  const { env, sourcePath, plist } = launchdFixture();
+  const environment = {
+    PATH: "/old/node/bin:/usr/bin:/bin",
+    OPERATOR_SETTING: "operator-secret",
+  };
+  const replacementEnvironment = { ...environment, PATH: "/new/node/bin:/usr/bin:/bin" };
+  const command = {
+    programArguments: ["/old/node/bin/node", "/opt/openclaw/index.js", "gateway"],
+    environment: { ...environment, NODE_EXTRA_CA_CERTS: "/etc/ssl/cert.pem" },
+    sourcePath,
+  };
+  const content = buildLaunchAgentPlist({ ...plist, ...command });
+  await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+  await fs.writeFile(sourcePath, content);
+  const result = await auditGatewayServiceConfig({
+    env,
+    command,
+    platform: "darwin",
+    expectedServicePath: replacementEnvironment.PATH,
+    expectedCommand: {
+      programArguments: ["/new/node/bin/node", "/opt/openclaw/index.js", "gateway"],
+      environment: { ...replacementEnvironment, NODE_USE_SYSTEM_CA: "1" },
+    },
+  });
+  expect(result.definitionDrift).toEqual([drift("outdated", "Environment.NODE_EXTRA_CA_CERTS")]);
+  expect(result.definitionDriftError).toBeUndefined();
+  expect(await fs.readFile(sourcePath, "utf8")).toBe(content);
+});
+
+it.each([
+  {
+    name: "discarded operator directory",
+    currentPath: "/old/bin:/operator/bin:/usr/bin:/bin",
+    nextPath: "/new/bin:/usr/bin:/bin",
+  },
+  {
+    name: "reordered operator directories",
+    currentPath: "/old/bin:/operator/bin:/usr/bin:/bin",
+    nextPath: "/new/bin:/usr/bin:/operator/bin:/bin",
+  },
+  {
+    name: "unrelated leading directory",
+    currentPath: "/operator/bin:/old/bin:/usr/bin:/bin",
+    nextPath: "/new/bin:/usr/bin:/bin",
+  },
+  {
+    name: "replacement missing the selected runtime directory",
+    currentPath: "/old/bin:/usr/bin:/bin",
+    nextPath: "/other/bin:/usr/bin:/bin",
+  },
+  {
+    name: "opaque launcher",
+    currentPath: "/old/bin:/usr/bin:/bin",
+    nextPath: "/new/bin:/usr/bin:/bin",
+    executable: "/old/bin/launcher",
+  },
+])("refuses a macOS runtime refresh with $name", ({ currentPath, nextPath, executable }) => {
+  const findings: ServiceDefinitionDrift[] = [];
+  auditGatewayInstallPreservation(
+    {
+      programArguments: [executable ?? "/old/bin/node", "/opt/openclaw/index.js", "gateway"],
+      environment: { PATH: currentPath },
+    },
+    {
+      programArguments: ["/new/bin/node", "/opt/openclaw/index.js", "gateway"],
+      environment: { PATH: nextPath },
+    },
+    "darwin",
+    findings,
+  );
+  expect(findings).toContainEqual(drift("unknown-edit", "Environment.PATH"));
+});
+
+it.each([
+  { platform: "darwin", value: "/operator-private/ca.pem", replacement: undefined },
+  { platform: "darwin", value: "/etc/ssl/cert.pem", replacement: "/operator-private/ca.pem" },
+  { platform: "linux", value: "/etc/ssl/cert.pem", replacement: undefined },
+  { platform: "win32", value: "/etc/ssl/cert.pem", replacement: undefined },
+] as const)(
+  "refuses other CA changes ($platform, $value -> $replacement)",
+  ({ platform, value, replacement }) => {
+    const findings: ServiceDefinitionDrift[] = [];
+    auditGatewayInstallPreservation(
+      { programArguments, environment: { NODE_EXTRA_CA_CERTS: value } },
+      { programArguments, environment: { NODE_EXTRA_CA_CERTS: replacement } },
+      platform,
+      findings,
+    );
+    expect(findings).toEqual([drift("unknown-edit", "Environment.NODE_EXTRA_CA_CERTS")]);
+    expect(JSON.stringify(findings)).not.toContain("operator-private");
+  },
+);
 
 it("bounds environment diffs and redacts nonnumeric timeout values", () => {
   const command = {

@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 281671,
-  "reason": "Bound Cron run-history selector traversal: matched c64f3109 startup 281744 to 281671 B gzip, style CPU median down 15.25% desktop and 17.09% mobile; 7 JS and 1 CSS request unchanged.",
-  "updatedAt": "2026-10-24"
+  "startupJsGzipBytes": 271935,
+  "reason": "Same-host uncached 8937cb4 to 92174fc builds measure startup 271947 to 271935 B gzip (-12 B), Chat +1451 B and New Session +29 B (within build variance), with unchanged CSS bytes and JS/CSS request counts. The lazy highlighting worker cuts 5000-line code/diff CPU by 18-70%; avoiding leaf-subtree table scans cuts dense-code CPU median/p95 by 65.9%/64.3%. Record the measured integrated startup head.",
+  "updatedAt": "2026-10-25"
 }

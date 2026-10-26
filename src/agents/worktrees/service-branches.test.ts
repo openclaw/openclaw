@@ -42,7 +42,7 @@ import {
   useInProcessWorktreeCapacityTransport,
 } from "./capacity.test-support.js";
 import { hasWorktreeUnknownOutcome } from "./errors.js";
-import { git } from "./git-fixture.test-support.js";
+import { git, gitIdentity } from "./git-fixture.test-support.js";
 import { ManagedWorktreeService } from "./service.js";
 
 const execFileAsync = promisify(execFile);
@@ -203,10 +203,7 @@ describe("ManagedWorktreeService branch discovery", () => {
 
       const next = await git(
         remote,
-        "-c",
-        "user.name=OpenClaw Test",
-        "-c",
-        "user.email=openclaw-test@example.invalid",
+        ...gitIdentity,
         "commit-tree",
         "HEAD^{tree}",
         "-p",

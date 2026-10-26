@@ -1836,6 +1836,23 @@
                     "group": "Models and memory",
                     "pages": [
                       "plugins/apple-fm",
+                      "plugins/knowledge",
+                      {
+                        "group": "Knowledge",
+                        "pages": [
+                          "plugins/knowledge/stores-and-access",
+                          "plugins/knowledge/memory-provider",
+                          "plugins/knowledge/tools",
+                          "plugins/knowledge/records-and-ontology",
+                          "plugins/knowledge/retrieval",
+                          "plugins/knowledge/evidence",
+                          "plugins/knowledge/ingestion",
+                          "plugins/knowledge/corrections",
+                          "plugins/knowledge/local-history",
+                          "plugins/knowledge/maintenance",
+                          "plugins/knowledge/control-ui"
+                        ]
+                      },
                       "plugins/llama-cpp",
                       "plugins/memory-lancedb",
                       "plugins/memory-wiki",
@@ -2299,6 +2316,7 @@
                       "providers/clawrouter",
                       "providers/cloudflare-ai-gateway",
                       "providers/kilocode",
+                      "providers/liquid-inference",
                       "providers/litellm",
                       "providers/neon",
                       "providers/openrouter",
@@ -3228,6 +3246,7 @@
                 "group": "Release notes",
                 "pages": [
                   "releases/index",
+                  "releases/2026.10.7",
                   "releases/2026.10.6",
                   "releases/2026.10.5",
                   "releases/2026.10.4",

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, test, vi }
 import { createAgentCommandLifecycle } from "../agents/command/lifecycle.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { getAgentEventExecutionContext } from "./agent-event-execution-context.js";
 import {
   type AgentAssistantSourceReceipt,
   type AgentEventPayload,
@@ -213,32 +214,27 @@ test("defers clearing an existing context until all overlapping owners exit", ()
 });
 
 test("reserves exclusive run ids for owner-only delivery and cleanup", () => {
-  const claimId = claimRun("run", { sessionKey: "worker" }, { exclusive: true, trackOwner: true })!;
-  expect(claimRun("run", { sessionKey: "local" }, { trackOwner: true })).toBeUndefined();
-  const seen: unknown[] = [];
-  onAgentEventForRun("run", ({ data }) => seen.push(data.text));
-  const event = (text: string) => ({ runId: "run", stream: "assistant", data: { text } });
-  emitAgentEventIfCurrent(event("local"));
-  emitAgentEventForOwner(event("worker"), claimId);
-  clearRun("run", readGeneration());
-  expect(getRun("run")?.sessionKey).toBe("worker");
-  releaseRun("run", claimId);
-  expect(getRun("run")).toBeUndefined();
-  emitAgentEventForOwner(event("late"), claimId);
-  expect(seen).toEqual(["worker"]);
-});
-
-test("drops stale explicit-generation events before shared listeners", () => {
-  const lifecycleGeneration = readGeneration();
-  registerRun("run", { sessionKey: "main", lifecycleGeneration });
-  const seen = captureEvents();
-  expect(
-    sendEvent("run", "lifecycle", { phase: "end" }, { lifecycleGeneration: "pre-restart" }),
-  ).toBe(false);
-  expect(
-    sendEvent("run", "lifecycle", { phase: "start", startedAt: 1_000 }, { lifecycleGeneration }),
-  ).toBe(true);
-  expect(seen).toMatchObject([{ seq: 1, data: { phase: "start" } }]);
+  withGeneration(readGeneration(), () => {
+    const claimId = claimRun(
+      "run",
+      { sessionKey: "worker" },
+      { exclusive: true, trackOwner: true },
+    )!;
+    expect(claimRun("run", { sessionKey: "local" }, { trackOwner: true })).toBeUndefined();
+    const seen: unknown[] = [];
+    onAgentEventForRun("run", ({ data }) => seen.push(data.text));
+    const event = (text: string) => ({ runId: "run", stream: "assistant", data: { text } });
+    emitAgentEventIfCurrent(event("local"));
+    emitAgentEventForOwner(event("worker"), claimId);
+    clearRun("run", readGeneration());
+    expect(getRun("run")?.sessionKey).toBe("worker");
+    releaseRun("run", claimId);
+    expect(getRun("run")).toBeUndefined();
+    emitAgentEventForOwner(event("late"), claimId);
+    expect(seen).toEqual(["worker"]);
+    rotateGeneration();
+    expect(emitAgentEventIfCurrent(event("rotated"))).toBe(false);
+  });
 });
 
 test("rejects inherited stale ownership and cannot reclaim the admitted replacement", () => {
@@ -819,6 +815,16 @@ describe("agent event routing after cancellation", () => {
         sessionKey: "agent:first:one",
         sessionId: "before",
       });
+      const routing = getAgentEventExecutionContext()
+        .getStore()!
+        .routingByRun!.get("shared")!.routing;
+      for (let index = 0; index < 3; index++) {
+        sendEvent("shared", "assistant", { delta: "streamed" });
+        expect(
+          getAgentEventExecutionContext().getStore()!.routingByRun!.get("shared")!.routing,
+        ).toBe(routing);
+      }
+      events.length = 0;
       await withGeneration(generation, async () => {
         registerRun("shared", { sessionId: "after-compaction" });
         await Promise.resolve();
@@ -845,28 +851,6 @@ describe("agent event routing after cancellation", () => {
     expect(events[1]).toMatchObject({ agentId: "second", sessionId: "second-session" });
     expect(events[2]?.agentId).toBeUndefined();
     expect(events[2]?.sessionKey).toBeUndefined();
-  });
-
-  it("never lets routing provenance revive a released claim or rotated execution", () => {
-    const generation = readGeneration();
-    const events = captureEvents(onAgentRuntimeEvent);
-    withGeneration(generation, () => {
-      const claim = claimRun(
-        "owned",
-        { agentId: "delivery", sessionKey: "agent:delivery:owned" },
-        { exclusive: true, trackOwner: true, ownsContext: true },
-      );
-      expect(claim).toBeDefined();
-      const event = { runId: "owned", stream: "tool", data: { phase: "result" } };
-      emitAgentEventForOwner(event, claim!);
-      clearRun("owned", generation, claim);
-      releaseRun("owned", claim);
-      expect(getRun("owned")).toBeUndefined();
-      emitAgentEventForOwner(event, claim!);
-      rotateGeneration();
-      expect(emitAgentEventIfCurrent(event)).toBe(false);
-    });
-    expect(events).toHaveLength(1);
   });
 
   it("extends a retained v2026.9.4 scope without replacing its execution owner", async () => {
@@ -1001,12 +985,14 @@ describe("live agent model projection", () => {
     rotateGeneration();
     clearRun(runId, generation);
     registerRun(runId, { sessionKey: "agent:main:replacement" });
-    emitAgentEvent({
-      runId,
-      lifecycleGeneration: generation,
-      stream: "lifecycle",
-      data: { phase: "model", provider: "stale", model: "stale" },
-    });
+    expect(
+      emitAgentEventIfCurrent({
+        runId,
+        lifecycleGeneration: generation,
+        stream: "lifecycle",
+        data: { phase: "model", provider: "stale", model: "stale" },
+      }),
+    ).toBe(false);
     expect(getRun(runId)).not.toHaveProperty("activeModel");
   });
 

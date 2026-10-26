@@ -24,8 +24,8 @@ const uploadedUrl = "https://memex.tlon.network/uploaded.png";
 const imageUrl = "https://example.com/image.png";
 const buffer = Buffer.from("fake-image");
 const upload = (url = imageUrl, cap?: number) => uploadImageFromUrl(url, clientConfig, cap);
-function setupSuccessfulUpload(contentType = "image/png") {
-  mockReadRemoteMediaBuffer.mockResolvedValue({ buffer, contentType, fileName: "image.png" });
+function setupSuccessfulUpload(contentType = "image/png", fileName?: string) {
+  mockReadRemoteMediaBuffer.mockResolvedValue({ buffer, contentType, fileName });
   mockUploadFile.mockResolvedValue({ url: uploadedUrl });
 }
 
@@ -59,6 +59,12 @@ it.each([1024, MAX_IMAGE_BYTES * 2])("caps downloads at %s bytes", async (cap) =
   const blob = uploadParams.blob;
   expect(blob).toBeInstanceOf(Blob);
   expect(Buffer.from(await blob.arrayBuffer())).toEqual(buffer);
+});
+
+it("prefers the downloaded filename over a query-style URL basename", async () => {
+  setupSuccessfulUpload("image/png", "photo#1.png");
+  await upload("https://example.com/download?id=123");
+  expect(requireUploadParams().fileName).toBe("photo#1.png");
 });
 
 it("preserves a wrapped authority rejection instead of falling back to the original URL", async () => {

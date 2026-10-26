@@ -2,6 +2,7 @@ import fs from "node:fs";
 import nodePath from "node:path";
 import { readRegularFile } from "@openclaw/fs-safe/advanced";
 import { unavailableDiffRevision, type DiffReadTiming } from "../infra/diff-read-timing.js";
+import { listDirectoryTreeStrictSync } from "../infra/directory-walk.js";
 import { GitCommandTimeoutError, requireGitCommandOutput } from "../infra/git-exec.js";
 import type { GitReadOperations } from "../infra/git-read-operations.js";
 import { readGitHead, readGitMetadataPrefix, readGitRefs } from "../infra/git-root.js";
@@ -38,7 +39,7 @@ export async function readCheckoutGitRevision(
       return await readCheckoutDiffRevision(root, diffPaths, summaryOnly, timing);
     }
     const head = readGitHead(root, { maxDepth: 1 });
-    const checkout = readCheckoutHead(root);
+    const checkout = readCheckoutHead(root, head);
     const defaultRef = readDefaultRef(checkout);
     if (
       !head ||
@@ -66,9 +67,9 @@ export async function readCheckoutGitRevision(
       );
       if (fs.existsSync(replacements)) {
         paths.push(
-          ...fs
-            .readdirSync(replacements, { recursive: true, encoding: "utf8" })
-            .map((name) => nodePath.join(replacements, name)),
+          ...listDirectoryTreeStrictSync(replacements).map(({ relativePath }) =>
+            nodePath.join(replacements, relativePath),
+          ),
         );
       }
       const packed = nodePath.join(checkout.refsBase, "packed-refs");

@@ -1,5 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { createSignal, onCleanup, type Accessor } from "solid-js";
+import { expect } from "vitest";
 import { analyzeConfigSchema } from "../components/config-form.analyze.ts";
 import { ConfigArray, ConfigObject } from "../components/config-form.node.collection.tsx";
 import { NumberInput, SelectInput, TextInput } from "../components/config-form.node.scalar.tsx";
@@ -9,6 +10,17 @@ import { ConfigForm } from "../components/config-form.render.tsx";
 import type { ConfigFormProps } from "../components/config-form.shared.ts";
 import { mountSolid } from "./mount-solid.ts";
 import { flush } from "./solid-settle.ts";
+
+export function connectionSchemaFixture(): ConfigNodeRenderParams["schema"] {
+  return {
+    type: "object",
+    required: ["host", "port"],
+    properties: {
+      host: { type: "string", minLength: 1 },
+      port: { type: "integer", minimum: 1 },
+    },
+  };
+}
 
 type NodeDefaults = Pick<ConfigNodeRenderParams, "hints" | "unsupported" | "disabled">;
 type FixtureOptions<Extra = object> = Omit<ConfigNodeRenderParams, keyof NodeDefaults> &
@@ -85,4 +97,12 @@ export function renderAnalyzedFormFixture(
     onShowAdvanced: () => {},
     ...props,
   });
+}
+
+export function expectElement<T extends Element>(element: T | null | undefined, label: string): T {
+  expect(element instanceof Element, label).toBe(true);
+  if (!(element instanceof Element)) {
+    throw new Error(`missing ${label}`);
+  }
+  return element;
 }

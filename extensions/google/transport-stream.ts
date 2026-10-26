@@ -265,13 +265,11 @@ export function buildGoogleGenerativeAiParams(
   options?: GoogleTransportOptions,
   videoSlots?: GoogleVideoSlots,
 ): GoogleGenerateContentRequest {
-  const generationConfig: Record<string, unknown> = {
-    ...buildGoogleGenerationConfig(
-      model,
-      options?.thinking ?? buildGoogleSimpleThinking(canonicalGoogleModel(model), options),
-      options?.maxTokens,
-    ),
-  };
+  const generationConfig: Record<string, unknown> = buildGoogleGenerationConfig(
+    model,
+    options?.thinking ?? buildGoogleSimpleThinking(canonicalGoogleModel(model), options),
+    options?.maxTokens,
+  );
   if (typeof options?.temperature === "number") {
     generationConfig.temperature = options.temperature;
   }

@@ -43,6 +43,16 @@ import {
 
 export const mocks = githubPublicationTestMocks();
 
+const isolatedGitEnv = (env: NodeJS.ProcessEnv = {}) => ({
+  ...process.env,
+  ...env,
+  GIT_CONFIG_GLOBAL: os.devNull,
+  GIT_CONFIG_SYSTEM: os.devNull,
+  GH_TOKEN: undefined,
+  GITHUB_TOKEN: undefined,
+  GH_CONFIG_DIR: undefined,
+});
+
 export async function fixture(
   options: { fork?: boolean; empty?: boolean; conflict?: boolean; priorPublication?: boolean } = {},
 ) {
@@ -65,21 +75,26 @@ export async function fixture(
     authenticationAlias: { kind: "email", email: "publication-guest@example.test" },
   });
   const upstream = path.join(path.dirname(local.cwd), "upstream");
+  const upstreamGit = (...args: string[]) => local.git("-C", upstream, ...args);
+  const commitUpstream = async (message: string, files: Record<string, string>) => {
+    for (const [file, contents] of Object.entries(files)) {
+      await fs.writeFile(path.join(upstream, file), contents);
+    }
+    await upstreamGit("add", "-A");
+    await upstreamGit("commit", "-m", message);
+    return upstreamGit("rev-parse", "HEAD");
+  };
   await local.git("clone", "--no-local", "--branch", "main", local.cwd, upstream);
-  const commonAncestor = await local.git("-C", upstream, "rev-parse", "HEAD");
-  await local.git("-C", upstream, "checkout", "-b", "topic/existing");
-  await fs.writeFile(path.join(upstream, "pr.txt"), "original PR contents\n");
-  if (options.conflict) {
-    await fs.writeFile(path.join(upstream, "artifact.txt"), "original PR change\n");
-  }
-  await local.git("-C", upstream, "add", "-A");
-  await local.git("-C", upstream, "commit", "-m", "Existing PR work");
-  const headCommit = await local.git("-C", upstream, "rev-parse", "HEAD");
-  await local.git("-C", upstream, "checkout", "main");
-  await fs.writeFile(path.join(upstream, "newer-base.txt"), "base advanced after PR\n");
-  await local.git("-C", upstream, "add", "newer-base.txt");
-  await local.git("-C", upstream, "commit", "-m", "Newer base work");
-  const baseCommit = await local.git("-C", upstream, "rev-parse", "HEAD");
+  const commonAncestor = await upstreamGit("rev-parse", "HEAD");
+  await upstreamGit("checkout", "-b", "topic/existing");
+  const headCommit = await commitUpstream("Existing PR work", {
+    "pr.txt": "original PR contents\n",
+    ...(options.conflict ? { "artifact.txt": "original PR change\n" } : {}),
+  });
+  await upstreamGit("checkout", "main");
+  const baseCommit = await commitUpstream("Newer base work", {
+    "newer-base.txt": "base advanced after PR\n",
+  });
   // The publication harness starts with staged work. A fresh selected-project
   // fixture instead starts at the real, clean project base; prior publications
   // retain their existing work and must be refused by initial preparation.
@@ -162,16 +177,12 @@ export async function fixture(
       }
       if (argv[0] === "gh") {
         const endpoint = argv.at(-1)!;
-        const value =
-          endpoint === "repos/openclaw/openclaw"
-            ? baseRepo
-            : endpoint === "repos/contributor/openclaw"
-              ? headRepo
-              : endpoint === `repos/openclaw/openclaw/pulls/${pr.number}`
-                ? pr
-                : endpoint.includes("/branches/")
-                  ? branch
-                  : undefined;
+        const reads: Record<string, unknown> = {
+          "repos/openclaw/openclaw": baseRepo,
+          "repos/contributor/openclaw": headRepo,
+          [`repos/openclaw/openclaw/pulls/${pr.number}`]: pr,
+        };
+        const value = endpoint.includes("/branches/") ? branch : reads[endpoint];
         if (!value) {
           throw new Error(`Unexpected GitHub read: ${endpoint}`);
         }
@@ -188,15 +199,7 @@ export async function fixture(
             ...commandOptions,
             cwd: commandOptions?.cwd ?? cwd,
             timeoutMs: 10_000,
-            env: {
-              ...process.env,
-              ...commandOptions?.env,
-              GIT_CONFIG_GLOBAL: os.devNull,
-              GIT_CONFIG_SYSTEM: os.devNull,
-              GH_TOKEN: undefined,
-              GITHUB_TOKEN: undefined,
-              GH_CONFIG_DIR: undefined,
-            },
+            env: isolatedGitEnv(commandOptions?.env),
           },
         );
       }
@@ -230,18 +233,12 @@ export async function fixture(
               input: stdin,
               signal,
               timeoutMs: 10_000,
-              env: {
-                ...process.env,
-                GIT_CONFIG_GLOBAL: os.devNull,
-                GIT_CONFIG_SYSTEM: os.devNull,
+              env: isolatedGitEnv({
                 GIT_AUTHOR_NAME: "Guest",
                 GIT_AUTHOR_EMAIL: "guest@example.test",
                 GIT_COMMITTER_NAME: "Guest",
                 GIT_COMMITTER_EMAIL: "guest@example.test",
-                GH_TOKEN: undefined,
-                GITHUB_TOKEN: undefined,
-                GH_CONFIG_DIR: undefined,
-              },
+              }),
             },
           );
           if (result.code === null) {
@@ -287,17 +284,12 @@ export async function fixture(
       }
       return result as T;
     };
+    const toolArgs = { action: "prepare_pr", pullRequestUrl: pr.html_url, ...args };
     const result = await withGatewayToolCallerIdentity(scope, () =>
       withPublicationToolTransport(callGateway, () =>
         createGitHubPublishTool({ sandbox: prepared }).execute(
           "prepare",
-          Object.fromEntries(
-            Object.entries({
-              action: "prepare_pr",
-              pullRequestUrl: pr.html_url,
-              ...args,
-            }).filter(([, value]) => value !== undefined),
-          ),
+          Object.fromEntries(Object.entries(toolArgs).filter(([, value]) => value !== undefined)),
         ),
       ),
     );
@@ -307,13 +299,8 @@ export async function fixture(
     return result.details;
   };
   const advanceHead = async (files: Record<string, string>) => {
-    await local.git("-C", upstream, "checkout", "topic/existing");
-    for (const [file, contents] of Object.entries(files)) {
-      await fs.writeFile(path.join(upstream, file), contents);
-    }
-    await local.git("-C", upstream, "add", "-A");
-    await local.git("-C", upstream, "commit", "-m", "Advance existing PR");
-    pr.head.sha = await local.git("-C", upstream, "rev-parse", "HEAD");
+    await upstreamGit("checkout", "topic/existing");
+    pr.head.sha = await commitUpstream("Advance existing PR", files);
     branch.commit.sha = pr.head.sha;
     return pr.head.sha;
   };

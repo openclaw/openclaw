@@ -422,11 +422,14 @@ describe("memory-core plugin runtime registration", () => {
     const ownerTool = intentFactory({ config: {}, senderIsOwner: true }) as AnyAgentTool;
     expect(ownerTool).toMatchObject({ name: "intent" });
     for (const senderIsOwner of [false, undefined]) {
-      expect(intentFactory({ config: {}, senderIsOwner })).toMatchObject({
+      const next = intentFactory({ config: {}, senderIsOwner }) as AnyAgentTool;
+      expect(next).toMatchObject({
         name: ownerTool.name,
         description: ownerTool.description,
         parameters: ownerTool.parameters,
       });
+      expect(next.parameters).toBe(ownerTool.parameters);
+      expect(next.execute).not.toBe(ownerTool.execute);
     }
     for (const maxFires of ["3", 3]) {
       const prepared = ownerTool.prepareArguments?.({

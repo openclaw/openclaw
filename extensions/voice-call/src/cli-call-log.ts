@@ -110,14 +110,7 @@ async function* readLogLines(file: string, last: number, pollMs?: number): Async
   }
 }
 
-function summarizeSeries(values: number[]): {
-  count: number;
-  minMs: number;
-  maxMs: number;
-  avgMs: number;
-  p50Ms: number;
-  p95Ms: number;
-} {
+function summarizeSeries(values: number[]) {
   if (values.length === 0) {
     return { count: 0, minMs: 0, maxMs: 0, avgMs: 0, p50Ms: 0, p95Ms: 0 };
   }

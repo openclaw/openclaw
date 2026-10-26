@@ -1,25 +1,23 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type * as ConfigIoModule from "../../config/io.js";
+import { beforeEach, expect, it, vi } from "vitest";
 import { resolvePersistCandidateForWrite } from "../../config/io.write-prepare.js";
-import type * as RuntimeSchemaModule from "../../config/runtime-schema.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type * as SecretsRuntimeModule from "../../secrets/runtime.js";
 import type * as ConfigWriteFlowModule from "./config-write-flow.js";
 import { configHandlers } from "./config.js";
 import { createConfigHandlerHarness, createConfigWriteSnapshot } from "./config.test-helpers.js";
+import { expectRpcError, expectRpcResult } from "./rpc-response.test-support.js";
 
 const mocks = vi.hoisted(() => ({ read: vi.fn(), commit: vi.fn() }));
 vi.mock("../../config/io.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof ConfigIoModule>()),
+  ...(await importOriginal<typeof import("../../config/io.js")>()),
   readConfigFileSnapshotForWrite: mocks.read,
 }));
 vi.mock("../../config/runtime-schema.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof RuntimeSchemaModule>()),
+  ...(await importOriginal<typeof import("../../config/runtime-schema.js")>()),
   loadGatewayConfigRedactionHints: () => ({}),
 }));
 vi.mock("../../secrets/runtime.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof SecretsRuntimeModule>()),
+  ...(await importOriginal<typeof import("../../secrets/runtime.js")>()),
   prepareSecretsRuntimeSnapshot: async ({ config }: { config: OpenClawConfig }) => ({ config }),
 }));
 vi.mock("./config-write-flow.js", async (importOriginal) => ({
@@ -39,7 +37,7 @@ const replacePaths = ["agents.entries.first.skills", "agents.entries.second.tool
 async function invoke(raw: unknown, options: { baseHash?: string; replacePaths?: string[] } = {}) {
   const harness = createConfigHandlerHarness({
     method: "config.patch",
-    params: { raw: JSON.stringify(raw), ...options },
+    params: { raw: JSON.stringify(raw), baseHash: "base-hash", ...options },
   });
   await expectDefined(configHandlers["config.patch"], "config.patch handler")(harness.options);
   return harness.respond;
@@ -51,16 +49,14 @@ beforeEach(() => {
     agents: {
       ownership: "explicit",
       entries: {
-        keep: { name: "Untouched" },
-        first: { name: "First", skills: [] },
-        second: { name: "Second", tools: { deny: ["*"] } },
+        keep: {},
+        first: { skills: [] },
+        second: { tools: { deny: ["*"] } },
       },
     },
   };
   persisted = undefined;
   mocks.read.mockImplementation(async () => createConfigWriteSnapshot(current));
-  // Keep handler isolation, but exercise the real persistence roster guard rather
-  // than accepting any nextConfig that reaches the mocked commit boundary.
   mocks.commit.mockImplementation(
     async (params: Parameters<typeof ConfigWriteFlowModule.commitGatewayConfigWrite>[0]) => {
       persisted = resolvePersistCandidateForWrite({
@@ -80,81 +76,44 @@ beforeEach(() => {
   );
 });
 
-describe("config.patch explicit agent removal", () => {
-  it("removes only explicitly deleted existing entries in a revision-checked batch", async () => {
-    const respond = await invoke(
-      { agents: { entries: { first: null, second: null, unknown: null } } },
-      { baseHash: "base-hash", replacePaths },
-    );
-    expect(respond).toHaveBeenCalledWith(true, expect.anything(), undefined);
-    expect(mocks.commit).toHaveBeenCalledWith(
-      expect.objectContaining({
-        writeOptions: expect.objectContaining({ allowedAgentRosterRemovals: ["first", "second"] }),
-      }),
-    );
-    expect(persisted).toEqual({
-      agents: { ...current.agents, entries: { keep: { name: "Untouched" } } },
-    });
-    expect(Object.keys(current.agents!.entries!)).toEqual(["keep", "first", "second"]);
-  });
-
-  it.each([undefined, "stale-hash"])(
-    "rejects removal with baseHash %s before committing",
-    async (baseHash) => {
-      const respond = await invoke(
-        { agents: { entries: { first: null } } },
-        { baseHash, replacePaths },
-      );
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "INVALID_REQUEST" }),
-      );
-      expect(mocks.commit).not.toHaveBeenCalled();
-      expect(persisted).toBeUndefined();
-    },
+it("removes only explicitly deleted existing entries in a revision-checked batch", async () => {
+  const respond = await invoke(
+    { agents: { entries: { first: null, second: null, unknown: null } } },
+    { replacePaths },
   );
-
-  it("still requires acknowledgment of arrays inside a removed entry", async () => {
-    const respond = await invoke(
-      { agents: { entries: { first: null } } },
-      { baseHash: "base-hash" },
-    );
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        message: expect.stringContaining("replacePaths"),
-      }),
-    );
-    expect(mocks.commit).not.toHaveBeenCalled();
+  expectRpcResult(respond, expect.anything());
+  expect(mocks.commit).toHaveBeenCalledWith(
+    expect.objectContaining({
+      writeOptions: expect.objectContaining({ allowedAgentRosterRemovals: ["first", "second"] }),
+    }),
+  );
+  expect(persisted).toEqual({
+    agents: { ...current.agents, entries: { keep: {} } },
   });
+  expect(Object.keys(current.agents!.entries!)).toEqual(["keep", "first", "second"]);
+});
 
-  it("does not authorize omitted siblings during ordinary entry updates", async () => {
-    const respond = await invoke(
-      { agents: { entries: { keep: { name: "Renamed" } } } },
-      { baseHash: "base-hash" },
-    );
-    expect(respond).toHaveBeenCalledWith(true, expect.anything(), undefined);
-    expect(persisted).toEqual({
-      agents: {
-        ...current.agents,
-        entries: { ...current.agents!.entries, keep: { name: "Renamed" } },
-      },
-    });
+it.each([
+  ["missing revision", undefined, replacePaths, { first: null }, undefined],
+  ["stale revision", "stale-hash", replacePaths, { first: null }, undefined],
+  ["unacknowledged arrays", "base-hash", undefined, { first: null }, "replacePaths"],
+  ["deleted roster", "base-hash", replacePaths, null, undefined],
+] as const)("rejects %s before committing", async (_name, baseHash, paths, entries, message) => {
+  const respond = await invoke({ agents: { entries } }, { baseHash, replacePaths: paths });
+  expectRpcError(respond, {
+    code: "INVALID_REQUEST",
+    ...(message ? { message: expect.stringContaining(message) } : {}),
   });
+  expect(mocks.commit).not.toHaveBeenCalled();
+});
 
-  it("rejects deleting the keyed roster container before committing", async () => {
-    const respond = await invoke(
-      { agents: { entries: null } },
-      { baseHash: "base-hash", replacePaths },
-    );
-    expect(mocks.commit).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "INVALID_REQUEST" }),
-    );
-    expect(persisted).toBeUndefined();
+it("does not authorize omitted siblings during ordinary entry updates", async () => {
+  const respond = await invoke({ agents: { entries: { keep: { name: "Renamed" } } } });
+  expectRpcResult(respond, expect.anything());
+  expect(persisted).toEqual({
+    agents: {
+      ...current.agents,
+      entries: { ...current.agents!.entries, keep: { name: "Renamed" } },
+    },
   });
 });

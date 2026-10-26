@@ -6,7 +6,6 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   createTelegramQaTransportAdapter: vi.fn(),
   listTelegramQaScenarios: vi.fn(),
-  printLiveTransportQaArtifacts: vi.fn(),
   resolveTelegramQaRunOptions: vi.fn((options: Parameters<typeof runQaTelegramSuite>[0]) => ({
     ...options,
     allowFailures: options.allowFailures ?? false,
@@ -18,10 +17,6 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../../suite-launch.runtime.js", () => ({
   runQaFlowSuiteFromRuntime: mocks.runQaFlowSuiteFromRuntime,
-}));
-
-vi.mock("../shared/live-artifacts.js", () => ({
-  printLiveTransportQaArtifacts: mocks.printLiveTransportQaArtifacts,
 }));
 
 vi.mock("./adapter.runtime.js", () => ({
@@ -82,6 +77,15 @@ afterEach(() => {
   process.exitCode = previousExitCode ?? 0;
   rmSync(tempRoot, { force: true, recursive: true });
   vi.unstubAllEnvs();
+});
+
+it("prints the report and summary paths in order", async () => {
+  const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+  await runSuite();
+  expect(write.mock.calls.map(([chunk]) => String(chunk))).toEqual([
+    "Telegram QA report: .artifacts/qa-e2e/telegram/qa-suite-report.md\n",
+    `Telegram QA summary: ${summaryPath}\n`,
+  ]);
 });
 
 it.each([

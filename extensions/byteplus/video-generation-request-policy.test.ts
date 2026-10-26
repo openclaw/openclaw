@@ -5,7 +5,10 @@ import type {
 } from "openclaw/plugin-sdk/provider-http";
 import { acquireTestPortBlock } from "openclaw/plugin-sdk/test-env";
 import { afterEach, assert, expect, it, vi } from "vitest";
-import { createProxyRequestModelProviderConfig } from "../test-support/model-provider-config.test-support.js";
+import {
+  createModelProviderConfig,
+  createProxyRequestModelProviderConfig,
+} from "../test-support/model-provider-config.test-support.js";
 import { buildBytePlusVideoGenerationProvider } from "./video-generation-provider.js";
 
 const { postMock, pollMock } = vi.hoisted(() => ({
@@ -77,13 +80,9 @@ it("denies private polling without needing a proxy override", async () => {
       provider: "byteplus",
       model: "seedance-1-0-pro-250528",
       prompt: "a synthetic lobster",
-      cfg: {
-        models: {
-          providers: {
-            byteplus: { baseUrl: "http://127.0.0.1:9", models: [] },
-          },
-        },
-      },
+      cfg: createModelProviderConfig({
+        byteplus: { baseUrl: "http://127.0.0.1:9", models: [] },
+      }),
     }),
   ).rejects.toMatchObject({ name: "SsrFBlockedError" });
   expect(postMock).toHaveBeenCalled();
@@ -140,9 +139,7 @@ it("blocks a loopback result before contacting the synthetic HTTP server", async
   } finally {
     try {
       if (server.listening) {
-        await new Promise<void>((resolve, reject) => {
-          server.close((error) => (error ? reject(error) : resolve()));
-        });
+        await server[Symbol.asyncDispose]();
       }
     } finally {
       await claim.release();

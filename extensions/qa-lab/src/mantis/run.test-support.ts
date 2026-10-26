@@ -4,6 +4,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { vi } from "vitest";
 import type { CommandRunner, CrabboxInspect } from "./crabbox-runtime.js";
+import type { MantisCommandRunner } from "./run-command.runtime.js";
 
 export async function mockManagedCrabboxBinary() {
   const actual = await vi.importActual<
@@ -74,6 +75,22 @@ export function successfulCommandResult(stdout = ""): StubCommandResult {
 
 export function failedCommandResult(code = 1): StubCommandResult {
   return { code, killed: false, signal: null, stderr: "", stdout: "", termination: "exit" };
+}
+
+export async function mockMantisSetupCommand(
+  ...[command, args, execution]: Parameters<MantisCommandRunner>
+) {
+  if (command === "git" && execution.stage === "worktree-add") {
+    await fs.mkdir(String(args[4]), { recursive: true });
+    return successfulCommandResult();
+  }
+  if (command === "git" && execution.stage === "worktree-cleanup") {
+    if (args[1] === "remove") {
+      await fs.rm(execution.cwd, { force: true, recursive: true });
+    }
+    return successfulCommandResult();
+  }
+  return successfulCommandResult();
 }
 
 export function worktreeListOutput(worktreeDir: string): string {

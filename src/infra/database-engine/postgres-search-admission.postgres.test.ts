@@ -58,9 +58,6 @@ function fixture(
         anchor,
         schema,
         input: { connection: dsn, schemaPrefix: "r6" },
-        openSqlite: () => {
-          throw new Error("Unexpected SQLite bootstrap");
-        },
       });
       if (!isPostgresSqlConnection(opened)) {
         throw new Error("Expected PostgreSQL");

@@ -82,6 +82,14 @@ function backend(id: string, workdir: string, runtimeId = id) {
   };
 }
 
+async function writeRetrySettings(directory: string, maxRetries: number, maxRetryDelayMs?: number) {
+  await fs.mkdir(directory, { recursive: true });
+  await fs.writeFile(
+    path.join(directory, "settings.json"),
+    JSON.stringify({ retry: { provider: { maxRetries, maxRetryDelayMs } } }),
+  );
+}
+
 it.each(["settled", "failed", "revoked", "unsandboxed"] as const)(
   "settles attribution before a writable sandbox setup (%s)",
   async (outcome) => {
@@ -157,8 +165,9 @@ it.each(["settled", "failed", "revoked", "unsandboxed"] as const)(
 );
 
 it.each(dispatchCases)(
-  "dispatches the generic harness for $agentId/global with policy $sandboxSessionKey, $skillCatalog skills, remote skills $remoteSkills, one-shot $oneShotCliRun, real managed workspace $realManagedWorkspace, explicit cwd $explicitCwd, host media $hostMedia, retired placement $retirePlacement, baseline $diffBaseline, cancelled trajectory $cancelTrajectory, prepared auth $preparedAuth",
+  "dispatches the generic harness for $agentId/global with policy $sandboxSessionKey, $skillCatalog skills, remote skills $remoteSkills, one-shot $oneShotCliRun, real managed workspace $realManagedWorkspace, explicit cwd $explicitCwd, host media $hostMedia, retired placement $retirePlacement, baseline $diffBaseline, cancelled trajectory $cancelTrajectory, prepared auth $preparedAuth, access $cyberAccessProgram",
   async ({
+    cyberAccessProgram,
     agentId = "work",
     sandboxSessionKey,
     remoteSkills = false,
@@ -322,6 +331,7 @@ it.each(dispatchCases)(
         | undefined;
       const sourceTurn = createSourceTurnDispatchAssertions();
       const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async (params) => {
+        expect(params.cyberAccessProgram).toBe(cyberAccessProgram);
         sourceTurn.expectBinding(params);
         retainedRetryPreparer = params.hostCapabilities?.prepareContinuationRetryCount;
         expect(params).not.toHaveProperty("prepareContinuationRetryCount");
@@ -329,11 +339,7 @@ it.each(dispatchCases)(
           const cwd = params.cwd ?? params.workspaceDir;
           retainedRetryPreparer?.({ cwd });
           if (retryPreparation === "mutate") {
-            await fs.mkdir(path.join(cwd, ".openclaw"), { recursive: true });
-            await fs.writeFile(
-              path.join(cwd, ".openclaw", "settings.json"),
-              JSON.stringify({ retry: { provider: { maxRetries: 6 } } }),
-            );
+            await writeRetrySettings(path.join(cwd, ".openclaw"), 6);
             retainedRetryPreparer?.({ cwd });
           } else if (retryPreparation === "change-cwd") {
             retainedRetryPreparer?.({ cwd: path.join(cwd, "different") });
@@ -389,6 +395,7 @@ it.each(dispatchCases)(
             }
           : undefined,
         admittedRunContext,
+        cyberAccessProgram,
         ...(cancelTrajectory ? { abortSignal: cancellation.signal } : {}),
         agentId,
         config,
@@ -619,17 +626,9 @@ it.each(dispatchCases)(
           : managedWorkspace && !realManagedWorkspace
             ? path.join(projection, ".openclaw")
             : state.agentDir(agentId);
-        await fs.mkdir(settingsDir, { recursive: true });
-        await fs.writeFile(
-          path.join(settingsDir, "settings.json"),
-          JSON.stringify({ retry: { provider: { maxRetries: retryCount, maxRetryDelayMs: 5 } } }),
-        );
+        await writeRetrySettings(settingsDir, retryCount, 5);
         if (explicitCwd || (managedWorkspace && !realManagedWorkspace)) {
-          await fs.mkdir(path.join(workspaceDir, ".openclaw"), { recursive: true });
-          await fs.writeFile(
-            path.join(workspaceDir, ".openclaw", "settings.json"),
-            JSON.stringify({ retry: { provider: { maxRetries: 7 } } }),
-          );
+          await writeRetrySettings(path.join(workspaceDir, ".openclaw"), 7);
         }
       }
       const pending = prepareAndDispatchEmbeddedRunAttempt(input);
@@ -770,15 +769,14 @@ it.each(dispatchCases)(
             permissionMode: "full",
           });
         }
+        expect(runAttempt).toHaveBeenCalledOnce();
+        expect(dispatched).toMatchObject({
+          agentId,
+          sessionKey: "global",
+          sandboxSessionKey,
+          gitCoauthorPrompt,
+        });
         expect(dispatched?.contextEngine).toBe(configuredContextEngine ? contextEngine : undefined);
-        expect(runAttempt).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({
-            agentId,
-            sessionKey: "global",
-            sandboxSessionKey,
-            gitCoauthorPrompt,
-          }),
-        );
         expect(resolveSessionGitCoauthorPrompt).toHaveBeenCalledExactlyOnceWith({
           config,
           agentId,

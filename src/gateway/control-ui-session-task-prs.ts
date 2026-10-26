@@ -1,3 +1,4 @@
+import { runWithMainThreadTask } from "../infra/main-thread-stall.js";
 import { createRetainedCache } from "../infra/retained-cache.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { getOrCreateWeakOwnerMap } from "../shared/weak-owner-map.js";
@@ -9,6 +10,9 @@ import type { ControlUiSessionTaskPullRequest } from "./control-ui-contract.js";
 import { SessionRowFactsPending } from "./session-row-prepared-read.js";
 import { hasEntry, type EntryRow, type Lookup, type Row } from "./session-row-projection-record.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
+import type { createSessionListEntryFilter } from "./session-sharing.js";
+
+type PublicationFilter = ReturnType<typeof createSessionListEntryFilter>;
 
 type PublicationNode = {
   query: Lookup;
@@ -24,17 +28,43 @@ const nodesByRevision = new WeakMap<object, Map<EntryRow["generation"], Publicat
 // Display rows retire with sharing publications, independently of long-lived lineage.
 const rowsByRevision = new WeakMap<object, Map<PublicationNode, Row>>();
 
+function readPublicationRow(
+  projection: SessionRowProjection,
+  node: PublicationNode,
+  rows: Map<PublicationNode, Row> | undefined,
+) {
+  let row = rows?.get(node);
+  if (!row) {
+    row = projection.capture(node.query);
+    if (row) {
+      rows?.set(node, row);
+    }
+  }
+  if (row && (row.sharingEntry !== row.storedEntry || row.entryAcquisitionPending)) {
+    throw new SessionRowFactsPending([node.query]);
+  }
+  return row;
+}
+
+function allowsPublicationRow(row: Row | undefined, allows: PublicationFilter): row is EntryRow {
+  return (
+    hasEntry(row) &&
+    !row.entry.incognito &&
+    !isIncognitoSessionKey(row.key) &&
+    allows?.(row.key, row.entry) !== false
+  );
+}
+
 /** Traverse the row owner's indexed lineage; neither checkout nor transcript is evidence. */
-export function selectTaskPublicationSessions(
+function selectTaskPublicationSessions(
   projection: SessionRowProjection,
   root: PublicationRow,
-  allows: (row: EntryRow) => boolean,
-): TaskPublicationRead["sessions"] {
-  // Registry publications can defer parent-index updates until row preparation.
-  void projection.state;
-  const nodes = getOrCreateWeakOwnerMap(nodesByRevision, projection.readTaskPublicationRevision());
-  const revision = projection.sharingRevision;
-  const rows = revision ? getOrCreateWeakOwnerMap(rowsByRevision, revision) : undefined;
+  allows: PublicationFilter,
+) {
+  const revision = projection.readTaskPublicationRevision();
+  const nodes = getOrCreateWeakOwnerMap(nodesByRevision, revision);
+  const sharing = projection.sharingRevision;
+  const rows = sharing ? getOrCreateWeakOwnerMap(rowsByRevision, sharing) : undefined;
   const prepare = (row: PublicationRow): PublicationNode => {
     const retained = nodes.get(row.generation);
     if (retained) {
@@ -56,36 +86,81 @@ export function selectTaskPublicationSessions(
   const seen = new Set<string>();
   const pending = [prepare(root)];
   const sessions: TaskPublicationRead["sessions"] = [];
+  const visits: Array<{ node: PublicationNode; duplicate: boolean; included: boolean }> = [];
   for (const node of pending) {
     const { identity } = node;
-    let row = rows?.get(node);
-    if (!row) {
-      row = projection.capture(node.query);
-      if (row) {
-        rows?.set(node, row);
-      }
-    }
-    if (row && (row.sharingEntry !== row.storedEntry || row.entryAcquisitionPending)) {
-      throw new SessionRowFactsPending([node.query]);
-    }
-    if (
-      !hasEntry(row) ||
-      seen.has(identity) ||
-      row.entry.incognito ||
-      isIncognitoSessionKey(row.key) ||
-      !allows(row)
-    ) {
+    const row = readPublicationRow(projection, node, rows);
+    const duplicate = seen.has(identity);
+    const included = !duplicate && allowsPublicationRow(row, allows);
+    visits.push({ node, duplicate, included });
+    if (!included) {
       continue;
     }
     seen.add(identity);
     sessions.push(node.session);
-    node.children ??= projection.selectEntries({ parentSessionKey: row }).map(prepare);
+    // Qualified parents use logical membership; sentinels retain cross-store alias selection.
+    node.children ??=
+      row.key.startsWith("agent:") && !projection.hasLogicalChildEntries(row)
+        ? []
+        : runWithMainThreadTask("gateway:task-pr-lineage", () =>
+            projection.selectEntries({ parentSessionKey: row }).map(prepare),
+          );
     pending.push(...node.children);
   }
-  // oxlint-disable-next-line unicorn/no-array-sort -- Indexed lineage traversal built this private result.
-  return sessions.sort(
+  sessions.sort(
     (a, b) => a.sessionKey.localeCompare(b.sessionKey) || a.agentId.localeCompare(b.agentId),
   );
+  return { sessions, visits, revision };
+}
+
+/** Retain structural selection facts; every assertion still checks live disclosure authority. */
+export function prepareTaskPublicationSessions(
+  projection: SessionRowProjection,
+  root: PublicationRow,
+  getAllows: () => PublicationFilter,
+) {
+  // Registry publications can defer parent-index updates until row preparation.
+  const initialAllows = getAllows();
+  void projection.state;
+  let prepared = selectTaskPublicationSessions(projection, root, initialAllows);
+  const sessions = prepared.sessions;
+  return {
+    sessions,
+    assertCurrent: () => {
+      // Registry publication can defer the lineage update until preparation.
+      const allows = getAllows();
+      void projection.state;
+      if (prepared.revision === projection.readTaskPublicationRevision()) {
+        const sharing = projection.sharingRevision;
+        const rows = sharing ? getOrCreateWeakOwnerMap(rowsByRevision, sharing) : undefined;
+        const unchanged = prepared.visits.every(({ node, duplicate, included }) => {
+          const row = readPublicationRow(projection, node, rows);
+          return duplicate || allowsPublicationRow(row, allows) === included;
+        });
+        // Capturing a deferred row can itself publish new lineage.
+        if (unchanged && prepared.revision === projection.readTaskPublicationRevision()) {
+          return;
+        }
+      }
+      const current = selectTaskPublicationSessions(projection, root, allows);
+      if (
+        current.sessions.length !== sessions.length ||
+        current.sessions.some((session, index) => {
+          const previous = sessions[index];
+          return (
+            session !== previous &&
+            (session.agentId !== previous?.agentId ||
+              session.sessionKey !== previous.sessionKey ||
+              session.sessionId !== previous.sessionId ||
+              session.lifecycleRevision !== previous.lifecycleRevision)
+          );
+        })
+      ) {
+        throw new Error("Task pull-request audience changed");
+      }
+      prepared = current;
+    },
+  };
 }
 
 type ReceiptResult = {

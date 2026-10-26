@@ -22,7 +22,7 @@ import {
   type CronQuarantinedJob,
   type QuarantinedCronConfigJob,
 } from "../../../cron/store.js";
-import { cronStoreKey } from "../../../cron/store/key.js";
+import { resolveCronStoreKeyInDatabase } from "../../../cron/store/paths.js";
 import { fingerprintCronJobRows } from "../../../cron/store/row-codec.js";
 import type { CronJob } from "../../../cron/types.js";
 import {
@@ -44,6 +44,7 @@ import {
   repairRetiredModelSlots,
   repairModelRefAuthProfile,
 } from "../shared/retired-model-ref-repair.js";
+import { readCronStoreSelectionForDoctor } from "./default-store-selection.js";
 import { parseLegacyCronJobs } from "./legacy-json-shapes.js";
 import { migrateLegacyNotifyFallback } from "./legacy-notify.js";
 import {
@@ -365,7 +366,7 @@ export async function applyLegacyCronStoreRepair(params: {
           state.legacyImport?.assertCurrent();
           if (
             !isDeepStrictEqual(
-              inspectCronOwnerRowsForDoctor(db, cronStoreKey(state.storePath)),
+              inspectCronOwnerRowsForDoctor(db, resolveCronStoreKeyInDatabase(db, state.storePath)),
               state.ownerRows,
             )
           ) {
@@ -460,6 +461,10 @@ export async function repairLegacyCronStoreWithoutPrompt(params: {
   migrateCodexModelRefs?: boolean;
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
 }): Promise<LegacyCronRepairResult> {
+  const selection = await readCronStoreSelectionForDoctor(params.cfg);
+  if (selection.status === "unresolved") {
+    return { changes: [], warnings: [selection.message] };
+  }
   const imported = await migrateRetiredCronState(params);
   const storePath = resolveCronJobsStorePath(
     normalizeOptionalString(readLegacyCronStorePath(params.cfg)),

@@ -1078,33 +1078,17 @@ describe("loadOpenClawPlugins", () => {
     const pluginDir = makePluginLoaderTempDir();
     const fullMarker = path.join(pluginDir, "full-loaded.txt");
 
-    fs.writeFileSync(
-      path.join(pluginDir, "package.json"),
-      JSON.stringify(
-        {
-          name: "@openclaw/nested-default-channel",
-          openclaw: {
-            extensions: ["./index.cjs"],
-          },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(pluginDir, "openclaw.plugin.json"),
-      JSON.stringify(
-        {
-          id: "nested-default-channel",
-          configSchema: EMPTY_PLUGIN_SCHEMA,
-          channels: ["nested-default-channel"],
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    writeFixtureJson(pluginDir, "package.json", {
+      name: "@openclaw/nested-default-channel",
+      openclaw: {
+        extensions: ["./index.cjs"],
+      },
+    });
+    writeFixtureJson(pluginDir, "openclaw.plugin.json", {
+      id: "nested-default-channel",
+      configSchema: EMPTY_PLUGIN_SCHEMA,
+      channels: ["nested-default-channel"],
+    });
     fs.writeFileSync(
       path.join(pluginDir, "index.cjs"),
       `module.exports = {

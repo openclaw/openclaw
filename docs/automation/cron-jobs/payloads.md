@@ -135,7 +135,10 @@ unbound, without that conversation's workspace or memory, and still rechecks the
 creator's device and grant. A removed or archived conversation pauses the job.
 
 Stored jobs are unchanged: a source is never inferred for an existing job, so
-jobs created before this behavior keep their recorded ownership check. A source
+jobs created before this behavior keep their recorded ownership check. Binding
+an older job that names its conversation only by key from an authenticated
+Control UI turn in that conversation stores that turn's source (see
+[Binding older jobs](/cli/cron#binding-older-jobs-to-their-conversation)). A source
 is also never captured for guests, scripts, unlinked jobs, jobs created without
 an authenticated operator turn (such as `cron.add` from the CLI), or another
 conversation. An authenticated owner update can bind it again
@@ -260,6 +263,19 @@ on such a route stays unbound and runs on that key; once a stored account become
 job stops with the adoption instructions instead of switching to that account. Job
 creation follows the same rule. An account refusal ends the run; it never falls back
 to another model or provider. Credentialless models remain usable without an account.
+
+Unbound CLI-runtime automations use the CLI's own login and do not require an
+inference binding. OpenClaw does not forward a stored inference profile on this
+native-only path. Jobs with a saved inference binding keep using that account.
+Known provider-auth environment variables and the backend's credential exclusions
+are removed after environment overrides, even when the live-test preserve-env
+option is set. Runtime settings, such as the context window, are retained.
+For paired-node runs, the Gateway withholds host credentials on every node. Nodes
+advertising native-only auth support also use their own provider inventory to
+remove credentials. Older nodes retain their existing local environment behavior
+and receive no new invocation parameter. Update the node and approve its new
+capability to apply node-side filtering.
+
 Native runtime-owned jobs retain their runtime’s existing authorization checks, and a
 native connection cannot silently replace a job’s recorded host-managed inference account.
 An explicit update from an authorized native creator can adopt its runtime authority.
@@ -328,11 +344,14 @@ the content instead of overwriting another edit.
 
 Use a normal final reply for a visible result and `NO_REPLY` for silence.
 `record_result` accepts one outcome (`no_change`, `progress`, `done`, `blocked`,
-or `needs_attention`) and a nonempty summary capped at 2000 characters. It records
-the result without sending a notification by itself. Meaningful outcomes are
-retained in ordinary run history and bounded session context, including when the
-final reply is silent; this is not a delivery retry queue. `no_change` keeps
-runner delivery silent without hiding execution failures. Adaptive scheduling still uses `next_check` on a paced
+or `needs_attention`). `no_change` needs no summary; every other outcome requires
+a trimmed summary of 1–2000 characters. It records the result without sending a
+notification by itself. Structured results are retained in run history. After a
+successful run, the last meaningful result is saved with the job and included as
+bounded context in its next prompt, even when the final reply is silent. Quiet
+checks and execution failures do not overwrite that result or append result
+boilerplate to the conversation. This is not a delivery retry queue. `no_change`
+keeps runner delivery silent without hiding execution failures. Adaptive scheduling still uses `next_check` on a paced
 job. Scratch is context, not another scheduler:
 runtime does not parse `tasks:` blocks or read `HEARTBEAT.md`.
 
@@ -479,7 +498,7 @@ With `announce`, agent, command, and script results belong to the chat or topic 
     A new transcript/session id per run. OpenClaw carries safe preferences (thinking/fast/verbose settings, labels, explicit user-selected model/auth overrides), but does not inherit ambient conversation context from an older automation session row: channel/group routing, send or queue policy, elevation, origin, or ACP runtime binding. Use `current` or `session:<id>` when a recurring job should deliberately build on the same conversation context.
   </Accordion>
   <Accordion title="Unattended run contract">
-    Isolated automation and hook agent turns are explicitly unattended: no one is present to clarify or approve. The final reply must be the deliverable rather than a plan, acknowledgement, or request for input. The agent returns `NO_REPLY` when nothing needs doing. When the task failed or is blocked, the reply explains what failed and what it tried in ordinary prose.
+    Isolated automation and hook agent turns are explicitly unattended: no one is present to clarify or approve. The final reply must be the deliverable rather than a plan, acknowledgement, or request for input. The agent records `no_change` without a summary and returns `NO_REPLY` when nothing needs doing. Unchanged state and repeated known blockers stay quiet; new blockers and changes that need action get a concise result. Explicitly requested recurring reports and digests still run and deliver at their requested cadence. Execution failures remain visible rather than being treated as no change. For machine-checkable conditions, use an existing deterministic condition trigger or script to skip inference when nothing changed, instead of paying for a model turn to rediscover that fact.
 
     A completed model run is not proof that the requested task succeeded. The scheduler does not classify assistant prose as an execution error: a blocker report remains ordinary output, including a subagent's settled final answer. It follows the job's delivery policy and does not itself trigger retries, error backoff, failure alerts, or owner-conversation repair. Runtime failures, such as provider errors or execution timeouts, still fail the run and use the normal scheduler failure policy. Required delivery failures are tracked separately; see [Failure notifications](/automation/cron-jobs/delivery#failure-notifications).
 

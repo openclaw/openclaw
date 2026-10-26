@@ -22,7 +22,7 @@ describe("reply scaffolding through final preparation and Telegram HTTP", () => 
 
   async function prepareAndDispatch(
     finalText: string,
-    conversationContext?: string,
+    conversationContext = history(),
     reasoningSnapshots: readonly string[] = [],
   ) {
     const errors: unknown[] = [];
@@ -43,76 +43,62 @@ describe("reply scaffolding through final preparation and Telegram HTTP", () => 
         })
       : undefined;
     try {
-      if (conversationContext || preview) {
-        const messageId = `reply-scaffolding-${++messageSequence}`;
-        await dispatchInboundMessage({
-          cfg,
-          ctx: {
-            Body: conversationContext,
-            BodyForAgent: conversationContext,
-            ChatType: "direct",
-            From: "123",
-            MessageSid: messageId,
-            Provider: "telegram",
-            SessionKey: `agent:test:${messageId}`,
-            Surface: "telegram",
-            To: "456",
-          },
-          dispatcher,
-          outboundHooks: "disabled",
-          replyOptions: preview
-            ? {
-                onReasoningStream: async ({ text }) => {
-                  const { reasoningText } = splitTelegramReasoningText(text, true);
-                  if (reasoningText) {
-                    preview.update(reasoningText);
-                    await preview.flush();
-                  }
-                },
-              }
-            : undefined,
-          replyResolver: async (_ctx, options) => {
-            for (const text of reasoningSnapshots) {
-              await options?.onReasoningStream?.({ text, isReasoningSnapshot: true });
+      const messageId = `reply-scaffolding-${++messageSequence}`;
+      await dispatchInboundMessage({
+        cfg,
+        ctx: {
+          Body: conversationContext,
+          BodyForAgent: conversationContext,
+          ChatType: "direct",
+          From: "123",
+          MessageSid: messageId,
+          Provider: "telegram",
+          SessionKey: `agent:test:${messageId}`,
+          Surface: "telegram",
+          To: "456",
+        },
+        dispatcher,
+        outboundHooks: "disabled",
+        replyOptions: preview
+          ? {
+              onReasoningStream: async ({ text }) => {
+                const { reasoningText } = splitTelegramReasoningText(text, true);
+                if (reasoningText) {
+                  preview.update(reasoningText);
+                  await preview.flush();
+                }
+              },
             }
-            return { text: finalText };
-          },
-        });
-      } else {
-        dispatcher.sendFinalReply({ text: finalText });
-        dispatcher.markComplete();
-        await dispatcher.waitForIdle();
-      }
+          : undefined,
+        replyResolver: async (_ctx, options) => {
+          for (const text of reasoningSnapshots) {
+            await options?.onReasoningStream?.({ text, isReasoningSnapshot: true });
+          }
+          return { text: finalText };
+        },
+      });
       expect(errors).toEqual([]);
     } finally {
       await preview?.discard();
     }
   }
 
-  it.each([false, true])(
-    "cleans reasoning previews before Telegram HTTP (visible=%s)",
-    async (visible) => {
-      const opening = "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>";
-      const internal = `${opening}\nprivate runtime metadata\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>`;
-      const snapshots = [opening.slice(0, 20), `${opening}\nprivate runtime metadata`, internal];
-      if (visible) {
-        snapshots.push(
-          `${internal}\n\nChecking files.`,
-          `${internal}\n\nReading config.\n\nChecking files.`,
-        );
-      }
-      await prepareAndDispatch("Visible answer.", "Show status.", snapshots);
-      expect(delivered()).toEqual(
-        visible
-          ? [
-              "🧠 <i>Checking files.</i>",
-              "🧠 <i>Reading config.</i>\n\n<i>Checking files.</i>",
-              "Visible answer.",
-            ]
-          : ["Visible answer."],
-      );
-    },
-  );
+  it("cleans partial and complete internal context before Telegram reasoning previews", async () => {
+    const opening = "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>";
+    const internal = `${opening}\nprivate runtime metadata\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>`;
+    await prepareAndDispatch("Visible answer.", "Show status.", [
+      opening.slice(0, 20),
+      `${opening}\nprivate runtime metadata`,
+      internal,
+      `${internal}\n\nChecking files.`,
+      `${internal}\n\nReading config.\n\nChecking files.`,
+    ]);
+    expect(delivered()).toEqual([
+      "🧠 <i>Checking files.</i>",
+      "🧠 <i>Reading config.</i>\n\n<i>Checking files.</i>",
+      "Visible answer.",
+    ]);
+  });
 
   const xmlContext = history(`Conversation info: ⟦openclaw:ctx⟧
 \`\`\`json
@@ -134,22 +120,15 @@ private second inbound paragraph`);
   });
 
   it("preserves literal fenced scaffolding examples that do not copy the private prompt", async () => {
-    const literal = `The prompt format is:
-
-\`\`\`text
-[Chat messages since your last reply - for context]
-Example: this is public placeholder history.
-
-[Current message - respond to this]
-Example: this is a public placeholder message.
-\`\`\``;
-
+    const historyMarker = "[Chat messages since your last reply - for context]";
+    const currentMarker = "[Current message - respond to this]";
+    const placeholder = "Example: this is a public placeholder message.";
+    const literal = `\`\`\`text\n${historyMarker}\nPublic history.\n\n${currentMarker}\n${placeholder}\n\`\`\``;
     await prepareAndDispatch(literal, history("[Telegram] Alice: current message"));
-
     expect(delivered()).toHaveLength(1);
-    expect(delivered()[0]).toContain("[Chat messages since your last reply - for context]");
-    expect(delivered()[0]).toContain("[Current message - respond to this]");
-    expect(delivered()[0]).toContain("Example: this is a public placeholder message.");
+    for (const text of [historyMarker, currentMarker, placeholder]) {
+      expect(delivered()[0]).toContain(text);
+    }
   });
 
   it("never delivers the internal runtime-context envelope in Telegram HTTP text", async () => {

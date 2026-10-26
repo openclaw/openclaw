@@ -17,6 +17,7 @@ import {
   closeOpenAICodexWebSocketSessions,
   streamOpenAICodexResponses,
 } from "../../../../packages/ai/src/providers/openai-chatgpt-responses.js";
+import { createJwt } from "../../../../packages/ai/src/providers/openai-chatgpt-responses.test-helpers.js";
 import { writeOpenAiResponsesSse } from "../../../../test/helpers/openai-responses-sse.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
 import { useTempSessionsFixture } from "../../../config/sessions/test-helpers.js";
@@ -91,16 +92,6 @@ function responseEvents(first: boolean): Record<string, unknown>[] {
   ];
 }
 
-function syntheticLoopbackJwt(): string {
-  const encode = (value: object) => Buffer.from(JSON.stringify(value)).toString("base64url");
-  return (
-    encode({ alg: "none", typ: "JWT" }) +
-    "." +
-    encode({ "https://api.openai.com/auth": { chatgpt_account_id: "acct-loopback" } }) +
-    ".signature"
-  );
-}
-
 const fixture = useTempSessionsFixture("settled-provider-error-loopback-");
 let admission: ReturnType<typeof prepareSystemAgentRunAdmission>;
 beforeEach(() => {
@@ -110,7 +101,9 @@ afterEach(() => admission.close());
 
 it.each(["HTTP", "WebSocket", "terminated"])("finalizes after %s failure", async (failure) => {
   const websocket = failure === "WebSocket";
-  const apiKey = websocket ? syntheticLoopbackJwt() : "synthetic-loopback-key";
+  const apiKey = websocket
+    ? createJwt({ "https://api.openai.com/auth": { chatgpt_account_id: "acct-loopback" } })
+    : "synthetic-loopback-key";
   const requests: Array<{ tools?: unknown[]; prompt_cache_key?: string }> = [];
   const conversationCacheKey = "conversation-cache-key";
   const server = createServer((request, response) => {

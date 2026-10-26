@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { selectBackgroundSource } from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
 import { openSlot } from "../pages/chat/sidebar-layout.ts";
 import { createImportedCustomThemeFixture } from "../test-helpers/custom-theme.ts";
+import { createMediaQueryList } from "../test-helpers/media-query.ts";
 import {
   expectedGatewayUrl,
   installSettingsStorageLifecycle,
@@ -129,30 +130,11 @@ describe("resolveApplicationStartupSettings", () => {
 describe("gateway settings and layout persistence", () => {
   installSettingsStorageLifecycle();
 
-  it("retains Details process dismissals in the existing Gateway settings across other writes", () => {
-    const first = "wss://process-a.example";
-    const second = "wss://process-b.example";
-    const dismissals = { '["viewer","main","agent:main:review"]': ["process-1"] };
-    patchSettings({ gatewayUrl: first, detailsDismissedProcesses: dismissals });
-    patchSettings({ gatewayUrl: second, themeMode: "light" });
-    expect(loadSettings(second).detailsDismissedProcesses).toBeUndefined();
-    expect(loadSettings(first).detailsDismissedProcesses).toEqual(dismissals);
-    patchSettings({ gatewayUrl: first, navWidth: 300 });
-    expect(loadSettings(first).detailsDismissedProcesses).toEqual(dismissals);
-  });
-
   beforeEach(() => {
     setTestLocation({ protocol: "https:", host: "gateway.example:8443", pathname: "/" });
-    vi.stubGlobal("matchMedia", (media: string): MediaQueryList => ({
-      media,
-      matches: false,
-      onchange: null,
-      addListener() {},
-      removeListener() {},
-      addEventListener() {},
-      removeEventListener() {},
-      dispatchEvent: () => true,
-    }));
+    vi.stubGlobal("matchMedia", (media: string): MediaQueryList =>
+      createMediaQueryList(media, false),
+    );
   });
 
   it("keeps development credentials scoped to the upstream when the Vite target changes", () => {

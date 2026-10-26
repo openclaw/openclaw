@@ -2,19 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { withTempDir } from "../../test-utils/temp-dir.js";
 import type { PluginInstallArtifactConsentHandler } from "../install-types.js";
+import { writeArtifacts as writeFixtureFiles } from "../public-surface.test-support.js";
 import { createColdPluginFixture } from "./cold-plugin-fixtures.js";
 
 type BundleFixtureFormat = "agent" | "codex" | "claude" | "cursor";
 type BundleFixtureParams = { bundleFormat: BundleFixtureFormat; name: string };
-
-function writeFixtureFiles(rootDir: string, files: Record<string, string | object>) {
-  for (const [name, content] of Object.entries(files)) {
-    const filePath = path.join(rootDir, name);
-    fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    const source = typeof content === "string" ? content : JSON.stringify(content);
-    fs.writeFileSync(filePath, source, "utf8");
-  }
-}
 
 const skillSource = "---\ndescription: fixture\n---\n";
 

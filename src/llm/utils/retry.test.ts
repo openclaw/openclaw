@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { failoverClassificationCorpus } from "../../agents/failover/failover-classification.corpus.cases.test-support.js";
-import { createZeroUsageFixture } from "../../agents/test-helpers/usage-fixtures.js";
+import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import {
   PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE,
   PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE,
@@ -12,18 +12,15 @@ function errorMessage(
   message: string | undefined,
   overrides: Partial<AssistantMessage> = {},
 ): AssistantMessage {
-  return {
-    role: "assistant",
+  return makeAgentAssistantMessage({
     content: [],
     api: "test-api",
     provider: "test-provider",
-    model: "test-model",
-    usage: createZeroUsageFixture(),
     stopReason: "error",
     errorMessage: message,
     timestamp: 1,
     ...overrides,
-  };
+  });
 }
 
 function expectRetry(

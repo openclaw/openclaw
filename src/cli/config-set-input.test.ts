@@ -109,7 +109,7 @@ describe("config set input parsing", () => {
       const fifoPath = path.join(tempDirs.make("openclaw-config-input-fifo-"), "input.pipe");
       execFileSync("mkfifo", [fifoPath]);
       const originalOpenSync = fs.openSync;
-      const openSpy = vi.spyOn(fs, "openSync").mockImplementation((file, flags, mode) => {
+      using _ = vi.spyOn(fs, "openSync").mockImplementation((file, flags, mode) => {
         // Fail instead of hanging the test if a regression opens this FIFO in blocking mode.
         if (
           file === fifoPath &&
@@ -119,13 +119,10 @@ describe("config set input parsing", () => {
         }
         return originalOpenSync(file, flags, mode);
       });
-      try {
-        expect(() => readConfigMutationFileSync(fifoPath, sourceLabel)).toThrow(
-          `${sourceLabel} must be a regular file: ${fifoPath}. Choose a JSON5 input file and try again.`,
-        );
-      } finally {
-        openSpy.mockRestore();
-      }
+
+      expect(() => readConfigMutationFileSync(fifoPath, sourceLabel)).toThrow(
+        `${sourceLabel} must be a regular file: ${fifoPath}. Choose a JSON5 input file and try again.`,
+      );
     },
   );
 

@@ -2,7 +2,13 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { publishSubagentRunChanges } from "../agents/subagents/registry/subagent-registry-publication.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { deleteSessionEntryLifecycle } from "../config/sessions/session-accessor.js";
 import * as gitReads from "../infra/git-read-cache.js";
+import {
+  listAgentDatabaseAdmissionRefusals,
+  recordAgentDatabaseAdmissions,
+} from "../state/agent-database-admission.js";
 import { publicationRowDefaults } from "../state/github-publication-fixtures.test-support.js";
 import type { RepositoryGitHubPublicationRow } from "../state/github-publication-read.types.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
@@ -12,9 +18,12 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import type { ControlUiSessionPullRequestSnapshot } from "./control-ui-contract.js";
 import { createFixture, sessionKey } from "./control-ui-session-pr-access.test-support.js";
-import { prepareControlUiSessionPrServiceTarget } from "./control-ui-session-pr-read.js";
+import {
+  createControlUiSessionPrRead,
+  prepareControlUiSessionPrServiceTarget,
+} from "./control-ui-session-pr-read.js";
 import { githubJson, pullListItem, requestUrl } from "./control-ui-session-prs.test-support.js";
-import { selectTaskPublicationSessions } from "./control-ui-session-task-prs.js";
+import { prepareTaskPublicationSessions } from "./control-ui-session-task-prs.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { insertRepositoryGitHubPublicationFixture } from "./github-publication-store.test-support.js";
 import { repositoryGitHubPublicationDigest } from "./github-repository-publication.kernel.js";
@@ -108,6 +117,99 @@ function stubOffline(message = "offline") {
   return fetcher;
 }
 
+it("reuses unchanged watcher currency and retires it on owner publications", async () => {
+  const f = fixture;
+  const child = "agent:main:currency-child";
+  await f.seed(child, f.other.id, { parentSessionKey: sessionKey });
+  const projection = getSessionRowProjection(f.context)!;
+  const read = createControlUiSessionPrRead({
+    client: f.client,
+    sessionKey,
+    getRuntimeConfig: f.context.getRuntimeConfig,
+    getSessionRowProjection: () => projection,
+    isCurrentClient: () => !f.client.invalidated,
+  })!;
+  const target = (await read())!;
+  expect(target.taskReceipts?.sessions.map((session) => session.sessionKey)).toEqual([
+    child,
+    sessionKey,
+  ]);
+  target.assertCurrent!();
+  const captures = vi.spyOn(projection, "capture");
+  const sharing = vi.spyOn(projection, "sharingTargetState");
+  try {
+    for (let index = 0; index < 20; index++) {
+      expect(await read()).toBe(target);
+      target.assertCurrent!();
+    }
+    expect(captures).not.toHaveBeenCalled();
+    expect(sharing).not.toHaveBeenCalled();
+
+    // A new lineage revision must recheck the audience, not reconstruct an unchanged source.
+    await f.seed("agent:main:currency-unrelated", f.profile.id);
+    await projection.ensureMaterialized();
+    const describes = vi.spyOn(projection, "describe");
+    const selections = vi.spyOn(projection, "selectEntries");
+    try {
+      expect(await read()).toBe(target);
+      // The qualified leaf has no children; only the parent needs a selection.
+      expect(selections).toHaveBeenCalledTimes(1);
+      selections.mockClear();
+      for (let index = 0; index < 20; index++) {
+        expect(await read()).toBe(target);
+        target.assertCurrent!();
+      }
+      expect(describes).not.toHaveBeenCalled();
+      expect(selections).not.toHaveBeenCalled();
+    } finally {
+      describes.mockRestore();
+      selections.mockRestore();
+    }
+
+    const admissions = listAgentDatabaseAdmissionRefusals();
+    try {
+      recordAgentDatabaseAdmissions([
+        {
+          agentId: "main",
+          paths: [],
+          code: "agent-database-inspection-pending",
+          reason: "Synthetic admission change",
+          repairHint: "Wait for admission",
+        },
+      ]);
+      expect(() => target.assertCurrent!()).toThrow("Session pull-request target changed");
+      expect(await read()).toBeUndefined();
+    } finally {
+      recordAgentDatabaseAdmissions(admissions);
+    }
+    expect((await read())?.taskReceipts?.sessions.map((session) => session.sessionKey)).toEqual([
+      child,
+      sessionKey,
+    ]);
+
+    await f.seed(child, f.other.id, {
+      parentSessionKey: sessionKey,
+      visibility: "draft",
+    });
+    await projection.ensureMaterialized();
+    expect(() => target.assertCurrent!()).toThrow("Task pull-request audience changed");
+    const narrowed = (await read())!;
+    expect(narrowed.taskReceipts?.sessions.map((session) => session.sessionKey)).toEqual([
+      sessionKey,
+    ]);
+
+    // Publishing the same config object still advances the owner's revision.
+    const cfg = f.context.getRuntimeConfig();
+    cfg.gateway!.roles!.definitions.reader!.scopes = [];
+    setRuntimeConfigSnapshot(cfg);
+    expect(() => narrowed.assertCurrent!()).toThrow("Session pull-request target changed");
+    expect(await read()).toBeUndefined();
+  } finally {
+    captures.mockRestore();
+    sharing.mockRestore();
+  }
+});
+
 it("shares lineage work across audiences without sharing visibility or stale descendants", async () => {
   const child = "agent:main:a-child";
   const hidden = "agent:main:b-hidden";
@@ -138,29 +240,39 @@ it("shares lineage work across audiences without sharing visibility or stale des
       lifecycleRevision: null,
     }));
   const allowsAll = () => true;
-  const allowsShared = (row: { key: string }) => row.key !== hidden;
-  const selected = selectTaskPublicationSessions(projection, root, allowsAll);
+  const allowsShared = (key: string | undefined) => key !== hidden;
+  const selected = prepareTaskPublicationSessions(projection, root, () => allowsAll).sessions;
   expect(selected).toEqual(expected([child, hidden, leaf, sessionKey]));
   selected.reverse();
-  expect(selectTaskPublicationSessions(projection, root, allowsAll)).toEqual(
+  expect(prepareTaskPublicationSessions(projection, root, () => allowsAll).sessions).toEqual(
     expected([child, hidden, leaf, sessionKey]),
   );
   const firstReads = reads.mock.calls.length;
   const firstCaptures = captures.mock.calls.length;
-  expect(firstReads).toBeGreaterThan(0);
-  expect(selectTaskPublicationSessions(projection, root, allowsShared)).toEqual(
+  expect(firstReads).toBe(2);
+  expect(prepareTaskPublicationSessions(projection, root, () => allowsShared).sessions).toEqual(
     expected([child, leaf, sessionKey]),
   );
-  expect(selectTaskPublicationSessions(projection, root, allowsAll)).toEqual(
+  expect(prepareTaskPublicationSessions(projection, root, () => allowsAll).sessions).toEqual(
     expected([child, hidden, leaf, sessionKey]),
   );
   expect(reads).toHaveBeenCalledTimes(firstReads);
   expect(captures).toHaveBeenCalledTimes(firstCaptures);
   expect(resolveParent).not.toHaveBeenCalled();
 
+  let allows: typeof allowsShared = allowsAll;
+  const retained = prepareTaskPublicationSessions(projection, root, () => allows);
+  retained.assertCurrent();
+  allows = allowsShared;
+  expect(() => retained.assertCurrent()).toThrow("Task pull-request audience changed");
+  const restricted = prepareTaskPublicationSessions(projection, root, () => allows);
+  allows = allowsAll;
+  expect(() => restricted.assertCurrent()).toThrow("Task pull-request audience changed");
+  retained.assertCurrent();
+
   await fixture.seed("agent:main:unrelated", fixture.profile.id);
   await projection.ensureMaterialized();
-  selectTaskPublicationSessions(projection, root, allowsAll);
+  prepareTaskPublicationSessions(projection, root, () => allowsAll);
   const afterCreation = reads.mock.calls.length;
   await fixture.seed("agent:main:unrelated", fixture.profile.id, {
     label: "Updated",
@@ -168,10 +280,11 @@ it("shares lineage work across audiences without sharing visibility or stale des
   });
   await fixture.seed(child, fixture.profile.id, { parentSessionKey: sessionKey, label: "Updated" });
   await projection.ensureMaterialized();
-  expect(selectTaskPublicationSessions(projection, root, allowsShared)).toEqual(
+  expect(prepareTaskPublicationSessions(projection, root, () => allowsShared).sessions).toEqual(
     expected([child, leaf, sessionKey]),
   );
   expect(reads).toHaveBeenCalledTimes(afterCreation);
+  retained.assertCurrent();
 
   // Permissions consume the replacement row even when lineage itself is unchanged.
   await fixture.seed(hidden, fixture.profile.id, {
@@ -180,7 +293,11 @@ it("shares lineage work across audiences without sharing visibility or stale des
   });
   await projection.ensureMaterialized();
   expect(
-    selectTaskPublicationSessions(projection, root, (row) => row.entry.visibility !== "draft"),
+    prepareTaskPublicationSessions(
+      projection,
+      root,
+      () => (_key, entry) => entry.visibility !== "draft",
+    ).sessions,
   ).toEqual(expected([child, hidden, leaf, sessionKey]));
   expect(reads).toHaveBeenCalledTimes(afterCreation);
 
@@ -188,10 +305,10 @@ it("shares lineage work across audiences without sharing visibility or stale des
   await projection.ensureMaterialized();
   const current = projection.describe({ agentId: "main", key: sessionKey })!;
   resolveParent.mockClear();
-  expect(selectTaskPublicationSessions(projection, current, allowsShared)).toEqual(
+  expect(prepareTaskPublicationSessions(projection, current, () => allowsShared).sessions).toEqual(
     expected([child, sessionKey]),
   );
-  expect(selectTaskPublicationSessions(projection, current, allowsAll)).toEqual(
+  expect(prepareTaskPublicationSessions(projection, current, () => allowsAll).sessions).toEqual(
     expected([child, hidden, leaf, sessionKey]),
   );
   expect(reads.mock.calls.length).toBeGreaterThan(firstReads);
@@ -211,16 +328,89 @@ it("shares lineage work across audiences without sharing visibility or stale des
   try {
     publishSubagentRunChanges();
     // No intervening describe/read may prepare the registry's deferred parent indexes.
-    expect(selectTaskPublicationSessions(projection, current, allowsShared)).toEqual(
-      expected([child, leaf, sessionKey]),
-    );
+    expect(
+      prepareTaskPublicationSessions(projection, current, () => allowsShared).sessions,
+    ).toEqual(expected([child, leaf, sessionKey]));
   } finally {
     subagentRuns.delete(runId);
     publishSubagentRunChanges();
   }
-  expect(selectTaskPublicationSessions(projection, current, allowsShared)).toEqual(
+  expect(prepareTaskPublicationSessions(projection, current, () => allowsShared).sessions).toEqual(
     expected([child, sessionKey]),
   );
+});
+
+it("keeps task descendants current across generated parent and child churn", async () => {
+  const rootKey = "agent:main:generated-root";
+  await fixture.seed(rootKey);
+  const projection = getSessionRowProjection(fixture.context)!;
+  const children = new Map<
+    string,
+    { parentSessionKey: string; sessionId: string; archivedAt?: number; status?: "done" | "failed" }
+  >();
+  let random = 221;
+  for (let step = 0; step < 42; step++) {
+    random = (Math.imul(random, 1664525) + 1013904223) >>> 0;
+    const slot = random % 7;
+    const key = `agent:main:generated-${slot}`;
+    const previous = children.get(key);
+    const operation = previous ? step % 6 : 0;
+    if (operation === 5) {
+      await deleteSessionEntryLifecycle({
+        agentId: "main",
+        storePath: projection.capture({ agentId: "main", key })!.storeTarget.storePath,
+        archiveTranscript: false,
+        target: { canonicalKey: key, storeKeys: [key] },
+      });
+      children.delete(key);
+    } else {
+      const entry: NonNullable<typeof previous> = previous
+        ? { ...previous }
+        : {
+            parentSessionKey: rootKey,
+            sessionId: `generated-session-${step}`,
+          };
+      if (operation === 1) {
+        entry.status = step % 2 ? "done" : "failed";
+      }
+      if (operation === 2) {
+        entry.archivedAt = step + 1;
+      }
+      if (operation === 3) {
+        entry.sessionId = `replacement-${step}`;
+      }
+      if (operation === 4) {
+        entry.parentSessionKey = slot > 0 ? `agent:main:generated-${slot - 1}` : sessionKey;
+      }
+      await fixture.seed(key, fixture.profile.id, entry);
+      children.set(key, entry);
+    }
+    await projection.ensureMaterialized();
+    const root = projection.capture({ agentId: "main", key: rootKey })!;
+    expect(root.entry).toBeDefined();
+    if (!root.entry) {
+      throw new Error("Missing generated root");
+    }
+    const reachable = new Set([rootKey]);
+    for (const parent of reachable) {
+      for (const [childKey, entry] of children) {
+        if (entry.parentSessionKey === parent) {
+          reachable.add(childKey);
+        }
+      }
+    }
+    const actual = prepareTaskPublicationSessions(
+      projection,
+      { ...root, entry: root.entry },
+      () => () => true,
+    ).sessions;
+    expect(actual.map((row) => row.sessionKey).toSorted()).toEqual([...reachable].toSorted());
+    for (const row of actual) {
+      if (row.sessionKey !== rootKey) {
+        expect(row.sessionId).toBe(children.get(row.sessionKey)!.sessionId);
+      }
+    }
+  }
 });
 
 it("projects three descendant receipts without mixing the parent's current branch", async () => {

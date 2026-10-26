@@ -272,14 +272,6 @@ port.on("message", (message: NativeWorkerRequest) => {
     lifetime.resource?.owner.ownerMessage(message.value, message.sequence);
     return;
   }
-  if (message.type === "ref") {
-    if (message.referenced) {
-      lifetime.worker.ref();
-    } else {
-      lifetime.worker.unref();
-    }
-    return;
-  }
   if (message.type === "post") {
     try {
       lifetime.worker.postMessage(message.value, message.transferList);

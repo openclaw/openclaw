@@ -18,7 +18,7 @@ import { modelAuthEventInvalidates } from "../../lib/model-auth-request-state.ts
 import { isSessionReactionEvent } from "../../lib/protocol-validators.generated/activity.js";
 import { listen } from "../../lib/reactive/listener.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
-import { resolveSessionKey } from "../../lib/sessions/index.ts";
+import { resolveSessionKey } from "../../lib/sessions/navigation.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import { takeCreatedComposer } from "../new-session/creation-composer-registry.ts";
 import * as chatAvatars from "./chat-avatar.ts";
@@ -27,6 +27,7 @@ import { CHAT_ROUTE_READY_EVENT } from "./chat-history-events.ts";
 import { retireInitialChatSnapshot } from "./chat-history-state.ts";
 import { syncSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
 import { loadChatHistory } from "./chat-history.ts";
+import { disposeChatLiveEvents } from "./chat-live-events.ts";
 import {
   type ChatAttachmentGatewayOwner,
   ChatPaneComposerHandoff,
@@ -677,6 +678,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     this.composerPresentation?.dispose();
     this.composerPresentation = undefined;
     if (this.state) {
+      disposeChatLiveEvents(this.state);
       cancelChatModelRecovery(this.state);
       retireInitialChatSnapshot(this.state);
       chatAvatars.invalidateChatAvatarCache(this.state);

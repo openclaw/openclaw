@@ -15,8 +15,8 @@
       "team-reports"
     ],
     "schemaVersions": {
-      "state": 31,
-      "agent": 33
+      "state": 34,
+      "agent": 37
     }
   },
   "description": "Multi-channel AI gateway with extensible messaging integrations",
@@ -56,14 +56,22 @@
     "gateway-run-argv.mjs",
     "gateway-shutdown-budget.mjs",
     "node-sqlite.mjs",
+    "node-sqlite.d.mts",
+    "node-sqlite-capabilities.mjs",
+    "node-sqlite-capabilities.d.mts",
+    "runtime-process-bootstrap.generated.mjs",
+    "runtime-process-bootstrap.generated.d.mts",
     "node-version.mjs",
     "node-runtime-update.mjs",
     "node-runtime-env.mjs",
     "node-runtime-recovery.mjs",
+    "runtime-process-scripts.generated.mjs",
+    "runtime-process-scripts.generated.d.mts",
     "node-host-launcher.mjs",
     "node-compile-cache.mjs",
     "gateway-prewarm.mjs",
     "openclaw.mjs",
+    "standalone-runtime-profile.mjs",
     "worker-heap-flag.mjs",
     "pnpm-workspace.yaml",
     "README.md",
@@ -432,6 +440,8 @@
     "scripts/lib/freebsd-service-discovery.d.mts",
     "scripts/lib/freebsd-service-discovery.mjs",
     "scripts/lib/fs-safe-prebuild.mjs",
+    "scripts/lib/fs-safe-npm-cli-preload.generated.mjs",
+    "scripts/lib/fs-safe-npm-cli-protocol.mjs",
     "scripts/lib/bun-cli-launcher.mjs",
     "scripts/lib/openclaw-bun.json",
     "scripts/lib/javascript-statements.mjs",
@@ -441,6 +451,7 @@
     "scripts/openclaw-immutable-launcher.mjs",
     "scripts/prepare-git-hooks.mjs",
     "scripts/prepare-native-protocol.mjs",
+    "src/infra/directory-walk.ts",
     "scripts/runtime-postbuild-shared.mjs",
     "scripts/preinstall-package-manager-warning.mjs",
     "scripts/lib/official-external-channel-catalog.json",
@@ -554,6 +565,10 @@
       "types": "./dist/plugin-sdk/runtime-env.d.ts",
       "default": "./dist/plugin-sdk/runtime-env.js"
     },
+    "./plugin-sdk/runtime-profile": {
+      "types": "./dist/plugin-sdk/runtime-profile.d.ts",
+      "default": "./dist/plugin-sdk/runtime-profile.js"
+    },
     "./plugin-sdk/proxy-capture": {
       "types": "./dist/plugin-sdk/proxy-capture.d.ts",
       "default": "./dist/plugin-sdk/proxy-capture.js"
@@ -660,6 +675,10 @@
     },
     "./plugin-sdk/json-schema-runtime": {
       "default": "./dist/plugin-sdk/json-schema-runtime.js"
+    },
+    "./plugin-sdk/json-schema-validator": {
+      "types": "./dist/plugin-sdk/json-schema-validator.d.ts",
+      "default": "./dist/plugin-sdk/json-schema-validator.js"
     },
     "./plugin-sdk/json-unsafe-integers": {
       "default": "./dist/plugin-sdk/json-unsafe-integers.js"
@@ -1761,6 +1780,7 @@
     "bench:agent-database-holds": "node --import ./scripts/tsx.mjs scripts/bench-agent-database-holds.ts",
     "bench:plugins:invocation": "node --import ./scripts/tsx.mjs scripts/bench-plugin-invocation.ts",
     "bench:plugins:stream": "node --expose-gc --import ./scripts/tsx.mjs scripts/bench-plugin-stream.ts",
+    "bench:transcript-turn": "node --import ./scripts/tsx.mjs scripts/bench-transcript-turn.ts",
     "bench:ui:copies": "node --import ./scripts/tsx.mjs scripts/bench-control-ui-copies.ts",
     "bench:usage-refresh-memory": "node --import ./scripts/tsx.mjs scripts/bench-usage-refresh-memory.ts",
     "build": "node --import ./scripts/tsx.mjs scripts/build-all.mts",
@@ -1809,8 +1829,8 @@
     "check:opengrep-rule-metadata": "node security/opengrep/check-rule-metadata.mjs",
     "check:protocol-coverage": "node scripts/check-protocol-event-coverage.mjs",
     "check:runtime-sidecar-loaders": "node --import ./scripts/tsx.mjs scripts/check-runtime-sidecar-loaders.mts",
-    "runtime:scripts:gen": "node scripts/generate-runtime-script-assets.mjs",
-    "runtime:scripts:check": "node scripts/generate-runtime-script-assets.mjs --check",
+    "runtime:scripts:gen": "node --import ./scripts/tsx.mjs scripts/generate-runtime-script-assets.mjs",
+    "runtime:scripts:check": "node --import ./scripts/tsx.mjs scripts/generate-runtime-script-assets.mjs --check",
     "check:script-erasability": "node --disable-warning=ExperimentalWarning scripts/check-script-erasability.mjs",
     "check:static-import-sccs": "pnpm check:madge-import-cycles",
     "check:temp-path-guardrails": "node --import ./scripts/tsx.mjs scripts/check-temp-path-guardrails.ts",
@@ -1975,6 +1995,8 @@
     "lint:ui:styles": "stylelint --config config/stylelint.config.mjs \"ui/src/**/*.css\" \"ui/public/themes/*.css\"",
     "lint:web-fetch-provider-boundaries": "node --import ./scripts/tsx.mjs scripts/check-web-fetch-provider-boundaries.mts",
     "lint:webhook:no-low-level-body-read": "node --import ./scripts/tsx.mjs scripts/check-webhook-auth-body-order.mts",
+    "lobster:validators:gen": "node --import ./scripts/tsx.mjs scripts/generate-lobster-schema-validators.mts",
+    "lobster:validators:check": "node --import ./scripts/tsx.mjs scripts/generate-lobster-schema-validators.mts --check",
     "mac:open": "open dist/OpenClaw.app",
     "mac:package": "/bin/bash scripts/package-mac-app.sh",
     "mac:restart": "/bin/bash scripts/restart-mac.sh",
@@ -2191,7 +2213,7 @@
     "test:type-suppression-inventory:report": "node --import ./scripts/tsx.mjs scripts/type-suppression-inventory.ts",
     "test:e2e": "pnpm test:e2e:gateway && pnpm test:e2e:agent-plugin-gateway && pnpm test:ui:e2e",
     "test:e2e:agent-plugin-gateway": "node --import ./scripts/tsx.mjs scripts/agent-plugin-gateway-e2e.ts",
-    "test:e2e:browser-extension": "node --import ./scripts/tsx.mjs scripts/build-all.mts qaRuntime && node --import ./scripts/tsx.mjs scripts/run-with-env.mts PLAYWRIGHT_BROWSERS_PATH=.artifacts/playwright-browsers -- node --import ./scripts/tsx.mjs scripts/ensure-playwright-chromium.mts --require-playwright-chromium && node --import ./scripts/tsx.mjs scripts/run-with-env.mts PLAYWRIGHT_BROWSERS_PATH=.artifacts/playwright-browsers OPENCLAW_BROWSER_EXTENSION_E2E=1 OPENCLAW_E2E_WORKERS=1 -- node scripts/run-vitest.mjs extensions/browser/chrome-extension/bootstrap.chromium.test.ts",
+    "test:e2e:browser-extension": "node --import ./scripts/tsx.mjs scripts/build-all.mts qaRuntime && node --import ./scripts/tsx.mjs scripts/ensure-playwright-chromium.mts --require-playwright-chromium && node --import ./scripts/tsx.mjs scripts/run-with-env.mts OPENCLAW_BROWSER_EXTENSION_E2E=1 OPENCLAW_E2E_WORKERS=1 -- node scripts/run-vitest.mjs extensions/browser/chrome-extension/bootstrap.chromium.test.ts",
     "test:e2e:browser-mcp": "node --import ./scripts/tsx.mjs scripts/ensure-playwright-chromium.mts --require-playwright-chromium && node --import ./scripts/tsx.mjs scripts/run-with-env.mts OPENCLAW_BROWSER_MCP_E2E=1 OPENCLAW_BROWSER_WAIT_E2E=1 OPENCLAW_VITEST_MAX_WORKERS=1 -- node scripts/run-vitest.mjs extensions/browser/src/browser/chrome-mcp.chromium.test.ts extensions/browser/src/browser/chrome-mcp-labels.chromium.test.ts extensions/browser/src/browser/routes/agent.act.wait-visibility.chromium.test.ts test/scripts/check-openclaw-package-tarball.bundled-mcp.test.ts",
     "test:e2e:gateway": "node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts",
     "test:e2e:node-auto-update": "node scripts/e2e/lib/node-auto-update/scenario.mjs",
@@ -2344,7 +2366,7 @@
     "update:compat:check": "node scripts/update-compat-inventory.mts --check",
     "static:validators:gen": "node --import ./scripts/tsx.mjs scripts/generate-static-validators.mts",
     "static:validators:check": "node --import ./scripts/tsx.mjs scripts/generate-static-validators.mts --check",
-    "validators:check": "pnpm gateway:validators:check && pnpm ui:validators:check && pnpm codex-app-server:validators:check && pnpm static:validators:check",
+    "validators:check": "pnpm gateway:validators:check && pnpm ui:validators:check && pnpm codex-app-server:validators:check && pnpm static:validators:check && pnpm lobster:validators:check",
     "verify": "node --import ./scripts/tsx.mjs scripts/verify.mts"
   },
   "bundleDependencies": [
@@ -2414,6 +2436,7 @@
     "partial-json": "0.1.7",
     "pg": "8.23.1",
     "playwright-core": "1.64.1",
+    "proxy-from-env": "2.1.0",
     "qrcode": "1.5.4",
     "rastermill": "0.4.0",
     "semver": "7.8.5",
@@ -2453,7 +2476,8 @@
     "@types/ws": "8.18.2",
     "@vitest/browser-playwright": "5.0.5",
     "@vitest/coverage-v8": "5.0.5",
-    "acpx": "0.19.6",
+    "acpx": "0.21.0",
+    "ajv": "8.20.0",
     "apache-arrow": "21.2.0",
     "baileys": "7.0.0-rc14",
     "ipaddr.js": "2.5.0",

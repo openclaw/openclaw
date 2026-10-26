@@ -46,12 +46,18 @@ function persisted(db: EngineConnection, sessionKey: string, sessionId: string) 
 }
 
 function tripRecorder(db: EngineConnection) {
-  const counts: Record<string, number> = {};
   const queries: Record<string, string[]> = {};
   return {
-    counts,
     queries,
-    capture<T>(name: string, run: () => T): T {
+    expectQueries(name: string, pattern: RegExp, count: number) {
+      if (isPostgresSqlConnection(db)) {
+        expect(
+          queries[name]!.filter((sql) => pattern.test(sql)),
+          name,
+        ).toHaveLength(count);
+      }
+    },
+    capture<T>(name: string, run: () => T, writes?: number | null): T {
       if (!isPostgresSqlConnection(db)) {
         return run();
       }
@@ -70,14 +76,66 @@ function tripRecorder(db: EngineConnection) {
       } finally {
         spy.mockRestore();
         queries[name] = statements;
-        counts[name] = statements.filter((sql) =>
-          /\binsert into\s+"?(?:session_nodes|session_windows|session_entry_snapshots)"?|\bdelete from\s+"?session_entry_snapshots"?/iu.test(
-            sql,
-          ),
-        ).length;
+        if (writes != null) {
+          expect(
+            statements.filter((sql) =>
+              /\binsert into\s+"?(?:session_nodes|session_windows|session_entry_snapshots)"?|\bdelete from\s+"?session_entry_snapshots"?/iu.test(
+                sql,
+              ),
+            ),
+            name,
+          ).toHaveLength(writes);
+        }
       }
     },
   };
+}
+
+function withEntryDatabase(
+  run: (fixture: ReturnType<typeof entryDatabase>) => void,
+  freezeTime = false,
+) {
+  return withEngineStoreAdmission(() => {
+    const fixture = entryDatabase();
+    const now = freezeTime ? vi.spyOn(Date, "now").mockReturnValue(20) : undefined;
+    try {
+      run(fixture);
+    } finally {
+      now?.mockRestore();
+    }
+  });
+}
+
+function entryDatabase() {
+  const database = openOpenClawAgentDatabase({ agentId: "main" });
+  const recorder = tripRecorder(database.db);
+  return {
+    database,
+    recorder,
+    transaction: <T>(run: (owner: typeof database) => T) =>
+      runOpenClawAgentWriteTransaction(run, { agentId: "main", path: database.path }),
+    write: (name: string, key: string, entry: SessionEntry, writes: number | null = 1) =>
+      recorder.capture(
+        name,
+        () =>
+          runSqliteImmediateTransactionSync(database.db, () =>
+            writeSessionEntry(database, key, entry),
+          ),
+        writes,
+      ),
+    state: (key: string, id: string) => persisted(database.db, key, id),
+  };
+}
+
+function expectState(
+  state: ReturnType<typeof persisted>,
+  revision: number,
+  skills?: SessionEntry["skillsSnapshot"],
+  prompt?: SessionEntry["systemPromptReport"],
+) {
+  expect(state.node).toMatchObject({ snapshot_revision: revision });
+  expect(state.snapshots).toEqual(snapshotRows(skills, prompt));
+  return expect(state);
 }
 
 function snapshotRows(
@@ -96,9 +154,7 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
     useMixedAgentPair(engine, engine);
 
     it("batches archive entries with exact shared-window, rollback, and cache outcomes", () =>
-      withEngineStoreAdmission(() => {
-        const database = openOpenClawAgentDatabase({ agentId: "main" });
-        const options = { agentId: "main", path: database.path };
+      withEntryDatabase(({ database, recorder, transaction }) => {
         const keys = [
           "agent:main:archive-a",
           ...Array.from({ length: 63 }, (_, index) => `agent:main:archive-middle-${index}`),
@@ -106,8 +162,6 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
         ];
         const untouched = "agent:main:archive-unselected";
         const skills = { prompt: "Retained archive instructions", skills: [] };
-        const now = vi.spyOn(Date, "now").mockReturnValue(20);
-        const recorder = tripRecorder(database.db);
         const read = (key: string) => {
           const row = readExactSessionEntryRow(database, key, "full", "canonical", true);
           if (!row) {
@@ -141,92 +195,85 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
             .prepare("UPDATE session_nodes SET entry_json = ?, label = ? WHERE session_key = ?")
             .run(JSON.stringify(entry), entry.label, untouched);
         };
-        try {
-          runOpenClawAgentWriteTransaction((owner) => {
-            for (const [index, key] of [...keys, untouched].entries()) {
-              writeSessionEntry(owner, key, {
-                sessionId: index === 0 || index === 64 ? "archive-shared" : `archive-${index}`,
-                updatedAt: 10,
-                skillsSnapshot: skills,
-              });
+        transaction((owner) => {
+          for (const [index, key] of [...keys, untouched].entries()) {
+            writeSessionEntry(owner, key, {
+              sessionId: index === 0 || index === 64 ? "archive-shared" : `archive-${index}`,
+              updatedAt: 10,
+              skillsSnapshot: skills,
+            });
+          }
+          appendTranscriptEventsInTransaction(
+            owner,
+            { agentId: "main", sessionKey: keys.at(-1)!, sessionId: "archive-shared" },
+            [{ type: "session", id: "archive-shared", version: 3 }],
+          );
+        });
+        const initial = current();
+        let sequential: ReturnType<typeof current> | undefined;
+        const rollback = new Error("archive equivalence rollback");
+        expect(() =>
+          transaction((owner) => {
+            rawUnselectedWrite();
+            for (const input of inputs()) {
+              writeSessionEntry(owner, input.sessionKey, input.entry);
             }
-            appendTranscriptEventsInTransaction(
-              owner,
-              { agentId: "main", sessionKey: keys.at(-1)!, sessionId: "archive-shared" },
-              [{ type: "session", id: "archive-shared", version: 3 }],
-            );
-          }, options);
-          const initial = current();
-          let sequential: ReturnType<typeof current> | undefined;
-          const rollback = new Error("archive equivalence rollback");
-          expect(() =>
-            runOpenClawAgentWriteTransaction((owner) => {
-              rawUnselectedWrite();
-              for (const input of inputs()) {
-                writeSessionEntry(owner, input.sessionKey, input.entry);
-              }
-              sequential = current();
-              throw rollback;
-            }, options),
-          ).toThrow(rollback);
-          expect(current()).toEqual(initial);
+            sequential = current();
+            throw rollback;
+          }),
+        ).toThrow(rollback);
+        expect(current()).toEqual(initial);
 
-          readSessionEntryCache(database, { cache: true, projection: "list" });
-          expect(() =>
-            runOpenClawAgentWriteTransaction((owner) => {
-              rawUnselectedWrite();
-              writeArchivedSessionEntries(owner, inputs(), new Map());
-              throw rollback;
-            }, options),
-          ).toThrow(rollback);
-          expect(current()).toEqual(initial);
-          expect(
-            readSessionEntryCache(database, { cache: true, projection: "list" }).entries.get(
-              keys[0]!,
-            )?.archivedAt,
-          ).toBeUndefined();
+        readSessionEntryCache(database, { cache: true, projection: "list" });
+        expect(() =>
+          transaction((owner) => {
+            rawUnselectedWrite();
+            writeArchivedSessionEntries(owner, inputs(), new Map());
+            throw rollback;
+          }),
+        ).toThrow(rollback);
+        expect(current()).toEqual(initial);
+        expect(
+          readSessionEntryCache(database, { cache: true, projection: "list" }).entries.get(keys[0]!)
+            ?.archivedAt,
+        ).toBeUndefined();
 
-          const postimages: SessionEntryWritePostimages = new Map();
-          const written = recorder.capture("archiveBatch", () =>
-            runOpenClawAgentWriteTransaction((owner) => {
+        const postimages: SessionEntryWritePostimages = new Map();
+        const written = recorder.capture(
+          "archiveBatch",
+          () =>
+            transaction((owner) => {
               rawUnselectedWrite();
               return writeArchivedSessionEntries(owner, inputs(), postimages);
-            }, options),
-          );
-          expect(current()).toEqual(sequential);
-          expect(written.map((entry) => entry.archivedAt)).toEqual(
-            Array.from({ length: 66 }, () => 30),
-          );
-          expect([written[1]?.label, written.at(-1)?.label]).toEqual(["final", "final"]);
-          expect(current()[0]).toMatchObject({
-            node: { archived_at: 30, snapshot_revision: 1 },
-            snapshots: snapshotRows(skills),
-            window: { session_key: keys.at(-1), hook_external_content_source: "gmail" },
-          });
-          for (const key of keys) {
-            const state = persisted(database.db, key, read(key).entry.sessionId);
-            const postimage = postimages.get(key);
-            expect(postimage).toBeDefined();
-            expect(state.window).toMatchObject(postimage!.window);
-            expect(postimage?.entry.skillsSnapshot).toEqual(skills);
-          }
-          expect(
-            readSessionEntryCache(database, { cache: true, projection: "list" }).entries.get(
-              untouched,
-            )?.label,
-          ).toBe("untracked update before archive");
-          if (engine === "postgres") {
-            expect(recorder.counts.archiveBatch).toBe(3);
-          }
-        } finally {
-          now.mockRestore();
+            }),
+          3,
+        );
+        expect(current()).toEqual(sequential);
+        expect(written.map((entry) => entry.archivedAt)).toEqual(
+          Array.from({ length: 66 }, () => 30),
+        );
+        expect([written[1]?.label, written.at(-1)?.label]).toEqual(["final", "final"]);
+        expect(current()[0]).toMatchObject({
+          node: { archived_at: 30, snapshot_revision: 1 },
+          snapshots: snapshotRows(skills),
+          window: { session_key: keys.at(-1), hook_external_content_source: "gmail" },
+        });
+        for (const key of keys) {
+          const state = persisted(database.db, key, read(key).entry.sessionId);
+          const postimage = postimages.get(key);
+          expect(postimage).toBeDefined();
+          expect(state.window).toMatchObject(postimage!.window);
+          expect(postimage?.entry.skillsSnapshot).toEqual(skills);
         }
-      }));
+        expect(
+          readSessionEntryCache(database, { cache: true, projection: "list" }).entries.get(
+            untouched,
+          )?.label,
+        ).toBe("untracked update before archive");
+      }, true));
 
     it("keeps batched empty, hot, cold, and changed transcript versions equivalent", () =>
-      withEngineStoreAdmission(() => {
-        const database = openOpenClawAgentDatabase({ agentId: "main" });
-        const options = { agentId: "main", path: database.path };
+      withEntryDatabase(({ database, transaction }) => {
         const ids = [
           "version-absent",
           "version-empty",
@@ -239,7 +286,6 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
           sessionKey: `agent:main:${sessionId}`,
           sessionId,
         });
-        const now = vi.spyOn(Date, "now").mockReturnValue(20);
         const read = () => {
           const batch = readTranscriptContextVersionsInTransaction(database, ids);
           expect(batch).toEqual(
@@ -247,65 +293,61 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
           );
           return batch;
         };
-        try {
-          runOpenClawAgentWriteTransaction((owner) => {
-            for (const id of ids.slice(1, 4)) {
-              writeSessionEntry(owner, scope(id).sessionKey, { sessionId: id, updatedAt: 10 });
-            }
+        transaction((owner) => {
+          for (const id of ids.slice(1, 4)) {
+            writeSessionEntry(owner, scope(id).sessionKey, { sessionId: id, updatedAt: 10 });
+          }
+          appendTranscriptEventsInTransaction(owner, scope("version-hot"), [
+            { type: "session", id: "version-hot", version: 3 },
+            { type: "custom", customType: "version", data: { value: "first" } },
+          ]);
+          owner.db
+            .prepare(
+              "INSERT INTO transcript_rewrite_watermarks (session_id, generation, updated_at) VALUES (?, ?, ?)",
+            )
+            .run("version-cold", "cold-generation", 17);
+          owner.db
+            .prepare("UPDATE session_windows SET transcript_updated_at = ? WHERE session_id = ?")
+            .run(17, "version-cold");
+          owner.db
+            .prepare(`INSERT INTO session_transcript_cold_archives
+              (session_id, generation, archive_name, archive_sha256, event_count, raw_bytes, archive_bytes, last_seq, archived_at, storage, archive_blob)
+              VALUES (?, ?, ?, ?, 10, 1, 1, 9, 17, 'file', NULL)`)
+            .run("version-cold", "cold-generation", "version-cold.zst", "0".repeat(64));
+        });
+        const before = read();
+        expect(before).toEqual([
+          { rawSeq: null, generation: null, updatedAt: null },
+          { rawSeq: null, generation: null, updatedAt: null },
+          { rawSeq: 1, generation: expect.any(String), updatedAt: 20 },
+          { rawSeq: 9, generation: "cold-generation", updatedAt: 17 },
+          { rawSeq: 1, generation: expect.any(String), updatedAt: 20 },
+        ]);
+        const rollback = new Error("rollback changed transcript versions");
+        expect(() =>
+          transaction((owner) => {
+            readTranscriptContextVersionInTransaction(owner, "version-hot");
             appendTranscriptEventsInTransaction(owner, scope("version-hot"), [
-              { type: "session", id: "version-hot", version: 3 },
-              { type: "custom", customType: "version", data: { value: "first" } },
+              { type: "custom", customType: "version", data: { value: "later" } },
             ]);
             owner.db
               .prepare(
-                "INSERT INTO transcript_rewrite_watermarks (session_id, generation, updated_at) VALUES (?, ?, ?)",
+                "UPDATE session_transcript_cold_archives SET last_seq = 11 WHERE session_id = ?",
               )
-              .run("version-cold", "cold-generation", 17);
+              .run("version-cold");
             owner.db
-              .prepare("UPDATE session_windows SET transcript_updated_at = ? WHERE session_id = ?")
-              .run(17, "version-cold");
-            owner.db
-              .prepare(`INSERT INTO session_transcript_cold_archives
-              (session_id, generation, archive_name, archive_sha256, event_count, raw_bytes, archive_bytes, last_seq, archived_at, storage, archive_blob)
-              VALUES (?, ?, ?, ?, 10, 1, 1, 9, 17, 'file', NULL)`)
-              .run("version-cold", "cold-generation", "version-cold.zst", "0".repeat(64));
-          }, options);
-          const before = read();
-          expect(before).toEqual([
-            { rawSeq: null, generation: null, updatedAt: null },
-            { rawSeq: null, generation: null, updatedAt: null },
-            { rawSeq: 1, generation: expect.any(String), updatedAt: 20 },
-            { rawSeq: 9, generation: "cold-generation", updatedAt: 17 },
-            { rawSeq: 1, generation: expect.any(String), updatedAt: 20 },
-          ]);
-          const rollback = new Error("rollback changed transcript versions");
-          expect(() =>
-            runOpenClawAgentWriteTransaction((owner) => {
-              readTranscriptContextVersionInTransaction(owner, "version-hot");
-              appendTranscriptEventsInTransaction(owner, scope("version-hot"), [
-                { type: "custom", customType: "version", data: { value: "later" } },
-              ]);
-              owner.db
-                .prepare(
-                  "UPDATE session_transcript_cold_archives SET last_seq = 11 WHERE session_id = ?",
-                )
-                .run("version-cold");
-              owner.db
-                .prepare(
-                  "UPDATE transcript_rewrite_watermarks SET generation = ? WHERE session_id = ?",
-                )
-                .run("cold-next", "version-cold");
-              const changed = read();
-              expect(changed[2]?.rawSeq).toBe(2);
-              expect(changed[3]).toEqual({ rawSeq: 11, generation: "cold-next", updatedAt: 17 });
-              throw rollback;
-            }, options),
-          ).toThrow(rollback);
-          expect(read()).toEqual(before);
-        } finally {
-          now.mockRestore();
-        }
-      }));
+              .prepare(
+                "UPDATE transcript_rewrite_watermarks SET generation = ? WHERE session_id = ?",
+              )
+              .run("cold-next", "version-cold");
+            const changed = read();
+            expect(changed[2]?.rawSeq).toBe(2);
+            expect(changed[3]).toEqual({ rawSeq: 11, generation: "cold-next", updatedAt: 17 });
+            throw rollback;
+          }),
+        ).toThrow(rollback);
+        expect(read()).toEqual(before);
+      }, true));
 
     it("commits actor and patch entry pairs without extra writes or publishing a refused commit", async () => {
       const initialSkills = { prompt: "Initial instructions", skills: [] };
@@ -360,19 +402,22 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
       const read = () => withEngineStoreAdmission(() => f.read());
       const execute = async (name: string, command: Mutation) => {
         await f.prepare(command);
-        return withEngineStoreAdmission(() => recorder.capture(name, () => f.mutate(command)));
+        return withEngineStoreAdmission(() => recorder.capture(name, () => f.mutate(command), 1));
       };
       const patch = (name: string, fields: Partial<SessionEntry>) =>
         withEngineStoreAdmission(() =>
-          recorder.capture(name, () =>
-            f.patchEntry({
-              selection: { kind: "entry", sessionKey: f.target.sessionKey, exact: true },
-              sessionKey: f.target.sessionKey,
-              operation: { kind: "fields", patch: fields },
-              operationLabel: "session-entry.patch",
-              validateCanonicalKeys: false,
-              preserveActivity: true,
-            }),
+          recorder.capture(
+            name,
+            () =>
+              f.patchEntry({
+                selection: { kind: "entry", sessionKey: f.target.sessionKey, exact: true },
+                sessionKey: f.target.sessionKey,
+                operation: { kind: "fields", patch: fields },
+                operationLabel: "session-entry.patch",
+                validateCanonicalKeys: false,
+                preserveActivity: true,
+              }),
+            name === "noOp" ? 0 : 1,
           ),
         );
       const completion = (
@@ -438,10 +483,7 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
         const untimestampedParticipant = { identity: { type: "agent", id: "z" } };
         expect(coldPatch).toMatchObject({
           entry: {
-            participants:
-              engine === "sqlite"
-                ? [untimestampedParticipant, ...timestampedParticipants]
-                : [...timestampedParticipants, untimestampedParticipant],
+            participants: [untimestampedParticipant, ...timestampedParticipants],
           },
         });
         // Actor hydration has always normalized NULL timestamps first on both engines.
@@ -476,11 +518,10 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
         });
         expect(acceptedOutcome.kind, JSON.stringify(acceptedOutcome)).toBe("committed");
         const accepted = state();
-        expect(accepted.node).toMatchObject({
-          updated_at: 20,
-          snapshot_revision: 1,
+        expectState(accepted, 1, initialSkills).toMatchObject({
+          node: { updated_at: 20 },
+          window: { updated_at: 20, started_at: 20 },
         });
-        expect(accepted.window).toMatchObject({ updated_at: 20, started_at: 20 });
         expect(read().entry).toMatchObject({ startedAt: 20 });
         expect(accepted.snapshots).toEqual(initial.snapshots);
 
@@ -489,9 +530,8 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
           kind: "committed",
         });
         const completed = state();
-        expect(completed.node).toMatchObject({ snapshot_revision: 2 });
+        expectState(completed, 2, initialSkills, prompt);
         expect(completed.window).toEqual(accepted.window);
-        expect(completed.snapshots).toEqual(snapshotRows(initialSkills, prompt));
         expect(read().entry).toMatchObject({
           inputTokens: 12,
           outputTokens: 4,
@@ -499,26 +539,26 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
         });
 
         const changedSkills = { prompt: "Changed instructions", skills: [] };
-        patch("entryPatch", { label: "Patched label", skillsSnapshot: changedSkills });
-        expect(state()).toMatchObject({
-          node: { label: "Patched label", snapshot_revision: 3 },
-          window: completed.window,
-          snapshots: snapshotRows(changedSkills, prompt),
-        });
-        patch("nodeOnly", { label: "Node only" });
-        expect(state()).toMatchObject({
-          node: { label: "Node only", snapshot_revision: 3 },
-          window: completed.window,
-          snapshots: snapshotRows(changedSkills, prompt),
-        });
         const finalSkills = { prompt: "Only cold instructions changed", skills: [] };
-        patch("snapshotOnly", { skillsSnapshot: finalSkills });
+        const patches: [string, Partial<SessionEntry>, string, typeof changedSkills, number][] = [
+          [
+            "entryPatch",
+            { label: "Patched label", skillsSnapshot: changedSkills },
+            "Patched label",
+            changedSkills,
+            3,
+          ],
+          ["nodeOnly", { label: "Node only" }, "Node only", changedSkills, 3],
+          ["snapshotOnly", { skillsSnapshot: finalSkills }, "Node only", finalSkills, 4],
+        ];
+        for (const [name, fields, label, skills, revision] of patches) {
+          patch(name, fields);
+          expectState(state(), revision, skills, prompt).toMatchObject({
+            node: { label },
+            window: completed.window,
+          });
+        }
         const stable = state();
-        expect(stable).toMatchObject({
-          node: { label: "Node only", snapshot_revision: 4 },
-          window: completed.window,
-          snapshots: snapshotRows(finalSkills, prompt),
-        });
         patch("noOp", { label: "Node only", skillsSnapshot: finalSkills });
         expect(state()).toEqual(stable);
 
@@ -544,32 +584,14 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
           expect(state()).toEqual(stable);
           expect(read().entry).toEqual(beforeRefusal.entry);
         }
-        if (engine === "postgres") {
-          for (const [name, queries] of Object.entries(recorder.queries)) {
-            expect(
-              queries.filter((sql) => /^BEGIN\b/iu.test(sql)),
-              name,
-            ).toHaveLength(1);
-            expect(
-              queries.filter((sql) => /pg_advisory_xact_lock/iu.test(sql)),
-              name,
-            ).toHaveLength(1);
-            expect(
-              queries.filter((sql) => /^COMMIT\b/iu.test(sql)),
-              name,
-            ).toHaveLength(name === "rollback" || name === "revokedGrant" ? 0 : 1);
-          }
-          expect(recorder.counts).toEqual({
-            coldPatch: 1,
-            acceptInput: 1,
-            completeTurn: 1,
-            entryPatch: 1,
-            nodeOnly: 1,
-            snapshotOnly: 1,
-            noOp: 0,
-            rollback: 1,
-            revokedGrant: 1,
-          });
+        for (const name of Object.keys(recorder.queries)) {
+          recorder.expectQueries(name, /^BEGIN\b/iu, 1);
+          recorder.expectQueries(name, /pg_advisory_xact_lock/iu, 1);
+          recorder.expectQueries(
+            name,
+            /^COMMIT\b/iu,
+            name === "rollback" || name === "revokedGrant" ? 0 : 1,
+          );
         }
       } finally {
         now.mockRestore();
@@ -578,9 +600,7 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
     });
 
     it("binds interleaved snapshot shapes and preserves legacy provenance when its column is omitted", () =>
-      withEngineStoreAdmission(() => {
-        const database = openOpenClawAgentDatabase({ agentId: "main" });
-        const recorder = tripRecorder(database.db);
+      withEntryDatabase(({ database, write }) => {
         const keyA = "agent:main:entry-shape-a";
         const keyB = "agent:main:entry-shape-b";
         let a: SessionEntry = {
@@ -599,12 +619,6 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
           skillsSnapshot: { prompt: "B0 instructions", skills: [] },
           systemPromptReport: report(10),
         };
-        const write = (name: string, key: string, entry: SessionEntry) =>
-          recorder.capture(name, () =>
-            runSqliteImmediateTransactionSync(database.db, () =>
-              writeSessionEntry(database, key, entry),
-            ),
-          );
         const stateA = () => persisted(database.db, keyA, a.sessionId);
         const source = (lifecycleRevision: string) => ({
           sourcePath: "/synthetic/acp/cache.json",
@@ -618,22 +632,18 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
           runSqliteImmediateTransactionSync(database.db, () =>
             recordLegacyAcpMigrationSources(database.db, keyA, revisions.map(source)),
           );
-        write("seedA", keyA, a);
-        write("seedB", keyB, b);
+        write("seedA", keyA, a, 2);
+        write("seedB", keyB, b, 2);
         a = { ...a, label: "A1", skillsSnapshot: { prompt: "A1 instructions", skills: [] } };
         write("oneSnapshot", keyA, a);
         b = { ...b, label: "B1", skillsSnapshot: { prompt: "B1 instructions", skills: [] } };
         write("twoSnapshots", keyB, b);
         a = { ...a, label: "A2", skillsSnapshot: { prompt: "A2 instructions", skills: [] } };
         write("oneSnapshotAgain", keyA, a);
-        expect(stateA()).toMatchObject({
-          node: { label: "A2", snapshot_revision: 3 },
-          snapshots: snapshotRows(a.skillsSnapshot),
-        });
+        expectState(stateA(), 3, a.skillsSnapshot).toMatchObject({ node: { label: "A2" } });
         const stableB = persisted(database.db, keyB, b.sessionId);
-        expect(stableB).toMatchObject({
-          node: { label: "B1", snapshot_revision: 3 },
-          snapshots: snapshotRows(b.skillsSnapshot, b.systemPromptReport),
+        expectState(stableB, 3, b.skillsSnapshot, b.systemPromptReport).toMatchObject({
+          node: { label: "B1" },
         });
 
         record(["a0", "a1"]);
@@ -643,11 +653,7 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
         expect(JSON.parse(String(afterWindow.node?.legacy_acp_migration_json))).toEqual([
           source("a1"),
         ]);
-        expect(afterWindow).toMatchObject({
-          node: { snapshot_revision: 3 },
-          window: { updated_at: 20 },
-          snapshots: snapshotRows(a.skillsSnapshot),
-        });
+        expectState(afterWindow, 3, a.skillsSnapshot).toMatchObject({ window: { updated_at: 20 } });
         a = { ...a, updatedAt: 30 };
         write("ordinaryWindow", keyA, a);
         expect(stateA().node?.legacy_acp_migration_json).toBe(
@@ -666,54 +672,29 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
         expect(JSON.parse(String(afterSnapshot.node?.legacy_acp_migration_json))).toEqual([
           source("a2"),
         ]);
-        expect(afterSnapshot).toMatchObject({
-          node: { label: "A3", snapshot_revision: 4 },
+        expectState(afterSnapshot, 4, a.skillsSnapshot).toMatchObject({
+          node: { label: "A3" },
           window: { updated_at: 30 },
-          snapshots: snapshotRows(a.skillsSnapshot),
         });
         a = { ...a, label: "A4", skillsSnapshot: { prompt: "A4 instructions", skills: [] } };
         write("ordinarySnapshot", keyA, a);
-        expect(stateA()).toMatchObject({
+        expectState(stateA(), 5, a.skillsSnapshot).toMatchObject({
           node: {
             label: "A4",
-            snapshot_revision: 5,
             legacy_acp_migration_json: afterSnapshot.node?.legacy_acp_migration_json,
           },
           window: afterSnapshot.window,
-          snapshots: snapshotRows(a.skillsSnapshot),
         });
         expect(persisted(database.db, keyB, b.sessionId)).toEqual(stableB);
-        if (engine === "postgres") {
-          expect(recorder.counts).toEqual({
-            seedA: 2,
-            seedB: 2,
-            oneSnapshot: 1,
-            twoSnapshots: 1,
-            oneSnapshotAgain: 1,
-            legacyWindow: 1,
-            ordinaryWindow: 1,
-            legacySnapshot: 1,
-            ordinarySnapshot: 1,
-          });
-        }
       }));
 
     it("creates foreign-key children after their node and preserves snapshot revisions, deletion, and window ownership", () =>
-      withEngineStoreAdmission(() => {
-        const database = openOpenClawAgentDatabase({ agentId: "main" });
-        const recorder = tripRecorder(database.db);
-        const write = (name: string, key: string, entry: SessionEntry) =>
-          recorder.capture(name, () =>
-            runSqliteImmediateTransactionSync(database.db, () =>
-              writeSessionEntry(database, key, entry),
-            ),
-          );
+      withEntryDatabase(({ database, recorder, write, state }) => {
         const plainKey = "agent:main:entry-new-window";
         write("newNodeWindow", plainKey, { sessionId: "entry-new-window", updatedAt: 10 });
-        expect(persisted(database.db, plainKey, "entry-new-window")).toMatchObject({
-          node: { current_session_id: "entry-new-window", snapshot_revision: 0 },
+        expectState(state(plainKey, "entry-new-window"), 0).toMatchObject({
+          node: { current_session_id: "entry-new-window" },
           window: { session_key: plainKey },
-          snapshots: [],
         });
 
         const key = "agent:main:entry-new-snapshots";
@@ -727,46 +708,40 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
           skillsSnapshot: skills,
           systemPromptReport: prompt,
         };
-        write("newNodeSnapshots", key, entry);
-        const initial = persisted(database.db, key, entry.sessionId);
-        expect(initial).toMatchObject({
-          node: { label: "New node", snapshot_revision: 2 },
-          window: { session_key: key },
-          snapshots: snapshotRows(skills, prompt),
-        });
+        const current = () => state(key, entry.sessionId);
         const changedSkills = { prompt: "One changed snapshot", skills: [] };
         const changed = { ...entry, label: "Changed node", skillsSnapshot: changedSkills };
-        write("existingNodeSnapshots", key, changed);
-        const updated = persisted(database.db, key, entry.sessionId);
-        expect(updated).toMatchObject({
-          node: { label: "Changed node", snapshot_revision: 3 },
-          window: initial.window,
-          snapshots: snapshotRows(changedSkills, prompt),
-        });
-        write("unchanged", key, changed);
-        expect(persisted(database.db, key, entry.sessionId)).toEqual(updated);
-
-        write("removeOne", key, { ...changed, skillsSnapshot: undefined });
-        expect(persisted(database.db, key, entry.sessionId)).toMatchObject({
-          node: { snapshot_revision: 4 },
-          window: initial.window,
-          snapshots: snapshotRows(undefined, prompt),
-        });
-        write("removeAll", key, {
-          ...changed,
-          skillsSnapshot: undefined,
-          systemPromptReport: undefined,
-        });
-        expect(persisted(database.db, key, entry.sessionId)).toMatchObject({
-          node: { snapshot_revision: 5 },
-          window: initial.window,
-          snapshots: [],
-        });
+        const withoutSkills = { ...changed, skillsSnapshot: undefined };
+        const stages: [string, SessionEntry, number, number | null][] = [
+          ["newNodeSnapshots", entry, 2, 2],
+          ["existingNodeSnapshots", changed, 3, 1],
+          ["unchanged", changed, 3, 0],
+          ["removeOne", withoutSkills, 4, null],
+          ["removeAll", { ...withoutSkills, systemPromptReport: undefined }, 5, null],
+        ];
+        let initialWindow: ReturnType<typeof persisted>["window"];
+        let previous: ReturnType<typeof persisted> | undefined;
+        for (const [name, value, revision, writes] of stages) {
+          write(name, key, value, writes);
+          const result = current();
+          initialWindow ??= result.window;
+          expectState(
+            result,
+            revision,
+            value.skillsSnapshot,
+            value.systemPromptReport,
+          ).toMatchObject({ node: { label: value.label }, window: initialWindow });
+          expect(result.window).toMatchObject({ session_key: key });
+          if (name === "unchanged") {
+            expect(result).toEqual(previous);
+          }
+          previous = result;
+        }
 
         const otherKey = "agent:main:entry-window-owner";
         write("claimOwner", otherKey, { sessionId: entry.sessionId, updatedAt: 20 });
         write("retainOwner", key, { sessionId: entry.sessionId, updatedAt: 30, status: "done" });
-        expect(persisted(database.db, key, entry.sessionId)).toMatchObject({
+        expect(current()).toMatchObject({
           node: { current_session_id: entry.sessionId, status: "done", snapshot_revision: 5 },
           window: { session_key: otherKey, created_at: 10, updated_at: 30, status: "done" },
         });
@@ -778,37 +753,13 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
             throw new Error("rollback new node");
           }),
         ).toThrow("rollback new node");
-        expect(persisted(database.db, refusedKey, "entry-refused-new")).toEqual({
+        expect(state(refusedKey, "entry-refused-new")).toEqual({
           node: undefined,
           window: undefined,
           snapshots: [],
         });
-        if (engine === "postgres") {
-          expect(
-            recorder.queries.removeOne!.filter((sql) =>
-              /delete from\s+"?session_entry_snapshots/iu.test(sql),
-            ),
-          ).toHaveLength(1);
-          expect(
-            recorder.queries.removeAll!.filter((sql) =>
-              /delete from\s+"?session_entry_snapshots/iu.test(sql),
-            ),
-          ).toHaveLength(1);
-          expect({
-            newNodeWindow: recorder.counts.newNodeWindow,
-            newNodeSnapshots: recorder.counts.newNodeSnapshots,
-            existingNodeSnapshots: recorder.counts.existingNodeSnapshots,
-            unchanged: recorder.counts.unchanged,
-            claimOwner: recorder.counts.claimOwner,
-            retainOwner: recorder.counts.retainOwner,
-          }).toEqual({
-            newNodeWindow: 1,
-            newNodeSnapshots: 2,
-            existingNodeSnapshots: 1,
-            unchanged: 0,
-            claimOwner: 1,
-            retainOwner: 1,
-          });
+        for (const name of ["removeOne", "removeAll"]) {
+          recorder.expectQueries(name, /delete from\s+"?session_entry_snapshots/iu, 1);
         }
       }));
   },

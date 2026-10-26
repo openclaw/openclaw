@@ -1,5 +1,6 @@
 import { expect } from "vitest";
 import { describePeriod } from "./periods.js";
+import { reportMember } from "./reports-data.test-support.js";
 import { githubCounts } from "./reports.fixtures.js";
 import { buildRoster } from "./roster.js";
 import type { TeamReportsOperations } from "./store-contract.js";
@@ -25,15 +26,9 @@ export function report(): ReportDocument {
       },
       discord: { messages: 13, channels: { general: 13 } },
     },
-    members: ["alice", "bob"].map((login) => ({
-      login,
-      display: login,
-      access: [],
-      areas: [],
-      aliases: [],
-      github: { ...githubCounts(1), items: [] },
-      discord: { total: 2, channels: { general: 2 }, excerpts: [] },
-    })),
+    members: ["alice", "bob"].map((login) =>
+      reportMember(login, { discord: { total: 2, channels: { general: 2 }, excerpts: [] } }),
+    ),
     otherActors: [],
     unmatchedDiscord: [],
     sources: { github: { ok: true, warnings: ["fixture warning"], stats: { apiCalls: 1 } } },

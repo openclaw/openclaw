@@ -389,6 +389,7 @@ beforeEach(() => {
   childUnref.mockClear();
   timeState.now = 0;
   vi.spyOn(Date, "now").mockImplementation(() => timeState.now);
+  vi.spyOn(performance, "now").mockImplementation(() => timeState.now);
   sleepMock.mockReset();
   sleepMock.mockImplementation(async (ms: number) => {
     timeState.now += ms;

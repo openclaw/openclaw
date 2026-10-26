@@ -19,7 +19,6 @@ import {
 } from "../../lib/sessions/route-navigation.ts";
 import {
   buildAgentMainSessionKey,
-  isDashboardSessionKey,
   isUiGlobalSessionKey,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
@@ -373,10 +372,6 @@ export async function loadChatRoute(
     };
   }
   if (target.kind === "literal") {
-    const deferSnapshotRows =
-      face === "chat" &&
-      isDashboardSessionKey(target.sessionKey) &&
-      Boolean(sessionKeyUuid(target.sessionKey));
     let defaultsKnown =
       defaultsUsable ||
       context.sessions.cachedRoutingDefaults?.scope === "per-sender" ||
@@ -446,7 +441,6 @@ export async function loadChatRoute(
     return {
       kind: "session",
       sessionKey: target.sessionKey,
-      ...(deferSnapshotRows ? { deferSnapshotRows: true as const } : {}),
       ...sessionRouteHints(routeLocation),
       face,
       ...(canonicalLocation

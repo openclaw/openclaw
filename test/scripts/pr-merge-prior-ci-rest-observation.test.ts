@@ -247,6 +247,39 @@ describePosix("prior-CI whole REST observation fallback", () => {
     },
   );
 
+  it("refuses a remote-only fork after consecutive materialization", () => {
+    const f = unknownGraphqlCandidate();
+    configureMerge(f, {
+      restObservations: [
+        ...unchanged(3),
+        { advanceMain: true },
+        { advanceMain: true, advanceMainFrom: f.base },
+      ],
+    });
+
+    const result = refuse(f, "both observed and verified main");
+    const advances = f.state().mainAdvances;
+    expect(advances).toHaveLength(2);
+    expect(() => f.git(["merge-base", "--is-ancestor", advances[0]!, advances[1]!])).toThrow();
+    expect(result.output).toContain("Requalifying admin admission");
+  });
+
+  it("refuses a remote-only mainAfter fork from qualified mainBefore", () => {
+    const f = unknownGraphqlCandidate();
+    const before = f.commit(f.tree("before\n", "qualified before\n"), [f.base]);
+    const state = f.state();
+    state.restObservations = [
+      ...unchanged(3),
+      { main: before, advanceMainAfterPolicy: true, advanceMainFrom: f.base },
+    ];
+    f.save(state);
+
+    refuse(f, "both observed and verified main");
+    const advances = f.state().mainAdvances;
+    expect(advances).toHaveLength(1);
+    expect(() => f.git(["merge-base", "--is-ancestor", before, advances[0]!])).toThrow();
+  });
+
   it("requires merged receipt during admission", () => {
     const f = unknownGraphqlCandidate();
     configureMerge(f, {

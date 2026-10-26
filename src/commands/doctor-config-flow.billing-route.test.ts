@@ -19,6 +19,7 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { prepareDoctorContext } from "./doctor-config-flow.test-support.js";
 import { useDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
 import { collectModelBillingRouteMigrationWarnings } from "./doctor/shared/model-billing-route-migration.js";
+import { createTestModelDefinition } from "./test-runtime-config-helpers.js";
 
 const withDoctorConfigPreflightHome = useDoctorConfigPreflightHome("billing-route");
 const retirementStep = "finalize:doctor:model-retirement";
@@ -57,16 +58,7 @@ async function writeBillingFixture(
         openai: {
           baseUrl: "https://api.openai.com/v1",
           api: "openai-completions",
-          models: [
-            {
-              id: retiredModel,
-              name: "Heartbeat",
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              maxTokens: 4096,
-            },
-          ],
+          models: [createTestModelDefinition(retiredModel, { name: "Heartbeat" })],
         },
       },
     },
@@ -115,14 +107,13 @@ it("does not compare Decision selectors through conversational billing routes", 
       before: withChatSelection(before, "openai/gpt-4o-mini"),
       after: withChatSelection(after, "openai/gpt-5.6-luna"),
     });
-    expect(warnings).toEqual([
-      expect.stringContaining(
-        "Billing route changed for agents.entries.main.model.primary (agent main):",
+    expect(warnings).toEqual(
+      ["model.primary", "subagents.model"].map((selector) =>
+        expect.stringContaining(
+          `Billing route changed for agents.entries.main.${selector} (agent main):`,
+        ),
       ),
-      expect.stringContaining(
-        "Billing route changed for agents.entries.main.subagents.model (agent main):",
-      ),
-    ]);
+    );
   });
 });
 
@@ -161,11 +152,7 @@ it.each([false, true])(
         ]);
         const saved: unknown = JSON.parse(await fs.readFile(configPath, "utf8"));
         expect(saved).toMatchObject({
-          agents: {
-            defaults: {
-              subagents: { model: "openai/gpt-4o-mini" },
-            },
-          },
+          agents: { defaults: { subagents: { model: "openai/gpt-4o-mini" } } },
         });
       }
       await using repeated = await prepareDoctorContext(configPath);
@@ -225,18 +212,6 @@ it.each(["run-id", "result-channel"] as const)(
         await expectInheritedHeartbeatAutomation(swap.cfg);
         expect(f.receipt()).toMatchObject({ status: "skipped" });
       }
-      for (const [index, detail] of [
-        "Heartbeat billing route changed.",
-        "Subagent billing route changed.",
-        "Gateway is bound to loopback.",
-      ].entries()) {
-        recordUpdateRunStep(f.runId, {
-          step: `warning:openclaw doctor:${index + 1}`,
-          status: "completed",
-          detail,
-        });
-      }
-
       await withEnvAsync({ OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1" }, async () => {
         {
           await using converged = await prepareDoctorContext(f.configPath);

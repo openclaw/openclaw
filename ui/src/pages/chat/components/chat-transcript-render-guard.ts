@@ -69,18 +69,14 @@ export function trackTranscriptRenderDependencies(
 }
 
 export function guardChatRenderItems(
-  state: ChatThreadState,
+  renderDependencies: readonly unknown[],
   // Reply sources and live status can change without replacing the row itself.
   presentationDependencies: (item: ChatRenderItem) => readonly unknown[],
   nativeFor: (item: ChatRenderItem) => NativeTranscriptView | undefined,
 ) {
   return (item: ChatRenderItem) =>
     new GuardedTranscriptItem(
-      [
-        ...itemDependencies(item),
-        state.transcriptRenderDependencies,
-        ...presentationDependencies(item),
-      ],
+      [...itemDependencies(item), renderDependencies, ...presentationDependencies(item)],
       nativeFor(item),
     );
 }

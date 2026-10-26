@@ -15,6 +15,23 @@
 }
 
 .sidebar-rail {
+  --sidebar-rail-background: var(--sidebar-rail-surface, var(--sidebar-bg));
+  /* Badge cutouts need the opaque result, not a second translucent layer. */
+  --sidebar-rail-hover-surface: color-mix(
+    in srgb,
+    var(--text) var(--surface-hover-amount),
+    var(--sidebar-rail-background)
+  );
+  --sidebar-rail-selected-surface: color-mix(
+    in srgb,
+    var(--text) var(--surface-selected-amount),
+    var(--sidebar-rail-background)
+  );
+  --sidebar-rail-selected-hover-surface: color-mix(
+    in srgb,
+    var(--text) var(--surface-selected-hover-amount),
+    var(--sidebar-rail-background)
+  );
   --sidebar-rail-control-size: 36px;
   --sidebar-rail-action-size: 30px;
   --sidebar-rail-glyph-size: 19px;
@@ -26,7 +43,8 @@
   min-height: 0;
   padding: 8px 4px;
   gap: 8px;
-  border-inline-end: 1px solid var(--border);
+  border-inline-end: var(--shell-divider-size) solid var(--resize-handle-rest-color);
+  background: var(--sidebar-rail-surface, transparent);
 }
 
 .sidebar-rail__views,
@@ -80,7 +98,7 @@
     .sidebar-workspace-header__main,
     .sidebar-identity-card
   ) {
-  --sidebar-rail-control-surface: var(--sidebar-bg);
+  --sidebar-rail-control-surface: var(--sidebar-rail-background);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -103,15 +121,27 @@
 
   &:not(.sidebar-new-session, :disabled, [aria-disabled="true"]) {
     &[aria-expanded="true"] {
-      --sidebar-rail-control-surface: color-mix(in srgb, var(--bg-hover) 60%, var(--sidebar-bg));
+      --sidebar-rail-control-surface: color-mix(
+        in srgb,
+        var(--sidebar-rail-hover-surface) 60%,
+        var(--sidebar-rail-background)
+      );
       background: var(--sidebar-rail-control-surface);
       color: var(--text-strong);
     }
 
     &:is(:hover, [aria-current="page"], [aria-pressed="true"], .nav-item--active) {
-      --sidebar-rail-control-surface: var(--bg-hover);
+      --sidebar-rail-control-surface: var(--sidebar-rail-hover-surface);
       background: var(--sidebar-rail-control-surface);
       color: var(--text-strong);
+    }
+
+    &:is([aria-current="page"], [aria-pressed="true"], .nav-item--active) {
+      --sidebar-rail-control-surface: var(--sidebar-rail-selected-surface);
+    }
+
+    &:is([aria-current="page"], [aria-pressed="true"], .nav-item--active):hover {
+      --sidebar-rail-control-surface: var(--sidebar-rail-selected-hover-surface);
     }
 
     &:active {
@@ -211,6 +241,10 @@
     .session-glyph__icon > svg
   ) {
   stroke-width: 2px;
+}
+
+.sidebar-rail__create .sidebar-new-session > svg {
+  stroke-width: var(--sidebar-rail-action-stroke-width, 2px);
 }
 
 .sidebar-rail .nav-item__text,

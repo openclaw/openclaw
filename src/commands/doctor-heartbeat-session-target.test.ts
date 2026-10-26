@@ -50,17 +50,14 @@ it("does not read a canonical database as JSON for a missing heartbeat target", 
     { agentId: "ops", sessionKey: "agent:ops:other", storePath },
     { sessionId: "other-session", updatedAt: Date.now() },
   );
-  const readFileSyncSpy = vi.spyOn(fs, "readFileSync");
-  try {
-    const warnings = await describeHeartbeatSessionTargetIssues(cfg);
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toContain("resolved to agent:ops:slack:channel:c123");
-    expect(warnings[0]).toContain("missing session route or recipient");
-    expect(warnings[0]).toContain("delivery failure instead of skipping the run");
-    expect(readFileSyncSpy.mock.calls.map(([file]) => file)).not.toContain(storePath);
-  } finally {
-    readFileSyncSpy.mockRestore();
-  }
+  using readFileSyncSpy = vi.spyOn(fs, "readFileSync");
+
+  const warnings = await describeHeartbeatSessionTargetIssues(cfg);
+  expect(warnings).toHaveLength(1);
+  expect(warnings[0]).toContain("resolved to agent:ops:slack:channel:c123");
+  expect(warnings[0]).toContain("missing session route or recipient");
+  expect(warnings[0]).toContain("delivery failure instead of skipping the run");
+  expect(readFileSyncSpy.mock.calls.map(([file]) => file)).not.toContain(storePath);
 });
 
 it("does not recover an absent incognito heartbeat target from a legacy store", async () => {

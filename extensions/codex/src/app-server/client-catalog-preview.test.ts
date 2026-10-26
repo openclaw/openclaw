@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { decodeCodexCatalogFrame } from "./client-catalog-response.js";
 import * as messageDecoder from "./client-message-decoder.js";
 import type { CodexThreadListParams } from "./protocol.js";
 import { createClientHarness } from "./test-support.js";
@@ -8,6 +9,43 @@ const prefix = "x".repeat(499);
 const tail = "y".repeat(4096);
 const fittingPair = "x".repeat(498) + "😀";
 const oscPayload = "p".repeat(3000);
+
+it("normalizes and copies each bounded worker preview only once", () => {
+  const preview = "synthetic preview ".padEnd(500, "x");
+  const id = Number.MAX_SAFE_INTEGER - 2;
+  const bytes = Buffer.from(
+    JSON.stringify({
+      id,
+      result: {
+        data: Array.from({ length: 16 }, (_, index) => ({
+          id: `thread-${index}`,
+          preview: preview + " discarded".repeat(8192),
+        })),
+        nextCursor: "next",
+      },
+    }),
+  );
+  const copies = vi.spyOn(Buffer, "from");
+  const replacements = vi.spyOn(String.prototype, "replace");
+  const decoded = decodeCodexCatalogFrame({ bytes, route: { id, kind: "list" } });
+  expect(decoded.message).toEqual({
+    id,
+    result: {
+      data: Array.from({ length: 16 }, (_, index) => ({
+        id: `thread-${index}`,
+        projectId: null,
+        preview,
+      })),
+      nextCursor: "next",
+    },
+  });
+  expect(copies.mock.calls.filter(([value]) => value === preview)).toHaveLength(16);
+  expect(
+    replacements.mock.calls.filter(
+      ([pattern]) => pattern instanceof RegExp && pattern.source === "\\s+",
+    ),
+  ).toHaveLength(16);
+});
 
 function createHarness() {
   const harness = createClientHarness({ autoEmitExit: false });

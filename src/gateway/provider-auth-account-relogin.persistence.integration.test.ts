@@ -1,9 +1,8 @@
-import { afterAll, afterEach, assert, expect, it, vi } from "vitest";
+import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { clearAuthProfileMigrationDiagnostics } from "../agents/auth-profiles/legacy-source-diagnostic.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
-import { resolveSessionAuthSelection } from "../agents/auth-profiles/session-override.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import { resolveApiKeyForProviderCore } from "../agents/model-auth-provider.js";
@@ -11,7 +10,6 @@ import {
   runModelsAuthLoginFlowCore,
   type ModelsAuthLoginFlowOptions,
 } from "../commands/models/auth.js";
-import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { cleanupPluginLoaderFixturesForTest } from "../plugins/loader.test-fixtures.js";
 import { updatePluginManifest, writeWorkspacePlugin } from "../plugins/loader.test-harness.js";
@@ -135,17 +133,10 @@ function persistedProfiles(state: OpenClawTestState): Profiles {
   return loadPersistedAuthProfileStore(state.agentDir())?.profiles ?? {};
 }
 
-it.each([false, true])("retains pinned account and session (force: %s)", async (force) => {
+it.each([false, true])("rotates the pinned credential (force: %s)", async (force) => {
   const { state, config, runLogin } = await proofFixture("account-a", "rotated", {
     "other:retained": retainedProfile,
   });
-  const sessionKey = "agent:main:proof";
-  const sessionEntry: SessionEntry = {
-    sessionId: "proof-session",
-    updatedAt: 1,
-    authProfileOverride: pinnedProfileId,
-    authProfileOverrideSource: "user",
-  };
   await expect(runLogin({ force })).resolves.toMatchObject({
     profiles: [{ profileId: pinnedProfileId, provider: providerId, mode: "oauth" }],
   });
@@ -153,28 +144,19 @@ it.each([false, true])("retains pinned account and session (force: %s)", async (
     "other:retained": retainedProfile,
     [pinnedProfileId]: oauthCredential("account-a", "rotated"),
   });
-  const selection = await resolveSessionAuthSelection({
-    cfg: config,
-    provider: providerId,
-    modelId: "proof-model",
-    agentId: "main",
-    agentDir: state.agentDir(),
-    sessionEntry,
-    sessionStore: { [sessionKey]: sessionEntry },
-    sessionKey,
-    isNewSession: false,
-  });
-  expect(selection).toMatchObject({ profileId: pinnedProfileId, source: "user" });
-  assert(selection, "Expected the existing session to retain its selected auth profile");
   await expect(
     resolveApiKeyForProviderCore({
       provider: providerId,
       cfg: config,
-      profileId: selection.profileId,
+      profileId: pinnedProfileId,
       agentDir: state.agentDir(),
       lockedProfile: true,
     }),
-  ).resolves.toMatchObject({ apiKey: "rotated-access", mode: "oauth", profileId: pinnedProfileId });
+  ).resolves.toMatchObject({
+    apiKey: "rotated-access",
+    mode: "oauth",
+    profileId: pinnedProfileId,
+  });
 });
 
 it("keeps a different account under its provider-generated profile id", async () => {

@@ -9,7 +9,7 @@ import { catalogAgentFacts } from "./prepared-model-catalog-worker.shared.test-s
 describe("prepared model catalog worker input", () => {
   it("reuses captured config digests for plugin context identities", () => {
     const marker = "synthetic-worker-roster-boundary";
-    const digests = vi.spyOn(cryptoDigest, "sha256Base64Url");
+    using digests = vi.spyOn(cryptoDigest, "sha256Base64Url");
     const config = captureRuntimeConfig({
       agents: {
         entries: Object.fromEntries(
@@ -20,42 +20,39 @@ describe("prepared model catalog worker input", () => {
     });
     const pluginMetadataSnapshot = createPluginMetadataSnapshotFixture();
     const agentFacts = catalogAgentFacts({ config, agentDir: "/tmp/catalog-agent" }, {});
-    try {
-      let captured: ReturnType<typeof createPreparedModelCatalogWorkerInput> | undefined;
-      for (let index = 0; index < 32; index++) {
-        captured = createPreparedModelCatalogWorkerInput({
-          agentFacts: { ...agentFacts, input: { config, agentDir: `/tmp/catalog-agent-${index}` } },
-          pluginMetadataSnapshot,
-        });
-        fingerprintPreparedModelCatalogPluginContext(captured);
-      }
-      expect(
-        digests.mock.calls.filter(([value]) => typeof value === "string" && value.includes(marker)),
-      ).toHaveLength(1);
-      const cloned = structuredClone(captured!);
-      const fingerprint = fingerprintPreparedModelCatalogPluginContext(captured!);
-      expect(
-        fingerprintPreparedModelCatalogPluginContext({ ...cloned, pluginMetadataSnapshot }),
-      ).toBe(fingerprint);
-      const builtInput = createPreparedModelCatalogWorkerInput({
-        agentFacts: { ...agentFacts, input: captured!.input },
+
+    let captured: ReturnType<typeof createPreparedModelCatalogWorkerInput> | undefined;
+    for (let index = 0; index < 32; index++) {
+      captured = createPreparedModelCatalogWorkerInput({
+        agentFacts: { ...agentFacts, input: { config, agentDir: `/tmp/catalog-agent-${index}` } },
         pluginMetadataSnapshot,
-        preferBuiltPluginArtifacts: true,
       });
-      expect(cloned.preferBuiltPluginArtifacts).toBe(false);
-      expect(builtInput.preferBuiltPluginArtifacts).toBe(true);
-      expect(fingerprintPreparedModelCatalogPluginContext(builtInput)).not.toBe(fingerprint);
-      const changedNull = structuredClone(cloned);
-      changedNull.input.config.plugins!.entries!.fixture!.config = { sentinel: null };
-      expect(
-        fingerprintPreparedModelCatalogPluginContext({ ...changedNull, pluginMetadataSnapshot }),
-      ).not.toBe(fingerprint);
-      cloned.input.config.agents!.entries!["agent-0"]!.name = "changed";
-      expect(
-        fingerprintPreparedModelCatalogPluginContext({ ...cloned, pluginMetadataSnapshot }),
-      ).not.toBe(fingerprint);
-    } finally {
-      digests.mockRestore();
+      fingerprintPreparedModelCatalogPluginContext(captured);
     }
+    expect(
+      digests.mock.calls.filter(([value]) => typeof value === "string" && value.includes(marker)),
+    ).toHaveLength(1);
+    const cloned = structuredClone(captured!);
+    const fingerprint = fingerprintPreparedModelCatalogPluginContext(captured!);
+    expect(
+      fingerprintPreparedModelCatalogPluginContext({ ...cloned, pluginMetadataSnapshot }),
+    ).toBe(fingerprint);
+    const builtInput = createPreparedModelCatalogWorkerInput({
+      agentFacts: { ...agentFacts, input: captured!.input },
+      pluginMetadataSnapshot,
+      preferBuiltPluginArtifacts: true,
+    });
+    expect(cloned.preferBuiltPluginArtifacts).toBe(false);
+    expect(builtInput.preferBuiltPluginArtifacts).toBe(true);
+    expect(fingerprintPreparedModelCatalogPluginContext(builtInput)).not.toBe(fingerprint);
+    const changedNull = structuredClone(cloned);
+    changedNull.input.config.plugins!.entries!.fixture!.config = { sentinel: null };
+    expect(
+      fingerprintPreparedModelCatalogPluginContext({ ...changedNull, pluginMetadataSnapshot }),
+    ).not.toBe(fingerprint);
+    cloned.input.config.agents!.entries!["agent-0"]!.name = "changed";
+    expect(
+      fingerprintPreparedModelCatalogPluginContext({ ...cloned, pluginMetadataSnapshot }),
+    ).not.toBe(fingerprint);
   });
 });

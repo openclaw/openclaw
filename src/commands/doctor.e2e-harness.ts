@@ -80,7 +80,7 @@ const {
   serviceUninstall,
   uninstallLegacyGatewayServices,
 } = createDoctorServiceMocks();
-export { callGateway, serviceIsLoaded, serviceRestart };
+export { callGateway };
 
 export const autoMigrateLegacyStateDir = vi.fn().mockResolvedValue({
   migrated: false,

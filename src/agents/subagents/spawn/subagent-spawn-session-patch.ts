@@ -88,6 +88,7 @@ export async function createInitialSubagentSession(input: {
   >;
   swarmGroupId?: string;
   collect: boolean;
+  blind?: boolean;
   outputSchema?: Record<string, unknown>;
   firstAdmission?: { delivery?: DeliveryContext; group: TrustedGroupMetadata };
 }): Promise<
@@ -111,6 +112,8 @@ export async function createInitialSubagentSession(input: {
   const initialChildSessionPatch: Partial<InternalSessionEntry> = {
     ...admissionPatch,
     ...(subagentRole ? { subagentRole } : {}),
+    // Explicit undefined keeps a reused child key from inheriting an earlier blind spawn.
+    blindPrompt: params.blind ? true : undefined,
     inheritedToolPolicyVersion: 1,
     ...(params.delegatedToolPolicy ? { delegatedToolPolicy: params.delegatedToolPolicy } : {}),
     ...(params.inheritedToolPolicySource

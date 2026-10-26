@@ -285,7 +285,7 @@ export function prepareSessionRowSelection(
   const rows =
     !selection || !prepared?.ordered
       ? (prepared?.candidateKeys
-          ? [...prepared.candidateKeys].map((key) => ({ key }))
+          ? Array.from(prepared.candidateKeys, (key) => ({ key }))
           : [{ key: prepared?.key, sessionIdOrKey: prepared?.sessionIdOrKey, parentSessionKey }]
         ).flatMap((query) =>
           projection.selectEntries(

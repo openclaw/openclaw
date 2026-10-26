@@ -84,22 +84,6 @@ export function requireRef(ref: string | undefined) {
   return refValue;
 }
 
-async function readActionsFile(filePath: string): Promise<string> {
-  try {
-    // Preserve existing symlinked inputs while rejecting oversized files and FIFOs.
-    const { buffer } = await readRegularFile({
-      filePath: await fs.realpath(filePath),
-      maxBytes: ACTIONS_INPUT_MAX_BYTES,
-    });
-    return decodeJsonInput(buffer, "--actions-file");
-  } catch (cause) {
-    if (cause instanceof FsSafeError && cause.code === "too-large") {
-      throw createActionsInputTooLargeError("--actions-file", cause);
-    }
-    throw cause;
-  }
-}
-
 function decodeJsonInput(buffer: Buffer, source: string): string {
   if (!isUtf8(buffer)) {
     throw new Error(`${source} must be valid UTF-8.`);
@@ -114,9 +98,12 @@ export async function readFields(opts: {
   if (opts.fields !== undefined && opts.fieldsFile !== undefined) {
     throw new Error("Specify only one of --fields or --fields-file");
   }
-  const payload = opts.fieldsFile
-    ? decodeJsonInput(await fs.readFile(opts.fieldsFile), "--fields-file")
-    : (opts.fields ?? "");
+  let payload = opts.fields ?? "";
+  if (opts.fieldsFile) {
+    // Fields files retain their uncapped, symlink-following input contract.
+    const { buffer } = await readRegularFile({ filePath: await fs.realpath(opts.fieldsFile) });
+    payload = decodeJsonInput(buffer, "--fields-file");
+  }
   return normalizeBrowserFormFields(parseBrowserInputArray(payload, "fields"));
 }
 
@@ -146,22 +133,32 @@ function createActionsInputTooLargeError(source: string, cause?: unknown): FsSaf
   );
 }
 
-async function readStdinText(): Promise<string> {
-  const bytes = await readByteStreamWithLimit(process.stdin, {
-    maxBytes: ACTIONS_INPUT_MAX_BYTES,
-    onOverflow: () => createActionsInputTooLargeError("--actions-file - stdin"),
-  });
-  return decodeJsonInput(bytes, "--actions-file - stdin");
-}
-
 export async function readActionsPayload(opts: {
   actions?: string;
   actionsFile?: string;
 }): Promise<string> {
   if (opts.actionsFile) {
-    return opts.actionsFile === "-"
-      ? await readStdinText()
-      : await readActionsFile(opts.actionsFile);
+    if (opts.actionsFile === "-") {
+      const bytes = await readByteStreamWithLimit(process.stdin, {
+        maxBytes: ACTIONS_INPUT_MAX_BYTES,
+        onOverflow: () => createActionsInputTooLargeError("--actions-file - stdin"),
+      });
+      return decodeJsonInput(bytes, "--actions-file - stdin");
+    }
+    const filePath = opts.actionsFile;
+    try {
+      // Preserve existing symlinked inputs while rejecting oversized files and FIFOs.
+      const { buffer } = await readRegularFile({
+        filePath: await fs.realpath(filePath),
+        maxBytes: ACTIONS_INPUT_MAX_BYTES,
+      });
+      return decodeJsonInput(buffer, "--actions-file");
+    } catch (cause) {
+      if (cause instanceof FsSafeError && cause.code === "too-large") {
+        throw createActionsInputTooLargeError("--actions-file", cause);
+      }
+      throw cause;
+    }
   }
   return opts.actions ?? "";
 }

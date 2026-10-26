@@ -22,6 +22,7 @@ import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { loadPluginRegistrySnapshotWithMetadata } from "./plugin-registry-snapshot.js";
 import { createColdPluginFixture } from "./test-helpers/cold-plugin-fixtures.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
+import { mockLinuxMountInfo } from "./test-helpers/linux-mountinfo.js";
 import { writeManagedNpmPlugin } from "./test-helpers/managed-npm-plugin.js";
 import { writeRegistryPackagePlugin } from "./test-helpers/plugin-registry-snapshot.js";
 
@@ -122,20 +123,6 @@ function writeBundledPlugin(
       extensions: [`./${entryPath}`],
       ...(build ? { build } : {}),
     },
-  });
-}
-
-function mockLinuxMountInfo(mountPoints: readonly string[]) {
-  const originalReadFileSync = fs.readFileSync;
-  return vi.spyOn(fs, "readFileSync").mockImplementation((filePath, options) => {
-    if (filePath === "/proc/self/mountinfo") {
-      return mountPoints
-        .map(
-          (mountPoint, index) => `${100 + index} 99 0:${index} / ${mountPoint} rw - tmpfs tmpfs rw`,
-        )
-        .join("\n");
-    }
-    return originalReadFileSync(filePath, options as never) as never;
   });
 }
 

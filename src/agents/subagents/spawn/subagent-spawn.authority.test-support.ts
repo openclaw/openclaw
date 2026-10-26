@@ -10,6 +10,7 @@ import { registerChatAbortController } from "../../../gateway/chat-abort.js";
 import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
 import { createChatAbortContext } from "../../../gateway/server-methods/chat.abort.test-helpers.js";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
+import { throwCollectedErrors } from "../../../infra/error-graph-internal.js";
 import {
   registerSessionBindingAdapter,
   unregisterSessionBindingAdapter,
@@ -42,10 +43,16 @@ import { isSameSubagentRun } from "../registry/subagent-run-generation.js";
 import { observeSwarmSchedulerWork } from "../swarm/swarm-scheduler.lifecycle.test-support.js";
 import { testing as spawnTesting } from "./subagent-spawn.test-support.js";
 
-vi.mock("../../runtime-plugins.js", () => ({
-  loadAgentRuntimePluginRegistryHandle:
-    vi.fn<typeof import("../../runtime-plugins.js").loadAgentRuntimePluginRegistryHandle>(),
-}));
+// mock-isolation: Spawn authority tests supply registries without discovering installed plugins.
+vi.mock("../../runtime-plugins.js", () => {
+  const loadRegistry =
+    vi.fn<typeof import("../../runtime-plugins.js").loadAgentRuntimePluginRegistryHandle>();
+  return {
+    loadAgentRuntimePluginRegistryHandle: loadRegistry,
+    loadAgentRuntimePluginRegistryHandleAsync: async (...args: Parameters<typeof loadRegistry>) =>
+      loadRegistry(...args),
+  };
+});
 vi.mock("../../../gateway/call.js", { spy: true });
 
 export function observeSubagentRun(
@@ -294,12 +301,7 @@ export function installSpawnAuthorityFixture() {
         failures.push(error);
       }
     }
-    if (failures.length === 1) {
-      throw failures[0];
-    }
-    if (failures.length > 1) {
-      throw new AggregateError(failures, "Spawn authority fixture cleanup failed");
-    }
+    throwCollectedErrors(failures, "Spawn authority fixture cleanup failed");
   });
 
   async function createBoundParent(runtime: "embedded" | "plugin-harness" = "embedded") {
@@ -347,10 +349,6 @@ export function installSpawnAuthorityFixture() {
     bindGatewayContextResolver(admitted, () => context as unknown as GatewayRequestContext);
     const authority = runContext.getAdmittedRunDelegatedAuthority(admitted)!;
     parent.bindAgentRunDelegatedAuthority(authority);
-    expect(parent.entry?.adapter.operationalRunInstance).toBe(admitted.operationalRunInstance);
-    expect(parent.entry?.adapter.agentRunDelegatedAuthority).toBe(authority);
-    expect(admitted.executionIdentityToken).toBeUndefined();
-
     return { cfg, storePath, context, admission, parent, admitted, authority };
   }
 

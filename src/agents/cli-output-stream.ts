@@ -413,7 +413,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       resetReplySegment();
     }
 
-    let result = parseClaudeCliJsonlResult({
+    const result = parseClaudeCliJsonlResult({
       backend: params.backend,
       providerId: params.providerId,
       parsed,
@@ -428,10 +428,8 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
         result.terminalFailure?.reason === "turn_stopped" ? result.terminalFailure : undefined;
       const stoppedTurnErrorText = stoppedTurn ? (result.errorText ?? "") : "";
       if (stoppedTurn) {
-        const delivered = { ...result };
-        delete delivered.errorText;
-        delete delivered.terminalFailure;
-        result = delivered;
+        delete result.errorText;
+        delete result.terminalFailure;
       } else if (result.errorText) {
         output = result;
         return;
@@ -451,7 +449,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
               onVisibleText: emitClaudeVisibleText,
             });
           }
-          result = { ...result, text: taggedResult.visibleText.trim() };
+          result.text = taggedResult.visibleText.trim();
         }
       }
       // Empty terminal result can follow already-streamed text; keep that text.

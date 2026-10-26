@@ -11,8 +11,8 @@ import {
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { MarkdownImageSpan as MarkdownImageMatch } from "../../packages/markdown-core/src/image-spans.js";
-import { findCodeRegions } from "../shared/text/code-regions.js";
-import { parseInlineDirectives } from "../utils/directive-tags.js";
+import { findCodeRegions } from "../shared/text/code-ranges.js";
+import { parseInlineDirectives } from "../utils/directive-tags-batch.js";
 import { parseInboundMediaUri } from "./inbound-media-uri.js";
 
 // A MEDIA directive consumes its entire line. Keep the optional leading backtick:

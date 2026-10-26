@@ -236,7 +236,7 @@ export class ShellGatewayOwner {
       return;
     }
     if (needsRefresh) {
-      await runtimeConfig.refresh();
+      await runtimeConfig.refreshDisplay();
       return;
     }
     if (retainedLocal) {
@@ -298,7 +298,7 @@ export class ShellGatewayOwner {
         (runtimeConfig.state.configSnapshot || !runtimeConfig.state.bootstrapConfig)
       ) {
         // Save notifications reconcile in place so active editors keep focus and stay interactive.
-        void runtimeConfig.refresh({ background: true });
+        void runtimeConfig.refreshDisplay({ background: true });
       }
       this.scheduleAgentRosterRefresh();
       return;
@@ -516,7 +516,7 @@ export class ShellGatewayOwner {
     const context = this.host.context;
     const generation = ++this.preferenceGeneration;
     this.runtimeConfigReady = (
-      runtimeConfig.state.bootstrapConfig ? Promise.resolve() : runtimeConfig.ensureLoaded()
+      runtimeConfig.state.bootstrapConfig ? Promise.resolve() : runtimeConfig.ensureDisplayLoaded()
     ).then(async () => {
       if (
         this.host.context !== context ||

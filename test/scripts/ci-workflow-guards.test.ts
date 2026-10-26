@@ -5720,7 +5720,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expectIncludes(run, [
       'OPENCLAW_VITEST_FS_MODULE_CACHE_PATH="${RUNNER_TEMP}/vitest-module-cache/${name}"',
       "test/scripts/doctor-config-preflight-plugin-index.built-cli.e2e.test.ts",
-      "env OPENCLAW_E2E_USE_PREBUILT_DIST=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=660000 node scripts/run-vitest.mjs run",
+      "env OPENCLAW_VITEST_WORKER_CACHE=1 OPENCLAW_E2E_USE_PREBUILT_DIST=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=660000 node scripts/run-vitest.mjs run",
       "--config test/vitest/vitest.e2e.config.ts",
       "Selected target predates",
       "pnpm test:build:singleton",

@@ -12,19 +12,21 @@ import type {
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import {
+  createGatewayBrowserClientFixture,
+  createInitializationContext,
+} from "./chat-application-context.test-support.ts";
 import { syncSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
 import { createMountedPanes } from "./chat-pane-mounted.test-support.ts";
 import {
   connectPaneTestView,
-  createGatewayBrowserClientFixture,
-  createInitializationContext,
   createRenderTestChatPane,
   createTestChatPane,
   getPaneTestRuntime,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
-import { handlePageGatewayEvent } from "./chat-state-events.ts";
+import { handlePageGatewayEvent } from "./chat-state-events.test-support.ts";
 
 describe("chat pane approval replay subscriptions", () => {
   it("preserves live approval transitions received while session replay is awaiting publication", async () => {

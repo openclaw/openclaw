@@ -25,6 +25,7 @@ import {
 import { resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
 import { withPreparedSessionCapabilityRead } from "./subagents/spawn/subagent-session-store.js";
 import { createAgentToolsSandboxContext } from "./test-helpers/agent-tools-sandbox-context.js";
+import { createOpenClawOnlyToolConstructionPlan } from "./test-helpers/tool-construction-plan.js";
 import { resolveCoreToolFactoryFamily } from "./tool-catalog.js";
 import {
   getGatewayToolCallerIdentity,
@@ -461,7 +462,7 @@ describe("gateway client capability tool filtering", () => {
     expect(hasTool(createOpenClawTools(), "github_identity_status")).toBe(false);
     expect(
       hasTool(createOpenClawTools({ githubPublicationAvailable: false }), "github_publish"),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       hasTool(createOpenClawTools({ githubPublicationAvailable: false }), "github_identity_status"),
     ).toBe(true);
@@ -476,8 +477,7 @@ describe("gateway client capability tool filtering", () => {
       publishing: false,
       deny: false,
       managed: true,
-      expected: false,
-      actions: false,
+      expected: true,
     },
     {
       scope: "operator.write",
@@ -485,7 +485,6 @@ describe("gateway client capability tool filtering", () => {
       deny: false,
       managed: true,
       expected: true,
-      actions: true,
     },
     {
       scope: "operator.admin",
@@ -493,7 +492,6 @@ describe("gateway client capability tool filtering", () => {
       deny: false,
       managed: true,
       expected: true,
-      actions: true,
     },
     {
       scope: "operator.write",
@@ -501,7 +499,6 @@ describe("gateway client capability tool filtering", () => {
       deny: true,
       managed: true,
       expected: false,
-      actions: false,
     },
     {
       scope: "operator.write",
@@ -509,7 +506,6 @@ describe("gateway client capability tool filtering", () => {
       deny: false,
       managed: false,
       expected: false,
-      actions: false,
     },
     {
       scope: "operator.sessions.write",
@@ -517,7 +513,6 @@ describe("gateway client capability tool filtering", () => {
       deny: false,
       managed: true,
       expected: true,
-      actions: false,
     },
     {
       scope: "operator.write",
@@ -525,7 +520,6 @@ describe("gateway client capability tool filtering", () => {
       deny: false,
       managed: true,
       expected: true,
-      actions: true,
     },
     {
       scope: "operator.admin",
@@ -533,11 +527,10 @@ describe("gateway client capability tool filtering", () => {
       deny: false,
       managed: true,
       expected: true,
-      actions: true,
     },
   ])(
     "projects PR actions for $scope, publishing=$publishing, deny=$deny, managed=$managed",
-    async ({ scope, publishing, deny, managed, expected, actions }) => {
+    async ({ scope, publishing, deny, managed, expected }) => {
       const cfg = withDefaultRoster(deny ? { tools: { deny: ["github_publish"] } } : {});
       const sessionKey = "agent:main:nonpublishing-parent";
       const additionalInheritedToolNamesRef: string[] = [];
@@ -564,13 +557,7 @@ describe("gateway client capability tool filtering", () => {
             additionalInheritedToolNamesRef,
             senderIsOwner: false,
             wrapBeforeToolCallHook: false,
-            toolConstructionPlan: {
-              includeBaseCodingTools: false,
-              includeShellTools: false,
-              includeChannelTools: false,
-              includeOpenClawTools: true,
-              includePluginTools: false,
-            },
+            toolConstructionPlan: createOpenClawOnlyToolConstructionPlan(),
           }),
       );
       expect(additionalInheritedToolNamesRef.includes("github_publish")).toBe(
@@ -587,7 +574,7 @@ describe("gateway client capability tool filtering", () => {
           action: "inspect",
           publishingSessionKey: "agent:main:child",
         }),
-      ).toBe(actions);
+      ).toBe(true);
       expect(Value.Check(tool.parameters, { title: "Publish workspace" })).toBe(publishing);
       expect(Value.Check(tool.parameters, { action: "publish" })).toBe(publishing);
       expect(
@@ -598,28 +585,13 @@ describe("gateway client capability tool filtering", () => {
       ).toBe(false);
       expect(Value.Check(tool.parameters, { action: "refresh_base" })).toBe(false);
       expect(Value.Check(tool.parameters, { action: "edit" })).toBe(publishing);
-      expect(Value.Check(tool.parameters, { action: "ready" })).toBe(publishing || actions);
+      expect(Value.Check(tool.parameters, { action: "ready" })).toBe(true);
       expect(
         Value.Check(tool.parameters, { action: "ready", publishingSessionKey: "agent:main:child" }),
-      ).toBe(actions);
+      ).toBe(true);
       expect(Value.Check(tool.parameters, { action: "upload_evidence" })).toBe(false);
       if (!publishing) {
         expect(tool.description).toContain("cannot publish its own workspace");
-      } else if (!actions) {
-        expect(tool.parameters).toHaveProperty("properties", {
-          action: expect.any(Object),
-          pullRequestUrl: expect.any(Object),
-          draft: expect.any(Object),
-          title: expect.any(Object),
-          body: expect.any(Object),
-          requestId: expect.any(Object),
-          expectedHeadCommit: expect.any(Object),
-          expectedTitle: expect.any(Object),
-          expectedBody: expect.any(Object),
-        });
-        expect(tool.parameters).toHaveProperty("additionalProperties", false);
-        expect(tool.description).not.toContain("use inspect");
-        expect(tool.description).toContain("expectedHeadCommit");
       }
     },
   );
@@ -650,7 +622,7 @@ describe("gateway client capability tool filtering", () => {
       available: true,
       expected: false,
     },
-    { name: "unavailable publication", config: {}, available: false, expected: false },
+    { name: "unavailable publication", config: {}, available: false, expected: true },
     { name: "unprepared publication", config: {}, available: undefined, expected: false },
   ] satisfies {
     name: string;
@@ -680,16 +652,10 @@ describe("gateway client capability tool filtering", () => {
         githubPublicationAvailable: available,
         senderIsOwner: false,
         wrapBeforeToolCallHook: false,
-        toolConstructionPlan: {
-          includeBaseCodingTools: false,
-          includeShellTools: false,
-          includeChannelTools: false,
-          includeOpenClawTools: true,
-          includePluginTools: false,
-        },
+        toolConstructionPlan: createOpenClawOnlyToolConstructionPlan(),
       });
       expect(hasTool(tools, "github_publish")).toBe(expected);
-      if (expected) {
+      if (expected && available) {
         await expectToolNamed(tools, "github_publish").execute("publish-1", {
           title: "Publish fix",
         });

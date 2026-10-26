@@ -263,10 +263,7 @@ describe("loadControlUiGitHubPreview", () => {
         ) {
           changed = true;
           if (stage !== "final visibility check") {
-            return new Response(null, {
-              status: 301,
-              headers: { Location: url.replace("/openclaw/openclaw", "/openclaw/renamed") },
-            });
+            return githubRedirect(url.replace("/openclaw/openclaw", "/openclaw/renamed"));
           }
         }
         return githubJson(

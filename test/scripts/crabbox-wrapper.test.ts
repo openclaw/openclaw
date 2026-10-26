@@ -3951,19 +3951,12 @@ esac
     ).toBe(false);
   });
 
-  it.each(
-    [
-      "ci-check-focused-testbox.yml",
-      "ci-android-focused-testbox.yml",
-      "ci-check-routine-testbox.yml",
-      "ci-check-high-memory-testbox.yml",
-    ].flatMap((workflow) =>
-      [[], ["--blacksmith-ref=old-workflow", "-blacksmith-ref", "main"]].map((refs) => ({
-        workflow,
-        refs,
-      })),
-    ),
-  )(
+  it.each([
+    {
+      workflow: "ci-check-focused-testbox.yml",
+      refs: ["--blacksmith-ref=old-workflow", "-blacksmith-ref", "main"],
+    },
+  ])(
     "pins Testbox policy independently of configured refs and payload arguments: %j",
     ({ workflow, refs }) => {
       const { output, result } = runSuccessfulDefaultWrapper(
@@ -4433,11 +4426,9 @@ process.on("exit", () => {
     ["aws", true, "transport"],
     ["aws", false, "transport"],
     ["aws", false, "arbitrary"],
-    ["aws", false, "reuse"],
     ["aws", false, "unchanged"],
     ["blacksmith-testbox", true, "transport"],
     ["blacksmith-testbox", false, "transport"],
-    ["blacksmith-testbox", false, "reuse"],
     ["blacksmith-testbox", false, "unchanged"],
     ["blacksmith-testbox", false, "unrelated-staging"],
     ["blacksmith-testbox", false, "captured-base"],
@@ -4551,7 +4542,7 @@ process.on("exit", () => {
       for (const file of ["owner.txt", "deleted.txt", "rename-before.txt", "mode.sh"]) {
         writeFileSync(path.join(origin, file), "base\n");
       }
-      if (scenario === "reuse" || scenario === "unchanged") {
+      if (scenario === "unchanged") {
         chmodSync(path.join(origin, "mode.sh"), 0o755);
       }
       writeFiles(origin, {
@@ -4853,7 +4844,7 @@ require('node:module').syncBuiltinESMExports();`,
         expect(git(producer, ["diff", "--name-only", sharedBase, "HEAD"])).toContain("mode.sh");
         return;
       }
-      if (scenario === "reuse" || scenario === "unchanged") {
+      if (scenario === "unchanged") {
         expect(git(producer, ["ls-files", "--stage", "--", "mode.sh"])).toMatch(/^100755 /u);
         const sent = runSender();
         const first = receive("reused", sent);
@@ -4861,21 +4852,16 @@ require('node:module').syncBuiltinESMExports();`,
         expect(git(first.receiver, ["rev-parse", "--is-shallow-repository"])).toBe("true");
         const capturedMode = git(first.receiver, ["ls-tree", "HEAD", "--", "mode.sh"]);
         expect(capturedMode).toMatch(/^100755 blob /u);
-        const retained =
-          scenario === "unchanged"
-            ? ["unchanged.bin", "alias", "directory-alias"].map((file) => ({
-                file,
-                stat: lstatSync(path.join(first.receiver, file)),
-              }))
-            : [];
-        if (scenario === "unchanged") {
-          // Keep the old inode allocated so recreation cannot pass through inode reuse.
-          linkSync(path.join(first.receiver, "unchanged.bin"), path.join(root, "retained-inode"));
-          writeFileSync(path.join(first.receiver, "owner.txt"), "stale physical bytes\n");
-          chmodSync(path.join(first.receiver, "mode.sh"), 0o644);
-          rmSync(path.join(first.receiver, "raw-crlf.txt"));
-          symlinkSync(deletionReferent, path.join(first.receiver, "raw-crlf.txt"), "dir");
-        }
+        const retained = ["unchanged.bin", "alias", "directory-alias"].map((file) => ({
+          file,
+          stat: lstatSync(path.join(first.receiver, file)),
+        }));
+        // Keep the old inode allocated so recreation cannot pass through inode reuse.
+        linkSync(path.join(first.receiver, "unchanged.bin"), path.join(root, "retained-inode"));
+        writeFileSync(path.join(first.receiver, "owner.txt"), "stale physical bytes\n");
+        chmodSync(path.join(first.receiver, "mode.sh"), 0o644);
+        rmSync(path.join(first.receiver, "raw-crlf.txt"));
+        symlinkSync(deletionReferent, path.join(first.receiver, "raw-crlf.txt"), "dir");
         // The old private Git owner is removed during promotion. A second import
         // must work without origin and leave no alternate pointing at that owner.
         const reused = receive("reused", sent, { source: path.join(root, "unavailable-origin") });

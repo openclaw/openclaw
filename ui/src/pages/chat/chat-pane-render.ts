@@ -15,7 +15,7 @@ import {
 import { hasSessionPresenceViewers } from "../../lib/presence-users.ts";
 import { readSessionMethodScopeAccess } from "../../lib/session-method-access.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
-import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
+import { scopedAgentParamsForSession } from "../../lib/sessions/navigation.ts";
 import { resolveUiConfiguredMainKey } from "../../lib/sessions/session-key.ts";
 import { navigateToModelProvider } from "../model-providers/navigation.ts";
 import { isChatBubbleMode } from "./chat-bubble-mode.ts";
@@ -29,6 +29,7 @@ import { chatPaneResourceProps } from "./chat-pane-resource-presentation.ts";
 import {
   createChatPaneQueuedEditProps,
   createChatPaneSessionActionCallbacks,
+  canDismissChatPendingInputs,
   readChatPaneMutationAccess,
   renderChatPaneComposerControls,
 } from "./chat-pane-session-controls.ts";
@@ -59,7 +60,7 @@ import { openSessionWorkspaceFile } from "./components/chat-session-workspace.ts
 import { chatFailureRunId, hasAbortableSessionRun, hasDirectSessionRun } from "./run-lifecycle.ts";
 import { lockChatScroll, scheduleChatScroll } from "./scroll.ts";
 import { createChatWidgetLayout } from "./session-message-cache.ts";
-import { resolveChatProjectionRunId } from "./tool-stream-status.ts";
+import { resolveChatProjectionRunId } from "./tool-stream-snapshot.ts";
 import { workspaceResultConflictFromPlacement } from "./workspace-conflict.ts";
 
 registerChatSessionEnglish();
@@ -68,7 +69,10 @@ registerChatSessionEnglish();
 const emptyTranscriptItems: [] = [];
 
 export class ChatPaneRuntime extends ChatPaneLayoutRender {
-  render(readProviderReview?: () => ChatProviderReviewOwner) {
+  render(
+    readProviderReview?: () => ChatProviderReviewOwner | undefined,
+    readRealtimeTalkConversation?: ChatProps["readRealtimeTalkConversation"],
+  ) {
     const state = this.state;
     if (!state) {
       return { layout: null, capabilityDialogs: undefined, providerReviewSource: undefined };
@@ -360,6 +364,10 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         ? this.captureProgressCardRefreshAction()
         : undefined;
     const props: ChatProps = {
+      canDismissPendingInputs: canDismissChatPendingInputs(mutationAccess, selectedSession, {
+        nativeConversation,
+        participationBlocked: sessionParticipationBlocked,
+      }),
       applicationContext: this.context,
       registerBrowserAnnotationFocus: this.registerBrowserAnnotationFocus,
       transcript: this.transcript,
@@ -491,7 +499,9 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       realtimeTalkDetail: state.realtimeTalk.snapshot.realtimeTalkDetail,
       realtimeTalkInputNotice: state.realtimeTalk.snapshot.realtimeTalkInputNotice,
       realtimeTalkInputLevel: state.realtimeTalk.snapshot.realtimeTalkInputLevel,
-      realtimeTalkConversation: state.realtimeTalk.snapshot.realtimeTalkConversationState.entries,
+      readRealtimeTalkConversation:
+        readRealtimeTalkConversation ??
+        (() => state.realtimeTalk.snapshot.realtimeTalkConversationState.entries),
       realtimeTalkVideoStream: state.realtimeTalk.snapshot.realtimeTalkVideoStream,
       realtimeTalkCameraDevices: state.realtimeTalk.snapshot.realtimeTalkCameraDevices,
       realtimeTalkVideoCapable: state.realtimeTalk.snapshot.realtimeTalkVideoCapable,

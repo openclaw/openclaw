@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { hydratePromptMediaMessages } from "../../agents/embedded-agent-runner/run/images.js";
@@ -26,12 +26,15 @@ vi.mock("../../agents/sandbox/context.js", () => ({
 beforeEach(() => workspace.mockReset());
 const read = (root: string, file: string) => fs.readFile(path.resolve(root, file), "utf8");
 
-async function mediaFixture(home: string) {
+async function mediaFixture(home: string, sandbox = false) {
   const source = path.join(home, ".openclaw", "media", "inbound", "synthetic.png");
   await fs.mkdir(path.dirname(source), { recursive: true });
   await fs.writeFile(source, "image");
+  const root = path.join(home, sandbox ? "sandbox" : "workspace");
+  workspace.mockResolvedValue(sandbox ? { workspaceDir: root, containerWorkdir: "/work" } : null);
   return {
     source,
+    root,
     ...createSandboxMediaContexts(source),
     cfg: createSandboxMediaStageConfig(home),
     sessionKey: "agent:main:main",
@@ -45,7 +48,6 @@ it.each(["settled", "failed", "aborted"] as const)(
     withHome("attribution-media-", async (home) => {
       const fixture = await mediaFixture(home);
       const { workspaceDir } = fixture;
-      workspace.mockResolvedValue(null);
       const entered = createDeferred();
       const baseline = createDeferred();
       const controller = new AbortController();
@@ -84,54 +86,51 @@ it.each(["settled", "failed", "aborted"] as const)(
     }),
 );
 
-describe.each([false, true])("history (sandbox=%s)", (sandbox) => {
-  it.each(["path-only", "physical-alias", "managed-alias", "file-alias"])(
-    "keeps %s images fetchable",
-    (reference) =>
-      withHome("staged-history-", async (home) => {
-        const fixture = await mediaFixture(home);
-        const { source, ctx, sessionCtx } = fixture;
-        const uri = "media://inbound/synthetic.png";
-        const root = path.join(home, sandbox ? "sandbox" : "workspace");
-        workspace.mockResolvedValue(
-          sandbox ? { workspaceDir: root, containerWorkdir: "/work" } : null,
-        );
-        const mediaPath = reference === "managed-alias" ? uri : source;
-        const url =
-          reference === "path-only"
-            ? undefined
-            : reference === "file-alias"
-              ? pathToFileURL(source).href
-              : mediaPath;
-        ctx.media = [{ path: mediaPath, url, contentType: "image/png", kind: "image" }];
-        const result = await stageSandboxMedia(fixture);
-        const stagedPath = result.staged.get(0)!;
-        expect(stagedPath).not.toBe(source);
-        expect(await read(root, stagedPath)).toBe("image");
-        expect(sessionCtx.media).toEqual(ctx.media);
+it.each([
+  [false, "path-only"],
+  [true, "path-only"],
+  [true, "physical-alias"],
+  [true, "managed-alias"],
+  [true, "file-alias"],
+] as const)("keeps images fetchable (sandbox=%s, reference=%s)", (sandbox, reference) =>
+  withHome("staged-history-", async (home) => {
+    const fixture = await mediaFixture(home, sandbox);
+    const { source, root, ctx, sessionCtx } = fixture;
+    const uri = "media://inbound/synthetic.png";
+    const mediaPath = reference === "managed-alias" ? uri : source;
+    const url =
+      reference === "path-only"
+        ? undefined
+        : reference === "file-alias"
+          ? pathToFileURL(source).href
+          : mediaPath;
+    ctx.media = [{ path: mediaPath, url, contentType: "image/png", kind: "image" }];
+    const result = await stageSandboxMedia(fixture);
+    const stagedPath = result.staged.get(0)!;
+    expect(stagedPath).not.toBe(source);
+    expect(await read(root, stagedPath)).toBe("image");
+    expect(sessionCtx.media).toEqual(ctx.media);
 
-        const [history] = sanitizeChatHistoryMessages([
-          buildPersistedUserTurnMessage({ text: "attachment", media: ctx.media }),
-        ]);
-        expect(history).toMatchObject({
-          __openclaw: { media: [{ url: uri, contentType: "image/png", kind: "image" }] },
-        });
-        expect(JSON.stringify(history)).not.toContain(home);
-        expect(JSON.stringify(history)).not.toContain("openclaw-staged-");
-      }),
-  );
-});
+    const [history] = sanitizeChatHistoryMessages([
+      buildPersistedUserTurnMessage({ text: "attachment", media: ctx.media }),
+    ]);
+    expect(history).toMatchObject({
+      __openclaw: { media: [{ url: uri, contentType: "image/png", kind: "image" }] },
+    });
+    expect(JSON.stringify(history)).not.toContain(home);
+    expect(JSON.stringify(history)).not.toContain("openclaw-staged-");
+  }),
+);
 
 it.each(["present", "missing", "outside-root"] as const)(
   "replays a staged photo on a later sandbox turn: %s",
   (copy) =>
     withHome("staged-history-replay-", async (home) => {
-      const fixture = await mediaFixture(home);
-      let root = path.join(home, "sandbox");
+      const fixture = await mediaFixture(home, true);
+      let { root } = fixture;
       const photo = createSolidPngBuffer(1, 1, { r: 0, g: 0, b: 255 });
       await fs.writeFile(fixture.source, photo);
       fixture.ctx.media = [{ path: fixture.source, contentType: "image/png" }];
-      workspace.mockResolvedValue({ workspaceDir: root, containerWorkdir: "/work" });
       const { staged } = await stageSandboxMedia(fixture);
       const message = buildPersistedUserTurnMessage({
         text: "Describe this photo",

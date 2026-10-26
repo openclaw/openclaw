@@ -53,6 +53,7 @@ export type MenuRuntime = {
   ): void;
   pointerDelta(x: number): number;
   item(
+    api: Api,
     value: string,
     disabled?: boolean,
     type?: "checkbox" | "radio",
@@ -85,7 +86,7 @@ export function createMenuRuntime(
   direction: () => "ltr" | "rtl",
   parent: MenuService | undefined,
   options: MenuNavigationOptions,
-  items: () => HTMLElement[],
+  items: (ordered?: boolean) => HTMLElement[],
   notify: () => void,
 ): MenuRuntime {
   let lastPointerX: number | undefined;
@@ -105,7 +106,7 @@ export function createMenuRuntime(
       return;
     }
     const id = service.computed("highlightedId");
-    const rows = items();
+    const rows = items(false);
     const node = id ? rows.find((item) => item.id === id) : undefined;
     if (node && options.focus === "retain" && !pointerHighlight) {
       revealInScrollRegion(overlay.surface, node);
@@ -118,8 +119,10 @@ export function createMenuRuntime(
     ) {
       return;
     }
-    for (const item of rows) {
-      item.tabIndex = options.focus !== "retain" && item === node ? 0 : -1;
+    if (options.focus !== "retain") {
+      for (const item of rows) {
+        item.tabIndex = item === node ? 0 : -1;
+      }
     }
     if (
       node &&
@@ -154,7 +157,9 @@ export function createMenuRuntime(
             ? null
             : `${params.scope.id}:${value}`
           : // Submenu triggers keep the caller's logical value and their own DOM id.
-            ((value == null ? null : items().find((item) => item.dataset.value === value)?.id) ??
+            ((value == null
+              ? null
+              : items(false).find((item) => item.dataset.value === value)?.id) ??
               computed.highlightedId(params));
       },
     },
@@ -439,13 +444,13 @@ export function createMenuRuntime(
       return delta;
     },
     item(
+      api: Api,
       value: string,
       disabled = false,
       type?: "checkbox" | "radio",
       checked = false,
       label = value,
     ) {
-      const api = read();
       const result = type
         ? api.getOptionItemProps({
             value,

@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { onSettled } from "solid-js";
+import { createSignal, onSettled, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { createLayoutMeasurement } from "../../../lib/reactive/layout-measurement.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
@@ -37,20 +37,10 @@ export function animateDetailsDesktopEntrance(shell: HTMLElement) {
   };
 }
 
-export type ChatDetailsDesktopSectionProps = {
-  section: ChatDetailsDesktopSectionId;
-  title: string;
-  expanded: boolean;
-  presented: boolean;
-  animateContentResize?: boolean;
-  onExpandedChange: (expanded: boolean) => void;
-  metadata?: JSX.Element;
-  children: JSX.Element;
-};
-
 /** Shared desktop reveal; callers retain disclosure choice and native content/chrome. */
 export function createDetailsDesktopReveal(
   read: () => readonly [expanded: boolean, presented: boolean, animateContentResize?: boolean],
+  onMotionChange?: (active: boolean) => void,
 ) {
   let disclosure!: HTMLDetailsElement;
   let body!: HTMLDivElement;
@@ -65,6 +55,7 @@ export function createDetailsDesktopReveal(
   const finish = () => {
     animation?.cancel();
     animation = undefined;
+    onMotionChange?.(false);
     disclosure.open = presentation?.[0] ?? false;
     // Keep new content clipped to the last measured size until its resize is scheduled.
     const retainHeight = presentation?.[0] && presentation?.[1] && presentation?.[2];
@@ -118,18 +109,27 @@ export function createDetailsDesktopReveal(
         disclosure.open = true;
         body.style.height = `${to}px`;
         body.style.overflow = "hidden";
-        animation = body.animate(
+        onMotionChange?.(true);
+        const revealAnimation = body.animate(
           reduced
             ? [{ opacity: expanded ? 0 : 1 }, { opacity: expanded ? 1 : 0 }]
             : [{ height: `${from}px` }, { height: `${to}px` }],
           { duration: reduced ? 100 : 300, easing: "cubic-bezier(0.4, 0, 0.2, 1)" },
         );
-        animation.onfinish = finish;
+        animation = revealAnimation;
+        revealAnimation.onfinish = () => {
+          if (animation === revealAnimation) {
+            finish();
+          }
+        };
       };
     },
     { targets: () => [content], changeTiming: "sync" },
   );
-  onSettled(() => () => animation?.cancel());
+  onSettled(() => () => {
+    animation?.cancel();
+    onMotionChange?.(false);
+  });
   return {
     finishOnFocus: () => {
       if (!presentation?.[2]) {
@@ -156,12 +156,23 @@ export function createDetailsDesktopReveal(
 }
 
 /** Desktop section chrome; the caller owns the choice and the leaf owns its data. */
-export function ChatDetailsDesktopSection(props: ChatDetailsDesktopSectionProps) {
-  const reveal = createDetailsDesktopReveal(() => [
-    props.expanded,
-    props.presented,
-    props.animateContentResize,
-  ]);
+export function ChatDetailsDesktopSection(props: {
+  section: ChatDetailsDesktopSectionId;
+  title: string;
+  expanded: boolean;
+  presented: boolean;
+  animateContentResize?: boolean;
+  onExpandedChange: (expanded: boolean) => void;
+  onRevealMotionChange?: (active: boolean) => void;
+  metadata?: JSX.Element;
+  children: JSX.Element;
+}) {
+  // Closed sections need only their heading; retain content after its first reveal.
+  const [contentMounted] = createSignal((previous = false) => previous || props.expanded);
+  const reveal = createDetailsDesktopReveal(
+    () => [props.expanded, props.presented, props.animateContentResize],
+    (active) => props.onRevealMotionChange?.(active),
+  );
   return (
     <details
       ref={reveal.details}
@@ -191,7 +202,9 @@ export function ChatDetailsDesktopSection(props: ChatDetailsDesktopSectionProps)
         inert={!props.expanded || !props.presented}
         aria-hidden={props.expanded ? "false" : "true"}
       >
-        <div ref={reveal.content}>{props.children}</div>
+        <div ref={reveal.content}>
+          <Show when={contentMounted()}>{props.children}</Show>
+        </div>
       </div>
     </details>
   );

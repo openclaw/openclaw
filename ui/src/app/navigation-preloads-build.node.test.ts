@@ -21,6 +21,26 @@ it("describes the emitted static JS/CSS graph without importing optional dynamic
         name: "navigation-fixture",
         resolveId: (id) => (id in modules ? id : undefined),
         load: (id) => modules[id],
+        generateBundle: {
+          order: "pre",
+          handler(_options, bundle) {
+            const pluginAsset = "assets/plugin-island.js";
+            this.emitFile({
+              type: "asset",
+              fileName: pluginAsset,
+              source: "globalThis.plugin = true;",
+            });
+            for (const chunk of Object.values(bundle)) {
+              if (
+                chunk.type === "chunk" &&
+                "/fixture/ui/src/pages/claws/page.tsx" in chunk.modules
+              ) {
+                expect(chunk.viteMetadata).toBeDefined();
+                chunk.viteMetadata!.importedAssets.add(pluginAsset);
+              }
+            }
+          },
+        },
       },
       controlUiNavigationPreloadsPlugin(),
     ],
@@ -56,5 +76,6 @@ it("describes the emitted static JS/CSS graph without importing optional dynamic
   expect(manifest.claws).toContain(page?.fileName);
   expect(manifest.claws?.some((file) => file.endsWith(".css"))).toBe(true);
   expect(manifest.claws).not.toContain(dialog?.fileName);
+  expect(manifest.claws).not.toContain("assets/plugin-island.js");
   expect(descriptor.fileName).toMatch(/^assets\/navigation-preloads-[\w-]+\.json$/u);
 });

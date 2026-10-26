@@ -16,6 +16,7 @@ import {
   resolveDiscoverableScopedChannelPluginIds,
 } from "../../plugins/channel-plugin-ids.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
+import { normalizeManifestChannelCommandDefaults } from "../../plugins/manifest-setup-normalizers.js";
 import { getPluginCache } from "../../plugins/plugin-cache.js";
 import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
@@ -30,7 +31,6 @@ import { getBundledChannelSetupPlugin } from "./bundled.js";
 import type { ManifestChannelPlugin } from "./manifest-channel-plugin.types.js";
 import {
   isSafeManifestChannelId,
-  normalizeChannelCommandDefaults,
   readOwnRecordValue,
   resolveReadOnlyChannelCommandDefaults,
 } from "./read-only-command-defaults.js";
@@ -188,7 +188,7 @@ function createManifestChannelPlugin(params: {
   );
   const detailLabel = normalizeManifestText(packageChannel?.detailLabel, "");
   const systemImage = normalizeManifestText(packageChannel?.systemImage, "");
-  const commands = normalizeChannelCommandDefaults(
+  const commands = normalizeManifestChannelCommandDefaults(
     channelConfig?.commands ?? catalogMeta?.commands,
   );
   return {

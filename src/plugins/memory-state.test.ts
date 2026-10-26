@@ -60,6 +60,10 @@ afterEach(clearMemoryPluginState);
 const { agentIds: _agentIds, ...legacyArtifact } = memoryArtifact();
 // mem0 <= 1.0.14 supplied records without the file-backed sort fields.
 const malformed = { id: "mem0:memory:1", type: "memory" } as unknown as Artifact;
+const laterArtifact = memoryArtifact({
+  workspaceDir: "/tmp/z",
+  absolutePath: "/tmp/z/MEMORY.md",
+});
 
 it("keeps a cleared registry absent while reading memory capability state", async () => {
   await clearActivePluginRegistry();
@@ -88,24 +92,13 @@ it("attributes direct builder registrations to the synchronous plugin owner", ()
   expect(building.memoryPromptPreparations[0]?.pluginId).toBe("actual-plugin");
 });
 
-it("lists active public memory artifacts in deterministic order", async () => {
-  const daily = memoryArtifact({
-    kind: "daily-note",
-    workspaceDir: "/tmp/workspace-b",
-    relativePath: "memory/2026-04-06.md",
-    absolutePath: "/tmp/workspace-b/memory/2026-04-06.md",
-  });
-  const root = memoryArtifact({
-    workspaceDir: "/tmp/workspace-a",
-    absolutePath: "/tmp/workspace-a/MEMORY.md",
-  });
-  registerArtifacts("memory-core", [daily, root]);
-  await expect(listArtifacts({ cfg: {} })).resolves.toEqual([root, daily]);
-});
-
 it.each([
   ["missing agent ids", [legacyArtifact as Artifact], [memoryArtifact({ agentIds: [] })]],
-  ["malformed records", [malformed, memoryArtifact()], [memoryArtifact()]],
+  [
+    "malformed records and unsorted workspaces",
+    [malformed, laterArtifact, memoryArtifact()],
+    [memoryArtifact(), laterArtifact],
+  ],
   ["non-array listings", { artifacts: [] } as unknown as Artifact[], []],
 ] satisfies Array<[string, Artifact[], Artifact[]]>)(
   "normalizes public memory artifacts with %s",
@@ -182,20 +175,13 @@ it.each([
   );
 });
 
-it("appends prompt supplements in plugin-id order", () => {
-  registerBuilder(() => ["primary"]);
-  registerSupplement("memory-wiki", () => ["wiki"]);
+it("appends valid prompt supplements in plugin-id order", () => {
+  registerBuilder(() => ["primary", 1, undefined] as never);
+  registerSupplement("memory-wiki", () => ["wiki", false] as never);
   registerSupplement("alpha-helper", () => ["alpha"]);
+  registerSupplement("async-helper", () => Promise.resolve(["async"]) as never);
 
   expect(buildPrompt({ availableTools: new Set() })).toEqual(["primary", "alpha", "wiki"]);
-});
-
-it("ignores malformed prompt builder output", () => {
-  registerBuilder(() => ["primary", 1, undefined] as never);
-  registerSupplement("async-helper", () => Promise.resolve(["async"]) as never);
-  registerSupplement("valid-helper", () => ["valid", false] as never);
-
-  expect(buildPrompt({ availableTools: new Set() })).toEqual(["primary", "valid"]);
 });
 
 it("prepares immutable prompt lines once per run before synchronous assembly", async () => {

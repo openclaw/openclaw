@@ -3,11 +3,8 @@ import { afterEach, beforeEach, expect, it, vi, type MockInstance } from "vitest
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { showToast, type ToastOptions } from "../../lib/toast.ts";
 import { releaseChatAttachmentPayload } from "./attachment-payload-store.ts";
-import {
-  createGatewayBrowserClientFixture,
-  createTestChatPane,
-  type TestChatPane,
-} from "./chat-pane.test-support.ts";
+import { createGatewayBrowserClientFixture } from "./chat-application-context.test-support.ts";
+import { createTestChatPane, type TestChatPane } from "./chat-pane.test-support.ts";
 
 // mock-isolation: Observe Undo without registering a toast host or retaining attachment URLs.
 vi.mock("../../lib/toast.ts", async (importOriginal) => ({
