@@ -234,3 +234,44 @@ it("keeps append receipts independent of retained transcript length", async () =
   // Scalar sequence/count encodings may grow; retained history must not cross the worker boundary.
   expect(Math.max(...receiptBytes) - Math.min(...receiptBytes)).toBeLessThan(128);
 });
+
+it("omits only the unchanged entry held by an append command", () =>
+  withActor(async (f) => {
+    const prompt = "synthetic instructions ".repeat(1600);
+    f.writeEntry({ ...f.nativeEntry()!, skillsSnapshot: { prompt, skills: [] } });
+    for (const mode of ["matching", "stale", "changed"] as const) {
+      const before = f.read();
+      const command: Mutation = {
+        type: "session.actor.appendTranscriptEvent",
+        input: {
+          target: f.target,
+          sessionId: f.scope.sessionId,
+          lifecycleRevision: null,
+          commandId: `resident-append-${mode}`,
+          phaseId: "turn",
+          entryReference: mode === "stale" ? "stale-token" : before.writeToken,
+          reducers: mode === "changed" ? [{ kind: "activity", updatedAt: 20 }] : undefined,
+          eventJson: JSON.stringify({
+            type: "custom",
+            customType: "synthetic-receipt",
+            id: `new-event-${mode}`,
+            parentId: null,
+            data: { content: "x".repeat(6 * 1024) },
+          }),
+        },
+      };
+      await f.prepare(command);
+      const outcome = f.mutate(command);
+      assert(outcome.kind === "committed");
+      if (mode === "matching") {
+        expect(serialize(outcome).byteLength).toBeLessThan(16 * 1024);
+      } else {
+        expect(outcome.receipt.postimage).toEqual(f.read());
+        outcome.receipt.postimage.entry!.skillsSnapshot!.prompt = "caller edit";
+      }
+      expect(before.entry?.skillsSnapshot?.prompt).toBe(prompt);
+      expect(f.read().entry?.skillsSnapshot?.prompt).toBe(prompt);
+      expect(f.nativeEntry()?.skillsSnapshot?.prompt).toBe(prompt);
+      expect(f.nativeEntry()?.updatedAt).toBe(mode === "changed" ? 20 : before.entry?.updatedAt);
+    }
+  }));

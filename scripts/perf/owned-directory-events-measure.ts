@@ -1,6 +1,6 @@
 // Source-owner measurement: real subscriptions, replayed native event callbacks.
 // node --expose-gc --import ./scripts/tsx.mjs scripts/perf/owned-directory-events-measure.ts
-//   --state-dir <new-directory> [--owner <frozen-owner.ts>] [--allocations]
+//   --state-dir <new-directory> [--owner <frozen-owner.ts>] [--allocations] [--event change|rename]
 // macOS selects the in-process native adapter during subscription setup only;
 // this measures owner delivery, not macOS helper-process transport or filesystem throughput.
 import assert from "node:assert/strict";
@@ -29,11 +29,17 @@ const { values } = parseArgs({
     "gc-log": { type: "string" },
     output: { type: "string" },
     allocations: { type: "boolean", default: false },
+    event: { type: "string", default: "change" },
   },
 });
 assert.ok(values["state-dir"], "--state-dir must name a new synthetic directory");
 assert.ok(global.gc, "Run with --expose-gc");
 assert.ok(["linux", "darwin"].includes(process.platform), "Native callback replay requires Unix");
+assert.ok(
+  values.event === "change" || values.event === "rename",
+  "--event must be change or rename",
+);
+const event = values.event;
 const integer = (name: "operations" | "start-at", min: number) =>
   parseStrictIntegerOption({ raw: values[name], label: `--${name}`, min, fallback: min });
 const operations = integer("operations", 1);
@@ -69,7 +75,8 @@ const native: {
 const originalWatch = native.watch;
 const callbacks: fs.WatchListener<string>[] = [];
 native.watch = (filename, options, listener) => {
-  const watcher = originalWatch(filename, options, listener);
+  // Replay alone drives delivery; incidental native events would corrupt the fixed work count.
+  const watcher = originalWatch(filename, options, () => {});
   callbacks.push(listener);
   return watcher;
 };
@@ -106,10 +113,10 @@ try {
 assert.equal(callbacks.length, 1, "Both subscriptions share the real root watch");
 const callback = callbacks[0]!;
 const run = () => {
-  for (let event = 0; event < 64; event++) {
-    callback("change", "auth-profiles.json");
+  for (let index = 0; index < 64; index++) {
+    callback(event, "auth-profiles.json");
   }
-  callback("change", "missing");
+  callback(event, "missing");
 };
 // Measure the common direct-root case separately from the missing-directory filter.
 // Close the missing subscriber after proving that shared callbacks scoped it correctly.
@@ -222,6 +229,7 @@ try {
       "real owned-directory subscriptions; fixed native callback replay, not filesystem or Gateway throughput",
     node: process.version,
     operations,
+    event,
     events: directNotifications,
     allocation: sampledAllocation,
     batchLatency: distribution(latency),

@@ -138,3 +138,29 @@ globalThis.openclawStandaloneLoadJitiFactory = () => loadStandalonePluginRuntime
 }`,
   };
 }
+
+/** Transfer compiled exports to interpreted plugins without reading virtual source files. */
+export function createStandaloneExternalModuleBootstrap({ source = false } = {}) {
+  return `const imageNamespace = ${source ? JSON.stringify("openclaw-image") : "undefined"};
+globalThis.__openclawStandaloneExternalModulePath = (filename) => {
+  // The compiled require adapter already passes image paths to the native loader.
+  if (filename.startsWith("/$bunfs/")) return undefined;
+  const entry = embedded(filename);
+  return entry ? (imageNamespace && !commonJsEntries.has(entry) ? imageNamespace + ":" + entry : entry) : undefined;
+};
+globalThis.__openclawStandaloneExternalModuleResolution = (filename) => {
+  const entry = embedded(filename);
+  return { path: entry ?? filename, namespace: imageNamespace && entry && !commonJsEntries.has(entry) ? imageNamespace : "file" };
+};
+${
+  source
+    ? `let requireImageModule;
+Bun.plugin({ name: "openclaw-image-exports", setup(build) {
+  build.onLoad({ filter: /.*/, namespace: imageNamespace }, ({ path: filename }) => {
+    requireImageModule ??= globalThis.__openclawStandaloneCreateRequire(createRequire, path.join(root, "package.json"));
+    return { exports: requireImageModule(filename), loader: "object" };
+  });
+}});`
+    : ""
+}`;
+}

@@ -86,6 +86,25 @@ it("formats unchanged family headers once across interleaved scrapes and value u
   }
 });
 
+it("checks header membership once per consecutive family across warm scrapes", () => {
+  const store = createPrometheusMetricStore();
+  for (const worker of ["z", "a", "m"]) {
+    store.counter("openclaw_run_completed_total", "Runs.", { worker });
+    store.histogram("openclaw_run_duration_seconds", "Duration.", { worker }, 0.5, [1]);
+  }
+  store.render();
+  store.counter("openclaw_run_completed_total", "Runs.", { worker: "a" });
+  const membership = vi.spyOn(Set.prototype, "has");
+  let checks: unknown[][];
+  try {
+    store.render();
+    checks = membership.mock.calls.slice();
+  } finally {
+    membership.mockRestore();
+  }
+  expect(checks).toEqual([["openclaw_run_completed_total"], ["openclaw_run_duration_seconds"]]);
+});
+
 it("selects header help and type after gauge removal, cross-type admission, and reset", () => {
   const store = createPrometheusMetricStore();
   const name = "openclaw_run_duration_seconds";

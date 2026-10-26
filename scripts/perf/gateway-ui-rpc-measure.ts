@@ -38,6 +38,32 @@ import {
 } from "../lib/gateway-bench-runtime.ts";
 import { createGatewayWsClient } from "../lib/gateway-ws-client.ts";
 
+// Match non-native Control UI in ui/src/api/gateway-connect-plan.ts, without a hello modelCatalog request.
+const controlUiCapabilities = [
+  "agent-kind",
+  "approvals",
+  "task-suggestions",
+  "terminal-offset-seq",
+  "terminal-session-metadata",
+  "terminal-upload-path-style",
+  "tool-events",
+  "chat-only-assistant-text",
+  "hello-health-on-demand",
+  "health-summary",
+  "hello-presence-self",
+  "session-scoped-events",
+  "presence-deltas",
+  "session-row-deltas",
+  "session-event-field-refs",
+  "roster-message-bodies-optional",
+  "inline-widgets",
+  "model-selection-policy",
+  "model-wait-status",
+  "ui-commands",
+  "ultrafast",
+  "usage-refreshing",
+];
+
 const { values } = parseArgs({
   options: {
     sync: { type: "string" },
@@ -118,6 +144,12 @@ assert(
     providerCount <= 100 &&
     modelsPerProvider <= 1000,
 );
+const expectedSyntheticModels = new Set<string>();
+for (let provider = 0; provider < providerCount; provider++) {
+  for (let model = 0; model < modelsPerProvider; model++) {
+    expectedSyntheticModels.add(`rpc-bench-${provider}/synthetic-${model}`);
+  }
+}
 const rawFixture: unknown = JSON.parse(
   readFileSync(path.join(root, "team-shape-summary.json"), "utf8"),
 );
@@ -199,6 +231,9 @@ type Metrics = {
   socketWriteBytes?: number;
   processCpuMs: number;
   mainThreadCpuMs: number;
+  rpcReceivedCount?: number;
+  rpcProcessCpuMs?: number;
+  rpcMainThreadCpuMs?: number;
   windowMs: number;
 };
 type Sample = {
@@ -209,6 +244,7 @@ type Sample = {
   payloadBytes: number;
   payloadSha256?: string;
   arrayCounts?: Record<string, number>;
+  syntheticModelCount?: number;
   requestParams?: unknown;
   error?: unknown;
   server: Metrics;
@@ -289,6 +325,16 @@ const rpcCases = [
     id: "models.list.provider-config",
     method: "models.list",
     params: { agentId: "main", view: "provider-config" },
+  },
+  {
+    id: "models.list.configured.refresh",
+    method: "models.list",
+    params: { agentId: "main", view: "configured", refresh: true },
+  },
+  {
+    id: "models.list.provider-config.refresh",
+    method: "models.list",
+    params: { agentId: "main", view: "provider-config", refresh: true },
   },
   { id: "config.get", method: "config.get", params: {} },
   { id: "config.schema", method: "config.schema", params: {} },
@@ -547,15 +593,7 @@ async function connectPeer(
       role: "operator",
       scopes,
       auth: { token },
-      caps: [
-        "hello-health-on-demand",
-        "health-summary",
-        "hello-presence-self",
-        "session-scoped-events",
-        "presence-deltas",
-        "session-row-deltas",
-        "roster-message-bodies-optional",
-      ],
+      caps: controlUiCapabilities,
       device: {
         id: device.id,
         publicKey,
@@ -568,6 +606,7 @@ async function connectPeer(
 }
 async function measure(id: string, method: string, params: unknown, peer: Peer, phase: string) {
   await control("begin", {
+    method,
     countOps: !values["no-counters"] || phase === "first" || phase === "counts",
   });
   const started = performance.now();
@@ -589,12 +628,28 @@ async function measure(id: string, method: string, params: unknown, peer: Peer, 
   }
   const roundTripMs = performance.now() - started;
   const server = await control("end");
+  const syntheticModels =
+    method === "models.list" && providerCount > 0 ? new Set<string>() : undefined;
+  let syntheticModelCount = 0;
+  if (syntheticModels && isRecord(response.payload) && Array.isArray(response.payload.models)) {
+    for (const model of response.payload.models) {
+      if (!isRecord(model) || typeof model.provider !== "string" || typeof model.id !== "string") {
+        continue;
+      }
+      const key = `${model.provider}/${model.id}`;
+      if (expectedSyntheticModels.has(key)) {
+        syntheticModelCount++;
+        syntheticModels.add(key);
+      }
+    }
+  }
   records.push({
     case: id,
     phase,
     roundTripMs,
     ok: response.ok,
     payloadBytes: Buffer.byteLength(JSON.stringify(response.payload ?? null)),
+    ...(syntheticModels ? { syntheticModelCount } : {}),
     payloadSha256: createHash("sha256")
       .update(JSON.stringify(response.payload ?? null))
       .digest("hex"),
@@ -621,8 +676,9 @@ async function measure(id: string, method: string, params: unknown, peer: Peer, 
     assert(
       isRecord(response.payload) &&
         Array.isArray(response.payload.models) &&
-        response.payload.models.length >= providerCount * modelsPerProvider,
-      `${id}: synthetic catalog was not loaded`,
+        syntheticModelCount === expectedSyntheticModels.size &&
+        syntheticModels?.size === expectedSyntheticModels.size,
+      `${id}: every synthetic provider/model pair must appear exactly once`,
     );
   }
   if (method === "cron.list" && id !== "cron.list.enabled") {
@@ -801,6 +857,9 @@ function summaries() {
             [
               "processCpuMs",
               "mainThreadCpuMs",
+              "rpcReceivedCount",
+              "rpcProcessCpuMs",
+              "rpcMainThreadCpuMs",
               "jsonStringifyMs",
               "jsonStringifyCount",
               "socketWriteMs",
@@ -1013,6 +1072,7 @@ try {
     },
     measurement: {
       transport: "real Gateway CLI and WebSocket",
+      clientCapabilities: controlUiCapabilities,
       ingress: remoteIngress ? "synthetic trusted loopback proxy" : "direct-local",
       negotiatedExtensions: [...negotiatedExtensions],
       serialTimedRequests: true,
@@ -1020,6 +1080,8 @@ try {
         "existing gateway.rpc response duration: admitted frame receipt through socket acceptance; no TCP delivery wait",
       cpuScope:
         "whole per-request IPC window, including event-loop work and worker CPU; not only the handler",
+      rpcCpuScope:
+        "diagnostic received through first-response callbacks for one matching method; omitted if receipt is ambiguous; excludes parse and IPC tails but may include overlapping work",
       jsonScope: values["no-counters"]
         ? "first/counts samples only; native JSON/socket methods in warmup and measured samples"
         : "all synchronous main-isolate JSON.stringify calls in each request window, including shaping",

@@ -13,7 +13,7 @@ const file = "/synthetic/gateway.log";
 const levels = ["info", "info", "info", "warn", "error"];
 const heldTails = new WeakMap<Page, number>();
 
-export function createDataLogTail(start: number, length = tailSize): LogsTailResult {
+function createDataLogTail(start: number, length = tailSize): LogsTailResult {
   return {
     file,
     cursor: start + length,
@@ -30,7 +30,7 @@ export function createDataLogTail(start: number, length = tailSize): LogsTailRes
   };
 }
 
-export function createDataLogFixture(): InteractionFixtureOverrides {
+function createDataLogFixture(): InteractionFixtureOverrides {
   return {
     featureMethods: ["logs.tail"],
     methodResponses: {

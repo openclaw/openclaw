@@ -21,7 +21,7 @@ const query = "Data usage 11999";
 const dayMs = 86_400_000;
 
 /** The Gateway owns population filtering and paging; the browser receives at most 50 rows. */
-export function createDataUsagePopulation(now = Date.now()): SessionUsageEntry[] {
+function createDataUsagePopulation(now = Date.now()): SessionUsageEntry[] {
   const end = Date.parse(new Date(now).toISOString().slice(0, 10));
   return Array.from({ length: sessionCount }, (_, index) => {
     const timestamp = end - (index % dayCount) * dayMs + (index % 24) * 3_600_000;
@@ -100,7 +100,7 @@ function overviewOptions(raw: Record<string, unknown>): UsageOverviewOptions {
   };
 }
 
-export function createDataUsageHandler() {
+function createDataUsageHandler() {
   const rows = createDataUsagePopulation();
   return (raw: unknown): SessionsUsageResult => {
     if (!isRecord(raw)) {
@@ -124,7 +124,7 @@ export function createDataUsageHandler() {
   };
 }
 
-export function createDataUsageFixture(): InteractionFixtureOverrides {
+function createDataUsageFixture(): InteractionFixtureOverrides {
   return { featureMethods: ["sessions.usage", "usage.status"] };
 }
 

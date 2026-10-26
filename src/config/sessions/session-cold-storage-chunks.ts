@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import type { Selectable } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -7,16 +6,15 @@ import {
 } from "../../infra/kysely-sync.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
+import type {
+  SessionColdArchive,
+  SessionColdChunkMetadata,
+} from "./session-accessor.sqlite-archive-types.js";
 import {
   decodeSessionColdRecords,
   readVerifiedSessionColdArchiveSync,
   type SessionColdRecord,
 } from "./session-cold-storage-codec.js";
-import type { SessionColdArchive } from "./session-cold-storage-state.js";
-
-export type SessionColdChunk = Selectable<DB["session_transcript_cold_archive_chunks"]>;
-export type SessionColdChunkMetadata = Omit<SessionColdChunk, "archive_blob">;
-
 const chunkMetadataColumns = [
   "session_id",
   "chunk_index",

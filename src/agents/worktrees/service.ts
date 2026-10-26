@@ -16,7 +16,6 @@ import {
   logWorktreeBase,
   resolveWorktreeCreationBase,
   withWorktreeBasePreparation,
-  type WorktreeBasePreparation,
 } from "./base-ref.js";
 import { createWorktreeCapacityOwner } from "./capacity-owner.js";
 import {
@@ -83,14 +82,14 @@ import { reconcileListedWorktrees } from "./service-list.js";
 import {
   removeFailedWorktree,
   createWithWorktreeAllocation,
-  createOwnedWorktree,
+  reserveOwnedWorktree,
   prepareWorktreeDestination,
   readWorktreeGitInventory,
   findWorktreeByName,
   rebindLiveWorktreeRepository,
   withWorktreeSource,
   withWorktreeSources,
-  type WorktreeSourceCustody,
+  type RepositoryCreationParams,
 } from "./service-preparation.js";
 import {
   exactStateRetirementSchema,
@@ -140,13 +139,6 @@ type ServiceOptions = {
 type ManagedWorktreeGcParams = WorktreeCleanupOwnerPolicy &
   WorktreeMutationGuard & {
     checkpoint?: (progress: ManagedWorktreeGcResult) => Promise<void>;
-  };
-
-type RepositoryCreationParams = CreateManagedWorktreeParams &
-  WorktreeAllocationGuard &
-  WorktreeSourceCustody & {
-    prepareBase?: WorktreeBasePreparation;
-    gitInventory: Awaited<ReturnType<typeof readWorktreeGitInventory>>;
   };
 
 type WorktreeCreation =
@@ -219,7 +211,20 @@ export class ManagedWorktreeService {
                 );
                 const owned = { ...params, ...guard, retainSources, prepareBase, gitInventory };
                 const creation = await this.withAllocationLease(owned, (allocation) =>
-                  this.reserveForOwner(owned, allocation, repository, publication),
+                  reserveOwnedWorktree(
+                    { ...owned, ...allocation },
+                    repository,
+                    this.env,
+                    (current, name, slots) =>
+                      this.reserveForRepository(
+                        owned,
+                        current,
+                        repository,
+                        name,
+                        publication,
+                        slots,
+                      ),
+                  ),
                 );
                 return typeof creation === "function" ? await creation() : creation;
               }),
@@ -266,11 +271,19 @@ export class ManagedWorktreeService {
                       gitInventory,
                     };
                     const retainSources = await retainRepository({ ...prepared, repository });
-                    return await this.reserveForOwner(
-                      { ...prepared, retainSources },
-                      allocation,
+                    return await reserveOwnedWorktree(
+                      { ...prepared, ...allocation, retainSources },
                       repository,
-                      publication,
+                      this.env,
+                      (current, name, slots) =>
+                        this.reserveForRepository(
+                          { ...prepared, retainSources },
+                          current,
+                          repository,
+                          name,
+                          publication,
+                          slots,
+                        ),
                     );
                   },
                 );
@@ -304,24 +317,6 @@ export class ManagedWorktreeService {
         }
       }),
     );
-  }
-
-  private async reserveForOwner(
-    params: RepositoryCreationParams,
-    allocation: WorktreeAllocationGuard,
-    repository: ResolvedRepository,
-    publication: WorktreeCreationPublication,
-  ): Promise<WorktreeCreation> {
-    return await withWorktreeSource({ ...params, ...allocation }, async (current) => {
-      // Publication can move pending to live while allocation is held; observe in that order.
-      const slots = await readPendingWorktrees(this.env);
-      return await createOwnedWorktree(
-        { ...current, retainSources: params.retainSources },
-        repository,
-        this.env,
-        (name) => this.reserveForRepository(params, current, repository, name, publication, slots),
-      );
-    });
   }
 
   async rollbackPreparation(

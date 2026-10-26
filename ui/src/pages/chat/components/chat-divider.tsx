@@ -84,15 +84,13 @@ export function ChatDivider(props: { item: Extract<ChatItem, { kind: "divider" }
   );
 }
 
-type ChatNoticeRecovery = Pick<
-  ChatThreadProps,
-  "failureActionsRunId" | "runActive" | "runWorking" | "onRetryRun" | "onDismissPendingInput"
->;
-
 type ChatNoticeProps = {
   item: Extract<ChatItem, { kind: "notice" }>;
   onPermissionRetry?: (message: string) => void;
-  recovery?: ChatNoticeRecovery;
+  recovery?: Pick<
+    ChatThreadProps,
+    "failureActionsRunId" | "runActive" | "runWorking" | "onRetryRun" | "onDismissPendingInput"
+  >;
 };
 
 function FailureNotice(props: ChatNoticeProps) {

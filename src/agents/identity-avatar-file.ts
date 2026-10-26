@@ -5,6 +5,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openRootFileSync, readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
 import { resolveRealpathOrAbsolute } from "../infra/boundary-path.js";
+import { resolveUserPath } from "../infra/home-dir.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { isRenderableAvatarImageDataUrl } from "../shared/avatar-limits.js";
 import {
@@ -16,8 +17,6 @@ import {
   isWindowsAbsolutePath,
   resolveAvatarMime,
 } from "../shared/avatar-policy.js";
-import { resolveUserPath } from "../utils.js";
-import { resolveAgentWorkspaceDir } from "./agent-scope.js";
 
 export type LocalAgentAvatarFailureReason =
   | "missing"
@@ -201,6 +200,7 @@ export async function prepareLocalAgentAvatarFile(params: {
 }): Promise<LocalAgentAvatarResult> {
   try {
     const { prepareLocalAgentAvatar } = await import("./identity-avatar-file-runtime.js");
+    const { resolveAgentWorkspaceDir } = await import("./agent-scope-config.js");
     return await prepareLocalAgentAvatar({
       workspaceDir: resolveAgentWorkspaceDir(params.cfg, params.agentId),
       source: params.source,

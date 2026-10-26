@@ -309,7 +309,7 @@ describe("provider local service shutdown", () => {
         : once(child, "close", { signal: AbortSignal.timeout(5_000) });
     try {
       if (closed) {
-        vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+        vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "performance"] });
       }
       lease.release();
       const stopped = stopManagedProviderLocalServices();

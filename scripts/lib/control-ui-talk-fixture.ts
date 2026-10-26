@@ -87,7 +87,7 @@ export type TalkBenchState =
   | "idle"
   | "hidden"
   | "hidden-transcribing";
-export type TalkBenchProof = {
+type TalkBenchProof = {
   peer?: { channel: EventTarget; remoteDescription: RTCSessionDescriptionInit | null };
   analyserReads: number;
   meterStyleMutations: number;
@@ -101,13 +101,27 @@ export type TalkBenchProof = {
   tooltipOpenAtStart: boolean;
   readonly tooltipOpenAtEnd: boolean;
   tooltipChanges: number;
+  focusedStop?: {
+    documentFocusedAtStart: boolean;
+    documentFocusedAtEnd: boolean;
+    triggerFocusedAtStart: boolean;
+    triggerFocusedAtEnd: boolean;
+    tooltipOpenAtStart: boolean;
+    tooltipOpenAtEnd: boolean;
+    invalidated: boolean;
+  };
   transcriptLatenciesMs: number[];
   playbackStartLatenciesMs: number[];
   frameTimes: number[];
   setState: (state: TalkBenchState, externalTranscripts?: boolean) => void;
   deliverTranscriptChunk: (expectedHidden?: boolean) => string;
   readTranscriptDom: () => void;
-  start: (frames: boolean, observeTranscripts?: boolean, observeTooltips?: boolean) => void;
+  start: (
+    frames: boolean,
+    observeTranscripts?: boolean,
+    observeTooltips?: boolean,
+    focusedStop?: boolean,
+  ) => void;
   stop: () => void;
 };
 
@@ -138,6 +152,7 @@ export async function installTalkPerfFixture(page: Page, includeCounters: boolea
       let frame: number | undefined;
       let observer: MutationObserver | undefined;
       let tooltipObserver: MutationObserver | undefined;
+      let finishFocusedStop: (() => void) | undefined;
       let observing = false;
       const pending = new Map<string, number>();
       const send = (event: unknown) => {
@@ -241,7 +256,7 @@ export async function installTalkPerfFixture(page: Page, includeCounters: boolea
             }
           }
         },
-        start(frames, observeTranscripts = true, observeTooltips = false) {
+        start(frames, observeTranscripts = true, observeTooltips = false, focusedStop = false) {
           observing = true;
           pending.clear();
           proof.analyserReads =
@@ -256,12 +271,47 @@ export async function installTalkPerfFixture(page: Page, includeCounters: boolea
           proof.frameTimes = [];
           proof.tooltipChanges = 0;
           proof.tooltipOpenAtStart = observeTooltips && proof.tooltipOpenAtEnd;
+          proof.focusedStop = undefined;
+          const trigger = focusedStop ? document.activeElement : null;
+          const tooltip = trigger?.closest("openclaw-tooltip");
+          if (focusedStop) {
+            if (
+              !(trigger instanceof HTMLButtonElement) ||
+              trigger.getAttribute("aria-label") !== "Stop voice input" ||
+              !tooltip
+            ) {
+              throw new Error("Native keyboard focus did not reach the Stop trigger");
+            }
+            const focus = {
+              documentFocusedAtStart: document.hasFocus(),
+              documentFocusedAtEnd: false,
+              triggerFocusedAtStart: document.activeElement === trigger,
+              triggerFocusedAtEnd: false,
+              tooltipOpenAtStart: tooltip.hasAttribute("open"),
+              tooltipOpenAtEnd: false,
+              invalidated: false,
+            };
+            proof.focusedStop = focus;
+            const invalidate = () => {
+              focus.invalidated = true;
+            };
+            window.addEventListener("blur", invalidate);
+            trigger.addEventListener("focusout", invalidate);
+            finishFocusedStop = () => {
+              focus.documentFocusedAtEnd = document.hasFocus();
+              focus.triggerFocusedAtEnd = document.activeElement === trigger;
+              focus.tooltipOpenAtEnd = tooltip.hasAttribute("open");
+              window.removeEventListener("blur", invalidate);
+              trigger.removeEventListener("focusout", invalidate);
+            };
+          }
           if (observeTooltips) {
             tooltipObserver = new MutationObserver((records) => {
               proof.tooltipChanges += records.filter(
                 (record) =>
                   record.target instanceof Element &&
-                  record.target.localName === "openclaw-tooltip",
+                  record.target.localName === "openclaw-tooltip" &&
+                  (!focusedStop || record.target === tooltip),
               ).length;
             });
             tooltipObserver.observe(document.body, {
@@ -323,6 +373,8 @@ export async function installTalkPerfFixture(page: Page, includeCounters: boolea
           }
           observer?.disconnect();
           tooltipObserver?.disconnect();
+          finishFocusedStop?.();
+          finishFocusedStop = undefined;
         },
       };
       window.openclawTalkBench = proof;

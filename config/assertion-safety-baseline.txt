@@ -955,7 +955,6 @@ packages/ai/src/transports/transport-utils.ts	2
 packages/ai/src/utils/credential-redaction.ts	1
 packages/ai/src/utils/oauth/openai-chatgpt-jwt.ts	1
 packages/ai/src/utils/stream-first-event-timeout.ts	2
-packages/ai/src/utils/tls-certificate-errors.ts	1
 packages/gateway-client/src/client.ts	3
 packages/gateway-client/src/gateway-origin-scope.ts	1
 packages/gateway-client/src/pending-request.ts	2

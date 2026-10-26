@@ -253,6 +253,16 @@ export function assertPluginStatePublicationSettled(
   if (state.unavailable.has(identity)) {
     throw new Error("Plugin state authority is unavailable");
   }
+  if (hasPendingPluginStatePublication(identity, scope)) {
+    throw new Error("Plugin state authority is unavailable");
+  }
+}
+
+/** Descriptive views may reload after unknown settlement; authority remains unavailable. */
+export function hasPendingPluginStatePublication(
+  identity: string,
+  scope?: PluginStatePublicationScope,
+): boolean {
   for (const pending of state.pending.get(identity) ?? []) {
     const write = pending.scope;
     if (
@@ -264,9 +274,10 @@ export function assertPluginStatePublicationSettled(
           write.key === undefined ||
           toUSVString(scope.key) === toUSVString(write.key)))
     ) {
-      throw new Error("Plugin state authority is unavailable");
+      return true;
     }
   }
+  return false;
 }
 
 /** Start denial before queueing work; committed-only lease checks remain usable by its owner. */
