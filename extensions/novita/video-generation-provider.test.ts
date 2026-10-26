@@ -47,6 +47,17 @@ function mockTask(
   );
 }
 
+const wanBody = (input: Record<string, unknown>, parameters: Record<string, unknown>) => ({
+  input: { prompt, ...input },
+  parameters: {
+    audio: false,
+    prompt_extend: true,
+    shot_type: "multi",
+    watermark: false,
+    ...parameters,
+  },
+});
+
 it.each<[string, Partial<Video.VideoGenerationRequest>, unknown]>([
   [
     "wan2.6-t2v",
@@ -62,18 +73,10 @@ it.each<[string, Partial<Video.VideoGenerationRequest>, unknown]>([
         seed: 42,
       },
     },
-    {
-      input: { prompt, negative_prompt: "blur" },
-      parameters: {
-        size: "1080*1920",
-        duration: 10,
-        audio: false,
-        prompt_extend: false,
-        shot_type: "single",
-        watermark: false,
-        seed: 42,
-      },
-    },
+    wanBody(
+      { negative_prompt: "blur" },
+      { size: "1080*1920", duration: 10, prompt_extend: false, shot_type: "single", seed: 42 },
+    ),
   ],
   [
     "minimax-hailuo-2.3-i2v",
@@ -94,21 +97,10 @@ it.each<[string, Partial<Video.VideoGenerationRequest>, unknown]>([
       inputImages: [remote("frame.png")],
       inputAudios: [remote("track.mp3")],
     },
-    {
-      input: {
-        prompt,
-        img_url: "https://example.com/frame.png",
-        audio_url: "https://example.com/track.mp3",
-      },
-      parameters: {
-        resolution: "1080P",
-        duration: 15,
-        audio: true,
-        prompt_extend: true,
-        shot_type: "multi",
-        watermark: true,
-      },
-    },
+    wanBody(
+      { img_url: "https://example.com/frame.png", audio_url: "https://example.com/track.mp3" },
+      { resolution: "1080P", duration: 15, audio: true, watermark: true },
+    ),
   ],
   [
     hailuoModel,
