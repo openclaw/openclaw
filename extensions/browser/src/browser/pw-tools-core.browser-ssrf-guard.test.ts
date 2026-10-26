@@ -14,21 +14,15 @@ const pageState = vi.hoisted(() => ({
 
 const session = await vi.hoisted(async () => {
   const { createGuardSession } = await import("./pw-tools-core.guard-test-support.js");
+  const required = (key: keyof typeof pageState) => () => {
+    const value = pageState[key];
+    if (!value) {
+      throw new Error(`missing ${key}`);
+    }
+    return value;
+  };
   return {
-    ...createGuardSession(
-      () => {
-        if (!pageState.page) {
-          throw new Error("missing page");
-        }
-        return pageState.page;
-      },
-      () => {
-        if (!pageState.locator) {
-          throw new Error("missing locator");
-        }
-        return pageState.locator;
-      },
-    ),
+    ...createGuardSession(required("page"), required("locator")),
     closeBlockedNavigationTarget: vi.fn(async () => {}),
     gotoPageWithNavigationGuard: vi.fn(async () => null),
     storeRoleRefsForTarget: vi.fn(() => {}),
@@ -76,6 +70,12 @@ function install(
 function guardOnce(implementation: (args: NavigationGuardCall) => Promise<unknown>): void {
   session.withPageNavigationRequestGuard.mockImplementationOnce(implementation);
 }
+function denyAfterAction(blocked: Error) {
+  guardOnce(async ({ action, page }) => {
+    await action(page.url());
+    throw blocked;
+  });
+}
 
 function trackGuardSettlement() {
   const settled = vi.fn();
@@ -100,12 +100,16 @@ function expectQuarantined() {
   });
 }
 
-function documentPage<T>(waitForFunction: T, url = "https://example.com") {
+function documentPage<T>(
+  waitForFunction: T,
+  options: { url?: () => string; waitForTimeout?: () => Promise<void> } = {},
+) {
   const documentHandle = { dispose: vi.fn(async () => {}) };
   const page = {
-    url: vi.fn(() => url),
+    url: () => "https://example.com",
     evaluateHandle: vi.fn(async () => documentHandle),
     waitForFunction,
+    ...options,
   };
   install(page);
   return { page, documentHandle };
@@ -155,7 +159,6 @@ describe("pw-tools-core browser SSRF guards", () => {
         order.push("guard");
         return await action(page.url());
       });
-      const documentHandle = { dispose: vi.fn(async () => {}) };
       const waitForFunction = vi.fn(async (predicate: WaitPredicate, state: WaitState) => {
         order.push("predicate");
         const browserState = { ...state, document: {} };
@@ -168,13 +171,11 @@ describe("pw-tools-core browser SSRF guards", () => {
         }
         currentUrl = "https://93.184.216.34/target";
       });
-      install({
+      const { documentHandle } = documentPage(waitForFunction, {
         url: () => currentUrl,
-        evaluateHandle: vi.fn(async () => documentHandle),
         waitForTimeout: vi.fn(async () => {
           order.push("passive");
         }),
-        waitForFunction,
       });
       const hostFunction = vi.spyOn(globalThis, "Function").mockImplementation(() => {
         throw new EvalError("Host code generation is disabled");
@@ -223,7 +224,7 @@ describe("pw-tools-core browser SSRF guards", () => {
       vi.fn(async (predicate: WaitPredicate, state: WaitState) =>
         predicate({ ...state, document: {} }),
       ),
-      "https://example.com/next",
+      { url: () => "https://example.com/next" },
     );
 
     await expect(wait(undefined, "() => document.cookie")).rejects.toThrow(
@@ -398,10 +399,7 @@ describe("pw-tools-core browser SSRF guards", () => {
     session.isPolicyDenyNavigationError.mockImplementationOnce(
       (err: unknown) => err instanceof Error && err.name === "SsrFBlockedError",
     );
-    guardOnce(async ({ action, page }) => {
-      await action(page.url());
-      throw blocked;
-    });
+    denyAfterAction(blocked);
 
     const task = startHover(ctrl);
     await hover.started;
@@ -482,10 +480,7 @@ describe("pw-tools-core browser SSRF guards", () => {
     const fill = vi.fn(async () => {});
     const blocked = policyFailure("blocked field navigation");
     install(undefined, { fill });
-    guardOnce(async ({ action, page }) => {
-      await action(page.url());
-      throw blocked;
-    });
+    denyAfterAction(blocked);
 
     await expect(
       pw.fillFormViaPlaywright({

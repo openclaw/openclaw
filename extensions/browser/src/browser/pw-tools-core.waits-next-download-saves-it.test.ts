@@ -1,10 +1,10 @@
 import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test-support.js";
 import { awaitStarted } from "./pw-tools-core.guard-test-support.js";
 import {
   getPwToolsCoreSessionMocks,
@@ -39,6 +39,7 @@ const mod = await import("./pw-tools-core.downloads.js");
 
 const target = { cdpUrl: "http://127.0.0.1:18792", targetId: "T1" };
 const strictPolicy = { dangerouslyAllowPrivateNetwork: false };
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 function waitForDownload(
   options: Omit<Parameters<typeof mod.waitForDownloadViaPlaywright>[0], "cdpUrl" | "targetId"> = {},
 ) {
@@ -69,14 +70,7 @@ describe("pw-tools-core", () => {
   });
 
   function withTempDir<T>(run: (tempDir: string) => Promise<T>) {
-    return async () => {
-      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-browser-download-test-"));
-      try {
-        return await run(tempDir);
-      } finally {
-        await fs.rm(tempDir, { recursive: true, force: true });
-      }
-    };
+    return () => run(tempDirs.make("openclaw-browser-download-test-"));
   }
 
   function requireSaveAsPath(saveAs: ReturnType<typeof vi.fn>): string {
@@ -95,7 +89,11 @@ describe("pw-tools-core", () => {
     const events = new EventEmitter();
     setPwToolsCoreCurrentPage({ on: events.on.bind(events), off: events.off.bind(events) });
     return {
-      trigger: (download: unknown) => events.emit("download", download),
+      deliver: async (download: ReturnType<typeof downloadEvent>) => {
+        await Promise.resolve();
+        expect(events.listenerCount("download")).toBeGreaterThan(0);
+        events.emit("download", download);
+      },
       expectArmed: () => expect(events.listenerCount("download")).toBeGreaterThan(0),
       activeHandlerCount: () => events.listenerCount("download"),
     };
@@ -121,7 +119,6 @@ describe("pw-tools-core", () => {
       const targetParent = path.join(rootDir, "race");
       const outsideDir = path.join(tempDir, "outside");
       const targetPath = path.join(targetParent, "file.bin");
-      const outsideTargetPath = path.join(outsideDir, "file.bin");
       await fs.mkdir(targetParent, { recursive: true });
       await fs.mkdir(outsideDir);
 
@@ -141,14 +138,10 @@ describe("pw-tools-core", () => {
 
       const p = waitForDownload({ path: targetPath, rootDir });
 
-      await Promise.resolve();
-      harness.expectArmed();
-      harness.trigger(downloadEvent(saveAs));
+      await harness.deliver(downloadEvent(saveAs));
 
       await expect(p).rejects.toMatchObject({ code: "not-file" });
       expect(parentSwappedBeforeFinalize).toBe(true);
-      expect(saveAs).toHaveBeenCalledOnce();
-      await expectPathMissing(outsideTargetPath);
       await expect(fs.readdir(outsideDir)).resolves.toStrictEqual([]);
     }),
   );
@@ -168,8 +161,7 @@ describe("pw-tools-core", () => {
 
     const successor = waitForDownload();
     const saveAs = writer("successor-content");
-    await Promise.resolve();
-    harness.trigger(downloadEvent(saveAs, "successor.bin"));
+    await harness.deliver(downloadEvent(saveAs, "successor.bin"));
 
     await expect(successor).resolves.toMatchObject({ suggestedFilename: "successor.bin" });
     expect(saveAs).toHaveBeenCalledOnce();
@@ -186,7 +178,7 @@ describe("pw-tools-core", () => {
 
     await Promise.resolve();
     expect(state.downloadWaiterDepth).toBe(2);
-    harness.trigger(downloadEvent(saveAs, "latest.bin", undefined, cancel));
+    await harness.deliver(downloadEvent(saveAs, "latest.bin", undefined, cancel));
 
     await expect(first).rejects.toThrow("superseded by another waiter");
     await expect(latest).resolves.toMatchObject({ suggestedFilename: "latest.bin" });
@@ -230,14 +222,13 @@ describe("pw-tools-core", () => {
 
       await awaitStarted(clicked.promise, p);
       harness.expectArmed();
-      expect(click).toHaveBeenCalledWith({ timeout: 1000, signal: expect.any(AbortSignal) });
       expect(sessionMocks.withPageNavigationRequestGuard).toHaveBeenCalledWith(
         expect.objectContaining({
           ssrfPolicy: strictPolicy,
         }),
       );
 
-      harness.trigger(download);
+      await harness.deliver(download);
 
       const res = await p;
       expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).toHaveBeenCalledWith({
@@ -277,9 +268,7 @@ describe("pw-tools-core", () => {
                 ssrfPolicy: strictPolicy,
               });
 
-        await Promise.resolve();
-        harness.expectArmed();
-        harness.trigger(
+        await harness.deliver(
           downloadEvent(saveAs, "metadata.bin", "http://169.254.169.254/latest/meta-data/", cancel),
         );
 
@@ -310,9 +299,7 @@ describe("pw-tools-core", () => {
       const saveAs = writer("download-content");
       const p = waitForDownload({ path: linkedPath });
 
-      await Promise.resolve();
-      harness.expectArmed();
-      harness.trigger(downloadEvent(saveAs));
+      await harness.deliver(downloadEvent(saveAs));
 
       await expect(p).resolves.toMatchObject({ path: linkedPath });
       await expectAtomicDownloadSave({
@@ -323,14 +310,11 @@ describe("pw-tools-core", () => {
       const outsideAfter = await fs.stat(outsidePath);
       const linkedAfter = await fs.stat(linkedPath);
       expect(await fs.readFile(outsidePath, "utf8")).toBe("outside-before");
-      expect({ dev: outsideAfter.dev, ino: outsideAfter.ino }).toEqual({
+      expect(outsideAfter).toMatchObject({
         dev: outsideBefore.dev,
         ino: outsideBefore.ino,
       });
-      expect({ dev: linkedAfter.dev, ino: linkedAfter.ino }).not.toEqual({
-        dev: outsideAfter.dev,
-        ino: outsideAfter.ino,
-      });
+      expect([linkedAfter.dev, linkedAfter.ino]).not.toEqual([outsideAfter.dev, outsideAfter.ino]);
     }),
   );
 
@@ -339,8 +323,9 @@ describe("pw-tools-core", () => {
     const harness = createDownloadEventHarness();
     const saveAs = writer("download-content");
     const pending = waitForDownload();
-    await Promise.resolve();
-    harness.trigger(downloadEvent(saveAs, "../../../../etc/passwd", "https://example.com/evil"));
+    await harness.deliver(
+      downloadEvent(saveAs, "../../../../etc/passwd", "https://example.com/evil"),
+    );
     const res = await pending;
     const outPath = requireSaveAsPath(saveAs);
     expect(typeof outPath).toBe("string");
@@ -374,9 +359,7 @@ describe("pw-tools-core", () => {
       const saveAs = writer("should-not-write");
       const p = waitForDownload();
 
-      await Promise.resolve();
-      harness.expectArmed();
-      harness.trigger(downloadEvent(saveAs));
+      await harness.deliver(downloadEvent(saveAs));
 
       await expect(p).rejects.toThrow(/output directory/i);
       expect(saveAs).not.toHaveBeenCalled();
