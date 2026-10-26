@@ -216,6 +216,7 @@ export async function preparePluginGenerationArtifact(
   shared.clients.set(captureId, {
     releaseRoot,
     service() {
+      // SAFETY: This artifact's private port carries only GenerationWorkerCallback messages.
       const message = receiveMessageOnPort(port1)?.message as GenerationWorkerCallback | undefined;
       if (message) {
         callback(message);
