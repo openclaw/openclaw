@@ -271,9 +271,12 @@ describe("gateway chat metadata personal accounts", () => {
         const startup = await harness.runtime.readStartup({
           agentId: "main",
           sessionEntry: { authProfileOverride: authProfileId, authProfileOverrideSource: "user" },
-          readRequesterProfileId: () => owner.id,
         });
+        expect(startup?.metadata?.commands).toEqual(expect.any(Array));
         expect(startup?.metadata).not.toHaveProperty("accountSelection");
+        expect(startup?.sessionModelCatalog).toBeUndefined();
+        expect(startup?.defaultModelCatalog).toBeUndefined();
+        expect(harness.buildProjection).toHaveBeenCalledOnce();
         expect(summaryRead).not.toHaveBeenCalled();
       } finally {
         summaryRead.mockRestore();

@@ -1,8 +1,8 @@
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import { ModelInferenceCapabilitiesSchema } from "openclaw/plugin-sdk/decisions";
 import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
+import type { ModelRequestHeaders } from "openclaw/plugin-sdk/llm";
 import type {
   ProviderDefaultThinkingPolicyContext,
   ProviderResolveDynamicModelContext,
@@ -46,6 +46,7 @@ import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { parseClawRouterPool, type ClawRouterPoolResult } from "./pool.js";
 import {
   buildClawRouterProviderConfig,
+  decisionCapabilities,
   CLAWROUTER_REASONING_EFFORT_LEVELS,
   normalizeClawRouterReasoningEfforts,
   normalizeClawRouterResolvedModel,
@@ -64,12 +65,6 @@ const PERPLEXITY_UNSUPPORTED_SCHEMA_KEYWORDS = new Set([
   "patternProperties",
   "additionalProperties",
 ]);
-
-const decisionCapabilities = ModelInferenceCapabilitiesSchema.parse(
-  manifest.modelCatalog.providers.clawrouter.models.find(
-    (model) => model.id === "openai/gpt-6-luna",
-  )?.inference,
-);
 
 const ENV_API_KEY_MARKER = "CLAWROUTER_API_KEY";
 const ATTRIBUTION_VALUE_MAX_LENGTH = 256;
@@ -145,13 +140,13 @@ function sanitizeBoundedId(value: string | undefined, policy: BoundedIdPolicy): 
   return `${safePrefix.slice(0, policy.maxLength - suffix.length)}${suffix}`;
 }
 
-function findHeader(headers: Record<string, string>, target: string): string | undefined {
+function findHeader(headers: ModelRequestHeaders, target: string): string | null | undefined {
   const normalizedTarget = target.toLowerCase();
   return Object.entries(headers).find(([name]) => name.toLowerCase() === normalizedTarget)?.[1];
 }
 
 function setHeaderDefault(
-  headers: Record<string, string>,
+  headers: ModelRequestHeaders,
   name: string,
   value: string | undefined,
 ): void {
@@ -182,7 +177,7 @@ function wrapClawRouterProviderStream(ctx: ProviderWrapStreamFnContext): StreamF
     const preparedModel = prepareClawRouterRequestModel(model);
     const hasExplicitRequestId =
       findHeader(options?.headers ?? {}, REQUEST_ID_HEADER) !== undefined;
-    const headers: Record<string, string> = {};
+    const headers: ModelRequestHeaders = {};
     for (const [name, value] of Object.entries(preparedModel.headers ?? {})) {
       if (name.toLowerCase() !== "authorization" || !dispatchKey) {
         headers[name] = value;

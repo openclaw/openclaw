@@ -27,6 +27,7 @@ import {
   getReplyPayloadMetadata,
   isReplyPayloadTerminalContent,
   markReplyPayloadForSourceSuppressionDelivery,
+  selectAutomationReplyPayloads,
 } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -43,7 +44,6 @@ import { appendUsageLine, resolveResponseUsageLine } from "./agent-runner-usage-
 import {
   resolveAutomationReplyState,
   retainAutomationReasoningWithFinal,
-  selectAutomationReplyPayloads,
 } from "./automation-reply-payloads.js";
 import { deliverBlockReply } from "./block-reply-delivery.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery-payloads.js";
@@ -61,7 +61,7 @@ import {
 } from "./source-reply-delivery-mode.js";
 import {
   isReplyOperationStalledBeforeOutput,
-  STALLED_TURN_NOTICE_TEXT,
+  resolveStalledTurnNoticeText,
 } from "./stalled-turn-recovery.js";
 import { resolveStrandedReplyRecovery } from "./stranded-reply-recovery.js";
 import { createTypingSignaler } from "./typing-mode.js";
@@ -170,7 +170,7 @@ export async function resolveFollowupDeliveryDecision(params: {
     ) {
       const payloads = preparePayloads([
         markReplyPayloadForSourceSuppressionDelivery({
-          text: STALLED_TURN_NOTICE_TEXT,
+          text: resolveStalledTurnNoticeText(turn.operation),
           isError: true,
         }),
       ]);

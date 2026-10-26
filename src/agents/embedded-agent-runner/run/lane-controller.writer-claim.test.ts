@@ -2,7 +2,7 @@ import { readFileSync, renameSync, statSync } from "node:fs";
 import path from "node:path";
 import { backup } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
 import { makeUserMessage } from "../../../../test/helpers/user-message.js";
 import {
@@ -58,6 +58,7 @@ import {
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
   type AgentRunTerminalOutcome,
 } from "../../agent-run-terminal-outcome.js";
+import { createEnteredGate } from "../../entered-gate.test-support.js";
 import { installSessionPlacementAdmissionProvider } from "../../session-placement-admission.js";
 import { convertToLlm } from "../../sessions/messages.js";
 import * as noteWriter from "../../sessions/session-manager-write-admission.js";
@@ -479,21 +480,19 @@ describe("embedded run durable writer admission", () => {
     const target = { agentId: "main", sessionId, sessionKey, storePath: fixture.storePath() };
     await replaceSessionEntry(target, { sessionId, updatedAt: 1, lifecycleRevision });
     const lane = recoveryLane("closing-recovery");
-    const entered = createDeferred();
-    const release = createDeferred();
+    const appendGate = createEnteredGate();
     const append = noteWriter.appendSessionTranscriptNote;
     vi.spyOn(noteWriter, "appendSessionTranscriptNote").mockImplementation(async (...args) => {
-      entered.resolve();
-      await release.promise;
+      await appendGate.wait();
       return append(...args);
     });
     const pending = lane.run();
     const failure = expect(pending).rejects.toThrow(
       "prepared restart recovery is no longer active",
     );
-    await entered.promise;
+    await appendGate.entered;
     lane.prepared.close();
-    release.resolve();
+    appendGate.release();
     await failure;
     expect((await SessionManager.openAsync(target)).getEntries()).toEqual([]);
   });
@@ -505,12 +504,10 @@ describe("embedded run durable writer admission", () => {
       await replaceSessionEntry(target, { sessionId, updatedAt: 1, lifecycleRevision });
       const databasePath = await preparePhysicalSessionStorePath(target);
       const lane = recoveryLane("replaced-recovery");
-      const entered = createDeferred();
-      const release = createDeferred();
+      const appendGate = createEnteredGate();
       const append = noteWriter.appendSessionTranscriptNote;
       vi.spyOn(noteWriter, "appendSessionTranscriptNote").mockImplementation(async (...args) => {
-        entered.resolve();
-        await release.promise;
+        await appendGate.wait();
         return append(...args);
       });
       const pending = lane.run();
@@ -519,12 +516,11 @@ describe("embedded run durable writer admission", () => {
       const heldPath = `${databasePath}.held`;
       let replaced = false;
       try {
-        await Promise.race([
-          entered.promise,
-          pending.then(() => {
-            throw new Error("Recovery skipped the pending note");
-          }),
-        ]);
+        await awaitGateBeforeSettlement(
+          appendGate.entered,
+          pending,
+          "Recovery skipped the pending note",
+        );
         const owner = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
         await backup(requireNativeSqliteDatabase(owner.db), replacementPath);
         expect(statSync(replacementPath, { bigint: true }).ino).not.toBe(
@@ -534,11 +530,11 @@ describe("embedded run durable writer admission", () => {
         renameSync(databasePath, heldPath);
         renameSync(replacementPath, databasePath);
         replaced = true;
-        release.resolve();
+        appendGate.release();
         await failure;
         expect(readFileSync(databasePath)).toEqual(replacementBytes);
       } finally {
-        release.resolve();
+        appendGate.release();
         await Promise.allSettled([pending]);
         if (replaced) {
           renameSync(databasePath, replacementPath);

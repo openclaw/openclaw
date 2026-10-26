@@ -5,6 +5,7 @@ import type {
 } from "../../../src/shared/control-ui-link-reader.js";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
+import { restorePropertyDescriptor } from "../test-helpers/property-descriptor.ts";
 import { waitForSolid as waitForFast } from "../test-helpers/solid-settle.ts";
 import {
   item,
@@ -580,11 +581,7 @@ describe("Plugin link reader panel", () => {
     const previous = Object.getOwnPropertyDescriptor(navigator, "clipboard");
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
     onTestFinished(() => {
-      if (previous) {
-        Object.defineProperty(navigator, "clipboard", previous);
-      } else {
-        Reflect.deleteProperty(navigator, "clipboard");
-      }
+      restorePropertyDescriptor(navigator, "clipboard", previous);
     });
     const panel = await mount(
       vi.fn(async (_method, params) => requestedItem(params)),

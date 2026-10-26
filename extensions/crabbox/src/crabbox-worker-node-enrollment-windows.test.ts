@@ -57,18 +57,9 @@ async function replay(options: ReplayOptions = {}) {
     ? stateFile(options.interrupted === "receipt-only" ? "node-launch.json" : "runtime")
     : undefined;
   const identity = { pid: 123, startTime, ...(options.desktop ? session : {}) };
-  const files = new Map([
-    [
-      path.win32.join(runtimeDir, "node_modules", "openclaw", "package.json"),
-      JSON.stringify({ name: "openclaw", version: "2026.8.1" }),
-    ],
-    [stateFile("node.pid"), "123\n"],
-    [
-      stateFile("node-launch.json"),
-      options.recordOutput ??
-        JSON.stringify({ ...identity, runtimeDir, stateDir, cli, ...options.launchRecord }),
-    ],
-  ]);
+  let launchRecord =
+    options.recordOutput ??
+    JSON.stringify({ ...identity, runtimeDir, stateDir, cli, ...options.launchRecord });
   const setup = createCrabboxNodeEnrollmentSetup({
     leaseId: workerLeaseId,
     desktop: options.desktop,
@@ -97,17 +88,8 @@ async function replay(options: ReplayOptions = {}) {
       if (!options.shortState || directory === stateDir) {
         return;
       }
-      for (const [file, content] of Array.from(files)) {
-        if (file.startsWith(stateDir + path.win32.sep)) {
-          files.delete(file);
-          files.set(path.win32.join(directory, path.win32.basename(file)), content);
-        }
-      }
       stateDir = directory;
-      files.set(
-        stateFile("node-launch.json"),
-        JSON.stringify({ ...identity, runtimeDir, stateDir, cli }),
-      );
+      launchRecord = JSON.stringify({ ...identity, runtimeDir, stateDir, cli });
     }),
     chmodSync: vi.fn(),
     mkdtempSync: () => path.win32.join(home, "desktop-probe"),
@@ -131,11 +113,16 @@ async function replay(options: ReplayOptions = {}) {
       throw Object.assign(new Error("Missing runtime pointer"), { code: "ENOENT" });
     },
     readFileSync: (file: string) => {
-      const content = files.get(file);
-      if (content === undefined) {
-        throw new Error(`Unexpected file read: ${file}`);
+      if (file === path.win32.join(runtimeDir, "node_modules", "openclaw", "package.json")) {
+        return JSON.stringify({ name: "openclaw", version: "2026.8.1" });
       }
-      return content;
+      if (file === stateFile("node.pid")) {
+        return "123\n";
+      }
+      if (file === stateFile("node-launch.json")) {
+        return launchRecord;
+      }
+      throw new Error(`Unexpected file read: ${file}`);
     },
     realpathSync: (file: string) =>
       options.canonicalizePaths
@@ -194,6 +181,7 @@ async function replay(options: ReplayOptions = {}) {
       tmpdir: () => path.win32.join(home, "Temp"),
     },
     "node:child_process": { spawn, spawnSync },
+    "node:perf_hooks": { performance: { now: () => 0 } },
   };
   await runInNewContext(script, {
     Buffer,
@@ -249,7 +237,7 @@ describe("native Windows node enrollment replay", () => {
     expect(result).toMatchObject({
       code: 0,
       output:
-        "CRABBOX_PHASE:openclaw-bootstrap-preparation\nCRABBOX_PHASE:openclaw-bootstrap-complete",
+        "CRABBOX_PHASE:openclaw-bootstrap-preparation\nCRABBOX_TIMING:openclaw-bootstrap-preparation:0\nCRABBOX_PHASE:openclaw-bootstrap-complete",
     });
     expect(result.spawnSync).toHaveBeenCalledOnce();
     expect(result.fs.mkdirSync).toHaveBeenCalledWith(defaultStateDir, { recursive: true });

@@ -161,6 +161,7 @@ import { makeCfg, withTempCronHome } from "../isolated-agent.test-harness.js";
 import type { CronDelivery } from "../types.js";
 import type { DispatchCronDeliveryParams } from "./delivery-dispatch-types.js";
 import { dispatchCronDelivery } from "./delivery-dispatch.js";
+import { registerPersistentSessionDeliveryTests } from "./delivery-dispatch.persistent-session.test-support.js";
 import {
   makeBaseParams,
   makeResolvedDelivery,
@@ -303,6 +304,13 @@ describe("dispatchCronDelivery", () => {
     vi.unstubAllEnvs();
   });
 
+  registerPersistentSessionDeliveryTests({
+    commitBackgroundResultToSessionMock,
+    deliverOutboundPayloads,
+    appendAssistantMessageToSessionTranscript,
+    expectDeliveryCall,
+  });
+
   it("suppresses incomplete descendant output while settlement is queued", async () => {
     const params = makeBaseParams({ synthesizedText: "on it" });
     const descendant: SubagentRunRecord = {
@@ -393,37 +401,33 @@ describe("dispatchCronDelivery", () => {
     },
   );
 
-  it.each([
-    {
-      name: "textless",
-      input: [{ text: "   " }, {}],
-      summary: "Pablo Daily Summary\n- One task needs attention.",
-      output: [{ text: "Pablo Daily Summary\n- One task needs attention." }],
-    },
-    {
-      name: "metadata-only",
-      input: [{ text: "   ", channelData: buttons }],
-      summary: "Report ready",
-      output: [
-        { text: "Report ready" },
+  const report = "Report ready";
+  type Payloads = DispatchCronDeliveryParams["deliveryPayloads"];
+  it.each<[string, Payloads, string, Payloads]>([
+    ["textless", [{ text: "   " }, {}], report, [{ text: report }]],
+    [
+      "metadata-only",
+      [{ text: "   ", channelData: buttons }],
+      report,
+      [
+        { text: report },
         {
           text: "   ",
-          fallbackText: { text: "Report ready", replacesPayloadIndex: 0 },
+          fallbackText: { text: report, replacesPayloadIndex: 0 },
           channelData: buttons,
         },
       ],
-    },
-    {
-      name: "literal metadata text",
-      input: [{ text: SILENT_REPLY_TOKEN, channelData: buttons }],
-      summary: SILENT_REPLY_TOKEN,
-      output: [{ text: SILENT_REPLY_TOKEN, channelData: buttons }],
-    },
-  ])("normalizes $name direct payloads", async ({ input, summary, output }) => {
-    const state = await dispatchCronDelivery(structuredParams(input, summary));
+    ],
+    [
+      "literal metadata text",
+      [{ text: SILENT_REPLY_TOKEN, channelData: buttons }],
+      SILENT_REPLY_TOKEN,
+      [{ text: SILENT_REPLY_TOKEN, channelData: buttons }],
+    ],
+  ])("normalizes %s direct payloads", async (_name, input, summary, output) => {
+    expectDelivered(await dispatchCronDelivery(structuredParams(input, summary)));
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
     expectDeliveryCall(0, { payloads: output });
-    expectDelivered(state);
   });
 
   it.each([true, false])(
@@ -1306,68 +1310,6 @@ describe("dispatchCronDelivery", () => {
       ),
     });
   });
-
-  it.each([
-    {
-      name: "normalized execution destination",
-      executionKey: "telegram:group:-100123:topic:42",
-      destinationThread: "42",
-      commits: 0,
-    },
-    {
-      name: "different destination thread",
-      executionKey: "agent:main:telegram:group:-100123:topic:42",
-      destinationThread: "43",
-      commits: 1,
-    },
-  ])(
-    "avoids duplicate transcript writes for $name",
-    async ({ executionKey, destinationThread, commits }) => {
-      const params = makeBaseParams({
-        synthesizedText: "Persistent session report",
-        sessionTarget: `session:${executionKey}`,
-      });
-      params.agentSessionKey = executionKey;
-      params.sourceSessionKey = "agent:main:telegram:group:-100123:topic:42";
-      params.sourceSessionGeneration = {
-        sessionId: "execution-session-id",
-        lifecycleRevision: "execution-lifecycle-revision",
-      };
-      const destinationKey = `agent:main:telegram:group:-100123:topic:${destinationThread}`;
-      params.resolvedDelivery = makeResolvedDelivery({
-        to: "-100123",
-        threadId: destinationThread,
-        sessionRoute: {
-          sessionKey: destinationKey,
-          baseSessionKey: "agent:main:telegram:group:-100123",
-          peer: { kind: "group", id: "-100123" },
-          chatType: "group",
-          from: "telegram:-100123",
-          to: "-100123",
-          threadId: destinationThread,
-        },
-      });
-
-      expectDelivered(await dispatchCronDelivery(params));
-      expect(deliverOutboundPayloads).toHaveBeenCalledOnce();
-      expectDeliveryCall(0, {
-        channel: "telegram",
-        to: "-100123",
-        threadId: destinationThread,
-        payloads: [{ text: "Persistent session report" }],
-      });
-      expect(commitBackgroundResultToSessionMock).toHaveBeenCalledTimes(commits);
-      if (commits) {
-        expect(commitBackgroundResultToSessionMock).toHaveBeenCalledWith(
-          expect.objectContaining({
-            sessionKey: destinationKey,
-            text: "Persistent session report",
-          }),
-        );
-      }
-      expect(appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
-    },
-  );
 
   it.each([
     ["literal skip token", "ANNOUNCE_SKIP", false, true],

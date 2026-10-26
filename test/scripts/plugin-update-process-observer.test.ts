@@ -52,24 +52,22 @@ describe("plugin update command observation", () => {
     expect(timers).toBe(0);
   });
 
-  it("ESRCH leaves evidence unknown and keeps scanning readable siblings and grandchildren", async () => {
+  it("keeps scanning the tree without inventing evidence for vanished or unreadable children", async () => {
+    setProc(10, { "task/10/children": "11 12 14" });
     setProc(11, { environ: procError("ESRCH"), "task/11/children": "13" });
     setProc(13, { cmdline: argv, environ: marker });
+    setProc(14, { environ: "OPENCLAW_UPDATE_POST_CORE=0\0", cmdline: procError("EACCES") });
     const outcome = observePostCoreCommand(child, "update");
     await vi.advanceTimersByTimeAsync(20);
     finish();
     const result = await outcome;
     expect(result.code).toBe(0);
-    expect(result.children).toEqual([observed("11", argv, null), observed("13"), observed("12")]);
-  });
-
-  it("does not manufacture positive handoff evidence when cmdline is inaccessible", async () => {
-    files.set("/proc/10/task/10/children", "11");
-    setProc(11, { environ: "OPENCLAW_UPDATE_POST_CORE=0\0", cmdline: procError("EACCES") });
-    const outcome = observePostCoreCommand(child, "update");
-    await vi.advanceTimersByTimeAsync(20);
-    finish();
-    expect((await outcome).children.some((entry) => entry.postCore)).toBe(false);
+    expect(result.children).toEqual([
+      observed("11", argv, null),
+      observed("13"),
+      observed("12"),
+      observed("14", "", null),
+    ]);
   });
 
   it("retains positive evidence and worker argv after process.title changes and the process exits", async () => {

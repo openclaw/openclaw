@@ -437,6 +437,7 @@ export async function prepareVisitorPublicationFixture(f: {
     openPluginPanel: unexpected,
     readSessionFacts: unexpected,
     withSessionFacts: unexpected,
+    appendAgentMessage: unexpected,
     subscribeSessionChanges: unexpected,
     request: async () => unexpected(),
   };

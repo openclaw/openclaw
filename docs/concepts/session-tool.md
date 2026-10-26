@@ -251,13 +251,14 @@ Supply the message body in the required `message` argument. Hidden aliases such 
 
 `sessions_send` runs another session on the same Gateway and optionally waits for the response. Its `sessionKey`, `label`, or `agentId` selects local model context, not an external destination. A peer's reply reaches the requester once, either inline or as a later inter-session input. Continue the conversation with another `sessions_send`. To post to a channel, use `message` with an explicit channel and target.
 
-Waiting sends recover long inline replies from the accepted run's stored answer instead
-of returning its 4,096-character lifecycle preview. If that answer is unavailable,
-`replyTruncated: true` and a note identify the possibly incomplete reply. The normal
-model tool-result budget still applies and reports truncation explicitly. Ask the
-target for the missing section or a file containing the full reply; `sessions_history`
-also caps individual messages and cannot always recover their tail. Delayed
-inter-session replies still use the bounded lifecycle preview.
+Waiting and delayed inter-session replies recover the accepted run's full answer
+instead of returning its 4,096-character lifecycle preview. If the full answer is
+unavailable under the requester's current access, inline results include
+`replyTruncated: true` and a note; delayed replies include the same guidance for the
+requesting agent. The normal model tool-result budget still applies and reports
+truncation explicitly. Ask the target for the missing section or a file containing
+the full reply; `sessions_history` also caps individual messages and cannot always
+recover their tail.
 
 [Swarm collector children](/tools/swarm#how-collector-children-behave) (spawned with
 `collect: true`) are one-shot and do not accept `sessions_send`, including after they

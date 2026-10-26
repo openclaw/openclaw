@@ -31,6 +31,7 @@ export type ChatPaneHeaderProps = ChatPaneLayoutMenuProps & {
   mergedChrome: boolean;
   navDrawerOpen?: boolean;
   gatewayStatus?: GatewayStatusProps | null;
+  savedConversation?: boolean;
   title: string;
   agent?: AgentIdentity & { name: string };
   titlePending?: boolean;

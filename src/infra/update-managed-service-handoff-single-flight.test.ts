@@ -1,11 +1,10 @@
 import type { ChildProcess } from "node:child_process";
 // Process-local handoff sharing complements the durable cross-process lease.
-import { EventEmitter, once } from "node:events";
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { SQLInputValue } from "node:sqlite";
-import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -14,6 +13,7 @@ import {
   createManagedHandoffTempDirTracker,
   readManagedHandoffArtifacts,
 } from "./update-managed-service-handoff-artifacts.test-support.js";
+import { createManagedServiceChildMock } from "./update-managed-service-handoff-command.test-support.js";
 import type {
   ManagedServiceUpdateHandoffParams,
   ManagedServiceUpdateHandoffResult,
@@ -45,14 +45,7 @@ function createReadyChild(
   paramsPath: string,
   failure?: MockManagedUpdateHandoffLeaseFailure,
 ) {
-  const child = Object.assign(new EventEmitter(), {
-    pid,
-    exitCode: null,
-    signalCode: null,
-    stdin: new PassThrough(),
-    stdout: new PassThrough(),
-    unref: vi.fn(),
-  });
+  const child = createManagedServiceChildMock({ pid });
   process.nextTick(() => {
     signalMockManagedUpdateHandoffReady({
       child,

@@ -14,12 +14,16 @@ export function createConfigSuite(name: string) {
   });
 }
 
-export const settingsPageOptions = {
-  colorScheme: "dark",
-  locale: "en-US",
-  serviceWorkers: "block",
-  viewport: { height: 1000, width: 1440 },
-} satisfies BrowserContextOptions;
+export function createSettingsPageOptions() {
+  return {
+    colorScheme: "dark",
+    locale: "en-US",
+    serviceWorkers: "block",
+    viewport: { height: 1000, width: 1440 },
+  } satisfies BrowserContextOptions;
+}
+
+export const settingsPageOptions = createSettingsPageOptions();
 
 export function configProof(name: string, variant?: string) {
   const enabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";

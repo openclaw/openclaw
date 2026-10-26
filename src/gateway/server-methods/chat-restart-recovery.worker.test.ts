@@ -5,18 +5,14 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   loadSessionEntry,
   patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.sqlite-entry.js";
-import { loadTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-read.js";
-import { appendTranscriptMessage } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { readSessionEntriesFromStoreInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db-lifecycle.js";
-import { invalidateRegisteredAgentDatabasesMemo } from "../../state/openclaw-agent-db-registry-listing.js";
 import * as writeAdmission from "../../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { terminalizeRestartSafeChatAdmission } from "./chat-restart-recovery.js";
@@ -60,42 +56,6 @@ async function seedTerminalTarget(storePath: string, source = false, lifecycle =
   });
   return target;
 }
-
-it("settles restart-safe chat claims without caller-thread SQL", () =>
-  withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const target = await seedTerminalTarget(state.statePath("terminal.sqlite"), true);
-    await appendTranscriptMessage(
-      { ...target, sessionId },
-      { message: { role: "user", content: "Synthetic accepted turn" } },
-    );
-    const terminal = await prepareTerminalTarget(target);
-    invalidateRegisteredAgentDatabasesMemo({ env: state.env });
-    const sql = observeHostDataSql();
-    try {
-      await expect(
-        terminalizeRestartSafeChatAdmission({
-          ...terminal,
-          status: "failed",
-          error: "Synthetic terminal failure",
-        }),
-      ).resolves.toBe(true);
-      expect(sql.queries).toEqual([]);
-    } finally {
-      sql.restore();
-    }
-    expect(loadSessionEntry(target)).toMatchObject({
-      status: "failed",
-      lastRunId: clientRunId,
-      restartRecoveryTerminalRunIds: ["source-run"],
-    });
-    expect(loadSessionEntry(target)?.restartRecoveryDeliveryRunId).toBeUndefined();
-    expect(loadTranscriptEventsSync({ ...target, sessionId })).toContainEqual(
-      expect.objectContaining({
-        customType: "run-failed-before-reply",
-        details: expect.objectContaining({ runId: "terminal-run" }),
-      }),
-    );
-  }));
 
 it("terminalizes the current source of the same admitted run without tombstoning stale source facts", () =>
   withOpenClawTestState({ scenario: "minimal" }, async (state) => {

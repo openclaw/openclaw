@@ -426,7 +426,7 @@ export const artifactsHandlers: GatewayRequestHandlers = {
     }
     if (artifactResponseIsCurrent(loaded.value, respond)) {
       respond(true, {
-        artifacts: artifacts.map(toArtifactSummary),
+        artifacts,
         ...(nextCursor ? { nextCursor } : {}),
         ...(omittedOversized ? { omittedOversized: true } : {}),
       });

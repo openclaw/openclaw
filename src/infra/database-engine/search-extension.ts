@@ -1,4 +1,8 @@
-import { isPostgresSqlConnection, type EngineConnection } from "../sql-connection.js";
+import {
+  isPostgresSqlConnection,
+  type EngineConnection,
+  type PostgresSqlConnection,
+} from "../sql-connection.js";
 import {
   invalidateLocalSqliteSchemaAdmissions,
   publishSqliteDatabaseSchemaChange,
@@ -22,6 +26,22 @@ import { admitSqliteMemoryTextSearch } from "./sqlite-search-schema.js";
 
 class SearchExtensionDefinitionChangedError extends Error {
   override name = "SearchExtensionDefinitionChangedError";
+}
+
+/** Definition preflight only; binding still checks the store's search capability admission. */
+export function arePostgresSearchExtensionsAdmitted(
+  db: PostgresSqlConnection,
+  definitions: Readonly<Record<string, SearchSchema>>,
+): boolean {
+  const schema = getAdmittedPostgresSchema(db);
+  return Boolean(
+    schema &&
+    getPostgresPhysicalFacts(db) &&
+    Object.entries(definitions).every(
+      ([name, definition]) =>
+        JSON.stringify(schema.searchExtensions?.[name]) === JSON.stringify(definition),
+    ),
+  );
 }
 
 /** Register only at the owner's admission boundary; SQLite retains its existing derived lifecycle. */
@@ -53,7 +73,7 @@ export function admitStoreSearchExtension(
     );
   }
   db.runTransaction(() => {
-    admitPostgresSearch(db, definition, facts.namespace);
+    admitPostgresSearch(db, definition, facts.namespace, base.postgresVectorSearchVersion);
     const existing = [base.search, ...Object.values(base.searchExtensions ?? {})].filter(
       (item) => item !== undefined,
     );
@@ -79,6 +99,7 @@ export function admitStoreSearchExtension(
           ),
         },
         base.postgresVectorDecoderVersion,
+        base.postgresVectorSearchVersion,
       ),
     );
     if (!Object.keys(base.searchExtensions ?? {}).length) {
@@ -101,7 +122,7 @@ export function admitStoreSearchExtension(
     for (const item of [next.search, ...Object.values(next.searchExtensions)].filter(
       (candidate) => candidate !== undefined,
     )) {
-      publishPostgresSearch(db, item);
+      publishPostgresSearch(db, item, base.postgresVectorSearchVersion);
     }
   });
   return bindStoreSearch(db, definition);

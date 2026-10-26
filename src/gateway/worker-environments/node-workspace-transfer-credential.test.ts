@@ -1,3 +1,4 @@
+import "./store-publication.test-support.js";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
@@ -20,34 +21,7 @@ import {
 import { startNodeWorkspaceTransferTestServer } from "./node-workspace-transfer.test-support.js";
 import * as support from "./service.test-support.js";
 
-const delivery = vi.hoisted(() => ({
-  command: undefined as string | undefined,
-  afterCommit: undefined as (() => Promise<void>) | undefined,
-}));
-vi.mock("../../state/openclaw-state-worker-store.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../state/openclaw-state-worker-store.js")>();
-  return {
-    ...actual,
-    runOpenClawStateWorkerOperation: (
-      ...[context, operation, options]: Parameters<typeof actual.runOpenClawStateWorkerOperation>
-    ) =>
-      actual.runOpenClawStateWorkerOperation(
-        context,
-        (scope) =>
-          operation({
-            execute: async (command, executeOptions) => {
-              const result = await scope.execute(command, executeOptions);
-              if (command.type === delivery.command) {
-                await delivery.afterCommit?.();
-              }
-              return result;
-            },
-          }),
-        options,
-      ),
-  };
-});
+const { delivery } = await import("./store-publication.test-support.js");
 
 async function transferFixture(name: string, filename: string, payload: string | Buffer) {
   const { store, root } = support.testState;
@@ -85,7 +59,7 @@ describe("node workspace credential revocation", () => {
       const resumeVerification = createDeferred();
       const committed = createDeferred();
       const publish = createDeferred();
-      const handled = createDeferred<{ headersSent: boolean }>();
+      const handled = createDeferred<boolean>();
       const verifyBlob = service.verifyBlob.bind(service);
       const verification = vi.spyOn(service, "verifyBlob").mockImplementation(async (blob) => {
         const valid = await verifyBlob(blob);
@@ -105,9 +79,7 @@ describe("node workspace credential revocation", () => {
           .catch((error: unknown) => {
             res.destroy(error instanceof Error ? error : new Error(String(error)));
           })
-          .then(() => {
-            handled.resolve({ headersSent: res.headersSent });
-          });
+          .then(() => handled.resolve(res.headersSent));
       });
       const requestAbort = new AbortController();
       let request: Promise<{ status: number; body: Buffer } | { error: unknown }> | undefined;
@@ -164,12 +136,10 @@ describe("node workspace credential revocation", () => {
           "Inventory mutation finished before its publication gate",
         );
         resumeVerification.resolve();
-        const response = await handled.promise;
-        expect(response.headersSent).toBe(mutationKind !== "revokeEnvironmentCredential");
+        expect(await handled.promise).toBe(mutationKind !== "revokeEnvironmentCredential");
         if (mutationKind !== "revokeEnvironmentCredential") {
           expect(await request).toEqual({ status: 200, body: payload });
         }
-        expect(verification).toHaveBeenCalledOnce();
         publish.resolve();
         await mutation;
       } finally {

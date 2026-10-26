@@ -70,6 +70,19 @@ writes and validates the exact serialized row before persisting it. Offline
 migration and repair retain explicit pending work and invalidate session-validation
 receipts; they never reuse readiness to admit unvalidated imports.
 
+Unknown persisted and imported session entries admit optional numeric metadata, including spawn
+depth, usage counters, timestamps, and costs, before typed consumers use it.
+Wrong types and non-finite values stop admission with a repair diagnostic rather
+than being coerced or discarded. Existing snooze normalization keeps its own
+deadline policy, and extensible plugin and nested payload contracts are unchanged.
+With the Gateway stopped, `openclaw doctor --fix` converts supported legacy
+numeric strings; spawn depth requires a nonnegative decimal integer. Unusable
+values remain available for offline repair or restoration. This uses the existing
+backed-up Doctor path and requires no schema-version change. Trusted internal
+projections and writes reuse admitted numeric fields without revalidating them.
+Doctor commits converted archive, activity, and run-timing query columns with the
+repaired JSON in the same transaction, preserving unrelated indexed facts.
+
 The pending table remains derived and stores no authority or copied payloads.
 Migration validates the prior schema, retires its validation triggers, queues all
 existing nodes, and clears the old session-validation receipt atomically with version
@@ -132,6 +145,28 @@ fragment activation/dependencies and the expected catalog for the state owner;
 it does not maintain a separate schema definition. They omit transaction wrappers and fixed schema qualification;
 the owning connection supplies the namespace and transaction. The `agent.postgres.sql` artifact follows the same runtime-only convention.
 
+### PostgreSQL index ordering migrations
+
+Explicit PostgreSQL index keys use native ordering for canonical NOT NULL and
+primary-key columns, and for direct keys proven non-null by the index's own
+`IS NOT NULL` predicate. Other nullable columns and expression keys retain SQLite's
+`ASC NULLS FIRST` / `DESC NULLS LAST` placement. This lets default PostgreSQL
+`ORDER BY` use non-null indexes without changing observable nullable ordering.
+State schema 32, agent schema 34, Workboard schema 4, Logbook schema 2, and
+Team Reports schema 2 introduced schema-nullability ordering. State schema 33,
+agent schema 35, and Logbook schema 3 extend it to predicate-proven keys,
+including equality-only indexes. Each migration rebuilds only changed indexes
+through versioned schema admission under its existing advisory lock. Queries
+that exclude null keys retain PostgreSQL's default ordering. Absent first-use fragments
+stay absent. SQLite advances version metadata without changing canonical DDL.
+Historical admission and backup descriptors retain the preceding index definitions;
+rollback restores the verified pre-upgrade backup. Update and Doctor retain their
+existing migration progress and recovery handling.
+
+The worker-only `openclaw/plugin-sdk/database-engine-worker-runtime` helpers
+`postgresIndexOrderingMigration` and `withLegacyPostgresIndexOrdering` let store
+owners share that cutover and exact predecessor reconstruction for generated DDL.
+
 The transcript navigation CHECK keeps its JSON validation for present metadata.
 Its PostgreSQL helper is strict, so absent metadata passes the CHECK without
 calling the helper. A fixed `pg_catalog` search path avoids repeatedly parsing
@@ -156,10 +191,10 @@ SET LOCAL standard_conforming_strings = on;
 COMMIT;
 ```
 
-Use a disposable schema for this readiness check; it does not enable shared-state
-PostgreSQL support or migrate an existing store.
+Use a disposable schema for this generation check; it does not configure runtime
+engine selection or migrate an existing store.
 
-Both engines use the same shared-state schema version (currently 25). Every
+Both engines use the same [shared-state schema version](/reference/database-schemas/state-schema-history). Every
 future version change must supply both engines' forward migration and catalog
 equivalence proof together. JSON stays canonical: a query/index projection is
 derived once in TypeScript and committed in the same statement as its JSON.
@@ -170,7 +205,7 @@ owner's retired index names and the canonical replacement index definitions.
 It contains forward DDL only; the caller supplies the transaction, namespace,
 and version publication. PostgreSQL conformance verifies the upgraded index
 definitions against a fresh schema and preserves retained rows and local indexes.
-This readiness artifact does not enable shared-state PostgreSQL runtime support.
+Applying this artifact alone does not configure PostgreSQL runtime selection.
 
 Schema 25 adds `state-v24-v25.postgres.sql`, a metadata-only forward migration
 registered with the existing PostgreSQL engine owner. It updates the shared-state
@@ -222,6 +257,7 @@ SQL/concurrency conformance or a choice of per-agent PostgreSQL topology.
 
 `pnpm check:database-dialect-ratchet` keeps mechanical, design, and engine-maintenance counts shrink-only against the Git base by scanning only differing production `.ts`/`.mts`/`.sql` files under `src/`, `extensions/`, and `packages/` (excluding tests and fixtures); `--staged` reads the index, `--full-tree` reports totals, and the `sqliteStringSet` owner subset is reported within mechanical debt.
 SQLite primitive owners listed in `SQLITE_PRIMITIVE_OWNERS` may grow engine-maintenance constructs, and consumers call them.
+The inventory also classifies a few file-scoped constructs with no PostgreSQL SQL equivalent as owned engine maintenance; other constructs in those files stay counted. Knowledge's `extensions/knowledge/src/retrieval.ts` owns `fts5`, `temp-schema`, and `rowid` for its keyword index, a rebuildable cache in each Knowledge store's own `state.sqlite` that never opens the selected Gateway engine.
 The lexical gate examines `.sql` files minus comments, all static parts of templates whose tag's final identifier ends in `sql` (case-insensitive), strings and untagged templates starting after whitespace and `(` with an uppercase SQL statement keyword, and the `orReplace`/`orIgnore`/`orAbort`/`orFail`/`orRollback` method calls; construct regexes remain case-insensitive, exclude SQL double-quoted text, require `name(` for functions, and require `PRAGMA <name>` or `pragma_<name>(` for `data_version`/`schema_version`/`user_version`.
 Prose, fragments without a statement prefix, and substitutions are ignored, accepting under-counts for assembled SQL; both revisions use identical rules without type, symbol, import, or SQL token-role analysis, and runtime behavior and schemas are unchanged.
 
@@ -958,7 +994,7 @@ transaction and commit admission. Only an actual scratch write marks its busines
 completion receipt. Unset tombstones, byte limits, source provenance and uncertain
 outcome handling are unchanged. Doctor's migration and compensation keep the same
 synchronous kernel. Ordinary scratch reads use the shared-state reader, with job
-definition and scratch in one native snapshot. The service rejects a changed
+definition and scratch in one joined statement snapshot. The service rejects a changed
 definition, and the Gateway rechecks the caller before returning private content.
 Scratch reads and writes reuse the original projection's creation-time fallback
 for legacy rows missing that metadata; finite persisted values always win.
@@ -2267,9 +2303,17 @@ that scope while retaining a healthy idle worker. Database retirement revokes qu
 requests, drains dispatched work, and joins native exit. The process keeps at most one
 reusable archive worker; scopes in the same state directory transfer it with fresh
 authority. Different state directories and unhealthy workers require native exit
-before replacement.
-Cold preparation and mutations retain their separate one-shot workers; cold mutations
-join their existing page maintenance and native exit.
+before replacement. Five minutes without archive work retires the idle worker and
+releases its loaded heap. Only actual work renews that deadline; empty scope
+preparation does not. Admission racing retirement joins native exit before creating
+a replacement, and an open archive scope remains usable afterward.
+Cold mutations share that archive worker through a private operation port. Each
+mutation retains its own live writer admission and commit checks, closes its agent
+database, source readers, and shared-state database, then acknowledges cleanup on
+the same port as its result. Cleanup uncertainty retires the worker and joins native
+exit before returning an error. No native connection or lease survives between
+mutations. Cold preparation still uses a separate one-shot worker, and cold
+maintenance retains its existing page reclamation.
 
 History eviction prepares its deletion snapshot in that archive worker's existing
 materialization request. The final reclamation transaction rereads durable references,

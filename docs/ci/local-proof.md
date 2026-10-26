@@ -307,6 +307,18 @@ contents, its fresh current analysis also supplies the comparison counts.
 Changed snapshots retain both full analyses and historical-cache validation.
 Frozen targets without the aggregate command retain their original commands.
 
+`pnpm check:test-lines-ratchet` compares total tracked test lines with the
+integer ceiling in `config/test-lines-baseline.txt`, counting newline-terminated
+lines like `wc -l` in `*.test.{ts,tsx,mts,mjs,js,cjs}`, `*.test-support.ts`,
+`*test-helpers*`, and `**/test-support/**`. In `checks-fast-baseline-ratchets`, an
+over-ceiling tree fails only when this change's net test-line delta against the
+comparison base is positive; non-growing changes pass with an over-ceiling notice,
+while runs without a base retain the absolute ceiling check. Run
+`pnpm check:test-lines-ratchet --prune` to lower the ceiling to the current total;
+this command never raises it. A higher ceiling requires a deliberate manual
+edit and justification in the PR, and the check reports the increase against
+the comparison base.
+
 The max-lines suppression inventory and the environment-variable count budget
 must describe the tree, and that check blocks in GitHub Actions as well as
 locally: an unlisted suppression, a stale inventory entry, or an `OPENCLAW_*`

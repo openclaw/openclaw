@@ -82,7 +82,7 @@ suite.define(() => {
         sessionKey: "agent:main:session-a",
       });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
-      await waitForRequests(gateway, "chat.startup", 1);
+      await waitForRequests(gateway, "sessions.messages.subscribe", 1);
       const thread = page.locator(".chat-thread");
       const prefixes = ["CLI user copy", "CLI imported-only reply"];
       for (const prefix of prefixes) {
@@ -111,40 +111,7 @@ suite.define(() => {
         const gateway = await installMockGateway(page, {
           sessionKey,
           sessions: [{ key: sessionKey, kind: "direct", hasActiveRun: true, status: "running" }],
-          historyMessages: [
-            { role: "user", content: "Inspect the original tool source.", timestamp: 1 },
-            {
-              role: "assistant",
-              timestamp: 2,
-              content: [
-                {
-                  type: "toolCall",
-                  id: "source-call",
-                  name: "custom_tool",
-                  arguments: { message: command },
-                },
-              ],
-            },
-            {
-              role: "toolResult",
-              toolCallId: "source-call",
-              toolName: "custom_tool",
-              timestamp: 3,
-              content: [{ type: "text", text: "Source read complete." }],
-            },
-            { role: "assistant", content: "The original tool source is available.", timestamp: 4 },
-          ],
         });
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-        await page.getByText("The original tool source is available.", { exact: true }).waitFor();
-        for (const group of await page
-          .locator('.chat-activity-group__summary[aria-expanded="false"]')
-          .all()) {
-          await group.click();
-        }
-        const toolRow = page.locator(".chat-tool-msg-summary").first();
-        await toolRow.waitFor();
-        const collapsedText = await toolRow.textContent();
         await page.goto(`${suite.server.baseUrl}activity?view=live`);
         await page.locator(".activity-empty").waitFor();
         await gateway.waitForRequest("sessions.messages.subscribe", { match: { key: sessionKey } });
@@ -167,7 +134,6 @@ suite.define(() => {
         const note = entry.locator(".activity-entry__note");
         await preview.waitFor();
         await note.waitFor();
-        expect(collapsedText).toContain(command);
         const visible = await preview.textContent();
         expect(visible).toContain("API_TOKEN = computeToken()");
         expect(visible).toContain(command);

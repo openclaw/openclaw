@@ -32,6 +32,7 @@ import {
   assertWorkerTurnInputAdmitted,
   type WorkerTurnExecutionIdentityCapability,
 } from "./placement-turn-claim-events.js";
+import { createWorkerExecApprovalRpc } from "./worker-exec-approval.js";
 import type { WorkerGatewayToolSink } from "./worker-gateway-tool-contract.js";
 import { workerSessionToolErrorResult } from "./worker-session-tool-result.js";
 import { createWorkerComputerRpc } from "./worker-turn-computer-rpc.js";
@@ -721,6 +722,7 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
     commitTranscript,
     pushLiveEvent,
     getToolSurface,
+    execApproval: createWorkerExecApprovalRpc(options, validateAttachedWorkerRequest),
     refreshGitHubBinding,
     invokeGatewayTool,
     cancelGatewayTool,

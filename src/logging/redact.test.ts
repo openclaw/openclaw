@@ -195,7 +195,7 @@ describe("redactSensitiveText", () => {
       ].join("\n"),
       "Use either --password or --password-file.",
       [
-        "npm_telegram_package_spec ask_openclaw_query_patterns team_management risk_assessment glpat-docs gloas-docs gldt-docs glcbt-docs glptt-docs glft-docs glimt-docs glagent-docs glwt-docs glsoat-docs glffct-docs glrt-docs glrtr-docs GR1348941-docs _gitlab_session=short dapi-example sbp_short nfp_site CCIPAT_docs ATATT-example fw-tooshort fw_tooshort fpk_tooshort",
+        "npm_telegram_package_spec ask_openclaw_query_patterns team_management risk_assessment glpat-docs gloas-docs gldt-docs glcbt-docs glptt-docs glft-docs glimt-docs glagent-docs glwt-docs glsoat-docs glffct-docs glrt-docs glrtr-docs GOCSPX-docs GR1348941-docs _gitlab_session=short dapi-example sbp_short nfp_site CCIPAT_docs ATATT-example fw-tooshort fw_tooshort fpk_tooshort",
         `fixturefw-${"C".repeat(40)}`,
         `fixture_fw_${"A".repeat(40)}`,
         `fixture_fpk_${"B".repeat(40)}`,
@@ -225,6 +225,7 @@ describe("redactSensitiveText", () => {
       "https://discord.com/api/webhooks/123456789012345678/abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdef",
       `discord bot token ${"A".repeat(24)}.${"B".repeat(6)}.${"C".repeat(27)}`,
       "AIzaabcdefghijklmnopqrstuvwxyzABCDE",
+      "GOCSPX-abcdefghijklmnopqrstuvwx_y-z",
       "fc-abcdefghijklmnopqrstuvwxyz",
       "gAAAAabcdefghijklmnopqrstuvwxyz123456",
       "AKIAABCDEFGHIJKLMNOP",

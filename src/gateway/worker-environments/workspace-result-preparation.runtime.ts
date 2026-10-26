@@ -77,7 +77,7 @@ async function publicationStageSource(
     size: content.byteLength,
     sha256: sha256(content),
   });
-  const entries = [...inline].map(([pathname, content]) => file(pathname, content));
+  const entries = Array.from(inline, ([pathname, content]) => file(pathname, content));
   const blobs = new Set(
     snapshot.entries.flatMap((entry) => (entry.sha && entry.mode !== "160000" ? [entry.sha] : [])),
   );
@@ -161,7 +161,11 @@ export async function buildWorkspaceStageInput(
     ref: stagedResultRef,
     entries: compared.entries,
     message: stagedResultMessage({ ...source, gitHistory: params.gitHistory }),
-    parentCommit: params.gitHistory?.descendsFromBase ? params.gitHistory.headCommit : undefined,
+    parentCommit:
+      params.parentCommit ??
+      (params.gitHistory?.descendsFromBase && !params.gitHistory.unavailableReason
+        ? params.gitHistory.headCommit
+        : undefined),
     readVerifiedContent: source.readVerifiedContent,
   });
   return null;

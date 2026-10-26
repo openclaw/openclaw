@@ -8,6 +8,7 @@ import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js"
 import type { PlaybackMediaProbeResult } from "./media-probe.js";
 import {
   observePlaybackSourceOpen,
+  readPlaybackSource,
   waitForPlaybackSourceCleanup,
 } from "./playback-transcode.test-support.js";
 
@@ -67,29 +68,32 @@ beforeEach(() => {
   probePlaybackMediaFileDescriptor.mockImplementation(async (_fd: number, kind: string) =>
     kind === "audio"
       ? { durationMs: 1000, audioCodec: "pcm_s16le", audioStreamIndex: 0 }
-      : {
-          durationMs: 1000,
+      : videoProbe({
           videoCodec: "vp9",
-          videoStreamIndex: 0,
           audioCodec: "opus",
           audioStreamIndex: 1,
-        },
+        }),
   );
 });
 
 async function createSource(fileName: string, contents = "source") {
   const fixturePath = path.join(tempHome.home, fileName);
   await fs.writeFile(fixturePath, contents);
-  const sourcePath = await fs.realpath(fixturePath);
-  const sourceStat = await fs.stat(sourcePath);
-  return {
-    sourcePath,
-    sourceStat: {
-      size: sourceStat.size,
-      mtimeMs: sourceStat.mtimeMs,
-      ctimeMs: sourceStat.ctimeMs,
-      exactIdentity: await fs.stat(sourcePath, { bigint: true }),
-    },
+  return await readPlaybackSource(fixturePath);
+}
+
+function videoRequest(source: Awaited<ReturnType<typeof createSource>>, mimeType = "video/mp4") {
+  return { ...source, mimeType, kind: "video" as const };
+}
+
+function videoProbe(probe: PlaybackMediaProbeResult): PlaybackMediaProbeResult {
+  return { durationMs: 1000, videoStreamIndex: 0, ...probe };
+}
+
+function writeFfmpegOutput(output: string) {
+  return async (args: string[]) => {
+    await fs.writeFile(args.at(-1) ?? "", output);
+    return "";
   };
 }
 
@@ -124,13 +128,11 @@ describe("playback transcode policy", () => {
       const probe =
         kind === "audio"
           ? { durationMs: 1000, audioCodec: codec, audioStreamIndex: 0 }
-          : {
-              durationMs: 1000,
+          : videoProbe({
               videoCodec: codec,
               videoProfile: codec === "h264" ? "high" : undefined,
               videoPixelFormat: codec === "h264" ? "yuv420p" : undefined,
-              videoStreamIndex: 0,
-            };
+            });
 
       probePlaybackMediaFileDescriptor.mockResolvedValueOnce(probe);
       await expect(
@@ -168,12 +170,11 @@ describe("playback transcode policy", () => {
       const probe =
         kind === "audio"
           ? { durationMs: 1000, audioCodec: "opus", audioStreamIndex: 0 }
-          : { durationMs: 1000, videoCodec: "hevc", videoStreamIndex: 0 };
+          : videoProbe({
+              videoCodec: "hevc",
+            });
       probePlaybackMediaFileDescriptor.mockResolvedValueOnce(probe);
-      runFfmpeg.mockImplementationOnce(async (args: string[]) => {
-        await fs.writeFile(args.at(-1) ?? "", `normalized-${kind}`);
-        return "";
-      });
+      runFfmpeg.mockImplementationOnce(writeFfmpegOutput(`normalized-${kind}`));
 
       await expect(
         playback.resolvePlaybackTranscode({ ...source, mimeType, kind }),
@@ -196,7 +197,7 @@ describe("playback transcode policy", () => {
   it("does not reuse a rendition after the source file is replaced", async () => {
     using sync = vi.spyOn(syncFs, "fsyncSync");
     const original = await createSource("replaced-cache.mkv", "first-source");
-    const params = { ...original, mimeType: "video/x-matroska", kind: "video" as const };
+    const params = videoRequest(original, "video/x-matroska");
     runFfmpeg.mockImplementation(async (args: string[]) => {
       await fs.writeFile(args.at(-1) ?? "", `rendition-${runFfmpeg.mock.calls.length}`);
       return "";
@@ -238,11 +239,7 @@ describe("resolvePlaybackTranscode", () => {
     });
 
     await expect(
-      playback.resolvePlaybackTranscode({
-        ...source,
-        mimeType: "video/x-matroska",
-        kind: "video",
-      }),
+      playback.resolvePlaybackTranscode(videoRequest(source, "video/x-matroska")),
     ).resolves.toEqual({ kind: "fallback" });
     expect(runFfmpeg).not.toHaveBeenCalled();
   });
@@ -251,13 +248,13 @@ describe("resolvePlaybackTranscode", () => {
     const source = await createSource("dual-track.mp4");
     probePlaybackMediaFileDescriptor
       .mockResolvedValueOnce({ durationMs: 1000, audioCodec: "aac", audioStreamIndex: 1 })
-      .mockResolvedValueOnce({
-        durationMs: 1000,
-        videoCodec: "hevc",
-        videoStreamIndex: 0,
-        audioCodec: "aac",
-        audioStreamIndex: 1,
-      });
+      .mockResolvedValueOnce(
+        videoProbe({
+          videoCodec: "hevc",
+          audioCodec: "aac",
+          audioStreamIndex: 1,
+        }),
+      );
 
     await expect(
       playback.resolvePlaybackMetadataForSource({
@@ -267,11 +264,7 @@ describe("resolvePlaybackTranscode", () => {
       }),
     ).resolves.toMatchObject({ playback: "native" });
     await expect(
-      playback.resolvePlaybackMetadataForSource({
-        ...source,
-        mimeType: "video/mp4",
-        kind: "video",
-      }),
+      playback.resolvePlaybackMetadataForSource(videoRequest(source)),
     ).resolves.toMatchObject({ playback: "transcode" });
   });
 
@@ -281,13 +274,13 @@ describe("resolvePlaybackTranscode", () => {
   ] as const)("only advertises native playback for oversized %s media", async (codec, expected) => {
     const source = await createSource(`oversized-${codec}.mp4`);
     await fs.truncate(source.sourcePath, 16 * 1024 * 1024 + 1);
-    probePlaybackMediaFileDescriptor.mockResolvedValueOnce({
-      durationMs: 1000,
-      videoCodec: codec,
-      videoProfile: "high",
-      videoPixelFormat: "yuv420p",
-      videoStreamIndex: 0,
-    });
+    probePlaybackMediaFileDescriptor.mockResolvedValueOnce(
+      videoProbe({
+        videoCodec: codec,
+        videoProfile: "high",
+        videoPixelFormat: "yuv420p",
+      }),
+    );
 
     const currentStat = await fs.stat(source.sourcePath);
     const metadata = await playback.resolvePlaybackMetadataForSource({
@@ -306,95 +299,75 @@ describe("resolvePlaybackTranscode", () => {
 
   it("transcodes nonportable H.264 profiles and pixel formats", async () => {
     const source = await createSource("high-10.mp4");
-    probePlaybackMediaFileDescriptor.mockResolvedValueOnce({
-      durationMs: 1000,
-      videoCodec: "h264",
-      videoProfile: "high 10",
-      videoPixelFormat: "yuv420p10le",
-      videoStreamIndex: 0,
-    });
+    probePlaybackMediaFileDescriptor.mockResolvedValueOnce(
+      videoProbe({
+        videoCodec: "h264",
+        videoProfile: "high 10",
+        videoPixelFormat: "yuv420p10le",
+      }),
+    );
 
     await expect(
-      playback.resolvePlaybackMetadataForSource({
-        ...source,
-        mimeType: "video/mp4",
-        kind: "video",
-      }),
+      playback.resolvePlaybackMetadataForSource(videoRequest(source)),
     ).resolves.toMatchObject({ playback: "transcode" });
   });
 
   it("transcodes known-incompatible MP4 audio when H.264 profile facts are unknown", async () => {
     const source = await createSource("unknown-profile-opus.mp4");
-    probePlaybackMediaFileDescriptor.mockResolvedValueOnce({
-      durationMs: 1000,
-      videoCodec: "h264",
-      videoStreamIndex: 0,
-      audioCodec: "opus",
-      audioStreamIndex: 1,
-    });
+    probePlaybackMediaFileDescriptor.mockResolvedValueOnce(
+      videoProbe({
+        videoCodec: "h264",
+        audioCodec: "opus",
+        audioStreamIndex: 1,
+      }),
+    );
 
     await expect(
-      playback.resolvePlaybackMetadataForSource({
-        ...source,
-        mimeType: "video/mp4",
-        kind: "video",
-      }),
+      playback.resolvePlaybackMetadataForSource(videoRequest(source)),
     ).resolves.toMatchObject({ playback: "transcode" });
   });
 
   it("does not cache native when a selected audio stream has an unknown codec", async () => {
     const source = await createSource("unknown-audio.mp4");
     probePlaybackMediaFileDescriptor
-      .mockResolvedValueOnce({
-        durationMs: 1000,
-        videoCodec: "h264",
-        videoProfile: "high",
-        videoPixelFormat: "yuv420p",
-        videoStreamIndex: 0,
-        audioStreamIndex: 1,
-      })
-      .mockResolvedValueOnce({
-        durationMs: 1000,
-        videoCodec: "h264",
-        videoProfile: "high",
-        videoPixelFormat: "yuv420p",
-        videoStreamIndex: 0,
-        audioCodec: "opus",
-        audioStreamIndex: 1,
-      });
+      .mockResolvedValueOnce(
+        videoProbe({
+          videoCodec: "h264",
+          videoProfile: "high",
+          videoPixelFormat: "yuv420p",
+          audioStreamIndex: 1,
+        }),
+      )
+      .mockResolvedValueOnce(
+        videoProbe({
+          videoCodec: "h264",
+          videoProfile: "high",
+          videoPixelFormat: "yuv420p",
+          audioCodec: "opus",
+          audioStreamIndex: 1,
+        }),
+      );
 
     await expect(
-      playback.resolvePlaybackMetadataForSource({
-        ...source,
-        mimeType: "video/mp4",
-        kind: "video",
-      }),
+      playback.resolvePlaybackMetadataForSource(videoRequest(source)),
     ).resolves.toMatchObject({ playback: "native" });
     await expect(
-      playback.resolvePlaybackMetadataForSource({
-        ...source,
-        mimeType: "video/mp4",
-        kind: "video",
-      }),
+      playback.resolvePlaybackMetadataForSource(videoRequest(source)),
     ).resolves.toMatchObject({ playback: "transcode" });
   });
 
   it("does not cache an inconclusive native codec probe", async () => {
     const source = await createSource("probe-retry.mp4");
     const transcode = createGatedFfmpegJob("normalized-video");
-    probePlaybackMediaFileDescriptor.mockResolvedValueOnce(null).mockResolvedValueOnce({
-      durationMs: 1000,
-      videoCodec: "hevc",
-      videoStreamIndex: 0,
-      audioCodec: "aac",
-      audioStreamIndex: 1,
-    });
+    probePlaybackMediaFileDescriptor.mockResolvedValueOnce(null).mockResolvedValueOnce(
+      videoProbe({
+        videoCodec: "hevc",
+        audioCodec: "aac",
+        audioStreamIndex: 1,
+      }),
+    );
     runFfmpeg.mockImplementationOnce(transcode.run);
-    const params = {
-      ...source,
-      mimeType: "video/mp4",
-      kind: "video" as const,
-    };
+    const params = videoRequest(source);
 
     try {
       await expect(playback.resolvePlaybackTranscode(params)).resolves.toEqual({
@@ -426,14 +399,9 @@ describe("resolvePlaybackTranscode", () => {
       probeStarted.resolve();
       return await probeGate.promise;
     });
-    const params = {
-      ...source,
-      mimeType: "video/mp4",
-      kind: "video" as const,
-    };
+    const params = videoRequest(source);
 
-    const nativeProbe: PlaybackMediaProbeResult = {
-      durationMs: 1000,
+    const nativeProbe: PlaybackMediaProbeResult = videoProbe({
       width: 720,
       height: 480,
       videoRotation: 90,
@@ -441,10 +409,9 @@ describe("resolvePlaybackTranscode", () => {
       videoCodec: "h264",
       videoProfile: "high",
       videoPixelFormat: "yuv420p",
-      videoStreamIndex: 0,
       audioCodec: "aac",
       audioStreamIndex: 1,
-    };
+    });
     const first = playback.resolvePlaybackMetadataForSource(params);
     const second = playback.resolvePlaybackMetadataForSource(params);
     try {
@@ -463,18 +430,13 @@ describe("resolvePlaybackTranscode", () => {
 
   it("does not cache an inconclusive duration probe for an exotic container", async () => {
     const source = await createSource("duration-retry.mkv");
-    probePlaybackMediaFileDescriptor
-      .mockResolvedValueOnce(null)
-      .mockResolvedValueOnce({ durationMs: 1000, videoCodec: "hevc", videoStreamIndex: 0 });
-    runFfmpeg.mockImplementationOnce(async (args: string[]) => {
-      await fs.writeFile(args.at(-1) ?? "", "normalized-video");
-      return "";
-    });
-    const params = {
-      ...source,
-      mimeType: "video/x-matroska",
-      kind: "video" as const,
-    };
+    probePlaybackMediaFileDescriptor.mockResolvedValueOnce(null).mockResolvedValueOnce(
+      videoProbe({
+        videoCodec: "hevc",
+      }),
+    );
+    runFfmpeg.mockImplementationOnce(writeFfmpegOutput("normalized-video"));
+    const params = videoRequest(source, "video/x-matroska");
 
     await expect(playback.resolvePlaybackTranscode(params)).resolves.toEqual({
       kind: "fallback",
@@ -500,11 +462,7 @@ describe("resolvePlaybackTranscode", () => {
       audioStreamIndex: 3,
     });
     runFfmpeg.mockImplementationOnce(transcode.run);
-    const params = {
-      ...source,
-      mimeType: "video/mp4",
-      kind: "video" as const,
-    };
+    const params = videoRequest(source);
 
     try {
       await expect(playback.resolvePlaybackTranscode(params)).resolves.toEqual({
@@ -575,11 +533,7 @@ describe("resolvePlaybackTranscode", () => {
     const transcode = createGatedFfmpegJob("normalized-video");
     runFfmpeg.mockImplementation(transcode.run);
 
-    const params = {
-      ...source,
-      mimeType: "video/x-matroska",
-      kind: "video" as const,
-    };
+    const params = videoRequest(source, "video/x-matroska");
     try {
       await expect(playback.resolvePlaybackTranscode(params)).resolves.toEqual({
         kind: "preparing",
@@ -666,14 +620,15 @@ describe("resolvePlaybackTranscode", () => {
       });
       if (probeFails) {
         probePlaybackMediaFileDescriptor
-          .mockResolvedValueOnce({ durationMs: 1000, videoCodec: "hevc", videoStreamIndex: 0 })
+          .mockResolvedValueOnce(
+            videoProbe({
+              videoCodec: "hevc",
+            }),
+          )
           .mockRejectedValueOnce(probeError);
       }
-      runFfmpeg.mockImplementationOnce(async (args: string[]) => {
-        await fs.writeFile(args.at(-1) ?? "", "normalized-video");
-        return "";
-      });
-      const params = { ...source, mimeType: "video/x-matroska", kind: "video" as const };
+      runFfmpeg.mockImplementationOnce(writeFfmpegOutput("normalized-video"));
+      const params = videoRequest(source, "video/x-matroska");
       try {
         await expect(playback.resolvePlaybackTranscode(params)).resolves.toEqual({
           kind: "preparing",
@@ -725,10 +680,7 @@ describe("resolvePlaybackTranscode", () => {
         kind: "fallback",
       });
       nowSpy.mockReturnValue(61_001);
-      runFfmpeg.mockImplementationOnce(async (args: string[]) => {
-        await fs.writeFile(args.at(-1) ?? "", "normalized-audio");
-        return "";
-      });
+      runFfmpeg.mockImplementationOnce(writeFfmpegOutput("normalized-audio"));
       await expect(playback.resolvePlaybackTranscode(params)).resolves.toEqual({
         kind: "preparing",
       });
@@ -780,10 +732,7 @@ describe("resolvePlaybackTranscode", () => {
         if (media.duringCheck) {
           nowSpy.mockReturnValueOnce(180_001);
         }
-        runFfmpeg.mockImplementationOnce(async (args: string[]) => {
-          await fs.writeFile(args.at(-1) ?? "", `normalized-${media.kind}`);
-          return "";
-        });
+        runFfmpeg.mockImplementationOnce(writeFfmpegOutput(`normalized-${media.kind}`));
 
         await expect(playback.resolvePlaybackTranscode(params)).resolves.toEqual({
           kind: "preparing",

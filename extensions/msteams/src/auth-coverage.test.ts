@@ -3,7 +3,6 @@
 // HTTP routing is covered by monitor.lifecycle.test.ts.
 
 import { createServer, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
 import { PUBLIC, withOverrides } from "@microsoft/teams.api/dist/auth/cloud-environment.js";
 import { InboundActivityTokenValidator } from "@microsoft/teams.apps/dist/middleware/auth/inbound-activity-token-validator.js";
 import {
@@ -13,6 +12,7 @@ import {
 import type { ILogger } from "@microsoft/teams.common";
 import { exportJWK, generateKeyPair, SignJWT } from "jose";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 
 const APP_ID = "test-app-id";
 const TENANT_ID = "test-tenant-id";
@@ -48,20 +48,13 @@ beforeAll(async () => {
     res.writeHead(404);
     res.end();
   });
-  await new Promise<void>((resolve) => {
-    jwksServer.listen(0, "127.0.0.1", resolve);
-  });
-  const { port } = jwksServer.address() as AddressInfo;
+  const port = await listenOnLoopback(jwksServer);
   loginEndpoint = `http://127.0.0.1:${port}`;
   openIdMetadataUrl = `${loginEndpoint}/v1/.well-known/openidconfiguration`;
   jwksUri = `${loginEndpoint}/jwks`;
 });
 
-afterAll(async () => {
-  await new Promise<void>((resolve, reject) => {
-    jwksServer.close((err) => (err ? reject(err) : resolve()));
-  });
-});
+afterAll(() => jwksServer[Symbol.asyncDispose]());
 
 // Surface rejection reasons without the SDK's routine diagnostics.
 const debugLogger: ILogger = {

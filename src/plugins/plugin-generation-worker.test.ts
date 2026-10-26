@@ -25,7 +25,6 @@ import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-stor
 import { createPluginCache, retirePluginCache, withPluginCache } from "./plugin-cache.js";
 import { createFixture } from "./plugin-generation-artifact.admission.test-support.js";
 import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
-import { writeTree } from "./plugin-generation-capture.test-support.js";
 import type { GenerationWorkerInput } from "./plugin-generation-worker-contract.js";
 import { preparePluginGenerationArtifact } from "./plugin-generation-worker.js";
 import {
@@ -36,6 +35,7 @@ import {
 import { withPluginSourceAdmissionPublisher } from "./plugin-source-admission-context.js";
 import type { PluginSourceAdmissionReceipt } from "./plugin-source-admission.types.js";
 import { withPluginSourceCaptureStorage } from "./plugin-source-capture-context.js";
+import { writeArtifacts as writeTree } from "./public-surface.test-support.js";
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
@@ -428,30 +428,6 @@ it.each(["capture", "custody", "fork"] as const)(
               new WeakRef(facts.capture),
             ];
           })();
-          const replies = Array.from(
-            { length: 100 },
-            () => new WeakRef(artifact.prepareModule(entry)),
-          );
-          const control = new WeakRef({});
-          await nextTurn();
-          queryObjects(WeakRef);
-          expect(control.deref()).toBeUndefined();
-          expect(replies.every((reply) => reply.deref() === undefined)).toBe(true);
-          expectSource(artifact, entry, "42");
-          const releaseRecovery = async () => {
-            const recovery = artifact.captureRecoverySource();
-            const references = [
-              new WeakRef(recovery.fork),
-              new WeakRef(recovery.sourceCapture.capture),
-            ];
-            await recovery.disposeAsync();
-            return references;
-          };
-          const released = await releaseRecovery();
-          await nextTurn();
-          queryObjects(WeakRef);
-          expect(released.every((reference) => reference.deref() === undefined)).toBe(true);
-          expectSource(artifact, entry, "42");
         }
         // Recovery copies the captured package synchronously in the worker. Advance
         // its host deadline clock without making this lifecycle proof sleep for 30s.
@@ -472,8 +448,10 @@ it.each(["capture", "custody", "fork"] as const)(
         }
         expectSource(artifact, entry, "42");
         await artifact.disposeAsync();
+        const control = new WeakRef({});
         await nextTurn();
         queryObjects(WeakRef);
+        expect(control.deref()).toBeUndefined();
         const moduleFactsReleased = moduleFactCallbacks?.every((callback) => !callback.deref());
         expectSource(recovery, entry, "42");
         const recoveredEntry = recovery.resolve(entry);

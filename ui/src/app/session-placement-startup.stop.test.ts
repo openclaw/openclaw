@@ -12,6 +12,7 @@ import {
 import * as toast from "../lib/toast.ts";
 import { reviewPrivateComposerDraft } from "../pages/chat/components/private-composer-recovery-dialog.tsx";
 import { PendingSessionPlacementRecoveryState } from "../pages/new-session/session-placement-recovery-state.ts";
+import { restoreMocksAndGlobals } from "../test-helpers/mock-cleanup.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { createChatAttachmentHandoff } from "./chat-attachment-handoff.ts";
 import { canReloadControlUiDocument } from "./document-reload-guard.ts";
@@ -36,10 +37,7 @@ describe("placement startup Stop", () => {
   const recoveryAccess = { readSessionPlacementRecovery, pauseSessionPlacementRecovery };
 
   beforeEach(() => sessionStorage.clear());
-  afterEach(() => {
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-  });
+  afterEach(() => restoreMocksAndGlobals());
 
   function createStopHarness(phase: string) {
     const moduleLoad = createDeferred<{ default: typeof createRuntime }>();
@@ -56,7 +54,7 @@ describe("placement startup Stop", () => {
           ? dispatch.promise
           : Promise.resolve({ placement: createStartupPlacement("active", 2) }),
       "sessions.reclaim": () => reclaim.promise,
-      "sessions.send": (params: { idempotencyKey?: string }) =>
+      "chat.send": (params: { idempotencyKey?: string }) =>
         Promise.resolve({ status: "started", runId: params.idempotencyKey }),
     });
     const { key, startup, input, client, gateway, dependencies } = createPlacementStartupHarness(
@@ -145,7 +143,7 @@ describe("placement startup Stop", () => {
           dispatch.resolve({ placement: createStartupPlacement("active", 1) });
           await flushStartupMicrotasks();
           await flushStartupMicrotasks();
-          expect(startupCalls(request, "sessions.send")).toHaveLength(0);
+          expect(startupCalls(request, "chat.send")).toHaveLength(0);
           const saved = readStartupRecovery(input.recovery);
           if (!storageFails) {
             expect(saved).toMatchObject({
@@ -160,7 +158,7 @@ describe("placement startup Stop", () => {
           await stopped;
           reconnectGateway(gateway, client);
           await flushStartupMicrotasks();
-          expect(startupCalls(request, "sessions.send")).toHaveLength(0);
+          expect(startupCalls(request, "chat.send")).toHaveLength(0);
           expect(startup.get(key)).toMatchObject({
             phase: "failed",
             action: "retry",
@@ -175,10 +173,10 @@ describe("placement startup Stop", () => {
             }));
             activeStartup.resumeRecovery();
             await vi.waitFor(() => expect(activeStartup.get(key)?.action).toBe("retry"));
-            expect(startupCalls(request, "sessions.send")).toHaveLength(0);
+            expect(startupCalls(request, "chat.send")).toHaveLength(0);
           }
           activeStartup.retry(key);
-          await vi.waitFor(() => expect(startupCalls(request, "sessions.send")).toHaveLength(1));
+          await vi.waitFor(() => expect(startupCalls(request, "chat.send")).toHaveLength(1));
         } finally {
           reclaim.resolve({ ok: true });
           activeStartup.dispose();
@@ -210,10 +208,13 @@ describe("placement startup Stop", () => {
       await vi.waitFor(() => expect(startupCalls(request, "sessions.dispatch")).toHaveLength(2));
       await requestCloudWorkerStop(stopClient, { key }, startup);
       dispatch.resolve({ placement: createStartupPlacement("active", 1) });
-      await vi.waitFor(() => expect(startupCalls(request, "sessions.send")).toHaveLength(1));
+      await vi.waitFor(() => expect(startupCalls(request, "chat.send")).toHaveLength(1));
       expect(request).toHaveBeenCalledWith(
-        "sessions.send",
-        expect.objectContaining({ key: "agent:cloud:other", idempotencyKey: "other-message" }),
+        "chat.send",
+        expect.objectContaining({
+          sessionKey: "agent:cloud:other",
+          idempotencyKey: "other-message",
+        }),
         expect.anything(),
       );
       expect(startup.get(key)?.action).toBe("retry");
@@ -264,7 +265,7 @@ describe("placement startup Stop", () => {
         startup.pause(key, "stopped", recoveryAccess);
         dispatch.resolve({ placement: createStartupPlacement("active", 1) });
         await flushStartupMicrotasks();
-        expect(startupCalls(request, "sessions.send")).toHaveLength(0);
+        expect(startupCalls(request, "chat.send")).toHaveLength(0);
         expect(readStartupRecovery(input.recovery)).toMatchObject({
           phase: "dispatching",
           messageId:
@@ -272,13 +273,14 @@ describe("placement startup Stop", () => {
         });
       },
     );
-    it("keeps delivery uncertain when Stop follows an in-flight send", async () => {
+    it("keeps a stopped in-flight send for explicit retry with the original key", async () => {
       const sent = createDeferred<{ status: string; runId: string }>();
       const request = startupRequest({
         "sessions.dispatch": () =>
           Promise.resolve({ placement: createStartupPlacement("active", 1) }),
-        "sessions.send": () => sent.promise,
-        "chat.history": () => Promise.resolve({ messages: [] }),
+        "chat.send": () => sent.promise,
+        "sessions.describe": () =>
+          Promise.resolve({ session: { placement: createStartupPlacement("active", 1) } }),
         "sessions.reclaim": () => Promise.resolve({ ok: true }),
       });
       const { key, startup, input, client, gateway } = createPlacementStartupHarness(request);
@@ -289,25 +291,25 @@ describe("placement startup Stop", () => {
       expect(stopClient).toBe(client);
       startup.start(input);
       await vi.waitFor(() =>
-        expect(request).toHaveBeenCalledWith("sessions.send", expect.anything(), expect.anything()),
+        expect(request).toHaveBeenCalledWith("chat.send", expect.anything(), expect.anything()),
       );
       await requestCloudWorkerStop(stopClient, { key }, startup);
       sent.resolve({ status: "started", runId: input.recovery.messageId });
       await flushStartupMicrotasks();
       expect(startup.get(key)).toMatchObject({
         phase: "failed",
-        action: "check-delivery",
-        initialTurn: { sendRunId: input.recovery.messageId, sendState: "unconfirmed" },
+        action: "retry",
+        initialTurn: { sendRunId: input.recovery.messageId, sendState: "failed" },
       });
       startup.retry(key);
-      await vi.waitFor(() =>
-        expect(request).toHaveBeenCalledWith("chat.history", expect.anything()),
-      );
+      await vi.waitFor(() => expect(startup.get(key)).toBeNull());
       await flushStartupMicrotasks();
-      for (const method of ["sessions.dispatch", "sessions.send", "sessions.reclaim"]) {
-        expect(request.mock.calls.filter(([name]) => name === method)).toHaveLength(1);
-      }
-      expect(startup.get(key)?.action).toBe("check-delivery");
+      expect(startupCalls(request, "sessions.dispatch")).toHaveLength(1);
+      expect(startupCalls(request, "sessions.reclaim")).toHaveLength(1);
+      expect(startupCalls(request, "chat.send")).toHaveLength(2);
+      expect(startupCalls(request, "chat.send")[1]?.[1]).toMatchObject({
+        idempotencyKey: input.recovery.messageId,
+      });
     });
   });
 });
@@ -386,7 +388,7 @@ describe("placement startup Retry", () => {
       let placement = createStartupPlacement("provisioning", 1);
       const request = startupRequest({
         "sessions.describe": async () => ({
-          session: { sessionId: "session-startup", placement },
+          session: { sessionId: "physical-startup-session", placement },
         }),
         "sessions.dispatch": async () => {
           // The Gateway rejects redispatch once an existing placement is active.
@@ -395,7 +397,7 @@ describe("placement startup Retry", () => {
             message: `session cannot dispatch from placement ${placement.state}`,
           });
         },
-        "sessions.send": async (params?: { idempotencyKey?: string }) => ({
+        "chat.send": async (params?: { idempotencyKey?: string }) => ({
           status: "started",
           runId: params?.idempotencyKey,
         }),
@@ -425,11 +427,11 @@ describe("placement startup Retry", () => {
       startup.retry(sessionKey);
       await vi.runAllTimersAsync();
 
-      expect(startupCalls(request, "sessions.send")).toEqual([
+      expect(startupCalls(request, "chat.send")).toEqual([
         [
-          "sessions.send",
+          "chat.send",
           expect.objectContaining({
-            key: sessionKey,
+            sessionKey,
             message: input.recovery.message,
             idempotencyKey: messageId,
           }),
@@ -472,7 +474,7 @@ describe("placement startup Retry", () => {
             }
             return { placement: createStartupPlacement("active", 2) };
           }
-          if (method === "sessions.send") {
+          if (method === "chat.send") {
             return { status: "started" };
           }
           throw new Error(`Unexpected ${method}`);
@@ -493,9 +495,7 @@ describe("placement startup Retry", () => {
         });
         expect(startupMethods(request)).toEqual([
           "sessions.describe",
-          ...(state === "missing"
-            ? []
-            : ["sessions.dispatch", ...(released ? ["sessions.send"] : [])]),
+          ...(state === "missing" ? [] : ["sessions.dispatch", ...(released ? ["chat.send"] : [])]),
         ]);
         if (state === "missing") {
           expect(sessionStorage.length).toBe(0);
@@ -564,10 +564,7 @@ describe("placement startup reload", () => {
     // Each case represents a fresh document, including in-memory reload ownership.
     vi.stubGlobal("sessionStorage", createStorageMock());
   });
-  afterEach(() => {
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-  });
+  afterEach(() => restoreMocksAndGlobals());
 
   it("reloads a saved paused startup after a cached import failure", async () => {
     const reload = vi

@@ -1,4 +1,5 @@
 import { getPublishedRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
+import * as toolSchema from "@openclaw/ai/internal/tool-schema";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
@@ -13,6 +14,7 @@ import {
   registerHeadlessToolSearchCatalog,
 } from "./tool-search.js";
 import { createInstalledSkillTools } from "./tools/installed-skill-tools.js";
+import { createMessageTool } from "./tools/message-tool-execution.js";
 
 type Options = Partial<Parameters<typeof finalizeAgentTools>[0]>;
 
@@ -65,6 +67,31 @@ async function published(tools: () => AnyAgentTool[], options: Options = {}) {
 afterEach(() => clearPluginMetadataLifecycleCaches());
 
 describe("finalized tool descriptor snapshots", () => {
+  it.each([undefined, {}])(
+    "shares message publications across new sessions (config: %j)",
+    async (config) => {
+      using publish = vi.spyOn(toolSchema, "publishRuntimeToolInputSchema");
+      using prewarm = vi.spyOn(toolSchema, "normalizeOpenAIStrictToolParameters");
+      const first = createMessageTool({ config });
+      const cold = attempt([first]);
+      const bytes = JSON.stringify(cold.tool().parameters);
+      await cold.settle();
+      const prepared = attempt([createMessageTool({ config })]).tool().parameters;
+      publish.mockClear();
+      prewarm.mockClear();
+      for (let index = 0; index < 8; index++) {
+        const current = createMessageTool({ config, runId: `run-${index}` });
+        expect(current.execute).not.toBe(first.execute);
+        const next = attempt([current], { hookContext: { sessionId: `session-${index}` } });
+        expect(next.tool().parameters).toBe(prepared);
+        expect(JSON.stringify(next.tool().parameters)).toBe(bytes);
+        await next.settle();
+      }
+      expect(publish).not.toHaveBeenCalled();
+      expect(prewarm).not.toHaveBeenCalled();
+    },
+  );
+
   it("reuses Tool Search schemas while binding the current catalog and configured limit", async () => {
     const catalogRef = createToolSearchCatalogRef();
     const controls = (searchDefaultLimit = 1) => {
@@ -146,30 +173,18 @@ describe("finalized tool descriptor snapshots", () => {
     },
   );
 
-  it("retains a prepared output schema when another descriptor changes", async () => {
-    const parameters = schema();
-    const outputSchema = schema();
-    const tools = () => [tool(parameters, { outputSchema }), tool(schema(), { name: "changing" })];
-    const warm = await published(tools);
-    const descriptor = warm.tool();
-    expect(getPublishedRuntimeToolInputSchema(descriptor.outputSchema)).toBeDefined();
-    await warm.settle();
-
-    const next = attempt(tools());
-    expect(next.tool().parameters).toBe(descriptor.parameters);
-    expect(next.tool().outputSchema).toBe(descriptor.outputSchema);
-    await next.settle();
-    expect(attempt(tools()).tool().outputSchema).toBe(descriptor.outputSchema);
-  });
-
-  it("isolates nested published schemas from source and consumer mutations", async () => {
+  it("retains isolated published schemas across source and sibling changes", async () => {
     const nestedSchema = () => ({
       type: "object",
       properties: { query: { type: "string", enum: ["first", "second"] } },
     });
     const parameters = nestedSchema();
     const outputSchema = nestedSchema();
-    const descriptor = (await published(() => [tool(parameters, { outputSchema })])).tool();
+    const tools = () => [tool(parameters, { outputSchema }), tool(schema(), { name: "changing" })];
+    const warm = await published(tools);
+    const descriptor = warm.tool();
+    expect(getPublishedRuntimeToolInputSchema(descriptor.outputSchema)).toBeDefined();
+    await warm.settle();
 
     parameters.properties.query.type = "number";
     outputSchema.properties.query.enum.push("source mutation");
@@ -183,10 +198,13 @@ describe("finalized tool descriptor snapshots", () => {
       assert.ok(Array.isArray(query.enum));
       expect(Reflect.set(query.enum, 0, "consumer mutation")).toBe(false);
     }
-
-    const next = attempt([tool(parameters, { outputSchema })]).tool();
-    expect(next.parameters).toEqual(nestedSchema());
-    expect(next.outputSchema).toEqual(nestedSchema());
+    const next = attempt(tools());
+    expect(next.tool().parameters).toBe(descriptor.parameters);
+    expect(next.tool().outputSchema).toBe(descriptor.outputSchema);
+    expect(next.tool().parameters).toEqual(nestedSchema());
+    expect(next.tool().outputSchema).toEqual(nestedSchema());
+    await next.settle();
+    expect(attempt(tools()).tool().outputSchema).toBe(descriptor.outputSchema);
   });
 
   it.each([

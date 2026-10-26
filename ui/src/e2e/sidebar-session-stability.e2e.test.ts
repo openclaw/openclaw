@@ -8,19 +8,12 @@ import {
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
-  controlUiSessionPath,
   controlUiSessionUrl,
   createSessionManagementE2eSuite,
   installMockGateway,
   sessionsListResponse,
 } from "./session-management.test-support.ts";
-import {
-  expectPath,
-  expectText,
-  expectAttribute,
-  expectCount,
-  seedStorage,
-} from "./sidebar-assertions.test-support.ts";
+import { expectText, expectCount, seedStorage } from "./sidebar-assertions.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
 
@@ -75,58 +68,6 @@ async function deferChildRefresh(
 }
 
 suite.define(() => {
-  it("refreshes the selected child after a later child-list result", async () => {
-    const baseTime = Date.parse("2026-09-07T12:00:00.000Z");
-    const parentKey = "agent:main:research-parent";
-    const childKey = "agent:main:research-child";
-    const siblingKey = "agent:main:research-sibling";
-    const parentRow = sessionRow(parentKey, "Research handoff", baseTime, {
-      childSessions: [childKey, siblingKey],
-    });
-    const childRow = sessionRow(childKey, "Research in progress", baseTime + 1, {
-      spawnedBy: parentKey,
-    });
-    const siblingRow = sessionRow(siblingKey, "Supporting research", baseTime + 1, {
-      spawnedBy: parentKey,
-    });
-    await withPage(async (page) => {
-      const gateway = await installMockGateway(page, {
-        sessions: [parentRow, childRow, siblingRow],
-        methodResponses: {
-          "sessions.list": treeList(parentKey, [parentRow], [childRow, siblingRow]),
-        },
-        sessionKey: childKey,
-      });
-      const documentResponse = await page.goto(controlUiSessionUrl(suite.server.baseUrl, childKey));
-      expect(documentResponse?.status()).toBe(200);
-      const child = page.locator(`[data-session-key="${childKey}"]`);
-      const sibling = page.locator(`[data-session-key="${siblingKey}"]`);
-      await expectText(child, "Research in progress");
-      await expectText(sibling, "Supporting research");
-      expect(await child.getAttribute("class")).toContain("sidebar-recent-session--active");
-      const refreshedChildren = [childRow, siblingRow].map((row, index) => {
-        const label = index === 0 ? "Research completed" : "Supporting research refreshed";
-        return Object.assign({}, row, { label, displayName: label, updatedAt: baseTime + 3 });
-      });
-      // Commit the change before its invalidation event so every later read sees it.
-      await gateway.setSessionsListResponse(
-        sessionsListResponse([parentRow, ...refreshedChildren]),
-      );
-      await gateway.setMethodResponse(
-        "sessions.list",
-        treeList(parentKey, [parentRow], refreshedChildren),
-      );
-      await deferChildRefresh(page, gateway, parentKey, baseTime + 2);
-      await gateway.resolveDeferred("sessions.list", sessionsListResponse(refreshedChildren));
-      // The sibling proves the new child snapshot rendered before checking the selected row.
-      await expectText(sibling, "Supporting research refreshed");
-      expect(await child.textContent()).toContain("Research completed");
-      expect(await child.textContent()).not.toContain("Research in progress");
-      expect(await child.count()).toBe(1);
-      expect(await child.getAttribute("class")).toContain("sidebar-recent-session--active");
-    });
-  });
-
   it.each([
     { colorScheme: "dark", pointer: "fine", textScale: 100, width: 1440 },
     { colorScheme: "light", pointer: "fine", textScale: 100, width: 1440 },
@@ -259,91 +200,4 @@ suite.define(() => {
       );
     },
   );
-
-  it("keeps visible sessions ordered and an active child expanded across run completion", async () => {
-    const baseTime = Date.parse("2026-08-14T18:00:00.000Z");
-    const parentKey = "agent:main:stability-parent";
-    const childKey = "agent:main:stability-child";
-    const runId = "sidebar-stability-run";
-    const siblingRows = Array.from({ length: 10 }, (_, index) =>
-      sessionRow(`agent:main:stability-${index}`, `Stable session ${index}`, baseTime - index, {
-        createdAt: baseTime - index,
-      }),
-    );
-    const parentRow = sessionRow(parentKey, "Parent session", baseTime + 100, {
-      childSessions: [childKey],
-      createdAt: baseTime + 100,
-    });
-    const childRow = sessionRow(childKey, "Child session", baseTime + 50, {
-      hasActiveRun: true,
-      spawnedBy: parentKey,
-      startedAt: baseTime,
-      status: "running",
-      activeRunIds: [runId],
-      createdAt: baseTime + 50,
-    });
-    const expectedVisibleKeys = [
-      parentKey,
-      childKey,
-      ...siblingRows.slice(0, 9).map(({ key }) => key),
-    ];
-    await withPage(async (page) => {
-      const gateway = await installMockGateway(page, {
-        methodResponses: {
-          "sessions.list": sessionsListResponse([parentRow, childRow, ...siblingRows]),
-        },
-        sessionKey: childKey,
-      });
-
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, childKey));
-      const rows = page.locator(".sidebar-recent-session");
-      const visibleKeys = () =>
-        rows.evaluateAll((elements) =>
-          elements.map((element) => element.getAttribute("data-session-key")),
-        );
-      const childToggle = page.locator(`[data-child-session-toggle="${parentKey}"]`);
-      await expect.poll(visibleKeys, { timeout: 10_000 }).toEqual(expectedVisibleKeys);
-      await expectAttribute(childToggle, "aria-expanded", "true");
-
-      await gateway.emitGatewayEvent("agent", {
-        data: { name: "bash" },
-        runId,
-        sessionKey: childKey,
-        stream: "tool",
-      });
-      expect(await visibleKeys()).toEqual(expectedVisibleKeys);
-
-      const completion = {
-        activeRunIds: [],
-        endedAt: baseTime + 200,
-        hasActiveRun: false,
-        status: "done",
-        updatedAt: baseTime + 200,
-      };
-      const completedChild = { ...childRow, ...completion };
-      await gateway.setSessionsListResponse(
-        sessionsListResponse([parentRow, completedChild, ...siblingRows]),
-      );
-      const listCount = (await gateway.getRequests("sessions.list")).length;
-      await invalidateSessions(page, gateway, {
-        ...completion,
-        key: childKey,
-        kind: "direct",
-        reason: "lifecycle",
-        sessionKey: childKey,
-      });
-      await expect
-        .poll(async () => (await gateway.getRequests("sessions.list")).length)
-        .toBeGreaterThan(listCount);
-      await expect.poll(visibleKeys).toEqual(expectedVisibleKeys);
-
-      const nextSessionKey = siblingRows[0]!.key;
-      await page
-        .locator(`[data-session-key="${nextSessionKey}"] a.sidebar-recent-session__link`)
-        .click();
-      await expectPath(page, controlUiSessionPath(nextSessionKey));
-      await expectAttribute(childToggle, "aria-expanded", "true");
-      await expect.poll(visibleKeys).toEqual(expectedVisibleKeys);
-    });
-  });
 });

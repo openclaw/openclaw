@@ -18,6 +18,7 @@ import {
   createCallerModeExecutionFixture,
   createCallerModeSnapshot,
   expectBlockedTailInPlanOrder,
+  writeLegacyDoctorSources,
 } from "./state-migrations.caller-mode.test-helpers.js";
 import {
   autoMigrateLegacyState,
@@ -84,15 +85,7 @@ it("repairs readable entries before independently preparing mixed agent database
   );
   fs.mkdirSync(path.dirname(brokenDatabasePath), { recursive: true });
   fs.writeFileSync(brokenDatabasePath, "not sqlite");
-  const execPath = path.join(fixture.stateDir, "exec-approvals.json");
-  fs.writeFileSync(
-    execPath,
-    `${JSON.stringify({
-      version: 1,
-      defaults: { security: "allowlist", ask: "on-miss" },
-      agents: { main: { allowlist: [{ pattern: "/usr/bin/rg" }] } },
-    })}\n`,
-  );
+  const { execPath } = writeLegacyDoctorSources(fixture.stateDir);
   const plan = await planLegacyStateMigrationsReadOnly({
     mode: "doctor",
     candidate: { root: fixture.root, version: "test" },

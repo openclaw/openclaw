@@ -8,6 +8,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { acquireDoctorGatewayMaintenanceOwner } from "../commands/doctor-maintenance-foreground.js";
 import { resolveStateDir } from "../config/paths.js";
 import * as processIdentity from "../shared/pid-alive.js";
+import { mockLinuxNamespace } from "./gateway-lock-namespace.test-support.js";
 import {
   GATEWAY_OWNER_HEARTBEAT_STALE_MS,
   parseGatewayLockPayload,
@@ -79,28 +80,6 @@ function createLockPayload(params: { configPath: string; startTime: number; port
     startTime: params.startTime,
     processNamespace: readGatewayLockProcessNamespace(),
   };
-}
-
-function mockLinuxNamespace(root: string) {
-  if (process.platform !== "linux") {
-    vi.spyOn(bootReader, "createManagedHandoffBootIdentityReader").mockReturnValue(() => ({
-      platform: "linux",
-      identity: "01234567-89ab-cdef-0123-456789abcdef",
-    }));
-    const namespaceLink = `pid:[${fsSync.statSync(root, { bigint: true }).ino}]`;
-    const readlink = fsSync.readlinkSync.bind(fsSync);
-    vi.spyOn(fsSync, "readlinkSync").mockImplementation((file, options) =>
-      file === "/proc/self/ns/pid" ? namespaceLink : readlink(file, options),
-    );
-    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    readGatewayLockProcessNamespace();
-    platform.mockRestore();
-  }
-  const namespace = readGatewayLockProcessNamespace();
-  if (!namespace || !("pidNsInode" in namespace)) {
-    throw new Error("Expected Linux process namespace identity");
-  }
-  return namespace;
 }
 
 describe("gateway lock namespaces", () => {

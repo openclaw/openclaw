@@ -57,10 +57,13 @@ it.each(["gateway", "agent-embedded"] as const)(
       await database.walMaintenance.stop();
       const before = snapshot(database.path);
       for (const [direct, error] of [
-        [false, expect.stringMatching(/stop.*external supervisor/iu)],
+        [false, { message: expect.stringMatching(/stop.*external supervisor/iu) }],
         [true, { message: expect.stringMatching(/OpenClaw state database is busy/iu) }],
       ] as const) {
-        expect(await claim(direct, 1)).toMatchObject({ error });
+        expect(await claim(direct, 1)).toMatchObject({
+          ok: false,
+          error: { type: "cli_error", ...error },
+        });
         expect(snapshot(database.path)).toEqual(before);
       }
       expect(inspectOpenClawStateOwnershipAtPath(database.path)).toBeNull();

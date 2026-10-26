@@ -76,7 +76,7 @@ async function runSystemdServiceAction(
   if (installed?.scope === "system") {
     runSystemctl = (args) => {
       params.assertCurrent?.();
-      return execSystemctl(args, env);
+      return execSystemctl(args, env, undefined, params.beforeEffect);
     };
   } else {
     runSystemctl = (args) =>
@@ -86,6 +86,7 @@ async function runSystemdServiceAction(
         undefined,
         params.assertCurrent,
         action === "stop" ? { warn } : undefined,
+        params.beforeEffect,
       );
   }
   if (action !== "stop") {
@@ -126,8 +127,6 @@ export async function restartSystemdService(
 type LegacySystemdUnit = {
   name: string;
   unitPath: string;
-  enabled: boolean;
-  exists: boolean;
 };
 
 async function findLegacySystemdUnits(env: GatewayServiceEnv): Promise<LegacySystemdUnit[]> {
@@ -145,7 +144,7 @@ async function findLegacySystemdUnits(env: GatewayServiceEnv): Promise<LegacySys
       enabled = res.code === 0;
     }
     if (exists || backupExists || enabled) {
-      results.push({ name, unitPath, enabled, exists });
+      results.push({ name, unitPath });
     }
   }
   return results;

@@ -11,16 +11,14 @@ import {
   normalizeMessagePresentation,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { readPositiveIntegerParam, readStringParam } from "openclaw/plugin-sdk/param-readers";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveDefaultSlackAccountId } from "./accounts.js";
+import { resolveDefaultSlackAccountId, resolveSlackMarkdownOptions } from "./accounts.js";
 import type { SlackActionContext } from "./action-context.js";
-import { SLACK_MAX_BLOCKS } from "./blocks-input.js";
-import { buildSlackPresentationBlocksIfComplete, type SlackBlock } from "./blocks-render.js";
+import type { SlackBlock } from "./blocks-render.js";
 import { normalizeSlackOutboundText } from "./format.js";
 import { SLACK_EDIT_TEXT_MAX_BYTES } from "./limits.js";
 import { extractSlackToolSend } from "./message-actions.js";
@@ -59,31 +57,42 @@ function readSlackForceDocument(params: Record<string, unknown>): boolean {
 function renderSlackActionPresentation(
   content: string | undefined,
   presentation: ReturnType<typeof normalizeMessagePresentation>,
+  markdownOptions: ReturnType<typeof resolveSlackMarkdownOptions>,
 ): {
   blocks?: SlackBlock[];
   text: string;
   usesPresentationTextFallback: boolean;
 } {
+  // Portable presentation text already uses Slack mrkdwn; render only authored Markdown.
+  const renderedContent = normalizeSlackOutboundText(content ?? "", markdownOptions);
   if (!presentation) {
-    return { text: content ?? "", usesPresentationTextFallback: false };
+    return { text: renderedContent, usesPresentationTextFallback: false };
   }
-  const needsCompleteTextFallback = presentation.blocks.some(
-    (block) =>
-      (block.type === "text" || block.type === "context") &&
-      block.text.trim().length > SLACK_SECTION_TEXT_MAX,
+  const resolution = resolveSlackReplyBlockResolution(
+    { text: content, presentation },
+    markdownOptions,
   );
-  const renderedBlocks = needsCompleteTextFallback
-    ? undefined
-    : buildSlackPresentationBlocksIfComplete(presentation);
-  const usesPresentationTextFallback = !renderedBlocks || renderedBlocks.length > SLACK_MAX_BLOCKS;
-  const blocks = usesPresentationTextFallback ? undefined : renderedBlocks;
+  const segment = resolution.segments.length === 1 ? resolution.segments[0] : undefined;
+  // Edits retain their single-message fallback even though normal sends can chunk.
+  const usesPresentationTextFallback =
+    segment?.kind !== "blocks" ||
+    presentation.blocks.some(
+      (block) =>
+        (block.type === "text" || block.type === "context") &&
+        block.text.trim().length > SLACK_SECTION_TEXT_MAX,
+    );
+  const blocks =
+    !usesPresentationTextFallback && segment?.kind === "blocks" ? segment.blocks : undefined;
   return {
     ...(blocks?.length ? { blocks } : {}),
     text:
       usesPresentationTextFallback ||
       presentation.blocks.some((block) => block.type === "chart" || block.type === "table")
-        ? renderSlackMessagePresentationFallbackText({ text: content, presentation })
-        : (content ?? ""),
+        ? renderSlackMessagePresentationFallbackText({
+            text: resolution.authoredTextPlacement === "blocks" ? undefined : renderedContent,
+            presentation,
+          })
+        : renderedContent,
     usesPresentationTextFallback,
   };
 }
@@ -157,7 +166,7 @@ export function createSlackActions(
       const accountId = ctx.accountId ?? undefined;
       const invokeSlackAction = async (
         request: Record<string, unknown>,
-        toolContext = ctx.toolContext,
+        toolContext: SlackActionContext | undefined = ctx.toolContext,
       ) => {
         const requestAction = { ...request, accountId };
         const actionContext = resolveSlackActionContext(ctx, toolContext);
@@ -206,7 +215,10 @@ export function createSlackActions(
             presentation,
             interactive,
           },
-          { materializeAuthoredText: hasStructuredContent },
+          {
+            ...resolveSlackMarkdownOptions({ cfg, accountId }),
+            materializeAuthoredText: hasStructuredContent,
+          },
         );
         const preparedMessages =
           resolution.segments.length > 0
@@ -311,17 +323,12 @@ export function createSlackActions(
           blocks,
           text: accessibleContent,
           usesPresentationTextFallback,
-        } = renderSlackActionPresentation(content, presentation);
-        const tableMode = resolveMarkdownTableMode({
-          cfg,
-          channel: "slack",
-          accountId: accountId ?? resolveDefaultSlackAccountId(cfg),
-        });
-        if (
-          !blocks &&
-          countSlackTextUtf8Bytes(normalizeSlackOutboundText(accessibleContent, { tableMode })) >
-            SLACK_EDIT_TEXT_MAX_BYTES
-        ) {
+        } = renderSlackActionPresentation(
+          content,
+          presentation,
+          resolveSlackMarkdownOptions({ cfg, accountId }),
+        );
+        if (!blocks && countSlackTextUtf8Bytes(accessibleContent) > SLACK_EDIT_TEXT_MAX_BYTES) {
           const editSubject = usesPresentationTextFallback
             ? "Slack presentation fallback"
             : "Slack edit";
@@ -332,13 +339,16 @@ export function createSlackActions(
         if (!accessibleContent && !blocks) {
           throw new Error("Slack edit requires message or blocks.");
         }
-        return await invokeSlackAction({
-          action: "editMessage",
-          channelId: resolveChannelId(),
-          messageId,
-          content: accessibleContent,
-          blocks,
-        });
+        return await invokeSlackAction(
+          {
+            action: "editMessage",
+            channelId: resolveChannelId(),
+            messageId,
+            content: accessibleContent,
+            blocks,
+          },
+          { ...ctx.toolContext, preparedEditText: accessibleContent },
+        );
       }
 
       if (action === "member-info") {

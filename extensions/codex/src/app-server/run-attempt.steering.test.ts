@@ -1,4 +1,5 @@
 import path from "node:path";
+import { setImmediate as yieldImmediate } from "node:timers/promises";
 import type { setActiveEmbeddedRun } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
@@ -9,9 +10,10 @@ import {
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
+import { createDynamicToolCall } from "./dynamic-tools.test-support.js";
 import { setCodexTestToolFactory } from "./host-capability.test-support.js";
 import type { JsonObject } from "./protocol.js";
-import { itemNotification } from "./protocol.test-helpers.js";
+import { itemNotification, turnCompleted } from "./protocol.test-helpers.js";
 import { seedRunSessionOwnerForTest } from "./run-attempt-session-owners.test-support.js";
 import {
   createCodexRuntimePlanFixture,
@@ -97,6 +99,72 @@ function assistantItem(
 
 const consumedUser = (clientId: string, id = "steered-user-message") =>
   itemNotification("item/completed", { id, type: "userMessage", clientId });
+
+it.each(["consumed", "unconfirmed"] as const)(
+  "settles submitted steering before terminal tool interruption (%s)",
+  async (outcome) => {
+    const harness = createStartedThreadHarness(undefined, { persistedThreads: [] });
+    const params = createSteeringParams();
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    setCodexTestModelSupportsTools(params, true);
+    const tool = createRuntimeDynamicTool("terminal_tool");
+    tool.execute = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "Waiting for follow-up" }],
+      details: { status: "yielded" },
+    }));
+    setCodexTestToolFactory(params, () => [tool]);
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const run = runCodexAppServerAttempt(params);
+    try {
+      await run.waitForTurnAccepted();
+      const handle = registeredRun(params.sessionId)!;
+      const accepted = vi.fn();
+      const settled = vi.fn();
+      const delivery = handle.queueMessage("Keep this follow-up", {
+        debounceMs: 0,
+        waitForTranscriptCommit: true,
+        onQueueAccepted: accepted,
+        onQueueSettled: settled,
+      });
+      await harness.waitForMethod("turn/steer");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(accepted).toHaveBeenCalledExactlyOnceWith(true);
+      const clientId = steerClientId(
+        harness.requests.find(({ method }) => method === "turn/steer"),
+      );
+
+      await expect(
+        harness.handleServerRequest({
+          id: "terminal-tool",
+          method: "item/tool/call",
+          params: createDynamicToolCall("terminal_tool", {}, "terminal-tool"),
+        }),
+      ).resolves.toMatchObject({ success: true });
+      await yieldImmediate();
+      expect(harness.requests.some(({ method }) => method === "turn/interrupt")).toBe(false);
+      expect(settled).not.toHaveBeenCalled();
+
+      if (outcome === "consumed") {
+        await vi.advanceTimersByTimeAsync(10);
+        await harness.notify(consumedUser(clientId));
+        await expect(delivery).resolves.toBeUndefined();
+      } else {
+        await vi.advanceTimersByTimeAsync(1_000);
+        await expect(delivery).resolves.toMatchObject({ transcriptCommit: "unconfirmed" });
+      }
+      await harness.waitForMethod("turn/interrupt");
+      await harness.notify(turnCompleted({ id: "turn-1", status: "interrupted" }));
+      await run;
+      expect(settled).toHaveBeenCalledOnce();
+      expect(harness.requests.filter(({ method }) => method === "turn/interrupt")).toHaveLength(1);
+      expect(harness.requests.filter(({ method }) => method === "turn/steer")).toHaveLength(1);
+    } finally {
+      harness.close();
+      await run;
+      vi.useRealTimers();
+    }
+  },
+);
 
 it.each(["host tool", "local projection"] as const)(
   "keeps native execution ownership during %s after a long turn",

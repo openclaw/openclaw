@@ -9,7 +9,6 @@ import {
   LiveIntegerSchema,
   WorkerIdentifierSchema,
   checkWorkerProtocolJson,
-  workerRequestSchema,
   workerResponseSchema,
 } from "./worker-protocol-primitives.js";
 
@@ -31,10 +30,6 @@ const WorkerTurnAdmissionResultSchema = Type.Union([
   closedObject({ outcome: Type.Literal("block") }),
 ]);
 
-export const WorkerTurnAdmissionRequestFrameSchema = workerRequestSchema(
-  WORKER_TURN_ADMISSION_METHOD,
-  WorkerTurnAdmissionParamsSchema,
-);
 export const WorkerTurnAdmissionResponseFrameSchema = workerResponseSchema(
   WorkerTurnAdmissionResultSchema,
 );

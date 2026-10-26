@@ -5,6 +5,7 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { availableLinkReaders } from "../../app/link-reader-routing.ts";
 import "./components/chat-details.tsx";
 import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
+import { resolveChatPaneDesktopTarget } from "../../components/desktop/desktop-source.ts";
 import { latestBrowserTabCards } from "../../lib/chat/browser-tab-preview.ts";
 import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
@@ -15,12 +16,10 @@ import { PaneAttachmentCatalog } from "./chat-pane-attachment-catalog.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import { ChatPaneHeaderLayout, type PaneDetailsActions } from "./chat-pane-header-layout.ts";
 import type { PaneLayoutData } from "./chat-pane-layout-view.tsx";
-import { resolveChatPaneDesktopTarget } from "./chat-pane-placement.ts";
 import type { createChatPaneRails } from "./chat-pane-rails.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import { renderSidebarRegion } from "./chat-pane-sidebar-layout.ts";
 import { hasTerminalRunStatus } from "./chat-run-working.ts";
-import { createSideChatModelControlProps } from "./chat-session-companion-model-controls.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createChatToolIcons, type PluginToolIcons } from "./chat-tool-icon-controller.ts";
 import type { ChatProps } from "./chat-view.tsx";
@@ -290,9 +289,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
         : undefined,
       onOpenSubagent: ownsSubagentsPanel ? (key) => this.showSubagents(key) : undefined,
       onOpenSubagents: ownsSubagentsPanel ? (focus) => this.showSubagents(null, focus) : undefined,
-      onOpenProcesses: ownsSubagentsPanel
-        ? () => this.requestBackgroundPanel("processes", "open")
-        : undefined,
+      onOpenProcesses: ownsSubagentsPanel ? this.showDetailsProcess : undefined,
       composerRecovery: recovery,
       pluginToolIcons: this.toolIcons,
       presented: {
@@ -418,8 +415,12 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
       subagentsInputRegion: this.inputRegion,
       subagentsPresented: slotPresentation("subagents"),
       processesPresented: slotPresentation("processes"),
+      contextPresented: slotPresentation("context"),
+      contextDetails: ownsSubagentsPanel ? paneChatProps : undefined,
       subagentsAvailable: !catalog,
       subagentsShowRequest: this.companionIntents.subagentsShowRequest,
+      processesShowRequest: this.companionIntents.processesShowRequest,
+      onBackToProcessDetails: this.returnToProcessDetails,
       onSubagentSessionSelect: (sessionKey, options) =>
         this.onPaneSessionChange?.(this.paneId, sessionKey, options),
       panePresentation,
@@ -496,11 +497,8 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
       activeRunId: observerRunId,
       pullRequests: this.sessionPullRequests,
       companion: companionThread,
-      companionModelControls: createSideChatModelControlProps({
-        state,
-        companion: companionThread,
-        onSelect: (patch) => this.sessionCompanionThreads.setModelSelection(currentAgentId, patch),
-      }),
+      onCompanionModelSelect: (patch) =>
+        this.sessionCompanionThreads.setModelSelection(currentAgentId, patch),
       companionFocusRequest: this.companionIntents.focusRequest,
       companionPresented,
       onCompanionSubmit: (question) => void this.submitSessionCompanionQuestion(question),
@@ -521,7 +519,6 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
       pluginPanels: this.context.plugins.registrations("panels"),
       isPluginPanelPresented: (slot) => slotPresentation(slot, "active"),
     });
-    const setPanelOpen = (open: boolean) => this.setChatSidePanelOpen(open, savedLayout);
     const nativeCallbacks: SidebarRegionCallbacks = {
       newTab: {
         open: (options) => state.updateSidebarLayout(openSidebarNewTab(savedLayout, options)),
@@ -532,11 +529,10 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
         },
         finishCloseAll: () => {
           const next = finishSidebarCloseAll(state.sidebarLayout);
-          if (!next) {
-            return false;
+          if (next) {
+            state.updateSidebarLayout(next);
           }
-          state.updateSidebarLayout(next);
-          return true;
+          return Boolean(next);
         },
       },
       activatePanel: (panelId) => {
@@ -562,7 +558,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
         state.updateSidebarLayout(setSidebarDock(savedLayout, dock), { geometryOnly: true }),
       closeSlot: (slot) => {
         if (slot === "conversation") {
-          setPanelOpen(false);
+          this.setChatSidePanelOpen(false, savedLayout);
           return;
         }
         if (slot === "discussion") {
@@ -574,7 +570,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
       reorderPanel: (panelId, targetPanelId, placement) =>
         state.updateSidebarLayout(reorderPanel(savedLayout, panelId, targetPanelId, placement)),
       resizePanel: (columnId, size) => this.commitSidebarPanelResize(savedLayout, columnId, size),
-      setOpen: setPanelOpen,
+      setOpen: (open) => this.setChatSidePanelOpen(open, savedLayout),
     };
     const updateMobileCatalogLayout = (next: SidebarLayout) => {
       // Catalog navigation changes selection, not the retained desktop expansion.
@@ -662,9 +658,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
     }
     const avatar = resolveAssistantDisplayAvatar(chatProps);
     const region = renderSidebarRegion({
-      onPanelReady: () => {
-        this.flushPendingPanelToggles();
-      },
+      onPanelReady: () => this.flushPendingPanelToggles(),
       mobileScrollFades: this.mobileScrollFades,
       onRegionElementRef: (element) => {
         this.sidebarRegionElement = element;

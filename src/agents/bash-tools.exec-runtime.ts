@@ -68,6 +68,7 @@ import { settleExecProcessExit } from "./bash-tools.exec-settlement.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import { chunkString, clampWithDefault, readEnvInt } from "./bash-tools.shared.js";
+import type { ExecApprovalTransport } from "./exec-approval-transport.js";
 import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { createSessionSlug } from "./session-slug.js";
@@ -209,6 +210,7 @@ export async function runExecProcess({
   // Execute this instead of `command` (which is kept for display/session/logging).
   // Used to sanitize safeBins execution while preserving the original user input.
   execCommand?: string;
+  approvalTransport?: ExecApprovalTransport;
   workdir: string;
   env: Record<string, string>;
   secretEgressBindings?: readonly SecretEgressSentinelBinding[];
@@ -312,7 +314,18 @@ export async function runExecProcess({
   // Clearing the callback also releases the completed turn's captured authority.
   let onUpdate = initialOnUpdate && AsyncLocalStorage.bind(initialOnUpdate);
   let beforeSpawn = initialBeforeSpawn;
-  let assertPolicyCurrent = initialAssertCurrent;
+  let assertPolicyCurrent: (() => void) | undefined = opts.approvalTransport
+    ? () => {
+        initialAssertCurrent?.();
+        opts.approvalTransport?.assertExecution({
+          command: opts.command,
+          execCommand,
+          cwd: opts.workdir,
+          env: opts.env,
+          pty: opts.usePty,
+        });
+      }
+    : initialAssertCurrent;
   let onSettledBeforeNotify = initialOnSettledBeforeNotify;
 
   const emitUpdate = () => {

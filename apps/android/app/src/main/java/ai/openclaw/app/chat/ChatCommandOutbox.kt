@@ -92,6 +92,14 @@ data class ChatOutboxAttachment(
   val byteLength: Long,
 )
 
+/** Largest stored photo a queued row decodes for its thumbnail; owned by the composer's image ceiling. */
+internal const val OUTBOX_PREVIEW_IMAGE_MAX_BYTES = CHAT_COMPOSER_MAX_IMAGE_DECODED_BYTES
+
+/** True for a stored photo small enough to preview from its outbox chunks. */
+internal fun ChatOutboxAttachment.isOutboxPreviewImage(): Boolean =
+  (type == "image" || mimeType.startsWith("image/", ignoreCase = true)) &&
+    byteLength in 1..OUTBOX_PREVIEW_IMAGE_MAX_BYTES
+
 /** One durable queued chat command; [id] doubles as the chat.send idempotency key. */
 data class ChatOutboxItem(
   val id: String,
@@ -238,6 +246,9 @@ interface ChatCommandOutbox {
 
   /** Re-assembles the attachment bytes for one command, in stable position order. */
   suspend fun loadAttachments(id: String): List<LoadedOutboxAttachment>
+
+  /** Re-assembles one stored attachment's bytes (for a queued-row preview), or null when absent. */
+  suspend fun loadAttachmentBytes(attachmentId: String): ByteArray?
 
   /** Attempt-scoped transition; stale delivery callbacks must update nothing. */
   suspend fun updateStatusIfAttempt(
@@ -778,15 +789,21 @@ class RoomChatCommandOutbox internal constructor(
     val database = openDatabase()
     val dao = database.outboxDao()
     return dao.attachmentsForCommands(listOf(id)).map { row ->
-      val chunks = dao.chunksForAttachment(row.id)
-      val bytes = ByteArray(chunks.sumOf { it.size })
-      var offset = 0
-      for (chunk in chunks) {
-        chunk.copyInto(bytes, offset)
-        offset += chunk.size
-      }
+      val bytes = loadAttachmentBytes(row.id) ?: ByteArray(0)
       LoadedOutboxAttachment(attachment = row.toAttachment(), bytes = bytes)
     }
+  }
+
+  override suspend fun loadAttachmentBytes(attachmentId: String): ByteArray? {
+    val chunks = openDatabase().outboxDao().chunksForAttachment(attachmentId)
+    if (chunks.isEmpty()) return null
+    val bytes = ByteArray(chunks.sumOf { it.size })
+    var offset = 0
+    for (chunk in chunks) {
+      chunk.copyInto(bytes, offset)
+      offset += chunk.size
+    }
+    return bytes
   }
 
   override suspend fun updateStatusIfAttempt(

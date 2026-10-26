@@ -198,10 +198,17 @@ export function openOpenClawAgentDatabaseReadOnly(
   try {
     let database: OpenClawAgentReadOnlyDatabaseHandle;
     if (engineInput) {
-      selected = openAgentEngineStore(db, agentId, pathname, true, (connection, error) => {
-        selected = connection;
-        throw error;
-      });
+      selected = openAgentEngineStore(
+        db,
+        agentId,
+        pathname,
+        true,
+        (connection, error) => {
+          selected = connection;
+          throw error;
+        },
+        true,
+      );
       registerOpenClawAgentDatabaseIdentity(selected);
       database = { agentId, db: selected, path: pathname, close };
     } else {

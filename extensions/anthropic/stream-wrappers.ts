@@ -1,4 +1,5 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import type { ModelRequestHeaders } from "openclaw/plugin-sdk/llm";
 import { getEnvApiKey, streamSimple } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
@@ -83,9 +84,9 @@ function parseHeaderList(value: unknown): string[] {
 }
 
 function mergeAnthropicBetaHeader(
-  headers: Record<string, string> | undefined,
+  headers: ModelRequestHeaders | undefined,
   betas: string[],
-): Record<string, string> {
+): ModelRequestHeaders {
   const merged = { ...headers };
   const existingKey = Object.keys(merged).find(
     (key) => normalizeLowercaseStringOrEmpty(key) === "anthropic-beta",
@@ -159,7 +160,7 @@ export function createAnthropicBetaHeadersWrapper(
     const openClawBetas = isOauth
       ? OPENCLAW_OAUTH_ANTHROPIC_BETAS
       : OPENCLAW_DEFAULT_ANTHROPIC_BETAS;
-    const allBetas = [...new Set([...openClawBetas, ...effectiveBetas])];
+    const allBetas = [...openClawBetas, ...effectiveBetas];
     return underlying(model, context, {
       ...options,
       headers: mergeAnthropicBetaHeader(options?.headers, allBetas),

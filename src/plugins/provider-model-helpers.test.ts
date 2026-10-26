@@ -4,7 +4,7 @@ import {
   cloneFirstTemplateModel,
   matchesExactOrPrefix,
   resolveFamilyForwardCompatModel,
-} from "./provider-model-helpers.js";
+} from "../plugin-sdk/provider-model-shared.js";
 import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 import type { ProviderResolveDynamicModelContext } from "./types.js";
 

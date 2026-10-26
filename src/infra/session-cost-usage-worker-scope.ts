@@ -5,7 +5,7 @@ import {
   armDatabaseWorkerIdleRetirement,
   costReadLane,
   costRefreshLane,
-  historyClearTimeout,
+  clearDatabaseWorkerIdleRetirement,
   pruneHistoryDatabases,
   refreshDatabaseWorkerPressureSubscription,
   releaseRetiredDatabaseCustody,
@@ -138,7 +138,7 @@ export async function withSessionCostUsageWorkerDatabases<T>(
     for (const resource of resources) {
       resource.aborters.add(abort);
     }
-    historyClearTimeout(lane.idleTimer);
+    clearDatabaseWorkerIdleRetirement(lane);
     lane.pending++;
     refreshDatabaseWorkerPressureSubscription();
     const hostEffects = new Set<Promise<WorkerTaskResponse>>();

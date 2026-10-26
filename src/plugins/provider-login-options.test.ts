@@ -63,8 +63,8 @@ describe("provider login choices", () => {
     expect(options[0]).not.toHaveProperty("requiresSetup");
   });
 
-  it("orders login methods by the provider's declared priority", () => {
-    const choices = [
+  it("orders login methods without recopying the private selection or mutating declarations", () => {
+    const choices = Object.freeze([
       choice({
         choiceId: "codex-device",
         choiceLabel: "Codex device code",
@@ -72,11 +72,16 @@ describe("provider login choices", () => {
         assistantPriority: -40,
       }),
       choice({ choiceId: "chatgpt", choiceLabel: "Sign in with ChatGPT", assistantPriority: -50 }),
-    ];
-    expect(listProviderLoginOptions(choices).map((option) => option.id)).toEqual([
-      "demo/chatgpt",
-      "demo/codex-device",
     ]);
+    const copies = vi.spyOn(Array.prototype, "toSorted");
+    try {
+      const options = listProviderLoginOptions(choices);
+      expect(copies).not.toHaveBeenCalled();
+      expect(options.map((option) => option.id)).toEqual(["demo/chatgpt", "demo/codex-device"]);
+      expect(choices.map((entry) => entry.choiceId)).toEqual(["codex-device", "chatgpt"]);
+    } finally {
+      copies.mockRestore();
+    }
   });
 
   it("keeps a single provider behind an explicit menu selection", () => {

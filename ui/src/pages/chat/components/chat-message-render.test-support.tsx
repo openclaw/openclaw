@@ -1,6 +1,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { For, Show } from "solid-js";
 import { afterEach, beforeEach, expect, vi } from "vitest";
+import { loadStreamingMarkdown } from "../../../components/markdown-live-loader.ts";
+import * as markdownLive from "../../../components/markdown-live.ts";
 import * as markdown from "../../../components/markdown.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { setAvatarGatewayOrigin } from "../../../lib/identity-avatar-context.ts";
@@ -33,24 +35,26 @@ export function createChatMessageHarness() {
 
   const renderMarkdownHtml = markdown.toSanitizedMarkdownHtml;
 
-  const renderStreamingMarkdown = markdown.toStreamingMarkdownParts;
+  const renderStreamingMarkdown = markdownLive.toStreamingMarkdownDomParts;
 
-  const markdownRenderMock = vi.fn((value: string) => value);
+  const markdownRenderMock = vi.fn<typeof markdown.toSanitizedMarkdownHtml>((value) => value);
 
-  const streamingMarkdownRenderMock = vi.fn((value: string): [string, string] => [
-    "",
-    `<div class="streaming-markdown">${value}</div>`,
-  ]);
+  const streamingMarkdownRenderMock = vi.fn<typeof markdownLive.toStreamingMarkdownDomParts>(
+    (value) => ["", `<div class="streaming-markdown">${value}</div>`],
+  );
 
   const messageMounts = new Map<
     HTMLElement,
     ReturnType<typeof mountSolid<{ values: MessageFixture[] }>>
   >();
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    await loadStreamingMarkdown();
     view = document.createElement("div");
     vi.spyOn(markdown, "toSanitizedMarkdownHtml").mockImplementation(markdownRenderMock);
-    vi.spyOn(markdown, "toStreamingMarkdownParts").mockImplementation(streamingMarkdownRenderMock);
+    vi.spyOn(markdownLive, "toStreamingMarkdownDomParts").mockImplementation(
+      streamingMarkdownRenderMock,
+    );
     vi.spyOn(chatAvatar, "ChatAvatar").mockImplementation(TestAvatar);
   });
 

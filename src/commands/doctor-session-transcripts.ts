@@ -25,6 +25,7 @@ import type {
   PreparedPostSessionPluginMigration,
 } from "../infra/state-migrations.types.js";
 import { repairCanonicalSessionKeys } from "./doctor-session-canonical-keys.js";
+import { repairLegacyDashboardChatTypes } from "./doctor-session-dashboard-chat-type.js";
 import {
   repairCanonicalSessionDeliveryStates,
   repairLegacySessionEntryStates,
@@ -258,6 +259,7 @@ export async function noteSessionTranscriptHealth(options?: {
     const reservedKeyReport = await repairReservedIncognitoSessionKeys(rowRepairParams);
     const deliveryReport = repairCanonicalSessionDeliveryStates(rowRepairParams);
     repairLegacySessionExecPolicy(rowRepairParams);
+    repairLegacyDashboardChatTypes(rowRepairParams);
     const acpKeyReport = await repairAcpSessionMetaKeysForDoctor({
       ...rowRepairParams,
       authority: maintenanceAuthority,

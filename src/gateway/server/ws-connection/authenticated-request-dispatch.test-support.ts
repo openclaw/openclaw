@@ -15,18 +15,6 @@ export type GatewayTestResponseFrame = {
   error?: { code?: string; message?: string } & Record<string, unknown>;
 };
 
-export const dispatchProfile = (
-  profileId: string,
-  overrides: Partial<NonNullable<GatewayWsClient["authenticatedUserProfile"]>> = {},
-) => ({
-  profileId,
-  displayName: null,
-  avatarRevision: "1",
-  hasAvatar: false,
-  updatedAt: 1,
-  ...overrides,
-});
-
 export const requestFrame = (id: string, method: string, params: unknown = {}) => ({
   type: "req",
   id,
@@ -68,6 +56,7 @@ export function createDispatchTestHarness(
     buildRequestContext?: () => unknown;
     isClosed?: () => boolean;
     getRequiredSharedGatewaySessionGeneration?: () => string | undefined;
+    getMethodRegistry?: GatewayWsMessageHandlerParams["getMethodRegistry"];
   } = {},
 ) {
   const clients = new GatewayClientRegistry();
@@ -106,6 +95,7 @@ export function createDispatchTestHarness(
       close,
       isClosed: options.isClosed ?? (() => false),
       getRequiredSharedGatewaySessionGeneration: options.getRequiredSharedGatewaySessionGeneration,
+      getMethodRegistry: options.getMethodRegistry,
       setCloseCause,
       logGateway,
     } as unknown as GatewayWsMessageHandlerParams,

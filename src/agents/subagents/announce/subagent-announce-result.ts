@@ -205,9 +205,11 @@ export function buildChildCompletionFindings(
       child.childSessionKey.trim() ||
       `child ${index + 1}`;
     const displayIndex: number = sections.length + 1;
+    // Requesters may quote results verbatim, so keep the child's characters.
     const result = {
       label: "Child result",
       text: resultText?.trim() || "(no output)",
+      encoding: "verbatim" as const,
       truncationMarker: `[result truncated; sessions_history sessionKey=${JSON.stringify(child.childSessionKey)} (text fields truncated to 4,000 characters)]`,
     };
     const resultBlock = wrapPromptDataBlock(result) || "Child result: (no output)";

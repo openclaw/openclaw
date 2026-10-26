@@ -12,7 +12,7 @@ import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
 
 useChatSendBrowserFixture();
 
-afterEach(() => vi.doUnmock("./chat-outbox-receipts.ts"));
+afterEach(() => vi.doUnmock("./chat-outbox-readiness.ts"));
 
 it.each([
   "current",
@@ -67,10 +67,12 @@ it.each([
 
   const started = createDeferred();
   const ready = createDeferred();
-  vi.doMock("./chat-outbox-receipts.ts", async () => {
+  vi.doMock("./chat-outbox-readiness.ts", async () => {
     started.resolve();
     await ready.promise;
-    return vi.importActual<typeof import("./chat-outbox-receipts.ts")>("./chat-outbox-receipts.ts");
+    return vi.importActual<typeof import("./chat-outbox-readiness.ts")>(
+      "./chat-outbox-readiness.ts",
+    );
   });
   const draining = resumeStoredChatOutboxes(host);
   try {

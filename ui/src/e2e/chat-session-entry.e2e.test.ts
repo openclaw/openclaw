@@ -263,7 +263,9 @@ suite.define(() => {
             reducedMotion: reducedMotion === "reduce",
             colorScheme,
           });
-          expect((await gateway.getRequests("chat.startup")).length).toBeGreaterThan(0);
+          expect(
+            (await gateway.getRequests("sessions.messages.subscribe", { key: target })).length,
+          ).toBeGreaterThan(0);
           assertEntryFrames(frames, `entry-${count - 1}`);
         },
       );

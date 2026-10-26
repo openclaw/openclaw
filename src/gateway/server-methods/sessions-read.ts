@@ -244,7 +244,8 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
         const limit = params.limit ?? 10;
         const sortedHits = targetResults
           .flatMap((result) => result.hits)
-          .toSorted(
+          // oxlint-disable-next-line unicorn/no-array-sort -- flatMap returns a fresh, private array.
+          .sort(
             (left, right) =>
               right.score - left.score ||
               right.timestamp - left.timestamp ||

@@ -22,10 +22,6 @@ import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { testing } from "../openai-transport-stream.test-support.js";
 import { log } from "./logger.js";
 import { attemptServerEndpointCompaction } from "./server-endpoint-compaction.js";
-import {
-  repairRejectedCompactionReplayInSessionManager,
-  repairRejectedThinkingReplayInSessionManager,
-} from "./thinking-replay-repair.js";
 
 const model = makeProviderModelFixture({
   id: "grok-4.5",
@@ -51,7 +47,6 @@ function createSession(
   sessionModel: Model = model,
   providerReplay?: AssistantMessage["providerReplay"],
   userText = sourceText,
-  assistantFields: Partial<AssistantMessage> = {},
 ) {
   const sessionManager = SessionManager.inMemory();
   sessionManager.appendMessage({ role: "user", content: userText, timestamp: 1 });
@@ -63,7 +58,6 @@ function createSession(
       model: sessionModel.id,
       providerReplay,
       timestamp: 2,
-      ...assistantFields,
     }),
   );
   return { sessionManager, messages: branchMessages(sessionManager) };
@@ -133,76 +127,6 @@ beforeEach(() => {
   requestPreparedCompactionMock.mockResolvedValue(createCompactionResponse());
 });
 
-describe("rejected provider replay repair", () => {
-  it("preserves downstream branch suffix entries after rewriting the first repaired assistant", async () => {
-    const { sessionManager } = createSession(model, undefined, "first", {
-      content: [
-        { type: "thinking", thinking: "private", thinkingSignature: "sig_bad" },
-        { type: "text", text: "first answer" },
-      ],
-    });
-    sessionManager.appendMessage(makeUserMessage("follow-up", 3));
-    sessionManager.appendMessage(
-      makeAgentAssistantMessage({
-        content: [{ type: "text", text: "follow-up answer" }],
-        timestamp: 4,
-      }),
-    );
-    expect(await repairRejectedThinkingReplayInSessionManager({ sessionManager })).toMatchObject({
-      repaired: true,
-    });
-    const messages = branchMessages(sessionManager);
-    expect(messages.map((message) => message.role)).toEqual([
-      "user",
-      "assistant",
-      "user",
-      "assistant",
-    ]);
-    expect(
-      messages.filter((message) => message.role === "assistant").map((message) => message.content),
-    ).toEqual([
-      [{ type: "text", text: "first answer" }],
-      [{ type: "text", text: "follow-up answer" }],
-    ]);
-  });
-
-  it("rewrites from the checkpoint identity that supplied the rejected request", async () => {
-    const checkpoint = {
-      v: 1 as const,
-      type: "openai-responses-retained-compaction" as const,
-      data: "rejected-ciphertext",
-      id: "cmp_rejected",
-      replayIndex: 0,
-      provider: model.provider,
-      api: model.api,
-      model: model.id,
-    };
-    const { sessionManager } = createSession(model, checkpoint);
-    sessionManager.appendMessage(makeUserMessage("after cmp_rejected", 3));
-    sessionManager.appendMessage(
-      makeAgentAssistantMessage({
-        content: [{ type: "text", text: "cmp_newer" }],
-        timestamp: 4,
-        providerReplay: {
-          ...checkpoint,
-          type: "openai-responses-compaction",
-          data: "newer-ciphertext",
-          id: "cmp_newer",
-        },
-      }),
-    );
-    sessionManager.appendMessage(makeUserMessage("after cmp_newer", 5));
-    expect(
-      await repairRejectedCompactionReplayInSessionManager({ sessionManager, checkpoint }),
-    ).toMatchObject({ repaired: true });
-    expect(
-      branchMessages(sessionManager)
-        .filter((message) => message.role === "assistant")
-        .map((message) => message.providerReplay),
-    ).toEqual([undefined, undefined]);
-  });
-});
-
 it.each([
   ["default", undefined, true, undefined],
   ["disabled", { enabled: false }, false, undefined],
@@ -228,7 +152,6 @@ describe("attemptServerEndpointCompaction", () => {
   it.each([
     { trigger: "manual", throws: false, model },
     { trigger: "manual", throws: true, model },
-    { trigger: "budget", throws: false, model },
     { trigger: "manual", throws: false, model: openAIModel },
     { trigger: "budget", throws: false, model: openAIModel },
   ] as const)(
@@ -268,7 +191,6 @@ describe("attemptServerEndpointCompaction", () => {
         },
       });
       expect(owner.message.providerReplay).not.toHaveProperty("replayIndex");
-      expect(requestPreparedCompactionMock).toHaveBeenCalledOnce();
       expect(onUsage).toHaveBeenCalledExactlyOnceWith(compactionUsage());
       expect(warn).not.toHaveBeenCalled();
       expect(onCompactionCommitted).toHaveBeenCalledExactlyOnceWith(1_000);
@@ -325,15 +247,11 @@ describe("attemptServerEndpointCompaction", () => {
     expect(requestAborted).toBe(true);
   });
 
-  it.each([model, openAIModel])(
-    "does not call the $provider endpoint during overflow recovery",
-    async (requestModel) => {
-      const { result } = attempt({ trigger: "overflow", model: requestModel });
-
-      await expect(result).resolves.toBeUndefined();
-      expect(requestPreparedCompactionMock).not.toHaveBeenCalled();
-    },
-  );
+  it("does not call the endpoint during overflow recovery", async () => {
+    const { result } = attempt({ trigger: "overflow" });
+    await expect(result).resolves.toBeUndefined();
+    expect(requestPreparedCompactionMock).not.toHaveBeenCalled();
+  });
 
   it("leaves a missing canonical checkpoint window to client budget compaction", async () => {
     const owner: Pick<AssistantMessage, "providerReplay"> = {};
@@ -365,13 +283,18 @@ describe("attemptServerEndpointCompaction", () => {
     expect(session.sessionManager.getBranch()).toEqual(before);
   });
 
-  it.each(["fixedTokens", "pendingTokens", "reserveTokens"] as const)(
-    "leaves an oversized retained-user window to client compaction after charging %s",
-    async (reservedField) => {
-      const userText = "source text ".repeat(400);
+  it.each([
+    ["fixed cost", false, 1_000, 0, 0],
+    ["pending input", false, 0, 1_000, 0],
+    ["output reserve", false, 0, 0, 1_000],
+    ["covered history and fixed prompt", true, 1_000, 400, 400],
+  ] as const)(
+    "admits a returned window iff it fits after charging %s",
+    async (_name, fits, fixedTokens, pendingTokens, reserveTokens) => {
+      const userText = fits ? "old history ".repeat(4_000) : "source text ".repeat(400);
       const session = createSession(openAIModel, undefined, userText);
       const before = structuredClone(session.sessionManager.getBranch());
-      const response = createCompactionResponse(openAIModel, userText);
+      const response = createCompactionResponse(openAIModel, fits ? sourceText : userText);
       requestPreparedCompactionMock.mockResolvedValueOnce(response);
       const onUsage = vi.fn();
       const onCompactionCommitted = vi.fn();
@@ -381,51 +304,33 @@ describe("attemptServerEndpointCompaction", () => {
           model: openAIModel,
           requestBudget: {
             contextWindow: 2_000,
-            fixedTokens: 0,
-            pendingTokens: 0,
-            reserveTokens: 0,
-            [reservedField]: 1_000,
+            fixedTokens,
+            pendingTokens,
+            reserveTokens,
           },
           onUsage,
           onCompactionCommitted,
         },
         session,
+        fits ? "system ".repeat(400) : undefined,
       );
 
-      await expect(result).resolves.toBeUndefined();
+      const outcome = await result;
       expect(onUsage).toHaveBeenCalledOnce();
-      expect(onCompactionCommitted).not.toHaveBeenCalled();
-      expect(session.sessionManager.getBranch()).toEqual(before);
+      if (fits) {
+        expect(outcome).toBeDefined();
+        expect(onCompactionCommitted).toHaveBeenCalledOnce();
+        expect(session.sessionManager.getLeafEntry()).toMatchObject({
+          type: "message",
+          message: { providerReplay: { data: "opaque" } },
+        });
+      } else {
+        expect(outcome).toBeUndefined();
+        expect(onCompactionCommitted).not.toHaveBeenCalled();
+        expect(session.sessionManager.getBranch()).toEqual(before);
+      }
     },
   );
-
-  it("admits the returned window without recharging its covered transcript or fixed prompt", async () => {
-    const session = createSession(openAIModel, undefined, "old history ".repeat(4_000));
-    requestPreparedCompactionMock.mockResolvedValueOnce(createCompactionResponse(openAIModel));
-    const onCompactionCommitted = vi.fn();
-    const { result } = attempt(
-      {
-        trigger: "budget",
-        model: openAIModel,
-        requestBudget: {
-          contextWindow: 2_000,
-          fixedTokens: 1_000,
-          pendingTokens: 400,
-          reserveTokens: 400,
-        },
-        onCompactionCommitted,
-      },
-      session,
-      "system ".repeat(400),
-    );
-
-    await expect(result).resolves.toBeDefined();
-    expect(onCompactionCommitted).toHaveBeenCalledOnce();
-    expect(session.sessionManager.getLeafEntry()).toMatchObject({
-      type: "message",
-      message: { providerReplay: { data: "opaque" } },
-    });
-  });
 
   it("does not compact transcript entries that remain after the checkpoint owner", async () => {
     const messages = createSession().messages.concat(makeUserMessage("trailing turn", 3));

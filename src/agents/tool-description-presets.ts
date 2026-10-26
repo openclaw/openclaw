@@ -161,7 +161,7 @@ export function describeSessionsSpawnTool(options?: {
     visibilityLine,
     ...(options?.swarmEnabled ? [SESSIONS_SPAWN_COLLECTOR_GUIDANCE] : []),
     "Inherits parent workspace. Native task arrives in the child's initial `[Subagent Task]` message.",
-    ...(options?.acpAvailable === false
+    ...(options?.acpAvailable === false || options?.agentIdGuidance
       ? []
       : ['`runtime="acp"` ids: codex, claude, gemini, opencode, or configured ACP.']),
     describeSubagentSpawnContext(options?.subagentThreadAvailable === true),

@@ -24,6 +24,8 @@ export type EmbeddingUsage = {
 export type EmbeddingProviderCallOptions = {
   signal?: AbortSignal;
   inputType?: "query" | "document" | "semantic" | "classification" | "clustering";
+  /** The host applied an explicit query instruction; skip provider query templates. */
+  queryInstructionApplied?: boolean;
   /** Report each successful upstream request before resolving; undefined means usage unavailable. */
   onUsage?: (usage: EmbeddingUsage | undefined) => void;
 } & MemorySearchDeadlineControlOptions;
@@ -98,6 +100,8 @@ export type EmbeddingProviderCreateResult = {
 /** Adapter contract registered by core or plugin embedding providers. */
 export type EmbeddingProviderAdapter = {
   id: string;
+  /** Alternate lookup ids; creation and index identity retain the canonical id. */
+  aliases?: readonly string[];
   defaultModel?: string;
   transport?: "local" | "remote";
   authProviderId?: string;

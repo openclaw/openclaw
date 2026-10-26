@@ -65,7 +65,6 @@ const UI_E2E_FILE_SECONDS_HINTS = new Map<string, number>([
   ["device-token-reconnect.e2e.test.ts", 12],
   ["github-link-hovercard.e2e.test.ts", 11],
   ["initial-connect-splash.e2e.test.ts", 16],
-  ["lobster-pet-dismiss-menu-overflow.e2e.test.ts", 12],
   ["locale-offline-retry.e2e.test.ts", 13],
   ["mobile-pairing.e2e.test.ts", 12],
   ["model-providers.e2e.test.ts", 13],

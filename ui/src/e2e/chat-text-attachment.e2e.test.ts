@@ -1,6 +1,5 @@
 import { readFile } from "node:fs/promises";
 import { createServer, request } from "node:http";
-import path from "node:path";
 import { expect, it } from "vitest";
 import { reserveTestPortListener } from "../../../src/test-utils/port-claims.ts";
 import { newChatPage } from "./chat-flow-fixtures.test-support.ts";
@@ -76,7 +75,7 @@ suite.define(() => {
       const baseUrl = `http://127.0.0.1:${server.claim.port}/`;
       try {
         await page.goto(`${baseUrl}chat`);
-        await gateway.waitForRequest("chat.startup");
+        await gateway.waitForRequest("sessions.messages.subscribe");
         const card = page
           .locator(".chat-assistant-attachment-card--compact")
           .filter({ hasText: filename });
@@ -92,9 +91,6 @@ suite.define(() => {
         });
         await expect.poll(() => downloadAction.count()).toBe(1);
         await downloadAction.waitFor();
-        await page.screenshot({
-          path: path.join(suite.artifactDir, `${extension}-preview-${width}.png`),
-        });
         const scroller = width === 390 ? reader : panel.locator(".sidebar-content");
         expect(
           await scroller.evaluate((element) => element.clientHeight < element.scrollHeight),
@@ -129,9 +125,6 @@ suite.define(() => {
             return false;
           }),
         ).toBe(true);
-        await page.screenshot({
-          path: path.join(suite.artifactDir, `${extension}-preview-${width}-bottom.png`),
-        });
         if (extension === "md") {
           await scroller.evaluate((element) => {
             element.scrollTop = 0;
@@ -147,9 +140,6 @@ suite.define(() => {
             .locator("pre")
             .evaluate((element) => element.scrollWidth <= element.clientWidth),
         ).toBe(true);
-        await page.screenshot({
-          path: path.join(suite.artifactDir, `${extension}-preview-${width}-readable.png`),
-        });
         const [download] = await Promise.all([
           page.waitForEvent("download"),
           downloadAction.click(),

@@ -69,6 +69,57 @@ describe("diagnostic support export", () => {
     vi.useRealTimers();
   });
 
+  it("includes separate redacted capabilities for the exporter and serving Gateway", async () => {
+    vi.stubGlobal("__openclawStandaloneBuildInfo", {
+      mode: "aot",
+      openclaw: { version: "2026.10.3", commit: "a".repeat(40) },
+      bun: { version: "1.4.4" },
+      plugins: { embedded: ["synthetic-private@example.invalid"], omitted: [] },
+    });
+    try {
+      const outputPath = path.join(tempDir, "capabilities.zip");
+      await writeDiagnosticSupportExport({
+        outputPath,
+        readGatewayCapabilities: async () => ({
+          process: { kind: "bun", flavor: "jit" },
+          source: "synthetic-private@example.invalid",
+          token: "synthetic-secret-value",
+        }),
+      });
+      const entries = await readZipTextEntries(outputPath);
+      expect(readJsonEntry(entries, "runtime/capabilities.json")).toHaveProperty(
+        "data.process.flavor",
+        "aot",
+      );
+      expect(readJsonEntry(entries, "runtime/capabilities.json")).toHaveProperty(
+        "data.build.openclaw.commit",
+        "a".repeat(40),
+      );
+      expect(readJsonEntry(entries, "runtime/gateway-capabilities.json")).toHaveProperty(
+        "data.process.flavor",
+        "jit",
+      );
+      expect(Object.values(entries).join("\n")).not.toMatch(
+        /synthetic-private@example.invalid|synthetic-secret-value/,
+      );
+      await writeDiagnosticSupportExport({
+        outputPath: path.join(tempDir, "offline.zip"),
+        readGatewayCapabilities: async () => {
+          throw new Error("synthetic-private@example.invalid is offline");
+        },
+      });
+      const offline = await readZipTextEntries(path.join(tempDir, "offline.zip"));
+      expect(readJsonEntry(offline, "runtime/gateway-capabilities.json")).toHaveProperty(
+        "status",
+        "failed",
+      );
+      expect(readJsonEntry(offline, "runtime/capabilities.json")).toHaveProperty("status", "ok");
+      expect(Object.values(offline).join("\n")).not.toContain("synthetic-private@example.invalid");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it.each(["current", "other-state alias", "marked relocated alias"])(
     "excludes %s capture files selected as config, logs, or a stability bundle",
     async (owner) => {
@@ -416,6 +467,7 @@ describe("diagnostic support export", () => {
       "health/gateway-health.json",
       "logs/openclaw-sanitized.jsonl",
       "manifest.json",
+      "runtime/capabilities.json",
       "stability/latest.json",
       "status/gateway-status.json",
       "summary.md",
@@ -788,6 +840,7 @@ describe("diagnostic support export", () => {
       "diagnostics.json",
       "logs/openclaw-sanitized.jsonl",
       "manifest.json",
+      "runtime/capabilities.json",
       "summary.md",
     ]);
 

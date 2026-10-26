@@ -60,6 +60,27 @@ const getCheck = (checks: readonly HealthCheck[], id: string) =>
   checks.find((entry) => entry.id === id)!;
 
 describe("CORE_HEALTH_CHECKS", () => {
+  it("reports the Doctor process capabilities through the registered read-only check", async () => {
+    vi.stubGlobal("__openclawStandaloneBuildInfo", {
+      mode: "aot",
+      openclaw: { version: "2026.10.3" },
+      bun: { version: "1.4.4" },
+    });
+    try {
+      const findings = await getCheck(
+        CORE_HEALTH_CHECKS,
+        "core/doctor/runtime-capabilities",
+      ).detect(context({}));
+      expectFinding(findings, {
+        severity: "info",
+        source: "doctor-process",
+        message: expect.stringContaining("flavor=aot"),
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   let tmp: string | undefined;
   const dirs = useAutoCleanupTempDirTracker(afterEach);
   async function execRef(script: string[], marker = false) {

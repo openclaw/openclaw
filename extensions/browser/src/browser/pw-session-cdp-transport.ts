@@ -16,7 +16,7 @@ const MAX_DIAGNOSTIC_TARGETS = 3;
 const MAX_DIAGNOSTIC_TARGET_ID_CHARS = 128;
 
 export class UnresponsiveCdpTargetError extends Error {
-  constructor(readonly targetIds: string[]) {
+  constructor(targetIds: string[]) {
     const targets = targetIds.map((targetId) => JSON.stringify(targetId)).join(", ");
     const suffix = targetIds.length === 1 ? "" : "s";
     super(

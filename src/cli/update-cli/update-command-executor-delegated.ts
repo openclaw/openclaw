@@ -12,10 +12,7 @@ import type {
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { UpdateActivationTimeoutError } from "./update-command-activation.js";
-import {
-  createChildOwner,
-  type UpdateCommandChildGrant,
-} from "./update-command-executor-children.js";
+import { createChildOwner } from "./update-command-executor-children.js";
 import { resolveUpdateCommandChildBinding } from "./update-command-executor-grant.js";
 import {
   prepareUpdateCommandExecutorTerminal,
@@ -49,7 +46,7 @@ function memoizeSuccessfulLeaseCheck<T>(check: (lease: T) => boolean) {
 /** A delegated executor retains both its original root and immediate spawner.
  * Neither the transported grant nor a lease row without live identity grants effects. */
 export async function withDelegatedUpdateCommandExecutor<T>(
-  grant: UpdateCommandChildGrant,
+  grant: unknown,
   runId: string,
   root: string,
   operation: (

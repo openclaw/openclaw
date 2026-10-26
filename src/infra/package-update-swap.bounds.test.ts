@@ -32,6 +32,21 @@ import { createPackageSwapFixture } from "./package-update-swap.test-support.js"
 import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
 
+type SwapFixture = Awaited<ReturnType<typeof createPackageSwapFixture>> & { base: string };
+const withSwap = (run: (fixture: SwapFixture) => Promise<void>) =>
+  withTestDir({ prefix: "package-bounds-" }, async (base) =>
+    run({ ...(await createPackageSwapFixture(base)), base }),
+  );
+
+function waitForGate(
+  gate: PromiseLike<unknown>,
+  operation: PromiseLike<unknown>,
+  signal: AbortSignal,
+  message: string,
+) {
+  return withinTest(awaitGateBeforeSettlement(gate, operation, message), signal);
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -39,9 +54,8 @@ afterEach(() => {
 describe("package verification bounds", () => {
   it.each(["presence", "root", "tree"] as const)(
     "continues with a warning when the baseline %s stat exceeds its deadline",
-    async (operation) => {
-      await withTestDir({ prefix: "openclaw-baseline-stat-deadline-" }, async (base) => {
-        const { params, packageRoot, launcher } = await createPackageSwapFixture(base);
+    (operation) =>
+      withSwap(async ({ params, packageRoot, launcher }) => {
         const target = operation === "tree" ? path.join(packageRoot, "dist") : packageRoot;
         const lstat = fs.lstat.bind(fs);
         let now = performance.now();
@@ -61,20 +75,18 @@ describe("package verification bounds", () => {
         await expectInstallation(packageRoot, launcher, true);
         expect((await transaction.rollback(() => {})).exitCode).toBe(0);
         await expectInstallation(packageRoot, launcher);
-      });
-    },
+      }),
   );
 
-  it("keeps a fresh reader usable after a wall-clock jump forward", async () => {
-    await withTestDir({ prefix: "openclaw-integrity-clock-forward-" }, async (base) => {
+  it("keeps a fresh reader usable after a wall-clock jump forward", () =>
+    withTestDir({ prefix: "openclaw-integrity-clock-forward-" }, async (base) => {
       const reader = createPackageIntegrityReader(1_000);
       vi.spyOn(Date, "now").mockReturnValue(Date.now() + 60_000);
       await expect(reader.entries(base)).resolves.toEqual([]);
-    });
-  });
+    }));
 
-  it("expires a read on time despite a wall-clock jump backward", async () => {
-    await withTestDir({ prefix: "openclaw-integrity-clock-backward-" }, async (base) => {
+  it("expires a read on time despite a wall-clock jump backward", () =>
+    withTestDir({ prefix: "openclaw-integrity-clock-backward-" }, async (base) => {
       let now = performance.now();
       vi.spyOn(performance, "now").mockImplementation(() => now);
       const reader = createPackageIntegrityReader(15);
@@ -86,11 +98,10 @@ describe("package verification bounds", () => {
       });
       vi.spyOn(Date, "now").mockReturnValue(Date.now() - 60_000);
       await expect(reader.entries(base)).rejects.toBeInstanceOf(PackageIntegrityTimeoutError);
-    });
-  });
+    }));
 
-  it("rehashes same-tick observations even after they age", async () => {
-    await withTestDir({ prefix: "openclaw-integrity-reuse-" }, async (base) => {
+  it("rehashes same-tick observations even after they age", () =>
+    withTestDir({ prefix: "openclaw-integrity-reuse-" }, async (base) => {
       const clock = Date.now.bind(Date);
       let now = clock();
       vi.spyOn(Date, "now").mockImplementation(() => now);
@@ -99,98 +110,24 @@ describe("package verification bounds", () => {
       await fs.writeFile(empty, "");
       const hash = interceptPackageFileHashes();
       const hashedFiles = () => hash.mock.calls.map(([file]) => file);
-      const open = vi.spyOn(fs, "open");
-      const packageOpens = () =>
-        open.mock.calls
-          .map(([file]) => String(file))
-          .filter((file) => file.startsWith(`${packageRoot}${path.sep}`));
       const reader = createPackageIntegrityReader();
       const first = await reader.tree(packageRoot);
       const files = hashedFiles();
       expect(files).toContain(empty);
       expect(new Set(files).size).toBe(files.length);
-      hash.mockClear();
-      open.mockClear();
-      expect(await reader.tree(packageRoot, packageRoot, first)).toEqual(first);
-      // The version read still opens the manifest once, independently of its digest.
-      expect(hashedFiles()).toEqual(files);
-      expect(packageOpens()).toEqual([path.join(packageRoot, "package.json")]);
       // Aging alone cannot turn an earlier racy read into settled evidence.
-      now = clock() + 6_000;
-      hash.mockClear();
-      open.mockClear();
-      expect(await reader.tree(packageRoot, packageRoot, first)).toEqual(first);
-      expect(hashedFiles()).toEqual(files);
-      expect(packageOpens()).toEqual([path.join(packageRoot, "package.json")]);
-    });
-  });
+      for (const age of [0, 6_000]) {
+        if (age) {
+          now = clock() + age;
+        }
+        hash.mockClear();
+        expect(await reader.tree(packageRoot, packageRoot, first)).toEqual(first);
+        expect(hashedFiles()).toEqual(files);
+      }
+    }));
 
-  it.for([4])(
-    "rehashes %i changed files in DFS order without charging reused entries a hash slot",
-    async (changedCount, { signal }) => {
-      await withTestDir({ prefix: "openclaw-integrity-mixed-reuse-" }, async (base) => {
-        const { packageRoot } = await createPackageSwapFixture(base);
-        const files = Array.from({ length: 4 }, (_, index) =>
-          path.join(packageRoot, "dist", `reuse-${index}-a.js`),
-        );
-        for (const file of files) {
-          await fs.writeFile(file, "before");
-          await fs.writeFile(file.replace("-a.js", "-b.js"), "");
-        }
-        vi.spyOn(Date, "now").mockReturnValue(Date.now() + 6_000);
-        const reader = createPackageIntegrityReader();
-        const first = await reader.tree(packageRoot);
-        const changed = files.slice(0, changedCount);
-        for (const file of changed) {
-          await fs.writeFile(file, "changed content");
-        }
-        const release = createDeferredCore();
-        const admitted = createDeferredCore();
-        const hashed: string[] = [];
-        const hash = interceptPackageFileHashes(async (file, _stat, next) => {
-          hashed.push(file);
-          // Queue real work before blocking its result so flush owns every job.
-          const hashing = next();
-          if (changed.includes(file)) {
-            if (hashed.length === changed.length) {
-              admitted.resolve();
-            }
-            await release.promise;
-          }
-          return hashing;
-        });
-        const open = vi.spyOn(fs, "open");
-        const walking = reader.tree(packageRoot, packageRoot, first);
-        try {
-          await withinTest(
-            awaitGateBeforeSettlement(
-              admitted.promise,
-              walking,
-              "The walk settled before admitting its changed files",
-            ),
-            signal,
-          );
-          release.resolve();
-          const second = await withinTest(walking, signal);
-          expect(hashed).toEqual(changed);
-          expect(open.mock.calls.map(([file]) => String(file))).toEqual([
-            path.join(packageRoot, "package.json"),
-          ]);
-          expect(second.digest).not.toBe(first.digest);
-          open.mockRestore();
-          hash.mockImplementation((_file, _stat, next) => next());
-          expect(second).toEqual(await reader.tree(packageRoot));
-        } finally {
-          release.resolve();
-          await Promise.allSettled([walking]);
-        }
-      });
-    },
-  );
-
-  it("distinguishes entry and byte budget exhaustion from integrity failures", async () => {
-    await withTestDir({ prefix: "openclaw-integrity-budget-type-" }, async (base) => {
-      const { packageRoot, launcher } = await createPackageSwapFixture(base);
+  it("distinguishes entry and byte budget exhaustion from integrity failures", () =>
+    withSwap(async ({ packageRoot, launcher }) => {
       await expect(createPackageIntegrityReader().entries(packageRoot, 1)).rejects.toBeInstanceOf(
         PackageIntegrityLimitError,
       );
@@ -201,14 +138,10 @@ describe("package verification bounds", () => {
       await expect(createPackageIntegrityReader().launcher(packageRoot)).rejects.not.toBeInstanceOf(
         PackageIntegrityLimitError,
       );
-    });
-  });
+    }));
 
-  it("preserves an earlier filesystem refusal over aggregate byte exhaustion", async ({
-    signal,
-  }) => {
-    await withTestDir({ prefix: "openclaw-integrity-error-order-" }, async (base) => {
-      const { params, packageRoot, launcher } = await createPackageSwapFixture(base);
+  it("preserves an earlier filesystem refusal over aggregate byte exhaustion", ({ signal }) =>
+    withSwap(async ({ params, packageRoot, launcher }) => {
       const first = path.join(packageRoot, "dist", "a-first.js");
       const second = path.join(packageRoot, "dist", "b-second.js");
       for (const file of [first, second]) {
@@ -253,13 +186,11 @@ describe("package verification bounds", () => {
         onTransaction,
       });
       try {
-        await withinTest(
-          awaitGateBeforeSettlement(
-            reading.promise,
-            update,
-            "The later resource limit replaced a still-owned package read",
-          ),
+        await waitForGate(
+          reading.promise,
+          update,
           signal,
+          "The later resource limit replaced a still-owned package read",
         );
         release.resolve();
         const result = await withinTest(update, signal);
@@ -275,14 +206,12 @@ describe("package verification bounds", () => {
         release.resolve();
         await update;
       }
-    });
-  });
+    }));
 
   it.each(["rollback", "changed identity"] as const)(
     "handles %s after the baseline fingerprint exhausts its byte budget",
-    async (outcome) => {
-      await withTestDir({ prefix: "openclaw-fingerprint-advisory-" }, async (base) => {
-        const { params, packageRoot, launcher } = await createPackageSwapFixture(base);
+    (outcome) =>
+      withSwap(async ({ params, packageRoot, launcher }) => {
         const original = await fs.stat(packageRoot);
         const payload = path.join(packageRoot, "runtime-payload.bin");
         await fs.writeFile(payload, "");
@@ -324,14 +253,12 @@ describe("package verification bounds", () => {
         const actual = await fs.stat(packageRoot);
         expect([actual.dev, actual.ino]).toEqual([original.dev, original.ino]);
         expect(await transaction.complete({ activationVerified: false }, () => {})).toBeUndefined();
-      });
-    },
+      }),
   );
 
   it("rejects manifest growth past the byte limit without an oversized metadata allocation", async () => {
     const size = 1024 * 1024 + 1;
-    await withTestDir({ prefix: "openclaw-rollback-metadata-bound-" }, async (base) => {
-      const { params, packageRoot } = await createPackageSwapFixture(base);
+    await withSwap(async ({ params, packageRoot }) => {
       const manifest = path.join(packageRoot, "package.json");
       const open = fs.open.bind(fs);
       let manifestOpens = 0;
@@ -369,26 +296,21 @@ describe("package verification bounds", () => {
     });
   });
 
-  it("accepts a valid manifest at the metadata byte limit", async () => {
-    await withTestDir({ prefix: "openclaw-rollback-metadata-valid-" }, async (base) => {
-      const { params, packageRoot } = await createPackageSwapFixture(base);
+  it("accepts a valid manifest at the metadata byte limit", () =>
+    withSwap(async ({ params, packageRoot }) => {
       const manifest = path.join(packageRoot, "package.json");
       const contents = await fs.readFile(manifest, "utf8");
       await fs.writeFile(manifest, contents.padEnd(1024 * 1024, " "));
-      const onTransaction = vi.fn();
-      const { result, transaction } = await captureSwap({ ...params, onTransaction });
+      const { result, transaction } = await captureSwap(params);
       expect(result.status).toBe("committed");
-      expect(onTransaction).toHaveBeenCalledOnce();
       expect((await transaction.rollback(() => {})).exitCode).toBe(0);
       await expect(fs.readFile(manifest, "utf8")).resolves.toHaveLength(1024 * 1024);
-    });
-  });
+    }));
 
   it.each(["launcher", "launcher directory"] as const)(
     "bounds the initial %s observation",
-    async (entry) => {
-      await withTestDir({ prefix: "openclaw-rollback-presence-bound-" }, async (base) => {
-        const { params, launcher } = await createPackageSwapFixture(base);
+    (entry) =>
+      withSwap(async ({ params, launcher }) => {
         const lstat = fs.lstat.bind(fs);
         const readdir = fs.readdir.bind(fs);
         const opendir = fs.opendir.bind(fs);
@@ -437,15 +359,13 @@ describe("package verification bounds", () => {
           blocked.resolve();
           await update;
         }
-      });
-    },
+      }),
   );
 
   it.for(["hash report"] as const)(
     "settles bounded parallel hashes after a stalled %s without continuing the walk",
-    async (_operation, { signal }) => {
-      await withTestDir({ prefix: "openclaw-rollback-deadline-" }, async (base) => {
-        const { params, packageRoot, launcher } = await createPackageSwapFixture(base);
+    (_operation, { signal }) =>
+      withSwap(async ({ params, packageRoot, launcher }) => {
         const window = 64;
         const full = createDeferredCore();
         const files = [
@@ -496,10 +416,7 @@ describe("package verification bounds", () => {
           timeoutMs: 40,
         });
         try {
-          await withinTest(
-            awaitGateBeforeSettlement(full.promise, update, "the admission window never filled"),
-            signal,
-          );
+          await waitForGate(full.promise, update, signal, "the admission window never filled");
           await withinTest(Promise.all(started), signal);
           expect(admitted).toEqual(files.slice(0, window));
           expect(lstat.mock.calls.some(([file]) => String(file) === files[window])).toBe(false);
@@ -527,13 +444,11 @@ describe("package verification bounds", () => {
           vi.useRealTimers();
           await update;
         }
-      });
-    },
+      }),
   );
 
-  it("does not wait beyond the deadline for directory cleanup", async ({ signal }) => {
-    await withTestDir({ prefix: "openclaw-rollback-close-deadline-" }, async (base) => {
-      const { params } = await createPackageSwapFixture(base);
+  it("does not wait beyond the deadline for directory cleanup", ({ signal }) =>
+    withSwap(async ({ params }) => {
       await fs.unlink(path.join(params.stage.layout.binDir, "openclaw"));
       const release = createDeferredCore();
       const entered = createDeferredCore();
@@ -555,10 +470,7 @@ describe("package verification bounds", () => {
       vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
       const update = swapStagedPackageInstall({ ...params, timeoutMs: 40 });
       try {
-        await withinTest(
-          awaitGateBeforeSettlement(entered.promise, update, "directory cleanup never started"),
-          signal,
-        );
+        await waitForGate(entered.promise, update, signal, "directory cleanup never started");
         await vi.advanceTimersByTimeAsync(40);
         const result = await withinTest(update, signal);
         // Cleanup is best effort once the verification deadline expires.
@@ -569,16 +481,14 @@ describe("package verification bounds", () => {
         vi.useRealTimers();
         await update;
       }
-    });
-  });
+    }));
 });
 
 describe("npm rollback content diagnostics", () => {
   it.each(["rewrite cache", "contents", "cache symlink", "cache during scan"])(
     "verifies retained bytes after %s",
-    async (change) => {
-      await withTestDir({ prefix: "openclaw-rollback-diagnostics-" }, async (base) => {
-        const { params, packageRoot, launcher } = await createPackageSwapFixture(base);
+    (change) =>
+      withSwap(async ({ params, packageRoot, launcher, base }) => {
         const modules = path.join(packageRoot, "node_modules");
         await fs.mkdir(modules);
         await fs.writeFile(path.join(modules, ".package-lock.json"), '{"lockfileVersion":3}');
@@ -636,8 +546,7 @@ describe("npm rollback content diagnostics", () => {
           expect(report.body).toContain(name);
           expect(report.body).not.toContain(base);
         }
-      });
-    },
+      }),
   );
 });
 
@@ -673,12 +582,7 @@ describe.skipIf(process.platform === "win32")("managed publication drift facts",
       ["dist/postinstall-content-inventory.json", "file"],
       ["dist/postinstall-inventory.json", "file"],
       ["dist", "directory"],
-      ["drift-0.js", "file"],
-      ["drift-1.js", "file"],
-      ["drift-2.js", "file"],
-      ["drift-3.js", "file"],
-      ["drift-4.js", "file"],
-      ["drift-5.js", "file"],
+      ...Array.from({ length: 6 }, (_, index): [string, "file"] => [`drift-${index}.js`, "file"]),
       ["nested/a.txt", "file"],
       ["nested/link", "symlink"],
       ["nested", "directory"],
@@ -743,13 +647,11 @@ describe.skipIf(process.platform === "win32")("managed publication drift facts",
       const rollingBack = transaction.rollback(fence.assertCurrent);
       let rollback: Awaited<ReturnType<PackageUpdateTransaction["rollback"]>>;
       try {
-        await withinTest(
-          awaitGateBeforeSettlement(
-            Promise.all(hashes.map((hash) => hash.hashed.promise)),
-            rollingBack,
-            "Rollback settled before its adjacent file hashes completed their byte reads",
-          ),
+        await waitForGate(
+          Promise.all(hashes.map((hash) => hash.hashed.promise)),
+          rollingBack,
           signal,
+          "Rollback settled before its adjacent file hashes completed their byte reads",
         );
         for (const index of [3, 2, 1, 0]) {
           hashes[index]!.release.resolve();

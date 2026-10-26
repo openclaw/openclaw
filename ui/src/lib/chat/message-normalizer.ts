@@ -12,6 +12,7 @@ import {
   isCanvasBoardWidgetName,
 } from "../../../../src/chat/canvas-render.js";
 import { readMessageClientSources } from "../../../../src/chat/message-client-source.js";
+import { projectImportedMessageForDisplay } from "../../../../src/chat/session-catalog-display.js";
 import {
   isToolCallContentType,
   isToolResultContentType,
@@ -23,7 +24,6 @@ import { readClawHubRecommendation } from "../../../../src/shared/clawhub-recomm
 import { readPluginInlineViewBlock } from "../../../../src/shared/plugin-inline-view.js";
 import { getMediaFileExtension } from "../media-file-extension.ts";
 import type { NormalizedMessage, MessageContentItem, MessageImageSource } from "./chat-types.ts";
-import { projectImportedMessageForDisplay } from "./imported-message-display.ts";
 import { normalizeAttachmentContentBlock } from "./message-normalizer-attachments.ts";
 import { resolveMessageSender, resolveMessageSenderLabel } from "./sender-label.ts";
 
@@ -145,27 +145,6 @@ export function readMessageSenderSession(value: unknown): NormalizedMessage["sen
         ...(label ? { label } : {}),
       }
     : undefined;
-}
-
-function normalizeOmittedMediaContentBlock(
-  item: Record<string, unknown>,
-): Extract<MessageContentItem, { type: "omitted_media" }> | null {
-  if (
-    item.type !== "image" ||
-    item.omitted !== true ||
-    normalizeOptionalString(item.artifactId) !== undefined ||
-    normalizeOptionalString(item.url) !== undefined
-  ) {
-    return null;
-  }
-  const sizeBytes = asNonNegativeFiniteNumber(item.bytes);
-  return {
-    type: "omitted_media",
-    media: {
-      kind: "image",
-      ...(sizeBytes !== undefined ? { sizeBytes } : {}),
-    },
-  };
 }
 
 export function normalizeRoleForGrouping(role: string): string {
@@ -500,7 +479,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
   let audioAsVoice = false;
   let replyTarget = resolveDeliveryReplyTarget(delivery);
   const normalizeText = (text: string, block = false): MessageContentItem[] => {
-    if (!isAssistantMessage) {
+    if (!isAssistantMessage || asOptionalRecord(m["__openclaw"])?.catalogSource === true) {
       return [{ type: "text", text, ...(block ? { name: undefined, args: undefined } : {}) }];
     }
     audioAsVoice = delivery?.audioAsVoice === true;
@@ -510,14 +489,27 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
   if (typeof contentRaw === "string") {
     content = normalizeText(contentRaw);
   } else if (contentItems) {
-    content = contentItems.flatMap((value) => {
+    content = contentItems.flatMap((value): MessageContentItem[] => {
       const item = asOptionalRecord(value);
       if (!item) {
         return [];
       }
-      const omittedMedia = normalizeOmittedMediaContentBlock(item);
-      if (omittedMedia) {
-        return [omittedMedia];
+      if (
+        item.type === "image" &&
+        item.omitted === true &&
+        normalizeOptionalString(item.artifactId) === undefined &&
+        normalizeOptionalString(item.url) === undefined
+      ) {
+        const sizeBytes = asNonNegativeFiniteNumber(item.bytes);
+        return [
+          {
+            type: "omitted_media",
+            media: {
+              kind: "image",
+              ...(sizeBytes !== undefined ? { sizeBytes } : {}),
+            },
+          },
+        ];
       }
       const image = normalizeImageContentBlock(item);
       if (image) {

@@ -13,6 +13,7 @@ import {
 } from "vitest";
 import type { BoardSnapshot } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import { commandResult } from "../../agents/github-identity.test-support.js";
 import { clearGitHubCredentialVerificationCache } from "../../agents/github-oauth-client.js";
 import { resolveManagedGitHubProfileDir } from "../../agents/github-tool-identity.js";
 import { createTestBoardStore } from "../../boards/board-store.test-support.js";
@@ -79,15 +80,6 @@ async function expectWaiting(started: Promise<unknown>, pending: Promise<unknown
     "waiting",
   );
 }
-const commandResult = (value = "", code = 0) => ({
-  stdout: Buffer.from(value),
-  stderr: Buffer.alloc(0),
-  code,
-  signal: null,
-  killed: false,
-  termination: "exit" as const,
-});
-
 const getOrCreatePromise = lazyPromise.getOrCreatePromise;
 
 function observeSharedReadAdmission() {
@@ -181,6 +173,10 @@ describe("board authenticated GitHub Actions", () => {
       getRuntimeConfig: () => config,
       trackExecution: (execute) => work.track(execute),
     });
+  }
+  function publishConfig(next: OpenClawConfig) {
+    config = next;
+    setRuntimeConfigSnapshot(config);
   }
   afterEach(async () => {
     await Promise.all(workScopes.splice(0).map((work) => work.drain()));
@@ -346,7 +342,10 @@ describe("board authenticated GitHub Actions", () => {
           controller.abort();
         }
         if (changed === "agent") {
-          config.agents = { entries: { other: {} } };
+          publishConfig({
+            ...config,
+            agents: { ...config.agents, entries: { other: {} } },
+          });
         }
         if (changed === "routing") {
           config.session = { scope: "global", mainKey: `runs-${caseNumber}` };
@@ -489,7 +488,10 @@ describe("board authenticated GitHub Actions", () => {
     const { started, release } = holdActions();
     const harness = createGitHubBoardHarness();
     const { read } = await reader(harness);
-    config.agents!.entries!.other = {};
+    publishConfig({
+      ...config,
+      agents: { ...config.agents, entries: { ...config.agents?.entries, other: {} } },
+    });
     const otherSession = await reader(harness, "runs", "other");
     const sharedSecond = otherSession.read();
     const first = read();
@@ -571,7 +573,10 @@ describe("board authenticated GitHub Actions", () => {
       if (changed === "token") {
         await writeCredential("synthetic-rotated-token");
       } else {
-        config.agents = { entries: { other: {} } };
+        publishConfig({
+          ...config,
+          agents: { ...config.agents, entries: { other: {} } },
+        });
       }
       release.resolve();
       await expectDenied(pending);

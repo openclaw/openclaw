@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
-import { resolveAttemptTranscriptPolicy } from "./attempt-history.js";
+import { resolveAttemptTranscriptPolicy } from "./attempt-transcript-policy.js";
 
 const resolveProviderRuntimePluginMock = vi.hoisted(() => vi.fn());
 

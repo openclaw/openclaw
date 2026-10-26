@@ -251,7 +251,20 @@ suite.define(() => {
             });
             await expect(peer.locator(".chat-sender-name")).toHaveText("Riley");
             await expect(peer.locator(".chat-group-footer")).toHaveCSS("opacity", "1");
-          } else {
+          }
+          const thread = page.locator(".chat-thread");
+          if (height === 430) {
+            // The first message can leave the virtual window after new turns.
+            // Return to it before checking its attributed identity.
+            await waitForChatScrollIdle(page);
+            await thread.focus();
+            await thread.press("Home");
+            // Chromium drops a keyboard scroll that lands in the tail of the
+            // previous smooth one, so End must wait for Home to settle.
+            await waitForChatScrollIdle(page);
+            expect(await thread.evaluate((element) => element.scrollTop)).toBe(0);
+          }
+          if (!profiled) {
             const own = page.locator(".chat-group.user", {
               hasText: "Keep the phone transcript readable.",
             });
@@ -259,13 +272,6 @@ suite.define(() => {
             await expect(own).toHaveCSS("justify-content", "end");
           }
           if (height === 430) {
-            const thread = page.locator(".chat-thread");
-            await thread.focus();
-            await thread.press("Home");
-            // Chromium drops a keyboard scroll that lands in the tail of the
-            // previous smooth one, so End must wait for Home to settle.
-            await waitForChatScrollIdle(page);
-            expect(await thread.evaluate((element) => element.scrollTop)).toBe(0);
             await thread.press("End");
             await expect
               .poll(() => thread.evaluate((element) => element.scrollTop))
@@ -682,7 +688,11 @@ suite.define(() => {
 
       await gateway.deferNext("chat.send");
       await group.getByRole("button", { name: "Retry queued message" }).click();
-      await expect(group.locator(".chat-send-status")).toHaveCount(0);
+      await expect(group.locator(".chat-send-status")).toHaveAttribute(
+        "data-send-state",
+        "sending",
+      );
+      await expect(group.getByRole("button", { name: "Retry queued message" })).toHaveCount(0);
       await expect(group).toBeVisible();
       await expect.poll(async () => (await gateway.getRequests("chat.send")).length).toBe(2);
       const sends = await gateway.getRequests("chat.send");
@@ -691,6 +701,7 @@ suite.define(() => {
       );
       expect(retryRunId).not.toBe(firstRunId);
       await gateway.resolveDeferred("chat.send", { runId: retryRunId, status: "started" });
+      await expect(group.locator(".chat-send-status")).toHaveCount(0);
     });
   });
 

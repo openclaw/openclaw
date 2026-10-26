@@ -132,11 +132,7 @@ export const handleToolsCommand: CommandHandler = async (params, allowTextComman
   }
 
   try {
-    const effectiveAccountId = resolveChannelAccountId({
-      cfg: params.cfg,
-      ctx: params.ctx,
-      command: params.command,
-    });
+    const effectiveAccountId = resolveChannelAccountId(params);
     const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
     const sessionBound = Boolean(params.sessionKey);
     const threadingContext = buildThreadingToolContext({
@@ -204,11 +200,7 @@ export const handleStatusCommand: CommandHandler = defineAuthorizedTextCommand(
   },
   async (params, normalizedStatusCommand) => {
     if (normalizedStatusCommand === "/status plugins") {
-      const reply = await buildStatusPluginsReply({
-        cfg: params.cfg,
-        command: params.command,
-        workspaceDir: params.workspaceDir,
-      });
+      const reply = await buildStatusPluginsReply(params);
       return commandReply(reply);
     }
     if (normalizedStatusCommand.startsWith("/status ")) {

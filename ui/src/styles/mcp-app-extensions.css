@@ -16,7 +16,10 @@
   gap: 8px;
   padding-block: 8px;
 }
-.mcp-app-catalog__entry {
+.mcp-app-catalog__entry,
+.mcp-app-panel__toolbar,
+.mcp-app-resources__search,
+.mcp-app-context__header {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
@@ -32,14 +35,6 @@
   flex-direction: column;
   min-height: 240px;
   gap: 12px;
-}
-.mcp-app-panel__toolbar,
-.mcp-app-resources__search,
-.mcp-app-context__header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
 }
 .mcp-app-panel__toolbar strong {
   flex: 1;

@@ -115,7 +115,7 @@ describe("bootstrap publication atomicity", () => {
     expect(await listTempSiblings(tempDir)).toEqual([]);
   });
 
-  it("keeps a safe reader on the complete single-link file", async () => {
+  it("rejects observable two-link reads and publishes complete single-link bytes", async () => {
     const realLink = syncFs.linkSync.bind(syncFs);
     let concurrentRead: ReturnType<typeof workspace.loadWorkspaceBootstrapFiles> | undefined;
     vi.spyOn(syncFs, "linkSync").mockImplementation((source, target) => {
@@ -127,9 +127,20 @@ describe("bootstrap publication atomicity", () => {
     if (!concurrentRead) {
       throw new Error("concurrent reader was not started");
     }
-    const agents = (await concurrentRead).find((file) => file.name === DEFAULT_AGENTS_FILENAME);
-    expect(agents).toMatchObject({ content: "COMPLETE\n", missing: false });
+    const intervalAgents = (await concurrentRead).find(
+      (file) => file.name === DEFAULT_AGENTS_FILENAME,
+    );
+    // Windows removes the staging link synchronously before this async read resumes.
+    expect(intervalAgents).toMatchObject({
+      content:
+        process.platform === "win32" ? "COMPLETE\n" : "[UNREADABLE: path must not be hardlinked]",
+      missing: false,
+    });
     expect((await fs.lstat(agentsPath)).nlink).toBe(1);
+    const settledAgents = (await workspace.loadWorkspaceBootstrapFiles(tempDir)).find(
+      (file) => file.name === DEFAULT_AGENTS_FILENAME,
+    );
+    expect(settledAgents).toMatchObject({ content: "COMPLETE\n", missing: false });
   });
 
   it("publishes complete bootstrap bytes without hard-link support", async () => {

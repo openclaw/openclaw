@@ -80,6 +80,7 @@ export async function prepareToolCallExecution(
   };
   const closeUpdates = () => {
     acceptingUpdates = false;
+    scopedExecutionContext.pendingInput = undefined;
     pendingInput = undefined;
     for (const release of inputSubscriptions) {
       release();

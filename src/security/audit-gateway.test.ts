@@ -1,6 +1,13 @@
-import { describe, expect, it } from "vitest";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { createConfigIO } from "../config/io.js";
 import { collectGatewayConfigFindings } from "./audit-gateway-config.js";
+import { runSecurityAuditCore } from "./audit.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function collect(cfg: OpenClawConfig, sourceConfig = cfg, env: NodeJS.ProcessEnv = {}) {
   return collectGatewayConfigFindings(cfg, sourceConfig, env);
@@ -13,6 +20,47 @@ function lan(auth: NonNullable<OpenClawConfig["gateway"]>["auth"]): OpenClawConf
 }
 
 describe("security audit gateway config findings", () => {
+  it.each([
+    ["env references", "${AUDIT_SECRET}", false],
+    ["literal secret", "synthetic-audit-secret", true],
+    ["escaped reference", "$${AUDIT_SECRET}", true],
+  ] as const)("audits loaded %s by authored provenance", async (_name, value, stored) => {
+    const stateDir = tempDirs.make("openclaw-audit-env-");
+    const configPath = path.join(stateDir, "openclaw.json");
+    const env = { OPENCLAW_STATE_DIR: stateDir, AUDIT_SECRET: "synthetic-audit-secret" };
+    await fs.writeFile(
+      configPath,
+      JSON.stringify({
+        gateway: { auth: { mode: "password", password: value } },
+        hooks: { enabled: true, token: value },
+      }),
+    );
+    const snapshot = await createConfigIO({
+      configPath,
+      env,
+      homedir: () => stateDir,
+      pluginValidation: "core-only",
+      shellEnvFallback: "defer",
+      observe: false,
+    }).readConfigFileSnapshot();
+    expect(snapshot.valid).toBe(true);
+    const report = await runSecurityAuditCore({
+      config: snapshot.config,
+      sourceConfig: snapshot.sourceConfig,
+      configPath,
+      stateDir,
+      env,
+      workspaceDir: stateDir,
+      includeFilesystem: false,
+    });
+    for (const checkId of [
+      "config.secrets.gateway_password_in_config",
+      "config.secrets.hooks_token_in_config",
+    ]) {
+      expect(report.findings.some((entry) => entry.checkId === checkId)).toBe(stored);
+    }
+  });
+
   it("does not allow Tailscale auth outside loopback", () => {
     const cfg: OpenClawConfig = {
       gateway: {

@@ -24,8 +24,8 @@ suite.define(() => {
         ].map((file) => controlUiE2eBuiltModuleRequest(`ui/src/pages/chat/components/${file}`));
         const mediaRequests = () =>
           requested.filter((path) => mediaModules.some((module) => module.test(path)));
-        const swarmModule = controlUiE2eBuiltModuleRequest(
-          "ui/src/pages/chat/components/chat-delegation.tsx",
+        const subagentActivityModule = controlUiE2eBuiltModuleRequest(
+          "ui/src/pages/chat/components/chat-subagent-activity-live.tsx",
         );
         const activityPillsModule = controlUiE2eBuiltModuleRequest(
           "ui/src/pages/chat/components/chat-activity-pills.tsx",
@@ -55,7 +55,7 @@ suite.define(() => {
         expect(iconRequests()).toEqual([]);
         expect(loginRequests()).toEqual([]);
         expect(mediaRequests()).toEqual([]);
-        expect(requested.filter((path) => swarmModule.test(path))).toEqual([]);
+        expect(requested.filter((path) => subagentActivityModule.test(path))).toEqual([]);
 
         const imageMessage = {
           role: "assistant",
@@ -116,7 +116,7 @@ suite.define(() => {
         await page.locator('.agent-chat__composer-shell[data-mobile-composer="true"]').waitFor();
         await page.waitForLoadState("networkidle");
         expect(requested.filter((path) => activityPillsModule.test(path))).toEqual([]);
-        expect(requested.filter((path) => swarmModule.test(path))).toEqual([]);
+        expect(requested.filter((path) => subagentActivityModule.test(path))).toEqual([]);
         await page.goto(`${suite.server.baseUrl}new`);
         await gateway.waitForRequest("connect");
         await gateway.resolveDeferred("connect");

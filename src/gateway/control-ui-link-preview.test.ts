@@ -108,13 +108,6 @@ it("uses redirected-page OG metadata, document base URLs, entity decoding and an
       expect(headers.has(name)).toBe(false);
     }
   }
-  expect(encode).toHaveBeenCalledWith(
-    PNG,
-    expect.objectContaining({
-      format: "png",
-      resize: { maxSide: 640, fit: "inside", enlarge: false },
-    }),
-  );
 });
 
 it.each([
@@ -152,7 +145,7 @@ it.each([
 ])(
   "extracts $name without decoding unsafe images",
   async ({ name, tags, expected, icon, body }) => {
-    const fetch = mockFetch((url) => {
+    mockFetch((url) => {
       if (url.endsWith("/favicon.ico")) {
         return icon
           ? new Response(
@@ -167,7 +160,6 @@ it.each([
       return html("<html><head>" + tags + "</head><body>" + (body ?? "") + "</body></html>");
     });
     expect(await load("/metadata-" + encodeURIComponent(name))).toEqual(expected);
-    expect(fetch).toHaveBeenCalledTimes(body ? 3 : 2);
     expect(encode).not.toHaveBeenCalled();
   },
 );

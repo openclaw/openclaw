@@ -10,6 +10,7 @@ export const WorkerWorkspaceGitHistorySchema = workerProtocolObject({
   baseCommit: z.string().regex(/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u),
   headCommit: z.string().regex(/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u),
   descendsFromBase: z.boolean(),
+  unavailableReason: z.string().max(512).optional(),
 });
 export type WorkerWorkspaceGitHistory = z.infer<typeof WorkerWorkspaceGitHistorySchema>;
 

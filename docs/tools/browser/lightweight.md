@@ -38,9 +38,12 @@ the Lightpanda engine. Existing profiles and engine configuration are unchanged.
 ## Licensing and distribution
 
 OpenClaw's adapter remains MIT-licensed. The optional Lightpanda engine is
-**AGPL-3.0-or-later**, not MIT: see its
+**AGPL**, not MIT. Version 1.0.2 has inconsistent declarations: its
+[licensing document](https://github.com/lightpanda-io/browser/blob/c5f7bb29b127040c899d4e181b5709f76fc71a6f/LICENSING.md)
+says `AGPL-3.0-only`, while its
 [pinned source notice](https://github.com/lightpanda-io/browser/blob/c5f7bb29b127040c899d4e181b5709f76fc71a6f/src/main.zig#L1)
-and [license](https://github.com/lightpanda-io/browser/blob/c5f7bb29b127040c899d4e181b5709f76fc71a6f/LICENSE).
+allows later versions. Record that discrepancy during your SBOM review; neither
+interpretation makes the engine permissively licensed.
 The existing Playwright client is Apache-2.0; the existing `ws` client is MIT.
 Their licenses and third-party notices still apply.
 
@@ -121,7 +124,8 @@ the official container image has Linux amd64 and arm64 variants.
 From the repository root:
 
 ```sh
-docker compose -f deploy/lightpanda/compose.yaml -f deploy/lightpanda/compose.host.yaml up -d
+docker compose -f deploy/lightpanda/compose.yaml -f deploy/lightpanda/compose.host.yaml up -d --wait
+docker compose -f deploy/lightpanda/compose.yaml -f deploy/lightpanda/compose.host.yaml ps
 docker compose -f deploy/lightpanda/compose.yaml -f deploy/lightpanda/compose.host.yaml exec lightpanda /bin/lightpanda version
 ```
 
@@ -129,6 +133,21 @@ The sample publishes CDP on `127.0.0.1:9222` only. Set `LIGHTPANDA_PORT` to sele
 another host port, and update the profile URL to match. The image is pinned by its
 multi-platform digest, so Docker selects the host architecture without pulling a
 moving `latest` or `nightly` version.
+
+The healthcheck opens an independent local CDP WebSocket session and checks its
+handshake. This proves listener readiness, not successful browsing or OpenClaw
+integration. The sample leaves memory, CPU, and PID limits unset. Set limits for
+your measured workload in your deployment's Compose configuration, or use
+[`docker update`](https://docs.docker.com/reference/cli/docker/container/update/)
+with `--memory`, `--cpus`, and `--pids-limit` for an existing container.
+`restart: unless-stopped` restarts a crashed engine but does not restart a
+still-running unhealthy container. Monitor unhealthy status and replace failed
+workers through your deployment's supervisor. Restarting loses that worker's
+page/login state; do not automatically replay clicks or submissions.
+
+The stop signal is `SIGTERM`, with a 10-second grace period, overriding the
+upstream image's immediate `SIGKILL`. This is a single-worker example, not a
+high-availability service or transparent failover guarantee.
 
 CDP gives a client control over the browser; the sample does not add CDP
 authentication. Do not change the loopback binding to a public address. Use an
@@ -145,7 +164,7 @@ docker compose -f deploy/lightpanda/compose.yaml -f deploy/lightpanda/compose.ho
 Merge the sidecar into the repository's existing Compose project:
 
 ```sh
-docker compose -f docker-compose.yml -f deploy/lightpanda/compose.yaml up -d lightpanda
+docker compose -f docker-compose.yml -f deploy/lightpanda/compose.yaml up -d --wait lightpanda
 ```
 
 Configure the OpenClaw Gateway with `cdpUrl: "ws://lightpanda:9222"` in the profile
@@ -371,7 +390,7 @@ container/binary version separately with the report. A Windows Node controller
 can use the same external-engine interface, but Windows Docker runtime behavior
 has not been verified for this sample.
 
-Compare the same fixed tasks with a pinned Chromium baseline. Record
+Compare the same deterministic tasks with a pinned Chromium baseline. Record
 task completion before reporting speed or memory improvements; unsupported or
 failed work must not be counted as a successful fast result. Report warm and
 cold runs separately, engine versions, host OS/architecture, client overhead,

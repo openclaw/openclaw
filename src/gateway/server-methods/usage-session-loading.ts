@@ -33,7 +33,7 @@ export type UsageSessionSummaryTarget = {
 
 const USAGE_AGENT_LOAD_CONCURRENCY = 12;
 const USAGE_REPORT_PUBLICATION_WAIT_MS = 100;
-const USAGE_REPORT_INITIAL_BATCH_SIZE = 256;
+const USAGE_REPORT_BATCH_SIZE = 256;
 
 export async function runUsageAgentTasks<T>(tasks: Array<() => Promise<T>>): Promise<T[]> {
   const result = await runTasksWithConcurrency({
@@ -71,7 +71,8 @@ export async function discoverAllSessionsForUsage(params: {
         return sessions.map((session) => Object.assign({}, session, { agentId }));
       }),
     );
-    return discovered.flat().toSorted((a, b) => b.mtime - a.mtime);
+    // oxlint-disable-next-line unicorn/no-array-sort -- flat returns a fresh, private array.
+    return discovered.flat().sort((a, b) => b.mtime - a.mtime);
   });
 }
 
@@ -147,10 +148,8 @@ export async function loadUsageSessionSummaries(params: {
       let usage: ReturnType<typeof createSessionCostSummaryAccumulator> | undefined;
       let reportBudgetBytes: number | undefined;
       for (let offset = 0; offset < agentSessions.length;) {
-        const batch = agentSessions.slice(
-          offset,
-          offset === 0 ? USAGE_REPORT_INITIAL_BATCH_SIZE : undefined,
-        );
+        // Concurrent reports share the worker pool's input-byte budget.
+        const batch = agentSessions.slice(offset, offset + USAGE_REPORT_BATCH_SIZE);
         const loaded = await params.read(
           () =>
             loadSessionCostSummariesFromCache({
@@ -238,8 +237,7 @@ export function withUsageRequestBudget(
       caller.beginClose(parent.reason);
       data.beginClose(parent.reason);
     };
-    const timer = setTimeout(() => data.beginClose(exhausted), 15_000);
-    timer.unref?.();
+    const timer = setTimeout(() => data.beginClose(exhausted), 15_000).unref();
     parent.addEventListener("abort", cancel, { once: true });
     if (parent.aborted) {
       cancel();

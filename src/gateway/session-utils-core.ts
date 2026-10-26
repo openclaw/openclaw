@@ -174,11 +174,7 @@ export function resolveSessionChildController(
   entry: SessionEntry,
   parentSessionKey?: string,
 ): string | undefined {
-  const agentId = parseAgentSessionKey(key)?.agentId;
-  if (
-    !agentId ||
-    (parentSessionKey && ![entry.parentSessionKey, entry.spawnedBy].includes(parentSessionKey))
-  ) {
+  if (parentSessionKey && ![entry.parentSessionKey, entry.spawnedBy].includes(parentSessionKey)) {
     return undefined;
   }
   const run = getLatestLiveSubagentRunByChildSessionKey(
@@ -186,13 +182,26 @@ export function resolveSessionChildController(
     (candidate) =>
       (isSubagentRunLive(candidate) || isSubagentRunQueued(candidate)) &&
       resolveSubagentChildAuthority(candidate, entry).status !== "mismatch",
-    agentId,
   );
   return (
     normalizeOptionalString(run?.controllerSessionKey) ??
     normalizeOptionalString(run?.requesterSessionKey)
   );
 }
+
+/** Promotion cuts navigation activity, not a live controller's ownership. */
+export function shouldPropagateChildActivity(
+  key: string,
+  entry: SessionEntry,
+  ownerSessionKey: string,
+): boolean {
+  return (
+    entry.sidebarRoot !== true ||
+    parseAgentSessionKey(key)?.rest.startsWith("subagent:") === true ||
+    resolveSessionChildController(key, entry) === ownerSessionKey
+  );
+}
+
 const sessionChildOwners = new WeakMap<
   SessionEntry,
   {
@@ -213,30 +222,31 @@ export function resolveSessionChildOwners(params: {
   hasActiveRun?: boolean;
 }): readonly string[] {
   const { key, entry, now, subagentRuns } = params;
-  const latest = subagentRuns.getDisplaySubagentRun(key);
-  const keep =
-    params.hasActiveRun ||
-    (latest
-      ? shouldKeepSubagentRunChildLink(latest, {
-          activeDescendants: subagentRuns.countActiveDescendantRuns(key),
-          now,
-        })
-      : shouldKeepStoreOnlyChildLink(entry, now));
   const parsed = params.parsedKey === undefined ? parseAgentSessionKey(key) : params.parsedKey;
   const native =
     !entry.acp &&
     !parsed?.rest.startsWith("acp:") &&
     (parsed?.rest.startsWith("subagent:") ||
       (Boolean(entry.spawnedBy) && (entry.spawnDepth ?? 0) > 0));
-  const controller = resolveSessionChildController(key, entry);
   // Native lineage is a durable relationship, not a retained-run lease. Saved
   // dashboard navigation keeps its existing lifetime. Other store-only rows
   // retain the bounded fallback rather than acquiring permanent authority.
+  let keep = native || params.hasActiveRun;
+  if (!keep) {
+    const latest = subagentRuns.getDisplaySubagentRun(key);
+    keep = latest
+      ? shouldKeepSubagentRunChildLink(latest, {
+          activeDescendants: subagentRuns.countActiveDescendantRuns(key),
+          now,
+        })
+      : shouldKeepStoreOnlyChildLink(entry, now);
+  }
+  const controller = resolveSessionChildController(key, entry);
   const explicitParent =
-    native || keep || parsed?.rest.startsWith("dashboard:")
+    keep || parsed?.rest.startsWith("dashboard:")
       ? normalizeOptionalString(entry.parentSessionKey)
       : undefined;
-  const spawner = native || keep ? normalizeOptionalString(entry.spawnedBy) : undefined;
+  const spawner = keep ? normalizeOptionalString(entry.spawnedBy) : undefined;
   // Modern explicit lineage remains readable during foreign control. Legacy
   // spawnedBy-only facts yield to a verified active controller. Neither grants
   // permission to take over that execution (delivery checks the current owner).

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, expect, it, vi } from "vitest";
+import { createPluginDeclaredSurface } from "../../test/helpers/plugin-declared-surface.js";
 import * as installRecordMap from "../config/plugin-install-record-map.js";
 import * as safeRegex from "../security/safe-regex.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex as recordsFrom } from "./installed-plugin-index-install-records.js";
@@ -57,18 +58,9 @@ it("indexes canonical transcript sources and retained legacy installed-index con
 it("prepares immutable ownership and install records once while preserving policy and caller copies", () => {
   withPluginCache(createPluginCache(), () => {
     const snapshot = createSnapshot();
-    const acceptedSurface = {
+    const acceptedSurface = createPluginDeclaredSurface({
       channels: ["fixture-channel"],
-      providers: [],
-      tools: [],
-      contracts: [],
-      hooks: [],
-      mcpServers: [],
-      cliCommands: [],
-      cliBackends: [],
-      skills: [],
-      dangerousConfigFlags: [],
-    };
+    });
     assert(snapshot.index.installRecords.alpha);
     snapshot.index.installRecords.alpha.acceptedSurface = acceptedSurface;
     finalizePluginMetadataSnapshot(snapshot);

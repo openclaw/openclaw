@@ -11,8 +11,7 @@ import {
   SettingsToggle,
 } from "../../components/solid/settings-ui.tsx";
 import { registerLogsEnglish } from "../../i18n/locales/en-logs.ts";
-import { createMsFormatter } from "../../lib/format.ts";
-import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { getLocale, registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { LOG_LEVELS, type LogEntry, type LogLevel } from "./log-lines.ts";
 
 registerEnglishCatalog(registerLogsEnglish);
@@ -41,12 +40,12 @@ export type LogsProps = {
   onScroll: JSX.EventHandler<HTMLDivElement, Event>;
 };
 
-function formatLogTime(value: string | null | undefined, formatTime: (ms: number) => string) {
+function formatLogTime(value: string | null | undefined, formatter: Intl.DateTimeFormat) {
   if (!value) {
     return "";
   }
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : formatTime(date.getTime());
+  return Number.isNaN(date.getTime()) ? value : formatter.format(date.getTime());
 }
 
 export function LogsView(props: LogsProps) {
@@ -80,14 +79,20 @@ export function LogsView(props: LogsProps) {
       ).includes(needle());
     }),
   );
-  // A visible-row update also picks up system timezone changes without a formatter per row.
-  const display = createMemo(() => {
-    t("gatewayLogs.title");
-    return {
-      entries: filtered(),
-      formatTime: createMsFormatter({ timeStyle: "short" }),
-    };
-  });
+  // Check system timezone on row updates without invalidating unchanged rows' timestamps.
+  const timeFormatter = createMemo(
+    () => {
+      filtered();
+      return new Intl.DateTimeFormat(getLocale(), { timeStyle: "short" });
+    },
+    {
+      equals: (previous, next) => {
+        const before = previous.resolvedOptions();
+        const after = next.resolvedOptions();
+        return before.locale === after.locale && before.timeZone === after.timeZone;
+      },
+    },
+  );
   const exportFileLabel = () =>
     needle() || LOG_LEVELS.some((level) => !props.levelFilters[level]) ? "filtered" : "visible";
 
@@ -196,13 +201,10 @@ export function LogsView(props: LogsProps) {
               <Loading fallback={<LoadingState />}>{loading() ? <LoadingState /> : null}</Loading>
             }
           >
-            <For
-              each={display().entries}
-              fallback={<SettingsEmpty message={t("gatewayLogs.empty")} />}
-            >
+            <For each={filtered()} fallback={<SettingsEmpty message={t("gatewayLogs.empty")} />}>
               {(entry) => (
                 <div class="log-row">
-                  <div class="log-time mono">{formatLogTime(entry.time, display().formatTime)}</div>
+                  <div class="log-time mono">{formatLogTime(entry.time, timeFormatter())}</div>
                   <div class={["log-level", entry.level ?? ""]}>{entry.level ?? ""}</div>
                   <div class="log-subsystem mono">{entry.subsystem ?? ""}</div>
                   <div class="log-message mono">{entry.message ?? entry.raw}</div>

@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { configureAiTransportHost } from "../host.js";
 import { createOpenAICompletionsTransportStreamFn } from "../transports/openai-completions-transport.js";
 import { createOpenAIResponsesTransportStreamFn } from "../transports/openai-responses-transport.js";
+import { completedResponse } from "../transports/openai-stream-cases.test-support.js";
 import type { Context, Model, ModelThinkingLevel } from "../types.js";
 import { streamOpenAICompletions, streamSimpleOpenAICompletions } from "./openai-completions.js";
 import { makeOpenAIProviderModel } from "./openai-provider.test-support.js";
@@ -215,10 +216,7 @@ describe.each([
                   },
                 ],
               }
-            : {
-                type: "response.completed",
-                response: { id: "reply", status: "completed", output: [] },
-              };
+            : completedResponse("reply", []);
         return new Response(`data: ${JSON.stringify(event)}\n\ndata: [DONE]\n\n`, {
           headers: { "content-type": "text/event-stream" },
         });

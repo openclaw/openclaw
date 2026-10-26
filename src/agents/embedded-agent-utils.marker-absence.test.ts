@@ -1,10 +1,11 @@
 import { afterAll, beforeEach, expect, it, vi } from "vitest";
+import * as markdownCodeRegions from "../../packages/markdown-core/src/markdown-code-regions.js";
+import * as markdownOwnership from "../../packages/markdown-core/src/reasoning-tag-parser.js";
+import * as reasoningSyntax from "../../packages/markdown-core/src/reasoning-tag-syntax.js";
 import * as inboundMetadata from "../auto-reply/reply/strip-inbound-meta.js";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "../plugin-sdk/message-tool-delivery-hints.js";
 import { assistantVisibleTextFilters } from "../shared/text/assistant-visible-text.js";
-import * as finalTags from "../shared/text/final-tags.js";
-import * as reasoningTags from "../shared/text/reasoning-tags.js";
-import { createTextProjection } from "../shared/text/text-projection.js";
+import { createTextProjection, trimTextPreservingCode } from "../shared/text/text-projection.js";
 import {
   sanitizeUserFacingText,
   userFacingTextFilters,
@@ -14,15 +15,21 @@ import {
   sanitizeAssistantVisibleStreamText,
 } from "./embedded-agent-utils.js";
 
-// Filter arrays cache their transforms, so keep the same spies for the entire module.
-const reasoning = vi.spyOn(reasoningTags, "stripReasoningTagsFromText");
-const final = vi.spyOn(finalTags, "stripFinalTags");
+// Observe canonical work across imports, including both code-range entry points:
+// findMarkdownCodeSpans calls its local region binding without crossing an export spy.
+const reasoning = vi.spyOn(reasoningSyntax, "reduceReasoningText");
+const ownership = vi.spyOn(markdownOwnership, "parseMarkdownOwnership");
+const regions = vi.spyOn(markdownCodeRegions, "findMarkdownCodeRegions");
+const spans = vi.spyOn(markdownCodeRegions, "findMarkdownCodeSpans");
+const canonicalWork = [reasoning, ownership, regions, spans];
 const inbound = vi.spyOn(inboundMetadata, "stripInboundMetadata");
-const transforms = [reasoning, final, inbound];
-beforeEach(() => transforms.forEach((spy) => spy.mockClear()));
-afterAll(() => transforms.forEach((spy) => spy.mockRestore()));
+beforeEach(() => [...canonicalWork, inbound].forEach((spy) => spy.mockClear()));
+afterAll(() => [...canonicalWork, inbound].forEach((spy) => spy.mockRestore()));
 function characters(calls: ReadonlyArray<readonly [string, ...unknown[]]>) {
   return calls.reduce((sum, [text]) => sum + text.length, 0);
+}
+function processedCharacters() {
+  return canonicalWork.reduce((sum, spy) => sum + characters(spy.mock.calls), 0);
 }
 function appendChunks(stream: ReturnType<typeof createTextProjection>, text: string, size: number) {
   for (let offset = 0; offset < text.length; offset += size) {
@@ -37,8 +44,7 @@ it.each([undefined, "final_answer"] as const)(
     const stream = createAssistantVisibleStreamText(phase);
     appendChunks(stream, source, 4);
     expect(stream.text).toBe(source);
-    expect(characters(reasoning.mock.calls)).toBeLessThan(source.length * 2);
-    expect(characters(final.mock.calls)).toBeLessThan(source.length * 2);
+    expect(processedCharacters()).toBeLessThan(source.length * 2);
   },
 );
 
@@ -50,10 +56,12 @@ it.each(["<think>hidden</think>Done.", "<final>Done.</final>"])(
     const stream = createAssistantVisibleStreamText();
     appendChunks(stream, prefix, 4);
     stream.append(marker);
-    const processedCharacters = characters([...reasoning.mock.calls, ...final.mock.calls]);
     expect(stream.text).toBe(prefix + "Done.");
-    expect(processedCharacters).toBeGreaterThan(0);
-    expect(processedCharacters).toBeLessThan(source.length * 8);
+    if (marker.startsWith("<think>")) {
+      expect(characters(reasoning.mock.calls)).toBeGreaterThan(0);
+    }
+    // A final-only marker can be removed without reasoning reduction or a Markdown parse.
+    expect(processedCharacters()).toBeLessThan(source.length * 8);
   },
 );
 
@@ -79,9 +87,7 @@ it("keeps marker probes and checkpoint deltas bounded after stripping a trace", 
   expect(delivered).toBe(answer);
   expect(comparedCharacters).toBeGreaterThan(0);
   expect(comparedCharacters).toBeLessThan(source.length * 64);
-  expect(characters([...reasoning.mock.calls, ...final.mock.calls])).toBeLessThan(
-    source.length * 4,
-  );
+  expect(processedCharacters()).toBeLessThan(source.length * 4);
 });
 
 it.each([
@@ -178,33 +184,45 @@ it.each(["[docs](https://example.com) ", "Context: "])(
 
 it.each([
   "[Mon 2026-10-24 12:34 UTC] Visible answer",
-  `${MESSAGE_TOOL_DELIVERY_HINTS[0]}\nVisible answer`,
+  ...MESSAGE_TOOL_DELIVERY_HINTS.map((hint) => `${hint}\nVisible answer`),
   `[Mon 2026-10-24 12:34 ${"long timezone ".repeat(16)}] Visible answer`,
   "[docs](https://example.com)\nContext: ordinary prose",
+  "[^note]: Ordinary footnote\nInline Context: prose",
   "\n\tContext: \t\r\n<active_memory_plugin>\nPrivate context\n</active_memory_plugin>\n\nVisible answer",
   'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"id":"synthetic"}\n```\n\nVisible answer',
+  ...["\u2028", "\u2029"].flatMap((boundary) => [
+    `Before.\n${boundary}Context:\n<active_memory_plugin>\nPrivate context\n</active_memory_plugin>\n\nVisible answer`,
+    `Before.\nContext:${boundary}\n<active_memory_plugin>\nPrivate context\n</active_memory_plugin>\n\nVisible answer`,
+  ]),
 ])("preserves canonical inbound filtering across every split: %s", (source) => {
-  const inboundFilter = userFacingTextFilters(false, true).find(
-    (filter) => filter.transform === inboundMetadata.stripInboundMetadata,
-  );
-  if (!inboundFilter) {
-    throw new Error("Missing inbound metadata stage in the shipping text pipeline.");
-  }
-  const stream = createTextProjection([inboundFilter]);
-  for (const initial of ["", source.slice(0, 7)]) {
-    stream.replace(initial);
-    let prefix = initial;
-    for (const char of source.slice(initial.length)) {
-      const previous = stream.text;
-      prefix += char;
-      const result = stream.append(char);
-      const expected = inboundMetadata.stripInboundMetadata(prefix);
-      expect(result.text, JSON.stringify(prefix)).toBe(expected);
-      expect(result.delta === null ? result.text : previous + result.delta).toBe(expected);
+  const stream = createAssistantVisibleStreamText("final_answer");
+  const expected = new Map<number, string>();
+  const chunkings = [
+    ...Array.from({ length: source.length + 1 }, (_, split) => [
+      source.slice(0, split),
+      source.slice(split),
+    ]),
+    source.split(""),
+    Array.from({ length: Math.ceil(source.length / 4) }, (_, index) =>
+      source.slice(index * 4, index * 4 + 4),
+    ),
+  ];
+  for (const chunks of chunkings) {
+    stream.replace("");
+    let prefix = "";
+    let delivered = "";
+    for (const chunk of chunks) {
+      prefix += chunk;
+      const result = stream.append(chunk);
+      delivered = result.delta === null ? result.text : delivered + result.delta;
+      const canonical =
+        expected.get(prefix.length) ??
+        trimTextPreservingCode(sanitizeAssistantVisibleStreamText(prefix, "final_answer"));
+      expected.set(prefix.length, canonical);
+      expect(result.text, JSON.stringify(prefix)).toBe(canonical);
+      expect(delivered).toBe(canonical);
     }
   }
-  stream.replace("");
-  expect(stream.append(source).text).toBe(inboundMetadata.stripInboundMetadata(source));
   stream.replace("[ordinary] Context: literal");
   expect(stream.append(" answer").text).toBe("[ordinary] Context: literal answer");
 });

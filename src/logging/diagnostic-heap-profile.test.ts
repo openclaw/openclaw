@@ -93,6 +93,15 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
+it("reports an unavailable inspector method as unsupported heap sampling", async () => {
+  native.post.mockRejectedValue(
+    new Error("Inspector error -32601: 'HeapProfiler.enable' wasn't found"),
+  );
+  expect(await capture()).toMatchObject({ status: "unavailable", reason: "unsupported" });
+  const { collectRuntimeCapabilities } = await import("../infra/runtime-capabilities.js");
+  expect(collectRuntimeCapabilities().capabilities.heapSampling.state).toBe("unavailable");
+});
+
 describe("diagnostic heap profile owner", () => {
   it("preserves the sanitized bytes of a recorded synthetic native profile", async () => {
     const { sanitizeDiagnosticHeapProfile } = await import("./diagnostic-heap-profile.js");

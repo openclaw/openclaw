@@ -206,107 +206,6 @@ export function createTelegramMessagePipeline({
     return { process: true, claims: claim.kind === "claimed" ? [claim.handle] : [] };
   };
 
-  const resolveReplyMediaForChain = async (
-    ctx: TelegramContext,
-    chain: TelegramCachedMessageNode[],
-    shouldHydrateMedia: (
-      sender: Pick<TelegramReplyChainEntry, "senderId">,
-      index: number,
-    ) => Promise<boolean>,
-    durableMediaReplay: boolean,
-    ...participantSignals: AbortSignal[]
-  ): Promise<{ replyMedia: TelegramMediaRef[]; replyChain: TelegramReplyChainEntry[] }> => {
-    const mediaRuntime = resolveMediaRuntime(...participantSignals);
-    const replyMedia: TelegramMediaRef[] = [];
-    const replyChain: TelegramReplyChainEntry[] = [];
-    const hydrateMedia = async (
-      sourceMessage: Parameters<typeof resolveMedia>[0]["ctx"]["message"],
-      replyFileId: string,
-      node?: TelegramCachedMessageNode,
-    ): Promise<TelegramMediaRef | undefined> => {
-      let mediaRef: TelegramMediaRef | undefined;
-      try {
-        mediaRuntime.abortSignal?.throwIfAborted();
-        const retainedMedia = resolveRetainedTelegramMedia({
-          media: node?.resolvedMedia,
-          sourceMessage,
-          maxBytes: mediaMaxBytes,
-          ttlHours: cfg.attachments?.ttlHours,
-        });
-        if (retainedMedia) {
-          return retainedMedia;
-        }
-        const media = await resolveMedia({
-          ctx: {
-            message: sourceMessage,
-            me: ctx.me,
-            getFile: async (signal) => await bot.api.getFile(replyFileId, signal),
-          },
-          maxBytes: mediaMaxBytes,
-          ...mediaRuntime,
-        });
-        if (!media) {
-          return undefined;
-        }
-        mediaRef = {
-          path: media.path,
-          kind: media.kind,
-          ...(media.contentType ? { contentType: media.contentType } : {}),
-          ...(media.fileName ? { fileName: media.fileName } : {}),
-          ...(media.stickerMetadata ? { stickerMetadata: media.stickerMetadata } : {}),
-        };
-        if (node) {
-          await recordReplyMessageResolvedMedia({
-            chatId: node.sourceMessage.chat.id,
-            messageId: node.messageId,
-            media,
-            botUserId: ctx.me?.id,
-          });
-        }
-      } catch (err) {
-        // Only durable ingress can replay a reply-media abort. Live polling must
-        // preserve the current text instead of acknowledging it without dispatch.
-        if (mediaRuntime.abortSignal?.aborted && durableMediaReplay) {
-          recordTelegramMessageProcessingResult({ kind: "failed-retryable", error: err });
-          throw err;
-        }
-        logger.warn(
-          { chatId: ctx.message.chat.id, error: String(err) },
-          "reply media fetch failed",
-        );
-      }
-      return mediaRef;
-    };
-    for (const [index, node] of chain.entries()) {
-      const replyFileId = resolveTelegramPrimaryMedia(node.sourceMessage)?.fileRef.file_id;
-      const mediaRef =
-        replyFileId && (await shouldHydrateMedia(node, index))
-          ? await hydrateMedia(node.sourceMessage, replyFileId, node)
-          : undefined;
-      if (mediaRef) {
-        replyMedia.push(mediaRef);
-      }
-      replyChain.push(toReplyChainEntry(node, ctx, mediaRef));
-    }
-    // An explicit external reply belongs to this turn, not to the current chat's cache.
-    const externalReply =
-      chain.length === 0 && !ctx.message.reply_to_message ? ctx.message.external_reply : undefined;
-    const externalFileId = resolveTelegramPrimaryMedia(externalReply)?.fileRef.file_id;
-    const externalTarget = externalFileId ? describeReplyTarget(ctx.message) : null;
-    if (
-      externalReply &&
-      externalFileId &&
-      externalTarget &&
-      (await shouldHydrateMedia(externalTarget, 0))
-    ) {
-      const mediaRef = await hydrateMedia(externalReply, externalFileId);
-      if (mediaRef) {
-        replyMedia.push(mediaRef);
-      }
-    }
-    return { replyMedia, replyChain };
-  };
-
   const processMessageWithReplyChain = async (params: {
     ctx: TelegramContext;
     msg: Message;
@@ -457,14 +356,100 @@ export function createTelegramMessagePipeline({
           senderAllowed,
         }).include;
       };
-      const { replyMedia, replyChain } = await resolveReplyMediaForChain(
-        params.ctx,
-        replyChainNodes,
-        shouldHydrateReplyMedia,
-        durableMediaReplay,
+      const replyCtx = params.ctx;
+      const mediaRuntime = resolveMediaRuntime(
         ...spooledReplayParticipants.map((participant) => participant.abortSignal),
         ...(params.spooledReplayAbortSignal ? [params.spooledReplayAbortSignal] : []),
       );
+      const replyMedia: TelegramMediaRef[] = [];
+      const replyChain: TelegramReplyChainEntry[] = [];
+      const hydrateMedia = async (
+        sourceMessage: Parameters<typeof resolveMedia>[0]["ctx"]["message"],
+        replyFileId: string,
+        node?: TelegramCachedMessageNode,
+      ): Promise<TelegramMediaRef | undefined> => {
+        let mediaRef: TelegramMediaRef | undefined;
+        try {
+          mediaRuntime.abortSignal?.throwIfAborted();
+          const retainedMedia = resolveRetainedTelegramMedia({
+            media: node?.resolvedMedia,
+            sourceMessage,
+            maxBytes: mediaMaxBytes,
+            ttlHours: cfg.attachments?.ttlHours,
+          });
+          if (retainedMedia) {
+            return retainedMedia;
+          }
+          const media = await resolveMedia({
+            ctx: {
+              message: sourceMessage,
+              me: replyCtx.me,
+              getFile: async (signal) => await bot.api.getFile(replyFileId, signal),
+            },
+            maxBytes: mediaMaxBytes,
+            ...mediaRuntime,
+          });
+          if (!media) {
+            return undefined;
+          }
+          mediaRef = {
+            path: media.path,
+            kind: media.kind,
+            ...(media.contentType ? { contentType: media.contentType } : {}),
+            ...(media.fileName ? { fileName: media.fileName } : {}),
+            ...(media.stickerMetadata ? { stickerMetadata: media.stickerMetadata } : {}),
+          };
+          if (node) {
+            await recordReplyMessageResolvedMedia({
+              chatId: node.sourceMessage.chat.id,
+              messageId: node.messageId,
+              media,
+              botUserId: replyCtx.me?.id,
+            });
+          }
+        } catch (err) {
+          // Only durable ingress can replay a reply-media abort. Live polling must
+          // preserve the current text instead of acknowledging it without dispatch.
+          if (mediaRuntime.abortSignal?.aborted && durableMediaReplay) {
+            recordTelegramMessageProcessingResult({ kind: "failed-retryable", error: err });
+            throw err;
+          }
+          logger.warn(
+            { chatId: replyCtx.message.chat.id, error: String(err) },
+            "reply media fetch failed",
+          );
+        }
+        return mediaRef;
+      };
+      for (const [index, node] of replyChainNodes.entries()) {
+        const replyFileId = resolveTelegramPrimaryMedia(node.sourceMessage)?.fileRef.file_id;
+        const mediaRef =
+          replyFileId && (await shouldHydrateReplyMedia(node, index))
+            ? await hydrateMedia(node.sourceMessage, replyFileId, node)
+            : undefined;
+        if (mediaRef) {
+          replyMedia.push(mediaRef);
+        }
+        replyChain.push(toReplyChainEntry(node, replyCtx, mediaRef));
+      }
+      // An explicit external reply belongs to this turn, not to the current chat's cache.
+      const externalReply =
+        replyChainNodes.length === 0 && !replyCtx.message.reply_to_message
+          ? replyCtx.message.external_reply
+          : undefined;
+      const externalFileId = resolveTelegramPrimaryMedia(externalReply)?.fileRef.file_id;
+      const externalTarget = externalFileId ? describeReplyTarget(replyCtx.message) : null;
+      if (
+        externalReply &&
+        externalFileId &&
+        externalTarget &&
+        (await shouldHydrateReplyMedia(externalTarget, 0))
+      ) {
+        const mediaRef = await hydrateMedia(externalReply, externalFileId);
+        if (mediaRef) {
+          replyMedia.push(mediaRef);
+        }
+      }
       const promptContextMediaByMessageId = new Map<string, TelegramMediaRef>();
       const currentMessageId =
         typeof params.msg.message_id === "number" ? String(params.msg.message_id) : undefined;

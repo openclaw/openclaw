@@ -108,7 +108,7 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
         operation.outcome.phase === "starting" &&
         !operation.isCurrent()
       ) {
-        operation.outcome = { phase: "failed", error: t("chat.queue.deliveryUnconfirmed") };
+        operation.outcome = { phase: "failed", error: t("chat.taskSuggestions.startUnconfirmed") };
         this.setTaskSuggestionOperation(id, operation);
       }
     }

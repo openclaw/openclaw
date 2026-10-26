@@ -24,10 +24,16 @@ import {
 function createPayloadCapture(opts?: {
   initialReasoning?: unknown;
   payload?: () => Record<string, unknown>;
+  includeModel?: boolean;
 }) {
   const payloads: Array<Record<string, unknown>> = [];
+  const observedOptions: Array<Record<string, unknown>> = [];
   const baseStreamFn: StreamFn = (model, context, options) => {
-    const payload: Record<string, unknown> = { model: model.id, ...opts?.payload?.() };
+    observedOptions.push(options as Record<string, unknown>);
+    const payload: Record<string, unknown> = {
+      ...(opts?.includeModel === false ? {} : { model: model.id }),
+      ...opts?.payload?.(),
+    };
     if (opts?.initialReasoning !== undefined) {
       payload.reasoning = structuredClone(opts.initialReasoning);
     }
@@ -35,7 +41,7 @@ function createPayloadCapture(opts?: {
     payloads.push(structuredClone(payload));
     return createAssistantMessageEventStream();
   };
-  return { baseStreamFn, payloads };
+  return { baseStreamFn, payloads, observedOptions };
 }
 
 const codexModel = {
@@ -186,12 +192,8 @@ describe("createCodexNativeWebSearchWrapper", () => {
   it("keeps native_active web_search alongside the code mode tool surface", () => {
     vi.stubEnv("OPENCLAW_DEBUG_CODE_MODE", "1");
     const secretFixture = `sk-${"fixture".repeat(6)}`;
-    let observedOptions: Parameters<StreamFn>[2];
-    const payloads: Array<Record<string, unknown>> = [];
-    const baseStreamFn: StreamFn = (model, context, options) => {
-      observedOptions = options;
-      const payload: Record<string, unknown> = {
-        model: model.id,
+    const { baseStreamFn, payloads, observedOptions } = createPayloadCapture({
+      payload: () => ({
         tools: [
           { type: "function", name: "exec" },
           { type: "function", name: "wait" },
@@ -201,11 +203,8 @@ describe("createCodexNativeWebSearchWrapper", () => {
           { type: "file_search" },
           { type: secretFixture },
         ],
-      };
-      options?.onPayload?.(payload, model);
-      payloads.push(structuredClone(payload));
-      return createAssistantMessageEventStream();
-    };
+      }),
+    });
     const wrapped = createCodexNativeWebSearchWrapper(baseStreamFn, {
       config: {
         tools: {
@@ -249,8 +248,11 @@ describe("createCodexNativeWebSearchWrapper", () => {
       { type: "web_search" },
     ]);
     expect(
-      (observedOptions as { openclawCodeModeAllowedHostedToolTypes?: Set<string> } | undefined)
-        ?.openclawCodeModeAllowedHostedToolTypes,
+      (
+        observedOptions.at(-1) as
+          | { openclawCodeModeAllowedHostedToolTypes?: Set<string> }
+          | undefined
+      )?.openclawCodeModeAllowedHostedToolTypes,
     ).toEqual(new Set(["web_search"]));
     expect(logger.info).toHaveBeenCalledOnce();
     const diagnostic = String(logger.info.mock.calls[0]?.[0]);
@@ -389,21 +391,16 @@ describe("createCodexNativeWebSearchWrapper", () => {
   });
 
   it("does not authorize hosted search when runtime tool policy denies it in code mode", () => {
-    let observedOptions: Parameters<StreamFn>[2];
-    const payloads: Array<Record<string, unknown>> = [];
-    const baseStreamFn: StreamFn = (model, _context, options) => {
-      observedOptions = options;
-      const payload = {
+    const { baseStreamFn, payloads, observedOptions } = createPayloadCapture({
+      includeModel: false,
+      payload: () => ({
         tools: [
           { type: "function", name: "exec" },
           { type: "function", name: "wait" },
           { type: "web_search" },
         ],
-      };
-      options?.onPayload?.(payload, model);
-      payloads.push(structuredClone(payload));
-      return createAssistantMessageEventStream();
-    };
+      }),
+    });
     const wrapped = createCodexNativeWebSearchWrapper(baseStreamFn, {
       codeModeToolSurfaceEnabled: true,
       nativeWebSearchAllowedByToolPolicy: false,
@@ -417,21 +414,16 @@ describe("createCodexNativeWebSearchWrapper", () => {
       { type: "function", name: "wait" },
     ]);
     expect(
-      (observedOptions as { openclawCodeModeAllowedHostedToolTypes?: Set<string> } | undefined)
-        ?.openclawCodeModeAllowedHostedToolTypes,
+      (
+        observedOptions.at(-1) as
+          | { openclawCodeModeAllowedHostedToolTypes?: Set<string> }
+          | undefined
+      )?.openclawCodeModeAllowedHostedToolTypes,
     ).toEqual(new Set());
   });
 
   it("does not enable code-mode transport enforcement when config is on but controls are inactive", () => {
-    const observedOptions: Array<Record<string, unknown>> = [];
-    const payloads: Array<Record<string, unknown>> = [];
-    const baseStreamFn: StreamFn = (model, context, options) => {
-      observedOptions.push(options as Record<string, unknown>);
-      const payload: Record<string, unknown> = { model: model.id };
-      options?.onPayload?.(payload, model);
-      payloads.push(structuredClone(payload));
-      return createAssistantMessageEventStream();
-    };
+    const { baseStreamFn, payloads, observedOptions } = createPayloadCapture();
     const wrapped = createCodexNativeWebSearchWrapper(baseStreamFn, {
       config: {
         tools: {
@@ -455,12 +447,8 @@ describe("createCodexNativeWebSearchWrapper", () => {
   });
 
   it("enforces the code-mode transport surface when the run enables it at agent scope", () => {
-    const observedOptions: Array<Record<string, unknown>> = [];
-    const payloads: Array<Record<string, unknown>> = [];
-    const baseStreamFn: StreamFn = (model, context, options) => {
-      observedOptions.push(options as Record<string, unknown>);
-      const payload: Record<string, unknown> = {
-        model: model.id,
+    const { baseStreamFn, payloads, observedOptions } = createPayloadCapture({
+      payload: () => ({
         tools: [
           { type: "function", name: "exec" },
           { type: "function", name: "wait" },
@@ -471,11 +459,8 @@ describe("createCodexNativeWebSearchWrapper", () => {
           { type: "function", name: "message" },
           { type: "function", name: "read" },
         ],
-      };
-      options?.onPayload?.(payload, model);
-      payloads.push(structuredClone(payload));
-      return createAssistantMessageEventStream();
-    };
+      }),
+    });
     const wrapped = createCodexNativeWebSearchWrapper(baseStreamFn, {
       codeModeToolSurfaceEnabled: true,
     });
@@ -502,10 +487,8 @@ describe("createCodexNativeWebSearchWrapper", () => {
   it.each(["functionDeclarations", "function_declarations"] as const)(
     "keeps grouped %s when code mode filters the payload",
     (declarationField) => {
-      const payloads: Array<Record<string, unknown>> = [];
-      const baseStreamFn: StreamFn = (model, context, options) => {
-        const payload: Record<string, unknown> = {
-          model: model.id,
+      const { baseStreamFn, payloads } = createPayloadCapture({
+        payload: () => ({
           tools: [
             {
               [declarationField]: [
@@ -521,11 +504,8 @@ describe("createCodexNativeWebSearchWrapper", () => {
             },
             { google_search: {} },
           ],
-        };
-        options?.onPayload?.(payload, model);
-        payloads.push(structuredClone(payload));
-        return createAssistantMessageEventStream();
-      };
+        }),
+      });
       const wrapped = createCodexNativeWebSearchWrapper(baseStreamFn, {
         codeModeToolSurfaceEnabled: true,
       });
@@ -808,7 +788,7 @@ describe("createOpenAIThinkingLevelWrapper", () => {
 describe("createOpenAIAttributionHeadersWrapper", () => {
   it("routes native Codex traffic through the OpenClaw transport so attribution survives OpenClaw defaults", () => {
     let codexCalls = 0;
-    let capturedHeaders: Record<string, string> | undefined;
+    let capturedHeaders: Model["headers"];
     const codexTransport: StreamFn = (model, context, options) => {
       codexCalls += 1;
       capturedHeaders = options?.headers;
@@ -843,7 +823,7 @@ describe("createOpenAIAttributionHeadersWrapper", () => {
     let capturedOptions:
       | {
           apiKey?: string;
-          headers?: Record<string, string>;
+          headers?: Model["headers"];
         }
       | undefined;
     const upstream: StreamFn = (model, context, options) => {

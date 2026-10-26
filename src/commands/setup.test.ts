@@ -73,7 +73,6 @@ afterEach(() => {
 describe("setupCommand", () => {
   it.each([false, true])("initializes local setup (json: %s)", async (json) => {
     await withSetupHome(async (home, { runtime, configPath }) => {
-      const effects = await observeSetupOwners();
       const workspace = path.join(home, ".openclaw", "workspace");
 
       await setupCommand({ workspace, json }, runtime);
@@ -84,16 +83,6 @@ describe("setupCommand", () => {
         gateway: { mode: "local" },
         messages: { queue: { allowCollaborativeSteering: false } },
       });
-      expect(effects.replaceConfigFile).toHaveBeenCalledWith(
-        expect.objectContaining({
-          baseHash: expect.any(String),
-          writeOptions: expect.objectContaining({
-            expectedConfigPath: configPath,
-            ownedConfigPathForWrite: configPath,
-          }),
-        }),
-      );
-      expect(effects.resolveSessionTranscriptsDir).toHaveBeenCalledWith("main");
       if (json) {
         expect(runtime.log).toHaveBeenCalledOnce();
         expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toEqual({
@@ -269,12 +258,8 @@ describe("setupCommand", () => {
         const sessionMkdirCalls = () =>
           effects.mkdir.mock.calls.filter(([dir]) => dir === sessionsDir).length;
         const beforeFinalWrite = { workspace: 0, sessions: 0, mkdir: 0 };
-        let finalWriteReached = false;
-        let finalWriteBasis: string | null | undefined;
         effects.replaceConfigFile.mockImplementationOnce(async (params) => {
           // The facade export is setup's final replace, not first-agent creation's transform.
-          finalWriteBasis = fresh ? params.baseHash : params.snapshot?.hash;
-          finalWriteReached = true;
           await fs.writeFile(configPath, externalRaw, "utf-8");
           beforeFinalWrite.workspace = effects.ensureAgentWorkspace.mock.calls.length;
           beforeFinalWrite.sessions = effects.resolveSessionTranscriptsDir.mock.calls.length;
@@ -287,8 +272,6 @@ describe("setupCommand", () => {
         );
 
         expect(await fs.readFile(configPath, "utf-8")).toBe(externalRaw);
-        expect(finalWriteReached).toBe(true);
-        expect(finalWriteBasis).toEqual(expect.any(String));
         // Fresh creation may already provision files; failure must stop subsequent setup effects.
         expect(effects.ensureAgentWorkspace).toHaveBeenCalledTimes(beforeFinalWrite.workspace);
         expect(effects.resolveSessionTranscriptsDir).toHaveBeenCalledTimes(

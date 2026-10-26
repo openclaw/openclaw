@@ -179,10 +179,7 @@ async function setupMatrixTrace(recorder: WireRecorder) {
   let capturedOnReplyStart: (() => Promise<void> | void) | undefined;
   let capturedOnIdle: (() => void) | undefined;
   let capturedReplyOptions: MatrixTraceReplyOptions | undefined;
-  let resolveCaptured: (() => void) | undefined;
-  const captured = new Promise<void>((resolve) => {
-    resolveCaptured = resolve;
-  });
+  const { promise: captured, resolve: resolveCaptured } = Promise.withResolvers<void>();
   const notifyCaptured = () => {
     if (capturedDeliver && capturedReplyOptions) {
       resolveCaptured?.();
@@ -194,10 +191,7 @@ async function setupMatrixTrace(recorder: WireRecorder) {
   // handler's post-dispatch flow (including the finally-block draft abandon
   // path) runs exactly where the real run would settle.
   type DispatchResult = { queuedFinal: boolean; counts: { final: number; block: number } };
-  let releaseRun: ((result: DispatchResult) => void) | undefined;
-  const runGate = new Promise<DispatchResult>((resolve) => {
-    releaseRun = resolve;
-  });
+  const { promise: runGate, resolve: releaseRun } = Promise.withResolvers<DispatchResult>();
 
   const { handler } = createMatrixHandlerTestHarness({
     streaming: "partial",

@@ -234,6 +234,39 @@ it.for(["before capture", "after capture"] as const)(
   },
 );
 
+it("records an independent interrupted turn in a child of a cross-agent group parent", async () => {
+  using store = createStore();
+  const child = await store.session("dashboard:historical-child", {
+    spawnDepth: 1,
+    spawnedBy: "agent:requester:discord:group:synthetic",
+    parentSessionKey: "agent:requester:discord:group:synthetic",
+    lifecycleRunId: "dashboard:historical-child-run",
+  });
+  expect(await store.mark({ activeRuns: [child.run] })).toEqual({ marked: 1, skipped: 0 });
+  expect(child.read()).toMatchObject({
+    abortedLastRun: true,
+    mainRestartRecovery: { chargedAttempts: 0 },
+  });
+});
+
+it("leaves a completed replacement child and its copied old recovery claim untouched", async () => {
+  using store = createStore();
+  const child = await store.session("subagent:replaced-child", {
+    spawnDepth: 1,
+    spawnedBy: "agent:main:main",
+    lifecycleRevision: "replacement-child-revision",
+    lifecycleRunId: "replacement-child-run",
+    status: "done",
+    abortedLastRun: false,
+    endedAt: 10,
+    restartRecoveryRuns: [{ runId: "original-child-run", lifecycleGeneration: "old-gateway" }],
+    restartRecoveryDeliverySourceRunId: "original-child-run",
+  });
+  const before = child.read();
+  expect(await store.markStartup()).toEqual({ marked: 0, skipped: 0 });
+  expect(child.read()).toEqual(before);
+});
+
 it("loads only orphan candidates for main-session startup recovery", async () => {
   using store = createStore();
   const { storePath } = store;

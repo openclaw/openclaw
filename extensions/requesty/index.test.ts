@@ -76,7 +76,7 @@ describe("requesty provider plugin", () => {
 
   it("adds attribution headers and keeps them provider-owned", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
-    let capturedHeaders: Record<string, string> | undefined;
+    let capturedHeaders: NonNullable<Parameters<StreamFn>[2]>["headers"];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       capturedHeaders = options?.headers;
       return {} as never;

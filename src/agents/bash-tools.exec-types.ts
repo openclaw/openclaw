@@ -18,6 +18,7 @@ import type { OperationalRunInstanceRef } from "./admitted-run-context.js";
 import type { ExecToolRoutingDefaults } from "./bash-tools.exec-routing.types.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import type { EmbeddedFullAccessBlockedReason } from "./embedded-agent-runner/types.js";
+import type { ExecApprovalTransport } from "./exec-approval-transport.js";
 import type { ExecReviewerConfig } from "./exec-auto-reviewer.js";
 import type { PreparedGitHubToolEnvironment } from "./github-tool-identity.types.js";
 
@@ -41,6 +42,7 @@ export type ExecToolDefaults = ExecToolRoutingDefaults & {
   /** Host-prepared routing hint; remote workers have no Gateway session database. */
   preparedSubagentExecution?: boolean;
   autoReviewer?: ExecAutoReviewer;
+  createApprovalTransport?: (toolCallId: string, signal?: AbortSignal) => ExecApprovalTransport;
   /** Reads current attempt context only when a command needs review. */
   reviewTranscript?: () => ExecAutoReviewTranscript | undefined;
   agentId?: string;
@@ -101,6 +103,7 @@ export type ExecToolDefaults = ExecToolRoutingDefaults & {
 
 /** Request and approval context shared by Gateway and node execution hosts. */
 export type ExecHostCommandParams = {
+  approvalTransport?: ExecApprovalTransport;
   command: string;
   env: Record<string, string>;
   requestedEnv?: Record<string, string>;

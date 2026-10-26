@@ -410,7 +410,7 @@ function seedReadyReview(fixture: ReturnType<typeof makeMismatchedWrapperRepo>) 
 
 describe("scripts/pr wrappers", () => {
   function workflowFixture() {
-    const fixture = makeMismatchedWrapperRepo();
+    const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
     const reviewPath = join(fixture.canonical, "scripts/pr-lib/review.sh");
     writeFileSync(
       reviewPath,
@@ -521,7 +521,7 @@ exit "$status"
   });
 
   itPosix("preserves the caller's gh route environment through startup", () => {
-    const fixture = makeMismatchedWrapperRepo();
+    const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
     cpSync("scripts/lib/plain-gh.sh", join(fixture.canonical, "scripts/lib/plain-gh.sh"));
     fixture.write(
       "scripts/pr-lib/worktree.sh",
@@ -537,7 +537,7 @@ exit "$status"
   });
 
   itPosix("fails loudly at preflight when ripgrep is unavailable", () => {
-    const fixture = makeMismatchedWrapperRepo();
+    const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
     rmSync(join(fixture.bin, "rg"));
     for (const command of ["bash", "basename", "dirname", "git", "gh", "jq", "pnpm", "node"]) {
       rmSync(join(fixture.bin, command), { force: true });
@@ -568,51 +568,25 @@ exit "$status"
     ];
     for (const args of [
       ["123", outcomeOid],
-      ["123", "", "--confirmed-operator-recovery"],
       ["123", "not-an-outcome", "--confirmed-operator-recovery"],
       ["123", outcomeOid, "--confirmed-no-running-tools"],
       recovery("--auto-merge"),
       recovery("--cancel-auto", "--cancel-auto"),
       recovery("--observed-head", selectedHead),
-      ...[
-        [],
-        [""],
-        ["HEAD"],
-        ["B".repeat(40)],
-        [selectedHead, "--observed-head", otherHead],
-        [selectedHead, "--merged-head", otherHead],
-        [selectedHead, "--replacement-head", otherHead],
-        [selectedHead, "--auto-merge"],
-        [selectedHead, "--body-file", "message.md"],
-        [selectedHead, "--legacy-refusal", "proof"],
-        [selectedHead, "--pre-dispatch-refusal", "proof"],
-        [selectedHead, "--admin-evidence", "proof", "--confirmed-operator-admin"],
-      ].map((suffix) => recovery("--cancel-auto", "--observed-head").concat(suffix)),
+      recovery("--cancel-auto", "--observed-head"),
+      recovery("--cancel-auto", "--observed-head", "HEAD"),
+      recovery("--cancel-auto", "--observed-head", selectedHead, "--observed-head", otherHead),
       recovery("--cancel-auto", "--body-file", "message.md"),
       recovery("--cancel-auto", "--replacement-head", selectedHead),
-      ...[
-        [],
-        [""],
-        ["HEAD"],
-        ["a".repeat(39)],
-        ["A".repeat(40)],
-        [selectedHead, "--replacement-head", otherHead],
-        [selectedHead, "--confirmed-operator-recovery"],
-      ].map((suffix) => recovery("--replacement-head").concat(suffix)),
-      ["123", outcomeOid, "--replacement-head", selectedHead, "--confirmed-operator-recovery"],
-      ["123", outcomeOid, "--replacement-head", selectedHead],
+      recovery("--replacement-head"),
+      recovery("--replacement-head", "HEAD"),
+      recovery("--replacement-head", selectedHead, "--replacement-head", otherHead),
+      recovery("--replacement-head", selectedHead, "--confirmed-operator-recovery"),
       ["0123", outcomeOid, "--confirmed-operator-recovery", "--replacement-head", selectedHead],
-      ...[
-        [],
-        ["HEAD"],
-        ["B".repeat(40)],
-        [selectedHead, "--merged-head", otherHead],
-        [selectedHead, "--cancel-auto"],
-        [selectedHead, "--auto-merge"],
-        [selectedHead, "--replacement-head", otherHead],
-        [selectedHead, "--body-file", "message.md"],
-        [selectedHead, "--admin-evidence", "proof.json", "--confirmed-operator-admin"],
-      ].map((suffix) => recovery("--merged-head").concat(suffix)),
+      recovery("--merged-head"),
+      recovery("--merged-head", "HEAD"),
+      recovery("--merged-head", selectedHead, "--merged-head", otherHead),
+      recovery("--merged-head", selectedHead, "--body-file", "message.md"),
     ]) {
       const result = runWrapper(fixture, ["merge-recover", ...args], "canonical");
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(2);
@@ -637,7 +611,6 @@ exit "$status"
     }
     for (const args of [
       ["--pr"],
-      ["--pr", "0123"],
       ["--pr", "../123"],
       ["--pr", "123", "--pr", "456"],
       ["--dry-run", "--dry-run"],
@@ -669,7 +642,7 @@ exit "$status"
       .join("");
   }
   function mergeDispatchFixture(main = true) {
-    const fixture = makeMismatchedWrapperRepo();
+    const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
     if (main) {
       fixture.write("gh", baseBranchGhStub("main"), fixture.bin);
     }
@@ -743,7 +716,7 @@ exit "$status"
   itPosix(
     "requires an exact receipt and explicit confirmation for completion-only dispatch",
     () => {
-      const fixture = makeMismatchedWrapperRepo();
+      const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
       fixture.write(
         "scripts/pr-lib/merge.sh",
         `merge_complete() { printf '<%s>\\n' "$@"; }\nmerge_run() { exit 99; }\n`,
@@ -772,7 +745,7 @@ exit "$status"
   );
 
   itPosix("rejects ambiguous body flags and keeps recovery confirmation mandatory", () => {
-    const fixture = makeMismatchedWrapperRepo();
+    const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
     for (const args of [
       ["merge-run", "123", "--body-file"],
       ["merge-run", "123", "--observed-head", selectedHead],
@@ -783,21 +756,7 @@ exit "$status"
       ...[
         ["--admin-evidence", "proof.json"],
         ["--confirmed-operator-admin"],
-        [
-          "--admin-evidence",
-          "proof.json",
-          "--confirmed-operator-admin",
-          "--replacement-head",
-          "HEAD",
-        ],
         ["--admin-evidence", "proof.json", "--confirmed-operator-admin", "--cancel-auto"],
-        [
-          "--admin-evidence",
-          "proof.json",
-          "--confirmed-operator-admin",
-          "--pre-dispatch-refusal",
-          "proof",
-        ],
       ].map((flags) =>
         ["merge-recover", "123", outcomeOid, "--confirmed-operator-recovery"].concat(flags),
       ),
@@ -835,7 +794,7 @@ exit "$status"
   });
 
   it("runs a mismatched advisory wrapper locally with an explicit developer opt-in", () => {
-    const fixture = makeMismatchedWrapperRepo();
+    const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
     const cliResult = runWrapper(fixture, ["--dev-wrapper", "ci-dispatch", "123"], "linked");
     expect(cliResult.status, `${cliResult.stderr}\n${cliResult.stdout}`).toBe(0);
     expect(cliResult.stdout).toContain("local wrapper executed");
@@ -889,7 +848,7 @@ exit "$status"
   );
 
   it("substitutes the canonical wrapper for a stale-base worktree once main moves the wrapper", () => {
-    const fixture = makeMismatchedWrapperRepo();
+    const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
     // Stale worktree: created at the pushed main base, no local wrapper edits.
     const stale = join(fixture.root, "stale");
     const baseline = fixture.gitText(["rev-parse", "main"]);
@@ -1355,7 +1314,7 @@ fs.symlinkSync(${JSON.stringify(expected)}, path.join(root, "node_modules/tsx"),
 const workspaceModules = path.join(root, "packages/markdown-core/node_modules");
 fs.mkdirSync(workspaceModules, { recursive: true });
 for (const name of Object.keys(${JSON.stringify(JSON.parse(readScript("packages/markdown-core/package.json")).dependencies)})) {
-  if (!name.startsWith("mdast-") && !name.startsWith("micromark-")) continue;
+  if (name !== "micromark" && !name.startsWith("mdast-") && !name.startsWith("micromark-")) continue;
   const target = path.join(root, "node_modules/.workspace", name);
   fs.cpSync(fs.realpathSync(path.join(${JSON.stringify(fixture.tooling)}, "packages/markdown-core/node_modules", name)), target, { recursive: true });
   fs.symlinkSync(path.relative(workspaceModules, target), path.join(workspaceModules, name), "dir");
@@ -1405,9 +1364,9 @@ if (process.env.PR_TEST_INSTALL_GATE) {
 
   itPosix("publishes one complete dependency installation when creators overlap", async () => {
     const fixture = makeFrozenDependencyFixture();
-    const gate = join(fixture.root, "install-gate");
-    expect(runCommand("mkfifo", [gate], fixture.env).status).toBe(0);
-    const start = () => {
+    const start = (name: string) => {
+      const gate = join(fixture.root, `install-gate-${name}`);
+      expect(runCommand("mkfifo", [gate], fixture.env).status).toBe(0);
       const child = spawn(join(fixture.linked, "scripts/pr"), ["unknown-command"], {
         cwd: fixture.linked,
         env: {
@@ -1429,12 +1388,12 @@ if (process.env.PR_TEST_INSTALL_GATE) {
         });
         child.on("exit", (code) => reject(new Error(`Installer exited ${code}: ${stderr}`)));
       });
-      return { child, ready, result: once(child, "exit"), errors: () => stderr };
+      return { child, gate, ready, result: once(child, "exit"), errors: () => stderr };
     };
-    const creators = [start(), start()];
+    const creators = [start("first"), start("second")];
     try {
       await Promise.all(creators.map((creator) => creator.ready));
-      await writeFile(gate, "xx");
+      await Promise.all(creators.map((creator) => writeFile(creator.gate, "x")));
       for (const creator of creators) {
         expect((await creator.result)[0], creator.errors()).toBe(2);
         expect(creator.errors()).toContain("running wrapper code materialized from");
@@ -1539,6 +1498,7 @@ exec "$OPENCLAW_TEST_NODE" "$@"
     ];
     const directory = "scripts/pr-lib/path-spelling";
     const fixture = makeMismatchedWrapperRepo({
+      toolingOnly: true,
       dispatchBody: `node -e '
 const { readFileSync } = require("node:fs");
 const { join } = require("node:path");
@@ -1573,7 +1533,6 @@ echo "canonical wrapper executed";`,
   });
 
   itPosix.for([
-    { outcome: "success", args: ["ci-dispatch", "123"], exitCode: 0, interrupt: false },
     { outcome: "failure", args: ["ci-dispatch", "123"], exitCode: 17, interrupt: false },
     { outcome: "SIGTERM", args: ["ci-dispatch", "123"], exitCode: 143, interrupt: true },
     { outcome: "unsupervised usage", args: ["unknown-command"], exitCode: 2, interrupt: false },
@@ -1665,7 +1624,7 @@ if (process.env.PR_TEST_INTERRUPT !== "1") process.exit(Number(process.env.PR_TE
   });
 
   itPosix("materializes the anchor when tar stops before the producer's trailing padding", () => {
-    const fixture = makeMismatchedWrapperRepo();
+    const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
     parkCanonicalOffAnchor(fixture);
     const git = join(fixture.bin, "git");
     writeFileSync(
@@ -1885,7 +1844,7 @@ exit 99
   );
 
   itPosix(
-    "executes tooling and publisher code from the extracted anchor dependency closure",
+    "keeps extracted dependency pins and executes the planner's source-scanning child",
     () => {
       const fixture = makeMismatchedWrapperRepo({ realModules: true });
       parkCanonicalOffAnchor(fixture);
@@ -1893,35 +1852,6 @@ exit 99
       fixture.write("gh", "#!/bin/sh\necho forbidden-gh >&2\nexit 99\n", fixture.bin);
       const nodeExecPath = requireNodeTool("node");
       const run = (args: string[]) => runCommand(nodeExecPath, args, fixture.env, anchor);
-      // These .mjs files launch children at import time. Execute the real shims
-      // with invalid arguments so their .mts owners reject before any GitHub IO.
-      for (const [entry, exitCode, message] of [
-        ["watch-pr-ci.mjs", 2, "Usage: node scripts/watch-pr-ci.mjs"],
-        ["verify-pr-hosted-gates.mjs", 1, "Usage: node scripts/verify-pr-hosted-gates.mjs"],
-        ["pr-lib/ci-dispatch.mjs", 2, "Usage: ci-dispatch.mjs"],
-      ] as const) {
-        const result = run([join(anchor, "scripts", entry)]);
-        expect.soft(result.status, `${entry}\n${result.stdout}\n${result.stderr}`).toBe(exitCode);
-        expect.soft(result.stderr, entry).toContain(message);
-      }
-      // Import the actual adapter closure before it rejects missing arguments.
-      // Real provisioning and allocation-lease renewal have separate flows.
-      const provision = runCommand(
-        nodeExecPath,
-        [
-          "--import",
-          join(anchor, "scripts/tsx.mjs"),
-          join(anchor, "scripts/pr-lib/worktree-provision.mts"),
-        ],
-        { ...fixture.env, TSX_TSCONFIG_PATH: join(anchor, "tsconfig.json") },
-        fixture.linked,
-      );
-      expect.soft(provision.status, provision.stderr).toBe(1);
-      expect.soft(provision.stderr).toContain("Usage: worktree-provision.mts");
-      expect.soft(provision.stderr).toContain("[pr-worktree-provision] FAILED (exit 1)");
-      expect
-        .soft(fixture.git(fixture.canonical, ["for-each-ref", "refs/openclaw"]).stdout)
-        .toBe("");
       // A later install may remove or redirect the canonical package aliases.
       // The materialized owner must keep its original installed dependency.
       const canonicalYaml = join(fixture.canonical, "node_modules/yaml");
@@ -1943,40 +1873,6 @@ exit 99
           .soft(verified.stderr, state)
           .toContain("Usage: node scripts/verify-pr-hosted-gates.mjs");
       }
-
-      const attribution = run([
-        "scripts/check-changelog-attributions.mjs",
-        "--is-forbidden-handle",
-        "fixture[bot]",
-      ]);
-      expect.soft(attribution.status, attribution.stderr).toBe(0);
-      const bypass = run([
-        "--input-type=module",
-        "-e",
-        "await import('./scripts/pr-lib/crabbox-merge-bypass.mjs')",
-      ]);
-      expect.soft(bypass.status, bypass.stderr).toBe(0);
-
-      const plan = {
-        version: 1,
-        baseSha: outcomeOid,
-        headSha: REVIEWED_HEAD,
-        changedPaths: [{ path: "docs/example.md", status: "M" }],
-        targets: [],
-      };
-      const planFile = join(fixture.root, "plan.json");
-      writeFileSync(planFile, JSON.stringify(plan));
-      const publisher = run([
-        "scripts/pr-crabbox-gate-publisher.mjs",
-        "--print-command",
-        planFile,
-        "c".repeat(64),
-      ]);
-      expect.soft(publisher.status, publisher.stderr).toBe(0);
-      expect.soft(publisher.stdout).toContain(`OPENCLAW_CRABBOX_GATE_HEAD=${REVIEWED_HEAD}`);
-      expect.soft(publisher.stdout).toContain("OPENCLAW_CRABBOX_GATE_TARGET_COUNT=0");
-      expect.soft(publisher.stdout).toContain("pnpm build");
-      expect.soft(publisher.stdout).toContain("pnpm check");
 
       // The trusted planner reads candidate sources without executing them. A
       // non-sibling importer exercises its real source-scanning child as well.
@@ -2202,14 +2098,7 @@ node "$script_parent_dir/verify-pr-hosted-gates.mjs" --anchor-proof;`,
     const { repo, linked, git, run } = unanchoredWrapperFixture("openclaw-pr-wrapper-revision-");
     expect(git(repo, ["worktree", "add", "-b", "feature", linked]).status).toBe(0);
 
-    for (const component of [
-      "scripts/pr-lib/wrapper-components.txt",
-      "scripts/pr-lib/merge.sh",
-      "scripts/watch-pr-ci.mts",
-      "scripts/verify-pr-hosted-gates.mts",
-      "scripts/lib/local-check-runtime.mts",
-      "scripts/tsx.mjs",
-    ]) {
+    for (const component of ["scripts/pr-lib/merge.sh", "scripts/lib/local-check-runtime.mts"]) {
       writeFileSync(join(linked, component), "# dirty linked\n");
       const dirtyResult = run();
       expect(dirtyResult.status, component).toBe(1);

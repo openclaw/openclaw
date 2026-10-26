@@ -130,6 +130,32 @@ describe("retired runtime config migrations", () => {
     expect(applyAll(raw).changes).toEqual([]);
   });
 
+  it.each(["ollama/retired-override", null])(
+    "removes a memory flush model override: %j",
+    (model) => {
+      const selection = { primary: "ollama/active", fallbacks: ["ollama/backup"] };
+      const flush = { enabled: false, softThresholdTokens: 1234 };
+      const raw = {
+        agents: {
+          defaults: {
+            model: selection,
+            compaction: { memoryFlush: { ...flush, model } },
+          },
+        },
+      };
+      expectIssue(raw, "agents.defaults.compaction.memoryFlush.model", "active session model");
+      const result = applyAll(raw);
+      expect(result.raw).toEqual({
+        agents: { defaults: { model: selection, compaction: { memoryFlush: flush } } },
+      });
+      expect(result.changes).toContain(
+        "Removed agents.defaults.compaction.memoryFlush.model; memory flushes now use the active session model and its fallback chain.",
+      );
+      expect(findLegacyConfigIssues(result.raw)).toEqual([]);
+      expect(applyAll(result.raw).changes).toEqual([]);
+    },
+  );
+
   it("tags and deduplicates modality models without conflating capabilities", () => {
     const shared = { provider: "openai", model: "shared", capabilities: ["image"] };
     const local = { provider: "local", model: "same", timeoutSeconds: 20 };

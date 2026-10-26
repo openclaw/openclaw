@@ -91,9 +91,6 @@ function coerceDisplayValue(
 }
 
 function lookupValueByPath(args: unknown, path: string): unknown {
-  if (!args || typeof args !== "object") {
-    return undefined;
-  }
   let current: unknown = args;
   for (const segment of path.split(".")) {
     if (!segment) {

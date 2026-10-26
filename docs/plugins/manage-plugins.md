@@ -304,12 +304,12 @@ owner update. Run `openclaw plugins reload <plugin-id>` after source or manifest
 edits. For API clients, `plugins.reload` takes `plugins: [{ pluginId }]` to reload
 one installed plugin, or multiple targets in the same request, and
 `plugins.refresh` refreshes the inventory.
-Both wait for runtime application and return a generation receipt. Reloading
-unchanged bundled code or replacing captured external code returns
-`restartRequired: false`. If compiled bundled code remains loaded after its files
-change, or those files cannot be verified, reload reports `restartRequired: true`
-with a warning. Rebuild compiled output after editing source files, then restart
-the Gateway when the result requires it. Explicit actions also work with `gateway.reload.mode: "off"`.
+Both wait for runtime application and return a generation receipt. Explicit reload
+of a loaded, enabled bundled plugin refreshes registrations and reports
+`restartRequired: true`, even when its files are unchanged. Restart the Gateway to
+load updated bundled code; rebuild compiled output first, and install a new
+executable for embedded code changes. Replacing captured external code returns
+`restartRequired: false`. Explicit actions also work with `gateway.reload.mode: "off"`.
 See [Plugin management RPCs](/gateway/protocol).
 
 Cleanup is best effort: disabling removes the plugin's registered capabilities
@@ -332,6 +332,11 @@ only to ClawHub installs; official installs use the catalog selection. To activa
 already-installed local TypeScript plugin, use `reload` with its plugin ID.
 Installing new local, npm, Git, or archive sources still uses the CLI workflow
 above.
+
+When the current turn uses the plugin being reloaded, use `reloadAndResume`.
+It checks administrator authority before yielding, finishes turn cleanup, then
+reloads and resumes the same conversation with the result. Permission revocation
+still stops the reload; do not repeat a completed mutation.
 
 In the embedded agent runtime, an applied change refreshes tools before the next
 model request after running code programs have settled. A parked program may need

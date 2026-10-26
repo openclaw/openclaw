@@ -4,12 +4,14 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { waitForSignalExitBarriers } from "../cli/signal-exit-barrier.js";
 import {
   captureRuntimeWorkerSource,
+  resolveRuntimeWorkerGenerationUrl,
   withRuntimeWorkerGeneration,
   type RuntimeWorkerGeneration,
 } from "./runtime-worker-generation.js";
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
 
 function runGeneration(operation: (generation: RuntimeWorkerGeneration) => Promise<unknown>) {
@@ -160,4 +162,49 @@ it("joins all native retirements and retains the command error when one fails", 
     native.resolve();
     await outcome;
   }
+});
+
+it("resolves only the explicit carried generation while ambient capture keeps its owner", async () => {
+  const original = new URL("file:///worker.mjs");
+  const ambient = new URL("file:///ambient/worker.mjs");
+  const explicit = new URL("file:///explicit/worker.mjs");
+  const generation: RuntimeWorkerGeneration = { resolve: () => explicit, retain() {} };
+  await withRuntimeWorkerGeneration(
+    async (bind) => {
+      bind(() => ambient);
+      expect(captureRuntimeWorkerSource(original).moduleUrl).toBe(ambient);
+      expect(resolveRuntimeWorkerGenerationUrl(original, generation)).toBe(explicit);
+      expect(resolveRuntimeWorkerGenerationUrl(original, undefined)).toBe(original);
+    },
+    async () => {},
+  );
+});
+
+it("leaves unchanged ambient URLs unbound", async () => {
+  const original = new URL("file:///worker.mjs");
+  await withRuntimeWorkerGeneration(
+    async (bind) => {
+      bind((url) => url);
+      expect(captureRuntimeWorkerSource(original)).toEqual({ moduleUrl: original });
+    },
+    async () => {},
+  );
+});
+
+it("keeps embedded entries immutable while loose entries follow the retained generation", async () => {
+  const embedded = new URL("file:///runtime/dist/embedded.worker.js");
+  const loose = new URL("file:///package/dist/loose.worker.js");
+  const retained = new URL("file:///retained/loose.worker.js");
+  vi.stubGlobal(
+    "__openclawStandaloneIsEmbeddedModule",
+    (filename: string) => filename === "/runtime/dist/embedded.worker.js",
+  );
+  await withRuntimeWorkerGeneration(
+    async (bind) => {
+      bind(() => retained);
+      expect(captureRuntimeWorkerSource(embedded)).toEqual({ moduleUrl: embedded });
+      expect(captureRuntimeWorkerSource(loose).moduleUrl).toBe(retained);
+    },
+    async () => {},
+  );
 });

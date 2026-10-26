@@ -44,6 +44,43 @@ import {
 vi.mock("../lib/toast.ts", () => ({ showToast: vi.fn() }));
 
 describe("patchSessionRows", () => {
+  it.each(["connected", "reconnecting"] as const)(
+    "preserves tree guards with queued work while %s",
+    async (phase) => {
+      const h = createHarness({ phase });
+      h.scope.gateway.snapshot.deferredIntentCount = 1;
+      const row = {
+        ...sessionRow(1),
+        archiveGuard: { expectedArchived: false },
+      };
+      const result = await patchSessionRows(h.host, [row], { archived: true }, h.scope, {
+        sessionScope: true,
+      });
+      expect(h.patch).not.toHaveBeenCalled();
+      if (phase === "connected") {
+        expect(result).toEqual([row]);
+        expect(h.request.mock.calls[0]?.[1]).toMatchObject({
+          targets: [{ ...sessionTarget(row), expectedArchived: false }],
+        });
+      } else {
+        expect(result).toBeNull();
+        expect(h.request).not.toHaveBeenCalled();
+        expect(h.publishSessionMutationError).toHaveBeenCalled();
+      }
+    },
+  );
+  it("queues offline bulk archive as one mutation per selected row", async () => {
+    const h = createHarness({ phase: "reconnecting" });
+    h.scope.allowDeferred = true;
+    h.scope.sessions.patch = vi.fn(async () => ({ queued: true as const }));
+    const rows = [sessionRow(0), sessionRow(1)];
+    await expect(
+      patchSessionRows(h.host, rows, { archived: true }, h.scope, { sessionScope: true }),
+    ).resolves.toEqual(rows);
+    expect(h.scope.sessions.patch).toHaveBeenCalledTimes(2);
+    expect(h.request).not.toHaveBeenCalled();
+    expect(h.publishSessionMutationError).not.toHaveBeenCalled();
+  });
   it.each([true, false])(
     "retires only a confirmed archive's personal pin (accepted: %s)",
     async (accepted) => {

@@ -3,11 +3,11 @@ import { awaitGateBeforeSettlement as beforeSettled } from "../../../../test/hel
 import { chunkText } from "../../../auto-reply/chunk.js";
 import * as transcript from "../../../infra/outbound/deliver-transcript.js";
 import { setActivePluginRegistry } from "../../../plugins/runtime.js";
-import { createDeferredCore } from "../../../shared/deferred.js";
 import {
   createOutboundTestPlugin,
   createTestRegistry,
 } from "../../../test-utils/channel-plugins.js";
+import { createEnteredGate } from "../../entered-gate.test-support.js";
 import { taskCompletionEvents } from "../../subagent-test-fixtures.test-helpers.js";
 import { deliverCompletionDirect } from "./subagent-announce-completion-delivery.js";
 
@@ -70,22 +70,18 @@ it.each(["rejected", "aborted"] as const)("settles after chunk two is %s", async
 
 it("reports complete delivery before transcript mirroring settles", async () => {
   const fixture = setup();
-  const mirrorEntered = createDeferredCore();
-  const releaseMirror = createDeferredCore();
-  vi.spyOn(transcript, "mirrorDeliveredPayloads").mockImplementation(async () => {
-    mirrorEntered.resolve();
-    await releaseMirror.promise;
-  });
+  const mirrorGate = createEnteredGate();
+  vi.spyOn(transcript, "mirrorDeliveredPayloads").mockImplementation(mirrorGate.wait);
   const delivery = fixture.deliver();
   try {
-    await beforeSettled(mirrorEntered.promise, delivery, "Delivery missed its mirror");
+    await beforeSettled(mirrorGate.entered, delivery, "Delivery missed its mirror");
     expect(fixture.sendText).toHaveBeenCalledTimes(2);
     expect(fixture.received.join(" ")).toBe(content);
     expect(fixture.onDeliveryResult).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ delivered: true, deliveredAt: expect.any(Number) }),
     );
   } finally {
-    releaseMirror.resolve();
+    mirrorGate.release();
     await delivery;
   }
   await expect(delivery).resolves.toMatchObject({ delivered: true, path: "direct" });

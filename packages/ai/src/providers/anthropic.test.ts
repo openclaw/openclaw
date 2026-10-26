@@ -7,6 +7,7 @@ import {
   SYSTEM_PROMPT_RELOCATABLE_BOUNDARY,
   SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END,
 } from "../utils/system-prompt-cache-boundary.js";
+import { makeProviderModel } from "./provider-model.test-support.js";
 
 const anthropicMockState = vi.hoisted(() => ({
   configs: [] as unknown[],
@@ -29,6 +30,7 @@ vi.mock("@anthropic-ai/sdk", () => ({
 }));
 
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
+import { collectEventTypes } from "../transports/openai-stream-cases.test-support.js";
 import { createZeroUsage } from "../usage.test-support.js";
 import {
   anthropicTerminalFallbackCases,
@@ -86,10 +88,7 @@ function startStream(
   });
 }
 async function consumeStream(stream: ReturnType<typeof streamAnthropic>) {
-  const eventTypes: string[] = [];
-  for await (const event of stream) {
-    eventTypes.push(event.type);
-  }
+  const eventTypes = await collectEventTypes(stream);
   return { eventTypes, result: await stream.result() };
 }
 
@@ -119,19 +118,13 @@ function messageDelta(delta: Record<string, unknown>, usage?: Record<string, unk
 }
 
 function makeAnthropicModel(overrides: Partial<Model<"anthropic-messages">> = {}) {
-  return {
-    id: "claude-sonnet-4-6",
+  return makeProviderModel("anthropic-messages", "anthropic", "claude-sonnet-4-6", {
     name: "Claude Sonnet 4.6",
-    provider: "anthropic",
-    api: "anthropic-messages",
     baseUrl: "https://api.anthropic.com",
-    reasoning: true,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 200_000,
     maxTokens: 4096,
     ...overrides,
-  } satisfies Model<"anthropic-messages">;
+  });
 }
 
 function makeAnthropicAssistantMessage(
@@ -582,6 +575,7 @@ describe("Anthropic provider", () => {
     expect(result.usage).toMatchObject({
       cacheWrite: 1_000_000,
       cacheWrite1h: 400_000,
+      cacheWrite5m: 600_000,
     });
     expect(result.usage.cost.cacheWrite).toBeCloseTo(7.75, 10);
   });
@@ -945,10 +939,7 @@ describe("Anthropic provider", () => {
         name,
         provider,
       });
-      const eventTypes: string[] = [];
-      for await (const event of stream) {
-        eventTypes.push(event.type);
-      }
+      const eventTypes = await collectEventTypes(stream);
       const result = await stream.result();
 
       expect(eventTypes).toEqual(["error"]);
@@ -1520,10 +1511,7 @@ describe("Anthropic provider", () => {
 
     const stream = startStream(client, {}, conversation(user("hi")));
 
-    const eventTypes: string[] = [];
-    for await (const event of stream as AsyncIterable<{ type: string }>) {
-      eventTypes.push(event.type);
-    }
+    const eventTypes = await collectEventTypes(stream);
 
     // error must be the first event — no start emitted before it
     expect(eventTypes[0]).toBe("error");

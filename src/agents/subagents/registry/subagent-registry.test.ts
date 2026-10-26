@@ -36,6 +36,7 @@ import {
   mockGatewayMethods,
   waitForFast,
 } from "../../subagent-test-fixtures.test-helpers.js";
+import { createRequesterTranscriptWriter } from "../../test-helpers/requester-transcript-writer.test-support.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
 import { releaseSwarmRun } from "../swarm/swarm-scheduler.js";
 import { observeSwarmSchedulerWork } from "../swarm/swarm-scheduler.lifecycle.test-support.js";
@@ -113,10 +114,11 @@ vi.mock("../../../infra/agent-events.js", () => ({
   onAgentEvent: mocks.onAgentEvent,
   registerAgentEventLifecycleRotationHandler: vi.fn(),
 }));
+// mock-isolation: Registry fixtures control run ownership without the process-global registry.
 vi.mock("../../../infra/agent-run-registry.js", () => ({
   getAgentRunContext: mocks.getAgentRunContext,
   listAgentRunsForSession: () => [],
-  hasLiveAgentRunContext: vi.fn(() => false),
+  hasLiveAgentRunContext: mocks.hasLiveAgentRunContext,
 }));
 
 vi.mock("../../../config/config.js", () => {
@@ -193,9 +195,8 @@ vi.mock("../../../browser-lifecycle-cleanup.js", { spy: true });
 // Manual mocks can bypass concurrent lazy imports in Vitest; warm the autospy once.
 vi.mock("../announce/subagent-announce.requester-settle-wake.js", { spy: true });
 const wakeRequester = vi.mocked(maybeWakeRequesterAfterAllChildrenSettled);
-vi.mock("../../runtime-plugins.js", () => ({
-  loadAgentRuntimePluginRegistryHandle: mocks.loadAgentRuntimePluginRegistryHandle,
-}));
+// mock-isolation: Lifecycle fixtures supply their own registries without loading installed plugins.
+vi.mock("../../runtime-plugins.js", () => import("../../runtime-plugins.test-support.js"));
 
 vi.mock("../../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: mocks.getGlobalHookRunner,
@@ -984,14 +985,8 @@ describe("subagent registry seam flow", () => {
     const pendingWait = createDeferred<Record<string, unknown>>();
     const waitStarted = createDeferred();
     const announceStarted = createDeferred();
-    const requesterTranscriptWrite = vi.fn();
-    const withRequesterTranscriptWrite = async <T>(operation: () => Promise<T> | T): Promise<T> => {
-      requesterTranscriptWrite();
-      if (disposed) {
-        throw new Error("attempt disposed before transcript write");
-      }
-      return await operation();
-    };
+    const { requesterTranscriptWrite, withRequesterTranscriptWrite } =
+      createRequesterTranscriptWriter(() => disposed);
     const freshTranscriptWrite = vi.fn(async () => {});
     const freshCompletionWrite = vi.fn(async () => {});
 

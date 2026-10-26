@@ -40,9 +40,10 @@ import { subagentRuns } from "./subagent-registry-memory.js";
 import { buildScopedSubagentRunReadIndexFromRuns } from "./subagent-registry-queries.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
-import type {
-  GatewayRequest,
-  SessionStoreEntry,
+import {
+  createExternalRequesterSessionEntry,
+  type GatewayRequest,
+  type SessionStoreEntry,
 } from "./subagent-registry.lifecycle-fixture.test-support.js";
 import { createLifecycleWaits } from "./subagent-registry.lifecycle-waits.test-support.js";
 import {
@@ -129,12 +130,16 @@ const loadConfigMock = vi.mocked(getRuntimeConfig);
 vi.mock("../../../config/config.js", { spy: true });
 vi.mock("../../../gateway/call.js", { spy: true });
 vi.mock("../../../infra/agent-events.js", { spy: true });
+// mock-isolation: Requester-wake tests supply registries without discovering installed plugins.
 vi.mock("../../runtime-plugins.js", async () => {
   const { createEmptyPluginRegistry } = await import("../../../plugins/registry-empty.js");
+  const loadRegistry = vi.fn<
+    typeof import("../../runtime-plugins.js").loadAgentRuntimePluginRegistryHandle
+  >(() => createEmptyPluginRegistry());
   return {
-    loadAgentRuntimePluginRegistryHandle: vi.fn<
-      typeof import("../../runtime-plugins.js").loadAgentRuntimePluginRegistryHandle
-    >(() => createEmptyPluginRegistry()),
+    loadAgentRuntimePluginRegistryHandle: loadRegistry,
+    loadAgentRuntimePluginRegistryHandleAsync: async (...args: Parameters<typeof loadRegistry>) =>
+      loadRegistry(...args),
   };
 });
 vi.mock("../announce/subagent-announce.requester-settle-wake.js", { spy: true });
@@ -237,16 +242,7 @@ describe("requester settle wake product flow", () => {
     emptyGatedAgentReply = false;
     sendMessageMock.mockClear();
     sessionStore = {
-      [MAIN_REQUESTER_SESSION_KEY]: {
-        sessionId: "sess-main",
-        updatedAt: 1,
-        delivery: {
-          kind: "external",
-          route: { channel: "discord", accountId: "default", target: { to: "user-1" } },
-          context: { channel: "discord", to: "user-1", accountId: "default" },
-          origin: { provider: "discord", to: "user-1", accountId: "default" },
-        },
-      },
+      [MAIN_REQUESTER_SESSION_KEY]: createExternalRequesterSessionEntry(),
     };
     await replaceSessionEntry(
       { storePath: sessionStorePath, sessionKey: MAIN_REQUESTER_SESSION_KEY },

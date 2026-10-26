@@ -104,7 +104,7 @@ export function createInboundMetadataProbe(): (input: TextProjection) => boolean
       return true;
     }
     for (const char of appended) {
-      if (char === "\n" || char === "\r") {
+      if (char === "\n" || char === "\r" || char === "\u2028" || char === "\u2029") {
         if (contextOffset === ACTIVE_MEMORY_CONTEXT_HEADER.length) {
           active = true;
           return true;
@@ -120,8 +120,8 @@ export function createInboundMetadataProbe(): (input: TextProjection) => boolean
         contextOffset = -1;
       }
     }
-    // At EOF, Context: can be a whole line; don't latch until its line ends,
-    // because the next delta may turn it into ordinary inline prose.
+    // Complete lines follow JavaScript's line boundaries, like the canonical sentinel.
+    // At EOF, don't latch: the next delta may turn Context: into ordinary inline prose.
     return contextOffset === ACTIVE_MEMORY_CONTEXT_HEADER.length;
   };
 }

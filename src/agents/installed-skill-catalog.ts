@@ -100,6 +100,10 @@ async function readSearchBody(skill: InstalledSkill, maxBytes: number, signal?: 
   const inline = skill.source.readContent;
   if (typeof inline === "string") {
     const prefix = inline.slice(0, maxBytes);
+    // Keep UTF-8 replacement semantics for malformed or byte-truncated text.
+    if (prefix.isWellFormed() && Buffer.byteLength(prefix) <= maxBytes) {
+      return { content: prefix, truncated: prefix.length < inline.length };
+    }
     const bytes = Buffer.from(prefix);
     return {
       content: bytes.subarray(0, maxBytes).toString("utf8"),
