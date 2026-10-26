@@ -123,18 +123,18 @@ export function resolveAliasedParamValue(
   return resolved;
 }
 
-/** Projects authored inheritance only; absent or invalid settings do not name a provider default. */
+/** Explicit empty or invalid settings remain unset; only absent configuration uses the fallback. */
 export function resolveConfiguredCyberAccessProgram(
   params: Parameters<typeof resolveModelExtraParamSources>[0],
+  fallback?: CyberAccessProgram,
 ): CyberAccessProgram | undefined {
   const { defaultParams, modelParams, agentModelParams, agentParams } =
     resolveModelExtraParamSources(params);
-  const programs = asOptionalRecord(
-    resolveAliasedParamValue(
-      [defaultParams, modelParams, agentModelParams, agentParams],
-      ["accessPrograms"],
-    ),
-  );
+  const sources = [defaultParams, modelParams, agentModelParams, agentParams];
+  if (!sources.some((source) => source && Object.hasOwn(source, "accessPrograms"))) {
+    return fallback;
+  }
+  const programs = asOptionalRecord(resolveAliasedParamValue(sources, ["accessPrograms"]));
   if (!programs || Object.keys(programs).some((key) => key !== "cyber")) {
     return undefined;
   }

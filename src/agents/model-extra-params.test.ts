@@ -78,14 +78,18 @@ it("resolves inherited access configuration without merging objects or inventing
       entries: { fixture: { models: { [modelKey]: {} } } },
     },
   };
-  const read = () =>
-    resolveConfiguredCyberAccessProgram({
-      config,
-      agentId: "fixture",
-      provider: "openai",
-      modelId: "fixture-model",
-    });
+  const read = (fallback?: "standard") =>
+    resolveConfiguredCyberAccessProgram(
+      {
+        config,
+        agentId: "fixture",
+        provider: "openai",
+        modelId: "fixture-model",
+      },
+      fallback,
+    );
   expect(read()).toBeUndefined();
+  expect(read("standard")).toBe("standard");
   config.agents!.defaults!.params = { accessPrograms: { cyber: "daybreak_blue" } };
   expect(read()).toBe("daybreak_blue");
   config.agents!.defaults!.models![modelKey].params = { accessPrograms: { cyber: "daybreak_red" } };
@@ -105,5 +109,6 @@ it("resolves inherited access configuration without merging objects or inventing
   ]) {
     config.agents!.entries!.fixture.params = { accessPrograms };
     expect(read()).toBeUndefined();
+    expect(read("standard")).toBeUndefined();
   }
 });
