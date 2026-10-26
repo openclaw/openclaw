@@ -315,6 +315,7 @@ const repositoryScriptEntries = [
   "scripts/perf/pty-session-scan-measure.mjs!",
   "scripts/perf/publication-spawn-measure.ts!",
   "scripts/perf/replay-history-measure.ts!",
+  "scripts/perf/run-tool-validation-retention.ts!",
   "scripts/perf/session-actor-listener-measure.ts!",
   "scripts/perf/session-authority-retention.ts!",
   "scripts/perf/session-fork-retention-measure.mjs!",
