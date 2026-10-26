@@ -29,8 +29,8 @@ vi.mock("./onboard-helpers.js", async (importOriginal) => ({
 
 afterEach(() => clearPluginMetadataLifecycleCaches());
 
-it.each([false, true])("fresh Gateway metadata/cwd (pinned caller=%s)", async (pinnedCaller) => {
-  await withTestState({ env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } }, async (state) => {
+it.each([false, true])("fresh Gateway metadata/cwd (pinned caller=%s)", (pinnedCaller) =>
+  withTestState({ env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } }, async (state) => {
     const config: OpenClawConfig = {
       gateway: { mode: "local", auth: { mode: "none" } },
       agents: { defaults: { workspace: state.workspaceDir } },
@@ -43,21 +43,17 @@ it.each([false, true])("fresh Gateway metadata/cwd (pinned caller=%s)", async (p
       const initial = readMetadata();
       expect(initial.byPluginId.has("codex")).toBe(false);
       const installAndStart = async () => {
-        const pluginRoot = writeManagedNpmPlugin({
-          stateDir: state.stateDir,
-          packageName: "@fixture/codex",
-          pluginId: "codex",
-          version: "1.0.0",
-        });
         await withPluginLifecycleLease({}, async () => {
           await seedInstalledPluginIndex(
             {
               codex: {
                 source: "npm",
-                spec: "@fixture/codex@1.0.0",
-                installPath: pluginRoot,
-                resolvedName: "@fixture/codex",
-                resolvedVersion: "1.0.0",
+                installPath: writeManagedNpmPlugin({
+                  stateDir: state.stateDir,
+                  packageName: "@fixture/codex",
+                  pluginId: "codex",
+                  version: "1.0.0",
+                }),
               },
             },
             { config, env: process.env },
@@ -106,5 +102,5 @@ it.each([false, true])("fresh Gateway metadata/cwd (pinned caller=%s)", async (p
         ? withPluginRuntimeGenerationScope({ metadataSnapshot: initial }, installAndStart)
         : installAndStart());
     });
-  });
-});
+  }),
+);
