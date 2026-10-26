@@ -394,6 +394,7 @@ const repositoryScriptEntries = [
   "scripts/perf/session-child-owner-measure.ts!",
   "scripts/perf/session-initialization-measure.ts!",
   "scripts/perf/session-list-order-measure.mjs!",
+  "scripts/perf/gateway-session-store-shapes.mjs!",
   "scripts/perf/session-pr-currency-measure.ts!",
   "scripts/perf/session-run-progress-measure.ts!",
   "scripts/perf/session-tool-pin-measure.ts!",
