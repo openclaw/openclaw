@@ -81,28 +81,30 @@ describe.skipIf(!mixedAgentConnection)(
     // Payload reads project the decoded row as "event_json"; metadata reads only size it.
     const payloadQueries = () => observed.filter((sql) => sql.includes(' as "event_json"'));
 
-    it.each(["memory", "export"])("%s reads a large transcript in one snapshot", async (reader) => {
+    it("memory batch reads a large transcript in its read-only snapshot without the writer lock", async () => {
+      const { scope } = seedLargeSession();
+      const entry = {
+        absPath: path.join(path.dirname(scope.storePath), `${scope.sessionId}.jsonl`),
+        options: scope,
+      };
+      // The batch reads synchronously before the first await.
+      let prepared: ReturnType<typeof collectSessionMemoryEntries> | undefined;
+      withEngineStoreAdmission(() => {
+        prepared = collectSessionMemoryEntries([entry]);
+      });
+      const [result] = await prepared!;
+      expect(result && "entry" in result ? result.entry?.content : undefined).toContain("lobster");
+      expect(begins()).toEqual(["BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY"]);
+      expect(observed.filter((sql) => sql.includes("pg_advisory_xact_lock"))).toEqual([]);
+      expect(payloadQueries()).toHaveLength(1);
+    });
+
+    it("single export fetches every payload with one query", () => {
       const { events, scope } = seedLargeSession();
-      if (reader === "memory") {
-        const [result] = await withEngineStoreAdmission(() =>
-          collectSessionMemoryEntries([
-            {
-              absPath: path.join(path.dirname(scope.storePath), `${scope.sessionId}.jsonl`),
-              options: scope,
-            },
-          ]),
-        );
-        expect(result && "entry" in result ? result.entry?.content : undefined).toContain(
-          "lobster",
-        );
-        expect(begins()).toEqual(["BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY"]);
-        expect(observed.filter((sql) => sql.includes("pg_advisory_xact_lock"))).toEqual([]);
-      } else {
-        const snapshot = withEngineStoreAdmission(() =>
-          readTranscriptExportSnapshotReadOnlySync(scope),
-        );
-        expect(snapshot?.events).toEqual(events);
-      }
+      const snapshot = withEngineStoreAdmission(() =>
+        readTranscriptExportSnapshotReadOnlySync(scope),
+      );
+      expect(snapshot?.events).toEqual(events);
       expect(begins()).toHaveLength(1);
       expect(payloadQueries()).toHaveLength(1);
     });
