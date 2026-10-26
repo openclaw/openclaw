@@ -167,6 +167,14 @@ and its parent completion, even when recovery uses a new execution ID. A missing
 final reply still records a failure. This does not authorize automatic relaunch
 of unrelated interrupted child work.
 
+If the lifecycle listener misses that terminal event, the registry sweep uses
+the same recovery claim or receipt to find the registered wake's execution and
+its own terminal timestamps and reply. It does not credit a later parent
+follow-up to the wake. Without matching execution evidence, ordinary wait and
+recovery owners remain in charge; an ownerless run eventually reports failure
+at the existing stale-run cutoff (two hours, or its longer explicit timeout plus
+one minute). Duplicate events and sweeps keep the same parent completion.
+
 Recovery retires superseded requester-transfer generations before restoring the
 remaining claim. The current generation keeps its completion custody; obsolete
 transfers do not retry indefinitely. Registry hydration and startup transfer each

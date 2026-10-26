@@ -6,10 +6,16 @@ import {
   withSessionEntryReadOnlyInWorker,
 } from "../../../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { waitForAgentJob } from "../../../gateway/agent-turn/agent-job.js";
+import { isAgentEventLifecycleGenerationCurrent } from "../../../infra/agent-events.js";
 import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { isIncognitoSessionKey } from "../../../routing/session-key.js";
+import { buildAgentRunTerminalOutcomeFromWaitResult } from "../../agent-run-terminal-outcome.js";
+import type { AgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.types.js";
 import { withSubagentSessionSource } from "../spawn/subagent-session-source.js";
 import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
+import { classifySubagentTerminalOutcome } from "../subagent-terminal-outcome.js";
+import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
 import { hasRetainedRequiredCompletionDelivery } from "./subagent-delivery-state.js";
 import {
@@ -18,6 +24,7 @@ import {
   SUBAGENT_ENDED_REASON_KILLED,
   type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
+import { resolveRecoveredSubagentExecutions } from "./subagent-recovered-executions.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isStaleUnendedSubagentRun } from "./subagent-run-liveness.js";
 
@@ -31,7 +38,67 @@ export type SubagentSessionCompletion = {
   endedAt: number;
   outcome: SubagentRunOutcome;
   reason: SubagentLifecycleEndedReason;
+  terminalReply?: AgentRunTerminalReplySnapshot;
 };
+
+export async function resolveCompletionForSubagentRun(
+  entry: SubagentRunRecord,
+  session: SessionEntry | undefined,
+  assertCurrent: () => void,
+): Promise<SubagentSessionCompletion | null> {
+  const authority = resolveSubagentChildAuthority(entry, session);
+  if (!session || authority.status !== "verified") {
+    return null;
+  }
+  const recovered = entry.runId.startsWith("announce:requester-settle:")
+    ? [...resolveRecoveredSubagentExecutions(session)].findLast(
+        ([, source]) => source === entry.runId,
+      )
+    : undefined;
+  const executionRunId = recovered?.[0] ?? entry.runId;
+  const snapshot = await waitForAgentJob({ runId: executionRunId, timeoutMs: 0 });
+  assertCurrent();
+  if (
+    !snapshot?.session ||
+    snapshot.session.sessionId !== session.sessionId ||
+    snapshot.session.sessionKey !== entry.childSessionKey ||
+    (snapshot.session.agentId !== undefined &&
+      snapshot.session.agentId !== authority.childAgentId) ||
+    !isAgentEventLifecycleGenerationCurrent(snapshot.session.lifecycleGeneration) ||
+    (snapshot.yielded && !entry.collect) ||
+    typeof snapshot.endedAt !== "number"
+  ) {
+    return null;
+  }
+  const terminal = buildAgentRunTerminalOutcomeFromWaitResult(snapshot);
+  if (!terminal) {
+    return null;
+  }
+  const classification =
+    snapshot.yielded && terminal.status !== "timeout" && terminal.reason !== "blocked"
+      ? "success"
+      : classifySubagentTerminalOutcome(terminal);
+  return {
+    startedAt: snapshot.startedAt,
+    endedAt: snapshot.endedAt,
+    terminalReply: snapshot.terminalReply,
+    outcome:
+      classification === "success"
+        ? { status: "ok" }
+        : classification === "timeout"
+          ? { status: "timeout" }
+          : {
+              status: "error",
+              error: classification === "cancellation" ? "subagent run terminated" : terminal.error,
+            },
+    reason:
+      classification === "cancellation"
+        ? SUBAGENT_ENDED_REASON_KILLED
+        : classification === "success" || classification === "timeout"
+          ? SUBAGENT_ENDED_REASON_COMPLETE
+          : SUBAGENT_ENDED_REASON_ERROR,
+  };
+}
 
 function terminalSessionTimestamp(sessionEntry: SessionEntry | undefined): number | undefined {
   return asFiniteNumber(sessionEntry?.endedAt) ?? asFiniteNumber(sessionEntry?.updatedAt);
