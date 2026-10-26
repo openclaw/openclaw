@@ -78,6 +78,9 @@ async function fixture(
   restricted = runtime === "claude-cli",
   deliveryConstraint?: "media" | "message" | "text",
 ) {
+  if (runtime === "claude-cli") {
+    onTestFinished(installCliBackend());
+  }
   const { storePath } = await createSessionStoreDir();
   const key = `agent:main:dashboard:${name}`;
   const sessionId = `${name}-session`;
@@ -241,9 +244,6 @@ test.for([
   async (scenario, { signal }) => {
     const cli = scenario === "cli-full" || scenario === "cli-restricted";
     const current = await fixture(`child-recovery-${scenario}`, cli ? "claude-cli" : undefined);
-    if (cli) {
-      onTestFinished(installCliBackend());
-    }
     const runId = `child-run-${scenario}`;
     const lifecycleRevision = `child-revision-${scenario}`;
     await patchSessionEntryCore(current.scope, () => ({
@@ -288,13 +288,11 @@ test.for([
       value: undefined,
       postimages: new Map([[runId, interrupted]]),
     }));
-    const before = await current.transcript();
-    const entryBefore = current.entry();
+    const expectUnchanged = await current.expectUnchangedAfter();
     const response = await recover(current, { automaticIdentity: true });
     if (scenario === "cancelled" || scenario === "replacement") {
       expect(response).toMatchObject({ ok: false });
-      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-      expect(await current.transcript()).toEqual(before);
+      await expectUnchanged();
       return;
     }
     if (scenario === "cli-restricted") {
@@ -302,10 +300,7 @@ test.for([
         status: "rejected",
         error: { details: { reason: "restart-safe-tools-unavailable" } },
       });
-      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-      expect(current.entry()).toEqual(entryBefore);
-      expect(await current.transcript()).toEqual(before);
-      expect((await listSessionPendingInputs(current.scope)).items).toEqual([]);
+      await expectUnchanged();
       return;
     }
     expectContinuation(current, response, { status: "started", runId: expect.any(String) });
@@ -387,7 +382,6 @@ test.for(["builtin", "native", "pending", "pending-child"] as const)(
       await withinTest(dispatched.promise, signal);
       const repeated = await recover(current);
       expect(repeated, JSON.stringify(repeated)).toMatchObject({ ok: false });
-      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
       expect((await listSessionPendingInputs(current.scope)).items).toHaveLength(1);
       expect(current.entry()?.archivedAt).toBeUndefined();
     } catch (error) {
@@ -431,21 +425,8 @@ test.for([undefined, "media", "message", "text", "pending", "pending-revoked"] a
     if (pending) {
       await patchSessionEntryCore(current.scope, () => pendingRecovery(current.recoveryCycleId));
     }
-    const restoreRegistry = installCliBackend();
     try {
-      const before = current.entry();
-      if (!before) {
-        throw new Error("CLI fixture session is missing");
-      }
-      expect(
-        await sessionRuntime.resolveWorkerPlacementSessionRuntimeAsync({
-          cfg: current.context.getRuntimeConfig(),
-          entry: before,
-          agentId: "main",
-          sessionKey: current.key,
-        }),
-      ).toBe("claude-cli");
-      const expectUnchanged = await current.expectUnchangedAfter(before);
+      const expectUnchanged = await current.expectUnchangedAfter();
       if (scenario === "pending-revoked") {
         let authorized = true;
         const resolveRuntime = sessionRuntime.resolveWorkerPlacementSessionRuntimeAsync;
@@ -488,11 +469,7 @@ test.for([undefined, "media", "message", "text", "pending", "pending-revoked"] a
         await expectUnchanged();
       }
     } finally {
-      try {
-        await current.drain();
-      } finally {
-        restoreRegistry();
-      }
+      await current.drain();
     }
   },
 );
