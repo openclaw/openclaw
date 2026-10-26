@@ -19,6 +19,8 @@ const runCron = await harness.loadRunCronIsolatedAgentTurn();
 const sessionDirs = useSessionStoreTempDirs(afterAll, "cron-diagnostic-events-");
 let sessionStorePath: string;
 type TraceContext = trace.DiagnosticTraceContext;
+let events: diagnostics.DiagnosticEventPayload[];
+let published: diagnostics.DiagnosticEventPayload[];
 
 function makeParams(config: OpenClawConfig = {}) {
   return makeIsolatedAgentParamsFixture({
@@ -29,52 +31,46 @@ function fallback(agentMeta: Record<string, unknown>, diagnosticTrace?: TraceCon
   const result = { payloads: [{ text: "test output" }], meta: { agentMeta }, diagnosticTrace };
   return { result: { result }, provider: "openai", model: "gpt-5.4", attempts: [] };
 }
-async function runWithEvents(
-  params: Parameters<typeof runCron>[0] = makeParams(),
-  events: diagnostics.DiagnosticEventPayload[] = [],
-) {
-  const published: diagnostics.DiagnosticEventPayload[] = [];
-  const unsubscribePublic = diagnostics.onDiagnosticEvent((event) => published.push(event));
-  const unsubscribe = diagnostics.onInternalDiagnosticEvent((event) => events.push(event), {
-    include: [
-      "message.queued",
-      "message.dispatch.started",
-      "message.dispatch.completed",
-      "message.processed",
-      "session.state",
-      "model.usage",
-    ],
-  });
-  try {
-    const result = await runCron(params);
-    await diagnostics.waitForDiagnosticEventsDrained();
-    return { result, events, published };
-  } finally {
-    unsubscribe();
-    unsubscribePublic();
-  }
+async function runWithEvents(params: Parameters<typeof runCron>[0] = makeParams()) {
+  const result = await runCron(params);
+  await diagnostics.waitForDiagnosticEventsDrained();
+  return result;
 }
 
 describe("runCronIsolatedAgentTurn diagnostic events", () => {
   setupRunCronIsolatedAgentTurnSuite();
-  beforeEach(() => {
+  beforeEach(({ onTestFinished }) => {
     resetDiagnosticStateForTest();
     diagnostics.resetDiagnosticEventsForTest();
     sessionStorePath = path.join(sessionDirs.make(), "sessions.json");
     harness.resolveCronSessionMock.mockReturnValue(
       harness.makeCronSession({ storePath: sessionStorePath }),
     );
+    events = [];
+    published = [];
+    onTestFinished(diagnostics.onDiagnosticEvent((event) => published.push(event)));
+    onTestFinished(
+      diagnostics.onInternalDiagnosticEvent((event) => events.push(event), {
+        include: [
+          "message.queued",
+          "message.dispatch.started",
+          "message.dispatch.completed",
+          "message.processed",
+          "session.state",
+          "model.usage",
+        ],
+      }),
+    );
   });
 
   it("keeps lifecycle trace and adopted session identity through execution and parent restoration", async () => {
     const parent = trace.createDiagnosticTraceContext();
-    const observedEvents: diagnostics.DiagnosticEventPayload[] = [];
     let dispatchStartedBeforeExecution = false;
     let executionTrace: TraceContext | undefined;
     let harnessTrace: TraceContext | undefined;
     harness.runWithModelFallbackMock.mockImplementationOnce(async () => {
       await Promise.resolve();
-      dispatchStartedBeforeExecution = observedEvents.some(
+      dispatchStartedBeforeExecution = events.some(
         (event) => event.type === "message.dispatch.started",
       );
       executionTrace = trace.getActiveDiagnosticTraceContext();
@@ -85,14 +81,11 @@ describe("runCronIsolatedAgentTurn diagnostic events", () => {
       );
     });
 
-    const { result, events, published } = await trace.runWithDiagnosticTraceContext(
-      parent,
-      async () => {
-        const run = await runWithEvents(makeParams(), observedEvents);
-        expect(trace.getActiveDiagnosticTraceContext()).toEqual(parent);
-        return run;
-      },
-    );
+    const result = await trace.runWithDiagnosticTraceContext(parent, async () => {
+      const run = await runWithEvents();
+      expect(trace.getActiveDiagnosticTraceContext()).toEqual(parent);
+      return run;
+    });
     expect(result.status).toBe("ok");
     const starts = events.filter((event) => event.type === "message.dispatch.started");
     expect(starts).toHaveLength(1);
@@ -131,7 +124,7 @@ describe("runCronIsolatedAgentTurn diagnostic events", () => {
   });
 
   it("emits neither lifecycle nor usage events when diagnostics are disabled", async () => {
-    const { result, events } = await runWithEvents(makeParams({ diagnostics: { enabled: false } }));
+    const result = await runWithEvents(makeParams({ diagnostics: { enabled: false } }));
     expect(result.status).toBe("ok");
     expect(events).toEqual([]);
   });
@@ -142,7 +135,7 @@ describe("runCronIsolatedAgentTurn diagnostic events", () => {
       abortController.abort("cron: job execution timed out");
       return fallback({ sessionId: "late-session", usage: { input: 50, output: 10, total: 60 } });
     });
-    const { result, events } = await runWithEvents({
+    const result = await runWithEvents({
       ...makeParams(),
       abortSignal: abortController.signal,
     });

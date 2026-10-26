@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import { buildDefaultTestCliBackend } from "../../agents/cli-runner.test-helpers.js";
 import { FailoverError } from "../../agents/failover-error.js";
@@ -23,7 +23,7 @@ const actualCliRunner = await vi.importActual<typeof import("../../agents/cli-ru
 );
 
 const sessionId = "cron-sandbox-admission-session";
-const tempRoots: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
 
@@ -92,7 +92,7 @@ describe("cron isolated-agent sandbox placement admission", () => {
       const lease = await acquireRuntime(input, options);
       return { ...lease, snapshot: { ...lease.snapshot, isCurrent: () => true } };
     });
-    tempDir = makeTempDir(tempRoots, "cron-sandbox-admission-");
+    tempDir = tempDirs.make("cron-sandbox-admission-");
     const commandPath = path.join(tempDir, "test-cli-bin.sh");
     markerPath = path.join(tempDir, "cli-launched.marker");
     fs.writeFileSync(
@@ -137,10 +137,7 @@ describe("cron isolated-agent sandbox placement admission", () => {
     harness.runCliAgentMock.mockImplementation((params) => actualCliRunner.runCliAgent(params));
   });
 
-  afterEach(() => {
-    cliBackendsTesting.resetDepsForTest();
-    cleanupTempDirs(tempRoots);
-  });
+  afterEach(() => cliBackendsTesting.resetDepsForTest());
 
   const cliDefaults: AgentDefaults = { subagents: { model: "test-cli/claude-x" } };
   it.each<[string, AgentDefaults, { model?: string; required?: boolean; fallback?: boolean }]>([

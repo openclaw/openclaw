@@ -80,32 +80,29 @@ beforeEach(() => {
   harness.mockRunCronFallbackPassthrough();
 });
 
-it.each(["mismatched target", "provisioning failure", "revoked lease"])(
-  "rejects %s before file tools start",
-  async (mismatch) => {
-    const { record } = bindSession(mismatch !== "mismatched target");
-    if (mismatch === "revoked lease") {
-      worktrees.read.mockResolvedValueOnce(record).mockResolvedValueOnce(undefined);
-    } else if (mismatch === "provisioning failure") {
-      harness.ensureAgentWorkspaceMock.mockRejectedValueOnce(new Error("workspace unavailable"));
-    }
-    const target =
-      mismatch === "mismatched target" ? "agent:default:another-dashboard" : sessionKey;
-    const pending = run(`session:${target}`);
-    if (mismatch === "provisioning failure") {
-      await expect(pending).rejects.toThrow("workspace unavailable");
-    } else {
-      expect(await pending).toMatchObject({ status: "error" });
-      if (mismatch !== "revoked lease") {
-        expect(harness.ensureAgentWorkspaceMock).not.toHaveBeenCalled();
-      }
-    }
-    if (mismatch === "provisioning failure" || mismatch === "revoked lease") {
-      expect(worktrees.release).toHaveBeenCalledOnce();
-    }
-    expect(harness.runEmbeddedAgentMock).not.toHaveBeenCalled();
-  },
-);
+it("rejects a mismatched target before workspace preparation", async () => {
+  bindSession(false);
+  expect(await run("session:agent:default:another-dashboard")).toMatchObject({ status: "error" });
+  expect(harness.ensureAgentWorkspaceMock).not.toHaveBeenCalled();
+  expect(harness.runEmbeddedAgentMock).not.toHaveBeenCalled();
+});
+
+it.each(["provisioning failure", "revoked lease"])("releases the lease on %s", async (failure) => {
+  const { record } = bindSession();
+  if (failure === "revoked lease") {
+    worktrees.read.mockResolvedValueOnce(record).mockResolvedValueOnce(undefined);
+  } else {
+    harness.ensureAgentWorkspaceMock.mockRejectedValueOnce(new Error("workspace unavailable"));
+  }
+  const pending = run();
+  if (failure === "provisioning failure") {
+    await expect(pending).rejects.toThrow("workspace unavailable");
+  } else {
+    expect(await pending).toMatchObject({ status: "error" });
+  }
+  expect(worktrees.release).toHaveBeenCalledOnce();
+  expect(harness.runEmbeddedAgentMock).not.toHaveBeenCalled();
+});
 
 it("drains admitted workspace preparation before a lifecycle owner removes its binding", async () => {
   const { entry, record, session } = bindSession();

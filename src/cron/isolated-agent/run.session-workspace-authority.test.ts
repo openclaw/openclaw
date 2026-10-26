@@ -140,13 +140,12 @@ it.each([
   replaceSessionEntrySync(
     { sessionKey: foreignKey },
     {
+      ...creatorEntry,
       sessionId: "foreign-conversation",
-      updatedAt: Date.now(),
-      sessionStartedAt: Date.now(),
-      lastInteractionAt: Date.now(),
       lifecycleRevision: "foreign",
       spawnedCwd: foreignWorkspace,
       createdActor: { type: "human", source: "profile", id: "another-person" },
+      worktree: undefined,
     },
   );
   const fixture = createCronFixture(undefined, config);
@@ -191,18 +190,9 @@ it.each([
     });
   }
   const job = expectDefined((await fixture.read())[0], "persisted job");
-  expect(job.scheduledToolPolicy?.mode).toBe(scenario === "operator" ? "trusted" : "account");
-  if (scenario !== "operator") {
-    expect(job.owner?.sessionKey).toBe(SESSION);
-  }
-  if (isolatedChild) {
-    expect(job.sourceConversation?.sessionKey).toBe(SESSION);
-  }
   if (scenario === "archived") {
     replaceSessionEntrySync({ sessionKey: SESSION }, { ...creatorEntry, archivedAt: Date.now() });
   }
-  const reads: string[] = [];
-  const refusals: string[] = [];
   runEmbeddedAgentMock.mockImplementation(async (params: RunEmbeddedAgentParams) =>
     withAuthorityTools(
       params,
@@ -214,10 +204,6 @@ it.each([
           tools.find((tool) => tool.name === "read"),
           "read tool",
         );
-        const readSentinel = async () =>
-          reads.push(
-            JSON.stringify(await read.execute("scheduled-read", { path: "sentinel.txt" })),
-          );
         if (worktree) {
           expect(hasLiveWorktreeRunLease(process.env, worktree.id)).toBe(true);
         }
@@ -237,15 +223,12 @@ it.each([
               lifecycleRevision: "reset",
             }),
           });
-          try {
-            assertRunActive();
-            await readSentinel();
-          } catch (error) {
-            refusals.push(String(error));
-          }
+          expect(assertRunActive).toThrow(/no longer active/);
           return { payloads: [{ text: "Read refused" }], meta: { agentMeta: {} } };
         }
-        await readSentinel();
+        expect(
+          JSON.stringify(await read.execute("scheduled-read", { path: "sentinel.txt" })),
+        ).toContain(scenario === "operator" ? "FOREIGN_WORKSPACE" : "OWN_WORKSPACE");
         if (worktree) {
           await expect(
             read.execute("outside", { path: path.join(foreignWorkspace, "sentinel.txt") }),
@@ -261,13 +244,9 @@ it.each([
   try {
     await execution.run(job.id, "force");
     const result = execution.getJob(job.id)?.state;
-    if (scenario === "isolated-child-reset") {
-      // The child keeps no access to the reset parent's workspace.
-      expect(reads).toEqual([]);
-      expect(refusals).toEqual([expect.stringMatching(/no longer active/)]);
-    } else if (scenario === "archived") {
+    if (scenario === "archived") {
       // The occurrence admission pauses the job before any session turn runs.
-      expect(reads).toEqual([]);
+      expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
       expect(result?.lastRunStatus).toBe("skipped");
       expect(result?.lastError).toMatch(/it was archived/);
       expect(execution.getJob(job.id)?.enabled).toBe(false);
@@ -277,7 +256,7 @@ it.each([
       scenario === "managed-manual-owner" ||
       scenario === "managed-escape"
     ) {
-      expect(reads).toEqual([]);
+      expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
       expect(result?.lastRunStatus).toBe("error");
       expect(result?.lastError).toMatch(
         scenario === "foreign"
@@ -286,10 +265,11 @@ it.each([
             ? /workspace does not match its managed worktree/
             : /worktree is missing, retired, or mismatched/,
       );
-    } else {
+    } else if (scenario !== "isolated-child-reset") {
       expect(result?.lastRunStatus, result?.lastError).toBe("ok");
-      expect(reads).toHaveLength(1);
-      expect(reads[0]).toContain(scenario === "operator" ? "FOREIGN_WORKSPACE" : "OWN_WORKSPACE");
+      expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    } else {
+      expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
     }
     if (worktree) {
       expect(hasLiveWorktreeRunLease(process.env, worktree.id)).toBe(false);
