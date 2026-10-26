@@ -5,7 +5,6 @@ import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { attribute, inputValue, text } from "./cron-assertions.test-support.ts";
 import {
   createCronViewJob,
-  getButton,
   getElement,
   openCronMenu,
   renderCronView,
@@ -40,14 +39,14 @@ it.each([
     expect(toggle).toMatchObject({ title: actionLabel });
     expect(toggleInput.checked).toBe(enabled);
 
-    getButton(row, ".cron-row-run").click();
+    getElement(row, ".cron-row-run", HTMLButtonElement).click();
     expect(onRun).toHaveBeenCalledExactlyOnceWith(job, "force");
     toggleInput.checked = !enabled;
     toggleInput.dispatchEvent(new Event("change", { bubbles: true }));
     expect(onToggle).toHaveBeenCalledExactlyOnceWith(job, !enabled);
     await openCronMenu(row, ".cron-job-menu");
     expect(row.querySelectorAll('.cron-job-menu [role="menuitem"]')).toHaveLength(3);
-    getButton(row, '.cron-job-menu [data-value="run-if-due"]').click();
+    getElement(row, '.cron-job-menu [data-value="run-if-due"]', HTMLButtonElement).click();
     await waitForSolid(() => expect(onRun).toHaveBeenLastCalledWith(job, "due"));
     expect(onRun).toHaveBeenCalledTimes(2);
     expect(onSelectJob).not.toHaveBeenCalled();
@@ -67,7 +66,11 @@ it.each([
     expect(text(detail, ".cron-detail-title")).toBe(expected);
     expect(inputValue(detail, "#cron-name")).toBe("Unsaved stable name");
     await openCronMenu(detail, ".cron-detail-actions .cron-job-menu");
-    const detailDue = getButton(detail, '.cron-detail-actions [data-value="run-if-due"]');
+    const detailDue = getElement(
+      detail,
+      '.cron-detail-actions [data-value="run-if-due"]',
+      HTMLButtonElement,
+    );
     expect(document.activeElement).toBe(detailDue);
     detailDue.click();
     await waitForSolid(() => expect(onRun).toHaveBeenCalledTimes(3));

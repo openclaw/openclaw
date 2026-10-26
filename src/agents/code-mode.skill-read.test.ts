@@ -1,13 +1,18 @@
 import { afterEach, expect, it, onTestFinished } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSkillsPrompt } from "../skills/loading/workspace-skill-prompt.js";
 import { createFixtureSkillEntry } from "../skills/test-support/test-helpers.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { resolveCodeModeSkills } from "./code-mode-skills.js";
-import { applyCodeModeCatalog, buildCodeModeCatalogPrompt } from "./code-mode.js";
+import {
+  applyCodeModeCatalog,
+  buildCodeModeCatalogPrompt,
+  createCodeModeTools,
+} from "./code-mode.js";
 import { createCatalogCodeModeHarness, resetCodeModeTestState } from "./code-mode.test-support.js";
 import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
-import { clearToolSearchCatalog } from "./tool-search-catalog.js";
+import { clearToolSearchCatalog, createToolSearchCatalogRef } from "./tool-search-catalog.js";
 import { createInstalledSkillTools } from "./tools/installed-skill-tools.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -72,6 +77,23 @@ it("reads a known skill with resource context before discovery through the worke
         `${locationNote}\n\n${body}`,
     },
   });
+});
+
+it("keeps tool schemas stable across run catalogs", () => {
+  const config: OpenClawConfig = { tools: { codeMode: true } };
+  const serializeRun = (runId: string, targetName: string) => {
+    const catalogRef = createToolSearchCatalogRef();
+    const ctx = { config, catalogRef, sessionKey: "agent:main:cache-proof", runId };
+    onTestFinished(() => clearToolSearchCatalog(ctx));
+    const { tools } = applyCodeModeCatalog({
+      ...ctx,
+      tools: [...createCodeModeTools(ctx), createStubTool(targetName)],
+    });
+    return JSON.stringify(
+      tools.map(({ name, description, parameters }) => ({ name, description, parameters })),
+    );
+  };
+  expect(serializeRun("second", "lookup")).toBe(serializeRun("first", "exec"));
 });
 
 it("keeps core signatures visible when the catalog overflows", () => {

@@ -5,6 +5,7 @@ import { promisify } from "node:util";
 import * as jsonReader from "@openclaw/fs-safe/json";
 import { describe, expect, it, vi } from "vitest";
 import { CODEX_ACP_PACKAGE, OPENCLAW_CODEX_CONFIG_ARG } from "./codex-adapter.js";
+import { prepareAcpxCodexAuthConfig } from "./codex-auth-bridge.js";
 import { useAuthBridgeFixture } from "./codex-auth-bridge.test-support.js";
 import { splitCommandParts } from "./command-line.js";
 
@@ -27,6 +28,37 @@ const maintainedArgs = [
 ];
 
 describe("prepareAcpxCodexAuthConfig command migration", () => {
+  it("migrates config flags from a bare Codex ACP executable", async () => {
+    const { root, config, generated, prepare } = fixture();
+    const resolved = await prepare(
+      { pluginConfig: config("codex-acp -cmodel='\"gpt-5.4\"'") },
+      path.join(root, "codex-acp.js"),
+    );
+    expect(splitCommandParts(resolved.agents.codex ?? "")).toEqual([
+      process.execPath,
+      generated.wrapperPath,
+      OPENCLAW_CODEX_CONFIG_ARG,
+      JSON.stringify({ model: "gpt-5.4" }),
+    ]);
+  });
+
+  it("normalizes an explicitly configured Claude ACP npx command to the local wrapper", async () => {
+    const { stateDir, config } = fixture();
+    const resolved = await prepareAcpxCodexAuthConfig({
+      pluginConfig: config(
+        "npx -y @agentclientprotocol/claude-agent-acp@0.31.4 --permission-mode bypass",
+        "claude",
+      ),
+      stateDir,
+    });
+    expect(resolved.agents.claude).toEqual([
+      process.execPath,
+      path.join(stateDir, "acpx", "claude-agent-acp-wrapper.mjs"),
+      "--permission-mode",
+      "bypass",
+    ]);
+  });
+
   it.each([
     {
       name: "Zed package config",

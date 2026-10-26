@@ -96,6 +96,9 @@ export function renderAnalyzedFormFixture(
 }
 
 export function expectElement<T extends Element>(element: T | null | undefined, label: string): T {
-  expect.assert(element instanceof Element, `missing ${label}`);
+  expect(element instanceof Element, label).toBe(true);
+  if (!(element instanceof Element)) {
+    throw new Error(`missing ${label}`);
+  }
   return element;
 }
