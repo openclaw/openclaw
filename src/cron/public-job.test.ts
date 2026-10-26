@@ -35,8 +35,7 @@ describe("toPublicCronJob", () => {
       timeoutSeconds: 300,
       toolBudget: 50,
     } as const;
-    const job = makeCronJob({ payload, state });
-    const result = publicJob(job);
+    const result = publicJob(makeCronJob({ payload, state }));
     expect(result).toMatchObject({ payload });
     expect(result.state).toStrictEqual({
       nextRunAtMs: 2_000,
@@ -45,12 +44,6 @@ describe("toPublicCronJob", () => {
   });
 
   it("strips runtime and executable provenance without mutating the stored job", () => {
-    const channelRequester = {
-      version: 1 as const,
-      channel: "discord",
-      accountId: "work",
-      senderId: "123456789012345678",
-    };
     const target = { version: 1, host: "gateway", ask: "always" } as const;
     const fields: Partial<CronStoredJob> = {
       runtimeAuthority: {
@@ -64,7 +57,7 @@ describe("toPublicCronJob", () => {
         version: 1,
         source: "final-executable-surface",
         callerOrigin: { kind: "unknown" },
-        channelRequester,
+        channelRequester: { version: 1, channel: "discord", accountId: "work", senderId: "123" },
       },
       toolsAllowExecTarget: target,
       toolsAllowExecTargetRequirement: { version: 1, target, grantIndex: 0 },
@@ -94,8 +87,7 @@ describe("toPublicCronJob", () => {
     );
     expect(toPublicCronJob(makeCronJob({}))).not.toHaveProperty("streamExecutionHost");
     for (const storedJob of [job, { ...job, streamSandbox: undefined }]) {
-      const view = cronJobReadView(storedJob);
-      const definition = cronJobDefinitionFromReadView(view);
+      const definition = cronJobDefinitionFromReadView(cronJobReadView(storedJob));
       expect(definition).not.toHaveProperty("streamExecutionHost");
       expect(definition.schedule).toEqual(storedJob.schedule);
     }

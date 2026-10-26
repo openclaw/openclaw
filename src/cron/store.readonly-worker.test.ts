@@ -24,17 +24,10 @@ it.each([false, true])(
       const observation = observeSqliteReadSql(StatementSync.prototype);
       try {
         const findings = await collectLegacyCronStoreHealthFindings({ cfg: {} });
-        expect(findings).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({
-              requirement: "quarantined-cron-rows",
-              message: expect.stringContaining("1 quarantined cron job row"),
-            }),
-          ]),
-        );
-        expect(observation.queries.filter((sql) => sql.includes('"diagnostic_events"'))).toEqual(
-          [],
-        );
+        expect(
+          findings.find((finding) => finding.requirement === "quarantined-cron-rows"),
+        ).toMatchObject({ message: expect.stringContaining("1 quarantined cron job row") });
+        expect(observation.queries.some((sql) => sql.includes('"diagnostic_events"'))).toBe(false);
       } finally {
         observation.restore();
       }
@@ -85,10 +78,10 @@ it("leaves missing databases absent and legacy layouts unmigrated", async () => 
     await expect(fs.stat(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
     await state.createDatabase("CREATE TABLE legacy_marker(value TEXT); PRAGMA user_version = 1;");
     const before = await state.bytes();
-    expect(await state.read(true)).toEqual(empty);
-    expect(await state.bytes()).toEqual(before);
-    expect(await state.read()).toEqual(empty);
-    expect(await state.bytes()).toEqual(before);
+    for (const preserve of [true, false]) {
+      expect(await state.read(preserve)).toEqual(empty);
+      expect(await state.bytes()).toEqual(before);
+    }
   });
 });
 
