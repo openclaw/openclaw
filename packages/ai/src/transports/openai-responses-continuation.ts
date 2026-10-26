@@ -101,14 +101,15 @@ function projectJsonValue(value: unknown, key: string, ancestors: Set<object>): 
   }
 }
 
+function projectJsonObject(value: object): unknown {
+  const projected = projectJsonValue(value, "", new Set());
+  // A root toJSON returning undefined was not valid JSON either.
+  return projected === undefined ? JSON.parse("undefined") : projected;
+}
+
 function jsonValuesEqual(left: object, right: object): boolean {
-  const normalize = (value: object) => {
-    const projected = projectJsonValue(value, "", new Set());
-    // A root toJSON returning undefined was not a valid JSON comparison either.
-    return projected === undefined ? JSON.parse("undefined") : projected;
-  };
   // Finish the left side before evaluating any right-side hook values.
-  return isDeepStrictEqual(normalize(left), normalize(right));
+  return isDeepStrictEqual(projectJsonObject(left), projectJsonObject(right));
 }
 
 function requestWithoutInput(request: ResponsesContinuationRequest): ResponsesContinuationRequest {
@@ -335,19 +336,19 @@ function normalizeContinuationHistory(input: readonly unknown[]): unknown[] | un
 export function responsesContinuationRequestFingerprint(
   request: ResponsesContinuationRequest,
 ): string {
-  const serialized = JSON.stringify(requestWithoutInput(request));
-  return sha256StableValue(JSON.parse(serialized)).digest;
+  return sha256StableValue(projectJsonObject(requestWithoutInput(request))).digest;
 }
 
 export function responsesContinuationPrefixFingerprint(
   input: readonly unknown[],
   output: readonly unknown[] = [],
 ): string {
-  const serialized = JSON.stringify([
-    ...normalizeAssistantReplayInput(input),
-    ...normalizeAssistantReplayInput(output, true),
-  ]);
-  return sha256StableValue(JSON.parse(serialized)).digest;
+  return sha256StableValue(
+    projectJsonObject([
+      ...normalizeAssistantReplayInput(input),
+      ...normalizeAssistantReplayInput(output, true),
+    ]),
+  ).digest;
 }
 
 export function resolveResponsesContinuationRequest(
@@ -511,6 +512,7 @@ type HttpContinuationEntry =
       state: ResponsesContinuationState;
       idleTimer: ReturnType<typeof setTimeout>;
       retainedBytes: number;
+      strings: ReadonlyMap<string, number>;
     }
   | { kind: "claimed"; sessionId: string; owner: SessionResourceOwner };
 
@@ -587,6 +589,27 @@ function connectionIdentity(params: HttpContinuationIdentity): string {
   );
 }
 
+// Strings are immutable: reuse their exact byte counts by value, never by mutable
+// item identity. Each ready entry retains only its current strings; eviction and
+// session cleanup drop the counts with the baseline.
+function retainedJsonBytes(value: unknown, previous?: ReadonlyMap<string, number>) {
+  const strings = new Map<string, number>();
+  let stringBytes = 0;
+  const skeleton = JSON.stringify(value, (_key, member: unknown) => {
+    if (typeof member !== "string") {
+      return member;
+    }
+    let bytes = strings.get(member) ?? previous?.get(member);
+    if (bytes === undefined) {
+      bytes = Buffer.byteLength(JSON.stringify(member), "utf8") - 2;
+    }
+    strings.set(member, bytes);
+    stringBytes += bytes;
+    return "";
+  });
+  return { retainedBytes: stringBytes + Buffer.byteLength(skeleton, "utf8"), strings };
+}
+
 export function claimOpenAIResponsesHttpContinuation(
   params: HttpContinuationIdentity & {
     sessionId: string;
@@ -628,7 +651,7 @@ export function claimOpenAIResponsesHttpContinuation(
         previous !== undefined && dispatchedPreviousResponseId === previous.state.lastResponseId,
       );
       // Serialized-content budget, not JavaScript heap overhead.
-      const retainedBytes = Buffer.byteLength(JSON.stringify(state), "utf8");
+      const { retainedBytes, strings } = retainedJsonBytes(state, previous?.strings);
       if (retainedBytes > MAX_HTTP_CONTINUATION_RETAINED_BYTES) {
         // Keep other sessions when this baseline cannot fit alone. Its next
         // request sends full history; the completed response remains valid.
@@ -642,6 +665,7 @@ export function claimOpenAIResponsesHttpContinuation(
         state,
         idleTimer: owner.runInDetachedAsyncContext(() => createHttpContinuationTimer(key)),
         retainedBytes,
+        strings,
       } satisfies Extract<HttpContinuationEntry, { kind: "ready" }>;
       httpContinuationRetainedBytes += retainedBytes;
       httpContinuationEntries.set(key, ready);

@@ -42,6 +42,19 @@ type ChildAuthorityEntry = Pick<
 > &
   Partial<Pick<SubagentRunRecord, "requesterSessionKey" | "requesterAgentId">>;
 type SessionIdentity = { sessionId?: string; lifecycleRevision?: string };
+
+export function matchesSubagentChildSessionIdentity(
+  entry: Pick<SubagentRunRecord, "childSessionIdentity">,
+  currentSession: SessionIdentity | null,
+): boolean {
+  const original = entry.childSessionIdentity;
+  return (
+    (!original?.sessionId || original.sessionId === currentSession?.sessionId) &&
+    (!original?.lifecycleRevision ||
+      original.lifecycleRevision === currentSession?.lifecycleRevision)
+  );
+}
+
 type SubagentChildAuthority =
   | {
       status: "verified";
@@ -65,12 +78,7 @@ export function resolveSubagentChildAuthority(
   const original = entry.childSessionIdentity;
   const sessionId = original?.sessionId?.trim();
   const lifecycleRevision = original?.lifecycleRevision?.trim();
-  if (
-    currentSession !== undefined &&
-    ((original?.sessionId && original.sessionId !== currentSession?.sessionId) ||
-      (original?.lifecycleRevision &&
-        original.lifecycleRevision !== currentSession?.lifecycleRevision))
-  ) {
+  if (currentSession !== undefined && !matchesSubagentChildSessionIdentity(entry, currentSession)) {
     return { status: "mismatch", error: refusal("original session incarnation changed") };
   }
   const requesterAgentId = resolveSubagentChildAgentId({

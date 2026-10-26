@@ -231,3 +231,35 @@ it.each(["small", "large"])("owns and reuses %s offset segments per window", asy
   }
   expect(retained.get(10)).not.toBe(retained.get(15));
 });
+
+it.each([512, 2048])(
+  "reuses complete %i-byte-segment frames across negotiated peers",
+  async (size) => {
+    const text = "shared é🦞 ".repeat(size);
+    const bytes = Buffer.from(JSON.stringify({ text }));
+    const segments = Array.from({ length: Math.ceil(bytes.length / size) }, (_, index) =>
+      bytes.subarray(index * size, (index + 1) * size),
+    );
+    const frame = new SerializedGatewayFrame(segments);
+    const retained = new Map<number, Buffer | SerializedGatewayFrame>();
+    for (const windowBits of [15, 10, 15, 10]) {
+      const { peer, codec, transport } = await connectTransport({
+        serverMaxWindowBits: windowBits,
+      });
+      using compress = vi.spyOn(codec, "compress");
+      const received = once(peer, "message");
+      await send(transport, frame);
+      const [data, binary] = await received;
+      expect(binary).toBe(false);
+      expect(data).toEqual(bytes);
+      const payload = compress.mock.results[0]?.value;
+      expect(payload).toBeDefined();
+      if (retained.has(windowBits)) {
+        expect(payload).toBe(retained.get(windowBits));
+      } else {
+        retained.set(windowBits, payload!);
+      }
+    }
+    expect(retained.get(10)).not.toBe(retained.get(15));
+  },
+);

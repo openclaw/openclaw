@@ -55,7 +55,7 @@ beforeEach(() => {
     stderr: "",
     stdout: JSON.stringify({
       ...JSON.parse(nodeProbeOutput("26.12.1").stdout),
-      bunVersion: path.basename(executable) === "bun" ? "1.4.3" : null,
+      bunVersion: path.basename(executable) === "bun" ? "1.4.4" : null,
     }),
   }));
   vi.mocked(service.isLoaded).mockResolvedValue(true);

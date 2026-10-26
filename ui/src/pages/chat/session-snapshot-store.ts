@@ -46,13 +46,15 @@ import { deleteStoredChatSnapshot } from "./session-snapshot-invalidation.ts";
 import {
   consumePrewarmedChatSnapshot,
   discardPrewarmedChatSnapshot,
+  loadChatHistoryStateValidator,
   peekPrewarmedChatSnapshot,
+  prewarmedHistoryStateValidator,
+  readSharedPrewarm,
 } from "./session-snapshot-prewarm.ts";
 const CHAT_SNAPSHOT_PROJECTION_VERSION = 5;
 const CHAT_SNAPSHOT_MESSAGE_LIMIT = 80;
 const CHAT_SNAPSHOT_WRITE_DELAY_MS = 500;
 const CHAT_SNAPSHOT_IDLE_TIMEOUT_MS = 1000;
-const parsedPrewarms = new WeakMap<object, Promise<ChatSessionSnapshot | null>>();
 
 const nonnegative = json.refine(json.number, (value) => value >= 0);
 const sessionKeySchema = json.refine(json.text, (value) => value.length > 0);
@@ -186,8 +188,9 @@ async function parseSnapshotRecord(
   if (historyState !== undefined) {
     // Do not hold board restoration behind the lazy transcript validator.
     onBoard?.(parsed.snapshot.board);
-    const { isChatHistoryState } =
-      await import("../../lib/protocol-validators.generated/history-state.js");
+    // A repeated dynamic import can yield past dispatch even after prewarm evaluated it.
+    const isChatHistoryState =
+      prewarmedHistoryStateValidator ?? (await loadChatHistoryStateValidator());
     if (!isChatHistoryState(historyState)) {
       return null;
     }
@@ -220,18 +223,6 @@ async function readSnapshotRecord(
   return record?.snapshot ?? null;
 }
 
-function readSharedPrewarm(
-  entry: object,
-  read: () => Promise<ChatSessionSnapshot | null>,
-): Promise<ChatSessionSnapshot | null> {
-  let snapshot = parsedPrewarms.get(entry);
-  if (!snapshot) {
-    snapshot = read();
-    parsedPrewarms.set(entry, snapshot);
-  }
-  return snapshot;
-}
-
 export async function readPrewarmedChatSnapshot(
   cacheKey: string,
 ): Promise<ChatSessionSnapshot | null> {
@@ -243,7 +234,7 @@ export async function readPrewarmedChatSnapshot(
     entry.promise.then((value) =>
       readSnapshotRecord(entry.cacheKey, value, () => !entry.cancelled),
     ),
-  );
+  ).promise;
   return snapshot && !entry.cancelled && peekPrewarmedChatSnapshot() === entry ? snapshot : null;
 }
 
@@ -546,6 +537,7 @@ export class SessionSnapshotStore implements ChatCacheObserver {
   async read(
     sessionKey: string,
     onBoard?: (board: ChatSessionSnapshot["board"]) => void,
+    onReady?: (snapshot: ChatSessionSnapshot) => void,
   ): Promise<ChatSessionSnapshot | null> {
     const scope = this.captureReadScope(sessionKey);
     try {
@@ -554,7 +546,11 @@ export class SessionSnapshotStore implements ChatCacheObserver {
         (prewarm?.promise ?? readStoredChatSnapshotRecord(sessionKey)).then((value) =>
           readSnapshotRecord(sessionKey, value, scope.isCurrent, onBoard),
         );
-      const snapshot = await (prewarm ? readSharedPrewarm(prewarm, read) : read());
+      const prepared = prewarm ? readSharedPrewarm(prewarm, read) : undefined;
+      if (prepared?.snapshot && scope.isCurrent() && !prewarm?.cancelled) {
+        onReady?.(prepared.snapshot);
+      }
+      const snapshot = await (prepared?.promise ?? read());
       if (!snapshot || !scope.isCurrent()) {
         return null;
       }

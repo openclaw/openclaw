@@ -397,6 +397,11 @@ still applies, but files too large to preview retain their download action.
 Folders are not downloadable. Downloads require the Control UI and its Gateway
 connection to share an origin (including a same-origin Gateway proxy).
 
+Detected PDFs opened from chat file links or the Files panel use the same
+browser-native preview as PDF attachments, up to 16 MiB. Preview failures and
+larger PDFs retain **Download file**. Rendering depends on your browser's PDF
+support; the generic text and image inline-preview limit is unchanged.
+
 Downloads use the session's existing file-read access, including managed repository
 workspaces. Provider-backed node workspaces whose bridge only supports whole-file
 reads do not yet support downloads. Authorization errors appear in the UI; transfer

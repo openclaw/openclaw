@@ -346,6 +346,56 @@ describe("resident catalog rollout currency", () => {
     expect(row?.name).toBeUndefined();
   });
 
+  it("parses catalog events once without deserializing unrelated rollout payloads", async () => {
+    const unrelated = [
+      line("response_item", { type: "function_call_output", output: "tool result" }),
+      line("turn_context", { cwd: "/workspace/context" }),
+      event("agent_message", { message: "assistant response" }),
+      event("token_count", { total_tokens: 100 }),
+    ];
+    const f = await fixture(
+      meta() + unrelated.join("").repeat(20) + message("First request") + settings(),
+    );
+    await f.read();
+    const parse = vi.spyOn(JSON, "parse");
+    expect(await f.read()).toMatchObject({
+      id: "native-thread",
+      preview: "First request",
+      cwd: "/workspace/moved",
+    });
+    expect(parse.mock.calls.filter(([text]) => text === meta().trim())).toHaveLength(1);
+    for (const record of unrelated) {
+      expect(parse).not.toHaveBeenCalledWith(record.trim());
+    }
+  });
+
+  it("preserves escaped event tags, reordered fields and malformed interior lines", async () => {
+    const escape = (text: string) =>
+      text.replace(/type|event_msg|user_message|thread_settings_applied|turn_started/gu, (tag) =>
+        tag
+          .split("")
+          .map((char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`)
+          .join(""),
+      );
+    const f = await fixture(
+      meta() +
+        "not json\nnull\n" +
+        escape(message("Escaped request")) +
+        escape(settings()) +
+        escape(event("turn_started", { started_at: 123 })) +
+        '{ "payload" : { "started_at" : 456, "type" : "task_started" }, "type" : "event_msg" }\n' +
+        event("thread_settings_applied", {
+          thread_settings: { cwd: "/workspace/incomplete" },
+        }).slice(0, -1),
+    );
+    expect(await f.read()).toMatchObject({
+      id: "native-thread",
+      preview: "Escaped request",
+      cwd: "/workspace/moved",
+      recencyAt: 456,
+    });
+  });
+
   it("reads preview and current workspace from opposite ends of a large rollout", async () => {
     const f = await fixture(
       meta() +
@@ -397,7 +447,7 @@ describe("resident catalog rollout currency", () => {
     expect((await f.read())?.recencyAt).toBe(Math.floor(Date.parse(createdAt) / 1_000));
   });
 
-  it.each(["", meta().slice(0, -1)])(
+  it.each(["", meta().slice(0, -1), `\n${meta()}`, `null\n${meta()}`, `broken\n${meta()}`])(
     "retries incomplete metadata rather than inventing a row (%j)",
     async (contents) => {
       const f = await fixture(contents);
