@@ -1,18 +1,11 @@
 import { once } from "node:events";
 import { connect, createServer, type Socket } from "node:net";
 import { serialize } from "node:v8";
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { reserveTestPortListener } from "../../test-utils/port-claims.js";
 import { MAX_PENDING_BYTES } from "./ipc.js";
 import { createBrokerResourceSocket } from "./resource-socket.js";
-
-const cleanups: Array<() => Promise<void>> = [];
-afterEach(async () => {
-  for (const cleanup of cleanups.splice(0).toReversed()) {
-    await cleanup();
-  }
-});
 
 async function socketPair() {
   const reservation = await reserveTestPortListener({
@@ -20,7 +13,7 @@ async function socketPair() {
     createListener: () => createServer(),
   });
   const sockets: Socket[] = [];
-  cleanups.push(async () => {
+  onTestFinished(async () => {
     await Promise.all(
       sockets
         .filter((socket) => !socket.closed)
@@ -136,9 +129,5 @@ it("rejects queued writes when the peer closes without reading them", async () =
   );
   peer.destroy();
   await closed;
-  expect((await writes).map((result) => result.status)).toEqual([
-    "rejected",
-    "rejected",
-    "rejected",
-  ]);
+  expect((await writes).map((result) => result.status)).toEqual(Array(3).fill("rejected"));
 });

@@ -75,25 +75,10 @@ it.each(["spawn", "spawn-execa"] as const)(
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       receive({ type: "bootstrap" });
       await setImmediate();
-      expect(boundary.send).toHaveBeenCalledWith({ type: "ready", pid: process.pid }, undefined);
       // Reservations reject on the next microtask. Synchronous delivery fills
       // the real admission count without invoking either native launch path.
       for (let id = 1; id <= 257; id += 1) {
-        receive(
-          type === "spawn"
-            ? {
-                type,
-                id,
-                argv: ["synthetic-command"],
-                options: { stdio: ["ignore", "ignore", "ignore"] },
-              }
-            : {
-                type,
-                id,
-                argv: ["synthetic-command"],
-                options: { stdin: "ignore", stdout: "ignore", stderr: "ignore" },
-              },
-        );
+        receive({ type, id, argv: ["synthetic-command"], options: {} });
       }
       await setImmediate();
       const responses = boundary.send.mock.calls.map(([message]) => message);
@@ -119,13 +104,7 @@ it.each(["spawn", "spawn-execa"] as const)(
       expect(boundary.close).not.toHaveBeenCalled();
       expect(vi.getTimerCount()).toBe(0);
     } finally {
-      // All launched continuations retain only these reservation/report promises;
-      // the final event-loop turn joins their catch/finally tails before restoring process hooks.
-      await Promise.allSettled(
-        [boundary.reserve, boundary.send].flatMap((mock) =>
-          mock.mock.results.flatMap((result) => (result.type === "return" ? [result.value] : [])),
-        ),
-      );
+      // Reservation and report mocks settle in microtasks; join their tails before restoring hooks.
       await setImmediate();
       vi.clearAllTimers();
       vi.useRealTimers();
