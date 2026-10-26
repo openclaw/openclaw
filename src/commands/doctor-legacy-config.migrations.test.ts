@@ -220,6 +220,9 @@ describe("normalizeCompatibilityConfigValues", () => {
       "custom/kept": { alias: "kept" },
       "openai/gpt-6-astra": {},
     });
+    expect(result.changes).toContain(
+      'Added agents.defaults.models entry "openai/gpt-6-astra" to keep the repaired allowlist restrictive.',
+    );
     expect(result.config.agents?.entries?.main).toMatchObject({
       models: { "plugin-provider/kept": {}, "openai/gpt-6-astra": {} },
     });
@@ -297,18 +300,6 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(result.config.agents?.entries?.worker?.model).toBeUndefined();
     expect(result.changes).toContain(
       'Removed stale agents.entries.worker.model "deleted/worker" so agent "worker" inherits the default model (provider "deleted" is unavailable).',
-    );
-  });
-
-  it("keeps a repaired model allowlist restrictive", () => {
-    mockPluginProviders();
-    const result = repairModelRefs({
-      agents: { defaults: { model: "deleted/main", models: { "deleted/main": {} } } },
-    });
-
-    expect(result.config.agents?.defaults?.models).toEqual({ "openai/gpt-6-astra": {} });
-    expect(result.changes).toContain(
-      'Added agents.defaults.models entry "openai/gpt-6-astra" to keep the repaired allowlist restrictive.',
     );
   });
 
