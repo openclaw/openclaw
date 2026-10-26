@@ -97,12 +97,7 @@ export async function observe(
 }
 
 export async function observePartial() {
-  const onAgentEvent = vi.fn();
   const onPartialReply = vi.fn();
-  const projector = await createProjector({
-    ...(await createParams()),
-    onAgentEvent,
-    onPartialReply,
-  });
+  const { projector, onAgentEvent } = await observe({ onPartialReply });
   return { projector, onAgentEvent, onPartialReply };
 }
