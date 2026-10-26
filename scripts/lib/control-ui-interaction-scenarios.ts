@@ -1,6 +1,6 @@
-import type { ElementHandle, Locator, Page } from "playwright";
+import type { ElementHandle, Page } from "playwright";
 import { buildWidgetDocument } from "../../src/canvas/wrap.ts";
-import type { ConfigSchemaResponse, CronJob } from "../../ui/src/api/types.ts";
+import type { ConfigSchemaResponse, CronJob, GatewaySessionRow } from "../../ui/src/api/types.ts";
 import { pathForAgentPanel, pathForRoute } from "../../ui/src/app-route-paths.ts";
 import { createSkill } from "../../ui/src/pages/skills/view.test-support.ts";
 import type {
@@ -14,7 +14,6 @@ import {
   type ControlUiMockGatewayScenario,
   waitForControlUiRoute,
 } from "../../ui/src/test-helpers/control-ui-e2e.ts";
-import { navigationDrawerToggle } from "../../ui/src/test-helpers/control-ui-navigation.ts";
 import type { ProjectionFamily } from "../../ui/src/test-helpers/control-ui-projection-fixture-contract.ts";
 import { mcpResourceHtml } from "../../ui/src/test-helpers/control-ui-team-scale-widget-html.ts";
 import { cronListResponseFixture } from "../../ui/src/test-helpers/cron.ts";
@@ -23,9 +22,29 @@ import {
   browserResourceMethodResponses,
   createBrowserResourceScenarios,
 } from "./control-ui-browser-resource-scenarios.ts";
+import { dataActivityScenarios } from "./control-ui-data-activity-scenarios.ts";
+import { dataBoardScenarios } from "./control-ui-data-board-scenarios.ts";
+import { dataCatalogScenarios } from "./control-ui-data-catalog-scenarios.ts";
+import { dataLogScenarios } from "./control-ui-data-log-scenarios.ts";
+import { dataUsageScenarios } from "./control-ui-data-usage-scenarios.ts";
 import { heavyContentScenarios } from "./control-ui-heavy-content-scenarios.ts";
+import {
+  frames,
+  navigation,
+  openInteractionPanel,
+  openNavigationDrawer,
+  prepareChat,
+} from "./control-ui-interaction-navigation.ts";
 import { runProjectionFixture } from "./control-ui-projection-fixtures.ts";
 import type { ControlUiResourceCounts } from "./control-ui-resource-counts.ts";
+import {
+  exerciseWorkboardResourceFixture,
+  idleWorkboardResourceFixture,
+  prepareWorkboardResourceFixture,
+  runWorkboardEventsCpu,
+  runWorkboardRemountCpu,
+  workboardResourceRoute,
+} from "./control-ui-workboard-resource-fixture.ts";
 
 const sessionKeys = ["agent:main:interaction-a", "agent:main:interaction-b"] as const;
 const sessionQuery = "Interaction 0999";
@@ -57,8 +76,17 @@ const retainedMcpFrames = new WeakMap<Page, Array<ElementHandle>>();
 
 export type InteractionSandbox = { sandboxUrl: string; sandboxPort: number };
 export type InteractionEvidence = Record<string, number | boolean>;
+type InteractionSession = GatewaySessionRow &
+  NonNullable<ControlUiMockGatewayScenario["sessions"]>[number];
+export type InteractionFixtureOverrides = Omit<
+  Partial<ControlUiMockGatewayScenario>,
+  "sessions"
+> & {
+  sessions?: InteractionSession[];
+};
 
 type InteractionFixtureOptions = {
+  workboardResources?: boolean;
   heavyContent?: boolean;
   runningSessions?: boolean;
   longSessionLabels?: boolean;
@@ -87,9 +115,16 @@ export type InteractionScenario = {
   id: string;
   route: string;
   expected: string;
+  /** Deliberately perturbs execution; exclude its timing from performance comparisons. */
+  diagnostic?: string;
   fixture?: InteractionFixtureOptions;
+  /** Large-data campaigns replace only their domain's synthetic Gateway responses. */
+  fixtureOverrides?: (sandbox?: InteractionSandbox) => InteractionFixtureOverrides;
+  createRequestHandlers?: () => Record<string, (params: unknown) => unknown>;
+  dataPage?: string;
   /** Resource campaigns opt into the longer inventory and idle scenarios. */
   resourceOnly?: boolean;
+  /** Own one browser per observation; launch and retirement stay outside measurement. */
   observationBrowser?: boolean;
   visibility?: "hidden";
   projectionFamily?: ProjectionFamily;
@@ -100,6 +135,30 @@ export type InteractionScenario = {
   prepare: (page: Page, gateway: MockGatewayControls) => Promise<void>;
   run: (page: Page, gateway: MockGatewayControls) => Promise<void | InteractionEvidence>;
 };
+
+export function createScenarioFixture(
+  buildId: string,
+  version: string,
+  scenario: InteractionScenario,
+  sandbox?: InteractionSandbox,
+): ControlUiMockGatewayScenario & { sessions: InteractionSession[] } {
+  const base = createInteractionFixture(buildId, version, scenario.fixture, sandbox);
+  const overrides = scenario.fixtureOverrides?.(sandbox);
+  return {
+    ...base,
+    ...overrides,
+    sessions: overrides?.sessions ?? base.sessions,
+    featureMethods: overrides?.featureMethods
+      ? [
+          ...new Set([
+            ...(base.featureMethods ?? defaultControlUiFeatureMethods),
+            ...overrides.featureMethods,
+          ]),
+        ]
+      : base.featureMethods,
+    methodResponses: { ...base.methodResponses, ...overrides?.methodResponses },
+  };
+}
 
 function resourceWidgetHtml(name: string) {
   return buildWidgetDocument(
@@ -558,50 +617,6 @@ export function createInteractionFixture(
   } satisfies ControlUiMockGatewayScenario;
 }
 
-async function frames(page: Page) {
-  await page.evaluate(
-    () =>
-      new Promise<void>((resolve) => {
-        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-      }),
-  );
-}
-
-async function inViewport(locator: Locator) {
-  const box = await locator.boundingBox();
-  if (!box || (await locator.evaluate((element) => element.closest("[inert]") !== null))) {
-    return false;
-  }
-  const viewport = await locator
-    .page()
-    .evaluate(() => ({ width: innerWidth, height: innerHeight }));
-  return box.x >= 0 && box.y >= 0 && box.x + box.width <= viewport.width && box.y < viewport.height;
-}
-
-async function openNavigationDrawer(page: Page) {
-  const chatToggle = page.locator(`${activePane} .mobile-header__navigation`);
-  await ((await chatToggle.count()) > 0 ? chatToggle : navigationDrawerToggle(page)).click();
-  const drawer = page.locator(".shell--nav-drawer-open > .shell-nav");
-  await drawer.waitFor({ state: "visible" });
-  await drawer.evaluate((element) =>
-    Promise.all(element.getAnimations().map((animation) => animation.finished)),
-  );
-}
-
-async function navigation(page: Page, view: "pages" | "sessions") {
-  const button = page.locator(`[data-navigation-view="${view}"]`).first();
-  if (!(await inViewport(button))) {
-    await openNavigationDrawer(page);
-  }
-  if ((await button.getAttribute("aria-pressed")) !== "true") {
-    await button.click();
-  }
-  await page
-    .locator(view === "pages" ? ".sidebar-pages" : ".sidebar-recent-session")
-    .first()
-    .waitFor();
-}
-
 async function switchSession(page: Page, index: 0 | 1) {
   await navigation(page, "sessions");
   await page
@@ -614,58 +629,6 @@ async function switchSession(page: Page, index: 0 | 1) {
     .getByText(`Transcript ${index} message 399.`, { exact: false })
     .waitFor();
   await frames(page);
-}
-
-async function prepareChat(page: Page) {
-  await page.locator(activePane).getByText("Transcript 0 message 399.", { exact: false }).waitFor();
-  await frames(page);
-}
-
-async function openInteractionPanel(
-  page: Page,
-  panel: "Dashboard" | "Browser" = "Dashboard",
-  sessionIndex: 0 | 1 = 0,
-) {
-  if (sessionIndex === 0) {
-    await prepareChat(page);
-  } else {
-    await page
-      .locator(activePane)
-      .getByText("Transcript 1 message 399.", { exact: false })
-      .waitFor();
-    await frames(page);
-  }
-  const pane = page.locator(activePane);
-  const mobileHeader = pane.locator(".agent-chat__header--mobile");
-  const mobile = await mobileHeader.isVisible();
-  const toggle = (mobile ? mobileHeader : pane.locator(".sidebar-region__panels-toggle")).getByRole(
-    "button",
-    { name: "Panels", exact: true },
-  );
-  if (mobile) {
-    const host = pane.locator(".chat-mobile-host");
-    if (!(await host.isVisible())) {
-      await toggle.click();
-    }
-    await host.getByRole("button", { name: "Panels", exact: true }).click();
-    await host
-      .locator(".chat-panel-launcher-mobile")
-      .getByRole("button", { name: panel, exact: true })
-      .click();
-  } else {
-    if ((await toggle.getAttribute("aria-expanded")) !== "true") {
-      await toggle.click();
-    }
-    await pane
-      .locator(".side-panel-launcher")
-      .getByRole("button")
-      .filter({
-        has: page
-          .getByText(panel, { exact: true })
-          .and(page.locator(".side-panel-type-option__label")),
-      })
-      .click();
-  }
 }
 
 function mcpResourceFrame(page: Page, index: number) {
@@ -1540,13 +1503,44 @@ async function prepareModelPicker(page: Page) {
 }
 
 async function searchModels(page: Page) {
-  await page.locator("[data-chat-model-search]").pressSequentially(modelQuery);
+  await searchModelQuery(page, modelQuery);
+}
+
+async function searchModelQuery(page: Page, query: string) {
+  await page.locator("[data-chat-model-search]").pressSequentially(query);
   await page.locator('[data-chat-model-option="example/model-999"]').waitFor();
   await page.waitForFunction(
     () =>
       [...document.querySelectorAll<HTMLElement>("[data-chat-model-option]")].filter((option) =>
         option.checkVisibility(),
       ).length === 1,
+  );
+}
+
+async function navigateModels(page: Page) {
+  const search = page.locator("[data-chat-model-search]");
+  const initial = await search.getAttribute("aria-activedescendant");
+  if (!initial) {
+    throw new Error("Expected an initial active model descendant");
+  }
+  await search.press("ArrowDown");
+  await page.waitForFunction(
+    (id) =>
+      document.querySelector("[data-chat-model-search]")?.getAttribute("aria-activedescendant") !==
+      id,
+    initial,
+  );
+  for (let index = 0; index < 9; index++) {
+    await search.press("ArrowDown");
+  }
+  for (let index = 0; index < 10; index++) {
+    await search.press("ArrowUp");
+  }
+  await page.waitForFunction(
+    (id) =>
+      document.querySelector("[data-chat-model-search]")?.getAttribute("aria-activedescendant") ===
+      id,
+    initial,
   );
 }
 
@@ -1560,6 +1554,11 @@ async function prepareProviderUsage(page: Page) {
 }
 
 export const interactionScenarios: readonly InteractionScenario[] = [
+  ...dataActivityScenarios,
+  ...dataBoardScenarios,
+  ...dataCatalogScenarios,
+  ...dataLogScenarios,
+  ...dataUsageScenarios,
   ...(
     ["tooltips", "link-providers", "link-metadata", "ci-pairs", "clawhub-cards"] as const
   ).flatMap((family): InteractionScenario[] => {
@@ -1659,6 +1658,59 @@ export const interactionScenarios: readonly InteractionScenario[] = [
     run: async (page) => {
       await runProjectionFixture(page);
     },
+  })),
+  {
+    id: "workboard-native-resources",
+    route: workboardResourceRoute,
+    fixture: { workboardResources: true },
+    resourceOnly: true,
+    observationBrowser: true,
+    expected:
+      "1,000 actual native Workboard cards preserve cancelled/coalesced popover transitions, pending hover cancellation, placement and independent resource retirement. Requires --resource-counts; diagnostic waits are not CPU timing.",
+    rowSelector: ".workboard-card",
+    prepare: (page) => prepareWorkboardResourceFixture(page, settleSidebarBackgroundWork),
+    run: (page, gateway) => exerciseWorkboardResourceFixture(page, gateway, frames),
+  },
+  {
+    id: "workboard-events-cpu",
+    route: workboardResourceRoute,
+    fixture: { workboardResources: true },
+    resourceOnly: true,
+    observationBrowser: true,
+    expected:
+      "1,000 closed cards receive eight actual viewport changes and eight native column scrolls with no diagnostic listeners; measure CPU without --resource-counts.",
+    prepare: (page) => prepareWorkboardResourceFixture(page, settleSidebarBackgroundWork),
+    run: async (page) => {
+      const evidence = await runWorkboardEventsCpu(page, frames);
+      await settleSidebarCapture(page);
+      return evidence;
+    },
+  },
+  {
+    id: "workboard-remount-cpu",
+    route: workboardResourceRoute,
+    fixture: { workboardResources: true },
+    resourceOnly: true,
+    observationBrowser: true,
+    expected:
+      "Retire 1,000 actual cards, then mount 1,000 through real paginated responses inside the warm CPU interval; measure without --resource-counts.",
+    prepare: (page) => prepareWorkboardResourceFixture(page, settleSidebarBackgroundWork),
+    run: async (page, gateway) => {
+      const evidence = await runWorkboardRemountCpu(page, gateway, frames);
+      await settleSidebarCapture(page);
+      return evidence;
+    },
+  },
+  ...(["visible", "hidden"] as const).map((visibility): InteractionScenario => ({
+    id: `workboard-idle-${visibility}`,
+    route: workboardResourceRoute,
+    fixture: { workboardResources: true },
+    resourceOnly: true,
+    observationBrowser: true,
+    visibility: visibility === "hidden" ? visibility : undefined,
+    expected: `1,000 actual Workboard cards stay mounted and genuinely ${visibility} during three native-clock idle seconds.`,
+    prepare: (page) => prepareWorkboardResourceFixture(page, settleSidebarBackgroundWork),
+    run: (page) => idleWorkboardResourceFixture(page, visibility),
   })),
   {
     id: "mcp-app-resize-resources",
@@ -2296,34 +2348,28 @@ export const interactionScenarios: readonly InteractionScenario[] = [
       await page.locator("[data-chat-model-search]").waitFor();
       await frames(page);
     },
-    run: async (page) => {
-      const search = page.locator("[data-chat-model-search]");
-      const initial = await search.getAttribute("aria-activedescendant");
-      if (!initial) {
-        throw new Error("Expected the selected model to be the initial active descendant");
-      }
-      await search.press("ArrowDown");
+    run: navigateModels,
+  },
+  {
+    id: "model-picker-filtered-navigate",
+    route: controlUiSessionPath(sessionKeys[0]),
+    resourceOnly: true,
+    expected: "Keyboard navigation retains the active descendant across 1,000 filtered models.",
+    prepare: async (page) => {
+      await prepareModelPicker(page);
+      await page.locator(`${activePane} [data-chat-model-select]`).click();
+      await page.locator("[data-chat-model-search]").fill("Warm model");
       await page.waitForFunction(
-        (id) =>
-          document
-            .querySelector("[data-chat-model-search]")
-            ?.getAttribute("aria-activedescendant") !== id,
-        initial,
+        () =>
+          Number.parseFloat(
+            document.querySelector<HTMLElement>(
+              "[data-chat-model-filtering] .chat-controls__model-virtual-content",
+            )?.style.height ?? "",
+          ) >= 30_000,
       );
-      for (let index = 0; index < 9; index++) {
-        await search.press("ArrowDown");
-      }
-      for (let index = 0; index < 10; index++) {
-        await search.press("ArrowUp");
-      }
-      await page.waitForFunction(
-        (id) =>
-          document
-            .querySelector("[data-chat-model-search]")
-            ?.getAttribute("aria-activedescendant") === id,
-        initial,
-      );
+      await frames(page);
     },
+    run: navigateModels,
   },
   {
     id: "model-picker-search",
@@ -2336,6 +2382,19 @@ export const interactionScenarios: readonly InteractionScenario[] = [
       await frames(page);
     },
     run: searchModels,
+  },
+  {
+    id: "model-picker-reference-search",
+    route: controlUiSessionPath(sessionKeys[0]),
+    resourceOnly: true,
+    expected: "A case-insensitive provider/model reference finds the original model choice.",
+    prepare: async (page) => {
+      await prepareModelPicker(page);
+      await page.locator(`${activePane} [data-chat-model-select]`).click();
+      await page.locator("[data-chat-model-search]").waitFor();
+      await frames(page);
+    },
+    run: (page) => searchModelQuery(page, "EXAMPLE/MODEL-999"),
   },
   ...(["sessions", "cron"] as const).map((route): InteractionScenario => ({
     id: `${route}-open`,

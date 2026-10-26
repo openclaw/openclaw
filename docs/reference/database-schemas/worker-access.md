@@ -75,8 +75,9 @@ Worker exit republishes only databases that held that worker's reference; an
 unrelated exit does not rescan retained session scopes. Interrupted-write
 settlement and shared reference revocation still precede publication.
 Reference and fact publications reuse the last complete scope sweep while its
-shared revision remains current. Importing scope cells invalidates that result;
-keyed publication never certifies that unrelated remote retirements were swept.
+shared revision remains current. Importing scope cells publishes only the imported
+keys and invalidates that result; keyed publication never certifies that unrelated
+remote retirements were swept.
 
 Use the existing read-only worker scope for descriptive reads and the store's
 writer broker for mutations. Keep multi-statement snapshot reads together; use
@@ -107,6 +108,14 @@ and the agent's
 [`openclaw-agent-execution.worker.ts`](https://github.com/openclaw/openclaw/blob/main/src/state/openclaw-agent-execution.worker.ts).
 The lifecycle owner closes its read scope and drains accepted writes before
 retiring the store.
+
+Session-entry and transcript readers resolve read scopes without loading synchronous
+writer admission. A passive process-local borrower owner shares already admitted
+handles, failure visibility, pins, and idle activity with the writable lifecycle.
+The writable lifecycle alone opens and publishes those handles and owns leases,
+migrations, timers, and closure. Borrowers prevent idle eviction; explicit disposal
+can still close the connection and invalidate its claims immediately. Maintenance
+closes cached handles before migrating or replacing their storage.
 
 If PostgreSQL schema publication invalidates admission, connection opening,
 shared-state reads before their callback, and standalone feature-schema ensures
@@ -171,6 +180,9 @@ replacement detection, and live disclosure authority remain with their owners.
 Session row projections borrow the replica's immutable nested entry facts while
 owning their mutable outer rows. Commit receipts carry pending final delivery in
 the canonical entry postimage, without a second copy.
+Session-entry patch preparation sends only logical entries and their keys. SQL row,
+window, and side-table facts stay with the worker; callback commits retain the same
+entry comparison, admission ordering, and persisted bytes.
 
 Session file reads retain workspace authority independently of evictable display
 rows. Committed writers carry their existing full postimages to predicates that
@@ -269,6 +281,11 @@ storage primitive. Lifecycle callbacks remain outside it, and ownership checks
 still read the current owner and expiry before permitting an effect.
 The CLI entry records an immutable process role before state access;
 one-shot CLI and Doctor processes may use the synchronous PostgreSQL bridge.
+Connections share four I/O services per process; inherited worker endpoints
+connect directly to those services. A bridge deadline resets the entire assigned
+service with an unknown outcome, rather than only the caller's connection. See
+[PostgreSQL topology](/gateway/postgresql#when-to-use-postgresql) and
+[timeout and recovery behavior](/gateway/postgresql#updates-and-schema-migrations).
 An unset role still refuses main-thread access. Interactive onboarding and
 `setup` (including `crestodian`) keep the CLI role through their prompts and
 local setup console. Any Gateway they start runs in a separate process with
@@ -509,6 +526,15 @@ Inside the durable worker, hot state and its stored entry row share one owned
 decoded entry. Mutations replace that entry instead of editing it in place;
 transaction forks retain the previous entry for rollback. Incoming postimages
 and outgoing public reads remain detached from the resident state.
+Internal hot-state projections also retain the actor's replace-only target,
+version, participants, and members. Read replies and committed receipt capture
+own detachment before those facts leave the worker.
+
+Actor commands retain their immutable replica preimage for admission transport.
+The worker sends a reference only after matching its authoritative write token,
+and only while the entry object remains unchanged. Cold or mismatched revisions
+and replaced entries carry the complete entry. Main resolves references within
+that command; live policy and revocation checks still run at every admission.
 
 Replica lookups resolve configured path spellings through the existing admission
 registry: SQLite uses the admitted physical identity and birthtime; PostgreSQL
@@ -2184,8 +2210,9 @@ facts from the actor's replica. Message payload hydration, admitted-user role
 validation, and cold or off-path history retain bounded reads; transcript metadata
 does not stand in for message contents.
 
-Host admission carries the session entry and physical/version identity rather
-than transcript indexes, retry keys, or context membership. Mutable policy callbacks
+Worker admission carries the session entry and physical/session target. Expected-version
+checks stay in commands; replica versions, write tokens, and dependency IDs remain in
+read results and committed receipts. Mutable policy callbacks
 receive their own copy; full snapshots stay in read results and committed receipts.
 An append shares the actor's transaction admission and final commit grant. Explicit
 fresh-message and pending-input checks retain their effect boundaries; the final

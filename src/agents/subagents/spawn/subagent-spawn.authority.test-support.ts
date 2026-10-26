@@ -43,10 +43,16 @@ import { isSameSubagentRun } from "../registry/subagent-run-generation.js";
 import { observeSwarmSchedulerWork } from "../swarm/swarm-scheduler.lifecycle.test-support.js";
 import { testing as spawnTesting } from "./subagent-spawn.test-support.js";
 
-vi.mock("../../runtime-plugins.js", () => ({
-  loadAgentRuntimePluginRegistryHandle:
-    vi.fn<typeof import("../../runtime-plugins.js").loadAgentRuntimePluginRegistryHandle>(),
-}));
+// mock-isolation: Spawn authority tests supply registries without discovering installed plugins.
+vi.mock("../../runtime-plugins.js", () => {
+  const loadRegistry =
+    vi.fn<typeof import("../../runtime-plugins.js").loadAgentRuntimePluginRegistryHandle>();
+  return {
+    loadAgentRuntimePluginRegistryHandle: loadRegistry,
+    loadAgentRuntimePluginRegistryHandleAsync: async (...args: Parameters<typeof loadRegistry>) =>
+      loadRegistry(...args),
+  };
+});
 vi.mock("../../../gateway/call.js", { spy: true });
 
 export function observeSubagentRun(

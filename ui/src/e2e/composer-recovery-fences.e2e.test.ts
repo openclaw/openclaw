@@ -43,10 +43,7 @@ suite.define(() => {
           let appliedText: string | null = null;
           let storageFailed = false;
           let currentWins = false;
-          let observeRestore!: () => void;
-          const observed = new Promise<void>((resolve) => {
-            observeRestore = resolve;
-          });
+          const { promise: observed, resolve: observeRestore } = Promise.withResolvers<void>();
           const persistence = new composer.DurableChatComposerPersistence(
             () => {
               storageFailed = true;

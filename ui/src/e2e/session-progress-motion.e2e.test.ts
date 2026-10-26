@@ -256,7 +256,7 @@ suite.define(() => {
         // when its own Home conversation already owns the primary chat page.
         await page.goto(suite.server.baseUrl + "new");
         await openProgressHomeDock(page);
-        await gateway.waitForRequest("chat.startup", { match: { sessionKey } });
+        await gateway.waitForRequest("sessions.messages.subscribe", { match: { key: sessionKey } });
         if (mobile) {
           await card.locator("summary").click();
         }

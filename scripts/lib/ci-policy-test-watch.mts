@@ -535,7 +535,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     watchGlobs: ["src/boards/sqlite-board-store.worker.ts"],
   })),
   ...[
-    "src/cli/capability-cli/model.account-secrets.provenance.test.ts",
+    "src/cli/capability-cli/model.resources.test.ts",
     "src/commands/models/list.probe.resources.test.ts",
   ].map((testFile): PolicyTestWatch => ({
     testFile,
@@ -703,6 +703,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     ],
   })),
   ...[
+    "src/config/sessions/session-accessor.pending-input-retention.test.ts",
     "src/config/sessions/session-accessor.pending-inputs.test.ts",
     "src/config/sessions/session-accessor.question-answer-transcript.test.ts",
   ].map((testFile): PolicyTestWatch => ({

@@ -1,4 +1,5 @@
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { recordBackupOutcomeBestEffort } from "./backup-shared.js";
 
@@ -38,6 +39,6 @@ export async function backupRecordCommand(
   if (opts.json) {
     writeRuntimeJson(runtime, outcome);
   } else {
-    runtime.log(`External backup: ${target} (${opts.status})`);
+    runtime.log(`External backup: ${sanitizeTerminalText(target)} (${opts.status})`);
   }
 }

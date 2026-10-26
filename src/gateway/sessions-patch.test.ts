@@ -867,7 +867,7 @@ describe("gateway sessions patch", () => {
           source: "agent-patch",
         },
       });
-      const input = store[MAIN_SESSION_KEY]!;
+      const input = Object.freeze(store[MAIN_SESSION_KEY]!);
       const before = structuredClone(input);
       const entry = await patchOk({ store, ...patch });
       expect(entry.thinkingLevel).toBe(thinking);

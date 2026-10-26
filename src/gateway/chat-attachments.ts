@@ -89,14 +89,6 @@ export async function discardPreparedInboundMedia(
   }
 }
 
-type ParsedMessageWithImages = {
-  message: string;
-  images: ChatImageContent[];
-  imageOrder: PromptImageOrderEntry[];
-  media: MediaFact[];
-  offloadedRefs: OffloadedRef[];
-};
-
 type AttachmentLog = {
   info?: (message: string) => void;
   warn: (message: string) => void;
@@ -302,7 +294,13 @@ export async function parseMessageWithAttachments(
     signal?: AbortSignal;
     assertCurrent?: () => void;
   },
-): Promise<ParsedMessageWithImages> {
+): Promise<{
+  message: string;
+  images: ChatImageContent[];
+  imageOrder: PromptImageOrderEntry[];
+  media: MediaFact[];
+  offloadedRefs: OffloadedRef[];
+}> {
   const maxBytes = opts?.maxBytes ?? DEFAULT_CHAT_ATTACHMENT_MAX_BYTES;
   const log = opts?.log;
   const supportsInlineImages = opts?.supportsInlineImages !== false;

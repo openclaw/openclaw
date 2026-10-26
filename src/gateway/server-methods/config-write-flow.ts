@@ -156,7 +156,12 @@ export function shouldAwaitGatewayConfigApplication(params: {
   previousConfig: OpenClawConfig;
   nextConfig: OpenClawConfig;
 }): boolean {
-  return !resolveConfigRestartRequirement(params).requiresRestart;
+  // With reload off the reloader persists non-plugin changes unapplied, so an awaited
+  // application could only report failure; the write applies at the next restart.
+  return (
+    resolveGatewayReloadSettings(params.nextConfig).mode !== "off" &&
+    !resolveConfigRestartRequirement(params).requiresRestart
+  );
 }
 
 /** Persists a gateway config write and returns follow-up work that must run after response. */

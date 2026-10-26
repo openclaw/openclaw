@@ -46,18 +46,16 @@ export type ChatAbortIntent =
       clearQueued?: true;
     });
 
-type ChatAbortRequestTarget = { sessionKey: string; agentId?: string } & (
-  | { runId: string; sessionAbortable?: boolean; discardPendingInput?: true }
-  | { runId: null; clearQueued?: true }
-);
-
 export type ChatAbortRequestResult =
   | { ok: true; noActiveRun: boolean; warning?: string }
   | { ok: false; error: unknown; errorKind?: "state_contention" };
 
 export async function requestChatAbort(
   client: GatewayBrowserClient,
-  intent: ChatAbortRequestTarget,
+  intent: { sessionKey: string; agentId?: string } & (
+    | { runId: string; sessionAbortable?: boolean; discardPendingInput?: true }
+    | { runId: null; clearQueued?: true }
+  ),
 ): Promise<ChatAbortRequestResult> {
   try {
     // Recovered embedded runs retain their exact identity on the session-owned route.

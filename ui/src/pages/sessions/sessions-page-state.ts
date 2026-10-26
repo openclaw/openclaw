@@ -696,7 +696,6 @@ export function createSessionsPage(
   const presentationSources = [
     application.agentIdentity,
     application.navigation,
-    application.runtimeConfig,
     application.plugins,
   ].map((owner) => projectOwner(owner, (source) => source));
   const revision = () =>

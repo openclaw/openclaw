@@ -31,7 +31,7 @@ import { acquireGatewayTestClient } from "../../../test/helpers/gateway-client.t
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { recordControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
+import { controlUiSessionUrl, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { deviceGatewayEnv } from "./device-gateway-env.test-support.ts";
 import { createGatewayProxy, gatewayProxyRoute } from "./gateway-proxy.test-support.ts";
@@ -45,6 +45,7 @@ const repository = "openclaw/openclaw";
 const branch = "proof/coordination-no-published-pr";
 const execFileAsync = promisify(execFile);
 const live = process.env.OPENCLAW_TASK_PR_LIVE_GITHUB === "1";
+const foregroundReadinessTimeoutMs = 30_000;
 const suite = createControlUiE2eSuite({
   name: "Delegated task PRs through a real Gateway",
   startServerBeforeBrowser: true,
@@ -402,6 +403,7 @@ suite.define(() => {
                 .locator("openclaw-gateway-url-confirmation")
                 .getByRole("button", { name: "Switch to " + browserGatewayUrl.host, exact: true })
                 .click();
+              await waitForControlUiRoute(page, { routeId: "chat" });
               const row = page.locator(
                 '.sidebar-recent-session[data-session-key="' + parentKey + '"]',
               );
@@ -413,7 +415,7 @@ suite.define(() => {
                   return;
                 }
                 await row.locator(".sidebar-recent-session__link").focus();
-                await card.waitFor();
+                await card.waitFor({ timeout: foregroundReadinessTimeoutMs });
                 // The earlier passive receipt snapshot is already ready.
                 await expect
                   .poll(() => latestSubscription)
@@ -434,7 +436,9 @@ suite.define(() => {
                 await activate();
                 await expect.poll(() => snapshots.at(-1)?.taskPullRequestCount).toBe(3);
                 await expect
-                  .poll(() => snapshots.at(-1)?.taskPullRequests)
+                  .poll(() => snapshots.at(-1)?.taskPullRequests, {
+                    timeout: foregroundReadinessTimeoutMs,
+                  })
                   .toEqual(
                     expect.arrayContaining(
                       numbers.map((number, index) =>

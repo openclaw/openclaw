@@ -27,6 +27,7 @@ import {
   createTestSessionCapability,
   sessionsResult,
 } from "../../lib/sessions/session-capability.test-support.ts";
+import { sessionListResult } from "../../test-helpers/chat-model.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { loadChatHistory } from "./chat-history.ts";
@@ -874,21 +875,15 @@ describe("canonical session message recovery", () => {
       listBranches,
       refresh: vi.fn(async () => {
         await refreshFinished.promise;
-        state.sessionsResult = {
-          ts: 2,
-          path: "",
-          count: 1,
-          defaults: { modelProvider: null, model: null, contextTokens: null },
-          sessions: [
-            {
-              key: state.sessionKey,
-              kind: "direct",
-              hasActiveRun: false,
-              status: "done",
-              updatedAt: 2,
-            },
-          ],
-        };
+        state.sessionsResult = sessionListResult(2, [
+          {
+            key: state.sessionKey,
+            kind: "direct",
+            hasActiveRun: false,
+            status: "done",
+            updatedAt: 2,
+          },
+        ]);
       }),
     };
 

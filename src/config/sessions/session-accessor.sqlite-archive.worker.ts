@@ -511,6 +511,25 @@ if (isRecord(workerData) && workerData.type === "sqlite-transcript-archive-v2") 
         [],
       );
       port.close();
+    } else if (operation === "cold-embed-snapshot") {
+      const { openNodeSqliteDatabase, resolveExistingSqliteFileUri } =
+        await import("../../infra/node-sqlite.js");
+      const { embedSessionColdArchivesInSnapshotInWorker } =
+        await import("./session-cold-storage-backup.worker.js");
+      // SAFETY: the snapshot owner retains this private file until the worker joins.
+      const data = workerData as Extract<
+        SqliteArchiveOneShotWorkerData,
+        { operation: "cold-embed-snapshot" }
+      >;
+      {
+        using database = openNodeSqliteDatabase(resolveExistingSqliteFileUri(data.snapshotPath));
+        await embedSessionColdArchivesInSnapshotInWorker({
+          database,
+          sourceStorePath: data.sourceStorePath,
+        });
+      }
+      port.postMessage({ type: "done", results: [] }, []);
+      port.close();
     } else if (operation === "cold-prepare") {
       const { prepareSessionColdBatchInWorker } = await import("./session-cold-storage-worker.js");
       // SAFETY: the paired parent constructs this internal payload with SessionColdPreparationWorkerData.

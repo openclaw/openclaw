@@ -1,4 +1,11 @@
 import { For, Show } from "solid-js";
+import {
+  formatGoalDetail,
+  formatGoalElapsed,
+  formatGoalStatusLabel,
+  formatGoalUsage,
+  goalElapsedMs,
+} from "../../../../../src/shared/session-goal-display.js";
 import type { SessionGoal } from "../../../api/types.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
@@ -7,13 +14,6 @@ import { registerChatGoalsEnglish } from "../../../i18n/locales/en-chat-goals.ts
 import type { ChatGoalAction, ChatGoalRecovery } from "../../../lib/chat/chat-types.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { readVisibleTime } from "../../../lib/reactive/visible-clock.ts";
-import {
-  formatGoalDetail,
-  formatGoalElapsed,
-  formatGoalStatusLabel,
-  formatGoalUsage,
-  goalElapsedMs,
-} from "../../../lib/session-goal.ts";
 
 registerEnglishCatalog(registerChatGoalsEnglish);
 

@@ -11,6 +11,41 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
 it.each([
+  ["session-cold-storage-chunks.ts", "readSessionColdChunks", "executeSqliteQuerySync"],
+  [
+    "session-cold-storage-chunks.ts",
+    "iterateSessionColdRecords",
+    "executeSqliteQueryTakeFirstSync",
+  ],
+  [
+    "session-cold-storage-prepare.ts",
+    "prepareSessionColdArchiveInWorker",
+    "withOpenClawAgentDatabaseReadOnly",
+  ],
+])(
+  "proves the cold-storage kernel %s:%s only through reviewed entries",
+  (file, operation, primitive) => {
+    const relative = `src/config/sessions/${file}`;
+    const sources = new Map([
+      [relative, `export function ${operation}() { return ${primitive}(query); }`],
+      [
+        "src/config/sessions/session-cold-storage-worker.ts",
+        `import { ${operation} } from './${file.replace(/\.ts$/, ".js")}';
+       export function prepareSessionColdBatchInWorker() { return ${operation}(); }`,
+      ],
+    ]);
+    const tiers = () => inventory(process.cwd(), "", false, sources).map(({ tier }) => tier);
+    expect(tiers()).toEqual(["W"]);
+    sources.set(
+      "src/plugin-sdk/runtime.ts",
+      `import { ${operation} } from '../config/sessions/${file.replace(/\.ts$/, ".js")}';
+     export function runtime() { return ${operation}(); }`,
+    );
+    expect(tiers()).toEqual(["T1"]);
+  },
+);
+
+it.each([
   ["session-claim-repair-copy.ts", "copySessionClaimForRepair"],
   ["session-accessor.sqlite-delivery-repair.ts", "copySessionDeliveriesForRepair"],
   ["session-accessor.sqlite-delivery-repair.ts", "readSessionDeliveryRepairInventory"],

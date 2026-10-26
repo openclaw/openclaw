@@ -175,7 +175,12 @@ it("shares recipient encodings only for matching authority and delivered baselin
     const publish = (ids: string[]) =>
       connection.broadcastToConnIds(
         "sessions.changed",
-        { sessionKey: key, agentId: "main", reason: "rename" },
+        {
+          sessionKey: key,
+          agentId: "main",
+          reason: "rename",
+          ["__proto__"]: { fixture: "own-data-property" },
+        },
         new Set(ids),
       );
     const decodeLast = (peer: (typeof peers)[number]) => {
@@ -214,11 +219,32 @@ it("shares recipient encodings only for matching authority and delivered baselin
         expect(JSON.parse(peer.send.mock.lastCall![0]).payload.session.version).toBe(1);
       }
       const previousSends = peers.map((peer) => peer.send.mock.calls.length);
+      const fieldEnumerations = new Map<object, number>();
+      let envelopeEnumerations = 0;
+      const entries = Object.entries;
+      const enumerating = vi.spyOn(Object, "entries").mockImplementation((value) => {
+        if (isRecord(value) && value.sessionKey === key && isRecord(value.session)) {
+          envelopeEnumerations++;
+        }
+        if (isRecord(value) && value.key === key && typeof value.sharingRole === "string") {
+          fieldEnumerations.set(value, (fieldEnumerations.get(value) ?? 0) + 1);
+        }
+        return entries(value);
+      });
       const stringify = JSON.stringify;
       let rowEncodings = 0;
       let envelopeEncodings = 0;
+      let sharingKeyEncodings = 0;
       const encoding = vi.spyOn(JSON, "stringify").mockImplementation((...args) => {
         const value: unknown = args[0];
+        if (
+          Array.isArray(value) &&
+          value.length === 10 &&
+          isRecord(value[0]) &&
+          value[0].kind === "operator"
+        ) {
+          sharingKeyEncodings++;
+        }
         if (isRecord(value) && value.key === key && typeof value.version === "number") {
           rowEncodings++;
         }
@@ -231,6 +257,7 @@ it("shares recipient encodings only for matching authority and delivered baselin
         publish(peers.map((peer) => peer.client.connId));
       } finally {
         encoding.mockRestore();
+        enumerating.mockRestore();
       }
       const decodedPayloads: unknown[] = [];
       for (const [index, peer] of peers.entries()) {
@@ -249,6 +276,9 @@ it("shares recipient encodings only for matching authority and delivered baselin
           },
         });
         const payload = JSON.parse(peer.send.mock.lastCall![0]).payload;
+        expect(Object.getOwnPropertyDescriptor(payload, "__proto__")?.value).toEqual({
+          fixture: "own-data-property",
+        });
         if (peer.capability === "refs") {
           expect(payload.sessionFieldRefs).toEqual(expect.any(Array));
           expect(payload).not.toHaveProperty("label");
@@ -281,6 +311,12 @@ it("shares recipient encodings only for matching authority and delivered baselin
           });
         }
       }
+      // The full row's field ordering is shared even when delivery baselines differ.
+      expect([...fieldEnumerations.values()]).toEqual([1, 1]);
+      // Referenced fields must not allocate entry tuples just to discard them.
+      expect(envelopeEnumerations).toBe(0);
+      // Eight current delta recipients were primed at this revision; sixteen were not.
+      expect(sharingKeyEncodings).toBe(16);
       // Four authority/baseline groups share row planning across both delta capabilities.
       expect(rowEncodings).toBeLessThanOrEqual(16);
       // Two wire capabilities per group, plus one legacy envelope per authority.

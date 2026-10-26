@@ -416,6 +416,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     subagentRole?: "orchestrator" | "leaf";
     /** Explicit control scope assigned at spawn time for subagent control decisions. */
     subagentControlScope?: "children" | "none";
+    /** Spawn-time blind child: its rendered prompt omits its model, identity and workspace path. */
+    blindPrompt?: true;
     /** Version of the requester tool-policy snapshot captured when this child was spawned. */
     inheritedToolPolicyVersion?: 1;
     /** Sender/channel restriction provenance retained with the inherited tool snapshot. */
@@ -505,6 +507,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
         requireExplicitMessageTarget?: boolean;
       };
     };
+    /** Explicit requested access program; omission follows the model/project default. */
+    cyberAccessProgram?: SessionRow["cyberAccessProgram"];
     fastMode?: FastMode;
     toolOverrides?: SessionToolOverrides;
     /** Swarm group for collector-mode child sessions. */

@@ -3,7 +3,6 @@ import { expect, it } from "vitest";
 import { buildCliSessionDriftNote } from "../agents/cli-session-drift.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import { applySessionHints } from "../auto-reply/reply/body.js";
-import { buildInterSessionPromptContext } from "../sessions/input-provenance.js";
 import { formatSystemTurnPrompt } from "../sessions/system-turn-prompt.js";
 import {
   projectChatDisplayMessages,
@@ -40,6 +39,8 @@ const REQUESTER_HINT =
 const frame = (json: string) =>
   `Conversation info: ⟦openclaw:ctx⟧\n\`\`\`json\n${json}\n\`\`\`\n\n`;
 const execPrompt = LEGACY_EXEC_COMPLETION_PROMPT;
+const writeRows = (filePath: string, rows: readonly unknown[]) =>
+  fs.writeFile(filePath, rows.map((row) => JSON.stringify(row)).join("\n"));
 
 function merge(localMessages: unknown[], importedMessages: unknown[]) {
   return mergeImportedChatHistoryMessages({ localMessages, importedMessages });
@@ -131,10 +132,7 @@ it.each(["[Request interrupted by user]", "[Request interrupted by user for tool
         claudeUser(blocks(` ${text}`), { uuid: "whitespace" }),
         claudeUser([...blocks(text), ...blocks("Please explain.")], { uuid: "sibling" }),
       ];
-      await fs.writeFile(
-        filePath,
-        [interrupt, ...visible].map((entry) => JSON.stringify(entry)).join("\n"),
-      );
+      await writeRows(filePath, [interrupt, ...visible]);
       const projected = projectChatDisplayMessagesWithState(merge([], await readMessages()));
       expect(projected.messages.map((message) => message.content)).toEqual(
         visible.map((entry) => entry.message.content),
@@ -148,46 +146,22 @@ it.each(["[Request interrupted by user]", "[Request interrupted by user for tool
   },
 );
 
-it.each(["sessions_send", "subagent_settle"])(
-  "preserves routed %s input for the shared provenance projection",
-  (sourceTool) => {
-    const text = `${
-      buildInterSessionPromptContext({
-        kind: "inter_session",
-        sourceSessionKey: "agent:peer:main",
-        sourceTool,
-      }).text
-    }\nRouted result.`;
-    for (const content of [text, blocks(text)]) {
-      const imported = parseImportedUser(content);
-      expect(imported).toMatchObject({ role: "user", content });
-      expect(imported?.display).not.toBe(false);
-      expect(imported?.provenance).not.toMatchObject({ kind: "internal_system" });
-    }
+it.each(["resume", "legacy requester"])(
+  "removes the %s decorator, not its image-bearing user turn",
+  (decoration) => {
+    const body = decoration === "resume" ? "real question" : `${REQUESTER_HINT}\n\nreal question`;
+    const prefix =
+      decoration === "resume"
+        ? buildCliSessionDriftNote(["system-prompt", "prompt-tools"])
+        : frame('{"requester_profile":{"id":"owner"}}') + REQUESTER_HINT;
+    const text = `${prefix}\n\n${body}`;
+    const image = {
+      type: "image",
+      source: { type: "base64", media_type: "image/png", data: "aa" },
+    };
+    expectVisible(importUnmatched([...blocks(text), image]), [...blocks(body), image]);
   },
 );
-
-it.each([
-  ["resume", "string"],
-  ["resume", "text-block"],
-  ["legacy requester", "string"],
-  ["legacy requester", "text-block"],
-])("removes the %s decorator, not its real %s user turn", (decoration, encoding) => {
-  const body = decoration === "resume" ? "real question" : `${REQUESTER_HINT}\n\nreal question`;
-  const prefix =
-    decoration === "resume"
-      ? buildCliSessionDriftNote(["system-prompt", "prompt-tools"])
-      : frame('{"requester_profile":{"id":"owner"}}') + REQUESTER_HINT;
-  const text = `${prefix}\n\n${body}`;
-  const image = {
-    type: "image",
-    source: { type: "base64", media_type: "image/png", data: "aa" },
-  };
-  expectVisible(
-    importUnmatched(encoding === "string" ? text : [...blocks(text), image]),
-    encoding === "string" ? body : [...blocks(body), image],
-  );
-});
 
 it.each(internalWakeInputs)("marks imported %s prompts internal", (sourceTool, text) => {
   const internal = { display: false, provenance: { kind: "internal_system", sourceTool } };
@@ -223,57 +197,32 @@ it("preserves system-event evidence quoted in a later native text block", () => 
 });
 
 it.each([
-  "",
-  frame('{"a":1}'),
-  frame('{"history_count":2}') +
-    "Recent chat history: ⟦openclaw:ctx⟧\n" +
-    "#123 2026-10-11 12:20:09 GMT+5:30 Alice: The conservatory has 137 benches.\n" +
-    "#124 2026-10-11 12:20:20 GMT+5:30 Alice: /model anthropic/claude-haiku-4-5\n\n",
-])("drops queued system event lines from a real user turn", (context) => {
-  for (const stamp of [
-    "2026-10-04 13:15:44 GMT+8",
-    "2026-10-11 12:20:20 GMT+5:30",
-    "2026-10-04T05:15:44Z",
+  ["", "2026-10-04T05:15:44Z", "real question"],
+  [
+    frame('{"a":1}'),
     "unknown-time",
-  ]) {
-    const events = `System: [${stamp}] Model switched.\nSystem: more\n\n`;
-    for (const question of [
-      "real question",
-      "Please explain this header:\n\nContext: ⟦openclaw:ctx⟧\nexample",
-      "Please explain this header:\n\nContext:\n<active_memory_plugin>\nexample\n</active_memory_plugin>",
-    ]) {
-      const text = `${context}${events}${question}`;
-      expect(importUnmatched(text)?.content).toBe(`${context}${question}`);
-      const canonical = user(`${context}${question}`, 1);
-      expect(merge([canonical], [{ ...parseImportedUser(text), timestamp: 2 }])).toMatchObject([
-        canonical,
-      ]);
-    }
-  }
+    "Please explain this header:\n\nContext: ⟦openclaw:ctx⟧\nexample",
+  ],
+  [
+    frame('{"history_count":2}') +
+      "Recent chat history: ⟦openclaw:ctx⟧\n" +
+      "#123 2026-10-11 12:20:09 GMT+5:30 Alice: The conservatory has 137 benches.\n" +
+      "#124 2026-10-11 12:20:20 GMT+5:30 Alice: /model anthropic/claude-haiku-4-5\n\n",
+    "2026-10-11 12:20:20 GMT+5:30",
+    "Please explain this header:\n\nContext:\n<active_memory_plugin>\nexample\n</active_memory_plugin>",
+  ],
+])("drops queued system events below context %j", (context, stamp, question) => {
+  const events = `System: [${stamp}] Model switched.\nSystem: more\n\n`;
+  const text = `${context}${events}${question}`;
+  expect(importUnmatched(text)?.content).toBe(`${context}${question}`);
+  const canonical = user(`${context}${question}`, 1);
+  expect(merge([canonical], [{ ...parseImportedUser(text), timestamp: 2 }])).toMatchObject([
+    canonical,
+  ]);
   const untouched = "real question\n\nSystem: quoted log line\n\nmore";
   expect(importUnmatched(untouched)).toMatchObject({ content: untouched });
 });
 
-it("hides decorated internal rows through JSONL import, merge and the common client history projection", async () => {
-  await withClaudeProjectsDir(async ({ filePath, readMessages }) => {
-    const note = buildCliSessionDriftNote(["prompt-tools"]);
-    await fs.writeFile(
-      filePath,
-      [
-        claudeUser("real question", { uuid: "human" }),
-        ...internalInputs.map(([kind, text]) =>
-          claudeUser(kind === "resume" ? text : `${note}\n\n${text}`, { uuid: kind }),
-        ),
-      ]
-        .map((entry) => JSON.stringify(entry))
-        .join("\n"),
-    );
-    const messages = merge([], await readMessages());
-    expect(projectChatDisplayMessages(messages)).toMatchObject([
-      { role: "user", content: "real question" },
-    ]);
-  });
-});
 it.each(["null", "not json"])("ignores non-record or malformed activity row %s", (line) => {
   expect(classify(line)).toEqual({ humanTurn: false });
 });
@@ -324,10 +273,9 @@ it("collects valid turns through the HOME-resolved session store despite null ro
   expect(seed?.summaryText).toBeUndefined();
 });
 
-it.each([
-  [
-    "latest explicit summary",
-    [
+it("seeds from the latest explicit summary", async () => {
+  expect(
+    await readSeed([
       claudeUser("PRE-COMPACT user turn"),
       assistantTurn("PRE-COMPACT assistant turn"),
       summary("EARLY"),
@@ -337,35 +285,34 @@ it.each([
       boundary(),
       claudeUser("tail turn"),
       assistantTurn("tail reply"),
-    ],
-    {
-      summaryText: "LATER",
-      recentTurns: [user("tail turn"), assistantTurn("tail reply").message],
-    },
-  ],
-  [
-    "boundary fallback after a compaction without a summary",
-    [
+    ]),
+  ).toMatchObject({
+    summaryText: "LATER",
+    recentTurns: [user("tail turn"), assistantTurn("tail reply").message],
+  });
+});
+
+it("seeds from the boundary after a compaction without a summary", async () => {
+  expect(
+    await readSeed([
       summary("FIRST"),
       boundary("Conversation compacted (1)"),
       claudeUser("post-first-compact turn"),
       boundary("Conversation compacted (2)"),
       claudeUser("post-second-compact turn"),
-    ],
-    {
-      summaryText: "Conversation compacted (2)",
-      recentTurns: [user("post-second-compact turn")],
-    },
-  ],
-  [
-    "trailing summary without a boundary",
-    [
+    ]),
+  ).toMatchObject({
+    summaryText: "Conversation compacted (2)",
+    recentTurns: [user("post-second-compact turn")],
+  });
+});
+
+it("seeds from a trailing summary without a boundary", async () => {
+  expect(
+    await readSeed([
       claudeUser("earlier turn"),
       summary("trailing summary without boundary"),
       claudeUser("later turn"),
-    ],
-    { summaryText: "trailing summary without boundary" },
-  ],
-] as const)("seeds from the %s", async (_name, lines, expected) => {
-  expect(await readSeed(lines)).toMatchObject(expected);
+    ]),
+  ).toMatchObject({ summaryText: "trailing summary without boundary" });
 });

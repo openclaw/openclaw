@@ -366,13 +366,13 @@ export type CronServiceState = {
     storeRevision: number;
     source: CronJob[] | undefined;
     status: CronStatusSummary;
-    list?: {
+    lists: {
       filteredJobs: CronJob[];
       sortBy: CronJobsSortBy;
       sortDir: CronSortDir;
       jobs: CronJob[];
       snapshotRevision: string;
-    };
+    }[];
     /** Requested rows are detached and frozen once for this list generation. */
     readJobs: WeakMap<CronJob, CronJob>;
   };

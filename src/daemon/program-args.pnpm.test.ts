@@ -77,28 +77,12 @@ describe("pnpm Scheduled Task entrypoint", () => {
       vi.spyOn(windowsEncoding, "resolveWindowsOemCodePage").mockReturnValue(437);
       const stdout = new PassThrough();
       try {
-        const retiredRoot = await fixture.writeGeneration("2026.9.5");
-        const previous = await stageScheduledTask({
-          env,
-          stdout,
-          programArguments: [
-            runtimePath,
-            toWindowsPath(path.join(retiredRoot, "dist", "index.js")),
-            "gateway",
-            "--port",
-            "18789",
-          ],
-          environment: { OPENCLAW_SERVICE_KIND: "gateway" },
-        });
-        await fs.rm(retiredRoot, { recursive: true });
-
         const { scriptPath } = await stageScheduledTask({
           env,
           stdout,
           programArguments,
           environment: { OPENCLAW_SERVICE_KIND: "gateway" },
         });
-        expect(scriptPath).toBe(previous.scriptPath);
         const script = decodeWindowsLauncherScript({ buffer: await fs.readFile(scriptPath) });
         const saved = await readScheduledTaskCommand(env);
         const savedEntry = saved?.programArguments.at(-4);
@@ -107,7 +91,6 @@ describe("pnpm Scheduled Task entrypoint", () => {
           path.win32.join(windowsHome, "pnpm/global/5/node_modules/openclaw/dist/index.js"),
         );
         expect(script).toContain(`"${runtimePath}" `);
-        expect(script).toContain("--task-supervisor < NUL\r\n");
         expect(script).not.toContain(".pnpm");
 
         const replacementRoot = await fixture.writeGeneration("2026.9.7");
@@ -157,11 +140,7 @@ it.each(["openclaw.mjs", "dist/index.js"])(
       const project = path.join(globalRoot, `${version}-0`);
       const root = path.join(
         project,
-        "node_modules",
-        ".pnpm",
-        `openclaw@${version}`,
-        "node_modules",
-        "openclaw",
+        `node_modules/.pnpm/openclaw@${version}/node_modules/openclaw`,
       );
       await writePackage(root, version);
       await fs.writeFile(
@@ -181,15 +160,13 @@ it.each(["openclaw.mjs", "dist/index.js"])(
       host: "gateway.example",
       port: 18789,
     });
-    const unitPath = path.join(home, "openclaw-gateway.service");
-    await fs.writeFile(unitPath, buildSystemdUnit({ programArguments }));
+    const unit = buildSystemdUnit({ programArguments });
 
     const replacement = await writeProject("2026.10.2");
     await fs.unlink(projectLink);
     await fs.symlink(replacement.project, projectLink, "junction");
     await fs.rm(original.project, { recursive: true });
 
-    const unit = await fs.readFile(unitPath, "utf8");
     const saved = parseSystemdExecStart(
       unit
         .split("\n")

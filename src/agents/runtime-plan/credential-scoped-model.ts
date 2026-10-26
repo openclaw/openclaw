@@ -15,11 +15,6 @@ import {
 } from "./prepare-auth.js";
 import type { AgentRuntimeAuthPlan } from "./types.js";
 
-type RuntimeModelAuthSelection =
-  | { authProfileId: string }
-  | { authProfileMode: ProviderModelRouteMaterializationAuthMode }
-  | undefined;
-
 export function providerUsesCredentialScopedModelMetadata(params: {
   provider: string;
   modelId: string;
@@ -52,7 +47,10 @@ export function resolveReusableRuntimeModelAuth(params: {
 }): {
   plan?: AgentRuntimeAuthPlan;
   authProfileId?: string;
-  modelAuth: RuntimeModelAuthSelection;
+  modelAuth:
+    | { authProfileId: string }
+    | { authProfileMode: ProviderModelRouteMaterializationAuthMode }
+    | undefined;
 } {
   const plan =
     params.plan &&

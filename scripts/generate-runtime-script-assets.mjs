@@ -33,6 +33,13 @@ const FORMAT_OPTIONS = JSON5.parse(
 /** @type {({entry: string, output: string, constant: string, platform: import("esbuild").Platform, encoding?: "data-url"} & ({program: true} | {program?: false, exportName: string}))[]} */
 const ASSETS = [
   {
+    entry: "src/shared/keyboard-shortcuts.ts",
+    exportName: "createKeyboardShortcutMatcher",
+    output: "src/shared/keyboard-shortcuts.generated.ts",
+    constant: "KEYBOARD_SHORTCUT_MATCHER_SOURCE",
+    platform: "browser",
+  },
+  {
     entry: "src/gateway/mcp-app-standalone-host.ts",
     exportName: "runStandaloneMcpAppHost",
     output: "src/gateway/mcp-app-standalone-host.generated.ts",

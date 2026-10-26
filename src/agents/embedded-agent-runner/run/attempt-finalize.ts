@@ -524,6 +524,11 @@ export function createEmbeddedAttemptExternalAbortController(input: {
     },
     dispose: () => {
       removeListener?.();
+      // Retained abort reasons can keep this controller after its attempt ends.
+      abortActiveSession = undefined;
+      abortRun = undefined;
+      isCompactionPendingOrRetrying = undefined;
+      isCompactionInFlight = undefined;
     },
     setActiveSessionAbort: (abort) => {
       abortActiveSession = abort;

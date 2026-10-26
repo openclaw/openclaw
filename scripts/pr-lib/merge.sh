@@ -1191,13 +1191,13 @@ merge_run() {
           75)
             MERGE_PRIOR_CI_PROOF=""
             [ -n "$MERGE_PRIOR_CI_REMATERIALIZE_MAIN" ] || return 1
-            # Discard authority before fetching the exact missing main object.
+            # Fetching proves ancestry, not a fresh projection. The next snapshot
+            # advances the observed cursor under the retained missing-tip floor.
             rematerialization_started=$(pr_merge_now)
             verify_merge_main_advance "$MERGE_OBSERVED_MAIN" "$MERGE_PRIOR_CI_REMATERIALIZE_MAIN" || return 1
             if [ -n "$MERGE_PRIOR_CI_UNKNOWN_START" ]; then
               MERGE_PRIOR_CI_UNKNOWN_START=$((MERGE_PRIOR_CI_UNKNOWN_START + $(pr_merge_now) - rematerialization_started))
             fi
-            MERGE_OBSERVED_MAIN="$MERGE_PRIOR_CI_REMATERIALIZE_MAIN"
             ;;
           76)
             MERGE_PRIOR_CI_PROOF=""

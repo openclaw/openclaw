@@ -1,6 +1,5 @@
 import { lazy } from "solid-js";
 import "../../../styles/chat/skill-learned-notice.css";
-import "../../../styles/session-menu.css";
 import { AgentRunFrame } from "./chat-agent-run-frame.tsx";
 import { ActivityGroup, MessageGroup } from "./chat-message-group-view.tsx";
 import { StreamGroup, UnplacedSubagentWait } from "./chat-message-stream-view.tsx";

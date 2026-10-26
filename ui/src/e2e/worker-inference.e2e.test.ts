@@ -167,7 +167,7 @@ suite.define(() => {
         // The URL can publish while the Chat module is still loading. Deliver
         // the synthetic terminal event only after its route and startup consumer exist.
         await waitForCommittedChatRoute(page);
-        await gateway.waitForRequest("chat.startup");
+        await gateway.waitForRequest("sessions.messages.subscribe");
         await transcript.waitFor();
         await gateway.emitChatFinal({
           runId: "worker-initial",

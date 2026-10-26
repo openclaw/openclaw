@@ -5,6 +5,7 @@ import {
 } from "../agents/internal-runtime-context.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { AgentAssistantSourceReceipt } from "../infra/agent-events.js";
+import * as jsonUtf8 from "../infra/json-utf8-bytes.js";
 import * as codeRegions from "../shared/text/code-regions.js";
 import { projectInFlightRunSnapshot } from "./chat-inflight-snapshot.js";
 import {
@@ -418,10 +419,19 @@ describe("createChatRunState", () => {
         return value;
       },
     });
+    using inspection = vi.spyOn(Object, "getPrototypeOf");
+    using traversal = vi.spyOn(jsonUtf8, "boundedJsonUtf8Bytes");
     tool(1, "result", "done", {
       result: { details, first: shared, again: shared, last: revocable.proxy },
     });
     const firstSnapshot = getSnapshot();
+    expect(traversal).not.toHaveBeenCalled();
+    const capturedResult = firstSnapshot!.events[0]!.data.result;
+    const capturedInspections = inspection.mock.calls.filter(
+      ([value]) => value === capturedResult,
+    ).length;
+    inspection.mockRestore();
+    expect(capturedInspections).toBe(0);
     expect(firstSnapshot?.byteLength).toBe(jsonBytes(firstSnapshot?.events[0]));
     tool(2, "input_delta", "active", { diff: { added: 1, removed: 0 } });
     expect([serializations, reads, numberHints]).toEqual([1, 1, ["number", "number"]]);

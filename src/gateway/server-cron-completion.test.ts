@@ -179,7 +179,7 @@ async function createCompletionFixture(
       .map(readTranscriptEventMessage)
       .filter((message) => message?.role === "assistant");
   };
-  const inspectText = `${text}\nInspect: https://automation.example.test/automations?job=${kind}-job&run=cron%3A${kind}-job%3A1000`;
+  const inspectText = `${text}\n[Inspect run](https://automation.example.test/automations?job=${kind}-job&run=cron%3A${kind}-job%3A1000)`;
   const assertMessages = async (scope?: typeof source, messageText?: string, metadata = {}) => {
     for (const target of [source, ...otherScopes]) {
       expect(await messages(target)).toEqual(
@@ -377,7 +377,7 @@ describe("completion announcement", () => {
         expect(fixture.sendText).toHaveBeenCalledOnce();
         expect(fixture.sendText.mock.calls[0]?.[0]).toMatchObject({
           to: "123",
-          text: `${fixture.text}\nInspect: https://automation.example.test/automations?job=${payloadKind}-job&run=cron%3A${payloadKind}-job%3A1000`,
+          text: `${fixture.text}\n[Inspect run](https://automation.example.test/automations?job=${payloadKind}-job&run=cron%3A${payloadKind}-job%3A1000)`,
         });
         expect(result).toMatchObject({
           deliveryAttempted: true,
@@ -551,7 +551,7 @@ describe("completion announcement", () => {
           deliveryAttempted: true,
           deliveryError: undefined,
         });
-        const deliveredText = `${text}\nInspect: https://automation.example.test/automations?job=script-job&run=cron%3Ascript-job%3A1000`;
+        const deliveredText = `${text}\n[Inspect run](https://automation.example.test/automations?job=script-job&run=cron%3Ascript-job%3A1000)`;
         expect(fixture.sendText).toHaveBeenCalledWith(
           expect.objectContaining({ text: deliveredText }),
         );

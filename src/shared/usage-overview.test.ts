@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createEmptyCostUsageTotals } from "../infra/session-cost-usage-totals.js";
 import type { SessionCostSummary, UsageDailyBucket } from "../infra/session-cost-usage.types.js";
 import { createUsageAggregateAccumulator, usageModelIdentity } from "./usage-aggregates.js";
@@ -389,6 +389,56 @@ function aggregate(...summaries: Partial<SessionCostSummary>[]) {
   return accumulator.finish();
 }
 
+it("sorts fresh aggregate arrays without copying them and isolates successive reports", () => {
+  const accumulator = createUsageAggregateAccumulator();
+  for (const [index, name] of ["first", "second"].entries()) {
+    const date = `2026-03-${12 - index}`;
+    const totals = usage({ firstActivity: 0, totalTokens: index + 1, totalCost: index + 1 });
+    accumulator.add({
+      agentId: name,
+      channel: name,
+      creatorKey: name,
+      usage: {
+        ...totals,
+        toolUsage: { totalCalls: index + 1, uniqueTools: 1, tools: [{ name, count: index + 1 }] },
+        modelUsage: [{ provider: name, model: name, count: 1, totals }],
+        dailyBreakdown: [day(date, totals)],
+        dailyModelUsage: [modelDay(date, name, index + 1, index + 1, 1, name)],
+        dailyLatency: [{ date, ...latency(1, 10, 10, 10) }],
+      },
+    });
+  }
+  const sortCopies = vi.spyOn(Array.prototype, "toSorted");
+  let result: ReturnType<typeof accumulator.finish>;
+  try {
+    result = accumulator.finish();
+    expect(sortCopies).not.toHaveBeenCalled();
+  } finally {
+    sortCopies.mockRestore();
+  }
+  expect(result.byModel.map(({ model }) => model)).toEqual(["second", "first"]);
+  expect(result.byCreator?.map(({ key }) => key)).toEqual(["second", "first"]);
+  expect(result.daily.map(({ date }) => date)).toEqual(["2026-03-11", "2026-03-12"]);
+  const expected = structuredClone(result);
+  const arrays = [
+    result.tools.tools,
+    result.byModel,
+    result.byProvider,
+    result.byAgent,
+    result.byChannel,
+    result.byCreator,
+    result.costDaily,
+    result.dailyLatency,
+    result.modelDaily,
+    result.daily,
+    ...(result.byCreator ?? []).flatMap((creator) => [creator.daily, creator.sessionActivity]),
+  ];
+  for (const array of arrays) {
+    array?.splice(0);
+  }
+  expect(accumulator.finish()).toEqual(expected);
+});
+
 it("retains incomplete daily and model subtotals after merging complete rows", () => {
   const date = "2026-05-15";
   const marker = { state: "unavailable" as const };
@@ -625,4 +675,29 @@ it("retains creator daily amounts and counts each multi-day session once", () =>
     ],
   });
   expect(summary).toEqual(original);
+});
+
+it("sorts private filter inventories without copying them again", () => {
+  const rows: SessionUsageEntry[] = [
+    { key: "z", agentId: "z", channel: "z", modelProvider: "z", model: "z", usage: null },
+    { key: "a", agentId: "a", channel: "a", modelProvider: "a", model: "a", usage: null },
+  ];
+  const before = structuredClone(rows);
+  const copies = vi.spyOn(Array.prototype, "toSorted");
+  let result: ReturnType<typeof overview>;
+  try {
+    result = overview(rows);
+    // The page keeps one copying sort; the five private filter lists need none.
+    expect(copies).toHaveBeenCalledTimes(1);
+  } finally {
+    copies.mockRestore();
+  }
+  expect(result.overview.filterOptions).toEqual({
+    agent: ["a", "z"],
+    channel: ["a", "z"],
+    provider: ["a", "z"],
+    model: ["a", "z"],
+    tool: [],
+  });
+  expect(rows).toEqual(before);
 });

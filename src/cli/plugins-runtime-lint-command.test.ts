@@ -4,6 +4,7 @@ import { Command } from "commander";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { defaultRuntime } from "../runtime.js";
+import { writeFixtureJson } from "./cli-fixtures.test-support.js";
 import { registerPluginsCli } from "./plugins-cli.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -12,7 +13,7 @@ describe("plugins lint", () => {
   it("reports an omitted source-directory link while ignoring node_modules links", async () => {
     const root = tempDirs.make("plugin-runtime-lint-link-");
     const generated = tempDirs.make("plugin-runtime-lint-generated-");
-    await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "directory-link" }));
+    await writeFixtureJson(path.join(root, "package.json"), { name: "directory-link" });
     await fs.writeFile(path.join(generated, "index.js"), "Buffer.concat = () => null;");
     await fs.symlink(generated, path.join(root, "runtime.assets"), "junction");
     await fs.symlink(generated, path.join(root, "node_modules"), "junction");
@@ -39,19 +40,16 @@ describe("plugins lint", () => {
     "distinguishes absent runtime dependencies with optional=%s",
     async (optional) => {
       const root = tempDirs.make("plugin-runtime-lint-missing-");
-      await fs.writeFile(
-        path.join(root, "package.json"),
-        JSON.stringify({
-          name: "missing-dependencies",
-          dependencies: optional ? {} : { required: "1.0.0" },
-          optionalDependencies: { optional: "1.0.0" },
-          peerDependencies: { "peer-required": "1.0.0", "peer-optional": "1.0.0" },
-          peerDependenciesMeta: {
-            "peer-required": { optional },
-            "peer-optional": { optional: true },
-          },
-        }),
-      );
+      await writeFixtureJson(path.join(root, "package.json"), {
+        name: "missing-dependencies",
+        dependencies: optional ? {} : { required: "1.0.0" },
+        optionalDependencies: { optional: "1.0.0" },
+        peerDependencies: { "peer-required": "1.0.0", "peer-optional": "1.0.0" },
+        peerDependenciesMeta: {
+          "peer-required": { optional },
+          "peer-optional": { optional: true },
+        },
+      });
       const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
       try {
         const program = new Command().exitOverride();
@@ -84,10 +82,10 @@ describe("plugins lint", () => {
     "reports a malformed dependency map %s as incomplete",
     async (dependencies) => {
       const root = tempDirs.make("plugin-runtime-lint-invalid-map-");
-      await fs.writeFile(
-        path.join(root, "package.json"),
-        JSON.stringify({ name: "invalid-map", dependencies }),
-      );
+      await writeFixtureJson(path.join(root, "package.json"), {
+        name: "invalid-map",
+        dependencies,
+      });
       const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
       try {
         const program = new Command().exitOverride();
@@ -112,7 +110,7 @@ describe("plugins lint", () => {
 
   it("reports incomplete parsing as a warning", async () => {
     const root = tempDirs.make("plugin-runtime-lint-incomplete-");
-    await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "parse-fixture" }));
+    await writeFixtureJson(path.join(root, "package.json"), { name: "parse-fixture" });
     await fs.writeFile(path.join(root, "invalid.ts"), "const broken = ;");
     const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
     const exit = vi.spyOn(defaultRuntime, "exit");
@@ -138,10 +136,10 @@ describe("plugins lint", () => {
     async (scenario) => {
       const root = tempDirs.make("plugin-runtime-lint-manifest-");
       if (scenario === "malformed-dependency") {
-        await fs.writeFile(
-          path.join(root, "package.json"),
-          JSON.stringify({ name: "plugin", dependencies: { malformed: "1.0.0" } }),
-        );
+        await writeFixtureJson(path.join(root, "package.json"), {
+          name: "plugin",
+          dependencies: { malformed: "1.0.0" },
+        });
         const dependency = path.join(root, "node_modules", "malformed");
         await fs.mkdir(dependency, { recursive: true });
         await fs.writeFile(path.join(dependency, "package.json"), "{ broken");

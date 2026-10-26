@@ -56,6 +56,53 @@ type Props = {
 };
 export type ChatDetailsSession = SolidBridgeElement<Props>;
 
+function DetailsAutomations(props: Props) {
+  const identity = createMemo(() =>
+    JSON.stringify([
+      props.props?.sessionKey,
+      props.props?.currentAgentId,
+      props.props?.selectedSession?.sessionId,
+    ]),
+  );
+  return (
+    <Show when={identity()} keyed>
+      {(_identity) => {
+        const [expanded, setExpanded] = createSignal(true);
+        const desktop = createMemo(
+          () =>
+            props.desktop
+              ? {
+                  expanded: props.props?.desktopDisclosures?.expanded.automations ?? expanded(),
+                  onExpandedChange: (next: boolean) => {
+                    if (props.presented) {
+                      setExpanded(next);
+                      props.props?.desktopDisclosures?.onExpandedChange("automations", next);
+                    }
+                  },
+                }
+              : undefined,
+          { equals: (before, after) => before?.expanded === after?.expanded },
+        );
+        return (
+          <ChatSummaryAutomations
+            desktop={desktop()}
+            gateway={props.props?.pullRequestsGateway}
+            sessionKey={
+              props.props
+                ? scopedSessionArtifactKey(
+                    props.props.sessionKey,
+                    props.props.currentAgentId ?? undefined,
+                  )
+                : ""
+            }
+            presented={props.presented}
+          />
+        );
+      }}
+    </Show>
+  );
+}
+
 export const ChatDetailsSession = defineSolidBridge<Props>(
   "openclaw-chat-details-session",
   (props, host) => {
@@ -139,18 +186,6 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                 before?.expanded === after?.expanded &&
                 before?.workingLabel === after?.workingLabel,
             },
-          );
-          const changeAutomationsExpanded = (expanded: boolean) =>
-            changeSection("automations", expanded);
-          const desktopAutomations = createMemo(
-            () =>
-              props.desktop
-                ? {
-                    expanded: sectionExpanded("automations"),
-                    onExpandedChange: changeAutomationsExpanded,
-                  }
-                : undefined,
-            { equals: (before, after) => before?.expanded === after?.expanded },
           );
           const requestsExpanded = () =>
             (props.desktop
@@ -467,19 +502,9 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                     </Show>
                   )}
                 </Show>
-                <ChatSummaryAutomations
-                  desktop={desktopAutomations()}
-                  gateway={props.props?.pullRequestsGateway}
-                  sessionKey={
-                    props.props
-                      ? scopedSessionArtifactKey(
-                          props.props.sessionKey,
-                          props.props.currentAgentId ?? undefined,
-                        )
-                      : ""
-                  }
-                  presented={active()}
-                />
+                <Show when={!props.desktop}>
+                  <DetailsAutomations props={props.props} presented={active()} />
+                </Show>
                 <Show when={props.desktop}>
                   <Background
                     details={props.props!}
@@ -586,6 +611,9 @@ export function ChatDetailsDesktopComposition(props: ChatDetailsDesktopCompositi
           {t("sessionProgressCard.widgetAccessDenied")}
         </div>
       </Show>
+      {/* Its separate inventory can arrive after the session. Append it so
+          loading automation rows never displaces the existing sections. */}
+      <DetailsAutomations props={props.props} presented={props.presented} desktop />
     </ChatDetailsDesktopBody>
   );
 }

@@ -676,7 +676,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   border: none;
   border-radius: var(--radius-md);
   background: transparent;
-  color: var(--muted);
+  color: var(--icon-interactive, var(--muted));
   transition:
     background var(--duration-fast) ease,
     color var(--duration-fast) ease;
@@ -693,7 +693,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   padding: 0;
   border: 0;
   border-radius: var(--radius-md);
-  background: var(--accent);
+  background: var(--sidebar-rail-action-bg);
   color: var(--accent-foreground);
   text-decoration: none;
 }
@@ -704,7 +704,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 }
 
 .header-new-session:hover:not(:disabled, [aria-disabled="true"]) {
-  background: var(--accent-hover);
+  background: var(--sidebar-rail-action-hover-bg);
   color: var(--accent-foreground);
 }
 
@@ -986,7 +986,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   border: none;
   border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--muted);
+  color: var(--icon-interactive, var(--muted));
   transition:
     opacity var(--duration-fast) ease,
     background var(--duration-fast) ease,
@@ -998,6 +998,10 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   height: 22px;
   padding: 0;
   opacity: 0.55;
+}
+
+.sidebar-session-toolbar__button:not(:disabled, [aria-disabled="true"]) {
+  opacity: var(--sidebar-toolbar-action-opacity, 0.55);
 }
 
 .sidebar-session-toolbar .sidebar-recent-sessions__label-text {
@@ -1356,7 +1360,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 .sidebar-recent-sessions__head:where(:hover, :has(:focus-visible)) .sidebar-session-group-actions,
 .sidebar-session-group-actions[aria-expanded="true"],
 .sidebar-session-group-actions.sidebar-session-sort--filtered {
-  opacity: 0.55;
+  opacity: var(--sidebar-toolbar-action-opacity, 1);
   pointer-events: auto;
 }
 
@@ -1387,7 +1391,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   }
 
   .sidebar-session-group-actions {
-    opacity: 0.55;
+    opacity: var(--sidebar-toolbar-action-opacity, 1);
     pointer-events: auto;
   }
 }
@@ -2491,7 +2495,7 @@ a:is(
 .nav-item.active .nav-item__icon,
 .nav-item--active .nav-item__icon {
   opacity: 1;
-  color: var(--accent);
+  color: var(--navigation-selected-icon, var(--accent));
 }
 
 /* Pinned sessions share the page-nav chrome (hover/active fill, muted glyphs and
@@ -3565,7 +3569,7 @@ html.openclaw-native-web-chrome
   font-weight: 650;
   letter-spacing: -0.03em;
   line-height: 1.2;
-  color: var(--accent);
+  color: var(--text-strong);
 }
 
 .page-subtitle {

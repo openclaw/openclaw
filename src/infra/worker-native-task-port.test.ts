@@ -5,7 +5,11 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it, vi } from "vitest";
 import { getWorkerMessageMetrics } from "./worker-message-metrics.js";
 import { NativeWorker } from "./worker-native-handle.js";
-import type { NativeWorkerRequest, NativeWorkerRuntime } from "./worker-native-lifecycle.types.js";
+import type {
+  NativeWorkerRequest,
+  NativeWorkerRuntime,
+  RetainedNativeWorker,
+} from "./worker-native-lifecycle.types.js";
 
 // These endpoints run on the Gateway main thread; Vitest itself runs in a worker.
 vi.mock("node:worker_threads", async (importOriginal) => ({
@@ -21,7 +25,7 @@ const messageMetrics = () =>
   );
 afterEach(() => cleanups.splice(0).forEach((cleanup) => cleanup()));
 
-function fixture() {
+function fixture(directTaskPort = true) {
   const { port1: port, port2: peer } = new MessageChannel();
   const context = new AsyncLocalStorage<string>();
   const sent: NativeWorkerRequest[] = [];
@@ -30,7 +34,12 @@ function fixture() {
   const runtime: NativeWorkerRuntime = {
     handles,
     service: () => worker.serviceTaskPort(),
-    post: (message) => sent.push(message),
+    post: (message, transfers = []) => {
+      sent.push(message);
+      if (!directTaskPort) {
+        port.postMessage(message, transfers);
+      }
+    },
     refreshReference: () => references.push(worker.needsReference),
     resourceBroker() {
       throw new Error("This fixture owns only a task port");
@@ -38,7 +47,16 @@ function fixture() {
   };
   const worker = context.run(
     "constructor",
-    () => new NativeWorker(runtime, 1, workerUrl, false, false, undefined, port),
+    () =>
+      new NativeWorker(
+        runtime,
+        1,
+        workerUrl,
+        false,
+        false,
+        undefined,
+        directTaskPort ? port : undefined,
+      ),
   );
   worker.on("error", () => {});
   cleanups.push(() => {
@@ -48,6 +66,37 @@ function fixture() {
   });
   return { worker, port, peer, context, sent, handles, runtime, references };
 }
+
+it.each([false, true])(
+  "borrows the transfer list until native send completes (direct: %s)",
+  async (direct) => {
+    const { worker, port, peer, sent } = fixture(direct);
+    worker.receive({ type: "created", id: 1, threadId: 105 });
+    const post = vi.spyOn(port, "postMessage");
+    const bytes = new Uint8Array([2, 4, 6]);
+    const transfers = Object.freeze([bytes.buffer]);
+    const sender: RetainedNativeWorker = worker;
+    const received = once(peer, "message");
+
+    sender.postMessage({ bytes }, transfers);
+
+    expect(bytes.byteLength).toBe(0);
+    const [message] = await received;
+    expect(post.mock.calls[0]?.[1] === transfers).toBe(true);
+    if (direct) {
+      expect(message).toEqual({ bytes: new Uint8Array([2, 4, 6]) });
+      return;
+    }
+    expect(message).toMatchObject({
+      type: "post",
+      id: 1,
+      value: { bytes: new Uint8Array([2, 4, 6]) },
+    });
+    expect(message.transferList[0] === message.value.bytes.buffer).toBe(true);
+    const envelope = sent.find((entry) => entry.type === "post");
+    expect(envelope?.transferList === post.mock.calls[0]?.[1]).toBe(true);
+  },
+);
 
 it("retains pre-start messages and permits synchronous delivery from the started callback", async () => {
   const { worker, port, peer, context } = fixture();

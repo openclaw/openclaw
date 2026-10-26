@@ -21,9 +21,11 @@ export function trackLocalServiceProcess(child: ChildProcess): ManagedLocalServi
   return owned;
 }
 
-function unrefLocalServiceOutput(stream: ChildProcess["stdout"]): void {
-  // SAFETY: Child stdio exposes an optional native-handle unref omitted by Readable's types.
-  (stream as { unref?: () => void } | null)?.unref?.();
+export function unrefLocalServiceOutput(child: ChildProcess): void {
+  for (const stream of [child.stdout, child.stderr]) {
+    // SAFETY: Child stdio exposes an optional native-handle unref omitted by Readable's types.
+    (stream as { unref?: () => void } | null)?.unref?.();
+  }
 }
 
 export function drainLocalServiceOutput(child: ChildProcess): void {
@@ -31,8 +33,7 @@ export function drainLocalServiceOutput(child: ChildProcess): void {
   child.stderr?.removeAllListeners("data");
   child.stdout?.resume();
   child.stderr?.resume();
-  unrefLocalServiceOutput(child.stdout);
-  unrefLocalServiceOutput(child.stderr);
+  unrefLocalServiceOutput(child);
 }
 
 function isLocalServiceProcessTreeAlive(owned: ManagedLocalServiceProcess): boolean {

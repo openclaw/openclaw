@@ -203,7 +203,7 @@ export function isSubagentSessionRunActive(
 ): boolean {
   // Liveness is mutation ownership, so a persisted snapshot must not outvote the raw live map.
   return isSubagentRunLive(
-    getLatestSubagentRunForChild(subagentRuns, { childSessionKey, childAgentId }),
+    getLatestLiveSubagentRunByChildSessionKey(childSessionKey, undefined, childAgentId),
   );
 }
 

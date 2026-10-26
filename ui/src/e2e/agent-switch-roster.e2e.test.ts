@@ -45,6 +45,7 @@ suite.define(() => {
       },
       async ({ page }) => {
         const gateway = await installMockGateway(page, {
+          subscriptionInitialHistory: false,
           sessions: rows,
           historyMessages: [{ role: "assistant", content: "Synthetic agent-switch conversation." }],
           methodResponses: {

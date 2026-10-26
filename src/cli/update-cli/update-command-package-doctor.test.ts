@@ -36,6 +36,7 @@ import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { createCommandResult as processResult } from "../../test-utils/npm-spec-install-test-helpers.js";
+import { writeFixtureJson } from "../cli-fixtures.test-support.js";
 import * as configCapture from "./update-command-config-snapshot.js";
 import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import { updateResult } from "./update-command-maintenance-fixtures.test-support.js";
@@ -92,7 +93,7 @@ async function createDoctorFixture() {
   };
   await fs.mkdir(path.join(root, "dist"));
   await fs.writeFile(path.join(root, "dist", "entry.js"), "export {};\n");
-  await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ version: "2026.9.4" }));
+  await writeFixtureJson(path.join(root, "package.json"), { version: "2026.9.4" });
   await fs.writeFile(env.OPENCLAW_CONFIG_PATH, "{}\n");
   const doctor = (overrides: Partial<Parameters<typeof runPackageUpdateDoctor>[0]> = {}) =>
     runPackageUpdateDoctor({ root, managedServiceEnv: env, progress: {}, ...overrides });
@@ -371,15 +372,12 @@ it.each([
       if (writerReceipt) {
         await writeReceipt(options, receipt);
       } else {
-        await fs.writeFile(
-          resultPath,
-          JSON.stringify({
-            ...receipt,
-            ...(cause === "reported-error-with-invalid-facts"
-              ? { failureFacts: [{ code: 42 }] }
-              : {}),
-          }),
-        );
+        await writeFixtureJson(resultPath, {
+          ...receipt,
+          ...(cause === "reported-error-with-invalid-facts"
+            ? { failureFacts: [{ code: 42 }] }
+            : {}),
+        });
       }
       return processResult({
         code: exitCode,

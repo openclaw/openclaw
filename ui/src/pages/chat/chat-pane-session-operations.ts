@@ -20,13 +20,11 @@ import { resolveChatAgentId } from "./chat-agent-id.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import type { HeaderMenuAction } from "./components/chat-header-session-menu.ts";
 
-type HeaderMetadataAction = Extract<
-  HeaderMenuAction,
-  { kind: "toggle-unread" | "set-icon" | "set-color" | "set-communication" | "reset-appearance" }
->;
-
 function headerSessionMetadataPatch(
-  action: HeaderMetadataAction,
+  action: Extract<
+    HeaderMenuAction,
+    { kind: "toggle-unread" | "set-icon" | "set-color" | "set-communication" | "reset-appearance" }
+  >,
   session: Pick<GatewaySessionRow, "unread">,
 ) {
   switch (action.kind) {

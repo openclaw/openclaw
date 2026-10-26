@@ -75,6 +75,7 @@ export class HelperClient {
     bundle = "com.apple.FaceTime",
     processId = 1234,
     buildId = TEST_HELPER_BUILD_ID,
+    expectRejection = buildId !== TEST_HELPER_BUILD_ID,
   ): Promise<boolean> {
     const started = 1_700_000_000_000;
     const nonce = "c".repeat(64);
@@ -94,7 +95,7 @@ export class HelperClient {
       },
       this.lineEnding,
     );
-    if (buildId !== TEST_HELPER_BUILD_ID) {
+    if (expectRejection) {
       return false;
     }
     const hello = await this.readFrame();

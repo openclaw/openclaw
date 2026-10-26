@@ -245,6 +245,7 @@ beforeEach(() => {
   findVerifiedGatewayListenerPidsOnPortSync.mockReset().mockReturnValue([]);
   timeState.now = 0;
   vi.spyOn(Date, "now").mockImplementation(() => timeState.now);
+  vi.spyOn(performance, "now").mockImplementation(() => timeState.now);
   spawnSync
     .mockReset()
     .mockImplementation((_exe, args) =>

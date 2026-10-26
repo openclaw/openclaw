@@ -90,6 +90,9 @@ See [Workspace access](/gateway/sandboxing/workspace-access#managed-project-work
 for write policy, reconciliation, and conflict recovery. To update an existing
 local sandbox workspace from its selected repository base, use `github_publish`
 action `refresh_base` before tests and Auto Review.
+Publication and base refresh reuse exact commits already stored locally instead
+of fetching them again. Partial clones still fetch missing contents when the
+operation needs those files.
 Only sessions with a writable managed sandbox are offered this action; direct
 host sessions merge the base with git in their workspace before publishing.
 Resolve reported conflicts and repeat it with `conflictsResolved: true` and the

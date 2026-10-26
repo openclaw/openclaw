@@ -41,16 +41,19 @@ export type ServiceWorkerObservation = {
 
 export type ObservedGatewayRequest = {
   documentOrdinal: number;
-  method: "chat.history" | "chat.send" | "chat.startup" | "connect" | "sessions.assignOwner";
+  method:
+    | "chat.history"
+    | "chat.send"
+    | "chat.startup"
+    | "connect"
+    | "sessions.assignOwner"
+    | "sessions.messages.subscribe";
   requestId: string;
 };
 
 export type PhoneRecoveryObservation = {
-  schemaVersion: 3;
   proofRevision: "base" | "head" | "local";
   serviceWorker: "normal" | "blocked";
-  targetPath: string;
-  scenarioCompleted: boolean;
   documentRequests: Array<{
     method: string;
     pathname: string;
@@ -64,79 +67,6 @@ export type PhoneRecoveryObservation = {
     status: number;
   }>;
   expectedRevisionSha: string | null;
-  gatewayRequests: ObservedGatewayRequest[];
-  installedArtifacts: Array<
-    InstalledArtifactObservation & {
-      documentOrdinal: number;
-    }
-  >;
-  serviceWorkerState?: {
-    final: ServiceWorkerObservation;
-    initial: ServiceWorkerObservation;
-  };
-  reloadRequired?: {
-    actionCount: number;
-    access: {
-      ariaLive: string | null | undefined;
-      disabled: boolean;
-      height: number;
-      insideFencedOutlet: boolean;
-      tabIndex: number;
-      width: number;
-    };
-    focused: boolean;
-    terminalInvocationCount: number;
-  };
-  recovered?: {
-    actionCount: number;
-    routePath: string;
-  };
-  assignment?: {
-    assignmentMutationCount: number;
-    expectedOwner: string;
-    modelWakeCount: number;
-    selectedOwners: string[];
-    visible: boolean;
-  };
-  failureRetention?: {
-    generatedImage: {
-      alt: string;
-      artifactId: string;
-      artifactDownloadRequestCount: number;
-      blockedUnticketedRequestCount: number;
-      loadedAfterReconnect: boolean;
-      loadedBeforeReconnect: boolean;
-      mediaRequestUrls: string[];
-      naturalWidth: number;
-      renderedSrc: string;
-      requestCount: number;
-      sourcePathname: string;
-    };
-    reconnect: {
-      assignmentMutationCount: number;
-      connectRequestCount: number;
-      connectRequestIds: string[];
-      modelWakeCount: number;
-      transcriptRequestCount: number;
-    };
-    timeoutDelivery: {
-      retainedAfterReconnect: boolean;
-      text: string;
-      visibleBeforeReconnect: boolean;
-    };
-  };
-  final?: {
-    appShellCount: number;
-    connectRequestCount: number;
-    loginGateCount: number;
-    mainInert: boolean | null;
-    modelWakeCount: number;
-    recoveryActionCount: number;
-    reloadCount: number | null;
-    routePath: string;
-    routerOutletInert: boolean | null;
-    terminalInvocationCount: number;
-  };
 };
 
 function isPhoneProofRevision(
@@ -357,6 +287,7 @@ export async function installPhoneRecoveryRequestObserver(
                 id?: unknown;
                 method?: unknown;
                 type?: unknown;
+                params?: Record<string, unknown>;
               };
               if (
                 frame.type === "req" &&
@@ -365,6 +296,8 @@ export async function installPhoneRecoveryRequestObserver(
                   frame.method === "chat.history" ||
                   frame.method === "chat.send" ||
                   frame.method === "chat.startup" ||
+                  (frame.method === "sessions.messages.subscribe" &&
+                    frame.params?.initialHistory) ||
                   frame.method === "sessions.assignOwner")
               ) {
                 const existing = JSON.parse(
