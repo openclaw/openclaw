@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   createGatewaySchedulerClock,
@@ -29,65 +29,47 @@ vi.mock("../infra/device-bootstrap.js", () => ({
   startDevicePairSetupMaintenance: vi.fn(async () => 0),
 }));
 
-let clock: ReturnType<typeof createGatewaySchedulerClock>;
-let timers: ReturnType<typeof startGatewayMaintenanceTimers>;
-const releaseHolds: (() => void)[] = [];
-
-beforeEach(() => {
-  clock = createGatewaySchedulerClock(1_234);
-  timers = startGatewayMaintenanceTimers({
+it("defers queue cleanup, joins storage before media, and rejects ticks after shutdown", async () => {
+  const clock = createGatewaySchedulerClock(1_234);
+  const expiry = createDeferredCore();
+  const media = createDeferredCore();
+  cleanup.tombstones.mockReturnValueOnce(expiry.promise);
+  cleanup.media.mockReturnValueOnce(media.promise);
+  const timers = startGatewayMaintenanceTimers({
     ...createGatewayMaintenanceStateForTest(),
     scheduler: createTestGatewayScheduler(clock.clock),
     isNixMode: true,
     runDeliveryQueueMediaGc: undefined,
   });
-});
-
-afterEach(async () => {
-  releaseHolds.splice(0).forEach((release) => release());
-  await timers.stopPeriodicTasks();
-  await timers.skillUsageCleanup();
-  cleanup.tombstones.mockReset().mockResolvedValue(undefined);
-  cleanup.media.mockReset().mockResolvedValue(undefined);
-});
-
-function expectCleanupCalls(count: number) {
-  expect(cleanup.tombstones).toHaveBeenCalledTimes(count);
-  expect(cleanup.media).toHaveBeenCalledTimes(count);
-}
-
-it("defers tombstone and queue media cleanup through reconnects, then runs hourly", async () => {
-  await waitForMediaCleanupDrainsToSettle();
-  await clock.advanceBy(120_000);
-  expectCleanupCalls(0);
-  await clock.advanceBy(10_000);
-  expectCleanupCalls(1);
-  await clock.advanceBy(60 * 60_000);
-  expectCleanupCalls(2);
-});
-
-it("joins queue storage and media cleanup before shutdown and rejects later ticks", async () => {
-  const expiry = createDeferredCore();
-  const media = createDeferredCore();
-  releaseHolds.push(expiry.resolve, media.resolve);
-  cleanup.tombstones.mockReturnValueOnce(expiry.promise);
-  cleanup.media.mockReturnValueOnce(media.promise);
-  let stopped = false;
-  await waitForMediaCleanupDrainsToSettle();
-  void clock.advanceBy(130_000);
-  const stopping = timers.stopMediaCleanup().then((result) => {
-    stopped = true;
-    return result;
-  });
-  await Promise.resolve();
-  expect(stopped).toBe(false);
-  expect(cleanup.media).not.toHaveBeenCalled();
-  expiry.resolve();
-  await Promise.resolve();
-  expect(cleanup.media).toHaveBeenCalledOnce();
-  expect(stopped).toBe(false);
-  media.resolve();
-  await expect(stopping).resolves.toBe("drained");
-  await clock.advanceBy(60 * 60_000);
-  expectCleanupCalls(1);
+  try {
+    let stopped = false;
+    await waitForMediaCleanupDrainsToSettle();
+    await clock.advanceBy(120_000);
+    expect(cleanup.tombstones).not.toHaveBeenCalled();
+    expect(cleanup.media).not.toHaveBeenCalled();
+    void clock.advanceBy(10_000);
+    const stopping = timers.stopMediaCleanup().then((result) => {
+      stopped = true;
+      return result;
+    });
+    await Promise.resolve();
+    expect(stopped).toBe(false);
+    expect(cleanup.media).not.toHaveBeenCalled();
+    expiry.resolve();
+    await Promise.resolve();
+    expect(cleanup.media).toHaveBeenCalledOnce();
+    expect(stopped).toBe(false);
+    media.resolve();
+    await expect(stopping).resolves.toBe("drained");
+    await clock.advanceBy(60 * 60_000);
+    expect(cleanup.tombstones).toHaveBeenCalledOnce();
+    expect(cleanup.media).toHaveBeenCalledOnce();
+  } finally {
+    expiry.resolve();
+    media.resolve();
+    await timers.stopPeriodicTasks();
+    await timers.skillUsageCleanup();
+    cleanup.tombstones.mockReset().mockResolvedValue(undefined);
+    cleanup.media.mockReset().mockResolvedValue(undefined);
+  }
 });

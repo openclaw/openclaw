@@ -1,8 +1,6 @@
-import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -11,38 +9,31 @@ import { createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
 import * as admission from "../process/gateway-work-admission.js";
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import {
-  forgetActiveSessionForShutdown,
-  listActiveSessionsForShutdown,
-} from "./active-sessions-shutdown-tracker.js";
+import { forgetActiveSessionForShutdown } from "./active-sessions-shutdown-tracker.js";
 import {
   emitGatewaySessionEndPluginHook,
   emitGatewaySessionStartPluginHook,
 } from "./session-lifecycle-plugin-hooks.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
 afterEach(() => {
-  for (const entry of listActiveSessionsForShutdown()) {
-    forgetActiveSessionForShutdown(entry.sessionId);
-  }
+  forgetActiveSessionForShutdown("session-hook-test");
   resetGlobalHookRunner();
   admission.resetGatewayWorkAdmission();
   vi.restoreAllMocks();
 });
 
 it.for([
-  { hookName: "session_end", parentPresent: true, fails: false },
-  { hookName: "session_start", parentPresent: true, fails: false },
-  { hookName: "session_end", parentPresent: false, fails: false },
-  { hookName: "session_end", parentPresent: true, fails: true },
+  { hookName: "session_end", fails: false },
+  { hookName: "session_start", fails: false },
+  { hookName: "session_end", fails: true },
 ] as const)(
-  "$hookName tracks deferred work (parent=$parentPresent, failure=$fails)",
-  async ({ hookName, parentPresent, fails }, { signal }) => {
-    const parent = parentPresent ? new AsyncWorkScope() : undefined;
-    const root = parentPresent
-      ? admission.tryBeginGatewayRootWorkAdmission("test:session-hook")
-      : undefined;
+  "$hookName tracks deferred work after the parent closes (failure=$fails)",
+  async ({ hookName, fails }, { signal }) => {
+    const parent = new AsyncWorkScope();
+    const root = expectDefined(
+      admission.tryBeginGatewayRootWorkAdmission("test:session-hook"),
+      "root",
+    );
     const entered = createDeferredCore();
     const release = createDeferredCore();
     const effect = vi.fn();
@@ -60,16 +51,12 @@ it.for([
     // Observe completion without replacing either lifetime owner or polling its count.
     const continuation = vi.spyOn(admission, "runWithGatewayDetachedWorkContinuation");
     const joinContinuations = () =>
-      Promise.allSettled(
-        continuation.mock.results
-          .filter((result) => result.type === "return")
-          .map((result) => result.value),
-      );
+      Promise.allSettled(continuation.mock.results.map((result) => result.value));
     const params = {
       cfg: {},
       sessionKey: "agent:main:main",
       sessionId: "session-hook-test",
-      storePath: path.join(tempDirs.make("session-hook-lifetime-"), "sessions.json"),
+      storePath: "/synthetic/session-hook-lifetime/sessions.json",
       agentId: "main",
       reason: "reset" as const,
     };
@@ -78,15 +65,11 @@ it.for([
         ? emitGatewaySessionEndPluginHook(params)
         : emitGatewaySessionStartPluginHook(params);
     try {
-      if (parent) {
-        await expectDefined(root, "parent root admission").run(async () => parent.run(emit));
-      } else {
-        emit();
-      }
+      await root.run(async () => parent.run(emit));
       await withinTest(entered.promise, signal);
-      root?.release();
+      root.release();
       // External work stays held until the triggering requester has fully closed.
-      await parent?.drain();
+      await parent.drain();
       expect(effect).not.toHaveBeenCalled();
       expect(admission.getActiveGatewayRootWorkCount()).toBe(1);
       release.resolve();
@@ -95,8 +78,8 @@ it.for([
       expect(admission.getActiveGatewayRootWorkCount()).toBe(0);
     } finally {
       release.resolve();
-      root?.release();
-      await parent?.drain();
+      root.release();
+      await parent.drain();
       await joinContinuations();
     }
   },

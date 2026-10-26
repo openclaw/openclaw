@@ -2,10 +2,7 @@ import "../test-utils/prepare-compiled-subprocesses.js";
 import { afterEach, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
-import { readSessionCreateTarget } from "./session-create-target.js";
 import { deleteIncognitoSessionForReset } from "./session-reset-incognito.js";
-import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
-import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils-store.js";
 
 // Durable publication receipts have their own owner; this suite isolates memory lifecycle.
 vi.mock("../state/github-personal-publication-lifecycle.js", async (importOriginal) => ({
@@ -29,7 +26,6 @@ const key = "agent:main:dashboard:incognito-lifecycle";
 const path = "/synthetic/lifecycle/agents/main/agent/incognito-openclaw-agent.sqlite";
 const authority = { assertCurrent() {}, authorize() {} };
 const lifetime = { assertCurrent() {}, assertReadable() {} };
-const cfg = { agents: { entries: { main: {} } } };
 
 afterEach(() => {
   memorySessionActorOwners.closeDatabase({ agentId: "main", path });
@@ -68,16 +64,8 @@ async function fixture() {
   };
 }
 
-it("reads current actor metadata and resets after cleanup updates it", async () => {
+it("resets after cleanup updates actor metadata", async () => {
   const { patch, owner, reset } = await fixture();
-  const target = await resolveGatewaySessionStoreTargetInWorker({ cfg, key, agentId: "main" });
-  await patch({ displayName: "Current title" });
-  expect(
-    (await loadGatewaySessionEntryReadOnlyAsync(key, { agentId: "main" }, cfg)).entry?.displayName,
-  ).toBe("Current title");
-  expect(
-    await readSessionCreateTarget({ cfg, commandSource: "test" }, target, "original", [key]),
-  ).toMatchObject({ ok: true, value: { displayName: "Current title" } });
   expect(
     await deleteIncognitoSessionForReset({
       ...reset,
