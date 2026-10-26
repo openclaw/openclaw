@@ -12,12 +12,14 @@ import { loadavg } from "node:os";
 import path from "node:path";
 import { PerformanceObserver } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
+import type { PluginInstallRecord } from "../../src/config/types.plugins.js";
 import { prepareRuntimePluginsConfig } from "../../src/plugins/config-state.js";
 import { setGatewayPluginMetadataSnapshot } from "../../src/plugins/current-plugin-metadata-snapshot.js";
 import { clearCurrentPluginMetadataSnapshot } from "../../src/plugins/current-plugin-metadata-state.js";
 import { recordInstalledPluginIndexInstallOwner } from "../../src/plugins/installed-plugin-index-install-owner.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../../src/plugins/installed-plugin-index-policy.js";
 import { listManagedPlugins } from "../../src/plugins/management-service.js";
+import type { PluginManifestRecord } from "../../src/plugins/manifest-registry.types.js";
 import { finalizePluginMetadataSnapshot } from "../../src/plugins/plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../../src/plugins/plugin-metadata.test-support.js";
 
@@ -45,7 +47,7 @@ const plugins = Array.from({ length: 44 }, (_, index) => {
     origin: "global" as const,
     categories: ["tools"],
     configSchema: { type: "object", properties: { label: { type: "string" } } },
-  };
+  } satisfies Partial<PluginManifestRecord>;
 });
 const config = {
   plugins: {
@@ -60,16 +62,18 @@ const metadata = createPluginMetadataSnapshotFixture(
   { plugins },
   resolveInstalledPluginIndexPolicyHash(config),
 );
+const installRecords: Record<string, PluginInstallRecord> = {};
 for (const record of metadata.index.plugins) {
   recordInstalledPluginIndexInstallOwner(record, record.pluginId);
   record.packageName = record.pluginId;
-  metadata.index.installRecords[record.pluginId] = {
+  installRecords[record.pluginId] = {
     source: "npm",
     spec: record.pluginId,
     installPath: record.rootDir,
     version: "1.0.0",
   };
 }
+metadata.index.installRecords = installRecords;
 finalizePluginMetadataSnapshot(metadata);
 setGatewayPluginMetadataSnapshot(metadata, { config });
 const params = { config, metadata, officialCatalog: { entries: [] } };
