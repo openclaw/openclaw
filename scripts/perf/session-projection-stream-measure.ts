@@ -152,6 +152,11 @@ try {
   }
   const allocatedBytes = profile ? allocated(profile.head) : undefined;
   const elapsedMs = ended - started;
+  // Compare retained heap outside timing, without retaining an allocation profile.
+  if (!values.allocations) {
+    global.gc();
+  }
+  const memoryAfterGc = values.allocations ? undefined : process.memoryUsage();
   const result = {
     node: process.version,
     mode: values.allocations ? "sampled-allocation" : "untraced-timing",
@@ -168,6 +173,7 @@ try {
     gc: { count: gc.length, totalMs: gc.reduce((sum, entry) => sum + entry.duration, 0), byKind },
     memoryBefore,
     memoryAfter,
+    memoryAfterGc,
     loadBefore,
     loadAfter,
   };
