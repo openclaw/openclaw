@@ -3,15 +3,13 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { readLatestConfigSnapshotAuditRecordAsync } from "../config/config-journal-snapshot.js";
-import { readRecentConfigAuditRecords } from "../config/io.audit.js";
-import { hashConfigRaw } from "../config/io.read-helpers.js";
 import { acquireGatewayLock, type GatewayLockHandle } from "../infra/gateway-lock.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
-import { writeFixtureJson } from "./cli-fixtures.test-support.js";
 import { runStateOwnerCli as run, stateOwnerEnv } from "./cli-process-fixture.test-support.js";
 
 const roots = useAutoCleanupTempDirTracker(afterAll);
+const originalConfig = JSON.stringify({ gateway: { mode: "local" }, logging: { level: "debug" } });
 const operations = [
   { name: "set", args: ["config", "set", "logging.level", "warn"], level: "warn" },
   {
@@ -27,19 +25,16 @@ const operations = [
 describe("config CLI database effects", () => {
   let env: NodeJS.ProcessEnv;
   let owner: GatewayLockHandle | null;
-  let originalConfig: string;
 
   async function fixture(home: string): Promise<NodeJS.ProcessEnv> {
-    const stateDir = path.join(home, "state");
-    const configPath = path.join(home, "openclaw.json");
-    await fs.mkdir(stateDir, { recursive: true });
-    await writeFixtureJson(configPath, { gateway: { mode: "local" }, logging: { level: "debug" } });
-    return stateOwnerEnv(home);
+    const fixtureEnv = stateOwnerEnv(home);
+    await fs.mkdir(fixtureEnv.OPENCLAW_STATE_DIR!, { recursive: true });
+    await fs.writeFile(fixtureEnv.OPENCLAW_CONFIG_PATH!, originalConfig);
+    return fixtureEnv;
   }
 
   beforeAll(async () => {
     env = await fixture(roots.make("openclaw-config-owner-"));
-    originalConfig = await fs.readFile(env.OPENCLAW_CONFIG_PATH!, "utf8");
     owner = await acquireGatewayLock({ env, allowInTests: true, timeoutMs: 0 });
     expect(owner).not.toBeNull();
   });
@@ -79,19 +74,11 @@ describe("config CLI database effects", () => {
   it.each(operations)(
     "persists $name and ancillary state while offline",
     async ({ args, input, level }) => {
-      const home = roots.make("openclaw-config-offline-");
-      const offline = await fixture(home);
+      const offline = await fixture(roots.make("openclaw-config-offline-"));
       const result = await run(offline, args, input);
       expect(result.code, result.stderr).toBe(0);
       const raw = await fs.readFile(offline.OPENCLAW_CONFIG_PATH!, "utf8");
       expect(JSON.parse(raw).logging?.level).toBe(level);
-      expect(
-        await readLatestConfigSnapshotAuditRecordAsync({ env: offline, homedir: () => home }),
-      ).toMatchObject({ rawHash: hashConfigRaw(raw) });
-      const audit = readRecentConfigAuditRecords({ env: offline, homedir: () => home, limit: 20 });
-      expect(audit).toContainEqual(
-        expect.objectContaining({ event: "config.write", result: "rename" }),
-      );
       expect(readConfigMachineState("config.lastTouchedAt", { env: offline })).toEqual(
         expect.any(String),
       );

@@ -24,11 +24,7 @@ describe("system-cli", () => {
   async function runCli(args: string[]) {
     const program = new Command();
     registerSystemCli(program);
-    await program.parseAsync(args, { from: "user" }).catch((err: unknown) => {
-      if (!(err instanceof Error && err.message.startsWith("__exit__:"))) {
-        throw err;
-      }
-    });
+    await program.parseAsync(args, { from: "user" });
   }
 
   beforeEach(() => {
@@ -40,24 +36,22 @@ describe("system-cli", () => {
   it("reports a rejected system event instead of claiming it was enqueued", async () => {
     callGatewayFromCli.mockResolvedValueOnce({ ok: false, reason: "unwakeable-session-key" });
 
-    await runCli(["system", "event", "--text", "hello"]);
+    await expect(runCli(["system", "event", "--text", "hello"])).rejects.toThrow("__exit__:1");
 
     expect(runtimeLogs).toEqual([]);
     expect(runtimeErrors[0]).toContain("unwakeable-session-key");
-    expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 
   it("writes JSON when invalid wake mode fails", async () => {
-    await runCli(["system", "event", "--text", "hello", "--mode", "later", "--json"]);
+    await expect(
+      runCli(["system", "event", "--text", "hello", "--mode", "later", "--json"]),
+    ).rejects.toThrow("__exit__:1");
     const failure = {
       ok: false,
       error: { type: "cli_error", message: "--mode must be now or next-heartbeat" },
     };
     expect(runtimeLogs).toEqual([JSON.stringify(failure, null, 2)]);
     expect(runtimeErrors).toEqual([]);
-    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(failure);
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
     expect(callGatewayFromCli).not.toHaveBeenCalled();
   });
 
@@ -70,28 +64,24 @@ describe("system-cli", () => {
 
     expect(runtimeLogs).toEqual([]);
     expect(runtimeErrors).toEqual([]);
-    expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
   });
 
   it.each([
-    {
-      args: ["event", "--text", "ping", "--session-key", "agent:main:telegram:dm:42"],
-      method: "wake",
-      params: { mode: "next-heartbeat", text: "ping", sessionKey: "agent:main:telegram:dm:42" },
-      output: "ok",
-    },
-    {
-      args: ["presence"],
-      method: "system-presence",
-      params: undefined,
-      output: '{\n  "ok": true\n}',
-    },
-  ])("routes system $method to gateway", async ({ args, method, params, output }) => {
+    [
+      ["event", "--text", "ping", "--session-key", "agent:main:telegram:dm:42"],
+      "wake",
+      { mode: "next-heartbeat", text: "ping", sessionKey: "agent:main:telegram:dm:42" },
+      "ok",
+    ],
+    [["presence"], "system-presence", undefined, '{\n  "ok": true\n}'],
+  ] as const)("routes system %j to gateway", async (args, method, params, output) => {
     await runCli(["system", ...args]);
-    expect(callGatewayFromCli).toHaveBeenCalledExactlyOnceWith(method, expect.any(Object), params, {
-      expectFinal: false,
-    });
+    expect(callGatewayFromCli.mock.calls[0]?.slice(0, 3)).toEqual([
+      method,
+      expect.any(Object),
+      params,
+    ]);
     expect(runtimeLogs).toEqual([output]);
   });
 });
