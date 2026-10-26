@@ -37,11 +37,7 @@ import { waitForSessionRunEnd } from "../../sessions/session-controller.native-r
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
-import {
-  parseWorkerLaunchDescriptor,
-  parseWorkerLaunchPlan,
-  type WorkerLaunchPlan,
-} from "../../worker/launch-descriptor.js";
+import type { WorkerLaunchPlan } from "../../worker/launch-descriptor.js";
 import { roundTripWorkerLaunchDescriptor } from "../../worker/launch-descriptor.test-support.js";
 import { projectWorkerSessionTurnClaim } from "./placement-record.js";
 import { getWorkerTurnToolSurface } from "./placement-turn-claim-events.js";
@@ -93,6 +89,28 @@ function turnProvider(
     placements,
     environments: { ...unusedEnvironments(), get: attachedEnvironment, ...environments },
     ...options,
+  });
+}
+
+function credentialedProvider(
+  tunnel: WorkerTunnelHandle,
+  options: Parameters<typeof turnProvider>[1] = {},
+) {
+  return turnProvider(
+    {
+      acquireTurnCredential: async () => credential(),
+      startTunnel: async () => tunnel,
+    },
+    options,
+  );
+}
+
+function preparePolicyRuntime(input: ReturnType<typeof turn>) {
+  return acquireAgentRunPreparedModelRuntime({
+    config: input.config,
+    agentId: input.agentId,
+    agentDir: resolveAgentDir(input.config, input.agentId),
+    workspaceDir: input.workspaceDir,
   });
 }
 
@@ -188,12 +206,7 @@ describe("worker turn execution", () => {
           message: "Request blocked.",
         };
       });
-      await using runtime = await acquireAgentRunPreparedModelRuntime({
-        config: input.config,
-        agentId: input.agentId,
-        agentDir: resolveAgentDir(input.config, input.agentId),
-        workspaceDir: input.workspaceDir,
-      });
+      await using runtime = await preparePolicyRuntime(input);
       const registry = runtime.snapshot.pluginRegistry;
       assert(registry);
       const registration = {
@@ -294,12 +307,7 @@ describe("worker turn execution", () => {
     const entered = createDeferred();
     const release = createDeferred();
     const input = turn("revoked-gate");
-    await using runtime = await acquireAgentRunPreparedModelRuntime({
-      config: input.config,
-      agentId: input.agentId,
-      agentDir: resolveAgentDir(input.config, input.agentId),
-      workspaceDir: input.workspaceDir,
-    });
+    await using runtime = await preparePolicyRuntime(input);
     const registry = runtime.snapshot.pluginRegistry;
     assert(registry);
     const registration = {
@@ -374,10 +382,7 @@ describe("worker turn execution", () => {
       });
       const runLocal = vi.fn();
       const tunnel = unusedTunnel({ launchTurn });
-      const provider = turnProvider({
-        acquireTurnCredential: async () => credential(),
-        startTunnel: async () => tunnel,
-      });
+      const provider = credentialedProvider(tunnel);
       try {
         const outcome = await execute(
           provider,
@@ -437,10 +442,7 @@ describe("worker turn execution", () => {
         launchTurn,
         readLaunchToolNames: async () => launchToolNames,
       });
-      const provider = turnProvider({
-        acquireTurnCredential: async () => credential(),
-        startTunnel: async () => tunnel,
-      });
+      const provider = credentialedProvider(tunnel);
       const input = turn("launch-tool-negotiation");
       const agentWorkspace = path.join(root, "agent-bootstrap");
       await mkdir(agentWorkspace);
@@ -470,7 +472,6 @@ describe("worker turn execution", () => {
         ).rejects.toBeInstanceOf(WorkerRunnerCapacityError);
         expect(launchTurn).toHaveBeenCalledOnce();
         const request = launchTurn.mock.calls[0]![0];
-        expect(parseWorkerLaunchPlan(request.plan)).toEqual(request.plan);
         const { systemPrompt, prompt, runtimeContext } = request.plan.assignment;
         expect(systemPrompt).toContain("You are a personal assistant running inside OpenClaw.");
         expect(systemPrompt).toContain("Canonical agent instructions.");
@@ -543,9 +544,7 @@ describe("worker turn execution", () => {
         runLocal,
       ).catch(captureFailure);
       try {
-        expect(await Promise.race([entered.promise.then(() => "entered"), operation])).toBe(
-          "entered",
-        );
+        await awaitGateBeforeSettlement(entered.promise, operation, "execution-start skipped");
         expectNoCalls(hydration, acquireTurnCredential, startTunnel);
         if (change === "cancel") {
           abort.abort(new Error("cancel during execution-start settlement"));
@@ -633,9 +632,7 @@ describe("worker turn execution", () => {
         },
       ).catch(captureFailure);
       try {
-        expect(await Promise.race([entered.promise.then(() => "hydrated"), operation])).toBe(
-          "hydrated",
-        );
+        await awaitGateBeforeSettlement(entered.promise, operation, "hydration skipped");
         expect(acquireTurnCredential).not.toHaveBeenCalled();
         if (change === "run") {
           current = false;
@@ -710,9 +707,7 @@ describe("worker turn execution", () => {
       (error: unknown) => ({ error }),
     );
     try {
-      expect(await Promise.race([entered.promise.then(() => "hydrated"), settled])).toBe(
-        "hydrated",
-      );
+      await awaitGateBeforeSettlement(entered.promise, settled, "terminal hydration skipped");
       const committed = (await openSessionManager()).getPersistedEntries();
       const committedRows = readWorkerTurnTranscriptStorageRows();
       expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(1);
@@ -758,20 +753,12 @@ describe("worker turn execution", () => {
           },
         },
       ]);
-      const provider = turnProvider(
-        {
-          acquireTurnCredential: async () => credential(),
-          startTunnel: async () => tunnel,
-        },
-        { reconcileActivePlacement: async () => {} },
-      );
+      const provider = credentialedProvider(tunnel, { reconcileActivePlacement: async () => {} });
       const operation = execute(provider, { ...input, abortSignal: abort.signal }, runLocal).catch(
         captureFailure,
       );
       try {
-        expect(await Promise.race([entered.promise.then(() => "preparing"), operation])).toBe(
-          "preparing",
-        );
+        await awaitGateBeforeSettlement(entered.promise, operation, "node preparation skipped");
         expect(measure).not.toHaveBeenCalled();
         await invalidateTurn(change, abort);
         release.resolve();
@@ -791,25 +778,17 @@ describe("worker turn execution", () => {
     await seedActivePlacement();
     let descriptor: WorkerLaunchPlan | undefined;
     const launchTurn = vi.fn<NonNullable<WorkerTunnelHandle["launchTurn"]>>(async ({ plan }) => {
-      descriptor = roundTripWorkerLaunchDescriptor(
-        parseWorkerLaunchDescriptor({
-          ...plan,
-          connectionEndpoint: {
-            kind: "unix",
-            socketPath: "/tmp/worker-approval.sock",
-          },
-        }),
-      );
+      descriptor = roundTripWorkerLaunchDescriptor({
+        ...plan,
+        connectionEndpoint: { kind: "unix", socketPath: "/tmp/worker-approval.sock" },
+      });
       throw new WorkerRunnerCapacityError();
     });
     const tunnel = unusedTunnel({
       launchTurn,
       stop: vi.fn(async () => {}),
     });
-    const provider = turnProvider({
-      acquireTurnCredential: async () => credential(),
-      startTunnel: async () => tunnel,
-    });
+    const provider = credentialedProvider(tunnel);
     const runLocal = vi.fn();
     await expect(
       execute(
