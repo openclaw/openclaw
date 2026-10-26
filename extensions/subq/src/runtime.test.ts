@@ -6,7 +6,7 @@ import type {
 } from "openclaw/plugin-sdk/decisions";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { getPreparedPluginSecretInput } from "openclaw/plugin-sdk/secret-input-runtime";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import plugin from "../index.js";
 
 // mock-isolation: Transport fixtures supply prepared credentials without opening host secret state.
@@ -25,11 +25,16 @@ const batch: DecisionBatch = {
 const probabilities = { support: 0.8, sales: 0.19 };
 const choice = { type: "choice", choice: "support", probabilities, confidence: 0.61 };
 const score = { type: "score", score: 0.607, probabilities: [0.4, 0.6], confidence: 0.5 };
-const result = () => ({
+const normalized = {
   model: "subq-snap-preview",
+  answers: { escalate: { type: "boolean", probabilityTrue: 0.92 }, queue: choice, urgency: score },
+  usage: { inputTokens: 477, outputTokens: 0 },
+};
+const result = () => ({
+  ...normalized,
   answers: {
+    ...structuredClone(normalized.answers),
     escalate: { type: "noul", noul: 0.92 },
-    queue: structuredClone(choice),
     urgency: {
       ...score,
       probabilities: { "0": 0.4, "1": 0.6 },
@@ -55,12 +60,10 @@ const withQuestions = (questions: DecisionBatch["questions"]): DecisionBatch => 
 });
 const entries = <const T>(count: number, value: T) =>
   Object.fromEntries(Array.from({ length: count }, (_, i) => [String(i), value]));
+const key = "synthetic-subq-key";
 beforeEach(() => {
   vi.stubEnv("SUBQ_API_KEY", "synthetic-ambient");
-  vi.mocked(getPreparedPluginSecretInput).mockReturnValue({
-    revision: 1,
-    value: "synthetic-subq-key",
-  });
+  vi.mocked(getPreparedPluginSecretInput).mockReturnValue({ revision: 1, value: key });
   const registerDecisionProvider = vi.fn<OpenClawPluginApi["registerDecisionProvider"]>();
   plugin.register({ registerDecisionProvider } as unknown as OpenClawPluginApi);
   const registered = registerDecisionProvider.mock.calls[0]?.[0];
@@ -69,38 +72,21 @@ beforeEach(() => {
   fetch.mockReset().mockImplementation(async () => Response.json(result()));
   vi.stubGlobal("fetch", fetch);
 });
-afterEach(() => {
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
-  vi.unstubAllEnvs();
-});
 
 it("posts the documented typed contract and preserves fractional/rounded results", async () => {
-  expect(await evaluate()).toEqual({
-    status: "ok",
-    result: {
-      model: "subq-snap-preview",
-      answers: {
-        escalate: { type: "boolean", probabilityTrue: 0.92 },
-        queue: choice,
-        urgency: score,
-      },
-      usage: { inputTokens: 477, outputTokens: 0 },
-    },
-  });
+  expect(await evaluate()).toEqual({ status: "ok", result: normalized });
   expect(fetch).toHaveBeenCalledOnce();
   const [url, init] = fetch.mock.calls[0]!;
   expect(url).toBe("https://api.subq.ai/v1/systemone");
   expect(init).toMatchObject({ method: "POST", redirect: "manual" });
-  expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer synthetic-subq-key");
+  expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer " + key);
   assert(typeof init?.body === "string");
   expect(JSON.parse(init.body)).toEqual({
     model: "subq-snap-preview",
     state: batch.state,
     questions: {
+      ...batch.questions,
       escalate: { type: "noul", instructions: "Does this need human review?" },
-      queue: batch.questions.queue,
-      urgency: batch.questions.urgency,
     },
   });
 });
@@ -115,12 +101,7 @@ it.each([
   [429, "rate-limited"],
   [503, "transport"],
 ] as const)("classifies HTTP %s without leaking errors or retrying", async (status, reason) => {
-  fetch.mockResolvedValue(
-    new Response("synthetic-subq-key: private ticket", {
-      status,
-      headers: { "Retry-After": "2" },
-    }),
-  );
+  fetch.mockResolvedValue(new Response(key, { status, headers: { "Retry-After": "2" } }));
   expect(await evaluate()).toEqual({
     ...unavailable(reason),
     ...(status === 429 ? { retryAfterMs: 2000 } : {}),
@@ -147,16 +128,12 @@ it("rejects chat model IDs and observes prepared credential rotation/loss, not a
     vi.mocked(getPreparedPluginSecretInput).mockReturnValue({ revision: 2, value });
     fetch.mockClear();
     expect(selected.isReady?.()).toBe(Boolean(value));
-    const outcome = await evaluate();
-    if (value) {
-      expect(outcome.status).toBe("ok");
-      expect(new Headers(fetch.mock.lastCall?.[1]?.headers).get("Authorization")).toBe(
-        "Bearer " + value,
-      );
-    } else {
-      expect(outcome).toEqual(unavailable("credentials-unavailable"));
-      expect(fetch).not.toHaveBeenCalled();
-    }
+    expect(await evaluate()).toEqual(
+      value ? expect.objectContaining({ status: "ok" }) : unavailable("credentials-unavailable"),
+    );
+    expect(
+      fetch.mock.calls.map(([, init]) => new Headers(init?.headers).get("Authorization")),
+    ).toEqual(value ? ["Bearer " + value] : []);
   }
 });
 
@@ -169,7 +146,7 @@ it.each<[string, (payload: ReturnType<typeof result>) => unknown]>([
   ["wrong legend", (p) => (p.answers.urgency.legend["0"] = "Wrong")],
   ["invalid score", (p) => (p.answers.urgency.score = 2)],
   ["wrong usage", (p) => (p.usage.output_tokens = 1)],
-  ["reflected credential", (p) => (p.answers.queue.choice = "synthetic-subq-key")],
+  ["reflected credential", (p) => (p.answers.queue.choice = key)],
 ])("rejects %s without partial output or another request", async (_kind, mutate) => {
   const payload = result();
   mutate(payload);
@@ -178,11 +155,9 @@ it.each<[string, (payload: ReturnType<typeof result>) => unknown]>([
   expect(fetch).toHaveBeenCalledOnce();
 });
 
-it("rejects malformed and oversized responses", async () => {
-  for (const body of ["not-json", "x".repeat(1024 * 1024 + 1)]) {
-    fetch.mockResolvedValue(new Response(body));
-    expect(await evaluate()).toEqual(unavailable("invalid-response"));
-  }
+it.each(["not-json", "x".repeat(1024 * 1024 + 1)])("rejects invalid bytes %#", async (body) => {
+  fetch.mockResolvedValue(new Response(body));
+  expect(await evaluate()).toEqual(unavailable("invalid-response"));
 });
 
 it("does not dispatch after cancellation, lost admission, or an exhausted deadline", async () => {
