@@ -38,10 +38,7 @@ describe("doctor startup channel maintenance", () => {
     ]);
 
     await expect(
-      collectChannelPreviewWarningHealthFindings({
-        cfg,
-        allowExec: true,
-      }),
+      collectChannelPreviewWarningHealthFindings({ cfg, allowExec: true }),
     ).resolves.toEqual([
       {
         checkId: "core/doctor/channel-preview-warnings",
@@ -73,25 +70,17 @@ describe("doctor startup channel maintenance", () => {
         log: (message: string) => runtimeCalls.push(`log:${message}`),
         error: (message: string) => runtimeCalls.push(`error:${message}`),
       };
-
       const run = vi
         .spyOn(startup, "runChannelPluginStartupMaintenance")
         .mockResolvedValue(undefined);
-      await maybeRunDoctorStartupChannelMaintenance({
-        cfg,
-        runtime,
-        shouldRepair,
-      });
+      await maybeRunDoctorStartupChannelMaintenance({ cfg, runtime, shouldRepair });
 
       if (!shouldRepair) {
         expect(run).not.toHaveBeenCalled();
         return;
       }
       expect(run).toHaveBeenCalledOnce();
-      const call = run.mock.calls[0]?.[0];
-      if (!call) {
-        throw new Error("Expected startup maintenance call");
-      }
+      const call = run.mock.calls[0]![0];
       expect(call.cfg).toBe(cfg);
       expect(call.env).toBe(process.env);
       expect(call).toMatchObject({

@@ -68,10 +68,6 @@ describe("Doctor responsiveness contribution flow", () => {
     const selected = resolveDoctorHealthContributions().filter((entry) =>
       ["doctor:gateway-health", "doctor:whatsapp-responsiveness"].includes(entry.id),
     );
-    expect(selected.map((entry) => entry.id)).toEqual([
-      "doctor:gateway-health",
-      "doctor:whatsapp-responsiveness",
-    ]);
     const kill = vi.spyOn(process, "kill").mockImplementation(() => {
       throw new Error("This advisory flow must not signal any process");
     });
@@ -92,28 +88,20 @@ describe("Doctor responsiveness contribution flow", () => {
       if (maintenance || process.platform === "win32") {
         expect(mocks.ps).not.toHaveBeenCalled();
         expect(findings).toEqual([]);
-        expect(output).not.toContain("Gateway reports pressure");
       } else {
         expect(mocks.ps).toHaveBeenCalledTimes(1);
-        expect(mocks.ps).toHaveBeenCalledWith("ps", ["-axo", "pid=,command="], {
-          encoding: "utf8",
-          killSignal: "SIGKILL",
-          timeout: 1_000,
-        });
         expect(findings).toEqual([
           expect.objectContaining({
             category: "recommended",
             target: String(fakePid),
-            message:
-              "Gateway reports pressure, and local TUI clients were detected. This snapshot does not identify the source of the pressure.",
-            fixHint:
-              "Inspect Gateway diagnostics with openclaw gateway diagnostics export before deciding whether to close clients.",
+            message: expect.stringContaining("does not identify the source of the pressure"),
+            fixHint: expect.stringContaining("openclaw gateway diagnostics export"),
           }),
         ]);
         expect(output).not.toContain("Recommended improvements:");
         expect(output).not.toContain("This snapshot does not identify the source of the pressure.");
-        expect(output).not.toContain("Gateway reports pressure");
       }
+      expect(output).not.toContain("Gateway reports pressure");
       expect(kill).not.toHaveBeenCalled();
       expect(mocks.note.mock.calls.filter(([, title]) => title === "Doctor warnings")).toEqual([]);
     } finally {

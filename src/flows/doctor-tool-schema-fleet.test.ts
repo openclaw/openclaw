@@ -52,7 +52,6 @@ it("shares metadata across a fleet while inspecting each workspace's actual tool
       return clone(value, options);
     };
     process.on(event, onFactory);
-    const started = performance.now();
     try {
       const findings = await collectRuntimeToolSchemaFindings(
         {
@@ -91,15 +90,6 @@ it("shares metadata across a fleet while inspecting each workspace's actual tool
           agentId: `agent${i}`,
           workspaceDir: state.path(`workspace${i}`),
         })),
-      );
-      console.log(
-        JSON.stringify({
-          agents: 200,
-          elapsedMs: performance.now() - started,
-          ownerBuilds: builds.mock.calls.length,
-          indexBuilds: indexBuilds.mock.calls.length,
-          indexClones,
-        }),
       );
       // Shared, workspace-local, fleet-union, and their two tool-owner projections.
       expect(builds.mock.calls.length).toBe(5);

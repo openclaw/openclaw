@@ -90,10 +90,7 @@ it.each([false, true])(
           `- Plugin ${id}: plugin failed during load: ENOSPC: no space left on device; free space on the filesystem used by the plugin load and rerun Doctor`,
         ),
       );
-      const output = runtime.error.mock.calls.flat().join("\n");
-      for (const detail of [id, "ENOSPC", source]) {
-        expect(output).toContain(detail);
-      }
+      expect(runtime.error.mock.calls.flat().join("\n")).toContain(source);
       expect(mocks.outro).not.toHaveBeenCalledWith("Doctor complete.");
       // A later invocation must not inherit released inspection failures.
       mocks.runContributions.mockResolvedValue(undefined);
