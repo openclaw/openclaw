@@ -9,6 +9,7 @@ import {
   prepareModelRunCapabilities,
   type PreparedModelThinkingCapability,
 } from "../../agents/model-catalog-lookup.js";
+import { getPreparedModelRuntimePluginGeneration } from "../../agents/prepared-model-runtime-generation-scope.js";
 import {
   normalizeThinkingCatalogProviders,
   resolveCandidateThinkingLevel,
@@ -26,6 +27,7 @@ import {
 } from "../../cli/command-secret-targets.js";
 import { resolveMessageSecretScope } from "../../cli/message-secret-scope.js";
 import { selectLiveRuntimeConfig, type OpenClawConfig } from "../../config/config.js";
+import { resolvePublishedRuntimeConfig } from "../../config/runtime-snapshot.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   isTrustedMessageActionTurnIngress,
@@ -66,6 +68,17 @@ type EmbeddedReplyRoute = Pick<
   | "originatingReplyToMode"
 >;
 
+export function resolveQueuedReplyRuntimeConfig(config: OpenClawConfig): OpenClawConfig {
+  // An already-admitted turn keeps its retained config paired with its plugin
+  // generation lease; rebinding to a newer publication would split them and fail
+  // the nested borrow. Queue drains run outside the generation scope and rebind.
+  const admittedGeneration = getPreparedModelRuntimePluginGeneration();
+  return (
+    (admittedGeneration ? null : resolvePublishedRuntimeConfig(config)) ??
+    selectLiveRuntimeConfig(config)
+  );
+}
+
 export async function resolveQueuedReplyExecutionConfig(
   config: OpenClawConfig,
   params?: {
@@ -75,7 +88,7 @@ export async function resolveQueuedReplyExecutionConfig(
     agentAccountId?: string;
   },
 ): Promise<OpenClawConfig> {
-  const runtimeConfig = selectLiveRuntimeConfig(config);
+  const runtimeConfig = resolveQueuedReplyRuntimeConfig(config);
   const { resolvedConfig } = await resolveCommandSecretRefsViaGateway({
     config: runtimeConfig,
     commandName: "reply",
