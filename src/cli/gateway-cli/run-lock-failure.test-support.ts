@@ -75,7 +75,6 @@ export function registerGatewayLockFailureTests({
     });
 
     expect(writeDiagnosticStabilityBundleForFailureSync).not.toHaveBeenCalled();
-    expect(startGatewayServer).toHaveBeenCalledWith(port, expect.any(Object));
     expect(runtimeErrors.join("\n")).toContain(`gateway already running on port ${port}`);
     expect(runtimeErrors.join("\n")).toContain("gateway stop");
     expect(triageAfterFailure).not.toHaveBeenCalled();

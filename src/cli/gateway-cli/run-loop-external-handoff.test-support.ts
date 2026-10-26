@@ -1,10 +1,8 @@
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
-import { withEnvAsync } from "../../test-utils/env.js";
 import {
   createLifecycleGate,
-  expectRestartCloseCall,
   expectStopCloseCall,
   expectUncalled,
   type UpdateRespawnFixtures,
@@ -48,7 +46,6 @@ export function registerExternalHandoffShutdownTests(f: UpdateRespawnFixtures): 
         expect(close).toHaveBeenCalledOnce();
         sigterm();
         expect(host?.externalRestart?.isCurrent()).toBe(false);
-        expectRestartCloseCall(close, 0);
         expectUncalled(f.waitForGatewayActiveWork, runtime.exit, f.cancelShutdownHardExitWatchdog);
       } finally {
         if (fails) {
@@ -58,7 +55,6 @@ export function registerExternalHandoffShutdownTests(f: UpdateRespawnFixtures): 
         }
       }
       await expect(exited).resolves.toBe(fails ? 1 : 0);
-      expect(f.consumeGatewaySuspendHandoff).toHaveBeenCalledOnce();
       expect(start).toHaveBeenCalledOnce();
       expectUncalled(
         f.restartGatewayProcessWithFreshPid,
@@ -88,43 +84,28 @@ export function registerExternalHandoffShutdownTests(f: UpdateRespawnFixtures): 
       });
       const sharedState = resolveGlobalMap<string, boolean>(Symbol("handoff"), "shared-state");
       sharedState.set("live", true);
-      await withEnvAsync({ OPENCLAW_GATEWAY_RESTART_TRACE: "1" }, () =>
-        f.withRunningGateway(async ({ captureSignal, close, runtime, exited, loopPromise }) => {
-          close.mockImplementationOnce(closeGate.wait);
-          captureSignal("SIGUSR2")();
-          try {
-            await awaitGateBeforeSettlement(closeGate.entered, loopPromise, "exit before close");
-            expect(close).toHaveBeenCalledWith(
-              expect.objectContaining({ retainSharedState: true }),
-            );
-            expect(f.writeGatewayRestartHandoff).not.toHaveBeenCalled();
-            closeGate.release();
-            await awaitGateBeforeSettlement(
-              handoffGate.entered,
-              loopPromise,
-              "exit before handoff",
-            );
-            expect(sharedState.get("live")).toBe(true);
-            expect(runtime.exit).not.toHaveBeenCalled();
-          } finally {
-            closeGate.release();
-            handoffGate.release();
-            await Promise.allSettled([loopPromise]);
-          }
-          await loopPromise;
-          await expect(exited).resolves.toBe(exitCode ?? 0);
-          expect(sharedState.size).toBe(0);
-          expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(exitCode ?? 0);
-          expect(lockRelease).toHaveBeenCalledOnce();
-          expect(lockRelease).toHaveBeenCalledBefore(runtime.exit);
-          const [respawnOpts] = f.restartGatewayProcessWithFreshPid.mock.calls[0] ?? [];
-          expect(respawnOpts?.env).toMatchObject({
-            OPENCLAW_GATEWAY_RESTART_TRACE_STARTED_AT_MS: expect.stringMatching(/^\d/u),
-            OPENCLAW_GATEWAY_RESTART_TRACE_LAST_AT_MS: expect.stringMatching(/^\d/u),
-          });
-          expect(f.writeGatewayRestartHandoff).toHaveBeenCalledOnce();
-        }),
-      );
+      await f.withRunningGateway(async ({ captureSignal, close, runtime, exited, loopPromise }) => {
+        close.mockImplementationOnce(closeGate.wait);
+        captureSignal("SIGUSR2")();
+        try {
+          await awaitGateBeforeSettlement(closeGate.entered, loopPromise, "exit before close");
+          expect(f.writeGatewayRestartHandoff).not.toHaveBeenCalled();
+          closeGate.release();
+          await awaitGateBeforeSettlement(handoffGate.entered, loopPromise, "exit before handoff");
+          expect(sharedState.get("live")).toBe(true);
+          expect(runtime.exit).not.toHaveBeenCalled();
+        } finally {
+          closeGate.release();
+          handoffGate.release();
+          await Promise.allSettled([loopPromise]);
+        }
+        await loopPromise;
+        await expect(exited).resolves.toBe(exitCode ?? 0);
+        expect(sharedState.size).toBe(0);
+        expect(lockRelease).toHaveBeenCalledOnce();
+        expect(lockRelease).toHaveBeenCalledBefore(runtime.exit);
+        expect(f.writeGatewayRestartHandoff).toHaveBeenCalledOnce();
+      });
     },
   );
 

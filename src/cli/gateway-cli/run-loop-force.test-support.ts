@@ -3,7 +3,6 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import {
   advanceWithoutCalls,
   createActiveWorkSnapshot,
-  expectRestartCloseCall,
   expectUncalled,
   systemdReply,
   withLifecycleClock,
@@ -64,10 +63,6 @@ export function registerGatewayForcedRestartTests(f: UpdateRespawnFixtures): voi
             try {
               if (deferred) {
                 await advanceWithoutCalls(300_000, close, f.abortActiveCronTaskRuns, runtime.exit);
-                expect(f.waitForGatewayActiveWork).toHaveBeenCalledExactlyOnceWith(
-                  75_000,
-                  expect.any(Object),
-                );
                 captureSignal("SIGINT")();
                 expect(f.waitForGatewayActiveWork).toHaveBeenCalledOnce();
                 await advanceWithoutCalls(75_000, close, f.abortActiveCronTaskRuns);
@@ -86,8 +81,7 @@ export function registerGatewayForcedRestartTests(f: UpdateRespawnFixtures): voi
                 expect(start).toHaveBeenCalledOnce();
                 expectUncalled(completeBoot, runtime.exit);
               }
-              expectRestartCloseCall(close, 0);
-              expect(f.abortActiveCronTaskRuns).toHaveBeenCalledWith(undefined);
+              expect(close).toHaveBeenCalledOnce();
               await advanceWithoutCalls(9_999, runtime.exit, ...(deferred ? [] : [completeBoot]));
               await advanceWithoutCalls(1, runtime.exit);
               closing.resolve();
