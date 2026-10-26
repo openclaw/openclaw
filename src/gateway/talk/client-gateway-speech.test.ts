@@ -37,7 +37,7 @@ describe("Gateway-controlled client speech", () => {
       expect(fixture.bridge.sendUserMessage).not.toHaveBeenCalled();
       sendTalkClientGatewayControlSpeech(request);
       expect(fixture.bridge.sendUserMessage).toHaveBeenCalledWith(envelope(request.text));
-      cleanupTalkConnection(fixture.connId);
+      cleanupTalkConnection(fixture.connId, { warn: vi.fn() });
       expect(() => sendTalkClientGatewayControlSpeech(request)).toThrow("closed");
       expect(fixture.bridge.sendUserMessage).toHaveBeenCalledOnce();
     } finally {
