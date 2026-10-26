@@ -53,10 +53,7 @@ import {
   deferSessionActorOutcome,
   SessionActorStaleStateError,
 } from "./session-actor-phase.worker.js";
-import {
-  createSessionActorCommittedOutcome,
-  projectSessionActorCommittedOutcome,
-} from "./session-actor-receipt.js";
+import { createSessionActorCommittedOutcome } from "./session-actor-receipt.js";
 import { createSessionActorResidency } from "./session-actor-residency.worker.js";
 import {
   forkSessionActorStoredState,
@@ -611,7 +608,7 @@ export function createSessionActorWorker(
                   : undefined;
             deferSessionActorOutcome({
               database: opened,
-              outcome: projectSessionActorCommittedOutcome(accepted, entryReference),
+              outcome: accepted,
               state,
               projectAuthority,
               publication: turn ?? commitPublication,
