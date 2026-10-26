@@ -271,21 +271,23 @@ const inertAiTransportHost: ActiveAiTransportHost = {
 };
 
 let activeAiTransportHost: ActiveAiTransportHost = inertAiTransportHost;
+type ProcessWithAsyncHooksBuiltin = NodeJS.Process & {
+  getBuiltinModule?: (id: "node:async_hooks") => {
+    AsyncLocalStorage: new <T>() => {
+      getStore(): T | undefined;
+      run<R>(store: T, callback: () => R): R;
+    };
+  };
+};
+
 function createAiTransportHostScope() {
   if (typeof process === "undefined") {
     return undefined;
   }
   // SAFETY: Node's Process type can lag the process.getBuiltinModule runtime API.
-  const asyncHooks = (
-    process as NodeJS.Process & {
-      getBuiltinModule?: (id: "node:async_hooks") => {
-        AsyncLocalStorage: new <T>() => {
-          getStore(): T | undefined;
-          run<R>(store: T, callback: () => R): R;
-        };
-      };
-    }
-  ).getBuiltinModule?.("node:async_hooks");
+  const asyncHooks = (process as ProcessWithAsyncHooksBuiltin).getBuiltinModule?.(
+    "node:async_hooks",
+  );
   return asyncHooks ? new asyncHooks.AsyncLocalStorage<ActiveAiTransportHost>() : undefined;
 }
 

@@ -32,6 +32,17 @@ import { resolveFollowupReplyExpectation } from "./source-reply-delivery-mode.js
 import { resolveReplySourceTurnId, setChannelSourceTurnId } from "./source-turn-id.js";
 import { createTypingSignaler, type TypingSignaler } from "./typing-mode.js";
 
+export type FollowupExecutionResult = {
+  commentaryPayloadsEnabled: boolean;
+  execution: AgentTurnExecutionResult;
+  runStartedAt: number;
+  sessionCtx: TemplateContext;
+  pendingToolTasks: Set<Promise<void>>;
+  progress: {
+    drain(): Promise<void>;
+  };
+};
+
 function buildFollowupTemplateContext(turn: AdmittedFollowupTurn): TemplateContext {
   const queued = turn.queued;
   const run = queued.run;
@@ -72,7 +83,7 @@ export async function executeFollowupTurn(params: {
   defaults: FollowupRunnerParams;
   onToolResult: (payload: ReplyPayload) => Promise<void>;
   onCompactionNoticePayload: (payload: ReplyPayload) => Promise<void>;
-}) {
+}): Promise<FollowupExecutionResult> {
   const { turn, defaults } = params;
   const sourceOpts = defaults.opts;
   const terminalReplyExpectation = resolveFollowupReplyExpectation(turn.queued, turn.config);

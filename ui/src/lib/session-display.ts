@@ -178,11 +178,16 @@ export function formatSessionChannelLabel(channel: string): string {
   return CHANNEL_LABELS.get(channel) ?? channel.charAt(0).toUpperCase() + channel.slice(1);
 }
 
-/**
- * Typed-session identity drives display branching, independent of label text.
- * The catalog supplies typed prefixes; keys supply fallback names and accounts.
- */
-function parseSessionKey(key: string) {
+function parseSessionKey(key: string): {
+  /** Typed-session identity; display branching keys off this, not label text. */
+  kind?: "subagent" | "automation";
+  /** Catalog-backed prefix for typed sessions. Empty for others. */
+  prefix: string;
+  /** Human-readable fallback when no label / displayName is available. */
+  fallbackName: string;
+  /** Raw account segment; only a fallback, Gateway rows carry the real one. */
+  accountId?: string;
+} {
   const normalized = normalizeLowercaseStringOrEmpty(key);
 
   if (key === "main" || /^agent:[^:]+:main$/u.test(key)) {

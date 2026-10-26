@@ -1,5 +1,8 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
-import { normalizeWorkboardSessionsBoardSpec, type WorkboardSessionFacts } from "./index.js";
+import {
+  normalizeWorkboardSessionsBoardSpec,
+  type WorkboardSessionFacts,
+} from "./sessions-board.js";
 
 it("exposes optional PR card details and rate-limit status without requiring enrichment", () => {
   expectTypeOf<WorkboardSessionFacts["pullRequests"][number]>().toEqualTypeOf<{
