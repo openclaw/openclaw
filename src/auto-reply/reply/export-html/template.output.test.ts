@@ -17,8 +17,8 @@ function render(messages: unknown[]) {
   });
 }
 
-function element<T extends Element = Element>(root: ParentNode, selector: string): T {
-  return html.requireElement(root.querySelector<T>(selector), `missing ${selector}`);
+function element(root: ParentNode, selector: string): Element {
+  return html.requireElement(root.querySelector(selector), `missing ${selector}`);
 }
 
 function textOf(root: ParentNode, selector: string) {
@@ -87,16 +87,20 @@ it("restores all tree rows when Escape clears a search", async () => {
   ]);
   const treeIds = () =>
     Array.from(document.querySelectorAll(".tree-node"), (node) => node.getAttribute("data-id"));
-  const search = element<HTMLInputElement>(document, "#tree-search");
+  const search = html.requireElement(
+    document.querySelector<HTMLInputElement>("#tree-search"),
+    "search input missing",
+  );
   search.value = "search-me";
   const input = document.createEvent("Event");
   input.initEvent("input", true, false);
   search.dispatchEvent(input);
   expect(treeIds()).toEqual(["0", "2"]);
 
-  input.initEvent("keydown", true, true);
-  Object.defineProperty(input, "key", { value: "Escape" });
-  document.dispatchEvent(input);
+  const escape = document.createEvent("Event");
+  escape.initEvent("keydown", true, true);
+  Object.defineProperty(escape, "key", { value: "Escape" });
+  document.dispatchEvent(escape);
 
   expect(search.value).toBe("");
   expect(treeIds()).toEqual(["0", "1", "2"]);

@@ -18,7 +18,9 @@ const fallback = { fallbackCode: "ACP_TURN_FAILED", fallbackMessage: "fallback" 
 
 function rejectThroughBoundary(error: unknown) {
   return withAcpRuntimeErrorBoundary({
-    run: () => Promise.reject(error),
+    run: async () => {
+      throw error;
+    },
     ...fallback,
   });
 }

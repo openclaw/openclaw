@@ -39,7 +39,15 @@ it("starts one ordinary session and opens its acknowledged run", async () => {
   button.click();
   await waitForSolid(() => expect(button.disabled).toBe(true));
 
-  expect(context.sessions.createResult).toHaveBeenCalledOnce();
+  expect(context.sessions.createResult).toHaveBeenCalledExactlyOnceWith(
+    {
+      agentId: "research",
+      displayName: "Learn from past conversations",
+      message: expect.stringContaining("past conversations"),
+      idempotencyKey: expect.any(String),
+    },
+    { reconciliation: "background", signal: expect.any(AbortSignal) },
+  );
   expect(context.navigate).not.toHaveBeenCalled();
   creation.resolve({ key, initialRun: { status: "started", runId: "learning-run" } });
   await vi.waitFor(() => expect(context.navigate).toHaveBeenCalledOnce());
@@ -50,11 +58,14 @@ it("starts one ordinary session and opens its acknowledged run", async () => {
 });
 
 it("shows a failed creation without automatically retrying", async () => {
-  const { getByRole, context, button } = await mountLearningPage();
+  const mounted = await mountLearningPage();
+  const { context, button } = mounted;
   context.sessions.state.error = "The Gateway refused this session.";
   context.sessions.createResult = vi.fn(async () => null);
   button.click();
-  await vi.waitFor(() => expect(getByRole("alert").textContent).toContain("Gateway refused"));
+  await vi.waitFor(() =>
+    expect(mounted.getByRole("alert").textContent).toContain("Gateway refused"),
+  );
   expect(context.sessions.createResult).toHaveBeenCalledOnce();
   expect(context.navigate).not.toHaveBeenCalled();
 });

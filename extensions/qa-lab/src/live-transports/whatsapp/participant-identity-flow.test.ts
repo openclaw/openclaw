@@ -12,7 +12,8 @@ const invalidEvidence = [
   ["unknown-person", "retain the admitted person"],
   ["room-principal", "retain the admitted person"],
   ["wrong-run", "retain the admitted person"],
-  ["wrong-execution", "must agree with run discovery"],
+  ["wrong-dm-execution", "must agree with run discovery"],
+  ["wrong-group-execution", "must agree with run discovery"],
   ["raw-phone", "exclude raw route and participant references"],
   ["raw-group", "exclude raw route and participant references"],
   ["verified-generic", "keep generic decisions unverified"],
@@ -78,7 +79,11 @@ async function runIdentityFlow(failure?: Failure) {
         const provenance = { state: failure === "verified-generic" ? "verified" : "unverified" };
         const context = {
           contextId: `context-${runId}`,
-          executionId: exact && failure === "wrong-execution" ? "other" : `execution-${runId}`,
+          executionId:
+            exact &&
+            failure === (runId === "dm-run" ? "wrong-dm-execution" : "wrong-group-execution")
+              ? "other"
+              : `execution-${runId}`,
           runId: failure === "wrong-run" ? "unrelated-run" : runId,
           invoker: { state: failure === "unknown-person" ? "unknown" : "present", principal },
           ingress: { kind: "channel", state: "present" },

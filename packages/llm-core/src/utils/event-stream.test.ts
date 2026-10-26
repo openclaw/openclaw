@@ -37,6 +37,23 @@ describe("EventStream", () => {
     ]);
   }, 30_000);
 
+  it("preserves interleaved queued and waiting push/pull order", async () => {
+    const stream = createNumberStream();
+    const iterator = stream[Symbol.asyncIterator]();
+
+    stream.push(1);
+    expect(await iterator.next()).toEqual({ value: 1, done: false });
+
+    const waiting = iterator.next();
+    stream.push(2);
+    expect(await waiting).toEqual({ value: 2, done: false });
+
+    stream.push(3);
+    stream.end();
+    expect(await iterator.next()).toEqual({ value: 3, done: false });
+    expect(await iterator.next()).toEqual({ value: undefined, done: true });
+  });
+
   it("preserves queued events across prefix compaction and subsequent pushes", async () => {
     const stream = createNumberStream();
     const iterator = stream[Symbol.asyncIterator]();

@@ -1,9 +1,12 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import type { InternalSessionEntry as SessionEntry } from "../../../config/sessions.js";
 import {
   appendTranscriptEvent,
   listSessionEntriesCore,
   loadSessionEntry,
   replaceSessionEntry,
+  upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
 import { normalizeLegacySessionEntryDelivery } from "../../../infra/state-migrations.legacy-session-store.js";
 import { projectSessionDeliveryFields } from "../../../utils/delivery-context.shared.js";
@@ -35,9 +38,14 @@ export async function writeSessionStore(
   storePath: string,
   store: Record<string, SessionEntry | Record<string, unknown>>,
 ): Promise<void> {
+  await fs.mkdir(path.dirname(storePath), { recursive: true });
   for (const [sessionKey, entry] of Object.entries(store)) {
     const canonical = normalizeLegacySessionEntryDelivery(entry as SessionEntry);
-    await replaceSessionEntry({ storePath, sessionKey }, canonical);
+    if (typeof entry.sessionId === "string" && entry.sessionId.trim()) {
+      await replaceSessionEntry({ storePath, sessionKey }, canonical);
+    } else {
+      await upsertSessionEntryCore({ storePath, sessionKey }, canonical);
+    }
   }
 }
 
