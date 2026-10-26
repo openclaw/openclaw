@@ -392,14 +392,14 @@ describe("Agents effective-tools read", () => {
     expect(view.calls()).toHaveLength(5);
   });
 
-  it("refreshes accepted tools for config and scoped catalog publications", async () => {
+  it("refreshes for scoped catalog replacements without reading picker observations", async () => {
     let revision = 1;
     const view = await mountEffective(async () => effective(`Inventory ${revision++}`));
     await view.settleEffective();
     view.emit("chat.metadata.changed", {
       agentId: "other",
       modelCatalogChanged: true,
-      authChanged: false,
+      authChanged: true,
       commandsChanged: false,
     });
     await view.settleEffective();
@@ -408,16 +408,48 @@ describe("Agents effective-tools read", () => {
     expect(await view.settleEffective()).toMatchObject({
       groups: [{ tools: [{ label: "Inventory 2" }] }],
     });
+    for (let index = 0; index < 60; index += 1) {
+      view.emit("chat.metadata.changed", {
+        agentId: "main",
+        modelCatalogChanged: true,
+        authChanged: false,
+        commandsChanged: false,
+      });
+      await view.settleEffective();
+    }
+    view.emit("chat.metadata.changed", {
+      agentId: "main",
+      modelCatalogChanged: false,
+      modelCatalogStatusChanged: true,
+      authChanged: false,
+      commandsChanged: false,
+    });
+    await view.settleEffective();
+    expect(view.calls()).toHaveLength(2);
     view.emit("chat.metadata.changed", {
       agentId: "main",
       modelCatalogChanged: true,
-      authChanged: false,
+      authChanged: true,
       commandsChanged: false,
     });
     expect(await view.settleEffective()).toMatchObject({
       groups: [{ tools: [{ label: "Inventory 3" }] }],
     });
     expect(view.calls()).toHaveLength(3);
+    view.emit("chat.metadata.changed", {
+      agentId: "main",
+      modelSelectionChanged: true,
+      authChanged: false,
+      commandsChanged: false,
+    });
+    expect(await view.settleEffective()).toMatchObject({
+      groups: [{ tools: [{ label: "Inventory 4" }] }],
+    });
+    view.emit("chat.metadata.changed", { agentId: "main", modelCatalogChanged: true });
+    expect(await view.settleEffective()).toMatchObject({
+      groups: [{ tools: [{ label: "Inventory 5" }] }],
+    });
+    expect(view.calls()).toHaveLength(5);
   });
 
   it("defers hidden inventory invalidations and catches up once when visible", async () => {

@@ -143,7 +143,9 @@ suite.define(() => {
     for (const { page, gateway, fixture } of clients) {
       const before = (await gateway.getRequests("tools.effective")).length;
       const row = fixture.scenario.sessions?.[1];
-      if (!row) throw new Error("Expected unrelated fixture session");
+      if (!row) {
+        throw new Error("Expected unrelated fixture session");
+      }
       for (let index = 0; index < 60; index++) {
         const now = await page.evaluate(() => Date.now());
         await gateway.emitGatewayEvent("sessions.changed", {
@@ -162,6 +164,29 @@ suite.define(() => {
       }
       await page.clock.fastForward(5_000);
       expect(await gateway.getRequests("tools.effective")).toHaveLength(before);
+      for (let index = 0; index < 60; index++) {
+        await gateway.emitGatewayEvent("chat.metadata.changed", {
+          agentId: "main",
+          modelCatalogChanged: true,
+          authChanged: false,
+          commandsChanged: false,
+        });
+        await page.clock.fastForward(1_000);
+      }
+      expect(await gateway.getRequests("tools.effective")).toHaveLength(before);
+      await gateway.setMethodResponse("tools.effective", inventory("Updated catalog fixture tool"));
+      await gateway.emitGatewayEvent("chat.metadata.changed", {
+        agentId: "main",
+        modelCatalogChanged: true,
+        authChanged: true,
+        commandsChanged: false,
+      });
+      await page.clock.runFor(100);
+      await page
+        .locator(".agent-tools-runtime-chip")
+        .filter({ hasText: "Updated catalog fixture tool" })
+        .waitFor();
+      expect(await gateway.getRequests("tools.effective")).toHaveLength(before + 1);
       await gateway.setMethodResponse(
         "tools.effective",
         inventory("Discovered fixture MCP tool", "mcp"),
@@ -177,7 +202,7 @@ suite.define(() => {
         .locator(".agent-tools-runtime-chip")
         .filter({ hasText: "Discovered fixture MCP tool" })
         .waitFor();
-      expect(await gateway.getRequests("tools.effective")).toHaveLength(before + 1);
+      expect(await gateway.getRequests("tools.effective")).toHaveLength(before + 2);
     }
   });
 });

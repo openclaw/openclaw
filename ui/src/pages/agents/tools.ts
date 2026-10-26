@@ -1,3 +1,4 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { createMemo, createSignal } from "solid-js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import type { ToolsCatalogResult, ToolsEffectiveResult } from "../../api/types.ts";
@@ -16,6 +17,17 @@ export function agentEffectiveToolsEventInvalidates(
   event: GatewayEventFrame,
   scope: UiSessionDefaultsHost & { agentId: string; sessionKey: string },
 ): boolean {
+  if (event.event === "chat.metadata.changed") {
+    const payload = asNullableRecord(event.payload);
+    // Auth receipts also certify executable catalog identity; picker observations preserve it.
+    if (
+      payload?.authChanged === false &&
+      payload.commandsChanged === false &&
+      payload.modelSelectionChanged !== true
+    ) {
+      return false;
+    }
+  }
   return Boolean(
     modelCatalogEventInvalidation(event, { agentId: scope.agentId }) ||
     (event.event === "sessions.changed" &&
