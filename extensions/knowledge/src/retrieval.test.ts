@@ -6,7 +6,7 @@ import { expect, it } from "vitest";
 import { stringify } from "yaml";
 import { contract } from "./contract.js";
 import { SqliteIdentityStore } from "./identity-store.js";
-import { isFullHit } from "./retrieval-contract.js";
+import { isFullHit } from "./retrieval-hit.js";
 import { keywordExpression } from "./retrieval.js";
 import { AGENT_HIT_LIMIT, COMPACT_SNIPPET_CHARS } from "./search-detail.js";
 import { createKnowledgeService } from "./service.js";

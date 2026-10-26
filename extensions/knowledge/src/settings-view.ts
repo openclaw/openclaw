@@ -1,5 +1,5 @@
 import type { FeatureOutput } from "openclaw/plugin-sdk/feature-contract";
-import { contract } from "./contract.js";
+import type { contract } from "./contract.js";
 import { loadVocabulary } from "./inspection-client.js";
 import { ontologyView } from "./ontology-view.js";
 import type { Page } from "./page-context.js";

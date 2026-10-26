@@ -1,7 +1,8 @@
 import type { ControlUiHost, ControlUiPanel } from "openclaw/plugin-sdk/control-ui";
 import { createFeatureClient } from "openclaw/plugin-sdk/feature-contract";
+import { browserContract } from "./browser-contract.js";
 import { coalesceChanges } from "./change-refresh.js";
-import { contract } from "./contract.js";
+import type { contract } from "./contract.js";
 import { markdownView } from "./markdown-view.js";
 import type { ActivityOutput } from "./session-activity.js";
 import { viewingClient } from "./store-view-client.js";
@@ -128,7 +129,12 @@ export function registerSessionPanel(host: ControlUiHost) {
         next: number | null = null,
         busy = false,
         selected = "";
-      const client = viewingClient(createFeatureClient(contract, host), () => ({ agent }));
+      const client = viewingClient(
+        createFeatureClient<typeof contract>(browserContract, host),
+        () => ({
+          agent,
+        }),
+      );
       const valid = (g: number) => !disposed && !context.signal.aborted && g === generation;
       function target() {
         const key = host.sessions.normalizeKey(context.props.sessionKey);
