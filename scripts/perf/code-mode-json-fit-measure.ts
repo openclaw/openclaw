@@ -74,9 +74,9 @@ try {
         serializedChars += json?.length ?? 0;
         return json;
       };
-      JSON.parse = (json, reviver) => {
-        parsedChars += json.length;
-        return parse(json, reviver);
+      JSON.parse = (...args) => {
+        parsedChars += args[0].length;
+        return Reflect.apply(parse, JSON, args);
       };
       result = invoke();
     } finally {
