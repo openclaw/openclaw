@@ -8,6 +8,7 @@ import {
 } from "../test-helpers/application-context-fixtures.ts";
 import { createShellOwner } from "./app-host-solid.test-support.ts";
 import { connectShellIdle } from "./app-shell-idle.runtime.ts";
+import { patchSettings } from "./settings.ts";
 
 vi.mock("./control-ui-favicon-status.runtime.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./control-ui-favicon-status.runtime.ts")>()),
@@ -26,6 +27,7 @@ const manifest = {
   debug: ["assets/debug-1234abcd.js"],
   "advanced-next": ["assets/security-1234abcd.js", "assets/security-1234abcd.css"],
   "claws-next": ["assets/claws-next-1234abcd.js"],
+  "roster-next": ["assets/chat-1234abcd.js", "assets/chat-1234abcd.css"],
 };
 
 beforeEach(() => {
@@ -56,7 +58,10 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function setup(routeId?: "advanced" | "dashboard" | "workboard") {
+function setup(
+  routeId?: "advanced" | "dashboard" | "workboard" | "new-session",
+  sidebarAgentsMode?: "chip" | "roster",
+) {
   const currentLocation = {
     pathname: routeId ? "/control/settings/advanced" : "/chat",
     search: "",
@@ -136,8 +141,20 @@ function setup(routeId?: "advanced" | "dashboard" | "workboard") {
     },
   });
   Object.assign(context.plugins, { isLoading: (id: string) => loading.has(id) });
+  const previousSidebarAgentsMode = context.theme.settings.sidebarAgentsMode;
+  const setSidebarAgentsMode = (mode: typeof previousSidebarAgentsMode) =>
+    patchSettings(
+      { gatewayUrl: context.gateway.connection.gatewayUrl, sidebarAgentsMode: mode },
+      { selectGateway: false },
+    );
+  if (sidebarAgentsMode) {
+    setSidebarAgentsMode(sidebarAgentsMode);
+  }
   const stop = connectShellIdle(host, context, 0);
   cleanups.push(stop, () => shell.remove());
+  if (sidebarAgentsMode) {
+    cleanups.push(() => setSidebarAgentsMode(previousSidebarAgentsMode));
+  }
   return {
     state,
     outlet,
@@ -151,6 +168,7 @@ function setup(routeId?: "advanced" | "dashboard" | "workboard") {
     paneState,
     pluginPages,
     loading,
+    setSidebarAgentsMode,
   };
 }
 
@@ -261,6 +279,57 @@ it("keeps declared next interactions as the route's only automatic idle work", a
     new URL("/control/assets/new-1234abcd.css", location.origin).href,
   ]);
   expect(fixture.preloadRoute).not.toHaveBeenCalled();
+});
+
+it.each(["chip", "roster"] as const)(
+  "warms Chat without evaluating it only for the New Session roster (%s)",
+  async (mode) => {
+    const fixture = setup("new-session", mode);
+    await idle();
+    expect(fetch).not.toHaveBeenCalled();
+    fixture.outlet.presentationSettled = true;
+    fixture.transcript.ready = true;
+    await idle();
+    expect(hints().map((link) => [link.rel, link.as ?? "", link.href])).toEqual(
+      mode === "roster"
+        ? [
+            [
+              "modulepreload",
+              "",
+              new URL("/control/assets/chat-1234abcd.js", location.origin).href,
+            ],
+            [
+              "preload",
+              "style",
+              new URL("/control/assets/chat-1234abcd.css", location.origin).href,
+            ],
+          ]
+        : [],
+    );
+    expect(fixture.preloadRoute).not.toHaveBeenCalled();
+    expect(document.querySelector("script")).toBeNull();
+  },
+);
+
+it("reacts to roster preference changes and releases its subscription", async () => {
+  const fixture = setup("new-session", "chip");
+  fixture.outlet.presentationSettled = true;
+  fixture.transcript.ready = true;
+  await idle();
+  expect(hints()).toHaveLength(0);
+
+  fixture.setSidebarAgentsMode("roster");
+  await idle();
+  expect(hints().map((link) => link.href)).toEqual([
+    new URL("/control/assets/chat-1234abcd.js", location.origin).href,
+    new URL("/control/assets/chat-1234abcd.css", location.origin).href,
+  ]);
+  fixture.stop();
+  fixture.setSidebarAgentsMode("chip");
+  fixture.setSidebarAgentsMode("roster");
+  await idle();
+  expect(hints()).toHaveLength(0);
+  expect(idleCallbacks).toHaveLength(0);
 });
 
 it.each(["topbar-search", "sidebar-brand__search", "shell-chrome-controls__search"])(

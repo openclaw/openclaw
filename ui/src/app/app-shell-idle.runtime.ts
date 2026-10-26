@@ -66,7 +66,12 @@ export function connectShellIdle(
       return intent;
     }
     const currentRoute = router.getState().matches[0]?.routeId;
-    const currentNext = currentRoute ? `${currentRoute}-next` : undefined;
+    const currentNext =
+      currentRoute === "new-session" && context.theme.settings.sidebarAgentsMode === "roster"
+        ? "roster-next"
+        : currentRoute
+          ? `${currentRoute}-next`
+          : undefined;
     if (currentNext && manifest?.[currentNext]) {
       return pending.has(currentNext) ? currentNext : undefined;
     }
@@ -271,6 +276,7 @@ export function connectShellIdle(
   const stops = [
     router.subscribe(schedule),
     gateway.subscribe(schedule),
+    context.theme.subscribe(schedule),
     listen(shell, "pointerover", onIntent),
     listen(shell, "pointerout", onIntent),
     listen(shell, "focusin", onIntent),

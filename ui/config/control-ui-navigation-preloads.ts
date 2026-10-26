@@ -28,6 +28,7 @@ const entries = {
     "app/theme-catalog.ts",
   ],
   "advanced-next": ["pages/config/security.tsx"],
+  "roster-next": ["pages/chat/route-entry.ts"],
   shortcuts: ["components/keyboard-shortcuts-dialog.tsx"],
   debug: [
     "pages/debug/debug-overlay.ts",
