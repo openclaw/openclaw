@@ -158,10 +158,10 @@ export function createWorkerTaskHost(
     taskContextTransferList(context) {
       // SAFETY: The pool passes the context returned by this host's capture method.
       const captured = context as WorkerTaskContext;
-      return [
-        ...(captured.databaseAdmissionPort ? [captured.databaseAdmissionPort] : []),
-        ...postgresPoolTransferList(captured.postgresPool),
-      ];
+      const transfers = postgresPoolTransferList(captured.postgresPool);
+      return captured.databaseAdmissionPort
+        ? [captured.databaseAdmissionPort, ...transfers]
+        : transfers;
     },
     createTaskObserver(url) {
       const kind = workerRequestKind(url);
