@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { assert, beforeEach, expect, it, vi } from "vitest";
+import { assert, expect, it, vi } from "vitest";
 import type { ManagedHandoffLease } from "../../infra/update-managed-service-handoff-lease.js";
 import { isChildProcessTreeAlive } from "../../process/child-process-tree.js";
 import { runUtf8CommandWithTimeout } from "../../process/exec.js";
@@ -14,21 +14,19 @@ import {
 import { useExecutorFixture } from "./update-command-executor.test-support.js";
 
 const fixture = useExecutorFixture("update-executor-descendants-");
-let root: string;
-beforeEach(() => {
-  ({ root } = fixture());
-});
 
 it.skipIf(process.platform === "win32").each([false, true])(
   "does not release either installation while a candidate descendant is alive (changed root=%s)",
   async (changedRoot) => {
+    const { root } = fixture();
     const candidateRoot = changedRoot ? path.join(root, "activated") : root;
     if (changedRoot) {
       fs.mkdirSync(candidateRoot);
     }
     let descendant: number | undefined;
     let candidatePid: number | undefined;
-    const expectedReleases = new Set([root, candidateRoot]);
+    const installations = new Set([root, candidateRoot]);
+    const expectedReleases = new Set(installations);
     const released = new Set<string>();
     const leaseOwner = await import("../../infra/update-managed-service-handoff-lease.js");
     const prepareStore = leaseOwner.prepareManagedHandoffLeaseStore;
@@ -88,7 +86,7 @@ it.skipIf(process.platform === "win32").each([false, true])(
           assert(candidatePid !== undefined);
           expect(pidAlive.isPidAlive(descendant)).toBe(true);
           expect(isChildProcessTreeAlive({ pid: candidatePid })).toBe(true);
-          for (const installation of new Set([root, candidateRoot])) {
+          for (const installation of installations) {
             expect(store.read(installation).kind).toBe("current");
             expect(store.acquire(installation, "next-owner", { kind: "update" }).kind).toBe("busy");
           }
