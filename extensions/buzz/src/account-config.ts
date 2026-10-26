@@ -9,7 +9,7 @@ import { BuzzAccountIdSchema, type BuzzConfig, type BuzzConfigInput } from "./co
 import { parseBuzzTarget } from "./target.js";
 
 function resolveChannelConfig(cfg: OpenClawConfig): BuzzConfigInput | undefined {
-  return (cfg.channels as Record<string, unknown> | undefined)?.buzz as BuzzConfigInput | undefined;
+  return cfg.channels?.buzz;
 }
 
 export const {

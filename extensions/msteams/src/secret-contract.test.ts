@@ -6,7 +6,7 @@ import {
 } from "openclaw/plugin-sdk/secret-ref-runtime";
 import { describe, expect, it, vi } from "vitest";
 
-// Secret metadata is loaded even when the channel and its setup wizard are inactive.
+// mock-isolation: secret metadata must not evaluate the inactive channel's setup wizard.
 vi.mock("openclaw/plugin-sdk/setup", () => {
   throw new Error("Microsoft Teams secret metadata must not load the setup wizard");
 });
