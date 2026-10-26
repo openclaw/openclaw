@@ -250,6 +250,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.web.fetch.provider": "Web Fetch Provider",
   "tools.web.fetch.timeoutSeconds": "Web Fetch Timeout (sec)",
   "tools.web.fetch.cacheTtlMinutes": "Web Fetch Cache TTL (min)",
+  "tools.web.fetch.decisionQuality": "Web Fetch Decision Quality (Experimental)",
   "tools.web.fetch.maxRedirects": "Web Fetch Max Redirects",
   "tools.web.fetch.userAgent": "Web Fetch User-Agent",
   "tools.web.fetch.headers": "Web Fetch Request Headers",

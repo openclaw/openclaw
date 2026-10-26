@@ -178,6 +178,7 @@ const ADVANCED_TUNING_PATHS = new Set([
   "session.maintenance.preserveRecent",
   "tools.github.app",
   "tools.sessions.allowThreadTargets",
+  "tools.web.fetch.decisionQuality",
 ]);
 
 function splitPath(path: string): string[] {
