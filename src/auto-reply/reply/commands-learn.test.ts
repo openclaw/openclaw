@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { WorkshopReviewNotFoundError } from "../../skills/workshop/review-undo.js";
+import { SKILL_LEARNING_METHOD_PROMPT } from "../../skills/workshop/skill-authoring-standards.js";
 import { createCanonicalAgentConfigFixture } from "../../test-utils/config-roster.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { handleLearnCommand } from "./commands-learn.js";
@@ -198,6 +199,8 @@ describe("learn command", () => {
       expect(params.ctx.BodyForAgent).toContain("Route each lesson to one medium.");
       expect(params.ctx.BodyForAgent).toContain("Memory: follow the provider learning skill.");
       expect(params.ctx.BodyForAgent).toContain("Write skills with skill_workshop");
+      expect(params.ctx.BodyForAgent).toContain(SKILL_LEARNING_METHOD_PROMPT);
+      expect(params.ctx.BodyForAgent).not.toContain("Make at most one change.");
     });
 
     it("learns into memory alone when policy hides skill_workshop", async () => {

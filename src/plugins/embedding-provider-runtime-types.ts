@@ -7,6 +7,8 @@ export type EmbeddingBatchChunk = {
 export type EmbeddingBatchOptions = {
   agentId: string;
   chunks: EmbeddingBatchChunk[];
+  /** The host applied an explicit document format; skip provider document templates. */
+  documentFormatApplied?: boolean;
   wait: boolean;
   concurrency: number;
   pollIntervalMs: number;

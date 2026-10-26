@@ -120,6 +120,7 @@ export function prepareSessionEventProjection(
       }
     >();
     const diff = createSessionRowDeltaDiffer();
+    const envelopeFields: [string, unknown][] = [];
     let revision = projection.state.revision;
     let accessRevision = readGatewayAccessRevision();
     // Run display facts belong to this synchronous publication; recipient authority stays live.
@@ -241,8 +242,14 @@ export function prepareSessionEventProjection(
           // Names index the immutable full row; values need no per-audience entry tuples.
           const fields = (audience.rowFields ??= Object.keys(row)
             .filter((field) => Reflect.get(row, field) !== undefined)
-            .toSorted());
-          audience.rowFieldIndices ??= new Map(fields.map((field, index) => [field, index]));
+            // oxlint-disable-next-line unicorn/no-array-sort -- The filtered array is private to this audience.
+            .sort());
+          if (!audience.rowFieldIndices) {
+            audience.rowFieldIndices = new Map();
+            for (let index = 0; index < fields.length; index++) {
+              audience.rowFieldIndices.set(fields[index]!, index);
+            }
+          }
           refs = { indices: [], omitted: new Uint8Array(fields.length) };
           for (let index = 0; index < fields.length; index++) {
             const field = fields[index]!;
@@ -260,16 +267,24 @@ export function prepareSessionEventProjection(
         }
         let wirePayload = delivery.payload;
         if (refs || omitMessage) {
-          // Copy retained fields in wire order; omitted fields need no entry tuples.
-          wirePayload = Object.fromEntries(
-            Object.keys(delivery.payload)
-              .filter(
-                (field) =>
-                  (!omitMessage || field !== "message") &&
-                  !refs?.omitted[audience.rowFieldIndices!.get(field) ?? -1],
-              )
-              .map((field) => [field, delivery.payload[field]]),
-          );
+          // fromEntries consumes these scratch tuples synchronously; only the envelope escapes.
+          let count = 0;
+          const keys = Object.keys(delivery.payload);
+          // oxlint-disable-next-line typescript/prefer-for-of -- Keep the measured indexed traversal in this hot path.
+          for (let i = 0; i < keys.length; i++) {
+            const field = keys[i]!;
+            if (
+              (omitMessage && field === "message") ||
+              refs?.omitted[audience.rowFieldIndices!.get(field) ?? -1]
+            ) {
+              continue;
+            }
+            const entry = (envelopeFields[count++] ??= [field, undefined]);
+            entry[0] = field;
+            entry[1] = delivery.payload[field];
+          }
+          envelopeFields.length = count;
+          wirePayload = Object.fromEntries(envelopeFields);
           if (refs) {
             wirePayload.sessionFieldRefs = refs.indices;
           }

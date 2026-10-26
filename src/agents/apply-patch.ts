@@ -133,6 +133,7 @@ export function createApplyPatchTool(
         throw withApplyPatchContainmentHint(
           error,
           workspaceOnly ? options.containmentSource : undefined,
+          !sandbox,
         );
       }
 

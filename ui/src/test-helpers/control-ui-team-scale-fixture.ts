@@ -370,6 +370,9 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     assistantAgentId: "main",
     assistantName: "Harbor",
     agentModel: "gpt-5-mini",
+    models: [
+      { id: "gpt-5-mini", name: "Fixture reasoning model", provider: "openai", reasoning: true },
+    ],
     sessionKey: selectedSessionKey,
     ...(options.rowFacts ? { sessionInfo: pinnedRows[0]! } : {}),
     sessions,

@@ -12,7 +12,6 @@ import {
   MEMORY_MANAGED_LOCAL_EMBEDDING_SETUP_CHECK_ID,
   registerMemoryCoreDoctorChecks,
 } from "./doctor-health.js";
-import { collectVectorProviderFindings } from "./doctor-vector-index-provider.js";
 
 type InspectManagedLocalEmbeddingSetup = Parameters<
   typeof registerMemoryCoreDoctorChecks
@@ -275,25 +274,24 @@ describe("managed local embedding setup health check", () => {
         }),
       ]);
       const checkContext = context(stateDir, "local");
-      const config = checkContext.cfg;
-      const env = checkContext.env!;
       const check = captureCheck(async () => null);
       await expect(check.detect(checkContext)).resolves.toEqual([]);
-      await expect(
-        collectVectorProviderFindings(
-          { config, env, stateDir, shouldInspectAgent: () => true },
-          async () => ({
-            provider: "local",
-            reason: "Synthetic provider setup requirement",
-          }),
-        ),
-      ).resolves.toEqual([
+      const failureCheck = captureCheck(async ({ provider }) => ({
+        provider,
+        reason: "Synthetic provider setup requirement",
+      }));
+      await expect(failureCheck.detect(checkContext)).resolves.toEqual([
         {
-          agentId: "main",
-          model,
-          provider: "local",
-          configPrefix: "memory.search",
-          reason: "Synthetic provider setup requirement",
+          checkId: MEMORY_MANAGED_LOCAL_EMBEDDING_SETUP_CHECK_ID,
+          severity: "error",
+          source: "memory-core",
+          path: "memory.search.provider",
+          target: "main/local",
+          requirement: "managed-local-embedding-setup",
+          message:
+            "Memory index for agent main uses vector model embeddinggemma-300m, but " +
+            'embedding provider "local" cannot initialize (Synthetic provider setup requirement).',
+          fixHint: undefined,
         },
       ]);
       expect(writer.exitCode).toBeNull();

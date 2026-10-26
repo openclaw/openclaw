@@ -572,7 +572,9 @@ export function createAgentsPageState(
         onModelCatalogOpen: () => modelCatalog.ensure({ refresh: true }),
       },
       agentSkills: {
-        filter: skillsFilter(),
+        get filter() {
+          return skillsFilter();
+        },
         onFilterChange: (next: string) => {
           setSkillsFilter(next);
         },
