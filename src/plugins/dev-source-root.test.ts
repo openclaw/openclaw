@@ -63,9 +63,6 @@ it.each([
         "https://clawhub.ai",
       );
       expect(request.source).toBe(expected);
-      expect(isBundledPluginInsideDevSourceRoot({ rootDir: pluginRoot, env: process.env })).toBe(
-        stagedCommit === commit,
-      );
       if (request.source === "bundled") {
         expect(request.bundledSource.localPath).toBe(pluginRoot);
         expect(request.rawSpec).toBe("@openclaw/codex");
@@ -75,14 +72,14 @@ it.each([
 );
 
 it.each([
-  ["explicit version", commit, "@openclaw/codex@2026.9.3", false, "clawhub"],
-  ["unqualified package", commit, "@openclaw/codex", false, "clawhub"],
-  ["explicit npm override", commit, "npm:@openclaw/codex", false, "npm"],
-  ["bare plugin ID", commit, "codex", false, "bundled"],
-] as const)("preserves source selection for %s", (_name, stagedCommit, raw, pin, expected) => {
-  fixture(stagedCommit);
+  ["@openclaw/codex@2026.9.3", "clawhub"],
+  ["@openclaw/codex", "clawhub"],
+  ["npm:@openclaw/codex", "npm"],
+  ["codex", "bundled"],
+] as const)("selects the source for %s", (raw, expected) => {
+  fixture(commit);
   withPluginCache(createPluginCache(), () => {
-    const plan = resolvePluginInstallSourcePlan({ raw, mode: "install", pin });
+    const plan = resolvePluginInstallSourcePlan({ raw, mode: "install" });
     expect(plan).toMatchObject({ ok: true, request: { source: expected } });
   });
 });

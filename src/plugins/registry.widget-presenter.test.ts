@@ -62,17 +62,13 @@ describe("plugin widget presenter registry", () => {
       );
       if (target === "node_panel") {
         const selected = registry.widgetPresenters[0]!.presenter;
-        await expect(selected.availability({})).resolves.toEqual({
-          ok: true,
-          value: { available: true },
+        const availability = await selected.availability({});
+        expect(availability).toEqual({ ok: true, value: { available: true } });
+        const document = { kind: "html" as const, html: "<p>Panel</p>" };
+        await expect(selected.present({ context: {}, document, title: "Panel" })).resolves.toEqual({
+          ok: false,
+          error: { code: "no_eligible_node", message: "none" },
         });
-        await expect(
-          selected.present({
-            context: {},
-            document: { kind: "html", html: "<p>Panel</p>" },
-            title: "Panel",
-          }),
-        ).resolves.toEqual({ ok: false, error: { code: "no_eligible_node", message: "none" } });
         expectDiagnostic(registry, {
           pluginId: "slack",
           message: "widget presenter already registered for node_panel (discord)",

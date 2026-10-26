@@ -70,14 +70,13 @@ describe("plugin registry Control UI descriptors", () => {
 
   it("keeps legacy flat descriptors loadable for shipped JavaScript plugins", () => {
     const { registerPlugin, expectDescriptor } = fixture();
-    registerPlugin({ id: "legacy-descriptor-fixture" }, (api) =>
+    registerPlugin({ id: "legacy" }, (api) =>
       api.registerControlUiDescriptor({
         id: "legacy-card",
         name: "Legacy Card",
-        description: "Legacy descriptor from a JavaScript plugin",
       } as never),
     );
-    expectDescriptor("legacy-descriptor-fixture", {
+    expectDescriptor("legacy", {
       id: "legacy-card",
       surface: "session",
       label: "Legacy Card",

@@ -95,16 +95,12 @@ it.each(["plain", "overlapping package", "native companion", "external dependenc
         results.push(await withPluginCache(cache, plugin.load).migrateLegacyState(plugin.input));
         acquisitions.push(copies.mock.calls.filter(([source]) => source === plugin.source).length);
       }
-      expect(results.map((result) => result.changes.slice(0, 3))).toEqual([
-        ["first", "1", "original resource"],
-        ["first", "1", "original resource"],
-      ]);
-      expect(results[0]!.changes[3]).not.toBe(results[1]!.changes[3]);
-      expect(results.map((result) => result.changes[4])).toEqual(
-        layout === "native companion"
-          ? ["original companion", "original companion"]
-          : ["none", "none"],
+      expect(results.map((result) => result.changes.slice(0, 3))).toEqual(
+        Array.from({ length: 2 }, () => ["first", "1", "original resource"]),
       );
+      expect(results[0]!.changes[3]).not.toBe(results[1]!.changes[3]);
+      const companion = layout === "native companion" ? "original companion" : "none";
+      expect(results.map((result) => result.changes[4])).toEqual([companion, companion]);
       expect(acquisitions[0]).toBeGreaterThan(0);
       expect(acquisitions[1]! - acquisitions[0]!).toBe(0);
     });

@@ -22,17 +22,7 @@ function createChannelRegistry(pluginId = "demo-plugin", source = "/tmp/demo/ind
 const { label, selectionLabel, docsPath, blurb } = getChatChannelMeta("telegram");
 it.each([
   ["telegram", { label, selectionLabel, docsPath, blurb }, false],
-  [
-    "external-chat",
-    {
-      id: "external-chat",
-      label: "external-chat",
-      selectionLabel: "external-chat",
-      docsPath: "/channels/external-chat",
-      blurb: "",
-    },
-    true,
-  ],
+  ["external-chat", { ...channelFixture("external-chat").meta, blurb: "" }, true],
 ] as const)("fills incomplete metadata for %s", (id, meta, exact) => {
   const { register, expectDiagnostic } = createChannelRegistry();
   const normalized = register({ id, meta: { id } as never });
