@@ -21,7 +21,7 @@ it("attributes retained hits and misses separately from winner revisions and vie
     ownerAgentIds: agents,
   };
   const selection = createSessionRowSelection(cfg, scope, false, () => context);
-  const row = (suffix: string, updatedAt: number) => {
+  const makeRow = (suffix: string, updatedAt: number) => {
     const key = `agent:main:${suffix}`;
     const entry = { sessionId: key, updatedAt };
     return {
@@ -29,8 +29,8 @@ it("attributes retained hits and misses separately from winner revisions and vie
       entry,
     };
   };
-  const first = row("a", 1);
-  const second = row("b", 2);
+  const first = makeRow("a", 1);
+  const second = makeRow("b", 2);
   selection.add(first);
   selection.add(second);
   const revisions = createSessionRowProjectionRevisions(
@@ -81,7 +81,7 @@ it("attributes retained hits and misses separately from winner revisions and vie
     expect(counter.hits - (beforeTask?.hits ?? 0)).toBe(5);
     expect(counter.misses - (beforeTask?.misses ?? 0)).toBe(5);
     const revisionCount = (value: typeof after, reason: string) =>
-      value.partitionRevisions.find((counter) => counter.reason === reason)?.changes ?? 0;
+      value.partitionRevisions.find((revision) => revision.reason === reason)?.changes ?? 0;
     expect(revisionCount(after, "metadata") - revisionCount(before, "metadata")).toBe(1);
     expect(revisionCount(after, "automation") - revisionCount(before, "automation")).toBe(0);
   } finally {
