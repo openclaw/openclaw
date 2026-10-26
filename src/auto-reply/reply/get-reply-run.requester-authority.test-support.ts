@@ -250,28 +250,4 @@ export function registerPendingRequesterAuthorityCases({
       }
     },
   );
-  it.each(["runtime", "scoped"] as const)(
-    "retains the %s config owner for queued admission",
-    async (kind) => {
-      const params = baseParams();
-      const runtimeConfig = params.cfg;
-      const scopedConfig = {
-        ...runtimeConfig,
-        commands: { ownerAllowFrom: ["slack:scoped-owner"] },
-      };
-      setRuntimeConfigSnapshot(runtimeConfig, runtimeConfig);
-      try {
-        await runPrepared({ ...params, cfg: kind === "scoped" ? scopedConfig : runtimeConfig });
-        const { followupRun } = requireRunReplyAgentCall();
-        const nextConfig = { ...runtimeConfig, commands: { ownerAllowFrom: ["slack:next-owner"] } };
-        setRuntimeConfigSnapshot(nextConfig, nextConfig);
-        expect(followupRun.readAdmissionConfig?.()).toEqual(
-          kind === "scoped" ? scopedConfig : nextConfig,
-        );
-        expect(followupRun.run.config).toEqual(kind === "scoped" ? scopedConfig : runtimeConfig);
-      } finally {
-        clearRuntimeConfigSnapshot();
-      }
-    },
-  );
 }

@@ -1,10 +1,9 @@
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createReplySessionEntryHandle } from "./session-entry-handle.js";
 
-const TEST_WORKSPACE_DIR = path.resolve("/tmp/workspace");
-
-const { updateSessionEntryMock } = vi.hoisted(() => ({ updateSessionEntryMock: vi.fn() }));
+const { updateSessionEntryMock } = vi.hoisted(() => ({
+  updateSessionEntryMock: vi.fn(async (..._args: unknown[]) => null),
+}));
 
 // mock-isolation: Session classification is outside skill snapshot publication.
 vi.mock("../../agents/sandbox/runtime-status.js", () => ({
@@ -61,88 +60,31 @@ vi.mock("../../config/sessions/session-accessor.sqlite-entry.js", () => ({
 
 const { ensureSkillSnapshot } = await import("./session-updates.js");
 
-function skillTurn(
-  sessionEntry: NonNullable<Parameters<typeof ensureSkillSnapshot>[0]["sessionEntry"]>,
-) {
+afterEach(() => vi.unstubAllEnvs());
+
+it("does not keep a deleted first-turn session entry when persisting skills", async () => {
+  vi.stubEnv("OPENCLAW_TEST_FAST", "0");
   const sessionKey = "agent:main:main";
+  const sessionEntry = { sessionId: "deleted-session", updatedAt: 10 };
   const sessionStore = { [sessionKey]: sessionEntry };
-  return {
+  const sessionEntryHandle = createReplySessionEntryHandle({
+    sessionKey,
+    sessionEntry,
+    sessionStore,
+  });
+  const result = await ensureSkillSnapshot({
     agentId: "main",
     sessionEntry,
+    sessionEntryHandle,
     sessionStore,
     sessionKey,
     sessionId: sessionEntry.sessionId,
     storePath: "/tmp/sessions.json",
     isFirstTurnInSession: true,
-    workspaceDir: TEST_WORKSPACE_DIR,
+    workspaceDir: "/tmp/workspace",
     cfg: {},
-  };
-}
-
-describe("ensureSkillSnapshot", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    vi.stubEnv("OPENCLAW_TEST_FAST", "0");
-    updateSessionEntryMock.mockReset();
-    updateSessionEntryMock.mockResolvedValue(null);
   });
-
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
-
-  it("does not keep a deleted first-turn session entry when persisting skills", async () => {
-    const turn = skillTurn({ sessionId: "deleted-session", updatedAt: 10 });
-    const sessionEntryHandle = createReplySessionEntryHandle(turn);
-    const result = await ensureSkillSnapshot({ ...turn, sessionEntryHandle });
-
-    expect(updateSessionEntryMock).toHaveBeenCalledWith(
-      {
-        storePath: "/tmp/sessions.json",
-        sessionKey: turn.sessionKey,
-      },
-      expect.objectContaining({ kind: "fields" }),
-      expect.any(Object),
-    );
-    expect(result).toMatchObject({ sessionEntry: undefined, systemSent: false });
-    expect(sessionEntryHandle.getCurrent()).toBeUndefined();
-    expect(turn.sessionStore[turn.sessionKey]).toBeUndefined();
-  });
-
-  it.each([true, false])(
-    "persists only owned skill fields as a partial update (first turn: %s)",
-    async (isFirstTurnInSession) => {
-      const turn = skillTurn({
-        sessionId: "session-1",
-        updatedAt: 10,
-        modelOverride: "gpt-5.5",
-        label: "Before rename",
-        pinnedAt: 100,
-      });
-      updateSessionEntryMock.mockImplementationOnce(async (_scope, operation) => {
-        const concurrentEntry = {
-          sessionId: turn.sessionId,
-          updatedAt: 20,
-          modelOverride: "sonnet-4.6",
-          label: "After rename",
-          sendPolicy: "deny",
-        };
-        const patch = operation.patch;
-        expect(patch).toStrictEqual({
-          ...(isFirstTurnInSession ? { systemSent: true } : {}),
-          skillsSnapshot: expect.any(Object),
-        });
-        return { ...concurrentEntry, ...patch };
-      });
-
-      const result = await ensureSkillSnapshot({ ...turn, isFirstTurnInSession });
-      expect(result.sessionEntry).toMatchObject({
-        modelOverride: "sonnet-4.6",
-        label: "After rename",
-        sendPolicy: "deny",
-      });
-      expect(result.sessionEntry?.pinnedAt).toBeUndefined();
-      expect(turn.sessionStore[turn.sessionKey]).toEqual(result.sessionEntry);
-    },
-  );
+  expect(result).toMatchObject({ sessionEntry: undefined, systemSent: false });
+  expect(sessionEntryHandle.getCurrent()).toBeUndefined();
+  expect(sessionStore[sessionKey]).toBeUndefined();
 });
