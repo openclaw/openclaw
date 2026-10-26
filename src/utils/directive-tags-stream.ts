@@ -1,4 +1,7 @@
-import { findCodeOwnership } from "../shared/text/code-regions.js";
+import {
+  canReuseMarkdownOwnershipForAppend,
+  findCodeOwnership,
+} from "../shared/text/code-regions.js";
 import type { TextFilter, TextProjector } from "../shared/text/text-projection.js";
 import { stripInlineDirectiveTagsForDisplay } from "./directive-tags-batch.js";
 
@@ -77,6 +80,8 @@ export function findDirectiveCodePrefix(
 
 /** Prose appends cannot open directive syntax or change Markdown code ownership. */
 const APPEND_SAFE_DELTA = /^[^[`~]*$/u;
+/** Characters that can complete an image, link title, table, or reference definition. */
+const APPEND_CHANGES_OWNERSHIP = /[[\]():"'|>=\t]| {4}|-{3}/u;
 
 function hasUnsettledDirectiveMarker(source: string): boolean {
   const marker = source.lastIndexOf("[[");
@@ -96,6 +101,7 @@ export const inlineDirectiveDisplayTextFilter: TextFilter = {
     // A settled reply only re-parses when a delta can still change directive syntax.
     let settledMarker = true;
     let visibleMarker = false;
+    let ownership: ReturnType<typeof findCodeOwnership> | undefined;
     const projector: TextProjector = (input) => {
       const appended = input.delta;
       if (appended === null) {
@@ -106,6 +112,7 @@ export const inlineDirectiveDisplayTextFilter: TextFilter = {
         settledMarker = !hasUnsettledDirectiveMarker(source);
         visibleMarker = hasUnsettledDirectiveMarker(visible);
         identity = visible === source;
+        ownership = findCodeOwnership(source);
         previousChar = source.slice(-1);
         return { text: visible, delta: null };
       }
@@ -117,11 +124,19 @@ export const inlineDirectiveDisplayTextFilter: TextFilter = {
       if (
         (prefix !== undefined || (settledMarker && !visibleMarker)) &&
         source.length + appended.length === input.text.length &&
-        APPEND_SAFE_DELTA.test(appended)
+        APPEND_SAFE_DELTA.test(appended) &&
+        (!hasMarker ||
+          !APPEND_CHANGES_OWNERSHIP.test(appended) ||
+          canReuseMarkdownOwnershipForAppend(
+            source,
+            appended,
+            (ownership ??= findCodeOwnership(source)),
+          ))
       ) {
         source = input.text;
         previousChar = appended.slice(-1);
         if (identity) {
+          visible = source;
           return input;
         }
         visible += appended;
@@ -143,6 +158,7 @@ export const inlineDirectiveDisplayTextFilter: TextFilter = {
       settledMarker = !hasUnsettledDirectiveMarker(source);
       visibleMarker = hasUnsettledDirectiveMarker(visible);
       identity = visible === source;
+      ownership = findCodeOwnership(source);
       if (identity) {
         return input;
       }

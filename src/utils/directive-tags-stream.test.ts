@@ -66,6 +66,42 @@ describe("inline directive display stream", () => {
     expect(projection.text).toBe("```text\n[[audio_as_voice]]\n```\nafter  done and more");
   });
 
+  test("keeps the visible baseline across identity appends and empty updates", () => {
+    const projection = createLiveAssistantTextProjection({});
+    expect(projection.append("Hello").text).toBe("Hello");
+    expect(projection.append("").text).toBe("Hello");
+    const filtered = createTextProjection([inlineDirectiveDisplayTextFilter]);
+    filtered.append("Hello");
+    expect(filtered.append("").text).toBe("Hello");
+  });
+
+  test("re-parses when a resolved image turns protected inline code into alt text", () => {
+    const source = "![`[[reply_to_current]]`](/image.png)";
+    const expected = stripInlineDirectiveTagsForDisplay(source).text;
+    expect(expected).not.toBe(source);
+    for (const chunks of [
+      ["![`[[reply_to_current]]`", "](/image.png)"],
+      ["![", "`", "[[reply_to_current]]", "`", "](/image.png)"],
+      Array.from({ length: source.length }, (_, index) => source[index]),
+    ]) {
+      const projection = createLiveAssistantTextProjection({});
+      let text = "";
+      for (const chunk of chunks) {
+        text = projection.append(chunk).text;
+      }
+      expect(text).toBe(expected);
+    }
+  });
+
+  test("keeps deltas correct when a later chunk first strips a directive", () => {
+    const projection = createTextProjection([inlineDirectiveDisplayTextFilter]);
+    projection.append("Hello");
+    projection.append(" [[reply_to_current]]");
+    const result = projection.append(" world");
+    expect(projection.text).toBe("Hello  world");
+    expect(result.delta).toBe(" world");
+  });
+
   test("emits only the appended suffix once the directive is settled", () => {
     const projection = streamChunks(["[[reply_to_current]]", "\n\nHello", " world"]);
     expect(projection.append("!").delta).toBe("!");
