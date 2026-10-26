@@ -21,9 +21,7 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => ({
   dispatchInboundDirectDm: agent.dispatch,
 }));
 
-// Registered by the SQLite-owning outbound suite. Transport, bus, durable queue
-// and Gateway policy resolution are real. Stub only downstream agent dispatch:
-// no model call or full running server/reload is part of this local proof.
+// Registered by the SQLite-owning outbound suite; only downstream agent dispatch is stubbed.
 export function registerNostrGatewayAdmissionTests() {
   const fixture = useNostrAdmissionFixture();
   const approved = new Uint8Array(32).fill(2);
@@ -41,7 +39,6 @@ export function registerNostrGatewayAdmissionTests() {
     agent.dispatch.mockImplementation(async () => {
       delivered.resolve();
     });
-    const dispatch = agent.dispatch;
     const context = createStartAccountContext({
       account: buildResolvedNostrAccount({ publicKey: recipient, relays: [relay.url], config }),
       cfg: { channels: { nostr: config } },
@@ -60,9 +57,7 @@ export function registerNostrGatewayAdmissionTests() {
           started.resolve();
         }
       },
-      error: (message) => {
-        errors.push(message);
-      },
+      error: (message) => errors.push(message),
     };
     const task = startNostrGatewayAccount(context);
     // Register teardown before waiting for startup; failures cannot leak a socket or monitor.
@@ -71,7 +66,13 @@ export function registerNostrGatewayAdmissionTests() {
       await task;
     });
     await withTimeout(Promise.all([started.promise, relay.subscribed]), 5000);
-    return { ...h, dispatch, delivered, blocked };
+    return { ...h, dispatch: agent.dispatch, delivered, blocked };
+  }
+
+  async function finish(h: Awaited<ReturnType<typeof start>>, ids: string[]) {
+    await h.stop();
+    expect(h.ids).toEqual(ids);
+    expect(getActiveNostrBuses().has("default")).toBe(false);
   }
 
   it("delivers through Gateway after a 200-event signed outsider burst with normalized literal keys", async () => {
@@ -84,18 +85,12 @@ export function registerNostrGatewayAdmissionTests() {
     const forged = { ...dm(other, "forged"), pubkey: key };
     h.relay.sendIncoming([...denied, forged, allowed]);
     await withTimeout(h.delivered.promise, 5000);
-    await h.stop();
+    await finish(h, [allowed.id]);
     expect(h.errors).toEqual([]);
-    expect(h.ids).toEqual([allowed.id]);
-    expect(h.dispatch).toHaveBeenCalledOnce();
-    expect(h.dispatch).toHaveBeenCalledWith(
-      expect.objectContaining({
-        rawBody: "approved through Gateway",
-        senderId: key,
-      }),
+    expect(h.dispatch).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ rawBody: "approved through Gateway", senderId: key }),
     );
     expect(h.relay.subscriptions).toEqual([[{ kinds: [4], "#p": [recipient], since: 0 }]]);
-    expect(getActiveNostrBuses().has("default")).toBe(false);
   });
 
   it("recreates Gateway admission after abort/join and an allowlist key change", async () => {
@@ -104,16 +99,13 @@ export function registerNostrGatewayAdmissionTests() {
     const oldAllowed = dm(approved, "old allowed");
     first.relay.sendIncoming([oldAllowed]);
     await withTimeout(first.delivered.promise, 5000);
-    await first.stop();
-    expect(first.ids).toEqual([oldAllowed.id]);
-    expect(getActiveNostrBuses().has("default")).toBe(false);
+    await finish(first, [oldAllowed.id]);
     const next = await start({ dmPolicy: "allowlist", allowFrom: [getPublicKey(other)] }, stateDir);
     const newAllowed = dm(other, "new allowed");
     next.relay.sendIncoming([dm(approved, "old denied after restart"), newAllowed]);
     await withTimeout(next.delivered.promise, 5000);
-    await next.stop();
+    await finish(next, [newAllowed.id]);
     expect(next.errors).toEqual([]);
-    expect(next.ids).toEqual([newAllowed.id]);
     expect(next.dispatch).toHaveBeenCalledOnce();
   });
 
@@ -125,8 +117,7 @@ export function registerNostrGatewayAdmissionTests() {
     const event = dm(approved, "matching hint is not authorization");
     h.relay.sendIncoming([event]);
     await withTimeout(h.blocked.promise, 5000);
-    await h.stop();
-    expect(h.ids).toEqual([event.id]);
+    await finish(h, [event.id]);
     expect(h.errors).toEqual([]);
     expect(h.dispatch).not.toHaveBeenCalled();
   });
@@ -152,8 +143,7 @@ export function registerNostrGatewayAdmissionTests() {
       if (config.dmPolicy === "disabled") {
         await withTimeout(h.blocked.promise, 5000);
       }
-      await h.stop();
-      expect(h.ids).toEqual([event.id]);
+      await finish(h, [event.id]);
       // Admission is not authorization: the disabled policy must never dispatch.
       if (config.dmPolicy === "disabled") {
         expect(h.dispatch).not.toHaveBeenCalled();

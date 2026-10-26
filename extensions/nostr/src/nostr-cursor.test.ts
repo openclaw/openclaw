@@ -8,36 +8,31 @@ function event(createdAt: number): Event {
   return { created_at: createdAt } as Event;
 }
 
+function createWriter(write: (cursor: number) => Promise<void>) {
+  return createNostrCursorStateWriter({
+    initialCursor: 1_000,
+    minimumCursor: 1_000,
+    debounceMs: 60_000,
+    write,
+  });
+}
+
 describe("Nostr durable cursor", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
+  afterEach(() => vi.useRealTimers());
 
-  it("caps progress so a transiently rejected event remains inside replay overlap", () => {
+  it.each([
+    ["caps progress inside replay overlap", 900, 1_020],
+    ["ignores rejections older than the relay filter", 700, 1_100],
+  ] as const)("%s", (_name, rejectedAt, expected) => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(1_200_000);
-    const cursor = createNostrDurableCursor({
-      since: 800,
-      replayOverlapSec: 120,
-    });
-
+    const cursor = createNostrDurableCursor({ since: 800, replayOverlapSec: 120 });
     cursor.recordDurableAppend(event(1_100));
-    cursor.recordTransientRejection(event(900));
-    expect(cursor.markBackfillComplete()).toBe(1_020);
-    expect(cursor.recordTransientRejection(event(950))).toBeUndefined();
-  });
-
-  it("ignores rejected events older than the active relay filter", () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(1_200_000);
-    const cursor = createNostrDurableCursor({
-      since: 800,
-      replayOverlapSec: 120,
-    });
-
-    cursor.recordDurableAppend(event(1_100));
-    cursor.recordTransientRejection(event(700));
-    expect(cursor.markBackfillComplete()).toBe(1_100);
+    cursor.recordTransientRejection(event(rejectedAt));
+    expect(cursor.markBackfillComplete()).toBe(expected);
+    if (rejectedAt === 900) {
+      expect(cursor.recordTransientRejection(event(950))).toBeUndefined();
+    }
   });
 
   it.each(["pending", "in-flight"])(
@@ -51,13 +46,7 @@ describe("Nostr durable cursor", () => {
           await highGate.promise;
         }
       });
-      const writer = createNostrCursorStateWriter({
-        initialCursor: 1_000,
-        minimumCursor: 1_000,
-        debounceMs: 60_000,
-        write,
-      });
-
+      const writer = createWriter(write);
       writer.schedule(2_000);
       const highWrite = writer.flush();
       if (progressState === "in-flight") {
@@ -80,13 +69,7 @@ describe("Nostr durable cursor", () => {
 
   it("persists a cursor queued while an idle flush is settling", async () => {
     const write = vi.fn<(cursor: number) => Promise<void>>().mockResolvedValue(undefined);
-    const writer = createNostrCursorStateWriter({
-      initialCursor: 1_000,
-      minimumCursor: 1_000,
-      debounceMs: 60_000,
-      write,
-    });
-
+    const writer = createWriter(write);
     const idle = writer.flush();
     const persist = writer.persistNow(1_020);
     await Promise.all([idle, persist]);
@@ -102,13 +85,7 @@ describe("Nostr durable cursor", () => {
       .mockRejectedValueOnce(new Error("state unavailable"))
       .mockRejectedValueOnce(new Error("state unavailable"))
       .mockResolvedValue(undefined);
-    const writer = createNostrCursorStateWriter({
-      initialCursor: 1_000,
-      minimumCursor: 1_000,
-      debounceMs: 60_000,
-      write,
-    });
-
+    const writer = createWriter(write);
     writer.schedule(1_020);
     const recovered = expect(writer.flushUntilSuccess()).resolves.toBeUndefined();
     await vi.runAllTimersAsync();
