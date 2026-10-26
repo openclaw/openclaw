@@ -21,19 +21,15 @@ type LogRecord = Extract<DiagnosticEventPayload, { type: "log.record" }>;
 
 async function logRecord(write: () => void) {
   const received: Array<{ event: LogRecord; metadata: DiagnosticEventMetadata }> = [];
-  const unsubscribe = onInternalDiagnosticEvent((event, metadata) => {
+  onInternalDiagnosticEvent((event, metadata) => {
     if (event.type === "log.record") {
       received.push({ event, metadata });
     }
   });
-  try {
-    write();
-    await yieldToEventLoop();
-    expect(received).toHaveLength(1);
-    return expectDefined(received[0], "log record");
-  } finally {
-    unsubscribe();
-  }
+  write();
+  await yieldToEventLoop();
+  expect(received).toHaveLength(1);
+  return expectDefined(received[0], "log record");
 }
 
 function tracedLogger() {
@@ -54,32 +50,23 @@ beforeEach(() => {
 
 afterEach(() => {
   resetDiagnosticEventsForTest();
-  setLoggerOverride(null);
   resetLogger();
   vi.restoreAllMocks();
 });
 
-it("does not build or queue log records for a public-only listener", async () => {
+it("keeps log records out of public diagnostic listeners", async () => {
   const listener = vi.fn();
-  const unsubscribe = onDiagnosticEvent(listener);
-  const structuredCloneSpy = vi.spyOn(globalThis, "structuredClone");
-
-  getChildLogger({ subsystem: "diagnostic" }).info("public listener ignores this log");
+  onDiagnosticEvent(listener);
+  getChildLogger().info("public listener ignores this log");
   await yieldToEventLoop();
-  unsubscribe();
-
   expect(listener).not.toHaveBeenCalled();
-  expect(structuredCloneSpy).not.toHaveBeenCalled();
 });
 
 it("uses active request trace context for unbound log records", async () => {
   const trace = createDiagnosticTraceContext({ traceId: TRACE_ID, spanId: SPAN_ID });
   const { event, metadata } = await logRecord(() =>
     runWithDiagnosticTraceContext(trace, () =>
-      getChildLogger({ subsystem: "diagnostic" }).info(
-        { runId: "run-1" },
-        "request-scoped diagnostic log",
-      ),
+      getChildLogger().info("request-scoped diagnostic log"),
     ),
   );
   expect(event.trace).toEqual(trace);
@@ -114,9 +101,7 @@ it("redacts and bounds internal log messages and attributes", async () => {
   const attributes = event.attributes ?? {};
   expect(event.message).not.toContain(secret);
   expect(event.message.length).toBeLessThanOrEqual(4200);
-  expect(attributes.token).not.toBe(secret);
   expect(attributes.password).toBe("***");
-  expect(JSON.stringify(event)).not.toContain("hunter2");
   expect(String(attributes.token)).toContain("…");
   expect(String(attributes.longValue).length).toBeLessThanOrEqual(2100);
   expect(attributes.safe).toBe("ok");

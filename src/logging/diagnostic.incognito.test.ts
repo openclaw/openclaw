@@ -17,12 +17,6 @@ import {
 import { resetDiagnosticStateForTest } from "./diagnostic.test-support.js";
 
 const events: DiagnosticEventPayload[] = [];
-function session(incognito: boolean, suffix: string) {
-  return {
-    sessionKey: `agent:main:dashboard:${incognito ? "incognito-" : ""}${suffix}`,
-    sessionId: `${incognito ? "private" : "ordinary"}-${suffix}-id`,
-  };
-}
 beforeEach(() => {
   resetDiagnosticStateForTest();
   resetDiagnosticEventsForTest();
@@ -37,7 +31,6 @@ afterEach(() => {
   resetDiagnosticEventsForTest();
   setDiagnosticsEnabledForProcess(false);
   vi.restoreAllMocks();
-  vi.useRealTimers();
 });
 
 it.each(["key", "session-id"] as const)(
@@ -47,7 +40,8 @@ it.each(["key", "session-id"] as const)(
       vi.spyOn(diagnosticLogger, level).mockImplementation(() => {}),
     );
     for (const incognito of [true, false]) {
-      const { sessionKey, sessionId } = session(incognito, "diagnostic");
+      const sessionKey = `agent:main:dashboard:${incognito ? "incognito-" : ""}diagnostic`;
+      const sessionId = `${incognito ? "private" : "ordinary"}-diagnostic-id`;
       const state = getDiagnosticSessionState({ sessionId, sessionKey });
       const ref = identity === "key" ? { sessionKey } : { sessionId };
       const marker = incognito
