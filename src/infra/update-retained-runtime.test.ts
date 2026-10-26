@@ -82,9 +82,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 it.for([false, true])(
   "defers runtime deletion until eligible maintenance without losing settled work (failed=%s)",
   async (failed, { signal }) => {
-    const base = await fs.realpath(tempDirs.make("openclaw-retained-runtime-cleanup-"));
-    const root = await fixture(base, "npm");
-    const moduleUrl = moduleUrlFor(root).href;
+    const { base, root, moduleUrl } = await runtimeFixture("retained-cleanup-");
     const unrelatedRoot = await fixture(path.join(base, "unrelated"), "npm");
     const unrelated = await openStore(
       workerSource(moduleUrlFor(unrelatedRoot).href),
@@ -180,7 +178,7 @@ it.for([false, true])(
     );
     expect(await maintain()).toContain(`Removed abandoned updater runtime: ${directory}`);
     expect(assertResourcesSettled).toHaveBeenCalledOnce();
-    await expect(stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
+    await expectMissing(stat(directory));
     expect(await contents(root, "dist/state/store.js")).toBe(backend);
   },
 );
@@ -798,7 +796,7 @@ it.each(["npm", "npm-linked", "npm-unresolved", "pnpm11"] as const)(
       if (layout === "npm-unresolved") {
         await expect(retainedSibling).resolves.toBeDefined();
       } else {
-        await expect(retainedSibling).rejects.toMatchObject({ code: "ENOENT" });
+        await expectMissing(retainedSibling);
       }
       await rename(globalRoot, `${globalRoot}.previous`);
       await mkdir(globalRoot);
@@ -810,11 +808,7 @@ it.each(["npm", "npm-linked", "npm-unresolved", "pnpm11"] as const)(
         return;
       }
       await expectMissing(stat(path.join(retainedAmbient, "ambient-peer")));
-      await expect(
-        readFile(path.join(retainedAmbient, "unrelated/sentinel.txt")),
-      ).rejects.toMatchObject({
-        code: "ENOENT",
-      });
+      await expectMissing(readFile(path.join(retainedAmbient, "unrelated/sentinel.txt")));
     });
   },
 );
@@ -959,7 +953,7 @@ it("retains and reclaims the runtime when the install is spelled unlike its nati
     return path.join(base, "Profile", name);
   });
   expect(await maintain()).toContain(`Removed abandoned updater runtime: ${directory}`);
-  await expect(stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
+  await expectMissing(stat(directory));
 });
 
 it("falls back when the runtime sibling is read-only", async () => {

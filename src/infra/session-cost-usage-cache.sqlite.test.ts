@@ -38,11 +38,7 @@ import {
 import * as fixtures from "./session-cost-usage-fixtures.test-support.js";
 import * as partitions from "./session-cost-usage-partitions.js";
 import { projectSessionCostSummaries } from "./session-cost-usage-projection.js";
-import {
-  decodeUsageCostRollup,
-  encodeUsageCostRollup,
-  USAGE_COST_ROLLUP_VERSION,
-} from "./session-cost-usage-rollup-codec.js";
+import { decodeUsageCostRollup, encodeUsageCostRollup } from "./session-cost-usage-rollup-codec.js";
 import {
   appendSessionUsageRollupContribution,
   createSessionUsageRollupData,
@@ -59,6 +55,31 @@ function utf8Json(value: string) {
 
 function encodeJson(value: string, format: "string" | "utf8") {
   return format === "string" ? value : utf8Json(value);
+}
+
+function contribute(
+  rollup: ReturnType<typeof createSessionUsageRollupData>,
+  timestamp: number,
+  model = "test",
+) {
+  appendSessionUsageRollupContribution(rollup, {
+    timestamp,
+    role: "assistant",
+    model,
+    provider: "test",
+    toolNames: [],
+    toolResultCounts: { total: 0, errors: 0 },
+    usageTotals: { ...rollup.untimestamped.totals, totalTokens: 10, totalCost: 1 },
+  });
+}
+
+function sessionsOperation(sessionFile: string, pricingFingerprint: string) {
+  return {
+    kind: "sessions" as const,
+    sessions: [{ sessionFile }],
+    pricingFingerprint,
+    dayBucket: { mode: "utc-offset" as const, utcOffsetMinutes: 0 },
+  };
 }
 
 function writeRollup(
@@ -92,35 +113,28 @@ describe("session cost usage SQLite cache", () => {
   it("keeps a sparse year below 25 KB without discarding quarter-hour accounting", () => {
     const rollup = createSessionUsageRollupData();
     for (let index = 0; index < 500; index++) {
-      appendSessionUsageRollupContribution(rollup, {
-        timestamp:
-          Date.UTC(2025, 0, 1) +
-          Math.floor((index * 365) / 500) * 86_400_000 +
-          (index % 2) * 900_000,
-        role: "assistant",
-        model: "fixture",
-        provider: "test",
-        toolNames: [],
-        toolResultCounts: { total: 0, errors: 0 },
-        usageTotals: { ...rollup.untimestamped.totals, totalTokens: 10, totalCost: 1 },
-      });
+      contribute(
+        rollup,
+        Date.UTC(2025, 0, 1) + Math.floor((index * 365) / 500) * 86_400_000 + (index % 2) * 900_000,
+        "fixture",
+      );
     }
-    const encoded = partitions.partitionUsageCostRollup({
-      version: USAGE_COST_ROLLUP_VERSION,
-      pricingFingerprint: "fixture",
-      scannedAt: 1,
-      parsedRecords: 500,
-      countedRecords: 500,
-      checkpoint: {
-        kind: "sqlite",
-        maxSeq: 500,
-        eventCount: 500,
-        size: 500,
-        mtimeMs: 1,
-        anchorHash: "fixture",
-      },
-      rollup,
-    });
+    const encoded = partitions.partitionUsageCostRollup(
+      fixtures.createUsageRollupEntry(rollup, {
+        pricingFingerprint: "fixture",
+        scannedAt: 1,
+        parsedRecords: 500,
+        countedRecords: 500,
+        checkpoint: {
+          kind: "sqlite",
+          maxSeq: 500,
+          eventCount: 500,
+          size: 500,
+          mtimeMs: 1,
+          anchorHash: "fixture",
+        },
+      }),
+    );
     const bytes =
       Buffer.byteLength(encoded.valueJson) +
       encoded.blob.byteLength +
@@ -198,15 +212,7 @@ describe("session cost usage SQLite cache", () => {
           Date.UTC(2026, 8, 19),
           Date.UTC(2026, 9, 1),
         ]) {
-          appendSessionUsageRollupContribution(rollup, {
-            timestamp,
-            role: "assistant",
-            model: "test",
-            provider: "test",
-            toolNames: [],
-            toolResultCounts: { total: 0, errors: 0 },
-            usageTotals: { ...rollup.untimestamped.totals, totalTokens: 10, totalCost: 1 },
-          });
+          contribute(rollup, timestamp);
         }
         const entry = fixtures.createUsageRollupEntry(rollup);
         const first = partitions.partitionUsageCostRollup(entry);
@@ -235,15 +241,7 @@ describe("session cost usage SQLite cache", () => {
         db.exec("DROP TRIGGER refuse_usage_partition");
 
         const extendedRollup = structuredClone(rollup);
-        appendSessionUsageRollupContribution(extendedRollup, {
-          timestamp: Date.UTC(2026, 9, 1, 0, 1),
-          role: "assistant",
-          model: "test",
-          provider: "test",
-          toolNames: [],
-          toolResultCounts: { total: 0, errors: 0 },
-          usageTotals: { ...rollup.untimestamped.totals, totalTokens: 10, totalCost: 1 },
-        });
+        contribute(extendedRollup, Date.UTC(2026, 9, 1, 0, 1));
         const extended = partitions.partitionUsageCostRollup({
           ...entry,
           rollup: extendedRollup,
@@ -308,23 +306,14 @@ describe("session cost usage SQLite cache", () => {
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       const agentId = "usage-migration";
       const { db } = openOpenClawAgentDatabase({ agentId });
-      const entry = {
+      const entry = fixtures.createUsageRollupEntry(createSessionUsageRollupData(), {
         version: 6,
         pricingFingerprint: "synthetic",
-        checkpoint: {
-          kind: "jsonl" as const,
-          parsedOffset: 7,
-          observedSize: 7,
-          observedMtimeMs: 10,
-          device: 1,
-          inode: 2,
-          anchorHash: "anchor",
-        },
+        checkpoint: fixtures.createUsageCheckpoint(7, 10, 2),
         scannedAt: 12,
         parsedRecords: 1,
         countedRecords: 0,
-        rollup: createSessionUsageRollupData(),
-      };
+      });
       entry.rollup.untimestamped.totals.totalTokens = 17;
       const insert = db.prepare(
         "INSERT INTO cache_entries(scope, key, value_json, blob, expires_at, updated_at) VALUES (?, ?, ?, ?, NULL, ?)",
@@ -736,24 +725,11 @@ it.each(["stored", "decoded", "corrupt-length"] as const)(
       if (!entry) {
         throw new Error("Expected valid checkpoint body");
       }
-      if (mode !== "corrupt-length") {
-        entry.rollup.untimestamped.tools = [
-          { name: "synthetic-" + "x".repeat((mode === "stored" ? 2 : 35) * 1024 * 1024), count: 1 },
-        ];
-      }
-      const encoded = encodeUsageCostRollup(entry);
-      if (mode === "corrupt-length") {
-        const envelope = JSON.parse(encoded.valueJson);
-        envelope.body.bytes = 35 * 1024 * 1024;
-        encoded.valueJson = JSON.stringify(envelope);
-      }
-      if (mode === "stored") {
-        encoded.blob = Uint8Array.from(Buffer.from(JSON.stringify(entry.rollup)));
-        const envelope = JSON.parse(encoded.valueJson);
-        envelope.body.encoding = "identity";
-        envelope.body.storedBytes = encoded.blob.byteLength;
-        encoded.valueJson = JSON.stringify(envelope);
-      }
+      const encoded = fixtures.encodeOversizedUsageRollup(
+        entry,
+        mode === "stored" ? "stored body" : mode === "decoded" ? "compressed body" : mode,
+        "synthetic-",
+      );
       const lock = prepareSessionCostUsageRefreshLock(agentId);
       try {
         expect(await lock.acquire()).toBe(true);
@@ -773,12 +749,10 @@ it.each(["stored", "decoded", "corrupt-length"] as const)(
         if (stale) {
           await fs.promises.appendFile(sessionFile, record);
         }
-        const result = await runUsageCostWorker(prepared, {
-          kind: "sessions",
-          sessions: [{ sessionFile }],
-          pricingFingerprint: entry.pricingFingerprint,
-          dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
-        });
+        const result = await runUsageCostWorker(
+          prepared,
+          sessionsOperation(sessionFile, entry.pricingFingerprint),
+        );
         expect(result).toMatchObject({
           kind: "sessions",
           summaries: [null],
@@ -875,12 +849,7 @@ it.each(["valid", "missing", "truncated"] as const)(
           agentId,
           sessionFiles: [sessionFile],
         });
-        const operation = {
-          kind: "sessions" as const,
-          sessions: [{ sessionFile }],
-          pricingFingerprint: entry.pricingFingerprint,
-          dayBucket: { mode: "utc-offset" as const, utcOffsetMinutes: 0 },
-        };
+        const operation = sessionsOperation(sessionFile, entry.pricingFingerprint);
         expect(await runUsageCostWorker(prepared, operation)).toMatchObject({
           staleSessionFiles: [sessionFile],
         });
@@ -961,12 +930,10 @@ it.each(["missing", "oversized-first", "oversized-last", "identity-length"])(
         throw new Error("Expected stored checkpoint");
       }
       const prepared = prepareUsageCostWorker(options);
-      const operation = {
-        kind: "sessions" as const,
-        sessions: [{ sessionFile }],
-        pricingFingerprint: JSON.parse(row.valueJson).pricingFingerprint,
-        dayBucket: { mode: "utc-offset" as const, utcOffsetMinutes: 0 },
-      };
+      const operation = sessionsOperation(
+        sessionFile,
+        JSON.parse(row.valueJson).pricingFingerprint,
+      );
       expect(
         await runUsageCostWorker(prepared, { ...operation, startMs: Date.UTC(2026, 8, 18) + 1 }),
       ).toMatchObject({ summaries: [{ totalTokens: 20 }], staleSessionFiles: [] });
