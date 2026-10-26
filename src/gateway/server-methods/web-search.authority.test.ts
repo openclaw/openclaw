@@ -75,7 +75,7 @@ it.each([
     }),
   );
   if (stage === "lazy import") {
-    mocks.beforeImport.mockImplementationOnce(boundary.wait);
+    mocks.beforeImport.mockImplementationOnce(() => boundary.wait());
   } else {
     fetch.mockImplementationOnce(async () => {
       await boundary.wait();

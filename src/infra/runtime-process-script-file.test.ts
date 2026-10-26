@@ -48,7 +48,7 @@ it("runs and removes retained programs without source neighbors", async () => {
       expect(fs.statSync(directory).mode & 0o777).toBe(0o700);
     }
     {
-      using _ = { [Symbol.dispose]: script.dispose };
+      using _ = { [Symbol.dispose]: () => script.dispose() };
       output[name] = runScript(
         script.url,
         name === "daemonRuntimeProbe" ? "node" : "",
@@ -68,7 +68,7 @@ it("runs and removes retained programs without source neighbors", async () => {
 it("passes required flags as data to the tested runtime", () => {
   const root = directories.make("runtime-script-required-flag-");
   const script = createRuntimeProcessScriptFile("nodeRuntimeProbe", { parentDirectory: root });
-  using _ = { [Symbol.dispose]: script.dispose };
+  using _ = { [Symbol.dispose]: () => script.dispose() };
   expect(runScript(script.url, "--max-old-space-size")).toBe(node);
   expect(runScript(script.url, "--openclaw-unsupported-'\";process.exit(42)")).toBe("");
 });
@@ -91,7 +91,7 @@ it("uses embedded self dispatch while keeping external runtime scripts physical"
     parentDirectory: root,
   });
   {
-    using _ = { [Symbol.dispose]: external.dispose };
+    using _ = { [Symbol.dispose]: () => external.dispose() };
     expect(external.argv[0]).toBe("/external/node");
     expect(fs.existsSync(expectDefined(external.argv[1], "physical script entry"))).toBe(true);
   }
