@@ -2,25 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { createOpenClawCodingTools, type AnyAgentTool } from "openclaw/plugin-sdk/agent-harness";
-import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
 import { resolvePreferredOpenClawTmpDir, tempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { createSandboxTestContext } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, test } from "vitest";
 import { MxcFsBridge } from "../src/fs-bridge.js";
-
-async function makeWorkspace() {
-  const workspace = await tempWorkspace({
-    rootDir: resolvePreferredOpenClawTmpDir(),
-    prefix: "openclaw-mxc-",
-  });
-  const root = await fs.realpath(workspace.dir);
-  return Object.assign(workspace, {
-    root,
-    workspaceDir: path.join(root, "sandbox"),
-    agentWorkspaceDir: path.join(root, "agent"),
-    skillsWorkspaceDir: path.join(root, "materialized"),
-  });
-}
 
 async function writeFile(root: string, relative: string, content: string) {
   const file = path.join(root, relative);
@@ -52,78 +37,33 @@ async function denyMutations(run: RunTool, file: string, oldText: string, error:
   }
 }
 
-function makeSandbox(workspaceDir: string, overrides: Partial<SandboxContext> = {}) {
-  return createSandboxTestContext({
-    overrides: {
-      backendId: "mxc",
-      workspaceDir,
-      agentWorkspaceDir: workspaceDir,
-      workspaceAccess: "rw",
-      containerWorkdir: workspaceDir,
-      tools: { allow: [], deny: [] },
-      ...overrides,
-    },
-  });
-}
-
-function directoryReader(params: Partial<SandboxContext> & { workspaceDir: string }) {
-  const bridge = new MxcFsBridge(makeSandbox(params.workspaceDir, params));
-  return (filePath: string, cwd?: string) => bridge.readDirectory({ filePath, cwd });
-}
-
-test("lists entry names and types relative to the mounted directory", async () => {
-  await using workspace = await makeWorkspace();
-  const workspaceDir = workspace.root;
-  await writeFile(workspaceDir, "readme.md", "readme");
-  await writeFile(workspaceDir, "notes/one.txt", "note");
-  const list = directoryReader({ workspaceDir });
-
-  await expect(list(".")).resolves.toEqual([entry("notes", true), entry("readme.md")]);
-  await expect(list(".", path.join(workspaceDir, "notes"))).resolves.toEqual([entry("one.txt")]);
-});
-
-test("lists the protected skill mount instead of its workspace shadow", async () => {
-  await using workspace = await makeWorkspace();
-  const { workspaceDir, skillsWorkspaceDir } = workspace;
-  const skillPath = path.join(".openclaw", "sandbox-skills", "skills");
-  await fs.mkdir(path.join(workspaceDir, skillPath, "shadow"), { recursive: true });
-  await fs.mkdir(path.join(skillsWorkspaceDir, "skills", "demo"), { recursive: true });
-  const list = directoryReader({ workspaceDir, skillsWorkspaceDir });
-
-  await expect(list(skillPath)).resolves.toEqual([entry("demo", true)]);
-});
-
-test("rejects a directory symlink that escapes the mounted root", async () => {
-  await using workspace = await makeWorkspace();
-  const { root, workspaceDir } = workspace;
-  const outsideDir = path.join(root, "outside");
-  await fs.mkdir(workspaceDir);
-  await fs.mkdir(outsideDir);
-  await fs.writeFile(path.join(outsideDir, "private.txt"), "outside");
-  await fs.symlink(
-    outsideDir,
-    path.join(workspaceDir, "outside-link"),
-    process.platform === "win32" ? "junction" : "dir",
-  );
-  const list = directoryReader({ workspaceDir });
-
-  await expect(list("outside-link")).rejects.toThrow("path alias escape blocked");
-});
-
 test.each([true, false])("native tool paths (workspaceOnly=%s)", async (workspaceOnly) => {
-  await using workspace = await makeWorkspace();
-  const { root, workspaceDir, agentWorkspaceDir, skillsWorkspaceDir } = workspace;
+  await using workspace = await tempWorkspace({
+    rootDir: resolvePreferredOpenClawTmpDir(),
+    prefix: "openclaw-mxc-",
+  });
+  const root = await fs.realpath(workspace.dir);
+  const workspaceDir = path.join(root, "sandbox");
+  const agentWorkspaceDir = path.join(root, "agent");
+  const skillsWorkspaceDir = path.join(root, "materialized");
   await writeFile(skillsWorkspaceDir, materializedSkill, "skill-data");
   await writeFile(agentWorkspaceDir, "agent.txt", "agent-data");
   await writeFile(workspaceDir, "agent.txt", "shadow-data");
   await writeFile(root, "outside.txt", "outside-data");
   const makeTools = (workspaceAccess: "none" | "ro" | "rw") => {
-    const sandbox = makeSandbox(workspaceDir, {
-      agentWorkspaceDir,
-      skillsWorkspaceDir,
-      workspaceAccess,
+    const sandbox = createSandboxTestContext({
+      overrides: {
+        backendId: "mxc",
+        workspaceDir,
+        agentWorkspaceDir,
+        skillsWorkspaceDir,
+        workspaceAccess,
+        containerWorkdir: workspaceDir,
+        tools: { allow: [], deny: [] },
+      },
     });
-    sandbox.fsBridge = new MxcFsBridge(sandbox);
+    const bridge = new MxcFsBridge(sandbox);
+    sandbox.fsBridge = bridge;
     const tools = createOpenClawCodingTools({
       sandbox,
       workspaceDir,
@@ -149,15 +89,27 @@ test.each([true, false])("native tool paths (workspaceOnly=%s)", async (workspac
         expect(tools.some((tool) => tool.name === name)).toBe(false);
       }
     }
-    return async (name: string, args: unknown) => {
-      const selected = expectDefined(
-        tools.find((tool) => tool.name === name),
-        `Missing ${name}`,
-      );
-      return text(await selected.execute(name, args));
+    const run = async (name: string, args: unknown) => {
+      const selected = tools.find((tool) => tool.name === name);
+      return text(await expectDefined(selected, `Missing ${name}`).execute(name, args));
     };
+    return Object.assign(run, { bridge });
   };
   const rw = makeTools("rw");
+  const list = (filePath: string, cwd?: string) => rw.bridge.readDirectory({ filePath, cwd });
+  await writeFile(agentWorkspaceDir, "notes/one.txt", "note");
+  await expect(list(".")).resolves.toEqual([entry("agent.txt"), entry("notes", true)]);
+  await expect(list(".", path.join(workspaceDir, "notes"))).resolves.toEqual([entry("one.txt")]);
+  const skillPath = path.dirname(path.dirname(skillRelative));
+  await fs.mkdir(path.join(workspaceDir, skillPath, "shadow"), { recursive: true });
+  await expect(list(skillPath)).resolves.toEqual([entry("demo", true)]);
+  await fs.symlink(
+    root,
+    path.join(agentWorkspaceDir, "outside-link"),
+    process.platform === "win32" ? "junction" : "dir",
+  );
+  await expect(list("outside-link")).rejects.toThrow("path alias escape blocked");
+  await fs.unlink(path.join(agentWorkspaceDir, "outside-link"));
   for (const filePath of ["note.txt", path.join(workspaceDir, "note.txt")]) {
     await rw("write", { path: filePath, content: "original\n" });
     await rw("edit", edit(filePath, "original", "edited"));
@@ -171,7 +123,6 @@ test.each([true, false])("native tool paths (workspaceOnly=%s)", async (workspac
     expect(await rw("ls", args)).toContain("note.txt");
   }
   await expectOutside(rw("ls", { path: agentWorkspaceDir }));
-  expect(await readText(workspaceDir, "agent.txt")).toBe("shadow-data");
   const ro = makeTools("ro");
   expect(await ro("read", { path: "agent.txt" })).toContain("shadow-data");
   expect(await ro("read", { path: path.join(agentWorkspaceDir, "agent.txt") })).toContain(
@@ -195,11 +146,8 @@ test.each([true, false])("native tool paths (workspaceOnly=%s)", async (workspac
     await expectOutside(rw(name, { path: outside }));
   }
   await denyMutations(rw, outside, "outside-data", "Path escapes sandbox root");
-  expect(
-    await Promise.all([
-      readText(root, "outside.txt"),
-      readText(agentWorkspaceDir, "agent.txt"),
-      readText(skillsWorkspaceDir, materializedSkill),
-    ]),
-  ).toEqual(["outside-data", "agent-data", "skill-data"]);
+  expect(await readText(workspaceDir, "agent.txt")).toBe("shadow-data");
+  expect(await readText(root, "outside.txt")).toBe("outside-data");
+  expect(await readText(agentWorkspaceDir, "agent.txt")).toBe("agent-data");
+  expect(await readText(skillsWorkspaceDir, materializedSkill)).toBe("skill-data");
 });
