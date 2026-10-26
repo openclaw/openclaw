@@ -28,12 +28,12 @@ import {
 import {
   type MockServer,
   type AnthropicResponse,
-  ANTHROPIC_GUEST_CODE_MODE_TOOLS,
-  expectAnthropicMessagesJson,
-  readDebugRequest,
+  ANTHROPIC_GUEST_CODE_MODE_TOOLS as anthropicTools,
+  expectAnthropicMessagesJson as anthropicJson,
+  readDebugRequest as readDebug,
   makeAnthropicUserText,
-  makeAnthropicToolResult,
-  QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION,
+  makeAnthropicToolResult as anthropicResult,
+  QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION as settledContinuation,
   createMockServerTestHarness,
   requireRecord,
   postJson,
@@ -43,57 +43,55 @@ import {
   getJson,
   postResponses,
   expectResponsesJson,
-  expectNonStreamingResponsesJson,
-  expectOpenAiNonStreamingResponsesJson,
+  expectNonStreamingResponsesJson as responseJson,
+  expectOpenAiNonStreamingResponsesJson as openAiJson,
   requireArray,
   outputItem,
   outputItems,
-  outputToolArgs,
-  outputToolArgsFromItem,
-  outputToolCall,
-  outputToolCallId,
+  outputToolArgs as responseArgs,
+  outputToolArgsFromItem as callArgs,
+  outputToolCall as findToolCall,
+  outputToolCallId as callIdOf,
   outputContentItem,
   outputText,
   makeUserInput,
-  makeToolOutputWithCallId,
+  makeToolOutputWithCallId as toolResult,
 } from "./server.test-harness.js";
 
 const { startMockServer } = createMockServerTestHarness();
-const QA_FANOUT_PROMPT =
+const fanoutPrompt =
   "Subagent fanout synthesis check: delegate two bounded subagents sequentially, then report both results together.";
 
-const QA_IMAGE_PNG_BASE64 =
+const imagePng =
   "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAT0lEQVR42u3RQQkAMAzAwPg33Wnos+wgBo40dboAAAAAAAAAAAAAAAAAAAAAAAAAAAAAANYADwAAAAAAAAAAAAAAAAAAAAAAAAAAAAC+Azy47PDiI4pA2wAAAABJRU5ErkJggg==";
-const QA_IMAGE_INPUT = {
+const imageInput = {
   type: "input_image",
-  source: { type: "base64", mime_type: "image/png", data: QA_IMAGE_PNG_BASE64 },
+  source: { type: "base64", mime_type: "image/png", data: imagePng },
 } as const;
-const QA_IMAGE_MEDIA_CONTEXT = textBlock(
+const imageContext = textBlock(
   "[media attached: media://inbound/red-top-blue-bottom.png (image/png)]",
 );
-const QA_IMAGE_DESCRIPTION_PROMPT =
-  "Image understanding check: describe the top and bottom colors.";
-const QA_REASONING_ONLY_RECOVERY_PROMPT =
+const imageDescriptionPrompt = "Image understanding check: describe the top and bottom colors.";
+const reasoningRecoveryPrompt =
   "Reasoning-only continuation QA check: read QA_KICKOFF_TASK.md, then answer with exactly REASONING-RECOVERED-OK.";
-const QA_REASONING_ONLY_SIDE_EFFECT_PROMPT =
+const reasoningWritePrompt =
   "Reasoning-only after write safety check: write reasoning-only-side-effect.txt, then answer with exactly SIDE-EFFECT-GUARD-OK.";
-const QA_MIXED_REASONING_BLANK_FALLBACK_PROMPT =
+const blankFallbackPrompt =
   "Mixed reasoning blank fallback QA check: recover through the alternate model.";
-const QA_THINKING_VISIBILITY_OFF_PROMPT =
-  "QA thinking visibility check off: answer exactly THINKING-OFF-OK.";
-const QA_THINKING_VISIBILITY_MAX_PROMPT =
+const thinkingOffPrompt = "QA thinking visibility check off: answer exactly THINKING-OFF-OK.";
+const thinkingMaxPrompt =
   "QA thinking visibility check max: verify 17+24=41 internally, then answer exactly THINKING-MAX-OK.";
-const QA_EMPTY_RESPONSE_RECOVERY_PROMPT =
+const emptyRecoveryPrompt =
   "Empty response continuation QA check: read QA_KICKOFF_TASK.md, then answer with exactly EMPTY-RECOVERED-OK.";
-const QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT =
+const emptyWriteRecoveryPrompt =
   "Empty response after write recovery QA check: write qa-empty-response-side-effect.txt, then reply with exact marker: `TELEGRAM-EMPTY-WRITE-RECOVERED-OK`.";
-const QA_EMPTY_RESPONSE_SIDE_EFFECT_EXHAUSTION_PROMPT =
+const emptyWriteExhaustionPrompt =
   "Empty response after write exhaustion QA check: write qa-empty-response-side-effect.txt, then reply with exact marker: `WRITE-EXHAUSTED-OK`.";
-const QA_ANTHROPIC_THINKING_ERROR_RECOVERY_PROMPT =
+const thinkingErrorPrompt =
   "Anthropic thinking error QA check: read QA_KICKOFF_TASK.md, then answer with exactly ANTHROPIC-THINKING-ERROR-RECOVERED-OK.";
-const QA_REASONING_ONLY_RETRY_INSTRUCTION =
+const reasoningRetry =
   "The previous assistant turn recorded reasoning but did not produce a user-visible answer. Continue from that partial turn and produce the visible answer now. Do not restate the reasoning or restart from scratch.";
-const QA_COMPACTION_RETRY_CODE_MODE_WRITE_RESULT = {
+const compactionWriteResult = {
   status: "completed",
   value: {
     changed: true,
@@ -109,25 +107,25 @@ const QA_COMPACTION_RETRY_CODE_MODE_WRITE_RESULT = {
   },
   replaySafe: false,
 } as const;
-const QA_COMPACTION_RETRY_PROMPT =
+const compactionPrompt =
   "Compaction retry mutating tool check. Current durable context marker: QA-COMPACTION-DURABLE-MARKER. Create compaction-retry-summary.txt.";
-const QA_COMPACTION_RETRY_OVERFLOW_PADDING = "x".repeat(300_000);
-const QA_COMPACTION_RETRY_HISTORICAL_PHRASE = "post-marker historical user block";
-const QA_COMPACTION_EMPTY_RECOVERY_SUMMARY_MARKER = "QA-COMPACTION-EMPTY-RECOVERED-SUMMARY";
-const QA_COMPACTION_REASONING_RECOVERY_SUMMARY_MARKER = "QA-COMPACTION-REASONING-RECOVERED-SUMMARY";
-const QA_COMPACTION_SUMMARY_HEADINGS = [
+const overflowPadding = "x".repeat(300_000);
+const historicalPhrase = "post-marker historical user block";
+const emptySummaryMarker = "QA-COMPACTION-EMPTY-RECOVERED-SUMMARY";
+const reasoningSummaryMarker = "QA-COMPACTION-REASONING-RECOVERED-SUMMARY";
+const summaryHeadings = [
   "## Decisions",
   "## Open TODOs",
   "## Constraints/Rules",
   "## Pending user asks",
   "## Exact identifiers",
 ] as const;
-const QA_COMPACTION_SUMMARY_INSTRUCTIONS = `You are a context summarization assistant. Your task is to read a conversation between a user and an AI assistant, then produce a structured summary following the exact format specified.
+const summaryInstructions = `You are a context summarization assistant. Your task is to read a conversation between a user and an AI assistant, then produce a structured summary following the exact format specified.
 
 Do NOT continue the conversation. Do NOT respond to any questions in the conversation. ONLY output the structured summary.`;
 
 function expectCurrentCompactionSummaryHeadings(summary: string) {
-  expect(summary.match(/^## .+$/gmu)).toEqual(QA_COMPACTION_SUMMARY_HEADINGS);
+  expect(summary.match(/^## .+$/gmu)).toEqual(summaryHeadings);
   expect(summary).not.toContain("## Goal");
 }
 
@@ -193,37 +191,33 @@ function sseEvents(body: string) {
     .map((line) => requireRecord(JSON.parse(line.slice(6)), "SSE event"));
 }
 
-async function completeSideEffectScenario(server: MockServer, kind: "recovery" | "exhaustion") {
-  const kickoff = makeUserInput(
-    kind === "recovery"
-      ? QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT
-      : QA_EMPTY_RESPONSE_SIDE_EFFECT_EXHAUSTION_PROMPT,
-  );
+async function completeSideEffectScenario(server: MockServer) {
+  const kickoff = makeUserInput(emptyWriteExhaustionPrompt);
   const plan = await respondOpenAi(server, [kickoff]);
-  const write = outputToolCall(plan, "write");
+  const write = findToolCall(plan, "write");
   const input = [
     kickoff,
     ...outputItems(plan),
-    makeToolOutputWithCallId(
-      outputToolCallId(write, "previous-write"),
+    toolResult(
+      callIdOf(write, "previous-write"),
       "Successfully wrote 27 bytes to qa-empty-response-side-effect.txt",
     ),
-    makeUserInput(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION),
+    makeUserInput(settledContinuation),
   ];
   const settled = await respondOpenAi(server, input);
-  expect(outputText(settled)).toBe(kind === "recovery" ? "TELEGRAM-EMPTY-WRITE-RECOVERED-OK" : "");
+  expect(outputText(settled)).toBe("");
   return [...input, ...outputItems(settled)];
 }
 
 async function startFanout(server: MockServer, tools: readonly unknown[], alphaResult: string) {
-  const first = await respond(server, QA_FANOUT_PROMPT, { tools });
-  expect(outputToolArgsFromItem(outputToolCall(first, "sessions_spawn"))).toMatchObject({
+  const first = await respond(server, fanoutPrompt, { tools });
+  expect(callArgs(findToolCall(first, "sessions_spawn"))).toMatchObject({
     label: "qa-fanout-alpha",
   });
-  const second = await respond(server, userInputs(QA_FANOUT_PROMPT, makeToolOutput(alphaResult)), {
+  const second = await respond(server, userInputs(fanoutPrompt, makeToolOutput(alphaResult)), {
     tools,
   });
-  expect(outputToolArgsFromItem(outputToolCall(second, "sessions_spawn"))).toMatchObject({
+  expect(callArgs(findToolCall(second, "sessions_spawn"))).toMatchObject({
     label: "qa-fanout-beta",
   });
 }
@@ -298,43 +292,23 @@ function makeDeveloperInput(text: string) {
   return { role: "developer" as const, content: [{ type: "input_text" as const, text }] };
 }
 
-function buildWhatsAppPendingHistoryContextFixture(
-  history: Array<{ body: string; sender: string; timestamp: number }>,
-) {
-  return [
-    "[Chat messages since your last reply - for context]",
-    ...history.map((entry, index) => `#history-${index + 1} ${entry.sender}: ${entry.body}`),
-    "",
-    "[Current message - respond to this]",
-  ].join("\n");
-}
-
 const SESSIONS_SPAWN_TOOL = { type: "function", name: "sessions_spawn" } as const;
 const SESSIONS_YIELD_TOOL = { type: "function", name: "sessions_yield" } as const;
-const CODE_MODE_TOOLS = [
-  {
+function stringArgumentTool(name: string, property: string) {
+  return {
     type: "function",
-    name: "exec",
-    parameters: { type: "object", properties: { code: { type: "string" } }, required: ["code"] },
-  },
-  {
-    type: "function",
-    name: "wait",
-    parameters: { type: "object", properties: { runId: { type: "string" } }, required: ["runId"] },
-  },
-];
-
-const NATIVE_CODE_MODE_TOOLS = [
-  { type: "custom", name: "exec", format: { type: "grammar", syntax: "lark", definition: "" } },
-  {
-    type: "function",
-    name: "wait",
+    name,
     parameters: {
       type: "object",
-      properties: { cell_id: { type: "string" } },
-      required: ["cell_id"],
+      properties: { [property]: { type: "string" } },
+      required: [property],
     },
-  },
+  };
+}
+const CODE_MODE_TOOLS = [stringArgumentTool("exec", "code"), stringArgumentTool("wait", "runId")];
+const NATIVE_CODE_MODE_TOOLS = [
+  { type: "custom", name: "exec", format: { type: "grammar", syntax: "lark", definition: "" } },
+  stringArgumentTool("wait", "cell_id"),
 ];
 
 const READ_TOOL = { type: "function", name: "read" } as const;
@@ -415,7 +389,7 @@ describe("qa mock openai server", () => {
 
     const failure = await postPlain(
       server,
-      userInputs(prompt, makeToolOutputWithCallId("call_mock_provider_503", "QA mission loaded")),
+      userInputs(prompt, toolResult("call_mock_provider_503", "QA mission loaded")),
       { model: "gpt-5.6-luna", tools: [READ_TOOL] },
     );
 
@@ -462,8 +436,8 @@ describe("qa mock openai server", () => {
       { tools: [MESSAGE_TOOL] },
     );
 
-    const toolCall = outputToolCall(retryBody, "message");
-    expect(outputToolArgsFromItem(toolCall)).toEqual({ action: "send", message: initialText });
+    const toolCall = findToolCall(retryBody, "message");
+    expect(callArgs(toolCall)).toEqual({ action: "send", message: initialText });
   });
 
   it.each([
@@ -548,13 +522,13 @@ describe("qa mock openai server", () => {
       };
       const initial = await expectResponsesJson(server, request);
       expect(outputItem(initial)).toMatchObject({ type: "function_call", name: "message" });
-      const call = outputToolCall(initial, "message");
-      expect(outputToolArgsFromItem(call)).toEqual(args);
+      const call = findToolCall(initial, "message");
+      expect(callArgs(call)).toEqual(args);
       const completed = await expectResponsesJson(server, {
         ...request,
         input: [
           ...request.input,
-          makeToolOutputWithCallId(outputToolCallId(call, "message"), JSON.stringify({ ok: true })),
+          toolResult(callIdOf(call, "message"), JSON.stringify({ ok: true })),
           ...continuation,
         ],
       });
@@ -611,10 +585,7 @@ describe("qa mock openai server", () => {
     expect(first).not.toContain('"item_id":"msg_mock_block_2"');
     const final = await streamText(
       server,
-      userInputs(
-        prompt,
-        makeToolOutputWithCallId("call_mock_read_fixture", "QA kickoff task read"),
-      ),
+      userInputs(prompt, toolResult("call_mock_read_fixture", "QA kickoff task read")),
     );
     expectIncludes(final, '"item_id":"msg_mock_block_2"', "BLOCK_TWO_OK");
     expect(final).not.toContain('"item_id":"msg_mock_block_1"');
@@ -633,7 +604,7 @@ describe("qa mock openai server", () => {
       "SLACK-QA-COMMENTARY-11112222 printf '%s' 'SLACK-QA-TOOL-11112222' >/dev/null; sleep 5; printf '%s\\n' 'SLACK-QA-OUTPUT-11112222' SLACK-QA-COMMENTARY-DONE-11112222";
     const input = userInputs(
       stale,
-      makeToolOutputWithCallId("call_stale_slack_progress", ""),
+      toolResult("call_stale_slack_progress", ""),
       `${stale}\n${run.input.replaceAll(">", "&gt;")}`,
     );
     const options = { tools: [{ type: "function", name: "exec" }] };
@@ -651,7 +622,7 @@ describe("qa mock openai server", () => {
     ]);
     expect(items).toHaveLength(2);
     const exec = requireRecord(items[1], "exec output item");
-    expect(outputToolArgsFromItem(exec)).toEqual({ command });
+    expect(callArgs(exec)).toEqual({ command });
     expectSlots(events, ["msg_mock_slack_progress_commentary", exec.id]);
     expect(events.find((event) => event.type === "response.function_call_arguments.delta")).toEqual(
       {
@@ -664,7 +635,7 @@ describe("qa mock openai server", () => {
     expect(JSON.stringify(events)).not.toContain(run.matchText);
     const final = await respond(
       server,
-      [...input, exec, makeToolOutputWithCallId(outputToolCallId(exec, "call_slack_progress"), "")],
+      [...input, exec, toolResult(callIdOf(exec, "call_slack_progress"), "")],
       options,
     );
     expect(outputItems(final)).toMatchObject([{ type: "message", phase: "final_answer" }]);
@@ -693,10 +664,7 @@ describe("qa mock openai server", () => {
       server,
       userInputs(
         "Read QA_KICKOFF_TASK.md, then summarize what you found.",
-        makeToolOutputWithCallId(
-          "call_mock_read_1",
-          JSON.stringify({ text: `${evidencePrefix}😀tail` }),
-        ),
+        toolResult("call_mock_read_1", JSON.stringify({ text: `${evidencePrefix}😀tail` })),
       ),
       { instructions: "If this is a heartbeat check, reply exactly: HEARTBEAT_OK" },
     );
@@ -732,7 +700,7 @@ describe("qa mock openai server", () => {
           ],
         },
         "tool search qa check target=fake_plugin_tool_17. Call exactly that tool once and then summarize.",
-        makeToolOutputWithCallId(
+        toolResult(
           "call_tool_call_1",
           JSON.stringify({
             tool: { name: "fake_plugin_tool_17" },
@@ -750,7 +718,7 @@ describe("qa mock openai server", () => {
           content: [textBlock("Nothing to say: entire reply exactly NO_REPLY")],
         },
         "QA routing marker: tool search qa check target=ask_user. Ask structured questions, then summarize their actual answers.",
-        makeToolOutputWithCallId(
+        toolResult(
           "call_ask_user_1",
           JSON.stringify({
             content: [
@@ -836,8 +804,8 @@ describe("qa mock openai server", () => {
     const payload = await respond(server, envelope);
 
     expect(outputText(payload)).toBe("CURRENT_ONE");
-    const toolCall = outputToolCall(payload, "read");
-    expect(outputToolArgsFromItem(toolCall)).toEqual({ path: "current-block.txt" });
+    const toolCall = findToolCall(payload, "read");
+    expect(callArgs(toolCall)).toEqual({ path: "current-block.txt" });
     expect(JSON.stringify(payload)).not.toContain("STALE_ONE");
     expect(JSON.stringify(payload)).not.toContain("stale-block.txt");
   });
@@ -943,17 +911,14 @@ describe("qa mock openai server", () => {
     const declaredPayload = await respondOpenAi(server, SLACK_CHART_PROMPT, {
       tools: [MESSAGE_TOOL],
     });
-    const toolCall = outputToolCall(declaredPayload, "message");
-    expect(outputToolArgsFromItem(toolCall)).toEqual(SLACK_CHART_MESSAGE_TOOL_ARGS);
+    const toolCall = findToolCall(declaredPayload, "message");
+    expect(callArgs(toolCall)).toEqual(SLACK_CHART_MESSAGE_TOOL_ARGS);
 
     const afterToolPayload = await respondOpenAi(
       server,
       userInputs(
         SLACK_CHART_PROMPT,
-        makeToolOutputWithCallId(
-          outputToolCallId(toolCall, "call_mock_message_chart"),
-          "message sent",
-        ),
+        toolResult(callIdOf(toolCall, "call_mock_message_chart"), "message sent"),
       ),
       { tools: [MESSAGE_TOOL] },
     );
@@ -982,14 +947,14 @@ describe("qa mock openai server", () => {
   ])("emits the deterministic message-decision $name fixture", async ({ prompt, args, result }) => {
     const server = await startMockServer();
     const request = { tools: [MESSAGE_TOOL], input: userInputs(prompt) };
-    const initial = await expectOpenAiNonStreamingResponsesJson(server, request);
-    const call = outputToolCall(initial, "message");
-    expect(outputToolArgsFromItem(call)).toEqual(args);
+    const initial = await openAiJson(server, request);
+    const call = findToolCall(initial, "message");
+    expect(callArgs(call)).toEqual(args);
     if (result) {
       expect(
         await openAiReply(
           server,
-          [...request.input, makeToolOutputWithCallId(outputToolCallId(call, "message"), result)],
+          [...request.input, toolResult(callIdOf(call, "message"), result)],
           { ...request },
         ),
       ).toBe("NO_REPLY");
@@ -1008,9 +973,9 @@ describe("qa mock openai server", () => {
     }
     for (const input of [WHATSAPP_AGENT_REACT_PROMPT, WHATSAPP_GROUP_AGENT_REACT_PROMPT]) {
       const declared = await respondOpenAi(server, input, { tools: [MESSAGE_TOOL] });
-      const call = outputToolCall(declared, "message");
+      const call = findToolCall(declared, "message");
       expect(call).toMatchObject({ type: "function_call", name: "message" });
-      expect(outputToolArgsFromItem(call)).toEqual({ action: "react", emoji: "👍", final: true });
+      expect(callArgs(call)).toEqual({ action: "react", emoji: "👍", final: true });
     }
   });
 
@@ -1022,9 +987,7 @@ describe("qa mock openai server", () => {
       `Return ${WHATSAPP_PENDING_HISTORY_OK_MARKER} only if prior group context contains the context-only sentinel.`,
     ].join(" ");
     const prior = (body: string) =>
-      buildWhatsAppPendingHistoryContextFixture([
-        { sender: "Alice", timestamp: 1_786_000_000_000, body },
-      ]);
+      `[Chat messages since your last reply - for context]\n#history-1 Alice: ${body}\n\n[Current message - respond to this]`;
     const history = prior(
       `quiet context ${WHATSAPP_PENDING_HISTORY_QUIET_MARKER} ${WHATSAPP_PENDING_HISTORY_CONTEXT_SENTINEL}`,
     );
@@ -1180,11 +1143,7 @@ describe("qa mock openai server", () => {
     const server = await startMockServer();
     const body = {
       tools: CODE_MODE_TOOLS.map(({ name, parameters }) => ({ name, input_schema: parameters })),
-      messages: [
-        makeAnthropicUserText(
-          `${QA_COMPACTION_RETRY_PROMPT}\n${QA_COMPACTION_RETRY_OVERFLOW_PADDING}`,
-        ),
-      ],
+      messages: [makeAnthropicUserText(`${compactionPrompt}\n${overflowPadding}`)],
     };
 
     const first = await postAnthropicMessages(server, body, "anthropic-overflow-a");
@@ -1216,18 +1175,17 @@ describe("qa mock openai server", () => {
 
   it("excludes compaction summary requests from overflow injection", async () => {
     const server = await startMockServer();
-    const initial = await postPlain(
-      server,
-      `${QA_COMPACTION_RETRY_PROMPT}\n${QA_COMPACTION_RETRY_OVERFLOW_PADDING}`,
-      { model: "gpt-5.6-luna", client_metadata: { session_id: "compaction-summary" } },
-    );
+    const initial = await postPlain(server, `${compactionPrompt}\n${overflowPadding}`, {
+      model: "gpt-5.6-luna",
+      client_metadata: { session_id: "compaction-summary" },
+    });
     expect(initial.status).toBe(400);
 
     const response = await postResponses(server, {
       stream: false,
       model: "gpt-5.6-luna",
-      instructions: QA_COMPACTION_SUMMARY_INSTRUCTIONS,
-      input: `<conversation>\n[Chunk 1 - oldest messages]\nQA-COMPACTION-BULKY-HISTORICAL-MARKER\n${QA_COMPACTION_RETRY_OVERFLOW_PADDING}\n</conversation>\n\nAdditional focus: preserve exact identifiers and current work.`,
+      instructions: summaryInstructions,
+      input: `<conversation>\n[Chunk 1 - oldest messages]\nQA-COMPACTION-BULKY-HISTORICAL-MARKER\n${overflowPadding}\n</conversation>\n\nAdditional focus: preserve exact identifiers and current work.`,
     });
 
     expect(response.status).toBe(200);
@@ -1244,13 +1202,13 @@ describe("qa mock openai server", () => {
     {
       faultMode: "empty-output-once",
       markerPrefix: "QA-COMPACTION-EMPTY-OUTPUT-ONCE",
-      recoveredMarker: QA_COMPACTION_EMPTY_RECOVERY_SUMMARY_MARKER,
+      recoveredMarker: emptySummaryMarker,
       reasoningOnly: false,
     },
     {
       faultMode: "reasoning-only-output-once",
       markerPrefix: "QA-COMPACTION-REASONING-ONLY-OUTPUT-ONCE",
-      recoveredMarker: QA_COMPACTION_REASONING_RECOVERY_SUMMARY_MARKER,
+      recoveredMarker: reasoningSummaryMarker,
       reasoningOnly: true,
     },
   ] as const)(
@@ -1259,7 +1217,7 @@ describe("qa mock openai server", () => {
       const server = await startMockServer();
       const requestFor = (session: string) => ({
         model: "gpt-5.6-luna",
-        instructions: QA_COMPACTION_SUMMARY_INSTRUCTIONS,
+        instructions: summaryInstructions,
         input: `<conversation>\n${markerPrefix}-${session}\nretain current work\n</conversation>\n\nCreate a structured summary.`,
       });
 
@@ -1271,11 +1229,8 @@ describe("qa mock openai server", () => {
           expect(outputText(response)).toBe("");
         }
       };
-      expectFault(await expectOpenAiNonStreamingResponsesJson(server, requestFor("session-a")));
-      const recovered = await expectOpenAiNonStreamingResponsesJson(
-        server,
-        requestFor("session-a"),
-      );
+      expectFault(await openAiJson(server, requestFor("session-a")));
+      const recovered = await openAiJson(server, requestFor("session-a"));
       const recoveredText = outputText(recovered);
       expectIncludes(
         recoveredText,
@@ -1287,7 +1242,7 @@ describe("qa mock openai server", () => {
         "## Pending user asks",
         "## Exact identifiers",
       );
-      expectFault(await expectOpenAiNonStreamingResponsesJson(server, requestFor("session-b")));
+      expectFault(await openAiJson(server, requestFor("session-b")));
 
       const requests = requireArray(
         await getJson(server, "/debug/requests"),
@@ -1305,8 +1260,8 @@ describe("qa mock openai server", () => {
   it("keeps historical, durable, and unrelated compaction summaries separate", async () => {
     const server = await startMockServer();
     const summarize = async (conversation: string) => {
-      const payload = await expectOpenAiNonStreamingResponsesJson(server, {
-        instructions: QA_COMPACTION_SUMMARY_INSTRUCTIONS,
+      const payload = await openAiJson(server, {
+        instructions: summaryInstructions,
         input: `<conversation>\n${conversation}\n</conversation>\n\nAdditional focus: preserve exact identifiers.`,
       });
       const summary = outputText(payload);
@@ -1315,9 +1270,9 @@ describe("qa mock openai server", () => {
       return summary;
     };
     const historical = await summarize(
-      `QA-COMPACTION-BULKY-HISTORICAL-MARKER ${QA_COMPACTION_RETRY_HISTORICAL_PHRASE} 10`,
+      `QA-COMPACTION-BULKY-HISTORICAL-MARKER ${historicalPhrase} 10`,
     );
-    expect(historical).toContain(QA_COMPACTION_RETRY_HISTORICAL_PHRASE);
+    expect(historical).toContain(historicalPhrase);
     expect(historical).not.toContain("QA-COMPACTION-DURABLE-MARKER");
     const durable = await summarize("Retain QA-COMPACTION-DURABLE-MARKER for the active task.");
     expect(durable).toContain("QA-COMPACTION-DURABLE-MARKER");
@@ -1329,9 +1284,9 @@ describe("qa mock openai server", () => {
 
   it("rejects Anthropic Code Mode compaction retry result with content added under another target", async () => {
     const result = {
-      ...QA_COMPACTION_RETRY_CODE_MODE_WRITE_RESULT,
+      ...compactionWriteResult,
       value: {
-        ...QA_COMPACTION_RETRY_CODE_MODE_WRITE_RESULT.value,
+        ...compactionWriteResult.value,
         patch: [
           "--- compaction-retry-summary.txt",
           "+++ compaction-retry-summary.txt",
@@ -1348,13 +1303,13 @@ describe("qa mock openai server", () => {
     const server = await startMockServer();
     const callId = "toolu_compaction_retry_invalid";
     const body = requireRecord(
-      await expectAnthropicMessagesJson(server, {
+      await anthropicJson(server, {
         messages: [
           makeAnthropicUserText(
             "Compaction retry mutating tool check: read COMPACTION_RETRY_CONTEXT.md, then create compaction-retry-summary.txt and keep replay safety explicit.",
           ),
           anthropicCall("exec", {}, callId),
-          makeAnthropicToolResult(callId, JSON.stringify(result)),
+          anthropicResult(callId, JSON.stringify(result)),
         ],
       }),
       "Anthropic compaction retry response",
@@ -1370,7 +1325,7 @@ describe("qa mock openai server", () => {
 
     const writePlan = await streamOpenAi(
       server,
-      userInputs(QA_COMPACTION_RETRY_PROMPT, "Continue after compaction."),
+      userInputs(compactionPrompt, "Continue after compaction."),
     );
     expect(await writePlan.text()).toContain('"name":"write"');
 
@@ -1378,7 +1333,7 @@ describe("qa mock openai server", () => {
       await openAiReply(
         server,
         userInputs(
-          QA_COMPACTION_RETRY_PROMPT,
+          compactionPrompt,
           makeToolOutput("Successfully wrote 41 bytes to compaction-retry-summary.txt"),
           "Continue after compaction.",
         ),
@@ -1424,7 +1379,7 @@ describe("qa mock openai server", () => {
       { tools: [SESSIONS_SPAWN_TOOL] },
     );
 
-    const debugPayload = await readDebugRequest(server);
+    const debugPayload = await readDebug(server);
     expect(debugPayload.plannedToolName).toBe("sessions_spawn");
     const plannedToolArgs = requireRecord(debugPayload.plannedToolArgs, "planned tool args");
     expectFields(plannedToolArgs, {
@@ -1461,7 +1416,7 @@ describe("qa mock openai server", () => {
     expectNoTool(payload);
     if (silent) {
       expect(outputText(payload)).toBe("");
-      expect(await readDebugRequest(server)).not.toHaveProperty("plannedToolName");
+      expect(await readDebug(server)).not.toHaveProperty("plannedToolName");
     }
   });
 
@@ -1472,7 +1427,7 @@ describe("qa mock openai server", () => {
     const event = (text: string) =>
       makeUserInput(TEST_RUNTIME_CONTEXT_CARRIER.replace("runtime metadata", text));
     const receipt = (id: string, child: string) =>
-      makeToolOutputWithCallId(
+      toolResult(
         id,
         JSON.stringify({ status: "accepted", childSessionKey: `agent:qa:subagent:${child}` }),
       );
@@ -1481,8 +1436,8 @@ describe("qa mock openai server", () => {
       receipt("first", "first"),
       event(`[Internal task completion event]\ntask: qa-terminal-private-first\nResult: ${nonce}`),
     ];
-    const call = outputToolCall(await request(input), "sessions_spawn");
-    expect(outputToolArgsFromItem(call)).toMatchObject({
+    const call = findToolCall(await request(input), "sessions_spawn");
+    expect(callArgs(call)).toMatchObject({
       label: "qa-terminal-private-second",
       completionTarget: "parent",
       task: expect.stringContaining(nonce),
@@ -1503,8 +1458,8 @@ describe("qa mock openai server", () => {
     const server = await startMockServer();
     const prompt = "Subagent terminal reply QA worker: empty.";
     const tools = [{ type: "function", name: "dispatch_action" }];
-    const call = outputToolCall(await respond(server, prompt, { tools }), "dispatch_action");
-    expect(outputToolArgsFromItem(call)).toMatchObject({
+    const call = findToolCall(await respond(server, prompt, { tools }), "dispatch_action");
+    expect(callArgs(call)).toMatchObject({
       id: "write",
       args: { path: "qa-terminal-empty-side-effect.txt" },
     });
@@ -1514,7 +1469,7 @@ describe("qa mock openai server", () => {
         userInputs(
           prompt,
           call,
-          makeToolOutputWithCallId(
+          toolResult(
             String(call.call_id),
             JSON.stringify({
               tool: { id: "write", name: "write", source: "core" },
@@ -1557,7 +1512,7 @@ describe("qa mock openai server", () => {
           call_id: "old-spawn",
           arguments: '{"label":"qa-terminal-visible"}',
         },
-        makeToolOutputWithCallId(
+        toolResult(
           "old-spawn",
           '{"status":"accepted","childSessionKey":"agent:qa:subagent:completed"}',
         ),
@@ -1572,8 +1527,8 @@ describe("qa mock openai server", () => {
         expect(outputText(payload)).toBe("");
         return;
       }
-      const messageCall = outputToolCall(payload, "message");
-      expect(outputToolArgsFromItem(messageCall)).toMatchObject({
+      const messageCall = findToolCall(payload, "message");
+      expect(callArgs(messageCall)).toMatchObject({
         action: "send",
         message: "QA-SUBAGENT-TERMINAL-SILENT-REPRESENTED",
       });
@@ -1582,7 +1537,7 @@ describe("qa mock openai server", () => {
         [
           ...input,
           messageCall,
-          makeToolOutputWithCallId(outputToolCallId(messageCall, "message"), '{"ok":true}'),
+          toolResult(callIdOf(messageCall, "message"), '{"ok":true}'),
           carrier,
         ],
         { tools },
@@ -1656,18 +1611,18 @@ describe("qa mock openai server", () => {
     const prompt = makeUserInput(
       "Thread memory check: what is the hidden thread codename stored only in memory?",
     );
-    const search = outputToolCall(
+    const search = findToolCall(
       await respondOpenAi(server, [
         { type: "additional_tools", role: "developer", tools: CODE_MODE_TOOLS },
         prompt,
       ]),
       "exec",
     );
-    const searchId = outputToolCallId(search, "call_mock_memory_search");
+    const searchId = callIdOf(search, "call_mock_memory_search");
     const input = [
       prompt,
       search,
-      makeToolOutputWithCallId(
+      toolResult(
         searchId,
         completedResult({
           results: [
@@ -1677,18 +1632,15 @@ describe("qa mock openai server", () => {
       ),
     ];
     const pending = await respondOpenAi(server, input);
-    const get = outputToolCall(pending, "memory_get");
-    const getId = outputToolCallId(get, "call_mock_memory_get");
+    const get = findToolCall(pending, "memory_get");
+    const getId = callIdOf(get, "call_mock_memory_get");
     expect(getId).not.toBe(searchId);
     expect(outputItems(pending).some((item) => item.type === "message")).toBe(false);
     expect(JSON.stringify(pending)).not.toContain("hidden thread codename is ORBIT-21");
     const final = await respondOpenAi(server, [
       ...input,
       get,
-      makeToolOutputWithCallId(
-        getId,
-        completedResult({ text: "Thread-hidden codename: ORBIT-22." }),
-      ),
+      toolResult(getId, completedResult({ text: "Thread-hidden codename: ORBIT-22." })),
     ]);
     expectIncludes(outputText(final), "ORBIT-22");
     expect(outputText(final)).not.toContain("ORBIT-21");
@@ -1840,33 +1792,33 @@ describe("qa mock openai server", () => {
       });
       for (const markers of combined ? [["ALPHA-OK", "BETA-OK"]] : [["ALPHA-OK"], ["BETA-OK"]]) {
         const input = userInputs(
-          QA_FANOUT_PROMPT,
+          fanoutPrompt,
           `[Internal task completion event]\n${markers.map((marker) => `result: ${marker}`).join("\n")}`,
         );
         const request = {
           tools: combined ? tools : canDeliver ? [MESSAGE_TOOL] : [],
           ...withInstructions(input),
         };
-        const completion = await expectNonStreamingResponsesJson(server, request);
+        const completion = await responseJson(server, request);
         if (!canDeliver || !markers.includes("BETA-OK")) {
           expectNoTool(completion);
           expect(outputText(completion)).toBe("");
           continue;
         }
-        const message = outputToolCall(completion, "message");
-        expect(outputToolArgsFromItem(message)).toEqual({
+        const message = findToolCall(completion, "message");
+        expect(callArgs(message)).toEqual({
           action: "send",
           message: "subagent-1: ok\nsubagent-2: ok",
           ...(final ? { final: true } : {}),
         });
         if (combined) {
-          const settled = await expectNonStreamingResponsesJson(server, {
+          const settled = await responseJson(server, {
             ...request,
             ...withInstructions([
               ...input,
               message,
-              makeToolOutputWithCallId(
-                outputToolCallId(message, "call_mock_message_fanout"),
+              toolResult(
+                callIdOf(message, "call_mock_message_fanout"),
                 '{"ok":true,"messageId":"qa-fanout-final"}',
               ),
             ]),
@@ -1879,7 +1831,7 @@ describe("qa mock openai server", () => {
         const wake = await respond(
           server,
           userInputs(
-            QA_FANOUT_PROMPT,
+            fanoutPrompt,
             "[Subagent Context] Every subagent in this batch has now settled.\n[Subagent Context] Review the completion results and send your consolidated final answer to the user now.\nALPHA-OK\nBETA-OK",
           ),
           { tools: [SESSIONS_SPAWN_TOOL] },
@@ -1892,7 +1844,7 @@ describe("qa mock openai server", () => {
 
   it("replays completed subagent fanout on requester-settle continuation turns", async () => {
     const server = await startMockServer();
-    const prompt = QA_FANOUT_PROMPT;
+    const prompt = fanoutPrompt;
     await startFanout(
       server,
       [SESSIONS_SPAWN_TOOL],
@@ -1930,9 +1882,9 @@ describe("qa mock openai server", () => {
     ).not.toBe("subagent-1: ok\nsubagent-2: ok");
 
     const restartedFanout = await readResponse(server, prompt, { tools: [SESSIONS_SPAWN_TOOL] });
-    expect(
-      outputToolArgsFromItem(outputToolCall(await restartedFanout.json(), "sessions_spawn")),
-    ).toEqual(expect.objectContaining({ label: "qa-fanout-alpha" }));
+    expect(callArgs(findToolCall(await restartedFanout.json(), "sessions_spawn"))).toEqual(
+      expect.objectContaining({ label: "qa-fanout-alpha" }),
+    );
   });
 
   it("keeps source discovery reports out of subagent handoff prose", async () => {
@@ -2032,7 +1984,7 @@ describe("qa mock openai server", () => {
       '@qa-sut.example.test /tool image_generate action=generate prompt="QA lighthouse image for Matrix delivery testing" size=1024x1024 count=1',
       "Continue with the QA scenario plan and report worked, failed, and blocked items.",
     );
-    const call = outputToolCall(
+    const call = findToolCall(
       await respond(server, input, { tools: [IMAGE_GENERATE_TOOL] }),
       "image_generate",
     );
@@ -2045,7 +1997,7 @@ describe("qa mock openai server", () => {
           { prompt: "A QA lighthouse", filename: "qa-lighthouse.png" },
           "image",
         ),
-        makeToolOutputWithCallId(
+        toolResult(
           "image",
           JSON.stringify({ details: { media: { mediaUrls: ["/tmp/qa-lighthouse.png"] } } }),
         ),
@@ -2056,7 +2008,7 @@ describe("qa mock openai server", () => {
   it("completes an image without replaying a tool unavailable to the completion turn", async () => {
     const server = await startMockServer();
     const prompt = "Image generation check: generate a QA lighthouse image.";
-    const call = outputToolCall(
+    const call = findToolCall(
       await respond(server, prompt, { tools: [IMAGE_GENERATE_TOOL] }),
       "image_generate",
     );
@@ -2065,8 +2017,8 @@ describe("qa mock openai server", () => {
       userInputs(
         prompt,
         call,
-        makeToolOutputWithCallId(
-          outputToolCallId(call, "image"),
+        toolResult(
+          callIdOf(call, "image"),
           JSON.stringify({
             content: [{ type: "text", text: "Background image generation started." }],
             details: { async: true, status: "started" },
@@ -2118,7 +2070,7 @@ describe("qa mock openai server", () => {
       },
     ],
   ] as const)("%s", async (_name, body, tool, args) => {
-    const item = outputItem(await expectNonStreamingResponsesJson(await startMockServer(), body));
+    const item = outputItem(await responseJson(await startMockServer(), body));
     expectFields(item, { type: "function_call", name: tool });
     if (typeof args === "string") {
       expect(String(item.arguments)).toContain(args);
@@ -2159,7 +2111,7 @@ describe("qa mock openai server", () => {
       userInputs(
         `tool search qa check target=${catalogTarget}. Call exactly that tool once and then summarize.`,
         functionCall(callName, args, callId),
-        makeToolOutputWithCallId(callId, output),
+        toolResult(callId, output),
       ),
       { tools: tools.map((name) => ({ type: "function", name })) },
     );
@@ -2216,7 +2168,7 @@ describe("qa mock openai server", () => {
     const planResponse = await readResponse(server, testCase.prompt);
     const plannedCall = outputItem(await planResponse.json());
     expect(plannedCall).toMatchObject({ type: "function_call", name: "apply_patch" });
-    const callId = outputToolCallId(plannedCall, "native-patch-call");
+    const callId = callIdOf(plannedCall, "native-patch-call");
 
     const continuationResponse = await readResponse(
       server,
@@ -2229,7 +2181,7 @@ describe("qa mock openai server", () => {
     );
     expect(outputItem(await continuationResponse.json()).type).toBe("message");
 
-    const debug = await readDebugRequest(server);
+    const debug = await readDebug(server);
     expectFields(debug, { toolOutput: testCase.expectedOutput, toolOutputCallId: callId });
     if (testCase.structuredError) {
       expect(debug.toolOutputStructuredError).toBe(true);
@@ -2239,7 +2191,7 @@ describe("qa mock openai server", () => {
     expect(debug).not.toHaveProperty("plannedToolName");
   });
 
-  let nestedImageInput: unknown = QA_IMAGE_INPUT;
+  let nestedImageInput: unknown = imageInput;
   for (let index = 0; index < 4_000; index += 1) {
     nestedImageInput = [textBlock("nested"), nestedImageInput];
   }
@@ -2247,8 +2199,8 @@ describe("qa mock openai server", () => {
     [
       "uses current request instructions for deeply nested image descriptions",
       [
-        makeDeveloperInput(QA_IMAGE_DESCRIPTION_PROMPT),
-        makeImageUserInput(nestedImageInput, QA_IMAGE_MEDIA_CONTEXT),
+        makeDeveloperInput(imageDescriptionPrompt),
+        makeImageUserInput(nestedImageInput, imageContext),
       ],
       ["red", "blue"],
     ],
@@ -2259,7 +2211,7 @@ describe("qa mock openai server", () => {
           textBlock(
             "Roundtrip image inspection check: describe the generated lighthouse attachment in one short sentence.",
           ),
-          QA_IMAGE_INPUT,
+          imageInput,
         ),
       ],
       ["lighthouse"],
@@ -2270,7 +2222,7 @@ describe("qa mock openai server", () => {
     for (const word of words) {
       expect(text).toContain(word);
     }
-    expect((await readDebugRequest(server)).imageInputCount).toBe(1);
+    expect((await readDebug(server)).imageInputCount).toBe(1);
   });
 
   it("rereads the current model-switch turn before reporting continuity", async () => {
@@ -2374,7 +2326,7 @@ describe("qa mock openai server", () => {
   it("uses native Codex custom exec, output arrays, and cell_id waits", async () => {
     const server = await startMockServer();
     const tools = NATIVE_CODE_MODE_TOOLS;
-    const prompt = QA_COMPACTION_RETRY_PROMPT;
+    const prompt = compactionPrompt;
     const execPayload = await respondOpenAi(server, prompt, { tools });
     const execCall = outputItem(execPayload);
     expect(execCall).toMatchObject({ type: "custom_tool_call", name: "exec" });
@@ -2384,7 +2336,7 @@ describe("qa mock openai server", () => {
     expect(source).not.toMatch(/ALL_TOOLS[^\n]*\.id/);
     expect(source).not.toContain("return value");
 
-    const execCallId = outputToolCallId(execCall, "native-exec");
+    const execCallId = callIdOf(execCall, "native-exec");
     const waitPayload = await respondOpenAi(
       server,
       userInputs(prompt, execCall, {
@@ -2394,8 +2346,8 @@ describe("qa mock openai server", () => {
       }),
       { tools },
     );
-    const waitCall = outputToolCall(waitPayload, "wait");
-    expect(outputToolArgsFromItem(waitCall)).toEqual({ cell_id: "cell-write-1" });
+    const waitCall = findToolCall(waitPayload, "wait");
+    expect(callArgs(waitCall)).toEqual({ cell_id: "cell-write-1" });
 
     expect(
       await openAiReply(
@@ -2411,11 +2363,11 @@ describe("qa mock openai server", () => {
           waitCall,
           {
             type: "function_call_output",
-            call_id: outputToolCallId(waitCall, "native-wait"),
+            call_id: callIdOf(waitCall, "native-wait"),
             output: [
               textBlock("Script completed\nWall time: 0.1 seconds\nOutput:\n"),
               textBlock(completedResult({ changed: false })),
-              textBlock(JSON.stringify(QA_COMPACTION_RETRY_CODE_MODE_WRITE_RESULT)),
+              textBlock(JSON.stringify(compactionWriteResult)),
             ],
           },
         ),
@@ -2429,7 +2381,7 @@ describe("qa mock openai server", () => {
       label: "terminated header with canonical JSON",
       output: [
         textBlock("Script terminated\nWall time: 0.1 seconds\nOutput:\n"),
-        textBlock(JSON.stringify(QA_COMPACTION_RETRY_CODE_MODE_WRITE_RESULT)),
+        textBlock(JSON.stringify(compactionWriteResult)),
       ],
     },
     {
@@ -2439,13 +2391,13 @@ describe("qa mock openai server", () => {
   ])("rejects native Code Mode compaction evidence with $label", async ({ output }) => {
     const server = await startMockServer();
     const tools = NATIVE_CODE_MODE_TOOLS;
-    const execPayload = await respondOpenAi(server, QA_COMPACTION_RETRY_PROMPT, { tools });
+    const execPayload = await respondOpenAi(server, compactionPrompt, { tools });
     const execCall = outputItem(execPayload);
     const payload = await respondOpenAi(
       server,
-      userInputs(QA_COMPACTION_RETRY_PROMPT, execCall, {
+      userInputs(compactionPrompt, execCall, {
         type: "custom_tool_call_output",
-        call_id: outputToolCallId(execCall, "native-exec"),
+        call_id: callIdOf(execCall, "native-exec"),
         output,
       }),
       { tools },
@@ -2461,7 +2413,7 @@ describe("qa mock openai server", () => {
       const server = await startMockServer();
       const tools =
         name === "exec"
-          ? ANTHROPIC_GUEST_CODE_MODE_TOOLS
+          ? anthropicTools
           : [
               {
                 name: "read",
@@ -2494,7 +2446,7 @@ describe("qa mock openai server", () => {
         input: { language: "javascript", code: "return 1;" },
       };
       if (name === "read") {
-        const first = await expectAnthropicMessagesJson(server, { tools, messages });
+        const first = await anthropicJson(server, { tools, messages });
         const read = first.content.find((block) => block.type === "tool_use");
         if (!read || typeof read.id !== "string") {
           throw new Error("Expected Anthropic read tool_use block");
@@ -2506,12 +2458,12 @@ describe("qa mock openai server", () => {
         { status: "waiting", runId: id },
         { status: "completed", value: { status: "waiting", runId: `${id}-completed-value` } },
       ]) {
-        const body = await expectAnthropicMessagesJson(server, {
+        const body = await anthropicJson(server, {
           tools,
           messages: [
             ...messages,
             { role: "assistant", content: [toolUse] },
-            makeAnthropicToolResult(toolUse.id, JSON.stringify(result)),
+            anthropicResult(toolUse.id, JSON.stringify(result)),
           ],
         });
         expect(body.stop_reason).toBe("end_turn");
@@ -2526,8 +2478,8 @@ describe("qa mock openai server", () => {
       "Subagent fanout synthesis check: delegate exactly two bounded subagents sequentially using sessions_spawn, not ACP.";
     const messages: Array<Record<string, unknown>> = [makeAnthropicUserText(prompt)];
     const request = () => {
-      return expectAnthropicMessagesJson(server, {
-        tools: ANTHROPIC_GUEST_CODE_MODE_TOOLS,
+      return anthropicJson(server, {
+        tools: anthropicTools,
         messages,
       });
     };
@@ -2537,7 +2489,7 @@ describe("qa mock openai server", () => {
     ) => {
       messages.push(
         { role: "assistant", content: [toolUse] },
-        makeAnthropicToolResult(toolUse.id, completedResult(value)),
+        anthropicResult(toolUse.id, completedResult(value)),
       );
     };
     const requireToolUse = (body: AnthropicResponse, expectedName: string) => {
@@ -2586,7 +2538,7 @@ describe("qa mock openai server", () => {
       ],
     });
 
-    const debug = await readDebugRequest(server);
+    const debug = await readDebug(server);
     expectFields(debug, {
       toolOutputCallId: "toolu_mock_read_error",
       toolOutputStructuredError: true,
@@ -2598,21 +2550,21 @@ describe("qa mock openai server", () => {
   it("preserves whitespace Anthropic tool results without replay", async () => {
     const server = await startMockServer();
     const callId = "toolu_empty_patch";
-    const body = await expectAnthropicMessagesJson(server, {
+    const body = await anthropicJson(server, {
       tools: [{ name: "apply_patch", input_schema: { type: "object", properties: {} } }],
       messages: [
         makeAnthropicUserText(
           "tool search qa check target=apply_patch. Call apply_patch exactly once and then summarize.",
         ),
         anthropicCall("apply_patch", {}, callId),
-        makeAnthropicToolResult(callId, "  "),
+        anthropicResult(callId, "  "),
       ],
     });
     expect(body.stop_reason).toBe("end_turn");
     expect(body.content).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ type: "tool_use" })]),
     );
-    const debug = await readDebugRequest(server);
+    const debug = await readDebug(server);
     expect(debug.toolOutputCallId).toBe(callId);
     expect(debug.toolOutputStructuredError ?? false).toBe(false);
     expect(debug).not.toHaveProperty("plannedToolName");
@@ -2654,10 +2606,10 @@ describe("qa mock openai server", () => {
       stream([
         makeAnthropicUserText(prompt),
         anthropicCall("read", { path: "QA_KICKOFF_TASK.md" }, id),
-        makeAnthropicToolResult(id, "QA kickoff task completed."),
+        anthropicResult(id, "QA kickoff task completed."),
       ]);
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      const prompt = `${QA_ANTHROPIC_THINKING_ERROR_RECOVERY_PROMPT} QA scenario run: direct-${attempt}`;
+      const prompt = `${thinkingErrorPrompt} QA scenario run: direct-${attempt}`;
       const initial = await readCall(prompt);
       expectIncludes(
         await replay(prompt, initial),
@@ -2705,7 +2657,7 @@ describe("qa mock openai server", () => {
   it("defaults empty-string Anthropic /v1/messages model to claude-opus-4-8", async () => {
     const server = await startMockServer();
 
-    const body = await expectAnthropicMessagesJson(server, {
+    const body = await anthropicJson(server, {
       model: "",
       max_tokens: 256,
       messages: [{ role: "user", content: "Read the plan" }],
@@ -2719,14 +2671,14 @@ describe("qa mock openai server", () => {
   it.each([
     {
       kind: "reasoning-only",
-      prompt: QA_REASONING_ONLY_RECOVERY_PROMPT,
-      retry: QA_REASONING_ONLY_RETRY_INSTRUCTION,
+      prompt: reasoningRecoveryPrompt,
+      retry: reasoningRetry,
       expected: "REASONING-RECOVERED-OK",
     },
     {
       kind: "empty-response",
-      prompt: QA_EMPTY_RESPONSE_RECOVERY_PROMPT,
-      retry: QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION,
+      prompt: emptyRecoveryPrompt,
+      retry: settledContinuation,
       expected: "EMPTY-RECOVERED-OK",
     },
   ])(
@@ -2757,14 +2709,14 @@ describe("qa mock openai server", () => {
   it("scripts mixed reasoning-plus-blank output for the explicit model pair", async () => {
     const server = await startMockServer();
 
-    const primary = await respondOpenAi(server, QA_MIXED_REASONING_BLANK_FALLBACK_PROMPT, {
+    const primary = await respondOpenAi(server, blankFallbackPrompt, {
       model: "mock-empty-primary",
     });
     expect(outputItems(primary).map((item) => item.type)).toEqual(["reasoning", "message"]);
     expect(outputText(primary, 1)).toBe(" ");
 
     expect(
-      await openAiReply(server, QA_MIXED_REASONING_BLANK_FALLBACK_PROMPT, {
+      await openAiReply(server, blankFallbackPrompt, {
         model: "mock-visible-fallback",
       }),
     ).toBe("MODEL-FALLBACK-VISIBLE-OK");
@@ -2773,18 +2725,18 @@ describe("qa mock openai server", () => {
   it("scripts the GPT-5.6 Luna thinking visibility switch prompts", async () => {
     const server = await startMockServer();
 
-    const offPayload = await respondOpenAi(server, QA_THINKING_VISIBILITY_OFF_PROMPT);
+    const offPayload = await respondOpenAi(server, thinkingOffPrompt);
     expect(outputItem(offPayload).type).toBe("message");
     expect(outputText(offPayload)).toBe("THINKING-OFF-OK");
 
-    const maxPayload = await respondOpenAi(server, QA_THINKING_VISIBILITY_MAX_PROMPT);
+    const maxPayload = await respondOpenAi(server, thinkingMaxPrompt);
     const maxReasoning = outputItem(maxPayload);
     expectFields(maxReasoning, { type: "reasoning", id: "rs_mock_thinking_visibility_max" });
     expect(maxReasoning.summary).toEqual([]);
     expect(outputItem(maxPayload, 1).type).toBe("message");
     expect(outputText(maxPayload, 1)).toBe("THINKING-MAX-OK");
 
-    const maxStream = await readOpenAiPromptResponseText(server, QA_THINKING_VISIBILITY_MAX_PROMPT);
+    const maxStream = await readOpenAiPromptResponseText(server, thinkingMaxPrompt);
     expectIncludes(maxStream, '"type":"response.output_text.delta"', '"delta":"THINKING-MAX-OK"');
     expectSlots(sseEvents(maxStream), [maxReasoning.id, outputItem(maxPayload, 1).id]);
   });
@@ -2792,16 +2744,13 @@ describe("qa mock openai server", () => {
   it("keeps the reasoning-only side-effect path ready for no-auto-retry QA coverage", async () => {
     const server = await startMockServer();
 
-    const toolPlan = await readOpenAiPromptResponseText(
-      server,
-      QA_REASONING_ONLY_SIDE_EFFECT_PROMPT,
-    );
+    const toolPlan = await readOpenAiPromptResponseText(server, reasoningWritePrompt);
     expectIncludes(toolPlan, '"name":"write"', "reasoning-only-side-effect.txt");
 
     const sideEffectPayload = await respondOpenAi(
       server,
       userInputs(
-        QA_REASONING_ONLY_SIDE_EFFECT_PROMPT,
+        reasoningWritePrompt,
         makeToolOutput("Successfully wrote 28 bytes to reasoning-only-side-effect.txt."),
       ),
     );
@@ -2811,9 +2760,9 @@ describe("qa mock openai server", () => {
 
   it("scripts settled continuation after a side-effecting write with settled exhaustion", async () => {
     const server = await startMockServer();
-    const history = await completeSideEffectScenario(server, "exhaustion");
-    const recovery = makeUserInput(QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT);
-    const continuation = makeUserInput(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
+    const history = await completeSideEffectScenario(server);
+    const recovery = makeUserInput(emptyWriteRecoveryPrompt);
+    const continuation = makeUserInput(settledContinuation);
     const output = makeToolOutput(
       "Successfully wrote 27 bytes to qa-empty-response-side-effect.txt",
     );
@@ -2835,7 +2784,7 @@ describe("qa mock openai server", () => {
           "Empty response after write recovery QA check: write once, then respond with exact marker: `CRON-EMPTY-WRITE-RECOVERED-OK`.",
           "This is an unattended scheduled run. If nothing needs doing, reply exactly HEARTBEAT_OK.",
         ].join("\n\n"),
-        `${QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION}\nRead HEARTBEAT.md if it exists.`,
+        `${settledContinuation}\nRead HEARTBEAT.md if it exists.`,
         output,
       ),
     ).resolves.toBe("CRON-EMPTY-WRITE-RECOVERED-OK");
@@ -2861,7 +2810,7 @@ describe("qa mock openai server", () => {
     );
     expectFields(plannedRequest, { plannedToolName: "read", plannedWireToolName: "exec" });
 
-    const failedToolOutput = makeToolOutputWithCallId(
+    const failedToolOutput = toolResult(
       String(plannedRequest.plannedToolCallId),
       JSON.stringify({ status: "failed", error: "ENOENT: qa-failed-terminal-missing-file.txt" }),
     );
@@ -2875,10 +2824,7 @@ describe("qa mock openai server", () => {
     expect(
       await reply(
         server,
-        userInputs(
-          prompt,
-          makeToolOutputWithCallId(String(plannedRequest.plannedToolCallId), "file contents"),
-        ),
+        userInputs(prompt, toolResult(String(plannedRequest.plannedToolCallId), "file contents")),
         { model: "gpt-5.6-luna", tools: CODE_MODE_TOOLS },
       ),
     ).toBe("BUG-TOOL-DID-NOT-FAIL");
@@ -2888,7 +2834,7 @@ describe("qa mock openai server", () => {
       "Read the seeded docs and source plan, then report grouped into Worked, Failed, Blocked, and Follow-up.";
     const handoffPrompt =
       "Delegate one bounded QA task to a subagent. Wait for the subagent to finish.";
-    for (const prompt of [sourcePrompt, handoffPrompt, QA_FANOUT_PROMPT]) {
+    for (const prompt of [sourcePrompt, handoffPrompt, fanoutPrompt]) {
       for (const [provider, modelId, location, path] of [
         ["openai", "gpt-5.6-luna", "workspace", "repo/qa/scenarios/index.yaml"],
         ["anthropic", "claude-opus-4-8", "docs fixture", "repo/docs/help/testing.md"],
@@ -2897,7 +2843,7 @@ describe("qa mock openai server", () => {
           model: prompt === handoffPrompt ? modelId : `${provider}/${modelId}`,
           ...(prompt === sourcePrompt ? {} : { tools: [SESSIONS_SPAWN_TOOL] }),
         });
-        const args = outputToolArgs(response);
+        const args = responseArgs(response);
         if (prompt === sourcePrompt) {
           expect(args).toEqual({ path });
         } else {
@@ -2933,15 +2879,15 @@ describe("qa mock openai server", () => {
     const request = (input: unknown[], surface = tools) =>
       respondOpenAi(server, input, { tools: surface });
     const plan = await request([kickoff]);
-    const call = outputToolCall(plan, "sessions_send");
-    const args = outputToolArgs(plan);
+    const call = findToolCall(plan, "sessions_send");
+    const args = responseArgs(plan);
     expect(args).toMatchObject({ sessionKey, timeoutSeconds: 0 });
     expectIncludes(String(args.message), "qa group visible reply tool check", marker);
     const input = [
       kickoff,
       call,
-      makeToolOutputWithCallId(
-        outputToolCallId(call, "call_a2a"),
+      toolResult(
+        callIdOf(call, "call_a2a"),
         JSON.stringify({
           status: "forbidden",
           error:
@@ -2957,7 +2903,7 @@ describe("qa mock openai server", () => {
           ...input,
           ...outputItems(response),
           makeUserInput(
-            `${QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION} If a tool failed, say so; never claim completion or success.`,
+            `${settledContinuation} If a tool failed, say so; never claim completion or success.`,
           ),
         ],
         [],
@@ -2972,7 +2918,7 @@ describe("qa mock openai server", () => {
       [...tools, { type: "function", name: "message" }],
     );
     expect(outputItem(target)).toMatchObject({ type: "function_call", name: "message" });
-    expect(outputToolArgs(target)).toMatchObject({ action: "send", message: marker });
+    expect(responseArgs(target)).toMatchObject({ action: "send", message: marker });
   });
   it.each([
     { prompt: "Telegram unsent failure QA check.", partialText: "" },
@@ -3085,14 +3031,14 @@ describe("qa mock openai server", () => {
         server,
         userInputs(
           "Memory tools check: read the hidden project codename.",
-          makeToolOutputWithCallId(
+          toolResult(
             "call_memory_search",
             JSON.stringify({ results: [{ path: "MEMORY.md", ...range }] }),
           ),
         ),
         { tools: [{ type: "function", name: "memory_get", parameters: { type: "object" } }] },
       );
-      expect(outputToolArgsFromItem(outputToolCall(payload, "memory_get"))).toEqual({
+      expect(callArgs(findToolCall(payload, "memory_get"))).toEqual({
         path: "MEMORY.md",
         from,
         lines: 4,
