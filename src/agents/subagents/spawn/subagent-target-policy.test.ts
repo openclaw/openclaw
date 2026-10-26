@@ -30,29 +30,12 @@ describe("subagent target policy", () => {
   });
 
   it.each([
-    {
-      allowAgents: ["planner", "stale"],
-      configuredAgentIds: ["main", "planner"],
-      allowAny: false,
-      allowedIds: ["planner"],
-      rejected: "stale",
-    },
-    {
-      allowAgents: ["*"],
-      configuredAgentIds: ["planner", "checker"],
-      allowAny: true,
-      allowedIds: ["checker", "main", "planner"],
-    },
-    {
-      allowAgents: ["*", "beta"],
-      configuredAgentIds: ["main", "planner"],
-      allowAny: true,
-      allowedIds: ["main", "planner"],
-      rejected: "beta",
-    },
-  ])(
-    "filters configured targets for $allowAgents",
-    ({ allowAgents, configuredAgentIds, allowAny, allowedIds, rejected }) => {
+    [["planner", "stale"], ["main", "planner"], false, ["planner"], "stale"],
+    [["*"], ["planner", "checker"], true, ["checker", "main", "planner"]],
+    [["*", "beta"], ["main", "planner"], true, ["main", "planner"], "beta"],
+  ] satisfies Array<[string[], string[], boolean, string[], string?]>)(
+    "filters configured targets for %j",
+    (allowAgents, configuredAgentIds, allowAny, allowedIds, rejected) => {
       expect(
         resolveSubagentAllowedTargetIds({
           requesterAgentId: "main",
@@ -145,32 +128,33 @@ describe("subagent target policy", () => {
     );
   });
 
-  it("checks a target against the requester's requireAgentId and allowAgents", () => {
-    const cfg = {
-      agents: {
-        entries: { main: { subagents: { allowAgents: ["planner"], requireAgentId: true } } },
-      },
-    };
-    const base = { cfg, requesterAgentId: "main", configuredAgentIds: ["main", "planner"] };
-    expect(resolveRequesterSpawnTargetPolicy({ ...base, targetAgentId: "planner" })).toMatchObject({
-      ok: false,
-      error: expect.stringContaining("requires explicit agentId"),
-    });
-    expect(
-      resolveRequesterSpawnTargetPolicy({
-        ...base,
-        targetAgentId: "planner",
-        requestedAgentId: "planner",
-      }),
-    ).toEqual({ ok: true });
-    expect(
-      resolveRequesterSpawnTargetPolicy({
-        ...base,
-        targetAgentId: "main",
-        requestedAgentId: "main",
-      }),
-    ).toEqual({ ok: false, error: expect.stringContaining("not allowed") });
-  });
+  it.each([
+    [
+      undefined,
+      "planner",
+      { ok: false, error: expect.stringContaining("requires explicit agentId") },
+    ],
+    ["planner", "planner", { ok: true }],
+    ["main", "main", { ok: false, error: expect.stringContaining("not allowed") }],
+  ] as const)(
+    "checks explicit target %s against requireAgentId and allowAgents",
+    (requestedAgentId, targetAgentId, expected) => {
+      const cfg = {
+        agents: {
+          entries: { main: { subagents: { allowAgents: ["planner"], requireAgentId: true } } },
+        },
+      };
+      expect(
+        resolveRequesterSpawnTargetPolicy({
+          cfg,
+          requesterAgentId: "main",
+          configuredAgentIds: ["main", "planner"],
+          requestedAgentId,
+          targetAgentId,
+        }),
+      ).toEqual(expected);
+    },
+  );
 
   it("resolves spawn target settings from the agent override, then defaults", () => {
     const cfg = {
