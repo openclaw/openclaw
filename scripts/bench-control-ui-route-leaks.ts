@@ -83,7 +83,7 @@ const { values } = parseArgs({
 });
 if (values.help) {
   console.log(
-    "--bundle-dir BASE [--compare-bundle-dir HEAD] --routes sessions,cron,usage --mode coverage|timing|all --pairs 10 --profiles local,remote [--screenshots] [--output DIR]. Default routes include every Settings section, Sessions, Cron, Agents, Usage, Plugins, Workboard and sharing. Select --routes systems,portals,desktop-document for the optional Desktop probes; they use a scripted RFB endpoint and loaded synthetic portal. portal-embedded navigates Chat and opens its Portal panel through native controls, including iframe readiness and the rail CSS cascade. Optional --interactions agents-files,cron-history,cron-transcript,worktree-create,claws-search,roster-create-claw,model-search-and-compose probes follow cold readiness; --routes roster exercises the persisted sidebar roster on New Session. Security uses --routes advanced with one settings-security-immediate or settings-security-idle interaction. Coverage and timing run in separate fresh contexts; comparison timings include a base/base control. Apps packet aliases: apps-catalog,apps-open-immediate,apps-open-idle. First App opens use real catalog navigation, actual launch/view receipts and the native sandbox; no prior Chat visit or manual preload.",
+    "--bundle-dir BASE [--compare-bundle-dir HEAD] --routes sessions,cron,usage --mode coverage|timing|all --pairs 10 --profiles local,remote [--screenshots] [--output DIR]. Default routes include every Settings section, Sessions, Cron, Agents, Usage, Plugins, Workboard and sharing. Select --routes systems,portals,desktop-document for the optional Desktop probes; they use a scripted RFB endpoint and loaded synthetic portal. portal-embedded navigates Chat and opens its Portal panel through native controls, including iframe readiness and the rail CSS cascade. Optional --interactions agents-files,cron-history,cron-transcript,worktree-create,claws-search,roster-create-claw,model-search-and-compose probes follow cold readiness; new-session-typing-immediate types before artifact work with no hover or think time; preload-idle observes native New Session/roster prefetch without prior intent; --routes roster exercises the persisted sidebar roster on New Session. Security uses --routes advanced with one settings-security-immediate or settings-security-idle interaction. Coverage and timing run in separate fresh contexts; comparison timings include a base/base control. Apps packet aliases: apps-catalog,apps-open-immediate,apps-open-idle. First App opens use real catalog navigation, actual launch/view receipts and the native sandbox; no prior Chat visit or manual preload.",
   );
   process.exit(0);
 }
@@ -147,6 +147,8 @@ const knownInteractions = [
   "agents-files",
   "cron-history",
   "cron-transcript",
+  "new-session-typing-immediate",
+  "preload-idle",
   ...securityInteractions,
   ...Object.keys(creationInteractions),
 ];
@@ -156,6 +158,18 @@ for (const id of interactionIds) {
   }
 }
 const securityInteraction = interactionIds.find((id) => securityInteractions.includes(id));
+const immediateTyping = interactionIds.includes("new-session-typing-immediate");
+const preloadIdle = interactionIds.includes("preload-idle");
+if (
+  (immediateTyping || preloadIdle) &&
+  (interactionIds.length !== 1 ||
+    (immediateTyping && (routes.length !== 1 || routes[0] !== "new-session")) ||
+    (preloadIdle && routes.some((route) => route !== "new-session" && route !== "roster")))
+) {
+  throw new Error(
+    "Immediate typing requires only --routes new-session; preload-idle requires only new-session/roster; use one interaction",
+  );
+}
 if (
   securityInteraction &&
   (interactionIds.length !== 1 || routes.length !== 1 || routes[0] !== "advanced")
@@ -619,10 +633,9 @@ async function readBuild(directory: string) {
     build,
     indexSha256: createHash("sha256").update(html).digest("hex"),
     nextPreloads: Object.fromEntries(
-      ["agents-next", "cron-next", "model-picker", "roster-next"].map((key) => [
-        key,
-        navigationPreloads[key] ?? [],
-      ]),
+      ["agents-next", "cron-next", "model-picker", "new-session-model-picker", "roster-next"].map(
+        (key) => [key, navigationPreloads[key] ?? []],
+      ),
     ),
   };
 }
@@ -721,9 +734,9 @@ async function save() {
     JSON.stringify(
       {
         workload:
-          "cold direct navigation; real production HTTP assets, synthetic in-document WebSocket Gateway; portal-embedded includes Chat navigation and native Portal panel activation; Agents/Cron/Creation interactions use a minimum2,000ms think time, Apps immediate has no intentional wait and Apps idle has a minimum2,000ms wait without manual preloading",
+          "cold direct navigation; real production HTTP assets, synthetic in-document WebSocket Gateway; portal-embedded includes Chat navigation and native Portal panel activation; Agents/Cron/Creation interactions use a minimum2,000ms think time, immediate New Session typing uses native key events before artifact work without hover/think time, preload-idle observes native warming without intent, Apps immediate has no intentional wait and Apps idle has a minimum2,000ms wait without manual preloading",
         instrumentation:
-          "Timing uses renderer-main-frame threadTicks without coverage. Optional interaction wallMs/CPU are automation-to-ready intervals after cold capture, not INP; evaluatedScriptUrls uses positive top-level V8 ranges. Parsed scripts without execution are reported separately. Import references are regex-extracted chunk references, not a complete source import graph. V8 coverage also belongs to the page target; workerUrls records any dedicated-worker coverage/network-emulation gap. Coverage is a separate pass bounded by usable route readiness and includes requested preloads absent from V8 as unexecuted. requestedRawBytes counts the full source of requested files; loadedBytes includes only completed/evaluated files. pendingJsRequests identifies incomplete transfer accounting, and jsResources contains completed Resource Timing entries. Remote emulates 100ms HTTP latency and 10Mbps; synthetic WS has no simulated RTT. Workboard plugin fixture is built from the current checkout and held identical across bundle variants; its bytes are reported separately from UI-bundle code. Ready requires route success and a visible enabled page control, then one animation frame. Security navigation additionally requires the checked/enabled Browser control and all four enabled tool profiles, with no fixture override selected; config/schema receipt counts must stay unchanged. Security before/after observations have their own timestamps, and no hover/focus/import or artificial preload precedes its native click. Its readinessToActionMs records observation overhead; coverage and screenshots are written after its action. Sharing includes opening the menu after the chat becomes usable. Apps first-open cells trigger before cold summarization/screenshot/file work; immediate has no intentional delay, idle has a native minimum2000ms from cold readiness without manual warming. Each cell starts a fresh context, with base eager imports observed naturally. Phase network data retains raw CDP MonotonicTime timestamps and the actual NavigationStart metric; RPC method counts use direct same-document performance.now. Native counter/Close assertions happen after first-open CPU cutoff. Cold-plus-first-open elapsed includes the idle interval and automation gap and does not waive any individual regression. Page-target V8/CPU excludes inner App and worker execution; frame URLs retain that scope gap. Matching Agents/Cron/Creation interactions give every variant the same minimum 2,000 ms idle interval before expected-preload verification. interactionWarmup CPU/wall stop before verification polling; preloadVerification records additional wall/CPU through confirmed completion. Total warm cost includes both intervals. Completion verification can extend readiness-to-action time. Cold-only and sharing runs have no think-time delay.",
+          "Timing uses renderer-main-frame threadTicks without coverage. Optional interaction wallMs/CPU are automation-to-ready intervals after cold capture, not INP; evaluatedScriptUrls uses positive top-level V8 ranges. Parsed scripts without execution are reported separately. Import references are regex-extracted chunk references, not a complete source import graph. V8 coverage also belongs to the page target; workerUrls records any dedicated-worker coverage/network-emulation gap. Coverage is a separate pass bounded by usable route readiness and includes requested preloads absent from V8 as unexecuted. requestedRawBytes counts the full source of requested files; loadedBytes includes only completed/evaluated files. pendingJsRequests identifies incomplete transfer accounting, and jsResources contains completed Resource Timing entries. Remote emulates 100ms HTTP latency and 10Mbps; synthetic WS has no simulated RTT. Workboard plugin fixture is built from the current checkout and held identical across bundle variants; its bytes are reported separately from UI-bundle code. Ready requires route success and a visible enabled page control, then one animation frame. Security navigation additionally requires the checked/enabled Browser control and all four enabled tool profiles, with no fixture override selected; config/schema receipt counts must stay unchanged. Security before/after observations have their own timestamps, and no hover/focus/import or artificial preload precedes its native click. Its readinessToActionMs records observation overhead; coverage and screenshots are written after its action. Sharing includes opening the menu after the chat becomes usable. Apps first-open cells trigger before cold summarization/screenshot/file work; immediate has no intentional delay, idle has a native minimum2000ms from cold readiness without manual warming. Each cell starts a fresh context, with base eager imports observed naturally. Phase network data retains raw CDP MonotonicTime timestamps and the actual NavigationStart metric; RPC method counts use direct same-document performance.now. Native counter/Close assertions happen after first-open CPU cutoff. Cold-plus-first-open elapsed includes the idle interval and automation gap and does not waive any individual regression. Page-target V8/CPU excludes inner App and worker execution; frame URLs retain that scope gap. Matching Agents/Cron/Creation interactions give every variant the same minimum 2,000 ms idle interval before expected-preload verification. interactionWarmup CPU/wall stop before verification polling; preloadVerification records additional wall/CPU through confirmed completion. Total warm cost includes both intervals. Completion verification can extend readiness-to-action time. Immediate New Session typing focuses the textarea and uses native pressSequentially before any cold artifact/screenshot work; its cutoff is the next animation frame and it records pending action requests without waiting for speculative imports. preload-idle has no synthetic intent and observes a minimum2000ms native idle window. Cold-only and sharing runs have no think-time delay.",
         acceptance:
           "A measured real-scenario win of at least 5%; no median readiness regression over 5% or worse p95 unless an A/A control attributes the movement to host noise. On a noisy host, run 20 interleaved pairs and judge affected threadTicks CPU plus structural byte/request counts. Coverage-instrumented timings are diagnostic only.",
         buildVariants: variants,
@@ -1108,6 +1121,8 @@ try {
             };
             let pendingColdCoverage: CoverageEntry[] | undefined;
             let abortAfterContext = false;
+            let preloadExpectation: { key: string; urls: string[] } | undefined;
+            const requests = new Map<string, AssetRequest>();
             try {
               console.info(`[route-leaks] ${prefix}: preparing synthetic fixture`);
               const prepared = await prepareControlUiMockGatewayScenario(
@@ -1192,7 +1207,6 @@ try {
                 uploadThroughput: profile.uploadThroughput,
               });
               await cdp.send("Performance.enable", { timeDomain: "threadTicks" });
-              const requests = new Map<string, AssetRequest>();
               cdp.on("Network.requestWillBeSent", (event) =>
                 requests.set(event.requestId, {
                   requestId: event.requestId,
@@ -1440,6 +1454,64 @@ try {
               result.cpu = cpuDelta(before, after);
               result.target = target;
               result.errors = errors;
+              if (immediateTyping) {
+                const cell: InteractionResult = { id: "new-session-typing-immediate" };
+                result.interactions = [cell];
+                const prior = new Map(
+                  Array.from(requests, ([key, request]) => [key, Object.assign({}, request)]),
+                );
+                if (mode === "coverage") {
+                  await page.coverage.startJSCoverage({
+                    resetOnNavigation: false,
+                    reportAnonymousScripts: false,
+                  });
+                }
+                const cpuBefore = await metrics(cdp);
+                const started = await page.evaluate(() => performance.now());
+                const textarea = page.locator(".new-session-page textarea").first();
+                await textarea.focus();
+                await textarea.pressSequentially("Synthetic unsent draft");
+                const ended = await page.evaluate(
+                  () =>
+                    new Promise<number>((resolve) => {
+                      requestAnimationFrame(() => resolve(performance.now()));
+                    }),
+                );
+                cell.cpu = cpuDelta(cpuBefore, await metrics(cdp));
+                cell.wallMs = ended - started;
+                cell.coldToActionGapMs = started - readyMs;
+                cell.intentionalThinkTimeMs = 0;
+                const atEnd = Array.from(requests.values(), (request) => ({ ...request }));
+                cell.newJsRequests = atEnd.filter(
+                  (request) =>
+                    !prior.has(request.requestId) && /\.m?js$/u.test(new URL(request.url).pathname),
+                );
+                cell.previousPendingCompleted = atEnd.filter(
+                  (request) =>
+                    prior.has(request.requestId) &&
+                    prior.get(request.requestId)!.wireBytes === undefined &&
+                    request.wireBytes !== undefined,
+                );
+                const typingCoverage =
+                  mode === "coverage" ? await page.coverage.stopJSCoverage() : undefined;
+                if (typingCoverage) {
+                  cell.evaluatedScriptUrls = evaluatedUrls(typingCoverage);
+                  await writeFile(
+                    path.join(output, `${prefix}-immediate-typing-v8.json`),
+                    JSON.stringify(typingCoverage),
+                  );
+                }
+                assert.equal(await textarea.inputValue(), "Synthetic unsent draft");
+                const writes = await page.evaluate(() => {
+                  const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway!;
+                  return ["claws.drafts.create", "sessions.create", "chat.send"].map(
+                    (method) => gateway.findRequests(method).length,
+                  );
+                });
+                assert.deepEqual(writes, [0, 0, 0]);
+                cell.draftRetained = true;
+                cell.noWrites = true;
+              }
               // First App opens happen before cold summaries, screenshots, or file writes.
               // Each route/variant already owns a fresh browser context: never visit Chat first.
               let appsFirstAction: InteractionResult | undefined;
@@ -1614,24 +1686,40 @@ try {
                   ),
               );
               const creationWarmup = routeInteractions.some((id) => id in creationInteractions);
-              const warmKey =
-                route === "chat" || route === "new-session" ? "model-picker" : `${route}-next`;
-              const warmFiles = routeInteractions.length
-                ? (variant.nextPreloads[warmKey] ?? [])
-                : [];
+              const warmKey = preloadIdle
+                ? route === "roster"
+                  ? "roster-next"
+                  : undefined
+                : route === "new-session" &&
+                    variant.nextPreloads["new-session-model-picker"]?.length
+                  ? "new-session-model-picker"
+                  : route === "chat" || route === "new-session"
+                    ? "model-picker"
+                    : `${route}-next`;
+              const warmFiles =
+                warmKey && (routeInteractions.length || preloadIdle)
+                  ? (variant.nextPreloads[warmKey] ?? [])
+                  : [];
               if (creationWarmup && (route === "chat" || route === "new-session")) {
                 assert(warmFiles.length > 0, `Missing native preload descriptor: ${warmKey}`);
               }
-              const warmup = routeInteractions.length
-                ? { cpu: await metrics(cdp), started: await page.evaluate(() => performance.now()) }
-                : undefined;
+              const warmup =
+                routeInteractions.length || preloadIdle
+                  ? {
+                      cpu: await metrics(cdp),
+                      started: await page.evaluate(() => performance.now()),
+                    }
+                  : undefined;
               if (warmup && mode === "coverage") {
                 await page.coverage.startJSCoverage({
                   resetOnNavigation: false,
                   reportAnonymousScripts: false,
                 });
               }
-              if (creationWarmup && warmKey === "model-picker") {
+              if (
+                creationWarmup &&
+                (warmKey === "model-picker" || warmKey === "new-session-model-picker")
+              ) {
                 await page
                   .locator('.chat-controls__model-trigger[aria-disabled="false"]')
                   .first()
@@ -1771,6 +1859,7 @@ try {
                 const idleCpu = await metrics(cdp);
                 // Keep descriptor-specific readiness polling outside the idle CPU sample.
                 const urls = warmFiles.map((file) => new URL(file, server.baseUrl).href);
+                preloadExpectation = { key: warmKey ?? "no-intent", urls };
                 if (urls.length) {
                   await page.waitForFunction(
                     (expectedUrls) =>
@@ -1793,20 +1882,17 @@ try {
                         .concat(evaluated)
                         .includes(urls[0]!)
                     : undefined;
-                const nativeLinks: string[] =
-                  creationWarmup && urls.length
-                    ? await page.evaluate(
-                        (expected) =>
-                          [
-                            ...document.querySelectorAll<HTMLLinkElement>(
-                              'link[rel="modulepreload"],link[rel="preload"][as="style"]',
-                            ),
-                          ]
-                            .filter((link) => expected.includes(link.href))
-                            .map((link) => link.href),
-                        urls,
+                const observedNativeLinks: string[] =
+                  creationWarmup || preloadIdle
+                    ? await page.evaluate(() =>
+                        [
+                          ...document.querySelectorAll<HTMLLinkElement>(
+                            'link[rel="modulepreload"],link[rel="preload"][as="style"]',
+                          ),
+                        ].map((link) => link.href),
                       )
                     : [];
+                const nativeLinks = observedNativeLinks.filter((url) => urls.includes(url));
                 result.interactionWarmup = {
                   files: warmFiles,
                   minimumThinkTimeMs: 2_000,
@@ -1819,19 +1905,20 @@ try {
                   },
                   evaluatedScriptUrls: evaluated,
                   panelEvaluatedBeforeAction: panelEvaluated,
-                  ...(creationWarmup
+                  ...(creationWarmup || preloadIdle
                     ? {
                         id: warmFiles.length
                           ? `native-next-prefetch-${warmKey}`
                           : "post-ready-think-time",
                         nativeLinks,
+                        observedNativeLinks,
                         alreadyEvaluatedAtCold: urls.filter((url) =>
                           evaluatedUrls(coverageAtReady ?? []).includes(url),
                         ),
                       }
                     : {}),
                 };
-                if (creationWarmup && urls.length) {
+                if ((creationWarmup || preloadIdle) && urls.length) {
                   const coldUrls = new Set(requestsAtReady.map((request) => request.url));
                   assert(
                     urls
@@ -1848,17 +1935,29 @@ try {
                     );
                   }
                 }
+                if (preloadIdle) {
+                  const coldRequests = new Set(requestsAtReady.map((request) => request.requestId));
+                  const newJsRequests = Array.from(requests.values(), (request) => ({ ...request }))
+                    .filter((request) => !coldRequests.has(request.requestId))
+                    .filter((request) => /\.m?js$/u.test(new URL(request.url).pathname));
+                  result.idleControl = { noPriorIntent: true, newJsRequests, observedNativeLinks };
+                  if (route === "new-session") {
+                    const chatChunk = /\/(?:control-ui-boot-chat|chat-route-entry)-/u;
+                    assert(newJsRequests.every((request) => !chatChunk.test(request.url)));
+                    assert((evaluated ?? []).every((url) => !chatChunk.test(url)));
+                  }
+                }
                 if (warmCoverage) {
                   await writeFile(
                     path.join(output, `${prefix}-warmup-v8.json`),
                     JSON.stringify(warmCoverage),
                   );
                 }
-                if (panelEvaluated && !creationWarmup) {
+                if (panelEvaluated && !creationWarmup && !preloadIdle) {
                   throw new Error(`Next panel evaluated before interaction: ${warmFiles[0]}`);
                 }
               }
-              result.interactions = appsFirstAction
+              result.interactions ??= appsFirstAction
                 ? [appsFirstAction]
                 : securityCell
                   ? [securityCell]
@@ -2074,6 +2173,8 @@ try {
               }
             } catch (error) {
               if (
+                immediateTyping ||
+                preloadIdle ||
                 route === "claws" ||
                 route === "worktrees" ||
                 route === "roster" ||
@@ -2103,12 +2204,56 @@ try {
                 .screenshot({ path: path.join(output, `${prefix}-failure.png`) })
                 .catch(() => {});
               result.failure = await page
-                .evaluate(() => ({
-                  url: location.href,
-                  text: document.body?.textContent,
-                  snapshot: window.openclawControlUi?.snapshot(),
-                }))
+                .evaluate(
+                  (preload) => ({
+                    capturedAtMs: performance.now(),
+                    url: location.href,
+                    text: document.body?.textContent,
+                    snapshot: window.openclawControlUi?.snapshot(),
+                    visibilityState: document.visibilityState,
+                    online: navigator.onLine,
+                    saveData:
+                      (navigator as Navigator & { connection?: { saveData?: boolean } }).connection
+                        ?.saveData ?? null,
+                    preload,
+                    missingExpectedUrls: preload?.urls.filter(
+                      (url) =>
+                        !performance
+                          .getEntriesByName(url)
+                          .some((entry) => (entry as PerformanceResourceTiming).responseEnd > 0),
+                    ),
+                    resources: performance.getEntriesByType("resource").map((entry) => {
+                      const resource = entry as PerformanceResourceTiming;
+                      return {
+                        url: resource.name,
+                        initiatorType: resource.initiatorType,
+                        startTime: resource.startTime,
+                        fetchStart: resource.fetchStart,
+                        responseStart: resource.responseStart,
+                        responseEnd: resource.responseEnd,
+                        duration: resource.duration,
+                        rawBytes: resource.decodedBodySize,
+                        encodedBytes: resource.encodedBodySize,
+                        transferBytes: resource.transferSize,
+                        nextHopProtocol: resource.nextHopProtocol,
+                      };
+                    }),
+                    links: [
+                      ...document.querySelectorAll<HTMLLinkElement>(
+                        'link[rel="modulepreload"],link[rel="preload"],link[rel="stylesheet"]',
+                      ),
+                    ].map((link) => ({
+                      href: link.href,
+                      rel: link.rel,
+                      as: link.as,
+                      crossOrigin: link.crossOrigin,
+                      fetchPriority: link.fetchPriority,
+                    })),
+                  }),
+                  preloadExpectation,
+                )
                 .catch(() => null);
+              result.failureRequests = Array.from(requests.values(), (request) => ({ ...request }));
             } finally {
               results.push(result);
               await context.close();

@@ -258,7 +258,9 @@ export function connectShellIdle(
     )
       ? "palette"
       : event.target.closest(".chat-controls__model-trigger")
-        ? "model-picker"
+        ? router.getState().matches[0]?.routeId === "new-session"
+          ? "new-session-model-picker"
+          : "model-picker"
         : event.target.closest('[data-value="command:settings"]')
           ? "appearance"
           : event.target.closest('[data-value="command:debug-overlay"]')

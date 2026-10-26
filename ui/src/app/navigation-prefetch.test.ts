@@ -23,6 +23,11 @@ const manifest = {
   claws: ["assets/claws-1234abcd.js"],
   palette: ["assets/palette-1234abcd.js"],
   "model-picker": ["assets/model-picker-1234abcd.js"],
+  "new-session-model-picker": [
+    "assets/model-picker-1234abcd.js",
+    "assets/new-submission-1234abcd.js",
+    "assets/new-composer-1234abcd.js",
+  ],
   appearance: ["assets/appearance-1234abcd.js"],
   debug: ["assets/debug-1234abcd.js"],
   "advanced-next": ["assets/security-1234abcd.js", "assets/security-1234abcd.css"],
@@ -331,6 +336,27 @@ it("reacts to roster preference changes and releases its subscription", async ()
   expect(hints()).toHaveLength(0);
   expect(idleCallbacks).toHaveLength(0);
 });
+
+it.each(["new-session", undefined] as const)(
+  "warms submission views only for explicit New Session model intent (%s)",
+  async (routeId) => {
+    const fixture = setup(routeId, "chip");
+    fixture.outlet.presentationSettled = true;
+    fixture.transcript.ready = true;
+    const trigger = fixture.shell.appendChild(document.createElement("button"));
+    trigger.className = "chat-controls__model-trigger";
+    trigger.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(0);
+    const expected =
+      routeId === "new-session" ? manifest["new-session-model-picker"] : manifest["model-picker"];
+    expect(hints().map((link) => link.href)).toEqual(
+      expected.map((file) => new URL(`/control/${file}`, location.origin).href),
+    );
+    expect(hints().every((link) => link.rel === "modulepreload")).toBe(true);
+    expect(fixture.preloadRoute).not.toHaveBeenCalled();
+    expect(document.querySelector("script")).toBeNull();
+  },
+);
 
 it.each(["topbar-search", "sidebar-brand__search", "shell-chrome-controls__search"])(
   "prioritizes %s intent without mounting and rechecks Save-Data at effect time",

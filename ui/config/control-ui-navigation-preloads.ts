@@ -22,6 +22,11 @@ const entries = {
   portals: ["pages/portals/portals-page.tsx"],
   palette: ["components/command-palette.tsx"],
   "model-picker": ["pages/chat/components/chat-model-picker-panel.tsx"],
+  "new-session-model-picker": [
+    "pages/chat/components/chat-model-picker-panel.tsx",
+    "pages/new-session/draft-submission-view.tsx",
+    "pages/new-session/creation-composer-render.tsx",
+  ],
   appearance: [
     "pages/config/config-page.tsx",
     "components/settings-sidebar-shell.tsx",
