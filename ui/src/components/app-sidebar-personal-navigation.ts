@@ -283,7 +283,7 @@ export function createSidebarPinnedSessions(
 export function personalSidebarZone(host: PersonalNavigationHost, rows: SidebarRecentSession[]) {
   let navigationState: SidebarSessionNavigationState | undefined;
   const livePins: SidebarRecentSession[] = [];
-  const pins = (host.sidebarSnapshot ? [] : host.sidebarEntries).flatMap((value) => {
+  const pins = host.sidebarEntries.flatMap((value) => {
     const entry = parseSidebarEntry(value);
     if (entry?.type !== "session") {
       return [];
@@ -310,9 +310,6 @@ export function personalSidebarZone(host: PersonalNavigationHost, rows: SidebarR
     rows: [...pins, ...rows],
     pluginNavigation: host.pluginNavigation(),
     pluginTabs: host.sessionDataContext?.gateway.snapshot.hello?.controlUiTabs,
-    snapshot: host.sidebarSnapshot
-      ? { model: host.sidebarSnapshot, selectedKey: host.getRouteSessionKey() }
-      : undefined,
     pendingPlugins:
       host.sessionDataContext?.plugins.registryStatus !== "complete"
         ? host.sidebarPluginSnapshot

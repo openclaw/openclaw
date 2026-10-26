@@ -19,22 +19,17 @@ export function sidebarSessionBadgeFacts(
   team: boolean,
   initialPullRequest = row.pullRequest,
 ) {
-  if (row.snapshot) {
-    return {
-      hasApproval: row.snapshot.hasApproval,
-      pullRequest: row.pullRequest,
-      pullRequestCount: row.snapshot.pullRequestCount,
-    };
-  }
   const attention = row.ownAttention ?? row.attention;
-  return {
-    hasApproval:
-      (attention.kind === "question"
-        ? attention.requests.some((request) => request.kind === "approval")
-        : !team && attention.kind === "approval") || undefined,
-    pullRequest: source.summary(row.key, row.worktreeId ?? "", initialPullRequest),
-    pullRequestCount: source.count(row.key),
-  };
+  return (
+    row.snapshot ?? {
+      hasApproval:
+        (attention.kind === "question"
+          ? attention.requests.some((request) => request.kind === "approval")
+          : !team && attention.kind === "approval") || undefined,
+      pullRequest: source.summary(row.key, row.worktreeId ?? "", initialPullRequest),
+      pullRequestCount: source.count(row.key),
+    }
+  );
 }
 
 export type SessionPlacementState = NonNullable<GatewaySessionRow["placement"]>["state"];

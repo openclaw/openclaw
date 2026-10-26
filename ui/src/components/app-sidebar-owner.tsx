@@ -47,7 +47,7 @@ import {
   captureSidebarSnapshotModel,
   isSidebarSnapshotSettled,
 } from "./sidebar-snapshot-capture.ts";
-import { restoreSnapshotSession, type SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
+import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 import { createSidebarSnapshot } from "./sidebar-snapshot.ts";
 import { SidebarViewBoundary } from "./sidebar-view-boundary.tsx";
 import { GatewayStatus } from "./solid/gateway-status.tsx";
@@ -133,10 +133,12 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
   releaseSidebarSnapshot(): void {
     const snapshot = this.sidebarSnapshot;
     if (snapshot) {
+      const rows = this.reconciledSidebarZone().sessionRows;
       this.pinnedSessions.seed(
-        snapshot.pinnedSessions.map((row) =>
-          restoreSnapshotSession(row, this.getRouteSessionKey()),
-        ),
+        snapshot.pinnedSessions.flatMap(({ key }) => {
+          const row = rows.get(key);
+          return row ? [row] : [];
+        }),
       );
       // Newer pagination choices override the saved view, independently per mode.
       const limits = snapshot.sections.map(({ id, visibleLimit }) => [id, visibleLimit] as const);

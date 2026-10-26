@@ -18,11 +18,8 @@ beforeEach(() => i18n.setLocale("en"));
 function renderBadge(params: SessionRowBadgesParams, kind: string, text: string) {
   const indicator = badge(renderBadges(params), kind);
   expect(indicator?.getAttribute("aria-label")).toBe(text);
-  expect(indicator?.hasAttribute("title")).toBe(false);
-  expect(indicator?.closest<HTMLElement & { content?: string }>("openclaw-tooltip")?.content).toBe(
-    text,
-  );
-  expect(indicator?.querySelector("svg")).not.toBeNull();
+  expect(indicator?.getAttribute("title")).toBe(text);
+  expect(indicator?.querySelector(".session-css-icon")).not.toBeNull();
   return indicator;
 }
 
@@ -50,6 +47,12 @@ it("renders outbox attention and stays quiet when empty", () => {
     "3 messages need attention",
   );
   expect(indicator?.textContent).toContain("3");
+  const approval = badge(renderBadges({ hasApproval: true }), "approval");
+  expect(
+    indicator?.querySelector(".session-css-icon")?.isEqualNode(
+      approval?.querySelector(".session-css-icon") ?? null,
+    ),
+  ).toBe(true);
 
   expect(
     badge(renderBadges({ outboxAttentionCount: 1 }), "attention")?.getAttribute("aria-label"),

@@ -33,6 +33,7 @@ import {
   snapshotSessions,
   type SidebarSnapshotModel,
 } from "./sidebar-snapshot-model.ts";
+import { sessionIconMask } from "./solid/icon.tsx";
 import { installTitleTooltips } from "./tooltip-title.ts";
 
 const emptySnapshot: SidebarSnapshotModel = {
@@ -117,6 +118,18 @@ function mountObservedHost(
   mountSolid(() => view(observed.host), { container });
   return observed.update;
 }
+
+it("keeps named glyphs visible and updates their kind without replacing the leading slot", () => {
+  const { dom, session, setCurrent } = mountRow({ icon: "kanban" });
+  const glyph = dom.query(".session-glyph");
+  const art = dom.query<HTMLElement>(".session-glyph__icon .session-css-icon");
+  expect(art?.style.getPropertyValue("--session-icon")).toBe(sessionIconMask("kanban"));
+  setCurrent({ ...session, icon: "bot" });
+  flush();
+  expect(dom.query(".session-glyph__icon .session-css-icon")).toBe(art);
+  expect(art?.style.getPropertyValue("--session-icon")).toBe(sessionIconMask("bot"));
+  expect(dom.query(".session-glyph")).toBe(glyph);
+});
 
 it("restores only active dashboards in saved order after alphabetized built-in Pages", async () => {
   const { host, context, dom } = await createCachedHost();
@@ -324,8 +337,8 @@ it.each(["owner", "icon"] as const)(
     flush();
     const content = dom.query(".session-glyph__content")!;
     const artwork = content.firstElementChild;
-    const graphic = content.querySelector("svg");
-    const initialGraphic = graphic?.innerHTML;
+    const graphic = content.querySelector<HTMLElement>(".session-css-icon");
+    const initialGraphic = graphic?.style.getPropertyValue("--session-icon");
     const archive = dom.query("[data-sidebar-session-archive]")!;
     const archiveIcon = archive.querySelector("svg");
     const row = dom.query(".sidebar-recent-session")!;
@@ -361,8 +374,8 @@ it.each(["owner", "icon"] as const)(
         "Ada renamed",
       );
     } else {
-      expect(content.querySelector("svg")).toBe(graphic);
-      expect(content.querySelector("svg")?.innerHTML).not.toBe(initialGraphic);
+      expect(content.querySelector(".session-css-icon")).toBe(graphic);
+      expect(graphic?.style.getPropertyValue("--session-icon")).not.toBe(initialGraphic);
     }
   },
 );

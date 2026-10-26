@@ -59,7 +59,7 @@ async function seededStore() {
   return store;
 }
 
-async function putSidebar(value: unknown, savedAt: number, projectionVersion = 2) {
+async function putSidebar(value: unknown, savedAt: number, projectionVersion = 3) {
   const database = await openSessionSnapshotDatabase();
   assert(database, "expected snapshot database");
   const transaction = database.transaction(SIDEBAR, "readwrite");
@@ -120,6 +120,14 @@ it("restores the settled row order before a connection and isolates gateway, acc
   ]) {
     expect(await read(reader, other)).toBeNull();
   }
+});
+
+it("decodes only the requested profile while bounding all retained envelopes", async () => {
+  const store = await seededStore();
+  const selected = vi.fn(validate);
+  expect(await store.readSidebar(key(scope), selected)).toEqual(model);
+  expect(selected).toHaveBeenCalledExactlyOnceWith(model);
+  expect(await read(store, otherProfile)).toEqual(model);
 });
 
 it("retires a legacy hierarchy without evicting valid sidebars or transcripts", async () => {

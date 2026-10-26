@@ -51,7 +51,6 @@ describe("serialized cold-load probes", () => {
     },
   );
 
-
   it("preserves event order in separate tasks when timers wake out of order", () => {
     const iframe = document.createElement("iframe");
     document.body.append(iframe);

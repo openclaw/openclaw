@@ -12,7 +12,7 @@ const sidebarRecordsSchema = json.array(
     {
       savedAt: json.refine(json.number, (value) => value >= 0),
       sessionKey: json.refine(json.text, (value) => value.length > 0),
-      projectionVersion: json.literal(2),
+      projectionVersion: json.literal(3),
       model: json.unknown,
     },
     true,
@@ -52,7 +52,8 @@ export async function accessSidebarSnapshot<Model>(
     let count = 0;
     let result: Model | null = null;
     for (const record of retained.toSorted((a, b) => b.savedAt - a.savedAt)) {
-      const admitted = validate(record.model);
+      // Decode the requested presentation only; envelopes bound the other scopes.
+      const admitted = record.sessionKey === key ? validate(record.model) : undefined;
       if (admitted === null) {
         store.delete(record.sessionKey);
         continue;
@@ -65,7 +66,7 @@ export async function accessSidebarSnapshot<Model>(
       ) {
         store.delete(record.sessionKey);
       } else if (record.sessionKey === key) {
-        result = admitted;
+        result = admitted ?? null;
       }
     }
     await transactionComplete(transaction);

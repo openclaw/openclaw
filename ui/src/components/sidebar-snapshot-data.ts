@@ -1,3 +1,4 @@
+import { SESSION_AGENT_ATTENTION_ICON_IDS } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import { isIncognitoSessionKey } from "../../../src/shared/incognito-session-key.js";
 import type { SidebarSessionSection } from "../lib/sessions/grouping.ts";
 import { bootRosterSchema } from "../lib/sessions/session-boot-roster-schema.ts";
@@ -15,13 +16,13 @@ const userFields = {
 };
 const user = json.object(userFields);
 const sessionKey = json.refine(text, (key) => !isIncognitoSessionKey(key));
-const attention = json.refine(
-  json.object({
-    kind: json.enumeration(["none", "agent", "error", "question", "approval"]),
-    icon: json.optional(json.enumeration(["hand", "key", "alert", "flag", "lock", "hourglass"])),
-  }),
-  (value) => value.kind !== "agent" || value.icon !== undefined,
-);
+const attention = json.enumeration([
+  "none",
+  "error",
+  "question",
+  "approval",
+  ...SESSION_AGENT_ATTENTION_ICON_IDS,
+]);
 const childrenState = {
   attention: json.optional(attention),
   runningChildCount: json.optional(json.number),

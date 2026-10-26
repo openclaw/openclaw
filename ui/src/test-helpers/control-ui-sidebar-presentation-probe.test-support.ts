@@ -7,6 +7,14 @@ export function sidebarPresentationProbe() {
     rows: Row[];
     issues: { present: boolean; count: string | null };
   };
+  const artwork = (icon: Element) => {
+    if (icon.localName === "svg") return icon.innerHTML;
+    const mask = icon.getAttribute("style")?.match(/data:image\/svg\+xml,([^"\s]+)"/u)?.[1];
+    if (!mask) return "missing CSS artwork";
+    const template = document.createElement("template");
+    template.innerHTML = decodeURIComponent(mask);
+    return template.content.firstElementChild?.innerHTML ?? "invalid CSS artwork";
+  };
   const frames: Frame[] = [];
   let stopped = false;
   let dirty = true;
@@ -50,9 +58,13 @@ export function sidebarPresentationProbe() {
           key: row.getAttribute("data-session-key") ?? "",
           glyphs: [
             ...[...row.querySelectorAll(".session-glyph")].flatMap((glyph) => {
-              const content = [...glyph.querySelectorAll(".session-glyph__content svg")]
+              const content = [
+                ...glyph.querySelectorAll(
+                  ".session-glyph__content svg,.session-glyph__content .session-css-icon",
+                ),
+              ]
                 .filter((svg) => !svg.closest(".viewer-avatar, .identity-avatar"))
-                .map((svg) => svg.innerHTML);
+                .map(artwork);
               const running = glyph.classList.contains("session-glyph--running");
               const badge = glyph.querySelectorAll(".session-glyph__badge--unread").length;
               // Avatar shape is separate; its run/unread decoration still belongs in the gate.
@@ -73,11 +85,11 @@ export function sidebarPresentationProbe() {
             }),
             ...[
               ...row.querySelectorAll(
-                ".sidebar-session-team-state__status svg,.sidebar-child-session__status svg",
+                ".sidebar-session-team-state__status svg,.sidebar-child-session__status svg,.sidebar-session-team-state__status .session-css-icon,.sidebar-child-session__status .session-css-icon",
               ),
             ]
               .filter((svg) => !svg.closest(".session-glyph"))
-              .map((svg) => svg.innerHTML),
+              .map(artwork),
           ],
           unread: row.querySelectorAll(
             ".session-glyph__badge--unread,.session-unread-dot,.sidebar-agent-roster__unread",

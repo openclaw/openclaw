@@ -12,7 +12,7 @@ import { sidebarSessionMetaId, sidebarSessionStateId } from "./app-sidebar-sessi
 import { ElapsedTime } from "./elapsed-time.tsx";
 import { describeSessionState } from "./session-leading-indicator.ts";
 import { sidebarSessionBadgeFacts } from "./session-row-badge-presentation.ts";
-import { Icon } from "./solid/icon.tsx";
+import { Icon, sessionIcon } from "./solid/icon.tsx";
 import {
   renderSessionLeadingState,
   sessionRunVisibility,
@@ -230,7 +230,7 @@ export function renderSidebarSessionIndicators(
               aria-label={t("chat.sidebar.coding")}
               title={readSession().subtitle ?? t("chat.sidebar.coding")}
             >
-              <Icon name="terminal" />
+              {sessionIcon("terminal", 12, 1.6)}
             </span>
           ) : undefined}
           {team() && readSession().hasAutomation ? (
@@ -240,7 +240,7 @@ export function renderSidebarSessionIndicators(
               aria-label={t("tabs.cron")}
               title={t("tabs.cron")}
             >
-              <Icon name="clock" />
+              {sessionIcon("clock", 12, 1.6)}
             </span>
           ) : undefined}
           <SessionRowBadges

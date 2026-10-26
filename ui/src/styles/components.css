@@ -284,8 +284,7 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 }
 
 .session-glyph__icon,
-.session-glyph__icon svg,
-.session-glyph__icon img {
+.session-glyph__icon :is(svg, i, img) {
   width: 16px;
   height: 16px;
 }
@@ -543,7 +542,6 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 .btn--icon svg,
 .agent-select__chevron svg,
 .agent-select__avatar--icon svg,
-.session-row-badge svg,
 .session-action svg,
 .chat-queue__leading svg,
 .chat-queue__remove svg,
@@ -2836,10 +2834,13 @@ td.data-table-key-col {
   color: var(--warn);
 }
 
-.session-row-badge svg {
+.session-css-icon {
+  display: inline-block;
   width: 12px;
   height: 12px;
-  stroke-width: 1.6px;
+  flex: none;
+  background: currentColor;
+  mask: var(--session-icon) center / contain no-repeat;
 }
 
 .session-row-actions {

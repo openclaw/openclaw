@@ -56,6 +56,7 @@ import {
   projectSidebarVisibleMainSession,
   resolveLatestSidebarAgentSession,
   resolveSidebarMainSessionKey,
+  restoreSnapshotNavigation,
   type SidebarSessionNavigationState,
 } from "./app-sidebar-session-navigation-logic.ts";
 import type { SessionPullRequestIndicators } from "./app-sidebar-session-pr-indicators.ts";
@@ -101,7 +102,7 @@ import {
   sidebarRowsInputs,
   type SidebarProjectionHost,
 } from "./sidebar-projection-memo.ts";
-import { restoreSnapshotSections, restoreSnapshotSession } from "./sidebar-snapshot-model.ts";
+import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 import { mountedViewerSessionKeys } from "./solid/viewer-facepile.tsx";
 
 export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase {
@@ -462,13 +463,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
 
   /** Collapsed zones keep full rows for true header counts and status dots. */
   protected zonedVisibleSections(rows: SidebarRecentSession[]): SidebarVisibleSections {
-    if (this.sidebarSnapshot) {
-      const model = this.sidebarSnapshot;
-      return this.sectionsMemo.read(
-        () => [model, this.getRouteSessionKey()],
-        () => restoreSnapshotSections(model, this.getRouteSessionKey()),
-      );
-    }
+    if (this.sidebarSnapshot) return this.readSnapshotNavigation(this.sidebarSnapshot);
     return memoizedSidebarSections(
       this.sectionsMemo,
       this,
@@ -478,15 +473,20 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
     );
   }
 
-  private readonly cachedZone = new SidebarProjectionMemo<ReturnType<typeof personalSidebarZone>>();
+  private readonly snapshotNavigation = new SidebarProjectionMemo<
+    ReturnType<typeof restoreSnapshotNavigation>
+  >();
+
+  private readSnapshotNavigation(model: SidebarSnapshotModel) {
+    const selectedKey = this.getRouteSessionKey();
+    return this.snapshotNavigation.read(
+      () => [model, selectedKey],
+      () => restoreSnapshotNavigation(model, selectedKey),
+    );
+  }
 
   reconciledSidebarZone(rows?: SidebarRecentSession[]) {
-    if (this.sidebarSnapshot) {
-      return this.cachedZone.read(
-        () => [this.sidebarSnapshot, this.getRouteSessionKey()],
-        () => personalSidebarZone(this, []),
-      );
-    }
+    if (this.sidebarSnapshot) return this.readSnapshotNavigation(this.sidebarSnapshot).zone;
     const liveRows = rows ?? this.selectedAgentSessionRows(this.getSessionNavigationState());
     return personalSidebarZone(this, liveRows);
   }
@@ -650,16 +650,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   protected selectedAgentSessionRows(
     navigationState: SidebarSessionNavigationState,
   ): SidebarRecentSession[] {
-    if (this.sidebarSnapshot) {
-      const model = this.sidebarSnapshot;
-      return this.rowsMemo.read(
-        () => [model, this.getRouteSessionKey()],
-        () =>
-          model.sections.flatMap((section) =>
-            section.rows.map((row) => restoreSnapshotSession(row, this.getRouteSessionKey())),
-          ),
-      );
-    }
+    if (this.sidebarSnapshot) return this.readSnapshotNavigation(this.sidebarSnapshot).visibleRows;
     return this.rowsMemo.read(
       () => [...sidebarRowsInputs(this, navigationState), this.sidebarEntries],
       () => {
