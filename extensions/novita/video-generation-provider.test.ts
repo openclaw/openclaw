@@ -20,9 +20,8 @@ const [provider] = capturePluginRegistration(plugin).videoGenerationProviders;
 assert(provider, "Novita video generation provider was not registered");
 providerHttp.installProviderHttpMockCleanup();
 
-function generateVideo(req: Partial<Video.VideoGenerationRequest> = {}) {
-  return provider.generateVideo({ ...requestDefaults, ...req });
-}
+const generateVideo = (req: Partial<Video.VideoGenerationRequest> = {}) =>
+  provider.generateVideo({ ...requestDefaults, ...req });
 
 function mockTask(
   payload: unknown = {

@@ -91,16 +91,27 @@ it.each([
   ["missing files", { append: undefined }],
   ["empty files", { prepend: [], append: [] }],
 ])("rejects %s configuration", (_name, extra) => {
-  const value = Array.isArray(extra) ? extra : config(extra);
-  if (["array", "unknown field", "empty agents", "missing files", "empty files"].includes(_name)) {
+  if (Array.isArray(extra)) {
+    expect(valid(extra)).toBe(false);
+    return;
+  }
+  const value = _name === "missing files" ? { directory, agents: ["main"] } : config(extra);
+  if (["unknown field", "empty agents", "missing files", "empty files"].includes(_name)) {
     expect(valid(value)).toBe(false);
   }
   expect(() => registerGuidance(value)).toThrow("agent-guidance:");
 });
 
-it.each(["nested/../rules.md", "/rules.md", "a\\b.md", "a//b.md", "a/./b.md", "a".repeat(257)])(
-  "rejects unsafe file name %s",
-  (name) => expect(() => guidance({ append: [name] })).toThrow("relative file names"),
+it.each([
+  "nested/../rules.md",
+  "/rules.md",
+  "a\\b.md",
+  "a//b.md",
+  "a/./b.md",
+  "a.md:stream",
+  "a".repeat(257),
+])("rejects unsafe file name %s", (name) =>
+  expect(() => guidance({ append: [name] })).toThrow("relative file names"),
 );
 
 it.each([" \n", "bad\0text", Buffer.from([0xff]), "a".repeat(16385)])(

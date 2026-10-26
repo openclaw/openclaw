@@ -56,13 +56,28 @@ function mockSuccess(pending = false) {
 function expectPost(n: number, url: string, body: Record<string, unknown>) {
   expect(postJsonRequestMock).toHaveBeenNthCalledWith(n, expect.objectContaining({ url, body }));
 }
-it.each<{ model: string; request: Request; input: Record<string, unknown> }>`
-  model                                   | request                                                                           | input
-  ${MODEL}                                | ${{ audio: true, durationSeconds: 10, timeoutMs: 20_000 }}                        | ${{ duration: "10", sound: true, aspect_ratio: "16:9" }}
-  ${"hailuo/02-text-to-video-pro"}        | ${{ model: "hailuo/02-text-to-video-pro" }}                                       | ${{}}
-  ${"hailuo/2-3-image-to-video-standard"} | ${{ model: "hailuo/2-3-image-to-video-standard", inputImages: [{ url: IMAGE }] }} | ${{ duration: "6", resolution: "768P", image_url: IMAGE }}
-  ${"kling-2.6/image-to-video"}           | ${{ inputImages: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }] }} | ${{ duration: "5", sound: false, image_urls: [IMAGE] }}
-`("submits $model, polls, and downloads without auth", async ({ model, request, input }) => {
+it.each<{ model: string; request: Request; input: Record<string, unknown> }>([
+  {
+    model: MODEL,
+    request: { audio: true, durationSeconds: 10, timeoutMs: 20_000 },
+    input: { duration: "10", sound: true, aspect_ratio: "16:9" },
+  },
+  {
+    model: "hailuo/02-text-to-video-pro",
+    request: { model: "hailuo/02-text-to-video-pro" },
+    input: {},
+  },
+  {
+    model: "hailuo/2-3-image-to-video-standard",
+    request: { model: "hailuo/2-3-image-to-video-standard", inputImages: [{ url: IMAGE }] },
+    input: { duration: "6", resolution: "768P", image_url: IMAGE },
+  },
+  {
+    model: "kling-2.6/image-to-video",
+    request: { inputImages: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }] },
+    input: { duration: "5", sound: false, image_urls: [IMAGE] },
+  },
+])("submits $model, polls, and downloads without auth", async ({ model, request, input }) => {
   vi.useFakeTimers();
   const upload = request.inputImages?.[0]?.buffer;
   const uploadRelease =
@@ -113,21 +128,47 @@ it("uses model-specific capabilities through the shared runtime", async () => {
   expect(result.ignoredOverrides).toContainEqual({ key: "audio", value: true });
 });
 
-it.each<{ error: string; request: Request; data?: unknown }>`
-  error                                        | request                                                                                                                | data
-  ${"does not support video or audio"}         | ${{ inputVideos: [{ url: OUTPUT }] }}                                                                                  | ${undefined}
-  ${"at most one input image"}                 | ${{ inputImages: [{ url: IMAGE }, { url: IMAGE }] }}                                                                   | ${undefined}
-  ${"remote http(s)"}                          | ${{ inputImages: [{ url: "data:image/png;base64,cG5n" }] }}                                                            | ${undefined}
-  ${"requires one input image"}                | ${{ model: "hailuo/2-3-image-to-video-pro" }}                                                                          | ${undefined}
-  ${"1080P only at 6 seconds"}                 | ${{ model: "hailuo/2-3-image-to-video-pro", inputImages: [{ url: IMAGE }], resolution: "1080P", durationSeconds: 10 }} | ${undefined}
-  ${"does not support model unknown"}          | ${{ model: "unknown" }}                                                                                                | ${undefined}
-  ${"requires a prompt of 3-20000 characters"} | ${{ model: "bytedance/seedance-1.5-pro", prompt: "Hi" }}                                                               | ${undefined}
-  ${"CONTENT_REJECTED): Prompt rejected"}      | ${{}}                                                                                                                  | ${{ state: "fail", failCode: "CONTENT_REJECTED", failMsg: "Prompt rejected" }}
-  ${"unknown state: mystery"}                  | ${{}}                                                                                                                  | ${{ state: "mystery" }}
-  ${"malformed resultJson"}                    | ${{}}                                                                                                                  | ${{ state: "success", resultJson: "not JSON" }}
-  ${"without result URLs"}                     | ${{}}                                                                                                                  | ${{ state: "success", resultJson: '{"resultUrls":[]}' }}
-  ${"Record not found for requested model"}    | ${{ inputImages: [{ buffer: Buffer.from("png") }] }}                                                                   | ${{ code: 422, msg: "Record not found for requested model" }}
-`("rejects at the expected request stage: $error", async ({ error, request, data }) => {
+it.each<{ error: string; request: Request; data?: unknown }>([
+  { error: "does not support video or audio", request: { inputVideos: [{ url: OUTPUT }] } },
+  { error: "at most one input image", request: { inputImages: [{ url: IMAGE }, { url: IMAGE }] } },
+  { error: "remote http(s)", request: { inputImages: [{ url: "data:image/png;base64,cG5n" }] } },
+  { error: "requires one input image", request: { model: "hailuo/2-3-image-to-video-pro" } },
+  {
+    error: "1080P only at 6 seconds",
+    request: {
+      model: "hailuo/2-3-image-to-video-pro",
+      inputImages: [{ url: IMAGE }],
+      resolution: "1080P",
+      durationSeconds: 10,
+    },
+  },
+  { error: "does not support model unknown", request: { model: "unknown" } },
+  {
+    error: "requires a prompt of 3-20000 characters",
+    request: { model: "bytedance/seedance-1.5-pro", prompt: "Hi" },
+  },
+  {
+    error: "CONTENT_REJECTED): Prompt rejected",
+    request: {},
+    data: { state: "fail", failCode: "CONTENT_REJECTED", failMsg: "Prompt rejected" },
+  },
+  { error: "unknown state: mystery", request: {}, data: { state: "mystery" } },
+  {
+    error: "malformed resultJson",
+    request: {},
+    data: { state: "success", resultJson: "not JSON" },
+  },
+  {
+    error: "without result URLs",
+    request: {},
+    data: { state: "success", resultJson: '{"resultUrls":[]}' },
+  },
+  {
+    error: "Record not found for requested model",
+    request: { inputImages: [{ buffer: Buffer.from("png") }] },
+    data: { code: 422, msg: "Record not found for requested model" },
+  },
+])("rejects at the expected request stage: $error", async ({ error, request, data }) => {
   const upload = Boolean(request.inputImages?.[0]?.buffer);
   if (data) {
     postResponse(upload ? data : { code: 200, data: { taskId: "task-1" } });

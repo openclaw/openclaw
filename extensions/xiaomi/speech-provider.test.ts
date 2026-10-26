@@ -77,6 +77,7 @@ it.each(["audio-file", "voice-note"] as const)("synthesizes %s", async (target) 
     transcodeMock.mockResolvedValueOnce(Buffer.from("fake-opus-audio"));
   }
   const mockFetch = vi.mocked(globalThis.fetch);
+  const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
   const result = await synthesize({
     target,
     timeoutMs: voiceNote ? 30000 : MAX_TIMER_TIMEOUT_MS + 1_000_000,
@@ -85,6 +86,9 @@ it.each(["audio-file", "voice-note"] as const)("synthesizes %s", async (target) 
       : { apiKey: "sk-test", model: "mimo-v2.5-tts", voice: "default_en", style: "Bright." },
   });
   const outputFormat = voiceNote ? "opus" : "mp3";
+  expect(
+    timeoutSpy.mock.calls.some(([, delay]) => delay === (voiceNote ? 30000 : MAX_TIMER_TIMEOUT_MS)),
+  ).toBe(true);
   expect(result).toEqual({
     outputFormat,
     fileExtension: `.${outputFormat}`,

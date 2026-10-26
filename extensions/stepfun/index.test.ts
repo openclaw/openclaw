@@ -134,7 +134,12 @@ it.each([
   const models = { [primary]: { alias: "Existing" } };
   const config = { agents: { defaults: structuredClone({ model, models }) } };
 
-  const defaults = (await applyConfig(providerId, methodId, config)).agents?.defaults;
+  const result = await applyConfig(providerId, methodId, config);
+  const defaults = result.agents?.defaults;
   expect(defaults?.model).toEqual(model);
   expect(defaults?.models?.[primary]).toEqual(models[primary]);
+  expect(defaults?.models?.[`${providerId}/step-3.5-flash`]).toMatchObject({
+    alias: expect.any(String),
+  });
+  expect(result.models?.providers?.[providerId]).toBeDefined();
 });

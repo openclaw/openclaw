@@ -118,6 +118,9 @@ describe("gateway method registry", () => {
     expect(registry.listAdvertisedMethods()).not.toContain("config.openFile");
     for (const descriptor of coreDescriptors) {
       expect(["independent", "required"], descriptor.name).toContain(descriptor.profileAccess);
+      expect(registry.requiresAuthenticatedProfile(descriptor.name), descriptor.name).toBe(
+        descriptor.profileAccess === "required",
+      );
     }
     const expectProfile = (methods: string[], required: boolean) => {
       for (const method of methods) {
