@@ -10,19 +10,21 @@ type OpenFileBackedSessionManagerForTestOptions = {
   SessionManagerClass?: typeof SessionManager;
 };
 
-function attachFilePersistence(params: {
-  manager: SessionManager;
-  sessionDir: string;
-  target: () => string;
-  initialize: boolean;
-  rotateTarget?: (sessionId: string) => void;
-}) {
-  const manager = Object.assign(params.manager, {
-    getSessionDir: () => params.sessionDir,
-    getSessionFile: () => params.target(),
+function attachFilePersistence(
+  manager: SessionManager,
+  sessionDir: string,
+  initialTarget?: string,
+  initialize = true,
+) {
+  let activeTarget = initialTarget;
+  const sessionFile = (id = manager.getSessionId()) => path.join(sessionDir, `${id}.jsonl`);
+  const getTarget = () => activeTarget ?? sessionFile();
+  const fileManager = Object.assign(manager, {
+    getSessionDir: () => sessionDir,
+    getSessionFile: getTarget,
   });
   const writeFullFile = <T>(result: T): T => {
-    const target = params.target();
+    const target = getTarget();
     fs.mkdirSync(path.dirname(target), { recursive: true });
     const entries = manager.getPersistedEntries();
     fs.writeFileSync(target, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
@@ -36,7 +38,9 @@ function attachFilePersistence(params: {
   Object.assign(manager, {
     newSession(options?: Parameters<SessionManager["newSession"]>[0]) {
       const sessionId = options?.id ?? randomUUID();
-      params.rotateTarget?.(sessionId);
+      if (activeTarget !== undefined) {
+        activeTarget = sessionFile(sessionId);
+      }
       return writeFullFile(newSession({ ...options, id: sessionId }));
     },
     removeTrailingEntries: (...args: Parameters<typeof remove>) => persistRemoval(remove(...args)),
@@ -49,14 +53,14 @@ function attachFilePersistence(params: {
           writeFullFile(await rewrite.commit(ids)),
       })),
     persistRecord(entry: unknown) {
-      const target = params.target();
+      const target = getTarget();
       fs.mkdirSync(path.dirname(target), { recursive: true });
       const lastByte = fs.existsSync(target) ? fs.readFileSync(target).at(-1) : undefined;
       const separator = lastByte !== undefined && lastByte !== 0x0a ? "\n" : "";
       fs.appendFileSync(target, `${separator}${JSON.stringify(entry)}\n`);
     },
   });
-  return params.initialize ? writeFullFile(manager) : manager;
+  return initialize ? writeFullFile(fileManager) : fileManager;
 }
 
 export function createFileBackedSessionManagerForTest(
@@ -64,13 +68,7 @@ export function createFileBackedSessionManagerForTest(
   sessionDir: string = cwd,
   SessionManagerClass: typeof SessionManager = SessionManager,
 ) {
-  const manager = SessionManagerClass.inMemory(cwd);
-  return attachFilePersistence({
-    manager,
-    sessionDir,
-    target: () => path.join(sessionDir, `${manager.getSessionId()}.jsonl`),
-    initialize: true,
-  });
+  return attachFilePersistence(SessionManagerClass.inMemory(cwd), sessionDir);
 }
 
 export function openFileBackedSessionManagerForTest(
@@ -84,8 +82,6 @@ export function openFileBackedSessionManagerForTest(
   const sessionDir = options?.sessionDir ?? (typeof input === "string" ? input : undefined);
   const cwd = options?.cwd ?? legacyCwd;
   const SessionManagerClass = options?.SessionManagerClass ?? legacySessionManagerClass;
-  let activeTarget = target;
-  const resolvedSessionDir = sessionDir ?? path.dirname(target);
   const exists = fs.existsSync(target);
   const manager = exists
     ? SessionManagerClass.fromEntries(parseSessionEntries(fs.readFileSync(target, "utf8")), cwd)
@@ -97,12 +93,5 @@ export function openFileBackedSessionManagerForTest(
     }
     manager.newSession({ id: sessionId });
   }
-  return attachFilePersistence({
-    manager,
-    sessionDir: resolvedSessionDir,
-    target: () => activeTarget,
-    initialize: !exists,
-    rotateTarget: (nextSessionId) =>
-      (activeTarget = path.join(resolvedSessionDir, `${nextSessionId}.jsonl`)),
-  });
+  return attachFilePersistence(manager, sessionDir ?? path.dirname(target), target, !exists);
 }
