@@ -174,16 +174,7 @@ export async function* streamChunks(chunks: readonly unknown[]): AsyncGenerator<
   }
 }
 
-export function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
-  if (!record || typeof record !== "object") {
-    throw new Error("Expected record");
-  }
-  const actual = record as Record<string, unknown>;
-  for (const [key, value] of Object.entries(expected)) {
-    expect(actual[key]).toEqual(value);
-  }
-  return actual;
-}
+export { expectObjectFields as expectRecordFields } from "../../../../src/test-utils/mock-call-assertions.js";
 
 export const openRouterModel = modelFixture("deepseek/deepseek-v4-flash", {
   provider: "openrouter",

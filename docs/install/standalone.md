@@ -99,7 +99,8 @@ AOT artifacts select the `embedded-aot` [runtime execution profile](/concepts/ru
 Host Code Mode using the Node executor, QA expressions, and plugins fetched after
 the build run interpreted. Each feature emits one performance notice per process;
 use a JIT build for full speed. Fetched CJS/TypeScript plugins load from disk
-through the normal loader against the compiled SDK. Missing runtime modules and
+through the normal loader against the compiled SDK in both emitted-JavaScript
+and original-TypeScript AOT builds. Missing runtime modules and
 builds with `--disallow-code-generation-from-strings=strict` still report actionable
 guidance. Guest runtimes keep their own qualification requirements; OpenClaw
 does not silently switch executors.
@@ -397,6 +398,28 @@ through the functional campaign below; a successful `--version` probe does not
 exercise native plugin loading. See [macOS signing](/platforms/mac/signing).
 
 ## Update the complete artifact
+
+### Managed Gateway service
+
+Install a complete standalone artifact as the managed Gateway runtime with:
+
+```sh
+./standalone-aot/openclaw gateway install --runtime standalone --runtime-path /absolute/path/to/standalone-aot/openclaw
+```
+
+The service launches `<executable> gateway ...` directly. It does not add a loose
+JavaScript entrypoint or Bun flags. Installation probes the executable's embedded
+runtime-check entry, including SQLite capabilities, and records the exact runtime
+path. Renaming the executable is supported when its adjacent `manifest.json`
+names it correctly. Keep that manifest and the complete `runtime/` directory
+together; older artifacts without the embedded runtime-check entry must be rebuilt.
+
+Reinstallation and Doctor retain an explicit standalone selection. To switch
+artifacts, install the newly verified complete directory with the same two flags
+and `--force`; retain the previous directory until the Gateway and CLI no longer
+reference it. Desktop applications own this handoff for their bundled artifacts.
+
+### Artifact replacement
 
 The standalone executable is not a package-manager or git installation.
 `openclaw update` refuses to modify it and displays a next step: update the owning

@@ -1376,7 +1376,7 @@ span.new-session-page__select {
   .agent-chat__input--mobile-toolbar .new-session-page__start-submit > svg {
     width: var(--chat-mobile-row-icon-size);
     height: var(--chat-mobile-row-icon-size);
-    color: var(--primary-foreground);
+    color: inherit;
   }
 
   .new-session-page .agent-chat__welcome-clawd {

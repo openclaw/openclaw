@@ -96,6 +96,8 @@ export type InteractionScenario = {
   id: string;
   route: string;
   expected: string;
+  /** Deliberately perturbs execution; exclude its timing from performance comparisons. */
+  diagnostic?: string;
   fixture?: InteractionFixtureOptions;
   /** Resource campaigns opt into the longer inventory and idle scenarios. */
   resourceOnly?: boolean;

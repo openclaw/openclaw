@@ -128,19 +128,28 @@ export function closeWorkboardPopoverOnAction(event: Event) {
   }
 }
 
-export function workboardPopoverRef(align: "start" | "end" = "start", hover = false) {
+export function workboardPopoverRef(
+  align: "start" | "end" = "start",
+  hover = false,
+  activeTrigger?: () => HTMLElement | undefined,
+) {
   let panel!: HTMLElement;
   onSettled(() => {
     const element = panel;
     // Conditional Solid fragments have no sibling anchor until their DOM is committed.
-    const sibling = element.previousElementSibling;
-    const trigger = sibling instanceof HTMLElement ? sibling : null;
+    const trigger = () => {
+      if (activeTrigger) {
+        return activeTrigger();
+      }
+      const sibling = element.previousElementSibling;
+      return sibling instanceof HTMLElement ? sibling : null;
+    };
     let hoverTimer: ReturnType<typeof setTimeout> | undefined;
     const position = () => {
       if (!element.matches(":popover-open")) {
         return;
       }
-      const anchor = trigger?.getBoundingClientRect();
+      const anchor = trigger()?.getBoundingClientRect();
       if (!anchor) {
         return;
       }
@@ -167,10 +176,7 @@ export function workboardPopoverRef(align: "start" | "end" = "start", hover = fa
     };
     const toggle = () => {
       synchronizePosition();
-      element.previousElementSibling?.setAttribute(
-        "aria-expanded",
-        String(element.matches(":popover-open")),
-      );
+      trigger()?.setAttribute("aria-expanded", String(element.matches(":popover-open")));
       position();
     };
     const keydown = (event: KeyboardEvent) => {
@@ -185,8 +191,8 @@ export function workboardPopoverRef(align: "start" | "end" = "start", hover = fa
       event.preventDefault();
       event.stopPropagation();
       element.hidePopover();
-      if (!hover && element.previousElementSibling instanceof HTMLElement) {
-        element.previousElementSibling.focus({ preventScroll: true });
+      if (!hover) {
+        trigger()?.focus({ preventScroll: true });
       }
     };
     const show = () => {
@@ -210,7 +216,7 @@ export function workboardPopoverRef(align: "start" | "end" = "start", hover = fa
       clearTimeout(hoverTimer);
       hoverTimer = setTimeout(() => {
         if (
-          !trigger?.matches(":hover, :focus-within") &&
+          !trigger()?.matches(":hover, :focus-within") &&
           !element.matches(":hover, :focus-within")
         ) {
           element.hidePopover();
@@ -218,11 +224,11 @@ export function workboardPopoverRef(align: "start" | "end" = "start", hover = fa
       }, 150);
     };
     if (hover) {
-      trigger?.addEventListener("pointerenter", enter);
-      trigger?.addEventListener("pointerleave", leave);
-      trigger?.addEventListener("focusin", show);
-      trigger?.addEventListener("focusout", leave);
-      trigger?.addEventListener("keydown", keydown);
+      trigger()?.addEventListener("pointerenter", enter);
+      trigger()?.addEventListener("pointerleave", leave);
+      trigger()?.addEventListener("focusin", show);
+      trigger()?.addEventListener("focusout", leave);
+      trigger()?.addEventListener("keydown", keydown);
       element.addEventListener("pointerenter", enter);
       element.addEventListener("pointerleave", leave);
     }
@@ -247,11 +253,11 @@ export function workboardPopoverRef(align: "start" | "end" = "start", hover = fa
     return () => {
       clearTimeout(hoverTimer);
       if (hover) {
-        trigger?.removeEventListener("pointerenter", enter);
-        trigger?.removeEventListener("pointerleave", leave);
-        trigger?.removeEventListener("focusin", show);
-        trigger?.removeEventListener("focusout", leave);
-        trigger?.removeEventListener("keydown", keydown);
+        trigger()?.removeEventListener("pointerenter", enter);
+        trigger()?.removeEventListener("pointerleave", leave);
+        trigger()?.removeEventListener("focusin", show);
+        trigger()?.removeEventListener("focusout", leave);
+        trigger()?.removeEventListener("keydown", keydown);
         element.removeEventListener("pointerenter", enter);
         element.removeEventListener("pointerleave", leave);
       }

@@ -282,10 +282,8 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
       this.taskPort.postMessage(value, transferList);
       return;
     }
-    this.runtime.post(
-      { type: "post", id: this.id, value, transferList: [...transferList] },
-      transferList,
-    );
+    const transfers = [...transferList];
+    this.runtime.post({ type: "post", id: this.id, value, transferList: transfers }, transfers);
   }
 
   ref(): this {

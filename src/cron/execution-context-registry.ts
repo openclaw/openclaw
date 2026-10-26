@@ -79,6 +79,19 @@ export function readScheduledToolOptions(
   return { scheduledToolTargets, ...(toolsAllow ? { runtimeToolAllowlist: [...toolsAllow] } : {}) };
 }
 
+/**
+ * The automations scope an ingress turn (hook or channel join introduction)
+ * takes from its admitted context, or undefined when the run is not an ingress
+ * turn admitted with a context.
+ */
+export function readScheduledIngressAutomationsScope(
+  owner: Readonly<{ operationalRunInstance?: OperationalRunInstanceRef }> | undefined,
+): ScheduledExecutionFacts["toolPolicy"]["automations"] | undefined {
+  const run = owner?.operationalRunInstance;
+  const context = run ? contextsByRun.get(run) : undefined;
+  return context?.principal.kind === "ingress" ? context.toolPolicy.automations : undefined;
+}
+
 /** The parent whose memory audience a child run inherits, or undefined to resolve from the run row. */
 export function readScheduledMemoryParent(
   run: OperationalRunInstanceRef | undefined,

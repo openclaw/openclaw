@@ -17,7 +17,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import * as stateWorker from "../../state/openclaw-state-worker-store.js";
-import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
+import { withoutMainThreadSql as withoutHostSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { git } from "./git-fixture.test-support.js";
 import * as gitLock from "./git-lock.js";
 import { lockState } from "./git-lock.js";
@@ -92,16 +92,7 @@ describe("worktree run lease", () => {
       await unlock(record);
     });
   }
-  async function withoutHostSql<T>(run: () => Promise<T>): Promise<T> {
-    const sql = observeMainThreadSql();
-    try {
-      const result = await run();
-      sql.expectIdle();
-      return result;
-    } finally {
-      sql.restore();
-    }
-  }
+
   function seedRunLease(token: string, pid: number, startTime: number) {
     runOpenClawStateWriteTransaction(
       ({ db }) =>

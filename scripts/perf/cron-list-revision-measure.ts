@@ -101,7 +101,7 @@ let revisionDigest = createHash("sha256");
 async function run(operation: number) {
   const state = stores[operation % stores.length]!;
   const round = Math.floor(operation / stores.length);
-  const previousList = state.readSnapshot?.list;
+  const previousList = state.readSnapshot?.lists[0];
   await locked(state, async () => {
     if (round > 0 && round % 50 === 0) {
       const job = state.store!.jobs[(round / 50) % 200]!;
@@ -115,7 +115,7 @@ async function run(operation: number) {
     }
   });
   const page = await listPage(state, { sortBy: "name", limit: 25 });
-  if (state.readSnapshot?.list !== previousList) {
+  if (state.readSnapshot?.lists[0] !== previousList) {
     hashComputations++;
   }
   assert.equal(page.total, 200);

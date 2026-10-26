@@ -9,11 +9,12 @@ import { afterEach, expect, it, vi } from "vitest";
 import { streamSimpleOpenAICodexResponses } from "../../../packages/ai/src/providers/openai-chatgpt-responses.js";
 import * as guardedFetch from "../../infra/net/fetch-guard.js";
 import * as undiciRuntime from "../../infra/net/undici-runtime.js";
-import "../ai-transport-runtime-host.js";
 import type { Context, Message, Model } from "../../llm/types.js";
+import "../ai-transport-runtime-host.js";
 import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.js";
 import { withServer } from "../../plugin-sdk/test-helpers/http-test-server.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { expectText } from "../../test-utils/text-assertions.js";
 import { providerResponse, type WireApi } from "../embedded-agent-runner.wire.test-support.js";
 import { attachModelProviderRequestTransport } from "../provider-request-config.js";
 import { closeProviderTransportDispatcherPool } from "../provider-transport-dispatcher-pool.js";
@@ -103,14 +104,7 @@ function fork(
     assertCurrent,
   });
 }
-function expectText(text: string, included: string[], excluded: string[] = []) {
-  for (const part of included) {
-    expect(text).toContain(part);
-  }
-  for (const part of excluded) {
-    expect(text).not.toContain(part);
-  }
-}
+
 function wireResponse(api: WireApi = "openai-responses"): Response {
   return providerResponse({
     api,

@@ -128,8 +128,7 @@ export function broadcastTypingThrottled(params: {
         rememberTypingBroadcast(params.key, next);
       },
       params.intervalMs - (params.now - previous.at),
-    );
-    timer.unref?.();
+    ).unref();
     previous.timer = timer;
   }
   rememberTypingBroadcast(params.key, previous);
@@ -157,8 +156,7 @@ export function updateTypingConnections(params: {
     }
     const timer = setTimeout(() => {
       typingConnections.delete(params.key);
-    }, TYPING_ACTIVE_TTL_MS);
-    timer.unref?.();
+    }, TYPING_ACTIVE_TTL_MS).unref();
     bucket = { connections: new Map(), timer };
   }
   const { connections } = bucket;

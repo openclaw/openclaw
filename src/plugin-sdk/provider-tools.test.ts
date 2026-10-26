@@ -286,6 +286,37 @@ it("preserves diagnostic paths and tool indices for gemini", () => {
   expect(tools).toEqual(originalTools);
 });
 
+it.each([
+  ["gemini", "pattern", "^value$"],
+  ["deepseek", "oneOf", [{ type: "string" }]],
+] as const)(
+  "bounds each %s inspection once and checks changed inputs again",
+  (family, keyword, value) => {
+    let enumerations = 0;
+    const schema: Record<string, unknown> = { type: "string" };
+    const parameters = new Proxy(schema, {
+      ownKeys(target) {
+        enumerations++;
+        return Reflect.ownKeys(target);
+      },
+    });
+    const context = providerContext([tool(parameters)]);
+    const hooks = buildProviderToolCompatFamilyHooks(family);
+
+    expect(hooks.inspectToolSchemas(context)).toEqual([]);
+    // One depth-bound walk and one diagnostic walk, with no intermediate revalidation.
+    expect(enumerations).toBe(2);
+    schema[keyword] = value;
+    enumerations = 0;
+    expect(hooks.inspectToolSchemas(context)).toEqual([
+      { toolName: "demo", toolIndex: 0, violations: [`demo.parameters.${keyword}`] },
+    ]);
+    expect(enumerations).toBe(2);
+    schema.items = parameters;
+    expect(() => hooks.inspectToolSchemas(context)).toThrow("circular reference");
+  },
+);
+
 it("normalizes canonical OpenAI Codex Responses tool schemas", () => {
   const normalized = normalizeOpenAITools([tool({})], {
     modelApi: "openai-chatgpt-responses",

@@ -145,6 +145,8 @@ describe("production lint suppressions", () => {
         "extensions/nostr/src/nostr-profile-url-safety.ts|no-warning-comments|1",
         "extensions/qa-lab/src/gateway-child-setup.ts|preserve-caught-error|1",
         "extensions/slack/src/monitor/provider-support.ts|typescript/no-unnecessary-type-parameters|1",
+        // The renderer sorts only fresh Set-spread/filter arrays, preserving caller-owned entities.
+        "extensions/telegram/src/bot/inbound-text-entities.ts|unicorn/no-array-sort|3",
         // The fault observer preserves methods for restoration and supplies each database receiver through .call.
         "scripts/e2e/lib/upgrade-survivor/package-activation-fault.mjs|typescript/unbound-method|2",
         "scripts/e2e/lib/upgrade-survivor/probe-volume-gateway.mjs|no-underscore-dangle|1",
@@ -181,11 +183,22 @@ describe("production lint suppressions", () => {
         "scripts/perf/subagent-maintenance-capture-measure.ts|typescript/unbound-method|1",
         // The retention probe measures fresh strings from the transcript JSON decode boundary.
         "scripts/perf/system-prompt-pool-retention.ts|unicorn/prefer-structured-clone|1",
+        // The counts-only probe wraps toSorted and restores it in finally; timing uses native methods.
+        "scripts/perf/tools-catalog-copy-measure.ts|no-extend-native|2",
         "src/agents/agent-bundle-mcp-runtime.ts|unicorn/prefer-add-event-listener|1",
         "src/agents/agent-tools.abort.ts|typescript/prefer-promise-reject-errors|1",
         "src/agents/auth-profiles/oauth-refresh-fence.ts|preserve-caught-error|1",
         "src/agents/auth-profiles/oauth-refresh-peers.ts|preserve-caught-error|1",
+        // Sort only freshly materialized private arrays; avoid a second copying sort.
+        "src/agents/embedded-agent-runner/model.static-catalog.ts|unicorn/no-array-sort|2",
+        "src/agents/embedded-agent-runner/post-compaction-loop-guard.ts|unicorn/no-array-sort|1",
+        "src/agents/embedded-agent-runner/run/attempt-context-summary.ts|unicorn/no-array-sort|1",
+        "src/agents/embedded-agent-runner/run/attempt-system-prompt-prepare.ts|unicorn/no-array-sort|2",
+        "src/agents/embedded-agent-runner/session-prompt-state.ts|unicorn/no-array-sort|1",
+        "src/agents/embedded-agent-runner/tool-name-allowlist.ts|unicorn/no-array-sort|1",
         "src/agents/mcp-http-transport.ts|unicorn/prefer-add-event-listener|3",
+        // Board private helpers only sort cloned layouts or freshly filtered arrays.
+        "src/boards/board-layout.ts|unicorn/no-array-sort|1",
         "src/channels/plugins/channel-runtime-surface.types.ts|typescript/no-unnecessary-type-parameters|1",
         "src/channels/plugins/config-schema.ts|typescript/no-generated-empty-object-type|1",
         "src/channels/plugins/contracts/test-helpers.ts|typescript/no-unnecessary-type-parameters|1",
@@ -208,6 +221,12 @@ describe("production lint suppressions", () => {
         "src/config/zod-schema.channel-messaging-common.ts|typescript/no-generated-empty-object-type|1",
         // Command declarations compare their stored JSON shape, where undefined properties are omitted.
         "src/cron/store/job-mutations.ts|unicorn/prefer-structured-clone|1",
+        // These handlers sort only fresh private arrays, preserving their upstream sources.
+        "src/gateway/server-methods/sessions-files.ts|unicorn/no-array-sort|1",
+        "src/gateway/server-methods/sessions-read.ts|unicorn/no-array-sort|1",
+        "src/gateway/server-methods/sessions-search-projected.ts|unicorn/no-array-sort|1",
+        "src/gateway/server-methods/tools-catalog.ts|unicorn/no-array-sort|1",
+        "src/gateway/server-methods/usage-session-loading.ts|unicorn/no-array-sort|1",
         // Pinned Bun HTTP sockets omit Writable._writev; this probe selects native or one-copy batching.
         "src/gateway/server/ws-transport.ts|no-underscore-dangle|1",
         // Node worker ports do not accept a browser target origin.
@@ -229,6 +248,9 @@ describe("production lint suppressions", () => {
         // MCP owns callback properties; Node worker messages have no browser target origin.
         "src/mcp/tools-stdio-server.lifecycle.fixture.mjs|unicorn/prefer-add-event-listener|1",
         "src/mcp/tools-stdio-server.lifecycle.fixture.mjs|unicorn/require-post-message-target-origin|1",
+        // Media selection reorders only fresh filter/flatMap results, preserving caller arrays.
+        "src/media-understanding/attachments.select.ts|unicorn/no-array-reverse|1",
+        "src/media-understanding/provider-registry-metadata.ts|unicorn/no-array-sort|1",
         "src/node-host/invoke-payload.ts|typescript/no-unnecessary-type-parameters|1",
         "src/node-host/mcp.ts|unicorn/prefer-add-event-listener|1",
         "src/plugin-sdk/channel-config-helpers.ts|typescript/no-unnecessary-type-parameters|1",
@@ -261,6 +283,8 @@ describe("production lint suppressions", () => {
         "src/secrets/private-plan-file.ts|preserve-caught-error|1",
         // Synchronous acquisition failures reject with the acquiring owner's original value.
         "src/shared/store-writer-acquisitions.ts|typescript/prefer-promise-reject-errors|1",
+        // Usage outputs sort freshly materialized private arrays without another copy.
+        "src/shared/usage-aggregates.ts|unicorn/no-array-sort|1",
         "src/state/config-machine-state.ts|typescript/no-unnecessary-type-parameters|1",
         // JSON string scanning must detect and reject unescaped control characters.
         "src/state/json-predicate-fields.ts|no-control-regex|1",

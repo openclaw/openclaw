@@ -109,7 +109,7 @@
 .chat-group.tool {
   --chat-message-column-max: var(--chat-message-max-width, min(980px, 100%));
   display: block;
-  padding-inline-start: var(--chat-avatar-gutter);
+  padding-inline-start: calc(var(--chat-group-inset-start) + var(--chat-avatar-gutter));
 }
 
 /* Tool activity, completed work and live narration are blocks inside a turn,
@@ -151,12 +151,16 @@
 .chat-group:hover .chat-group-footer,
 .chat-group:focus-within .chat-group-footer,
 .chat-group-footer:has(.msg-meta[open]) {
+  --chat-footer-disclosure-opacity: 1;
+  --chat-footer-disclosure-pointer-events: auto;
   opacity: 1;
   pointer-events: auto;
 }
 
 /* Delivery recovery stays visible even when identity metadata is collapsed. */
 .chat-group-footer.chat-group-footer--send-status {
+  --chat-footer-disclosure-opacity: 1;
+  --chat-footer-disclosure-pointer-events: auto;
   opacity: 1;
   pointer-events: auto;
 }
@@ -262,10 +266,49 @@
   align-items: center;
   gap: 4px;
   margin-top: 6px;
+  pointer-events: auto;
+}
+
+.chat-group-footer > .chat-message-reactions,
+.chat-message-actions-row > .chat-message-reactions {
+  min-width: 0;
+  margin-top: 0;
+}
+
+/* One chip and its add button stay together while metadata yields width.
+   Longer reaction inventories retain their wrapping layout. */
+.chat-group-footer > .chat-message-reactions--single,
+.chat-message-actions-row > .chat-message-reactions--single {
+  flex-shrink: 0;
+  max-width: 100%;
+}
+
+/* Reactions share the reserved footer row without inheriting its hover fade.
+   Metadata and actions retain their own disclosure and keyboard access. */
+.chat-group-footer:has(> .chat-message-reactions) {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.chat-group-footer:has(> .chat-message-reactions)
+  > :is(.chat-group-footer__meta, .chat-group-footer-actions) {
+  opacity: var(--chat-footer-disclosure-opacity, 0);
+  pointer-events: var(--chat-footer-disclosure-pointer-events, none);
+  transition: opacity 120ms ease-out;
+}
+
+.chat-group-footer--persistent-identity:has(> .chat-message-reactions) > .chat-group-footer__meta {
+  opacity: var(--chat-persistent-footer-opacity, 1);
 }
 
 .chat-group.user:not(.chat-group--peer) .chat-message-reactions {
   justify-content: flex-end;
+}
+
+.chat-group.user:not(.chat-group--peer)
+  :is(.chat-group-footer, .chat-message-actions-row)
+  > .chat-message-reactions {
+  order: 1;
 }
 
 .chat-reaction-chip {
@@ -1944,8 +1987,11 @@ button.chat-reply-attribution__target:disabled {
     --chat-footer-disclosure-opacity: 0;
     --chat-footer-disclosure-pointer-events: none;
     --chat-footer-action-opacity: 0;
-    opacity: var(--chat-footer-disclosure-opacity);
     pointer-events: var(--chat-footer-disclosure-pointer-events);
+  }
+
+  .chat-group.user.chat-group--peer .chat-message-footer:not(:has(> .chat-message-reactions)) {
+    opacity: var(--chat-footer-disclosure-opacity);
   }
 
   .chat-group.user.chat-group--peer

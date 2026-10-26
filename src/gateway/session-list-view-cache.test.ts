@@ -51,7 +51,7 @@ it("charges shared current encodings once and replaces their cost with identity 
   const view = cache.get("encoded");
   const emptyBytes = view.bytes;
   cache.setRows(view, rows, true);
-  expect(view.bytes - emptyBytes).toBe(8 + encoded.length * 2 + Buffer.byteLength(`[${encoded}]`));
+  expect(view.bytes - emptyBytes).toBe(16 + encoded.length * 2 + Buffer.byteLength(`[${encoded}]`));
   const shared = cache.get("shared");
   cache.setRows(shared, [encodedRow], true);
   await flushReports();

@@ -102,7 +102,7 @@ export function criticalPathCpuDelta(
 }
 
 /** Browser-local frame sampling excludes the driver's polling/round-trip delay. */
-export function installCriticalPathProbe(bootRoute: "chat" | "new") {
+export function installCriticalPathProbe(bootRoute: "chat" | "new" | "sessions" | "settings") {
   performance.setResourceTimingBufferSize(5000);
   type Step = {
     name: string;
@@ -140,11 +140,13 @@ export function installCriticalPathProbe(bootRoute: "chat" | "new") {
       case "cold-new":
         ready = Boolean(enabled(".new-session-page__message"));
         break;
+      case "cold-sessions":
       case "sessions":
         ready = Boolean(
           visible("openclaw-sessions-page .session-link") && enabled(".sessions-toolbar__refresh"),
         );
         break;
+      case "cold-settings":
       case "settings":
         ready = Boolean(
           (document.querySelector(".shell--mobile-nav:not(.shell--nav-drawer-open)") ||
