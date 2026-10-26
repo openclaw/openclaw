@@ -121,7 +121,8 @@ const suite = createControlUiE2eSuite({
     await writeFile(
       preload,
       `const undici = require("undici/index.js");
-const original = globalThis.fetch;
+// Keep fetch and its dispatcher on the same Undici version.
+const original = undici.fetch;
 const localDispatcher = new undici.Agent();
 globalThis.fetch = (input, init) => { const url = new URL(typeof input === "string" || input instanceof URL ? input : input.url); if (url.hostname === "chatgpt.com" || url.hostname === "api.openai.com") { const local = "http://127.0.0.1:PORT" + url.pathname + url.search; const { dispatcher, ...localInit } = init ?? {}; return original(typeof input === "string" || input instanceof URL ? local : new Request(local, input), { ...localInit, dispatcher: localDispatcher }); } if (url.hostname === "127.0.0.1" || url.hostname === "localhost") return original(input, init); throw new Error("External network forbidden in Daybreak fixture: " + url.hostname); };
 // Cover native dispatcher fetch as well as global fetch; no provider I/O leaves the fixture.
@@ -251,6 +252,13 @@ suite.define(() => {
             view: "configured",
             refresh: true,
           });
+          expect(result.providerOutcomes).toContainEqual(
+            expect.objectContaining({
+              provider: "openai",
+              profileId: "openai:platform-fixture",
+              status: "ready",
+            }),
+          );
           expect(
             result.models.find((model: { id: string }) => model.id === "gpt-6.1-sol")
               ?.availableAccessPrograms?.cyber,

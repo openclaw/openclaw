@@ -462,7 +462,7 @@ describe("Control UI service-worker production update E2E", () => {
         );
         await ensureControlledPage(page, pageErrors, buildA);
         if (mode === "chat") {
-          await gateway.waitForRequest("chat.startup");
+          await gateway.waitForRequest("sessions.messages.subscribe");
         } else {
           await page.getByRole("button", { name: "Raw", exact: true }).click();
         }

@@ -7,6 +7,7 @@ import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promis
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { deleteSessionEntryLifecycle } from "../config/sessions.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import * as databaseIdentity from "../infra/sqlite-worker-identity.js";
 import { runExec } from "../process/exec.js";
 import { runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import { createSpawnBrokerHost, type SpawnBrokerHost } from "../process/spawn-broker/host.js";
@@ -39,6 +40,7 @@ import {
   createControlUiSessionPrRead,
   prepareControlUiSessionPrServiceTarget,
 } from "./control-ui-session-pr-read.js";
+import { withControlUiSessionPrSource } from "./control-ui-session-pr-source.js";
 import { createControlUiSessionPullRequestSubscriptions } from "./control-ui-session-pr-subscriptions.js";
 import {
   createTestSessionPrReadSource,
@@ -873,6 +875,28 @@ it("keeps warm default-loader SQL constant as readers join without a native row 
     expect(frames(f.socket)).toHaveLength(1);
     expect(JSON.stringify(frames(f.socket))).toContain('"number":103469');
     expect(provider).toHaveBeenCalledTimes(1);
+  });
+});
+
+it("checks physical source once per load while every assertion observes owner retirement", async () => {
+  await withFixture("operator.admin", async () => {
+    const source = await sessionSource(sessionKey);
+    const identities = vi.spyOn(databaseIdentity, "readDatabasePathIdentitySync");
+    try {
+      await withControlUiSessionPrSource(source, async (assertCurrent) => {
+        const captured = identities.mock.calls.length;
+        expect(captured).toBeGreaterThan(0);
+        for (let index = 0; index < 20; index++) {
+          assertCurrent();
+        }
+        expect(identities).toHaveBeenCalledTimes(captured);
+        expect(captured).toBe(1);
+        await closeOpenClawAgentDatabaseByPathAsync(source.path);
+        expect(assertCurrent).toThrow("Session PR source changed or closed");
+      });
+    } finally {
+      identities.mockRestore();
+    }
   });
 });
 

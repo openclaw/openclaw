@@ -60,6 +60,7 @@ suite.define(() => {
         async ({ context, page }) => {
           await seedChatSettings(page, suite.server.baseUrl, { theme: "claw", themeMode: "dark" });
           const gateway = await installMockGateway(page, {
+            subscriptionInitialHistory: false,
             sessionKey,
             agentModel: "openai/gpt-4.1",
             sessions: [row],

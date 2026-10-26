@@ -131,8 +131,9 @@ suite.define(() => {
         });
         await page.goto(`${suite.server.baseUrl}chat`);
         const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
-        await gateway.waitForRequest("chat.startup");
+        await gateway.waitForRequest("sessions.messages.subscribe");
         await gateway.waitForRequest("chat.history");
+        expect(await gateway.getRequests("chat.startup")).toEqual([]);
         await expectHistoryBoundaryState(page, false);
         await expectTranscriptLayoutCommitted(thread);
         expect(await gateway.getRequests("chat.history")).toMatchObject([

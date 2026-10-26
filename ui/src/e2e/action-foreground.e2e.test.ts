@@ -152,7 +152,9 @@ suite.define(() => {
           methodResponses: { "config.get": configResponse({ theme, themeMode: mode, accent }, id) },
         });
         await page.goto(`${suite.server.baseUrl}chat`);
-        await gateway.waitForRequest("chat.startup");
+        await gateway.waitForRequest("sessions.messages.subscribe", {
+          match: { key: "agent:main:main" },
+        });
         const resolved = theme === "claw" ? mode : `${theme}${mode === "light" ? "-light" : ""}`;
         await expect.poll(() => page.locator("html").getAttribute("data-theme")).toBe(resolved);
         if (theme !== "claw") {

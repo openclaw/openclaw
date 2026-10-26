@@ -2,11 +2,8 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import {
-  controlUiSessionUrl,
-  createChatFlowE2eSuite,
-  installMockGateway,
-} from "./chat-flow.test-support.ts";
+import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
@@ -21,6 +18,12 @@ suite.define(() => {
       const fullText = `# Museum inventory\n\nThe restored exhibit is ${keyword}.`;
       const gateway = await installMockGateway(page, {
         sessionKey,
+        sessions: [
+          createControlUiSessionRow(sessionKey, "Recovered search", 1_800_000_000_000, {
+            sessionId: "recovered-search-session",
+            lifecycleRevision: "recovered-search-revision-1",
+          }),
+        ],
         deferredMethods: ["chat.message.get"],
         historyMessages: [
           {
@@ -37,7 +40,13 @@ suite.define(() => {
           },
         ],
       });
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      // Search recovery uses the settled roster's message scope, independent of boot ordering.
+      await page.goto(`${suite.server.baseUrl}activity`);
+      await page
+        .locator(
+          `.sidebar-recent-session[data-session-key="${sessionKey}"] a.sidebar-recent-session__link`,
+        )
+        .click();
       const pane = page.locator(".chat-pane-cache__pane--active");
       const reply = pane.locator(`.chat-bubble[data-entry-id="${messageId}"]`);
       const prompt = pane.locator('.chat-bubble[data-entry-id="recovered-search-prompt"]');

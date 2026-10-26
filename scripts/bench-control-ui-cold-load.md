@@ -489,14 +489,12 @@ hello, live catch-up, enabled input, layout shifts, mutation batches, and retain
 row elements, duplicate visible row keys, and the same visible row's viewport offset
 at the cached-to-live handoff. Visibility and enabled-input milestones are DOM observations;
 FCP is the browser's paint metric. Diagnostic runs also save filmstrip frames.
-Live catch-up recognizes both `chat.startup` and successful initial history in a
+Live catch-up recognizes both `chat.startup` and initial history in a
 `sessions.messages.subscribe` reply, so cross-revision runs do not label live rows
 as cached rows after the subscription starts carrying history.
-The benchmark enables the mock Gateway's `subscriptionInitialHistory` scenario:
-clients requesting initial history receive it in the subscription reply, using the
-same history fixtures and delay/error controls as `chat.startup`. Older clients
-still make their separate startup request. Other mock scenarios retain separate
-startup replies unless they explicitly enable this protocol mode.
+The benchmark enables `subscriptionInitialHistory`; requested initial history uses
+the shared startup-response fixture owner. Older clients still make a separate
+startup request. Scenarios testing that fallback set `subscriptionInitialHistory: false`.
 Use `--untraced` for timing comparisons without boot tracing or CPU sampling,
 then collect separate traced runs for the storyboard and attribution.
 

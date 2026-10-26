@@ -45,7 +45,7 @@ suite.define(() => {
           ],
         });
         await page.goto(suite.server.baseUrl + "chat");
-        await gateway.waitForRequest("chat.startup");
+        await gateway.waitForRequest("sessions.messages.subscribe");
         const thread = page.locator(".chat-thread");
         const start = page.getByText(first, { exact: true });
         const end = page.getByText(last, { exact: true });

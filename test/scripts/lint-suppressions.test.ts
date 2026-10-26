@@ -141,6 +141,9 @@ describe("production lint suppressions", () => {
         "extensions/codex/src/app-server/run-attempt-turn-request.ts|preserve-caught-error|1",
         "extensions/diffs/src/viewer-client.ts|eslint/no-underscore-dangle|1",
         "extensions/discord/src/outbound-adapter.test-harness.ts|typescript/no-unnecessary-type-parameters|1",
+        // Ranking sorts private intermediate arrays; shared page order still uses a copy.
+        "extensions/knowledge/src/memory-index.ts|unicorn/no-array-sort|7",
+        "extensions/memory-core/src/memory/hybrid.ts|unicorn/no-array-sort|2",
         "extensions/memory-core/src/memory/manager-embedding-ops.ts|unicorn/no-array-fill-with-reference-type|1",
         "extensions/nostr/src/nostr-profile-url-safety.ts|no-warning-comments|1",
         "extensions/qa-lab/src/gateway-child-setup.ts|preserve-caught-error|1",
@@ -165,6 +168,8 @@ describe("production lint suppressions", () => {
         // Node BroadcastChannel.postMessage has no target-origin parameter.
         "scripts/perf/idle-gateway-measure-preload.mjs|unicorn/require-post-message-target-origin|1",
         "scripts/perf/lease-main-thread-renewal.mjs|typescript/unbound-method|3",
+        // Keep measured fixture shapes unchanged; construction is outside the benchmark loop.
+        "scripts/perf/memory-ranking-copies.ts|oxc/no-map-spread|2",
         // The size-record probe forwards Map.set with the original map receiver.
         "scripts/perf/model-prompt-stats-measure.ts|typescript/unbound-method|1",
         // The footprint observer supplies the native MessagePort receiver through Reflect.apply.
@@ -212,6 +217,8 @@ describe("production lint suppressions", () => {
         "src/cli/test-runtime-capture.ts|typescript/no-unnecessary-type-parameters|1",
         // Both restore cleanup paths retain the primary and cleanup failures in AggregateError.errors.
         "src/commands/backup-restore.ts|preserve-caught-error|2",
+        // Sort only freshly materialized private arrays, preserving source order and ownership.
+        "src/config/channel-config-activation.ts|unicorn/no-array-sort|1",
         "src/config/sessions/session-accessor.sqlite-schema-probes.test-support.ts|typescript/unbound-method|2",
         "src/config/sessions/session-accessor.sqlite-worker-request.ts|no-warning-comments|1",
         "src/config/sessions/session-transcript-reconcile.close-failure.test-support.mjs|typescript/unbound-method|1",
@@ -221,6 +228,11 @@ describe("production lint suppressions", () => {
         "src/config/zod-schema.channel-messaging-common.ts|typescript/no-generated-empty-object-type|1",
         // Command declarations compare their stored JSON shape, where undefined properties are omitted.
         "src/cron/store/job-mutations.ts|unicorn/prefer-structured-clone|1",
+        // These sort only freshly materialized arrays or locally owned swarm member lists.
+        "src/gateway/health/collector.ts|unicorn/no-array-sort|3",
+        "src/gateway/methods/read-share-keys.ts|unicorn/no-array-sort|1",
+        "src/gateway/node-connection-notifications.ts|unicorn/no-array-sort|1",
+        "src/gateway/node-plugin-tool-snapshot.ts|unicorn/no-array-sort|1",
         // These handlers sort only fresh private arrays, preserving their upstream sources.
         "src/gateway/server-methods/sessions-files.ts|unicorn/no-array-sort|1",
         "src/gateway/server-methods/sessions-read.ts|unicorn/no-array-sort|1",
@@ -229,6 +241,8 @@ describe("production lint suppressions", () => {
         "src/gateway/server-methods/usage-session-loading.ts|unicorn/no-array-sort|1",
         // Pinned Bun HTTP sockets omit Writable._writev; this probe selects native or one-copy batching.
         "src/gateway/server/ws-transport.ts|no-underscore-dangle|1",
+        "src/gateway/session-companion-prompt.ts|unicorn/no-array-sort|1",
+        "src/gateway/session-swarm-summary.ts|unicorn/no-array-sort|2",
         // Node worker ports do not accept a browser target origin.
         "src/gateway/system-ca-warmup.worker.ts|unicorn/require-post-message-target-origin|1",
         "src/hooks/module-loader.ts|typescript/no-unnecessary-type-parameters|1",
@@ -244,6 +258,7 @@ describe("production lint suppressions", () => {
         "src/infra/sqlite-native-observer.ts|typescript/unbound-method|2",
         "src/infra/sqlite-worker-input.bun.test-support.ts|typescript/unbound-method|1",
         "src/infra/sqlite-worker-shared-state-admission.test-support.ts|typescript/unbound-method|1",
+        "src/infra/system-presence.ts|unicorn/no-array-sort|2",
         "src/infra/worker-cpu.ts|typescript/unbound-method|4",
         // MCP owns callback properties; Node worker messages have no browser target origin.
         "src/mcp/tools-stdio-server.lifecycle.fixture.mjs|unicorn/prefer-add-event-listener|1",
@@ -261,6 +276,7 @@ describe("production lint suppressions", () => {
         "src/plugin-sdk/qa-runner-runtime.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugin-sdk/test-helpers/subagent-hooks.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugins/host-hooks.ts|typescript/no-unnecessary-type-parameters|1",
+        "src/plugins/installed-plugin-index-policy.ts|unicorn/no-array-sort|2",
         "src/plugins/lazy-service-module.ts|typescript/no-unnecessary-type-parameters|1",
         // Reflect.apply supplies the wrapped callable as Function.prototype.bind's receiver.
         "src/plugins/plugin-instance-bindings.ts|typescript/unbound-method|1",
@@ -269,6 +285,8 @@ describe("production lint suppressions", () => {
         "src/plugins/plugin-return-value.ts|typescript/prefer-promise-reject-errors|1",
         "src/plugins/plugin-return-value.ts|typescript/unbound-method|1",
         "src/plugins/plugin-return-value.ts|unicorn/no-thenable|1",
+        "src/plugins/provider-login-options.ts|unicorn/no-array-sort|2",
+        "src/plugins/provider-registry-selection.ts|unicorn/no-array-sort|1",
         "src/plugins/public-surface-loader.ts|typescript/no-unnecessary-type-parameters|3",
         "src/plugins/registry-registrars-providers.ts|typescript/unbound-method|1",
         // Admission records original factory identities; executable views bind their receivers.
@@ -281,6 +299,7 @@ describe("production lint suppressions", () => {
         "src/secrets/egress-proxy/proxy-server.ts|no-control-regex|1",
         "src/secrets/egress-proxy/proxy-server.ts|no-warning-comments|1",
         "src/secrets/private-plan-file.ts|preserve-caught-error|1",
+        "src/sessions/session-lifecycle-identity.ts|unicorn/no-array-sort|1",
         // Synchronous acquisition failures reject with the acquiring owner's original value.
         "src/shared/store-writer-acquisitions.ts|typescript/prefer-promise-reject-errors|1",
         // Usage outputs sort freshly materialized private arrays without another copy.

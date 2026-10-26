@@ -75,7 +75,7 @@ suite.define(() => {
       const baseUrl = `http://127.0.0.1:${server.claim.port}/`;
       try {
         await page.goto(`${baseUrl}chat`);
-        await gateway.waitForRequest("chat.startup");
+        await gateway.waitForRequest("sessions.messages.subscribe");
         const card = page
           .locator(".chat-assistant-attachment-card--compact")
           .filter({ hasText: filename });

@@ -37,7 +37,7 @@ suite.define(() => {
         },
       });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, row.key));
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe", { match: { key: row.key } });
       await page.locator("openclaw-chat-pane.chat-pane-cache__pane--active").waitFor();
       await gateway.waitForRequest("sessions.github.options");
       const ownRead = await gateway.waitForRequest(subscribe);

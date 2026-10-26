@@ -186,9 +186,7 @@ export function warmReloadProbe() {
           }
           if (
             method === "chat.startup" ||
-            (method === "sessions.messages.subscribe" &&
-              frame.ok === true &&
-              frame.payload?.initialHistory?.ok === true)
+            (method === "sessions.messages.subscribe" && frame.payload?.initialHistory)
           ) {
             mark("catchupResponse");
           }

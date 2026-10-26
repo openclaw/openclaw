@@ -1,9 +1,14 @@
-// Owner-level probe; pair with the sessions.cleanup Gateway workload in README.md.
+// Owner-level placement preservation probe (synthetic immutable replicas).
+// node --expose-gc --import ./scripts/tsx.mjs scripts/perf/placement-preservation-measure.ts
+//   --operations 3000 --replicas 10000 --protected 64 --captures 2 --mode timing
+// Run allocation separately with --mode allocation; --owner-source selects a comparison owner.
+// This measures preservation work, not whole-Gateway latency.
 import assert from "node:assert/strict";
 import { hash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
+import { loadavg } from "node:os";
 import path from "node:path";
 import { constants, monitorEventLoopDelay, PerformanceObserver } from "node:perf_hooks";
 import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
@@ -49,7 +54,7 @@ const source = values["owner-source"]
     );
 let captureAuthority:
   | (() => Promise<{
-      placements: WorkerSessionPlacementRecord[];
+      placements: Iterable<WorkerSessionPlacementRecord>;
       release: () => void;
     }>)
   | undefined;
@@ -164,6 +169,7 @@ if (values.mode === "counts") {
 let returnedRecords = 0;
 let lastSnapshot: WorkerSessionPlacementRecord[] = [];
 async function run(count: number, latencies?: number[]) {
+  lastSnapshot = [];
   for (let index = 0; index < count; index++) {
     const started = performance.now();
     let released = false;
@@ -185,10 +191,15 @@ async function run(count: number, latencies?: number[]) {
       ));
     try {
       for (let capture = 0; capture < captures; capture++) {
-        const placements = read.placements;
-        assert.equal(placements.length, protectedCount);
-        returnedRecords += placements.length;
-        lastSnapshot = placements;
+        let capturedRecords = 0;
+        for (const placement of read.placements) {
+          capturedRecords++;
+          if (index === count - 1 && capture === captures - 1) {
+            lastSnapshot.push(placement);
+          }
+        }
+        assert.equal(capturedRecords, protectedCount);
+        returnedRecords += capturedRecords;
       }
     } finally {
       read.release();
@@ -240,6 +251,7 @@ if (values.mode === "allocation") {
   loop.enable();
 }
 const latencies: number[] = [];
+const hostLoadBefore = loadavg();
 const cpu = process.cpuUsage();
 const started = performance.now();
 await run(operations, values.mode === "timing" ? latencies : undefined);
@@ -278,6 +290,9 @@ const result = {
     : "synthetic retained placement authority; no database, Gateway RPC or model",
   mode: values.mode,
   node: process.version,
+  hostLoadBefore,
+  hostLoadAfter: loadavg(),
+  memory: process.memoryUsage(),
   sourceHash: hash("sha256", readFileSync(fileURLToPath(source))),
   fixtureHash: hash("sha256", JSON.stringify(baseline)),
   outputHash: hash("sha256", JSON.stringify(lastSnapshot)),
