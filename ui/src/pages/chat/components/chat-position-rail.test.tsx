@@ -111,6 +111,21 @@ function part(root: ParentNode, name: string) {
   return root.querySelector<HTMLElement>(`.chat-position-rail__${name}`);
 }
 
+function measure(element: Element, values: Record<string, number | (() => number)>) {
+  for (const [key, value] of Object.entries(values)) {
+    Object.defineProperty(element, key, {
+      configurable: true,
+      ...(typeof value === "function" ? { get: value } : { value }),
+    });
+  }
+}
+
+function markerAt(root: ParentNode, id: string | number) {
+  return root.querySelector<HTMLButtonElement>(
+    `[data-position-marker-id="${typeof id === "number" ? `message-${id}` : id}"]`,
+  )!;
+}
+
 function pressKey(target: EventTarget, key: string, bubbles = true) {
   const event = new KeyboardEvent("keydown", { key, bubbles, cancelable: true });
   target.dispatchEvent(event);
@@ -149,10 +164,9 @@ describe("conversation position rail", () => {
       const { flushFrame, publishVisibility, activeMessage, root, marks } = railFixture(
         "agent:main:rail-publication",
       );
-      Object.defineProperty(marks, "clientHeight", { configurable: true, value: 240 });
+      measure(marks, { clientHeight: 240 });
       emitTranscriptResize(marks, 44, 240);
-      const marker = (id: string) =>
-        marks.querySelector<HTMLButtonElement>(`[data-position-marker-id="${id}"]`);
+      const marker = (id: string) => markerAt(marks, id);
       const current = () => marks.querySelector<HTMLButtonElement>('[aria-current="true"]');
       const tabStops = () => [...marks.querySelectorAll<HTMLButtonElement>('[tabindex="0"]')];
       flushFrame();
@@ -229,11 +243,8 @@ describe("conversation position rail", () => {
         ] as const) {
           const focusedMarker = document.activeElement;
           assert(focusedMarker instanceof HTMLButtonElement);
-          focusedMarker.dispatchEvent(
-            new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }),
-          );
           // The marker commits in Solid's microtask; no animation frame is required.
-          flush();
+          pressKey(focusedMarker, key);
           expect(document.activeElement).toBe(marker(`message-${index}`));
           expect(tabStops()).toEqual([document.activeElement]);
         }
@@ -306,24 +317,18 @@ describe("conversation position rail", () => {
           count,
           startsAtTop ? "message-0" : "message-79",
         );
-      const marker = (index: number) =>
-        marks.querySelector<HTMLButtonElement>(`[data-position-marker-id="message-${index}"]`)!;
+      const marker = (index: number) => markerAt(marks, index);
       let height = 597;
       const scrollHeight = 8912;
       let marksHeight = 283;
       let railOffset = 0;
-      Object.defineProperties(root, {
-        clientHeight: { configurable: true, get: () => height },
-        scrollHeight: { configurable: true, get: () => scrollHeight },
-      });
-      Object.defineProperties(marks, {
-        clientHeight: { configurable: true, get: () => marksHeight },
-        scrollTop: {
-          configurable: true,
-          get: () => railOffset,
-          set: (value: number) => {
-            railOffset = Math.max(0, Math.min(value, count * 12 - marksHeight));
-          },
+      measure(root, { clientHeight: () => height, scrollHeight });
+      measure(marks, { clientHeight: () => marksHeight });
+      Object.defineProperty(marks, "scrollTop", {
+        configurable: true,
+        get: () => railOffset,
+        set: (value: number) => {
+          railOffset = Math.max(0, Math.min(value, count * 12 - marksHeight));
         },
       });
       root.scrollTop = startsAtTop ? 0 : 8315;
@@ -399,16 +404,13 @@ describe("conversation position rail", () => {
         container.classList.add("chat");
         const textarea = container.appendChild(document.createElement("textarea"));
         textarea.value = "/goal";
-        Object.defineProperties(textarea, {
-          clientHeight: { configurable: true, value: 32 },
-          scrollHeight: {
-            configurable: true,
-            get: () => {
-              // Measuring the replacement draft commits the expanded transcript.
-              height = 597;
-              marksHeight = 283;
-              return 32;
-            },
+        measure(textarea, {
+          clientHeight: 32,
+          scrollHeight: () => {
+            // Measuring the replacement draft commits the expanded transcript.
+            height = 597;
+            marksHeight = 283;
+            return 32;
           },
         });
         if (navigatesBeforeResize) {
@@ -486,10 +488,7 @@ describe("conversation position rail", () => {
       rows,
     );
     try {
-      Object.defineProperties(container, {
-        clientHeight: { configurable: true, value: 600 },
-        scrollHeight: { configurable: true, value: 4880 },
-      });
+      measure(container, { clientHeight: 600, scrollHeight: 4880 });
       container.style.paddingTop = "80px";
       emitTranscriptResize(container, 800, 600);
       const ids = rows.map((row) => row.key);
@@ -503,7 +502,7 @@ describe("conversation position rail", () => {
       expect(session.activeMessageId(ids)).toBe("row-2");
       container.scrollTop = 3000;
       expect(session.activeMessageId(ids)).toBe("row-26");
-      Object.defineProperty(container, "clientHeight", { configurable: true, value: 300 });
+      measure(container, { clientHeight: 300 });
       expect(session.activeMessageId(ids)).toBe("row-25");
       container.scrollTop = 4580;
       expect(session.activeMessageId(ids)).toBe("row-39");
@@ -673,8 +672,7 @@ describe("conversation position rail", () => {
       streamStartedAt: 2_000,
     });
     const { transcript, container, rerender } = threadFixture(props);
-    const marker = () =>
-      container.querySelector<HTMLButtonElement>('[data-position-marker-id="run:stream-run"]')!;
+    const marker = () => markerAt(container, "run:stream-run");
     rerender();
     transcript.start();
     expect(container.querySelectorAll(".chat-position-rail__marker")).toHaveLength(1);
@@ -689,7 +687,7 @@ describe("conversation position rail", () => {
     )!;
     const root = container.querySelector<HTMLElement>(".chat-thread")!;
     const marks = part(container, "marks")!;
-    Object.defineProperty(marks, "clientHeight", { configurable: true, value: 600 });
+    measure(marks, { clientHeight: 600 });
     emitTranscriptResize(marks, 44, 600);
     await settleFrames();
     expect(observed.has(streamBubble)).toBe(true);

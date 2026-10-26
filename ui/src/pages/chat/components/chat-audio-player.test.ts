@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { CHAT_AUDIO_WAVEFORM_MAX_BYTES } from "./chat-audio-waveform.ts";
@@ -22,15 +23,10 @@ const seekInput = (player: ChatAudioPlayer) =>
   player.querySelector<HTMLInputElement>(".chat-audio-player__seek")!;
 const source = (player: ChatAudioPlayer) => player.querySelector("audio")?.getAttribute("src");
 function pendingFetch() {
-  let resolve!: (response: Response) => void;
-  const fetchMock = vi.fn<typeof fetch>(
-    async () =>
-      await new Promise<Response>((respond) => {
-        resolve = respond;
-      }),
-  );
+  const response = createDeferred<Response>();
+  const fetchMock = vi.fn<typeof fetch>(async () => await response.promise);
   vi.stubGlobal("fetch", fetchMock);
-  return { fetchMock, resolve: (response: Response) => resolve(response) };
+  return { fetchMock, resolve: response.resolve };
 }
 async function update(player: ChatAudioPlayer, properties: Partial<ChatAudioPlayer>) {
   Object.assign(player, properties);
@@ -101,6 +97,11 @@ function mockActivePlayback(media: HTMLMediaElement) {
 function mockPlay(media: HTMLMediaElement) {
   Object.defineProperty(media, "paused", { configurable: true, value: true });
   return vi.spyOn(media, "play").mockResolvedValue(undefined);
+}
+function stubAudioFetch(blobUrl: string) {
+  const fetchMock = vi.fn<typeof fetch>(async () => audioResponse());
+  vi.stubGlobal("fetch", fetchMock);
+  vi.spyOn(URL, "createObjectURL").mockReturnValue(blobUrl);
 }
 async function createPlayer(
   label: string,
@@ -329,16 +330,7 @@ describe("ChatAudioPlayer", () => {
   it.each(["download", "expand", "outside"])(
     "preserves %s focus when playback preparation fails",
     async (target) => {
-      let respond!: (response: Response) => void;
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(
-          () =>
-            new Promise<Response>((resolve) => {
-              respond = resolve;
-            }),
-        ),
-      );
+      const { resolve: respond } = pendingFetch();
       const outside = document.createElement("button");
       outside.textContent = "Outside player";
       document.body.append(outside);
@@ -472,11 +464,7 @@ describe("ChatAudioPlayer", () => {
         "fetch",
         vi
           .fn<typeof fetch>()
-          .mockResolvedValueOnce(
-            new Response(new Uint8Array([1, 2, 3, 4]), {
-              headers: { "Content-Type": "audio/mpeg", "Content-Length": "4" },
-            }),
-          )
+          .mockResolvedValueOnce(audioResponse())
           .mockResolvedValue(new Response(null, { status: 500 })),
       );
       vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:waveform-disposal");
@@ -510,17 +498,11 @@ describe("ChatAudioPlayer", () => {
   it("recovers a waveform-backed source after a renewed media ticket", async () => {
     const intersect = observeIntersections();
     mockAudioContext();
-    let resolveFirstFetch: ((response: Response) => void) | undefined;
-    let fetchCount = 0;
-    const fetchMock = vi.fn<typeof fetch>(async () => {
-      fetchCount += 1;
-      if (fetchCount > 1) {
-        return new Response(null, { status: 500 });
-      }
-      return await new Promise<Response>((resolve) => {
-        resolveFirstFetch = resolve;
-      });
-    });
+    const firstResponse = createDeferred<Response>();
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockImplementationOnce(async () => await firstResponse.promise)
+      .mockResolvedValue(new Response(null, { status: 500 }));
     vi.stubGlobal("fetch", fetchMock);
     vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:waveform-audio");
     vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
@@ -529,7 +511,7 @@ describe("ChatAudioPlayer", () => {
     await player.updateComplete;
     intersect();
     await waitForSolid(() => expect(fetchMock).toHaveBeenCalledOnce());
-    resolveFirstFetch?.(audioResponse());
+    firstResponse.resolve(audioResponse());
     await waitForSolid(() => expect(source(player)).toBe("blob:waveform-audio"));
     const media = audio(player);
     Object.defineProperty(media, "error", { configurable: true, value: {} as MediaError });
@@ -556,11 +538,7 @@ describe("ChatAudioPlayer", () => {
       return { decodeAudioData, close: vi.fn(async () => undefined) };
     });
     vi.stubGlobal("AudioContext", AudioContextMock);
-    vi.stubGlobal(
-      "fetch",
-      vi.fn<typeof fetch>(async () => audioResponse()),
-    );
-    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:duration-mismatch");
+    stubAudioFetch("blob:duration-mismatch");
     const player = await createPlayer("duration-mismatch");
     player.serverDurationMs = 100_000;
     const media = audio(player);
@@ -608,11 +586,7 @@ describe("ChatAudioPlayer", () => {
       throw new Error("audio context limit reached");
     });
     vi.stubGlobal("AudioContext", FailingAudioContext);
-    vi.stubGlobal(
-      "fetch",
-      vi.fn<typeof fetch>(async () => audioResponse()),
-    );
-    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:context-fallback");
+    stubAudioFetch("blob:context-fallback");
     const player = await createPlayer("context-fallback");
     player.serverDurationMs = 4_000;
     const media = audio(player);
