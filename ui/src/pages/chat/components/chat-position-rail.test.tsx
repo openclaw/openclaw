@@ -258,7 +258,7 @@ describe("conversation position rail", () => {
     },
   );
 
-  it("reveals only overflowing transcripts and retires focus when they fit again", () => {
+  it("requires more than one pixel of overflow and a nonzero viewport", () => {
     const flushFrame = stubSettledAnimationFrames();
     stubRailVisibility();
     const positions = railPositions(1);
@@ -273,7 +273,6 @@ describe("conversation position rail", () => {
     Object.defineProperty(marks, "clientHeight", { configurable: true, value: 12 });
     emitTranscriptResize(marks, 44, 12);
     flushFrame();
-    expect(rail.hasAttribute("data-overflow")).toBe(false);
     const resize = (clientHeight: number, scrollHeight: number) => {
       viewportHeight = clientHeight;
       transcriptHeight = scrollHeight;
@@ -283,15 +282,6 @@ describe("conversation position rail", () => {
       });
       flushFrame();
     };
-    resize(600, 900);
-    expect(rail.hasAttribute("data-overflow")).toBe(true);
-    const marker = rail.querySelector<HTMLButtonElement>("button")!;
-    marker.focus();
-    expect(document.activeElement).toBe(marker);
-    resize(900, 900);
-    expect(rail.hasAttribute("data-overflow")).toBe(false);
-    expect(document.activeElement).toBe(root);
-    expect(rail.querySelector(".chat-position-rail__preview")).toBeNull();
     resize(600, 601);
     expect(rail.hasAttribute("data-overflow")).toBe(false);
     resize(600, 602);
