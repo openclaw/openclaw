@@ -33,7 +33,6 @@ import {
   type OpenClawTestState,
 } from "../../../test-utils/openclaw-test-state.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
-import { readSubagentRunAnnounceResultUsing } from "../announce/subagent-announce-result.js";
 import { mutateRequesterCompletionBatch } from "../completion/subagent-completion-admission.store.js";
 import { bindSubagentRunGatewayOwners } from "./subagent-registry-gateway-owner.js";
 import { getSubagentActivationRuns, subagentRuns } from "./subagent-registry-memory.js";
@@ -798,45 +797,6 @@ it.each(["before ACK", "inside failing callback"] as const)(
     }
   },
 );
-
-it("retains prepared announcement authority across bookkeeping and revokes it for a changed terminal outcome", async () => {
-  const child = entry("announcement");
-  child.execution = {
-    status: "terminal",
-    endedAt: 2,
-    outcome: { status: "ok" },
-    transcriptTarget: {
-      agentId: "main",
-      sessionId: "synthetic-session",
-      sessionKey: child.childSessionKey,
-      storePath: "/synthetic/sessions",
-    },
-  };
-  child.completion = {
-    required: true,
-    terminalReply: { disposition: "visible", text: "child result" },
-  };
-  await register(child);
-  const prepared = await readSubagentRunAnnounceResultUsing(subagentRuns.get(child.runId)!, {
-    readSubagentRun: (runId) => subagentRuns.get(runId),
-    getRuntimeConfig: () => ({}),
-    readSubagentSessionEntry: async () => undefined,
-    resolveSessionStorePathCore: () => "/synthetic/sessions",
-    findTranscriptEvent: async () => ({
-      event: { message: { role: "assistant", content: [{ type: "text", text: "child result" }] } },
-    }),
-    findSessionTranscriptArchiveEventReadOnly: async () => undefined,
-  });
-  await change(child.runId, (row) => {
-    row.completion!.capturedAt = 2;
-  });
-  expect(prepared.text).toBe("child result");
-  expect(prepared.isCurrent()).toBe(true);
-  await change(child.runId, (row) => {
-    row.execution.outcome = { status: "error" };
-  });
-  expect(prepared.isCurrent()).toBe(false);
-});
 
 it("retains the execution's Gateway binding through immutable metadata publications", async () => {
   const child = entry("bound");

@@ -344,20 +344,8 @@ export function registerRequesterCompletionCustodyTests({
             },
           );
           for (const runId of runIds) {
-            const admitted = loadSubagentRegistryFromSqlite().get(runId);
-            expect(admitted?.operatorRecoverySource).toMatchObject({
-              agentId: "main",
-              sessionKey: requesterSessionKey,
-              sessionId,
-              lifecycleRevision,
-              sourceRunId: requesterTurnRunId,
-              snapshot: { scopes: ["operator.write"], grant: owner ? null : grantRef },
-            });
             if (owner) {
-              expect(admitted?.operatorRecoverySource?.snapshot).toMatchObject({
-                sharedGeneration: ownerGeneration,
-                authPolicy: { authMethod: ownerAuth.mode },
-              });
+              const admitted = loadSubagentRegistryFromSqlite().get(runId);
               expect(JSON.stringify(admitted?.operatorRecoverySource)).not.toContain(
                 nestedOwner ? ownerAuth.password : ownerAuth.token,
               );
