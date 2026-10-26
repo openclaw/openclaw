@@ -333,6 +333,7 @@ const repositoryScriptEntries = [
   "scripts/perf/cron-history-plan-measure.ts!",
   "scripts/perf/cron-list-projection-measure.mjs!",
   "scripts/perf/cron-list-revision-measure.ts!",
+  "scripts/perf/cron-session-bindings-measure.ts!",
   "scripts/perf/embedded-runner-array-copies.ts!",
   "scripts/perf/gateway-clone-measure.ts!",
   "scripts/perf/gateway-snapshot-freeze-measure.mjs!",
