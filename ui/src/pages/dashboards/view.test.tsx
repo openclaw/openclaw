@@ -34,7 +34,11 @@ function routeData(sessions: SessionsListResult["sessions"], basePath = ""): Das
   };
 }
 
-it("resolves the accessible dashboard skeleton to an error", async () => {
+it.each([
+  ["gallery", "[data-dashboard-session]", "Release health"],
+  ["empty", "[data-dashboards-empty]", "No dashboards yet"],
+  ["error", '[role="alert"]', "Dashboard service unavailable"],
+])("resolves the accessible dashboard skeleton to %s", async (outcome, selector, message) => {
   const [value, setValue] = createSignal<DashboardsRouteData>();
   const pending = Promise.withResolvers<void>();
   const { container } = mountSolid(() => {
@@ -56,15 +60,34 @@ it("resolves the accessible dashboard skeleton to an error", async () => {
   expect(container.querySelector('[role="status"]')?.textContent).toContain("Loading");
   expect(busy?.querySelectorAll("a, button, input, select, textarea").length).toBe(0);
 
-  const error = "Dashboard service unavailable";
-  setValue({ ...routeData([]), result: null, error });
-  pending.reject(new Error(error));
+  const data = routeData(
+    outcome === "gallery"
+      ? [{ key: "agent:main:dashboard:release", kind: "direct", displayName: "Release health" }]
+      : [],
+  );
+  if (outcome === "error") {
+    data.result = null;
+    data.error = "Dashboard service unavailable";
+  }
+  setValue(data);
+  if (outcome === "error") {
+    pending.reject(new Error(data.error!));
+  } else {
+    pending.resolve();
+  }
 
   await waitForSolid(() => {
     expect(container.querySelector('[aria-busy="true"], .skeleton')).toBeNull();
-    expect(container.querySelector('[role="alert"]')?.textContent).toContain(error);
+    expect(container.querySelector(selector)?.textContent).toContain(message);
   });
-  expect(container.querySelector("[data-dashboards-empty]")).toBeNull();
+  if (outcome === "empty") {
+    expect(container.querySelector(selector)?.textContent).toContain(
+      "Dashboards created in your tasks will appear here",
+    );
+  }
+  if (outcome === "error") {
+    expect(container.querySelector("[data-dashboards-empty]")).toBeNull();
+  }
 });
 
 it.each(["", "/openclaw"])("navigates dashboard links with base path %s", (basePath) => {

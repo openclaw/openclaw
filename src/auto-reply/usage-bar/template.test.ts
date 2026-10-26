@@ -25,6 +25,7 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   const original = observation.watch;
   vi.spyOn(observation, "watch").mockImplementation((authority, options) => {
+    expect(options.persistent).toBe(false);
     const subscription = original(authority, { ...options, mode: "poll" });
     subscriptions.push(subscription);
     created.resolve(subscription);

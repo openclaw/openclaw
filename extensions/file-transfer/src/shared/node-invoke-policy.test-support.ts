@@ -50,7 +50,7 @@ export function createCtx({
   params?: Fields;
   pluginConfig?: Fields;
 }) {
-  const invokeNode = vi.fn<InvokeNode>(async ({ params } = {}) => {
+  const invokeNode = vi.fn<InvokeNode>(async ({ params }: Parameters<InvokeNode>[0] = {}) => {
     const path = (params as { path?: unknown } | undefined)?.path;
     return nodeResult(typeof path === "string" ? path : "/tmp/file.txt", {
       size: 1,

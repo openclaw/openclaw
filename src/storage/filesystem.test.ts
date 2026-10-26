@@ -72,6 +72,7 @@ test.for([3, 10])("rejects declared size %s", async (sizeBytes, { store: [backen
 
 test("requires an existing absolute directory", async ({ store: [, dir] }) => {
   await expect(openBackend("relative-storage")).rejects.toThrow(/absolute/u);
+  await expect(openBackend(path.join(dir, "missing"))).rejects.toThrow();
   await fs.writeFile(path.join(dir, "file"), "not a directory");
   await expect(openBackend(path.join(dir, "file"))).rejects.toThrow();
   await expect(fs.readdir(dir)).resolves.toEqual(["file"]);
