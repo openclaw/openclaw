@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { attachToolAllowlistIntersection } from "../tool-policy.js";
 import {
   resolvePluginHarnessPolicyToolsAllow,
@@ -39,7 +38,17 @@ const sender: PolicyParams = {
 
 describe("native harness tool policy", () => {
   it.each([
-    ["conversation deny", { config: denyExec }, "conversation", true],
+    ["conversation deny", { config: denyExec }, "conversation", true, []],
+    ["narrow allowlist", { config: { tools: { allow: ["message"] } } }, "conversation", true, []],
+    ["narrow profile", { config: coding }, "conversation", false, []],
+    ["full profile", { config: { tools: { profile: "full" } } }, "conversation", false, undefined],
+    [
+      "empty config allowlist",
+      { config: { tools: { allow: [] } } },
+      "conversation",
+      false,
+      undefined,
+    ],
     ["request allowlist", { toolsAllow: ["read"] }, "turn", true],
     ["wildcard intersection", { toolsAllow: intersection }, "turn", true],
     ["scheduled wildcard", scheduled(["*"]), "conversation", false],
@@ -52,13 +61,17 @@ describe("native harness tool policy", () => {
     ["unrestricted request allowlist", { toolsAllow: ["*"] }, "conversation", false],
     ["scheduled grant", scheduled(["*"], { runtimePluginToolGrant: grant }), "turn", false],
     ["sender deny", sender, "turn", true],
-  ] satisfies Array<[string, PolicyParams, "conversation" | "turn", boolean]>)(
+  ] satisfies Array<[string, PolicyParams, "conversation" | "turn", boolean, []?]>)(
     "separates lifetime from restriction for %s",
-    async (_name, params, scope, restricted) => {
-      expect(await prepare(params)).toMatchObject({
+    async (_name, params, scope, restricted, ...sideQuestionAllow) => {
+      const policies = await prepare(params);
+      expect(policies).toMatchObject({
         toolPolicyScope: scope,
         toolPolicyRestricted: restricted,
       });
+      if (sideQuestionAllow.length) {
+        expect(resolvePluginHarnessPolicyToolsAllow(policies)).toEqual(sideQuestionAllow[0]);
+      }
     },
   );
 
@@ -102,23 +115,6 @@ describe("native harness tool policy", () => {
         requiresLiveToolAuthority: active,
         toolPolicyRestricted: true,
       });
-    },
-  );
-
-  it.each([
-    { name: "narrow allowlist", config: { tools: { allow: ["message"] } }, restricted: true },
-    { name: "specific denylist", config: { tools: { deny: ["exec"] } }, restricted: true },
-    { name: "narrow profile", config: { tools: { profile: "coding" } }, restricted: true },
-    { name: "full profile", config: { tools: { profile: "full" } }, restricted: false },
-    { name: "empty config allowlist", config: { tools: { allow: [] } }, restricted: false },
-  ] satisfies Array<{ name: string; config: OpenClawConfig; restricted: boolean }>)(
-    "preserves plugin side-question restrictions for $name",
-    async ({ config, restricted }) => {
-      expect(
-        resolvePluginHarnessPolicyToolsAllow(
-          await preparePluginHarnessToolPolicies({ ...input, config }),
-        ),
-      ).toEqual(restricted ? [] : undefined);
     },
   );
 

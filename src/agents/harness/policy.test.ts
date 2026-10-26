@@ -43,6 +43,8 @@ function checkPolicy(
 
 const agentParams = { entries: { writer: { params: { temperature: 0.2 } } } };
 const routeModel = (facts: Record<string, unknown> = {}, id = "gpt-5.5") => ({ id, ...facts });
+const completions = routeModel({ api: "openai-completions" });
+const customHeaders = routeModel({ headers: { "x-route": "custom" } });
 
 describe("resolveAgentHarnessPolicy", () => {
   it("preserves the source of an explicit provider runtime", () => {
@@ -57,11 +59,7 @@ describe("resolveAgentHarnessPolicy", () => {
   it.each(["default", "auto"] as const)("treats %s as implicit route selection", (id) => {
     const agentRuntime = { id };
     const anthropic = providerConfig(
-      {
-        api: "anthropic-messages",
-        baseUrl: "https://api.anthropic.com",
-        agentRuntime,
-      },
+      { api: "anthropic-messages", baseUrl: "https://api.anthropic.com", agentRuntime },
       undefined,
       "anthropic",
     );
@@ -103,33 +101,20 @@ describe("resolveAgentHarnessPolicy", () => {
   });
 
   it.each([
-    [
-      "later adapter",
-      [routeModel(), routeModel({ api: "openai-completions" })],
-      "openclaw",
-      "openai-completions",
-    ],
+    ["later adapter", [routeModel(), completions], "openclaw", "openai-completions"],
     [
       "provider-looking native id",
-      [
-        routeModel({ api: "openai-responses" }, "openai/gpt-5.5"),
-        routeModel({ api: "openai-completions" }),
-      ],
+      [routeModel({ api: "openai-responses" }, "openai/gpt-5.5"), completions],
       "openclaw",
       "openai-completions",
     ],
     [
       "authoritative empty headers",
-      [routeModel({ headers: {} }), routeModel({ headers: { "x-route": "custom" } })],
+      [routeModel({ headers: {} }), customHeaders],
       "codex",
       "openai-responses",
     ],
-    [
-      "later headers",
-      [routeModel(), routeModel({ headers: { "x-route": "custom" } })],
-      "openclaw",
-      "openai-responses",
-    ],
+    ["later headers", [routeModel(), customHeaders], "openclaw", "openai-responses"],
   ] as const)("keeps duplicate model config aligned: %s", (_name, models, runtime, api) => {
     const config = providerConfig({ models });
     checkPolicy(config, runtime);

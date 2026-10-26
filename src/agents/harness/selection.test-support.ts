@@ -13,23 +13,17 @@ import type {
 } from "../embedded-agent-runner/run/types.js";
 import { retainPreparedPluginRegistry } from "../prepared-model-runtime.plugin-lifetime.js";
 import { maybeCompactAgentHarnessSession as compactSession } from "./compaction.js";
-import { createBaseAttemptParams } from "./lifecycle.test-support.js";
+import {
+  createAttemptResult as createBaseAttemptResult,
+  createBaseAttemptParams,
+} from "./lifecycle.test-support.js";
 
 export function createAttemptResult(sessionIdUsed: string): EmbeddedRunAttemptResult {
+  const { diagnosticTrace: _trace, ...result } = createBaseAttemptResult();
   return {
-    terminal: { kind: "ok" },
+    ...result,
     sessionIdUsed,
-    messagesSnapshot: [],
     assistantTexts: [`${sessionIdUsed} ok`],
-    toolMetas: [],
-    lastAssistant: undefined,
-    didSendViaMessagingTool: false,
-    messagingToolSentTexts: [],
-    messagingToolSentMediaUrls: [],
-    messagingToolSentTargets: [],
-    cloudCodeAssistFormatError: false,
-    replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-    itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
   };
 }
 
