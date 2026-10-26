@@ -62,9 +62,13 @@ try {
   }
   const expected = await Promise.all(entries.map((entry) => import(entry)));
   async function run(count: number) {
-    for (let iteration = 0; iteration < count; iteration++) {
-      const index = iteration % entries.length;
-      assert.equal(await import(entries[index]), expected[index]);
+    for (let completed = 0; completed < count;) {
+      for (const [index, entry] of entries.entries()) {
+        assert.equal(await import(entry), expected[index]);
+        if (++completed === count) {
+          break;
+        }
+      }
     }
   }
   await run(200);

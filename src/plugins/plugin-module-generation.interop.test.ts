@@ -44,10 +44,11 @@ describe("native plugin generation interop", () => {
           expect(managed.load("entry.cjs")).toMatchObject({ value: 42 });
         }
         const boot = register.mock.calls.filter(([hooks]) => hooks.resolve).length;
-        for (let i = 0; i < hosts.length; i++) {
-          await hosts[i].dispose();
-          hosts[i] = host(root);
-          expect(hosts[i].load("entry.cjs")).toMatchObject({ value: 42 });
+        for (const [i, managed] of hosts.entries()) {
+          await managed.dispose();
+          const replacement = host(root);
+          hosts[i] = replacement;
+          expect(replacement.load("entry.cjs")).toMatchObject({ value: 42 });
         }
         // The SDK and capture dispatcher each install at most one process hook.
         expect(boot).toBeLessThanOrEqual(2);

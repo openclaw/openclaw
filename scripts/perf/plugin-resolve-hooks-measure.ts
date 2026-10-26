@@ -94,8 +94,8 @@ try {
     owners.push(load(i));
   }
   const bootHooks = active;
-  for (let i = 0; i < plugins; i++) {
-    await owners[i].dispose();
+  for (const [i, owner] of owners.entries()) {
+    await owner.dispose();
     owners[i] = load(i);
   }
   const reloadedHooks = active;
