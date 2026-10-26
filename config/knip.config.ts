@@ -466,6 +466,7 @@ const repositoryScriptEntries = [
   "scripts/perf/sandbox-paths-measure.ts!",
   "scripts/perf/session-projection-stream-measure.ts!",
   "scripts/perf/session-sharing-key-measure.ts!",
+  "scripts/perf/session-store-key-measure.ts!",
   "scripts/perf/session-store-summary-measure.ts!",
   "scripts/perf/session-transcript-catalog-measure.ts!",
   "scripts/perf/slack-send-preparation-measure.ts!",
