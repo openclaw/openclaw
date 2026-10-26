@@ -362,6 +362,13 @@ export function createOpenClawStateLeaseWorkerOwner(params: {
     await Promise.allSettled(settlements);
   };
   return {
+    // Draining stops new effects; retained scopes still own their native settlement.
+    assertCurrent(this: void) {
+      assertCurrent("write");
+      if (!accepting) {
+        throw new Error("State lease worker operation differs from its live owner");
+      }
+    },
     bind(lease: OpenClawStateWorkerLeaseContext) {
       if (closed || boundLease) {
         throw new Error("State lease worker owner is already bound or closed");

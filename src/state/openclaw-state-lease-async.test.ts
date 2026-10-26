@@ -39,10 +39,12 @@ it("refuses a worker-leased effect after expiry before the host expiry callback 
       (lease) =>
         withAdmission([lease], context, async (authority) => {
           authority.assertCurrent();
+          lease.assertCurrent();
           // No timer or worker notification runs between the clock change and this effect.
           const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 120_000);
           try {
             expect(lease.signal.aborted).toBe(false);
+            expect(() => lease.assertCurrent()).toThrow();
             authority.assertCurrent();
             effect();
           } finally {
@@ -83,6 +85,7 @@ it("drains an accepted callback and releases its lease during canonical close", 
       await expect(lease.renew()).rejects.toMatchObject({
         code: "STATE_DATABASE_READ_ADMISSION_INVALIDATED",
       });
+      expect(() => lease.assertCurrent()).toThrow();
       finish.resolve();
       expect(await outcome).toBeInstanceOf(Error);
       await closing;
@@ -125,6 +128,7 @@ it.each([
         });
         expect(blocked).not.toHaveBeenCalled();
         await expect(retired.assertOwned()).rejects.toThrow();
+        expect(() => retired.assertCurrent()).toThrow();
         await closeDatabase();
         sql.expectIdle();
         expect(wait).not.toHaveBeenCalled();

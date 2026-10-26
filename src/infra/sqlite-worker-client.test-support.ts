@@ -14,6 +14,7 @@ export function createSqliteWorkerClientActor(): Actor {
     databasePath: "/fixture/state.sqlite",
     stateAccess: {
       canonicalPath: "/fixture/state.sqlite",
+      processOwner: undefined,
       async prepareAccess() {
         return () => {};
       },

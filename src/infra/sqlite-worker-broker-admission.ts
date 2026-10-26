@@ -155,6 +155,7 @@ export function captureSqliteWorkerOpen(
     ...(options.admission
       ? {
           expectedIdentity: options.admission.identity,
+          expectedBirthtime: options.admission.birthtime,
           createOpenAdmission: () => {
             let granted = false;
             return {
@@ -193,7 +194,11 @@ export async function prepareSqliteWorkerDatabaseAdmission(options: PreparedSqli
   const inputHash = createHash("sha256").update(options.input).digest("hex");
   const identity = await readDatabasePathIdentity(databasePath);
   options.assertCurrent?.();
-  if (options.expectedIdentity && identity.key !== options.expectedIdentity) {
+  if (
+    options.expectedIdentity &&
+    (identity.key !== options.expectedIdentity ||
+      (options.expectedBirthtime !== undefined && identity.birthtime !== options.expectedBirthtime))
+  ) {
     throw new Error("SQLite Worker path no longer matches its borrowed native owner");
   }
   return { databasePath, inputHash, identity, key: identity.key };

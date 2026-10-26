@@ -183,6 +183,13 @@ export class SqliteWorkerBroker {
   ): Promise<SqliteWorkerStore<Operations> | undefined> {
     // Cached client callbacks share this scope; never capture the opening options in it.
     const { maintenanceScope, cleanupAccess } = options;
+    const databaseIdentity = options.expectedIdentity
+      ? {
+          databasePath: options.databasePath,
+          key: options.expectedIdentity,
+          birthtime: options.expectedBirthtime,
+        }
+      : undefined;
     options.signal?.throwIfAborted();
     options.assertCurrent?.();
     const { databasePath, inputHash, identity, key } =
@@ -191,7 +198,7 @@ export class SqliteWorkerBroker {
     if (reusable && this.actors.get(key) !== reusable.actor) {
       return undefined;
     }
-    const stateAccess = captureStateDatabaseAccess(
+    const stateAccess = await captureStateDatabaseAccess(
       options.stateDatabasePath ?? identity.canonicalPath,
     );
     const assertStateAccess = await stateAccess.prepareAccess({
@@ -295,6 +302,7 @@ export class SqliteWorkerBroker {
         {
           type: "open",
           actor: actor.id,
+          databaseIdentity,
           moduleUrl,
           databasePath,
           ...(options.createAdmission
@@ -368,6 +376,7 @@ export class SqliteWorkerBroker {
           {
             type: "execute",
             actor: owned.id,
+            databaseIdentity,
             input: payload,
             ...(scope?.stateContext ? { stateContext: scope.stateContext } : {}),
           },

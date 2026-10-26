@@ -88,7 +88,7 @@ export type Actor = {
   markNativeStopped(): void;
   closeReceipt?: SqliteWorkerCloseReceipt;
   stateDatabasePath?: string;
-  stateAccess: ReturnType<typeof captureStateDatabaseAccess>;
+  stateAccess: Awaited<ReturnType<typeof captureStateDatabaseAccess>>;
   id: number;
   key: string;
   databasePath: string;
@@ -148,7 +148,7 @@ export type SqliteWorkerStoreOptions = {
   databasePath: string;
   input: unknown;
   existingOnly?: boolean;
-  admission?: { identity: string; assertCurrent(): void };
+  admission?: { identity: string; birthtime?: string; assertCurrent(): void };
 };
 
 export type PreparedSqliteWorkerOpen = {
@@ -162,6 +162,7 @@ export type PreparedSqliteWorkerOpen = {
   runtimeGeneration?: RuntimeWorkerGeneration;
   carrierUrl: URL;
   expectedIdentity?: string;
+  expectedBirthtime?: string;
   createOpenAdmission?: SqliteWorkerAdmissionFactory;
   maintenanceScope?: OpenClawDatabaseMaintenanceScope;
   cleanupAccess?: Pick<StateDatabaseSchemaLease, "assertDatabaseAccess">;

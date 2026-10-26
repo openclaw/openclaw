@@ -2,10 +2,7 @@ import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { captureRuntimeWorkerSource } from "../infra/runtime-worker-generation.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
-import {
-  assertExistingDatabaseIdentity,
-  type DatabasePathIdentity,
-} from "../infra/sqlite-worker-identity.js";
+import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import type { SqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import {
   openSharedStateSqliteWorkerStore,
@@ -268,11 +265,6 @@ function createSharedStateWorkerOwner() {
       }
       const assertCurrent = () => {
         assertOwned();
-        assertExistingDatabaseIdentity(
-          databasePath,
-          expectedIdentity.key,
-          expectedIdentity.birthtime,
-        );
         for (const entry of activeEntries) {
           if (
             matches(entry, expectedIdentity) &&
@@ -301,7 +293,16 @@ function createSharedStateWorkerOwner() {
         }
       }
       return openSharedStateSqliteWorkerStore<OpenClawStateWorkerCleanupOperations>(
-        { ...captureRuntimeWorkerSource(moduleUrl), databasePath, existingOnly: true },
+        {
+          ...captureRuntimeWorkerSource(moduleUrl),
+          databasePath,
+          existingOnly: true,
+          admission: {
+            identity: expectedIdentity.key,
+            birthtime: expectedIdentity.birthtime,
+            assertCurrent,
+          },
+        },
         context,
         assertCurrent,
         {
