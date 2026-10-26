@@ -184,7 +184,7 @@ it("excludes incognito roots and descendants and restores no live mutation facts
     }),
   );
   expect(captured).toHaveLength(1);
-  expect(captured[0]?.children.map((row) => row.key)).toEqual([publicChild.key]);
+  expect(captured[0]?.children.map((child) => child.key)).toEqual([publicChild.key]);
   expect(captured[0]?.childrenDisplayMode).toBe("expanded");
   expect(captured[0]?.snapshotSubtitle).toBeUndefined();
   const restored = restoreSnapshotSession(captured[0]!, row.key);

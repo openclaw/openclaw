@@ -1477,12 +1477,12 @@ try {
         await toggle.click();
       }
       await page.waitForFunction(
-        (parentKey) =>
+        (expectedParent) =>
           Reflect.get(window, "__coldLoad")
             .read()
             .rpcs.some(
               (rpc: { method: string; params: { spawnedBy?: string } }) =>
-                rpc.method === "sessions.list" && rpc.params.spawnedBy === parentKey,
+                rpc.method === "sessions.list" && rpc.params.spawnedBy === expectedParent,
             ),
         parentKey,
       );

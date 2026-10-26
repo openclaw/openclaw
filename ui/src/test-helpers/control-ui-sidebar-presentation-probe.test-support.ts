@@ -8,9 +8,13 @@ export function sidebarPresentationProbe() {
     issues: { present: boolean; count: string | null };
   };
   const artwork = (icon: Element) => {
-    if (icon.localName === "svg") return icon.innerHTML;
+    if (icon.localName === "svg") {
+      return icon.innerHTML;
+    }
     const mask = icon.getAttribute("style")?.match(/data:image\/svg\+xml,([^"\s]+)"/u)?.[1];
-    if (!mask) return "missing CSS artwork";
+    if (!mask) {
+      return "missing CSS artwork";
+    }
     const template = document.createElement("template");
     template.innerHTML = decodeURIComponent(mask);
     return template.content.firstElementChild?.innerHTML ?? "invalid CSS artwork";
@@ -38,7 +42,9 @@ export function sidebarPresentationProbe() {
     characterData: true,
   });
   const sample = () => {
-    if (stopped) return;
+    if (stopped) {
+      return;
+    }
     const sidebar = document.querySelector("aside.sidebar");
     if (sidebar && dirty) {
       dirty = false;

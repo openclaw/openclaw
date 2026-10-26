@@ -184,7 +184,9 @@ export function renderSessionUnreadBadge(): JSX.Element {
 export function SessionRowBadges(props: SessionRowBadgesParams) {
   const rendered = createMemo(() => {
     const badges = resolveSessionRowBadges(props, t);
-    if (!badges.length) return;
+    if (!badges.length) {
+      return undefined;
+    }
     const group = document.createElement("span");
     group.className = "session-row-badges";
     for (const badge of badges) {
@@ -199,7 +201,9 @@ export function SessionRowBadges(props: SessionRowBadgesParams) {
         "disk-space-status": badge.diskSpaceStatus,
         "workspace-conflicts": badge.workspaceConflictCount || undefined,
       })) {
-        if (value !== undefined) element.setAttribute(`data-${key}`, String(value));
+        if (value !== undefined) {
+          element.setAttribute(`data-${key}`, String(value));
+        }
       }
       element.append(sessionIcon(badge.icon, 12, 1.6));
       if (badge.count) {

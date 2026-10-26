@@ -463,7 +463,9 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
 
   /** Collapsed zones keep full rows for true header counts and status dots. */
   protected zonedVisibleSections(rows: SidebarRecentSession[]): SidebarVisibleSections {
-    if (this.sidebarSnapshot) return this.readSnapshotNavigation(this.sidebarSnapshot);
+    if (this.sidebarSnapshot) {
+      return this.readSnapshotNavigation(this.sidebarSnapshot);
+    }
     return memoizedSidebarSections(
       this.sectionsMemo,
       this,
@@ -486,7 +488,9 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   }
 
   reconciledSidebarZone(rows?: SidebarRecentSession[]) {
-    if (this.sidebarSnapshot) return this.readSnapshotNavigation(this.sidebarSnapshot).zone;
+    if (this.sidebarSnapshot) {
+      return this.readSnapshotNavigation(this.sidebarSnapshot).zone;
+    }
     const liveRows = rows ?? this.selectedAgentSessionRows(this.getSessionNavigationState());
     return personalSidebarZone(this, liveRows);
   }
@@ -650,7 +654,9 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   protected selectedAgentSessionRows(
     navigationState: SidebarSessionNavigationState,
   ): SidebarRecentSession[] {
-    if (this.sidebarSnapshot) return this.readSnapshotNavigation(this.sidebarSnapshot).visibleRows;
+    if (this.sidebarSnapshot) {
+      return this.readSnapshotNavigation(this.sidebarSnapshot).visibleRows;
+    }
     return this.rowsMemo.read(
       () => [...sidebarRowsInputs(this, navigationState), this.sidebarEntries],
       () => {

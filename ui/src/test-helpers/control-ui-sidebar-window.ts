@@ -9,14 +9,12 @@ export async function revealSidebarTarget(
 ): Promise<void> {
   const deadline = Date.now() + timeout;
   const commit = () =>
-    viewport
-      .page()
-      .evaluate(
-        () =>
-          new Promise<void>((resolve) =>
-            requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
-          ),
-      );
+    viewport.page().evaluate(
+      () =>
+        new Promise<void>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+        }),
+    );
   if (!(await target.count())) {
     await viewport.evaluate((element) => {
       element.scrollTop = 0;

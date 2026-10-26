@@ -41,13 +41,21 @@ function restoreAttention(
   value: NonNullable<SidebarSnapshotSession["state"]>["attention"],
   key: string,
 ): SidebarSessionAttention {
-  if (!value || value === "none") return { kind: "none" };
-  if (value === "error") return { kind: "error", reason: "", sourceSessionKey: key };
-  if (value === "question" || value === "approval") return { kind: value, requests: [] };
+  if (!value || value === "none") {
+    return { kind: "none" };
+  }
+  if (value === "error") {
+    return { kind: "error", reason: "", sourceSessionKey: key };
+  }
+  if (value === "question" || value === "approval") {
+    return { kind: value, requests: [] };
+  }
   return { kind: "agent", icon: value, note: "", sourceSessionKey: key };
 }
 function snapshotChildren(value: SidebarRecentSession["subagentSummary"]) {
-  if (!value) return;
+  if (!value) {
+    return undefined;
+  }
   const state = {
     attention: snapshotAttention(value.attention),
     runningChildCount: value.runningChildCount || undefined,
@@ -55,7 +63,7 @@ function snapshotChildren(value: SidebarRecentSession["subagentSummary"]) {
     unreadChildCount: value.unreadChildCount || undefined,
     failedChildCount: value.failedChildCount || undefined,
   };
-  return Object.values(state).some((value) => value !== undefined) ? state : undefined;
+  return Object.values(state).some((item) => item !== undefined) ? state : undefined;
 }
 
 export function snapshotSessions(

@@ -17,7 +17,7 @@ export function sessionIconMask(name: IconName, stroke = 2): string {
   if (!mask) {
     const attributes = (values: IconData["attributes"]) =>
       Object.entries(values)
-        .map(([key, value]) => ` ${key}="${value}"`)
+        .map(([attribute, value]) => ` ${attribute}="${value}"`)
         .join("");
     const node = ([tag, values, children]: IconNode): string =>
       `<${tag}${attributes(values)}>${children?.map(node).join("") ?? ""}</${tag}>`;
@@ -32,7 +32,9 @@ export function sessionIcon(name: IconName, size = 12, stroke = 2): HTMLElement 
   const element = document.createElement("i");
   element.className = "session-css-icon";
   element.setAttribute("aria-hidden", "true");
-  if (size !== 12) element.style.cssText = `width:${size}px;height:${size}px`;
+  if (size !== 12) {
+    element.style.cssText = `width:${size}px;height:${size}px`;
+  }
   element.style.maskImage = sessionIconMask(name, stroke);
   return element;
 }

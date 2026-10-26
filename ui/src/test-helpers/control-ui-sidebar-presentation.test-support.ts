@@ -79,9 +79,9 @@ export function installTeamScaleSidebarPresentation(input: {
       respond: (payload: unknown) => void;
     }) => {
       respond({ subscribed: true });
-      const keys = [...(params.sessionKeys ?? []), ...(params.passiveSessionKeys ?? [])];
+      const keys = new Set([...(params.sessionKeys ?? []), ...(params.passiveSessionKeys ?? [])]);
       for (const [key, snapshot] of Object.entries(input.sessions)) {
-        if (keys.includes(key)) {
+        if (keys.has(key)) {
           gateway.emit(input.event, { sessions: { [key]: snapshot } });
         }
       }
