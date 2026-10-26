@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { DOMParser } from "linkedom";
 import { ignoreMissingPath } from "../infra/errno.js";
 import { inspectPortUsage } from "../infra/ports-inspect.js";
 import { WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS } from "../infra/windows-powershell-spawn.js";
@@ -57,6 +58,7 @@ import {
 } from "./schtasks-runtime.js";
 import { probeScheduledTaskExists } from "./schtasks-state-probe.js";
 import { buildScheduledTaskXml, writeTaskXmlTempFile } from "./schtasks-xml.js";
+import { preserveServicePolicyXml } from "./service-policy-xml.js";
 import { resolveTaskUser } from "./service-process-env.js";
 import { publishServiceFile } from "./service-stage.js";
 import type {
@@ -191,7 +193,6 @@ export async function installScheduledTask(
   const warn = args.warn ?? ((message: string) => args.stdout.write(`${message}\n`));
   let activationAttempted = false;
   const install = async () => {
-    const { DOMParser } = await import("linkedom");
     const installedCommand = await readScheduledTaskCommand(args.env).catch(() => null);
     const fallbackEnv = resolveScheduledTaskActivationEnv(args.env, installedCommand?.environment);
     // Capture ownership before repair changes the port/profile that locates the old process.
@@ -340,7 +341,6 @@ export async function installScheduledTask(
         interactive: activationEnv.OPENCLAW_SERVICE_KIND === "node",
       });
       if (definitionTransaction?.preservePolicy?.length) {
-        const { preserveServicePolicyXml } = await import("./service-policy-xml.js");
         expectedXml = preserveServicePolicyXml(
           expectedXml,
           await readScheduledTaskDefinition(activationEnv),

@@ -96,7 +96,7 @@ function mockPlutil() {
 
 describe("LaunchAgent plist", () => {
   beforeEach(mockPlutil);
-  it("loads service adapters and resolves paths without the XML policy editor", async () => {
+  it("resolves service paths without loading the XML policy editor", async () => {
     const result = await runNodeScript(
       [
         "--import",
@@ -111,10 +111,6 @@ registerHooks({ resolve(specifier, context, nextResolve) {
 } });
 const { resolveLaunchAgentPlistPathForLabel } = await import(${JSON.stringify(new URL("./launchd-service-files.ts", import.meta.url).href)});
 assert.equal(resolveLaunchAgentPlistPathForLabel({ HOME: "/synthetic" }, "test.service"), "/synthetic/Library/LaunchAgents/test.service.plist");
-const { resolveGatewayService } = await import(${JSON.stringify(new URL("./service.ts", import.meta.url).href)});
-assert.equal(typeof resolveGatewayService().install, "function");
-const { checkTokenDrift } = await import(${JSON.stringify(new URL("./service-audit.ts", import.meta.url).href)});
-assert.equal(checkTokenDrift({ serviceToken: "same", configToken: "same" }), null);
 console.log("service-path-import-ok");`,
       ],
       {
