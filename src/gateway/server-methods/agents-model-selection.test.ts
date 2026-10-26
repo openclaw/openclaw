@@ -10,8 +10,8 @@ const fixture = vi.hoisted(() => {
   const config: OpenClawConfig = {};
   return {
     config,
-    writes: vi.fn(),
-    beforeWrite: vi.fn(),
+    beforeWrite: () => {},
+    current: true,
     choice: vi.fn<typeof preparePublishedModelRuntimeChoice>(),
   };
 });
@@ -26,7 +26,6 @@ vi.mock("../../config/config.js", async (importOriginal) => ({
     await params.mutate(draft);
     fixture.beforeWrite();
     params.writeOptions?.assertConfigPathForWrite?.();
-    fixture.writes(draft);
     fixture.config = draft;
     if (params.writeOptions) {
       getRuntimeConfigWriteApplication(params.writeOptions)?.claim()?.settle("applied");
@@ -47,11 +46,12 @@ function update(params: Record<string, unknown>) {
 beforeEach(() => {
   vi.clearAllMocks();
   fixture.config = { agents: { entries: { main: {} } } };
-  fixture.beforeWrite.mockReset();
+  fixture.beforeWrite = () => {};
+  fixture.current = true;
   fixture.choice.mockReset().mockImplementation(async ({ runtimeId }) => ({
     kind: "ready",
     runtimeId: runtimeId ?? "openclaw",
-    validate: () => undefined,
+    validate: () => (fixture.current ? undefined : "Replaced"),
   }));
 });
 
@@ -78,16 +78,9 @@ it.each([false, true])(
 );
 it("rechecks catalog ownership at the final config write", async () => {
   const before = structuredClone(fixture.config);
-  let current = true;
-  fixture.choice.mockResolvedValue({
-    kind: "ready",
-    runtimeId: "acp-opencode",
-    validate: () => (current ? undefined : "Replaced"),
-  });
-  fixture.beforeWrite.mockImplementation(() => {
-    current = false;
-  });
+  fixture.beforeWrite = () => {
+    fixture.current = false;
+  };
   expectRpcError(await update(request), { message: "Replaced" });
-  expect(fixture.writes).not.toHaveBeenCalled();
   expect(fixture.config).toEqual(before);
 });
