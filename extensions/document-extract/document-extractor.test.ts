@@ -1,6 +1,6 @@
 import type { Worker } from "node:worker_threads";
 import type { DocumentExtractionRequest } from "openclaw/plugin-sdk/document-extractor";
-import { afterAll, expect, it, vi } from "vitest";
+import { afterAll, expect, it, onTestFinished, vi } from "vitest";
 import { createPdfFixture } from "./document-extractor.test-support.js";
 
 const workers = vi.hoisted(() => [] as Worker[]);
@@ -96,14 +96,11 @@ it("joins canceled extraction before allowing the next document to succeed", asy
     // Cancel at dispatch so a fast worker reply cannot beat the abort.
     abort.abort(reason);
   });
-  try {
-    await expect(
-      extract({ minTextChars: 10_000, maxPixels: 4_000_000, signal: abort.signal }),
-    ).rejects.toBe(reason);
-    expect(worker.threadId).toBe(-1);
-  } finally {
-    dispatch.mockRestore();
-  }
+  onTestFinished(() => dispatch.mockRestore());
+  await expect(
+    extract({ minTextChars: 10_000, maxPixels: 4_000_000, signal: abort.signal }),
+  ).rejects.toBe(reason);
+  expect(worker.threadId).toBe(-1);
   await expect(extract({ signal: abort.signal })).rejects.toBe(reason);
   expect((await extract())?.text).toContain("First PDF page");
 });
