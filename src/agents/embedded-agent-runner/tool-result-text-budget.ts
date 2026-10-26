@@ -20,7 +20,7 @@ export function getToolResultTextBudget(msg: AgentMessage): number {
   if (!msg || msg.role !== "toolResult") {
     return 0;
   }
-  const content = (msg as { content?: unknown }).content;
+  const content = msg.content;
   return Array.isArray(content) ? getToolResultContentBudget(content) : 0;
 }
 
