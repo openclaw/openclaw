@@ -17,8 +17,6 @@ import {
 } from "./agent-command.compaction.test-support.js";
 import { readRestartRecoveryRequesterSource } from "./requester-run-recovery-source.js";
 
-// Exercise real command admission, post-run publication and the marker transaction.
-// Shared fixtures isolate model, provider/config/plugin and final transport dependencies.
 afterEach(() => clearRuntimeConfigSnapshot());
 registerAgentCommandCompactionTestHooks();
 beforeEach(() => {
@@ -27,11 +25,18 @@ beforeEach(() => {
   }
   setRuntimeConfigSnapshot(state.cfg);
 });
+const { loadSessionEntry, replaceSessionEntry, patchSessionEntryCore } = compactionTestRuntime;
+const requesterOrigin = (previous = false) => ({
+  sessionKey: `agent:main:dashboard:${previous ? "previous-parent" : "parent"}`,
+  messageProvider: "webchat",
+  senderId: previous ? "synthetic-previous-owner" : "synthetic-owner",
+});
+const runCommand = (params: Parameters<typeof agentCommandFromGatewayIngress>[0]) =>
+  agentCommandFromGatewayIngress({ allowModelOverride: false, ...params }, ...GATEWAY_INGRESS_ARGS);
 
 it.each([false, true])(
   "keeps admitted final ownership across post-run cache publication (successor: %s)",
   async (successor) => {
-    const { loadSessionEntry, replaceSessionEntry, patchSessionEntryCore } = compactionTestRuntime;
     const sessionId = "same-session";
     const sessionKey = "agent:main:dashboard:admitted-final";
     const target = { agentId: "main", sessionKey, storePath: requireCompactionStorePath() };
@@ -70,24 +75,20 @@ it.each([false, true])(
       }
       return { deliverySucceeded: false };
     });
-    await agentCommandFromGatewayIngress(
-      {
-        sessionKey,
-        sessionId,
-        runId: "run-a",
-        message: "Finish the admitted result",
-        allowModelOverride: false,
-        ...context,
-        deliver: true,
-        inputProvenance: {
-          kind: "inter_session",
-          sourceSessionKey: "agent:main:subagent:synthetic-child",
-          sourceChannel: "internal",
-          sourceTool: "subagent_settle",
-        },
+    await runCommand({
+      sessionKey,
+      sessionId,
+      runId: "run-a",
+      message: "Finish the admitted result",
+      ...context,
+      deliver: true,
+      inputProvenance: {
+        kind: "inter_session",
+        sourceSessionKey: "agent:main:subagent:synthetic-child",
+        sourceChannel: "internal",
+        sourceTool: "subagent_settle",
       },
-      ...GATEWAY_INGRESS_ARGS,
-    );
+    });
     expect(state.runAgentAttemptMock).toHaveBeenCalledOnce();
     expect(state.deliverAgentCommandResultMock).toHaveBeenCalledOnce();
   },
@@ -101,7 +102,6 @@ it.each([
 ] as const)(
   "keeps direct command steering bound to its admitted claim with predecessor custody %s in %s",
   async (predecessor, kind) => {
-    const { loadSessionEntry, replaceSessionEntry } = compactionTestRuntime;
     const sessionId = "reused-child-session";
     const sessionKey = `agent:main:${kind}:reused-child`;
     const target = { agentId: "main", sessionKey, storePath: requireCompactionStorePath() };
@@ -124,11 +124,7 @@ it.each([
         sessionId,
         lifecycleRevision: "same-child-incarnation",
         sourceRunId: previousRunId,
-        requesterOrigin: {
-          sessionKey: "agent:main:dashboard:previous-parent",
-          messageProvider: "webchat",
-          senderId: "synthetic-previous-owner",
-        },
+        requesterOrigin: requesterOrigin(true),
       },
       ...(predecessor !== "unresolved" ? { restartRecoveryTerminalRunIds: [previousRunId] } : {}),
       ...(predecessor === "terminal-pending"
@@ -187,29 +183,21 @@ it.each([
       }
       return makeCompactionResult({ sessionId, text: "Child result", runner: "embedded" });
     });
-    await agentCommandFromGatewayIngress(
-      {
-        sessionKey,
-        sessionId,
-        runId,
-        message: "Continue the child's work",
-        allowModelOverride: false,
-        deliver: false,
-        channel: "webchat",
-        requesterOrigin: {
-          sessionKey: "agent:main:dashboard:parent",
-          messageProvider: "webchat",
-          senderId: "synthetic-owner",
-        },
-        inputProvenance: {
-          kind: "inter_session",
-          sourceSessionKey: "agent:main:dashboard:parent",
-          sourceChannel: "webchat",
-          sourceTool: "sessions_send",
-        },
+    await runCommand({
+      sessionKey,
+      sessionId,
+      runId,
+      message: "Continue the child's work",
+      deliver: false,
+      channel: "webchat",
+      requesterOrigin: requesterOrigin(),
+      inputProvenance: {
+        kind: "inter_session",
+        sourceSessionKey: "agent:main:dashboard:parent",
+        sourceChannel: "webchat",
+        sourceTool: "sessions_send",
       },
-      ...GATEWAY_INGRESS_ARGS,
-    );
+    });
     expect(state.runAgentAttemptMock).toHaveBeenCalledOnce();
     if (kind === "subagent") {
       const settled = loadSessionEntry(target);

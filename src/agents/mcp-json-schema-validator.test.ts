@@ -1,4 +1,4 @@
-import type { JsonSchemaType } from "@modelcontextprotocol/client";
+import type { JsonSchemaType, JsonSchemaValidator } from "@modelcontextprotocol/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMcpJsonSchemaValidator } from "./mcp-json-schema-validator.js";
 
@@ -9,12 +9,22 @@ vi.mock("../../standalone-runtime-profile.mjs", async (importOriginal) => ({
 }));
 afterEach(() => vi.restoreAllMocks());
 
+function expectValidation(
+  validate: JsonSchemaValidator<unknown>,
+  valid: unknown,
+  invalid: unknown,
+) {
+  expect([validate(valid).valid, validate(invalid).valid]).toEqual([true, false]);
+}
+
 describe.each(["dynamic-execution", "embedded-aot"])("MCP validation on %s", (runtimeProfile) => {
+  let provider: ReturnType<typeof createMcpJsonSchemaValidator>;
   beforeEach(() => {
     profile.value = runtimeProfile;
+    provider = createMcpJsonSchemaValidator();
   });
   it("resolves dependency refs even when the dependency key is a schema keyword", () => {
-    const validate = createMcpJsonSchemaValidator().getValidator({
+    const validate = provider.getValidator({
       $id: "https://example.test/config",
       type: "object",
       definitions: { text: { type: "string" } },
@@ -23,13 +33,11 @@ describe.each(["dynamic-execution", "embedded-aot"])("MCP validation on %s", (ru
         type: { properties: { value: { $ref: "#/definitions/text" } }, required: ["value"] },
       },
     });
-    expect(validate({ type: "trigger", value: "valid" }).valid).toBe(true);
-    expect(validate({ type: "trigger", value: 42 }).valid).toBe(false);
+    expectValidation(validate, { type: "trigger", value: "valid" }, { type: "trigger", value: 42 });
     expect(validate({ type: "trigger" }).valid).toBe(false);
   });
 
   it("retains registered root and nested resource identities across schema acquisition", () => {
-    const provider = createMcpJsonSchemaValidator();
     const root = {
       $id: "https://example.test/schemas/",
       definitions: {
@@ -43,38 +51,32 @@ describe.each(["dynamic-execution", "embedded-aot"])("MCP validation on %s", (ru
       properties: { value: { $ref: "https://example.test/schemas/alias" } },
       required: ["value"],
     });
-    expect(validate({ value: "valid" }).valid).toBe(true);
-    expect(validate({ value: 1 }).valid).toBe(false);
+    expectValidation(validate, { value: "valid" }, { value: 1 });
     const existing = provider.getValidator({
       $id: "https://example.test/schemas/alias",
       type: "number",
     });
-    expect(existing("valid").valid).toBe(true);
-    expect(existing(1).valid).toBe(false);
+    expectValidation(existing, "valid", 1);
     const sameRoot = provider.getValidator({ ...root, type: "number" });
     expect(sameRoot("still unconstrained").valid).toBe(true);
   });
 
   it("preserves RFC reference resolution under an opaque URI scope", () => {
-    const provider = createMcpJsonSchemaValidator();
     provider.getValidator({
       $id: "urn:example:root",
       definitions: { value: { $id: "text", type: "string" } },
     });
     const validate = provider.getValidator({ $ref: "urn:text" });
-    expect(validate("value").valid).toBe(true);
-    expect(validate(1).valid).toBe(false);
+    expectValidation(validate, "value", 1);
   });
 
   it("keeps legacy anchors and rejects ambiguous IDs within a document", () => {
-    const provider = createMcpJsonSchemaValidator();
     for (const anchor of ["$anchor", "$dynamicAnchor"]) {
       const validate = provider.getValidator({
         definitions: { value: { [anchor]: "value", type: "string" } },
         $ref: "#value",
       });
-      expect(validate("valid").valid).toBe(true);
-      expect(validate(1).valid).toBe(false);
+      expectValidation(validate, "valid", 1);
     }
     for (const type of ["string", "number"]) {
       expect(() =>
@@ -91,7 +93,6 @@ describe.each(["dynamic-execution", "embedded-aot"])("MCP validation on %s", (ru
   });
 
   it("keeps acquired checks stable while replacing an unacquired resource alias", () => {
-    const provider = createMcpJsonSchemaValidator();
     const first = provider.getValidator({
       $id: "https://example.test/first",
       definitions: { value: { $id: "value", type: "string" } },
@@ -102,14 +103,11 @@ describe.each(["dynamic-execution", "embedded-aot"])("MCP validation on %s", (ru
       definitions: { value: { $id: "value", type: "number" } },
       $ref: "value",
     });
-    expect(first("valid").valid).toBe(true);
-    expect(first(1).valid).toBe(false);
-    expect(second(1).valid).toBe(true);
-    expect(second("valid").valid).toBe(false);
+    expectValidation(first, "valid", 1);
+    expectValidation(second, 1, "valid");
   });
 
   it("resolves relative root IDs, sibling resources, and encoded pointers", () => {
-    const provider = createMcpJsonSchemaValidator();
     provider.getValidator({
       $id: "schemas/",
       definitions: {
@@ -124,13 +122,11 @@ describe.each(["dynamic-execution", "embedded-aot"])("MCP validation on %s", (ru
     }
     for (const $ref of references) {
       const validate = provider.getValidator({ $ref });
-      expect(validate("valid").valid).toBe(true);
-      expect(validate(1).valid).toBe(false);
+      expectValidation(validate, "valid", 1);
     }
   });
 
   it("supports canonical draft-07 metaschema references and their historical alias", () => {
-    const provider = createMcpJsonSchemaValidator();
     for (const $ref of [
       "http://json-schema.org/draft-07/schema#",
       "http://json-schema.org/schema",
@@ -142,7 +138,6 @@ describe.each(["dynamic-execution", "embedded-aot"])("MCP validation on %s", (ru
   });
 
   it("preserves draft-07 fragment IDs alongside the containing resource", () => {
-    const provider = createMcpJsonSchemaValidator();
     const validate = provider.getValidator({
       $id: "https://example.test/anchored",
       definitions: {
@@ -153,29 +148,25 @@ describe.each(["dynamic-execution", "embedded-aot"])("MCP validation on %s", (ru
       properties: { value: { $ref: "#text" } },
       required: ["value"],
     });
-    expect(validate({ value: "valid" }).valid).toBe(true);
-    expect(validate({ value: 1 }).valid).toBe(false);
+    expectValidation(validate, { value: "valid" }, { value: 1 });
     expect(
       provider.getValidator({ $ref: "https://example.test/anchored#text" })("valid").valid,
     ).toBe(true);
   });
 
   it("keeps independently acquired modern schemas with the same ID independent", () => {
-    const provider = createMcpJsonSchemaValidator();
     const identity = {
       $schema: "https://json-schema.org/draft/2020-12/schema",
       $id: "https://example.test/reused",
     };
     const text = provider.getValidator({ ...identity, type: "string" });
     const number = provider.getValidator({ ...identity, type: "number" });
-    expect(text("value").valid).toBe(true);
-    expect(text(1).valid).toBe(false);
-    expect(number("value").valid).toBe(false);
-    expect(number(1).valid).toBe(true);
+    expectValidation(text, "value", 1);
+    expectValidation(number, 1, "value");
   });
 
   it("preserves legacy reference rebasing through a sibling ID", () => {
-    const validate = createMcpJsonSchemaValidator().getValidator({
+    const validate = provider.getValidator({
       $id: "https://example.test/sibling/base/",
       definitions: {
         sibling: { $id: "https://example.test/sibling/value.json", type: "string" },
@@ -183,12 +174,10 @@ describe.each(["dynamic-execution", "embedded-aot"])("MCP validation on %s", (ru
       },
       allOf: [{ $id: "https://example.test/sibling/", $ref: "value.json" }],
     });
-    expect(validate("legacy sibling").valid).toBe(true);
-    expect(validate(1).valid).toBe(false);
+    expectValidation(validate, "legacy sibling", 1);
   });
 
   it("keeps draft-07 ignored keywords separate from draft-2020-12 assertions", () => {
-    const provider = createMcpJsonSchemaValidator();
     const schema = { type: "array", contains: { type: "number" }, minContains: 2 };
     expect(provider.getValidator(schema)([1]).valid).toBe(true);
     expect(
@@ -201,7 +190,6 @@ describe.each(["dynamic-execution", "embedded-aot"])("MCP validation on %s", (ru
   });
 
   it("asserts known string and number formats while treating unknown formats as annotations", () => {
-    const provider = createMcpJsonSchemaValidator();
     expect(provider.getValidator({ type: "string", format: "email" })("not an email").valid).toBe(
       false,
     );
@@ -224,16 +212,14 @@ describe.each(["dynamic-execution", "embedded-aot"])("MCP validation on %s", (ru
   });
 
   it("does not retain evaluated properties between modern inputs", () => {
-    const validate = createMcpJsonSchemaValidator().getValidator({
+    const validate = provider.getValidator({
       $schema: "https://json-schema.org/draft/2020-12/schema",
       type: "object",
       anyOf: [{ properties: { a: { type: "number" } } }, { properties: { b: { type: "number" } } }],
       unevaluatedProperties: false,
     });
-    expect(validate({ a: 1 }).valid).toBe(true);
-    expect(validate({ a: "invalid" }).valid).toBe(false);
-    expect(validate({ b: 2 }).valid).toBe(true);
-    expect(validate({ b: "invalid" }).valid).toBe(false);
+    expectValidation(validate, { a: 1 }, { a: "invalid" });
+    expectValidation(validate, { b: 2 }, { b: "invalid" });
   });
 });
 
@@ -245,22 +231,18 @@ describe("MCP without string code generation", () => {
     const codegen = vi.spyOn(globalThis, "Function").mockImplementation(() => {
       throw new Error("string code generation is disabled");
     });
-    let results: boolean[];
-    try {
-      const validator = createMcpJsonSchemaValidator().getValidator({
-        type: "object",
-        properties: { name: { type: "string", format: "email" } },
-        required: ["name"],
-        additionalProperties: false,
-      });
-      results = [
-        validator({ name: "test@example.com" }).valid,
-        validator({ name: "invalid" }).valid,
-      ];
-      expect(codegen).not.toHaveBeenCalled();
-    } finally {
-      codegen.mockRestore();
-    }
+    const validator = createMcpJsonSchemaValidator().getValidator({
+      type: "object",
+      properties: { name: { type: "string", format: "email" } },
+      required: ["name"],
+      additionalProperties: false,
+    });
+    const results = [
+      validator({ name: "test@example.com" }).valid,
+      validator({ name: "invalid" }).valid,
+    ];
+    expect(codegen).not.toHaveBeenCalled();
+    codegen.mockRestore();
     expect(results).toEqual([true, false]);
   });
 });

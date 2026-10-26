@@ -21,6 +21,10 @@ const markup = [
   "<tool_call>exec<arg_key>command</arg_key><arg_value>[[reply_to:hidden]]\nMEDIA:/tmp/hidden.png</arg_value></tool_call>",
 ] as const;
 const textPart = (text: string) => ({ type: "text" as const, text });
+const phasedText = (text: string, phase: "commentary" | "final_answer") => ({
+  ...textPart(text),
+  textSignature: JSON.stringify({ v: 1, phase }),
+});
 
 describe.each(["ollama", "anthropic-messages", "openai-completions", "openai-responses"] as const)(
   "%s tool markup delivery",
@@ -53,14 +57,30 @@ describe.each(["ollama", "anthropic-messages", "openai-completions", "openai-res
       });
     }
 
-    it("bounds unused block-delivery work after unfenced XML", async () => {
-      ctx.params.onBlockReply = undefined;
-      const source =
-        `Visible\n${markup[2]}\n` +
-        Array.from(
-          { length: 100 },
-          (_, index) => `Paragraph ${index}: the reply continues.\n`,
-        ).join("");
+    const prose = Array.from(
+      { length: 100 },
+      (_, i) => `Paragraph ${i}: the reply continues.\n`,
+    ).join("");
+    const quoted =
+      `\`\`\`xml\n${markup[2]}\n\`\`\`\n\n` +
+      "Explanation.\n\n- Item\n\n```python\nprint('hello')\n```\n\n".repeat(128);
+    it.each([
+      {
+        kind: "unused block delivery after unfenced XML",
+        source: `Visible\n${markup[2]}\n${prose}`,
+        visible: `Visible\n\n${prose}`.trimEnd(),
+        blockReply: false,
+      },
+      {
+        kind: "Markdown after quoted XML",
+        source: quoted,
+        visible: quoted.trimEnd(),
+        blockReply: true,
+      },
+    ])("bounds $kind parse work in token-sized deltas", async ({ source, visible, blockReply }) => {
+      if (!blockReply) {
+        ctx.params.onBlockReply = undefined;
+      }
       const regions = vi.spyOn(codeRegions, "findCodeRegions");
       onTestFinished(() => regions.mockRestore());
       let text = "";
@@ -69,29 +89,7 @@ describe.each(["ollama", "anthropic-messages", "openai-completions", "openai-res
         text += delta;
         await update(text, "text_delta", delta);
       }
-      expect(ctx.state.assistantStream?.text).toBe(source.replace(markup[2], "").trimEnd());
-      expect(regions.mock.calls.reduce((total, [parsed]) => total + parsed.length, 0)).toBeLessThan(
-        source.length * 8,
-      );
-    });
-
-    it("bounds Markdown parse work after quoted tool XML in token-sized deltas", async () => {
-      const example = `\`\`\`xml\n${markup[2]}\n\`\`\`\n\n`;
-      const continuation = "Explanation.\n\n- Item\n\n```python\nprint('hello')\n```\n\n".repeat(
-        128,
-      );
-      const source = example + continuation;
-      const regions = vi.spyOn(codeRegions, "findCodeRegions");
-      onTestFinished(() => {
-        regions.mockRestore();
-      });
-      let text = "";
-      for (let offset = 0; offset < source.length; offset += 4) {
-        const delta = source.slice(offset, offset + 4);
-        text += delta;
-        await update(text, "text_delta", delta);
-      }
-      expect(ctx.state.assistantStream?.text).toBe(source.trimEnd());
+      expect(ctx.state.assistantStream?.text).toBe(visible);
       expect(regions.mock.calls.reduce((total, [parsed]) => total + parsed.length, 0)).toBeLessThan(
         source.length * 8,
       );
@@ -171,13 +169,14 @@ describe("native tool-call marker boundaries", () => {
 
   it("does not borrow a commentary fence to preserve a later unphased marker", () => {
     const ctx = createMessageUpdateContext();
-    const commentary = {
-      ...textPart("```"),
-      textSignature: JSON.stringify({ v: 1, phase: "commentary" }),
-    };
     const message = makeAgentAssistantMessage({
       api: "openai-completions",
-      content: [commentary, { ...read, id: "read-first" }, textPart("<tool_"), read],
+      content: [
+        phasedText("```", "commentary"),
+        { ...read, id: "read-first" },
+        textPart("<tool_"),
+        read,
+      ],
     });
     const original = structuredClone(message);
     expect(extractAssistantStreamSnapshot(ctx, message)).toMatchObject({ text: "", blockText: "" });
@@ -194,15 +193,17 @@ describe("native tool-call marker boundaries", () => {
         api: "openai-completions",
         content: [textPart(fragment)],
       });
-      await updateMessage(ctx, {
-        message: partial,
-        assistantMessageEvent: {
-          type: "text_delta",
-          contentIndex: 0,
-          delta: fragment,
-          partial,
-        },
-      });
+      const update = (message: AssistantMessage, chunk: { delta: string } | { content: string }) =>
+        updateMessage(ctx, {
+          message,
+          assistantMessageEvent: {
+            type: "delta" in chunk ? "text_delta" : "text_end",
+            contentIndex: 0,
+            partial: message,
+            ...chunk,
+          },
+        });
+      await update(partial, { delta: fragment });
       expect(onAgentEvent).not.toHaveBeenCalled();
 
       const message = {
@@ -211,15 +212,7 @@ describe("native tool-call marker boundaries", () => {
         stopReason: "toolUse" as const,
       };
       const source = structuredClone(message);
-      await updateMessage(ctx, {
-        message,
-        assistantMessageEvent: {
-          type: "text_end",
-          contentIndex: 0,
-          content: fragment,
-          partial: message,
-        },
-      });
+      await update(message, { content: fragment });
       expect.soft(ctx.state.assistantStream?.text).toBe("");
       expect.soft(extractAssistantStreamSnapshot(ctx, message)).toMatchObject({
         text: "",
@@ -243,11 +236,7 @@ describe("native tool-call marker boundaries", () => {
       blockText: "```xml\n\n<tool_\n\n```",
     },
     {
-      content: [
-        { ...textPart("Working"), textSignature: JSON.stringify({ v: 1, phase: "commentary" }) },
-        { ...textPart("a < b"), textSignature: JSON.stringify({ v: 1, phase: "final_answer" }) },
-        read,
-      ],
+      content: [phasedText("Working", "commentary"), phasedText("a < b", "final_answer"), read],
       expected: "a < b",
     },
     { content: [textPart("<"), textPart("tool_"), read], expected: "" },

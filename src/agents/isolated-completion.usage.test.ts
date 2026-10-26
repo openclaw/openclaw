@@ -37,6 +37,15 @@ afterEach(async () => {
 });
 const cliUsage = { input: 10, output: 462, cacheRead: 0, cacheWrite: 4111, total: 4583 };
 type UsageCase = "cli" | "diagnostic-cli" | "harness" | "empty-harness";
+const runCompletion = (overrides: Parameters<typeof fixtures.isolatedRequest>[0] = {}) =>
+  fixtures.runIsolatedCompletion(fixtures.isolatedRequest(overrides));
+const runOwnedCompletion = (overrides: Parameters<typeof fixtures.isolatedRequest>[0] = {}) =>
+  work.run(() => runCompletion(overrides));
+const registerCompletion = (
+  runIsolatedCompletionV2: Parameters<
+    typeof fixtures.registerIsolatedHarness
+  >[0]["runIsolatedCompletionV2"],
+) => fixtures.registerIsolatedHarness({ runIsolatedCompletionV2 });
 
 async function collectUsage(kind: UsageCase, purpose?: IsolatedCompletionPurpose) {
   if (kind === "cli" || kind === "diagnostic-cli") {
@@ -46,16 +55,15 @@ async function collectUsage(kind: UsageCase, purpose?: IsolatedCompletionPurpose
       usage,
       ...(kind === "diagnostic-cli" ? { diagnosticUsage: cliUsage } : {}),
     };
-    const payloads = [{ text: "done" }];
-    mocks.runCliAgent.mockResolvedValue({ payloads, meta: { agentMeta } });
+    mocks.runCliAgent.mockResolvedValue({ payloads: [{ text: "done" }], meta: { agentMeta } });
   } else {
     const assistant = fixtures.isolatedAssistant([{ type: "text", text: "done" }]);
     if (kind === "empty-harness") {
       assistant.usage = { ...assistant.usage, input: 0, output: 0, totalTokens: 0 };
     }
-    fixtures.registerIsolatedHarness({ runIsolatedCompletionV2: async () => ({ assistant }) });
+    registerCompletion(async () => ({ assistant }));
   }
-  await fixtures.runIsolatedCompletion({ ...fixtures.isolatedRequest(), purpose });
+  await runCompletion({ purpose });
   return events;
 }
 
@@ -87,7 +95,7 @@ it("retains rejected CLI output's cumulative usage without accepting the output"
     payloads: [{ text: "rejected", isError: true }],
     meta: { agentMeta: { usage: { input: 1 }, diagnosticUsage: cliUsage } },
   });
-  await expect(fixtures.runIsolatedCompletion(fixtures.isolatedRequest())).rejects.toMatchObject({
+  await expect(runCompletion()).rejects.toMatchObject({
     code: "output-rejected",
   });
   expect(events).toMatchObject([{ usage: { input: 10, output: 462, total: 4583 } }]);
@@ -132,15 +140,13 @@ it.each([
         usageReport: { state: outcome === "unavailable" ? "unavailable" : "available" },
       };
     }
-    fixtures.registerIsolatedHarness({
-      runIsolatedCompletionV2: async () => {
-        if (outcome === "thrown") {
-          throw new Error("fixture transport failed");
-        }
-        return { assistant };
-      },
+    registerCompletion(async () => {
+      if (outcome === "thrown") {
+        throw new Error("fixture transport failed");
+      }
+      return { assistant };
     });
-    const pending = work.run(() => fixtures.runIsolatedCompletion(fixtures.isolatedRequest()));
+    const pending = runOwnedCompletion();
     if (["rejected", "aborted", "empty", "tool", "thrown"].includes(outcome)) {
       await expect(pending).rejects.toThrow();
     } else {
@@ -164,12 +170,8 @@ it.each([
 
 it("keeps disabled diagnostics out of completion acceptance and cleanup", async () => {
   Object.assign(fixtures.preparedModelRuntime, { config: { diagnostics: { enabled: false } } });
-  fixtures.registerIsolatedHarness({
-    runIsolatedCompletionV2: async () => fixtures.isolatedReply(),
-  });
-  await expect(
-    work.run(() => fixtures.runIsolatedCompletion(fixtures.isolatedRequest())),
-  ).resolves.toMatchObject({ text: "done" });
+  registerCompletion(async () => fixtures.isolatedReply());
+  await expect(runOwnedCompletion()).resolves.toMatchObject({ text: "done" });
   await work.drain();
   expect(events).toEqual([]);
   expect(fixtures.releaseRuntimeLease).toHaveBeenCalledOnce();
@@ -188,24 +190,18 @@ it.each(["accepted", "retired", "aborted"] as const)(
       current = outcome !== "retired";
       return fixtures.isolatedReply().assistant;
     });
-    fixtures.registerIsolatedHarness({
-      runIsolatedCompletionV2: runHostPreparedIsolatedCompletion,
+    registerCompletion(runHostPreparedIsolatedCompletion);
+    const pending = runOwnedCompletion({
+      purpose: "session-activity-summary",
+      sessionId: "fixture-session",
+      sessionKey: "agent:main:fixture",
+      abortSignal: controller.signal,
+      assertCurrent: () => {
+        if (!current) {
+          throw failure;
+        }
+      },
     });
-    const pending = work.run(() =>
-      fixtures.runIsolatedCompletion(
-        fixtures.isolatedRequest({
-          purpose: "session-activity-summary",
-          sessionId: "fixture-session",
-          sessionKey: "agent:main:fixture",
-          abortSignal: controller.signal,
-          assertCurrent: () => {
-            if (!current) {
-              throw failure;
-            }
-          },
-        }),
-      ),
-    );
     if (outcome === "accepted") {
       await expect(pending).resolves.toMatchObject({ text: "done" });
     } else {
@@ -233,7 +229,7 @@ it("retains each profile attempt rather than deduplicating the whole completion"
         ? fixtures.isolatedErrorReply("429 Too many requests")
         : fixtures.isolatedReply(),
   });
-  await fixtures.runIsolatedCompletion(fixtures.isolatedRequest());
+  await runCompletion();
   expect(events).toHaveLength(2);
   expect(events[0]).toMatchObject({ completionId: events[1]?.completionId, usage: { total: 2 } });
   expect(events[0]?.attemptId).not.toBe(events[1]?.attemptId);
@@ -243,16 +239,12 @@ it("does not finalize an abort before its admitted runtime returns usage", async
   const started = createDeferredCore();
   const finish = createDeferredCore();
   const controller = new AbortController();
-  fixtures.registerIsolatedHarness({
-    runIsolatedCompletionV2: async () => {
-      started.resolve();
-      await finish.promise;
-      return fixtures.isolatedReply();
-    },
+  registerCompletion(async () => {
+    started.resolve();
+    await finish.promise;
+    return fixtures.isolatedReply();
   });
-  const pending = work.run(() =>
-    fixtures.runIsolatedCompletion(fixtures.isolatedRequest({ abortSignal: controller.signal })),
-  );
+  const pending = runOwnedCompletion({ abortSignal: controller.signal });
   const rejected = expect(pending).rejects.toThrow("fixture abort");
   await started.promise;
   controller.abort(new Error("fixture abort"));
