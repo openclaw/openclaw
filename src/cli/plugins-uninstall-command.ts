@@ -48,12 +48,14 @@ export async function runPluginUninstallCommand(
     if (preview.plan.directoryRemoval) {
       labels.push(`directory: ${shortenHomePath(preview.plan.directoryRemoval.target)}`);
     }
+    // Manifest-derived ids are untrusted: strip terminal controls before styling.
+    const pluginId = sanitizeTerminalText(preview.pluginId);
     runtime.log(
-      `Plugin: ${theme.command(sanitizeTerminalText(preview.name))}${preview.name !== preview.pluginId ? theme.muted(` (${preview.pluginId})`) : ""}`,
+      `Plugin: ${theme.command(sanitizeTerminalText(preview.name))}${preview.name !== preview.pluginId ? theme.muted(` (${pluginId})`) : ""}`,
     );
     if (preview.pluginIds.length > 1 || preview.requestedPluginId !== preview.pluginId) {
       runtime.log(
-        `Package owner: ${theme.command(preview.pluginId)}; all entries will be removed: ${preview.pluginIds.join(", ")}`,
+        `Package owner: ${theme.command(pluginId)}; all entries will be removed: ${preview.pluginIds.map(sanitizeTerminalText).join(", ")}`,
       );
     }
     runtime.log(`Will remove: ${labels.length ? labels.join(", ") : "(nothing)"}`);
