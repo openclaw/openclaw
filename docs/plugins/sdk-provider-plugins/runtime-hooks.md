@@ -68,6 +68,10 @@ JSON types or maintaining a separate capability definition.
 
 ## Credential lookup cancellation
 
+`resolveApiKeyForProvider` and `getRuntimeAuthForModel` load the host's authentication
+runtime lazily. The host build selects that module, so SDK consumers do not need
+to locate JavaScript files on disk, including in standalone executables.
+
 Credential consumers using `resolveApiKeyForProvider` from
 `openclaw/plugin-sdk/provider-auth-runtime` should pass their request's optional
 `signal`. It ends the caller's wait for queued admission, a profile lock, or
@@ -123,6 +127,13 @@ Existing one-argument hooks remain compatible, and direct callers can omit confi
         });
     },
     ```
+
+    Runtime model and stream-option headers accept `string | null`. Preserve
+    `null` when merging headers: it removes a default header in the OpenAI SDK
+    and is omitted when materializing headers for raw HTTP transports. Saved
+    provider configuration and catalog headers remain string-only. For direct HTTP
+    clients, use `omitNullRequestHeaders` from
+    `openclaw/plugin-sdk/provider-request-headers` after the final header merge.
 
     Existing wrappers may still pass the deprecated `maxRetries` stream option,
     including `0`. Built-in text transports ignore it: the embedded runner owns

@@ -297,7 +297,7 @@ export function isClientCredentialMutation(operation: ClientCredentialOperation)
 export function runClientCredentialOperation(
   env: NodeJS.ProcessEnv,
   operation: ClientCredentialOperation,
-  options: { timeoutMs?: number; beforeCommit?: () => void; readOnly?: boolean } = {},
+  options: { beforeCommit?: () => void; readOnly?: boolean } = {},
 ): ClientCredentialResult {
   if (options.readOnly && isClientCredentialMutation(operation)) {
     throw new Error("Client credential custody is read-only.");
@@ -307,7 +307,6 @@ export function runClientCredentialOperation(
     env,
     {
       createIfMissing: clientCredentialOperationCreatesStore(operation),
-      timeoutMs: options.timeoutMs,
       readOnly: options.readOnly,
     },
     (database) => {

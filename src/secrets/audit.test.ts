@@ -41,6 +41,8 @@ function writeAuthStore(fixture: AuditFixture, value: unknown): void {
   writePersistedAuthProfileStoreRaw(value, fixture.agentDir);
 }
 
+const storeRef = { source: "store", provider: "default", id: "STORED_API_KEY" } as const;
+
 const execRef = (id: string) => ({ source: "exec", provider: "execmain", id });
 const authProfile = (key: string, keyRef?: unknown) => ({
   type: "api_key",
@@ -104,6 +106,15 @@ describe("secrets audit", () => {
   let fixture: AuditFixture;
   const audit = (allowExec = false) => runSecretsAudit({ env: fixture.env, allowExec });
   const writeConfig = (config: unknown) => writeJsonFile(fixture.configPath, config);
+  const writeStoredSecret = (value: string) =>
+    writeSecretStoreEntry({
+      scope: { kind: "team" },
+      name: storeRef.id,
+      value,
+      kind: "secret",
+      updatedBy: "test",
+      database: { env: fixture.env },
+    });
 
   async function writeModelsProvider(
     overrides: { apiKey?: unknown; headers?: Record<string, unknown> } = {},
@@ -188,13 +199,12 @@ describe("secrets audit", () => {
   });
 
   describe("store SecretRef resolution", () => {
-    const ref = { source: "store", provider: "default", id: "STORED_API_KEY" } as const;
     const config = (alias: string, source: "env" | "store") => ({
       secrets: { providers: { [alias]: { source } } },
     });
     const resolve = (provider = "default", configuredSource: "env" | "store" = "store") =>
       resolveSecretRefString(
-        { ...ref, provider },
+        { ...storeRef, provider },
         { config: config(provider, configuredSource), env: fixture.env },
       );
 
@@ -202,14 +212,7 @@ describe("secrets audit", () => {
       ["default", "env"],
       ["teamstore", "store"],
     ] as const)("resolves store alias %s configured as %s", async (provider, source) => {
-      await writeSecretStoreEntry({
-        scope: { kind: "team" },
-        name: ref.id,
-        value: "resolved-store-secret",
-        kind: "secret",
-        updatedBy: "test",
-        database: { env: fixture.env },
-      });
+      await writeStoredSecret("resolved-store-secret");
       await expect(resolve(provider, source)).resolves.toBe("resolved-store-secret");
     });
     it("rejects a non-default store alias configured for another source", async () => {
@@ -226,7 +229,7 @@ describe("secrets audit", () => {
     });
     it("maps a missing name to a retryable not-found degradation", async () => {
       const error = await resolveSecretRefString(
-        { ...ref, id: "MISSING_API_KEY" },
+        { ...storeRef, id: "MISSING_API_KEY" },
         { config: {}, env: fixture.env },
       ).catch((caught: unknown) => caught);
       expect(error).toMatchObject({ code: "SECRET_REF_NOT_FOUND", source: "store" });
@@ -237,7 +240,7 @@ describe("secrets audit", () => {
     it("maps database access failures to provider unavailable", async () => {
       fixture.env.OPENCLAW_STATE_DIR = path.join(fixture.rootDir, "not-a-directory");
       await fs.writeFile(fixture.env.OPENCLAW_STATE_DIR, "not a directory", "utf8");
-      const error = await resolveSecretRefString(ref, { config: {}, env: fixture.env }).catch(
+      const error = await resolveSecretRefString(storeRef, { config: {}, env: fixture.env }).catch(
         (caught: unknown) => caught,
       );
       expect(error).toMatchObject({ code: "SECRET_PROVIDER_UNAVAILABLE", source: "store" });
@@ -280,19 +283,12 @@ describe("secrets audit", () => {
   });
 
   it("reports plaintext that duplicates the store while resolving store refs", async () => {
-    await writeSecretStoreEntry({
-      scope: { kind: "team" },
-      name: "STORED_API_KEY",
-      value: "shared-store-value",
-      kind: "secret",
-      updatedBy: "test",
-      database: { env: fixture.env },
-    });
+    await writeStoredSecret("shared-store-value");
     await writeConfig({
       models: {
         providers: {
           plaintext: modelProvider("shared-store-value"),
-          referenced: modelProvider({ source: "store", provider: "default", id: "STORED_API_KEY" }),
+          referenced: modelProvider(storeRef),
           envReferenced: modelProvider("${AUDIT_STORE_VALUE}"),
         },
       },
@@ -329,42 +325,28 @@ describe("secrets audit", () => {
     },
   );
 
-  it("skips exec ref resolution during audit unless explicitly allowed", async () => {
+  it.each(["denied", "allowed", "provider failure"] as const)("exec audit: %s", async (mode) => {
     if (process.platform === "win32") {
       return;
     }
-    const execLogPath = await execFixture();
-
-    const report = await audit();
-    expect(report.resolution.resolvabilityComplete).toBe(false);
-    expect(report.resolution.skippedExecRefs).toBe(1);
-    expect(report.summary.unresolvedRefCount).toBe(0);
-    await expectPathMissing(execLogPath);
-  });
-
-  it("batches ref resolution per provider during audit when --allow-exec is enabled", async () => {
-    if (process.platform === "win32") {
-      return;
+    const allowed = mode !== "denied";
+    const failed = mode === "provider failure";
+    const execLogPath = await execFixture({ header: allowed, fail: failed });
+    const report = await audit(allowed);
+    if (failed) {
+      expect(report.summary.unresolvedRefCount).toBeGreaterThanOrEqual(2);
+    } else {
+      expect(report.summary.unresolvedRefCount).toBe(0);
     }
-    const execLogPath = await execFixture({ header: true });
-
-    const report = await audit(true);
-    expect(report.summary.unresolvedRefCount).toBe(0);
-    expect(report.resolution.refsChecked).toBe(2);
-
-    await expectOneExecution(execLogPath);
-  });
-
-  it("short-circuits per-ref fallback for provider-wide batch failures when --allow-exec is enabled", async () => {
-    if (process.platform === "win32") {
-      return;
+    if (allowed) {
+      if (!failed) {
+        expect(report.resolution.refsChecked).toBe(2);
+      }
+      await expectOneExecution(execLogPath);
+    } else {
+      expect(report.resolution).toMatchObject({ resolvabilityComplete: false, skippedExecRefs: 1 });
+      await expectPathMissing(execLogPath);
     }
-    const execLogPath = await execFixture({ header: true, fail: true });
-
-    const report = await audit(true);
-    expect(report.summary.unresolvedRefCount).toBeGreaterThanOrEqual(2);
-
-    await expectOneExecution(execLogPath);
   });
 
   it("scans hardlinked agent models.json files for plaintext provider apiKey values", async () => {

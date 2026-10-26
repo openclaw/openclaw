@@ -13,22 +13,75 @@ import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-sk
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import type { MessageGroup as MessageGroupData } from "../../../lib/chat/chat-types.ts";
 import { cancelLayout, scheduleLayout } from "../../../lib/layout-frame.ts";
+import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { createParkedProjection } from "../../../lib/reactive/parked-projection.ts";
 import { projectOwner } from "../../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
+import type { SidebarPanelDefinitionParams } from "../chat-pane-embedded-types.ts";
+import { usePanePresentation } from "../chat-pane-presentation.ts";
+import { createSideChatModelControlProps } from "../chat-session-companion-model-controls.ts";
 import type {
   ChatSessionCompanionThread,
   ChatSessionCompanionTurn,
 } from "../chat-session-companion.ts";
+import { resolveChatAttachmentLimits } from "./chat-attachment-admission.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import { createChatAttachmentDropHandlers } from "./chat-attachments.ts";
 import { ChatCommentController } from "./chat-comment-controller.ts";
 import { MessageGroup } from "./chat-message-group-view.tsx";
 import { StreamGroup } from "./chat-message-stream-view.tsx";
-import type { ChatModelControlsProps } from "./chat-model-controls.tsx";
+import type { ChatModelControlsProps } from "./chat-model-controls.types.ts";
 import { SessionRailComposer, sessionRailQuestion } from "./chat-session-rail-composer.tsx";
+import type { SidebarPanelHostRegistration } from "./chat-sidebar-region-types.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
+
+/** Adapt pane facts only after Side Chat's first presentation loads this module. */
+export function ChatSessionRailPanel(
+  props: SidebarPanelDefinitionParams & { registerPanelHost?: SidebarPanelHostRegistration },
+) {
+  const presented = usePanePresentation(() => props.companionPresented);
+  const modelControls = createParkedProjection(
+    () =>
+      props.onCompanionModelSelect
+        ? createSideChatModelControlProps({
+            state: props.state,
+            companion: props.companion,
+            onSelect: (patch) => props.onCompanionModelSelect?.(patch),
+          })
+        : undefined,
+    presented,
+  );
+  return (
+    <ChatSessionRail
+      presentation={props.presentation}
+      data-sidebar-panel-host
+      ref={[elementRef((element: ChatSessionRailElement) => props.registerPanelHost?.(element))]}
+      presented={presented()}
+      focusRequest={props.companionFocusRequest}
+      sessionKey={props.state.sessionKey}
+      agentId={props.agentId}
+      assistantName={props.state.assistantName}
+      digest={props.digest}
+      running={Boolean(props.activeRunId)}
+      activeRunId={props.activeRunId}
+      pullRequests={props.pullRequests}
+      companion={props.companion}
+      modelControls={modelControls()}
+      client={props.state.connected ? props.state.client : null}
+      connected={props.state.connected}
+      sendShortcut={props.state.settings.chatSendShortcut ?? "enter"}
+      inputDeviceId={props.state.settings.realtimeTalkInputDeviceId}
+      onSubmit={props.onCompanionSubmit}
+      onDraftChange={props.onCompanionDraftChange}
+      onAttachmentsChange={props.onCompanionAttachmentsChange}
+      onOpenImage={props.state.handleOpenImage}
+      uploadConfig={props.state.uploadConfig}
+      attachmentLimits={resolveChatAttachmentLimits(props.state.hello?.policy)}
+    />
+  );
+}
 
 function checksSummary(pullRequest: ControlUiSessionPullRequest): string | null {
   const checks = pullRequest.checks;
@@ -184,7 +237,8 @@ function ChatSessionRailContent(props: ChatSessionRailProps, host: ChatSessionRa
       if (nextScrollKey !== scrollKey) {
         scrollKey = nextScrollKey;
         scheduleLayout(thread, () => {
-          const bottom = thread.scrollHeight;
+          const bottom =
+            host.companion.loading && !host.companion.turns.length ? 0 : thread.scrollHeight;
           return () => {
             thread.scrollTop = bottom;
           };
@@ -246,6 +300,9 @@ function ChatSessionRailContent(props: ChatSessionRailProps, host: ChatSessionRa
       )}
       <div
         class="chat-session-rail__thread"
+        style={{
+          padding: props.companion.loading && !props.companion.turns.length ? "0" : undefined,
+        }}
         aria-live="polite"
         onClick={handleMarkdownCodeBlockClick}
         ref={(element) => {
@@ -258,8 +315,7 @@ function ChatSessionRailContent(props: ChatSessionRailProps, host: ChatSessionRa
         )}
         {!props.companion.loading && !props.companion.turns.length && (
           <PanelEmptyState
-            // Side chat keeps its native desktop empty; only mobile adopts the shared variant.
-            presentation={props.presentation === "mobile" ? "mobile" : undefined}
+            presentation={props.presentation}
             icon={<Icon name="bot" />}
             heading={t("chat.sidePanel.companion")}
             description={t("chat.rail.empty")}
@@ -373,34 +429,38 @@ function ChatSessionRailContent(props: ChatSessionRailProps, host: ChatSessionRa
   );
 }
 
-defineSolidBridge<ChatSessionRailProps>("openclaw-chat-session-rail", ChatSessionRailContent, {
-  propertyChanged: (host, key) => {
-    if (key === "companion" || key === "focusRequest") {
-      inputHandlers.get(host)?.();
-    }
+export const ChatSessionRail = defineSolidBridge<ChatSessionRailProps>(
+  "openclaw-chat-session-rail",
+  ChatSessionRailContent,
+  {
+    propertyChanged: (host, key) => {
+      if (key === "companion" || key === "focusRequest") {
+        inputHandlers.get(host)?.();
+      }
+    },
+    properties: {
+      presentation: { default: undefined, attribute: false },
+      sessionKey: { default: "", attribute: false },
+      agentId: { default: undefined, attribute: false },
+      assistantName: { default: undefined, attribute: false },
+      digest: { default: null, attribute: false },
+      running: { default: false, attribute: false },
+      activeRunId: { default: null, attribute: false },
+      pullRequests: { default: [], attribute: false },
+      companion: { default: { turns: [], loading: false, draft: "" }, attribute: false },
+      modelControls: { default: undefined, attribute: false },
+      client: { default: null, attribute: false },
+      connected: { default: false, attribute: false },
+      sendShortcut: { default: "enter", attribute: false },
+      inputDeviceId: { default: undefined, attribute: false },
+      onSubmit: { default: undefined, attribute: false },
+      onDraftChange: { default: undefined, attribute: false },
+      onAttachmentsChange: { default: undefined, attribute: false },
+      onOpenImage: { default: undefined, attribute: false },
+      attachmentLimits: { default: undefined, attribute: false },
+      uploadConfig: { default: undefined, attribute: false },
+      presented: { default: false, type: Boolean },
+      focusRequest: { default: undefined, attribute: false },
+    },
   },
-  properties: {
-    presentation: { default: undefined, attribute: false },
-    sessionKey: { default: "", attribute: false },
-    agentId: { default: undefined, attribute: false },
-    assistantName: { default: undefined, attribute: false },
-    digest: { default: null, attribute: false },
-    running: { default: false, attribute: false },
-    activeRunId: { default: null, attribute: false },
-    pullRequests: { default: [], attribute: false },
-    companion: { default: { turns: [], loading: false, draft: "" }, attribute: false },
-    modelControls: { default: undefined, attribute: false },
-    client: { default: null, attribute: false },
-    connected: { default: false, attribute: false },
-    sendShortcut: { default: "enter", attribute: false },
-    inputDeviceId: { default: undefined, attribute: false },
-    onSubmit: { default: undefined, attribute: false },
-    onDraftChange: { default: undefined, attribute: false },
-    onAttachmentsChange: { default: undefined, attribute: false },
-    onOpenImage: { default: undefined, attribute: false },
-    attachmentLimits: { default: undefined, attribute: false },
-    uploadConfig: { default: undefined, attribute: false },
-    presented: { default: false, type: Boolean },
-    focusRequest: { default: undefined, attribute: false },
-  },
-});
+);

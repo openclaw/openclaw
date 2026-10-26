@@ -21,13 +21,14 @@ import {
   prepareWebPushNotificationSender,
   type BoundWebPushSubscription,
 } from "../infra/push-web.js";
-import { createSubsystemLogger, type SubsystemLogger } from "../logging/subsystem.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../shared/transcript-only-openclaw-assistant.js";
 import { resolveControlUiWebPushUrl } from "./control-ui-shared.js";
 import { QUESTIONS_SCOPE } from "./method-scopes.js";
 import { ADMIN_SCOPE, READ_SCOPE } from "./operator-scopes.js";
 import type { GatewayBroadcastOpts } from "./server-broadcast-types.js";
 import { canReceiveSessionEvent } from "./session-sharing.js";
+import type { SessionViewerPresenceDeclarations } from "./session-viewer-presence.js";
 import {
   listCurrentWebPushTargets,
   withCurrentWebPushAuthority,
@@ -37,7 +38,7 @@ import {
 import { currentWebPushAgentIcon, prepareWebPushAgentIcon } from "./web-push-avatar.js";
 
 const EVENT_PUSH_TTL_SECONDS = 5 * 60;
-const defaultLog = createSubsystemLogger("gateway/web-push");
+const log = createSubsystemLogger("gateway/web-push");
 
 type EventNotification = {
   category: WebPushNotificationCategory;
@@ -124,12 +125,10 @@ function resolveEventWebPushNotification(
 }
 
 /** Routes attention events to offline browsers without expanding live session visibility. */
-export function createEventWebPushDelivery(params: {
-  getRuntimeConfig: () => OpenClawConfig;
-  log?: Pick<SubsystemLogger, "warn">;
-  stateDir?: string;
-}) {
-  const log = params.log ?? defaultLog;
+export function createEventWebPushDelivery(
+  getRuntimeConfig: () => OpenClawConfig,
+  viewers?: Pick<SessionViewerPresenceDeclarations, "isViewedOnDevice">,
+) {
   const deliver = (
     notification: EventNotification,
     event: string,
@@ -139,11 +138,11 @@ export function createEventWebPushDelivery(params: {
   ): void => {
     let stage = "subscriptions";
     void (async () => {
-      if (!(await hasBoundWebPushSubscriptions(params.stateDir))) {
+      if (!(await hasBoundWebPushSubscriptions())) {
         return;
       }
       stage = "sender";
-      const sender = await prepareWebPushNotificationSender(params.stateDir);
+      const sender = await prepareWebPushNotificationSender();
       stage = "authority";
       const agentId = normalizeOptionalString(
         opts?.agentId ?? (isRecord(payload) ? payload.agentId : undefined),
@@ -151,9 +150,9 @@ export function createEventWebPushDelivery(params: {
       const sessionKeys = opts?.sessionKeys ?? [];
       const preparedIcon = mention
         ? undefined
-        : await prepareWebPushAgentIcon(params.getRuntimeConfig(), agentId);
+        : await prepareWebPushAgentIcon(getRuntimeConfig(), agentId);
       const groupedResults = await withCurrentWebPushAuthority(
-        { ...params, sessionKeys, agentId, preparePublication: mention?.prepare },
+        { getRuntimeConfig, sessionKeys, agentId, preparePublication: mention?.prepare },
         (authority) => {
           const { cfg } = authority;
           const recipientProfileId =
@@ -185,6 +184,8 @@ export function createEventWebPushDelivery(params: {
                 : [READ_SCOPE],
             ...(mention ? { visibilityScopes: [ADMIN_SCOPE] } : {}),
           });
+          // Only an unambiguous session can be matched against one device's viewer declarations.
+          const viewedSessionKey = sessionKeys.length === 1 ? sessionKeys[0] : undefined;
           const agentLabel = normalizeWebPushDisplayLabel(agentId);
           const agentIcon = currentWebPushAgentIcon(cfg, preparedIcon);
           const groups = new Map<
@@ -225,6 +226,14 @@ export function createEventWebPushDelivery(params: {
             }
             if (cfg.gateway?.roles && sessionKeys.length === 0) {
               // Multi-user events without an authoritative session owner are not broadcast offline.
+              continue;
+            }
+            if (
+              notification.category === "agent-finished" &&
+              viewedSessionKey !== undefined &&
+              viewers?.isViewedOnDevice(target.subscription.deviceId, viewedSessionKey) === true
+            ) {
+              // This device already shows the reply; other devices and categories still notify.
               continue;
             }
             const prefix = preferences.label ? `${preferences.label} · ` : "";

@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { DaemonStatus } from "../cli/daemon-cli/status.gather.js";
 import type { GatewayBindMode } from "../config/types.gateway.js";
 import { ExitError } from "../runtime.js";
+import { expectNoCalls } from "../test-utils/mock-call-assertions.js";
 import { dashboardCommand } from "./dashboard.js";
 import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -13,7 +15,8 @@ const formatControlUiSshHint = vi.hoisted(() => vi.fn());
 const copyToClipboard = vi.hoisted(() => vi.fn());
 const issueDeviceBootstrapToken = vi.hoisted(() => vi.fn());
 const resolveSecretRefValues = vi.hoisted(() => vi.fn());
-const ensureDashboardGatewayReady = vi.hoisted(() => vi.fn());
+const gatherStatus = vi.hoisted(() => vi.fn());
+const startGateway = vi.hoisted(() => vi.fn());
 const waitForControlUiDocument = vi.hoisted(() => vi.fn());
 const inspectPortUsage = vi.hoisted(() => vi.fn());
 
@@ -44,8 +47,14 @@ vi.mock("../infra/clipboard.js", () => ({ copyToClipboard }));
 // mock-isolation: Issue synthetic bootstrap tokens without creating real device authority.
 vi.mock("../infra/device-bootstrap.js", () => ({ issueDeviceBootstrapToken }));
 
-// mock-isolation: Select readiness outcomes without starting or probing a real Gateway.
-vi.mock("./gateway-readiness.js", () => ({ ensureDashboardGatewayReady }));
+vi.mock("../cli/daemon-cli/status.gather.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../cli/daemon-cli/status.gather.js")>()),
+  gatherDaemonStatus: gatherStatus,
+}));
+vi.mock("../cli/daemon-cli/lifecycle.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../cli/daemon-cli/lifecycle.js")>()),
+  runDaemonStart: startGateway,
+}));
 
 vi.mock("./control-ui-handoff.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./control-ui-handoff.js")>()),
@@ -68,7 +77,21 @@ function expectNoLoggedToken(token: string) {
 
 const browserUrl =
   "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner&gatewayUrl=ws%3A%2F%2F127.0.0.1%3A18789";
-const notReady = { ready: false, reason: "Gateway is not running." };
+const notReady = {
+  service: {
+    label: "synthetic service",
+    loaded: false,
+    loadState: { status: "not-loaded" },
+    loadedText: "loaded",
+    notLoadedText: "not loaded",
+    command: { programArguments: ["openclaw", "gateway", "run"] },
+    runtime: { status: "stopped" },
+  },
+  port: { port: 18789, status: "free", listeners: [], hints: [] },
+  rpc: { ok: false, error: "connect ECONNREFUSED 127.0.0.1:18789" },
+  extraServices: [],
+} satisfies DaemonStatus;
+const ready = { ...notReady, rpc: { ok: true } };
 
 type GatewayOptions = {
   controlUi?: { basePath: string };
@@ -97,7 +120,8 @@ beforeEach(() => {
   issueDeviceBootstrapToken
     .mockReset()
     .mockResolvedValue({ token: "browser-bootstrap", expiresAtMs: 123_456 });
-  ensureDashboardGatewayReady.mockReset().mockResolvedValue({ ready: true, recovered: false });
+  gatherStatus.mockReset().mockResolvedValue(ready);
+  startGateway.mockReset();
   waitForControlUiDocument.mockReset().mockResolvedValue({ ready: true });
   copyToClipboard.mockResolvedValue(true);
   detectBrowserOpenSupport.mockResolvedValue({ ok: true });
@@ -106,9 +130,12 @@ beforeEach(() => {
   delete process.env.CUSTOM_GATEWAY_TOKEN;
 });
 
-it("never logs the gateway token in the dashboard URL (CVE regression)", async () => {
-  const secretToken = "super-secret-bearer-token";
-  mockSnapshot(secretToken);
+it.each([
+  "super-secret-bearer-token",
+  { source: "env", provider: "default", id: "MISSING_GATEWAY_TOKEN" },
+])("delivers bootstrap without logging shared credentials: %j", async (token) => {
+  mockSnapshot(token);
+  resolveSecretRefValues.mockRejectedValue(new Error("missing env var"));
 
   await dashboardCommand(runtime);
 
@@ -116,32 +143,45 @@ it("never logs the gateway token in the dashboard URL (CVE regression)", async (
   expect(openUrlPrivately).toHaveBeenCalledWith(browserUrl);
   expect(openUrl).not.toHaveBeenCalled();
 
-  expectNoLoggedToken(secretToken);
+  expectNoLoggedToken(typeof token === "string" ? token : token.id);
+  expect(output()).not.toContain("Token auto-auth unavailable");
+  expect(output()).not.toContain("missing env var");
   expect(runtime.log).toHaveBeenCalledWith("Dashboard URL: http://127.0.0.1:18789/");
   expect(runtime.log).toHaveBeenCalledWith(
     "One-time browser pairing included in browser/clipboard URL.",
   );
 });
 
-it("preserves Gateway TLS after remote browser delivery fails", async () => {
-  vi.stubEnv("SSH_CONNECTION", "192.0.2.1 12345 192.0.2.2 22");
-  mockSnapshot("shhhh", {
-    controlUi: { basePath: "/control" },
-    tls: { enabled: true },
-  });
-  copyToClipboard.mockResolvedValue(false);
-  openUrlPrivately.mockResolvedValue(false);
-  formatControlUiSshHint.mockReturnValue("ssh hint");
+it.each([false, true])(
+  "keeps SSH hints credential-free after failed delivery (TLS=%s)",
+  async (tls) => {
+    const secretToken = "super-secret-bearer-token";
+    if (tls) {
+      vi.stubEnv("SSH_CONNECTION", "192.0.2.1 12345 192.0.2.2 22");
+    }
+    mockSnapshot(
+      secretToken,
+      tls ? { controlUi: { basePath: "/control" }, tls: { enabled: true } } : undefined,
+    );
+    copyToClipboard.mockResolvedValue(false);
+    openUrlPrivately.mockResolvedValue(false);
+    detectBrowserOpenSupport.mockResolvedValue(tls ? { ok: true } : { ok: false, reason: "ssh" });
+    formatControlUiSshHint.mockReturnValue("ssh hint");
 
-  await dashboardCommand(runtime);
+    await dashboardCommand(runtime);
 
-  expect(formatControlUiSshHint).toHaveBeenCalledWith({
-    port: 18789,
-    basePath: "/control",
-    tlsEnabled: true,
-  });
-  expect(runtime.log).toHaveBeenCalledWith("ssh hint");
-});
+    expect(formatControlUiSshHint).toHaveBeenCalledWith({
+      port: 18789,
+      basePath: tls ? "/control" : undefined,
+      tlsEnabled: tls,
+    });
+    expect(runtime.log).toHaveBeenCalledWith("ssh hint");
+    expectNoLoggedToken(secretToken);
+    expect(openUrl).not.toHaveBeenCalled();
+    expect(output()).toContain("OPENCLAW_GATEWAY_TOKEN");
+    expect(output()).toContain("key `token`");
+  },
+);
 
 it("reports opener failure without claiming the host has no GUI", async () => {
   mockSnapshot("shhhh");
@@ -153,30 +193,6 @@ it("reports opener failure without claiming the host has no GUI", async () => {
   expect(runtime.log).toHaveBeenCalledWith(
     "Browser launch failed. Open the one-time pairing URL copied to clipboard.",
   );
-});
-
-it("never passes token to SSH hint (CVE regression — SSH path)", async () => {
-  const secretToken = "super-secret-bearer-token";
-  mockSnapshot(secretToken);
-  copyToClipboard.mockResolvedValue(false);
-  detectBrowserOpenSupport.mockResolvedValue({ ok: false, reason: "ssh" });
-  formatControlUiSshHint.mockReturnValue("ssh hint without token");
-
-  await dashboardCommand(runtime);
-
-  expect(formatControlUiSshHint).toHaveBeenCalledWith({
-    port: 18789,
-    basePath: undefined,
-    tlsEnabled: false,
-  });
-  const [sshHintOptions] = formatControlUiSshHint.mock.calls[0] ?? [];
-  expect(sshHintOptions).not.toHaveProperty("token");
-
-  expectNoLoggedToken(secretToken);
-  expect(openUrl).not.toHaveBeenCalled();
-  expect(runtime.log).toHaveBeenCalledWith("ssh hint without token");
-  expect(output()).toContain("OPENCLAW_GATEWAY_TOKEN");
-  expect(output()).toContain("key `token`");
 });
 
 it("guides no-token users to the explicit JSON handoff when clipboard delivery fails", async () => {
@@ -193,19 +209,8 @@ it("guides no-token users to the explicit JSON handoff when clipboard delivery f
   );
 });
 
-it("uses browser bootstrap when the shared-token SecretRef is unresolved", async () => {
-  mockSnapshot({ source: "env", provider: "default", id: "MISSING_GATEWAY_TOKEN" });
-  resolveSecretRefValues.mockRejectedValue(new Error("missing env var"));
-
-  await dashboardCommand(runtime);
-
-  expect(copyToClipboard).toHaveBeenCalledWith(browserUrl);
-  expect(output()).not.toContain("Token auto-auth unavailable");
-  expect(output()).not.toContain("missing env var");
-});
-
 it("emits one JSON readiness failure before an exiting runtime unwinds", async () => {
-  ensureDashboardGatewayReady.mockResolvedValueOnce(notReady);
+  gatherStatus.mockResolvedValueOnce(notReady);
   const exit = new ExitError(1);
   runtime.exit.mockImplementationOnce(() => {
     throw exit;
@@ -217,7 +222,7 @@ it("emits one JSON readiness failure before an exiting runtime unwinds", async (
 });
 
 it("does not copy or open when gateway readiness fails", async () => {
-  ensureDashboardGatewayReady.mockResolvedValueOnce(notReady);
+  gatherStatus.mockResolvedValueOnce(notReady);
 
   await dashboardCommand(runtime);
 
@@ -254,12 +259,6 @@ function mockAliasOwnership(host: string, loopbackPid = 4242) {
   });
 }
 
-function expectNoCalls(...mocksToCheck: unknown[]) {
-  for (const mock of mocksToCheck) {
-    expect(mock).not.toHaveBeenCalled();
-  }
-}
-
 function expectNoCredentials() {
   expectNoCalls(copyToClipboard, issueDeviceBootstrapToken);
   expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("Dashboard URL:"));
@@ -276,10 +275,10 @@ describe("verified custom-bind handoff", () => {
 
     await dashboardCommand(runtime, { noOpen: true });
 
-    expect(ensureDashboardGatewayReady).toHaveBeenCalledWith(
-      expect.objectContaining({ probeUrl: "ws://10.0.0.5:18789" }),
+    expect(gatherStatus).toHaveBeenCalledWith(
+      expect.objectContaining({ rpc: { url: "ws://10.0.0.5:18789" } }),
     );
-    expect(ensureDashboardGatewayReady.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(gatherStatus.mock.invocationCallOrder[0]).toBeLessThan(
       inspectPortUsage.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
     expect(copyToClipboard).toHaveBeenCalledWith(browserUrl);
@@ -314,9 +313,7 @@ describe("verified custom-bind handoff", () => {
         readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot, valid: false });
       }
       await dashboardCommand(runtime);
-      const untouched = missingDocument
-        ? [copyToClipboard, openUrlPrivately]
-        : [ensureDashboardGatewayReady];
+      const untouched = missingDocument ? [copyToClipboard, openUrlPrivately] : [gatherStatus];
       expectNoCalls(issueDeviceBootstrapToken, ...untouched);
       expect(runtime.error).toHaveBeenCalledWith(
         missingDocument ? reason : expect.stringContaining("openclaw doctor --fix"),
@@ -333,24 +330,23 @@ describe("verified custom-bind handoff", () => {
       .mockResolvedValueOnce(
         createSnapshot("abc123", { bind: "custom", customBindHost: "10.0.0.6" }),
       );
-    ensureDashboardGatewayReady
-      .mockResolvedValueOnce({ ready: true, recovered: true })
-      .mockResolvedValueOnce({ ready: false, reason: "failed" });
+    gatherStatus
+      .mockResolvedValueOnce(notReady)
+      .mockResolvedValueOnce(ready)
+      .mockResolvedValueOnce({
+        ...notReady,
+        port: { ...notReady.port, status: "busy" },
+        rpc: { ok: false, error: "failed" },
+      });
 
     await dashboardCommand(runtime, { noOpen: true, yes: true });
 
-    expect(ensureDashboardGatewayReady).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ probeUrl: "ws://10.0.0.5:18789" }),
-    );
-    expect(ensureDashboardGatewayReady).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        probeUrl: "ws://10.0.0.6:18789",
-        allowInstall: false,
-        interactive: false,
-      }),
-    );
+    expect(gatherStatus.mock.calls.map(([options]) => options.rpc)).toEqual([
+      { url: "ws://10.0.0.5:18789" },
+      { url: "ws://10.0.0.5:18789" },
+      { url: "ws://10.0.0.6:18789" },
+    ]);
+    expect(startGateway).toHaveBeenCalledExactlyOnceWith({ json: false });
     expectNoCredentials();
     expectNoCalls(inspectPortUsage, runtime.exit);
   });

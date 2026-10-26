@@ -10,7 +10,6 @@ import {
 } from "./code-mode.js";
 import {
   createHeadlessCodeModeHarness,
-  pluginToolWithExecute,
   resetCodeModeTestState,
   resultDetails,
   resultText,
@@ -23,7 +22,6 @@ import {
 import { defineToolOutputSchema } from "./schema/tool-output-schema.js";
 import { resolveToolResultBudget, toolResultFitsBudget } from "./tool-result-limits.js";
 import { clearToolSearchCatalog } from "./tool-search.js";
-import { jsonResult } from "./tools/common.js";
 
 const catalogs: Array<ReturnType<typeof createCatalogCodeModeHarness>["ctx"]> = [];
 afterEach(async () => {
@@ -195,9 +193,7 @@ it("bounds deep and long-key preview traversal", async () => {
 });
 
 it("infers literal and union selectors while keeping dynamic and missing inputs sound", async () => {
-  const tool = pluginToolWithExecute("records", "Read records or status", async (_id, input) =>
-    jsonResult(isRecord(input) && input.kind === "list" ? { rows: ["one", "two"] } : { total: 2 }),
-  );
+  const tool = jsonTool("records", {});
   tool.parameters = closedObject({ kind: Type.Optional(Type.String()) });
   tool.outputSchema = defineToolOutputSchema({
     inputProperty: "kind",
@@ -207,49 +203,35 @@ it("infers literal and union selectors while keeping dynamic and missing inputs 
     },
   });
   const { run } = createCatalogCodeModeHarness([tool]);
-  const declaration = await run(
-    'return await API.read("tools/records.d.ts");',
-    "read-records-contract",
-  );
+  const declaration = await run('return await API.read("tools/records.d.ts");');
   expect(declaration.status).toBe("completed");
-  const composition = `
-    const list = await records({kind: "list"});
-    const status = await records({kind: "status"});
-    const choice = Math.random() > 0.5 ? "list" : "status";
-    const selected = await records({kind: choice});
-    const selectedCount = "rows" in selected ? selected.rows.length : selected.total;
-    let dynamic = "status";
-    const broad = await records({kind: dynamic});
-    const omitted = await records();
-    const broadCount = "rows" in broad ? broad.rows.length : broad.total;
-    const omittedCount = "rows" in omitted ? omitted.rows.length : omitted.total;
-    const explicit = await records(undefined);
-    const explicitCount = "rows" in explicit ? explicit.rows.length : explicit.total;
-    return [list.rows.length, status.total, selectedCount, broadCount, omittedCount, explicitCount];
-  `;
   const source = `${(declaration.value as { content: string }).content}
-async function consume() { ${composition} }
 async function checkContracts(kind: string, choice: "list" | "status") {
   const list = await records({kind: "list"});
+  const rows: string[] = list.rows;
   // @ts-expect-error A list result has rows, not a total.
   list.total;
+  const status = await records({kind: "status"});
+  const total: number = status.total;
   const dynamic = await records({kind});
+  const broadCount = "rows" in dynamic ? dynamic.rows.length : dynamic.total;
   // @ts-expect-error A broad selector cannot promise rows.
   dynamic.rows;
   const selected = await records({kind: choice});
+  const selectedCount = "rows" in selected ? selected.rows.length : selected.total;
   // @ts-expect-error A union selector cannot promise rows.
   selected.rows;
   const omitted = await records();
+  const omittedCount = "rows" in omitted ? omitted.rows.length : omitted.total;
   // @ts-expect-error Missing selectors keep all output branches.
   omitted.rows;
+  const explicit = await records(undefined);
+  const explicitCount = "rows" in explicit ? explicit.rows.length : explicit.total;
   // @ts-expect-error A generic selector cannot supply an omitted runtime argument.
   await records<{kind: "list"}>();
 }`;
   expect(typeCheckSources({ "/records-consumer.ts": source })).toEqual([]);
   expect(tool.execute).not.toHaveBeenCalled();
-
-  expectCompleted(await run(composition, "literal-and-union"), [2, 2, 2, 2, 2, 2]);
-  expect(tool.execute).toHaveBeenCalledTimes(6);
 });
 
 it("keeps a large set of action declarations within the complete output allowance", async () => {
@@ -267,31 +249,17 @@ it("keeps a large set of action declarations within the complete output allowanc
   expect(file.content).toContain("Promise<unknown>");
 });
 
-it("preserves changed fields, requiredness, and root constraints when reusing object declarations", async () => {
-  const base = closedObject({ value: Type.String() });
-  const extended = closedObject({ ...base.properties, receipt: Type.String() });
+it("does not reuse an object declaration for a constrained root", async () => {
+  const base = closedObject({ value: Type.String(), receipt: Type.String() });
   const file = await actionApi({
     empty: closedObject({}),
     base,
-    extended,
-    changed: closedObject({ ...extended.properties, value: Type.Number() }),
-    optional: { ...extended, required: ["receipt"] },
-    constrained: { ...extended, allOf: [{ maxProperties: 1 }] },
+    constrained: { ...base, allOf: [{ maxProperties: 1 }] },
   });
   expect(
     typeCheckSources({
       "/extended-records.ts": `${file.content}
 async function consume() {
-  const extended = await records({ kind: "extended" });
-  const accepted: typeof extended = { value: "item", receipt: "approved" };
-  const value: string = extended.value;
-  const receipt: string = extended.receipt;
-  const changed = await records({ kind: "changed" });
-  const numeric: number = changed.value;
-  const optional = await records({ kind: "optional" });
-  const maybe: string | undefined = optional.value;
-  // @ts-expect-error Reuse must not restore requiredness removed by this branch.
-  const required: string = optional.value;
   const constrained = await records({ kind: "constrained" });
   // @ts-expect-error Unsupported root constraints must retain an unknown result.
   constrained.receipt;

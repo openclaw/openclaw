@@ -55,30 +55,19 @@ export function buildSandboxCreateArgs(params: {
   name: string;
   cfg: SandboxDockerConfig;
   scopeKey: string;
-  createdAtMs?: number;
   labels?: Record<string, string>;
   configHash?: string;
   bindSourceRoots?: string[];
-  allowSourcesOutsideAllowedRoots?: boolean;
-  allowReservedContainerTargets?: boolean;
-  allowContainerNamespaceJoin?: boolean;
 }) {
   // Runtime security validation: blocks dangerous bind mounts, network modes, and profiles.
   validateSandboxSecurity({
     ...params.cfg,
     allowedSourceRoots: params.bindSourceRoots,
-    allowSourcesOutsideAllowedRoots:
-      params.allowSourcesOutsideAllowedRoots ??
-      params.cfg.dangerouslyAllowExternalBindSources === true,
-    allowReservedContainerTargets:
-      params.allowReservedContainerTargets ??
-      params.cfg.dangerouslyAllowReservedContainerTargets === true,
-    dangerouslyAllowContainerNamespaceJoin:
-      params.allowContainerNamespaceJoin ??
-      params.cfg.dangerouslyAllowContainerNamespaceJoin === true,
+    allowSourcesOutsideAllowedRoots: params.cfg.dangerouslyAllowExternalBindSources === true,
+    allowReservedContainerTargets: params.cfg.dangerouslyAllowReservedContainerTargets === true,
   });
 
-  const createdAtMs = params.createdAtMs ?? Date.now();
+  const createdAtMs = Date.now();
   const args = ["create", "--name", params.name];
   // The container engine's init owns PID 1 so orphaned children from long-running
   // tool and browser workloads are reaped instead of accumulating against pidsLimit.
@@ -175,7 +164,8 @@ function appendCustomBinds(args: string[], binds: readonly string[] | undefined)
   }
 }
 
-export type SandboxContainerAllocationParams = {
+/** Allocate inertly; the caller records custody before starting any container process. */
+export async function allocateSandboxContainer(params: {
   engine: SandboxContainerEngine;
   name: string;
   cfg: SandboxDockerConfig;
@@ -191,12 +181,7 @@ export type SandboxContainerAllocationParams = {
   assertCurrent?: () => void;
   labels?: Record<string, string>;
   command?: SandboxPersistentExecCommand;
-};
-
-/** Allocate inertly; the caller records custody before starting any container process. */
-export async function allocateSandboxContainer(
-  params: SandboxContainerAllocationParams,
-): Promise<string> {
+}): Promise<string> {
   const { engine, name, workspaceDir, scopeKey } = params;
   const cfg = params.command?.env
     ? { ...params.cfg, env: { ...params.cfg.env, ...params.command.env } }

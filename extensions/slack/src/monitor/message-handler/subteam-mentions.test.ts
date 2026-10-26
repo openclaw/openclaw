@@ -27,15 +27,15 @@ describe("Slack subteam mentions", () => {
     const { mention, list } = createLookup(["U_OTHER", "U_BOT"]);
 
     await expect(
-      mention({ text: "<!subteam^S123|eng> ping", botUserId: "u_bot", teamId: "T1", now: 1 }),
+      mention({ text: "<!subteam^S123|eng> ping", botUserId: "u_bot", teamId: "T1" }),
     ).resolves.toBe(true);
     expect(list).toHaveBeenCalledWith({ usergroup: "S123", team_id: "T1" });
   });
 
   it("fails closed and caches successful membership lookups", async () => {
     const { mention, list } = createLookup(["U_OTHER"]);
-    await expect(mention({ now: 1 })).resolves.toBe(false);
-    await expect(mention({ text: "<!subteam^S123> ping again", now: 2 })).resolves.toBe(false);
+    await expect(mention()).resolves.toBe(false);
+    await expect(mention({ text: "<!subteam^S123> ping again" })).resolves.toBe(false);
     expect(list).toHaveBeenCalledTimes(1);
   });
 
@@ -65,8 +65,8 @@ describe("Slack subteam mentions", () => {
       });
       const text = "<!subteam^S123> <!subteam^S456> ping";
 
-      await expect(mention({ text, now: 1 })).resolves.toBe(true);
-      await expect(mention({ text, now: 2 })).resolves.toBe(true);
+      await expect(mention({ text })).resolves.toBe(true);
+      await expect(mention({ text })).resolves.toBe(true);
       expect(list.mock.calls.map(([options]) => options.usergroup)).toEqual(
         firstResult === "nonmember" ? ["S123", "S456"] : ["S123", "S456", "S123"],
       );

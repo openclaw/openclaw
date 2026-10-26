@@ -25,12 +25,7 @@ import {
   getScopedChannelsCommandSecretTargets,
 } from "../../cli/command-secret-targets.js";
 import { resolveMessageSecretScope } from "../../cli/message-secret-scope.js";
-import {
-  getRuntimeConfigSnapshot,
-  getRuntimeConfigSourceSnapshot,
-  selectApplicableRuntimeConfig,
-  type OpenClawConfig,
-} from "../../config/config.js";
+import { selectLiveRuntimeConfig, type OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   isTrustedMessageActionTurnIngress,
@@ -71,16 +66,6 @@ type EmbeddedReplyRoute = Pick<
   | "originatingReplyToMode"
 >;
 
-export function resolveQueuedReplyRuntimeConfig(config: OpenClawConfig): OpenClawConfig {
-  return (
-    selectApplicableRuntimeConfig({
-      inputConfig: config,
-      runtimeConfig: getRuntimeConfigSnapshot(),
-      runtimeSourceConfig: getRuntimeConfigSourceSnapshot(),
-    }) ?? config
-  );
-}
-
 export async function resolveQueuedReplyExecutionConfig(
   config: OpenClawConfig,
   params?: {
@@ -90,7 +75,7 @@ export async function resolveQueuedReplyExecutionConfig(
     agentAccountId?: string;
   },
 ): Promise<OpenClawConfig> {
-  const runtimeConfig = resolveQueuedReplyRuntimeConfig(config);
+  const runtimeConfig = selectLiveRuntimeConfig(config);
   const { resolvedConfig } = await resolveCommandSecretRefsViaGateway({
     config: runtimeConfig,
     commandName: "reply",
@@ -494,6 +479,7 @@ export async function buildEmbeddedRunExecutionParams(params: {
     providerReviewAcknowledgment: params.run.providerReviewAcknowledgment,
     permissionMode: params.run.permissionMode,
     sessionRoot: params.run.sessionRoot,
+    blindPrompt: params.run.blindPrompt,
     agentDir: params.run.agentDir,
     config,
     trustedInternalHandoff: params.run.trustedInternalHandoff,
@@ -523,6 +509,7 @@ export async function buildEmbeddedRunExecutionParams(params: {
     ...authProfile,
     thinkLevel: params.run.thinkLevel,
     thinkingExplicit: params.run.thinkingExplicit,
+    cyberAccessProgram: params.run.cyberAccessProgram,
     fastMode: params.run.fastMode,
     fastModeAutoOnSeconds: params.run.fastModeAutoOnSeconds,
     verboseLevel: params.run.verboseLevel,

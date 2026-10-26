@@ -15,7 +15,7 @@ import {
 import { SessionSnapshotStore } from "../pages/chat/session-snapshot-store.ts";
 import { parseSidebarSnapshot, type SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 
-type SidebarSnapshotHost = {
+export function createSidebarSnapshot(host: {
   sidebarSnapshot: SidebarSnapshotModel | null;
   readonly sessionDataContext?: {
     gateway: ApplicationGateway;
@@ -28,9 +28,7 @@ type SidebarSnapshotHost = {
   restoreSidebarSnapshot(model: SidebarSnapshotModel): void;
   releaseSidebarSnapshot(): void;
   clearSidebarSnapshot(): void;
-};
-
-export function createSidebarSnapshot(host: SidebarSnapshotHost) {
+}) {
   let publish: (() => void) | undefined;
   let pending = false;
   let saved = false;
@@ -48,6 +46,7 @@ export function createSidebarSnapshot(host: SidebarSnapshotHost) {
   let handoffTimer: ReturnType<typeof setTimeout> | undefined;
   let handoffIdle: number | undefined;
   let handoffReady = false;
+  let handoffExpired = false;
 
   function subscribe(listener: () => void): () => void {
     publish = listener;
@@ -168,9 +167,17 @@ export function createSidebarSnapshot(host: SidebarSnapshotHost) {
         replaceScope(next);
       }
     }
-    if (host.sidebarSnapshot && host.sidebarSnapshotSettled()) {
+    if (snapshot.phase !== "connected") {
+      cancelHandoff();
+    } else if (host.sidebarSnapshot) {
+      handoffTimer ??= setTimeout(() => {
+        handoffExpired = true;
+        releaseWhenReady();
+      }, 3000);
+      if (!handoffExpired && !host.sidebarSnapshotSettled()) {
+        return;
+      }
       if (!handoffReady) {
-        handoffTimer ??= setTimeout(releaseWhenReady, 1800);
         if (host.sessionDataContext?.connectionBootstrap.foregroundReady) {
           if (typeof requestIdleCallback === "function") {
             handoffIdle ??= requestIdleCallback(releaseWhenReady, { timeout: 1800 });
@@ -203,6 +210,7 @@ export function createSidebarSnapshot(host: SidebarSnapshotHost) {
     }
     handoffTimer = handoffIdle = undefined;
     handoffReady = false;
+    handoffExpired = false;
   }
 
   function capture(): void {

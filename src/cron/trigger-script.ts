@@ -63,7 +63,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayContextResolver } from "../gateway/server-methods/types.js";
 import { formatErrorMessageWithCode } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
-import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.js";
+import {
+  capturePluginLifecycleAuthority,
+  isPluginRegistryRecordSetAdmitting,
+} from "../plugins/registry-lifecycle.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
@@ -426,13 +429,16 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
     }
     const promise = prepareRuntime({ ...request, signal: scope.signal }).then((runtime) => {
       entry.lifetime.publish(runtime);
+      const registry = runtime.pluginRegistry;
+      const registryCurrent =
+        registry && capturePluginLifecycleAuthority(registry, undefined, { scopedRuntime: true });
       return {
         ...runtime,
-        isCurrent: runtime.pluginRegistry
-          ? (capturePluginLifecycleAuthority(runtime.pluginRegistry, undefined, {
-              scopedRuntime: true,
-            }) ?? (() => false))
-          : () => true,
+        // Per-plugin replacement disposes one instance without retiring this
+        // retained registry; its stale hooks would fail every later tool call.
+        isCurrent: () =>
+          !registry ||
+          (registryCurrent?.() === true && isPluginRegistryRecordSetAdmitting(registry)),
       };
     });
     const entry: TriggerRuntimeCacheEntry = {
@@ -503,7 +509,6 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
           runId,
           runSessionKey: runtime.context.sessionKey,
           toolsAllow: request.toolsAllow,
-          operatorAuthorityRestored: false,
         }),
         cfg: runtime.context.config,
         runId,

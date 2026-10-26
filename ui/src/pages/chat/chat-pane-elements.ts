@@ -2,7 +2,6 @@ import type { BoardFace } from "../../lib/board/settings.ts";
 
 export type ChatPaneElement = HTMLElement & {
   active?: boolean;
-  conversationPresented?: boolean;
   readonly composerElement?: HTMLTextAreaElement | null;
   readonly headerElement?: HTMLElement | null;
   discardStagedAttachments?: () => void;

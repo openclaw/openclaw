@@ -167,6 +167,16 @@ export function getPluginInstance(record: PluginRecord): PluginInstanceHandle | 
   return pluginInstanceState.records.get(record)?.instance;
 }
 
+/**
+ * Digest of a live instance's captured plugin generation source. Core-bundled plugins load
+ * host-owned modules and have none; `getPluginInstanceCodeIdentity` covers both.
+ */
+export function getPluginInstanceSourceDigest(record: PluginRecord): string | undefined {
+  return getPluginInstanceIncarnation(record)
+    ? pluginInstanceState.records.get(record)?.instance?.sourceDigest
+    : undefined;
+}
+
 /** Process-local exact-instance identity, preserved by adoption, never reconstructed on reload. */
 export function getPluginInstanceIncarnation(record: PluginRecord): string | undefined {
   const owner = pluginInstanceState.records.get(record);

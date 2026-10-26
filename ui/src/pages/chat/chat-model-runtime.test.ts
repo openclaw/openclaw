@@ -1,14 +1,14 @@
 /* @vitest-environment jsdom */
 
-import { createComponent, createSignal, merge } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ModelCatalogEntry, SessionsListResult } from "../../api/types.ts";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { makeChatHost, requestCalls } from "./chat-host.test-support.ts";
 import { switchChatModel } from "./chat-session.ts";
-import { ChatModelControls } from "./components/chat-model-controls.tsx";
+import { renderChatModelControls } from "./chat-view.test-helpers.ts";
+import type { ChatModelControls } from "./components/chat-model-controls.tsx";
+import { expandModelProviders } from "./components/chat-model-picker.test-support.tsx";
 
 const codexChoice = {
   agentRuntime: { id: "codex", source: "model" },
@@ -24,9 +24,14 @@ const model: ModelCatalogEntry = {
   agentRuntime: { id: "openclaw", source: "model" },
   runtimeChoices: [codexChoice],
 };
+type RuntimeChoice = NonNullable<ModelCatalogEntry["runtimeChoices"]>[number];
+const withChoice = (choice: Partial<RuntimeChoice>, entry: Partial<ModelCatalogEntry> = {}) => ({
+  ...model,
+  ...entry,
+  runtimeChoices: [{ ...codexChoice, ...choice }],
+});
 
 type ModelControlsProps = Parameters<typeof ChatModelControls>[0];
-const mountedControls = new WeakMap<HTMLElement, (props: ModelControlsProps) => void>();
 
 async function renderControls(
   result: SessionsListResult,
@@ -34,42 +39,27 @@ async function renderControls(
   options: Pick<ModelControlsProps, "onModelSelect" | "onModelSetup" | "modelSelectionLocked"> = {},
   container = document.createElement("div"),
 ) {
-  const props: ModelControlsProps = {
-    activeRunId: null,
-    connected: true,
-    gatewayAvailable: true,
-    loading: false,
-    modelCatalog: models,
-    modelCatalogState: { hasSnapshot: true, status: "ready" },
-    modelSwitching: false,
-    modelPickerOpen: true,
-    sending: false,
-    sessionKey: "main",
-    selectedSession: result.sessions[0],
-    sessionsResult: result,
-    stream: null,
-    ...options,
-  };
-  const update = mountedControls.get(container);
-  if (update) {
-    update(props);
-  } else {
-    document.body.append(container);
-    const [current, setCurrent] = createSignal(props);
-    const view = mountSolid(() => createComponent(ChatModelControls, merge(current)), {
-      container,
-    });
-    mountedControls.set(container, setCurrent);
-    onTestFinished(() => {
-      view.unmount();
-      mountedControls.delete(container);
-      container.remove();
-    });
-  }
-  flush();
-  await waitForSolid(() =>
-    expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
+  await renderChatModelControls(
+    {
+      activeRunId: null,
+      connected: true,
+      gatewayAvailable: true,
+      loading: false,
+      modelCatalog: models,
+      modelCatalogState: { hasSnapshot: true, status: "ready" },
+      modelSwitching: false,
+      modelPickerOpen: true,
+      sending: false,
+      sessionKey: "main",
+      selectedSession: result.sessions[0],
+      sessionsResult: result,
+      stream: null,
+      ...options,
+    },
+    container,
   );
+  flush();
+  expandModelProviders(container);
   return container;
 }
 
@@ -226,22 +216,17 @@ describe("chat model runtime choices", () => {
         { agentRuntime: { id: "openclaw", source: "model" }, available: true },
       ],
     });
-    expect(container.querySelectorAll("[data-chat-model-runtime]")).toHaveLength(2);
-    expect(
-      container.querySelectorAll('[data-chat-model-runtime][aria-selected="true"]'),
-    ).toHaveLength(0);
-    expect(
-      container.querySelectorAll('[data-chat-model-option][aria-selected="true"]'),
-    ).toHaveLength(1);
+    const count = (selector: string) => container.querySelectorAll(selector).length;
+    expect([
+      count("[data-chat-model-runtime]"),
+      count('[data-chat-model-runtime][aria-selected="true"]'),
+      count('[data-chat-model-option][aria-selected="true"]'),
+    ]).toEqual([2, 0, 1]);
   });
 
   it("uses the selected harness capability for the model trigger", async () => {
     const container = await renderRuntimeModel(
-      {
-        ...model,
-        supportsTools: true,
-        runtimeChoices: [{ ...codexChoice, supportsTools: false }],
-      },
+      withChoice({ supportsTools: false }, { supportsTools: true }),
       "codex",
     );
     expect(
@@ -254,11 +239,10 @@ describe("chat model runtime choices", () => {
 
   it("labels an observed Codex default with an alternate runtime", async () => {
     const container = await renderRuntimeModel(
-      {
-        ...model,
-        agentRuntime: { id: "codex", source: "implicit" },
-        runtimeChoices: [{ agentRuntime: { id: "openclaw", source: "model" }, available: true }],
-      },
+      withChoice(
+        { agentRuntime: { id: "openclaw", source: "model" } },
+        { agentRuntime: { id: "codex", source: "implicit" } },
+      ),
       "codex",
       true,
     );
@@ -272,25 +256,21 @@ describe("chat model runtime choices", () => {
   });
 
   it("uses alternate thinking metadata when the base runtime identity is absent", async () => {
-    const { agentRuntime: _runtime, ...unknownRuntimeModel } = model;
     const container = await renderRuntimeModel(
-      {
-        ...unknownRuntimeModel,
-        thinkingLevels: [{ id: "medium", label: "Medium" }],
-        thinkingDefault: "medium",
-        runtimeChoices: [
-          {
-            ...codexChoice,
-            thinkingLevels: [{ id: "high", label: "High" }],
-            thinkingDefault: "high",
-          },
-        ],
-      },
+      withChoice(
+        { thinkingLevels: [{ id: "high", label: "High" }], thinkingDefault: "high" },
+        {
+          agentRuntime: undefined,
+          thinkingLevels: [{ id: "medium", label: "Medium" }],
+          thinkingDefault: "medium",
+        },
+      ),
       "codex",
     );
     container.querySelector<HTMLElement>(".chat-controls__effort-picker summary")!.click();
-    flush();
-    expect(container.querySelector('[data-chat-thinking-option="high"]')).not.toBeNull();
+    await waitForSolid(() =>
+      expect(container.querySelector('[data-chat-thinking-option="high"]')).not.toBeNull(),
+    );
     expect(container.querySelector('[data-chat-thinking-option="medium"]')).toBeNull();
   });
 
@@ -304,16 +284,10 @@ describe("chat model runtime choices", () => {
       const container = await renderControls(
         result,
         [
-          {
-            ...model,
-            runtimeChoices: [
-              {
-                ...codexChoice,
-                available: false,
-                ...(guard === "locked" ? {} : { unavailableReason: guard }),
-              },
-            ],
-          },
+          withChoice({
+            available: false,
+            ...(guard === "locked" ? {} : { unavailableReason: guard }),
+          }),
         ],
         {
           modelSelectionLocked: guard === "locked",

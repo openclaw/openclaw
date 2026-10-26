@@ -3,13 +3,9 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { syncPluginVersions } from "../../scripts/sync-plugin-versions.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { writeJsonFile as writeJson } from "../../test/helpers/temp-repo.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-function writeJson(filePath: string, value: unknown) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-}
 
 function makeRoot(version: string) {
   const root = tempDirs.make("openclaw-sync-plugin-versions-");

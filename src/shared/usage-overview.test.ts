@@ -1,9 +1,8 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createEmptyCostUsageTotals } from "../infra/session-cost-usage-totals.js";
 import type { SessionCostSummary, UsageDailyBucket } from "../infra/session-cost-usage.types.js";
 import { createUsageAggregateAccumulator, usageModelIdentity } from "./usage-aggregates.js";
 import { buildUsageOverview } from "./usage-overview.js";
-import { filterSessionsByQuery } from "./usage-query.js";
 import type { SessionUsageEntry, UsageOverviewOptions } from "./usage-types.js";
 
 const utc: UsageDailyBucket = { mode: "utc-offset", utcOffsetMinutes: 0 };
@@ -32,12 +31,19 @@ function report(
 
 it("matches wildcard filters without exponential backtracking", () => {
   const longKey = "a".repeat(128);
-  const sessions = [{ key: longKey }, { key: "Agent:Main:Job.42", sessionId: "run-[42]" }];
-  expect(filterSessionsByQuery(sessions, `key:${"*?".repeat(64)}b`).sessions).toEqual([]);
-  expect(filterSessionsByQuery(sessions, `key:${"*?".repeat(64)}`).sessions).toEqual([sessions[0]]);
-  expect(filterSessionsByQuery(sessions, "key:agent:*:job.??").sessions).toEqual([sessions[1]]);
-  expect(filterSessionsByQuery(sessions, "id:run-[?2]").sessions).toEqual([sessions[1]]);
-  expect(filterSessionsByQuery(sessions, "key:*jobX??").sessions).toEqual([]);
+  const sessions = [
+    { key: longKey, usage: null },
+    { key: "Agent:Main:Job.42", sessionId: "run-[42]", usage: null },
+  ];
+  expect(overview(sessions, { query: `key:${"*?".repeat(64)}b` }, false).sessions).toEqual([]);
+  expect(overview(sessions, { query: `key:${"*?".repeat(64)}` }, false).sessions).toEqual([
+    sessions[0],
+  ]);
+  expect(overview(sessions, { query: "key:agent:*:job.??" }, false).sessions).toEqual([
+    sessions[1],
+  ]);
+  expect(overview(sessions, { query: "id:run-[?2]" }, false).sessions).toEqual([sessions[1]]);
+  expect(overview(sessions, { query: "key:*jobX??" }, false).sessions).toEqual([]);
 });
 
 it("keeps incomplete table totals unknown beyond the page and scopes completeness to selected days", () => {
@@ -168,6 +174,7 @@ function sources(secondDate = "2026-02-01") {
       dailyBreakdown: [{ ...daily(date, tokens), ...totals }],
       dailyMessageCounts: [{ ...zeroMessages, date, total: 1, assistant: 1, toolCalls: 1 }],
       modelUsage: [{ provider, model, count: 1, totals }],
+      dailyModelUsage: [{ date, provider, model, tokens, cost: tokens / 10, count: 1 }],
       messageCounts: { ...zeroMessages, total: 1, assistant: 1, toolCalls: 1 },
       toolUsage: { totalCalls: 1, uniqueTools: 1, tools: [{ name: "read", count: 1 }] },
     };
@@ -188,6 +195,7 @@ function sources(secondDate = "2026-02-01") {
         dailyBreakdown: [...firstDay.dailyBreakdown!, ...secondDay.dailyBreakdown!],
         dailyMessageCounts: [...firstDay.dailyMessageCounts!, ...secondDay.dailyMessageCounts!],
         modelUsage: [...firstDay.modelUsage!, ...secondDay.modelUsage!],
+        dailyModelUsage: [...firstDay.dailyModelUsage!, ...secondDay.dailyModelUsage!],
         missingCostEntries: 2,
         missingCostByModel: { "provider::a/model": 1, "provider/a::model": 1 },
         messageCounts: { ...zeroMessages, total: 2, assistant: 2, toolCalls: 2 },
@@ -234,7 +242,7 @@ it("aggregates prepared family rows and all agents before selecting the page", (
   });
 });
 
-it("keeps an excluded agent's costs only in the calendar facet after day selection", () => {
+it("keeps excluded days' costs and providers in the calendar while summaries follow selection", () => {
   const result = overview(sources("2026-02-03"), {
     selectedDays: ["2026-02-01"],
     recentKeys: [],
@@ -254,6 +262,11 @@ it("keeps an excluded agent's costs only in the calendar facet after day selecti
     { date: "2026-02-02", totalTokens: 20 },
     { date: "2026-02-03", totalTokens: 30 },
   ]);
+  expect(result.aggregates.modelDaily).toEqual([
+    { date: "2026-02-01", provider: "provider::a", model: "model", tokens: 10, cost: 1, count: 1 },
+    { date: "2026-02-02", provider: "provider", model: "a::model", tokens: 20, cost: 2, count: 1 },
+    { date: "2026-02-03", provider: "provider::a", model: "model", tokens: 30, cost: 3, count: 1 },
+  ]);
   expect(result.aggregates.daily).toEqual([
     { date: "2026-02-01", tokens: 10, cost: 1, messages: 1, toolCalls: 1, errors: 0 },
     { date: "2026-02-02", tokens: 20, cost: 2, messages: 1, toolCalls: 1, errors: 0 },
@@ -264,6 +277,25 @@ it("keeps an excluded agent's costs only in the calendar facet after day selecti
     byCreator: [{ key: "person", totals: { totalTokens: 10 }, sessionCount: 1 }],
   });
 });
+
+it.each([{ query: "agent:first" }, { selectedSessions: ["family"] }])(
+  "keeps non-calendar filters on both calendar series: %j",
+  (filter) => {
+    const result = overview(sources("2026-02-03"), {
+      ...filter,
+      selectedDays: ["2026-02-01"],
+    });
+    expect(result.aggregates.costDaily?.map((entry) => entry.date)).toEqual([
+      "2026-02-01",
+      "2026-02-02",
+    ]);
+    expect(result.aggregates.modelDaily?.map((entry) => entry.date)).toEqual([
+      "2026-02-01",
+      "2026-02-02",
+    ]);
+    expect(result.totals.totalTokens).toBe(10);
+  },
+);
 
 it("counts activity independently of recently modified empty comparison rows", () => {
   const result = overview(
@@ -362,6 +394,56 @@ function aggregate(...summaries: Partial<SessionCostSummary>[]) {
   }
   return accumulator.finish();
 }
+
+it("sorts fresh aggregate arrays without copying them and isolates successive reports", () => {
+  const accumulator = createUsageAggregateAccumulator();
+  for (const [index, name] of ["first", "second"].entries()) {
+    const date = `2026-03-${12 - index}`;
+    const totals = usage({ firstActivity: 0, totalTokens: index + 1, totalCost: index + 1 });
+    accumulator.add({
+      agentId: name,
+      channel: name,
+      creatorKey: name,
+      usage: {
+        ...totals,
+        toolUsage: { totalCalls: index + 1, uniqueTools: 1, tools: [{ name, count: index + 1 }] },
+        modelUsage: [{ provider: name, model: name, count: 1, totals }],
+        dailyBreakdown: [day(date, totals)],
+        dailyModelUsage: [modelDay(date, name, index + 1, index + 1, 1, name)],
+        dailyLatency: [{ date, ...latency(1, 10, 10, 10) }],
+      },
+    });
+  }
+  const sortCopies = vi.spyOn(Array.prototype, "toSorted");
+  let result: ReturnType<typeof accumulator.finish>;
+  try {
+    result = accumulator.finish();
+    expect(sortCopies).not.toHaveBeenCalled();
+  } finally {
+    sortCopies.mockRestore();
+  }
+  expect(result.byModel.map(({ model }) => model)).toEqual(["second", "first"]);
+  expect(result.byCreator?.map(({ key }) => key)).toEqual(["second", "first"]);
+  expect(result.daily.map(({ date }) => date)).toEqual(["2026-03-11", "2026-03-12"]);
+  const expected = structuredClone(result);
+  const arrays = [
+    result.tools.tools,
+    result.byModel,
+    result.byProvider,
+    result.byAgent,
+    result.byChannel,
+    result.byCreator,
+    result.costDaily,
+    result.dailyLatency,
+    result.modelDaily,
+    result.daily,
+    ...(result.byCreator ?? []).flatMap((creator) => [creator.daily, creator.sessionActivity]),
+  ];
+  for (const array of arrays) {
+    array?.splice(0);
+  }
+  expect(accumulator.finish()).toEqual(expected);
+});
 
 it("retains incomplete daily and model subtotals after merging complete rows", () => {
   const date = "2026-05-15";
@@ -599,4 +681,159 @@ it("retains creator daily amounts and counts each multi-day session once", () =>
     ],
   });
   expect(summary).toEqual(original);
+});
+
+it("sorts private filter inventories without copying them again", () => {
+  const rows: SessionUsageEntry[] = [
+    { key: "z", agentId: "z", channel: "z", modelProvider: "z", model: "z", usage: null },
+    { key: "a", agentId: "a", channel: "a", modelProvider: "a", model: "a", usage: null },
+  ];
+  const before = structuredClone(rows);
+  const copies = vi.spyOn(Array.prototype, "toSorted");
+  let result: ReturnType<typeof overview>;
+  try {
+    result = overview(rows);
+    // The page keeps one copying sort; the five private filter lists need none.
+    expect(copies).toHaveBeenCalledTimes(1);
+  } finally {
+    copies.mockRestore();
+  }
+  expect(result.overview.filterOptions).toEqual({
+    agent: ["a", "z"],
+    channel: ["a", "z"],
+    provider: ["a", "z"],
+    model: ["a", "z"],
+    tool: [],
+  });
+  expect(rows).toEqual(before);
+});
+
+const makeSession = (
+  key: string,
+  summary: Partial<SessionCostSummary> | null,
+  fields: Omit<SessionUsageEntry, "key" | "usage"> = {},
+) => ({ key, usage: summary === null ? null : usage(summary), ...fields });
+
+function queryOverview(rows: SessionUsageEntry[], query: string) {
+  const result = overview(
+    rows,
+    { query, limit: rows.length, recentKeys: rows.map((row) => row.key) },
+    false,
+  );
+  return { sessions: result.sessions, warnings: result.overview.queryWarnings };
+}
+
+it("matches quoted multi-word session labels", () => {
+  const session = { key: "planning", label: "Team Planning", usage: null };
+
+  expect(queryOverview([session], 'label:"Team Planning"').sessions).toEqual([session]);
+  expect(queryOverview([session], '"Team Planning"').sessions).toEqual([session]);
+});
+
+function populatedSessions() {
+  const rows: [string, string, string, number, number, string][] = [
+    ["openai", "discord", "gpt", 100, 1, "read"],
+    ["anthropic", "slack", "claude", 80, 0, "write"],
+    ["google", "discord", "gemini", 60, 1, "read"],
+  ];
+  return rows.map(([key, channel, model, totalTokens, errors, name]) =>
+    makeSession(
+      key,
+      {
+        totalTokens,
+        messageCounts: { ...zeroMessages, errors },
+        toolUsage: { uniqueTools: 1, totalCalls: 1, tools: [{ count: 1, name }] },
+      },
+      { channel, modelProvider: key, model, hasContextWeight: true },
+    ),
+  );
+}
+
+it("unions categorical values while intersecting categories and other constraints", () => {
+  const sessions = populatedSessions();
+  const cases: Array<[query: string, keys: string[]]> = [
+    ["provider:openai provider:anthropic", ["openai", "anthropic"]],
+    ["provider: provider:openai", ["openai"]],
+    ["channel:discord channel:slack", ["openai", "anthropic", "google"]],
+    ["model:gpt model:claude", ["openai", "anthropic"]],
+    ["tool:read tool:write", ["openai", "anthropic", "google"]],
+    ["provider:openai provider:anthropic channel:discord", ["openai"]],
+    ["provider:openai provider:anthropic minTokens:90 has:errors has:tools", ["openai"]],
+    ["minTokens:50 minTokens:90", ["openai"]],
+    ["has:errors has:tools", ["openai", "google"]],
+  ];
+
+  for (const [query, keys] of cases) {
+    expect(queryOverview(sessions, query).sessions.map((session) => session.key)).toEqual(keys);
+  }
+});
+
+it("supports numeric filters like minTokens/maxTokens", () => {
+  const a = makeSession("a", {
+    totalTokens: 1_000,
+    totalCost: 20,
+    messageCounts: { ...zeroMessages, total: 30 },
+  });
+  const b = makeSession("b", {
+    totalTokens: 5,
+    totalCost: 2,
+    messageCounts: { ...zeroMessages, total: 3 },
+  });
+  const filters = [
+    "minTokens:10",
+    "minTokens:1k",
+    "minCost:10",
+    "minMessages:10",
+    "maxTokens:10",
+    "maxCost:10",
+    "maxMessages:10",
+  ];
+
+  for (const [index, filter] of filters.entries()) {
+    expect(queryOverview([a, b], filter)).toEqual({
+      sessions: [index < 4 ? a : b],
+      warnings: [],
+    });
+  }
+});
+
+it("does not classify unknown usage as zero or as its known subtotal", () => {
+  const interrupted = makeSession("interrupted", {
+    usageReport: { state: "unavailable" },
+    totalTokens: 100,
+    totalCost: 0,
+    messageCounts: { ...zeroMessages, total: 2 },
+  });
+  for (const query of ["minTokens:10", "maxTokens:1000", "minCost:0", "maxCost:1"]) {
+    expect(queryOverview([interrupted], query).sessions).toEqual([]);
+  }
+  expect(queryOverview([interrupted], "minMessages:1").sessions).toEqual([interrupted]);
+});
+
+it("supports every has predicate and warns on unknown values", () => {
+  const populated = populatedSessions()[0]!;
+  const empty = makeSession("empty", null);
+
+  for (const value of ["tools", "errors", "context", "usage", "model", "provider"]) {
+    expect(queryOverview([populated, empty], `has:${value}`)).toEqual({
+      sessions: [populated],
+      warnings: [],
+    });
+  }
+  expect(queryOverview([populated, empty], "has:__proto__")).toEqual({
+    sessions: [populated, empty],
+    warnings: ["Unknown has:__proto__"],
+  });
+});
+
+it("rejects non-decimal numbers and warns on unknown keys", () => {
+  const target = makeSession("a", { totalTokens: 10_000, totalCost: 0 });
+  for (const value of ["1e3", "0x1000", "9007199254740993", "wat"]) {
+    const unknown = value === "wat";
+    const query = `${unknown ? "__proto__:1 " : ""}minTokens:${value}`;
+    expect(queryOverview([target], query).warnings).toEqual([
+      ...(unknown ? ["Unknown filter: __proto__"] : []),
+      "Invalid number for minTokens",
+    ]);
+  }
 });

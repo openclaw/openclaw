@@ -1,7 +1,11 @@
 import type { TranslationMap } from "../lib/types.ts";
+import { registerSessionOrganizationSharedEnglish } from "./en-session-organization-shared.ts";
 import { en } from "./en.ts";
 
-// The ordered source retains hot labels by reference; menu and management copy loads on use.
+const sharedSessions = registerSessionOrganizationSharedEnglish.catalog.sessionsView;
+const sharedWorktrees = registerSessionOrganizationSharedEnglish.catalog.worktrees;
+
+// Preserve catalog order while shared labels load independently of menu and management copy.
 const enSessionOrganization = {
   sessionsView: {
     pullRequestCount: en.sessionsView.pullRequestCount,
@@ -42,8 +46,8 @@ const enSessionOrganization = {
       "cleanup-failed": "cleanup failed",
     },
     draftCleanupFailed: en.sessionsView.draftCleanupFailed,
-    title: "Sessions",
-    subtitle: "Browse sessions and manage per-session overrides.",
+    title: sharedSessions.title,
+    subtitle: sharedSessions.subtitle,
     store: "Store: {path}",
     active: "Updated within",
     limit: "Limit",
@@ -51,12 +55,11 @@ const enSessionOrganization = {
     ownedBy: en.sessionsView.ownedBy,
     archivedBy: en.sessionsView.archivedBy,
     archiveReason: "Archive reason",
-    archiveReasonManual: "Archived manually",
-    archiveReasonAgeRetention: "Automatically archived by age retention",
-    archiveReasonActiveSessionCap:
-      "Automatically archived because the active-session limit was reached",
-    archiveReasonStaleDashboard: "Automatically archived after dashboard inactivity",
-    archiveReasonRestartRecovery: "Archived when a replacement session was recovered",
+    archiveReasonManual: sharedSessions.archiveReasonManual,
+    archiveReasonAgeRetention: sharedSessions.archiveReasonAgeRetention,
+    archiveReasonActiveSessionCap: sharedSessions.archiveReasonActiveSessionCap,
+    archiveReasonStaleDashboard: sharedSessions.archiveReasonStaleDashboard,
+    archiveReasonRestartRecovery: sharedSessions.archiveReasonRestartRecovery,
     viewingNow: en.sessionsView.viewingNow,
     owners: en.sessionsView.owners,
     allOwners: en.sessionsView.allOwners,
@@ -102,7 +105,7 @@ const enSessionOrganization = {
     limitTooltip: "Max sessions to load.",
     globalTooltip: "Include global sessions.",
     unknownTooltip: "Include unknown sessions.",
-    archivedOnlyTooltip: "Show only archived sessions.",
+    archivedOnlyTooltip: sharedSessions.archivedOnlyTooltip,
     minutesPlaceholder: "min",
     searchPlaceholder: "Filter by key, agent, label, kind…",
     clearSearch: "Clear search",
@@ -120,7 +123,7 @@ const enSessionOrganization = {
     kind: "Kind",
     updated: "Updated",
     tokens: "Tokens",
-    goal: "Goal",
+    goal: sharedSessions.goal,
     goalNote: "Goal note",
     thinking: "Thinking",
     fast: "Fast",
@@ -234,7 +237,7 @@ const enSessionOrganization = {
     customIconHintNoShortcut: "Paste an emoji or SVG.",
     removeIcon: "Remove icon",
     pinSession: en.sessionsView.pinSession,
-    pinRootSessionsOnly: "Only root sessions can be pinned; pin the parent session instead.",
+    pinRootSessionsOnly: sharedSessions.pinRootSessionsOnly,
     unpinSession: en.sessionsView.unpinSession,
     markUnread: "Mark as unread",
     markRead: "Mark as read",
@@ -252,9 +255,9 @@ const enSessionOrganization = {
     splitBelow: "Split below",
     workspaceEditors: "Workspace · editor",
     resetAppearance: "Reset to default",
-    copyTranscriptChanged: "Conversation changed while copying. Try again.",
-    openWindowBlocked: "Allow pop-ups for this site, then try again.",
-    splitUnavailable: "Open a conversation on a wide screen to use split view.",
+    copyTranscriptChanged: sharedSessions.copyTranscriptChanged,
+    openWindowBlocked: sharedSessions.openWindowBlocked,
+    splitUnavailable: sharedSessions.splitUnavailable,
     openPullRequest: "Open PR",
     openInEditorMenu: "Open in",
     archiveSession: en.sessionsView.archiveSession,
@@ -279,8 +282,8 @@ const enSessionOrganization = {
     sessionNameInUse: "A session with this name already exists.",
     newGroupMoveSkipped:
       "Group created, but the move was skipped because the list changed. Move from the row menu.",
-    stopCloudWorkerConfirm: 'Stop the cloud worker for "{session}"?',
-    stopCloudWorkerConfirmAction: "Stop worker",
+    stopCloudWorkerConfirm: sharedSessions.stopCloudWorkerConfirm,
+    stopCloudWorkerConfirmAction: sharedSessions.stopCloudWorkerConfirmAction,
     stopCloudWorkerStale:
       'Gateway connection replaced before the cloud worker for "{session}" was stopped. Try again.',
     deleteSessionConfirm:
@@ -291,12 +294,26 @@ const enSessionOrganization = {
       "Delete 1 session?\n\nStop any attached worker safely, then delete the session entry and archive its transcript.",
     deleteSelectedConfirm:
       "Delete {count} sessions?\n\nStop any attached workers safely, then delete the session entries and archive their transcripts.",
-    archiveSessionTitle: "Archive session?",
+    archiveSessionTitle: "Also archive nested sessions?",
     archiveSessionNestedOne:
-      '"{session}" has a nested session. Archive only this one and it moves to the top level.',
+      '"{session}" has 1 directly nested session. If you archive only this session, that nested session moves to the top level.',
     archiveSessionNestedOther:
-      '"{session}" has {count} nested sessions. Archive only this one and they move to the top level.',
-    archiveThisSession: "Archive this session",
+      '"{session}" has {count} directly nested sessions. If you archive only this session, those nested sessions move to the top level.',
+    archiveThisSession: "Archive only this session",
+    archiveSessionNestedOffline:
+      'Archive only "{session}"? Its directly nested sessions move to the top level. Reconnect to archive the complete subtree.',
+    archiveAllSessions: "Archive all ({count})",
+    automationPauseTitle: "Pause automations?",
+    automationPauseArchiveOne: 'Archiving "{session}" pauses its automations.',
+    automationPauseArchiveOther:
+      "Automations are bound to {count} of these conversations. Archiving a conversation pauses its automations.",
+    automationPauseDeleteOne: 'Deleting "{session}" pauses its automations.',
+    automationPauseDeleteOther:
+      "Automations are bound to {count} of these conversations. Deleting a conversation pauses its automations.",
+    automationPauseUnlisted: "Automation names are unavailable right now.",
+    automationPauseMore: "+{count} more",
+    archiveAnyway: "Archive anyway",
+    deleteAnyway: "Delete anyway",
     moveToTopLevel: en.sessionsView.moveToTopLevel,
     archiveTreeRootRequired:
       "Archive a persistent conversation and its children, not a hidden worker run.",
@@ -310,8 +327,8 @@ const enSessionOrganization = {
     archiveSessionCount: "Archive {count}",
     restoreSession: en.sessionsView.restoreSession,
     restoreSessionCount: "Restore {count}",
-    moveSession: "Move session…",
-    moveSessionTitle: "Move session",
+    moveSession: sharedSessions.moveSession,
+    moveSessionTitle: sharedSessions.moveSessionTitle,
     moveSessionDescription: 'Choose where "{session}" should continue.',
     moveSessionNoReplayWarning:
       "OpenClaw safely reconciles the current workspace before moving. Active work is never replayed.",
@@ -319,17 +336,19 @@ const enSessionOrganization = {
       "The active turn will be interrupted. Partial output is not replayed; send the next turn again after the move.",
     moveSessionAction: "Move session",
     moveSessionCatalogFailed: "Could not load available destinations.",
-    moveSessionFailed: "Move failed",
-    moveSessionGatewayTarget: "Gateway",
-    movingSession: "Moving to {target}…",
-    movingSessionGeneric: "Moving session…",
-    stopCloudWorker: "Stop cloud worker…",
+    moveSessionFailed: sharedSessions.moveSessionFailed,
+    moveSessionGatewayTarget: sharedSessions.moveSessionGatewayTarget,
+    movingSession: sharedSessions.movingSession,
+    movingSessionGeneric: sharedSessions.movingSessionGeneric,
+    stopCloudWorker: sharedSessions.stopCloudWorker,
     initialTurnPausedByWorkerStop:
       "Worker stop requested. Review the initial message before retrying.",
     deleteSessionMenu: "Delete…",
     deleteSessionCount: "Delete {count}…",
-    deleteSessionStale: en.sessionsView.deleteSessionStale,
-    deleteSessionsStale: en.sessionsView.deleteSessionsStale,
+    deleteSessionStale: sharedSessions.deleteSessionStale,
+    deleteSessionIdentityMissing: en.sessionsView.deleteSessionIdentityMissing,
+    deleteSessionsStale:
+      "Gateway connection replaced before {count} sessions were deleted. Try again.",
     groupBy: "Group by",
     groupByNone: "None",
     groupByCategory: "Custom groups",
@@ -349,11 +368,11 @@ const enSessionOrganization = {
     group: "Group",
     ungrouped: "Ungrouped",
     newGroup: "New group",
-    newGroupPrompt: "New group name",
-    newGroupTitle: "New group",
-    newGroupCreate: "Create group",
-    newGroupFailed: "Could not create the group.",
-    newGroupStale: "Gateway connection replaced before the group was saved. Try again.",
+    newGroupPrompt: sharedSessions.newGroupPrompt,
+    newGroupTitle: sharedSessions.newGroupTitle,
+    newGroupCreate: sharedSessions.newGroupCreate,
+    newGroupFailed: sharedSessions.newGroupFailed,
+    newGroupStale: sharedSessions.newGroupStale,
     moveToGroup: "Move session to a group",
     moveToGroupMenu: "Move to group",
     moveToGroupMenuCount: "Move {count} to group",
@@ -381,11 +400,32 @@ const enSessionOrganization = {
     groupRowCount: "{count} sessions",
     groupRowCountOne: "{count} session",
   },
+  worktrees: {
+    adminRequired: "Browsing only. Worktree changes require operator.admin access.",
+    newWorktree: "New worktree",
+    ownerManual: "Manual",
+    ownerSession: "Session",
+    ownerWorkboard: "Workboard",
+    title: sharedWorktrees.title,
+    subtitle: sharedWorktrees.subtitle,
+    cleanNow: "Clean up now",
+    name: "Name",
+    namePlaceholder: "auto",
+    baseBranch: "Base branch",
+    baseBranchPlaceholder: "Remote default",
+    repo: "Repository",
+    empty: "No managed worktrees.",
+    restorable: "Restorable",
+    restore: "Restore",
+    confirmDelete: "Snapshot and delete {name}?",
+    confirmForceDelete: "Snapshot failed: {error}\n\nDelete without a snapshot?",
+  },
 } satisfies TranslationMap;
 
 export const registerSessionOrganizationEnglish = Object.assign(
   () => {
     Object.assign(en.sessionsView, enSessionOrganization.sessionsView);
+    Object.assign(en.worktrees, enSessionOrganization.worktrees);
   },
   { catalog: enSessionOrganization },
 );

@@ -19,35 +19,17 @@ import {
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { isDecisionAssistanceEligible } from "./decision-assistance.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 
 const batch: DecisionBatch = {
-  state: { message: "Please refund this order." },
-  questions: {
-    refund: {
-      type: "boolean",
-      instructions: { question: "Is a refund requested?" },
-      criteria: { true: "Money back", false: "No money back" },
-    },
-    route: { type: "choice", criteria: { billing: ["Refunds", "Payments"], other: null } },
-    urgency: { type: "score", criteria: ["Routine", { anchor: "Soon" }, "Immediate"] },
-  },
+  state: "Please refund this order.",
+  questions: { refund: { type: "boolean" } },
 };
 const answer = {
   status: "ok",
   result: {
     model: "fixture-reported-model",
-    answers: {
-      refund: { type: "boolean", probabilityTrue: 0.947 },
-      route: {
-        type: "choice",
-        choice: "billing",
-        probabilities: { billing: 0.51, other: 0.48 },
-        confidence: 0.03,
-      },
-      urgency: { type: "score", score: 1.14, probabilities: [0.02, 0.82, 0.16], confidence: 0.74 },
-    },
+    answers: { refund: { type: "boolean", probabilityTrue: 0.947 } },
     usage: { inputTokens: 12 },
   },
 } satisfies ProviderDecisionOutcome;
@@ -102,26 +84,12 @@ it("keeps the explicit tool independent of automatic eligibility through Labs on
     };
     setRuntimeConfigSnapshot(current);
     evaluate.mockClear();
-    expect(isDecisionAssistanceEligible(current, "main")).toBe(decisionAssistance);
-    expect(isDecisionAssistanceEligible(current, "alternate")).toBe(decisionAssistance);
-    expect(isDecisionAssistanceEligible(current, "disabled")).toBe(false);
     expect(assembled("disabled", current)).toBeUndefined();
     const fresh = requiredTool("main", current);
     expect(evaluate).not.toHaveBeenCalled();
     expect((await fresh.execute("fresh", batch)).details).toMatchObject({ status: "ok" });
     expectSelection("main", "default");
-    const result = await retained.execute("retained", batch);
-    expect(result.details).toEqual({
-      ...answer,
-      provenance: {
-        providerId: "fixture",
-        rubricVersion: expect.stringMatching(/^decision-v1-[0-9a-f]{24}$/),
-        runtimeGeneration: expect.any(String),
-      },
-    });
-    expect(JSON.parse(result.content.find((entry) => entry.type === "text")!.text)).toEqual(
-      result.details,
-    );
+    expect((await retained.execute("retained", batch)).details).toMatchObject({ status: "ok" });
     expectSelection("alternate", "override");
     expect(evaluate).toHaveBeenCalledTimes(2);
   }

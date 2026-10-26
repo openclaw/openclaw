@@ -45,6 +45,7 @@ import {
   searchSessionTranscriptsReadOnlySync,
 } from "./session-transcript-search.js";
 import type { SessionTranscriptSearchParams } from "./session-transcript-search.types.js";
+import { messageEvent } from "./transcript-message.test-support.js";
 
 vi.mock("../config.js", async () => ({
   ...(await vi.importActual<typeof import("../config.js")>("../config.js")),
@@ -555,18 +556,11 @@ describe("searchSessionTranscripts", () => {
   it("only surfaces the active branch after a deferred leaf-control rebuild", async () => {
     const scope = transcriptScope("session-1", "agent:main:main");
     await replaceTranscriptEvents(scope, [
-      {
-        type: "message",
-        id: "m1",
-        parentId: null,
-        message: { role: "user", content: [{ type: "text", text: "alpha origin" }] },
-      },
-      {
-        type: "message",
-        id: "m2",
-        parentId: "m1",
-        message: { role: "assistant", content: [{ type: "text", text: "beta abandoned" }] },
-      },
+      messageEvent("m1", null, { role: "user", content: [{ type: "text", text: "alpha origin" }] }),
+      messageEvent("m2", "m1", {
+        role: "assistant",
+        content: [{ type: "text", text: "beta abandoned" }],
+      }),
     ] as unknown as TranscriptEvent[]);
     await appendTranscriptEvent(scope, {
       type: "leaf",
@@ -589,12 +583,12 @@ describe("searchSessionTranscripts", () => {
     const largeText = "x".repeat(140 * 1024);
     await replaceTranscriptEvents(
       scope,
-      ["alpha-stream", "beta-stream", "gamma-stream"].map((marker, index) => ({
-        type: "message",
-        id: `m${index + 1}`,
-        parentId: index === 0 ? null : `m${index}`,
-        message: { role: "user", content: [{ type: "text", text: `${marker} ${largeText}` }] },
-      })) as unknown as TranscriptEvent[],
+      ["alpha-stream", "beta-stream", "gamma-stream"].map((marker, index) =>
+        messageEvent(`m${index + 1}`, index === 0 ? null : `m${index}`, {
+          role: "user",
+          content: [{ type: "text", text: `${marker} ${largeText}` }],
+        }),
+      ) as unknown as TranscriptEvent[],
     );
     await appendTranscriptEvent(scope, {
       type: "leaf",

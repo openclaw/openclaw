@@ -24,7 +24,7 @@ import {
   DEFAULT_STARTUP_DEFERRED_MISSED_AGENT_JOB_DELAY_MS,
   MAX_CRON_TIMER_DELAY_MS,
   MIN_REFIRE_GAP_MS,
-} from "../service/timer-execution-timeout.js";
+} from "../service/timer-constants.js";
 import { hasMissedCronSlotSinceLastRun, isRunnableJob } from "../service/timer-runnable.js";
 import type { CronJob } from "../types.js";
 import { hasCanonicalCronDeliveryMode } from "./delivery-codec.js";
@@ -545,6 +545,7 @@ export function runCronSchedulerInWorker(
           schedulingPaused: input.paused,
           preparingAgentIds: snapshot.config.preparingAgentIds,
           hostProcessId: snapshot.config.hostProcessId,
+          pluginCommandHosts: snapshot.config.pluginCommandHosts,
         },
         jobs,
       );

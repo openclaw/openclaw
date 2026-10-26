@@ -15,7 +15,7 @@ import { formatUiError } from "../../../lib/format-error.ts";
 import { createGatewayConnectionLifecycle } from "../../../lib/gateway-connection-lifecycle.ts";
 import { canCallGatewayMethod } from "../../../lib/gateway-methods.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { projectOwner } from "../../../lib/reactive/projection.ts";
+import { projectSource } from "../../../lib/reactive/projection.ts";
 import type {
   CiAutomationOption,
   CiAutomationOptions,
@@ -33,6 +33,7 @@ import {
   type ChatCiAutomationProps,
 } from "./chat-ci-automation.tsx";
 import { createCiDisclosure, type ChatCiDisclosureProps } from "./chat-ci-disclosure.ts";
+import { subscribeCiGatewayUpdates } from "./chat-ci-gateway-updates.ts";
 
 /** Cron owns durable settings and execution; this element retains only the visible projection. */
 type Props = ChatCiDisclosureProps & {
@@ -60,7 +61,14 @@ function createCiAutomation(props: Props, host: SolidBridgeElement<Props>) {
   const connection = createGatewayConnectionLifecycle({ client: null, phase: "stopped" });
   const gatewayProjection = createMemo(() => {
     const source = props.gateway;
-    return source && projectOwner(source, (gateway) => gateway.snapshot);
+    return (
+      source &&
+      projectSource(source, {
+        read: (gateway) => gateway.snapshot,
+        subscribe: (gateway, notify) => subscribeCiGatewayUpdates(gateway, "automation", notify),
+        equality: "revision",
+      })
+    );
   });
   let connectionRevision = -1;
   let connectionGeneration = -1;
@@ -103,10 +111,12 @@ function createCiAutomation(props: Props, host: SolidBridgeElement<Props>) {
     const source = host.gateway;
     reset();
     // Retire request authority on every connection transition, before subsequent events.
-    stopGateway = source?.subscribe(() => {
-      syncConnection();
-      queueRefresh();
-    });
+    stopGateway = source
+      ? subscribeCiGatewayUpdates(source, "automation", () => {
+          syncConnection();
+          queueRefresh();
+        })
+      : undefined;
     stopEvents = source?.subscribeEvents((event) => {
       if (event.event === "cron" || event.event === "config.changed") {
         invalidate();
@@ -496,16 +506,20 @@ function ChatCiAutomationContent(props: Props, host: SolidBridgeElement<Props>) 
   );
 }
 
-defineSolidBridge<Props>("openclaw-chat-ci-automation", ChatCiAutomationContent, {
-  propertyChanged: (host, key) => inputHandlers.get(host)?.(key),
-  properties: {
-    gateway: { default: undefined, attribute: false },
-    pullRequest: { default: undefined, attribute: false },
-    sessionKey: { default: "", attribute: false },
-    sessionId: { default: "", attribute: false },
-    presented: { default: true, type: Boolean },
-    inline: { default: false, attribute: false },
-    menuPresentation: { default: false, attribute: false },
-    controls: { default: undefined, attribute: false },
+export const ChatCiAutomationControl = defineSolidBridge<Props>(
+  "openclaw-chat-ci-automation",
+  ChatCiAutomationContent,
+  {
+    propertyChanged: (host, key) => inputHandlers.get(host)?.(key),
+    properties: {
+      gateway: { default: undefined, attribute: false },
+      pullRequest: { default: undefined, attribute: false },
+      sessionKey: { default: "", attribute: false },
+      sessionId: { default: "", attribute: false },
+      presented: { default: true, type: Boolean },
+      inline: { default: false, attribute: false },
+      menuPresentation: { default: false, attribute: false },
+      controls: { default: undefined, attribute: false },
+    },
   },
-});
+);

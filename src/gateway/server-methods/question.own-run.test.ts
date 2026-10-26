@@ -32,9 +32,10 @@ import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-cli
 import { GatewayClientRegistry } from "../server/client-registry.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
-import { canReceiveSessionEvent, prepareProjectedSessionSharing } from "../session-sharing.js";
-import { canReceivePreparedSessionEvent } from "../session-sharing.test-utils.js";
-import { resolveSessionStoreIdentity } from "../session-store-key.js";
+import {
+  canReceivePreparedSessionEvent,
+  createProjectedSessionEventPredicate,
+} from "../session-sharing.test-utils.js";
 import {
   broadcast,
   callQuestionRpc,
@@ -151,31 +152,7 @@ async function createOwnRunFixture() {
   const clients = new GatewayClientRegistry([browser.client]);
   const broadcaster = createGatewayBroadcaster({
     clients,
-    canReceiveSessionEvent: (client, sessionKeys, agentId, event, payload) =>
-      canReceiveSessionEvent({
-        cfg,
-        client,
-        sessionKeys,
-        agentId,
-        event,
-        payload,
-        prepared: {
-          sharing: prepareProjectedSessionSharing({
-            cfg,
-            client,
-            isMember: (target, identityId) =>
-              projection.hasMembership(target.storePath, target.storeKey, identityId),
-          }),
-          target: (key, targetAgentId) => {
-            const { agentId: ownerAgentId } = resolveSessionStoreIdentity({
-              cfg,
-              sessionKey: key,
-              agentId: targetAgentId,
-            });
-            return projection.sharingTarget({ key, agentId: ownerAgentId });
-          },
-        },
-      }),
+    canReceiveSessionEvent: createProjectedSessionEventPredicate(cfg, projection),
   });
   broadcast.mockImplementation(broadcaster.broadcast);
   const call = (

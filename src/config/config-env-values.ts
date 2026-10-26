@@ -1,9 +1,5 @@
 import { resolveEnvNormalizationKeys } from "../infra/env.js";
-import {
-  clearFsSafeEnvFallback,
-  fsSafeEnvInput,
-  normalizeFsSafeNativeEnv,
-} from "../infra/fs-safe-env.js";
+import { clearFsSafeEnvFallback, fsSafeEnvInput } from "../infra/fs-safe-env.js";
 import {
   isDangerousHostEnvOverrideVarName,
   isDangerousHostEnvVarName,
@@ -127,24 +123,4 @@ export function snapshotEnvProperties(
   env: Readonly<NodeJS.ProcessEnv>,
 ): Map<string, EnvSnapshotEntry> {
   return new Map(Object.entries(fsSafeEnvInput(env)).map(([key, value]) => [key, { key, value }]));
-}
-
-export type PublishedConfigRuntimeEnvChange = {
-  before: EnvSnapshotEntry | undefined;
-  after: EnvSnapshotEntry | undefined;
-};
-
-export function rollbackConfigRuntimeEnvChanges(
-  env: NodeJS.ProcessEnv,
-  changes: ReadonlyMap<string, PublishedConfigRuntimeEnvChange>,
-): void {
-  let current: ReadonlyMap<string, EnvSnapshotEntry> | undefined;
-  for (const [key, change] of changes) {
-    const currentEntry = (current ??= snapshotEnvByPlatformKey(env)).get(key);
-    if (!envSnapshotEntriesEqual(currentEntry, change.after)) {
-      continue;
-    }
-    replaceEnvSnapshotEntry(env, currentEntry, change.before);
-  }
-  normalizeFsSafeNativeEnv(env);
 }

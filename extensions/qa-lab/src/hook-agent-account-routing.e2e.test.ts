@@ -1,5 +1,6 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { stopQaGatewayFixture } from "openclaw/plugin-sdk/test-env";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createQaGatewayChild } from "./gateway-child.js";
 import { startQaLabServer } from "./lab-server.js";
@@ -11,74 +12,67 @@ const MARKER = "QA_HOOK_ACCOUNT_ROUTING_OK";
 const DEFAULT_MARKER = "QA_HOOK_DEFAULT_ACCOUNT_ROUTING_OK";
 const MODEL = "mock-openai/gpt-5.6-luna";
 
+const cleanups: Array<() => Promise<void>> = [];
+
 async function startHookAccountFixture() {
   const repoRoot = fileURLToPath(new URL("../../../", import.meta.url));
   const lab = await startQaLabServer({ repoRoot, embeddedGateway: "disabled" });
+  cleanups.push(() => lab.stop());
   const mock = await startQaProviderServer("mock-openai", { modelRefs: [MODEL] });
-  const gatewayOwner = createQaGatewayChild();
-  const stop = async () => {
-    await gatewayOwner.stop().catch(() => undefined);
-    await mock?.stop().catch(() => undefined);
-    await lab.stop().catch(() => undefined);
-  };
-
-  try {
-    if (!mock) {
-      throw new Error("mock-openai provider server did not start");
-    }
-    const transport = createQaChannelTransport(lab.state);
-    const gateway = await gatewayOwner.start({
-      repoRoot,
-      useRepoCli: true,
-      providerBaseUrl: `${mock.baseUrl}/v1`,
-      providerMode: "mock-openai",
-      primaryModel: MODEL,
-      alternateModel: MODEL,
-      transportBaseUrl: lab.listenUrl,
-      transport,
-      controlUiEnabled: false,
-      mutateConfig: (config) => {
-        const qaChannel = config.channels?.["qa-channel"];
-        if (!qaChannel) {
-          throw new Error("qa-channel transport config missing");
-        }
-        config.hooks = { enabled: true, token: HOOK_TOKEN, path: "/hooks" };
-        Object.assign(qaChannel, {
-          defaultAccount: "default",
-          accounts: {
-            default: { name: "Default" },
-            work: { name: "Work" },
-            disabled: { name: "Disabled", enabled: false },
-          },
-        });
-        return config;
-      },
-    });
-    return {
-      lab,
-      stop,
-      outbound: () =>
-        lab.state.getSnapshot().messages.filter((message) => message.direction === "outbound"),
-      post: async (overrides: { accountId?: string; message?: string; to?: string } = {}) => {
-        const response = await fetch(`${gateway.baseUrl}/hooks/agent`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${HOOK_TOKEN}` },
-          signal: AbortSignal.timeout(30_000),
-          body: JSON.stringify({
-            message: `Reply exactly: ${MARKER}`,
-            deliver: true,
-            channel: "qa-channel",
-            to: "dm:hook-recipient",
-            ...overrides,
-          }),
-        });
-        return { status: response.status, json: (await response.json()) as unknown };
-      },
-    };
-  } catch (error) {
-    await stop();
-    throw error;
+  if (!mock) {
+    throw new Error("mock-openai provider server did not start");
   }
+  cleanups.push(() => mock.stop());
+  const gatewayOwner = createQaGatewayChild();
+  cleanups.push(() => stopQaGatewayFixture(gatewayOwner));
+  const transport = createQaChannelTransport(lab.state);
+  const gateway = await gatewayOwner.start({
+    repoRoot,
+    useRepoCli: true,
+    providerBaseUrl: `${mock.baseUrl}/v1`,
+    providerMode: "mock-openai",
+    primaryModel: MODEL,
+    alternateModel: MODEL,
+    transportBaseUrl: lab.listenUrl,
+    transport,
+    controlUiEnabled: false,
+    mutateConfig: (config) => {
+      const qaChannel = config.channels?.["qa-channel"];
+      if (!qaChannel) {
+        throw new Error("qa-channel transport config missing");
+      }
+      config.hooks = { enabled: true, token: HOOK_TOKEN, path: "/hooks" };
+      Object.assign(qaChannel, {
+        defaultAccount: "default",
+        accounts: {
+          default: { name: "Default" },
+          work: { name: "Work" },
+          disabled: { name: "Disabled", enabled: false },
+        },
+      });
+      return config;
+    },
+  });
+  return {
+    lab,
+    outbound: () =>
+      lab.state.getSnapshot().messages.filter((message) => message.direction === "outbound"),
+    post: async (overrides: { accountId?: string; message?: string; to?: string } = {}) => {
+      const response = await fetch(`${gateway.baseUrl}/hooks/agent`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${HOOK_TOKEN}` },
+        signal: AbortSignal.timeout(30_000),
+        body: JSON.stringify({
+          message: `Reply exactly: ${MARKER}`,
+          deliver: true,
+          channel: "qa-channel",
+          to: "dm:hook-recipient",
+          ...overrides,
+        }),
+      });
+      return { status: response.status, json: (await response.json()) as unknown };
+    },
+  };
 }
 
 describe("hook agent account routing product proof", () => {
@@ -101,7 +95,15 @@ describe("hook agent account routing product proof", () => {
     fixture = await startHookAccountFixture();
   }, 180_000);
 
-  afterAll(() => fixture?.stop());
+  afterAll(async () => {
+    const errors: unknown[] = [];
+    for (const cleanup of cleanups.splice(0).toReversed()) {
+      await cleanup().catch((error: unknown) => errors.push(error));
+    }
+    if (errors.length) {
+      throw new AggregateError(errors, "hook account routing fixture cleanup failed");
+    }
+  });
 
   it(
     "rejects invalid explicit accounts before running the agent",

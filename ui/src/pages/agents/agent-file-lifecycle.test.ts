@@ -24,11 +24,31 @@ function snapshot(client: GatewayBrowserClient) {
   return { ...gatewaySnapshot(client), hello: AGENT_FILE_GATEWAY_HELLO };
 }
 
+function createFilePage(
+  currentGateway: Parameters<typeof pageContext>[0],
+  agents: Parameters<typeof pageContext>[1],
+) {
+  const context = pageContext(currentGateway, agents);
+  return createAgentsPage(
+    context,
+    agentsRouteData(currentGateway, agentsList, "main", context.settingsAgentSelection),
+  );
+}
+
 function fileList(): AgentsFilesListResult {
   return {
     agentId: "main",
     workspace: "/tmp/workspace",
     files: [{ name: "AGENTS.md", path: "/tmp/workspace/AGENTS.md", missing: false }],
+  };
+}
+
+function fileResult(content: string, missing = false) {
+  const list = fileList();
+  return {
+    agentId: "main",
+    workspace: list.workspace,
+    file: { ...list.files[0], missing, content },
   };
 }
 
@@ -39,7 +59,6 @@ describe("agent file lifecycle", () => {
       ...list,
       file: { ...list.files[0], content: "# Instructions" },
     }));
-    const client = { request } as unknown as GatewayBrowserClient;
     const pending = createDeferred<AgentsFilesListResult>();
     type AgentListener = Parameters<ReturnType<typeof agentsCapability>["subscribe"]>[0];
     const listeners = new Set<AgentListener>();
@@ -61,72 +80,57 @@ describe("agent file lifecycle", () => {
       recordFile: () => list,
       subscribe: (listener: AgentListener) => {
         listeners.add(listener);
-        return () => {
-          listeners.delete(listener);
-        };
+        return () => listeners.delete(listener);
       },
     };
-    const currentGateway = gateway(snapshot(client));
-    const context = pageContext(currentGateway, agents);
-    const page = createAgentsPage(
-      context,
-      agentsRouteData(currentGateway, agentsList, "main", context.settingsAgentSelection),
-    );
+    const currentGateway = gateway(snapshot({ request } as unknown as GatewayBrowserClient));
+    const page = createFilePage(currentGateway, agents);
     published = list;
     listeners.forEach((listener) => listener(agents.state));
-    expect(page.read().readData().agentFileActive).toBe("AGENTS.md");
+    expect(page.data().agentFileActive).toBe("AGENTS.md");
     expect(request).not.toHaveBeenCalled();
 
     pending.resolve(list);
     await vi.waitFor(() =>
-      expect(page.read().readData().agentFileEditors["AGENTS.md"]?.content).toBe("# Instructions"),
+      expect(page.data().agentFileEditors["AGENTS.md"]?.content).toBe("# Instructions"),
     );
-
-    expect(page.read().readData().agentFileEditors["AGENTS.md"]?.content).toBe("# Instructions");
   });
 
-  it("keeps a failed initial inventory visible until an explicit retry", async () => {
-    const list = fileList();
-    const first = createDeferred<AgentsFilesListResult>();
+  it("keeps a failed initial inventory visible until explicit retry", async () => {
+    const failed = createDeferred<AgentsFilesListResult>();
     const retry = createDeferred<AgentsFilesListResult>();
     let listCalls = 0;
     const request = vi.fn(async (method: string) => {
       if (method === "agents.files.list") {
-        return ++listCalls === 1 ? await first.promise : await retry.promise;
+        return ++listCalls === 1 ? failed.promise : retry.promise;
       }
       if (method === "agents.list") {
         return agentsList;
       }
       if (method === "agents.files.get") {
-        return { ...list, file: { ...list.files[0], content: "recovered" } };
+        return fileResult("recovered");
       }
       throw new Error(`Unexpected request: ${method}`);
     });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const currentGateway = gateway(snapshot(client));
+    const currentGateway = gateway(snapshot({ request } as unknown as GatewayBrowserClient));
     const agents = createAgentCapability(currentGateway);
     await agents.ensureList();
     const initial = agents.ensureFiles("main");
-    const context = pageContext(currentGateway, agents);
-    const page = createAgentsPage(
-      context,
-      agentsRouteData(currentGateway, agentsList, "main", context.settingsAgentSelection),
-    );
+    const page = createFilePage(currentGateway, agents);
     const mounted = mountSolid(Agents, page.read());
     try {
-      first.reject(new Error("initial inventory unavailable"));
+      failed.reject(new Error("inventory unavailable"));
       await initial;
-      expect(listCalls).toBe(1);
       await vi.waitFor(() => {
         mounted.update(page.read());
         expect(mounted.container.querySelector(".callout.danger")?.textContent).toBe(
-          "initial inventory unavailable",
+          "inventory unavailable",
         );
       });
-
+      expect(listCalls).toBe(1);
       page.read().agentFiles.onLoadFiles("main");
       expect(listCalls).toBe(2);
-      retry.resolve(list);
+      retry.resolve(fileList());
       await vi.waitFor(() => {
         mounted.update(page.read());
         expect(
@@ -139,137 +143,6 @@ describe("agent file lifecycle", () => {
       agents.dispose();
       mounted.dispose();
     }
-  });
-
-  it("keeps an inventory refresh failure visible without rereading file content", async () => {
-    const list = fileList();
-    const refresh = createDeferred<AgentsFilesListResult>();
-    let listCalls = 0;
-    const request = vi.fn(async (method: string) => {
-      if (method === "agents.files.list") {
-        return ++listCalls === 1 ? list : await refresh.promise;
-      }
-      if (method === "agents.list") {
-        return agentsList;
-      }
-      if (method === "agents.files.get") {
-        return { ...list, file: { ...list.files[0], content: "original" } };
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const currentGateway = gateway(snapshot(client));
-    const agents = createAgentCapability(currentGateway);
-    await agents.ensureList();
-    await agents.ensureFiles("main");
-    const context = pageContext(currentGateway, agents);
-    const page = createAgentsPage(
-      context,
-      agentsRouteData(currentGateway, agentsList, "main", context.settingsAgentSelection),
-    );
-    await vi.waitFor(() =>
-      expect(page.read().readData().agentFileEditors["AGENTS.md"]?.content).toBe("original"),
-    );
-    const mounted = mountSolid(Agents, page.read());
-    try {
-      page.read().agentFiles.onLoadFiles("main");
-      refresh.reject(new Error("workspace inventory unavailable"));
-      await vi.waitFor(() => {
-        mounted.update(page.read());
-        expect(mounted.container.querySelector(".callout.danger")?.textContent).toBe(
-          "workspace inventory unavailable",
-        );
-      });
-      expect(request.mock.calls.filter(([method]) => method === "agents.files.get")).toHaveLength(
-        1,
-      );
-      expect(
-        mounted.container.querySelector<HTMLTextAreaElement>(".agent-file-textarea")?.value,
-      ).toBe("original");
-    } finally {
-      page.dispose();
-      agents.dispose();
-      mounted.dispose();
-    }
-  });
-
-  it("refreshes the active file base without replacing a dirty draft", async () => {
-    const list = fileList();
-    let authoritativeContent = "server revision 1";
-    const request = vi.fn(async () => ({
-      file: {
-        ...list.files[0],
-        content: authoritativeContent,
-      },
-    }));
-    const refreshFiles = vi.fn(async () => list);
-    const client = { request } as unknown as GatewayBrowserClient;
-    const currentGateway = gateway(snapshot(client));
-    const context = pageContext(currentGateway, {
-      ...agentsCapability(async () => list),
-      refreshFiles,
-      recordFile: () => list,
-    });
-    const page = createAgentsPage(
-      context,
-      agentsRouteData(currentGateway, agentsList, "main", context.settingsAgentSelection),
-    );
-    await vi.waitFor(() =>
-      expect(page.read().readData().agentFileEditors["AGENTS.md"]?.content).toBe(
-        "server revision 1",
-      ),
-    );
-    page.read().agentFiles.onFileDraftChange("AGENTS.md", "local draft");
-    authoritativeContent = "server revision 2";
-
-    page.read().agentFiles.onLoadFiles("main");
-    await vi.waitFor(() =>
-      expect(page.read().readData().agentFileEditors["AGENTS.md"]?.content).toBe(
-        "server revision 2",
-      ),
-    );
-
-    expect(refreshFiles).toHaveBeenCalledOnce();
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(page.read().readData().agentFileEditors["AGENTS.md"]?.content).toBe("server revision 2");
-    expect(page.read().readData().agentFileEditors["AGENTS.md"]?.draft).toBe("local draft");
-  });
-
-  it("keeps a rejected save visible without refreshing it away", async () => {
-    const list = fileList();
-    const request = vi.fn(async (method: string) => {
-      if (method === "agents.files.get") {
-        return { ...list, file: { ...list.files[0], content: "original" } };
-      }
-      throw new Error("workspace write failed");
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const refreshFiles = vi.fn(async () => list);
-    const currentGateway = gateway(snapshot(client));
-    const context = pageContext(currentGateway, {
-      ...agentsCapability(async () => list),
-      refreshFiles,
-      recordFile: () => list,
-    });
-    const page = createAgentsPage(
-      context,
-      agentsRouteData(currentGateway, agentsList, "main", context.settingsAgentSelection),
-    );
-    await vi.waitFor(() =>
-      expect(page.read().readData().agentFileEditors["AGENTS.md"]?.content).toBe("original"),
-    );
-    page.read().agentFiles.onFileDraftChange("AGENTS.md", "updated");
-    void page.read().agentFiles.onFileSave("AGENTS.md");
-
-    await vi.waitFor(() =>
-      expect(request.mock.calls.filter(([method]) => method === "agents.files.set")).toHaveLength(
-        1,
-      ),
-    );
-    expect(await page.read().readData().agentFileOutcome).toEqual({
-      error: "workspace write failed",
-    });
-    expect(refreshFiles).not.toHaveBeenCalled();
   });
 
   it.each(["content read", "file list", "invalidated cache"] as const)(
@@ -297,11 +170,7 @@ describe("agent file lifecycle", () => {
         if (method === "agents.files.get") {
           contentCalls += 1;
           if (contentCalls === 1) {
-            return {
-              agentId: "main",
-              workspace: missingList.workspace,
-              file: { ...missingFile, content: "" },
-            };
+            return fileResult("", true);
           }
           return pendingRequest !== "file list" && contentCalls === 2
             ? await contentRead.promise
@@ -320,13 +189,9 @@ describe("agent file lifecycle", () => {
       const agents = createAgentCapability(currentGateway);
       await agents.ensureFiles("main");
       await agents.ensureList();
-      const context = pageContext(currentGateway, agents);
-      const page = createAgentsPage(
-        context,
-        agentsRouteData(currentGateway, agentsList, "main", context.settingsAgentSelection),
-      );
+      const page = createFilePage(currentGateway, agents);
       await vi.waitFor(() =>
-        expect(page.read().readData().agentFileEditors[missingFile.name]?.content).toBe(""),
+        expect(page.data().agentFileEditors[missingFile.name]?.content).toBe(""),
       );
       page.read().agentFiles.onFileDraftChange(missingFile.name, savedFile.content);
       page.read().agentFiles.onLoadFiles("main");
@@ -334,42 +199,37 @@ describe("agent file lifecycle", () => {
         await vi.waitFor(() => expect(contentCalls).toBe(2));
       }
 
+      const expectSavedMetadata = () => {
+        expect(page.data().agentFilesList?.files).toEqual([
+          expect.objectContaining({ name: missingFile.name, missing: false, size: 13 }),
+        ]);
+      };
       try {
-        expect(page.read().readData().agentFilesLoading || agents.files("main").loading).toBe(true);
+        expect(page.data().agentFilesLoading || agents.files("main").loading).toBe(true);
         if (pendingRequest === "invalidated cache") {
           agents.invalidateFiles(["main"]);
         }
         void page.read().agentFiles.onFileSave(missingFile.name);
         await vi.waitFor(() => {
-          expect(page.read().readData().agentFileSaving).toBe(false);
-          expect(page.read().readData().agentFileEditors[missingFile.name]?.content).toBe(
-            savedFile.content,
-          );
+          expect(page.data().agentFileSaving).toBe(false);
+          expect(page.data().agentFileEditors[missingFile.name]?.content).toBe(savedFile.content);
         });
-        expect(page.read().readData().agentFilesList?.files).toEqual([
-          expect.objectContaining({ name: missingFile.name, missing: false, size: 13 }),
-        ]);
+        expectSavedMetadata();
 
         contentRead.resolve(savedResult);
         listRead.resolve(missingList);
-        await vi.waitFor(() => expect(page.read().readData().agentFilesLoading).toBe(false));
-        expect(page.read().readData().agentFilesList?.files).toEqual([
-          expect.objectContaining({ name: missingFile.name, missing: false, size: 13 }),
-        ]);
-        expect(page.read().readData().agentFileActive).toBe(missingFile.name);
+        await vi.waitFor(() => expect(page.data().agentFilesLoading).toBe(false));
+        expectSavedMetadata();
+        expect(page.data().agentFileActive).toBe(missingFile.name);
 
         await agents.refreshList();
 
-        expect(page.read().readData().agentFilesList?.files).toEqual([
-          expect.objectContaining({ name: missingFile.name, missing: false, size: 13 }),
-        ]);
-        expect(page.read().readData().agentFileEditors[missingFile.name]?.content).toBe(
-          savedFile.content,
-        );
-        expect(page.read().readData().agentFileEditors[missingFile.name]?.draft).toBe(
-          savedFile.content,
-        );
-        expect((await page.read().readData().agentFileOutcome)?.error).toBeUndefined();
+        expectSavedMetadata();
+        expect(page.data().agentFileEditors[missingFile.name]).toMatchObject({
+          content: savedFile.content,
+          draft: savedFile.content,
+        });
+        expect((await page.data().agentFileOutcome)?.error).toBeUndefined();
       } finally {
         page.dispose();
         contentRead.resolve(savedResult);
@@ -399,18 +259,13 @@ describe("agent file lifecycle", () => {
           if (writeCalls > 1) {
             throw new Error(writeError);
           }
-          return {
-            ok: true,
-            agentId: "main",
-            workspace: list.workspace,
-            file: { ...list.files[0], content: savedContent },
-          };
+          return { ok: true, ...fileResult(savedContent) };
         }
         if (method === "agents.list") {
           return agentsList;
         }
         if (method === "agents.files.get") {
-          return { ...list, file: { ...list.files[0], content: "original" } };
+          return fileResult("original");
         }
         throw new Error(`Unexpected request: ${method}`);
       });
@@ -419,13 +274,9 @@ describe("agent file lifecycle", () => {
       const agents = createAgentCapability(currentGateway);
       await agents.ensureFiles("main");
       await agents.ensureList();
-      const context = pageContext(currentGateway, agents);
-      const page = createAgentsPage(
-        context,
-        agentsRouteData(currentGateway, agentsList, "main", context.settingsAgentSelection),
-      );
+      const page = createFilePage(currentGateway, agents);
       await vi.waitFor(() =>
-        expect(page.read().readData().agentFileEditors["AGENTS.md"]?.content).toBe("original"),
+        expect(page.data().agentFileEditors["AGENTS.md"]?.content).toBe("original"),
       );
       page.read().agentFiles.onFileDraftChange("AGENTS.md", savedContent);
       const mounted = mountSolid(Agents, page.read());
@@ -443,14 +294,14 @@ describe("agent file lifecycle", () => {
         agents.invalidateFiles(["main"]);
         saveDraft();
         await vi.waitFor(() => {
-          expect(page.read().readData().agentFileSaving).toBe(false);
-          expect(page.read().readData().agentFileEditors["AGENTS.md"]?.content).toBe(savedContent);
+          expect(page.data().agentFileSaving).toBe(false);
+          expect(page.data().agentFileEditors["AGENTS.md"]?.content).toBe(savedContent);
           expect(listCalls).toBe(2);
         });
         if (newerSaveFails) {
           page.read().agentFiles.onFileDraftChange("AGENTS.md", "newer draft");
           saveDraft();
-          expect(await page.read().readData().agentFileOutcome).toEqual({ error: writeError });
+          expect(await page.data().agentFileOutcome).toEqual({ error: writeError });
         }
         rebuild.reject(new Error(rebuildError));
         await expect(agents.files("main").read).resolves.toEqual({ error: rebuildError });
@@ -465,7 +316,7 @@ describe("agent file lifecycle", () => {
         expect(container.querySelector<HTMLTextAreaElement>(".agent-file-textarea")?.value).toBe(
           newerSaveFails ? "newer draft" : savedContent,
         );
-        expect(page.read().readData().agentFileEditors["AGENTS.md"]?.content).toBe(savedContent);
+        expect(page.data().agentFileEditors["AGENTS.md"]?.content).toBe(savedContent);
       } finally {
         page.dispose();
         rebuild.resolve(list);

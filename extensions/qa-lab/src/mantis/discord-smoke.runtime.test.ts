@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { jsonResponse } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { fetchWithSsrFGuard } = vi.hoisted(() => ({
@@ -17,13 +18,6 @@ const readText = (file: string) => fs.readFile(file, "utf8");
 const guildId = "1456350064065904867";
 const channelId = "1456744319972282449";
 const messageId = "1500000000000000001";
-
-function jsonResponse(payload: unknown, status = 200) {
-  return new Response(JSON.stringify(payload), {
-    status,
-    headers: { "content-type": "application/json" },
-  });
-}
 
 function fetchGuardCallsWithMethod(method: string) {
   return fetchWithSsrFGuard.mock.calls.filter(([request]) => {
@@ -107,6 +101,7 @@ describe("mantis discord smoke runtime", () => {
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
     await fs.rm(repoRoot, { recursive: true, force: true });
   });
 
@@ -131,9 +126,14 @@ describe("mantis discord smoke runtime", () => {
   });
 
   it("redacts Discord target metadata in public artifacts", async () => {
-    const result = await runSmoke({ redactPublicMetadata: true });
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-05-04T12:00:00.000Z"));
+    const result = await runSmoke({ outputDir: undefined, redactPublicMetadata: true });
 
     expect(result.status).toBe("pass");
+    expect(result.outputDir).toBe(
+      path.join(repoRoot, ".artifacts/qa-e2e/mantis/discord-smoke-2026-05-04T12-00-00-000Z"),
+    );
     const summaryText = await readText(result.summaryPath);
     const reportText = await readText(result.reportPath);
     for (const line of [

@@ -43,6 +43,9 @@ and optional transcript previews are prepared when a page or session recipient
 first requests them. Those rows stay resident for subsequent reads and refresh
 from committed changes. Unrequested rows do not repeat display enrichment when
 the startup model catalog becomes available.
+Cold pages share bounded enrichment batches. Each requested row becomes available
+when its own preparation finishes, with event-loop yields between slices; pages
+do not repeatedly select the roster while their accepted rows are still preparing.
 
 ## Deep diagnostics
 
@@ -67,9 +70,24 @@ credentials, and model preparation finish; rebuilding its transcript projections
 does not hold agent admission or another agent's preparation. Shutdown still joins
 accepted repair work, and repair failures are logged without withdrawing admission.
 
+When `agents.defaults.authInheritance.agentId` names an owner whose PostgreSQL
+database is still preparing, admitted agents start with their own credentials.
+Inherited credentials become available automatically when the owner's admission
+completes. Failed owner inspections remain visible and do not use this pending
+fallback. The Gateway stays running during preparation. After initial recovery,
+admitted agents can chat while a different agent's store is still preparing.
+Each pending agent remains gated until its saved inputs have been replayed into
+the ordered session queue. Its inherited credentials and fresh-chat admission
+become available through the existing preparation completion signal.
+
 Health and status collection groups fast session-store reads into short work
 slices, keeping busy background preparation from delaying every individual read.
 Slow reads finish their transaction before yielding to other Gateway work.
+
+The `health` RPC includes live `coreReady` status, independent of cached health
+data and optional channel availability. The macOS app waits for this flag before
+reporting its Gateway ready. Older Gateways omit the flag; the app retains its
+successful-health-response compatibility behavior for those versions.
 
 - Creds on disk: `ls -l ~/.openclaw/credentials/whatsapp/<accountId>/creds.json` (mtime should be recent).
 - Session store: `ls -l ~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`. Count and recent recipients are surfaced via `status`.
@@ -101,11 +119,11 @@ Channel connectivity and inbound admission are separate failure domains. A chann
 
 The Gateway exposes three unauthenticated `GET`/`HEAD` check pairs:
 
-| Endpoints               | Meaning                                                                                                                                                                                     | Use                                               |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
-| `/health`, `/healthz`   | The HTTP server is live.                                                                                                                                                                    | Process liveness and restart decisions.           |
-| `/startup`, `/startupz` | Startup sidecars and agent database inspection/preparation have settled, and the Gateway is not draining. Channel health is not consulted.                                                  | Startup-phase monitoring and update verification. |
-| `/ready`, `/readyz`     | Startup sidecars have settled, the Gateway is not draining, required agent databases have completed admission without failures, and configured channel accounts pass deep readiness checks. | Traffic admission and operator monitoring.        |
+| Endpoints               | Meaning                                                                                                                                                                                                           | Use                                               |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| `/health`, `/healthz`   | The HTTP server is live.                                                                                                                                                                                          | Process liveness and restart decisions.           |
+| `/startup`, `/startupz` | Startup sidecars and agent database inspection/preparation have settled, and the Gateway is not draining. Channel health is not consulted.                                                                        | Startup-phase monitoring and update verification. |
+| `/ready`, `/readyz`     | Startup sidecars and fresh-chat admission are ready, the Gateway is not draining, required agent databases have completed admission without failures, and configured channel accounts pass deep readiness checks. | Traffic admission and operator monitoring.        |
 
 The HTTP listener opens before the initial session projection is complete. During
 that build, `/healthz` can return `200`, while `/startupz` and `/readyz` remain
@@ -124,7 +142,20 @@ probes: they still wait for initialization and retain their normal authenticatio
 
 `/startupz` returns `503` with `status: "starting"` while startup sidecars or agent database inspection/preparation are pending, `503` with `status: "draining"` during drain, and `200` with `status: "started"` otherwise. After sidecars settle, pending inspection for any agent, including an optional agent, reports `pendingReason: "agent-database-inspection"`. This lets `openclaw update` candidate verification wait within its startup budget before checking readiness. A settled inspection failure does not keep startup pending; readiness and per-agent admission report the failure.
 
-A default or system agent database with pending startup inspection/preparation or a confirmed admission failure keeps readiness false, with `failing: ["agent-database:<id>"]` and the exact admission reason and repair hint in `agentDatabases`. Pending startup inspection is reported there with code `agent-database-inspection-pending`. The HTTP listener, Control UI, and admitted agents remain available while readiness is false; pending optional agents do not hold readiness. Readiness does not wait for post-ready subagent recovery or transcript maintenance. Agent-scoped `sessions.list`, plus `sessions.resolve`, `sessions.describe`, and `models.list`, wait up to 20 seconds for their selected agents to finish startup preparation, then recheck request authorization before reading. Requests targeting healthy agents proceed independently. Unscoped session lists continue returning admitted agents while other stores prepare. Writes still require completed admission. RPC requests refused for pending inspection return `UNAVAILABLE` with `retryable: true` and `retryAfterMs: 250`; callers can retry the same request after that delay. Inspection failures and ownership mismatches remain non-retryable. A refused optional agent can remain isolated while healthy agents serve requests. Gateway ready announcements use the same readiness decision.
+Startup completion lets saved-input recovery run. Its initial pass holds fresh
+chat admission, with `/readyz` reporting `503` and `failing: ["chat-recovery"]`.
+After that pass, recovery gates each deferred agent independently. Detailed
+readiness responses list those agents in `agentRecovery`; a required agent keeps
+`coreReady` false with `failing: ["chat-recovery:<id>"]`, while an optional agent
+does not hold readiness. A pending agent's database refusal remains unchanged.
+After database admission, fresh input still waits for saved input to enter the
+session queue first. Cross-agent subagent recovery gates all agents in its
+requester/child group until that group's saved custody is restored.
+If recovery fails before that handoff, its affected gates stay closed and waiting
+callers receive the recovery error. The Gateway logs the failure; repair the
+underlying store or authority problem and restart to retry saved-input recovery.
+
+A default or system agent database with pending startup inspection/preparation or a confirmed admission failure keeps readiness false, with `failing: ["agent-database:<id>"]` and the exact admission reason and repair hint in `agentDatabases`. Pending startup inspection is reported there with code `agent-database-inspection-pending`. The HTTP listener, Control UI, and admitted agents remain available while readiness is false; pending optional agents do not hold readiness. Readiness waits for saved-input and subagent recovery to release fresh-chat admission, but does not wait for transcript maintenance. Agent-scoped `sessions.list`, plus `sessions.resolve`, `sessions.describe`, and `models.list`, wait up to 20 seconds for their selected agents to finish startup preparation, then recheck request authorization before reading. Requests targeting healthy agents proceed independently. Unscoped session lists continue returning admitted agents while other stores prepare. Writes still require completed admission. RPC requests refused for pending inspection return `UNAVAILABLE` with `retryable: true` and `retryAfterMs: 250`; callers can retry the same request after that delay. Inspection failures and ownership mismatches remain non-retryable. A refused optional agent can remain isolated while healthy agents serve requests. Gateway ready announcements use the same readiness decision.
 
 If a newer model-runtime publication supersedes deferred agent preparation, admission
 waits for that publication once, then retries preparation against current configuration
@@ -166,14 +197,21 @@ the logs and restart through the service owner.
 A broken Telegram or other channel account can also make `/readyz` return `503` while `/startupz` remains started. Neither check replaces the other: startup completion alone does not certify agent or channel availability.
 
 Detailed readiness responses also include `coreReady`, which excludes channel
-availability while retaining startup, drain, database admission, child-runtime,
-and plugin-replacement checks. Updates can complete with channel warnings when
+availability while retaining startup, fresh-chat admission, drain, database
+admission, child-runtime, and plugin-replacement checks. Updates can complete with channel warnings when
 the core is ready. HTTP status and `ready` still include channel health, including
 for ordinary service start and traffic admission.
 
 Disabled, unconfigured, and ordinarily unlinked accounts do not fail channel readiness. An enabled, configured account with a recorded terminal disconnect, blocked lifecycle, or unavailable ingress still fails its health check even if it becomes unlinked. For example, a terminal WhatsApp logout makes `/readyz` return `503` with `failing: ["whatsapp"]` in detailed responses. Terminal disconnects and blocked accounts require operator action; the health monitor does not restart them.
 
+Unexpected channel exits use automatic restart backoff. Intentional stops cancel a pending retry; failed restart waits leave a stopped account with `restartPending: false` and the failure recorded in `lastError`.
+
 Remote unauthenticated startup responses contain only `ok` and `status`. Local-direct and authenticated callers also receive `version`, `uptimeMs`, and `pendingReason` while startup is pending. Readiness details follow the same local-or-authenticated gate because they can name failing subsystems.
+
+Proxies listed in `gateway.trustedProxies` can request aggregate readiness and
+startup checks without forwarded client headers. Diagnostic details still require
+client attribution and authorization. Proxy attribution remains required for
+non-probe routes; untrusted proxy sources do not receive this exception.
 
 ### Shared-state integrity failure
 
@@ -233,7 +271,10 @@ its CPU and delay readings. If the sampler resets, health responses omit
 The optional `cpuBreakdown` separates independent native counters:
 
 - `hostUtilization` is the busy fraction of the host CPU time reported by
-  `os.cpus()`, from `0` to `1` across `hostCpuCount` logical CPUs. This includes
+  the aggregate `/proc/stat` counters on Linux and `os.cpus()` elsewhere, from
+  `0` to `1` across `hostCpuCount` online logical CPUs. Linux counts user, nice,
+  system, idle, and hard IRQ time, matching `os.cpus()`; iowait, softirq, and
+  steal are excluded, and guest time is not counted twice. This includes
   other processes and is not the Gateway's CPU quota or container allowance.
 - `mainThreadCoreRatio` measures the Gateway main thread with
   `process.threadCpuUsage()`, not event-loop utilization.
@@ -277,7 +318,7 @@ with a code-owned task label where available. On Node 26, a bounded CPU flight
 recorder writes one additional bounded `main-thread stall profile` line with a
 trailing window's top inclusive frames, sample count, and truncation status.
 Several callbacks can finish before a sample, so this window is not assigned to
-an individual task. It samples every 10 ms and rotates five-second windows without
+an individual task. It samples every 25 ms and rotates five-second windows without
 stopping the sampler. At most two windows are retained; no profile files are
 written. Symbols and locations use the same redaction policy as on-demand
 diagnostic profiles. Inclusive counts overlap when a sampled stack contains
@@ -338,6 +379,10 @@ session-store summary, and check duration. Live checks use bounded account concu
 and a Gateway-owned deadline, so one slow account returns a structured timeout while
 completed sibling results remain available. The command exits non-zero if the gateway is
 unreachable or the Gateway call itself times out.
+
+Cron heartbeat summaries reuse the running scheduler's last successful read until
+jobs or configuration change. Failed reads are retried on the next refresh. Before
+the scheduler loads, health reads the selected cron store directly.
 
 ### Queue warnings
 

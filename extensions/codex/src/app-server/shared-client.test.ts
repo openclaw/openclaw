@@ -5,9 +5,10 @@ import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { WebSocketServer, type RawData } from "ws";
+import { WebSocketServer } from "ws";
 import { createCodexAppServerAgentHarness } from "../../harness.js";
 import type { CodexAppServerAuthHandoff, CodexAppServerPreparedAuth } from "./auth-types.js";
+import { rawDataToText } from "./client-websocket.test-support.js";
 import { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config.js";
 import { withCodexAppServerJsonClient } from "./request.js";
@@ -344,13 +345,11 @@ describe("shared Codex app-server client", () => {
             url: transport === "unix" ? "unix://" : "ws://127.0.0.1:39175",
           },
         },
-        startOptions: {
+        startOptions: createStartOptions({
           transport: "websocket",
-          command: "codex",
           args: [],
-          headers: {},
           url: "ws://127.0.0.1:39176",
-        },
+        }),
         timeoutMs: 1_000,
       });
 
@@ -377,15 +376,11 @@ describe("shared Codex app-server client", () => {
         async () => {
           const client = await acquire({
             config: { agents: { ownership: "explicit", entries: { alpha: {}, beta: {} } } },
-            startOptions: {
-              transport: "stdio",
+            startOptions: createStartOptions({
               homeScope: "user",
-              command: "codex",
               commandSource: "managed",
-              args: ["app-server"],
-              headers: {},
               env: { CODEX_HOME: "/native/codex" },
-            },
+            }),
             authProfileId: null,
             timeoutMs: 1_000,
           });
@@ -738,13 +733,10 @@ describe("shared Codex app-server client", () => {
         .spyOn(CodexAppServerClient, "start")
         .mockResolvedValueOnce(normal.client)
         .mockResolvedValueOnce(captured.client);
-      const startOptions: CodexAppServerStartOptions = {
-        transport: "stdio",
+      const startOptions: CodexAppServerStartOptions = createStartOptions({
         command,
         commandSource: "config",
-        args: ["app-server"],
-        headers: {},
-      };
+      });
 
       try {
         const normalClient = await getLeasedSharedCodexAppServerClient({ startOptions });
@@ -2426,13 +2418,4 @@ describe("shared Codex app-server client", () => {
   });
 });
 
-function rawDataToText(data: RawData): string {
-  if (Array.isArray(data)) {
-    return Buffer.concat(data).toString("utf8");
-  }
-  if (data instanceof ArrayBuffer) {
-    return Buffer.from(new Uint8Array(data)).toString("utf8");
-  }
-  return Buffer.from(data).toString("utf8");
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

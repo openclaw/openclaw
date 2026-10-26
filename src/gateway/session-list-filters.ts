@@ -25,7 +25,6 @@ import { formatGoalSummary } from "../shared/session-goal-display.js";
 import { isSessionRunStateActive } from "../shared/session-run-state.js";
 import { normalizeSessionSearchText } from "../shared/session-search-text.js";
 import type { SessionActivityPulse, SessionOwnerFacetIdentity } from "../shared/session-types.js";
-import type { SynchronousWork } from "../shared/synchronous-work.js";
 import { sessionDeliveryChannel, sessionDeliveryOrigin } from "../utils/delivery-context.read.js";
 import { readPreparedGatewayModelCatalogMetadata } from "./server-model-catalog-view.js";
 import {
@@ -108,7 +107,6 @@ export type SessionListFilterParams = {
   involvingActorId?: string;
   ownerFirstActorId?: string;
   projectActiveRun?: SessionListActiveRunProjector;
-  shouldYield?: () => boolean;
   involvementKeys: (profileId: string, personal: boolean) => ReadonlySet<string>;
 };
 
@@ -152,10 +150,10 @@ function matchesSessionListSearch(fields: Array<string | undefined>, search: str
   );
 }
 
-// Selection facts are replaced with the resident entry; weak keys release retired revisions.
+// Search follows the committed entry and physical key; weak keys release retired revisions.
 const staticSearchFields = new WeakMap<
-  NonNullable<ReturnType<SessionListTargetLookup>>["selection"],
-  { literal: string[]; titles: string[] }
+  SessionEntry,
+  { key: string; literal: string[]; titles: string[] }
 >();
 
 function createActivityPulse(opts: SessionsListParams): SessionActivityPulse | undefined {
@@ -173,11 +171,11 @@ function createActivityPulse(opts: SessionsListParams): SessionActivityPulse | u
   };
 }
 
-export function* filterSessionEntries(
+export function filterSessionEntries(
   params: SessionListFilterParams,
   window?: { offset: number; limit?: number; ownerLimit: number },
-): SynchronousWork<SessionListFilteredEntries> {
-  const { cfg, opts, now, shouldYield, configuredAgentIds } = params;
+): SessionListFilteredEntries {
+  const { cfg, opts, now, configuredAgentIds } = params;
   let rowContext: SessionListRowContext | undefined;
   const getRowContext = () => (rowContext ??= params.getRowContext());
   const search = normalizeLowercaseStringOrEmpty(opts.search);
@@ -230,9 +228,6 @@ export function* filterSessionEntries(
       ) {
         visibleEntries.push(pair);
       }
-      if (shouldYield?.()) {
-        yield;
-      }
     }
   }
   const allowedProfileIds =
@@ -243,18 +238,14 @@ export function* filterSessionEntries(
       for (const person of projectPeople(entry, identities, owner)) {
         allowedProfileIds.add(person.identity.id);
       }
-      if (shouldYield?.()) {
-        yield;
-      }
     }
   }
   const profileReference = opts.involvingProfileId
-    ? yield* resolveSessionListProfileReference(
+    ? resolveSessionListProfileReference(
         opts.involvingProfileId,
         visibleEntries,
         identities,
         allowedProfileIds,
-        shouldYield,
       )
     : undefined;
   if (profileReference && !profileReference.ok) {
@@ -277,8 +268,8 @@ export function* filterSessionEntries(
     ? (key: string, entry: SessionEntry): boolean => {
         const target = expectDefined(params.getTarget(key), "search row owner");
         const storeKey = target.storeKey ?? key;
-        let fields = staticSearchFields.get(target.selection);
-        if (!fields) {
+        let fields = staticSearchFields.get(entry);
+        if (!fields || fields.key !== storeKey) {
           const titles = [
             entry.label,
             entry.subject,
@@ -297,10 +288,11 @@ export function* filterSessionEntries(
             model: entry.model,
           });
           fields = {
+            key: storeKey,
             literal: rawFields.map(normalizeLowercaseStringOrEmpty),
             titles: titles.map(normalizeSessionSearchText),
           };
-          staticSearchFields.set(target.selection, fields);
+          staticSearchFields.set(entry, fields);
         }
         if (
           fields.literal.some((field) => field.includes(search)) ||
@@ -378,9 +370,6 @@ export function* filterSessionEntries(
       : undefined;
 
   for (const pair of candidateEntries) {
-    if (shouldYield?.()) {
-      yield;
-    }
     const key = pair[0];
     const entry = pair[1];
     if (

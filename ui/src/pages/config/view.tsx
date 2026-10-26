@@ -6,17 +6,17 @@ import {
   Errored,
   For,
   isPending,
+  lazy,
   latest,
   Loading,
   Show,
   untrack,
 } from "solid-js";
 import "../../styles/lobster-pet.css";
-import { ConfigForm } from "../../components/config-form.render.tsx";
 import { countSensitiveConfigValues } from "../../components/config-form.shared.ts";
-import { HighlightedJson } from "../../components/solid/highlighted-json.tsx";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
+import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import "../../components/tooltip.ts";
 import { SettingsSegmented, SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
@@ -24,10 +24,10 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { isJson5Warm, warmJson5 } from "../../lib/json5-runtime.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { liveValue as createLiveValue } from "../../lib/reactive/live-value.ts";
-import { NotificationsSection } from "./notifications-section.tsx";
-import { SetupSection } from "./setup.tsx";
+import { omitCuratedOwnedConfigLeaves } from "./config-sections.ts";
 import { AppearanceSection } from "./view-appearance.tsx";
 import { computeRawDiff, formatConfigDiffPath, renderRawDiffValue } from "./view-diff.ts";
+import { ConfigForm, NotificationsSection, SetupSection } from "./view-lazy.ts";
 import {
   CATEGORISED_KEYS,
   ConfigAccordionNav,
@@ -52,9 +52,12 @@ import type { ConfigProps } from "./view-types.ts";
 
 registerEnglishCatalog(registerSettingsEnglish);
 export type { ConfigProps } from "./view-types.ts";
-void warmJson5().catch(() => undefined);
+const HighlightedJson = lazy(() => import("../../components/solid/highlighted-json.tsx"), {
+  export: "HighlightedJson",
+});
 
 export function Config(props: ConfigProps) {
+  const plainIssues = () => <pre class="code-block">{JSON.stringify(props.issues, null, 2)}</pre>;
   let content: HTMLDivElement | undefined;
   function resetContentScroll() {
     queueMicrotask(() => {
@@ -79,13 +82,11 @@ export function Config(props: ConfigProps) {
     return props.viewState;
   };
   const schema = createMemo(() => asConfigSchema(props.schema));
-  const includeSections = createMemo(() => props.includeSections);
-  const excludeSections = createMemo(() => props.excludeSections);
   const includedSections = createMemo(() =>
-    includeSections()?.length ? new Set(includeSections()) : null,
+    props.includeSections?.length ? new Set(props.includeSections) : null,
   );
   const excludedSections = createMemo(() =>
-    excludeSections()?.length ? new Set(excludeSections()) : null,
+    props.excludeSections?.length ? new Set(props.excludeSections) : null,
   );
   const schemaAnalysis = createMemo(() =>
     getConfigSchemaAnalysis(schema(), includedSections(), excludedSections()),
@@ -93,7 +94,6 @@ export function Config(props: ConfigProps) {
   const state = createMemo(() => {
     const viewState = view();
     const showModeToggle = props.showModeToggle ?? false;
-    const includeVirtualSections = props.includeVirtualSections ?? true;
     const analysis = schemaAnalysis();
     const unsupportedActivePaths = analysis.unsupportedPaths.filter(
       (path) =>
@@ -122,7 +122,7 @@ export function Config(props: ConfigProps) {
     const schemaProps = analysis.schema?.properties ?? {};
     const virtualSections = new Set(["__appearance__", "__notifications__"]);
     const visibleVirtual = (key: string) =>
-      includeVirtualSections &&
+      (props.includeVirtualSections ?? true) &&
       virtualSections.has(key) &&
       (key === "__appearance__" || includedSections()?.has(key) === true);
     const sectionLabel = (key: string) =>
@@ -135,7 +135,9 @@ export function Config(props: ConfigProps) {
       sections: category.sections
         .filter(
           (key) =>
-            (visibleVirtual(key) || key in schemaProps) &&
+            (visibleVirtual(key) ||
+              key in schemaProps ||
+              (key === "ui" && includedSections()?.has("__appearance__"))) &&
             includedSections()?.has(key) !== false &&
             !excludedSections()?.has(key),
         )
@@ -171,7 +173,7 @@ export function Config(props: ConfigProps) {
           }
         : analysis.schema;
     const setupSchema = formSchema?.properties?.wizard;
-    const editorSchema = setupSchema
+    const editorSchemaBase = setupSchema
       ? {
           ...formSchema,
           properties: Object.fromEntries(
@@ -179,6 +181,9 @@ export function Config(props: ConfigProps) {
           ),
         }
       : formSchema;
+    const editorSchema = editorSchemaBase
+      ? omitCuratedOwnedConfigLeaves(editorSchemaBase)
+      : editorSchemaBase;
     const topTabs: Array<{ key: string | null; label: string }> = [
       ...((props.showRootTab ?? true)
         ? [{ key: null, label: props.navRootLabel ?? t("nav.settings") }]
@@ -210,10 +215,10 @@ export function Config(props: ConfigProps) {
     const showSectionTabs = props.settingsLayout !== "accordion" && topTabs.length > 1;
     const showToolbar = showModeToggle || showSectionTabs;
     const showValidityWarning = props.valid === false && !viewState.validityDismissed;
-    const sensitiveCount = countSensitiveConfigValues(props.formValue, [], props.uiHints);
     return {
+      displayReady: props.activeSection === "__appearance__" && props.appearanceDisplayReady,
       showModeToggle,
-      includeVirtualSections,
+      includeVirtualSections: props.includeVirtualSections ?? true,
       include: includedSections(),
       analysis,
       unsupportedActivePaths,
@@ -240,7 +245,6 @@ export function Config(props: ConfigProps) {
         props.settingsLayout === "accordion" ||
         showValidityWarning ||
         Boolean(channelGroup),
-      sensitiveCount,
     };
   });
   const schemaRead = createMemo(() => ({ completion: props.schemaRead }), {
@@ -259,14 +263,20 @@ export function Config(props: ConfigProps) {
   const schemaReady = createMemo(readSchema);
   const readSchemaReady = () => (hasSchema() ? latest(schemaReady) : schemaReady());
   function RawEditor() {
-    const [pending, setPending] = createOptimistic<"save" | "discard" | "open" | null>(null);
+    void warmJson5().catch(() => undefined);
+    const sensitiveCount = createMemo(() =>
+      countSensitiveConfigValues(props.formValue, [], props.uiHints),
+    );
+    const [commandPending, setCommandPending] = createOptimistic(false);
+    const [savePending, setSavePending] = createOptimistic(false);
     const presentCommand = action(function* (
       operation: "save" | "discard" | "open",
       result: void | Promise<unknown>,
       retired: Promise<void>,
     ) {
       if (retired === props.presentationRetired()) {
-        setPending(operation);
+        setCommandPending(true);
+        setSavePending(operation === "save");
       }
       yield Promise.race([result, retired]);
     });
@@ -281,12 +291,11 @@ export function Config(props: ConfigProps) {
       await Promise.resolve();
       return presentCommand(operation, result, retired);
     };
-    const busy = () => pending() !== null || state().configBusy;
-    const saving = () => pending() === "save" || props.saving;
-    const rawRef = createLiveValue(() => props.raw);
+    const busy = () => commandPending() || state().configBusy;
+    const saving = () => savePending() || props.saving;
     // Resolve the raw branch once; a dynamic children factory recreates the textarea on each edit.
-    const editor = (
-      <>
+    return (
+      <SettingsPage>
         {state().hasRawChanges ? (
           <details
             class="config-diff"
@@ -387,14 +396,14 @@ export function Config(props: ConfigProps) {
             <div class="field config-raw-field">
               <span style={{ display: "flex", "align-items": "center", gap: "8px" }}>
                 {t("configView.rawConfig")}
-                {state().sensitiveCount > 0 ? (
+                {sensitiveCount() > 0 ? (
                   <>
                     <span class="settings-count">
                       {t(
-                        state().sensitiveCount === 1
+                        sensitiveCount() === 1
                           ? "configView.secretCount"
                           : "configView.secretCountPlural",
-                        { count: String(state().sensitiveCount) },
+                        { count: String(sensitiveCount()) },
                       )}{" "}
                       {t(view().rawRevealed ? "configView.visible" : "configView.redacted")}
                     </span>
@@ -420,20 +429,20 @@ export function Config(props: ConfigProps) {
                   </>
                 ) : null}
               </span>
-              {state().sensitiveCount > 0 && !view().rawRevealed ? (
+              {sensitiveCount() > 0 && !view().rawRevealed ? (
                 <div class="callout info" style={{ "margin-top": "12px" }}>
                   {t(
-                    state().sensitiveCount === 1
+                    sensitiveCount() === 1
                       ? "configView.sensitiveHidden"
                       : "configView.sensitiveHiddenPlural",
-                    { count: String(state().sensitiveCount) },
+                    { count: String(sensitiveCount()) },
                   )}
                 </div>
               ) : (
                 <textarea
                   aria-label={t("configView.rawConfig")}
                   placeholder={t("configView.rawConfig")}
-                  ref={rawRef}
+                  ref={createLiveValue(() => props.raw)}
                   disabled={busy() || !state().mutationAllowed}
                   onInput={(event) => props.onRawChange(event.currentTarget.value)}
                 />
@@ -441,9 +450,8 @@ export function Config(props: ConfigProps) {
             </div>
           </div>
         </div>
-      </>
+      </SettingsPage>
     );
-    return <SettingsPage>{editor}</SettingsPage>;
   }
   function FormEditor() {
     const editor = (
@@ -566,25 +574,17 @@ export function Config(props: ConfigProps) {
               <div class="config-toolbar">
                 <label class="field">
                   <span>{t("configView.channelSettings")}</span>
-                  <select
-                    class="settings-select"
+                  <SettingsSelect
                     value={channelGroup().key ?? ""}
                     onChange={(event) => {
                       props.onSubsectionChange(event.currentTarget.value || null);
                       resetContentScroll();
                     }}
-                  >
-                    <For each={state().channelGroups} keyed={(group) => group.key}>
-                      {(group) => (
-                        <option
-                          value={group().key ?? ""}
-                          selected={group().key === channelGroup().key}
-                        >
-                          {group().label}
-                        </option>
-                      )}
-                    </For>
-                  </select>
+                    options={state().channelGroups.map((group) => ({
+                      value: group.key ?? "",
+                      label: group.label,
+                    }))}
+                  />
                 </label>
               </div>
             )}
@@ -619,7 +619,7 @@ export function Config(props: ConfigProps) {
         }
         aria-label={state().showSectionTabs ? undefined : t("common.settingsSections")}
       >
-        <ConfigReadBoundary config={props}>
+        <ConfigReadBoundary config={props} displayReady={state().displayReady}>
           {props.activeSection === "__appearance__" ? (
             state().includeVirtualSections ? (
               <AppearanceSection {...props} />
@@ -695,7 +695,11 @@ export function Config(props: ConfigProps) {
         {props.issues.length > 0 ? (
           <div class="config-content-callout">
             <div class="callout danger">
-              <HighlightedJson class="code-block" value={props.issues} />
+              <Errored fallback={plainIssues}>
+                <Loading fallback={plainIssues()}>
+                  <HighlightedJson class="code-block" value={props.issues} />
+                </Loading>
+              </Errored>
             </div>
           </div>
         ) : null}

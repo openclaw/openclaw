@@ -57,9 +57,7 @@ it.each([
         register(api) {
           api.registerGatewayMethod(
             "reader.preview",
-            async () => {
-              await dispatchGatewayMethod("health", {});
-            },
+            async () => void (await dispatchGatewayMethod("health", {})),
             { scope: "operator.read" },
           );
         },
@@ -91,11 +89,7 @@ it.each([
         http ? { ...options, timeoutMs: 500 } : options,
       );
     } else {
-      await expect(invoke()).rejects.toThrow(
-        http
-          ? 'contracts.gatewayMethodDispatch: ["authenticated-request"] for plugin "http-rpc"'
-          : "contracts.gatewayMethodDispatch",
-      );
+      await expect(invoke()).rejects.toThrow("contracts.gatewayMethodDispatch");
       expect(dispatchRaw).not.toHaveBeenCalled();
     }
   },

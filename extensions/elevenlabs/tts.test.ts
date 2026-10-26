@@ -5,7 +5,10 @@ import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
 import { MAX_AUDIO_BYTES } from "openclaw/plugin-sdk/speech-provider";
 import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-media-understanding";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createStreamingResponse } from "../test-support/streaming-error-response.js";
+import {
+  createClosedChunkStream,
+  createStreamingResponse,
+} from "../test-support/streaming-error-response.js";
 import * as configApi from "./config-api.js";
 import { buildElevenLabsSpeechProvider } from "./speech-provider-factory.js";
 
@@ -84,12 +87,7 @@ describe("elevenlabs tts diagnostics", () => {
   );
 
   it("uses the streaming endpoint without buffering the audio body", async () => {
-    const audioStream = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(new Uint8Array([1, 2, 3]));
-        controller.close();
-      },
-    });
+    const audioStream = createClosedChunkStream([new Uint8Array([1, 2, 3])]);
     const fetchMock = mockFetch(new Response(audioStream));
 
     const result = await streamSynthesize({

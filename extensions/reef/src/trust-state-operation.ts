@@ -99,10 +99,14 @@ function deliveriesForCurrentPeers(
   prefix: string,
   requireValid = false,
 ) {
+  const deliveries = tx.entries(1);
+  if (deliveries.length === 0) {
+    return [];
+  }
   const peers = new Map(
     listReefPeerTrust(tx.entries(0), prefix).map(({ peer, trust }) => [peer, trust]),
   );
-  return currentReefDeliveries(tx.entries(1), prefix, (peer) => peers.get(peer), requireValid);
+  return currentReefDeliveries(deliveries, prefix, (peer) => peers.get(peer), requireValid);
 }
 
 export function runReefTrustStateOperation(

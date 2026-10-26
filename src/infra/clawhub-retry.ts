@@ -11,12 +11,6 @@ type ClawHubResponseHandle = {
   response: Response;
 };
 
-type ClawHubRetryOptions<T extends ClawHubResponseHandle> = {
-  disposeRetry: (result: T) => Promise<void>;
-  retryRateLimit?: boolean;
-  sleep?: (ms: number) => Promise<void>;
-};
-
 class RetryableClawHubResponse<T extends ClawHubResponseHandle> extends Error {
   constructor(readonly result: T) {
     super(`ClawHub request returned retryable status ${result.response.status}`);
@@ -42,7 +36,11 @@ function parseRetryAfterMs(headers: Headers): number | undefined {
  */
 export async function retryClawHubRead<T extends ClawHubResponseHandle>(
   request: () => Promise<T>,
-  options: ClawHubRetryOptions<T>,
+  options: {
+    disposeRetry: (result: T) => Promise<void>;
+    retryRateLimit?: boolean;
+    sleep?: (ms: number) => Promise<void>;
+  },
 ): Promise<T> {
   try {
     return await retryAsync(

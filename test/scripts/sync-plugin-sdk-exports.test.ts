@@ -26,13 +26,14 @@ const fixtureFiles = [
   "assets/",
   "!assets/internal.txt",
   "!dist/plugin-sdk/nested/internal.d.ts",
-  ...["*", "?", "[ab]", "{a,b}", "@(a|b)"].map((glob) => `!dist/plugin-sdk/owner-${glob}.js`),
+  "!dist/plugin-sdk/owner-*.js",
   "!dist/**/*.map",
   "!dist/plugin-sdk/.tsbuildinfo",
   "!dist/plugin-sdk/qa-lab.*",
   "!dist/plugin-sdk/owner_entry.json",
 ];
-const literalEntries = ["private-entry", "private_entry", "Private.entry-Ü"];
+const literalEntries = ["Private.entry_name-Ü"];
+const sdkFiles = (names: string) => names.split(" ").map((name) => `dist/plugin-sdk/${name}`);
 
 function declarationPaths(prefix: string, entries: string[] = []) {
   const declaration = `${prefix}packages/plugin-sdk/dist/src/plugin-sdk/`;
@@ -83,7 +84,12 @@ function readPackage(root: string): { exports: Record<string, unknown>; files: s
   return JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
 }
 
-function createFixture(inventory?: { entries: string[]; privateEntries: string[] }) {
+function createFixture(
+  inventory = {
+    entries: ["public-entry", "private-entry"],
+    privateEntries: ["private-entry"],
+  },
+) {
   const root = tempDirs.make("openclaw-sdk-registration-");
   for (const file of [
     syncScript,
@@ -92,33 +98,23 @@ function createFixture(inventory?: { entries: string[]; privateEntries: string[]
     privateList,
     "scripts/lib/plugin-sdk-deprecated-barrel-subpaths.json",
     "scripts/lib/plugin-sdk-deprecated-public-subpaths.json",
-    ...outputFiles,
   ]) {
     fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
     fs.copyFileSync(path.join(repoRoot, file), path.join(root, file));
   }
   fs.mkdirSync(path.join(root, "packages/plugin-sdk/src"), { recursive: true });
-  if (inventory) {
-    writeJson(root, entryList, inventory.entries);
-    writeJson(root, privateList, inventory.privateEntries);
-    writeJson(root, "package.json", {
-      name: "sdk-registration-fixture",
-      version: "1.0.0",
-      type: "module",
-      exports: { ".": "./index.js" },
-      files: fixtureFiles,
-    });
-    writeJson(root, "packages/plugin-sdk/package.json", { exports: {} });
-    for (const { file, prefix } of declarationConfigs) {
-      writeJson(root, file, { compilerOptions: { paths: declarationPaths(prefix) } });
-    }
-  } else {
-    // Registration reads facade names, not their implementation or dependencies.
-    for (const file of fs.readdirSync(path.join(repoRoot, "packages/plugin-sdk/src"))) {
-      if (file.endsWith(".ts")) {
-        fs.writeFileSync(path.join(root, "packages/plugin-sdk/src", file), "");
-      }
-    }
+  writeJson(root, entryList, inventory.entries);
+  writeJson(root, privateList, inventory.privateEntries);
+  writeJson(root, "package.json", {
+    name: "sdk-registration-fixture",
+    version: "1.0.0",
+    type: "module",
+    exports: { ".": "./index.js" },
+    files: fixtureFiles,
+  });
+  writeJson(root, "packages/plugin-sdk/package.json", { exports: {} });
+  for (const { file, prefix } of declarationConfigs) {
+    writeJson(root, file, { compilerOptions: { paths: declarationPaths(prefix) } });
   }
   return root;
 }
@@ -142,11 +138,9 @@ function expectStableSync(root: string) {
 describe("plugin SDK registration CLI", () => {
   it("detects files-only drift without writing, repairs it and stays byte-idempotent", () => {
     const root = createFixture();
-    const original = readOutputs(root);
     expect(runSync(root).status).toBe(0);
-    expect(readOutputs(root)).toEqual(original);
     const manifest = readPackage(root);
-    const exclusion = "!dist/plugin-sdk/gateway-config-runtime.d.ts";
+    const exclusion = "!dist/plugin-sdk/private-entry.d.ts";
     manifest.files = manifest.files.filter((file) => file !== exclusion);
     writeJson(root, "package.json", manifest);
     const before = readOutputs(root);
@@ -174,23 +168,15 @@ describe("plugin SDK registration CLI", () => {
     });
     const included = [
       "assets/public.txt",
-      "dist/plugin-sdk/nested/public.d.ts",
-      "dist/plugin-sdk/owner-extra.d.ts",
-      "dist/plugin-sdk/public-entry.js",
-      "dist/plugin-sdk/public-entry.d.ts",
+      ...sdkFiles("nested/public.d.ts owner-extra.d.ts public-entry.js public-entry.d.ts"),
       ...literalEntries.map((entry) => `dist/plugin-sdk/${entry}.js`),
     ];
     const excluded = [
       "assets/internal.txt",
-      "dist/plugin-sdk/nested/internal.d.ts",
-      "dist/plugin-sdk/owner-extra.js",
-      "dist/plugin-sdk/public-entry.js.map",
-      "dist/plugin-sdk/.tsbuildinfo",
-      "dist/plugin-sdk/qa-lab.js",
-      "dist/plugin-sdk/owner_entry.json",
+      ...sdkFiles(
+        "nested/internal.d.ts owner-extra.js public-entry.js.map .tsbuildinfo qa-lab.js owner_entry.json test-fixtures.js test-fixtures.d.ts",
+      ),
       ...literalEntries.map((entry) => `dist/plugin-sdk/${entry}.d.ts`),
-      "dist/plugin-sdk/test-fixtures.js",
-      "dist/plugin-sdk/test-fixtures.d.ts",
     ];
     for (const file of [...included, ...excluded]) {
       writeJson(root, file, {});

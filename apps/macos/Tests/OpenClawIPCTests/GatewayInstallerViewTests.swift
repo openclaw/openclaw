@@ -62,6 +62,66 @@ struct GatewayInstallerViewTests {
             version: "2026.9.3", lastPrompt: nil, userInitiated: false))
     }
 
+    @Test func `bundled status exposes callable recovery without offering a healthy Gateway downgrade`() async throws {
+        // Reconstruct the pre-fix bundled branch: it advertised the app version without checking the service.
+        let before = GatewayEnvironmentStatus(
+            kind: .ok,
+            nodeVersion: nil,
+            gatewayVersion: "2026.10.6",
+            requiredGateway: "2026.10.6",
+            message: "Bundled Bun runtime; Gateway 2026.10.6")
+        let older = GatewayEnvironment.bundledEnvironmentStatus(
+            installed: .incompatible(location: "/fixture/service", found: "2026.10.2", required: "2026.10.6"),
+            expected: "2026.10.6",
+            connectedVersion: "2026.10.2",
+            seedMatchesBundle: true,
+            recoveryPending: true)
+        let pendingNewer = GatewayEnvironment.bundledEnvironmentStatus(
+            installed: .ready(location: "/fixture/service", version: "2026.10.7"),
+            expected: "2026.10.6",
+            connectedVersion: "2026.10.7",
+            seedMatchesBundle: false,
+            recoveryPending: true)
+        let healthyNewer = GatewayEnvironment.bundledEnvironmentStatus(
+            installed: .ready(location: "/fixture/service", version: "2026.10.7"),
+            expected: "2026.10.6",
+            connectedVersion: "2026.10.7",
+            seedMatchesBundle: false,
+            recoveryPending: false)
+
+        let scenarios: [(GatewayEnvironmentStatus, String?, String)] = [
+            (before, nil, "gateway-status-before"),
+            (older, "Update Gateway…", "gateway-status-after"),
+            (pendingNewer, "Repair Gateway…", "gateway-status-pending-newer"),
+            (healthyNewer, nil, "gateway-status-healthy-newer"),
+        ]
+        for (status, title, captureName) in scenarios {
+            var installs = 0
+            let view = GatewayInstallerView(
+                status: status,
+                failure: nil,
+                existingGatewayDetails: nil,
+                isInstalling: false,
+                installStatus: nil,
+                onInstall: { installs += 1 },
+                onRecheck: {})
+            try await self.withButtons(view, captureName: captureName) { buttons in
+                let names = buttons.compactMap(AppKitTestSupport.accessibilityName(of:))
+                if let title {
+                    #expect(Set(names) == Set([title, "Recheck"]))
+                    let recovery = try #require(buttons.first {
+                        AppKitTestSupport.accessibilityName(of: $0) == title
+                    })
+                    #expect(recovery.accessibilityPerformPress?() == true)
+                    #expect(installs == 1)
+                } else {
+                    #expect(names == ["Recheck"])
+                    #expect(installs == 0)
+                }
+            }
+        }
+    }
+
     private func view(
         kind: GatewayEnvironmentKind,
         isInstalling: Bool = false,
@@ -85,10 +145,14 @@ struct GatewayInstallerViewTests {
 
     private func withButtons(
         _ view: GatewayInstallerView,
+        captureName: String? = nil,
         _ body: ([AnyObject]) throws -> Void) async throws
     {
         _ = AppKitTestSupport.application
-        let hosting = NSHostingView(rootView: Form { view }.formStyle(.grouped))
+        let hosting = NSHostingView(rootView: Form { view }.formStyle(.grouped)
+            .environment(\.locale, Locale(identifier: "en_US"))
+            .environment(\.colorScheme, .light))
+        hosting.appearance = NSAppearance(named: .aqua)
         hosting.frame = NSRect(x: 0, y: 0, width: 1100, height: 400)
         let window = NSWindow(contentRect: hosting.frame, styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -102,6 +166,26 @@ struct GatewayInstallerViewTests {
         hosting.layoutSubtreeIfNeeded()
         let buttons = try await AppKitTestSupport.accessibilityElements(in: hosting).filter {
             $0.accessibilityRole?() == .button
+        }
+        if let captureName,
+           let directory = ProcessInfo.processInfo.environment["OPENCLAW_TEST_MENU_CAPTURE_DIR"]
+        {
+            let image = try #require(hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds))
+            hosting.cacheDisplay(in: hosting.bounds, to: image)
+            let png = try #require(image.representation(using: .png, properties: [:]))
+            let output = URL(fileURLWithPath: directory, isDirectory: true)
+            try png.write(to: output.appendingPathComponent("\(captureName)-window.png"))
+            let metadata: [String: Any] = [
+                "name": captureName,
+                "source": "GatewayInstallerView",
+                "synthetic": true,
+                "baselinePresentationReconstructed": captureName == "gateway-status-before",
+                "gatewayVersion": view.status.gatewayVersion ?? "unknown",
+                "buttons": buttons.compactMap(AppKitTestSupport.accessibilityName(of:)),
+                "requiresVisualInspection": true,
+            ]
+            try JSONSerialization.data(withJSONObject: metadata, options: [.sortedKeys])
+                .write(to: output.appendingPathComponent("\(captureName)-capture-status.json"))
         }
         try body(buttons)
     }

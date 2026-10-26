@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { exactBoardWidgetHeightPx, FINE_POINTER_QUERY } from "../../lib/board/grid.ts";
-import "./board-view.ts";
+import "./board-view.tsx";
+import { createMediaQueryList } from "../../test-helpers/media-query.ts";
 import {
   boardWidget,
   callbacks,
@@ -39,16 +40,9 @@ describe("board widget sizing", () => {
   });
 
   it("lets a dashboard document fit tall HTML content without an inner scroll viewport", async () => {
-    vi.spyOn(window, "matchMedia").mockImplementation((media) => ({
-      media,
-      matches: media === FINE_POINTER_QUERY,
-      onchange: null,
-      addListener() {},
-      removeListener() {},
-      addEventListener() {},
-      removeEventListener() {},
-      dispatchEvent: () => true,
-    }));
+    vi.spyOn(window, "matchMedia").mockImplementation((media) =>
+      createMediaQueryList(media, media === FINE_POINTER_QUERY),
+    );
     const view = await mount();
     view.fitAutoContent = true;
     await view.updateComplete;
@@ -73,6 +67,7 @@ describe("board widget sizing", () => {
   it("pins preset resizing and toggles height mode from the menu", async () => {
     const applyOps = vi.fn(async () => undefined);
     const view = await mount({ callbacks: callbacks({ applyOps }) });
+    expect(view.querySelector('[role^="menuitem"]')).toBeNull();
     await openBoardMenu(view);
     view.querySelector<HTMLButtonElement>('[data-value="resize:sm"]')!.click();
     await vi.waitFor(() => expect(applyOps).toHaveBeenCalledWith([resizeOp(3, 3, "fixed")]));

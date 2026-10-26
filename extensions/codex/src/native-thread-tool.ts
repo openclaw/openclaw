@@ -136,15 +136,18 @@ function redactNativeThreadResponse(value: unknown): unknown {
   return redacted;
 }
 
-/** Builds the native Codex thread tool only for owner runs with native-home access. */
+/** Declares native-home access consistently; execution requires current owner authority. */
 export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAgentTool | null {
-  if (options.context.senderIsOwner !== true) {
-    return null;
-  }
   const configured = readCodexPluginConfig(options.getPluginConfig());
   if (configured.appServer?.homeScope !== "user" && configured.supervision?.enabled !== true) {
     return null;
   }
+  const assertOwnerCurrent = () => {
+    options.context.assertInvocationCurrent?.();
+    if (options.context.senderIsOwner !== true) {
+      throw new Error("Codex native thread access requires an owner-authorized sender.");
+    }
+  };
 
   return {
     name: "codex_threads",
@@ -153,6 +156,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
       "Manage native Codex threads: list, read, fork, rename, archive (confirm:true), unarchive. When supervision is enabled, raw transcript reads and every mutation require their matching supervision policy option.",
     parameters: CodexThreadsParamsSchema,
     async execute(_toolCallId, rawParams) {
+      assertOwnerCurrent();
       const runtimeConfig = () =>
         options.context.getRuntimeConfig?.() ??
         options.context.runtimeConfig ??
@@ -226,7 +230,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
               })
             : undefined;
         using _ = { [Symbol.dispose]: () => prepared?.release() };
-        options.context.assertInvocationCurrent?.();
+        assertOwnerCurrent();
         const archiveSession = archiveThreadId ? currentSession() : undefined;
         if (archiveThreadId && !archiveSession) {
           throw new Error("cannot safely archive a native Codex thread without a session identity");
@@ -261,7 +265,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
           const binding = identity ? await options.bindingStore.readAsync(identity) : undefined;
           const selection = codexBindingConnectionSelection(binding);
           const assertCurrent = () => {
-            options.context.assertInvocationCurrent?.();
+            assertOwnerCurrent();
             const current = currentSession();
             if (
               runtimeConfig() !== base.config ||
@@ -400,10 +404,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
                 kind: "clear",
                 threadId,
               },
-              composeSessionEntryCommitGuards([
-                options.context.assertInvocationCurrent,
-                prepared?.source,
-              ]),
+              composeSessionEntryCommitGuards([assertOwnerCurrent, prepared?.source]),
             );
           }
           return jsonResult({ action, threadId });

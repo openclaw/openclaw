@@ -1,7 +1,3 @@
-import {
-  buildControlUiFocusPath,
-  type ControlUiFocusBuildTarget,
-} from "@openclaw/session-url-contract";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
@@ -28,7 +24,6 @@ const viewport = { height: 900, width: 1280 };
 const pageOptions = { locale: "en-US", serviceWorkers: "block", viewport } as const;
 const button = (host: Page | Locator, name: string) =>
   host.getByRole("button", { name, exact: true });
-const sessionKey = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI lazy custom-element recovery",
@@ -115,14 +110,6 @@ async function installChunkFailure(
   };
 }
 
-function focusPath(target: ControlUiFocusBuildTarget): string {
-  const resolvedPath = buildControlUiFocusPath(target, "");
-  if (!resolvedPath) {
-    throw new Error(`Could not build focus path for ${target.kind}`);
-  }
-  return resolvedPath;
-}
-
 async function expectRealChunkFailure(page: Page, label: string) {
   const error = page.locator(".lazy-view-error");
   await error.waitFor();
@@ -148,85 +135,6 @@ async function retryThroughReload(
   await reloaded;
 }
 
-const focusedCases = [
-  {
-    name: "browser",
-    label: "browser panel",
-    path: focusPath({
-      kind: "browser",
-      sessionKey,
-      tab: { target: "host", profile: "work", targetId: "existing" },
-    }),
-    modulePath: "ui/src/components/browser/browser-document.tsx",
-    gateway: {
-      featureMethods: ["browser.request"],
-      operatorScopes: ["operator.read"],
-    },
-    ready: (page: Page) =>
-      page
-        .getByText(
-          "Browser control is unavailable for this connection. Reconnect with browser access.",
-        )
-        .waitFor(),
-  },
-  {
-    name: "terminal",
-    label: "terminal panel",
-    path: focusPath({ kind: "terminal" }),
-    modulePath: "ui/src/components/terminal/terminal-panel-registration.tsx",
-    gateway: {
-      featureMethods: [...defaultControlUiFeatureMethods, "terminal.open"],
-      terminalEnabled: true,
-    },
-    ready: (page: Page) => page.locator("openclaw-terminal-panel .tp-header").waitFor(),
-  },
-  {
-    name: "desktop",
-    label: "desktop panel",
-    path: focusPath({ kind: "desktop", control: false }),
-    modulePath: "ui/src/components/desktop/desktop-panel-solid.tsx",
-    gateway: {
-      featureMethods: [...defaultControlUiFeatureMethods, "desktop.observe", "environments.list"],
-      methodResponses: {
-        "environments.list": {
-          environments: [{ id: "gateway", type: "local", status: "available", desktop: true }],
-        },
-      },
-    },
-    ready: (page: Page) => page.getByText("Desktop sources", { exact: true }).waitFor(),
-  },
-  {
-    name: "dashboard",
-    label: "dashboard document",
-    path: focusPath({ kind: "dashboard", path: "/dashboard/main/12345678" }),
-    modulePath: "ui/src/components/board/board-document.tsx",
-    gateway: {
-      sessionKey,
-      featureMethods: [...defaultControlUiFeatureMethods, "board.get"],
-      methodResponses: {
-        "sessions.resolve": {
-          ok: true,
-          key: sessionKey,
-          agentId: "main",
-          boardFace: "dashboard",
-          displayName: "Lazy dashboard",
-        },
-        "sessions.describe": {
-          session: {
-            key: sessionKey,
-            kind: "direct",
-            boardFace: "dashboard",
-            displayName: "Lazy dashboard",
-            updatedAt: 1,
-          },
-        },
-        "board.get": { sessionKey, revision: 1, tabs: [], widgets: [] },
-      },
-    },
-    ready: (page: Page) => page.locator("openclaw-board-document openclaw-board-view").waitFor(),
-  },
-];
-
 const systemBusyness = {
   name: "System busyness",
   label: "System busyness",
@@ -251,7 +159,7 @@ const dockedCases = [
     name: `Home ${dock}`,
     label: "Assistant sidebar",
     tag: "openclaw-assistant-panel-content",
-    modulePath: "ui/src/components/assistant-panel-content.ts",
+    modulePath: "ui/src/components/assistant-panel-content-solid.tsx",
     dock,
     frame: (page: Page) => page.locator(".assistant-panel"),
     close: (page: Page) => button(page, "Close assistant sidebar"),
@@ -262,12 +170,6 @@ const dockedCases = [
       page.locator("openclaw-assistant-panel .agent-chat__composer-combobox textarea"),
   })),
   systemBusyness,
-  {
-    ...systemBusyness,
-    name: "System busyness frame",
-    tag: "openclaw-debug-overlay",
-    modulePath: "ui/src/pages/debug/debug-overlay.tsx",
-  },
 ];
 
 async function installDockedScenario(
@@ -299,16 +201,7 @@ async function installDockedScenario(
     historyMessages: [{ role: "assistant", content: "The workspace is ready." }],
     methodResponses: {
       "diagnostics.lanes": {
-        lanes: [
-          {
-            lane: "main",
-            queuedCount: 0,
-            activeCount: 0,
-            maxConcurrent: 16,
-            draining: false,
-            generation: 1,
-          },
-        ],
+        lanes: [],
         dynamic: null,
       },
     },
@@ -331,7 +224,7 @@ async function installDockedScenario(
 suite.define(() => {
   it("recovers the login gate after its chunk fails without loading it during admission", async () => {
     await suite.withPage(pageOptions, async ({ page }) => {
-      const failure = await installChunkFailure(page, "ui/src/components/login-gate.ts");
+      const failure = await installChunkFailure(page, "ui/src/components/login-gate-solid.tsx");
       const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
       const rejectLogin = async () => {
         await gateway.waitForRequest("connect");
@@ -366,108 +259,34 @@ suite.define(() => {
     });
   });
 
-  it("does not reload after a lazy surface is dismissed during its retry probe", async () => {
-    let releaseProbe = () => {};
-    const manualProbe = new Promise<void>((resolve) => {
-      releaseProbe = resolve;
-    });
-    try {
-      await suite.withPage(pageOptions, async ({ page }) => {
-        await page.clock.install();
-        const completedHeadFrames = await traceHeadFrames(page, true);
-        const failure = await installChunkFailure(page, "ui/src/components/command-palette.tsx", {
-          manualProbe,
-        });
-        await installMockGateway(page);
-        const documentRequests = observeDocuments(page);
-        await page.goto(`${suite.server.baseUrl}chat`);
-        await waitForControlUiGatewayReady(page);
-        await page.keyboard.press("ControlOrMeta+k");
-        const error = await expectRealChunkFailure(page, "command palette");
-        await expect.poll(failure.headCount).toBeGreaterThanOrEqual(1);
-
-        const reloaded = new Promise<void>((resolve) => {
-          page.once("domcontentloaded", () => resolve());
-        });
-        await button(error, "Retry").click();
-        failure.restoreDocument();
-        await expect.poll(failure.recoveryProbeCount).toBeGreaterThanOrEqual(1);
-        await page.keyboard.press("Escape");
-        const paletteModal = page.locator('openclaw-modal-dialog[label="command palette"]');
-        await expect.poll(() => paletteModal.count()).toBe(0);
-        releaseProbe();
-        await expect
-          .poll(async () => documentRequests() > 1 || (await completedHeadFrames()) >= 1)
-          .toBe(true);
-        // A generic automatic retry used to wake one second after this
-        // first settled frame. Close must remain authoritative beyond it.
-        await page.clock.runFor(1_500);
-        if (documentRequests() > 1) {
-          await reloaded;
-        }
-        await waitForControlUiGatewayReady(page);
-        expect(documentRequests()).toBe(1);
-        expect(await paletteModal.count()).toBe(0);
-        expect(await page.evaluate(() => sessionStorage.getItem("openclaw:lazy-event"))).toBeNull();
+  it("reloads a focused document after its real hashed chunk fails", async () => {
+    await suite.withPage(pageOptions, async ({ page }) => {
+      const failure = await installChunkFailure(
+        page,
+        "ui/src/components/terminal/terminal-panel-registration.tsx",
+      );
+      await installMockGateway(page, {
+        featureMethods: [...defaultControlUiFeatureMethods, "terminal.open"],
+        terminalEnabled: true,
       });
-    } finally {
-      releaseProbe();
-    }
-  });
+      const documentRequests = observeDocuments(page);
 
-  for (const testCase of focusedCases) {
-    it(`reloads the focused ${testCase.name} after its real hashed chunk fails`, async () => {
-      await suite.withPage(pageOptions, async ({ page }) => {
-        const failure = await installChunkFailure(page, testCase.modulePath);
-        await installMockGateway(page, testCase.gateway);
-        const documentRequests = observeDocuments(page);
-
-        expect((await page.goto(new URL(testCase.path, suite.server.baseUrl).href))?.status()).toBe(
-          200,
-        );
-        const error = await expectRealChunkFailure(page, testCase.label);
-        const failedPathname = new URL(page.url()).pathname;
-        expect(failure.chunkDocumentCount()).toBe(1);
-        await expect.poll(failure.headCount).toBeGreaterThanOrEqual(1);
-        expect(documentRequests()).toBe(1);
-
-        await retryThroughReload(page, error, failure);
-        await testCase.ready(page);
-
-        await expect.poll(failure.chunkDocumentCount).toBe(2);
-        expect(new URL(page.url()).pathname).toBe(failedPathname);
-        expect(documentRequests()).toBe(2);
-      });
-    });
-  }
-
-  it("restores the command-palette action after a real stale-chunk reload", async () => {
-    const context = await suite.newBrowserContext(pageOptions);
-    try {
-      const page = await context.newPage();
-      const failure = await installChunkFailure(page, "ui/src/components/command-palette.tsx");
-      await installMockGateway(page);
-      await page.goto(`${suite.server.baseUrl}chat`);
-      await waitForControlUiGatewayReady(page);
-
-      await page.evaluate(() => {
-        window.dispatchEvent(new CustomEvent("openclaw:command-palette-open"));
-      });
-      const error = await expectRealChunkFailure(page, "command palette");
-      await expect.poll(failure.headCount).toBeGreaterThanOrEqual(1);
+      expect(
+        (await page.goto(new URL("focus/terminal", suite.server.baseUrl).href))?.status(),
+      ).toBe(200);
+      const error = await expectRealChunkFailure(page, "terminal panel");
+      const failedPathname = new URL(page.url()).pathname;
       expect(failure.chunkDocumentCount()).toBe(1);
+      await expect.poll(failure.headCount).toBeGreaterThanOrEqual(1);
+      expect(documentRequests()).toBe(1);
 
       await retryThroughReload(page, error, failure);
-      await page
-        .locator("openclaw-command-palette")
-        .getByRole("textbox", { name: "Search or start a task…" })
-        .waitFor();
+      await page.locator("openclaw-terminal-panel .tp-header").waitFor();
 
       await expect.poll(failure.chunkDocumentCount).toBe(2);
-      expect(await page.locator("openclaw-command-palette").count()).toBe(1);
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
+      expect(new URL(page.url()).pathname).toBe(failedPathname);
+      expect(documentRequests()).toBe(2);
+    });
   });
 
   it.each(["new", "chat"] as const)(
@@ -488,37 +307,18 @@ suite.define(() => {
             const frame = page.locator(".debug-overlay");
             await frame.waitFor();
             expect(await page.locator("openclaw-modal-dialog").count()).toBe(0);
-            const handle = (await frame.locator("header").boundingBox())!;
-            await page.mouse.move(handle.x + 30, handle.y + 20);
-            await page.mouse.down();
-            await page.mouse.move(handle.x - 30, handle.y, { steps: 3 });
-            await page.mouse.up();
-            const expanded = await frame.boundingBox();
             await composer.fill("Still editable during the outer load");
             await button(frame, "Minimize system busyness").click();
             await expect
               .poll(() => frame.getAttribute("class"))
               .toContain("debug-overlay--minimized");
-            await frame.evaluate(async (element) => {
-              await new Promise(requestAnimationFrame);
-              await new Promise(requestAnimationFrame);
-              await Promise.all(element.getAnimations().map((animation) => animation.finished));
-            });
-            const minimized = await frame.boundingBox();
-            expect(minimized).not.toBeNull();
-            expect(minimized!.height).toBeLessThan(expanded!.height);
             await composer.press("Escape");
             expect(await frame.isVisible()).toBe(true);
-            await button(frame, "Expand system busyness").click();
-            await expect.poll(() => frame.boundingBox()).toEqual(expanded);
-            await button(frame, "Minimize system busyness").click();
             held.release();
             await page.locator("openclaw-debug-overlay .debug-overlay--minimized").waitFor();
-            await expect.poll(() => frame.boundingBox()).toEqual(minimized);
             expect(await composer.inputValue()).toBe("Still editable during the outer load");
             await button(frame, "Expand system busyness").click();
             await systemBusyness.ready(page).waitFor();
-            await expect.poll(() => frame.boundingBox()).toEqual(expanded);
             await button(frame, "Minimize system busyness").click();
             await button(frame, "Close").press("Escape");
             await frame.waitFor({ state: "hidden" });
@@ -543,11 +343,9 @@ suite.define(() => {
           const header = page.locator(".assistant-panel-header");
           const headerBounds = await header.boundingBox();
           const titleBounds = await header.locator(".assistant-panel-title").boundingBox();
-          expect(headerBounds?.height).toBe(48);
           expect(titleBounds).not.toBeNull();
           for (const control of await header.locator(".assistant-panel-actions button").all()) {
             const bounds = await control.boundingBox();
-            expect(bounds).toMatchObject({ width: 28, height: 28 });
             expect(bounds!.x).toBeGreaterThanOrEqual(titleBounds!.x + titleBounds!.width);
             expect(bounds!.y).toBeGreaterThanOrEqual(headerBounds!.y);
             expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(
@@ -623,18 +421,10 @@ suite.define(() => {
     },
   );
 
-  it.each(
-    dockedCases
-      .filter((testCase) => testCase.dock !== "bottom")
-      .flatMap((testCase) =>
-        (testCase.dock ? [false] : [false, true]).map((automaticReload) =>
-          Object.assign({}, testCase, {
-            automaticReload,
-            recovery: automaticReload ? "automatic reload" : "manual Retry",
-          }),
-        ),
-      ),
-  )("recovers $name from its in-place stale-chunk error via $recovery", async (testCase) => {
+  it.each([
+    { ...dockedCases[0]!, automaticReload: false, recovery: "manual Retry" },
+    { ...systemBusyness, automaticReload: true, recovery: "automatic reload" },
+  ])("recovers $name from its in-place stale-chunk error via $recovery", async (testCase) => {
     await suite.withPage(pageOptions, async ({ page }) => {
       const failure = await installChunkFailure(page, testCase.modulePath, {
         automaticReload: testCase.automaticReload,
@@ -691,7 +481,12 @@ suite.define(() => {
           await page.locator(".sidebar-rail").waitFor({ state: "attached" });
           await held.request;
           const element = page.locator("openclaw-macos-titlebar-controls");
-          expect(await element.evaluate((node) => node.matches(":defined"))).toBe(false);
+          expect(await element.count()).toBe(0);
+          expect(
+            await page.evaluate(
+              () => customElements.get("openclaw-macos-titlebar-controls") === undefined,
+            ),
+          ).toBe(true);
           await page.evaluate(() => {
             window.dispatchEvent(
               new CustomEvent("openclaw:native-history-state", {

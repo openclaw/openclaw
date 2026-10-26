@@ -2,8 +2,9 @@ import { createSignal } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { captureI18nStateForTesting } from "../../i18n/lib/translate.test-support.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
-import type { UsageAggregates, UsageSessionEntry, UsageTotals } from "./types.ts";
+import type { UsageAggregates, UsageProps, UsageSessionEntry, UsageTotals } from "./types.ts";
 import { totals, dailyEntry } from "./usage-chart.test-support.ts";
 import { renderCostWindowComparison, renderFilterChips, UsageInsights } from "./view-overview.tsx";
 import { mountView, text, texts, usageState } from "./view-render.test-support.ts";
@@ -28,7 +29,6 @@ function mountInsights(currentTotals: () => UsageTotals, currentAggregates: () =
       },
       stats: { durationCount: 0, avgDurationMs: 0, errorRate: 0 },
       showCostHint: false,
-      showCostShares: true,
       errorHours: [],
       sessionCount: 1,
       totalSessions: 1,
@@ -107,7 +107,7 @@ describe("UsageInsights", () => {
       () => ({ ...aggregates, byProvider: [{ provider: "openai", count: 1, totals: complete }] }),
     );
     // A complete provider's share of an incomplete total is unknown, not 100%.
-    expect(container.textContent).toContain("openai");
+    expect(container.textContent).toContain("OpenAI");
     expect(container.textContent).not.toContain("of cost");
   });
 
@@ -118,10 +118,41 @@ describe("UsageInsights", () => {
       () => ({ ...aggregates, byProvider: [{ provider: "ollama", count: 1, totals: unpriced }] }),
     );
     const provider = [...container.querySelectorAll(".usage-list-item")].find((item) =>
-      item.textContent?.includes("ollama"),
+      item.textContent?.toLowerCase().includes("ollama"),
     );
     expect(text(provider, ".usage-list-value")).toContain("Unpriced");
     expect(provider?.textContent).not.toContain("$0.00");
+  });
+
+  it("names the provider of each top model so same-named models stay distinct", () => {
+    const container = document.createElement("div");
+    const used = { ...totals, totalTokens: 100, totalCost: 1 };
+    mountSolid(
+      () =>
+        UsageInsights({
+          totals: used,
+          aggregates: {
+            ...aggregates,
+            byModel: [
+              { provider: "anthropic", model: "claude-opus-5.5", count: 2, totals: used },
+              { provider: "github-copilot", model: "claude-opus-5.5", count: 1, totals: used },
+            ],
+          },
+          stats: { durationCount: 0, avgDurationMs: 0, errorRate: 0 },
+          showCostHint: false,
+          errorHours: [],
+          sessionCount: 1,
+          totalSessions: 1,
+        }),
+      { container },
+    );
+    flush();
+    const subs = [...container.querySelectorAll(".usage-list-item")]
+      .filter((item) => item.querySelector(".usage-list-label")?.textContent === "claude-opus-5.5")
+      .map((item) => item.querySelector(".usage-list-sub")?.textContent ?? "");
+    expect(subs).toHaveLength(2);
+    expect(subs[0]).toMatch(/^Anthropic · /u);
+    expect(subs[1]).not.toMatch(/^Anthropic · /u);
   });
 });
 
@@ -158,20 +189,28 @@ it("preserves filter-chip order, session-only title, labels, and clear callbacks
   expect(onClearSessions).toHaveBeenCalledOnce();
 });
 
-it("cost windows preserve sub-cent totals and daily averages", () => {
-  const { container } = mountView(() =>
-    renderCostWindowComparison(
-      [dailyEntry("2026-07-01", 300, 0.003)],
-      "2026-06-02",
-      "2026-07-01",
-      "local",
-    ),
-  );
+it.each([false, true])(
+  "cost windows preserve sub-cent totals and daily completeness (partial: %s)",
+  (partial) => {
+    const day = dailyEntry("2026-07-01", 300, 0.003);
+    if (partial) {
+      day.usageReport = { state: "unavailable" };
+    }
+    const { container } = mountView(() =>
+      renderCostWindowComparison([day], "2026-06-02", "2026-07-01", "local"),
+    );
 
-  const range = container.querySelector(".cost-window-card--range");
-  expect(text(range, ".cost-window-card__value")?.trim()).toBe("$0.0030");
-  expect(text(range, ".cost-window-card__meta")).toContain("$0.0001 / day");
-});
+    const range = container.querySelector(".cost-window--range");
+    const prefix = partial ? "≥ " : "";
+    expect(text(range, ".cost-window__value")?.trim()).toBe(`${prefix}$0.0030`);
+    expect(text(range, ".cost-window__meta")).toContain(`${prefix}$0.0001 / day`);
+    range!
+      .querySelector(".usage-bars__bar:last-of-type")!
+      .dispatchEvent(new MouseEvent("pointerenter"));
+    flush();
+    expect(text(range, ".usage-bars__tip")).toBe(`Jul 1 · ${prefix}$0.0030`);
+  },
+);
 
 describe("SessionsCard", () => {
   const session = (key: string, tokens = 100): UsageSessionEntry => ({
@@ -180,10 +219,26 @@ describe("SessionsCard", () => {
     agentId: "main",
     usage: { ...totals, totalTokens: tokens },
   });
+  const mountSessions = (
+    sessions: () => UsageSessionEntry[],
+    usage: UsageProps,
+    totalSessions = 2,
+    overview?: UsageProps["data"]["sessionPage"],
+  ) =>
+    mountView(() =>
+      SessionsCard({
+        get sessions() {
+          return sessions();
+        },
+        usage,
+        totalSessions,
+        overview,
+      }),
+    );
 
   it("exposes the selected session view to assistive technology", () => {
     const { usage, onChange } = usageState();
-    const view = mountView(() => SessionsCard({ sessions: [], usage, totalSessions: 0 }));
+    const view = mountSessions(() => [], usage, 0);
 
     const all = view.getByRole<HTMLButtonElement>("button", { name: "All", pressed: true });
     const recent = view.getByRole<HTMLButtonElement>("button", {
@@ -206,15 +261,7 @@ describe("SessionsCard", () => {
   it("preserves sort focus while waiting for the server to reorder rows", () => {
     const { usage, onChange } = usageState();
     const [sessions, setSessions] = createSignal([session("Alpha"), session("Beta")]);
-    const { container } = mountView(() =>
-      SessionsCard({
-        get sessions() {
-          return sessions();
-        },
-        usage,
-        totalSessions: 2,
-      }),
-    );
+    const { container } = mountSessions(sessions, usage);
     const select = container.querySelector<HTMLSelectElement>(".sessions-sort select")!;
     select.focus();
     select.value = "cost";
@@ -237,15 +284,7 @@ describe("SessionsCard", () => {
     }));
     const onSelectSession = vi.fn();
     usage.callbacks.details.onSelectSession = onSelectSession;
-    const { container } = mountView(() =>
-      SessionsCard({
-        get sessions() {
-          return sessions();
-        },
-        usage,
-        totalSessions: 2,
-      }),
-    );
+    const { container } = mountSessions(sessions, usage);
     const first = container.querySelector<HTMLButtonElement>(".session-bar-selection")!;
     first.focus();
 
@@ -265,7 +304,7 @@ describe("SessionsCard", () => {
     const buttons = [...container.querySelectorAll<HTMLButtonElement>(".session-bar-selection")];
     expect(buttons[1]).toBe(first);
     expect(text(first, ".session-bar-title")).toBe("Renamed");
-    expect(text(first, ".session-bar-meta")).toContain("channel:web");
+    expect(text(first, ".session-bar-meta")).toContain("web");
     expect(text(first.closest(".session-bar-row"), ".session-bar-value")).toBe("250");
     first.dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true }));
     expect(onSelectSession).toHaveBeenLastCalledWith("Alpha", true, ["Beta", "Alpha"]);
@@ -296,7 +335,7 @@ describe("SessionsCard", () => {
       const row = container.querySelector(".session-bar-row");
       const value = () => text(row, ".session-bar-value");
       const average = () => text(container, ".sessions-card-stats > span");
-      expect(text(row, ".session-bar-meta")).toContain("dur:1m");
+      expect(text(row, ".session-bar-meta")).toContain("1m");
       expect(value()).toMatch(/^≥ \d/);
       expect(average()).toMatch(/^≥ /);
       const englishValue = value();
@@ -308,17 +347,17 @@ describe("SessionsCard", () => {
         unit: "minute",
         unitDisplay: "narrow",
       }).format(1);
-      expect(text(row, ".session-bar-meta")).toContain(`dur:${germanMinute}`);
+      expect(text(row, ".session-bar-meta")).toContain(germanMinute);
       expect(value()).toBe(englishValue);
       expect(average()).toMatch(/^≥ /);
       setDisplay({ ...base.display, chartMode: "cost" });
       flush();
-      expect(value()).toMatch(/^≥ \$/);
+      expect(value()).toBe("≥ $0.00");
       await i18n.setLocale("en");
       flush();
       expect(container.querySelector(".session-bar-row")).toBe(row);
       expect(value()).toBe("≥ $0.00");
-      expect(average()).toMatch(/^≥ \$/);
+      expect(average()).toBe("≥ $0.00 avg");
     } finally {
       await restoreI18n();
     }
@@ -343,5 +382,19 @@ describe("SessionsCard", () => {
     );
     expect(texts(container, ".session-bar-title", false)).toEqual(["B", "A"]);
     expect(text(container, ".sessions-card-stats")).toContain("500 avg");
+  });
+
+  it("leads with the top ten sessions and expands to the full page on request", () => {
+    const sessions = Array.from({ length: 12 }, (_, index) => session(`S${index + 1}`));
+    const overview = createUsageOverview({ total: 12, tableSessionCount: 12 });
+    const { container } = mountSessions(() => sessions, usageFixture({ overview }), 12, overview);
+    const rows = () => container.querySelectorAll(".session-bar-row").length;
+    expect(rows()).toBe(10);
+    const toggle = container.querySelector<HTMLButtonElement>(".sessions-show-all")!;
+    expect(toggle.textContent?.trim()).toBe("Show all 12");
+    toggle.click();
+    flush();
+    expect(rows()).toBe(12);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
   });
 });

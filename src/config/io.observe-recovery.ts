@@ -2,7 +2,6 @@ import type fs from "node:fs";
 import path from "node:path";
 import { replaceFileAtomic, replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import JSON5 from "json5";
-import { root } from "../infra/fs-safe.js";
 import { readExistingStateRootMode } from "../infra/private-dir-mode.js";
 import {
   enqueueConfigAuditRecord,
@@ -34,7 +33,7 @@ import {
 } from "./io.observe-state.js";
 import { resolveConfigObserveSuspiciousReasons } from "./io.observe-suspicious.js";
 import { hashConfigRaw, resolveGatewayMode } from "./io.read-helpers.js";
-import type { NormalizedConfigIoDeps } from "./io.read.types.js";
+import type { ConfigSnapshotReadMeasure, NormalizedConfigIoDeps } from "./io.read.types.js";
 import type {
   ConfigRecoveryCandidate,
   ConfigRecoveryCandidatePreparation,
@@ -52,7 +51,7 @@ import {
 } from "./recovery-policy.js";
 import type { ConfigFileSnapshot } from "./types.openclaw.js";
 
-type ObserveRecoveryDeps = Pick<NormalizedConfigIoDeps, "fs" | "env" | "homedir"> & {
+export type ObserveRecoveryDeps = Pick<NormalizedConfigIoDeps, "fs" | "env" | "homedir"> & {
   logger: Pick<typeof console, "warn">;
 };
 
@@ -67,6 +66,7 @@ type ConfigReadRecoveryParams = {
   ) => Promise<ConfigRecoveryCandidatePreparation>;
   assertCurrent?: () => void;
   allowBackupRecovery?: () => Promise<boolean>;
+  measure?: ConfigSnapshotReadMeasure;
 };
 
 type ConfigReadRecoveryResult = Pick<ConfigRecoveryCandidate, "raw" | "parsed">;
@@ -272,7 +272,10 @@ function* planSuspiciousConfigRead(
   });
   const healthSnapshot = (yield {
     sync: () => ({ state: readConfigHealthStateFromStore(deps), basis: null }),
-    async: (health) => health.read(),
+    async: (health) =>
+      params.measure
+        ? params.measure("config.recovery.health-read", () => health.read())
+        : health.read(),
   }) as ConfigHealthSnapshot; // SAFETY: Both effect runners return the typed health-owner snapshot.
   const entry = readConfigHealthEntry(healthSnapshot.state, configPath);
   let backupRaw: string | null = null;
@@ -291,6 +294,7 @@ function* planSuspiciousConfigRead(
   const suspicious = resolveConfigObserveSuspiciousReasons({
     ...current,
     parsed,
+    lastObservedSuspiciousSignature: entry.lastObservedSuspiciousSignature,
     lastKnownGood: backupBaseline,
   });
   const suspiciousSignature = `${current.hash}:${suspicious.join(",")}`;
@@ -402,7 +406,9 @@ function* planSuspiciousConfigRead(
         !restoredFromBackup && restoreErrorDetails.message
           ? `; ${restoreErrorDetails.message}`
           : "";
-      deps.logger.warn(`Config ${result}: ${configPath} (${suspicious.join(", ")}${detail})`);
+      deps.logger.warn(
+        `Config ${result}: ${configPath} (${suspicious.join(", ")}${detail}). Original config kept at ${clobberedPath}; to undo, stop the Gateway and copy it back to ${configPath} after correcting the reported problem.`,
+      );
       const audit = {
         env: deps.env,
         homedir: deps.homedir,
@@ -442,72 +448,6 @@ function* planSuspiciousConfigRead(
       return { restored: restoredFromBackup, error: restoreError };
     },
   };
-}
-
-/** True reports committed file work; health metadata remains best-effort. */
-export async function promoteConfigSnapshotToLastKnownGoodCore(params: {
-  deps: ObserveRecoveryDeps;
-  snapshot: ConfigFileSnapshot;
-  logger?: Pick<typeof console, "warn">;
-}): Promise<boolean> {
-  const { deps, snapshot } = params;
-  if (resolveIsConfigReadOnly(deps.env)) {
-    return false;
-  }
-  if (!snapshot.exists || !snapshot.valid || typeof snapshot.raw !== "string") {
-    return false;
-  }
-  const polluted = collectPollutedSecretPlaceholders(snapshot.parsed);
-  if (polluted.length > 0) {
-    params.logger?.warn(
-      `Config last-known-good promotion skipped: redacted secret placeholder at ${polluted[0]}`,
-    );
-    return false;
-  }
-  const health = captureConfigHealthStateStore(deps, snapshot.path);
-  const healthSnapshot = await health.read();
-  const stat = await deps.fs.promises.stat(snapshot.path).catch(() => null);
-  const now = new Date().toISOString();
-  const current = createConfigHealthFingerprint({
-    raw: snapshot.raw,
-    parsed: snapshot.parsed,
-    resolved: snapshot.resolved,
-    stat,
-    observedAt: now,
-  });
-  const lastGoodPath = `${snapshot.path}.last-good`;
-  health.assertCurrent();
-  const raw = snapshot.raw;
-  const assertUnchanged = createConfigRecoverySourceGuard(deps, [[snapshot.path, raw, stat]]);
-  await commitConfigRecoveryFile({
-    health,
-    beforeCommit: assertUnchanged,
-    write: async (assertCurrent) => {
-      const directory = await root(path.dirname(lastGoodPath));
-      await directory.write(path.basename(lastGoodPath), raw, {
-        mkdir: false,
-        mode: 0o600,
-        durable: false,
-        encoding: "utf8",
-        overwrite: true,
-        assertBeforeMutation: assertCurrent,
-      });
-    },
-  });
-  await chmodConfigBestEffort({
-    deps,
-    configPath: lastGoodPath,
-    context: "last-known-good promotion",
-  });
-  await health.updateAfterFileCommit(
-    {
-      lastKnownGood: current,
-      lastPromotedGood: current,
-      lastObservedSuspiciousSignature: null,
-    },
-    healthSnapshot,
-  );
-  return true;
 }
 
 /** True lets recovery callers reread the changed file even if newer health facts win. */
@@ -616,7 +556,7 @@ export async function recoverConfigFromLastKnownGoodCore(params: {
   });
   const issueSummary = formatConfigIssueSummary([...snapshot.issues, ...snapshot.legacyIssues]);
   deps.logger.warn(
-    `Config auto-restored from last-known-good: ${snapshot.path} (${params.reason})${issueSummary ? `; Rejected validation details: ${issueSummary}.` : ""}`,
+    `Config auto-restored from last-known-good: ${snapshot.path} (${params.reason})${issueSummary ? `; Rejected validation details: ${issueSummary}.` : ""} Original config kept at ${clobberedPath}; to undo, stop the Gateway and copy it back to ${snapshot.path} after correcting the reported problem.`,
   );
   await appendAudit(
     createConfigObserveAuditRecord({

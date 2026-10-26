@@ -6,7 +6,6 @@ import { SessionManager } from "../../agents/sessions/session-manager.js";
 import * as sessionAccess from "../../config/sessions/session-accessor.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { projectWorkerSessionTurnClaim } from "./placement-record.js";
-import type { WorkerWorkspaceTunnelHandle } from "./tunnel-contract.js";
 import * as launcher from "./worker-turn-launcher.test-support.js";
 import { placements, sessionTarget } from "./worker-turn-launcher.test-support.js";
 import { withWorkerTurnTranscriptDatabase } from "./worker-turn-transcript-target.js";
@@ -99,13 +98,10 @@ describe("cloud transcript write admission", () => {
       });
       const provider = launcher.createWorkerSessionTurnPlacementProvider({
         placements,
-        environments: {
-          ...launcher.unusedEnvironments(),
+        environments: launcher.workerTurnEnvironments(tunnel, {
           get: () => environment,
-          acquireTurnCredential: async () => launcher.credential(),
           acknowledgeCredentialDelivery: async () => true,
-          startTunnel: async () => tunnel,
-        },
+        }),
       });
       let runCurrent = true;
       const operation = provider
@@ -190,11 +186,8 @@ describe("cloud transcript write admission", () => {
       assert(entry, "expected current session entry");
       const gate = deferTranscriptWrite();
       const publish = vi.fn();
-      const tunnel: WorkerWorkspaceTunnelHandle = {
-        environmentId,
-        ownerEpoch,
-        runWorkspaceCommand: vi.fn(),
-        quiesceWorkspace: async () => ({ assertActive: async () => {}, resume: async () => {} }),
+      const tunnel = launcher.createWorkerTurnTunnel({
+        launchTurn: vi.fn(),
         reconcileWorkspace: async (request) => {
           assert(request.source.kind === "local", "expected local staged result");
           if (!cleared) {
@@ -210,9 +203,7 @@ describe("cloud transcript write admission", () => {
             }),
           };
         },
-        syncWorkspace: vi.fn(),
-        stop: vi.fn(),
-      };
+      });
       const target = { ...sessionTarget, expectedWriterRunId: turnClaim.runId };
       const operation = withWorkerTurnTranscriptDatabase(
         { ...target, sessionTarget: target },
@@ -234,7 +225,6 @@ describe("cloud transcript write admission", () => {
       ).catch((error: unknown) => error);
       try {
         await gate.wait(operation, publish);
-        expect(placements.validateWorkspaceResultClaim(turnClaim)).toBe(true);
         await {
           current: () => {},
           draining: () => placements.startWorkspaceResultDrain(turnClaim),

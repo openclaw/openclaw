@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { once } from "node:events";
 import { createServer } from "node:http";
 import { promisify } from "node:util";
 import { isHttpUrl } from "@openclaw/net-policy/url-protocol";
@@ -186,13 +187,7 @@ async function createLoopbackValidationCanary(): Promise<LoopbackValidationCanar
     response.end();
   });
 
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
+  await once(server.listen(0, "127.0.0.1"), "listening");
 
   const address = server.address();
   if (typeof address === "string" || address === null) {

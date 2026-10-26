@@ -239,8 +239,21 @@ describe("chat page split layout host", () => {
           ? viewportMedia
           : matchMedia(query),
     );
-    const { page } = await mountPage();
+    const page = document.createElement("openclaw-chat-page");
+    setNavigationContext(page);
+    page.data = { sessionKey: "main" };
+    document.body.append(page);
+    viewportMedia.matches = true;
+    navigationMedia.matches = true;
+    viewportMedia.dispatchEvent(new Event("change"));
+    await settleChatPage(page);
     const pane = paneAt(page);
+    expect(pane).toMatchObject({ narrow: true, mergedChrome: true });
+
+    viewportMedia.matches = false;
+    navigationMedia.matches = false;
+    viewportMedia.dispatchEvent(new Event("change"));
+    await settleChatPage(page);
     expect(pane).toMatchObject({ narrow: false, mergedChrome: false });
 
     navigationMedia.matches = true;
@@ -261,6 +274,14 @@ describe("chat page split layout host", () => {
     await settleChatPage(page);
     expect(pane).toMatchObject({ narrow: true, mergedChrome: true });
     expect(paneAt(page)).toBe(pane);
+
+    page.presented = false;
+    viewportMedia.matches = false;
+    navigationMedia.matches = false;
+    viewportMedia.dispatchEvent(new Event("change"));
+    await settleChatPage(page);
+    expect(paneAt(page)).toBe(pane);
+    expect(pane).toMatchObject({ narrow: false, mergedChrome: false });
   });
 
   it("updates a retained pane label on a live locale change", async () => {

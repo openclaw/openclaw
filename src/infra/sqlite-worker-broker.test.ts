@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { EventEmitter } from "node:events";
-import { existsSync } from "node:fs";
+import fs, { existsSync } from "node:fs";
 import * as os from "node:os";
 import { Worker } from "node:worker_threads";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
@@ -16,6 +16,7 @@ import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db-cont
 import { initializeSqliteRuntimeCapabilities } from "./bun-sqlite-library.js";
 import { onInternalDiagnosticEvent, waitForDiagnosticEventsDrained } from "./diagnostic-events.js";
 import type { DiagnosticWorkerRequestFields } from "./diagnostic-process-types.js";
+import { readGatewayLockProcessNamespace } from "./gateway-lock-payload.js";
 import { StateDatabaseAdmissionPendingError } from "./gateway-state-owner-record.js";
 import * as stateOwner from "./gateway-state-owner.js";
 import { SqliteWorkerBroker } from "./sqlite-worker-broker.js";
@@ -31,6 +32,7 @@ import {
   type SqliteWorkerStore,
 } from "./sqlite-worker-store.js";
 import type { FixtureOperations } from "./sqlite-worker-store.test-support.js";
+import * as workerCpu from "./worker-cpu.js";
 
 vi.mock("./diagnostic-flags.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./diagnostic-flags.js")>()),
@@ -50,14 +52,15 @@ const { databasePath, open } = useSqliteWorkerStoreFixture("sqlite-worker-broker
 const { explicitSqliteCloseReleasesNativeResources } = await initializeSqliteRuntimeCapabilities();
 const poolIt = explicitSqliteCloseReleasesNativeResources ? it : it.skip;
 const queueRows = Array.from({ length: 128 }, (_, index) => String(index));
+const rejectedOutcome = (reason: unknown) => ({ status: "rejected", reason });
 
 it("retires a disk-full nested transaction without claiming a definite write outcome", async () => {
   const file = databasePath();
   const store = await open(file, { type: "disk-full" });
   const outcomes = await Promise.allSettled([append(store, "full"), append(store, "queued")]);
   expect(outcomes).toMatchObject([
-    { status: "rejected", reason: { code: "outcome-unknown" } },
-    { status: "rejected", reason: { code: "unavailable" } },
+    rejectedOutcome({ code: "outcome-unknown" }),
+    rejectedOutcome({ code: "unavailable" }),
   ]);
   for (const outcome of outcomes) {
     assert(outcome.status === "rejected");
@@ -71,10 +74,139 @@ it("retires a disk-full nested transaction without claiming a definite write out
   expect(await read(recovered)).toEqual(["recovered"]);
 });
 
+it.for(["resume", "replace", "replace-inode", "symlink", "release"] as const)(
+  "keeps dispatch responsive to slow physical owner checks and refuses %s custody changes",
+  async (ending, { signal, skip }) => {
+    if (ending === "symlink" && process.platform === "win32") {
+      skip(); // File symlinks require privileges on Windows.
+    }
+    const pause = new Int32Array(new SharedArrayBuffer(8));
+    const blocked = createDeferredCore();
+    const createWorker = workerCpu.createCpuTrackedWorker;
+    vi.spyOn(workerCpu, "createCpuTrackedWorker").mockImplementation((url, options) => {
+      const data: unknown = options?.workerData;
+      if (!isRecord(data) || !(data.lastBeat instanceof SharedArrayBuffer)) {
+        return createWorker(url, options);
+      }
+      const worker = createWorker(
+        new URL(
+          `data:text/javascript,${encodeURIComponent(`
+          import fs from "node:fs";
+          import { parentPort, workerData } from "node:worker_threads";
+          const pause = new Int32Array(workerData.verificationPause);
+          const lstat = fs.lstatSync;
+          fs.lstatSync = (...args) => {
+            if (Atomics.compareExchange(pause, 0, 1, 2) === 1) {
+              parentPort.postMessage("verification-blocked");
+              Atomics.wait(pause, 1, 0);
+            }
+            return lstat(...args);
+          };
+          await import(${JSON.stringify(String(url))});
+        `)}`,
+        ),
+        { ...options, workerData: { ...data, verificationPause: pause.buffer } },
+      );
+      worker.on("message", (message) => {
+        if (message === "verification-blocked") {
+          blocked.resolve();
+        }
+      });
+      return worker;
+    });
+    const file = databasePath();
+    const owner = stateOwner.acquireGatewayStateOwner({
+      databasePath: file,
+      payload: {
+        pid: process.pid,
+        role: "gateway",
+        createdAt: new Date().toISOString(),
+        configPath: `${file}.config`,
+        processNamespace: readGatewayLockProcessNamespace(),
+      },
+    });
+    const store = await open(file);
+    const original = fs.readFileSync(owner.path);
+    const moved = `${owner.path}.original`;
+    let movedOriginal = false;
+    let released = false;
+    let pending: Promise<PromiseSettledResult<unknown>[]> | undefined;
+    const lstat = fs.lstatSync;
+    let hostOwnerReads = 0;
+    const hostProbe = vi.spyOn(fs, "lstatSync").mockImplementation((pathname, options) => {
+      if (String(pathname) === owner.path) {
+        hostOwnerReads++;
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+      }
+      return lstat(pathname, options);
+    });
+    try {
+      Atomics.store(pause, 0, 1);
+      let settled = false;
+      pending = Promise.allSettled([append(store, "accepted")]).then((result) => {
+        settled = true;
+        return result;
+      });
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
+      expect(hostOwnerReads).toBe(0);
+      await withinTest(blocked.promise, signal);
+      // The real heartbeat worker is blocked inside fs; the host remains responsive.
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
+      expect(settled).toBe(false);
+      hostProbe.mockRestore();
+      if (ending === "replace") {
+        fs.writeFileSync(owner.path, "replacement");
+      } else if (ending === "replace-inode" || ending === "symlink") {
+        fs.renameSync(owner.path, moved);
+        movedOriginal = true;
+        if (ending === "replace-inode") {
+          fs.copyFileSync(moved, owner.path);
+        } else {
+          fs.symlinkSync(moved, owner.path);
+        }
+      } else if (ending === "release") {
+        owner.release();
+        released = true;
+      }
+      Atomics.store(pause, 1, 1);
+      Atomics.notify(pause, 1);
+      const outcomes = await withinTest(pending, signal);
+      if (ending === "resume") {
+        expect(outcomes).toMatchObject([{ status: "fulfilled" }]);
+        expect(await read(store)).toEqual(["accepted"]);
+      } else {
+        expect(outcomes).toMatchObject([{ status: "rejected" }]);
+      }
+    } finally {
+      hostProbe.mockRestore();
+      Atomics.store(pause, 1, 1);
+      Atomics.notify(pause, 1);
+      await pending;
+      if (!released) {
+        if (movedOriginal) {
+          fs.unlinkSync(owner.path);
+          fs.renameSync(moved, owner.path);
+        } else if (ending === "replace") {
+          fs.writeFileSync(owner.path, original);
+        }
+        owner.release();
+      }
+      await store.close();
+    }
+    if (ending !== "resume") {
+      expect(await read(await open(file))).toEqual([]);
+    }
+  },
+);
+
 async function openWithRetainedAccess(pathname: string) {
   const capture = stateOwner.captureStateDatabaseAccess;
-  const access = capture(pathname);
-  vi.spyOn(stateOwner, "captureStateDatabaseAccess").mockImplementation((location) =>
+  const access = await capture(pathname);
+  vi.spyOn(stateOwner, "captureStateDatabaseAccess").mockImplementation(async (location) =>
     location === pathname ? access : capture(location),
   );
   return { store: await open(pathname), access };
@@ -82,16 +214,16 @@ async function openWithRetainedAccess(pathname: string) {
 
 function holdDatabaseAdmission(
   pathname: string,
-  access: ReturnType<typeof stateOwner.captureStateDatabaseAccess>,
+  access: Awaited<ReturnType<typeof stateOwner.captureStateDatabaseAccess>>,
 ) {
   const pending = new StateDatabaseAdmissionPendingError(pathname, "Schema publication pending");
-  const assertAccessAllowed = access.assertAccessAllowed.bind(access);
+  const prepareAccess = access.prepareAccess.bind(access);
   let held = true;
-  vi.spyOn(access, "assertAccessAllowed").mockImplementation((options) => {
+  vi.spyOn(access, "prepareAccess").mockImplementation(async (options) => {
     if (held) {
       throw pending;
     }
-    assertAccessAllowed(options);
+    return prepareAccess(options);
   });
   const sleeping = createDeferredCore();
   const sleepWithAbort = retry.sleepWithAbort;
@@ -217,24 +349,23 @@ it("waits for schema publication after opening, then dispatches queued writes on
     await waitForDiagnosticEventsDrained();
     expect(completed).toHaveLength(3);
     for (const { timing } of completed) {
-      expect(timing).toBeDefined();
+      assert(timing);
       const stages = [
-        timing?.enqueued,
-        timing?.dispatched,
-        timing?.posted,
-        timing?.received,
-        timing?.inputReady,
-        timing?.executeStarted,
-        timing?.executeFinished,
-        timing?.serialized,
-        timing?.replied,
-        timing?.replyReceived,
-      ];
-      for (const stamp of stages) {
-        expect(stamp).toEqual(expect.any(Number));
-      }
-      expect(stages).toEqual(stages.toSorted((a, b) => a! - b!));
-      expect(timing?.postFinished).toBeGreaterThanOrEqual(timing!.posted!);
+        "enqueued",
+        "dispatched",
+        "posted",
+        "received",
+        "inputReady",
+        "executeStarted",
+        "executeFinished",
+        "serialized",
+        "replied",
+        "replyReceived",
+      ] as const;
+      const stamps = stages.map((stage) => timing[stage]);
+      expect(stamps).toEqual(stages.map(() => expect.any(Number)));
+      expect(stamps).toEqual(stamps.toSorted((a, b) => a! - b!));
+      expect(timing.postFinished).toBeGreaterThanOrEqual(timing.posted!);
     }
   } finally {
     await admission.finish(outcomes);
@@ -285,7 +416,7 @@ it.each(["cancellation", "revocation", "deadline"] as const)(
           : ending === "revocation"
             ? revoked
             : admission.pending;
-      expect(await outcome).toMatchObject([{ status: "rejected", reason: expectedReason }]);
+      expect(await outcome).toMatchObject([rejectedOutcome(expectedReason)]);
       expect(requests).not.toHaveBeenCalled();
       admission.release();
       expect(await append(store, "successor")).toMatchObject({ writes: 1 });
@@ -301,7 +432,7 @@ it("does not wait on permanent refusal or another database's admission", async (
   const { store, access } = await openWithRetainedAccess(file);
   const requests = vi.spyOn(Worker.prototype, "postMessage");
   const sleep = vi.spyOn(retry, "sleepWithAbort");
-  const assertion = vi.spyOn(access, "assertAccessAllowed");
+  const assertion = vi.spyOn(access, "prepareAccess");
   for (const error of [
     new Error("Maintenance authority required"),
     new StateDatabaseAdmissionPendingError(databasePath(), "Another database is unavailable"),
@@ -447,8 +578,8 @@ poolIt("keeps an independent database responsive while another worker is at capa
     expect((await accepted).every((outcome) => outcome.status === "fulfilled")).toBe(true);
   }
   expect(await waiting).toMatchObject([
-    { status: "rejected", reason: canceled },
-    { status: "rejected", reason: revoked },
+    rejectedOutcome(canceled),
+    rejectedOutcome(revoked),
     { status: "fulfilled" },
     { status: "fulfilled" },
   ]);
@@ -510,7 +641,7 @@ it.each([
     const [first, second] = await outcomes;
     expect(first.status).toBe("fulfilled");
     if (revoke) {
-      expect(second).toEqual({ status: "rejected", reason: revoked });
+      expect(second).toEqual(rejectedOutcome(revoked));
     } else {
       expect(second.status).toBe("fulfilled");
     }
@@ -550,12 +681,9 @@ it.each(["drain", "timeout"] as const)(
         expect(settled).toBe(false);
         vi.advanceTimersByTime(1);
       }
-      for (const outcome of await waiters) {
-        expect(outcome).toMatchObject({
-          status: "rejected",
-          reason: { code: "overloaded" },
-        });
-      }
+      expect(await waiters).toMatchObject(
+        Array.from({ length: 2 }, () => rejectedOutcome({ code: "overloaded" })),
+      );
       if (action === "timeout") {
         expect(warn).toHaveBeenCalledExactlyOnceWith("SQLite worker admission delayed", {
           queueDepth: 2,
@@ -591,16 +719,14 @@ it("charges admission waiters to the byte budget and releases canceled reservati
       code: "overloaded",
     });
     cancel.abort(new Error("release waiting bytes"));
-    expect(await outcome).toMatchObject([
-      { status: "rejected", reason: { message: "release waiting bytes" } },
-    ]);
+    expect(await outcome).toMatchObject([rejectedOutcome({ message: "release waiting bytes" })]);
     const replacement = new AbortController();
     const replacementOutcome = Promise.allSettled([
       append(store, "x".repeat(40 * 1024 * 1024), replacement.signal),
     ]);
     replacement.abort(new Error("replacement admitted"));
     expect(await replacementOutcome).toMatchObject([
-      { status: "rejected", reason: { message: "replacement admitted" } },
+      rejectedOutcome({ message: "replacement admitted" }),
     ]);
   } finally {
     for (const prepared of concurrentInputs) {

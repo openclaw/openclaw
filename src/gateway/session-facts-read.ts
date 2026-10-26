@@ -4,7 +4,7 @@ import type {
   RuntimeSessionFactsSelectionResult,
 } from "../plugins/runtime/types-session-facts.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
-import { freezeJsonSnapshot } from "../shared/immutable-data.js";
+import { freezeTrustedJsonSnapshot } from "../shared/immutable-data.js";
 import { stripMarkdown } from "../shared/text/strip-markdown.js";
 import type { ControlUiSessionPullRequestSnapshot } from "./control-ui-contract.js";
 import {
@@ -180,7 +180,7 @@ export function prepareFactsRead(
       const digest = row.observerDigest ? record.entry.observerDigest : undefined;
       const facts: RuntimeSessionFacts =
         cached?.facts ??
-        freezeJsonSnapshot({
+        freezeTrustedJsonSnapshot({
           key: record.key,
           sessionId: record.entry.sessionId,
           ...(record.entry.lifecycleRevision

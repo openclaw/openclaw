@@ -45,7 +45,8 @@ export function resolveCronAgentConfig(params: {
   // Agent-aware resolvers merge these scopes themselves. Flattening partial maps
   // erases inherited sandbox, memory, model-runtime and request-parameter settings.
   const agentDefaults: AgentDefaultsConfig = {
-    ...Object.assign({}, runtimeConfig.agents?.defaults, definedOverrides),
+    ...runtimeConfig.agents?.defaults,
+    ...definedOverrides,
   };
   const existingModel = toAgentModelListLike(agentDefaults.model) ?? {};
   if (typeof overrideModel === "string") {

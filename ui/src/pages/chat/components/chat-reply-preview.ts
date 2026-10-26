@@ -1,8 +1,9 @@
 // Reply-preview resolution: memoized quoted-source previews served from
 // already-loaded transcript rows first, then page-carried quoted originals.
+import { userTurnRunId } from "../../../lib/chat/history-message-identity.ts";
 import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
 import { DEFAULT_AGENT_ID } from "../../../lib/sessions/session-key.ts";
-import { persistedMessageEntryId, userTurnRunId } from "../chat-thread-items.ts";
+import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import {
   prepareChatMessageRender,
   resolveMessageReplyText,

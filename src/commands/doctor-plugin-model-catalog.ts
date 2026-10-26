@@ -21,6 +21,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { privateFileStore } from "../infra/private-file-store.js";
+import { decodeUtf8Input, Utf8InputError } from "../infra/utf8-input.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
@@ -120,19 +121,18 @@ type RootModelsFile = Readonly<{
   providers: Record<string, unknown>;
 }>;
 
-function readRootModelsFile(agentDir: string): RootModelsFile | undefined {
-  let raw: string;
+function readRootModelsFile(agentDir: string, runtime: RuntimeEnv): RootModelsFile | undefined {
+  const pathname = path.join(agentDir, "models.json");
   try {
-    raw = fs.readFileSync(path.join(agentDir, "models.json"), "utf8");
-  } catch {
-    return undefined;
-  }
-  try {
+    const raw = decodeUtf8Input(fs.readFileSync(pathname), `Model catalog ${pathname}`);
     const root = parseModelCatalogJson(raw);
     return isRecord(root) && isRecord(root.providers)
       ? { raw, root, providers: root.providers }
       : undefined;
-  } catch {
+  } catch (error) {
+    if (error instanceof Utf8InputError) {
+      runtime.error(`${error.message} Left source unchanged.`);
+    }
     return undefined;
   }
 }
@@ -253,7 +253,10 @@ export async function maybeMigrateLegacyPluginModelCatalogs(params: {
         return repairPluginModelCatalogTransportMetadata(contents).contents !== contents;
       })
       .map(({ pluginId }) => pluginId);
-    const rootCopies = reviewRootFile(readRootModelsFile(agentDir), [...persisted, ...migrations]);
+    const rootCopies = reviewRootFile(readRootModelsFile(agentDir, params.runtime), [
+      ...persisted,
+      ...migrations,
+    ]);
     agents.push({
       agentDir,
       migrations,
@@ -393,7 +396,7 @@ export async function maybeMigrateLegacyPluginModelCatalogs(params: {
       continue;
     }
     // Compare against the catalogs as they stand after migration, from the bytes being replaced.
-    const file = readRootModelsFile(agent.agentDir);
+    const file = readRootModelsFile(agent.agentDir, params.runtime);
     const review = reviewRootFile(file, loadPersistedPluginModelCatalogsReadOnly(agent.agentDir));
     if (!file || review.copies.length === 0) {
       continue;

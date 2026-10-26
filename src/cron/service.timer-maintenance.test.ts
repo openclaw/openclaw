@@ -16,17 +16,6 @@ import {
 } from "./store/scheduler-actor.worker.js";
 import type { CronJob } from "./types.js";
 
-const sqliteTransactionLabels = vi.hoisted(() => [] as string[]);
-
-vi.mock("../state/openclaw-state-db.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../state/openclaw-state-db.js")>();
-  const observedWriteTransaction: typeof actual.runOpenClawStateWriteTransaction = (...args) => {
-    sqliteTransactionLabels.push(args[2]?.operationLabel ?? "state.write");
-    return actual.runOpenClawStateWriteTransaction(...args);
-  };
-  return { ...actual, runOpenClawStateWriteTransaction: observedWriteTransaction };
-});
-
 const NOW = Date.parse("2026-08-30T12:00:00.000Z");
 const CRON_SCHEDULE = { kind: "cron", expr: "0 * * * * *", tz: "UTC", staggerMs: 0 } as const;
 let fixture: Awaited<ReturnType<typeof createOpenClawTestState>>;
@@ -97,7 +86,6 @@ function createScheduler(jobs: CronJob[]) {
     ),
   );
   send("cron.schedulerStart");
-  sqliteTransactionLabels.length = 0;
   actors.set(channelName, storeKey);
   return {
     read: () => loadCronStoreFromDatabase(database.db, storeKey).store,
@@ -105,12 +93,9 @@ function createScheduler(jobs: CronJob[]) {
   };
 }
 
-function runTimer(overrides: Partial<CronJob>, expectedSweeps = 1) {
+function runTimer(overrides: Partial<CronJob>) {
   const scheduler = createScheduler([job("timer", overrides)]);
   scheduler.tick();
-  expect(sqliteTransactionLabels.filter((label) => label === "cron.schedule-unowned")).toHaveLength(
-    expectedSweeps,
-  );
   return scheduler.read().jobs[0]!;
 }
 
@@ -119,13 +104,17 @@ it("uses the claimed job postimage for maintenance and the next wake", () => {
   const result = scheduler.tick();
   expect(result.accepted).toHaveLength(1);
   expect(scheduler.read().jobs[0]?.state.runningAtMs).toBe(NOW);
-  expect(sqliteTransactionLabels).not.toContain("cron.schedule-unowned");
   expect(result.nextWakeAtMs).toBeGreaterThan(NOW);
   expect(scheduler.tick().accepted).toEqual([]);
 });
 
 it("skips a write sweep for an active due schedule", () => {
-  runTimer({ state: { nextRunAtMs: NOW - 60_000, runningAtMs: NOW } }, 0);
+  const scheduler = createScheduler([
+    job("active", { state: { nextRunAtMs: NOW - 60_000, runningAtMs: NOW } }),
+  ]);
+  const before = database.db.prepare("SELECT total_changes() AS changes").get();
+  expect(scheduler.tick().accepted).toEqual([]);
+  expect(database.db.prepare("SELECT total_changes() AS changes").get()).toEqual(before);
 });
 
 it("does not recheck natural-next slots during a 1000-job timer tick", () => {
@@ -141,7 +130,6 @@ it("does not recheck natural-next slots during a 1000-job timer tick", () => {
   const result = scheduler.tick();
   expect(scheduler.read()).toEqual(before);
   expect(database.db.prepare("SELECT total_changes() AS changes").get()).toEqual(changes);
-  expect(sqliteTransactionLabels).toEqual([]);
   expect(result).toMatchObject({
     accepted: [],
     notifications: [],
@@ -151,7 +139,7 @@ it("does not recheck natural-next slots during a 1000-job timer tick", () => {
   expect(previousRuns).toHaveBeenCalledTimes(0);
 });
 
-it("runs one sweep for a stale backoff slot", () => {
+it("reschedules a stale backoff slot", () => {
   const result = runTimer({
     state: {
       nextRunAtMs: NOW - 20_000,
@@ -163,7 +151,7 @@ it("runs one sweep for a stale backoff slot", () => {
   expect(result.state.nextRunAtMs).toBeGreaterThan(NOW);
 });
 
-it("repairs a stale future trigger cron slot with one sweep", () => {
+it("repairs a stale future trigger cron slot", () => {
   const result = runTimer({
     schedule: CRON_SCHEDULE,
     state: { nextRunAtMs: NOW + 7 * 24 * 60 * 60_000 + 30_000 },

@@ -568,7 +568,12 @@ test.each(["active work", "unavailable drain", "runtime drain rejection"] as con
         reserveSessionDrain: () => {
           throw new Error("Worker inference drain is unavailable");
         },
-        captureSessionCancellation: () => ({ runIds: [], cancel: async () => [] }),
+        captureSessionCancellation: () => ({
+          runIds: [],
+          settled: Promise.resolve(),
+          executing: false,
+          cancel: async () => [],
+        }),
         resolveSessionTargetForRunId: () => undefined,
       });
     }

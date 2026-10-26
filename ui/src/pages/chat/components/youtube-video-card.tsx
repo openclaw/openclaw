@@ -4,6 +4,7 @@ import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-sessio
 import type { YouTubeVideo } from "../../../lib/chat/youtube-video.ts";
 import "./youtube-video-card.css";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { observeResize } from "../../../lib/reactive/observers.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 
@@ -50,15 +51,14 @@ export function YouTubeVideoCard(props: YouTubeVideoProps) {
     setPlaying(true);
   };
   onSettled(() => {
-    const observer = new ResizeObserver(([entry]) => {
+    const stopResize = observeResize([host], ([entry]) => {
       if (entry) {
         // YouTube requires a player viewport of at least 200 × 200 CSS pixels.
         setWideEnough(entry.contentRect.width >= 200);
       }
     });
-    observer.observe(host);
     return () => {
-      observer.disconnect();
+      stopResize();
       releasePlayback();
     };
   });

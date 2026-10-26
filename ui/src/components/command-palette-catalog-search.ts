@@ -16,12 +16,15 @@ import type { NativeDeviceSettingsCapability } from "../app/native-device-settin
 import { t } from "../i18n/index.ts";
 import { registerAppsEnglish } from "../i18n/locales/en-apps.ts";
 import { registerCommandPaletteEnglish } from "../i18n/locales/en-command-palette.ts";
+import { registerRouteSubtitlesEnglish } from "../i18n/locales/en-route-subtitles.ts";
 import { loadCronCatalog } from "../lib/cron/catalog.ts";
 import type { PluginListResult } from "../lib/plugins/index.ts";
 import { settingsNavigationLabelForRoute } from "../lib/settings-navigation.ts";
 import { SETTINGS_SEARCH_TARGETS } from "../pages/config/settings-targets.ts";
 import type { IconName } from "./icon-data.ts";
 import { askBrandLabel } from "./theme-brand-label.ts";
+
+registerRouteSubtitlesEnglish();
 
 registerCommandPaletteEnglish();
 

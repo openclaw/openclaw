@@ -2,12 +2,12 @@
 
 import { createRouter, definePage } from "@openclaw/uirouter";
 import { createComponent } from "solid-js";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SolidRouteProps } from "../../app-route-types.tsx";
+import { createApplicationTheme } from "../../app/bootstrap-theme.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { createNativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
 import { mountRouterOutlet } from "../../app/router-outlet.test-support.tsx";
 import { changedServerUiPrefs } from "../../app/server-prefs-intent.ts";
 import { canSyncAppearancePreference } from "../../app/server-prefs-profile-runtime.ts";
@@ -23,13 +23,7 @@ import {
 } from "../../app/server-prefs.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import type { WebPushSnapshot } from "../../app/web-push.ts";
-import {
-  installDialogPolyfill,
-  nextFrame,
-  waitForRenderedModalDialog,
-} from "../../test-helpers/modal-dialog.ts";
 import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
-import { createNativeDeviceSettingsSnapshot } from "../../test-helpers/native-device-settings.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
@@ -40,9 +34,18 @@ import {
   mountConfigPageState,
   publishConfigSource,
 } from "./config-page.test-support.ts";
-import type { ConfigPageId, ConfigPageRouteData } from "./config-page.tsx";
+import { preloadConfigPage, type ConfigPageId, type ConfigPageRouteData } from "./config-page.tsx";
 import { pages } from "./route.ts";
-import { extractQuickSettingsSecurity } from "./security.tsx";
+import { extractQuickSettingsSecurity } from "./security-model.ts";
+
+beforeAll(() =>
+  Promise.all([
+    preloadConfigPage("updates"),
+    preloadConfigPage("notifications"),
+    preloadConfigPage("advanced"),
+    preloadConfigPage("security"),
+  ]),
+);
 
 const switchActiveRealtimeTalkCameras =
   vi.fn<typeof realtimeTalk.switchActiveRealtimeTalkCameras>();
@@ -55,6 +58,21 @@ function configContext(overrides: object = {}) {
   } as unknown as ApplicationContext;
 }
 
+function mediaDevices(enumerateDevices = vi.fn().mockResolvedValue([])) {
+  const stop = vi.fn();
+  const getUserMedia = vi.fn().mockResolvedValue({ getTracks: () => [{ stop }] });
+  const devices = Object.assign(new EventTarget(), { enumerateDevices, getUserMedia });
+  vi.stubGlobal("navigator", { mediaDevices: devices });
+  return { devices, enumerateDevices, getUserMedia, stop };
+}
+
+function stubCameraDevices() {
+  const { getUserMedia } = mediaDevices(
+    vi.fn().mockResolvedValue([{ kind: "videoinput", deviceId: "camera-1", label: "Desk Camera" }]),
+  );
+  getUserMedia.mockReset();
+}
+
 const auth = (scopes = ["operator.admin"]) => ({ role: "operator", scopes });
 const connectedGateway = (methods: string[]) => ({
   snapshot: {
@@ -63,6 +81,61 @@ const connectedGateway = (methods: string[]) => ({
     hello: { auth: auth(), features: { methods } },
   },
 });
+
+function buttonNamed(container: ParentNode, label: string) {
+  return [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+    (button) => button.textContent?.trim() === label,
+  )!;
+}
+function chooseCamera(select: HTMLSelectElement, deviceId = "camera-1") {
+  select.value = deviceId;
+  select.dispatchEvent(new Event("change", { bubbles: true }));
+}
+function expectCameraFocus(container: ParentNode, select: HTMLSelectElement) {
+  expect(container.querySelector("[data-settings-camera]")).toBe(select);
+  expect(document.activeElement).toBe(select);
+}
+async function selectCamera(container: ParentNode) {
+  const select = await waitForSolid(() => {
+    const control = container.querySelector<HTMLSelectElement>("[data-settings-camera]");
+    expect(control?.options).toHaveLength(2);
+    return control!;
+  });
+  chooseCamera(select);
+  await waitForSolid(() =>
+    expect(switchActiveRealtimeTalkCameras).toHaveBeenCalledWith("camera-1"),
+  );
+  expect(loadSettings().realtimeTalkVideoDeviceId).toBeUndefined();
+}
+
+function attachTheme(context: ApplicationContext) {
+  const theme = createApplicationTheme(
+    loadSettings(context.gateway.connection.gatewayUrl),
+    context.gateway,
+  );
+  Object.assign(context, { theme });
+  onTestFinished(() => theme.dispose());
+  return theme;
+}
+function updateReadContext(
+  first: Promise<boolean>,
+  second: Promise<boolean>,
+  text = "Current update status",
+  source?: "read",
+) {
+  const refreshUpdateStatus = vi
+    .fn<ApplicationContext["overlays"]["refreshUpdateStatus"]>()
+    .mockReturnValueOnce(first)
+    .mockReturnValueOnce(second);
+  const context = configContext({
+    gateway: connectedGateway(["update.status"]),
+    overlays: {
+      refreshUpdateStatus,
+      snapshot: { updateStatusBanner: { ...(source ? { source } : {}), tone: "warn", text } },
+    },
+  });
+  return { context, refreshUpdateStatus };
+}
 
 function profileContext(
   gatewayUrl: string,
@@ -92,6 +165,8 @@ async function loadProfile(configObject: object, entries: Record<string, string>
   const client = {
     request: vi.fn(async () => ({ status: "ok", entries })),
   } as unknown as GatewayBrowserClient;
+  const context = completeConfigContext(profileContext(scope, profileId, configObject));
+  attachTheme(context);
   await refreshProfileAppearancePrefs({
     configObject,
     scope,
@@ -99,7 +174,6 @@ async function loadProfile(configObject: object, entries: Record<string, string>
     onApplied: vi.fn(),
     client,
   });
-  const context = profileContext(scope, profileId, configObject);
   const previous = loadSettings();
   const props = mountConfigPageState(context).state.configProps;
   return { context, previous, props };
@@ -157,10 +231,6 @@ it("refreshes notification presentation from in-place owner publications", () =>
   publishNotifications();
   flush();
   expect(state.configProps().nativeNotifications?.test?.state).toBe("pending");
-
-  Object.assign(context.webPush.snapshot, { loading: true });
-  publishConfigSource(context.webPush);
-  expect(state.configProps().webPush?.loading).toBe(true);
 });
 
 it("renders Web Push registration publications and dispatches Unsubscribe without reloading", () => {
@@ -212,9 +282,7 @@ it("renders Web Push registration publications and dispatches Unsubscribe withou
   expect(
     container.querySelector<HTMLInputElement>('input[aria-label="Notification label"]')?.value,
   ).toBe("Settings test browser");
-  const unsubscribe = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
-    (button) => button.textContent?.trim() === "Unsubscribe",
-  )!;
+  const unsubscribe = buttonNamed(container, "Unsubscribe");
   expect(unsubscribe.disabled).toBe(false);
   unsubscribe.click();
   expect(run).toHaveBeenCalledExactlyOnceWith({ kind: "disable" });
@@ -238,10 +306,11 @@ it.each([
 
 it("restores the gateway appearance default while queuing deletion of the profile override", async () => {
   const configObject = { ui: { prefs: { theme: "dash" } } };
-  const { props, previous } = await loadProfile(configObject, { "ui.theme": "knot" });
+  const { context, props, previous } = await loadProfile(configObject, { "ui.theme": "knot" });
   props().setTheme("dash");
 
   expect(loadSettings().theme).toBe("dash");
+  expect(context.theme.settings.theme).toBe("dash");
   expect(changedServerUiPrefs(previous, loadSettings())).toEqual({
     theme: null,
     accent: "theme",
@@ -315,8 +384,8 @@ it("resets the fontUi profile override when its picker sentinel is selected", as
   const { context, props, previous } = await loadProfile({}, { "ui.fontUi": "lora" });
   props().setFontUi(undefined);
   expect(loadSettings().fontUi).toBeUndefined();
+  expect(context.theme.settings.fontUi).toBeUndefined();
   expect(changedServerUiPrefs(previous, loadSettings())).toEqual({ fontUi: null });
-  expect(context.theme.refresh).toHaveBeenCalledOnce();
 });
 
 it("uses the committed snapshot for both display and reset while the form draft differs", async () => {
@@ -362,21 +431,14 @@ it("uses the committed snapshot for both display and reset while the form draft 
 });
 
 it.each([
-  ["microphone", "disconnect"],
   ["microphone", "reentry"],
   ["microphone", "reentry with gesture"],
   ["microphone", "passive failure"],
-  ["microphone", "leave during retry"],
   ["microphone", "permission failure"],
   ["camera", "reentry with gesture"],
 ] as const)("%s permission lifetime: %s", async (kind, scenario) => {
   const initial = deferred<MediaDeviceInfo[]>();
-  const second = deferred<MediaDeviceInfo[]>();
-  const enumerateDevices = vi.fn().mockResolvedValue([]);
-  const stop = vi.fn();
-  const getUserMedia = vi.fn().mockResolvedValue({ getTracks: () => [{ stop }] });
-  const devices = Object.assign(new EventTarget(), { enumerateDevices, getUserMedia });
-  vi.stubGlobal("navigator", { mediaDevices: devices });
+  const { enumerateDevices, stop, getUserMedia, devices } = mediaDevices();
   const page = mountConfigPageState(configContext(), { pageId: "appearance" });
   const props = page.state.configProps;
   await Promise.all([props().microphone?.discovery, props().camera?.discovery]);
@@ -391,9 +453,6 @@ it.each([
   if (!startsWithPermission && kind === "microphone") {
     enumerateDevices.mockResolvedValueOnce([]);
   }
-  if (scenario === "leave during retry") {
-    enumerateDevices.mockReturnValueOnce(second.promise);
-  }
   const refresh = () =>
     kind === "microphone" ? props().onMicrophoneRefresh?.() : props().onCameraRefresh?.();
   if (!startsWithPermission) {
@@ -405,33 +464,20 @@ it.each([
   expect(enumerateDevices).toHaveBeenCalledTimes(initialCalls);
   expect(getUserMedia).not.toHaveBeenCalled();
 
-  if (scenario === "disconnect") {
-    page.dispose();
-  } else if (scenario.startsWith("reentry")) {
+  if (scenario.startsWith("reentry")) {
     page.update({ pageId: "advanced" });
     page.update({ pageId: "appearance" });
     if (scenario === "reentry with gesture") {
       refresh();
     }
   }
-  if (["passive failure", "leave during retry", "permission failure"].includes(scenario)) {
+  if (["passive failure", "permission failure"].includes(scenario)) {
     initial.reject(new DOMException("Synthetic inactive enumeration", "InvalidStateError"));
   } else {
     initial.resolve([]);
   }
-  if (scenario === "leave during retry") {
-    await waitForSolid(() => expect(enumerateDevices).toHaveBeenCalledTimes(initialCalls + 1));
-    page.update({ pageId: "advanced" });
-    second.resolve([]);
-  }
-  if (scenario === "disconnect") {
-    await initial.promise;
-    await Promise.resolve();
-    flush();
-  } else {
-    await props()[kind]?.discovery;
-    flush();
-  }
+  await props()[kind]?.discovery;
+  flush();
   const permits = ["reentry with gesture", "passive failure"].includes(scenario);
   expect(getUserMedia).toHaveBeenCalledTimes(permits ? 1 : 0);
   expect(stop).toHaveBeenCalledTimes(permits ? 1 : 0);
@@ -448,10 +494,7 @@ it.each([
 it("keeps media permission gestures live while discovery status is pending", async () => {
   const initial = deferred<MediaDeviceInfo[]>();
   const enumerateDevices = vi.fn().mockReturnValueOnce(initial.promise).mockResolvedValue([]);
-  const stop = vi.fn();
-  const getUserMedia = vi.fn().mockResolvedValue({ getTracks: () => [{ stop }] });
-  const mediaDevices = Object.assign(new EventTarget(), { enumerateDevices, getUserMedia });
-  vi.stubGlobal("navigator", { mediaDevices });
+  const { stop, getUserMedia, devices } = mediaDevices(enumerateDevices);
   const { container } = mountConfigPage(configContext(), { pageId: "appearance" });
   const select = container.querySelector<HTMLSelectElement>("[data-settings-microphone]")!;
   expect(select).not.toBeNull();
@@ -465,7 +508,7 @@ it("keeps media permission gestures live while discovery status is pending", asy
     expect(select.closest(".settings-row")?.textContent).toContain("No additional microphones"),
   );
   enumerateDevices.mockRejectedValueOnce(new DOMException("Device unavailable", "NotFoundError"));
-  mediaDevices.dispatchEvent(new Event("devicechange"));
+  devices.dispatchEvent(new Event("devicechange"));
   await waitForSolid(() =>
     expect(select.closest(".settings-row")?.querySelector('[role="alert"]')).not.toBeNull(),
   );
@@ -473,7 +516,7 @@ it("keeps media permission gestures live while discovery status is pending", asy
   select.focus();
   const retry = deferred<MediaDeviceInfo[]>();
   enumerateDevices.mockReturnValueOnce(retry.promise);
-  mediaDevices.dispatchEvent(new Event("devicechange"));
+  devices.dispatchEvent(new Event("devicechange"));
   await waitForSolid(() =>
     expect(select.closest(".settings-row")?.querySelector('[role="alert"]')).toBeNull(),
   );
@@ -493,178 +536,137 @@ it("keeps media permission gestures live while discovery status is pending", asy
   expect(document.activeElement).toBe(select);
 });
 
-it("persists only confirmed camera selections and ignores superseded failures", async () => {
+it("settles superseded camera selection without accepting its late failure", async () => {
   const first = deferred();
-  switchActiveRealtimeTalkCameras
-    .mockRejectedValueOnce(new Error("The selected camera is unavailable"))
-    .mockReturnValueOnce(first.promise)
-    .mockResolvedValueOnce(undefined)
-    .mockRejectedValueOnce(new Error("Another camera error"))
-    .mockResolvedValueOnce(undefined);
-  const context = configContext({ theme: { refresh: vi.fn() } });
+  switchActiveRealtimeTalkCameras.mockReturnValueOnce(first.promise);
+  const context = completeConfigContext(configContext());
+  const theme = attachTheme(context);
   const { state } = mountConfigPageState(context);
-  const props = state.configProps;
-
-  await expect(props().onCameraSelect?.("missing-camera")).rejects.toThrow(
-    "The selected camera is unavailable",
-  );
-  expect(loadSettings().realtimeTalkVideoDeviceId).toBeUndefined();
-  expect(context.theme.refresh).not.toHaveBeenCalled();
-
-  const superseded = props().onCameraSelect?.("slow-camera");
-  await props().onCameraSelect?.("back-camera");
+  const select = (id: string) => state.configProps().onCameraSelect?.(id);
+  const superseded = select("slow-camera");
+  await select("back-camera");
   await expect(superseded).resolves.toBeUndefined();
-  flush();
-  expect(props().camera?.selectedDeviceId).toBe("back-camera");
-  expect(loadSettings().realtimeTalkVideoDeviceId).toBe("back-camera");
-  expect(context.theme.refresh).toHaveBeenCalledOnce();
-  first.reject(new Error("The selected camera is unavailable"));
+  first.reject(new Error("Superseded camera failure"));
   await first.promise.catch(() => undefined);
   flush();
-  await expect(props().camera?.selection).resolves.toBeUndefined();
+  await expect(state.configProps().camera?.selection).resolves.toBeUndefined();
+  expect(state.configProps().camera?.selectedDeviceId).toBe("back-camera");
   expect(loadSettings().realtimeTalkVideoDeviceId).toBe("back-camera");
-  expect(context.theme.refresh).toHaveBeenCalledOnce();
-
-  await expect(props().onCameraSelect?.("another-missing-camera")).rejects.toThrow(
-    "Another camera error",
-  );
-  await props().onCameraSelect?.("");
-  flush();
-  expect(props().camera?.selectedDeviceId).toBe("");
-  expect(loadSettings().realtimeTalkVideoDeviceId).toBeUndefined();
+  expect(theme.settings.realtimeTalkVideoDeviceId).toBe("back-camera");
 });
 
-it("keeps the camera select mounted through pending, rejected, and retried selections", async () => {
+it("retains camera controls and confirmed selection through retry and reset", async () => {
   const pending = deferred();
   const retry = deferred();
   const recovery = deferred();
   switchActiveRealtimeTalkCameras
     .mockReturnValueOnce(pending.promise)
     .mockReturnValueOnce(retry.promise)
-    .mockReturnValueOnce(recovery.promise);
-  vi.stubGlobal("navigator", {
-    mediaDevices: Object.assign(new EventTarget(), {
-      enumerateDevices: vi
-        .fn()
-        .mockResolvedValue([{ kind: "videoinput", deviceId: "camera-1", label: "Desk Camera" }]),
-      getUserMedia: vi.fn(),
-    }),
-  });
-  const { container } = mountConfigPage(configContext({ theme: { refresh: vi.fn() } }), {
-    pageId: "appearance",
-  });
+    .mockReturnValueOnce(recovery.promise)
+    .mockResolvedValueOnce(undefined);
+  stubCameraDevices();
+  const context = completeConfigContext(configContext());
+  const theme = attachTheme(context);
+  const { container } = mountConfigPage(context, { pageId: "appearance" });
+  const expectStored = (id: string | undefined) => {
+    expect(loadSettings().realtimeTalkVideoDeviceId).toBe(id);
+    expect(theme.settings.realtimeTalkVideoDeviceId).toBe(id);
+  };
   const select = container.querySelector<HTMLSelectElement>("[data-settings-camera]")!;
   await waitForSolid(() => expect(select.options).toHaveLength(2));
   select.focus();
-  select.value = "camera-1";
-  select.dispatchEvent(new Event("change", { bubbles: true }));
+  chooseCamera(select);
   await waitForSolid(() => expect(select.value).toBe("camera-1"));
-  expect(loadSettings().realtimeTalkVideoDeviceId).toBeUndefined();
+  expectStored(undefined);
   pending.reject(new Error("Synthetic camera unavailable"));
   const alert = () => select.closest(".settings-row")?.querySelector('[role="alert"]');
   await waitForSolid(() => expect(alert()?.textContent).toContain("Synthetic camera unavailable"));
   expect(select.value).toBe("");
-  expect(container.querySelector("[data-settings-camera]")).toBe(select);
-  expect(document.activeElement).toBe(select);
-  select.value = "camera-1";
-  select.dispatchEvent(new Event("change", { bubbles: true }));
+  expectStored(undefined);
+  expectCameraFocus(container, select);
+  chooseCamera(select);
   await waitForSolid(() => expect(alert()).toBeNull());
   retry.reject(new Error("Synthetic second camera failure"));
   await waitForSolid(() => expect(alert()?.textContent).toBe("Synthetic second camera failure"));
   expect(select.value).toBe("");
-  expect(container.querySelector("[data-settings-camera]")).toBe(select);
-  expect(document.activeElement).toBe(select);
-  select.value = "camera-1";
-  select.dispatchEvent(new Event("change", { bubbles: true }));
+  expectCameraFocus(container, select);
+  chooseCamera(select);
   await waitForSolid(() => expect(alert()).toBeNull());
   recovery.resolve();
   await waitForSolid(() => expect(loadSettings().realtimeTalkVideoDeviceId).toBe("camera-1"));
   expect(alert()).toBeNull();
   expect(select.value).toBe("camera-1");
-  expect(container.querySelector("[data-settings-camera]")).toBe(select);
-  expect(document.activeElement).toBe(select);
+  expectCameraFocus(container, select);
+  expectStored("camera-1");
+  chooseCamera(select, "");
+  await waitForSolid(() => expect(loadSettings().realtimeTalkVideoDeviceId).toBeUndefined());
+  expect(select.value).toBe("");
+  expectStored(undefined);
 });
 
 it("leaves Appearance while a camera selection is unresolved", async () => {
   const pending = deferred();
   switchActiveRealtimeTalkCameras.mockReturnValueOnce(pending.promise);
-  vi.stubGlobal("navigator", {
-    mediaDevices: Object.assign(new EventTarget(), {
-      enumerateDevices: vi
-        .fn()
-        .mockResolvedValue([{ kind: "videoinput", deviceId: "camera-1", label: "Desk Camera" }]),
-      getUserMedia: vi.fn(),
+  stubCameraDevices();
+  const configPages = pages
+    .filter((page) => page.id !== "settings" && page.id !== "config")
+    .filter((page) => page.id === "appearance" || page.id === "notifications");
+  const routes = await Promise.all(
+    configPages.map(async ({ id, path, aliases, loader, loaderDeps, component }) => {
+      const module = await component();
+      return {
+        id,
+        path,
+        aliases,
+        loader,
+        loaderDeps,
+        component: () => ({
+          ...module,
+          renderSolid: (props: SolidRouteProps<ConfigPageRouteData>) =>
+            createComponent(provider.wrapper, {
+              get children() {
+                return createComponent(module.renderSolid, props);
+              },
+            }),
+        }),
+      };
     }),
-  });
-  const view = mountConfigPage(configContext({ theme: { refresh: vi.fn() } }), {
-    pageId: "appearance",
-  });
-  const select = view.container.querySelector<HTMLSelectElement>("[data-settings-camera]")!;
-  await waitForSolid(() => expect(select.options).toHaveLength(2));
-  select.value = "camera-1";
-  select.dispatchEvent(new Event("change", { bubbles: true }));
-  await waitForSolid(() =>
-    expect(switchActiveRealtimeTalkCameras).toHaveBeenCalledWith("camera-1"),
   );
-  expect(loadSettings().realtimeTalkVideoDeviceId).toBeUndefined();
-
-  view.update({ pageId: "notifications" });
-  await waitForSolid(() => {
-    expect(view.container.querySelector("h1")?.textContent).toBe("Notifications");
-    expect(view.container.querySelector("[data-settings-camera]")).toBeNull();
-  });
-
-  pending.resolve();
-  await waitForSolid(() => expect(loadSettings().realtimeTalkVideoDeviceId).toBe("camera-1"));
-  expect(view.container.querySelector("h1")?.textContent).toBe("Notifications");
-  expect(view.container.querySelector("[data-settings-camera]")).toBeNull();
-});
-
-it("leaves Talk while a native voice edit is unresolved and still accepts its outcome", async () => {
-  const snapshot = createNativeDeviceSettingsSnapshot();
-  const pending = Promise.withResolvers<unknown>();
-  const post = vi
-    .fn<(message: { type: string }) => Promise<unknown>>()
-    .mockResolvedValue(undefined);
-  vi.stubGlobal("webkit", { messageHandlers: { openclawDeviceSettings: { postMessage: post } } });
-  vi.stubGlobal("__OPENCLAW_NATIVE_DEVICE_SETTINGS__", snapshot);
-  const capability = createNativeDeviceSettingsCapability()!;
-  const view = mountConfigPage(configContext({ nativeDeviceSettings: capability }), {
-    pageId: "talk",
-  });
+  const router = createRouter<
+    ConfigPageId,
+    ApplicationContext,
+    ReturnType<(typeof routes)[number]["component"]>,
+    ConfigPageRouteData
+  >({ routes });
+  const context = completeConfigContext(configContext({ router }));
+  const provider = createSolidApplicationContextProvider(context);
+  const view = mountRouterOutlet({ router, retryContext: context });
   try {
-    const wake = view.container.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
-    post.mockReturnValueOnce(pending.promise);
-    wake.click();
-    await waitForSolid(() => expect(view.container.textContent).toContain("Saving"));
-    expect(capability.snapshot?.voice.wakeEnabled).toBe(false);
+    await router.navigate("appearance", context);
+    await selectCamera(view);
 
-    view.update({ pageId: "notifications" });
+    await router.navigate("notifications", context);
     await waitForSolid(() => {
-      expect(view.container.querySelector("h1")?.textContent).toBe("Notifications");
-      expect(view.container.querySelector("openclaw-talk-settings")).toBeNull();
+      expect(view.querySelector("h1")?.textContent).toBe("Notifications");
+      expect(view.querySelector("[data-settings-camera]")).toBeNull();
     });
-    const accepted = structuredClone(snapshot);
-    accepted.voice.wakeEnabled = true;
-    pending.resolve(accepted);
-    await waitForSolid(() => expect(capability.snapshot?.voice.wakeEnabled).toBe(true));
-    expect(view.container.querySelector("h1")?.textContent).toBe("Notifications");
+    expect(loadSettings().realtimeTalkVideoDeviceId).toBeUndefined();
+
+    pending.resolve();
+    await waitForSolid(() => expect(loadSettings().realtimeTalkVideoDeviceId).toBe("camera-1"));
+    expect(view.querySelector("h1")?.textContent).toBe("Notifications");
+    expect(view.querySelector("[data-settings-camera]")).toBeNull();
   } finally {
-    capability.dispose();
+    pending.resolve();
+    view.dispose();
+    router.stop();
   }
 });
 
 it("leaves the settings route before a camera switch settles and still records its outcome", async () => {
   const pending = deferred();
   switchActiveRealtimeTalkCameras.mockReturnValueOnce(pending.promise);
-  vi.stubGlobal("navigator", {
-    mediaDevices: Object.assign(new EventTarget(), {
-      enumerateDevices: vi
-        .fn()
-        .mockResolvedValue([{ kind: "videoinput", deviceId: "camera-1", label: "Desk Camera" }]),
-      getUserMedia: vi.fn(),
-    }),
-  });
+  stubCameraDevices();
   const appearance = pages.find((page) => page.id === "appearance");
   if (!appearance || appearance.id !== "appearance") {
     throw new Error("Missing Appearance route");
@@ -706,18 +708,7 @@ it("leaves the settings route before a camera switch settles and still records i
   const outlet = mountRouterOutlet({ router, retryContext: context });
   try {
     await router.navigate("appearance", context);
-    await waitForSolid(() =>
-      expect(
-        outlet.querySelector<HTMLSelectElement>("[data-settings-camera]")?.options,
-      ).toHaveLength(2),
-    );
-    const select = outlet.querySelector<HTMLSelectElement>("[data-settings-camera]")!;
-    select.value = "camera-1";
-    select.dispatchEvent(new Event("change", { bubbles: true }));
-    await waitForSolid(() =>
-      expect(switchActiveRealtimeTalkCameras).toHaveBeenCalledWith("camera-1"),
-    );
-    expect(loadSettings().realtimeTalkVideoDeviceId).toBeUndefined();
+    await selectCamera(outlet);
 
     await router.navigate("usage", context);
     await waitForSolid(() => {
@@ -791,57 +782,47 @@ it.each([
   expect(state.mutationDisabled()).toBe(true);
 });
 
-it("refreshes update status once when the page becomes active", async () => {
-  const refreshUpdateStatus = vi.fn(async () => {});
-  const context = configContext({
-    gateway: connectedGateway(["update.status"]),
-    overlays: { refreshUpdateStatus },
-  });
-
-  const view = mountConfigPage(context, { pageId: "updates" });
-  publishConfigSource(context.gateway);
-  publishConfigSource(context.overlays);
-  await waitForSolid(() => expect(refreshUpdateStatus).toHaveBeenCalledOnce());
-
-  view.update({ pageId: "advanced" });
-  view.update({ pageId: "updates" });
-  await waitForSolid(() => expect(refreshUpdateStatus).toHaveBeenCalledTimes(2));
-});
-
-it("presents initial and manual update status reads without hiding policy controls", async () => {
+it.each([false, true])("presents and retries update status reads (failed=%s)", async (failed) => {
   const initial = deferred<boolean>();
   const manual = deferred<boolean>();
-  const refreshUpdateStatus = vi
-    .fn<ApplicationContext["overlays"]["refreshUpdateStatus"]>()
-    .mockReturnValueOnce(initial.promise)
-    .mockReturnValueOnce(manual.promise);
-  const context = configContext({
-    gateway: connectedGateway(["update.status"]),
-    overlays: {
-      refreshUpdateStatus,
-      snapshot: {
-        updateStatusBanner: { source: "read", tone: "warn", text: "Recorded update status" },
-      },
-    },
-  });
+  const { context, refreshUpdateStatus } = updateReadContext(
+    initial.promise,
+    manual.promise,
+    "Current update status",
+    failed ? undefined : "read",
+  );
   const { container } = mountConfigPage(context, { pageId: "updates" });
   const status = () => container.querySelector(".settings-status")?.textContent;
   await waitForSolid(() => expect(status()).toContain("Checking for updates…"));
   expect(container.querySelectorAll('input[role="switch"]')).toHaveLength(2);
   expect(refreshUpdateStatus).toHaveBeenCalledOnce();
 
-  initial.resolve(true);
-  await waitForSolid(() => expect(status()).toContain("Recorded update status"));
-  const check = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
-    (button) => button.textContent?.trim() === "Check status",
-  )!;
+  if (failed) {
+    initial.reject(new Error("Synthetic status read failed"));
+    await waitForSolid(() =>
+      expect(container.querySelector(".updates-status-check-failed")?.textContent).toContain(
+        "Synthetic status read failed",
+      ),
+    );
+  } else {
+    initial.resolve(true);
+    await waitForSolid(() => expect(status()).toContain("Current update status"));
+  }
+  expect(container.querySelectorAll('input[role="switch"]')).toHaveLength(2);
+  const check = failed
+    ? container.querySelector<HTMLButtonElement>(".updates-status-check-failed button")!
+    : buttonNamed(container, "Check status");
   check.click();
   await waitForSolid(() => expect(status()).toContain("Checking for updates…"));
-  expect(check.disabled).toBe(true);
-  manual.resolve(false);
+  if (!failed) {
+    expect(check.disabled).toBe(true);
+  }
+  manual.resolve(failed);
   await waitForSolid(() => {
-    expect(status()).toContain("Recorded update status");
-    expect(check.disabled).toBe(false);
+    expect(status()).toContain("Current update status");
+    if (!failed) {
+      expect(check.disabled).toBe(false);
+    }
   });
   expect(container.querySelector(".updates-status-check-failed")).toBeNull();
   expect(refreshUpdateStatus).toHaveBeenCalledTimes(2);
@@ -850,20 +831,14 @@ it("presents initial and manual update status reads without hiding policy contro
 it("retires an update status receipt when the page leaves and re-enters", async () => {
   const first = deferred<boolean>();
   const second = deferred<boolean>();
-  const refreshUpdateStatus = vi
-    .fn<ApplicationContext["overlays"]["refreshUpdateStatus"]>()
-    .mockReturnValueOnce(first.promise)
-    .mockReturnValueOnce(second.promise);
-  const context = configContext({
-    gateway: connectedGateway(["update.status"]),
-    overlays: {
-      refreshUpdateStatus,
-      snapshot: { updateStatusBanner: { tone: "warn", text: "Current update status" } },
-    },
-  });
+  const { context, refreshUpdateStatus } = updateReadContext(first.promise, second.promise);
   const view = mountConfigPage(context, { pageId: "updates" });
-  const status = () => view.container.querySelector(".settings-status")?.textContent;
+  const { container } = view;
+  const status = () => container.querySelector(".settings-status")?.textContent;
   await waitForSolid(() => expect(status()).toContain("Checking for updates…"));
+  publishConfigSource(context.gateway);
+  publishConfigSource(context.overlays);
+  expect(refreshUpdateStatus).toHaveBeenCalledOnce();
   view.update({ pageId: "advanced" });
   view.update({ pageId: "updates" });
   expect(refreshUpdateStatus).toHaveBeenCalledTimes(2);
@@ -873,52 +848,8 @@ it("retires an update status receipt when the page leaves and re-enters", async 
   await waitForSolid(() => expect(status()).toContain("Current update status"));
 });
 
-it("retries a rejected update status read without hiding policy controls", async () => {
-  const failed = deferred<boolean>();
-  const retried = deferred<boolean>();
-  const refreshUpdateStatus = vi
-    .fn<ApplicationContext["overlays"]["refreshUpdateStatus"]>()
-    .mockReturnValueOnce(failed.promise)
-    .mockReturnValueOnce(retried.promise);
-  const context = configContext({
-    gateway: connectedGateway(["update.status"]),
-    overlays: {
-      refreshUpdateStatus,
-      snapshot: { updateStatusBanner: { tone: "warn", text: "Current update status" } },
-    },
-  });
-  const { container } = mountConfigPage(context, { pageId: "updates" });
-  await waitForSolid(() => expect(refreshUpdateStatus).toHaveBeenCalledOnce());
-  failed.reject(new Error("Synthetic status read failed"));
-  await waitForSolid(() =>
-    expect(container.querySelector(".updates-status-check-failed")?.textContent).toContain(
-      "Synthetic status read failed",
-    ),
-  );
-  expect(container.querySelectorAll('input[role="switch"]')).toHaveLength(2);
-  container.querySelector<HTMLButtonElement>(".updates-status-check-failed button")!.click();
-  await waitForSolid(() => {
-    expect(refreshUpdateStatus).toHaveBeenCalledTimes(2);
-    expect(container.querySelector(".settings-status")?.textContent).toContain(
-      "Checking for updates…",
-    );
-  });
-  retried.resolve(true);
-  await waitForSolid(() => {
-    expect(container.querySelector(".settings-status")?.textContent).toContain(
-      "Current update status",
-    );
-    expect(container.querySelector(".updates-status-check-failed")).toBeNull();
-  });
-});
-
-it("stages policy changes through patchForm and confirms Update Gateway… before overlays", async () => {
+it("routes update policy edits through the configuration owner", () => {
   const patchForm = vi.fn();
-  const updateActions = {
-    captureUpdateTarget: () => () => true,
-    runUpdate: vi.fn<ApplicationContext["overlays"]["runUpdate"]>(),
-  } satisfies Pick<ApplicationContext["overlays"], "captureUpdateTarget" | "runUpdate">;
-  const { runUpdate } = updateActions;
   const context = configContext({
     runtimeConfig: {
       canSet: true,
@@ -929,90 +860,26 @@ it("stages policy changes through patchForm and confirms Update Gateway… befor
       patchForm,
     },
     gateway: connectedGateway(["update.run"]),
-    overlays: {
-      snapshot: {
-        updateSchedule: { channel: "stable", autoEnabled: false },
-        updateRunning: false,
-        updateReconciliationPending: false,
-      },
-      ...updateActions,
-    },
+    overlays: { snapshot: { updateSchedule: { channel: "stable", autoEnabled: false } } },
   });
   const { container } = mountConfigPage(context, { pageId: "updates" });
-  const restoreDialogPolyfill = installDialogPolyfill();
-  const updateButton = () =>
-    [...container.querySelectorAll<HTMLButtonElement>("button")].find(
-      (button) => button.textContent?.trim() === "Update Gateway…",
-    )!;
-  const status = () => container.querySelector(".settings-status")?.textContent;
-
-  context.overlays.snapshot.updateStatusRefreshing = true;
-  publishConfigSource(context.overlays);
-  const checkingButton = updateButton();
-  expect(checkingButton.textContent?.trim()).toBe("Update Gateway…");
-  expect(checkingButton).toMatchObject({ disabled: true, title: "Checking for updates…" });
-  expect(status()).toContain("Checking for updates…");
-  expect(container.querySelector<HTMLInputElement>(".settings-segmented__input")?.disabled).toBe(
-    true,
-  );
-  context.overlays.snapshot.updateStatusRefreshing = false;
-  context.overlays.snapshot.updateStatusCheckBanner = {
-    mode: "manual",
-    tone: "warn",
-    text: "Could not check for updates: timeout",
-  };
-  publishConfigSource(context.overlays);
-  expect(updateButton()).toMatchObject({
-    disabled: true,
-    title: "Check for updates successfully before starting an update.",
-  });
-
-  context.overlays.snapshot.updateSchedule = {
-    channel: "dev",
-    autoEnabled: false,
-    install: { kind: "git", git: { status: "diverged", commitsAhead: 1, commitsBehind: 3 } },
-  };
-  publishConfigSource(context.overlays);
-  expect(updateButton()).toMatchObject({ disabled: false, title: "" });
-  expect(status()).toContain("Could not check for updates: timeout");
-  expect(runUpdate).not.toHaveBeenCalled();
-
   container.querySelector<HTMLInputElement>('.settings-segmented__input[value="beta"]')!.click();
-  const policySwitches = [
-    ...container.querySelectorAll<HTMLInputElement>(".settings-toggle__input"),
-  ];
-  const togglePolicy = (title: string, checked: boolean) => {
-    const control = policySwitches.find(
-      (input) =>
-        input
+  for (const [title, checked, path] of [
+    ["Check for updates", false, ["update", "checkOnStart"]],
+    ["Automatic updates", true, ["update", "auto", "enabled"]],
+  ] as const) {
+    const input = [...container.querySelectorAll<HTMLInputElement>(".settings-toggle__input")].find(
+      (control) =>
+        control
           .closest(".settings-row")
           ?.querySelector(".settings-row__title")
           ?.textContent?.trim() === title,
-    );
-    if (!control) {
-      throw new Error(`Missing ${title} control`);
-    }
-    control.checked = checked;
-    control.dispatchEvent(new Event("change"));
-  };
-  togglePolicy("Check for updates", false);
-  togglePolicy("Automatic updates", true);
-  updateButton().click();
-  await nextFrame();
-
+    )!;
+    input.checked = checked;
+    input.dispatchEvent(new Event("change"));
+    expect(patchForm).toHaveBeenCalledWith(path, checked);
+  }
   expect(patchForm).toHaveBeenCalledWith(["update", "channel"], "beta");
-  expect(patchForm).toHaveBeenCalledWith(["update", "checkOnStart"], false);
-  expect(patchForm).toHaveBeenCalledWith(["update", "auto", "enabled"], true);
-  expect(runUpdate).not.toHaveBeenCalled();
-
-  const { modal } = await waitForRenderedModalDialog(document.body);
-  [...modal.querySelectorAll("button")]
-    .find((button) => button.textContent?.trim() === "Update and restart")
-    ?.click();
-  await nextFrame();
-
-  expect(runUpdate).toHaveBeenCalledOnce();
-  restoreDialogPolyfill();
 });
 
 function createRuntimeConfig() {

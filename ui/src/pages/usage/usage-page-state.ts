@@ -1,7 +1,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { createStore, onCleanup } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { CostUsageSummary, SessionsUsageResult } from "../../api/types.ts";
+import type { SessionsUsageResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context-types.ts";
 import { watchAgentScope } from "../../lib/agents/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -15,26 +15,23 @@ import { projectMutableSource } from "../../lib/reactive/projection.ts";
 import type { SessionUsageQuery } from "../../lib/sessions/usage.ts";
 import { isUsageCacheIncomplete, resolveUsagePublication } from "./cache-status.ts";
 import { createUsageExportRequest } from "./export.ts";
-import { createDefaultUsageDateRange, toggleUsageRangeSelection } from "./helpers.ts";
+import {
+  createDefaultUsageDateRange,
+  DEFAULT_USAGE_SESSION_SORT,
+  toggleUsageRangeSelection,
+} from "./helpers.ts";
 import { createProviderUsageLoader } from "./provider-usage-load.ts";
 import { UsageRefreshPolicy } from "./refresh-policy.ts";
 import { requestUsageSnapshot } from "./request-usage-snapshot.ts";
 import { createUsageDetails } from "./usage-details.ts";
 import type {
   UsageDetailPresentation,
+  UsagePresentation,
   UsageDisplayState,
   UsageFilterState,
   UsageRouteData,
   UsageSessionEntry,
 } from "./usage-state-types.ts";
-
-type UsagePresentation = {
-  display: Pick<
-    UsageDisplayState,
-    "chartMode" | "dailyChartMode" | "contextExpanded" | "headerPinned"
-  >;
-  detail: UsageDetailPresentation;
-};
 
 export function createUsagePage(context: ApplicationContext) {
   let publish = () => {};
@@ -43,7 +40,6 @@ export function createUsagePage(context: ApplicationContext) {
   let usageSnapshot: {
     query: SessionUsageQuery;
     result: SessionsUsageResult | null;
-    costSummary: CostUsageSummary | null;
   } | null = null;
   let usageError: string | null = null;
   let sessionLoadedAtMs: number | null = null;
@@ -59,15 +55,15 @@ export function createUsagePage(context: ApplicationContext) {
   };
   // Sorting and recent selection belong to the next request, before Solid commits.
   let display: Omit<UsageDisplayState, keyof UsagePresentation["display"]> = {
-    sessionSort: "recent",
-    sessionSortDir: "desc",
+    sessionSort: DEFAULT_USAGE_SESSION_SORT.sort,
+    sessionSortDir: DEFAULT_USAGE_SESSION_SORT.sortDirection,
     recentSessions: [],
     sessionsTab: "all",
   };
   const [presentation, setPresentation] = createStore<UsagePresentation>({
     display: {
       chartMode: "tokens",
-      dailyChartMode: "by-type",
+      dailyChartMode: "by-provider",
       contextExpanded: false,
       headerPinned: false,
     },
@@ -162,12 +158,11 @@ export function createUsagePage(context: ApplicationContext) {
       const snapshot = value.snapshot;
       const current = isCurrentQuery(value.query);
       if (current && snapshot.ok) {
-        const result = snapshot.value.result;
+        const result = snapshot.value;
         const refreshSummary = usageSnapshot?.result?.updatedAt !== result.updatedAt;
         usageSnapshot = {
           query: value.query,
           result,
-          costSummary: snapshot.value.costSummary,
         };
         usageError = null;
         const sessionKey =
@@ -250,7 +245,6 @@ export function createUsagePage(context: ApplicationContext) {
     usageSnapshot = {
       query: currentQuery(),
       result: data.result,
-      costSummary: data.costSummary,
     };
     markUsageLoaded(connectionEpoch, data.loadedAtMs);
     void providerUsage.load();
@@ -375,10 +369,10 @@ export function createUsagePage(context: ApplicationContext) {
     return usageSnapshot && isCurrentQuery(usageSnapshot.query) ? usageSnapshot.result : null;
   }
 
-  function usageCalendarSummary(): CostUsageSummary | null {
+  function usageCalendarSummary(): SessionsUsageResult | null {
     // Day selection changes totals, but the same calendar remains available for Shift-click.
     return usageSnapshot && isCurrentQuery(usageSnapshot.query, "calendar")
-      ? usageSnapshot.costSummary
+      ? usageSnapshot.result
       : null;
   }
 
@@ -530,7 +524,8 @@ export function createUsagePage(context: ApplicationContext) {
         loading: usageLoading(),
         read: !routeDataInitialized ? routeRead.promise : (dateRead?.promise ?? usageRequest.read),
         exporting: usageExportRequest.pending,
-        error: usageError ?? usageResult()?.partial?.message ?? null,
+        error: usageError,
+        partialNotice: usageResult()?.partial?.message ?? null,
         sessions: usageRosterResult()?.sessions ?? [],
         sessionPage: usageRosterResult()?.overview,
         creatorOptions: usageCreatorOptions(),
@@ -538,7 +533,7 @@ export function createUsagePage(context: ApplicationContext) {
         selectedSession: details.session.data ?? selectedSession,
         totals: usageResult()?.totals ?? null,
         aggregates: usageResult()?.aggregates ?? null,
-        costDaily: usageCalendarSummary()?.daily ?? [],
+        costDaily: usageCalendarSummary()?.aggregates.costDaily ?? [],
         cacheRefresh: usageCacheIncomplete()
           ? usageRefreshFailed()
             ? ("failed" as const)
@@ -554,16 +549,13 @@ export function createUsagePage(context: ApplicationContext) {
       detail: {
         context: {
           weight: details.session.data?.contextWeight,
-          loading: details.session.loading,
           read: details.session.read,
           status: details.session.status,
         },
         timeSeries,
-        timeSeriesLoading: details.timeSeries.loading,
         timeSeriesRead: details.timeSeries.read,
         timeSeriesStatus: details.timeSeries.status,
         sessionLogs: details.sessionLogs.data,
-        sessionLogsLoading: details.sessionLogs.loading,
         sessionLogsRead: details.sessionLogs.read,
         sessionLogsStatus: details.sessionLogs.status,
       },

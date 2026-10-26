@@ -294,13 +294,20 @@ async function finalizeLineInboundContext<Event extends MessageEvent | PostbackE
   commandBody?: string;
   messageSid: string;
   commandAuthorized: boolean;
-  channelIngress?: ResolvedChannelMessageIngress;
+  resolveChannelIngress?: BuildLineMessageContextParams["resolveChannelIngress"];
   media: readonly ChannelInboundMediaInput[];
   locationContext?: ReturnType<typeof toLocationContext>;
   inboundHistory?: Pick<HistoryEntry, "sender" | "body" | "timestamp">[];
   mentions?: LineInboundMentionAccess;
   buildContext?: typeof buildChannelInboundEventContext;
 }) {
+  // Conversation bindings can replace the base route; bind only to the final route.
+  const channelIngress = await params.resolveChannelIngress?.({
+    agentId: params.route.agentId,
+    sessionKey: params.route.sessionKey,
+    messageId: params.messageSid,
+    inboundEventKind: "user_request",
+  });
   const senderId = params.source.userId ?? "unknown";
   const clientOpts = {
     cfg: params.cfg,
@@ -368,7 +375,7 @@ async function finalizeLineInboundContext<Event extends MessageEvent | PostbackE
   });
 
   const ctxPayload = (params.buildContext ?? buildChannelInboundEventContext)({
-    channelIngress: params.channelIngress,
+    channelIngress,
     channel: "line",
     accountId: params.route.accountId,
     messageId: params.messageSid,
@@ -549,13 +556,7 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
     mentions: params.mentions,
     messageSid: messageId,
     commandAuthorized,
-    // Conversation bindings can replace the base route; bind only to the final route.
-    channelIngress: await params.resolveChannelIngress?.({
-      agentId: route.agentId,
-      sessionKey: route.sessionKey,
-      messageId,
-      inboundEventKind: "user_request",
-    }),
+    resolveChannelIngress: params.resolveChannelIngress,
     buildContext: params.buildContext,
     media: mediaFacts,
     locationContext,
@@ -615,12 +616,7 @@ export async function buildLinePostbackContext(params: {
     agentBody,
     messageSid,
     commandAuthorized,
-    channelIngress: await params.resolveChannelIngress?.({
-      agentId: route.agentId,
-      sessionKey: route.sessionKey,
-      messageId: messageSid,
-      inboundEventKind: "user_request",
-    }),
+    resolveChannelIngress: params.resolveChannelIngress,
     buildContext: params.buildContext,
     media: [],
   });

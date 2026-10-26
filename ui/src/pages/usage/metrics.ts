@@ -12,12 +12,9 @@ registerUsageEnglish();
 
 const CHARS_PER_TOKEN = 4;
 const DAY_MS = 86_400_000;
-
-type UsageCostWindowSummary = {
-  days: number;
-  endDate: string;
-  totals: UsageTotals;
-};
+// These labels use the host realm's default locale, independently of the UI language.
+let dayLabelFormatter: Intl.DateTimeFormat | undefined;
+let fullDateFormatter: Intl.DateTimeFormat | undefined;
 
 function charsToTokens(chars: number): number {
   return Math.round(chars / CHARS_PER_TOKEN);
@@ -38,7 +35,11 @@ function formatUsageTokens(n: number, report?: UsageTotals["usageReport"]): stri
 // Usage charts choose fixed precision from the surrounding scale; the shared
 // adaptive cost formatter would change labels as values cross its thresholds.
 function formatUsageCost(n: number, decimals = 2, report?: UsageTotals["usageReport"]): string {
-  return atLeast(`$${n.toFixed(decimals)}`, report);
+  const amount = n.toLocaleString("en-US", {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  });
+  return atLeast(`$${amount}`, report);
 }
 
 export function formatAnalysisCost(value: number, report?: UsageTotals["usageReport"]): string {
@@ -67,7 +68,8 @@ function buildPeakErrorHours(hourMsgs: number[], hourErrors: number[]) {
     .map((entry) => ({
       label: formatHourLabel(entry.hour),
       value: `${(entry.rate * 100).toFixed(2)}%`,
-      sub: `${Math.round(entry.errors)} ${normalizeLowercaseStringOrEmpty(t("usage.overview.errors"))} · ${Math.round(entry.msgs)} ${t("usage.overview.messagesAbbrev")}`,
+      weight: entry.rate,
+      sub: `${Math.round(entry.errors).toLocaleString()} ${normalizeLowercaseStringOrEmpty(t("usage.overview.errors"))} · ${Math.round(entry.msgs).toLocaleString()} ${t("usage.overview.messagesAbbrev")}`,
     }));
 }
 
@@ -91,23 +93,41 @@ function parseIsoDayIndex(dateStr: string): number | null {
 }
 
 function formatDayLabel(dateStr: string): string {
-  return formatCalendarDate(dateStr, { month: "short", day: "numeric" });
+  const date = parseYmdDate(dateStr);
+  if (!date) {
+    return dateStr;
+  }
+  dayLabelFormatter ??= new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  });
+  return dayLabelFormatter.format(date);
 }
 
 function formatFullDate(dateStr: string): string {
-  return formatCalendarDate(dateStr, { month: "long", day: "numeric", year: "numeric" });
-}
-
-function formatCalendarDate(dateStr: string, options: Intl.DateTimeFormatOptions): string {
   const date = parseYmdDate(dateStr);
-  return date ? date.toLocaleDateString(undefined, { ...options, timeZone: "UTC" }) : dateStr;
+  if (!date) {
+    return dateStr;
+  }
+  fullDateFormatter ??= new Intl.DateTimeFormat(undefined, {
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+  return fullDateFormatter.format(date);
 }
 
 function buildUsageCostWindows(
   daily: Array<UsageTotals & { date: string }>,
   rangeStartDate: string,
   rangeEndDate: string,
-): UsageCostWindowSummary[] {
+): {
+  days: number;
+  endDate: string;
+  totals: UsageTotals;
+}[] {
   const rangeStartDay = parseIsoDayIndex(rangeStartDate);
   const rangeEndDay = parseIsoDayIndex(rangeEndDate);
   if (rangeStartDay === null || rangeEndDay === null || rangeStartDay > rangeEndDay) {

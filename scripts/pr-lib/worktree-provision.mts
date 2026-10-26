@@ -137,7 +137,11 @@ async function preparePrStateSchema(
     preserveSourceArtifacts: false,
   });
   assertCurrent();
-  const migration = preflight.pendingMigrations?.find(({ kind }) => kind === "state");
+  // An unclassified store is never assumed current: guarded preparation re-inspects it
+  // instead of leaving a pending migration to the uncaptured lease open.
+  const migration =
+    preflight.pendingMigrations?.find(({ kind }) => kind === "state") ??
+    preflight.indeterminate.find(({ kind }) => kind === "state");
   // Missing/current stores keep ordinary allocation concurrency and admission.
   if (!migration) {
     return;
@@ -236,7 +240,12 @@ async function provisionPrWorktree(params: ProvisionParams): Promise<void> {
     params.signal,
   );
   await withWorktreeAllocationLease(
-    { env: storageEnv, signal: params.signal, commitGuard: assertPrAuthority },
+    {
+      env: storageEnv,
+      signal: params.signal,
+      commitGuard: assertPrAuthority,
+      rollbackGuard: assertPrAuthority,
+    },
     async (guard) => {
       const assertCurrent = () => {
         guard.signal?.throwIfAborted();

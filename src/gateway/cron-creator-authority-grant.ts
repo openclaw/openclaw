@@ -32,6 +32,7 @@ export const CRON_MANAGEMENT_METHODS = [
   "cron.update",
   "cron.run",
   "cron.remove",
+  "cron.bind",
 ] as const;
 type CronManagementBinding = { method: string; authority: AgentRunDelegatedAuthority };
 type CronManagementCaller = {

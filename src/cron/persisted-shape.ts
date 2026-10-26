@@ -4,6 +4,8 @@ import {
   MAX_DATE_TIMESTAMP_MS,
 } from "@openclaw/normalization-core/number-coercion";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
+import { Value } from "typebox/value";
+import { AutomationLastMeaningfulResultSchema } from "../../packages/gateway-protocol/src/schema/cron-automation-result.js";
 import { compileSafeRegex } from "../security/safe-regex.js";
 import { assertCronActiveHours } from "./active-hours.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
@@ -52,6 +54,11 @@ export function assertCronJobStateTimestamps(state: Partial<CronJobState>): void
       "cron state.pluginCommandRuns is private launch accounting and cannot be authored",
     );
   }
+  if (Object.hasOwn(state, "pluginCommandBinding")) {
+    throw new Error(
+      "cron state.pluginCommandBinding is private restart continuity and cannot be authored",
+    );
+  }
   const invalidField = getInvalidCronJobStateTimestampField(state);
   if (invalidField) {
     throw new Error(
@@ -80,6 +87,13 @@ export function getInvalidPersistedCronJobReason(
   const id = candidate.id;
   if (typeof id !== "string" || !id.trim()) {
     return "missing-id";
+  }
+  const lastMeaningfulResult = asRecord(candidate.state).lastMeaningfulResult;
+  if (
+    lastMeaningfulResult !== undefined &&
+    !Value.Check(AutomationLastMeaningfulResultSchema, lastMeaningfulResult)
+  ) {
+    return "invalid-state";
   }
   if (getInvalidCronJobStateTimestampField(candidate.state)) {
     return "invalid-state";

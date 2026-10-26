@@ -42,7 +42,8 @@ dreaming consolidation sidecar:
   index. `--json` returns
   `[{"agentId","provider","health","memoryCore":"consolidation-sidecar"}]`.
   `--deep`, `--index`, and `--fix` exit with code 1 because they inspect
-  Memory Core's own index.
+  Memory Core's own index. With `--json`, these refusals return the standard
+  [CLI JSON failure envelope](/cli#json-failures).
 - `memory search` exits with code 1 and names the slot owner instead of
   searching the sidecar index.
 - `index`, `reset`, `forget`, `promote`, and the REM commands keep working on
@@ -90,6 +91,13 @@ configured, falls back to the default agent.
 
 With local llama.cpp embeddings, `--deep` and `--index` also show available
 server, model, capability, and endpoint diagnostics.
+
+In the Control UI, **Memory → Overview → Test** checks embedding readiness on
+demand. The Gateway reuses the result for 30 seconds, including across page
+reloads. After it expires, **No recent check** means readiness needs a fresh
+check, not that embeddings have failed. Reloading the page does not probe the
+provider. CLI `memory status --deep` runs in a separate process and does not
+refresh the Gateway's readiness cache.
 
 Repair preserves recorded recall days, including local dates that differ from
 UTC. It fills in a day from the last recall timestamp only when no day is recorded.
@@ -145,6 +153,7 @@ stale index records without `--force` or re-embedding unchanged conversations.
 Historical transcripts without a recognizable helper identity remain eligible.
 
 Full rebuilds wait for temporary database cleanup before reporting completion.
+Searches remain available against the published index while a rebuild finishes.
 File removal runs asynchronously so cleanup does not block the Gateway event loop.
 SQLite background rebuilds retain completed work when foreground activity interrupts
 indexing. The next sync resumes the rebuild, incorporating source changes before
@@ -249,6 +258,10 @@ openclaw memory search [query] [--query <text>] [--agent <id>] [--max-results <n
 - `--min-score <n>`: filter out matches below this score.
 
 Routine indexing can continue after search returns and does not add a warning.
+Standalone searches print results from the available index, then finish pending
+indexing before exiting so the next search can see file edits. When routed through
+the Gateway, results arrive before that indexing finishes; the Gateway keeps the
+request's resources alive until it settles.
 If automatic indexing failed, or the index identity is incompatible, human
 output warns that matches may be incomplete. With `--json`, the response adds
 `stale: true`, plus `warning` and `action` fields. Treat an empty `results`

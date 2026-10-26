@@ -17,10 +17,10 @@ import {
   resultDetails,
   testing,
   waitUntilCompleted,
-  fakeTool,
   runUntilCompleted,
 } from "./code-mode.test-support.js";
 import { projectMcpCallToolResult } from "./mcp-content.js";
+import { fakeTool } from "./test-helpers/fake-tool.js";
 import {
   addClientToolsToToolCatalog,
   registerHeadlessToolSearchCatalog,

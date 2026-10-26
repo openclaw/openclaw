@@ -1,5 +1,5 @@
 import { describe, it } from "vitest";
-import { schemaValidation, withOverrides } from "./protocol-validation.test-support.js";
+import { schemaValidation } from "./protocol-validation.test-support.js";
 import {
   SessionGitHubConfirmParamsSchema,
   SessionGitHubOptionsResultSchema,
@@ -21,36 +21,40 @@ const selection = { source: "personal", generation: requestId, account };
 const sessionKey = "agent:main:publication";
 const emptyOptions = { personal: null, shared: null, pendingPersonal: null, latestShared: null };
 const request = (operation: string) => ({ sessionKey, action: operation });
+const foreignTarget = {
+  publishingSessionKey: "other",
+  repository: "other/repo",
+  url: "https://github.com/other/repo/pull/1",
+};
+function rejectsAction(base: object, fields: Record<string, unknown>) {
+  for (const [key, value] of Object.entries(fields)) {
+    action.rejects(Object.assign({}, base, { [key]: value }));
+  }
+}
 
 describe("session GitHub publication protocol", () => {
   it("binds review requests to the current PR without freeform text", () => {
     const review = { ...request("request_review"), requestId, expectedHeadCommit: head };
     action.accepts(review, { ...review, requestId: undefined });
-    action.rejects(
-      ...[
-        { body: "@clawsweeper stop" },
-        { focus: "maintainer instructions" },
-        { publishingSessionKey: "child" },
-        { repository: "other/repo" },
-        { url: "https://github.com/other/repo/pull/1" },
-        { mergeMethod: "squash" },
-        { expectedHeadCommit: undefined },
-      ].map(withOverrides(review)),
-    );
+    rejectsAction(review, {
+      ...foreignTarget,
+      body: "@clawsweeper stop",
+      focus: "maintainer instructions",
+      mergeMethod: "squash",
+      expectedHeadCommit: undefined,
+    });
   });
   it("bounds current-workspace refresh and conflict acknowledgment", () => {
     const refresh = request("refresh_base");
     action.accepts(refresh, { ...refresh, conflictsResolved: true, baseCommit: head });
-    action.rejects(
-      ...[
-        { repository: "other/repo" },
-        { ref: "main" },
-        { publishingSessionKey: "other" },
-        { requestId },
-        { mergeMethod: "merge" },
-        { baseCommit: "main" },
-      ].map(withOverrides(refresh)),
-    );
+    rejectsAction(refresh, {
+      repository: foreignTarget.repository,
+      ref: "main",
+      publishingSessionKey: "other",
+      requestId,
+      mergeMethod: "merge",
+      baseCommit: "main",
+    });
   });
   it("binds metadata edits without target or lifecycle selectors", () => {
     const edit = request("edit");
@@ -63,32 +67,26 @@ describe("session GitHub publication protocol", () => {
       requestId,
       expectedHeadCommit: head,
     });
-    action.rejects(
-      ...[
-        { publishingSessionKey: "other" },
-        { repository: "other/repo" },
-        { url: "https://github.com/other/repo/pull/1" },
-        { mergeMethod: "squash" },
-        { draft: false },
-        { state: "closed" },
-        { token: "synthetic" },
-        { conflictsResolved: true },
-        { body: "x".repeat(65537) },
-      ].map(withOverrides(edit)),
-    );
+    rejectsAction(edit, {
+      ...foreignTarget,
+      mergeMethod: "squash",
+      draft: false,
+      state: "closed",
+      token: "synthetic",
+      conflictsResolved: true,
+      body: "x".repeat(65537),
+    });
   });
   it("excludes arbitrary targets, credentials and auto-merge from PR actions", () => {
     const inspect = request("inspect");
     action.accepts(inspect);
-    action.rejects(
-      ...[
-        { action: "auto_merge" },
-        { url: "https://github.com/another/repository/pull/1" },
-        { token: "synthetic" },
-        { admin: true },
-        { mergeMethod: "admin" },
-      ].map(withOverrides(inspect)),
-    );
+    rejectsAction(inspect, {
+      action: "auto_merge",
+      url: foreignTarget.url,
+      token: "synthetic",
+      admin: true,
+      mergeMethod: "admin",
+    });
   });
   it("admits an explicit own-PR inspection URL without publication or authority fields", () => {
     const inspection = {
@@ -96,19 +94,17 @@ describe("session GitHub publication protocol", () => {
       pullRequestUrl: "https://github.com/example/repository/pull/1",
     };
     action.accepts(inspection);
-    action.rejects(
-      ...[
-        { pullRequestUrl: undefined },
-        { pullRequestUrl: "" },
-        { publishingSessionKey: "child" },
-        { expectedHeadCommit: head },
-        { requestId },
-        { title: "Write" },
-        { token: "synthetic" },
-        { profileId: "other" },
-        { mergeMethod: "merge" },
-      ].map(withOverrides(inspection)),
-    );
+    action.rejects({ ...inspection, pullRequestUrl: undefined });
+    rejectsAction(inspection, {
+      pullRequestUrl: "",
+      publishingSessionKey: "child",
+      expectedHeadCommit: head,
+      requestId,
+      title: "Write",
+      token: "synthetic",
+      profileId: "other",
+      mergeMethod: "merge",
+    });
   });
   it("accepts typed unavailability rather than arbitrary diagnostics", () => {
     options.accepts(

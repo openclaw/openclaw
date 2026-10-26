@@ -11,8 +11,8 @@ import {
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { MarkdownImageSpan as MarkdownImageMatch } from "../../packages/markdown-core/src/image-spans.js";
-import { findCodeRegions } from "../shared/text/code-regions.js";
-import { parseInlineDirectives } from "../utils/directive-tags.js";
+import { findCodeRegions } from "../shared/text/code-ranges.js";
+import { parseInlineDirectives } from "../utils/directive-tags-batch.js";
 import { parseInboundMediaUri } from "./inbound-media-uri.js";
 
 // A MEDIA directive consumes its entire line. Keep the optional leading backtick:
@@ -36,18 +36,6 @@ type ParsedMediaOutputSegment =
       type: "media";
       url: string;
     };
-
-type SplitMediaOutputOptions = {
-  extractAudioDirectives?: boolean;
-  extractMediaDirectives?: boolean;
-  preserveTrailingWhitespace?: boolean;
-  onAudioDirective?: () => void;
-};
-
-type MarkdownImageExtraction = {
-  scan: (text: string) => MarkdownImageMatch[];
-  allowlist?: readonly string[];
-};
 
 const FILE_URL_PREFIX_RE = /^file:(?:\/\/)?/i;
 
@@ -366,8 +354,16 @@ function removeMarkdownImageSpans(line: string, matches: MarkdownImageMatch[]): 
 /** Splits tool/stdout text into visible text, media attachments, voice tags, and ordered segments. */
 export function splitMediaOutput(
   raw: string,
-  options: SplitMediaOutputOptions = {},
-  imageExtraction?: MarkdownImageExtraction,
+  options: {
+    extractAudioDirectives?: boolean;
+    extractMediaDirectives?: boolean;
+    preserveTrailingWhitespace?: boolean;
+    onAudioDirective?: () => void;
+  } = {},
+  imageExtraction?: {
+    scan: (text: string) => MarkdownImageMatch[];
+    allowlist?: readonly string[];
+  },
 ): {
   text: string;
   mediaUrls?: string[];

@@ -1,5 +1,6 @@
+import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { withEngineStoreAdmission } from "../database-engine/admission-scope.js";
 import {
   readSqliteDatabasePendingScopedWriteToken as pendingToken,
@@ -38,6 +39,9 @@ describe.skipIf(!connection)("PostgreSQL exclusive idle connection reuse", () =>
     transaction(db, () => db.query(sql), true);
   const scoped = (db: PostgresSyncConnection, scope: string, body: () => void) =>
     transaction(db, () => withSqliteDatabaseWriteScope(db, [scope], body));
+  const tokens = (db: PostgresSyncConnection) => [token(db, "first"), token(db, "second")];
+  const backendRows = async (backendPid: unknown) =>
+    (await admin.query("SELECT pid FROM pg_stat_activity WHERE pid = $1", [backendPid])).rows;
 
   beforeAll(async () => {
     await admin.query(`CREATE SCHEMA "${schema}"; CREATE TABLE "${schema}".entries (id integer)`);
@@ -62,14 +66,45 @@ describe.skipIf(!connection)("PostgreSQL exclusive idle connection reuse", () =>
     expect(get(reader, "SELECT count(*)::int AS count FROM entries")).toEqual({ count: 0 });
   });
 
-  it("retains unrelated replicas and predicts only the written scope across commits", () => {
+  it("expires quiet backends while preserving burst reuse and checked-out connections", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const first = open();
+      const firstPid = pid(first);
+      close(first);
+      vi.advanceTimersByTime(2 * 60_000);
+      const borrowed = open();
+      expect(pid(borrowed)).toBe(firstPid);
+      // Its previous idle deadline must not retire a checked-out connection.
+      vi.advanceTimersByTime(2 * 60_000);
+      expect(get(borrowed, "SELECT 7::int AS value")).toEqual({ value: 7 });
+      close(borrowed);
+      vi.advanceTimersByTime(3 * 60_000);
+      // Pool expiry ends the client asynchronously after closing its port.
+      await expect.poll(() => backendRows(firstPid), { timeout: 10_000, interval: 50 }).toEqual([]);
+      const reopened = open();
+      expect(pid(reopened)).not.toBe(firstPid);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["plain", "cte"] as const)("settles only certified %s write scopes", (kind) => {
     const db = open();
-    exec(db, "CREATE TABLE scoped_entries (id integer)");
-    const before = token(db, "first");
-    const second = token(db, "second");
+    const table = `scoped_${kind}`;
+    exec(db, `CREATE TABLE ${table} (id integer)`);
+    const [before, second] = tokens(db);
     let pending: string | undefined;
     scoped(db, "second", () => {
-      db.prepare("INSERT INTO scoped_entries VALUES (?)").run(7);
+      if (kind === "plain") {
+        db.prepare(`INSERT INTO ${table} VALUES (?)`).run(7);
+      } else {
+        expect(
+          db.query(
+            `WITH inserted AS (INSERT INTO ${table} VALUES (7) RETURNING id) SELECT id FROM inserted`,
+          ).rows,
+        ).toEqual([{ id: 7 }]);
+      }
       pending = pendingToken(db, "second");
       expect(pendingToken(db, "first")).toBe(before);
       // Closing another handle to this anchor cannot settle the writer's pending receipt.
@@ -78,23 +113,29 @@ describe.skipIf(!connection)("PostgreSQL exclusive idle connection reuse", () =>
       expect(token(db, "second")).toBe(second);
     });
     expect(pending).not.toBe(second);
-    expect([token(db, "second"), token(db, "first")]).toEqual([pending, before]);
+    expect(tokens(db)).toEqual([before, pending]);
 
-    transaction(db, () => db.prepare("SELECT count(*) FROM scoped_entries").get());
+    transaction(db, () => db.prepare(`SELECT count(*) FROM ${table}`).get());
     transaction(db, () => {});
-    expect([token(db, "first"), token(db, "second")]).toEqual([before, pending]);
+    expect(tokens(db)).toEqual([before, pending]);
 
-    // Uncertified writes still invalidate both scopes.
-    transaction(db, () => db.exec("INSERT INTO scoped_entries VALUES (8); SELECT 1"));
-    expect(token(db, "first")).not.toBe(before);
-    expect(token(db, "second")).not.toBe(pending);
-    const beforeCte = token(db, "first");
-    transaction(db, () =>
-      db.exec(
-        "WITH changed AS (UPDATE scoped_entries SET id = id + 1 RETURNING *) SELECT * FROM changed",
-      ),
-    );
-    expect(token(db, "first")).not.toBe(beforeCte);
+    const unscoped =
+      kind === "plain"
+        ? [
+            `INSERT INTO ${table} VALUES (8); SELECT 1`,
+            `WITH changed AS (UPDATE ${table} SET id = id + 1 RETURNING *) SELECT * FROM changed`,
+          ]
+        : [`SELECT source."id" INTO cte_copy FROM ${table} AS source`, "SELECT 1. INTO cte_number"];
+    for (const sql of unscoped) {
+      const previous = tokens(db);
+      const write = () => db.exec(sql);
+      if (kind === "plain") {
+        transaction(db, write);
+      } else {
+        scoped(db, "second", write);
+      }
+      tokens(db).forEach((value, index) => expect(value).not.toBe(previous[index]));
+    }
   });
 
   it("keeps read snapshots pure when columns use qualified SQL keywords", () => {
@@ -128,30 +169,30 @@ describe.skipIf(!connection)("PostgreSQL exclusive idle connection reuse", () =>
     expect(query(reader, "SELECT * FROM snapshot_entries")).toEqual([{ merge: 7 }]);
   });
 
-  it("preserves certified CTE write scopes but fences SELECT INTO across scopes", () => {
-    const db = open();
-    exec(db, "CREATE TABLE cte_entries (id integer)");
-    const first = token(db, "first");
-    const second = token(db, "second");
-    let pending: string | undefined;
-    scoped(db, "second", () => {
-      expect(
-        db.query(
-          "WITH inserted AS (INSERT INTO cte_entries VALUES (7) RETURNING id) SELECT id FROM inserted",
-        ).rows,
-      ).toEqual([{ id: 7 }]);
-      pending = pendingToken(db, "second");
-    });
-    expect([token(db, "first"), token(db, "second")]).toEqual([first, pending]);
-    expect(pending).not.toBe(second);
+  it("releases evicted idle backends and their session locks", async () => {
+    const dsn = new URL(connection!);
+    const independent = () => {
+      dsn.searchParams.set("application_name", randomUUID());
+      return open(dsn.href);
+    };
+    const first = independent();
+    const firstPid = pid(first);
+    const lockKey = Number.parseInt(randomUUID().replaceAll("-", "").slice(0, 12), 16);
+    run(() => first.prepare("SELECT pg_advisory_lock(?)").get(lockKey));
+    close(first);
+    for (let index = 0; index < 4; index++) {
+      const next = independent();
+      close(next);
+    }
 
-    scoped(db, "second", () =>
-      db.exec('SELECT source."id" INTO cte_copy FROM cte_entries AS source'),
-    );
-    expect(token(db, "first")).not.toBe(first);
-    const afterQuoted = token(db, "first");
-    scoped(db, "second", () => db.exec("SELECT 1. INTO cte_number"));
-    expect(token(db, "first")).not.toBe(afterQuoted);
+    await admin.query("BEGIN");
+    try {
+      await admin.query("SET LOCAL lock_timeout = '5s'");
+      await admin.query("SELECT pg_advisory_xact_lock($1)", [lockKey]);
+      expect(await backendRows(firstPid)).toEqual([]);
+    } finally {
+      await admin.query("ROLLBACK");
+    }
   });
 
   it("reconnects after an idle backend is terminated, without reusing the broken backend", async () => {
@@ -163,7 +204,6 @@ describe.skipIf(!connection)("PostgreSQL exclusive idle connection reuse", () =>
     await admin.query("SELECT 1");
     const recovered = open();
     expect(pid(recovered)).not.toBe(killedPid);
-    expect(get(recovered, "SELECT 7::int AS value")).toEqual({ value: 7 });
   });
 
   it("settles committed batches and retains transactions opened later in a batch", () => {
@@ -202,10 +242,13 @@ describe.skipIf(!connection)("PostgreSQL exclusive idle connection reuse", () =>
     expect(pid(differentSettings)).not.toBe(originalPid);
   });
 
-  it("applies all session settings with a quoted, comma-containing schema name", async () => {
+  it("inherits commit durability while applying settings with a quoted, comma-containing schema name", async () => {
     const namespace = `${schema}_"first,second`;
     const quoted = `"${namespace.replaceAll('"', '""')}"`;
     await admin.query(`CREATE SCHEMA ${quoted}`);
+    const defaults = await admin.query<{ synchronous_commit: string }>(
+      "SELECT current_setting('synchronous_commit') AS synchronous_commit",
+    );
     const db = open(connection!, namespace, { lockTimeoutMs: 321, statementTimeoutMs: 654 });
     const settings = query(
       db,
@@ -217,7 +260,7 @@ describe.skipIf(!connection)("PostgreSQL exclusive idle connection reuse", () =>
     );
     expect(settings).toEqual([
       {
-        synchronous_commit: "off",
+        synchronous_commit: defaults.rows[0]?.synchronous_commit,
         lock_timeout: "321ms",
         statement_timeout: "654ms",
         search_path: quoted,

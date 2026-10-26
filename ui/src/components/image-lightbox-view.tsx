@@ -1,9 +1,21 @@
 import type { JSX } from "@solidjs/web";
-import { Errored, Loading, Show, action, createMemo, createOptimistic } from "solid-js";
-import { t } from "../lib/reactive/i18n.ts";
+import {
+  Errored,
+  Loading,
+  Show,
+  action,
+  createMemo,
+  createOptimistic,
+  createUniqueId,
+  omit,
+} from "solid-js";
+import { registerChatMediaEnglish } from "../i18n/locales/en-chat-media.ts";
+import { t, registerEnglishCatalog } from "../lib/reactive/i18n.ts";
 import { showToast } from "../lib/toast.ts";
 import type { ImageLightboxItem } from "./image-lightbox.types.ts";
 import { Icon } from "./solid/icon.tsx";
+
+registerEnglishCatalog(registerChatMediaEnglish);
 
 type FocusableRef = () => (element: HTMLElement) => void;
 
@@ -106,6 +118,23 @@ export function LightboxChrome(props: {
   );
 }
 
+export function LightboxImage(
+  props: JSX.ImgHTMLAttributes<HTMLImageElement> & { description?: string },
+) {
+  const descriptionId = createUniqueId();
+  const imageProps = omit(props, "description");
+  return (
+    <>
+      <img {...imageProps} aria-describedby={props.description ? descriptionId : undefined} />
+      <Show when={props.description}>
+        <p id={descriptionId} hidden>
+          {props.description}
+        </p>
+      </Show>
+    </>
+  );
+}
+
 function LightboxVideoOriginal(props: { focusableRef: FocusableRef; url: string }) {
   return (
     <openclaw-modal-actions class="lightbox-footer">
@@ -137,8 +166,8 @@ export function lightboxImageStyle(image: ImageLightboxItem | undefined) {
     typeof height === "number" &&
     Number.isFinite(height) &&
     height > 0
-    ? `width: min(${width}px, 100cqw, calc(100cqh * ${width / height}))`
-    : undefined;
+    ? { width: `min(${width}px, 100cqw, calc(100cqh * ${width / height}))` }
+    : { width: undefined };
 }
 
 function LightboxImageDownload(props: {

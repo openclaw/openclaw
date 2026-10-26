@@ -5,6 +5,7 @@ import { executeOpenClawStateWorker } from "../../state/openclaw-state-worker-st
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { makeCronJob } from "../delivery.test-helpers.js";
 import { currentPluginCommandHostProcessId } from "../plugin-command-schedule.js";
+import type { PluginCommandScheduleHost } from "../plugin-command-schedule.types.js";
 import { projectCronRunHistoryPage } from "../run-history.js";
 import { saveCronStore } from "../store.js";
 import type { CronJob, CronJobPatch } from "../types.js";
@@ -96,7 +97,12 @@ export async function queueStore(
     },
     request: (requests: QueueRequest[], nowMs = now) =>
       run("cron.requestRuns", { storeKey, nowMs, requests }),
-    drain: (requests: RequestContext[] = [], maxConcurrentRuns = 1, schedulingPaused = false) =>
+    drain: (
+      requests: RequestContext[] = [],
+      maxConcurrentRuns = 1,
+      schedulingPaused = false,
+      pluginCommandHosts?: PluginCommandScheduleHost[],
+    ) =>
       run("cron.drainQueue", {
         storeKey,
         nowMs: now + 1,
@@ -104,6 +110,7 @@ export async function queueStore(
         maxConcurrentRuns,
         schedulingPaused,
         hostProcessId: currentPluginCommandHostProcessId(),
+        pluginCommandHosts,
       }),
     cancel: (receiptIds: string[], status?: "skipped" | "superseded") =>
       run("cron.cancelRequests", {

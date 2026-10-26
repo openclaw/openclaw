@@ -26,7 +26,10 @@ import type {
   TranscriptWriteSnapshot,
 } from "./session-accessor.sqlite-contract.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
-import type { PreparedSessionTranscriptHydration as PreparedSessionTranscriptReload } from "./session-history-read.types.js";
+import type {
+  PreparedSessionTranscriptHydration as PreparedSessionTranscriptReload,
+  SessionTranscriptContextSelection,
+} from "./session-history-read.types.js";
 import type {
   SessionPendingInputWorkerFacts,
   SessionPendingInputWorkerReceipt,
@@ -38,7 +41,6 @@ import type {
 import type { InternalSessionEntry } from "./types.js";
 
 type MetadataTarget = Omit<SessionTranscriptWriteScope, "env"> & SessionTranscriptRuntimeTarget;
-type SessionManagerBoundedContextLimits = { maxBytes: number; maxEvents: number };
 
 /** Host metadata capability; SDK-visible admissions do not expose the actor's other domains. */
 export type SessionManagerIncognitoDatabase = {
@@ -179,7 +181,7 @@ export type SessionMetadataOperations = SessionMaintenanceOperations &
         options: Pick<TranscriptEventAppendOptions, "appendIntent" | "expectedMutationAt">;
         view?: {
           loadedVersion?: SessionTranscriptContextVersion;
-          limits?: SessionManagerBoundedContextLimits;
+          limits?: SessionTranscriptContextSelection;
           admission?: UserTurnTranscriptAdmissionReceipt;
           questionAnswers?: readonly UserTurnTranscriptAdmissionReceipt[];
         };

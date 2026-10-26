@@ -146,34 +146,6 @@ function canonicalizeInlineBase64Payload(value: string): string | undefined {
   return cleaned.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$/.test(cleaned) ? cleaned : undefined;
 }
 
-function decodeInlineDataImage(
-  src: string,
-  maxBytes: number,
-  totalBytes: number,
-): { data: Buffer; contentType: string; estimatedBytes: number } | null {
-  const match = /^data:(image\/[a-z0-9.+-]+)?(;base64)?,(.*)$/i.exec(src);
-  if (!match) {
-    return null;
-  }
-  const contentType = normalizeLowercaseStringOrEmpty(match[1] ?? "");
-  const isBase64 = Boolean(match[2]);
-  if (!isBase64) {
-    return null;
-  }
-  const payload = match[3] ?? "";
-  const canonicalPayload = canonicalizeInlineBase64Payload(payload);
-  if (!canonicalPayload) {
-    return null;
-  }
-
-  // Validation above guarantees whitespace-free base64 for this allocation-free size check.
-  const estimatedBytes = Buffer.byteLength(canonicalPayload, "base64");
-  if (estimatedBytes <= 0 || estimatedBytes > maxBytes || totalBytes + estimatedBytes > maxBytes) {
-    return null;
-  }
-  return { data: Buffer.from(canonicalPayload, "base64"), contentType, estimatedBytes };
-}
-
 async function resolveInlineDataImageMime(inline: {
   data: Buffer;
   contentType?: string;
@@ -328,10 +300,35 @@ export async function downloadMSTeamsAttachments(params: {
       return undefined;
     }
     if (candidate.kind === "data") {
-      const decoded = decodeInlineDataImage(candidate.src, maxInlineBytes, totalInlineBytes);
-      if (!decoded) {
+      const match = /^data:(image\/[a-z0-9.+-]+)?(;base64)?,(.*)$/i.exec(candidate.src);
+      if (!match) {
         return undefined;
       }
+      const declaredContentType = normalizeLowercaseStringOrEmpty(match[1] ?? "");
+      const isBase64 = Boolean(match[2]);
+      if (!isBase64) {
+        return undefined;
+      }
+      const payload = match[3] ?? "";
+      const canonicalPayload = canonicalizeInlineBase64Payload(payload);
+      if (!canonicalPayload) {
+        return undefined;
+      }
+
+      // Validation above guarantees whitespace-free base64 for this allocation-free size check.
+      const estimatedBytes = Buffer.byteLength(canonicalPayload, "base64");
+      if (
+        estimatedBytes <= 0 ||
+        estimatedBytes > maxInlineBytes ||
+        totalInlineBytes + estimatedBytes > maxInlineBytes
+      ) {
+        return undefined;
+      }
+      const decoded = {
+        data: Buffer.from(canonicalPayload, "base64"),
+        contentType: declaredContentType,
+        estimatedBytes,
+      };
       // Accepted bytes still consume the message budget when MIME detection or saving fails.
       totalInlineBytes += decoded.estimatedBytes;
       try {

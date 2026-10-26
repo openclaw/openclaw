@@ -1,4 +1,5 @@
-import { isSessionDisplayMetadataPatch } from "../lib/sessions/patch.ts";
+import "../lib/sessions/session-mutation-operations.runtime.ts";
+import { isSessionDeferredPatch, type SessionPatchOptions } from "../lib/sessions/patch.ts";
 import { resolveUiSessionRowAgentId } from "../lib/sessions/session-key.ts";
 import type {
   SidebarSessionMutationResult,
@@ -17,6 +18,8 @@ export async function patchSession(
   refresh: {
     deferListRefresh?: boolean;
     sessionScope?: boolean;
+    onConfirmed?: SessionPatchOptions["onConfirmed"];
+    onDeferredSettled?: SessionPatchOptions["onDeferredSettled"];
     /** Return true when the caller presents this attempt's rejection locally. */
     handleError?: (error: unknown) => boolean;
   } = {},
@@ -45,7 +48,7 @@ export async function patchSession(
     !requireSessionMutationAccess(host, scope, {
       method: "sessions.patch",
       params: requestParams,
-      allowDeferred: isSessionDisplayMetadataPatch(patch),
+      allowDeferred: isSessionDeferredPatch(patch),
       sessionScope: refresh.sessionScope,
       session,
     })
@@ -53,11 +56,28 @@ export async function patchSession(
     return "failed";
   }
   try {
+    const snapshot = scope.gateway.snapshot;
+    const queuedArchive =
+      patch.archived === true &&
+      (snapshot.phase !== "connected" ||
+        snapshot.deferredIntentCount ||
+        snapshot.deferredIntentDraining);
     const request = () =>
       scope.sessions.patch(session.key, patch, {
         agentId,
         ...(session.sessionId ? { expectedSessionId: session.sessionId } : {}),
         ...(refresh.deferListRefresh ? { deferListRefresh: true } : {}),
+        ...(queuedArchive || refresh.onConfirmed
+          ? {
+              onConfirmed: (result) => {
+                if (queuedArchive) {
+                  host.pruneSidebarSessionEntry(session.key);
+                }
+                refresh.onConfirmed?.(result);
+              },
+            }
+          : {}),
+        ...(refresh.onDeferredSettled ? { onDeferredSettled: refresh.onDeferredSettled } : {}),
       });
     const patched =
       patch.archived === true
@@ -81,11 +101,7 @@ export async function patchSession(
     if ("queued" in patched) {
       return "completed";
     }
-    // Unpin from any surface (menu, pin button, drag) retires the session's
-    // persisted zone slot; leaving it would resurrect stale synced entries.
-    // Archiving implicitly unpins server-side (sessions-patch clears
-    // pinnedAt), so it retires the slot too.
-    if (patch.pinned === false || (patch.archived === true && session.pinned)) {
+    if (patch.pinned === false || patch.archived === true) {
       host.pruneSidebarSessionEntry(session.key);
     }
     if (!refresh.deferListRefresh && host.sidebarSessionStatusFilter() !== "active") {

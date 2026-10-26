@@ -1,15 +1,9 @@
-import path from "node:path";
 import type { BrowserContext, Locator, Page } from "playwright";
-import { afterEach, beforeEach, expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { afterEach, expect, it } from "vitest";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
-import {
-  discoveryCategories,
-  discoveryResult,
-} from "../test-helpers/plugins-e2e-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { installNativeWebChrome } from "./native-nav.test-support.ts";
 
@@ -18,14 +12,7 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
-const proofDirParent = process.env.OPENCLAW_UI_RAIL_PROOF_DIR?.trim();
-let proofDir: string | undefined;
 let context: BrowserContext | undefined;
-beforeEach(() => {
-  proofDir = proofDirParent
-    ? createControlUiE2eArtifactDir("page-toolbar-row", proofDirParent)
-    : undefined;
-});
 
 type Box = { x: number; y: number; width: number; height: number };
 const center = (box: Box, axis: "x" | "y") =>
@@ -86,12 +73,6 @@ suite.define(() => {
       })
       .toBeLessThanOrEqual(axis === "x" ? 1 : 0.5);
   }
-  async function capture(page: Page, file: string) {
-    if (proofDir) {
-      await page.screenshot({ animations: "disabled", path: path.join(proofDir, file) });
-    }
-  }
-
   // Built-in Pages use the stacked hub header; Memory import keeps the toolbar-row title.
   it.each([true, false])("centers page titles and clears controls (native: %s)", async (native) => {
     const { page, toolbar } = await openPage(
@@ -111,7 +92,6 @@ suite.define(() => {
       expect(toolbar.y + toolbar.height).toBe(52);
       expect(titleBox.x).toBeGreaterThan(toolbar.x + toolbar.width);
       expect((await header.locator(".page-subtitle").boundingBox())!.y).toBeGreaterThanOrEqual(52);
-      await capture(page, "native-web-collapsed-page-header.png");
     } else {
       const edges = await page
         .locator(".shell-chrome-controls button:visible")
@@ -203,10 +183,6 @@ suite.define(() => {
         `Claws search ${JSON.stringify(box)} overlaps intro ${JSON.stringify(introBox)}`,
       ).toBe(true);
       await search.click({ trial: true });
-      await capture(
-        page,
-        `claws-header-${width}-${native ? "native" : "browser"}${narrowColumn ? "-narrow" : ""}.png`,
-      );
       await search.fill("workflow");
       await gateway.waitForRequest("claws.catalog.search", { match: { query: "workflow" } });
       expect(new URL(page.url()).pathname).toBe("/claws");
@@ -214,16 +190,18 @@ suite.define(() => {
   );
 
   it.each([
-    { width: 1280, height: 900 },
-    { width: 390, height: 844 },
-  ])(
-    "shares a stacked title and aligned tabs across Sessions and Worktrees at $width px",
-    async ({ width, height }) => {
+    { width: 1280, height: 900, direction: "ltr" },
+    { width: 1280, height: 900, direction: "rtl" },
+    { width: 390, height: 844, direction: "ltr" },
+  ] as const)(
+    "shares a stacked title and aligned tabs across Sessions and Worktrees at $width px ($direction)",
+    async ({ width, height, direction }) => {
       const { page, toolbar } = await openPage(
         "sessions",
         installNativeWebChrome,
         ".hub-page-header__tabs",
         { methodResponses: { "worktrees.list": { worktrees: [] } } },
+        direction,
       );
       await page.setViewportSize({ width, height });
       if (width <= 560) {
@@ -239,11 +217,12 @@ suite.define(() => {
         header.evaluate((element) => {
           const titleBox = element.querySelector(".page-title")!.getBoundingClientRect();
           const tabsBox = element.querySelector(".hub-page-header__tabs")!.getBoundingClientRect();
+          const edge = getComputedStyle(element).direction === "rtl" ? "right" : "left";
           return {
             titleWidth: titleBox.width,
             titleY: titleBox.y,
             tabsBelowTitle: tabsBox.y >= titleBox.bottom,
-            xDelta: Math.abs(tabsBox.x - titleBox.x),
+            xDelta: Math.abs(tabsBox[edge] - titleBox[edge]),
           };
         });
       const expectAlignedHub = async () => {
@@ -258,7 +237,6 @@ suite.define(() => {
       if (width > 560) {
         expect((await alignment()).titleY).toBeGreaterThanOrEqual(toolbar.y + toolbar.height);
       }
-      await capture(page, `sessions-stacked-header-${width}.png`);
       await tabs.getByRole("tab", { name: "Worktrees" }).click();
       await expect.poll(() => title.textContent()).toBe("Worktrees");
       await expectAlignedHub();
@@ -267,46 +245,6 @@ suite.define(() => {
           .poll(async () => (await title.boundingBox())?.y ?? -1)
           .toBeGreaterThanOrEqual(toolbar.y + toolbar.height);
       }
-      await capture(page, `worktrees-stacked-header-${width}.png`);
-    },
-  );
-
-  it.each(["ltr", "rtl"] as const)(
-    "keeps the stacked hub title and tabs below collapsed Mac controls (%s)",
-    async (direction) => {
-      const { page, toolbar } = await openPage(
-        "plugins",
-        installNativeWebChrome,
-        ".plugins-hub-header",
-        {
-          methodResponses: {
-            "plugins.catalog.browse": discoveryResult,
-            "plugins.catalog.categories": discoveryCategories,
-          },
-        },
-        direction,
-      );
-      const header = page.locator(".plugins-hub-header");
-      const title = header.locator(".page-title");
-      await expect
-        .poll(async () => (await title.boundingBox())?.y ?? -1)
-        .toBeGreaterThanOrEqual(toolbar.y + toolbar.height);
-      // Read together to avoid comparing different animation frames.
-      const { titleBox, introBox, tabsBox } = await header.evaluate((element) => ({
-        titleBox: element.querySelector(".page-title")!.getBoundingClientRect().toJSON(),
-        introBox: element
-          .querySelector(".hub-page-header__title")!
-          .getBoundingClientRect()
-          .toJSON(),
-        tabsBox: element.querySelector(".hub-page-header__tabs")!.getBoundingClientRect().toJSON(),
-      }));
-      expect(titleBox.height).toBeGreaterThan(1);
-      expect(titleBox.width).toBeGreaterThan(1);
-      expect(tabsBox.y).toBeGreaterThanOrEqual(introBox.bottom);
-      const titleStart = direction === "rtl" ? titleBox.right : titleBox.left;
-      const tabsStart = direction === "rtl" ? tabsBox.right : tabsBox.left;
-      expect(Math.abs(titleStart - tabsStart)).toBeLessThanOrEqual(1);
-      await capture(page, `native-web-collapsed-stacked-header-${direction}.png`);
     },
   );
 

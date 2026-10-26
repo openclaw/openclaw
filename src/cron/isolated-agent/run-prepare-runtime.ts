@@ -2,7 +2,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
 import { hasAnyAuthProfileStoreSourceAsync } from "../../agents/auth-profiles/source-check.js";
-import type { SessionEventTarget } from "../../auto-reply/reply/session-event-contract.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -25,6 +24,8 @@ export type RunCronAgentTurnParams = {
   assertCurrent?: () => void;
   admissionSource?: import("../../agents/admitted-run-context.js").AdmittedRunContext["admissionSource"];
   cfg: OpenClawConfig;
+  /** Gateway-selected cron partition; standalone callers resolve it from config. */
+  cronStorePath?: string;
   deps: CliDeps;
   job: CronStoredJob;
   /** Trusted caller classification; stored jobs default to cron, not their payload or audit ingress. */
@@ -60,8 +61,6 @@ export function createCronSessionRowWriter(params: {
   agentId: string;
   agentSessionKey: string;
   assertCurrent?: () => void;
-  resultTarget: SessionEventTarget;
-  cronSession: MutableCronSession;
 }): CronSessionRowWriter {
   const { agentId, agentSessionKey } = params;
   let baseSessionMaintenanceStarted = false;
@@ -92,17 +91,6 @@ export function createCronSessionRowWriter(params: {
         ],
         skipMaintenance: true,
       });
-      const { resultTarget, cronSession } = params;
-      if (
-        resultTarget.agentId === agentId &&
-        resultTarget.sessionKey === sessionKey &&
-        resultTarget.storePath === storePath &&
-        resultTarget.sessionId === cronSession.initialSessionEntry?.sessionId &&
-        resultTarget.lifecycleRevision === cronSession.initialSessionEntry?.lifecycleRevision
-      ) {
-        resultTarget.sessionId = entry.sessionId;
-        resultTarget.lifecycleRevision = entry.lifecycleRevision;
-      }
       return entry;
     }
     const { applySessionEntryOperation } =

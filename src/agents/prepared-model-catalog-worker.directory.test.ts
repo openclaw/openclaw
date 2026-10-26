@@ -20,7 +20,10 @@ import {
 } from "./prepared-model-catalog-worker.test-support.js";
 import { prepareWorkspaceBuildGroup } from "./prepared-model-runtime.facts.js";
 import { retainPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
-import { createCatalogInspectionPool } from "./test-helpers/prepared-model-catalog-inspection.js";
+import {
+  createCatalogInspectionPool,
+  type CatalogInspectionTask,
+} from "./test-helpers/prepared-model-catalog-inspection.js";
 import { usePreparedCatalogWorkerFixtures } from "./test-helpers/prepared-model-catalog-worker-fixture.js";
 
 const { makeTempDir, retireAfterTest } = usePreparedCatalogWorkerFixtures();
@@ -46,6 +49,22 @@ const catalogResult = {
   snapshot: { entries: expect.arrayContaining([catalogEntry("plugin-generation-v1")]) },
 };
 
+function createInspector(env: NodeJS.ProcessEnv) {
+  const { pool } = createCatalogInspectionPool(env);
+  const request = {
+    kind: "catalog" as const,
+    syntheticAuth: [],
+    clawInstallSchemaVersions: captureClawInstallSchemaVersionFacts({ env }),
+  };
+  return {
+    run: (
+      value: CatalogInspectionTask["value"],
+      inspection?: CatalogInspectionTask["inspection"],
+    ) => pool.run({ value, request, inspection }, { timeoutMs: 30_000 }),
+    [Symbol.asyncDispose]: () => pool.close(),
+  };
+}
+
 describe("catalog request existing directory ownership", () => {
   beforeEach(() => {
     vi.stubEnv("CODEX_HOME", makeTempDir("openclaw-directory-request-empty-codex-"));
@@ -60,20 +79,15 @@ describe("catalog request existing directory ownership", () => {
       env: fixture.env,
     });
     const database = openOpenClawStateDatabase({ env: fixture.env });
-    const clawInstallSchemaVersions = captureClawInstallSchemaVersionFacts({ env: fixture.env });
-    await closeOpenClawStateDatabaseByPathAsync(database.path);
-    const { pool } = createCatalogInspectionPool(fixture.env);
     try {
+      await using inspector = createInspector(fixture.env);
+      await closeOpenClawStateDatabaseByPathAsync(database.path);
       // Worker startup and the copy probe are real; this contract does not measure their latency.
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
       for (let tick = 0; tick < 3; tick++) {
-        const { inspection, ...result } = await pool.run(
-          {
-            value,
-            request: { kind: "catalog", syntheticAuth: [], clawInstallSchemaVersions },
-            ...(tick === 0 ? { inspection: { copyProbePath: database.path } } : {}),
-          },
-          { timeoutMs: 30_000 },
+        const { inspection, ...result } = await inspector.run(
+          value,
+          tick === 0 ? { copyProbePath: database.path } : undefined,
         );
         expect(result).toMatchObject(catalogResult);
         expect(inspection.sqliteCopies).toBe(0);
@@ -82,12 +96,8 @@ describe("catalog request existing directory ownership", () => {
         }
       }
     } finally {
-      try {
-        await pool.close();
-      } finally {
-        vi.useRealTimers();
-        await closeOpenClawStateDatabaseByPathAsync(database.path);
-      }
+      vi.useRealTimers();
+      await closeOpenClawStateDatabaseByPathAsync(database.path);
     }
   });
 
@@ -132,25 +142,8 @@ describe("catalog request existing directory ownership", () => {
       }),
     );
     unregisterResolvedAgentDir({ agentId: "main", agentDir, env: fixture.env });
-    const { pool } = createCatalogInspectionPool(fixture.env);
-    let completed: Awaited<ReturnType<typeof pool.run>>;
-    try {
-      completed = await pool.run(
-        {
-          value,
-          request: {
-            kind: "catalog",
-            syntheticAuth: [],
-            clawInstallSchemaVersions: captureClawInstallSchemaVersionFacts({ env: fixture.env }),
-          },
-          inspection: { existingAgentIds: existing },
-        },
-        { timeoutMs: 30_000 },
-      );
-    } finally {
-      await pool.close();
-    }
-    const { inspection, ...result } = completed;
+    await using inspector = createInspector(fixture.env);
+    const { inspection, ...result } = await inspector.run(value, { existingAgentIds: existing });
     if (conflict) {
       expect(result).toEqual({
         status: "failed",

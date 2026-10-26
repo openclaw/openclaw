@@ -2,9 +2,9 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
 import type { SessionsUsageResult } from "../../api/types.ts";
 import * as downloads from "../../lib/download.ts";
+import { suspendingGatewayError as suspensionError } from "../../test-helpers/gateway-errors.test-support.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { selectUsageExport } from "./export-menu.test-support.ts";
 import type { UsageSessionEntry, UsageRouteData } from "./types.ts";
@@ -20,6 +20,7 @@ import {
   createPendingUsageRouteData,
   focusDocument,
   refreshButton,
+  showRecentSessions,
   queryUsagePage,
   selectUsageSession,
   settleUsagePage,
@@ -27,15 +28,6 @@ import {
 } from "./usage-page.test-support.ts";
 
 afterEach(cleanupUsagePageTest);
-
-function suspensionError(message: string) {
-  return new GatewayRequestError({
-    code: "UNAVAILABLE",
-    message,
-    retryable: true,
-    details: { reason: "gateway-suspending", phase: "draining" },
-  });
-}
 
 function detailCalls<T extends readonly unknown[]>(request: { mock: { calls: T[] } }) {
   return request.mock.calls.filter(
@@ -131,6 +123,7 @@ describe("UsagePage detail requests", () => {
         : { providers: [], points: [], logs: [] },
     );
     const { page } = await loadUsagePage(request);
+    await showRecentSessions(page);
     const settle = () => settleUsagePage(page);
     const changePage = async (label: string) => {
       usageButton(page, label, ".data-table-pagination button").click();
@@ -413,7 +406,7 @@ describe("UsagePage detail requests", () => {
         "agent:main:second",
       ]);
     second.reject(new Error("Selected timeline unavailable"));
-    await waitForFast(() => expect(page.read().detail.timeSeriesLoading).toBe(false));
+    await page.read().detail.timeSeriesRead;
     first.reject(new Error("Retired timeline unavailable"));
     await first.promise.catch(() => {});
     expect(usageCalls(request, "sessions.usage.timeseries")).toHaveLength(2);

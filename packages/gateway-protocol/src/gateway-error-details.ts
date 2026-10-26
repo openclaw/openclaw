@@ -45,6 +45,7 @@ export const GatewayErrorDetailCodes = {
   TASK_HISTORY_PREVIEW_CAPACITY: "TASK_HISTORY_PREVIEW_CAPACITY",
   CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED: "CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED",
   CLAW_REVIEW_REQUIRED: "CLAW_REVIEW_REQUIRED",
+  PENDING_INPUT_NOT_RETIRED: "PENDING_INPUT_NOT_RETIRED",
 } as const;
 
 /** Missing cron automation identified by its exact store key. */
@@ -119,6 +120,11 @@ export type ClawReviewRequiredErrorDetails = Static<
   typeof ErrorSchemas.ClawReviewRequiredErrorDetailsSchema
 >;
 
+/** Requested pending inputs that are still queued or held by a settling turn. */
+export type PendingInputNotRetiredErrorDetails = Static<
+  typeof ErrorSchemas.PendingInputNotRetiredErrorDetailsSchema
+>;
+
 /** Structured details emitted by method-level failures. */
 export type GatewayErrorDetails =
   | CronJobNotFoundErrorDetails
@@ -135,6 +141,7 @@ export type GatewayErrorDetails =
   | TaskWorktreeSourceRequiredErrorDetails
   | ClawHubRiskAcknowledgementRequiredErrorDetails
   | ClawReviewRequiredErrorDetails
+  | PendingInputNotRetiredErrorDetails
   | { code: typeof GatewayErrorDetailCodes.TASK_HISTORY_PREVIEW_CAPACITY };
 
 export function readClawHubRiskAcknowledgementRequiredError(

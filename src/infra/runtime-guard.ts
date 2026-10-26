@@ -193,9 +193,7 @@ export async function assertSupportedRuntime(
       log: (...args) => console.log(...args),
       error: (...args) => {
         const message = format(...args);
-        process.stderr.write(
-          formatConsoleDiagnosticBlock({ level: "error", message: `${message}\n` }),
-        );
+        process.stderr.write(formatConsoleDiagnosticBlock({ message: `${message}\n` }));
       },
       exit: (code) => {
         throw new ExitError(code);
@@ -216,7 +214,7 @@ export async function assertSupportedRuntime(
   }
   const requirement =
     details.kind === "bun"
-      ? "openclaw requires Bun 1.4.3 or newer with WAL-reset-safe node:sqlite (SQLite 3.51.3+ or a patched 3.50.x/3.44.x release)."
+      ? "openclaw requires Bun 1.4.4 or newer with WAL-reset-safe node:sqlite (SQLite 3.51.3+ or a patched 3.50.x/3.44.x release)."
       : (details.sqliteProbe && nodeRuntimeFailure(details.version, details.sqliteProbe)) ||
         "openclaw requires Node >=24.22.1 <25, or >=26.12.1.";
   const retryHint =

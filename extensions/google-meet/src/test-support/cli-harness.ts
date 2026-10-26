@@ -54,7 +54,7 @@ export function jsonResponse(value: unknown): Response {
   return Response.json(value);
 }
 
-export function requestUrl(input: RequestInfo | URL): URL {
+function requestUrl(input: RequestInfo | URL): URL {
   return new URL(typeof input === "string" || input instanceof URL ? input : input.url);
 }
 

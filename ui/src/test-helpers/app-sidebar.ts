@@ -303,6 +303,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     get canonicalListRevision() {
       return canonicalListRevision;
     },
+    canonicalListReady: true,
     captureConnectionScope: () => scopedSessions?.captureConnectionScope() ?? null,
     isConnectionScopeCurrent: (
       scope: Parameters<SessionCapability["isConnectionScopeCurrent"]>[0],
@@ -535,6 +536,7 @@ export function createContext(
     runtimeConfig: {
       state: createInitialConfigState(gateway.snapshot),
       ensureLoaded: async () => undefined,
+      ensureDisplayLoaded: async () => undefined,
       subscribe: () => () => undefined,
     },
     scopeUpgrade: hiddenScopeUpgradeCapability,

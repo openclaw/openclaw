@@ -38,12 +38,15 @@ import type {
   FileReaderViewRequest,
 } from "./chat-sidebar-content-types.ts";
 import { buildRawContent, SidebarPanel, type SidebarPanelProps } from "./chat-sidebar-content.tsx";
-import type { ChatDetailPanel, ChatDetailPanelProps } from "./chat-sidebar-view-types.ts";
+import type {
+  ChatDetailPanel as ChatDetailPanelElement,
+  ChatDetailPanelProps,
+} from "./chat-sidebar-view-types.ts";
 import type { FileEditorViewHandle } from "./file-editor-view.ts";
 
 registerEnglishCatalog(registerFilePreviewEnglish);
 
-function DetailPanel(props: ChatDetailPanelProps, host: ChatDetailPanel) {
+function DetailPanel(props: ChatDetailPanelProps, host: ChatDetailPanelElement) {
   const fileAttachment = createFileSessionAttachment(props);
   const gateways = nativeGatewaysCapability();
   const nativeGateways = gateways && projectOwner(gateways, (owner) => owner);
@@ -729,7 +732,7 @@ function DetailPanel(props: ChatDetailPanelProps, host: ChatDetailPanel) {
   return <SidebarPanel {...lifecycle.snapshot()} />;
 }
 
-defineSolidBridge("openclaw-chat-detail-panel", DetailPanel, {
+export const ChatDetailPanel = defineSolidBridge("openclaw-chat-detail-panel", DetailPanel, {
   properties: chatDetailPanelProperties,
   ...detailPanelOperationLifetime,
 });

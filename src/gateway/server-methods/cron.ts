@@ -16,8 +16,10 @@ import {
 } from "../../cron/config-revision.js";
 import { resolveCronDeliveryFailurePreview } from "../../cron/delivery-preview.js";
 import { cronJobReadView } from "../../cron/job-read-view.js";
+import { resolveCronOperatorExecutionRevision } from "../../cron/service/jobs-tool-policy.js";
 import type { CronUpdateOptions } from "../../cron/service/state.js";
 import { isInvalidCronSessionTargetIdError } from "../../cron/session-target.js";
+import { CronStoreSelectionRequiredError } from "../../cron/store/selection-error.js";
 import { CronStreamApprovalEndedError } from "../../cron/stream-approval-outcome.js";
 import { cronUpdateRequiresStreamExecAuthority } from "../../cron/stream-exec-authority.js";
 import type { CronDeliveryPreview, CronJobPatch, CronStoredJob } from "../../cron/types.js";
@@ -32,6 +34,7 @@ import {
 import { getGatewayProcessInstanceId } from "../process-instance.js";
 import { assertActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js";
 import { cronAddHandler } from "./cron-add.js";
+import { cronBindHandler } from "./cron-bind.js";
 import {
   assertCronModelJobAllowed,
   cronCreateMatchesCallerScope,
@@ -49,6 +52,7 @@ import { isCronInvalidRequestError } from "./cron-error-classification.js";
 import { cronHistoryHandler } from "./cron-history.js";
 import {
   assertValidCronUpdatePatch,
+  captureCronCreatorSession,
   captureCronUpdatedInferenceBinding,
   cronRunQueuesBehindCaller,
   normalizeCronUpdateRequest,
@@ -69,6 +73,7 @@ import { cronRunsHandler } from "./cron-runs.js";
 import { cronScratchHandlers } from "./cron-scratch.js";
 import { withCronStreamExecApproval } from "./cron-stream-approval.js";
 import { cronWakeHandler } from "./cron-wake.js";
+import type { GatewayReadErrorHandler } from "./prepared-read.js";
 import type { GatewayRequestHandler, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -94,6 +99,7 @@ export const cronHandlers: GatewayRequestHandlers = {
   ),
   ...cronScratchHandlers,
   "cron.add": cronAddHandler,
+  "cron.bind": cronBindHandler,
   "cron.update": async ({
     params,
     respond,
@@ -158,6 +164,8 @@ export const cronHandlers: GatewayRequestHandlers = {
         : callerScope && { ...callerScope, manageAll: undefined };
     let capture: ReturnType<typeof resolveCronCreatorAuthorityCapture>;
     let inference: Awaited<ReturnType<typeof captureCronUpdatedInferenceBinding>>;
+    let operatorCapture: Awaited<ReturnType<typeof captureCronCreatorSession>> | undefined;
+    let operatorSourceExecutionRevision: string | undefined;
     let streamExecPolicy: ReturnType<typeof resolveCronStreamExecPolicy>;
     let creatorSessionId: string | undefined;
     if (callerScope && !callerScope.manageAll && "agentId" in patch) {
@@ -233,6 +241,16 @@ export const cronHandlers: GatewayRequestHandlers = {
       const runtimeAuthority = capture?.captureRuntimeAuthority();
       capture &&= { ...capture, captureRuntimeAuthority: () => runtimeAuthority };
       const nextJob = await validateUpdate(currentJob);
+      if (creatorScope) {
+        operatorSourceExecutionRevision = resolveCronOperatorExecutionRevision(nextJob);
+        operatorCapture = await captureCronCreatorSession(
+          nextJob,
+          creatorScope,
+          { client, context, signal },
+          cfg,
+          true,
+        );
+      }
       inference = runtimeAuthority
         ? undefined
         : await captureCronUpdatedInferenceBinding(nextJob, patch, cfg, {
@@ -249,11 +267,15 @@ export const cronHandlers: GatewayRequestHandlers = {
         sessionMutationCommitGuard?.();
         capture?.assertCurrent();
         inference?.assertInferenceSelectionCurrent();
+        operatorCapture?.assertOperatorSourceCurrent?.();
       },
       hasCurrentClientAuthority,
       modelJobPolicy: { config: cfg, jobId, patch },
     });
     const updateOptions: CronUpdateOptions = {
+      ...(operatorCapture?.operatorSource
+        ? { operatorSource: operatorCapture.operatorSource, operatorSourceExecutionRevision }
+        : {}),
       ...(touchesToolRuntime
         ? {
             scheduledToolPolicy:
@@ -587,7 +609,7 @@ export const cronHandlers: GatewayRequestHandlers = {
 // The existing one-use grant is request-scoped; the original runtime identity
 // stays intact so deferred cron commits still fence the exact admitted run.
 for (const [method, handler] of Object.entries(cronHandlers)) {
-  const wrapped: GatewayRequestHandler = async (args) => {
+  const invoke: GatewayRequestHandler = async (args) => {
     const identity = args.client?.internal?.agentRuntimeIdentity;
     if (!identity) {
       return await handler(args);
@@ -633,12 +655,38 @@ for (const [method, handler] of Object.entries(cronHandlers)) {
       }
     }
   };
+  const respondError: GatewayReadErrorHandler = (error, args) => {
+    if (!(error instanceof CronStoreSelectionRequiredError)) {
+      if (handler.onReadError) {
+        handler.onReadError(error, args);
+        return;
+      }
+      throw error;
+    }
+    assertCronReadCurrent(args);
+    args.respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.UNAVAILABLE, error.message, {
+        retryable: false,
+        details: { code: error.code, selection: error.selection },
+      }),
+    );
+  };
+  const wrapped: GatewayRequestHandler = async (args) => {
+    try {
+      await invoke(args);
+    } catch (error) {
+      respondError(error, args);
+    }
+  };
   if (handler.prepareRead) {
     const prepareRead = handler.prepareRead;
     wrapped.prepareRead = (args) =>
       args.client?.internal?.agentRuntimeIdentity
         ? { run: (respond) => wrapped({ ...args, respond }) }
         : prepareRead(args);
+    wrapped.onReadError = respondError;
   }
   cronHandlers[method] = wrapped;
 }

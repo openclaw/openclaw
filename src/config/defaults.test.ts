@@ -1,8 +1,8 @@
 import { normalizeModelCostConfig } from "@openclaw/llm-core";
-// Verifies default config values and environment-sensitive overrides.
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { listAgentIds } from "../agents/agent-roster.js";
+import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import type { ProviderResolveModelRoutesContext } from "../plugin-sdk/provider-model-types.js";
 import { resolveProviderModelRoutes } from "../plugins/provider-model-routes.js";
 import { estimateUsageCost } from "../utils/usage-format.js";
@@ -35,6 +35,31 @@ const mocks = vi.hoisted(() => ({
   applyProviderConfigDefaultsForConfig: vi.fn(),
 }));
 
+const materialize = (config: OpenClawConfig, env: NodeJS.ProcessEnv = {}) =>
+  materializeRuntimeConfig(config, {
+    env,
+    homedir: () => "/tmp/config-fixture",
+    manifestRegistry: { plugins: [] },
+  });
+const withModels = (
+  models: ModelProviderConfig["models"],
+  provider = "openai",
+  baseUrl = "https://api.openai.com/v1",
+): OpenClawConfig => ({ models: { providers: { [provider]: { baseUrl, models } } } });
+function materializedModel(
+  config: OpenClawConfig,
+  manifestRegistry: NonNullable<Parameters<typeof applyModelDefaults>[1]>["manifestRegistry"],
+  provider = "openai",
+) {
+  return expectDefined(
+    applyModelDefaults(config, { manifestRegistry }).models?.providers?.[provider]?.models?.[0],
+    "materialized model entry",
+  );
+}
+function catalog(providers: Record<string, unknown>, id = "openai") {
+  return { plugins: [{ id, modelCatalog: { providers } }] };
+}
+
 vi.mock("./provider-policy.js", () => ({
   applyProviderConfigDefaultsForConfig: (
     ...args: Parameters<typeof mocks.applyProviderConfigDefaultsForConfig>
@@ -59,13 +84,10 @@ describe("config defaults", () => {
   it("materializes the canonical main session key and warns only once", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const source = { session: { mainKey: " custom " } };
-    const options = { env: {}, manifestRegistry: { plugins: [] } };
     try {
-      expect(materializeRuntimeConfig(source, options).session?.mainKey).toBe("main");
+      expect(materialize(source).session?.mainKey).toBe("main");
       expect(source.session.mainKey).toBe(" custom ");
-      expect(
-        materializeRuntimeConfig({ session: { mainKey: "another" } }, options).session?.mainKey,
-      ).toBe("main");
+      expect(materialize({ session: { mainKey: "another" } }).session?.mainKey).toBe("main");
       expect(warn).toHaveBeenCalledExactlyOnceWith(
         'session.mainKey is ignored; main session is always "main".',
       );
@@ -96,31 +118,22 @@ describe("config defaults", () => {
       createConfigResolutionFacts(warnings, pending, "custom", resolved),
     );
 
-    const runtime = materializeRuntimeConfig(source, {
-      env: {},
-      homedir: () => "/tmp/config-fixture",
-      manifestRegistry: { plugins: [] },
-    });
+    const runtime = materialize(source);
+    const envRef = (id: string) => ({ source: "env", provider: "custom", id });
 
     expect(runtime.logging?.file).toBe("/tmp/config-fixture/logs/openclaw.log");
     expect(getResolvedConfigEnvSecretRef(runtime, "logging.file")).toBeNull();
-    expect(getResolvedConfigEnvSecretRef(runtime, "gateway.auth.password")).toEqual({
-      source: "env",
-      provider: "custom",
-      id: "KEEP_PASSWORD",
-    });
-    expect(getAuthoredConfigSecretRef(runtime, "gateway.auth.token")).toEqual({
-      source: "env",
-      provider: "custom",
-      id: "PENDING_TOKEN",
-    });
+    expect(getResolvedConfigEnvSecretRef(runtime, "gateway.auth.password")).toEqual(
+      envRef("KEEP_PASSWORD"),
+    );
+    expect(getAuthoredConfigSecretRef(runtime, "gateway.auth.token")).toEqual(
+      envRef("PENDING_TOKEN"),
+    );
     expect(collectEnvSecretRefIds(runtime)).toEqual(new Set(["PENDING_TOKEN", "KEEP_PASSWORD"]));
   });
 
   it("preserves the implicit main agent when materializing a pre-roster config", () => {
-    const runtime = materializeRuntimeConfig({}, { env: {}, manifestRegistry: { plugins: [] } });
-
-    expect(listAgentIds(runtime)).toEqual(["main"]);
+    expect(listAgentIds(materialize({}))).toEqual(["main"]);
   });
 
   it("rebuilds the SDK roster projection from the final materialized entries", () => {
@@ -133,11 +146,7 @@ describe("config defaults", () => {
       },
     };
     attachAgentListProjection(source);
-    const runtime = materializeRuntimeConfig(source, {
-      env: {},
-      homedir: () => "/tmp/config-fixture",
-      manifestRegistry: { plugins: [] },
-    });
+    const runtime = materialize(source);
     expect(Object.getOwnPropertyDescriptor(runtime.agents, "list")).toEqual({
       configurable: true,
       enumerable: false,
@@ -154,66 +163,27 @@ describe("config defaults", () => {
     expect(structuredClone(runtime)).not.toHaveProperty("agents.list");
   });
 
-  it("skips provider defaults when agent defaults are absent", () => {
-    const cfg = {
-      models: {
-        providers: {
-          openai: {
-            api: "openai-completions",
-          },
-        },
-      },
-    };
-
-    expect(applyContextPruningDefaults(cfg as never)).toBe(cfg);
-    expect(mocks.applyProviderConfigDefaultsForConfig).not.toHaveBeenCalled();
-  });
-
-  it("skips provider defaults when agent defaults have no Anthropic auth signal", () => {
-    const cfg = {
-      agents: {
-        defaults: {},
-      },
-    };
-
+  it.each([
+    { models: { providers: { openai: { api: "openai-completions" } } } },
+    { agents: { defaults: {} } },
+  ])("skips provider defaults without both agent defaults and an auth signal: %j", (cfg) => {
     expect(applyContextPruningDefaults(cfg as never)).toBe(cfg);
     expect(mocks.applyProviderConfigDefaultsForConfig).not.toHaveBeenCalled();
   });
 
   it("uses anthropic provider defaults when agent defaults and auth signal exist", () => {
-    const cfg = {
-      auth: {
-        profiles: {
-          anthropic: { provider: "anthropic", mode: "api_key" },
-        },
-      },
-      agents: {
-        defaults: {},
-      },
+    const cfg: OpenClawConfig = {
+      auth: { profiles: { anthropic: { provider: "anthropic", mode: "api_key" } } },
+      agents: { defaults: {} },
     };
-    const nextCfg = {
-      agents: {
-        defaults: {
-          contextPruning: {
-            mode: "cache-ttl",
-          },
-        },
-      },
-    };
+    const nextCfg = { agents: { defaults: { contextPruning: { mode: "cache-ttl" } } } };
     mocks.applyProviderConfigDefaultsForConfig.mockReturnValue(nextCfg);
 
     const manifestRegistry = { plugins: [] };
-    expect(applyContextPruningDefaults(cfg as never, { manifestRegistry })).toBe(nextCfg);
-    expect(mocks.applyProviderConfigDefaultsForConfig).toHaveBeenCalledTimes(1);
-    const [defaultsParams] = expectDefined(
-      (
-        mocks.applyProviderConfigDefaultsForConfig.mock.calls as unknown as Array<
-          [{ manifestRegistry?: unknown }]
-        >
-      )[0],
-      "(mocks.applyProviderConfigDefaultsForConfig.mock.calls as unknown as Array<\n        [{ manifestRegistry?: unknown }]\n      >)[0] test invariant",
+    expect(applyContextPruningDefaults(cfg, { manifestRegistry })).toBe(nextCfg);
+    expect(mocks.applyProviderConfigDefaultsForConfig.mock.calls[0]?.[0].manifestRegistry).toBe(
+      manifestRegistry,
     );
-    expect(defaultsParams.manifestRegistry).toBe(manifestRegistry);
   });
 
   it.each(["staged", "ambient"] as const)(
@@ -235,13 +205,7 @@ describe("config defaults", () => {
           },
         }),
       );
-      const config = materializeRuntimeConfig(
-        { agents: { defaults: {} } },
-        {
-          env,
-          manifestRegistry: { plugins: [] },
-        },
-      );
+      const config = materialize({ agents: { defaults: {} } }, env);
       if (source === "staged") {
         expect(config.agents?.defaults?.contextPruning).toEqual({ mode: "cache-ttl", ttl: "1h" });
         expect(mocks.applyProviderConfigDefaultsForConfig).toHaveBeenCalledWith(
@@ -258,15 +222,7 @@ describe("config defaults", () => {
   it("defaults ackReactionScope without deriving other message fields", () => {
     const next = applyMessageDefaults({
       agents: {
-        entries: {
-          main: {
-            identity: {
-              name: "Samantha",
-              theme: "helpful sloth",
-              emoji: "🦥",
-            },
-          },
-        },
+        entries: { main: { identity: { name: "Samantha", theme: "helpful sloth", emoji: "🦥" } } },
       },
       messages: {},
     } as never);
@@ -279,11 +235,13 @@ describe("config defaults", () => {
   it("fills missing agent concurrency defaults", () => {
     const next = applyAgentDefaults({ messages: {} } as never);
 
-    expect(next.agents?.defaults?.maxConcurrent).toBe(resolveAgentMaxConcurrent());
-    expect(next.agents?.defaults?.subagents?.maxConcurrent).toBe(DEFAULT_SUBAGENT_MAX_CONCURRENT);
-    expect(next.agents?.defaults?.subagents?.archiveAfterMinutes).toBe(
-      DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES,
-    );
+    expect(next.agents?.defaults).toMatchObject({
+      maxConcurrent: resolveAgentMaxConcurrent(),
+      subagents: {
+        maxConcurrent: DEFAULT_SUBAGENT_MAX_CONCURRENT,
+        archiveAfterMinutes: DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES,
+      },
+    });
   });
 
   it("preserves explicit subagent archive default", () => {
@@ -298,19 +256,17 @@ describe("config defaults", () => {
   it.each([false, true])(
     "normalizes keyed agent models without authoring a legacy list (projection: %s)",
     (withProjection) => {
+      const entries = (ref: string) => ({
+        worker: {
+          model: { primary: ref, fallbacks: [ref] },
+          models: { [ref]: { alias: "worker-model" } },
+        },
+        helper: { model: ref },
+      });
       const config: OpenClawConfig = {
         agents: {
           ownership: "explicit",
-          entries: {
-            worker: {
-              model: {
-                primary: "google/gemini-3-pro-preview",
-                fallbacks: ["google/gemini-3-pro-preview"],
-              },
-              models: { "google/gemini-3-pro-preview": { alias: "worker-model" } },
-            },
-            helper: { model: "google/gemini-3-pro-preview" },
-          },
+          entries: entries("google/gemini-3-pro-preview"),
         },
       };
       if (withProjection) {
@@ -319,16 +275,7 @@ describe("config defaults", () => {
 
       const next = applyModelDefaults(config, { manifestRegistry: { plugins: [] } });
 
-      expect(next.agents?.entries).toEqual({
-        worker: {
-          model: {
-            primary: "google/gemini-3.1-pro-preview",
-            fallbacks: ["google/gemini-3.1-pro-preview"],
-          },
-          models: { "google/gemini-3.1-pro-preview": { alias: "worker-model" } },
-        },
-        helper: { model: "google/gemini-3.1-pro-preview" },
-      });
+      expect(next.agents?.entries).toEqual(entries("google/gemini-3.1-pro-preview"));
       expect(Object.keys(next.agents ?? {})).not.toContain("list");
       expect(structuredClone(next)).not.toHaveProperty("agents.list");
     },
@@ -336,39 +283,29 @@ describe("config defaults", () => {
 });
 
 describe("applyModelDefaults catalog seeding", () => {
-  const catalogRegistry = {
-    plugins: [
-      {
-        id: "openai",
-        modelCatalog: {
-          providers: {
-            " OpenAI ": {
-              api: "openai-responses",
-              baseUrl: "https://api.openai.com/v1",
-              models: [
-                {
-                  id: "gpt-5.6-sol",
-                  name: "GPT-5.6 Sol",
-                  reasoning: true,
-                  input: ["text", "image"],
-                  contextWindow: 400_000,
-                  contextTokens: 272_000,
-                  maxTokens: 128_000,
-                  cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
-                  thinkingLevelMap: { off: "none" },
-                  compat: { supportsStore: false },
-                },
-              ],
-            },
-            openai: {
-              models: [{ id: "gpt-5.6-sol", reasoning: false, input: ["text"] }],
-            },
-          },
+  const catalogRegistry = catalog({
+    " OpenAI ": {
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      models: [
+        {
+          id: "gpt-5.6-sol",
+          name: "GPT-5.6 Sol",
+          reasoning: true,
+          input: ["text", "image"],
+          contextWindow: 400_000,
+          contextTokens: 272_000,
+          maxTokens: 128_000,
+          cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
+          thinkingLevelMap: { off: "none" },
+          compat: { supportsStore: false },
         },
-      },
-    ],
-    // SAFETY: minimal manifest record carrying only the fields applyModelDefaults reads.
-  } as never;
+      ],
+    },
+    openai: {
+      models: [{ id: "gpt-5.6-sol", reasoning: false, input: ["text"] }],
+    },
+  }) as never;
 
   // Regression: an override entry pinning only sizing fields materialized as a
   // text-only, non-reasoning, zero-cost model, silently dropping vision-gated
@@ -392,62 +329,35 @@ describe("applyModelDefaults catalog seeding", () => {
       vi.mocked(normalizeProviderConfigForConfigDefaults).mockImplementationOnce((params) =>
         generatedRows ? { ...params.providerConfig, models } : params.providerConfig,
       );
-      const cfg = applyModelDefaults(
-        {
-          models: {
-            providers: {
-              [providerId]: {
-                baseUrl: "https://api.openai.com/v1",
-                models: generatedRows ? [] : models,
-              },
-            },
-          },
-        },
-        { manifestRegistry: catalogRegistry },
+      const model = materializedModel(
+        withModels(generatedRows ? [] : models, providerId),
+        catalogRegistry,
+        providerId,
       );
-      const model = expectDefined(
-        cfg.models?.providers?.[providerId]?.models?.[0],
-        "materialized model entry",
-      );
+      expect(model).toMatchObject({
+        reasoning: true,
+        maxTokens: 128_000,
+        contextWindow: 1_050_000,
+        contextTokens: 922_000,
+        name: "GPT-5.6",
+      });
       expect(model.input).toEqual(["text", "image"]);
-      expect(model.reasoning).toBe(true);
       expect(model.cost).toEqual({ input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 });
-      expect(model.maxTokens).toBe(128_000);
       expect(model.thinkingLevelMap).toEqual({ off: "none" });
-      // Authored fields stay authoritative.
-      expect(model.contextWindow).toBe(1_050_000);
-      expect(model.contextTokens).toBe(922_000);
-      expect(model.name).toBe("GPT-5.6");
     },
   );
 
   it("keeps authored metadata authoritative over the catalog row", () => {
-    const cfg = applyModelDefaults(
-      {
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              models: [
-                {
-                  id: "gpt-5.6-sol",
-                  name: "text-only override",
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 8_192,
-                  maxTokens: 4_096,
-                },
-              ],
-            },
-          },
-        },
-      },
-      { manifestRegistry: catalogRegistry },
-    );
-    const model = expectDefined(
-      cfg.models?.providers?.openai?.models?.[0],
-      "materialized model entry",
+    const model = materializedModel(
+      withModels([
+        modelDefinition("gpt-5.6-sol", {
+          name: "text-only override",
+          reasoning: false,
+          contextWindow: 8_192,
+          maxTokens: 4_096,
+        }),
+      ]),
+      catalogRegistry,
     );
     expect(model.input).toEqual(["text"]);
     expect(model.reasoning).toBe(false);
@@ -455,25 +365,7 @@ describe("applyModelDefaults catalog seeding", () => {
   });
 
   it("keeps catalog-seeded compatibility out of authored route overrides", () => {
-    const sourceConfig: OpenClawConfig = {
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            models: [
-              {
-                id: "gpt-5.6-sol",
-                name: "GPT-5.6 Sol",
-                reasoning: true,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                maxTokens: 8192,
-              },
-            ],
-          },
-        },
-      },
-    };
+    const sourceConfig = withModels([modelDefinition("gpt-5.6-sol", { name: "GPT-5.6 Sol" })]);
     const runtimeConfig = applyModelDefaults(sourceConfig, { manifestRegistry: catalogRegistry });
     setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
     const resolveModelRoutes = vi.fn((_context: ProviderResolveModelRoutesContext) => ({
@@ -507,82 +399,45 @@ describe("applyModelDefaults catalog seeding", () => {
     ],
   };
 
+  const freeCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+  const emptyTiers = { ...authoredFlatCost, tieredPricing: [] };
   it.each([
-    {
-      name: "omitted cost inherits catalog tiers",
-      authoredCost: undefined,
-      expectedCost: catalogTieredCost,
-      expectedUsd: 0.006675,
-    },
-    {
-      name: "empty cost inherits catalog tiers",
-      authoredCost: {},
-      expectedCost: catalogTieredCost,
-      expectedUsd: 0.006675,
-    },
-    {
-      name: "partial flat cost inherits missing rates but not catalog tiers",
-      authoredCost: { input: 4 },
-      expectedCost: { ...catalogFlatCost, input: 4 },
-      expectedUsd: 0.0038875,
-    },
-    {
-      name: "authored flat cost excludes catalog tiers",
-      authoredCost: authoredFlatCost,
-      expectedCost: authoredFlatCost,
-      expectedUsd: 0.00327,
-    },
-    {
-      name: "authored zero cost remains free",
-      authoredCost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      expectedCost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      expectedUsd: 0,
-    },
-    {
-      name: "authored tiers replace catalog tiers",
-      authoredCost: authoredTieredCost,
-      expectedCost: authoredTieredCost,
-      expectedUsd: 0.00327,
-    },
-    {
-      name: "authored empty tiers retain flat pricing",
-      authoredCost: { ...authoredFlatCost, tieredPricing: [] },
-      expectedCost: { ...authoredFlatCost, tieredPricing: [] },
-      expectedUsd: 0.00327,
-    },
-  ])("$name", ({ authoredCost, expectedCost, expectedUsd }) => {
-    const tieredRegistry = {
-      plugins: [
-        {
-          id: "pricing-fixture",
-          modelCatalog: {
-            providers: {
-              "pricing-fixture": {
-                models: [{ id: "fixture", cost: catalogTieredCost }],
-              },
-            },
-          },
-        },
-      ],
-      // SAFETY: minimal manifest record carrying only the fields applyModelDefaults reads.
-    } as never;
-    const cfg = applyModelDefaults(
-      {
-        models: {
-          providers: {
-            "pricing-fixture": {
-              baseUrl: "https://pricing.example/v1",
-              // SAFETY: config schema accepts omitted or partial cost before materialization.
-              models: [{ id: "fixture", name: "Fixture", cost: authoredCost } as never],
-            },
-          },
-        },
-      },
-      { manifestRegistry: tieredRegistry },
-    );
-    const model = expectDefined(
-      cfg.models?.providers?.["pricing-fixture"]?.models?.[0],
-      "materialized pricing model",
+    ["omitted cost inherits catalog tiers", undefined, catalogTieredCost, 0.006675],
+    ["empty cost inherits catalog tiers", {}, catalogTieredCost, 0.006675],
+    [
+      "partial flat cost inherits missing rates but not tiers",
+      { input: 4 },
+      { ...catalogFlatCost, input: 4 },
+      0.0038875,
+    ],
+    ["authored flat cost excludes catalog tiers", authoredFlatCost, authoredFlatCost, 0.00327],
+    [
+      "authored zero cost remains free",
+      freeCost,
+      { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      0,
+    ],
+    ["authored tiers replace catalog tiers", authoredTieredCost, authoredTieredCost, 0.00327],
+    [
+      "authored empty tiers retain flat pricing",
+      emptyTiers,
+      { ...authoredFlatCost, tieredPricing: [] },
+      0.00327,
+    ],
+  ] as const)("%s", (_name, authoredCost, expectedCost, expectedUsd) => {
+    const tieredRegistry = catalog(
+      { "pricing-fixture": { models: [{ id: "fixture", cost: catalogTieredCost }] } },
+      "pricing-fixture",
+    ) as never;
+    const model = materializedModel(
+      // SAFETY: config schema accepts omitted or partial cost before materialization.
+      withModels(
+        [{ id: "fixture", name: "Fixture", cost: authoredCost } as never],
+        "pricing-fixture",
+        "https://pricing.example/v1",
+      ),
+      tieredRegistry,
+      "pricing-fixture",
     );
 
     expect(model.cost).toEqual(expectedCost);
@@ -597,46 +452,23 @@ describe("applyModelDefaults catalog seeding", () => {
   it("copies frozen catalog metadata before downstream normalization", () => {
     const supportedReasoningEfforts = Object.freeze(["low", "high"]);
     const compat = Object.freeze({ supportedReasoningEfforts });
-    const frozenRegistry = {
-      plugins: [
-        {
-          id: "openai",
-          modelCatalog: {
-            providers: {
-              openai: {
-                api: "openai-responses",
-                baseUrl: "https://api.openai.com/v1",
-                models: [
-                  Object.freeze({
-                    id: "gpt-5.6-sol",
-                    name: "GPT-5.6 Sol",
-                    reasoning: true,
-                    compat,
-                  }),
-                ],
-              },
-            },
-          },
-        },
-      ],
-      // SAFETY: minimal frozen manifest record reproducing production registry ownership.
-    } as never;
-    const cfg = applyModelDefaults(
-      {
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              models: [{ id: "gpt-5.6-sol", name: "GPT-5.6" } as never],
-            },
-          },
-        },
+    const frozenRegistry = catalog({
+      openai: {
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        models: [
+          Object.freeze({
+            id: "gpt-5.6-sol",
+            name: "GPT-5.6 Sol",
+            reasoning: true,
+            compat,
+          }),
+        ],
       },
-      { manifestRegistry: frozenRegistry },
-    );
-    const model = expectDefined(
-      cfg.models?.providers?.openai?.models?.[0],
-      "materialized model entry",
+    }) as never;
+    const model = materializedModel(
+      withModels([{ id: "gpt-5.6-sol", name: "GPT-5.6" } as never]),
+      frozenRegistry,
     );
 
     expect(() => {
@@ -646,25 +478,15 @@ describe("applyModelDefaults catalog seeding", () => {
   });
 
   it("falls back to generic defaults when no catalog row matches", () => {
-    const cfg = applyModelDefaults(
-      {
-        models: {
-          providers: {
-            custom: {
-              baseUrl: "https://custom.example.com/v1",
-              models: [
-                // SAFETY: mirrors a real operator config entry that omits input/reasoning/cost.
-                { id: "house-model", name: "House Model" } as never,
-              ],
-            },
-          },
-        },
-      },
-      { manifestRegistry: catalogRegistry },
-    );
-    const model = expectDefined(
-      cfg.models?.providers?.custom?.models?.[0],
-      "materialized model entry",
+    const model = materializedModel(
+      // SAFETY: mirrors a real operator config entry that omits input/reasoning/cost.
+      withModels(
+        [{ id: "house-model", name: "House Model" } as never],
+        "custom",
+        "https://custom.example.com/v1",
+      ),
+      catalogRegistry,
+      "custom",
     );
     expect(model.input).toEqual(["text"]);
     expect(model.reasoning).toBe(false);

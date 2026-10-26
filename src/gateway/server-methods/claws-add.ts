@@ -282,7 +282,6 @@ export const clawsAddHandlers: GatewayRequestHandlers = {
             assertCurrent();
             await deleteAgentConfigEntry({
               agentId,
-              allowConfigSizeDrop: true,
               assertCurrent,
               validate: (agent) => {
                 if (!isDeepStrictEqual(agent, expectedAgentConfig)) {

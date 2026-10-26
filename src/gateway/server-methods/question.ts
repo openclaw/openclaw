@@ -41,6 +41,7 @@ import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { isGatewayAdmin } from "../session-sharing.js";
 import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
 import { managerError, QuestionRequestValidationError } from "./question.errors.js";
+import { respondError } from "./response.js";
 import type { SecretStoreWriteService } from "./secrets.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
@@ -150,28 +151,22 @@ export function createQuestionHandlers(
       // this gate any operator.questions client could mint and self-answer one,
       // bypassing the operator.admin requirement on secrets.store.set.
       if (storeBound && !isGatewayAdmin(client)) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            "secret store questions require an operator.admin client",
-          ),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          "secret store questions require an operator.admin client",
         );
         return;
       }
       const identity = client?.internal?.agentRuntimeIdentity;
       const validateAuthority = context.validateAgentRuntimeApprovalAuthority;
       if ((storeBound || narrow) && (!identity || !validateAuthority)) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            storeBound
-              ? "secret store questions require trusted agent runtime authority"
-              : "question creation requires trusted agent runtime authority",
-          ),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          storeBound
+            ? "secret store questions require trusted agent runtime authority"
+            : "question creation requires trusted agent runtime authority",
         );
         return;
       }
@@ -198,13 +193,10 @@ export function createQuestionHandlers(
           request.questions.some((question) => question.isSecret) ||
           isRequesterActive?.() !== true)
       ) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            "Session-scoped questions require an ordinary question and a live agent requester.",
-          ),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          "Session-scoped questions require an ordinary question and a live agent requester.",
         );
         return;
       }
@@ -267,13 +259,10 @@ export function createQuestionHandlers(
           if (narrow) {
             authority.assertCurrent();
             if (!sessionAccess || !prepared?.canAccess(client, true, sessionAccess)) {
-              respond(
-                false,
-                undefined,
-                errorShape(
-                  ErrorCodes.FORBIDDEN,
-                  "Session-scoped questions require your own materialized ordinary session.",
-                ),
+              respondError(
+                respond,
+                ErrorCodes.FORBIDDEN,
+                "Session-scoped questions require your own materialized ordinary session.",
               );
               return;
             }
@@ -421,15 +410,15 @@ export function createQuestionHandlers(
         }
       } catch (error) {
         if (error instanceof QuestionRequestValidationError) {
-          respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
+          respondError(respond, ErrorCodes.INVALID_REQUEST, error.message);
           return;
         }
         if (!managerError(error, respond)) {
           if (storeBound) {
-            respond(
-              false,
-              undefined,
-              errorShape(ErrorCodes.UNAVAILABLE, "Secret store entry metadata is unavailable."),
+            respondError(
+              respond,
+              ErrorCodes.UNAVAILABLE,
+              "Secret store entry metadata is unavailable.",
             );
             return;
           }
@@ -496,13 +485,10 @@ export function createQuestionHandlers(
             const binding = secretQuestion?.secretStore;
             if (!binding) {
               if (request.secretStoreAllowedHosts !== undefined) {
-                respond(
-                  false,
-                  undefined,
-                  errorShape(
-                    ErrorCodes.INVALID_REQUEST,
-                    "Secret store allowed hosts require a store-bound question.",
-                  ),
+                respondError(
+                  respond,
+                  ErrorCodes.INVALID_REQUEST,
+                  "Secret store allowed hosts require a store-bound question.",
                 );
                 return;
               }
@@ -526,13 +512,10 @@ export function createQuestionHandlers(
               values?.length !== 1 ||
               value === undefined
             ) {
-              respond(
-                false,
-                undefined,
-                errorShape(
-                  ErrorCodes.INVALID_REQUEST,
-                  `question '${secretQuestion.questionId}' requires exactly one secret value`,
-                ),
+              respondError(
+                respond,
+                ErrorCodes.INVALID_REQUEST,
+                `question '${secretQuestion.questionId}' requires exactly one secret value`,
               );
               return;
             }
@@ -577,19 +560,16 @@ export function createQuestionHandlers(
                 if (!saved && managerError(error, respond)) {
                   return;
                 }
-                respond(
-                  false,
-                  undefined,
-                  errorShape(
-                    !saved && error instanceof SecretStoreValidationError
-                      ? ErrorCodes.INVALID_REQUEST
-                      : ErrorCodes.UNAVAILABLE,
-                    saved
-                      ? "Secret store entry was saved, but runtime refresh failed. Resolve provider errors and retry secrets.reload; do not resubmit this answer."
-                      : error instanceof SecretStoreValidationError
-                        ? error.message
-                        : "Secret store entry could not be saved.",
-                  ),
+                respondError(
+                  respond,
+                  !saved && error instanceof SecretStoreValidationError
+                    ? ErrorCodes.INVALID_REQUEST
+                    : ErrorCodes.UNAVAILABLE,
+                  saved
+                    ? "Secret store entry was saved, but runtime refresh failed. Resolve provider errors and retry secrets.reload; do not resubmit this answer."
+                    : error instanceof SecretStoreValidationError
+                      ? error.message
+                      : "Secret store entry could not be saved.",
                 );
               } finally {
                 authority?.release();
@@ -605,13 +585,10 @@ export function createQuestionHandlers(
             await storeWriteService.reloadReference(reload.name);
             respond(true, reload.result, undefined);
           } catch {
-            respond(
-              false,
-              undefined,
-              errorShape(
-                ErrorCodes.UNAVAILABLE,
-                "Secret store entry was saved, but runtime refresh failed. Resolve provider errors and retry secrets.reload; do not resubmit this answer.",
-              ),
+            respondError(
+              respond,
+              ErrorCodes.UNAVAILABLE,
+              "Secret store entry was saved, but runtime refresh failed. Resolve provider errors and retry secrets.reload; do not resubmit this answer.",
             );
           }
         }

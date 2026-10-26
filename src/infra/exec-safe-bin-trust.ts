@@ -18,7 +18,6 @@ type TrustedSafeBinPathParams = {
 
 export type WritableTrustedSafeBinDir = {
   dir: string;
-  groupWritable: boolean;
   worldWritable: boolean;
 };
 
@@ -99,7 +98,6 @@ function isExecutableSafeBinFile(value: string): boolean {
 function resolveTrustedSafeBinTargetDirs(
   entries: readonly string[],
   safeBins: readonly string[],
-  forComparison = true,
 ): string[] {
   const dirs: string[] = [];
   const bins = Array.from(
@@ -119,7 +117,7 @@ function resolveTrustedSafeBinTargetDirs(
       }
       try {
         const targetDir = path.dirname(fs.realpathSync(candidate));
-        const normalized = normalizeTrustedDir(targetDir, forComparison);
+        const normalized = normalizeTrustedDir(targetDir);
         if (normalized) {
           dirs.push(normalized);
         }
@@ -177,7 +175,7 @@ export function listWritableExplicitTrustedSafeBinDirs(
     if (!groupWritable && !worldWritable) {
       continue;
     }
-    hits.push({ dir, groupWritable, worldWritable });
+    hits.push({ dir, worldWritable });
   }
   return hits;
 }

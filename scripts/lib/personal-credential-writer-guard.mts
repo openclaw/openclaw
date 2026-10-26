@@ -327,6 +327,9 @@ const genericCredentialCallers = new Map<string, readonly string[]>([
     [
       key("src/tui/tui-last-session.kernel.ts", "tui.lastSession.write"),
       key("src/commands/doctor/shared/legacy-webhook-pins.ts", "recordUnwrittenWebhookCompletion"),
+      // Exclusive Doctor repair records only sessions.relative-store.v1.<path hash> fingerprints.
+      // This receipt prevents retained originals from resurrecting later-deleted conversations.
+      key("src/commands/doctor-relative-session-store.ts", "repairRelativeSessionStores"),
     ],
   ],
   [
@@ -535,7 +538,9 @@ const callers = new Map<string, readonly string[]>([
     key(sessionArtifacts, "copySessionNodeArtifactsForRepair"),
     [
       key(sessionEntries, "deleteLegacySessionEntryRows"),
-      key("src/config/sessions/legacy-main-session-migration-operations.ts", "copyClaimCrossStore"),
+      // Moved from copyClaimCrossStore: the same offline claim-copy transaction now also
+      // preserves relocation membership after source/destination claim and sharing checks.
+      key("src/config/sessions/session-claim-repair-copy.ts", "copySessionClaimForRepair"),
       key(
         "src/config/sessions/session-accessor.sqlite-canonical-repair.ts",
         "copySqliteSessionOwnedStateForRepair",

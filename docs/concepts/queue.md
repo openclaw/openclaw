@@ -105,6 +105,8 @@ Per-session `/queue` options apply to queued delivery. The `debounce` option als
 - `drop: "old"`: drop the oldest queued entries as needed, without preserving summaries.
 - `drop: "new"`: reject the newest message when the queue is already full.
 
+Gateway followup and collect debounce windows measure elapsed time, so wall-clock corrections do not shorten or extend them.
+
 The queue uses a built-in 500ms debounce. `cap` defaults to `20`, and `drop` defaults to `summarize`.
 
 ## Steer and streaming
@@ -197,6 +199,11 @@ access cancels the collected turn and blocks further effects.
   prompt and its attachments. The cancellation record prevents replay after
   reconnect. Stop and timeout cancellations keep their recovery messages.
 
+After a successful session reset, an unsent follow-up reply retained for retry
+still belongs to the original session generation. Recovery does not replay it
+into the reset session. Recovery without a reset and replies to new turns
+continue normally.
+
 Gateway-backed clients (including `openclaw tui`) forward mid-run prompts and
 let the Gateway apply the queue mode. Esc/`/stop` uses a session-scoped abort
 so lost local handles cannot leave a still-queued prompt running.
@@ -218,6 +225,10 @@ Other connected clients can display the accepted input while it waits, without w
 In `collect` mode, appending the combined
 turn and marking its source inputs consumed happen in one transaction. A browser
 reconnect can reconcile those source inputs even if it missed their final events.
+
+An unrelated announcement does not consume another active request's accepted input or include it
+in its model context. The original request keeps that input, including inputs combined by collect
+mode, for its own continuation.
 
 The chat displays recorded non-Web client sources separately from the sender, for example `Alice · via CLI`. Web sources are omitted from these labels, including in collected messages that also contain input from another client.
 Reported app names describe the submitting client; they do not establish a human identity or grant permissions.
@@ -281,7 +292,7 @@ The Control UI **System busyness** overlay and `diagnostics.lanes` report plugin
   - Active work with recent progress logs as `session.long_running`. Owned silent model calls also stay `session.long_running` until the built-in abort threshold so slow or non-streaming providers are not reported as stalled too early.
   - Active work with no recent progress logs as `session.stalled`; owned model calls, blocked tool calls, and stalled embedded runs switch to `session.stalled` at or after the abort threshold. Ownerless stale model/tool activity is not hidden as long-running.
   - `session.stuck` is reserved for recoverable stale session bookkeeping, including idle queued sessions with stale ownerless model/tool activity.
-  - Diagnostics project controller state; they do not reset lanes, clear run owners, or manufacture idle state. The controller watchdog owns recovery. A timeout requests cleanup but never proves that a writer has stopped.
+  - Incoming messages waiting for admission are `waiting`, not `processing`. Diagnostics ask the controller to reconcile stale bookkeeping when no run owns it: runnable mailbox work is woken, while queued input or retained cleanup stays visibly `waiting`. Reconciliation preserves queue counts and never releases writer custody. The controller watchdog owns active-run recovery. A timeout requests cleanup but never proves that a writer has stopped.
   - Repeated model requests without semantic progress share one stagnation clock, starting with the first retry. A long initial response that hits its output limit therefore leaves a full recovery window for the corrective request. Successfully completed embedded tools reset the clock under their current run owner, even if the enclosing response later hits its output limit. Failed, blocked, or retired-owner tools do not reset it. Fresh transport bytes or later retries cannot renew it indefinitely. Recovery rechecks that evidence before aborting, honors owned tool and provider retry deadlines, and lets the existing run owner settle before the queue drains.
   - Repeated warning lines back off while the session remains unchanged. Watchdog progress, recovery deduplication, and cleanup remain owned by the exact operation, independent of the diagnostic heartbeat.
   - When recovery aborts an interactive turn before it replied and its request is already saved in the transcript, OpenClaw attempts one continuation instead of immediately asking the user to retry. When the next queued follow-up is from the same sender and route (for example a `chat.send` with `queueMode: "followup"`), it takes over the outstanding request; otherwise a recovery turn starts on the stalled turn's route. The recovery reply is delivered the same way as any queued follow-up from that source; a Web UI (`chat.send`) recovery arrives as its own run in the chat. Group-thread participant turns get the notice instead, because queued participant replies have no delivery owner. Both use the existing transcript and are instructed not to repeat completed actions. Other senders' queued messages and channel messages that arrived during the stalled turn run afterwards as their own turns. The "stopped making progress" notice is the last resort if that continuation also stalls or cannot be scheduled, including when the original request was not yet saved. Heartbeat and cron turns are unaffected.

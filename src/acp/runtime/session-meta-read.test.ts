@@ -4,6 +4,7 @@ import { WorkerTaskPoolCore } from "@openclaw/worker-runtime";
 import { afterEach, expect, it, vi } from "vitest";
 import { captureRuntimeConfigAsyncReader } from "../../config/io.runtime.js";
 import { resetConfigRuntimeState } from "../../config/runtime-snapshot.js";
+import { captureRuntimeConfig } from "../../config/runtime-source-projection.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
@@ -23,6 +24,7 @@ import { seedCanonicalAcpSessionMeta } from "./session-meta-fixture.test-support
 import { buildAcpDatabaseSessionKey } from "./session-meta-keys.js";
 import { createAcpMeta } from "./session-meta-lifecycle.test-support.js";
 import { listAcpSessionEntries } from "./session-meta-list.js";
+import { captureAcpSessionReadContext } from "./session-meta-read-context.js";
 import { readAcpSessionEntryAsync, readAcpSessionMetaAsync } from "./session-meta-read.js";
 import * as metadataReads from "./session-meta-readonly.js";
 import { upsertAcpSessionMeta } from "./session-meta-write.js";
@@ -35,6 +37,16 @@ function seed(env: NodeJS.ProcessEnv, sessionKey: string, lifecycleRevision?: st
 }
 
 afterEach(() => vi.restoreAllMocks());
+
+it("reuses a captured config across ACP read contexts without cloning it again", async () => {
+  const config = captureRuntimeConfig(baseConfig);
+  const clone = vi.spyOn(globalThis, "structuredClone");
+  for (let index = 0; index < 3; index++) {
+    const context = await captureAcpSessionReadContext({ cfg: config });
+    expect(context.cfg).toBe(config);
+  }
+  expect(clone).not.toHaveBeenCalled();
+});
 
 it.each(["cold-file", "incognito"] as const)(
   "joins the %s session with its current metadata through the owning storage route",

@@ -4,7 +4,6 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
   OpenAsyncKeyedStoreOptions,
   PluginStateKeyedStore,
-  PluginStateOperationReceipt,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateSyncKeyedStoreForTests,
@@ -16,7 +15,8 @@ import {
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReviewRequest } from "../protocol/index.js";
-import { MemoryAuditStore, MemoryReplayStore } from "../protocol/memory-stores.test-support.js";
+import { MemoryReplayStore } from "../protocol/memory-stores.test-support.js";
+import { openReefAuditStore } from "./audit-state.js";
 import { handleReefCommand } from "./commands.js";
 import { ReefChannelConfigSchema } from "./config-schema.js";
 import { ReefMessageFlow } from "./flow.js";
@@ -116,7 +116,7 @@ function activateReviewStore(reviews: ReviewApprovalStore) {
       trust,
       reviews,
       delivered: new ReefDeliveredStore(stateRuntime),
-      audit: new MemoryAuditStore(new Uint8Array(32).fill(1)),
+      audit: openReefAuditStore(stateRuntime, new Uint8Array(32).fill(1)),
       replay: new MemoryReplayStore(),
       guard: {
         providerId: "test",
@@ -305,8 +305,12 @@ describe("Reef SQLite state", () => {
     const digest = review.approvalDigest;
 
     await expect(reviews.request(review)).resolves.toBeUndefined();
-    await expect(reviews.lookupDecision(digest)).resolves.toBe("pending");
-    await expect(reviews.lookupDecision("c".repeat(64))).resolves.toBe("none");
+    await expect(reviews.observeDecision(digest).then((receipt) => receipt.value)).resolves.toBe(
+      "pending",
+    );
+    await expect(
+      reviews.observeDecision("c".repeat(64)).then((receipt) => receipt.value),
+    ).resolves.toBe("none");
     const releaseCommand = activateReviewStore(reviews);
     try {
       for (const action of ["approve", "deny"]) {
@@ -319,7 +323,9 @@ describe("Reef SQLite state", () => {
             },
           }),
         ).rejects.toThrow("owner revoked");
-        await expect(reviews.lookupDecision(digest)).resolves.toBe("pending");
+        await expect(
+          reviews.observeDecision(digest).then((receipt) => receipt.value),
+        ).resolves.toBe("pending");
       }
     } finally {
       releaseCommand();
@@ -335,11 +341,17 @@ describe("Reef SQLite state", () => {
     await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     const sql = observeHostDataSql().calls;
-    await expect(restored.lookupDecision(digest)).resolves.toEqual({
+    await expect(
+      restored.observeDecision(digest).then((receipt) => receipt.value),
+    ).resolves.toEqual({
       approved: true,
     });
-    await expect(restored.lookupDecision(pendingReview.approvalDigest)).resolves.toBe("pending");
-    await expect(restored.lookupDecision("c".repeat(64))).resolves.toBe("none");
+    await expect(
+      restored.observeDecision(pendingReview.approvalDigest).then((receipt) => receipt.value),
+    ).resolves.toBe("pending");
+    await expect(
+      restored.observeDecision("c".repeat(64)).then((receipt) => receipt.value),
+    ).resolves.toBe("none");
     await expect(restored.list()).resolves.toEqual([pendingReview]);
     const releaseList = activateReviewStore(restored);
     try {
@@ -373,7 +385,7 @@ describe("Reef SQLite state", () => {
         method === "keys"
           ? loadKeys(runtime, () => controller.signal.throwIfAborted())
           : method === "lookup"
-            ? reviews.lookupDecision(reviewRequest().approvalDigest)
+            ? reviews.observeDecision(reviewRequest().approvalDigest)
             : reviews.list(),
       ).rejects.toBe(refusal);
     },
@@ -386,7 +398,7 @@ describe("Reef SQLite state", () => {
     const malformed = { review, approved: "false" };
     await raw.register(review.approvalDigest, malformed);
     for (const operation of [
-      () => reviews.lookupDecision(review.approvalDigest),
+      () => reviews.observeDecision(review.approvalDigest),
       () => reviews.request(review),
       () => reviews.decide(review.approvalDigest, true),
     ]) {
@@ -410,7 +422,9 @@ describe("Reef SQLite state", () => {
       "ReefReviewCapacityError",
     );
     await expect(reviews.list()).resolves.toEqual([first]);
-    await expect(reviews.lookupDecision(next.approvalDigest)).resolves.toBe("none");
+    await expect(
+      reviews.observeDecision(next.approvalDigest).then((receipt) => receipt.value),
+    ).resolves.toBe("none");
   });
 
   it.each(["request", "channel decision", "owner decision"] as const)(
@@ -443,10 +457,12 @@ describe("Reef SQLite state", () => {
           : reviews.decide(first.approvalDigest, true, assertOwnerCurrent),
       ).rejects.toBe(revoked);
       const reopened = new ReviewApprovalStore(reopen(), 1);
-      await expect(reopened.lookupDecision(first.approvalDigest)).resolves.toEqual(
-        action === "request" ? { approved: false } : "pending",
-      );
-      await expect(reopened.lookupDecision("2".repeat(64))).resolves.toBe("none");
+      await expect(
+        reopened.observeDecision(first.approvalDigest).then((receipt) => receipt.value),
+      ).resolves.toEqual(action === "request" ? { approved: false } : "pending");
+      await expect(
+        reopened.observeDecision("2".repeat(64)).then((receipt) => receipt.value),
+      ).resolves.toBe("none");
     },
   );
 
@@ -456,21 +472,8 @@ describe("Reef SQLite state", () => {
     const review = reviewRequest();
     await reviews.request(review);
     await reviews.decide(review.approvalDigest, true);
-    const receipts: PluginStateOperationReceipt<unknown>[] = [];
-    beforeNextStateOperation(
-      runtime,
-      (receipt) => {
-        if (!receipt) {
-          throw new Error("Expected a completed review operation receipt");
-        }
-        receipts.push(receipt);
-      },
-      "after",
-    );
-    await expect(reviews.lookupDecision(review.approvalDigest)).resolves.toEqual({
-      approved: true,
-    });
-    const receipt = receipts[0]!;
+    const receipt = await reviews.observeDecision(review.approvalDigest);
+    expect(receipt.value).toEqual({ approved: true });
     receipt.assertCurrent();
 
     const revocation = reviews.decide(review.approvalDigest, false);
@@ -479,9 +482,14 @@ describe("Reef SQLite state", () => {
       expect(() => receipt.assertCurrent()).toThrow("no longer current");
       const reapproval = reviews.decide(review.approvalDigest, true);
       const finalRevocation = sibling.decide(review.approvalDigest, false);
-      const observed = reviews.lookupDecision(review.approvalDigest);
+      const observed = reviews.observeDecision(review.approvalDigest);
       pending.push(reapproval, finalRevocation, observed);
-      const settled = await Promise.all([revocation, reapproval, finalRevocation, observed]);
+      const settled = await Promise.all([
+        revocation,
+        reapproval,
+        finalRevocation,
+        observed.then((observedReceipt) => observedReceipt.value),
+      ]);
       expect(settled).toEqual([review, review, review, { approved: false }]);
     } finally {
       await Promise.allSettled(pending);
@@ -516,7 +524,7 @@ describe("Reef SQLite state", () => {
     const request = reviews.request(review);
     await entered.promise;
     const decision = reviews.decide(original.approvalDigest, true);
-    const lookup = reviews.lookupDecision(original.approvalDigest);
+    const lookup = reviews.observeDecision(original.approvalDigest);
     const pending = reviews.list();
     env.OPENCLAW_STATE_DIR = redirectedDir;
     finish.resolve();
@@ -524,9 +532,11 @@ describe("Reef SQLite state", () => {
     try {
       await expect(request).resolves.toBeUndefined();
       await expect(decision).resolves.toEqual(original);
-      await expect(lookup).resolves.toEqual({ approved: true });
+      await expect(lookup.then((receipt) => receipt.value)).resolves.toEqual({ approved: true });
       await expect(pending).resolves.toEqual([retained]);
-      await expect(redirected.lookupDecision(original.approvalDigest)).resolves.toEqual({
+      await expect(
+        redirected.observeDecision(original.approvalDigest).then((receipt) => receipt.value),
+      ).resolves.toEqual({
         approved: false,
       });
     } finally {

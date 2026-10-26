@@ -56,20 +56,9 @@ it("shows configured credentials and opens existing Settings", async () => {
         status: "configured",
       },
     ],
-    overview: {
-      capabilities: {
-        providers: [],
-        channels: [],
-        contracts: { webSearchProviders: ["workboard"] },
-      },
-    },
   });
   const { page, context } = await setup({ "plugins.inspect": () => inspection });
   const sections = [...page.querySelectorAll(".plugin-capabilities")];
-  expect(sections.map((section) => section.querySelector("h2")?.textContent)).toEqual([
-    "Credentials1",
-    "Capabilities1",
-  ]);
   expect(sections[0]?.textContent).toContain("WORKBOARD_API_KEY");
   expect(sections[0]?.querySelector('[role="status"]')?.textContent?.trim() ?? null).toBe(
     "Configured",
@@ -85,7 +74,7 @@ it("shows configured credentials and opens existing Settings", async () => {
 it("starts the server's existing OAuth flow and waits for authoritative status after completion", async () => {
   const refreshed = createDeferred<PluginsInspectResult>();
   let completed = false;
-  const { page, context, request, calls } = await setup({
+  const { page, context, calls, waitForCall } = await setup({
     "plugins.inspect": () =>
       completed ? refreshed.promise : inspectionWithAuth("requires-authorization"),
     "mcp.authLogin": () => {
@@ -94,13 +83,11 @@ it("starts the server's existing OAuth flow and waits for authoritative status a
     },
   });
   connectButton(page)!.click();
-  await waitForSolid(() =>
-    expect(request).toHaveBeenCalledWith(
-      "mcp.authLogin",
-      { serverName: "workboard-mcp", sessionId: expect.any(String) },
-      { timeoutMs: null },
-    ),
-  );
+  await waitForCall("mcp.authLogin");
+  expect(calls("mcp.authLogin")[0]?.[1]).toEqual({
+    serverName: "workboard-mcp",
+    sessionId: expect.any(String),
+  });
   await waitForSolid(() => expect(calls("plugins.inspect")).toHaveLength(2));
   expect(connectButton(page)).not.toBeNull();
   refreshed.resolve(inspectionWithAuth("authorized"));

@@ -1,5 +1,4 @@
 import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
-import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
@@ -15,9 +14,9 @@ import { SecretProviderSchema } from "../config/zod-schema.core.js";
 import { decodeUtf8Input } from "../infra/utf8-input.js";
 import {
   formatExecSecretRefIdValidationMessage,
+  isValidExecSecretRefId,
   isValidFileSecretRefId,
   isValidSecretProviderAlias,
-  validateExecSecretRefId,
 } from "../secrets/ref-contract.js";
 import { resolveConfigSecretTargetByPath } from "../secrets/target-registry.js";
 import {
@@ -40,6 +39,7 @@ import {
   resolveConfigSetMode,
   type ConfigSetOptions,
 } from "./config-set-input.js";
+import { parseOptionalPositiveInteger } from "./parse-positive-integer.js";
 
 const CONFIG_PATCH_STDIN_MAX_BYTES = 1024 * 1024;
 
@@ -121,25 +121,17 @@ function parseSecretRefBuilder(params: {
       `${params.fieldPrefix}.id must be an absolute JSON pointer (or "value" for singleValue mode).`,
     );
   }
-  if (source === "exec" && !validateExecSecretRefId(id).ok) {
+  if (source === "exec" && !isValidExecSecretRefId(id)) {
     throw new Error(formatExecSecretRefIdValidationMessage());
   }
   return { source, provider, id };
 }
 
-function parseOptionalPositiveInteger(raw: string | undefined, flag: string): number | undefined {
-  if (raw === undefined) {
-    return undefined;
-  }
-  const trimmed = raw.trim();
-  if (!trimmed) {
+function parseProviderPositiveInteger(raw: string | undefined, flag: string): number | undefined {
+  if (raw !== undefined && !raw.trim()) {
     throw new Error(`${flag} must not be empty.`);
   }
-  const parsed = parseStrictPositiveInteger(trimmed);
-  if (parsed === undefined) {
-    throw new Error(`${flag} must be a positive integer.`);
-  }
-  return parsed;
+  return parseOptionalPositiveInteger(raw, flag, ".");
 }
 
 function parseProviderEnvEntries(
@@ -307,13 +299,13 @@ export function buildConfigSetOperations(params: {
       throw new Error("--provider-source is required in provider builder mode.");
     }
     const source = parseSecretRefSource(sourceRaw, "--provider-source");
-    const timeoutMs = parseOptionalPositiveInteger(opts.providerTimeoutMs, "--provider-timeout-ms");
-    const maxBytes = parseOptionalPositiveInteger(opts.providerMaxBytes, "--provider-max-bytes");
-    const noOutputTimeoutMs = parseOptionalPositiveInteger(
+    const timeoutMs = parseProviderPositiveInteger(opts.providerTimeoutMs, "--provider-timeout-ms");
+    const maxBytes = parseProviderPositiveInteger(opts.providerMaxBytes, "--provider-max-bytes");
+    const noOutputTimeoutMs = parseProviderPositiveInteger(
       opts.providerNoOutputTimeoutMs,
       "--provider-no-output-timeout-ms",
     );
-    const maxOutputBytes = parseOptionalPositiveInteger(
+    const maxOutputBytes = parseProviderPositiveInteger(
       opts.providerMaxOutputBytes,
       "--provider-max-output-bytes",
     );

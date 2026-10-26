@@ -1,4 +1,5 @@
 import { t } from "../../i18n/index.ts";
+import { registerTerminalEnglish } from "../../i18n/locales/en-terminal.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { TerminalConnection, TerminalSessionInfo } from "./terminal-connection.ts";
 import { observeTerminalRestoreInput } from "./terminal-panel-session-boot.ts";
@@ -11,6 +12,8 @@ import {
   loadPersistedTerminalSessionIds,
   persistTerminalSessionIds,
 } from "./terminal-session-storage.ts";
+
+registerTerminalEnglish();
 
 type TerminalSessionRecoveryHost = {
   storageScope: () => string;
@@ -150,7 +153,12 @@ export class TerminalPanelSessionRecovery {
       for (const sessionId of restore.pending.keys()) {
         const session = known.get(sessionId);
         if (!session) {
-          await this.restoreExitedSession(sessionId, restore);
+          const { tab } = await this.host.boot(sessionId, restore);
+          if (!this.host.isCurrent(restore.operation, restore) || tab.cancelled) {
+            this.host.discard(tab);
+          } else {
+            this.markExited(tab, sessionId);
+          }
         } else {
           const attached = await this.host.attach(
             sessionId,
@@ -188,18 +196,6 @@ export class TerminalPanelSessionRecovery {
   markExited(tab: TerminalPanelSessionTab, sessionId: string): void {
     tab.gatewaySessionId = sessionId;
     this.host.exited(tab);
-  }
-
-  private async restoreExitedSession(
-    sessionId: string,
-    restore: TerminalRestoreBatch,
-  ): Promise<void> {
-    const { tab } = await this.host.boot(sessionId, restore);
-    if (!this.host.isCurrent(restore.operation, restore) || tab.cancelled) {
-      this.host.discard(tab);
-      return;
-    }
-    this.markExited(tab, sessionId);
   }
 
   retireTab(tab: TerminalPanelSessionTab): void {

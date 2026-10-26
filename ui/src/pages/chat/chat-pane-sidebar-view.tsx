@@ -1,17 +1,16 @@
-import { dynamic } from "@solidjs/web";
-import { For, Show, createSignal, onSettled } from "solid-js";
-import { shellViewport } from "../../app/shell-viewport.ts";
+import { Portal } from "@solidjs/web";
+import { Errored, For, Loading, Show, createMemo, lazy, onSettled, type Element } from "solid-js";
+import {
+  isStaleChunkImportError,
+  retryStaleChunkReloadWhenReachable,
+} from "../../app/stale-chunk-reload.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
 import { PanelLoadingSkeleton } from "../../components/solid/panel-loading-skeleton.tsx";
-import { createTextOverflow } from "../../components/solid/text-overflow.ts";
 import "../../styles/chat/mobile-host.css";
 import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import { elementRef } from "../../lib/reactive/element-ref.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { listen } from "../../lib/reactive/listener.ts";
-import { createScrollPosition } from "../../lib/reactive/scroll-state.ts";
-import { ContentPresentation } from "../../lib/solid/presentation.ts";
 import type { ElementProperties } from "../../types/solid-elements.d.ts";
 import type {
   RegionProps,
@@ -25,6 +24,43 @@ import {
 } from "./sidebar-layout.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
+
+const MobileHostBackdrop = lazy(() => import("./chat-mobile-host.runtime.tsx"), {
+  export: "MobileHostBackdrop",
+});
+const MobileHostChrome = lazy(() => import("./chat-mobile-host.runtime.tsx"), {
+  export: "MobileHostChrome",
+});
+const MobileHostPage = lazy(() => import("./chat-mobile-host.runtime.tsx"), {
+  export: "MobileHostPage",
+});
+
+const ChatSidebarRegion = lazy(() => import("./components/chat-sidebar-region.runtime.tsx"), {
+  export: "ChatSidebarRegion",
+});
+
+function MobileHostBoundary(props: { children: Element; fallback?: Element }) {
+  return (
+    <Errored
+      fallback={(error, reset) => (
+        <LazyViewError
+          error={error()}
+          stale={isStaleChunkImportError(error())}
+          onRetry={() => {
+            if (isStaleChunkImportError(error())) {
+              void retryStaleChunkReloadWhenReachable();
+            } else {
+              reset();
+            }
+          }}
+          inline
+        />
+      )}
+    >
+      <Loading fallback={props.fallback}>{props.children}</Loading>
+    </Errored>
+  );
+}
 
 export function SidebarRegionView(props: SidebarRegionViewProps) {
   let shell!: HTMLElement;
@@ -49,182 +85,12 @@ export function SidebarRegionView(props: SidebarRegionViewProps) {
       return outlet;
     },
   };
+  const mobileActivated = createMemo<boolean>(
+    (previous) => previous === true || Boolean(props.mobileHost),
+  );
   const mobileVisible = () => Boolean(props.mobileHost?.open && !props.mobileHost.suspended);
   const panelsVisible = () => props.mobileHost?.destination.area === "panels";
   const detailsChild = () => Boolean(props.mobileHost?.destination.page);
-  const expandable = () => props.mobileHost?.destination.page?.expandable !== false;
-  const resizable = () => expandable() || props.mobileHost?.destination.page?.resizable === true;
-  const toggleExpanded = () =>
-    props.mobileHost?.toggleExpanded(shell.getBoundingClientRect().height);
-  let drag:
-    | {
-        pointer: number;
-        y: number;
-        height: number;
-        current: number;
-        minimum: number;
-        maximum: number;
-        safeTop: number;
-        dock: number;
-        independent: boolean;
-        moved: boolean;
-      }
-    | undefined;
-  let dragFrame = 0;
-  let suppressGrabberClick = false;
-  let backdropPointer: number | undefined;
-  let backdropClicked = false;
-  const paintResize = () => {
-    dragFrame = 0;
-    if (!drag) {
-      return;
-    }
-    region.style.setProperty("--mobile-live-height", `${drag.current}px`);
-    region.style.setProperty(
-      "--mobile-live-reserved",
-      `${drag.independent ? 0 : Math.min(drag.current, drag.dock)}px`,
-    );
-  };
-  const clearResize = () => {
-    cancelAnimationFrame(dragFrame);
-    dragFrame = 0;
-    delete region.dataset.mobileDragging;
-    region.style.removeProperty("--mobile-live-height");
-    region.style.removeProperty("--mobile-live-reserved");
-  };
-  const startResize = (event: PointerEvent) => {
-    if (event.button !== 0 || !resizable()) {
-      return;
-    }
-    suppressGrabberClick = false;
-    const bounds = region.getBoundingClientRect();
-    const viewport = window.visualViewport;
-    const minimum = 152 + (regionView?.readMobileChromeHeight?.() ?? 0);
-    const safeTop =
-      Number.parseFloat(getComputedStyle(region).getPropertyValue("--mobile-safe-top")) || 0;
-    const maximum = Math.max(
-      minimum,
-      Math.min(
-        bounds.height,
-        viewport ? viewport.height + viewport.offsetTop - bounds.top : bounds.height,
-      ) - safeTop,
-    );
-    const height = shell.getBoundingClientRect().height;
-    drag = {
-      pointer: event.pointerId,
-      y: event.clientY,
-      height,
-      current: height,
-      minimum,
-      maximum,
-      safeTop,
-      independent: props.mobileHost?.destination.page?.presentation === "sheet",
-      dock: Math.max(minimum, Math.min(bounds.height * 0.52, bounds.height - 200)),
-      moved: false,
-    };
-    if (event.currentTarget instanceof HTMLElement) {
-      event.currentTarget.setPointerCapture(event.pointerId);
-    }
-  };
-  const resize = (event: PointerEvent) => {
-    if (!drag || drag.pointer !== event.pointerId || !resizable()) {
-      return;
-    }
-    const delta = drag.y - event.clientY;
-    if (!drag.moved && Math.abs(delta) < 4) {
-      return;
-    }
-    drag.moved = true;
-    suppressGrabberClick = true;
-    region.dataset.mobileDragging = "true";
-    drag.current = Math.max(drag.minimum, Math.min(drag.maximum, drag.height + delta));
-    if (!dragFrame) {
-      dragFrame = requestAnimationFrame(paintResize);
-    }
-  };
-  const endResize = () => {
-    const completed = drag;
-    drag = undefined;
-    if (!completed?.moved || !region.hasAttribute("data-mobile-dragging")) {
-      return;
-    }
-    cancelAnimationFrame(dragFrame);
-    dragFrame = 0;
-    const height =
-      !completed.independent && Math.abs(completed.current - completed.dock) <= 24
-        ? completed.dock
-        : completed.current;
-    const mode = height > completed.dock ? "expanded" : "dock";
-    props.mobileHost?.resize(height, mode, mode === "expanded" ? completed.dock : 0);
-    // Keep the live geometry through the owner's commit; then only the final snap animates.
-    onSettled(clearResize);
-  };
-  onSettled(() => {
-    const viewportChanged = () => {
-      if (!drag?.moved) {
-        return;
-      }
-      const bounds = region.getBoundingClientRect();
-      const viewport = window.visualViewport;
-      drag.maximum = Math.max(
-        drag.minimum,
-        Math.min(
-          bounds.height,
-          viewport ? viewport.height + viewport.offsetTop - bounds.top : bounds.height,
-        ) - drag.safeTop,
-      );
-      drag.dock = Math.max(drag.minimum, Math.min(bounds.height * 0.52, bounds.height - 200));
-      drag.current = Math.min(drag.current, drag.maximum);
-      if (!dragFrame) {
-        dragFrame = requestAnimationFrame(paintResize);
-      }
-    };
-    const stopViewport = window.visualViewport
-      ? listen(window.visualViewport, "resize", viewportChanged)
-      : undefined;
-    return () => {
-      stopViewport?.();
-      drag = undefined;
-      clearResize();
-    };
-  });
-  onSettled(() => {
-    // One capture pair covers native nested scrollers without reactive work per frame.
-    const scrolling = new Set<HTMLElement>();
-    const start = (event: Event) => {
-      if (
-        props.mobileHost &&
-        event.target instanceof HTMLElement &&
-        !event.target.hasAttribute("data-mobile-scrolling")
-      ) {
-        event.target.setAttribute("data-mobile-scrolling", "");
-        scrolling.add(event.target);
-      }
-    };
-    const end = (event: Event) => {
-      if (event.target instanceof HTMLElement) {
-        event.target.removeAttribute("data-mobile-scrolling");
-        scrolling.delete(event.target);
-      }
-    };
-    const stopScroll = listen(shell, "scroll", start, { capture: true, passive: true });
-    const stopScrollEnd = listen(shell, "scrollend", end, { capture: true, passive: true });
-    return () => {
-      stopScroll();
-      stopScrollEnd();
-      for (const element of scrolling) {
-        element.removeAttribute("data-mobile-scrolling");
-      }
-      scrolling.clear();
-    };
-  });
-  const ScrollFades = () => {
-    onSettled(() => props.mobileScrollFades?.connect(shell));
-    return undefined;
-  };
-  onSettled(() =>
-    shellViewport.subscribe(() => props.mobileHost?.onViewportChange(shellViewport.snapshot)),
-  );
   const column = () => props.layout.columns[0];
   const visiblePanels = () =>
     column()?.panels.filter(
@@ -238,6 +104,95 @@ export function SidebarRegionView(props: SidebarRegionViewProps) {
   const collapsed = () =>
     props.narrow ||
     (props.availableWidth > 0 && props.availableWidth < SIDEBAR_NARROW_BREAKPOINT_PX);
+  function RegionPlaceholder(status: { error?: unknown; retry?: () => void }) {
+    return (
+      <Portal mount={outlet}>
+        <For each={visiblePanels()} keyed={(panel) => panel.id}>
+          {(panel) => {
+            const definition = () =>
+              props.panelDefinitions.find((entry) => entry.slot === panel().slot)!;
+            return (
+              <section
+                class={[
+                  "side-panel__panel",
+                  { "sidebar-region__failed-panel": Boolean(status.retry) },
+                ]}
+                data-region={panel().id === props.layout.mainPanelId ? "main" : "side"}
+              >
+                <Show
+                  when={status.retry}
+                  fallback={<PanelLoadingSkeleton {...definition().loading} />}
+                >
+                  <header class="rail-header">
+                    <strong>{definition().label}</strong>
+                    <button
+                      class="rail-header__action"
+                      type="button"
+                      aria-label={t("chat.sidebarColumns.close", { panel: definition().label })}
+                      onClick={() => props.callbacks.closeSlot(panel().slot)}
+                    >
+                      <Icon name="x" />
+                    </button>
+                  </header>
+                  <LazyViewError
+                    error={status.error}
+                    stale={isStaleChunkImportError(status.error)}
+                    onRetry={() => status.retry?.()}
+                  />
+                </Show>
+              </section>
+            );
+          }}
+        </For>
+      </Portal>
+    );
+  }
+  function RegionRuntime() {
+    // Refs belong to the conditional region, outside Loading's tracked children.
+    const regionRefs = [
+      elementRef((element: HTMLElementTagNameMap["openclaw-chat-sidebar-region"]) =>
+        props.onRegionViewRef?.(element),
+      ),
+      elementRef((element: HTMLElementTagNameMap["openclaw-chat-sidebar-region"]) => {
+        regionView = element;
+        return () => {
+          regionView = undefined;
+        };
+      }),
+    ];
+    return (
+      <Errored
+        fallback={(error) => (
+          <RegionPlaceholder
+            error={error()}
+            retry={() => void retryStaleChunkReloadWhenReachable()}
+          />
+        )}
+      >
+        <Loading fallback={<RegionPlaceholder />}>
+          <ChatSidebarRegion
+            ref={regionRefs}
+            elements={elements}
+            panelIdPrefix={props.panelIdPrefix}
+            mobileHost={props.mobileHost}
+            onScrollPortRef={props.mobileScrollFades?.register}
+            presentation={props.presentation}
+            conversationTab={props.conversationTab}
+            layout={props.layout}
+            fetchFavicon={props.fetchFavicon}
+            panelDefinitions={props.panelDefinitions}
+            callbacks={props.callbacks}
+            narrow={props.narrow}
+            sideFocusLocked={props.sideFocusLocked === true}
+            sideFocusManaged={props.sideFocusManaged === true}
+            sideFocusOrigin={props.sideFocusOrigin}
+            availableWidth={props.availableWidth}
+            onPanelReady={props.onPanelReady}
+          />
+        </Loading>
+      </Errored>
+    );
+  }
   return (
     <div
       ref={[(element) => (region = element), elementRef(props.onRegionElementRef)]}
@@ -324,34 +279,6 @@ export function SidebarRegionView(props: SidebarRegionViewProps) {
           </openclaw-tooltip>
         </div>
       </Show>
-      <Show when={props.regionError === undefined}>
-        <openclaw-chat-sidebar-region
-          ref={[
-            elementRef(props.onRegionViewRef),
-            elementRef((element) => {
-              regionView = element;
-              return () => {
-                regionView = undefined;
-              };
-            }),
-          ]}
-          prop:elements={elements}
-          prop:panelIdPrefix={props.panelIdPrefix}
-          prop:mobileHost={props.mobileHost}
-          prop:onScrollPortRef={props.mobileScrollFades?.register}
-          prop:presentation={props.presentation}
-          prop:conversationTab={props.conversationTab}
-          prop:layout={props.layout}
-          prop:fetchFavicon={props.fetchFavicon}
-          prop:panelDefinitions={props.panelDefinitions}
-          prop:callbacks={props.callbacks}
-          prop:narrow={props.narrow}
-          prop:sideFocusLocked={props.sideFocusLocked === true}
-          prop:sideFocusManaged={props.sideFocusManaged === true}
-          prop:sideFocusOrigin={props.sideFocusOrigin}
-          prop:availableWidth={props.availableWidth}
-        />
-      </Show>
       <div
         id={`${props.panelIdPrefix}-conversation`}
         class="sidebar-region__primary"
@@ -364,42 +291,10 @@ export function SidebarRegionView(props: SidebarRegionViewProps) {
       >
         {props.primary}
       </div>
-      <Show
-        when={
-          props.mobileHost &&
-          mobileVisible() &&
-          (props.mobileHost.mode === "expanded" ||
-            props.mobileHost.destination.page?.presentation === "sheet")
-        }
-      >
-        <div
-          class="chat-mobile-host__backdrop"
-          aria-hidden="true"
-          onPointerDown={(event) => {
-            backdropPointer = event.pointerId;
-            backdropClicked = false;
-          }}
-          onPointerUp={(event) => {
-            backdropClicked = backdropPointer === event.pointerId;
-            backdropPointer = undefined;
-          }}
-          onPointerCancel={() => {
-            backdropPointer = undefined;
-            backdropClicked = false;
-          }}
-          onPointerLeave={() => {
-            backdropPointer = undefined;
-            backdropClicked = false;
-          }}
-          onClick={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            if (backdropClicked) {
-              props.mobileHost?.close();
-            }
-            backdropClicked = false;
-          }}
-        />
+      <Show when={mobileActivated()}>
+        <MobileHostBoundary>
+          <MobileHostBackdrop view={props} />
+        </MobileHostBoundary>
       </Show>
       <section
         ref={(element) => (shell = element)}
@@ -411,6 +306,7 @@ export function SidebarRegionView(props: SidebarRegionViewProps) {
         inert={Boolean(props.mobileHost) && !mobileVisible()}
         aria-label={props.mobileHost ? t("chat.sessionHeader.panels") : undefined}
         onKeyDown={(event) => {
+          // Keep delegated ordering: an open menu consumes Escape before its host closes.
           if (event.key === "Escape" && !event.defaultPrevented && props.mobileHost) {
             event.preventDefault();
             props.mobileHost.close();
@@ -426,146 +322,33 @@ export function SidebarRegionView(props: SidebarRegionViewProps) {
             ) ||
               target.isContentEditable)
           ) {
-            toggleExpanded();
+            props.mobileHost.toggleExpanded(shell.getBoundingClientRect().height);
           }
         }}
       >
-        <Show when={props.mobileHost}>
-          <ScrollFades />
-          <Show when={resizable()}>
-            <button
-              class="chat-mobile-host__grabber"
-              type="button"
-              aria-label={
-                !expandable()
-                  ? t("board.widget.resizeHandle", {
-                      title: props.mobileHost?.destination.page?.title ?? "",
-                    })
-                  : props.mobileHost?.mode === "expanded"
-                    ? t("common.restore")
-                    : t("chat.sidePanel.expandPanel", { panel: t("chat.sidePanel.label") })
-              }
-              onPointerDown={startResize}
-              onPointerMove={resize}
-              onPointerUp={endResize}
-              onLostPointerCapture={endResize}
-              onPointerCancel={() => {
-                clearResize();
-                drag = undefined;
-              }}
-              onClick={(event) => {
-                if (expandable() && (event.detail === 0 || !suppressGrabberClick)) {
-                  toggleExpanded();
-                }
-                suppressGrabberClick = false;
-                drag = undefined;
-              }}
-            >
-              <span />
-            </button>
-          </Show>
-          <header class="chat-mobile-host__header">
-            <button
-              type="button"
-              class="chat-mobile-host__circle"
-              aria-label={
-                detailsChild() && props.mobileHost?.destination.backTo
-                  ? t("common.back")
-                  : t("common.close")
-              }
-              onClick={() =>
-                detailsChild() && props.mobileHost?.destination.backTo
-                  ? props.mobileHost.back()
-                  : props.mobileHost?.close()
-              }
-            >
-              <Icon
-                name={detailsChild() && props.mobileHost?.destination.backTo ? "chevronLeft" : "x"}
-              />
-            </button>
-            <Show
-              when={detailsChild() ? props.mobileHost?.destination.page : undefined}
-              fallback={
-                <div class="chat-mobile-host__segments">
-                  <button
-                    type="button"
-                    aria-pressed={
-                      props.mobileHost?.destination.area === "details" ? "true" : "false"
-                    }
-                    onClick={() => props.mobileHost?.navigate({ area: "details" })}
-                  >
-                    {t("chat.sessionDetails.title")}
-                  </button>
-                  <button
-                    type="button"
-                    aria-pressed={
-                      props.mobileHost?.destination.area === "panels" ? "true" : "false"
-                    }
-                    onClick={() => props.mobileHost?.navigate({ area: "panels" })}
-                  >
-                    {t("chat.sessionHeader.panels")}
-                  </button>
-                </div>
-              }
-            >
-              {(page) => {
-                const Heading = dynamic(() => page().heading ?? (() => page().title));
-                return (
-                  <Show
-                    when={page().details?.kind === "pull-request"}
-                    fallback={
-                      <div
-                        ref={createTextOverflow(() => page().title)}
-                        class="chat-mobile-host__title"
-                        data-details-route={page().details?.kind}
-                      >
-                        <Heading />
-                      </div>
-                    }
-                  >
-                    <div
-                      class="chat-mobile-host__title"
-                      data-details-route="pull-request"
-                      title={page().title}
-                    >
-                      <Heading />
-                    </div>
-                  </Show>
-                );
-              }}
-            </Show>
-            {props.mobileHost?.destination.page?.headerActions}
-            <Show when={expandable()}>
-              <button
-                type="button"
-                class="chat-mobile-host__circle"
-                aria-label={
-                  props.mobileHost?.mode === "expanded"
-                    ? t("common.restore")
-                    : t("chat.sidePanel.expandPanel", { panel: t("chat.sidePanel.label") })
-                }
-                onClick={toggleExpanded}
-              >
-                <Icon
-                  name={
-                    props.mobileHost?.mode === "expanded"
-                      ? "sessionPanelRestore"
-                      : "sessionPanelExpand"
+        <Show when={mobileActivated()}>
+          <MobileHostBoundary
+            fallback={
+              <Show when={props.mobileHost}>
+                <Show
+                  when={
+                    props.mobileHost?.destination.page?.expandable !== false ||
+                    props.mobileHost?.destination.page?.resizable === true
                   }
-                />
-              </button>
-            </Show>
-            <Show when={detailsChild() && props.mobileHost?.destination.backTo}>
-              <button
-                type="button"
-                class="chat-mobile-host__circle"
-                aria-label={t("common.close")}
-                onClick={() => props.mobileHost?.close()}
-              >
-                <Icon name="x" />
-              </button>
-            </Show>
-          </header>
+                >
+                  <div class="chat-mobile-host__grabber" aria-hidden="true" />
+                </Show>
+                <div class="chat-mobile-host__header" aria-hidden="true" />
+              </Show>
+            }
+          >
+            <MobileHostChrome
+              view={props}
+              readRegion={() => region}
+              readShell={() => shell}
+              readRegionView={() => regionView}
+            />
+          </MobileHostBoundary>
         </Show>
         <Show when={props.mobileHost?.setDetailsMount} keyed>
           {(attach) => {
@@ -585,97 +368,22 @@ export function SidebarRegionView(props: SidebarRegionViewProps) {
             Boolean(props.mobileHost.destination.page && !props.mobileHost.destination.page.details)
           }
         />
-        <Show
-          when={
-            detailsChild() && !props.mobileHost?.destination.page?.details
-              ? props.mobileHost?.destination.page
-              : undefined
-          }
-        >
-          {(page) => {
-            const Page = dynamic(() => page().render ?? (() => page().content));
-            const [scrollport, setScrollport] = createSignal<HTMLDivElement>();
-            createScrollPosition(() => ({
-              restore: {
-                identity: [page().key, scrollport()],
-                target: scrollport(),
-                top: 0,
-              },
-            }));
-            return (
-              <ContentPresentation value={mobileVisible}>
-                <div
-                  class="chat-mobile-host__page"
-                  data-mobile-page={page().key}
-                  ref={[setScrollport, elementRef(props.mobileScrollFades?.register)]}
-                >
-                  <Page />
-                </div>
-              </ContentPresentation>
-            );
-          }}
+        <Show when={mobileActivated()}>
+          <MobileHostBoundary>
+            <MobileHostPage view={props} />
+          </MobileHostBoundary>
         </Show>
         <div
           class="chat-mobile-host__panels"
           hidden={Boolean(props.mobileHost) && (!panelsVisible() || detailsChild())}
           inert={Boolean(props.mobileHost) && (!panelsVisible() || detailsChild())}
         >
-          <Show when={props.regionError === null}>
-            <For each={visiblePanels()} keyed={(panel) => panel.id}>
-              {(panel) => (
-                <div
-                  class="side-panel__panel"
-                  data-region={panel().id === props.layout.mainPanelId ? "main" : "side"}
-                >
-                  <PanelLoadingSkeleton
-                    {...props.panelDefinitions.find(
-                      (definition) => definition.slot === panel().slot,
-                    )!.loading}
-                  />
-                </div>
-              )}
-            </For>
-          </Show>
-          <Show
-            when={props.regionError != null}
-            fallback={
-              <div class="sidebar-region__right-runtime" ref={(element) => (outlet = element)} />
-            }
-          >
-            <div class="sidebar-region__right-runtime" ref={(element) => (outlet = element)}>
-              <For each={visiblePanels()} keyed={(panel) => panel.id}>
-                {(panel) => {
-                  const label = () =>
-                    props.panelDefinitions.find((definition) => definition.slot === panel().slot)!
-                      .label;
-                  return (
-                    <section
-                      class="side-panel__panel sidebar-region__failed-panel"
-                      data-region={panel().id === props.layout.mainPanelId ? "main" : "side"}
-                    >
-                      {/* Shell chrome cannot depend on the region module that failed to load. */}
-                      <header class="rail-header">
-                        <strong>{label()}</strong>
-                        <button
-                          class="rail-header__action"
-                          type="button"
-                          aria-label={t("chat.sidebarColumns.close", {
-                            panel: label(),
-                          })}
-                          onClick={() => props.callbacks.closeSlot(panel().slot)}
-                        >
-                          <Icon name="x" />
-                        </button>
-                      </header>
-                      <LazyViewError {...props.regionError!} />
-                    </section>
-                  );
-                }}
-              </For>
-            </div>
-          </Show>
+          <div class="sidebar-region__right-runtime" ref={(element) => (outlet = element)} />
         </div>
       </section>
+      <Show when={props.layout.columns.length > 0}>
+        <RegionRuntime />
+      </Show>
     </div>
   );
 }

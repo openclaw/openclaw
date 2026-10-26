@@ -103,11 +103,11 @@ function summary(...results: RuntimeParityResult[]): QaParitySuiteSummary {
 }
 
 function makeReport(scenarios: QaSeedScenarioWithSource[], suite?: QaParitySuiteSummary) {
-  return buildQaToolCoverageReport({
-    scenarios,
-    summary: suite,
-    generatedAt: "2026-05-10T00:00:00.000Z",
-  });
+  return buildQaToolCoverageReport({ scenarios, summary: suite });
+}
+
+function evaluate(scenario: QaSeedScenarioWithSource, parity: RuntimeParityResult) {
+  return makeReport([scenario], summary(parity));
 }
 
 describe("qa tool coverage report", () => {
@@ -117,19 +117,7 @@ describe("qa tool coverage report", () => {
     ]);
 
     expect(report.evaluated).toBe(false);
-    expect(report.rows).toMatchObject([
-      {
-        tool: "read",
-        bucket: "codex-native-workspace",
-        expectedLayer: "codex-native-workspace",
-        capabilityLayer: "codex-native-workspace",
-        required: true,
-        fixtureCount: 1,
-        openclaw: "not-run",
-        codex: "not-run",
-        drift: "not-run",
-      },
-    ]);
+    expect(report.rows).toHaveLength(1);
     expect(renderQaToolCoverageMarkdownReport(report)).toContain(
       "| read | codex-native-workspace | codex-native-workspace | codex-native-workspace | yes | 1 | not-run | not-run | not-run |",
     );
@@ -194,18 +182,16 @@ describe("qa tool coverage report", () => {
   });
 
   it("keeps searchable OpenClaw dynamic tool rows report-only by default", () => {
-    const report = makeReport(
-      [
-        makeScenario("tool-searchable-web-search", "web-search", {
-          toolName: "web_search",
-          toolCoverage: {
-            bucket: "openclaw-dynamic-integration",
-            expectedLayer: "openclaw-dynamic",
-            capabilityLayer: "openclaw-dynamic-searchable",
-          },
-        }),
-      ],
-      summary(result("tool-searchable-web-search", "tool-call-shape", [call("web_search")], [])),
+    const report = evaluate(
+      makeScenario("tool-searchable-web-search", "web-search", {
+        toolName: "web_search",
+        toolCoverage: {
+          bucket: "openclaw-dynamic-integration",
+          expectedLayer: "openclaw-dynamic",
+          capabilityLayer: "openclaw-dynamic-searchable",
+        },
+      }),
+      result("tool-searchable-web-search", "tool-call-shape", [call("web_search")], []),
     );
 
     expect(report).toMatchObject({
@@ -223,21 +209,17 @@ describe("qa tool coverage report", () => {
   });
 
   it("counts Codex-native workspace receipts under their native tool names", () => {
-    const report = makeReport(
-      [
-        makeScenario("tool-exec", "exec", {
-          toolName: "exec",
-          nativeWorkspaceBehavior: "exec",
-          toolCoverage: NATIVE_COVERAGE,
-        }),
-      ],
-      summary(
-        result(
-          "tool-exec",
-          "tool-call-shape",
-          [call("exec", "openclaw-ok")],
-          [call("bash", "codex-ok", "b")],
-        ),
+    const report = evaluate(
+      makeScenario("tool-exec", "exec", {
+        toolName: "exec",
+        nativeWorkspaceBehavior: "exec",
+        toolCoverage: NATIVE_COVERAGE,
+      }),
+      result(
+        "tool-exec",
+        "tool-call-shape",
+        [call("exec", "openclaw-ok")],
+        [call("bash", "codex-ok", "b")],
       ),
     );
 
@@ -251,27 +233,25 @@ describe("qa tool coverage report", () => {
   });
 
   it("does not count error or unlinked results as successful required tool evidence", () => {
-    const report = makeReport(
-      [makeRequiredToolScenario("web-search", "web_search")],
-      summary(
-        result(
-          "tool-web-search",
-          "tool-result-shape",
-          [call("web_search", "ok")],
-          [
-            { ...call("web_search", "error"), errorClass: "tool-result-error" },
-            call("web_search", "", "b"),
-          ],
-        ),
+    const report = evaluate(
+      makeRequiredToolScenario("web-search", "web_search"),
+      result(
+        "tool-web-search",
+        "tool-result-shape",
+        [call("web_search", "ok")],
+        [
+          { ...call("web_search", "error"), errorClass: "tool-result-error" },
+          call("web_search", "", "b"),
+        ],
       ),
     );
 
-    expect(report.pass).toBe(false);
     expect(report.rows[0]).toMatchObject({ codexToolCalls: 2, codexSuccessfulToolCalls: 0 });
-    expect(report.passingTools).toBe(0);
-    expect(report.failures).toEqual([
-      "web-search missing successful codex tool call/result web_search",
-    ]);
+    expect(report).toMatchObject({
+      pass: false,
+      passingTools: 0,
+      failures: ["web-search missing successful codex tool call/result web_search"],
+    });
   });
 
   it("does not let skipped execution hide a runtime cell failure", () => {

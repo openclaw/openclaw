@@ -171,14 +171,15 @@ export function createComposerMobileInteraction(
           }
           pointerOrigin = event.composedPath()[0];
           setKeyboardNavigation(false);
-          // A tap on the editor starts writing even if a closing drawer or
-          // keyboard transition prevents a new focusin event.
+          // Focus during the tap, before expansion moves the native hit target.
+          // iOS needs this user gesture to open the software keyboard.
           if (
             event.button === 0 &&
-            pointerOrigin instanceof Node &&
+            pointerOrigin instanceof HTMLTextAreaElement &&
             pointerOrigin === state.composerTextarea &&
             editable(pointerOrigin)
           ) {
+            pointerOrigin.focus({ preventScroll: true });
             changeEditing(true);
           }
           if (pointerOrigin instanceof Node && !insideComposer(pointerOrigin)) {

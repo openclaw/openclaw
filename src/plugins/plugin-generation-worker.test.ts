@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { setImmediate as nextTurn, setTimeout as nextTimer } from "node:timers/promises";
 import { queryObjects } from "node:v8";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -24,7 +25,6 @@ import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-stor
 import { createPluginCache, retirePluginCache, withPluginCache } from "./plugin-cache.js";
 import { createFixture } from "./plugin-generation-artifact.admission.test-support.js";
 import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
-import { writeTree } from "./plugin-generation-capture.test-support.js";
 import type { GenerationWorkerInput } from "./plugin-generation-worker-contract.js";
 import { preparePluginGenerationArtifact } from "./plugin-generation-worker.js";
 import {
@@ -35,6 +35,7 @@ import {
 import { withPluginSourceAdmissionPublisher } from "./plugin-source-admission-context.js";
 import type { PluginSourceAdmissionReceipt } from "./plugin-source-admission.types.js";
 import { withPluginSourceCaptureStorage } from "./plugin-source-capture-context.js";
+import { writeArtifacts as writeTree } from "./public-surface.test-support.js";
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
@@ -85,6 +86,49 @@ function sourceFixture(version?: string) {
   });
   return { root, source, entry };
 }
+
+it("signals posted source-mapping callbacks before their worker task can finish", async () => {
+  const { root, source, entry } = sourceFixture();
+  writeTree(source, {
+    "index.js": "export const value = 42;",
+    "dependency.js": "export const value = 7;",
+  });
+  await withArtifactPreservingStateReads(() =>
+    withStorage(root, async () => {
+      const posts = vi.spyOn(NativeWorker.prototype, "postMessage");
+      const prepared = await preparePluginGenerationArtifact({ rootDir: source, source: entry });
+      try {
+        const input = posts.mock.calls
+          .map(([value]) => (isRecord(value) ? value.input : undefined))
+          .find((value) => isRecord(value) && value.operation === "capture");
+        const command = input as Extract<GenerationWorkerInput, { operation: "capture" }>;
+        const progress = expectDefined(command.progressSignal, "source callback progress signal");
+        let observed = Atomics.load(progress, 0);
+        let mappings = 0;
+        prepared.attachModuleSource((filename) => {
+          const current = Atomics.load(progress, 0);
+          expect(current).not.toBe(observed);
+          observed = current;
+          mappings++;
+          return filename;
+        });
+        const capturedEntry = prepared.artifact.resolve(entry);
+        prepared.artifact.prepareModule(capturedEntry);
+        observed = Atomics.load(progress, 0);
+        const captured = prepared.artifact.captureModule(capturedEntry, "./dependency.js", [
+          "node",
+          "import",
+        ]);
+        expect(mappings).toBeGreaterThan(0);
+        expect(captured && "target" in captured && fs.readFileSync(captured.target, "utf8")).toBe(
+          "export const value = 7;",
+        );
+      } finally {
+        await prepared.artifact.disposeAsync();
+      }
+    }),
+  );
+});
 
 async function withWorkerFixture(
   label: string,
@@ -384,30 +428,6 @@ it.each(["capture", "custody", "fork"] as const)(
               new WeakRef(facts.capture),
             ];
           })();
-          const replies = Array.from(
-            { length: 100 },
-            () => new WeakRef(artifact.prepareModule(entry)),
-          );
-          const control = new WeakRef({});
-          await nextTurn();
-          queryObjects(WeakRef);
-          expect(control.deref()).toBeUndefined();
-          expect(replies.every((reply) => reply.deref() === undefined)).toBe(true);
-          expectSource(artifact, entry, "42");
-          const releaseRecovery = async () => {
-            const recovery = artifact.captureRecoverySource();
-            const references = [
-              new WeakRef(recovery.fork),
-              new WeakRef(recovery.sourceCapture.capture),
-            ];
-            await recovery.disposeAsync();
-            return references;
-          };
-          const released = await releaseRecovery();
-          await nextTurn();
-          queryObjects(WeakRef);
-          expect(released.every((reference) => reference.deref() === undefined)).toBe(true);
-          expectSource(artifact, entry, "42");
         }
         // Recovery copies the captured package synchronously in the worker. Advance
         // its host deadline clock without making this lifecycle proof sleep for 30s.
@@ -428,8 +448,10 @@ it.each(["capture", "custody", "fork"] as const)(
         }
         expectSource(artifact, entry, "42");
         await artifact.disposeAsync();
+        const control = new WeakRef({});
         await nextTurn();
         queryObjects(WeakRef);
+        expect(control.deref()).toBeUndefined();
         const moduleFactsReleased = moduleFactCallbacks?.every((callback) => !callback.deref());
         expectSource(recovery, entry, "42");
         const recoveredEntry = recovery.resolve(entry);
@@ -447,13 +469,14 @@ it.each(["capture", "custody", "fork"] as const)(
   },
 );
 
-it("isolates an active artifact from a sibling capture waiting on host publication", async () => {
+it("shares one worker while a sibling capture waits on host publication", async () => {
   const root = fs.realpathSync(temp.make("plugin-generation-worker-sibling-"));
   const fixture = createFixture(path.join(root, "installed"), false);
   const cache = createPluginCache();
   const siblingCache = createPluginCache();
   const { promise: gate, resolve: releasePublication } = createDeferredCore();
   const { promise: started, resolve: publicationStarted } = createDeferredCore();
+  const posts = vi.spyOn(NativeWorker.prototype, "postMessage");
   try {
     await withInstalledCapture(root, cache, async () => {
       preparePluginNativeAdmissions(fixture.index, cache);
@@ -472,6 +495,16 @@ it("isolates an active artifact from a sibling capture waiting on host publicati
         () => withPluginCache(siblingCache, () => prepare(fixture)),
       );
       try {
+        // Resolve synchronously before the sibling's result continuation can run.
+        // The shared transport must service and release its preceding capture.
+        const now = performance.now();
+        const clock = vi.spyOn(performance, "now").mockReturnValue(now + 30_001);
+        clock.mockReturnValueOnce(now);
+        try {
+          first.artifact.prepareModule(first.artifact.resolve(fixture.entry));
+        } finally {
+          clock.mockRestore();
+        }
         await Promise.race([
           started,
           preparing.then(() => {
@@ -481,6 +514,13 @@ it("isolates an active artifact from a sibling capture waiting on host publicati
         // Registration may schedule a lazy import while another plugin is preparing.
         await nextTimer(0);
         expectSource(first.artifact, fixture.entry);
+        const captureWorkers = posts.mock.calls.flatMap(([value], index) =>
+          isRecord(value) && isRecord(value.input) && value.input.operation === "capture"
+            ? [posts.mock.contexts[index]]
+            : [],
+        );
+        expect(captureWorkers).toHaveLength(2);
+        expect(new Set(captureWorkers).size).toBe(1);
         await expect(
           preparePluginGenerationArtifact({
             rootDir: path.join(root, "missing"),

@@ -13,6 +13,7 @@ import {
 } from "./scenario-catalog.js";
 import { runScenarioFlow } from "./scenario-flow-runner.js";
 import {
+  addQaFlowTestOutbound,
   runLoadedScenarioFlow,
   assertTelegramRichObservationFlow,
   telegramRichObservationCases,
@@ -83,15 +84,6 @@ async function runWebchatTranscriptWait(
     flow: readWebchatTranscriptWaitFlow(),
     api: {
       readSessionTranscriptSummary,
-      waitForCondition: async <T>(check: () => Promise<T | undefined>) => {
-        for (let attempt = 0; attempt < 10; attempt += 1) {
-          const value = await check();
-          if (value !== undefined) {
-            return value;
-          }
-        }
-        throw new Error("test condition was not met");
-      },
       normalizeLowercaseStringOrEmpty,
       formatErrorMessage: coerceErrorMessage,
       liveTurnTimeoutMs: (_env: unknown, timeoutMs: number) => timeoutMs,
@@ -229,11 +221,7 @@ function runPlanningEvidenceFixture(
     flow: readPlanningEvidenceFlow(fixture.scenario),
     state,
     onWaitForOutboundMessage: ({ state: currentState }) => {
-      currentState.addOutboundMessage({
-        accountId: "qa-channel",
-        to: "dm:qa-operator",
-        text: fixture.outboundText,
-      });
+      addQaFlowTestOutbound(currentState, "dm:qa-operator", fixture.outboundText);
     },
     api: {
       env: {
@@ -673,11 +661,7 @@ describe("scenario-flow-runner", () => {
     await expect(
       runLoadedScenarioFlow(scenarioId, {
         onWaitForOutboundMessage: ({ state }) => {
-          state.addOutboundMessage({
-            accountId: "qa-channel",
-            to,
-            text,
-          });
+          addQaFlowTestOutbound(state, to, text);
         },
       }),
     ).rejects.toThrow("waiting for outbound marker");
@@ -688,18 +672,10 @@ describe("scenario-flow-runner", () => {
       runLoadedScenarioFlow("qa-channel-reconnect-dedupe", {
         onWaitForOutboundMessage: ({ waitCount, state }) => {
           if (waitCount === 1) {
-            state.addOutboundMessage({
-              accountId: "qa-channel",
-              to: "channel:qa-room",
-              text: "RECONNECT-FIRST-OK",
-            });
+            addQaFlowTestOutbound(state, "channel:qa-room", "RECONNECT-FIRST-OK");
             return;
           }
-          state.addOutboundMessage({
-            accountId: "qa-channel",
-            to: "channel:qa-room",
-            text: "RECONNECT-FIRST-OK",
-          });
+          addQaFlowTestOutbound(state, "channel:qa-room", "RECONNECT-FIRST-OK");
         },
       }),
     ).rejects.toThrow("waiting for outbound marker");
@@ -710,23 +686,11 @@ describe("scenario-flow-runner", () => {
       runLoadedScenarioFlow("qa-channel-reconnect-dedupe", {
         onWaitForOutboundMessage: ({ waitCount, state }) => {
           if (waitCount === 1) {
-            state.addOutboundMessage({
-              accountId: "qa-channel",
-              to: "channel:qa-room",
-              text: "RECONNECT-FIRST-OK",
-            });
+            addQaFlowTestOutbound(state, "channel:qa-room", "RECONNECT-FIRST-OK");
             return;
           }
-          state.addOutboundMessage({
-            accountId: "qa-channel",
-            to: "channel:qa-room",
-            text: "RECONNECT-SECOND-OK",
-          });
-          state.addOutboundMessage({
-            accountId: "qa-channel",
-            to: "channel:qa-room",
-            text: "unmarked duplicate delivery",
-          });
+          addQaFlowTestOutbound(state, "channel:qa-room", "RECONNECT-SECOND-OK");
+          addQaFlowTestOutbound(state, "channel:qa-room", "unmarked duplicate delivery");
         },
       }),
     ).rejects.toThrow("exactly one marked post-restart reply");
@@ -845,20 +809,16 @@ describe("live inbound voice talkback scenario", () => {
         resolveQaLiveTurnTimeoutMs: (_env: unknown, timeoutMs: number) => timeoutMs,
       },
       onWaitForOutboundMessage: ({ state: currentState }) => {
-        const preview = currentState.addOutboundMessage({
-          accountId: "qa-channel",
-          to: "dm:qa-live-voice-talkback",
-          text: expectedReply,
-        });
+        const preview = addQaFlowTestOutbound(
+          currentState,
+          "dm:qa-live-voice-talkback",
+          expectedReply,
+        );
         currentState.deleteMessage({
           accountId: "qa-channel",
           messageId: preview.id,
         });
-        currentState.addOutboundMessage({
-          accountId: "qa-channel",
-          to: "dm:qa-live-voice-talkback",
-          text: expectedReply,
-        });
+        addQaFlowTestOutbound(currentState, "dm:qa-live-voice-talkback", expectedReply);
       },
     });
 

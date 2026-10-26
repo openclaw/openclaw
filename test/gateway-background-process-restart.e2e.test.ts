@@ -308,12 +308,16 @@ it.skipIf(process.platform === "win32").for(["managed", "SIGTERM", "SIGKILL"] as
             agentId: "main",
             permissionMode: "full",
           });
-          await client.request(
+          const accepted = await client.request<{ runId: string }>(
             "chat.send",
             { sessionKey, message, idempotencyKey: sessionKey },
             { expectFinal: false },
           );
           await waitForIdleFinal(sessionKey, final);
+          // Idle presentation can precede cleanup of the run's permission owner.
+          expect(
+            await client.request("agent.wait", { runId: accepted.runId, timeoutMs: 30_000 }),
+          ).toMatchObject({ status: "ok" });
         }
         await client.request("sessions.patch", { key: REVOKED_KEY, permissionMode: "read-only" });
         expect(await readEffect("exec-count")).toBe("started\n");

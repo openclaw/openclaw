@@ -107,6 +107,9 @@ stay aligned with the neighboring columns.
 JSON output preserves tabs and line endings in descriptions and paths as escaped
 characters.
 
+Human-readable `list`, `info`, and `check` output neutralizes terminal control
+sequences in installed skill metadata before styling.
+
 `info` resolves an exact skill name before a metadata key. Key, case-insensitive,
 and separator-normalized matches must identify one skill; ambiguous selectors
 fail instead of choosing discovery order.
@@ -250,6 +253,10 @@ CLI host.
 ```bash
 openclaw skills library --help
 ```
+
+Human-readable library metadata neutralizes terminal control sequences and displays
+embedded tabs and line breaks as visible escapes. JSON retains the original values.
+`library read` prints the requested skill and supporting-file contents verbatim.
 
 List your library:
 

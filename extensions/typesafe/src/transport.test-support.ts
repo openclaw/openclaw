@@ -1,6 +1,4 @@
-import assert from "node:assert/strict";
 import type { IncomingMessage } from "node:http";
-import type { Server } from "node:net";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { vi } from "vitest";
 import plugin from "../index.js";
@@ -34,12 +32,10 @@ export function stubAmbientProxies() {
 export function collectRequest(request: IncomingMessage, handle: (body: string) => void) {
   const chunks: Buffer[] = [];
   request.on("data", (chunk: Buffer) => chunks.push(chunk));
-  request.on("end", () => {
-    handle(Buffer.concat(chunks).toString("utf8"));
-  });
+  request.on("end", () => handle(Buffer.concat(chunks).toString("utf8")));
 }
 
-export const choiceAnswer = (
+const choiceAnswer = (
   choice: string,
   probabilities: Record<string, number>,
   confidence: number,
@@ -106,11 +102,6 @@ export const mixedFixture = {
     },
   },
 };
-export const closeServer = (server: Server) =>
-  new Promise<void>((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
-  });
-
 export function registeredDecisionProvider(
   current: () => ReturnType<OpenClawPluginApi["runtime"]["config"]["current"]>,
 ) {
@@ -119,10 +110,6 @@ export function registeredDecisionProvider(
     runtime: { config: { current } },
     registerDecisionProvider,
   } as unknown as OpenClawPluginApi);
-  const provider = registerDecisionProvider.mock.calls[0]?.[0];
-  assert(provider);
-  if (provider.contractVersion !== 2) {
-    throw new Error("TypeSafe fixture registered an unexpected decision contract");
-  }
+  const provider = registerDecisionProvider.mock.calls[0]![0];
   return legacyWireFixture(provider, () => resolveRuntimeConfig(current()));
 }

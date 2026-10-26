@@ -6,7 +6,12 @@ macOS 26.2, iOS 26.2, Safari/WKWebView 26.2, and Chrome/Edge and Firefox from th
 
 ## The native-first stack
 
-The shared primitives (menu, popover, tooltip, dialog, tabs) land with the overlay lane. Until they're on `main`, keep existing `wa-*` elements in JSX (`onWa-select`-style events) rather than building a one-off replacement.
+Use the shared [Menu](../../../../ui/src/components/solid/menu.tsx),
+[Popover](../../../../ui/src/components/solid/popover.tsx),
+[Tooltip](../../../../ui/src/components/solid/tooltip.tsx),
+[ModalDialog](../../../../ui/src/components/modal-dialog.tsx), and
+[Tabs](../../../../ui/src/components/solid/tabs.tsx). Their owners preserve
+positioning, keyboard navigation, focus, dismissal, and cleanup.
 
 - **Positioning:** CSS anchor positioning (`anchor-name`, `position-area`, `position-try-fallbacks`) handles placement, flips, and the 420 px / available-height budgets with no JS positioning writes. No Floating UI. Caret popups anchor to an invisible element placed at the measured caret (`textarea-token-anchor.ts`). Rectangle reads serve pointer intent only.
 - **Top layer:** popovers for nonmodal surfaces, so they stay usable above `<dialog>.showModal()`.

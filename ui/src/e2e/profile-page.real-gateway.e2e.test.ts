@@ -1,4 +1,4 @@
-import { createServer, type ViteDevServer } from "vite";
+import type { ViteDevServer } from "vite";
 import { expect, it } from "vitest";
 import type { GatewayServer } from "../../../src/gateway/server-public.ts";
 import { setDisplayName } from "../../../src/state/user-profile-writes.worker.ts";
@@ -8,7 +8,8 @@ import { getFreePort } from "../../../src/test-utils/ports.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { requireString } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { deviceGatewayEnv } from "./device-gateway.test-support.ts";
+import { deviceGatewayEnv } from "./device-gateway-env.test-support.ts";
+import { createGatewayProxy, gatewayProxyRoute } from "./gateway-proxy.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI profile page real Gateway E2E",
@@ -18,7 +19,7 @@ const suite = createControlUiE2eSuite({
 const authenticatedUser = "primary.user@example.test";
 
 suite.define(() => {
-  it("shows the authenticated user instead of the default agent through a real Gateway", async () => {
+  it("lets a session-only member save their name and avatar through a real Gateway", async () => {
     const port = await getFreePort();
     const state = await createOpenClawTestState({
       label: "control-ui-profile-real-gateway",
@@ -64,6 +65,16 @@ suite.define(() => {
             controlUi: { allowedOrigins: [origin], enabled: false },
             port,
             trustedProxies: ["127.0.0.1", "::1"],
+            roles: {
+              default: "member",
+              definitions: {
+                member: {
+                  agents: "*",
+                  sessions: { others: "view" },
+                  scopes: ["operator.sessions.write"],
+                },
+              },
+            },
           },
         });
         const { startGatewayServer } = await import("../../../src/gateway/server.js");
@@ -75,27 +86,8 @@ suite.define(() => {
         });
 
         // Chromium does not consistently apply extraHTTPHeaders to WebSocket upgrades.
-        proxy = await createServer({
-          configFile: false,
-          envFile: false,
-          root: state.workspaceDir,
-          appType: "custom",
-          logLevel: "error",
-          server: {
-            host: "127.0.0.1",
-            port: 0,
-            proxy: {
-              "/": {
-                target: `http://127.0.0.1:${port}`,
-                ws: true,
-                headers: {
-                  "x-forwarded-for": "192.0.2.10",
-                  "x-forwarded-proto": "http",
-                  "x-forwarded-user": authenticatedUser,
-                },
-              },
-            },
-          },
+        proxy = await createGatewayProxy(state.workspaceDir, {
+          "/": gatewayProxyRoute(port, authenticatedUser),
         });
         await proxy.listen();
         const gatewayUrl = new URL(
@@ -127,6 +119,23 @@ suite.define(() => {
             await nameInput.fill("Remote Person");
             await nameInput.press("Enter");
             await text(".profile-hero__name").toBe("Remote Person");
+            await editor.locator('#settings-profile-identity input[type="file"]').setInputFiles({
+              name: "avatar.png",
+              mimeType: "image/png",
+              buffer: Buffer.from(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/a6kAAAAASUVORK5CYII=",
+                "base64",
+              ),
+            });
+            const image = editor.locator(".identity-avatar-control img");
+            await expect
+              .poll(() => image.evaluate((element: HTMLImageElement) => element.naturalWidth))
+              .toBeGreaterThan(0);
+            await editor.reload();
+            await expect.poll(() => nameInput.inputValue()).toBe("Remote Person");
+            await expect
+              .poll(() => image.evaluate((element: HTMLImageElement) => element.naturalWidth))
+              .toBeGreaterThan(0);
             await nameInput.fill("");
             await nameInput.press("Enter");
             await text(".profile-hero__name").toBe(authenticatedUser);

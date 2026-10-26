@@ -1,4 +1,4 @@
-import { onCleanup } from "solid-js";
+import { elementRef } from "../lib/reactive/element-ref.ts";
 
 type VisibilityGroup = {
   observer: IntersectionObserver;
@@ -52,43 +52,41 @@ export function createSessionRunVisibility(
     }
     observation = undefined;
   };
-  onCleanup(() => {
-    release();
-    current = undefined;
-  });
-
-  return (next) => {
-    if (current !== next) {
-      release();
-      current = next;
+  return elementRef((next) => {
+    current = next;
+    if (!pending) {
+      pending = true;
+      // Child-owned rows attach after the sidebar updates; wait for this template's commit.
+      queueMicrotask(() => {
+        pending = false;
+        const element = current;
+        if (!element?.isConnected) {
+          return;
+        }
+        const row = element.closest(".session-row-host");
+        const root = element.closest(".sidebar-shell__body");
+        if (!row || !root) {
+          return;
+        }
+        if (observation?.root !== root || observation.row !== row) {
+          release();
+          const group = visibilityGroup(root);
+          const indicators =
+            group.rows.get(row) ?? new Map<Element, (offscreen: boolean) => void>();
+          indicators.set(element, onOffscreenChange);
+          group.rows.set(row, indicators);
+          observation = { root, row, group };
+          // A new indicator needs native delivery even when this row is already observed.
+          group.observer.unobserve(row);
+          group.observer.observe(row);
+        }
+      });
     }
-    if (pending) {
-      return;
-    }
-    pending = true;
-    // Child-owned rows attach after the sidebar updates; wait for this template's commit.
-    queueMicrotask(() => {
-      pending = false;
-      const element = current;
-      if (!element?.isConnected) {
-        return;
-      }
-      const row = element.closest(".session-row-host");
-      const root = element.closest(".sidebar-shell__body");
-      if (!row || !root) {
-        return;
-      }
-      if (observation?.root !== root || observation.row !== row) {
+    return () => {
+      if (current === next) {
         release();
-        const group = visibilityGroup(root);
-        const indicators = group.rows.get(row) ?? new Map<Element, (offscreen: boolean) => void>();
-        indicators.set(element, onOffscreenChange);
-        group.rows.set(row, indicators);
-        observation = { root, row, group };
-        // A new indicator needs native delivery even when this row is already observed.
-        group.observer.unobserve(row);
-        group.observer.observe(row);
+        current = undefined;
       }
-    });
-  };
+    };
+  });
 }

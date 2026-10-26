@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { waitForFast } from "../../../test-helpers/wait-for.ts";
+import { consultRunResult } from "./consult.test-support.ts";
 import {
   audioContexts,
   beginTransport,
@@ -432,12 +433,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
       addEventListener,
       request: vi.fn(async (method: string) => {
         expect(method).toBe("talk.client.toolCall");
-        return {
-          runId: "run-1",
-          idempotencyKey: "run-1",
-          agentId: "main",
-          agentSessionKey: "agent:main:main",
-        };
+        return consultRunResult();
       }),
     } as unknown as RealtimeTalkTransportContext["client"];
     const transport = await sessionTransport(

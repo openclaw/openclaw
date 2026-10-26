@@ -32,6 +32,8 @@ export const PLUGIN_MANIFEST_CONTRACT_KEYS = [
   "commandRuntimeCapabilities",
   /** Native, bounded, requester-admitted scheduled command turns. */
   "sessionScheduledTurns",
+  /** Plugin-local native subagent profile ids, reviewed before runtime registration. */
+  "subagentProfiles",
   "tools",
 ] as const;
 

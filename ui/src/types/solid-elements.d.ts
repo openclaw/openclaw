@@ -100,15 +100,7 @@ declare module "@solidjs/web" {
           entry: import("../pages/agents-home/claws-catalog-client.ts").ClawCatalogEntry,
         ) => void;
       };
-      "openclaw-claws-catalog-dialog": HTMLAttributes<HTMLElement> & {
-        "prop:initialPackageName"?: string;
-        "prop:pageMode"?: boolean;
-        "prop:onClose"?: () => void;
-        "prop:onAdded"?: () => void;
-        "prop:onSelectEntry"?: (
-          entry: import("../pages/agents-home/claws-catalog-client.ts").ClawCatalogEntry,
-        ) => void;
-      };
+      "openclaw-claws-catalog-dialog": HTMLAttributes<HTMLElement>;
       "openclaw-github-identity": HTMLAttributes<HTMLElement>;
       "openclaw-chat-permission-card": HTMLAttributes<HTMLElement>;
       "openclaw-chat-run-failure-notice": HTMLAttributes<HTMLElement>;

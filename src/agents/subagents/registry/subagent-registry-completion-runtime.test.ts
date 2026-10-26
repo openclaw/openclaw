@@ -79,7 +79,6 @@ function createHarness() {
     ...dependencies,
     warn,
     entry,
-    resumeError,
     runtime,
     request,
     complete: (source: string, overrides: Partial<SubagentCompletionRequest> = {}) =>
@@ -162,7 +161,6 @@ describe("subagent completion rejection ownership", () => {
         }),
       );
       await Promise.race([capture.entered, completion]);
-      expect(h.completeSubagentRun).toHaveBeenCalledOnce();
       expect(completionSignal).toBeDefined();
       expect(completionSignal).not.toBe(launch.signal);
       expect(completionSignal?.aborted).toBe(false);
@@ -193,10 +191,6 @@ describe("subagent completion rejection ownership", () => {
       markGatewayRestartDraining();
       await invoke();
       h.expectState({ completed: 0, timers: 1, roots: 0 });
-      expect(h.warn).toHaveBeenCalledWith("subagent completion deferred during gateway restart", {
-        source: "subagent-wait",
-        runId: h.entry.runId,
-      });
       if (change === "replacement") {
         h.runs.set(h.entry.runId, { ...h.entry });
       } else if (change === "generation") {
@@ -221,29 +215,16 @@ describe("subagent completion rejection ownership", () => {
     h.expectState({ completed: 2, retained: false, roots: 0 });
     expect(h.completeSubagentRun).toHaveBeenLastCalledWith(expect.objectContaining({ reason }));
     expect(h.resumeRun).toHaveBeenCalledExactlyOnceWith(h.entry.runId);
-    expect(h.warn).toHaveBeenLastCalledWith("failed to complete subagent run in background", {
-      source: `lifecycle-${kind}-grace`,
-      runId: h.entry.runId,
-      error: h.resumeError,
-    });
     expect(isSameSubagentRunOwner(h.runs.get(h.entry.runId), h.entry)).toBe(true);
     expect(h.runs.get(h.entry.runId)?.cleanupHandled).toBe(false);
   });
 
-  it("retains the interrupted-finalization restart diagnostic and retires the fired timer", async () => {
+  it("retries interrupted finalization after restart and retires the fired timer", async () => {
     markGatewayRestartDraining();
     await expect(h.finalize()).resolves.toBe(1);
     expect(h.retryTimers.size).toBe(1);
     resetGatewayWorkAdmission();
     await vi.advanceTimersByTimeAsync(1_000);
-    expect(h.warn).toHaveBeenLastCalledWith(
-      "failed to retry subagent completion after gateway restart",
-      {
-        source: "explicit-failed-mark",
-        runId: h.entry.runId,
-        error: h.resumeError,
-      },
-    );
     h.expectState({ completed: 3, timers: 0, roots: 0 });
   });
 

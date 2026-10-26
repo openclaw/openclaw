@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { vi } from "vitest";
+import type { AgentCommandOpts } from "../agents/command/types.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
@@ -22,7 +23,10 @@ type CronIsolatedRunFn = (...args: unknown[]) => Promise<RunCronAgentTurnResult>
 type AgentCommandResult = Awaited<
   ReturnType<(typeof import("../agents/agent-command.js"))["agentCommand"]>
 >;
-type AgentCommandFn = (...args: unknown[]) => Promise<AgentCommandResult | void>;
+type AgentCommandFn = (
+  opts: AgentCommandOpts,
+  ...args: unknown[]
+) => Promise<AgentCommandResult | void>;
 type SendWhatsAppFn = (...args: unknown[]) => Promise<{ messageId: string; toJid: string }>;
 export type RunBtwSideQuestionFn = (...args: unknown[]) => Promise<unknown>;
 type DispatchInboundMessageFn = (
@@ -82,16 +86,9 @@ const gatewayTestHoisted = resolveGatewayTestFileFixture(
       endWaitCalls: new Array<string>(),
       endWaiters: new Map<string, (ended: boolean) => void>(),
       resolveEndBeforeTimeoutIds: new Set<string>(),
-      compactEmbeddedAgentSession: vi.fn<CompactEmbeddedAgentSessionFn>().mockResolvedValue({
-        ok: true,
-        compacted: true,
-        result: {
-          summary: "summary",
-          firstKeptEntryId: "entry-1",
-          tokensBefore: 120,
-          tokensAfter: 80,
-        },
-      }),
+      compactEmbeddedAgentSession: vi
+        .fn<CompactEmbeddedAgentSessionFn>()
+        .mockResolvedValue(createCompactionResult()),
     },
     testTailscaleWhois: {
       ...mutableValue<TailscaleWhoisIdentity | null>(null),
@@ -134,4 +131,17 @@ export const testConfigRoot = resolveGatewayTestFileFixture(GATEWAY_TEST_CONFIG_
 export function setTestConfigRoot(root: string): void {
   testConfigRoot.value = root;
   process.env.OPENCLAW_CONFIG_PATH = path.join(root, "openclaw.json");
+}
+
+export function createCompactionResult() {
+  return {
+    ok: true as const,
+    compacted: true as const,
+    result: {
+      summary: "summary",
+      firstKeptEntryId: "entry-1",
+      tokensBefore: 120,
+      tokensAfter: 80,
+    },
+  };
 }

@@ -436,58 +436,32 @@ describe("artifact transfer interruption observations", () => {
     expect(h.progress).not.toHaveBeenCalled();
   });
 
-  it.each([
-    [
-      "expired",
-      (h: Harness) => {
-        h.state.now = h.prepared.expiresAtMs;
-      },
-    ],
-    [
-      "owner cancelled",
-      (h: Harness) => {
-        h.owner.abort(new Error("private cancellation detail"));
-      },
-    ],
-    [
-      "authorization lost",
-      (h: Harness) => {
-        h.state.authorized = false;
-      },
-    ],
-    [
-      "throwing authorization",
-      (h: Harness) => {
-        h.state.error = new Error("private error");
-      },
-    ],
-    [
-      "released",
-      (h: Harness) => {
-        h.service.revoke(h.prepared.token);
-      },
-    ],
-    [
-      "shutdown",
-      (h: Harness) => {
-        h.service.closeAll();
-      },
-    ],
-  ] as const)("reports partial transfer closure for %s", async (closure, close) => {
-    const h = await prepare(() => {
-      close(h);
-    }, 3);
-    await h.run();
-    expect(h.interrupted).toHaveBeenCalledExactlyOnceWith(
-      2,
-      `authority closed (${closure === "throwing authorization" ? "authorization lost" : closure})`,
-    );
-    expect(h.socketErrors).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ code: "ABORT_ERR" }),
-    );
-    Object.assign(h.state, { authorized: true, error: undefined });
-    expect(h.authorize()).toBeUndefined();
-  });
+  const closures: Record<string, (h: Harness) => unknown> = {
+    expired: (h) => (h.state.now = h.prepared.expiresAtMs),
+    "owner cancelled": (h) => h.owner.abort(new Error("private cancellation detail")),
+    "authorization lost": (h) => (h.state.authorized = false),
+    "throwing authorization": (h) => (h.state.error = new Error("private error")),
+    released: (h) => h.service.revoke(h.prepared.token),
+    shutdown: (h) => h.service.closeAll(),
+  };
+  it.each(Object.entries(closures))(
+    "reports partial transfer closure for %s",
+    async (closure, close) => {
+      const h = await prepare(() => {
+        close(h);
+      }, 3);
+      await h.run();
+      expect(h.interrupted).toHaveBeenCalledExactlyOnceWith(
+        2,
+        `authority closed (${closure === "throwing authorization" ? "authorization lost" : closure})`,
+      );
+      expect(h.socketErrors).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ code: "ABORT_ERR" }),
+      );
+      Object.assign(h.state, { authorized: true, error: undefined });
+      expect(h.authorize()).toBeUndefined();
+    },
+  );
 
   it("records timer expiry independently of a later owner cancellation", async () => {
     const h = await prepare();

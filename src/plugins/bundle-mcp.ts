@@ -1,5 +1,5 @@
 import path from "node:path";
-import { isStringRecord } from "@openclaw/normalization-core/record-coerce";
+import { isStringArray, isStringRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveMcpTransportConfig } from "../agents/mcp-transport-config.js";
 import {
@@ -237,11 +237,7 @@ function validateAgentMcpServer(params: {
     if (!isValidAgentCommand(params.raw.command, params.rootDir)) {
       return { ok: false, error: "stdio command must be a bare name or ./-relative path" };
     }
-    if (
-      params.raw.args !== undefined &&
-      (!Array.isArray(params.raw.args) ||
-        !params.raw.args.every((entry) => typeof entry === "string"))
-    ) {
+    if (params.raw.args !== undefined && !isStringArray(params.raw.args)) {
       return { ok: false, error: "stdio args must be an array of strings" };
     }
     if (params.raw.env !== undefined && !isStringRecord(params.raw.env)) {

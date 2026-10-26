@@ -20,8 +20,6 @@ type IngressClaimLivenessOptions = {
   now?: number;
   /** Test seam for PID existence (including Linux TID impersonation). */
   processExists?: (pid: number) => boolean;
-  /** Test seam for process start-time identity. */
-  readProcessStartTime?: (pid: number) => number | null;
 };
 
 function readProcessStartTime(pid: number): number | null {
@@ -130,7 +128,6 @@ function isClaimOwnerProcessInstanceLive(
   options?: IngressClaimLivenessOptions,
 ): boolean {
   const exists = options?.processExists ?? processExists;
-  const readStart = options?.readProcessStartTime ?? readProcessStartTime;
   if (!exists(pid)) {
     return false;
   }
@@ -145,7 +142,7 @@ function isClaimOwnerProcessInstanceLive(
     // of stealing a fresh claim from a possibly live worker.
     return true;
   }
-  const actualStart = readStart(pid);
+  const actualStart = readProcessStartTime(pid);
   // Unreadable starttime retains existence-based protection for a possibly live peer.
   return actualStart === null || actualStart === startToken;
 }

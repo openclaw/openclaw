@@ -51,7 +51,13 @@ type ScheduledPlacement = "child" | "in-session" | "detached";
 
 type ScheduledAuthority = Readonly<{
   owner: boolean;
-  basis: "operator-source" | "channel-owner" | "profile-role" | "legacy" | "none";
+  basis:
+    | "operator-source"
+    | "channel-owner"
+    | "profile-role"
+    | "trusted-policy"
+    | "legacy"
+    | "none";
   /** Undefined for ingress turns, which are admitted without a schedule source. */
   admissionSource?: NonNullable<AdmittedRunContext["admissionSource"]>;
 }>;
@@ -146,7 +152,7 @@ export type ScheduledAdmissionFacts = Readonly<{
   requesterCheck?: Readonly<{ owner: boolean }>;
 }>;
 
-type ScheduledParentUnavailableReason = "removed" | "archived" | "reset" | "worktree-missing";
+type ScheduledParentUnavailableReason = "removed" | "archived" | "worktree-missing";
 
 export type ScheduledExecutionContextResult =
   | Readonly<{ status: "ready"; facts: ScheduledExecutionFacts }>
@@ -255,7 +261,7 @@ export function resolveScheduledPrincipal(
 export function classifyScheduledParent(
   parent: ScheduledParentRef,
   row: ScheduledParentRowFacts | undefined,
-): ScheduledParentUnavailableReason | "current" | "unread" {
+): ScheduledParentUnavailableReason | "reset" | "current" | "unread" {
   if (!row) {
     return "unread";
   }
@@ -289,7 +295,13 @@ function resolveAuthority(
   if (principal.kind === "parent") {
     const { requester } = principal;
     if (requester.kind === "unknown") {
-      return withSource(false, "none");
+      // v2026.10.6 recorded a trusted policy, but no requester, for jobs an
+      // authenticated operator linked with `cron.add --session-key`; agents never
+      // get one. Those runs keep the operator surface they had, like an unlinked
+      // trusted job. Agent-created jobs with no requester stay non-owners.
+      return job.scheduledToolPolicy?.mode === "trusted"
+        ? withSource(true, "trusted-policy")
+        : withSource(false, "none");
     }
     // A missing check fails closed: the caller owns running it each occurrence.
     const owner = facts.requesterCheck?.owner === true;
@@ -354,20 +366,27 @@ export function buildScheduledExecutionContext(
   job: BuilderJob,
   facts: ScheduledAdmissionFacts,
 ): ScheduledExecutionContextResult {
-  const principal = resolveScheduledPrincipal(job, facts);
-  if ("error" in principal) {
-    return { status: "fail", error: principal.error };
+  const resolved = resolveScheduledPrincipal(job, facts);
+  if ("error" in resolved) {
+    return { status: "fail", error: resolved.error };
   }
+  const state =
+    resolved.kind === "parent"
+      ? classifyScheduledParent(resolved.parent, facts.parentRow)
+      : "current";
+  if (state === "unread") {
+    return { status: "fail", error: "parent session facts are required for a parent-linked job" };
+  }
+  if (resolved.kind === "parent" && state !== "current" && state !== "reset") {
+    return { status: "pause", reason: state, parentSessionKey: resolved.parent.sessionKey };
+  }
+  // A reset keeps the automation running, but nothing carries into the new
+  // incarnation: this occurrence takes the legacy decisions until rebound.
+  const principal: ScheduledPrincipal =
+    resolved.kind === "parent" && state === "reset"
+      ? { kind: "unbound-parent", parentSessionKey: resolved.parent.sessionKey }
+      : resolved;
   const parentRow = principal.kind === "parent" ? facts.parentRow : undefined;
-  if (principal.kind === "parent") {
-    const state = classifyScheduledParent(principal.parent, parentRow);
-    if (state === "unread") {
-      return { status: "fail", error: "parent session facts are required for a parent-linked job" };
-    }
-    if (state !== "current") {
-      return { status: "pause", reason: state, parentSessionKey: principal.parent.sessionKey };
-    }
-  }
   const liveRow = parentRow && !parentRow.missing ? parentRow : undefined;
   if (liveRow?.worktree && !liveRow.worktree.exists && principal.kind === "parent") {
     return {
@@ -445,7 +464,8 @@ export function buildScheduledExecutionContext(
                 ...(liveRow.worktree ? { worktreePath: liveRow.worktree.path } : {}),
               }
             : { source: "run-session" },
-        fileScope: detached ? "root" : "session",
+        // Only an in-session run uses its session's file scope; child runs stay at root.
+        fileScope: placement === "in-session" ? "session" : "root",
         bootstrap: detached ? "cron-allowlist" : "default",
         sandbox: { required: sandboxBasis.length > 0, basis: sandboxBasis },
         ...(job.toolsAllowExecTarget ? { execHost: job.toolsAllowExecTarget } : {}),

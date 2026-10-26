@@ -161,22 +161,15 @@ it("checkpoints bulk archive moves without per-file manifest rewrites", async ()
     expect(target.plannedMoves.map((move) => path.basename(move.sourcePath)).toSorted()).toEqual(
       expectedSources.toSorted(),
     );
-    expect(target.completedMoves).toHaveLength(135);
     expect(new Set(plannedUnreferencedMoves.map((move) => move.archivePath)).size).toBe(67);
-    for (const [kind, count] of [
-      ["unreferenced-jsonl", 67],
-      ["transcript", 65],
-    ] as const) {
-      expect(target.plannedMoves.filter((move) => move.kind === kind)).toHaveLength(count);
-      expect(target.completedMoves.filter((move) => move.kind === kind)).toHaveLength(count);
+    expect(target.completedMoves).toHaveLength(135);
+    for (const moves of [target.plannedMoves, target.completedMoves]) {
+      expect(moves.filter((move) => move.kind === "unreferenced-jsonl")).toHaveLength(67);
+      expect(moves.filter((move) => move.kind === "transcript")).toHaveLength(65);
     }
     expect(manifestWrites).toBeLessThan(20);
     expect(replaceFileAtomicSync).toHaveBeenCalledWith(
-      expect.objectContaining({
-        filePath: report.migrationRun?.manifestPath,
-        mode: 0o600,
-        tempPrefix: path.basename(report.migrationRun?.manifestPath ?? ""),
-      }),
+      expect.objectContaining({ filePath: report.migrationRun?.manifestPath, mode: 0o600 }),
     );
     expectMissing(pointerPath);
     contains(

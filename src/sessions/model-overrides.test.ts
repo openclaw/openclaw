@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { contextBudgetStatusFixture } from "../config/sessions/context-budget.test-support.js";
@@ -12,9 +12,9 @@ import {
   repairProviderWrappedModelOverride,
 } from "./model-overrides.js";
 import {
-  resolveDirectStoredModelOverride,
   resolveStoredModelOverride,
   resolveStoredModelOverrideAsync,
+  resolveStoredModelOverrideCore,
 } from "./stored-model-overrides.js";
 
 const openai = { provider: "openai", model: "gpt-5.4" };
@@ -68,58 +68,53 @@ describe("applyModelOverrideToSessionEntry", () => {
     "modelOverrideRouteResolution",
   ] as const;
 
-  it.each([
-    {
-      name: "unchanged override with stale runtime fields",
-      fields: { ...override, ...runtime },
-      selection: openai,
-      cleared: runtimeFields,
-      expected: override,
-    },
-    {
-      name: "default replacing a local override",
-      fields: {
-        providerOverride: "local",
-        modelOverride: "sunapi386/llama-3-lexi-uncensored:8b",
-        modelOverrideRouteResolution: "resolved" as const,
-        contextTokens: 4_096,
-        contextBudgetStatus: contextBudgetStatusFixture({
-          provider: "local",
-          model: "sunapi386/llama-3-lexi-uncensored:8b",
-          contextTokenBudget: 4_096,
-        }),
-      },
-      selection: { provider: "local", model: "llama3.1:8b", isDefault: true },
-      cleared: [...overrideFields, "contextTokens", "contextBudgetStatus"] as const,
-      expected: {},
-    },
-    {
-      name: "default with runtime-only fields and a pending live switch",
-      fields: { ...runtime, contextTokens: 200_000 },
-      selection: { ...openai, isDefault: true },
-      cleared: runtimeFields,
-      expected: { liveModelSwitchPending: true },
-      markLiveSwitchPending: true,
-    },
-    {
-      name: "profile-only pending switch",
-      fields: {
-        ...override,
-        authProfileOverride: "oldprofile",
-        authProfileOverrideSource: "user" as const,
-      },
-      selection: openai,
-      cleared: [],
-      expected: { authProfileOverride: "newprofile", liveModelSwitchPending: true },
-      profileOverride: "newprofile",
-      markLiveSwitchPending: true,
-    },
-  ])("updates $name", ({ name: _name, fields, selection, cleared, expected, ...options }) => {
+  type Update = Parameters<typeof applyModelOverrideToSessionEntry>[0];
+  function update(fields: Partial<SessionEntry>, options: Omit<Update, "entry">) {
     const entry = makeEntry(fields);
-    expect(applyModelOverrideToSessionEntry({ entry, selection, ...options }).updated).toBe(true);
-    expect(entry).toMatchObject(expected);
-    expectCleared(entry, ...cleared);
+    expect(applyModelOverrideToSessionEntry({ entry, ...options }).updated).toBe(true);
     expect(entry.updatedAt).toBeGreaterThan(before);
+    return entry;
+  }
+  it("clears stale runtime for an unchanged override", () => {
+    const entry = update({ ...override, ...runtime }, { selection: openai });
+    expect(entry).toMatchObject(override);
+    expectCleared(entry, ...runtimeFields);
+  });
+  it("clears override and context when selecting the default", () => {
+    const entry = update(
+      {
+        ...override,
+        modelOverrideRouteResolution: "resolved",
+        contextTokens: 4_096,
+        contextBudgetStatus: contextBudgetStatusFixture(openai),
+      },
+      {
+        selection: { ...openai, isDefault: true },
+      },
+    );
+    expectCleared(entry, ...overrideFields, ...runtimeFields);
+  });
+  it("marks a runtime-only switch to default pending", () => {
+    const entry = update(runtime, {
+      selection: { ...openai, isDefault: true },
+      markLiveSwitchPending: true,
+    });
+    expect(entry.liveModelSwitchPending).toBe(true);
+    expectCleared(entry, ...runtimeFields);
+  });
+  it("marks a profile-only switch pending", () => {
+    const entry = update(
+      { ...override, authProfileOverride: "oldprofile", authProfileOverrideSource: "user" },
+      {
+        selection: openai,
+        profileOverride: "newprofile",
+        markLiveSwitchPending: true,
+      },
+    );
+    expect(entry).toMatchObject({
+      authProfileOverride: "newprofile",
+      liveModelSwitchPending: true,
+    });
   });
 
   it("persists an explicit default selection and clears it on a user pin", () => {
@@ -181,41 +176,28 @@ describe("repairProviderWrappedModelOverride", () => {
     expect(entry).toEqual(unchanged);
   });
 
-  it("restores a provider-wrapped override from aligned runtime model fields", () => {
-    const entry = wrappedEntry(runtime);
-    const result = repairProviderWrappedModelOverride({ entry, ...defaultSelection });
-
-    expect(result.updated).toBe(true);
-    expect(entry).toMatchObject({
-      providerOverride: "openrouter",
-      modelOverride: "anthropic/claude-haiku-4.5",
-      modelOverrideSource: "user",
-    });
-    expectCleared(entry, "modelProvider", "model", "contextTokens");
-    expect((entry.updatedAt ?? 0) > before).toBe(true);
-  });
-
-  it("clears a provider-wrapped override that matches the configured default", () => {
-    const entry = wrappedEntry();
-
-    const result = repairProviderWrappedModelOverride({
-      entry,
-      defaultProvider: "openrouter",
-      defaultModel: "anthropic/claude-haiku-4.5",
-    });
-
-    expect(result.updated).toBe(true);
-    expectCleared(entry, "providerOverride", "modelOverride", "modelOverrideSource");
-    expect((entry.updatedAt ?? 0) > before).toBe(true);
+  it.each([false, true])("repairs a wrapped override (default=%s)", (isDefault) => {
+    const entry = wrappedEntry(isDefault ? {} : runtime);
+    const selection = isDefault
+      ? { defaultProvider: runtime.modelProvider, defaultModel: runtime.model }
+      : defaultSelection;
+    expect(repairProviderWrappedModelOverride({ entry, ...selection }).updated).toBe(true);
+    if (isDefault) {
+      expectCleared(entry, "providerOverride", "modelOverride", "modelOverrideSource");
+    } else {
+      expect(entry).toMatchObject({
+        providerOverride: runtime.modelProvider,
+        modelOverride: runtime.model,
+        modelOverrideSource: "user",
+      });
+      expectCleared(entry, "modelProvider", "model", "contextTokens");
+    }
+    expect(entry.updatedAt).toBeGreaterThan(before);
   });
 });
 
 describe("stored model overrides", () => {
-  function storedEntry(fields: Partial<SessionEntry>): SessionEntry {
-    return makeEntry({ updatedAt: 1, ...fields });
-  }
-
-  const staleDefault = storedEntry({
+  const staleDefault = makeEntry({
     modelOverrideSource: "default",
     providerOverride: "anthropic",
     modelOverride: "stale-model",
@@ -241,20 +223,42 @@ describe("stored model overrides", () => {
     return { provider, model, source: "parent", routeResolution: "raw" };
   }
 
-  function resolveParentOverride(parent: Partial<SessionEntry>) {
-    const rootKey = "agent:main:discord:channel:root";
-    return resolveStoredModelOverrideAsync({
-      defaultProvider: "openai",
-      sessionKey: `${rootKey}:thread:child`,
-      sessionStore: { [rootKey]: storedEntry(parent) },
+  it.each([
+    ["sync", resolveStoredModelOverrideCore],
+    ["async", resolveStoredModelOverrideAsync],
+  ] as const)("does not load a parent for a resolved %s choice", async (_name, resolve) => {
+    const loadSessionEntry = vi.fn(() => {
+      throw new Error("resolved choices must not load a parent");
     });
-  }
+    for (const [sessionEntry, expected] of [
+      [staleDefault, null],
+      [
+        makeEntry(userPin),
+        {
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          source: "session",
+          routeResolution: "raw",
+        },
+      ],
+    ] as const) {
+      const result = await resolve({
+        defaultProvider: "openai",
+        sessionEntry,
+        sessionKey: "agent:main:dashboard:child",
+        parentSessionKey: parentKey,
+        loadSessionEntry,
+      });
+      expect(result).toEqual(expected);
+    }
+    expect(loadSessionEntry).not.toHaveBeenCalled();
+  });
 
   it("recovers resolved provenance for legacy auto-fallback overrides", () => {
     expect(
       resolveStoredModelOverride({
         defaultProvider: "openai",
-        sessionEntry: storedEntry({
+        sessionEntry: makeEntry({
           providerOverride: "cloudflare-ai-gateway",
           modelOverride: "gemini-2.5-flash-lite",
           modelOverrideSource: "auto",
@@ -266,33 +270,23 @@ describe("stored model overrides", () => {
   });
 
   it("inherits configured automatic choices", async () => {
-    expect(await resolveParentOverride(automatic)).toEqual(
-      parentChoice("google-vertex", "gemini-fallback"),
-    );
+    expect(
+      await resolveStoredModelOverrideAsync({
+        defaultProvider: "openai",
+        sessionKey: `${parentKey}:thread:child`,
+        sessionStore: { [parentKey]: makeEntry(automatic) },
+      }),
+    ).toEqual(parentChoice("google-vertex", "gemini-fallback"));
   });
 
-  it.each([
-    ["direct", resolveDirectStoredModelOverride, { sessionEntry: staleDefault }],
-    [
-      "parent",
-      resolveStoredModelOverride,
-      {
+  it("honors a parent's explicit Default marker", () => {
+    expect(
+      resolveStoredModelOverride({
+        defaultProvider: "openai",
         sessionKey: `${parentKey}:thread:child`,
         sessionStore: { [parentKey]: staleDefault },
-      },
-    ],
-    [
-      "child",
-      resolveStoredModelOverride,
-      {
-        sessionEntry: { ...staleDefault, providerOverride: "google-vertex" },
-        sessionKey: "agent:main:dashboard:child",
-        parentSessionKey: parentKey,
-        sessionStore: { [parentKey]: storedEntry(userPin) },
-      },
-    ],
-  ] as const)("honors an explicit Default marker on the %s", (_name, resolve, params) => {
-    expect(resolve({ defaultProvider: "openai", ...params })).toBeNull();
+      }),
+    ).toBeNull();
   });
 
   it("reloads parent model choices after in-process writes", async () => {

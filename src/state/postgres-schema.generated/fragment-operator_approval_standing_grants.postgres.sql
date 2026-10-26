@@ -29,7 +29,7 @@ CREATE TABLE "operator_approval_standing_grants" (
   CHECK ("expires_at_ms" IS NULL OR ("expires_at_ms" >= "created_at_ms"))
 );
 
-CREATE INDEX "idx_operator_approval_standing_grants_binding" ON "operator_approval_standing_grants" (("agent_id") ASC NULLS FIRST, ("cron_job_id") ASC NULLS FIRST, ("operation_binding") ASC NULLS FIRST, ("created_at_ms") DESC NULLS LAST);
+CREATE INDEX "idx_operator_approval_standing_grants_binding" ON "operator_approval_standing_grants" (("agent_id") ASC, ("cron_job_id") ASC, ("operation_binding") ASC, ("created_at_ms") DESC);
 
 ALTER TABLE "operator_approval_standing_grant_generations" ADD FOREIGN KEY ("grant_id") REFERENCES "operator_approval_standing_grants" ("grant_id") ON UPDATE NO ACTION ON DELETE CASCADE NOT DEFERRABLE;
 

@@ -7,20 +7,26 @@ import { buildSandboxFsMounts, resolveSandboxFsPathWithMounts } from "./fs-paths
 import { createRemoteShellSandboxFsBridge } from "./remote-fs-bridge.js";
 import { createLocalRemoteShellScriptRunner } from "./remote-fs-bridge.test-helpers.js";
 import {
+  ensureReadOnlyWorkspaceSkillMountSources,
   resolveWorkspaceMounts,
   resolveSandboxMountSelection,
   type ReadOnlyWorkspaceSkillMount,
 } from "./workspace-mounts.js";
 
+function mountParams(workspaceDir: string) {
+  return {
+    workspaceDir,
+    agentWorkspaceDir: workspaceDir,
+    workdir: "/workspace",
+    workspaceAccess: "rw" as const,
+  };
+}
 function workspaceMounts(
   workspaceDir: string,
   overrides: Partial<Parameters<typeof resolveWorkspaceMounts>[0]> = {},
 ) {
   return resolveWorkspaceMounts({
-    workspaceDir,
-    agentWorkspaceDir: workspaceDir,
-    workdir: "/workspace",
-    workspaceAccess: "rw",
+    ...mountParams(workspaceDir),
     ...overrides,
   }).map((mount) => `${mount.hostPath}:${mount.containerPath}:${mount.readOnly ? "ro,z" : "z"}`);
 }
@@ -31,7 +37,13 @@ function addSkill(workspaceDir: string, root = "skills") {
 }
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
-const makeTempWorkspace = () => dirs.make("openclaw-sandbox-mounts-");
+function makeTempWorkspace(...skillRoots: string[]) {
+  const workspace = dirs.make("openclaw-sandbox-mounts-");
+  for (const root of skillRoots) {
+    addSkill(workspace, root);
+  }
+  return workspace;
+}
 
 function resolveSkillPath(workspaceDir: string, filePath: string, skillsWorkspaceDir?: string) {
   const sandbox = createSandbox({
@@ -87,18 +99,43 @@ async function expectWriteRejected(
 }
 
 describe("resolveWorkspaceMounts", () => {
-  it.each([
-    { access: "rw" as const, expected: "/tmp/workspace:/workspace:z" },
-    { access: "ro" as const, expected: "/tmp/workspace:/workspace:ro,z" },
-    { access: "none" as const, expected: "/tmp/workspace:/workspace:z" },
-  ])("sets main mount permissions for workspaceAccess=$access", ({ access, expected }) => {
-    const mounts = workspaceMounts("/tmp/workspace", {
-      agentWorkspaceDir: "/tmp/agent-workspace",
-      workspaceAccess: access,
-    });
+  it.skipIf(process.platform === "win32").each(["symlink", "file"] as const)(
+    "does not materialize skill sources through a %s parent",
+    async (kind) => {
+      const workspaceDir = makeTempWorkspace();
+      const outsideDir = makeTempWorkspace();
+      const parent = path.join(workspaceDir, ".agents");
+      if (kind === "symlink") {
+        fs.symlinkSync(outsideDir, parent, "dir");
+      } else {
+        fs.writeFileSync(parent, "existing user file");
+      }
+      await ensureReadOnlyWorkspaceSkillMountSources(mountParams(workspaceDir));
+      expect(fs.existsSync(path.join(outsideDir, "skills"))).toBe(false);
+      expect(workspaceMounts(workspaceDir)).not.toContain(
+        `${path.join(workspaceDir, ".agents", "skills")}:/workspace/.agents/skills:ro,z`,
+      );
+      if (kind === "file") {
+        expect(fs.readFileSync(parent, "utf8")).toBe("existing user file");
+      }
+    },
+  );
 
-    expect(mounts).toContain(expected);
-  });
+  it.each(["rw", "ro", "none"] as const)(
+    "sets mount permissions for workspaceAccess=%s",
+    (access) => {
+      const mounts = workspaceMounts("/tmp/workspace", {
+        agentWorkspaceDir: "/tmp/agent-workspace",
+        workspaceAccess: access,
+      });
+
+      const mode = access === "ro" ? "ro,z" : "z";
+      expect(mounts).toEqual([
+        `/tmp/workspace:/workspace:${mode}`,
+        ...(access === "none" ? [] : [`/tmp/agent-workspace:/agent:${mode}`]),
+      ]);
+    },
+  );
 
   it.each(["none", "identical"] as const)("omits agent workspace mount for %s", (kind) => {
     const workspaceDir = makeTempWorkspace();
@@ -109,125 +146,73 @@ describe("resolveWorkspaceMounts", () => {
     expect(mounts).toEqual([`${workspaceDir}:/workspace:z`]);
   });
 
-  it("marks split agent workspace mounts shared for SELinux", () => {
-    const mounts = workspaceMounts("/tmp/workspace", {
-      agentWorkspaceDir: "/tmp/agent-workspace",
-      workspaceAccess: "ro",
-    });
-
-    expect(mounts).toEqual(["/tmp/workspace:/workspace:ro,z", "/tmp/agent-workspace:/agent:ro,z"]);
-  });
-
-  it.each(["skills", ".agents/skills"])("overlays %s read-only in a writable workspace", (root) => {
-    const agentWorkspaceDir = makeTempWorkspace();
-    addSkill(agentWorkspaceDir, root);
-    const mounts = workspaceMounts(agentWorkspaceDir);
-    expect(mounts).toEqual([
-      `${agentWorkspaceDir}:/workspace:z`,
-      `${path.join(agentWorkspaceDir, root)}:/workspace/${root}:ro,z`,
-    ]);
-    expect(resolveSkillPath(agentWorkspaceDir, "normal.txt").writable).toBe(true);
-    for (const filePath of [`${root}/demo/SKILL.md`, `/workspace/${root}/demo/SKILL.md`]) {
-      expect(resolveSkillPath(agentWorkspaceDir, filePath).writable).toBe(false);
-    }
-  });
+  it.each(["skills", ".agents/skills", "materialized"])(
+    "overlays %s read-only in a writable workspace",
+    (source) => {
+      const materialized = source === "materialized";
+      const root = materialized ? ".openclaw/sandbox-skills/skills" : source;
+      const agentWorkspaceDir = makeTempWorkspace(...(materialized ? [] : [root]));
+      const skillsWorkspaceDir = materialized ? makeTempWorkspace("skills") : undefined;
+      const hostRoot = materialized
+        ? path.join(skillsWorkspaceDir!, "skills")
+        : path.join(agentWorkspaceDir, root);
+      const mounts = workspaceMounts(agentWorkspaceDir, { skillsWorkspaceDir });
+      expect(mounts).toEqual([
+        `${agentWorkspaceDir}:/workspace:z`,
+        `${hostRoot}:/workspace/${root}:ro,z`,
+      ]);
+      expect(resolveSkillPath(agentWorkspaceDir, "normal.txt").writable).toBe(true);
+      for (const filePath of [`${root}/demo/SKILL.md`, `/workspace/${root}/demo/SKILL.md`]) {
+        expect(resolveSkillPath(agentWorkspaceDir, filePath, skillsWorkspaceDir)).toMatchObject({
+          writable: false,
+          hostPath: path.join(hostRoot, "demo/SKILL.md"),
+        });
+      }
+    },
+  );
 
   describe.runIf(process.platform !== "win32")("symlink containment", () => {
     it.each(["skills", ".agents"])("does not overlay through symlinked %s", (root) => {
       const agentWorkspaceDir = makeTempWorkspace();
-      const outsideDir = makeTempWorkspace();
-      fs.mkdirSync(path.join(outsideDir, "skills", "demo"), { recursive: true });
+      const outsideDir = makeTempWorkspace("skills");
       fs.symlinkSync(outsideDir, path.join(agentWorkspaceDir, root), "dir");
       expect(workspaceMounts(agentWorkspaceDir)).toEqual([`${agentWorkspaceDir}:/workspace:z`]);
     });
   });
 
-  it("overlays materialized sandbox skills read-only when workspaceAccess is rw", () => {
-    const agentWorkspaceDir = makeTempWorkspace();
-    const skillsWorkspaceDir = makeTempWorkspace();
-    const materializedSkillsDir = path.join(skillsWorkspaceDir, "skills");
-    addSkill(skillsWorkspaceDir);
-    const mounts = workspaceMounts(agentWorkspaceDir, { skillsWorkspaceDir });
-    expect(mounts).toEqual([
-      `${agentWorkspaceDir}:/workspace:z`,
-      `${materializedSkillsDir}:/workspace/.openclaw/sandbox-skills/skills:ro,z`,
-    ]);
-    for (const prefix of ["", "/workspace/"]) {
-      expect(
-        resolveSkillPath(
-          agentWorkspaceDir,
-          `${prefix}.openclaw/sandbox-skills/skills/demo/SKILL.md`,
-          skillsWorkspaceDir,
-        ),
-      ).toMatchObject({
-        writable: false,
-        hostPath: path.join(materializedSkillsDir, "demo/SKILL.md"),
+  it.each(["ro", "none"] as const)(
+    "protects %s workspace skills without extra exposure",
+    (workspaceAccess) => {
+      const agentWorkspaceDir = makeTempWorkspace("skills");
+      const sandboxWorkspaceDir = makeTempWorkspace("skills", ".agents/skills");
+      const mounts = workspaceMounts(sandboxWorkspaceDir, {
+        agentWorkspaceDir,
+        workspaceAccess,
       });
-    }
-  });
-
-  it("does not add a separate synced skill overlay when workspaceAccess is ro", () => {
-    const agentWorkspaceDir = makeTempWorkspace();
-    const sandboxWorkspaceDir = makeTempWorkspace();
-    fs.mkdirSync(path.join(sandboxWorkspaceDir, "skills", "demo"), { recursive: true });
-
-    const mounts = workspaceMounts(sandboxWorkspaceDir, {
-      agentWorkspaceDir,
-      workspaceAccess: "ro",
-    });
-
-    expect(mounts).toEqual([
-      `${sandboxWorkspaceDir}:/workspace:ro,z`,
-      `${agentWorkspaceDir}:/agent:ro,z`,
-    ]);
-  });
-
-  it("keeps private workspace skills read-only without exposing the agent workspace", () => {
-    const agentWorkspaceDir = makeTempWorkspace();
-    const sandboxWorkspaceDir = makeTempWorkspace();
-    fs.mkdirSync(path.join(sandboxWorkspaceDir, "skills", "demo"), { recursive: true });
-    fs.mkdirSync(path.join(sandboxWorkspaceDir, ".agents", "skills"), { recursive: true });
-    fs.mkdirSync(path.join(agentWorkspaceDir, "skills", "host-only"), { recursive: true });
-
-    const mounts = workspaceMounts(sandboxWorkspaceDir, {
-      agentWorkspaceDir,
-      workspaceAccess: "none",
-    });
-
-    expect(mounts).toEqual([
-      `${sandboxWorkspaceDir}:/workspace:z`,
-      `${path.join(sandboxWorkspaceDir, "skills")}:/workspace/skills:ro,z`,
-      `${path.join(sandboxWorkspaceDir, ".agents", "skills")}:/workspace/.agents/skills:ro,z`,
-    ]);
-  });
+      expect(mounts).toEqual([
+        `${sandboxWorkspaceDir}:/workspace:${workspaceAccess === "ro" ? "ro,z" : "z"}`,
+        ...(workspaceAccess === "ro"
+          ? [`${agentWorkspaceDir}:/agent:ro,z`]
+          : ["skills", ".agents/skills"].map(
+              (root) => `${path.join(sandboxWorkspaceDir, root)}:/workspace/${root}:ro,z`,
+            )),
+      ]);
+    },
+  );
 });
 
 describe.runIf(process.platform !== "win32")("remote skill mount enforcement", () => {
   it("rejects writes under remote-only skill roots", async () => {
-    const remoteWorkspaceDir = makeTempWorkspace();
-    const skillsWorkspaceDir = makeTempWorkspace();
-    addSkill(remoteWorkspaceDir);
-    addSkill(skillsWorkspaceDir);
+    const remoteWorkspaceDir = makeTempWorkspace("skills");
+    const skillsWorkspaceDir = makeTempWorkspace("skills");
     const remote = remoteBridge(makeTempWorkspace(), remoteWorkspaceDir, skillsWorkspaceDir);
     await expectWriteRejected(remote, "skills/demo/SKILL.md");
     await expectWriteRejected(remote, ".openclaw/sandbox-skills/skills/demo/SKILL.md");
   });
 
-  it("rejects materialized skill writes with a separate remote workspace", async () => {
-    const workspaceDir = makeTempWorkspace();
-    const skillsWorkspaceDir = makeTempWorkspace();
-    addSkill(skillsWorkspaceDir);
-    await expectWriteRejected(
-      remoteBridge(workspaceDir, makeTempWorkspace(), skillsWorkspaceDir),
-      ".openclaw/sandbox-skills/skills/demo/SKILL.md",
-    );
-  });
-
   it("rejects mkdirp under skill roots from container cwd", async () => {
-    const workspaceDir = makeTempWorkspace();
-    const remoteWorkspaceDir = makeTempWorkspace();
-    addSkill(workspaceDir);
-    addSkill(remoteWorkspaceDir);
+    const workspaceDir = makeTempWorkspace("skills");
+    const remoteWorkspaceDir = makeTempWorkspace("skills");
     const { bridge, remoteRoot } = remoteBridge(workspaceDir, remoteWorkspaceDir);
     const filePath = "skills/demo/generated";
     await expect(bridge.mkdirp({ filePath, cwd: remoteRoot })).rejects.toThrow(/read-only/);
@@ -248,8 +233,7 @@ describe.runIf(process.platform === "linux")("remote skill canonical paths", () 
   });
 
   it("rejects writes through symlinks into skill roots", async () => {
-    const remoteWorkspaceDir = makeTempWorkspace();
-    addSkill(remoteWorkspaceDir);
+    const remoteWorkspaceDir = makeTempWorkspace("skills");
     fs.symlinkSync("skills", path.join(remoteWorkspaceDir, "link"), "dir");
     await expectWriteRejected(
       remoteBridge(makeTempWorkspace(), remoteWorkspaceDir),
@@ -276,10 +260,7 @@ describe("resolveSandboxMountSelection", () => {
   function select(binds?: readonly string[], readOnlyResourceMounts = protectedMounts) {
     const workspaceDir = makeTempWorkspace();
     const selection = resolveSandboxMountSelection({
-      workspaceDir,
-      agentWorkspaceDir: workspaceDir,
-      workdir: "/workspace",
-      workspaceAccess: "rw",
+      ...mountParams(workspaceDir),
       binds,
       readOnlyResourceMounts,
     });
@@ -303,8 +284,7 @@ describe("resolveSandboxMountSelection", () => {
   it("keeps user binds when no protected mounts exist", () => {
     const binds = [customSkill];
     const selection = select(binds, []);
-    expect(selection.custom).toEqual(binds);
-    expect(selection.skippedBinds).toEqual([]);
+    expect(selection).toMatchObject({ custom: binds, skippedBinds: [] });
     expect(selection.mounts).toContainEqual({
       hostPath: "/host/custom",
       containerPath: "/workspace/skills",
@@ -315,11 +295,9 @@ describe("resolveSandboxMountSelection", () => {
 
   it.each([
     ["undefined binds", undefined, [], []],
-    ["empty binds", [], [], []],
     ["one conflicting bind", [customSkill, otherData], [otherData], [customSkill]],
     ["normalized targets", [skillA, skillB, data], [data], [skillA, skillB]],
     ["no conflicting binds", others, others, []],
-    ["all binds conflicting", [skillA, skillB], [], [skillA, skillB]],
     ["no options", [noOptions], [], [noOptions]],
     ["a trailing target slash", [trailingSlash], [], [trailingSlash]],
     ["an unparsed bind retained for validation", ["missing-source"], ["missing-source"], []],
