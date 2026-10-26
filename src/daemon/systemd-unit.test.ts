@@ -41,16 +41,12 @@ it("round-trips escaped and quoted Environment values", () => {
   }
 });
 
-it("round-trips escaped and quoted ExecStart arguments", () => {
-  const programArguments = ["/usr/bin/openclaw", "gateway", ...values];
+it("round-trips escaped, quoted and empty ExecStart arguments without shifting positions", () => {
+  const programArguments = ["run", "", ...values, "tail", ""];
   const unit = build(programArguments);
-  expect(parseSystemdExecStart(execStart(unit))).toEqual(programArguments);
-});
-
-it("quotes empty ExecStart arguments without shifting later arguments", () => {
-  const programArguments = ["/usr/bin/node", "gateway", "--label", "", "--port", "18789", ""];
-  const unit = build(programArguments);
-  expect(execStart(unit)).toBe('/usr/bin/node gateway --label "" --port 18789 ""');
+  expect(execStart(unit)).toBe(
+    String.raw`run "" plain "mix \\ and \" here" "trailing\\" "apostrophe's" "'quoted'" tail ""`,
+  );
   expect(parseSystemdExecStart(execStart(unit))).toEqual(programArguments);
 });
 
@@ -63,7 +59,6 @@ it("preserves explicit NODE_OPTIONS while omitting other empty values", () => {
     expect(directives(unit, "Environment").flatMap(parseSystemdEnvAssignments)).toEqual([
       { key: "NODE_OPTIONS", value: nodeOptions },
     ]);
-    expect(parseSystemdExecStart(execStart(unit))).toEqual(programArguments);
   }
 });
 
@@ -103,11 +98,9 @@ it("rejects environment values with line breaks", () => {
 
 it.each([
   ['run "a b"', "none", ["run", "a b"]],
-  ['run "a \\"b\\"" c', "backslash", ["run", 'a "b"', "c"]],
   ['run "C:\\\\a b\\\\c"', "backslash-quote-only", ["run", "C:\\\\a b\\\\c"]],
   ['run "a \\"b\\" c"', "backslash-quote-only", ["run", 'a "b" c']],
   ['  "" run "" tail ""  ', "none", ["", "run", "", "tail", ""]],
-  ['  "" run "" tail ""  ', "backslash", ["", "run", "", "tail", ""]],
   ['  "" run "" tail ""  ', "backslash-quote-only", ["", "run", "", "tail", ""]],
 ] as const)("splits %s using %s escaping", (input, escapeMode, expected) => {
   expect(

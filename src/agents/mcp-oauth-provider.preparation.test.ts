@@ -117,8 +117,7 @@ it.each([
   async ({ operation, owner }) => {
     read.mockResolvedValue({});
     const failure = new Error("credential owner ended");
-    const login = new AbortController();
-    let leaseLive = true;
+    const lifetime = new AbortController();
     const provider = await createMcpOAuthClientProvider({
       ...providerParams,
       allowAuthorizationRedirect: true,
@@ -126,21 +125,17 @@ it.each([
       lease: {
         ...lease,
         async assertOwned() {
-          if (!leaseLive) {
-            throw failure;
+          if (owner === "lease") {
+            lifetime.signal.throwIfAborted();
           }
         },
       },
-      login: owner === "login" ? loginLifecycle(login) : undefined,
+      login: owner === "login" ? loginLifecycle(lifetime) : undefined,
     });
     if (operation === "codeVerifier") {
       await provider.saveCodeVerifier("fixture-prepared-verifier");
     }
-    if (owner === "login") {
-      login.abort(failure);
-    } else {
-      leaseLive = false;
-    }
+    lifetime.abort(failure);
     await expect(provider[operation]()).rejects.toBe(failure);
   },
 );

@@ -419,8 +419,10 @@ and current-authority checks inside the worker admission boundary. The existing
 terminal replay keys, JSON payloads, retention limits, schema, and restart
 recovery policy remain unchanged.
 
-Ordinary operator approval lookups, pending replay, verdicts, expiry, and allow-once
-consumption execute in the shared-state worker. Replay expires and publishes due
+Ordinary operator approval lookups, verdicts, expiry, and allow-once
+consumption execute in the shared-state worker. Pending replay uses a per-session
+view seeded in bounded read-worker pages and maintained by committed approval
+receipts. Closing or replacing the database retires the view. Replay expires and publishes due
 approvals before listing the pending set; the pending query excludes expired rows
 without repeating that sweep. Lookups retain expiry, and both reads retain
 corrupt-row repair transactions; history pages use the read-only worker. The

@@ -135,6 +135,47 @@ describe("subscribeEmbeddedAgentSession partial reply lifecycle", () => {
     expect(partials.at(-1)).toEqual({ text: "ABCD", delta: "D" });
   });
 
+  it("bounds promise continuations while preserving a stalled delivery boundary", async () => {
+    const terminal = pending();
+    let observed = 0;
+    const h = subscribe({
+      runId: "event-backlog",
+      onBeforeTerminalDelivery: () => terminal.promise,
+      onAgentEvent: (event) => {
+        if (event.stream === "lifecycle" && event.data.phase === "start") {
+          observed++;
+        }
+      },
+    });
+    h.emit({ type: "agent_end", messages: [], willRetry: false });
+    const events = 1_000;
+    // A promise spy observes returned promises recursively. Count only synchronous
+    // enqueue work with the native method, restoring it before any await.
+    /* eslint-disable no-extend-native, unicorn/no-thenable, @typescript-eslint/unbound-method */
+    const then = Promise.prototype.then;
+    let continuations = 0;
+    Promise.prototype.then = function (this: Promise<unknown>, ...args) {
+      continuations++;
+      return Reflect.apply(then, this, args);
+    };
+    try {
+      for (let index = 0; index < events; index++) {
+        h.emit({ type: "agent_start" });
+      }
+    } finally {
+      Promise.prototype.then = then;
+    }
+    /* eslint-enable no-extend-native, unicorn/no-thenable, @typescript-eslint/unbound-method */
+    expect(observed).toBe(0);
+    terminal.resolve();
+    await h.subscription.waitForPendingEvents();
+    expect(observed).toBe(events);
+    h.emit({ type: "agent_start" });
+    expect(observed).toBe(events + 1);
+    expect(continuations).toBeGreaterThan(0);
+    expect(continuations).toBeLessThanOrEqual(events * 2);
+  });
+
   it("joins a partial reply task created while terminal events settle", async () => {
     const { emit, subscription, partial, onPartialReply } = fixture(subscribe, {
       onBeforeTerminalDelivery: async () => undefined,

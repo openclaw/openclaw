@@ -324,6 +324,41 @@ describe("Git operation host lifecycle", () => {
     expect(ignoredReads).toBeGreaterThan(0);
   });
 
+  it("reuses snapshot status for an add/add directory replacement without losing nested repository protection", async () => {
+    const repo = await repository(tempDirs.make("openclaw-snapshot-add-add-"));
+    const blob = await git(repo, "rev-parse", "HEAD:README.md");
+    await worktreeGit.requireGit(repo, ["update-index", "--index-info"], {
+      input: Buffer.from(`100644 ${blob} 2\tentry\n100644 ${blob} 3\tentry\n`),
+    });
+    await fs.mkdir(path.join(repo, "entry"));
+    await fs.writeFile(path.join(repo, "entry", "child.txt"), "replacement child\n");
+    expect(await git(repo, "status", "--porcelain=v1", "--untracked-files=no")).toBe("AA entry");
+    const commands = vi.spyOn(worktreeGit, "runGitBuffered");
+    const capture = () =>
+      runGitWorkerOperation(
+        {
+          type: "worktree.snapshot",
+          input: {
+            worktreeId: "add-add-replacement",
+            checkoutPath: repo,
+            repoRoot: repo,
+            reason: "fixture",
+            provisionedPaths: [],
+          },
+        },
+        { onEffect: () => undefined },
+      );
+    const snapshot = await capture();
+    expect.soft(commands.mock.calls.filter(([, args]) => args[0] === "diff-files")).toHaveLength(0);
+    expect(commands.mock.calls.filter(([, args]) => args.includes("status"))).toHaveLength(1);
+    const captured = await git(repo, "show", `${snapshot.snapshotRef}:entry/child.txt`);
+    expect(captured).toBe("replacement child");
+    await fs.mkdir(path.join(repo, "entry", "nested", ".git"), { recursive: true });
+    await expect(capture()).rejects.toThrow(
+      "nested git repositories cannot be snapshotted losslessly",
+    );
+  });
+
   it.skipIf(!supportsRawPathBytes)(
     "inspects ignored raw-byte directories without following symlinks",
     async () => {
@@ -805,9 +840,9 @@ describe("Git operation host lifecycle", () => {
       const onEffect: NonNullable<GitWorkerOperationOptions["onEffect"]> = async (effect) => {
         if (
           effect.type === "worktree.snapshot-capacity" &&
-          effect.input.purpose === "worktree safety snapshot index"
+          effect.input.purpose === "worktree safety snapshot"
         ) {
-          temporaryDirectory = effect.input.demands[0]?.path ?? "";
+          temporaryDirectory = effect.input.demands[1]?.path ?? "";
           entered.resolve();
           if (ending === "cancel") {
             await release.promise;
@@ -923,9 +958,9 @@ describe("Git operation host lifecycle", () => {
             onEffect: (effect) => {
               if (
                 effect.type === "worktree.snapshot-capacity" &&
-                effect.input.purpose === "worktree safety snapshot index"
+                effect.input.purpose === "worktree safety snapshot"
               ) {
-                temporaryDirectory = effect.input.demands[0]?.path ?? "";
+                temporaryDirectory = effect.input.demands[1]?.path ?? "";
               }
               return undefined;
             },

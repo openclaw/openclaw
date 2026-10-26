@@ -1,5 +1,9 @@
 import { isDeepStrictEqual } from "node:util";
 import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../../packages/gateway-protocol/src/client-info.js";
+import {
   createConfigIO,
   readConfigFileSnapshotForWrite,
   replaceConfigFile,
@@ -24,7 +28,7 @@ import { isRecord } from "../../utils.js";
 import { resolveGatewayAuth } from "../auth.js";
 import { buildGatewayReloadPlan, isNoopGatewayReloadPlan } from "../config-reload-plan.js";
 import { resolveGatewayReloadSettings } from "../config-reload-settings.js";
-import { formatControlPlaneActor, type ControlPlaneActor } from "../control-plane-audit.js";
+import { formatControlPlaneActor, resolveControlPlaneActor } from "../control-plane-audit.js";
 import { holdGatewayPolicyResponse } from "../server/ws-policy-close.js";
 import { resolveSharedGatewaySessionGeneration } from "../server/ws-shared-generation.js";
 import { parseRestartRequestParams } from "./restart-request.js";
@@ -136,6 +140,8 @@ function resolveConfigRestartRequirement(params: {
   changedPaths: string[];
   previousConfig: OpenClawConfig;
   nextConfig: OpenClawConfig;
+  /** Offline-write semantics: under reload off, persist and leave the restart to the operator. */
+  deferRestartWhenReloadOff?: boolean;
 }): { requiresRestart: boolean; scheduleDirectRestart: boolean } {
   const reloadSettings = resolveGatewayReloadSettings(params.nextConfig);
   const plan = buildGatewayReloadPlan(params.changedPaths, {
@@ -146,7 +152,8 @@ function resolveConfigRestartRequirement(params: {
     !isNoopGatewayReloadPlan(plan) && (reloadSettings.mode === "off" || plan.restartGateway);
   return {
     requiresRestart,
-    scheduleDirectRestart: requiresRestart && reloadSettings.mode === "off",
+    scheduleDirectRestart:
+      requiresRestart && reloadSettings.mode === "off" && !params.deferRestartWhenReloadOff,
   };
 }
 
@@ -242,7 +249,7 @@ export async function resolveGatewayConfigRestartWriteResult(params: {
   changedPaths: string[];
   previousConfig: OpenClawConfig;
   nextConfig: OpenClawConfig;
-  actor: ControlPlaneActor;
+  client: Parameters<typeof resolveControlPlaneActor>[0];
   context?: GatewayRequestContext;
 }): Promise<{
   payload: RestartSentinelPayload;
@@ -254,7 +261,19 @@ export async function resolveGatewayConfigRestartWriteResult(params: {
   );
   // Restart delivery uses generic :thread: parsing plus plugin-owned session grammars.
   const sessionDelivery = await extractDeliveryInfo(sessionKey);
-  const restartRequirement = resolveConfigRestartRequirement(params);
+  const actor = resolveControlPlaneActor(params.client);
+  const cli = params.client?.connect?.client;
+  const restartRequirement = resolveConfigRestartRequirement({
+    ...params,
+    // `openclaw config set/patch/unset` route here while a Gateway owns the state and keep
+    // the offline write's reload-off contract: persist, and the CLI prints a restart hint.
+    // Control UI and RPC patches still restart. Stable Gateways close the request schema,
+    // so the connection identity carries this rather than a request field.
+    deferRestartWhenReloadOff:
+      params.mode === "config.patch" &&
+      cli?.id === GATEWAY_CLIENT_NAMES.CLI &&
+      cli.mode === GATEWAY_CLIENT_MODES.CLI,
+  });
   const payload: RestartSentinelPayload = {
     kind: params.kind,
     status: "ok",
@@ -279,16 +298,16 @@ export async function resolveGatewayConfigRestartWriteResult(params: {
         delayMs: restartDelayMs,
         reason: params.mode,
         audit: {
-          actor: params.actor.actor,
-          deviceId: params.actor.deviceId,
-          clientIp: params.actor.clientIp,
+          actor: actor.actor,
+          deviceId: actor.deviceId,
+          clientIp: actor.clientIp,
           changedPaths: params.changedPaths,
         },
       })
     : undefined;
   if (restart?.coalesced) {
     params.context?.logGateway?.warn(
-      `${params.mode} restart coalesced ${formatControlPlaneActor(params.actor)} delayMs=${restart.delayMs}`,
+      `${params.mode} restart coalesced ${formatControlPlaneActor(actor)} delayMs=${restart.delayMs}`,
     );
   }
   return { payload, sentinelPersisted, restart };

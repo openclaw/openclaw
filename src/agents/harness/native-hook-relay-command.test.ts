@@ -2,6 +2,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
+import { standaloneManifestFixture } from "../../daemon/standalone-manifest.test-support.js";
 import { withTempDir } from "../../test-utils/temp-dir.js";
 
 const mocks = vi.hoisted(() => ({
@@ -86,14 +87,7 @@ it.each([
     const executable = path.join(root, "renamed-cli");
     await writeFile(
       path.join(root, "manifest.json"),
-      JSON.stringify({
-        schemaVersion: 1,
-        mode: "jit",
-        executable: { path: "renamed-cli" },
-        runtime: { path: "runtime" },
-        openclaw: { version: "2026.10.15" },
-        bun: { version: "1.4.3" },
-      }),
+      JSON.stringify(standaloneManifestFixture("jit", "renamed-cli", "2026.10.15", "1.4.3")),
     );
     const target = relative ? path.relative(process.cwd(), executable) : executable;
     vi.stubGlobal("__openclawStandaloneRootUrl", pathToFileURL("/other/runtime/").href);

@@ -179,6 +179,52 @@ describe("Agent lifecycle and continuation", () => {
 });
 
 describe("agentLoop streaming updates", () => {
+  it("does not inspect prior content when forwarding unguarded provider snapshots", async () => {
+    const message = makeAssistantMessage([{ type: "thinking", thinking: "synthetic thought" }]);
+    let blockReads = 0;
+    message.content = new Proxy(message.content, {
+      get(target, key, receiver) {
+        if (key === "0") {
+          blockReads++;
+        }
+        return Reflect.get(target, key, receiver);
+      },
+    });
+    const readsAtUpdate: number[] = [];
+    await runAgentLoop(
+      [user("hello")],
+      { systemPrompt: "", messages: [] },
+      config,
+      (event) => {
+        if (event.type === "message_start" && event.message.role === "assistant") {
+          blockReads = 0;
+        }
+        if (event.type === "message_update") {
+          readsAtUpdate.push(blockReads);
+          expect(event.message).not.toBe(message);
+          expect(event.assistantMessageEvent).toMatchObject({
+            type: "thinking_delta",
+            contentIndex: 0,
+            delta: "synthetic thought",
+            partial: message,
+          });
+        }
+      },
+      undefined,
+      () =>
+        reply(message, [
+          { type: "start", partial: message },
+          {
+            type: "thinking_delta",
+            contentIndex: 0,
+            delta: "synthetic thought",
+            partial: message,
+          },
+        ]),
+    );
+    expect(readsAtUpdate).toEqual([0]);
+  });
+
   it("rebuilds assistant message snapshots for text deltas without partial snapshots", async () => {
     const firstDeltaConsumed = createDeferred();
     const streamFn: StreamFn = () => {

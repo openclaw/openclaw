@@ -39,6 +39,37 @@ function toRunMap(runs: SubagentRunRecord[]): Map<string, SubagentRunRecord> {
 }
 
 describe("subagent registry query regressions", () => {
+  it("counts prepared descendants without allocating array iterators", () => {
+    const parent = makeRun({ runId: "parent", endedAt: 100 });
+    const child = makeRun({
+      runId: "child",
+      requesterSessionKey: parent.childSessionKey,
+      endedAt: 100,
+    });
+    const index = buildSubagentRunReadIndexFromRuns({ runs: toRunMap([parent, child]) });
+    const root = parent.requesterSessionKey;
+    index.listDescendantRunsForRequester(root);
+    const iterate = Array.prototype[Symbol.iterator];
+    let iterations = 0;
+    // eslint-disable-next-line no-extend-native -- Measure native iterator work; restore synchronously below.
+    Array.prototype[Symbol.iterator] = function () {
+      iterations++;
+      return iterate.call(this);
+    };
+    let active: number;
+    let pending: number;
+    try {
+      active = index.countActiveDescendantRuns(root);
+      pending = index.countPendingDescendantRuns(root);
+    } finally {
+      // eslint-disable-next-line no-extend-native -- Restore the instrumented native iterator.
+      Array.prototype[Symbol.iterator] = iterate;
+    }
+    expect(active).toBe(0);
+    expect(pending).toBe(2);
+    expect(iterations).toBe(0);
+  });
+
   it("keeps cached parent groups current across status, generation, move, insert and removal churn", () => {
     const now = Date.UTC(2026, 9, 25);
     const roots = ["parent-a", "parent-b"];

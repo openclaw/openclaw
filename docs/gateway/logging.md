@@ -31,6 +31,20 @@ isolate). Both values are in MiB and are sampled when the phase finishes, so
 service journals can attribute startup memory growth before readiness. They are
 point-in-time readings, not peak memory measurements.
 
+Environment selection reports imports, config reading, recovery (including its
+config-health database read), guarding, and runtime-path pinning separately.
+These sub-phases appear during ordinary foreground Gateway startup without
+enabling full startup tracing. Parent timings include their nested sub-phases;
+do not add them together. Config-health timing includes any private database
+snapshot preparation and cleanup required by that read.
+
+The same lines include `workers` (live tracked worker isolates) and
+`workerHeapSamples` (sampled workers/live workers). When samples are available,
+`workerHeapMb` sums their total heap capacity in MiB; `workerHeapSource=cached`
+identifies the existing diagnostics samples, which may be up to 60 seconds old.
+Missing or stale samples are excluded, so partial coverage is not the total heap
+of all workers. Startup logging never requests new worker samples.
+
 ## File-based logger
 
 - Default rolling log files are under `/tmp/openclaw/` (one file per day), dated by the gateway host's local timezone. The default profile uses `openclaw-YYYY-MM-DD.log`. Named profiles use `openclaw-<profile>-YYYY-MM-DD.log` (for example, `openclaw-dev-YYYY-MM-DD.log`). If that directory is unsafe or unwritable (wrong owner, world-writable, a symlink), OpenClaw falls back to a user-scoped `os.tmpdir()/openclaw-<uid>` path instead. On Windows it always uses that OS-tmpdir fallback.

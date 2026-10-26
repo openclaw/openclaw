@@ -31,6 +31,7 @@ import {
   type JsonObject,
   type JsonValue,
 } from "./protocol.js";
+import { asCodexToolArguments } from "./tool-progress-normalization.js";
 
 const optedOutNotificationMethods = new Set<string>(CODEX_APP_SERVER_OPT_OUT_NOTIFICATION_METHODS);
 
@@ -337,9 +338,15 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
     namespace?: string | null;
     tool: string;
     arguments?: JsonValue;
+    hideFromChannelProgress?: boolean;
   }): void {
     this.toolSearchEvidenceProjection?.recordDynamicToolCall(params);
-    this.toolTranscriptProjection.recordDynamicToolCall(params);
+    this.toolTranscriptProjection.recordToolCall({
+      id: params.callId,
+      name: params.tool,
+      arguments: asCodexToolArguments(params.arguments),
+      hideFromChannelProgress: params.hideFromChannelProgress,
+    });
   }
 
   /** Projects a successful OpenClaw progress_card call through the native plan stream. */

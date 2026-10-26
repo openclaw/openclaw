@@ -43,3 +43,22 @@ export function expectSubagentFollowupReactivation(params: {
     },
   );
 }
+
+export function completedSubagentFollowupRun(childSessionKey: string) {
+  return {
+    runId: "run-old",
+    childSessionKey,
+    controllerSessionKey: "agent:main:main",
+    requesterSessionKey: "agent:main:main",
+    requesterDisplayKey: "main",
+    task: "initial task",
+    cleanup: "keep" as const,
+    createdAt: 1,
+    execution: {
+      status: "terminal" as const,
+      startedAt: 2,
+      endedAt: 3,
+      outcome: { status: "ok" as const },
+    },
+  };
+}

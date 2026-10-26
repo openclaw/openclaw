@@ -49,8 +49,10 @@ Normal maintenance remains enabled in both passes.
 
 Before stress rounds, completed mock turns and closed provider streams establish
 readiness; unrelated background sidebar publications need not become quiet.
-After each workload, subscriber events drain before continuous receipts check
-delivery across all clients. Primary turns require both message and session-change
+After each workload, tracked foreground and committed-injection events settle
+before continuous receipts check delivery across all clients. Unrelated background
+metadata and cron events do not reset that workload's one-second quiet window.
+Primary turns require both message and session-change
 events; native subagent parents and children retain per-event delivery parity,
 including child events published before the spawn response. Committed injections
 must arrive exactly once on every client. The existing bounded drain also waits
