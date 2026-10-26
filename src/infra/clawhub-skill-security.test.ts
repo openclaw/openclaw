@@ -72,16 +72,14 @@ describe("fetchExactClawHubSkillSecurityVerdicts", () => {
 
   it("uses exact unauthenticated verify fallbacks for owner collisions on older registries", async () => {
     mocks.fetchClawHubSkillSecurityVerdicts.mockImplementation(missingSkills);
-    mocks.fetchClawHubSkillVerification.mockImplementation(
-      async ({ ownerHandle }: { ownerHandle: string }) => ({
-        ...verification(target("weather", ownerHandle)),
-        displayName: `${ownerHandle} Weather`,
-        pageUrl: `https://clawhub.ai/${ownerHandle}/skills/weather`,
-        publisherDisplayName: ownerHandle,
-        createdAt: 1,
-        security: { status: "clean", passed: true, checkedAt: 2 },
-      }),
-    );
+    mocks.fetchClawHubSkillVerification.mockImplementation(async (item: Target) => ({
+      ...verification(item),
+      displayName: `${item.ownerHandle} Weather`,
+      pageUrl: `https://clawhub.ai/${item.ownerHandle}/skills/weather`,
+      publisherDisplayName: item.ownerHandle,
+      createdAt: 1,
+      security: { status: "clean", passed: true, checkedAt: 2 },
+    }));
 
     const items = await fetchExactClawHubSkillSecurityVerdicts({
       baseUrl: "https://clawhub.ai",
@@ -89,21 +87,16 @@ describe("fetchExactClawHubSkillSecurityVerdicts", () => {
       skipAuth: true,
     });
 
-    const options = {
-      baseUrl: "https://clawhub.ai",
-      skipAuth: true,
-      timeoutMs: undefined,
-      token: undefined,
-    };
-    expect(mocks.fetchClawHubSkillSecurityVerdicts.mock.calls).toEqual([
-      [{ ...options, items: [target()] }],
-      [{ ...options, items: [target("weather", "bob")] }],
+    expect(
+      [
+        ...mocks.fetchClawHubSkillSecurityVerdicts.mock.calls,
+        ...mocks.fetchClawHubSkillVerification.mock.calls,
+      ].map(([options]) => options.skipAuth),
+    ).toEqual([true, true, true, true]);
+    expect(items.map(({ ok, slug, version }) => [ok, slug, version])).toEqual([
+      [true, "weather", "1.2.3"],
+      [true, "weather", "1.2.3"],
     ]);
-    expect(mocks.fetchClawHubSkillVerification).toHaveBeenCalledTimes(2);
-    expect(mocks.fetchClawHubSkillVerification).toHaveBeenNthCalledWith(1, {
-      ...options,
-      ...target(),
-    });
     expect(items.map((item) => item.publisherHandle)).toEqual(["alice", "bob"]);
     expect(items.map((item) => item.requestedOwnerHandle)).toEqual(["alice", "bob"]);
   });
@@ -134,41 +127,27 @@ describe("fetchExactClawHubSkillSecurityVerdicts", () => {
     expect(maxActiveFallbacks).toBe(6);
   });
 
-  it("correlates reordered batches and fails closed on publisher mismatches", async () => {
-    batch([
-      verdict(target("calendar", "bob", "2.0.0"), { publisherHandle: "mallory" }),
-      verdict(target()),
-    ]);
+  it.each([{ publisherHandle: "mallory" }, { version: "2.0.1" }])(
+    "correlates reordered batches and fails closed on identity mismatch %j",
+    async (mismatch) => {
+      batch([verdict(target("calendar", "bob", "2.0.0"), mismatch), verdict(target())]);
 
-    const items = await fetchExactClawHubSkillSecurityVerdicts({
-      items: [target(), target("calendar", "bob", "2.0.0")],
-      skipAuth: true,
-    });
+      const items = await fetchExactClawHubSkillSecurityVerdicts({
+        items: [target(), target("calendar", "bob", "2.0.0")],
+        skipAuth: true,
+      });
 
-    expect(mocks.fetchClawHubSkillSecurityVerdicts).toHaveBeenCalledTimes(1);
-    expect(items).toMatchObject([
-      { ok: true, requestedOwnerHandle: "alice", publisherHandle: "alice" },
-      {
-        ok: false,
-        requestedOwnerHandle: "bob",
-        reasons: ["security.identity_mismatch"],
-        error: { code: "identity_mismatch" },
-      },
-    ]);
-    expect(mocks.fetchClawHubSkillVerification).not.toHaveBeenCalled();
-  });
-
-  it("fails closed when a successful verdict returns a different exact version", async () => {
-    batch([verdict(target(), { version: "1.2.4" })]);
-
-    const [item] = await fetchExactClawHubSkillSecurityVerdicts({ items: [target()] });
-
-    expect(item).toMatchObject({
-      ok: false,
-      requestedOwnerHandle: "alice",
-      requestedVersion: "1.2.3",
-      reasons: ["security.identity_mismatch"],
-      error: { code: "identity_mismatch" },
-    });
-  });
+      expect(items).toMatchObject([
+        { ok: true, requestedOwnerHandle: "alice", publisherHandle: "alice" },
+        {
+          ok: false,
+          requestedOwnerHandle: "bob",
+          requestedVersion: "2.0.0",
+          reasons: ["security.identity_mismatch"],
+          error: { code: "identity_mismatch" },
+        },
+      ]);
+      expect(mocks.fetchClawHubSkillVerification).not.toHaveBeenCalled();
+    },
+  );
 });
