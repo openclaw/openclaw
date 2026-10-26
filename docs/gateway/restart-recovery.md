@@ -22,6 +22,9 @@ tomorrow, without a new user message. Shutdown uses the same interruption and
 recovery marking as a managed restart, with the existing drain deadlines.
 Explicit session Stop/cancel remains terminal. The crash-loop breaker, recovery
 retry budgets, current-authority checks, and archived/reset exclusions still apply.
+Ordinary session interruptions and timeouts retain their original cancellation
+cause; they do not create Gateway-restart recovery custody. Chat admission uses
+the cancellation owner's recorded cause, including when interrupted before execution.
 Before accepting another message, the Gateway retires leftover recovery records
 whose runs are all recorded terminal and have no remaining execution or delivery
 owner. For a killed conversation, it also releases unfinished fences after checking
