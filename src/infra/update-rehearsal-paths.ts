@@ -3,6 +3,18 @@ import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { isPathInside } from "./path-guards.js";
 import { resolveSqliteDatabaseFilePaths } from "./sqlite-files.js";
 
+export const UPDATE_REHEARSAL_CRON_IDENTITY_ENV = "OPENCLAW_UPDATE_REHEARSAL_CRON_IDENTITY";
+const MAX_UPDATE_REHEARSAL_CRON_IDENTITY_BYTES = 16 * 1024;
+
+type UpdateRehearsalCronIdentity = {
+  rehearsalRoot: string;
+  storeKey: string;
+};
+
+function invalidCronIdentity(): never {
+  throw new Error("Update rehearsal cron identity is invalid");
+}
+
 /** Declare the private filesystem namespace shared by every rehearsal child. */
 export function buildUpdateRehearsalPathEnv(root: string): NodeJS.ProcessEnv {
   return {
@@ -47,6 +59,63 @@ export function resolveUpdateRehearsalRoot(env: NodeJS.ProcessEnv): string | und
     return undefined;
   }
   return path.resolve(root);
+}
+
+/** Carry one compare-only source identity inside its exact disposable rehearsal. */
+export function buildUpdateRehearsalCronIdentityEnv(
+  rehearsalRoot: string,
+  storeKey: string,
+): NodeJS.ProcessEnv {
+  if (
+    !path.isAbsolute(rehearsalRoot) ||
+    path.resolve(rehearsalRoot) !== rehearsalRoot ||
+    !path.isAbsolute(storeKey) ||
+    path.resolve(storeKey) !== storeKey
+  ) {
+    invalidCronIdentity();
+  }
+  const value = JSON.stringify({ rehearsalRoot, storeKey } satisfies UpdateRehearsalCronIdentity);
+  if (Buffer.byteLength(value, "utf8") > MAX_UPDATE_REHEARSAL_CRON_IDENTITY_BYTES) {
+    invalidCronIdentity();
+  }
+  return { [UPDATE_REHEARSAL_CRON_IDENTITY_ENV]: value };
+}
+
+/** Missing means an older parent; present invalid input never becomes provenance. */
+export function resolveUpdateRehearsalCronDefaultStoreKey(
+  env: NodeJS.ProcessEnv,
+): string | undefined {
+  const raw = env[UPDATE_REHEARSAL_CRON_IDENTITY_ENV];
+  if (raw === undefined) {
+    return undefined;
+  }
+  if (Buffer.byteLength(raw, "utf8") > MAX_UPDATE_REHEARSAL_CRON_IDENTITY_BYTES) {
+    invalidCronIdentity();
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    invalidCronIdentity();
+  }
+  const root = resolveUpdateRehearsalRoot(env);
+  if (
+    !root ||
+    !value ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    Object.keys(value).length !== 2 ||
+    !("rehearsalRoot" in value) ||
+    !("storeKey" in value) ||
+    typeof value.rehearsalRoot !== "string" ||
+    typeof value.storeKey !== "string" ||
+    value.rehearsalRoot !== root ||
+    !path.isAbsolute(value.storeKey) ||
+    path.resolve(value.storeKey) !== value.storeKey
+  ) {
+    invalidCronIdentity();
+  }
+  return value.storeKey;
 }
 
 /** Uncopied absolute locators remain inventory; they cannot grant writes outside the private root. */

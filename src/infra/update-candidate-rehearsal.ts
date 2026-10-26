@@ -6,6 +6,7 @@ import { resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
 import type { AgentEntryConfig } from "../config/types.agents.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
+import { resolvePathDerivedCronDefaultStoreKey } from "../state/openclaw-state-cron-default-store-key.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveDatabaseFamilyEngines } from "./database-engine/registry.js";
 import { resolveUserPath } from "./home-dir.js";
@@ -32,7 +33,10 @@ import {
   POST_CORE_UPDATE_REQUESTED_CHANNEL_ENV,
   POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV,
 } from "./update-post-core-context.js";
-import { buildUpdateRehearsalPathEnv } from "./update-rehearsal-paths.js";
+import {
+  buildUpdateRehearsalCronIdentityEnv,
+  buildUpdateRehearsalPathEnv,
+} from "./update-rehearsal-paths.js";
 import type { UpdateRunStep } from "./update-run-record.js";
 import { buildUpdateDoctorEnv } from "./update-runner-doctor.js";
 import type { UpdateSnapshotCapacity } from "./update-snapshot-capacity.js";
@@ -198,6 +202,7 @@ export async function prepareUpdateCandidateRehearsal(params: {
   migrationPolicy?: "rehearse" | "startup-only";
 }): Promise<UpdateCandidateRehearsal> {
   const sourceEnv = params.env ?? process.env;
+  const sourceCronDefaultStoreKey = resolvePathDerivedCronDefaultStoreKey(sourceEnv);
   const workerEnv = (tempDir: string): NodeJS.ProcessEnv => {
     const copiedAgentDir = (directory: string | undefined) =>
       directory?.trim()
@@ -210,6 +215,7 @@ export async function prepareUpdateCandidateRehearsal(params: {
     const env: NodeJS.ProcessEnv = {
       ...sourceEnv,
       ...buildUpdateRehearsalPathEnv(tempDir),
+      ...buildUpdateRehearsalCronIdentityEnv(tempDir, sourceCronDefaultStoreKey),
       // Validation must resolve the candidate SDK, not the source launcher's checkout.
       OPENCLAW_DEV_SOURCE_ROOT: params.candidateRoot,
       OPENCLAW_AGENT_DIR: copiedAgentDir(sourceEnv.OPENCLAW_AGENT_DIR),

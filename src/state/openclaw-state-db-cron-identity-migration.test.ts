@@ -4,6 +4,11 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
+  buildUpdateRehearsalCronIdentityEnv,
+  buildUpdateRehearsalPathEnv,
+  UPDATE_REHEARSAL_CRON_IDENTITY_ENV,
+} from "../infra/update-rehearsal-paths.js";
+import {
   CRON_DEFAULT_STORE_IDENTITY_SCHEMA_VERSION,
   migrateCronDefaultStoreIdentity,
   readCronDefaultStoreKeyInDatabase,
@@ -109,6 +114,47 @@ it("gives fresh state a durable path-derived identity and resolves legacy config
       OPENCLAW_CONFIG_PATH: "/ignored/config.json",
     }),
   ).toBe(path.join(root, "cron", "jobs.json"));
+});
+
+it("accepts only the bounded cron identity for the exact private rehearsal root", () => {
+  const privateRoot = tempDirs.make("cron-identity-rehearsal-");
+  const sourceStoreKey = path.join(tempDirs.make("cron-identity-source-"), "cron", "jobs.json");
+  const baseEnv: NodeJS.ProcessEnv = {
+    ...buildUpdateRehearsalPathEnv(privateRoot),
+    OPENCLAW_UPDATE_IN_PROGRESS: "0",
+    OPENCLAW_SERVICE_REPAIR_POLICY: "external",
+    OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR: "0",
+    OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION: "0",
+  };
+
+  expect(resolveLegacyCronDefaultStoreKey(baseEnv)).toBe(
+    path.join(privateRoot, "cron", "jobs.json"),
+  );
+  expect(
+    resolveLegacyCronDefaultStoreKey({
+      ...baseEnv,
+      ...buildUpdateRehearsalCronIdentityEnv(privateRoot, sourceStoreKey),
+    }),
+  ).toBe(sourceStoreKey);
+
+  const staleRoot = tempDirs.make("cron-identity-stale-");
+  const invalidValues = [
+    "{",
+    "x".repeat(16 * 1024 + 1),
+    JSON.stringify({ rehearsalRoot: privateRoot, storeKey: "relative/cron/jobs.json" }),
+    JSON.stringify({ rehearsalRoot: privateRoot, storeKey: sourceStoreKey, extra: true }),
+    buildUpdateRehearsalCronIdentityEnv(staleRoot, sourceStoreKey)[
+      UPDATE_REHEARSAL_CRON_IDENTITY_ENV
+    ]!,
+  ];
+  for (const value of invalidValues) {
+    expect(() =>
+      resolveLegacyCronDefaultStoreKey({
+        ...baseEnv,
+        [UPDATE_REHEARSAL_CRON_IDENTITY_ENV]: value,
+      }),
+    ).toThrow("Update rehearsal cron identity is invalid");
+  }
 });
 
 it("preserves an upgraded partition and receipt bytes across a stopped state-directory move", async () => {

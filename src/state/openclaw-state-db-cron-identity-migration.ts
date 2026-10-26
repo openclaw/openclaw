@@ -1,7 +1,5 @@
-import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sql } from "kysely";
-import { resolveConfigDir } from "../infra/config-dir.js";
 import { jsonPickObject, jsonValid } from "../infra/database-engine/json-values.js";
 import {
   executeSqliteQuerySync,
@@ -10,7 +8,9 @@ import {
 } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { getSqliteWorkerCronDefaultStoreKey } from "../infra/sqlite-worker-state-context.js";
+import { resolveUpdateRehearsalCronDefaultStoreKey } from "../infra/update-rehearsal-paths.js";
 import type { ConfigMachineStateDatabase } from "./config-machine-state-row.js";
+import { resolvePathDerivedCronDefaultStoreKey } from "./openclaw-state-cron-default-store-key.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB } from "./openclaw-state-db.generated.js";
 
@@ -27,9 +27,11 @@ export type CronStorePartitionInventory = {
   proactiveReceipts: number;
 };
 
-/** Capture the old selector before moving state; this value is never a path to open. */
+/** Capture the old selector before moving state, including a validated private handoff. */
 export function resolveLegacyCronDefaultStoreKey(env: NodeJS.ProcessEnv): string {
-  return path.resolve(resolveConfigDir(env), "cron", "jobs.json");
+  return (
+    resolveUpdateRehearsalCronDefaultStoreKey(env) ?? resolvePathDerivedCronDefaultStoreKey(env)
+  );
 }
 
 export function resolveCronIdentityMigrationDefaultStoreKey(env: NodeJS.ProcessEnv): string {
