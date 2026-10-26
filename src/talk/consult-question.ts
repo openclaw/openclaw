@@ -52,7 +52,6 @@ function normalizeRealtimeVoiceConsultQuestion(value: string | undefined): strin
     value
       ?.toLowerCase()
       .replace(/[^\p{L}\p{N}]+/gu, " ")
-      .replace(/\s+/gu, " ")
       .trim() || undefined
   );
 }
