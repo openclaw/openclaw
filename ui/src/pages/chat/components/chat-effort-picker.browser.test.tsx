@@ -324,6 +324,7 @@ it("plays Ultra feedback only when entering Ultra, including an uncommitted drag
   expect(feedback()).toBeUndefined();
   await emulateOverlayMedia({ reducedMotion: "reduce" });
   onTestFinished(() => emulateOverlayMedia({ reducedMotion: "no-preference" }));
+  await expect.poll(() => matchMedia("(prefers-reduced-motion: reduce)").matches).toBe(true);
   await fixture(["low", "high", "ultra"], "high");
   preview("2");
   expect(feedback()).toBeUndefined();

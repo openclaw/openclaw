@@ -2,11 +2,12 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { createSignal } from "solid-js";
-import { beforeAll, expect, it, onTestFinished, vi } from "vitest";
+import { beforeAll, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import type { CyberAccessProgram } from "../../../api/types.ts";
 import { i18n } from "../../../i18n/index.ts";
 import { captureI18nStateForTesting } from "../../../i18n/lib/translate.test-support.ts";
 import { createSessionsListResult } from "../../../test-helpers/chat-model.ts";
+import { createMediaQueryList } from "../../../test-helpers/media-query.ts";
 import { installModelPickerLayout } from "../../../test-helpers/model-picker-layout.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
@@ -20,6 +21,13 @@ beforeAll(async () => {
     import("./chat-model-picker-panel.tsx"),
     import("./chat-effort-picker-panel.tsx"),
   ]);
+});
+
+beforeEach(() => {
+  // jsdom has no Web Animations API; the browser suite owns motion proof.
+  vi.stubGlobal("matchMedia", (query: string) =>
+    createMediaQueryList(query, query === "(prefers-reduced-motion: reduce)"),
+  );
 });
 
 async function controls(overrides: Partial<Props>) {

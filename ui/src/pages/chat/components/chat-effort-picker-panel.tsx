@@ -226,7 +226,7 @@ export function ChatEffortPickerPanel(props: ChatEffortPickerPanelProps) {
                 ref={(element) => (committedLabel = element)}
                 data-chat-thinking-preview-committed
               >
-                {view().reasoningValueLabel}
+                {view().reasoningValueText}
               </span>
               <For each={view().sliderStops} keyed={(stop) => stop.value}>
                 {(stop, index) => (
