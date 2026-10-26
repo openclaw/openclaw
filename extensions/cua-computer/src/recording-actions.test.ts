@@ -8,7 +8,6 @@ import {
   CUA_DRIVER_CONTRACT_FIXTURES as fixtures,
   cuaToolResult,
 } from "./cua-driver-contract.test-fixtures.js";
-import type { CuaToolResult } from "./driver-client.js";
 
 const recordingStates: Record<string, Record<string, unknown>> = {
   start_recording: fixtures.recordingActive,
@@ -22,13 +21,15 @@ function recordingHandle(json: string): string {
 }
 
 async function createRecording(
-  reply: (name: string, root: string) => CuaToolResult | Promise<CuaToolResult> = (name) =>
-    cuaToolResult(recordingStates[name] ?? {}),
+  beforeReply: (name: string, root: string) => void | Promise<void> = () => {},
 ) {
   const active = Object.assign(driver(), { root: "" });
   active.callTool.mockImplementation(async (name, args) => {
     active.root = name === "start_recording" ? String(args.output_dir) : active.root;
-    return reply(name, active.root);
+    await beforeReply(name, active.root);
+    return cuaToolResult(recordingStates[name] ?? {}, {
+      text: `${active.root}/recording.mp4 native-session`,
+    });
   });
   const computer = await execution(active.session);
   return Object.assign(active, { computer, act: computer.send });
@@ -41,11 +42,6 @@ it("maps each recording tool while projecting only opaque resource handles", asy
       await fs.mkdir(turn);
       await fs.writeFile(path.join(turn, "action.json"), '{"tool":"click","arguments":{}}');
     }
-    const text: Record<string, string> = {
-      start_recording: `recording at ${root}`,
-      stop_recording: `${root}/recording.mp4`,
-    };
-    return cuaToolResult(recordingStates[name] ?? {}, { text: text[name] ?? "ok" });
   });
   const { act, computer } = active;
 
@@ -112,9 +108,7 @@ it("finalizes an in-flight recording once on every execution close", async () =>
     if (name === "start_recording") {
       startEntered.resolve();
       await startGate.promise;
-      return cuaToolResult(fixtures.recordingActive);
     }
-    return cuaToolResult(fixtures.recordingStopped);
   });
   const { act, computer } = active;
   onTestFinished(async () => {

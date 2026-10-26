@@ -21,45 +21,35 @@ const geometry = {
 
 const CUA_DRIVER_ENDPOINT_ENV = "OPENCLAW_CUA_DRIVER_ENDPOINT";
 
-export function macOsEndpoint(overrides: Record<string, unknown> = {}): NodeJS.ProcessEnv {
-  return {
-    [CUA_DRIVER_ENDPOINT_ENV]: JSON.stringify({
-      v: 1,
-      socketPath: "/tmp/openclaw-cua-test/driver.sock",
-      binaryPath: process.execPath,
-      ...overrides,
-    }),
-  };
-}
+export const macOsEndpoint = (overrides: Record<string, unknown> = {}): NodeJS.ProcessEnv => ({
+  [CUA_DRIVER_ENDPOINT_ENV]: JSON.stringify({
+    v: 1,
+    socketPath: "/tmp/openclaw-cua-test/driver.sock",
+    binaryPath: process.execPath,
+    ...overrides,
+  }),
+});
 
-export function invalidMacOsEndpoints(): Array<[string, NodeJS.ProcessEnv]> {
-  return [
-    ["missing", {}],
-    ["malformed JSON", { [CUA_DRIVER_ENDPOINT_ENV]: "{" }],
-    ["partial", macOsEndpoint({ binaryPath: undefined })],
-    ["unsupported version", macOsEndpoint({ v: 2 })],
-    ["extra field", macOsEndpoint({ extra: true })],
-    ["relative socket", macOsEndpoint({ socketPath: "relative.sock" })],
-    ["relative binary", macOsEndpoint({ binaryPath: "cua-driver" })],
-    ["nul socket", macOsEndpoint({ socketPath: "/tmp/cua\0.sock" })],
-    ["missing binary", macOsEndpoint({ binaryPath: "/missing/cua-driver" })],
-    ["oversized", macOsEndpoint({ socketPath: `/${"x".repeat(4_096)}` })],
-  ];
-}
+export const invalidMacOsEndpoints = (): Array<[string, NodeJS.ProcessEnv]> => [
+  ["missing", {}],
+  ["malformed JSON", { [CUA_DRIVER_ENDPOINT_ENV]: "{" }],
+  ["partial", macOsEndpoint({ binaryPath: undefined })],
+  ["unsupported version", macOsEndpoint({ v: 2 })],
+  ["extra field", macOsEndpoint({ extra: true })],
+  ["relative socket", macOsEndpoint({ socketPath: "relative.sock" })],
+  ["relative binary", macOsEndpoint({ binaryPath: "cua-driver" })],
+  ["nul socket", macOsEndpoint({ socketPath: "/tmp/cua\0.sock" })],
+  ["missing binary", macOsEndpoint({ binaryPath: "/missing/cua-driver" })],
+  ["oversized", macOsEndpoint({ socketPath: `/${"x".repeat(4_096)}` })],
+];
 
-export function result(structured: Record<string, unknown>, image = false): CuaToolResult {
-  return cuaToolResult(structured, { image });
-}
+export const result = (structured: Record<string, unknown>, image = false): CuaToolResult =>
+  cuaToolResult(structured, { image });
 
-export function driver(
-  options: {
-    geometry?: typeof geometry;
-    screenSize?: { width: number; height: number; scale_factor: number };
-  } = {},
-) {
+export function driver(options: { geometry?: typeof geometry } = {}) {
   let generation = "execution-1";
   const activeGeometry = options.geometry ?? geometry;
-  const screenSize = options.screenSize ?? {
+  const screenSize = {
     width: activeGeometry.screen_width,
     height: activeGeometry.screen_height,
     scale_factor: activeGeometry.scale_factor,
@@ -76,10 +66,8 @@ export function driver(
     callTool: vi.fn<CuaDriverSession["callTool"]>(async () => result({})),
     getCursorPosition: vi.fn<CuaDriverSession["getCursorPosition"]>(async () => result({})),
     getSessionState: vi.fn(async () => ({
-      session: "openclaw-test",
       captureScope: 2,
       effectiveScope: 1,
-      desktopCaptureAuthorized: true,
       desktopUnlocked: true,
     })),
     dispose: vi.fn(async () => {}),
@@ -110,11 +98,7 @@ export function createTestProvider(
   createDriver.mockReturnValueOnce(session);
   onTestFinished(() => createDriver.mockRestore());
   const endpoint = process.env[CUA_DRIVER_ENDPOINT_ENV];
-  const hostPlatform = process.platform;
-  const platformSpy = vi
-    .spyOn(process, "platform", "get")
-    .mockReturnValue(hostPlatform)
-    .mockReturnValueOnce(platform);
+  const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValueOnce(platform);
   vi.stubEnv(CUA_DRIVER_ENDPOINT_ENV, env[CUA_DRIVER_ENDPOINT_ENV]);
   try {
     return createCuaComputerProvider();
@@ -155,12 +139,10 @@ export type WindowObservation = {
   observation: { base64?: string; observationId: string; elements: Array<{ elementRef: string }> };
 };
 
-export function pngImage(width: number, height: number) {
-  return {
-    mimeType: "image/png",
-    dataBase64: createSolidPngBuffer(width, height, { r: 70, g: 125, b: 180 }).toString("base64"),
-  };
-}
+export const pngImage = (width: number, height: number) => ({
+  mimeType: "image/png",
+  dataBase64: createSolidPngBuffer(width, height, { r: 70, g: 125, b: 180 }).toString("base64"),
+});
 
 export function frameTarget(screen: Screen) {
   return { displayFrameId: screen.displayFrameId, refWidth: screen.width };
