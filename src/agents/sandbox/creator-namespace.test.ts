@@ -56,51 +56,38 @@ it.each(["agent", "session", "shared"] as const)(
       };
       const allLayouts: Awaited<ReturnType<typeof layoutFor>>[] = [];
       for (const [index, createdActor] of actors.entries()) {
-        const layouts = [];
         for (const suffix of ["one", "two"]) {
           const sessionKey = `agent:main:required-${index}-${suffix}`;
-          await upsertSessionEntryCore(
-            { agentId: "main", sessionKey },
-            {
-              sessionId: sessionKey,
-              updatedAt: 1,
-              createdVia: "cron",
-              createdActor,
-              sandbox: "required",
-            },
-          );
+          const entry = {
+            sessionId: sessionKey,
+            updatedAt: 1,
+            createdVia: "cron",
+            createdActor,
+            sandbox: "required",
+          } as const;
+          await upsertSessionEntryCore({ agentId: "main", sessionKey }, entry);
           const layout = await layoutFor(sessionKey);
           for (const alias of [sessionKey.slice("agent:main:".length), sessionKey.toUpperCase()]) {
             expect.soft(await layoutFor(alias), alias).toEqual(layout);
-            expect
-              .soft(await layoutFor("agent:main:borrowed-runtime", alias), alias)
-              .toEqual(layout);
+            const borrowed = await layoutFor("agent:main:borrowed-runtime", alias);
+            expect.soft(borrowed, alias).toEqual(layout);
           }
-          layouts.push(layout);
           allLayouts.push(layout);
         }
-        const [first, second] = layouts;
-        assert(first && second, "expected two persisted sessions");
-        if (index === 0) {
-          expect(first.scopeKey).toBe(
-            `agent:main:principal:${hashTextSha256(id).slice(0, 32)}:workspace:${hashTextSha256(state.workspaceDir).slice(0, 32)}`,
-          );
-          expect(second).toEqual(first);
-        } else {
-          expect.soft(first.scopeKey).not.toBe(second.scopeKey);
-        }
       }
+      const [first, second] = allLayouts;
+      assert(first && second, "expected two persisted profile sessions");
+      expect(first.scopeKey).toBe(
+        `agent:main:principal:${hashTextSha256(id).slice(0, 32)}:workspace:${hashTextSha256(state.workspaceDir).slice(0, 32)}`,
+      );
+      expect(second).toEqual(first);
+      // Of 14 sessions, only the two profile sessions may share resources.
       for (const key of ["scopeKey", "workspaceDir"] as const) {
         expect.soft(new Set(allLayouts.map((layout) => layout[key])).size, key).toBe(13);
       }
-      expect
-        .soft(
-          new Set(
-            allLayouts.map(({ scopeKey }) =>
-              buildSandboxContainerName("openclaw-sbx-", slugifySessionKey(scopeKey)),
-            ),
-          ).size,
-        )
-        .toBe(13);
+      const containers = allLayouts.map(({ scopeKey }) =>
+        buildSandboxContainerName("openclaw-sbx-", slugifySessionKey(scopeKey)),
+      );
+      expect.soft(new Set(containers).size).toBe(13);
     }),
 );
