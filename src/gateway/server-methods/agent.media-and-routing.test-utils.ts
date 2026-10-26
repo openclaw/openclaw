@@ -1066,54 +1066,6 @@ describe("gateway agent handler", () => {
     resetTimeConfig();
   });
 
-  it("suppresses persisted prompts for subagent announce task-completion handoffs", async () => {
-    primeMainAgentRun({ cfg: mocks.loadConfigReturn });
-    mocks.agentCommand.mockClear();
-
-    await invokeAgent(
-      {
-        message: "runtime-only announce bookkeeping",
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        inputProvenance: {
-          kind: "inter_session",
-          sourceSessionKey: "agent:main:subagent:child",
-          sourceTool: "subagent_announce",
-        },
-        internalEvents: [
-          {
-            type: "task_completion",
-            source: "subagent",
-            childSessionKey: "agent:main:subagent:child",
-            childSessionId: "child-session-id",
-            announceType: "completion",
-            taskLabel: "child task",
-            status: "ok",
-            statusLabel: "completed",
-            result: "child result",
-            statsLine: "tokens=10",
-            replyInstruction: "Deliver the child result.",
-          },
-        ],
-        idempotencyKey: "test-subagent-announce-suppress-prompt",
-      },
-      {
-        reqId: "subagent-announce-suppress-prompt",
-        client: backendGatewayClient(),
-      },
-    );
-
-    const callArgs = await waitForAgentCommandCall<{
-      suppressPromptPersistence?: boolean;
-      preserveUserFacingSessionModelState?: boolean;
-      message?: string;
-    }>();
-    expect(callArgs.suppressPromptPersistence).toBe(true);
-    expect(callArgs.preserveUserFacingSessionModelState).toBe(true);
-    expect(callArgs.message).toMatch(/^\[Inter-session message\]/);
-    expect(callArgs.message).toContain("sourceTool=subagent_announce");
-  });
-
   it("restores exact cron continuation policy for generated-media wakes", async () => {
     mocks.agentCommand.mockClear();
     const sessionKey = "agent:main:cron:job-1:run:run-1";

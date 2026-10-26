@@ -55,7 +55,6 @@ const SETUP_LIST_MAX_ATTEMPTS = 3;
 export async function createComposedCatalogFixture(
   state: OpenClawTestState,
   counters: ReturnType<typeof createCatalogIoCounters>,
-  options: { beforeNativeListResponse?: () => Promise<void> } = {},
 ) {
   const agentDir = state.agentDir("main");
   await fs.mkdir(path.join(agentDir, "codex-home"), { recursive: true });
@@ -140,19 +139,7 @@ export async function createComposedCatalogFixture(
         });
         return;
       }
-      const respond = () => send({ result });
-      if (request.method === "thread/list" && options.beforeNativeListResponse) {
-        void options.beforeNativeListResponse().then(respond, (error: unknown) => {
-          send({
-            error: {
-              code: -32603,
-              message: error instanceof Error ? error.message : "Synthetic native list failed",
-            },
-          });
-        });
-      } else {
-        respond();
-      }
+      send({ result });
     }),
   );
   await once(server, "listening");
@@ -408,7 +395,6 @@ export async function createComposedCatalogFixture(
     const setupMaintenance = { completed: 0 };
     let maintenanceReady: ReturnType<typeof observeSessionMaintenanceCompletion> | undefined;
     return {
-      api,
       projection,
       list,
       setupList,

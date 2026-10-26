@@ -1,10 +1,14 @@
 import { readFile } from "node:fs/promises";
 import type { BrowserContext, Page } from "playwright";
 import { expect as expectBrowser } from "playwright/test";
-import { afterAll, afterEach, beforeAll, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { createPlaybackMediaFixture } from "../../../test/fixtures/media-playback.js";
 import { captureControlUiE2eFailureDiagnostics } from "../test-helpers/control-ui-e2e-diagnostics.ts";
-import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiSessionUrl,
+  installMockGateway,
+  navigateToControlUiSession,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
   createMarginImage,
@@ -33,7 +37,7 @@ function expectActivityEdges(margin: Margin, label: string) {
 }
 
 suite.define(() => {
-  // Bound parked panes while amortizing the identical app boot across four cases.
+  // Retain four-case media isolation while sharing each app boot within the batch.
   const casesPerPage = 4;
   let context: BrowserContext;
   let page: Page;
@@ -76,8 +80,7 @@ suite.define(() => {
   it.each(marginCases)(
     "preserves $id gutters across viewports and themes, restoring desktop geometry",
     async (testCase) => {
-      const index = marginCases.indexOf(testCase);
-      const batch = Math.floor(index / casesPerPage);
+      const batch = Math.floor(marginCases.indexOf(testCase) / casesPerPage);
       await page.setViewportSize({ width: 1440, height: 1200 });
       await page.emulateMedia({ colorScheme: "light", reducedMotion: "reduce" });
       if (batch !== pageBatch) {
@@ -124,11 +127,7 @@ suite.define(() => {
           waitUntil: "domcontentloaded",
         });
       } else {
-        await page
-          .locator(
-            `.sidebar-recent-session[data-session-key="${sessionKey(testCase)}"] a.sidebar-recent-session__link`,
-          )
-          .click();
+        await navigateToControlUiSession(page, sessionKey(testCase));
       }
       await page.mouse.move(0, 0);
       const activePane = page.locator(".chat-pane-cache__pane--active");
@@ -210,12 +209,15 @@ suite.define(() => {
             await expectBrowser(activity, label).toHaveJSProperty("open", false);
             await expectBrowser(activity.locator(".chat-bubble"), label).toHaveCount(0);
           } else if (!("excluded" in testCase)) {
-            await pollMargin((box) => box.open - box.columnWidth * 0.1).toBeGreaterThanOrEqual(-1);
-            await pollMargin((box) => box.closed).toBeCloseTo(
-              testCase.id === "user-audio" ? 17 : 0,
-              0,
+            const mobile = await vi.waitFor(
+              async () => {
+                const box = await measure();
+                expect(box.open - box.columnWidth * 0.1, label).toBeGreaterThanOrEqual(-1);
+                expect(box.closed, label).toBeCloseTo(testCase.id === "user-audio" ? 17 : 0, 0);
+                return box;
+              },
+              { interval: 100, timeout: 15_000 },
             );
-            const mobile = await measure();
             if (imageSize) {
               const expectedWidth = Math.min(imageSize.width, mobile.columnWidth * 0.9);
               expect(mobile, label).toMatchObject({

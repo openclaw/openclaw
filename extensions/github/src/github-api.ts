@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
-import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { parseRetryAfterHeaderSeconds } from "openclaw/plugin-sdk/retry-runtime";
 import {

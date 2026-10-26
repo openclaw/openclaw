@@ -16,6 +16,7 @@ import {
   readUpdateRunResolutionHistory,
 } from "./update-run-reader.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
+import { createUpdateRunRecordFixture } from "./update-run-record.test-support.js";
 import { validateTriageUpdateResolution } from "./update-triage-resolution.js";
 
 vi.mock("../cli/daemon-cli/restart-health-probe.js", () => ({
@@ -51,26 +52,17 @@ const TARGET_VERSION = "2026.9.4";
 const BEFORE_VERSION = "2026.9.3";
 
 function run(patch: Partial<UpdateRunRecord> = {}): UpdateRunRecord {
-  return {
-    runId: FAILED_RUN_ID,
+  return createUpdateRunRecordFixture(FAILED_RUN_ID, {
     createdAtMs: 10,
     updatedAtMs: 20,
-    trigger: "cli",
-    phase: "finished",
-    status: "failed",
     reason: "global-install-failed",
-    origin: {},
     target: { kind: "package", version: TARGET_VERSION },
     before: { version: BEFORE_VERSION },
     after: { version: BEFORE_VERSION },
     steps: [{ step: "global install swap", status: "failed", exitCode: 1 }],
-    verification: {},
-    repair: [],
-    confirmedAtMs: null,
     finishedAtMs: 20,
-    downtimeMs: null,
     ...patch,
-  };
+  });
 }
 
 function failure(

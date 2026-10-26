@@ -1,7 +1,7 @@
 // Control UI test helper supports control ui e2e setup.
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { stat } from "node:fs/promises";
+import { cp, stat } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -256,6 +256,8 @@ export type ControlUiMockGatewayScenario = {
   /** Simulate a legacy Gateway that predates the advertised method catalog. */
   omitFeatureMethods?: boolean;
   historyMessages?: unknown[];
+  /** Disable only for scenarios exercising the separate chat.startup fallback. */
+  subscriptionInitialHistory?: boolean;
   sessionReactions?: Record<string, Record<string, MessageReactionSummary[]>>;
   /** Canonical per-session transcripts, shared by history and startup reads. */
   sessionTranscripts?: Record<
@@ -545,21 +547,24 @@ function controlUiE2ePreviewConfigPlugin(
 }
 
 function createBundledControlUiE2eConfig(
-  controlUiViteConfig: (options: { outDir?: string }) => InlineConfig,
+  controlUiViteConfig: (options: {
+    outDir?: string;
+    buildInfo?: ControlUiBuildInfo;
+  }) => InlineConfig,
   outDir: string,
 ): InlineConfig {
-  const config = controlUiViteConfig({ outDir });
+  // Keep identity in the document so copied deployment fixtures can refresh it.
+  const config = controlUiViteConfig({ outDir, buildInfo: DEFAULT_CONTROL_UI_E2E_BUILD_INFO });
   const uiRoot = path.join(resolveRepoRoot(), "ui");
   return {
     ...config,
     base: "/",
     configFile: false,
-    define: {
-      ...config.define,
-      "globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO": JSON.stringify(
-        DEFAULT_CONTROL_UI_E2E_BUILD_INFO,
-      ),
-    },
+    // Vite preview serves raw assets; shipped-artifact jobs own sidecar proof.
+    plugins: config.plugins?.filter(
+      (plugin) =>
+        !(plugin && "name" in plugin && plugin.name === "control-ui-precompressed-assets"),
+    ),
     logLevel: "error" as const,
     root: uiRoot,
   };
@@ -570,8 +575,17 @@ export async function buildProductionControlUiE2e(
   buildId: string,
   options: ControlUiE2eBuildOptions = {},
 ): Promise<void> {
-  // Keep the production config outside Vitest, but write directly to the
-  // caller-owned output so concurrent E2E builds cannot replace its worker.
+  await buildControlUiE2e(outDir, buildId, options, "--production-build");
+}
+
+async function buildControlUiE2e(
+  outDir: string,
+  buildId: string,
+  options: ControlUiE2eBuildOptions,
+  command: "--production-build" | "--bundled-build",
+): Promise<void> {
+  // Compile outside Vitest so its NODE_ENV=test cannot disable production
+  // behavior or select development dependencies in the shared browser artifact.
   const repoRoot = resolveRepoRoot();
   const uiRoot = path.join(repoRoot, "ui");
   const env: NodeJS.ProcessEnv = {
@@ -590,7 +604,7 @@ export async function buildProductionControlUiE2e(
       "--import",
       "tsx",
       fileURLToPath(import.meta.url),
-      "--production-build",
+      command,
       outDir,
       ...(options.includeBootGroups === false ? ["--individual-boot-modules"] : []),
       ...(options.protocolVersion === undefined
@@ -659,12 +673,15 @@ await refreshControlUiBuildOutput(process.argv[2], resolveControlUiBuildInfo());
 async function runProductionControlUiBuild(
   outDir: string,
   options: ControlUiE2eBuildOptions = {},
+  bundled = false,
 ): Promise<void> {
   const [{ build }, { default: controlUiViteConfig }] = await Promise.all([
     import("vite"),
     import("../../vite.config.ts"),
   ]);
-  const config = controlUiViteConfig({ outDir });
+  const config = bundled
+    ? createBundledControlUiE2eConfig(controlUiViteConfig, outDir)
+    : controlUiViteConfig({ outDir });
   await build({
     ...config,
     plugins: [config.plugins, ...(await controlUiE2eBuildPlugins(options))],
@@ -712,14 +729,7 @@ export async function startBuiltControlUiE2eServer(
 }
 
 export async function startBundledControlUiE2eServer(outDir: string): Promise<ControlUiE2eServer> {
-  const [{ build }, { default: controlUiViteConfig }] = await Promise.all([
-    import("vite"),
-    import("../../vite.config.ts"),
-  ]);
-  await build({
-    ...createBundledControlUiE2eConfig(controlUiViteConfig, outDir),
-    logLevel: "info",
-  });
+  await buildControlUiE2e(outDir, DEFAULT_CONTROL_UI_E2E_BUILD_INFO.buildId, {}, "--bundled-build");
   return startBuiltControlUiE2eServer(outDir);
 }
 
@@ -730,6 +740,19 @@ export async function startProductionControlUiE2eServer(
   options: ControlUiE2eBuildOptions = {},
 ): Promise<ControlUiE2eProductionServer> {
   await buildProductionControlUiE2e(outDir, buildId, options);
+  return startBuiltControlUiE2eServer(outDir, bootstrapConfig);
+}
+
+export async function startCopiedProductionControlUiE2eServer(
+  sourceRoot: string,
+  outDir: string,
+  buildId: string,
+  bootstrapConfig?: Record<string, unknown>,
+): Promise<ControlUiE2eProductionServer> {
+  // A private copy lets deployment fixtures change identity and replace workers
+  // without mutating the producer artifact or another fixture's active build.
+  await cp(sourceRoot, outDir, { recursive: true, dereference: true });
+  await refreshProductionControlUiE2e(outDir, buildId);
   return startBuiltControlUiE2eServer(outDir, bootstrapConfig);
 }
 
@@ -810,6 +833,7 @@ function normalizeScenario(
     featureMethods: scenario.featureMethods ?? [...defaultControlUiFeatureMethods],
     omitFeatureMethods: scenario.omitFeatureMethods ?? false,
     historyMessages: scenario.historyMessages ?? [],
+    subscriptionInitialHistory: scenario.subscriptionInitialHistory ?? true,
     sessionReactions: scenario.sessionReactions ?? {},
     sessionTranscripts: scenario.sessionTranscripts ?? {},
     maxPayload: scenario.maxPayload ?? DEFAULT_MOCK_MAX_PAYLOAD_BYTES,
@@ -1271,33 +1295,6 @@ function installControlUiMockGateway(
       // Committed fixture source remains available in the current page.
     }
     return source;
-  }
-
-  /** Transcript fields a scenario configured on chat.history, replayed onto the
-   * chat.startup payload so both bootstrap paths serve the same conversation. */
-  function configuredHistoryTranscript(): Record<string, unknown> {
-    const configured = scenario.methodResponses["chat.history"];
-    if (
-      !isRecord(configured) ||
-      responseFixtures.cases(configured) ||
-      responseFixtures.sequence(configured)
-    ) {
-      return {};
-    }
-    const transcript: Record<string, unknown> = {};
-    for (const field of [
-      "messages",
-      "activity",
-      "sessionId",
-      "sessionInfo",
-      "inFlightRun",
-      "thinkingLevel",
-    ]) {
-      if (hasOwn(configured, field)) {
-        transcript[field] = configured[field];
-      }
-    }
-    return transcript;
   }
 
   function recordSessionsPatchMany(params: unknown, response: unknown): unknown {
@@ -1900,8 +1897,7 @@ function installControlUiMockGateway(
           ...(method === "chat.startup"
             ? {
                 metadata: { models: scenario.models },
-                // Static transcript overrides intentionally replay on startup too.
-                ...configuredHistoryTranscript(),
+                ...responseFixtures.historyTranscript(),
               }
             : {}),
         };
@@ -2113,11 +2109,13 @@ function installControlUiMockGateway(
       case "sessions.subscribe":
         return { subscribed: true };
       case "sessions.messages.subscribe":
-        return {
-          key: subscriptionRouting.canonicalKey(
-            isRecord(params) && typeof params.key === "string" ? params.key : "",
+        return subscriptionRouting.subscribeResponse(params, (historyParams) =>
+          commitFixtureResponse(
+            "chat.startup",
+            historyParams,
+            buildResponse("chat.startup", historyParams),
           ),
-        };
+        );
       case "sessions.messages.unsubscribe":
         return { ok: true };
       case "terminal.open": {
@@ -2712,7 +2710,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const [command, outDir, ...flags] = process.argv.slice(2);
   const protocolFlag = flags.find((flag) => flag.startsWith("--protocol-version="));
   if (
-    command !== "--production-build" ||
+    (command !== "--production-build" && command !== "--bundled-build") ||
     !outDir ||
     flags.some(
       (flag) =>
@@ -2720,12 +2718,16 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     )
   ) {
     throw new Error(
-      "Usage: control-ui-e2e.ts --production-build <out-dir> [--individual-boot-modules] [--protocol-version=N]",
+      "Usage: control-ui-e2e.ts <--production-build|--bundled-build> <out-dir> [--individual-boot-modules] [--protocol-version=N]",
     );
   }
-  await runProductionControlUiBuild(outDir, {
-    includeBootGroups: !flags.includes("--individual-boot-modules"),
-    protocolVersion: protocolFlag ? Number(protocolFlag.split("=")[1]) : undefined,
-  });
+  await runProductionControlUiBuild(
+    outDir,
+    {
+      includeBootGroups: !flags.includes("--individual-boot-modules"),
+      protocolVersion: protocolFlag ? Number(protocolFlag.split("=")[1]) : undefined,
+    },
+    command === "--bundled-build",
+  );
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

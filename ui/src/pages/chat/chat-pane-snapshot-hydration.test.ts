@@ -7,15 +7,17 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { loadSettings } from "../../app/settings.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import {
+  createInitializationContext,
+  createGatewayBrowserClientFixture,
+} from "./chat-application-context.test-support.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { chatHistoryRequests } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { ChatPaneRuntime } from "./chat-pane-render.ts";
 import {
-  createInitializationContext,
   createPaneTestHost,
   getPaneTestRuntime,
-  createGatewayBrowserClientFixture,
   nativeHistoryMessage,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";

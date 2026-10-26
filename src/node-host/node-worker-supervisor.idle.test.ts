@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NODE_WORKER_PROCESS_CHANGES_PROTOCOL_FEATURE } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { createEnteredGate } from "../agents/entered-gate.test-support.js";
 import type { NodeWorkerCapacitySnapshot } from "../infra/node-runner-inventory.js";
 import { setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
@@ -353,16 +354,12 @@ describe("node worker idle retention", () => {
         release: vi.fn(),
       };
       const acquired = createDeferred<typeof lease>();
-      const started = createDeferred();
-      const startup = createDeferred();
+      const startupGate = createEnteredGate();
       const controller = new AbortController();
       const failure = new Error("Synthetic admission failure");
       let closing: Promise<void> | undefined;
       mocks.acquirePreparedWorkspace.mockReturnValueOnce(acquired.promise);
-      mocks.send.mockImplementationOnce(async () => {
-        started.resolve();
-        await startup.promise;
-      });
+      mocks.send.mockImplementationOnce(startupGate.wait);
       const pending = f.supervisor.launch(
         input("prepared"),
         TEST_WORKER_ENDPOINT,
@@ -379,14 +376,14 @@ describe("node worker idle retention", () => {
         }
         acquired.resolve(lease);
         if (outcome === "completed") {
-          await started.promise;
+          await startupGate.entered;
           expect(lease.release).not.toHaveBeenCalled();
           expect(mocks.prepare).toHaveBeenCalledWith(
             expect.objectContaining({
               workerEnv: expect.objectContaining({ HOME: lease.homeDir }),
             }),
           );
-          startup.resolve();
+          startupGate.release();
           expect(await settled).toMatchObject({
             value: { launchId: "prepared", state: "running" },
           });
@@ -402,7 +399,7 @@ describe("node worker idle retention", () => {
         expect(mocks.prepare).toHaveBeenCalledTimes(outcome === "completed" ? 1 : 0);
       } finally {
         acquired.resolve(lease);
-        startup.resolve();
+        startupGate.release();
         await pending.catch(() => undefined);
       }
     },
@@ -493,8 +490,8 @@ describe("node worker idle retention", () => {
         expect(owner.adapter.kill).toHaveBeenCalledTimes(2);
         expect(mocks.prepare).toHaveBeenCalledTimes(1);
       } else {
-        // Move wall time to the boundary without firing the deadline callback.
-        vi.setSystemTime(10_000);
+        // Reach the admission boundary without firing unrelated retention timers.
+        vi.spyOn(performance, "now").mockReturnValue(10_000);
       }
       cleanup.resolve();
       if (timing === "before") {
@@ -544,6 +541,7 @@ describe("node worker idle retention", () => {
         });
         await owner.killed.promise;
         if (boundary === "deadline") {
+          vi.setSystemTime(-60_000);
           await vi.advanceTimersByTimeAsync(9_999);
           expect(outcomes).toEqual([]);
           await vi.advanceTimersByTimeAsync(1);

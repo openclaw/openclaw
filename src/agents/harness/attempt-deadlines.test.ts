@@ -1,6 +1,6 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { createAgentHarnessAttemptDeadlineController } from "./attempt-deadlines.js";
+import { createAgentHarnessAttemptDeadlineController } from "../../plugin-sdk/agent-harness-attempt-runtime.js";
 
 const SETTLEMENT_TIMEOUT_MS = 2 * 60_000;
 

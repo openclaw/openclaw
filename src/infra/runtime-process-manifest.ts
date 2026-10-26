@@ -18,6 +18,7 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
   }
 
   return {
+    daemonRuntimeProbe: runtimeProcessEntrypoint("infra/daemon-runtime-probe.entry"),
     pluginToolsServe: runtimeProcessEntrypoint("mcp/plugin-tools-serve"),
     openclawToolsServe: runtimeProcessEntrypoint("mcp/openclaw-tools-serve"),
     repositoryPublicationRestore: runtimeProcessEntrypoint(
@@ -310,6 +311,14 @@ export const pluginRuntimeProcessManifest = {
   iMessageChatDb: {
     ...pluginRuntimeProcess("imessage", "src/chat-db", "src/chat-db.worker"),
     sourceWorkerName: "chat-db.worker",
+  },
+  knowledgeRegistry: {
+    ...pluginRuntimeProcess("knowledge", "src/registry-client", "src/registry-worker"),
+    sourceWorkerName: "registry-worker",
+  },
+  knowledgeStorage: {
+    ...pluginRuntimeProcess("knowledge", "src/storage-client", "src/storage-worker"),
+    sourceWorkerName: "storage-worker",
   },
   mxcLauncher: {
     plugin: "mxc",
@@ -694,6 +703,7 @@ export const runtimeProcessScriptEntrypoints = {
     kind: "file",
     fileName: "daemon-runtime-probe.mjs",
     materialize: true,
+    runtimeEntrypoint: "daemonRuntimeProbe",
   },
   updateStateSizes: {
     sourceModule: "src/infra/update-state-sizes.generated.mjs",

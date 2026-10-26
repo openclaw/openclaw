@@ -5,8 +5,8 @@ import { projectAgentToolActivity } from "../../../../../src/infra/agent-activit
 import { ApplicationProvider } from "../../../lib/reactive/context.ts";
 import { prepareChatHistoryFixture } from "../../../test-helpers/chat-activity-fixtures.ts";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
+import { createInitializationContext } from "../chat-application-context.test-support.ts";
 import { attachHistoryActivity } from "../chat-history-request.ts";
-import { createInitializationContext } from "../chat-pane.test-support.ts";
 import {
   createChatMessageHarness,
   type RenderMessageGroupOptions,

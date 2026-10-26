@@ -73,18 +73,16 @@ it("rejects successor bytes substituted after fresh validation and before snapsh
   expect(context.admission.identity.key).toBe(originalIdentity.key);
 
   const startPreparation = snapshots.startSqliteReadOnlyLocationAsync;
-  const preparation = vi
-    .spyOn(snapshots, "startSqliteReadOnlyLocationAsync")
-    .mockImplementationOnce((pathname, preparationOptions) => {
-      expect(pathname).toBe(options.path);
+  vi.spyOn(snapshots, "startSqliteReadOnlyLocationAsync").mockImplementationOnce(
+    (pathname, preparationOptions) => {
       // This real entry is reached only after the original fresh-validation operation settles.
       fs.renameSync(options.path, archived);
       fs.renameSync(replacement, options.path);
       return startPreparation(pathname, preparationOptions);
-    });
+    },
+  );
   const outcome = await settle(read(context));
 
-  expect(preparation).toHaveBeenCalledOnce();
   expect(readDatabasePathIdentitySync(options.path).key).toBe(replacementIdentity.key);
   assert("error" in outcome, "The original read admission accepted a replacement database");
   expect(

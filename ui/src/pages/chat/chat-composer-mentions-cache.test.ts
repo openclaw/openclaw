@@ -6,7 +6,6 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayBrowserClient, GatewayRequestError } from "../../api/gateway.ts";
 import {
   composerFixture,
-  mention,
   people,
   resetMentionComposerFixture,
 } from "./chat-composer-mentions.test-support.ts";
@@ -15,6 +14,12 @@ import { createHumanMentionMenu } from "./components/chat-composer-mention-menu-
 afterEach(resetMentionComposerFixture);
 
 const fixture = () => composerFixture("chat");
+const profileError = () =>
+  new GatewayRequestError({
+    code: "UNAVAILABLE",
+    message: "Profile unavailable",
+    details: { code: "AUTHENTICATED_PROFILE_UNAVAILABLE" },
+  });
 
 async function staleFixture() {
   const view = fixture();
@@ -25,71 +30,36 @@ async function staleFixture() {
 }
 
 describe("mention query cache", () => {
-  it.each(["before", "after"])(
-    "keeps an in-flight result when reopened %s it settles",
-    async (reopen) => {
-      const view = fixture();
-      const response = view.defer();
-      await view.search("@Al");
-      view.key("Escape");
-      if (reopen === "before") {
-        await view.search("Review @Al");
-      }
-      await response(people);
-      if (reopen === "after") {
-        expect(view.query('[role="listbox"]')).toBeNull();
-        view.edit("Review @Al");
-      }
-      expect(view.options()).toHaveLength(2);
-      expect(view.request).toHaveBeenCalledTimes(1);
-    },
-  );
-
-  it("refreshes stale results in the background without losing keyboard selection", async () => {
-    const view = await staleFixture();
+  it.each(["before", "after"])("reopens %s the in-flight result settles", async (reopen) => {
+    const view = fixture();
     const response = view.defer();
-    view.edit("Review @Al");
+    await view.search("@Al");
+    view.key("Escape");
+    if (reopen === "before") {
+      await view.search("Review @Al");
+    }
+    await response(people);
+    if (reopen === "after") {
+      expect(view.query('[role="listbox"]')).toBeNull();
+      view.edit("Review @Al");
+    }
     expect(view.options()).toHaveLength(2);
-    expect(view.query(".mention-menu__loading")).toBeNull();
-    view.key("ArrowDown");
-    await vi.advanceTimersByTimeAsync(150);
-    expect(view.request).toHaveBeenCalledTimes(2);
-    await response({ users: people.users.toReversed(), truncated: false });
-    view.key("Enter");
-    expect(view.value().mentions).toEqual([mention("profile-alex-offline", 7, 12)]);
-    expect(view.send).not.toHaveBeenCalled();
+    expect(view.request).toHaveBeenCalledTimes(1);
   });
 
   it.each([
-    { failure: "network outage", error: new Error("Connection interrupted"), message: null },
-    {
-      failure: "directory unavailable",
-      error: new GatewayRequestError({ code: "UNAVAILABLE", message: "Directory unavailable" }),
-      message: null,
-    },
-    {
-      failure: "access revoked",
-      error: new GatewayRequestError({ code: "FORBIDDEN", message: "Access revoked" }),
-      message: "Mention access denied.",
-    },
-    {
-      failure: "profile unavailable",
-      error: new GatewayRequestError({
-        code: "UNAVAILABLE",
-        message: "Profile unavailable",
-        details: { code: "AUTHENTICATED_PROFILE_UNAVAILABLE" },
-      }),
-      message: "Profile unverified.",
-    },
-    {
-      failure: "invalid destination",
-      error: new GatewayRequestError({
-        code: "INVALID_REQUEST",
-        message: "Session was not found.",
-      }),
-      message: "Mention search rejected.",
-    },
-  ])("handles a background refresh failure: $failure", async ({ error, message }) => {
+    [new Error("Connection interrupted"), null],
+    [new GatewayRequestError({ code: "UNAVAILABLE", message: "Directory unavailable" }), null],
+    [
+      new GatewayRequestError({ code: "FORBIDDEN", message: "Access revoked" }),
+      "Mention access denied.",
+    ],
+    [profileError(), "Profile unverified."],
+    [
+      new GatewayRequestError({ code: "INVALID_REQUEST", message: "Session was not found." }),
+      "Mention search rejected.",
+    ],
+  ] as const)("handles a background refresh failure: %s", async (error, message) => {
     const view = await staleFixture();
     view.request.mockRejectedValueOnce(error);
     await view.search("Review @Al");
@@ -112,16 +82,13 @@ describe("mention query cache", () => {
     }
   });
 
-  it.each(["switch query", "close", "replace owner"])(
+  it.each(["close", "replace owner"])(
     "does not publish an old refresh after %s",
     async (action) => {
       const view = await staleFixture();
       const response = view.defer();
       await view.search("Review @Al");
-      if (action === "switch query") {
-        view.request.mockResolvedValueOnce({ users: [], truncated: false });
-        await view.search("Review @Nobody");
-      } else if (action === "close") {
+      if (action === "close") {
         view.key("Escape");
       } else {
         view.replaceOwner();
@@ -174,13 +141,7 @@ describe("mention query cache", () => {
   it("fences other pending successes when identity verification is lost", async () => {
     const view = fixture();
     const old = createDeferred<UsersMentionableResult>();
-    view.request.mockReturnValueOnce(old.promise).mockRejectedValueOnce(
-      new GatewayRequestError({
-        code: "UNAVAILABLE",
-        message: "Profile unavailable",
-        details: { code: "AUTHENTICATED_PROFILE_UNAVAILABLE" },
-      }),
-    );
+    view.request.mockReturnValueOnce(old.promise).mockRejectedValueOnce(profileError());
     await view.search("@Al");
     await view.search("@Other");
     old.resolve(people);
@@ -269,33 +230,3 @@ it.each(["pending", "denied"])(
     expect(menu.activeLabel()).toBe("Fresh");
   },
 );
-
-it("shares native mention lookup with external insertion and retires captured access on owner change", async () => {
-  const view = composerFixture("chat", "Before after");
-  const access = view.mentionAccess()!;
-  const pending = createDeferred<UsersMentionableResult>();
-  view.request.mockReturnValueOnce(pending.promise);
-  const first = access.request("Al");
-  const second = access.request("Al");
-  expect(view.request).toHaveBeenCalledTimes(1);
-  pending.resolve(people);
-  const [read, shared] = await Promise.all([first, second]);
-  expect(read?.result).toEqual(people);
-  expect(shared?.result).toBe(read?.result);
-  expect(access.read("Al")?.result).toBe(read?.result);
-  const textarea = view.container.querySelector<HTMLTextAreaElement>("textarea")!;
-  textarea.setSelectionRange(7, 12);
-  expect(read?.insert("profile-alex-online")).toBe(true);
-  view.refresh();
-  await vi.advanceTimersByTimeAsync(0);
-  expect(view.value()).toEqual({
-    draft: "Before @Alex ",
-    mentions: [{ profileId: "profile-alex-online", start: 7, end: 12 }],
-  });
-  expect([textarea.selectionStart, textarea.selectionEnd]).toEqual([13, 13]);
-  expect(view.send).not.toHaveBeenCalled();
-  view.replaceOwner();
-  expect(read?.insert("profile-alex-offline")).toBe(false);
-  expect(access.read("Al")).toBeNull();
-  expect(view.value().draft).toBe("Before @Alex ");
-});

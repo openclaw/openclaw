@@ -12,7 +12,10 @@ import {
   workspacePackageExportAliasEntries,
 } from "../src/plugins/sdk-alias-workspace.ts";
 import { createStandaloneArtifactAdapter } from "./lib/bun-standalone-artifacts.mjs";
-import { bundleStandaloneModules } from "./lib/bun-standalone-bundle.mjs";
+import {
+  bundleStandaloneModules,
+  finalizeStandaloneModules,
+} from "./lib/bun-standalone-bundle.mjs";
 import { createStandaloneCodegenAdapter } from "./lib/bun-standalone-codegen.mjs";
 import {
   assertStandaloneCompiler,
@@ -40,7 +43,10 @@ import {
   selectStandalonePluginModules,
   stageStandalonePluginLoader,
 } from "./lib/bun-standalone-plugins.mjs";
-import { createStandaloneRequireAdapter } from "./lib/bun-standalone-require.mjs";
+import {
+  createStandaloneExternalModuleBootstrap,
+  createStandaloneRequireAdapter,
+} from "./lib/bun-standalone-require.mjs";
 import {
   planStandaloneRuntime,
   pruneStandaloneRuntime,
@@ -247,17 +253,17 @@ if (sourceEntries?.unmappedWorkers(workerEntries).length) {
   );
 }
 const metadataEntries = [...moduleEntries];
-// Source discovery retains lazy companions; emitted-JS builds keep their full inventory.
-moduleEntries = sourceEntries?.selectRuntimeEntries(moduleEntries) ?? moduleEntries;
 const pluginLoader = await stageStandalonePluginLoader({
   runtimeRoot,
   outputRoot,
   build: Bun.build,
 });
 const native = createStandaloneNativeAdapter({ runtimeRoot, parse });
-// Disk loaders still need their builtin imports retained in the compiled host.
-native.discover([...moduleEntries, pluginLoader.modulePath]);
-moduleEntries.push(...native.additionalModuleEntries);
+moduleEntries = native.discover(metadataEntries, {
+  selectRuntimeEntries: sourceEntries?.selectRuntimeEntries,
+  // Retain the disk loader's builtins without embedding the loader itself.
+  scanOnlyEntries: [pluginLoader.modulePath],
+});
 // Include conditional ESM/CJS entries reached through computed imports.
 for (const packageName of ["@openclaw/fs-safe", "@openclaw/proc-safe", "sqlite-vec", "ws"]) {
   const manifest = fs.realpathSync(
@@ -480,6 +486,7 @@ globalThis.__openclawStandaloneImport = (parent, specifier, options) => {
     commonJsEntries.has(target) ? { ...loaded.default, ...loaded } : loaded);
 };
 ${requireAdapter.bootstrap}
+${createStandaloneExternalModuleBootstrap({ source: Boolean(sourceGraph) })}
 let resolving = false;
 if (isMainThread) Bun.plugin({ name: "openclaw-embedded-modules", setup(build) {
   // Bun checks the filter against the compiled entry before invoking callbacks.
@@ -498,7 +505,7 @@ if (isMainThread) Bun.plugin({ name: "openclaw-embedded-modules", setup(build) {
         })());
     } catch { return; } finally { resolving = false; }
     const entry = embedded(target);
-    if (entry) return {path: entry, namespace: "file"};
+    if (entry) return globalThis.__openclawStandaloneExternalModuleResolution(entry);
   });
 }});
 if (process.env.OPENCLAW_STANDALONE_TRACE_PRELOAD) {
@@ -793,13 +800,22 @@ do {
   result = await bundleStandaloneModules(
     { ...buildOptions, entrypoints: sourceEntrypoints() },
     Bun.build,
-    parse,
   );
   if (!result.success) {
     throw new AggregateError(result.logs, "Standalone bundle failed");
   }
   discoverMore = Boolean(sourceGraph) && sourceEntrypoints().length !== discoveredRoots;
 } while (discoverMore);
+result = await finalizeStandaloneModules(
+  { ...buildOptions, entrypoints: sourceEntrypoints() },
+  result,
+  Bun.build,
+  parse,
+  { sourceAot: Boolean(sourceGraph) },
+);
+if (!result.success) {
+  throw new AggregateError(result.logs, "Standalone final link failed");
+}
 if (sourceGraph) {
   for (const output of result.outputs) {
     if (/\.[cm]?js$/.test(output.path)) {
@@ -923,7 +939,7 @@ if (nativeTables === 0) {
   throw new Error("Standalone bundle omitted its native resource resolution table");
 }
 // Bun preserves CJS -> ESM requires as import.meta.require in split output.
-// The second split pass moves callers, so pin those edges to embedded entry names.
+// Native compilation can move callers again, so pin edges to embedded entry names.
 const splitRequireEdges = [];
 const compiledEntrySet = new Set(compiledEntries);
 for (const filename of compiledEntries) {

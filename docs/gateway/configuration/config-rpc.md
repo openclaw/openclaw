@@ -82,7 +82,9 @@ already applied the exact saved source before the managed notification arrives, 
 RPC acknowledges that completed application without resolving secrets or scanning
 skills again. Shutdown,
 supersession by different content, or failed application returns `UNAVAILABLE`
-with recovery guidance. `config.set` acknowledges persistence only.
+with recovery guidance. `config.set` acknowledges persistence only. With
+`gateway.reload.mode: "off"`, a write that needs no restart is acknowledged once
+persisted and applies at the next restart; a write that needs a restart schedules one.
 
 When a committed write cannot finish runtime application, the error's
 `details.persistedConfig` contains the redacted committed `config` and its public

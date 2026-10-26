@@ -7,6 +7,7 @@ import { approveDevicePairing } from "../../../src/infra/device-pairing-approval
 import { requestDevicePairing } from "../../../src/infra/device-pairing.js";
 import { createOpenClawTestState } from "../../../src/test-utils/openclaw-test-state.ts";
 import { getFreePort } from "../../../src/test-utils/ports.ts";
+import { deviceGatewayEnv } from "./device-gateway-env.test-support.ts";
 
 export async function readUiBundle(page: Page) {
   const script = await page.locator('script[type="module"][src]').first().getAttribute("src");
@@ -22,17 +23,6 @@ export async function readUiBundle(page: Page) {
       .digest("hex"),
   };
 }
-
-export const deviceGatewayEnv = {
-  OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-  OPENCLAW_SKIP_CANVAS_HOST: "1",
-  OPENCLAW_SKIP_CHANNELS: "1",
-  OPENCLAW_SKIP_CRON: "1",
-  OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-  OPENCLAW_SKIP_PROVIDERS: "1",
-  OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-  VITEST: "1",
-};
 
 export async function approvePairing(params: Parameters<typeof requestDevicePairing>[0]) {
   const request = await requestDevicePairing(params);

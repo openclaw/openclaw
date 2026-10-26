@@ -20,6 +20,10 @@ GET /api/diagnostics/prometheus
 Content type is `text/plain; version=0.0.4; charset=utf-8`, the standard
 Prometheus exposition format.
 
+Worker queue depths, wait times, and request durations are aggregated directly
+from worker observations. Metrics collection does not enable per-request
+diagnostic events; explicit diagnostic subscribers still receive those events.
+
 <Warning>
 The route uses Gateway authentication (operator scope, trusted-operator surface) and requires the caller's effective scopes to include `operator.read` (implied by `operator.write` or `operator.admin`). Do not expose it as a public unauthenticated `/metrics` endpoint. Scrape it through the same auth path you use for other operator APIs.
 </Warning>
@@ -294,8 +298,11 @@ client receipt. Their only label is `event`: a known protocol event name, such a
 `chat` or `sessions.changed`, or `other` for an unrecognized name. No payload,
 session, user, or connection identifiers are exported. The
 `openclaw_gateway_ws_operator_connections` gauge reports connected authenticated
-operator sockets without labels. These observations use the existing bounded
-diagnostic queue and shared exporter series cap. Event observations are batched
+operator sockets without labels. Event counters reach Prometheus directly at flush,
+without allocating diagnostic event snapshots. Explicit diagnostic subscribers,
+including OpenTelemetry metrics, still receive queued snapshots. Connection counts
+use the bounded diagnostic queue; all metrics share the exporter series cap.
+Event observations are batched
 by event name within one event-loop turn while preserving per-socket frame and
 byte totals. Connection counts update on
 connect/disconnect and refresh every 30 seconds so a late-starting exporter or

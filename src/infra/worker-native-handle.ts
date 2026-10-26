@@ -271,7 +271,7 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
     );
   }
 
-  postMessage(value: unknown, transferList: readonly Transferable[] = []): void {
+  postMessage(value: unknown, transferList: Transferable[] = []): void {
     if (this.joined || this.stopping || this.executionStopped) {
       throw new Error("Native worker is closing");
     }
@@ -282,10 +282,7 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
       this.taskPort.postMessage(value, transferList);
       return;
     }
-    this.runtime.post(
-      { type: "post", id: this.id, value, transferList: [...transferList] },
-      transferList,
-    );
+    this.runtime.post({ type: "post", id: this.id, value, transferList }, transferList);
   }
 
   ref(): this {

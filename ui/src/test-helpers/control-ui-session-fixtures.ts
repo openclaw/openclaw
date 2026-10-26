@@ -168,6 +168,7 @@ export function createControlUiSessionFixtures(
       "model",
       "thinkingLevel",
       "fastMode",
+      "cyberAccessProgram",
       "permissionMode",
       "label",
       "category",
@@ -179,7 +180,10 @@ export function createControlUiSessionFixtures(
       "toolOverrides",
     ]) {
       if (Object.hasOwn(fields, field)) {
-        set(field, fields[field]);
+        set(
+          field,
+          field === "cyberAccessProgram" && fields[field] === null ? undefined : fields[field],
+        );
       }
     }
     if (Object.hasOwn(fields, "model")) {

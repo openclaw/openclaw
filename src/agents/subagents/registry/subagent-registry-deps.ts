@@ -23,6 +23,9 @@ const subagentRegistryRuntimeLoader = createLazyPromiseLoader(() =>
 const subagentRegistryPluginRuntimeLoader = createLazyPromiseLoader(
   () => import("../../runtime-plugins.js"),
 );
+const preparedRuntimeLoader = createLazyPromiseLoader(
+  () => import("../../prepared-model-runtime.js"),
+);
 
 export const loadSubagentAnnounceModule = subagentAnnounceLoader.load;
 export const loadSubagentBrowserCleanupModule = browserCleanupLoader.load;
@@ -51,12 +54,24 @@ export function createSubagentRegistryGatewayCaller(
 
 export async function loadSubagentRegistryPluginRuntimeHandle(params: {
   config: OpenClawConfig;
+  agentId?: string;
+  agentDir?: string;
   workspaceDir?: string;
   allowGatewaySubagentBinding?: boolean;
 }): Promise<PluginRegistry | undefined> {
-  return (await subagentRegistryPluginRuntimeLoader.load()).loadAgentRuntimePluginRegistryHandle(
-    params,
-  );
+  if (params.allowGatewaySubagentBinding && params.agentDir) {
+    const prepared = await preparedRuntimeLoader.load();
+    const registry = prepared.getPreparedInboundPluginRegistry({
+      ...params,
+      agentDir: params.agentDir,
+    });
+    if (registry) {
+      return registry;
+    }
+  }
+  return (
+    await subagentRegistryPluginRuntimeLoader.load()
+  ).loadAgentRuntimePluginRegistryHandleAsync(params);
 }
 
 export async function resolveSubagentRegistryContextEngine(

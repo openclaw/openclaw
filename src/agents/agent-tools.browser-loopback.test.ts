@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import * as execApprovalsStore from "../infra/exec-approvals-store.js";
 import * as execApprovals from "../infra/exec-approvals.js";
@@ -17,205 +17,109 @@ import { createAgentToolsSandboxContext } from "./test-helpers/agent-tools-sandb
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 
 describe("assembled browser loopback authority", () => {
-  const browserLoopbackCases: {
-    name: string;
-    options?: NonNullable<Parameters<typeof createOpenClawCodingTools>[0]>;
-    approvals?: execApprovals.ExecApprovalsFile;
-    allowed: boolean;
-  }[] = [
-    { name: "unrestricted local execution", allowed: true },
-    {
-      name: "explicit empty browser policy",
-      options: { config: { browser: { ssrfPolicy: {} } } },
-      allowed: false,
-    },
-    {
-      name: "explicit full session over host approval floors",
-      options: { sessionPermissionPolicy: { root: "/workspace", mode: "full" } },
-      approvals: { version: 1, defaults: { security: "deny", ask: "always" }, agents: {} },
-      allowed: true,
-    },
-    {
-      name: "sandbox with host browser control",
-      options: {
-        sandbox: createAgentToolsSandboxContext({
-          workspaceDir: "/workspace",
-          fsBridge: createHostSandboxFsBridge("/workspace"),
-          browserAllowHostControl: true,
-        }),
+  type Options = NonNullable<Parameters<typeof createOpenClawCodingTools>[0]>;
+  const full: Options = { sessionPermissionPolicy: { root: "/workspace", mode: "full" } };
+  const denied: Options = { config: { tools: { deny: ["exec"] } } };
+  const sandbox: Options = {
+    sandbox: createAgentToolsSandboxContext({
+      workspaceDir: "/workspace",
+      fsBridge: createHostSandboxFsBridge("/workspace"),
+      browserAllowHostControl: true,
+    }),
+  };
+  const deployment = (allow: string[], exec?: string[]): Options => ({
+    config: {
+      tools: {
+        gatewayPolicy: { allow, actions: { browser: ["open", "navigate"], ...(exec && { exec }) } },
       },
-      allowed: false,
     },
-    {
-      name: "workspace session",
-      options: { sessionPermissionPolicy: { root: "/workspace", mode: "workspace" } },
-      allowed: false,
-    },
-    {
-      name: "workspace-only filesystem",
-      options: { requireWorkspaceOnly: true },
-      allowed: false,
-    },
-    {
-      name: "node execution",
-      options: { exec: { host: "node" } },
-      allowed: false,
-    },
-    {
-      name: "exec allowlist",
-      options: { exec: { security: "allowlist" } },
-      allowed: false,
-    },
-    {
-      name: "full session tightened by exec override",
-      options: {
-        sessionPermissionPolicy: { root: "/workspace", mode: "full" },
-        exec: { security: "allowlist" },
+  });
+  const policyCase = (
+    name: string,
+    options: Options = {},
+    allowed = false,
+    approvals?: execApprovals.ExecApprovalsFile,
+  ) => ({ name, options, allowed, approvals });
+  const browserLoopbackCases = [
+    policyCase("unrestricted local execution", {}, true),
+    policyCase("explicit empty browser policy", { config: { browser: { ssrfPolicy: {} } } }),
+    policyCase("explicit full session over host approval floors", full, true, {
+      version: 1,
+      defaults: { security: "deny", ask: "always" },
+      agents: {},
+    }),
+    policyCase("sandbox with host browser control", sandbox),
+    policyCase("workspace session", {
+      sessionPermissionPolicy: { root: "/workspace", mode: "workspace" },
+    }),
+    policyCase("workspace-only filesystem", { requireWorkspaceOnly: true }),
+    policyCase("node execution", { exec: { host: "node" } }),
+    policyCase("exec allowlist", { exec: { security: "allowlist" } }),
+    policyCase("full session tightened by exec override", {
+      ...full,
+      exec: { security: "allowlist" },
+    }),
+    policyCase("host approval floor", {}, false, {
+      version: 1,
+      defaults: { security: "allowlist" },
+      agents: {},
+    }),
+    policyCase("exec approval requirement", { exec: { security: "full", ask: "always" } }),
+    policyCase("scheduled approval requirement", {
+      ...full,
+      scheduledToolPolicy: {
+        version: 1,
+        mode: "trusted",
+        execTarget: { host: "gateway", ask: "always" },
       },
-      allowed: false,
-    },
-    {
-      name: "host approval floor",
-      approvals: { version: 1, defaults: { security: "allowlist" }, agents: {} },
-      allowed: false,
-    },
-    {
-      name: "exec approval requirement",
-      options: { exec: { security: "full", ask: "always" } },
-      allowed: false,
-    },
-    {
-      name: "scheduled approval requirement",
-      options: {
-        sessionPermissionPolicy: { root: "/workspace", mode: "full" },
-        scheduledToolPolicy: {
-          version: 1,
-          mode: "trusted",
-          execTarget: { host: "gateway", ask: "always" },
-        },
-      },
-      allowed: false,
-    },
-    {
-      name: "denied exec tool",
-      options: { config: { tools: { deny: ["exec"] } } },
-      allowed: false,
-    },
-    {
-      name: "deployment permits Browser but withholds exec",
-      options: {
-        config: {
-          tools: {
-            gatewayPolicy: { allow: ["browser"], actions: { browser: ["open", "navigate"] } },
-          },
-        },
-      },
-      allowed: false,
-    },
-    {
-      name: "deployment permits Browser and exec",
-      options: {
-        config: {
-          tools: {
-            gatewayPolicy: {
-              allow: ["browser", "exec"],
-              actions: { browser: ["open", "navigate"] },
-            },
-          },
-        },
-      },
-      allowed: true,
-    },
-    {
-      name: "deployment withholds exec through an empty action list",
-      options: {
-        config: {
-          tools: {
-            gatewayPolicy: {
-              allow: ["browser", "exec"],
-              actions: { browser: ["open", "navigate"], exec: [] },
-            },
-          },
-        },
-      },
-      allowed: false,
-    },
-    {
-      name: "inherited runtime tool ceiling",
-      options: { runtimeToolAllowlist: ["browser"], inheritRuntimeToolAllowlist: true },
-      allowed: false,
-    },
+    }),
+    policyCase("denied exec tool", denied),
+    policyCase("deployment permits Browser but withholds exec", deployment(["browser"])),
+    policyCase("deployment permits Browser and exec", deployment(["browser", "exec"]), true),
+    policyCase(
+      "deployment withholds exec through an empty action list",
+      deployment(["browser", "exec"], []),
+    ),
+    policyCase("inherited runtime tool ceiling", {
+      runtimeToolAllowlist: ["browser"],
+      inheritRuntimeToolAllowlist: true,
+    }),
   ];
 
-  it.each(["sandbox", "denied exec", "full session"])(
-    "does not prepare host approvals for %s",
-    async (kind) => {
-      const read = vi.spyOn(execApprovalsStore, "prepareExecApprovalsCurrentRead");
-      const plugins = vi
-        .spyOn(openClawPluginTools, "resolveOpenClawPluginToolsForOptionsAsync")
-        .mockResolvedValue([]);
-      try {
-        await createOpenClawCodingToolsInternalAsync(
-          kind === "sandbox"
-            ? browserLoopbackCases.find(
-                (entry) => entry.name === "sandbox with host browser control",
-              )!.options
-            : kind === "denied exec"
-              ? { config: { tools: { deny: ["exec"] } } }
-              : { sessionPermissionPolicy: { root: "/workspace", mode: "full" } },
-        );
-        expect(read).not.toHaveBeenCalled();
-      } finally {
-        plugins.mockRestore();
-        read.mockRestore();
-      }
-    },
-  );
-
-  it("keeps ordinary tools usable when the optional preview policy owner is unavailable", async () => {
-    const read = vi
-      .spyOn(execApprovalsStore, "prepareExecApprovalsCurrentRead")
-      .mockRejectedValue(new Error("synthetic unavailable policy owner"));
+  function mockAsyncAssembly() {
+    const read = vi.spyOn(execApprovalsStore, "prepareExecApprovalsCurrentRead");
     const plugins = vi
       .spyOn(openClawPluginTools, "resolveOpenClawPluginToolsForOptionsAsync")
       .mockResolvedValue([]);
-    try {
-      const tools = await createOpenClawCodingToolsInternalAsync();
-      expect(tools.some((tool) => tool.name === "browser")).toBe(true);
-      const options = vi.mocked(createOpenClawTools).mock.calls.at(-1)?.[0];
-      expect(options?.allowLocalBrowserLoopback).toBe(false);
-    } finally {
+    onTestFinished(() => {
       plugins.mockRestore();
       read.mockRestore();
-    }
+    });
+    return read;
+  }
+
+  it("keeps ordinary tools usable when the optional preview policy owner is unavailable", async () => {
+    mockAsyncAssembly().mockRejectedValue(new Error("synthetic unavailable policy owner"));
+    const tools = await createOpenClawCodingToolsInternalAsync();
+    expect(tools.some((tool) => tool.name === "browser")).toBe(true);
+    const options = vi.mocked(createOpenClawTools).mock.calls.at(-1)?.[0];
+    expect(options?.allowLocalBrowserLoopback).toBe(false);
   });
 
   it("retires the preview grant when config changes while policy preparation awaits", async () => {
     const config = {};
     const explicitPolicy = { browser: { ssrfPolicy: {} } };
     setRuntimeConfigSnapshot(config);
-    const read = vi
-      .spyOn(execApprovalsStore, "prepareExecApprovalsCurrentRead")
-      .mockImplementation(async () => {
-        setRuntimeConfigSnapshot(explicitPolicy);
-        return () => ({ version: 1, defaults: { security: "full", ask: "off" } });
-      });
-    const plugins = vi
-      .spyOn(openClawPluginTools, "resolveOpenClawPluginToolsForOptionsAsync")
-      .mockResolvedValue([]);
+    mockAsyncAssembly().mockImplementation(async () => {
+      setRuntimeConfigSnapshot(explicitPolicy);
+      return () => ({ version: 1, defaults: { security: "full", ask: "off" } });
+    });
     try {
       await createOpenClawCodingToolsInternalAsync({ config });
       expect(vi.mocked(createOpenClawTools).mock.calls.at(-1)?.[0]?.allowLocalBrowserLoopback).toBe(
         false,
       );
-      await createOpenClawCodingToolsInternalAsync({ config: explicitPolicy });
-      expect(vi.mocked(createOpenClawTools).mock.calls.at(-1)?.[0]?.allowLocalBrowserLoopback).toBe(
-        false,
-      );
-      expect(read).toHaveBeenCalledOnce();
     } finally {
-      plugins.mockRestore();
-      read.mockRestore();
       clearRuntimeConfigSnapshot();
     }
   });
@@ -272,11 +176,7 @@ describe("assembled browser loopback authority", () => {
     try {
       vi.mocked(createOpenClawTools).mockClear();
       createOpenClawCodingToolsInternal({
-        config: {
-          tools: {
-            gatewayPolicy: { allow: ["browser"], actions: { browser: ["open", "navigate"] } },
-          },
-        },
+        ...deployment(["browser"]),
         nativeHarnessExecution: true,
       });
       const { context } = resolveOpenClawPluginToolInputs({

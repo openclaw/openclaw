@@ -280,6 +280,47 @@ describe("model stream cooperative scheduler", { concurrent: false }, () => {
     await vi.runAllTimersAsync();
   });
 
+  it("adds no per-event async checkpoints while the shared turn has capacity", async () => {
+    const values = Array.from({ length: 16 }, (_, index) => index);
+    async function countCheckpoints(stream: AsyncIterable<number>) {
+      let finished = false;
+      let checkpoints = 0;
+      const probe = (async () => {
+        // A stalled iterator must still let the runner's deadline fire.
+        while (checkpoints < 1024) {
+          if (finished) {
+            break;
+          }
+          await Promise.resolve();
+          checkpoints++;
+        }
+      })();
+      const received: number[] = [];
+      try {
+        for await (const value of stream) {
+          received.push(value);
+        }
+      } finally {
+        finished = true;
+        await probe;
+      }
+      return { checkpoints, received };
+    }
+    const control = await countCheckpoints(
+      (async function* (source: AsyncIterable<number> | Iterable<number>) {
+        for await (const value of source) {
+          yield value;
+        }
+      })(values),
+    );
+    const scheduled = await countCheckpoints(iterateModelStream(values));
+    expect(control.checkpoints).toBeGreaterThan(values.length);
+    expect(control.received).toEqual(values);
+    expect(scheduled.received).toEqual(values);
+    // The control includes iterator/consumer work; ready budget admission needs no extra await.
+    expect(scheduled.checkpoints).toBeLessThanOrEqual(control.checkpoints);
+  });
+
   it("stops before pulling upstream again after cancellation", async () => {
     const controller = new AbortController();
     const reason = Object.assign(new Error("Stream canceled"), { code: "TEST_CANCELED" });

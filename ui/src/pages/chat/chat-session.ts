@@ -1,7 +1,12 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { splitTrailingAuthProfile } from "../../../../src/agents/model-ref-profile.js";
 import { normalizeThinkLevel } from "../../../../src/auto-reply/thinking.shared.js";
-import type { GatewaySessionRow, ModelCatalogResult, SessionsListResult } from "../../api/types.ts";
+import type {
+  CyberAccessProgram,
+  GatewaySessionRow,
+  ModelCatalogResult,
+  SessionsListResult,
+} from "../../api/types.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import { registerModelControlsEnglish } from "../../i18n/locales/en-model-controls.ts";
@@ -21,17 +26,18 @@ import {
   resolveModelRuntimeEntry,
 } from "../../lib/model-runtime-choice.ts";
 import { readSessionMethodScopeAccess } from "../../lib/session-method-access.ts";
+import type {
+  SessionCapability,
+  SessionArchivedFilter,
+  SessionListOptions,
+  SessionRefreshTarget,
+  SessionScopeHost,
+} from "../../lib/sessions/index.ts";
 import {
-  DEFAULT_SESSION_LIST_QUERY,
   scopedAgentParamsForSession,
   scopedAgentListParamsForRefreshTarget,
   scopedAgentListParamsForSession,
-  type SessionCapability,
-  type SessionArchivedFilter,
-  type SessionListOptions,
-  type SessionRefreshTarget,
-  type SessionScopeHost,
-} from "../../lib/sessions/index.ts";
+} from "../../lib/sessions/navigation.ts";
 import type { SessionPatch, SessionPatchResult } from "../../lib/sessions/patch.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -39,6 +45,7 @@ import {
   resolveUiSelectedGlobalAgentId,
   uiSessionRowMatchesSelectedChat,
 } from "../../lib/sessions/session-key.ts";
+import { DEFAULT_SESSION_LIST_QUERY } from "../../lib/sessions/session-requests.ts";
 import { setChatError } from "./chat-history-state.ts";
 import { patchChatSessionSettings } from "./chat-settings-patches.ts";
 
@@ -199,8 +206,8 @@ async function applyChatSetting(
   host: ChatModelSettingsHost,
   sessionKey: string,
   captured: ReturnType<typeof captureChatSettingsTarget>,
-  patch: Pick<SessionPatch, "thinkingLevel" | "fastMode" | "contextWindow">,
-  settingName: "thinking level" | "speed" | "context window",
+  patch: Pick<SessionPatch, "thinkingLevel" | "fastMode" | "contextWindow" | "cyberAccessProgram">,
+  settingName: "thinking level" | "speed" | "context window" | "access program",
 ): Promise<boolean> {
   const canDispatch = (receipt?: SessionPatchResult | null) =>
     (captured.isCurrent() || Boolean(captured.row(receipt))) &&
@@ -234,6 +241,7 @@ async function applyChatSetting(
 export function switchChatSetting(
   host: ChatModelSettingsHost,
   selection:
+    | { kind: "cyberAccessProgram"; value: CyberAccessProgram | null }
     | { kind: "fastMode"; value: "" | "on" | "off" | "auto" | "ultrafast" }
     | { kind: "thinkingLevel" | "contextWindow"; value: string },
   targetSessionKey = host.sessionKey,
@@ -242,6 +250,18 @@ export function switchChatSetting(
     return Promise.resolve(false);
   }
   const captured = captureChatSettingsTarget(host, targetSessionKey);
+  if (selection.kind === "cyberAccessProgram") {
+    if ((captured.settings.cyberAccessProgram ?? null) === selection.value) {
+      return Promise.resolve(true);
+    }
+    return applyChatSetting(
+      host,
+      targetSessionKey,
+      captured,
+      { cyberAccessProgram: selection.value },
+      "access program",
+    );
+  }
   if (selection.kind === "fastMode") {
     const next = normalizeChatFastModeInput(selection.value);
     if (captured.settings.fastMode === next) {

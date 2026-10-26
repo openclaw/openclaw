@@ -1,19 +1,6 @@
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import type { EmbeddedTuiBackend } from "./embedded-backend.js";
 
-export function deferred<T>() {
-  let resolve: ((value: T) => void) | undefined;
-  let reject: ((error?: unknown) => void) | undefined;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  if (!resolve || !reject) {
-    throw new Error("Expected deferred callbacks to be initialized");
-  }
-  return { promise, resolve, reject };
-}
-
 export async function flushMicrotasks() {
   await Promise.resolve();
   await Promise.resolve();

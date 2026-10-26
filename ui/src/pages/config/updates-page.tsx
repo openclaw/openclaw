@@ -16,7 +16,7 @@ import {
 import type { UpdatesCommandPresentation } from "./updates-types.ts";
 import { Updates } from "./updates.tsx";
 
-export type UpdatesPageProps = {
+export function UpdatesPage(props: {
   context: ApplicationContext;
   configObject: Record<string, unknown>;
   configBusy: boolean;
@@ -25,9 +25,7 @@ export type UpdatesPageProps = {
   onCheckStatus: () => Promise<boolean>;
   captureCommandPresentation: () => UpdatesCommandPresentation;
   nowMs?: number;
-};
-
-export function UpdatesPage(props: UpdatesPageProps) {
+}) {
   const gateway = createMemo(() => projectGateway(props.context.gateway));
   const overlays = createMemo(() => projectOverlays(props.context.overlays));
   const config = createMemo(() => projectApplicationConfig(props.context.config));

@@ -623,6 +623,8 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     onSelectionChange: revisions.onSelectionChange,
     onFactsChange: revisions.onFactsChange,
     readTaskPublicationRevision: revisions.taskPublication,
+    hasLogicalChildEntries: (parent: Pick<records.Row, "agentId" | "key">) =>
+      byParent.has(records.logicalSessionRowIdentity(parent.agentId, parent.key)),
     get physicalPaths() {
       return scope.physicalPaths;
     },

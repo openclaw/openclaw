@@ -41,6 +41,7 @@ beforeAll(() =>
     preloadConfigPage("advanced"),
     preloadConfigPage("communications", "transcripts"),
     preloadConfigPage("ai-agents", "session"),
+    preloadConfigPage("security"),
   ]),
 );
 
@@ -497,7 +498,9 @@ describe("ConfigPage model catalog lifecycle", () => {
       expect(statusReads()).toHaveLength(initialReads);
       expect(view.page.isConnected).toBe(true);
       activate(true);
-      await waitForSolid(() => expect(statusReads()).toHaveLength(initialReads + 1));
+      await vi.advanceTimersByTimeAsync(0);
+      flush();
+      expect(statusReads()).toHaveLength(initialReads + 1);
       await vi.advanceTimersByTimeAsync(9_999);
       expect(statusReads()).toHaveLength(initialReads + 1);
       await vi.advanceTimersByTimeAsync(1);

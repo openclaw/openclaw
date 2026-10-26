@@ -4,6 +4,10 @@ import {
   toErrorObject,
 } from "@openclaw/normalization-core/error-coercion";
 import { getDatabaseEngineSelection } from "../infra/database-engine/context.js";
+import {
+  createPostgresPoolEndpoints,
+  postgresPoolTransferList,
+} from "../infra/postgres-sync/pool.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import {
   resolveRuntimeWorkerThreadExecArgv,
@@ -452,10 +456,12 @@ export function startOpenClawStateLeaseHeartbeat(
     // Keep the lease worker isolated from every other ambient environment setting.
     const sourceTsconfig = execArgv.length > 0 ? process.env.TSX_TSCONFIG_PATH : undefined;
     startupContext?.admission.assertCurrent();
+    const databaseEngineSelection =
+      startupContext?.databaseEngineSelection ?? getDatabaseEngineSelection();
     const data = {
-      databaseEngineSelection:
-        startupContext?.databaseEngineSelection ?? getDatabaseEngineSelection(),
+      databaseEngineSelection,
       databaseAdmissionPort: databaseAdmission.port,
+      postgresPool: createPostgresPoolEndpoints(databaseEngineSelection),
       path: databasePath,
       expectedIdentity,
       ...(startupContext ? { deferActivation: true as const } : {}),
@@ -479,7 +485,10 @@ export function startOpenClawStateLeaseHeartbeat(
           runInDetachedAsyncContext(() => {
             const native = createCpuTrackedWorker(url, {
               workerData: data,
-              transferList: [databaseAdmission.port],
+              transferList: [
+                databaseAdmission.port,
+                ...postgresPoolTransferList(data.postgresPool),
+              ],
               env: sourceTsconfig ? { TSX_TSCONFIG_PATH: sourceTsconfig } : {},
               execArgv,
               stdout: true,

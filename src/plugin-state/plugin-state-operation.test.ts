@@ -15,8 +15,10 @@ import { preparePluginStateRead } from "../plugin-sdk/plugin-state-runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { useState } from "./plugin-state-fixtures.test-support.js";
+import { observePluginStateReads, useState } from "./plugin-state-fixtures.test-support.js";
+import type { PluginStateOperationInput } from "./plugin-state-operation-contract.js";
 import { PluginStateOperationInvalidatedError } from "./plugin-state-operation-error.js";
+import { executePluginStateOperation } from "./plugin-state-operation.kernel.js";
 import type { FixtureOperations } from "./plugin-state-operation.test-support.js";
 import { pluginStatePublication } from "./plugin-state-publication.js";
 import {
@@ -94,6 +96,7 @@ it("moves rows across namespaces in one worker command and rolls back undeclared
   await invalid(move(operation, "moved", [0]));
   expect(await first.lookup("key")).toBe("original");
   expect(await second.lookup("key")).toBeUndefined();
+  const reads = observePluginStateReads();
   const hostSql = observeHostDataSql();
   const facts = new Map<string, unknown>();
   const unsubscribe = pluginStatePublication.subscribeFacts((change) => {
@@ -108,6 +111,9 @@ it("moves rows across namespaces in one worker command and rolls back undeclared
       after: [undefined, "moved"],
     });
     expect(result.value.threadId).toBeGreaterThan(0);
+    expect(await first.lookup("key")).toBeUndefined();
+    expect(await second.lookup("key")).toBe("moved");
+    expect(reads).not.toHaveBeenCalled();
     result.assertCurrent();
     expect(facts.get(JSON.stringify(["operation-test", "move-first", "key"]))).toEqual({
       kind: "absent",
@@ -140,9 +146,9 @@ it("keeps read-only absent sources noncreating and uses only an explicit missing
   expect(existsSync(resolveOpenClawStateSqlitePath(env))).toBe(false);
 });
 
-it("uses one autocommit read when empty and rereads populated inputs in a snapshot", async () => {
+it("uses one cold snapshot and executes resident namespace snapshots without SQL", async () => {
   const { second } = await pair("empty-count");
-  const input = {
+  const input: PluginStateOperationInput = {
     module: {
       modulePath,
       boundaryRoot: path.dirname(modulePath),
@@ -187,18 +193,38 @@ it("uses one autocommit read when empty and rereads populated inputs in a snapsh
         ok: true,
         value: { value: [], validUntil: undefined, emptyShortcut: true },
       });
-      expect(statements.splice(0)).toEqual([expect.stringContaining("plugin_state_entries")]);
+      expect(statements.splice(0)).toEqual([
+        "BEGIN",
+        expect.stringContaining("plugin_state_entries"),
+        "COMMIT",
+      ]);
     }
     await second.register("key", "delivery");
     statements.length = 0;
     expect(run()).toMatchObject({ ok: true, value: { value: [[{ value: "delivery" }], [{}]] } });
     expect(statements).toEqual([
-      expect.stringContaining("plugin_state_entries"),
       "BEGIN",
       expect.stringContaining("plugin_state_entries"),
       expect.stringContaining("plugin_state_entries"),
       "COMMIT",
     ]);
+    input.namespaceSnapshots = Object.fromEntries(
+      input.stores.map((scope) => {
+        const response = executePluginStateCommand(
+          { type: "pluginState.loadNamespace", input: { ...scope, maxBytes: 4096 } },
+          { path: database.path, env: state().env },
+          () => database,
+          true,
+        );
+        if (!response.ok || !response.value) {
+          throw new Error("Expected complete namespace rows");
+        }
+        return [JSON.stringify([scope.pluginId, scope.namespace]), response.value];
+      }),
+    );
+    statements.length = 0;
+    expect(run()).toMatchObject({ ok: true, value: { value: [[{ value: "delivery" }], [{}]] } });
+    expect(statements).toEqual([]);
   } finally {
     transactions.mockRestore();
     reads.restore();
@@ -252,6 +278,62 @@ it("invalidates empty receipts after either watched namespace changes", async ()
       ),
     );
   }));
+
+it("decodes only live requested snapshot rows and retains expiry across clock corrections", () => {
+  const input: PluginStateOperationInput = {
+    module: {
+      modulePath,
+      boundaryRoot: path.dirname(modulePath),
+      origin: "bundled",
+      pluginId: "operation-test",
+    },
+    exportName: "execute",
+    stores: [
+      {
+        pluginId: "operation-test",
+        namespace: "raw-snapshot",
+        maxEntries: 10,
+        overflowPolicy: "reject-new",
+        defaultTtlMs: undefined,
+      },
+    ],
+    writeStores: [],
+    command: { type: "read", input: undefined },
+    receiptId: "raw-snapshot",
+    namespaceSnapshots: {
+      '["operation-test","raw-snapshot"]': [
+        { entry_key: "key", value_json: '"current"', created_at: 1, expires_at: 3_000 },
+        {
+          entry_key: "expired-corrupt",
+          value_json: "invalid JSON",
+          created_at: 2,
+          expires_at: 500,
+        },
+        { entry_key: "backward", value_json: '"earlier"', created_at: 3, expires_at: 1_000 },
+      ],
+    },
+  };
+  const now = vi.spyOn(Date, "now").mockReturnValue(2_000);
+  expect(
+    executePluginStateOperation(undefined, input, (_command, tx) => tx.lookup(0, "key")),
+  ).toEqual({ value: "current", validUntil: 3_000 });
+  expect(executePluginStateOperation(undefined, input, (_command, tx) => tx.entries(0))).toEqual({
+    value: [{ key: "key", value: "current", createdAt: 1, expiresAt: 3_000 }],
+    validUntil: 3_000,
+  });
+  now.mockReturnValue(750);
+  expect(
+    executePluginStateOperation(undefined, input, (_command, tx) =>
+      tx.lookupMany([{ store: 0, key: "backward" }]),
+    ),
+  ).toEqual({ value: ["earlier"], validUntil: 1_000 });
+  now.mockReturnValue(250);
+  expect(() =>
+    executePluginStateOperation(undefined, input, (_command, tx) =>
+      tx.lookup(0, "expired-corrupt"),
+    ),
+  ).toThrowError(expect.objectContaining({ code: "PLUGIN_STATE_CORRUPT", operation: "lookup" }));
+});
 
 it("waits for an earlier write to the empty target even when it is not watched", async () =>
   withDatabaseEngineSelection(await resolveDatabaseEngineSelection({}), async () => {

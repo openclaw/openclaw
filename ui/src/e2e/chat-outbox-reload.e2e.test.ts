@@ -1,9 +1,9 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { readControlUiE2eDownload } from "../test-helpers/control-ui-e2e-download.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createControlUiMockSameOriginGatewayScript } from "../test-helpers/control-ui-e2e.ts";
-import { requireString } from "./chat-flow.test-support.ts";
 import { readOutboxQueue } from "./chat-outbox-payloads.test-support.ts";
 import {
   createNewSessionPageE2eSuite,
@@ -160,9 +160,7 @@ suite.define(() => {
           dialog.getByRole("button", { name: "Download pending-note.txt", exact: true }).click(),
         ]);
         expect(download.suggestedFilename()).toBe(file.name);
-        expect(
-          await readFile(requireString(await download.path(), "downloaded attachment")),
-        ).toEqual(file.buffer);
+        expect(await readControlUiE2eDownload(download)).toEqual(file.buffer);
         if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
           const frame = await takeControlUiScreenshotFrame(
             page,

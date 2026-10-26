@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, test } from "vitest";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
+import { expect, test, vi } from "vitest";
 import {
   isPairedDeviceTokenIdentityCurrent,
   hasEffectivePairedDeviceRole,
@@ -8,6 +9,11 @@ import {
   resolveAuthenticatedDeviceTokenIdentity,
 } from "./device-pairing-identity.js";
 import type { DeviceAuthToken, PairedDevice } from "./device-pairing.types.js";
+
+vi.mock("@openclaw/normalization-core/node-crypto", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@openclaw/normalization-core/node-crypto")>();
+  return { ...actual, sha256Hex: vi.fn(actual.sha256Hex) };
+});
 
 const makeToken = (role: string, scopes: string[] = []): DeviceAuthToken => ({
   token: `synthetic-${role}-token`,
@@ -52,8 +58,13 @@ function createPairedOperator(): PairedDevice {
 test("captures only the device key and token actually accepted at handshake", () => {
   const device = createPairedOperator();
   const authenticated = { ...authenticate(device), scopes: ["operator.write"] };
+  vi.mocked(sha256Hex).mockClear();
   const original = resolveAuthenticatedDeviceTokenIdentity(device, authenticated);
-  expect(original).not.toBeNull();
+  expect(original).toEqual({
+    deviceId: "paired-device",
+    key: "3a3c86bb905c3f65d85c8a38e22526f5e3e2bb0cb72a592f43b48922ea671a1d",
+  });
+  expect(sha256Hex).toHaveBeenCalledTimes(1);
   expect(Object.isFrozen(original)).toBe(true);
   expect(
     resolveAuthenticatedDeviceTokenIdentity(device, { ...authenticated, publicKey: "foreign-key" }),
@@ -123,6 +134,7 @@ test.each(["token scopes", "approval baseline", "missing approval baseline"] as 
       delete device.approvedScopes;
     }
     expect(isCurrent(device, identity)).toBe(false);
+    expect(resolveAuthenticatedDeviceTokenIdentity(device, authenticate(device))).toBeNull();
     if (change !== "token scopes") {
       // Live verification rejects an over-scoped token even for a narrower request.
       expect(isCurrent(device, identity, "operator.read")).toBe(false);

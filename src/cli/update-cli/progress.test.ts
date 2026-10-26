@@ -4,6 +4,7 @@ import { writeUpdateRunReportArtifact } from "../../infra/update-failure-report-
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
 import { getUpdateRunForProgressAsync } from "../../infra/update-run-reader.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
+import { createUpdateRunRecordFixture } from "../../infra/update-run-record.test-support.js";
 import { UPDATE_RUN_HEARTBEAT_MS } from "../../infra/update-run-timeouts.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -66,25 +67,16 @@ const timeline = (phase: UpdateRunRecord["phase"], ...completed: UpdateRunRecord
 });
 
 function runRecord(): UpdateRunRecord {
-  return {
-    runId,
+  return createUpdateRunRecordFixture(runId, {
     createdAtMs: 100,
     updatedAtMs: 100,
-    trigger: "cli",
     status: "running",
     phase: "requested",
-    reason: null,
     before: { version: "2026.9.2" },
-    after: {},
     target: { version: "2026.9.3" },
-    origin: {},
     steps: [{ step: "requested", status: "in_progress", startedAtMs: 100 }],
-    verification: {},
-    repair: [],
-    confirmedAtMs: null,
     finishedAtMs: null,
-    downtimeMs: null,
-  };
+  });
 }
 
 describe("update progress", () => {

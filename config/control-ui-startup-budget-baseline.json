@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 273565,
-  "reason": "Streaming cold-runtime prefix retention cuts standard script CPU 47.1% and burst 37.7% over 20 interleaved base/A-A/head triplets per workload. After merging main b3ba4d62263, same-host builds measure startup 273582 to 273565 B gzip, unchanged raw startup bytes and seven JS/one CSS requests. Chat is 347 B smaller and New Session 56 B smaller. Ratchet to the measured integrated head.",
+  "startupJsGzipBytes": 271935,
+  "reason": "Same-host uncached 8937cb4 to 92174fc builds measure startup 271947 to 271935 B gzip (-12 B), Chat +1451 B and New Session +29 B (within build variance), with unchanged CSS bytes and JS/CSS request counts. The lazy highlighting worker cuts 5000-line code/diff CPU by 18-70%; avoiding leaf-subtree table scans cuts dense-code CPU median/p95 by 65.9%/64.3%. Record the measured integrated startup head.",
   "updatedAt": "2026-10-25"
 }

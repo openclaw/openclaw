@@ -113,6 +113,44 @@ function loadedNamespaceMemberNames(source, loaderName) {
   return members;
 }
 
+function computedCheckoutNamespaceMemberEdges(source) {
+  const sourceDirectories = new Map(
+    [
+      ...source.matchAll(
+        /\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*join\(\s*source\s*,\s*["']([^"'\r\n]+)["']\s*\)\s*;/gu,
+      ),
+    ]
+      .filter(
+        ([, , directory]) =>
+          !path.isAbsolute(directory) && !directory.split(/[\\/]/u).includes(".."),
+      )
+      .map(([, binding, directory]) => [binding, directory]),
+  );
+  const edges = new Map();
+
+  for (const match of source.matchAll(
+    /\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*await\s+import\(\s*pathToFileURL\(\s*join\(\s*([A-Za-z_$][\w$]*)\s*,\s*["']([^"'\r\n]+)["']\s*\)\s*\)\s*\)\s*;/gu,
+  )) {
+    const [, namespace, directoryBinding, modulePath] = match;
+    const directory = sourceDirectories.get(directoryBinding);
+    if (!directory || path.isAbsolute(modulePath) || modulePath.split(/[\\/]/u).includes("..")) {
+      continue;
+    }
+
+    const escapedNamespace = namespace.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+    const memberCall = new RegExp(
+      `^[ \\t]*(?:(?:const|let)\\s+[A-Za-z_$][\\w$]*\\s*=\\s*)?${escapedNamespace}\\s*\\.\\s*([A-Za-z_$][\\w$]*)\\s*\\(`,
+      "gmu",
+    );
+    const names = new Set([...source.matchAll(memberCall)].map((member) => member[1]));
+    if (names.size > 0) {
+      edges.set(path.resolve(directory, modulePath), names);
+    }
+  }
+
+  return edges;
+}
+
 function emittedNamedImportEdges(source) {
   const transforms = new Map(
     [
@@ -369,6 +407,37 @@ export function compileDynamicConsumerEdges(source, filePath, scriptEntrypoints 
     imports.push(
       namedImport(trajectoryFlushNames, trajectoryFlushPreloadPath, filePath, imports.length),
     );
+  }
+
+  const poolLifecyclePath = "scripts/perf/pg-pool-lifecycle.mts";
+  const poolFixtureSpecifier = fs
+    .readFileSync(poolLifecyclePath, "utf8")
+    .match(
+      /\bbroker\.open(?:<[^>]+>)?\(\s*\{\s*moduleUrl:\s*new URL\(\s*["']([^"'\r\n]+)["']\s*,\s*self\s*\)/u,
+    )?.[1];
+  const creationFactory = fs
+    .readFileSync("src/infra/sqlite-store.worker.ts", "utf8")
+    .match(
+      /\bconst factoryName\s*=\s*request\.existingIdentity\s*\?\s*["'][^"'\r\n]+["']\s*:\s*["']([^"'\r\n]+)["']/u,
+    )?.[1];
+  if (poolFixtureSpecifier && creationFactory) {
+    imports.push(
+      namedImport(
+        [creationFactory],
+        path.resolve(path.dirname(poolLifecyclePath), poolFixtureSpecifier),
+        filePath,
+        "PgPool",
+      ),
+    );
+  }
+
+  const publishedUpgradeScenarioPath =
+    ".agents/skills/telegram-e2e-userbot/scripts/published-upgrade-scenario.mjs";
+  const publishedUpgradeScenario = fs.readFileSync(publishedUpgradeScenarioPath, "utf8");
+  for (const [targetFile, names] of computedCheckoutNamespaceMemberEdges(
+    publishedUpgradeScenario,
+  )) {
+    imports.push(namedImport([...names], targetFile, filePath, imports.length));
   }
 
   return `${source}\n${imports.join("\n")}`;

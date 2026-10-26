@@ -1,19 +1,23 @@
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { getEmbeddedStandaloneRuntimeRoot } from "../../cli-invocation.mjs";
+import {
+  getEmbeddedStandaloneRuntimeRoot,
+  isStandaloneRuntimeExecutable,
+  resolveStandaloneSidecarRoot,
+} from "../../cli-invocation.mjs";
 import { nodeRuntimeFailure, type SqliteCapabilities } from "../../node-sqlite.mjs";
 import { SUPPORTED_NODE_VERSIONS } from "../../node-version.mjs";
-import { createRuntimeProcessScriptFile } from "../../runtime-process-scripts.generated.mjs";
+import type { GatewayDaemonRuntime } from "../commands/daemon-runtime.js";
 import { isMissingPathError } from "../infra/errno.js";
 import {
   isSupportedBunVersion,
   isSupportedNodeVersion,
   parseSemver,
 } from "../infra/runtime-guard.js";
+import { prepareRuntimeProcessScriptInvocation } from "../infra/runtime-process-url.js";
 import { isSqliteWalResetSafeVersion } from "../infra/sqlite-runtime-version.js";
 import { resolveStableNodePath } from "../infra/stable-node-path.js";
 import { getWindowsProgramFilesRoots } from "../infra/windows-install-roots.js";
@@ -154,20 +158,25 @@ type SystemNodeInfo = RuntimeInfo & { path: string };
 
 async function resolveRuntimeInfo(
   runtimePath: string,
-  runtime: "node" | "bun",
+  runtime: GatewayDaemonRuntime,
   env: Record<string, string | undefined>,
   timeoutMs = RUNTIME_PROBE_TIMEOUT_MS,
 ): Promise<RuntimeInfo> {
-  const label = runtime === "node" ? "Node" : "Bun";
+  const label = runtime === "node" ? "Node" : runtime === "bun" ? "Bun" : "Standalone OpenClaw";
+  const probeRuntime = runtime === "standalone" ? "bun" : runtime;
   let cwd: string | undefined;
   try {
     cwd = process.cwd();
-    const script = createRuntimeProcessScriptFile("daemonRuntimeProbe");
+    const script = prepareRuntimeProcessScriptInvocation("daemonRuntimeProbe", runtimePath);
     let stdout: string;
     try {
       ({ stdout } = await runExec(
         runtimePath,
-        [fileURLToPath(script.url), runtime, getEmbeddedStandaloneRuntimeRoot() ?? ""],
+        [
+          ...script.argv.slice(1),
+          probeRuntime,
+          resolveStandaloneSidecarRoot(runtimePath) ?? getEmbeddedStandaloneRuntimeRoot() ?? "",
+        ],
         {
           baseEnv: buildRuntimeProbeEnv(env),
           logOutput: false,
@@ -181,13 +190,13 @@ async function resolveRuntimeInfo(
     if (!isRecord(parsed)) {
       throw new Error("Runtime check returned invalid output");
     }
-    const version = parsed[`${runtime}Version`];
+    const version = parsed[`${probeRuntime}Version`];
     const sqliteVersion = parsed.sqliteVersion;
     const sqliteSelectionError = parsed.sqliteSelectionError;
     const sqliteLibraryPath = parsed.sqliteLibraryPath;
     const probe = parsed.sqliteProbe;
     if (
-      !(typeof version === "string" || (runtime === "bun" && version === null)) ||
+      !(typeof version === "string" || (probeRuntime === "bun" && version === null)) ||
       (runtime === "node" && typeof version === "string" && !parseSemver(version)) ||
       !(typeof sqliteVersion === "string" || sqliteVersion === null) ||
       !(typeof sqliteSelectionError === "string" || sqliteSelectionError == null) ||
@@ -253,6 +262,14 @@ export function resolveBunRuntimeInfo(
   return resolveRuntimeInfo(bunPath, "bun", env);
 }
 
+export function resolveStandaloneRuntimeInfo(
+  executable: string,
+  env: Record<string, string | undefined> = process.env,
+  timeoutMs = RUNTIME_PROBE_TIMEOUT_MS,
+) {
+  return resolveRuntimeInfo(executable, "standalone", env, timeoutMs);
+}
+
 /** Probes a recorded Node executable without inheriting service preloads or secrets. */
 export function resolveNodeRuntimeInfo(
   nodePath: string,
@@ -266,15 +283,17 @@ export function resolveNodeRuntimeInfo(
 export async function resolveRecordedDaemonRuntime(
   runtimePath: string | undefined,
   env: Record<string, string | undefined>,
-): Promise<(RuntimeInfo & { runtime: "node" | "bun"; path: string }) | undefined> {
+): Promise<(RuntimeInfo & { runtime: GatewayDaemonRuntime; path: string }) | undefined> {
   if (!runtimePath) {
     return undefined;
   }
-  const runtime = isBunRuntime(runtimePath)
-    ? "bun"
-    : isNodeRuntime(runtimePath)
-      ? "node"
-      : undefined;
+  const runtime = isStandaloneRuntimeExecutable(runtimePath)
+    ? "standalone"
+    : isBunRuntime(runtimePath)
+      ? "bun"
+      : isNodeRuntime(runtimePath)
+        ? "node"
+        : undefined;
   if (!runtime) {
     return undefined;
   }
@@ -474,7 +493,7 @@ export async function resolvePreferredBunPath(
 /** Validate an operator pin without falling back to another executable. */
 export async function resolvePinnedDaemonRuntimePath(
   input: string | undefined,
-  runtime: "node" | "bun",
+  runtime: GatewayDaemonRuntime,
   env: Record<string, string | undefined>,
 ): Promise<string | undefined> {
   if (input === undefined) {
@@ -492,10 +511,29 @@ export async function resolvePinnedDaemonRuntimePath(
     throw new Error("--runtime-path must be an absolute executable path.");
   }
   const runtimePath = paths.normalize(value);
+  const standaloneRoot = resolveStandaloneSidecarRoot(runtimePath);
   const matchesRuntime =
-    runtime === "node" ? isNodeRuntime(runtimePath) : isBunRuntime(runtimePath);
+    runtime === "standalone"
+      ? standaloneRoot !== undefined
+      : standaloneRoot !== undefined
+        ? false
+        : runtime === "node"
+          ? isNodeRuntime(runtimePath)
+          : isBunRuntime(runtimePath);
   if (!matchesRuntime) {
     throw new Error(`--runtime-path must name a ${runtime} executable: ${runtimePath}`);
+  }
+  if (runtime === "standalone") {
+    try {
+      if (!standaloneRoot || !(await fs.stat(standaloneRoot)).isDirectory()) {
+        throw new Error("not a directory");
+      }
+    } catch (cause) {
+      throw new Error(
+        `Pinned standalone runtime directory is unavailable: ${standaloneRoot ?? runtimePath}. Restore the complete standalone artifact.`,
+        { cause },
+      );
+    }
   }
   try {
     if (!(await fs.stat(runtimePath)).isFile()) {

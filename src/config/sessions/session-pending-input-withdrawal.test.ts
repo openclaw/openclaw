@@ -1,11 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
-import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
-import * as workerStore from "../../infra/sqlite-worker-store.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import {
   openOpenClawAgentDatabase,
@@ -25,6 +23,7 @@ import {
   discardSessionPendingInput,
   dismissRetiredSessionPendingInputs,
 } from "./session-pending-input-withdrawal.js";
+import { interceptWorkerExecution } from "./session-transcript-reconcile.fixtures.test-support.js";
 
 type WithdrawalScope = Parameters<typeof discardSessionPendingInput>[0];
 
@@ -222,8 +221,6 @@ it.each(["queued", "retired"] as const)(
               runIds: ["lost-result"],
               missingIds: [],
             };
-      const selection =
-        kind === "queued" ? { runId: "lost-result" } : { inputIds: [receipt.inputId] };
       const remove = () =>
         kind === "queued"
           ? discard("lost-result")
@@ -231,52 +228,15 @@ it.each(["queued", "retired"] as const)(
       const before = read(receipt.inputId);
       const lostResult = new Error("Withdrawal committed but its result was lost");
       let verifiedCommits = 0;
-      const original = workerStore.runSqliteWorkerStoreOperation;
-      const observer = vi
-        .spyOn(workerStore, "runSqliteWorkerStoreOperation")
-        .mockImplementation((store, operation, context, current, admit) => {
-          let withdrawing = false;
-          let grant: admission.SqliteWorkerOperationAdmission | undefined;
-          let retention: RetainedWorkerTransactionAdmission | undefined;
-          return original(
-            store,
-            (worker) =>
-              operation({
-                execute: async (command, options) => {
-                  withdrawing = command.type === "session.pendingInputs.withdraw";
-                  const result = await worker.execute(command, options);
-                  if (!withdrawing) {
-                    return result;
-                  }
-                  expect(grant?.committed).toEqual({
-                    facts: {
-                      kind: "session-pending-input-withdrawal",
-                      sessionKey: target.sessionKey,
-                      sessionId: target.sessionId,
-                      ...selection,
-                      outcome,
-                    },
-                  });
-                  expect(grant?.settlement).toMatchObject({ kind: "completed" });
-                  expect(await retention?.settled).toEqual({ kind: "completed" });
-                  expectWithdrawn(before, read(receipt.inputId));
-                  verifiedCommits++;
-                  throw lostResult;
-                },
-              }),
-            context,
-            current,
-            admit &&
-              ((retained) => {
-                const owned = admit(retained);
-                if (withdrawing) {
-                  grant = owned.admission;
-                  retention = retained;
-                }
-                return owned;
-              }),
-          );
-        });
+      const observer = interceptWorkerExecution((execute) => async (command, options) => {
+        const result = await execute(command, options);
+        if (command.type !== "session.pendingInputs.withdraw") {
+          return result;
+        }
+        expectWithdrawn(before, read(receipt.inputId));
+        verifiedCommits++;
+        throw lostResult;
+      });
       try {
         await expect(remove()).resolves.toEqual(outcome);
         expect(verifiedCommits).toBe(1);

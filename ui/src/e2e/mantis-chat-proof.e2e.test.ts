@@ -1,5 +1,5 @@
 // Control UI Mantis proof covers the focused web chat browser path.
-import { copyFile, mkdir, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { BrowserContext, Page } from "playwright";
 import { expect, it } from "vitest";
@@ -37,9 +37,8 @@ async function saveResult(dir: string, details: Record<string, unknown>) {
 async function saveVideo(page: Page, context: BrowserContext, dir: string) {
   const video = page.video();
   await suite.closeBrowserContext(context);
-  const videoPath = await video?.path().catch(() => undefined);
-  if (videoPath) {
-    await copyFile(videoPath, path.join(dir, "web-ui-chat.webm"));
+  if (video) {
+    await video.saveAs(path.join(dir, "web-ui-chat.webm"));
   }
 }
 

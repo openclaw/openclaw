@@ -4,9 +4,13 @@ import path from "node:path";
 import { parse } from "acorn";
 import { build } from "esbuild";
 import { afterEach, expect, it } from "vitest";
+import { rewriteStandaloneImports } from "../../scripts/lib/bun-standalone-imports.mjs";
 import { createStandaloneNativeAdapter } from "../../scripts/lib/bun-standalone-native.mjs";
 import { stageStandalonePluginLoader } from "../../scripts/lib/bun-standalone-plugins.mjs";
-import { createStandaloneRequireAdapter } from "../../scripts/lib/bun-standalone-require.mjs";
+import {
+  createStandaloneExternalModuleBootstrap,
+  createStandaloneRequireAdapter,
+} from "../../scripts/lib/bun-standalone-require.mjs";
 import {
   planStandaloneRuntime,
   pruneStandaloneRuntime,
@@ -154,5 +158,70 @@ console.log("lazy relocated loader");`,
     });
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout.trim()).toBe("lazy relocated loader");
+  },
+);
+
+it.skipIf(!configuredBun && !hasBun)(
+  "loads source-less SDK exports and preserves callable CommonJS exports for disk plugins",
+  () => {
+    const root = temporary.make("standalone-image-exports-");
+    const sdk = path.join(root, "sdk.mjs");
+    const legacy = path.join(root, "legacy.cjs");
+    fs.writeFileSync(
+      sdk,
+      "globalThis.sdkLoads = (globalThis.sdkLoads ?? 0) + 1; export const answer = 42; export default { name: 'sdk' };\n",
+    );
+    fs.writeFileSync(legacy, "module.exports = () => 'legacy';\n");
+    fs.writeFileSync(
+      path.join(root, "consumer.cjs"),
+      `module.exports = { sdk: require("fixture-sdk"), legacy: require("fixture-legacy") };`,
+    );
+    const image = "/$bunfs/root/runtime/.typed-source/sdk.ts";
+    const resolver = rewriteStandaloneImports({
+      contents: `Module._resolveFilename = (specifier, ...args) => specifier === "fixture-sdk" ? sdk : specifier === "fixture-legacy" ? legacy : original(specifier, ...args);`,
+      filename: path.join(root, "main.mjs"),
+      runtimeRoot: root,
+      embeddedPaths: {},
+      moduleAliases: {},
+      workerThreadsShim: "",
+      parse,
+    });
+    fs.writeFileSync(
+      path.join(root, "main.mjs"),
+      `import assert from "node:assert/strict";
+import Module, { createRequire } from "node:module";
+import path from "node:path";
+import fs from "node:fs";
+import * as sdkNamespace from "./sdk.mjs";
+const root = ${JSON.stringify(root)};
+const sdk = ${JSON.stringify(sdk)};
+const legacy = ${JSON.stringify(legacy)};
+const commonJsEntries = new Set([legacy]);
+const image = ${JSON.stringify(image)};
+const embedded = filename => filename === sdk || filename === image ? image : filename === legacy ? legacy : undefined;
+fs.unlinkSync(sdk);
+let imageLoads = 0;
+globalThis.__openclawStandaloneCreateRequire = () => filename => { assert.equal(filename, image); imageLoads++; return sdkNamespace; };
+${createStandaloneExternalModuleBootstrap({ source: true })}
+const original = Module._resolveFilename;
+${resolver}
+createRequire(import.meta.url).resolve("fixture-sdk");
+assert.equal(imageLoads, 0);
+const consumer = createRequire(import.meta.url)("./consumer.cjs");
+assert.equal(consumer.sdk.answer, 42);
+assert.equal(consumer.sdk.default.name, "sdk");
+assert.equal(consumer.legacy(), "legacy");
+assert.equal(globalThis.sdkLoads, 1);
+assert.equal(imageLoads, 1);
+assert.equal(createRequire(import.meta.url)("./consumer.cjs"), consumer);
+console.log("external exports preserved");`,
+    );
+    const result = spawnSync(bunCommand, [path.join(root, "main.mjs")], {
+      cwd: root,
+      encoding: "utf8",
+      timeout: 10_000,
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim()).toBe("external exports preserved");
   },
 );

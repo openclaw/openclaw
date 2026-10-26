@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import * as tar from "tar";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import {
   recordArchiveSymbolicLink,
   resolvePortableArchivePathKey,
@@ -61,7 +62,9 @@ function formatResult(result: BackupVerifyResult): string {
       ? "SQLite database inventory verified."
       : "SQLite database coverage unknown: this legacy archive has no database inventory.",
     ...(result.warnings ?? []),
-  ].join("\n");
+  ]
+    .map(sanitizeTerminalText)
+    .join("\n");
 }
 
 function resolveExtractionBytes(

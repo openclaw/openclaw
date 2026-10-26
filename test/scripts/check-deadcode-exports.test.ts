@@ -42,6 +42,31 @@ const isEntry = (entries: readonly string[], file: string) =>
 afterEach(() => vi.restoreAllMocks());
 
 describe("check-deadcode-exports", () => {
+  it("models the PostgreSQL broker fixture only when both consumers exist", () => {
+    const compile = knipConfig.compilers.mjs;
+    const filePath = "config/knip-dynamic-consumers.mjs";
+    expect(compile("// dynamic consumers", filePath)).toContain(
+      'import { createSqliteWorkerBackend as __dynamicPgPool_0 } from "../scripts/perf/pg-pool-broker.fixture.mts";',
+    );
+
+    const readFileSync = fs.readFileSync.bind(fs);
+    vi.spyOn(fs, "readFileSync").mockImplementation((file, options) => {
+      const source = readFileSync(file, options);
+      return path.resolve(String(file)) === path.resolve("scripts/perf/pg-pool-lifecycle.mts")
+        ? String(source).replace('moduleUrl: new URL("./pg-pool-broker.fixture.mts", self),', "")
+        : source;
+    });
+    expect(compile("// dynamic consumers", filePath)).not.toContain("pg-pool-broker.fixture.mts");
+
+    vi.mocked(fs.readFileSync).mockImplementation((file, options) => {
+      const source = readFileSync(file, options);
+      return path.resolve(String(file)) === path.resolve("src/infra/sqlite-store.worker.ts")
+        ? String(source).replace('"createSqliteWorkerBackend"', '""')
+        : source;
+    });
+    expect(compile("// dynamic consumers", filePath)).not.toContain("pg-pool-broker.fixture.mts");
+  });
+
   it("makes tests in every workspace roots of the full-tree export audit", () => {
     expectEntries(knipConfig.workspaces["."].entry, [
       "config/knip.config.ts!",
@@ -387,6 +412,48 @@ const catalog = module.loadControlUiSourceCatalog();`;
     expect(withoutConsumers).not.toContain("fetchWithSsrFGuard");
     expect(withoutConsumers).not.toContain("addDoctorLegacyIssues");
     expect(withoutConsumers).not.toContain("recordTrajectoryFlush");
+  });
+
+  it("models a computed checkout module member only while its binding and call exist", () => {
+    const consumerPath = path.resolve(
+      ".agents/skills/telegram-e2e-userbot/scripts/published-upgrade-scenario.mjs",
+    );
+    const consumerSource = fs.readFileSync(consumerPath, "utf8");
+    const compile = knipConfig.compilers.mjs;
+    const compiled = compile("// dynamic consumers", "config/knip-dynamic-consumers.mjs");
+    expect(compiled).toMatch(
+      /import \{[^}\n]*\bcreateScenarioCommandEnvironment as __dynamic\d+_\d+\b[^}\n]*\} from "\.\.\/\.agents\/skills\/telegram-e2e-userbot\/scripts\/run-mock-sut-user-e2e\.mjs";/u,
+    );
+
+    const readFileSync = fs.readFileSync.bind(fs);
+    const readFile = vi.spyOn(fs, "readFileSync");
+    const compileWithConsumer = (source: string) => {
+      readFile.mockImplementation((file, options) =>
+        path.resolve(String(file)) === consumerPath ? source : readFileSync(file, options),
+      );
+      return compile("// dynamic consumers", "config/knip-dynamic-consumers.mjs");
+    };
+
+    const withoutBinding = compileWithConsumer(
+      replaceFixture(
+        consumerSource,
+        'const harness = await import(pathToFileURL(join(scripts, "run-mock-sut-user-e2e.mjs")));',
+        "const harness = {};",
+      ),
+    );
+    expect(withoutBinding).not.toContain("run-mock-sut-user-e2e.mjs");
+
+    const withoutCall = compileWithConsumer(
+      replaceFixture(
+        consumerSource,
+        "  const commandEnv = harness.createScenarioCommandEnvironment({",
+        '  // harness.createScenarioCommandEnvironment({ is not a call.\n  const mention = "harness.createScenarioCommandEnvironment(";\n  const commandEnv = Object.freeze({',
+      ),
+    );
+    expect(withoutCall).not.toContain("createScenarioCommandEnvironment as");
+    expect(withoutCall).toContain("run-mock-sut-user-e2e.mjs");
+    expect(withoutCall).toContain("runtimeProcessDeployManifest");
+    expect(withoutCall).toContain("observeNativeMcpProbe");
   });
 
   it("removes projected MCP and Python edges with their actual consumers", () => {

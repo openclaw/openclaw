@@ -2,6 +2,7 @@
 
 import { IDBFactory } from "fake-indexeddb";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { parseSidebarSnapshot } from "../../components/sidebar-snapshot-data.ts";
 import { sidebarSnapshot } from "../../components/sidebar-snapshot.test-support.ts";
 import {
@@ -26,6 +27,7 @@ import {
   SIDEBAR_SNAPSHOT_STORE_NAME as SIDEBAR,
   readStoredChatSnapshotRecord,
 } from "./session-snapshot-database.ts";
+import * as snapshotDatabase from "./session-snapshot-database.ts";
 import {
   clearStoredChatSnapshots,
   deleteStoredChatSnapshot,
@@ -197,6 +199,91 @@ describe("persistent chat session snapshots", () => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
+
+  it("releases one read scope without retiring another reader or its replacement", () => {
+    const first = writer.captureReadScope(sessionKey);
+    const second = writer.captureReadScope(sessionKey);
+    expect([first.isCurrent(), second.isCurrent()]).toEqual([true, true]);
+    first.dispose();
+    first.dispose();
+    expect([first.isCurrent(), second.isCurrent()]).toEqual([false, true]);
+    second.dispose();
+
+    const replacement = writer.captureReadScope(sessionKey);
+    expect([first.isCurrent(), second.isCurrent(), replacement.isCurrent()]).toEqual([
+      false,
+      false,
+      true,
+    ]);
+    replacement.dispose();
+  });
+
+  it.each(["write", "forget", "prefix", "clear", "sidebar", "disconnect"] as const)(
+    "keeps an old read scope retired after %s and recapture",
+    (operation) => {
+      const target =
+        operation === "sidebar" || operation === "disconnect"
+          ? `${sessionKey.split("\u0000")[0]}\u0000sidebar:operator`
+          : sessionKey;
+      const store = makeStore(undefined, operation === "disconnect");
+      const retired = store.captureReadScope(target);
+      const unrelated = store.captureReadScope(key("agent:main:unrelated"));
+      if (operation === "write") {
+        store.write(target, snapshot());
+      } else if (operation === "forget") {
+        store.forget(target);
+      } else if (operation === "prefix") {
+        store.forgetScope(target);
+      } else if (operation === "clear") {
+        store.clearMemory();
+      } else if (operation === "sidebar") {
+        store.forgetSidebar({ sessionKey });
+      } else {
+        store.disconnect();
+      }
+      expect(retired.isCurrent()).toBe(false);
+      const replacement = store.captureReadScope(target);
+      retired.dispose();
+      expect(retired.isCurrent()).toBe(false);
+      expect(replacement.isCurrent()).toBe(true);
+      expect(unrelated.isCurrent()).toBe(operation !== "clear");
+      unrelated.dispose();
+      replacement.dispose();
+      store.clearMemory();
+    },
+  );
+
+  it.each([false, true])(
+    "preserves queued snapshot admission through read-scope churn (forgotten=%s)",
+    async (forgotten) => {
+      await seed();
+      const database = await openDatabase();
+      const held = createDeferred<IDBDatabase | null>();
+      const opening = vi
+        .spyOn(snapshotDatabase, "openSessionSnapshotDatabase")
+        .mockReturnValueOnce(held.promise);
+      writer.write(key("agent:main:blocker"), snapshot("blocker"));
+      const blocker = writer.flush();
+      await vi.waitFor(() => expect(opening).toHaveBeenCalledOnce());
+      const target = key("agent:main:queued");
+      const value = snapshot("queued");
+      writer.write(target, value);
+      const queued = writer.flush();
+      if (forgotten) {
+        writer.forget(target);
+      }
+      for (let index = 0; index < 100; index += 1) {
+        const scope = writer.captureReadScope(key(`agent:main:churn-${index}`));
+        scope.dispose();
+      }
+      const replacement = writer.captureReadScope(target);
+      held.resolve(database);
+      await Promise.all([blocker, queued]);
+      expect(replacement.isCurrent()).toBe(true);
+      replacement.dispose();
+      expect(await readSnapshot(target)).toEqual(forgotten ? null : value);
+    },
+  );
 
   it("restores a board snapshot and its original ticket receipt with the conversation", async () => {
     const value: ChatSessionSnapshot = {
@@ -422,7 +509,10 @@ describe("persistent chat session snapshots", () => {
     const hydrated = await reader.read(sessionKey);
     assert.isNotNull(previousHydration);
     assert.isNotNull(hydrated);
+    const scope = reader.captureReadScope(sessionKey);
     cacheSnapshot(memoryCache, sessionKey, hydrated);
+    expect(scope.isCurrent()).toBe(false);
+    scope.dispose();
     await reader.flush();
     expect((await readRawRecord(sessionKey))?.savedAt).toBe(1);
     reader.write(sessionKey, previousHydration);

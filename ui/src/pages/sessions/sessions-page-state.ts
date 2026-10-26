@@ -14,12 +14,8 @@ import { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import { observeState } from "../../lib/reactive/observe-state.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import { normalizeSessionsGroupBy } from "../../lib/sessions/grouping.ts";
-import {
-  SESSIONS_PAGE_DEFAULT_LIMIT,
-  filterSessionRows,
-  type SessionArchivedFilter,
-  type SessionListSnapshot,
-} from "../../lib/sessions/index.ts";
+import type { SessionArchivedFilter, SessionListSnapshot } from "../../lib/sessions/index.ts";
+import { filterSessionRows } from "../../lib/sessions/navigation.ts";
 import type { SessionPatch } from "../../lib/sessions/patch.ts";
 import {
   resolveSessionPreferredFaceForKey,
@@ -27,6 +23,7 @@ import {
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
 import { resolveUiConfiguredMainKey } from "../../lib/sessions/session-key.ts";
+import { SESSIONS_PAGE_DEFAULT_LIMIT } from "../../lib/sessions/session-requests.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import {
   sessionAgentId,
@@ -696,7 +693,6 @@ export function createSessionsPage(
   const presentationSources = [
     application.agentIdentity,
     application.navigation,
-    application.runtimeConfig,
     application.plugins,
   ].map((owner) => projectOwner(owner, (source) => source));
   const revision = () =>

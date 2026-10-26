@@ -1,4 +1,4 @@
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 
 const SESSION_RETRY_DEFAULT_MS = 500;
 const SESSION_RETRY_MIN_MS = 100;

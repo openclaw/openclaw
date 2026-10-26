@@ -118,7 +118,17 @@ function readSession(databasePath: string, key: string) {
   );
 }
 
-it("merges the old HOME-relative store through Doctor without losing history or sharing", async () => {
+const agentDatabase = (root: string) =>
+  path.join(root, "agents", "main", "agent", "openclaw-agent.sqlite");
+
+async function withRelativeStore(
+  run: (fixture: {
+    home: string;
+    cfg: OpenClawConfig;
+    canonical: string;
+    legacy: string;
+  }) => Promise<void>,
+) {
   await withDoctorConfigPreflightHome(async (home) => {
     const stateDir = path.join(home, ".openclaw");
     const workspace = path.join(stateDir, "workspace");
@@ -131,170 +141,132 @@ it("merges the old HOME-relative store through Doctor without losing history or 
     };
     await writeOpenClawConfig(home, cfg);
     await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
-      const canonical = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
-      const legacy = path.join(home, "agents", "main", "agent", "openclaw-agent.sqlite");
-      const key = "agent:main:legacy-home";
-      const source = { databaseAgentId: "main", databasePath: legacy, key };
-      seedClaim(source);
-      seedClaim({ databaseAgentId: "main", databasePath: canonical, key: "agent:main:retained" });
-      const collision = "agent:main:collision";
-      seedClaim({
-        databaseAgentId: "main",
-        databasePath: legacy,
-        key: collision,
-        entry: { sessionId: "legacy-conflict", updatedAt: 100 },
-      });
-      seedClaim({
-        databaseAgentId: "main",
-        databasePath: canonical,
-        key: collision,
-        entry: { sessionId: "canonical-conflict", updatedAt: 100 },
-      });
-      addMember(legacy, key, "synthetic-member");
-      addMember(legacy, collision, "source-conflict-member");
-      addMember(canonical, collision, "canonical-conflict-member");
-      const original = readSession(legacy, key);
-      const retained = readSession(canonical, "agent:main:retained");
-      const canonicalConflict = readSession(canonical, collision);
-      const sourceConflict = readSession(legacy, collision);
       const cwd = vi.spyOn(process, "cwd").mockReturnValue(home);
       try {
-        await repair();
-        expect(readSession(canonical, key)).toEqual(original);
-        expect(readSession(canonical, "agent:main:retained")).toEqual(retained);
-        expect(readSession(canonical, collision)).toEqual(canonicalConflict);
-        const recovered = withOpenClawAgentDatabaseReadOnly(
-          (database) =>
-            executeSqliteQuerySync(
-              database.db,
-              getSessionKysely(database.db)
-                .selectFrom("session_nodes")
-                .select("session_key")
-                .where("current_session_id", "=", "legacy-conflict"),
-            ).rows[0]?.session_key,
-          { agentId: "main", path: canonical },
-        );
-        if (!recovered.found || !recovered.value) {
-          throw new Error("Doctor did not preserve the conflicting source conversation");
-        }
-        expect(recovered.value).not.toBe(collision);
-        expect(readSession(canonical, recovered.value)).toEqual(sourceConflict);
-        expect(readSession(legacy, key)).toEqual(original);
-        expect(listOpenClawRegisteredAgentDatabases().map((row) => row.path)).toEqual([canonical]);
-        expect(
-          fs
-            .readdirSync(path.dirname(legacy))
-            .some(
-              (file) =>
-                file.startsWith("openclaw-agent.sqlite.pre-startup-migration-") &&
-                file.endsWith(".bak"),
-            ),
-        ).toBe(true);
-        await repairOwner(cfg);
-        expect(readSession(canonical, key)).toEqual(original);
-
-        expect(
-          await deleteSessionEntryLifecycle({
-            agentId: "main",
-            storePath: canonical,
-            archiveTranscript: false,
-            deleteTranscriptWithoutArchive: true,
-            target: { canonicalKey: key, storeKeys: [key] },
-          }),
-        ).toMatchObject({ deleted: true });
-        await repairOwner(cfg);
-        expect(readSession(canonical, key)).toEqual({ found: true, value: undefined });
-        expect(readSession(legacy, key)).toEqual(original);
+        await run({ home, cfg, canonical: agentDatabase(stateDir), legacy: agentDatabase(home) });
       } finally {
         cwd.mockRestore();
       }
     });
   });
+}
+
+it("merges the old HOME-relative store through Doctor without losing history or sharing", async () => {
+  await withRelativeStore(async ({ cfg, canonical, legacy }) => {
+    const key = "agent:main:legacy-home";
+    const source = { databaseAgentId: "main", databasePath: legacy, key };
+    seedClaim(source);
+    seedClaim({ databaseAgentId: "main", databasePath: canonical, key: "agent:main:retained" });
+    const collision = "agent:main:collision";
+    seedClaim({
+      databaseAgentId: "main",
+      databasePath: legacy,
+      key: collision,
+      entry: { sessionId: "legacy-conflict", updatedAt: 100 },
+    });
+    seedClaim({
+      databaseAgentId: "main",
+      databasePath: canonical,
+      key: collision,
+      entry: { sessionId: "canonical-conflict", updatedAt: 100 },
+    });
+    addMember(legacy, key, "synthetic-member");
+    addMember(legacy, collision, "source-conflict-member");
+    addMember(canonical, collision, "canonical-conflict-member");
+    const original = readSession(legacy, key);
+    const retained = readSession(canonical, "agent:main:retained");
+    const canonicalConflict = readSession(canonical, collision);
+    const sourceConflict = readSession(legacy, collision);
+    await repair();
+    expect(readSession(canonical, key)).toEqual(original);
+    expect(readSession(canonical, "agent:main:retained")).toEqual(retained);
+    expect(readSession(canonical, collision)).toEqual(canonicalConflict);
+    const recovered = withOpenClawAgentDatabaseReadOnly(
+      (database) =>
+        executeSqliteQuerySync(
+          database.db,
+          getSessionKysely(database.db)
+            .selectFrom("session_nodes")
+            .select("session_key")
+            .where("current_session_id", "=", "legacy-conflict"),
+        ).rows[0]?.session_key,
+      { agentId: "main", path: canonical },
+    );
+    if (!recovered.found || !recovered.value) {
+      throw new Error("Doctor did not preserve the conflicting source conversation");
+    }
+    expect(recovered.value).not.toBe(collision);
+    expect(readSession(canonical, recovered.value)).toEqual(sourceConflict);
+    expect(readSession(legacy, key)).toEqual(original);
+    expect(listOpenClawRegisteredAgentDatabases().map((row) => row.path)).toEqual([canonical]);
+    expect(
+      fs
+        .readdirSync(path.dirname(legacy))
+        .some(
+          (file) =>
+            file.startsWith("openclaw-agent.sqlite.pre-startup-migration-") &&
+            file.endsWith(".bak"),
+        ),
+    ).toBe(true);
+    await repairOwner(cfg);
+    expect(readSession(canonical, key)).toEqual(original);
+
+    expect(
+      await deleteSessionEntryLifecycle({
+        agentId: "main",
+        storePath: canonical,
+        archiveTranscript: false,
+        deleteTranscriptWithoutArchive: true,
+        target: { canonicalKey: key, storeKeys: [key] },
+      }),
+    ).toMatchObject({ deleted: true });
+    await repairOwner(cfg);
+    expect(readSession(canonical, key)).toEqual({ found: true, value: undefined });
+    expect(readSession(legacy, key)).toEqual(original);
+  });
 });
 
 it("merges a registered source from an unrelated prior working directory", async () => {
-  await withDoctorConfigPreflightHome(async (home) => {
-    const stateDir = path.join(home, ".openclaw");
-    const workspace = path.join(stateDir, "workspace");
-    fs.mkdirSync(workspace, { recursive: true });
-    await writeOpenClawConfig(home, {
-      gateway: { mode: "local" },
-      plugins: { enabled: false },
-      agents: { ownership: "explicit", entries: { main: { workspace } } },
-      session: { store: "agents/{agentId}/sessions/sessions.json" },
-    });
-    await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
-      const canonical = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
-      const legacy = path.join(
-        home,
-        "prior-working-directory",
-        "agents",
-        "main",
-        "agent",
-        "openclaw-agent.sqlite",
-      );
-      const key = "agent:main:prior-cwd";
-      seedClaim({ databaseAgentId: "main", databasePath: canonical, key: "agent:main:retained" });
-      seedClaim({ databaseAgentId: "main", databasePath: legacy, key });
-      const original = readSession(legacy, key);
-      const cwd = vi.spyOn(process, "cwd").mockReturnValue(home);
-      try {
-        await repair();
-        expect(readSession(canonical, key)).toEqual(original);
-        expect(readSession(legacy, key)).toEqual(original);
-        expect(listOpenClawRegisteredAgentDatabases().map((row) => row.path)).toEqual([canonical]);
-      } finally {
-        cwd.mockRestore();
-      }
-    });
+  await withRelativeStore(async ({ home, canonical }) => {
+    const legacy = agentDatabase(path.join(home, "prior-working-directory"));
+    const key = "agent:main:prior-cwd";
+    seedClaim({ databaseAgentId: "main", databasePath: canonical, key: "agent:main:retained" });
+    seedClaim({ databaseAgentId: "main", databasePath: legacy, key });
+    const original = readSession(legacy, key);
+    await repair();
+    expect(readSession(canonical, key)).toEqual(original);
+    expect(readSession(legacy, key)).toEqual(original);
+    expect(listOpenClawRegisteredAgentDatabases().map((row) => row.path)).toEqual([canonical]);
   });
 });
 
 it.each(["history", "sharing"] as const)(
   "preserves both originals and refuses conflicting %s with the same session id",
   async (conflict) => {
-    await withDoctorConfigPreflightHome(async (home) => {
-      const stateDir = path.join(home, ".openclaw");
-      const workspace = path.join(stateDir, "workspace");
-      fs.mkdirSync(workspace, { recursive: true });
-      await writeOpenClawConfig(home, {
-        gateway: { mode: "local" },
-        plugins: { enabled: false },
-        agents: { ownership: "explicit", entries: { main: { workspace } } },
-        session: { store: "agents/{agentId}/sessions/sessions.json" },
-      });
-      await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
-        const canonical = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
-        const legacy = path.join(home, "agents", "main", "agent", "openclaw-agent.sqlite");
-        const key = "agent:main:collision";
-        for (const [databasePath, text] of [
-          [canonical, "canonical history"],
-          [legacy, conflict === "history" ? "legacy history" : "canonical history"],
-        ] as const) {
-          seedClaim({
-            databaseAgentId: "main",
-            databasePath,
-            key,
-            entry: { sessionId: "same-session-id", updatedAt: 100 },
-            events: [{ type: "message", id: "event-1", text }],
-          });
-        }
-        if (conflict === "sharing") {
-          addMember(canonical, key, "canonical-member");
-          addMember(legacy, key, "source-member");
-        }
-        const originalCanonical = readSession(canonical, key);
-        const originalLegacy = readSession(legacy, key);
-        const cwd = vi.spyOn(process, "cwd").mockReturnValue(home);
-        try {
-          await expect(repair()).rejects.toThrow("conflicting session generations");
-          expect(readSession(canonical, key)).toEqual(originalCanonical);
-          expect(readSession(legacy, key)).toEqual(originalLegacy);
-          expect(listOpenClawRegisteredAgentDatabases().map((row) => row.path)).toContain(legacy);
-        } finally {
-          cwd.mockRestore();
-        }
-      });
+    await withRelativeStore(async ({ canonical, legacy }) => {
+      const key = "agent:main:collision";
+      for (const [databasePath, text] of [
+        [canonical, "canonical history"],
+        [legacy, conflict === "history" ? "legacy history" : "canonical history"],
+      ] as const) {
+        seedClaim({
+          databaseAgentId: "main",
+          databasePath,
+          key,
+          entry: { sessionId: "same-session-id", updatedAt: 100 },
+          events: [{ type: "message", id: "event-1", text }],
+        });
+      }
+      if (conflict === "sharing") {
+        addMember(canonical, key, "canonical-member");
+        addMember(legacy, key, "source-member");
+      }
+      const originalCanonical = readSession(canonical, key);
+      const originalLegacy = readSession(legacy, key);
+      await expect(repair()).rejects.toThrow("conflicting session generations");
+      expect(readSession(canonical, key)).toEqual(originalCanonical);
+      expect(readSession(legacy, key)).toEqual(originalLegacy);
+      expect(listOpenClawRegisteredAgentDatabases().map((row) => row.path)).toContain(legacy);
     });
   },
 );
@@ -303,15 +275,8 @@ it.each(["completed", "created", "queued", "unknown", "outbox", "goal", "archive
   "preserves delivery evidence and refuses unsettled %s state before retiring the source",
   async (state) => {
     await withDoctorConfigPreflightHome(async (home) => {
-      const canonical = path.join(
-        home,
-        ".openclaw",
-        "agents",
-        "main",
-        "agent",
-        "openclaw-agent.sqlite",
-      );
-      const legacy = path.join(home, "agents", "main", "agent", "openclaw-agent.sqlite");
+      const canonical = agentDatabase(path.join(home, ".openclaw"));
+      const legacy = agentDatabase(home);
       const key = "agent:main:receipt";
       const cfg: OpenClawConfig = { session: { store: "agents/{agentId}/sessions/sessions.json" } };
       seedClaim({ databaseAgentId: "main", databasePath: canonical, key: "agent:main:retained" });
@@ -425,15 +390,8 @@ it("keeps verified pre-merge backups inside a disposable update rehearsal", asyn
         OPENCLAW_COMPATIBILITY_HOST_VERSION: undefined,
       },
       async () => {
-        const canonical = path.join(root, "agents", "main", "agent", "openclaw-agent.sqlite");
-        const legacy = path.join(
-          root,
-          "prior-cwd",
-          "agents",
-          "main",
-          "agent",
-          "openclaw-agent.sqlite",
-        );
+        const canonical = agentDatabase(root);
+        const legacy = agentDatabase(path.join(root, "prior-cwd"));
         const shared = resolveOpenClawStateSqlitePath(process.env);
         const key = "agent:main:copied-rehearsal";
         const retainedKey = "agent:main:retained";

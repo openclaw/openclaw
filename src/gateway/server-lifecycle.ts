@@ -371,6 +371,7 @@ export async function prepareGatewayLifecycle(params: {
     clients,
     publishPresence: runtime.publishPresence,
   });
+  runtime.attachSessionViewerPresence(runtimeState.sessionViewerPresence);
   deps.cron = runtimeState.cronState.cron;
   const cronReconciliation = createGatewayCronReconciliation({
     port,

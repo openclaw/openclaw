@@ -74,6 +74,32 @@ function gate(backend = true) {
   return { started, release: () => released.resolve(), run };
 }
 
+function recoveryGate() {
+  const target = captureSessionTarget({ ...channelTurn, storeScope: sessionTarget.storePath });
+  const recovery = createDeferred();
+  const waiting = createDeferred();
+  let pending = true;
+  const fixture = createOwner(undefined, {
+    isPending: () => pending,
+    waitForAgentInputRecovery: (_agentId, options) => {
+      if (!pending) {
+        return undefined;
+      }
+      waiting.resolve();
+      return racePromiseWithAbortSignal(recovery.promise, options?.signal);
+    },
+  });
+  return {
+    ...fixture,
+    waiting,
+    mailbox: () => getExistingSessionControllerMailbox(sessionTarget.canonicalKey, target),
+    recover: () => {
+      pending = false;
+      recovery.resolve();
+    },
+  };
+}
+
 function createOwner(
   flushTranscript: () => Promise<void> = async () => undefined,
   inputRecovery?: AgentInputRecoveryAdmission,
@@ -115,8 +141,12 @@ function createOwner(
       }
       return { ...task, done };
     },
-    waitForResults: (count = 1) =>
-      vi.waitFor(() => expect(bridge.submitToolResult).toHaveBeenCalledTimes(count)),
+    expectResults: (...ids: string[]) =>
+      vi.waitFor(() =>
+        expect(bridge.submitToolResult.mock.calls).toEqual(
+          ids.map((id) => [id, { result: `answer: ${id}` }]),
+        ),
+      ),
   };
 }
 
@@ -161,7 +191,7 @@ it.each([
   "runs %s then %s FIFO across transcript flush",
   async (firstKind, secondKind, callIds) => {
     const flush = createDeferred();
-    const { bridge, enqueue, owner, waitForResults } = createOwner(() => flush.promise);
+    const { enqueue, owner, expectResults } = createOwner(() => flush.promise);
     const first = enqueue(firstKind, "first");
     const second = enqueue(secondKind, "second");
     flush.resolve();
@@ -175,11 +205,8 @@ it.each([
     expect(order).toEqual(["first", "second"]);
     second.release();
     await Promise.all([first.done, second.done]);
-    await waitForResults(callIds.length);
+    await expectResults(...callIds);
     expect(order).toEqual(["first", "second"]);
-    expect(bridge.submitToolResult.mock.calls).toEqual(
-      callIds.map((id) => [id, { result: `answer: ${id}` }]),
-    );
     await owner.close();
   },
 );
@@ -187,45 +214,25 @@ it.each([
 it.each(["recovered", "closed"] as const)(
   "reserves Talk consults after saved input recovery, preserving arrival order: %s",
   async (outcome) => {
-    const recovery = createDeferred();
-    const waiting = createDeferred();
-    let pending = true;
-    const fixture = createOwner(undefined, {
-      isPending: () => pending,
-      waitForAgentInputRecovery: (_agentId, options) => {
-        if (!pending) {
-          return undefined;
-        }
-        waiting.resolve();
-        return racePromiseWithAbortSignal(recovery.promise, options?.signal);
-      },
-    });
+    const fixture = recoveryGate();
     const first = gate();
     const second = gate();
-    const target = captureSessionTarget({
-      storeScope: sessionTarget.storePath,
-      sessionKey: sessionTarget.canonicalKey,
-      agentId: sessionTarget.agentId,
-    });
     fixture.consult("first", "first");
     fixture.consult("second", "second");
-    await waiting.promise;
-    expect(getExistingSessionControllerMailbox(sessionTarget.canonicalKey, target)).toBeUndefined();
+    await fixture.waiting.promise;
+    expect(fixture.mailbox()).toBeUndefined();
     let savedRun: Promise<unknown> | undefined;
     const saved = gate(false);
     try {
       if (outcome === "closed") {
         await fixture.owner.close();
         expect(mocks.consultRealtimeVoiceAgent).not.toHaveBeenCalled();
-        expect(
-          getExistingSessionControllerMailbox(sessionTarget.canonicalKey, target),
-        ).toBeUndefined();
+        expect(fixture.mailbox()).toBeUndefined();
         return;
       }
       savedRun = withSessionTurn(channelTurn, () => saved.run({ prompt: "saved" }));
       await saved.started.promise;
-      pending = false;
-      recovery.resolve();
+      fixture.recover();
       await vi.waitFor(() => expect(mocks.consultRealtimeVoiceAgent).toHaveBeenCalledTimes(2));
       expect(order).toEqual(["saved"]);
       saved.release();
@@ -235,14 +242,9 @@ it.each(["recovered", "closed"] as const)(
       await second.started.promise;
       expect(order).toEqual(["saved", "first", "second"]);
       second.release();
-      await fixture.waitForResults(2);
-      expect(fixture.bridge.submitToolResult.mock.calls).toEqual([
-        ["first", { result: "answer: first" }],
-        ["second", { result: "answer: second" }],
-      ]);
+      await fixture.expectResults("first", "second");
     } finally {
-      pending = false;
-      recovery.resolve();
+      fixture.recover();
       saved.release();
       first.release();
       second.release();
@@ -252,19 +254,11 @@ it.each(["recovered", "closed"] as const)(
 );
 
 it("closes a native Talk consultation waiting for saved-input recovery before admission", async () => {
-  const recovery = createDeferred();
-  const waiting = createDeferred();
-  const fixture = createOwner(undefined, {
-    isPending: () => true,
-    waitForAgentInputRecovery: (_agentId, options) => {
-      waiting.resolve();
-      return racePromiseWithAbortSignal(recovery.promise, options?.signal);
-    },
-  });
+  const fixture = recoveryGate();
   const consultation = fixture.owner.runAgentConsult({ prompt: "native consult" });
   void consultation.catch(() => {});
   try {
-    await waiting.promise;
+    await fixture.waiting.promise;
     expect(mocks.consultRealtimeVoiceAgent).not.toHaveBeenCalled();
     await fixture.owner.close();
     await expect(consultation).rejects.toMatchObject({
@@ -273,7 +267,7 @@ it("closes a native Talk consultation waiting for saved-input recovery before ad
     });
     expect(mocks.consultRealtimeVoiceAgent).not.toHaveBeenCalled();
   } finally {
-    recovery.resolve();
+    fixture.recover();
     await Promise.allSettled([consultation, fixture.owner.close()]);
   }
 });
@@ -340,6 +334,10 @@ it("keeps an in-flight consult running across a preserveRuns transport replaceme
   replacement.consult("call-2", "next");
   await next.started.promise;
   next.release();
-  await replacement.waitForResults();
+  await vi.waitFor(() =>
+    expect(replacement.bridge.submitToolResult.mock.calls).toEqual([
+      ["call-2", { result: "answer: next" }],
+    ]),
+  );
   await replacement.owner.close();
 });

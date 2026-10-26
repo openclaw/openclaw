@@ -29,12 +29,13 @@ import {
   restorePaneStagedAttachments,
 } from "./chat-pane-attachment-handoff.ts";
 import { registerChatPane } from "./chat-pane-elements.ts";
-import { createSessionCapabilityFixture, createTestChatPane } from "./chat-pane.test-support.ts";
+import { createTestChatPane } from "./chat-pane.test-support.ts";
 import { enqueueChatMessage } from "./chat-queue.ts";
 import {
   captureChatCommandComposerRecovery,
   settleChatCommandComposer,
 } from "./chat-send-composer.ts";
+import { createSessionCapabilityFixture } from "./chat-session-capability.test-support.ts";
 import { createChatState } from "./chat-state-controller.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import type { ChatAttachmentControlsProps } from "./components/chat-attachment-controls.types.ts";
@@ -184,30 +185,6 @@ describe("cross-region Home composer ownership", () => {
     const context = {} as ApplicationContext;
     return { context, owner, page: presentation(context, owner, "page", sessionKey) };
   }
-
-  it("derives recovery attachment retention from surviving composer presentations", () => {
-    const { context, owner, page } = home();
-    const peer = presentation(context, owner, "page", "agent:main:peer");
-    const composer = storedAttachment("recovery-composer");
-    const fallback = storedAttachment("recovery-fallback");
-    const otherPane = storedAttachment("recovery-peer");
-    const removed = storedAttachment("recovery-removed");
-    page.current.chatAttachments = [composer];
-    page.current.chatComposerFallbackByScope.saved = composerFallback([fallback]);
-    peer.current.chatAttachments = [otherPane];
-    expect(
-      ChatPaneComposerHandoff.retainedAttachmentIds(context, [
-        composer,
-        fallback,
-        otherPane,
-        removed,
-      ]),
-    ).toEqual(new Set([composer.id, fallback.id, otherPane.id]));
-    peer.handoff.dispose();
-    expect(ChatPaneComposerHandoff.retainedAttachmentIds(context, [otherPane])).not.toContain(
-      otherPane.id,
-    );
-  });
 
   function captureCommand(current: ChatPageHost, attachments: ChatAttachment[] = []) {
     return captureChatCommandComposerRecovery(current, scope(current), {

@@ -47,6 +47,7 @@ export type LeaseHeartbeatLoss = {
 };
 
 export type LeaseHeartbeatWorkerData = {
+  postgresPool?: import("../infra/postgres-sync/pool.js").PostgresPoolEndpoints;
   databaseEngineSelection?: DatabaseEngineSelection;
   databaseAdmissionPort: MessagePort;
   path: string;

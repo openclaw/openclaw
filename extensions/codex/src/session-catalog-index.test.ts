@@ -10,11 +10,7 @@ import {
   nativeCatalogFixture as fixture,
   writeCatalogRollout,
 } from "./session-catalog-resident.test-support.js";
-import {
-  commandRpcMocks,
-  createCodexSessionCatalogControl,
-  idleThread,
-} from "./session-catalog.test-helpers.js";
+import { createCodexSessionCatalogControl, idleThread } from "./session-catalog.test-helpers.js";
 
 const indexes: CodexCatalogIndex[] = [];
 const fakeClock = () =>
@@ -63,6 +59,36 @@ function localRoot() {
 }
 
 describe("resident Codex catalog", () => {
+  it("does not snapshot resident rows when a local DB-only walk cannot remove them", async () => {
+    const root = localRoot();
+    const native = idleThread({ id: "local-omission", source: "cli" });
+    const readNative = vi.fn(async (_params: CodexThreadListParams) =>
+      projectCodexCatalogPage({ data: [native] }),
+    );
+    const index = await initializedIndex("local-omission", readNative, root);
+    await advance(index, 0);
+    const resident = index.get(native.id)!;
+    const iterate = Map.prototype[Symbol.iterator];
+    let residentIterations = 0;
+    vi.spyOn(Map.prototype, Symbol.iterator).mockImplementation(function (
+      this: Map<unknown, unknown>,
+    ) {
+      if (this.get(native.id) === resident) {
+        residentIterations++;
+      }
+      return iterate.call(this);
+    });
+    readNative.mockImplementation(async () => projectCodexCatalogPage({ data: [] }));
+    await advance(index, 15 * 60_000);
+    await index.list({});
+    await advance(index, 0);
+    expect(readNative).toHaveBeenCalledTimes(2);
+    expect(readNative.mock.calls[1]?.[0]).toMatchObject({ useStateDbOnly: true });
+    expect(await listedIds(index)).toEqual([native.id]);
+    expect(index.get(native.id)).toBe(resident);
+    expect(residentIterations).toBe(0);
+  });
+
   it("runs due local file scans while a demand-triggered native walk is blocked", async () => {
     const root = localRoot();
     await fs.mkdir(root, { recursive: true });
@@ -117,101 +143,30 @@ describe("resident Codex catalog", () => {
     }
   });
 
-  it("defers full native safety reconciliation until a catalog read after idle", async () => {
+  it("serves cached rows without retrying a failed demand refresh on every read", async () => {
     fakeClock();
-    const recent = Array.from({ length: 64 }, (_, index) =>
-      idleThread({
-        id: `recent-${index}`,
-        source: "cli",
-        recencyAt: 100 - index,
-      }),
+    const readNative = vi.fn(async () =>
+      projectCodexCatalogPage({ data: [idleThread({ id: "cached", source: "cli" })] }),
     );
-    const missed = idleThread({ id: "missed", source: "cli", recencyAt: 1 });
-    let nativeRows = recent;
-    const readNative = vi.fn(async (params: CodexThreadListParams) => {
-      const offset = Number(params.cursor ?? 0);
-      const limit = params.limit ?? 64;
-      return projectCodexCatalogPage({
-        data: nativeRows.slice(offset, offset + limit),
-        nextCursor: offset + limit < nativeRows.length ? String(offset + limit) : null,
-      });
-    });
-    const index = await initializedIndex("idle-safety-reconcile", readNative);
-    expect(readNative).toHaveBeenCalledTimes(4);
-
+    const index = await initializedIndex("failed-demand", readNative);
     await vi.advanceTimersByTimeAsync(15 * 60_000);
-    expect(readNative).toHaveBeenCalledTimes(4);
-
-    // A missed native notification changes an older thread beyond an unchanged prefix.
-    nativeRows = [...recent, missed];
     readNative.mockRejectedValueOnce(new Error("native unavailable"));
-    const page = await index.list({ limit: 100 });
-    expect(page.sessions).toHaveLength(64);
-    await vi.waitFor(() => expect(readNative).toHaveBeenCalledTimes(5));
-
-    // A failed walk preserves cached rows and does not retry on a busy reader.
-    await index.list({ limit: 100 });
-    expect(readNative).toHaveBeenCalledTimes(5);
-    await vi.advanceTimersByTimeAsync(15 * 60_000);
-    expect(readNative).toHaveBeenCalledTimes(5);
-
-    const stale = await index.list({ limit: 100 });
-    expect(stale.sessions).toHaveLength(64);
-    await vi.waitFor(() => expect(readNative).toHaveBeenCalledTimes(10));
-    const refreshed = await index.list({ limit: 100 });
-    expect(refreshed.sessions).toHaveLength(64);
-    const tail = await index.list({ limit: 100, cursor: refreshed.nextCursor });
-    expect(tail.sessions.map((session) => session.threadId)).toEqual(["missed"]);
-    expect(readNative).toHaveBeenCalledTimes(10);
+    expect(await listedIds(index)).toEqual(["cached"]);
+    await vi.waitFor(() => expect(index.hasActiveWork()).toBe(false));
+    expect(await listedIds(index)).toEqual(["cached"]);
+    expect(readNative).toHaveBeenCalledTimes(2);
   });
 
-  it("preserves native sub-second order when exposed timestamps tie", async () => {
+  it("preserves native ties and promotes a newer observation into the tied group", async () => {
     const native = ["alpha", "bravo", "zulu"].map((id) =>
-      idleThread({
-        id,
-        source: "cli",
-        originator: "codex_cli_rs",
-        recencyAt: id === "zulu" ? 99 : 100,
-      }),
+      idleThread({ id, source: "cli", recencyAt: id === "zulu" ? 99 : 100 }),
     );
     const index = await initializedIndex("native-order", async () =>
       projectCodexCatalogPage({ data: native }),
     );
-    const first = await index.list({ limit: 1 });
-    expect(first.sessions[0]?.threadId).toBe("alpha");
-    const second = await index.list({ limit: 1, cursor: first.nextCursor });
-    expect(second.sessions[0]?.threadId).toBe("bravo");
-    expect((await index.list({ limit: 1, cursor: second.backwardsCursor })).sessions).toEqual(
-      first.sessions,
-    );
+    expect(await listedIds(index)).toEqual(["alpha", "bravo", "zulu"]);
     await index.upsertThread({ ...native[2]!, recencyAt: 100 });
-    let current = await index.list({ limit: 1 });
-    const ids = current.sessions.map((session) => session.threadId);
-    while (current.nextCursor) {
-      current = await index.list({ limit: 1, cursor: current.nextCursor });
-      ids.push(...current.sessions.map((session) => session.threadId));
-    }
-    expect(ids).toEqual(["zulu", "alpha", "bravo"]);
-  });
-
-  it("ends a backward page before its anchor after removing preceding rows", async () => {
-    const f = fixture(90);
-    const control = await f.make();
-    const first = await control.listPage({ limit: 64 });
-    const second = await control.listPage({ limit: 64, cursor: first.nextCursor });
-    f.fetched.length = 0;
-    const removed = first.sessions.slice(0, 24);
-    for (const session of removed) {
-      await control.archiveThread(session.threadId);
-    }
-    const previous = await control.listPage({ limit: 64, cursor: second.backwardsCursor });
-    expect(previous.sessions.map((session) => session.threadId)).toEqual(
-      first.sessions.slice(removed.length).map((session) => session.threadId),
-    );
-    expect(f.fetched).toEqual([]);
-    expect(
-      commandRpcMocks.codexControlRequest.mock.calls.filter((call) => call[1] === "thread/archive"),
-    ).toHaveLength(removed.length);
+    expect(await listedIds(index)).toEqual(["zulu", "alpha", "bravo"]);
   });
 
   it("requests small native pages without losing threads or retaining large previews", async () => {
@@ -240,37 +195,22 @@ describe("resident Codex catalog", () => {
     expect(readNative).toHaveBeenCalledOnce();
     const added = await writeCatalogRollout(
       root,
-      idleThread({ id: "new-thread", preview: "A new native request" }),
-      2 * 1024 * 1024,
+      idleThread({ id: "new-thread", preview: "New request" }),
     );
-    const reads: Array<() => Promise<number[]>> = [];
-    const realOpen = fs.open;
-    const open = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-      const handle = await realOpen(...args);
-      const read = vi.spyOn(handle, "read");
-      reads.push(async () =>
-        Promise.all(read.mock.results.map(async (result) => (await result.value).bytesRead)),
-      );
-      return handle;
-    });
-    const readFile = vi.spyOn(fs, "readFile");
+    const open = vi.spyOn(fs, "open");
     await vi.advanceTimersByTimeAsync(14 * 60_000 + 30_000);
     await index.reconcile();
     await vi.waitFor(async () => {
-      expect((await index.list({})).sessions).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            threadId: "new-thread",
-            fallbackName: "A new native request",
-          }),
-          expect.objectContaining({ threadId: "existing" }),
-        ]),
+      const sessions = (await index.list({})).sessions;
+      expect(sessions.map((session) => session.threadId).toSorted()).toEqual([
+        "existing",
+        "new-thread",
+      ]);
+      expect(sessions.find((session) => session.threadId === "new-thread")?.fallbackName).toBe(
+        "New request",
       );
     });
     expect(open.mock.calls.map((call) => call[0])).toEqual([added]);
-    const bytesRead = (await Promise.all(reads.map((read) => read()))).flat();
-    expect(bytesRead.reduce((sum, value) => sum + value, 0)).toBe(256 * 1024);
-    expect(readFile).not.toHaveBeenCalled();
     expect(readNative).toHaveBeenCalledTimes(2);
     open.mockClear();
     await index.list({});

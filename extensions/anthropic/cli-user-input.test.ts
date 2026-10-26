@@ -86,6 +86,41 @@ describe("Claude CLI user input adapter", () => {
     });
   });
 
+  it.each([
+    ["an oversized description", "x".repeat(2_000), `${"x".repeat(1_023)}…`],
+    ["a surrogate at the boundary", `${"x".repeat(1_022)}🌍 tail`, `${"x".repeat(1_022)}…`],
+    ["the exact display limit", "x".repeat(1_024), "x".repeat(1_024)],
+  ])("preserves the question set and answers with %s", async (_case, description, displayed) => {
+    const requestUserInput = answered("Unit tests");
+    const payload = {
+      questions: [
+        {
+          ...input.questions[0],
+          options: [{ label: "Vitest", description }, ...options("Node test")],
+        },
+        input.questions[1],
+      ],
+    };
+
+    const result = await ask(authorizerFor(requestUserInput), payload);
+
+    expect(payload.questions[0]!.options[0]!.description).toBe(description);
+    expect(requestUserInput).toHaveBeenCalledOnce();
+    expect(requestUserInput.mock.calls[0]![0].questions).toEqual([
+      {
+        ...payload.questions[0],
+        id: "question_1",
+        isOther: true,
+        options: [{ label: "Vitest", description: displayed }, ...options("Node test")],
+      },
+      { ...payload.questions[1], id: "question_2", isOther: true },
+    ]);
+    expect(result).toEqual({
+      behavior: "allow",
+      updatedInput: { ...payload, answers: mappedAnswers("Unit tests") },
+    });
+  });
+
   it("returns actionable denial guidance when the operator skips", async () => {
     const authorizer = authorizerFor(async () => ({
       status: "cancelled",
@@ -135,6 +170,16 @@ describe("Claude CLI user input adapter", () => {
       "empty option description",
       malformed({ options: [...options("A"), { label: "B", description: "" }] }),
       "questions[0].options[1].description must not be empty",
+    ],
+    [
+      "oversized option label",
+      malformed({ options: options("A".repeat(257), "B") }),
+      "questions[0].options[0].label must be at most 256 characters",
+    ],
+    [
+      "oversized question",
+      malformed({ question: "Q".repeat(4_097) }),
+      "questions[0].question must be at most 4096 characters",
     ],
     [
       "missing option label",
