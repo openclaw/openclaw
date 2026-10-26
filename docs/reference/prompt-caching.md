@@ -47,6 +47,13 @@ Code Mode catalog, including `screen`, without borrowing execution authority.
 The next operator declaration updates that session fact; current-turn execution
 gates and the live requesting-browser check still enforce calls.
 
+GitHub tool listing follows the session's Gateway publication capability and
+workspace support, not the current turn's operator or GitHub identity. Operator,
+channel, scheduled, heartbeat, and senderless wake turns retain the same
+`github_publish` definition and catalog while those facts are unchanged. The
+Gateway checks current identity, target access, and full operator write authority
+for privileged PR actions when called. Listing an action does not grant it.
+
 The `message` description and schema use the session's channel, bound account,
 and configured bindings, not the current turn's source. CLI, restart recovery, and subagent
 announcement turns in the same conversation keep identical definitions,
