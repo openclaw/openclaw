@@ -23,14 +23,11 @@ it("backs up a schema-36 store without requiring the later cold archive chunk ta
   const descriptor = await loadAgentPortDescriptor(36);
   using db = openNodeSqliteDatabase(":memory:");
   seedAgentV30Schema(db, 36);
-  db.exec(`
-    DROP TRIGGER memory_index_sources_revision_after_insert;
-    DROP TRIGGER memory_index_sources_revision_after_update;
-    DROP TRIGGER memory_index_sources_revision_after_delete;
-    DROP TRIGGER memory_index_chunks_revision_after_insert;
-    DROP TRIGGER memory_index_chunks_revision_after_update;
-    DROP TRIGGER memory_index_chunks_revision_after_delete;
-  `);
+  for (const table of ["sources", "chunks"]) {
+    for (const event of ["insert", "update", "delete"]) {
+      db.exec(`DROP TRIGGER memory_index_${table}_revision_after_${event}`);
+    }
+  }
   const inspected = await inspectDatabasePort({ engine: "sqlite", db }, descriptor);
   expect(inspected.tables.session_transcript_cold_archives?.rows).toBe(0);
   expect(inspected.tables.session_transcript_cold_archive_chunks).toBeUndefined();

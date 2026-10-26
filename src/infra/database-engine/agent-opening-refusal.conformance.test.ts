@@ -20,6 +20,14 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
     it("keeps a peer borrower after caller refusal follows a committed opening lease", async () => {
       const options = { agentId: "receipt-refusal", env: process.env };
       const state = admit(() => openOpenClawStateDatabase());
+      const leaseCount = () =>
+        admit(() =>
+          Number(
+            state.db
+              .prepare("SELECT COUNT(*) AS count FROM agent_database_leases WHERE agent_id = ?")
+              .get(options.agentId)?.count,
+          ),
+        );
       const source = admit(() => openOpenClawAgentDatabase(options));
       admit(() => closeOpenClawAgentDatabaseByPath(source.path));
       await closeOpenClawAgentDatabaseByPathAsync(source.path);
@@ -41,15 +49,7 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
               isRecord(request.facts) &&
               request.facts.kind === "agent-validation-start"
             ) {
-              committedLeaseCount = admit(() =>
-                Number(
-                  state.db
-                    .prepare(
-                      "SELECT COUNT(*) AS count FROM agent_database_leases WHERE agent_id = ?",
-                    )
-                    .get(options.agentId)?.count,
-                ),
-              );
+              committedLeaseCount = leaseCount();
               refused = true;
               throw refusal;
             }
@@ -74,15 +74,7 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
         expect(refused).toBe(true);
         expect(committedLeaseCount).toBe(1);
         expect(operation).not.toHaveBeenCalled();
-        expect(
-          admit(() =>
-            Number(
-              state.db
-                .prepare("SELECT COUNT(*) AS count FROM agent_database_leases WHERE agent_id = ?")
-                .get(options.agentId)?.count,
-            ),
-          ),
-        ).toBe(0);
+        expect(leaseCount()).toBe(0);
         expect(() => retained.assertCurrent()).not.toThrow();
         await expect(
           retained.runExisting(owner, (scope) =>
