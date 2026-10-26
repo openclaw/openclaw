@@ -1,6 +1,7 @@
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import type { Command } from "commander";
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
@@ -58,7 +59,25 @@ function run(cmd: string, args: string[], opts?: RunOpts): string {
 function writeFileSudoIfNeeded(filePath: string, content: string): void {
   // Zone/CoreDNS paths may be root-owned; fall back to sudo tee only after normal write fails.
   try {
-    fs.writeFileSync(filePath, content, "utf-8");
+    // Operator-owned files (Corefile, .server) must never be truncated in place:
+    // a crash or ENOSPC during the write must leave the previous contents
+    // exactly as they were, published by temp-file + rename (#184888).
+    // Preserve CoreDNS symlinks by publishing to the real target, not the link.
+    const targetPath = fs.existsSync(filePath) ? fs.realpathSync(filePath) : filePath;
+    const existingDir = path.dirname(targetPath);
+    // fs-safe applies dirMode to the immediate parent; match the current mode
+    // instead of its 0700 default. New directories use 0755.
+    const dirMode = fs.existsSync(existingDir) ? fs.statSync(existingDir).mode & 0o7777 : 0o755;
+    replaceFileAtomicSync({
+      filePath: targetPath,
+      content,
+      // Existing operator files keep their rwx bits; ancestor directories keep
+      // their modes instead of the fs-safe 0700 default (#184888).
+      preserveExistingMode: true,
+      // New files keep writeFileSync's umask-respecting default, not fs-safe's 0600.
+      mode: 0o666 & ~process.umask(),
+      dirMode,
+    });
     return;
   } catch (err) {
     const code = (err as { code?: string }).code;

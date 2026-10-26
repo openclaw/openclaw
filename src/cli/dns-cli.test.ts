@@ -128,6 +128,67 @@ describe("dns-cli probe bounds", () => {
     },
   );
 
+  it("keeps the previous Corefile intact when the final rename fails mid-write (#184888)", async () => {
+    const etcDir = path.join(brewPrefix, "etc", "coredns");
+    const corefilePath = path.join(etcDir, "Corefile");
+    const original = ".:53 {\n  errors\n}\n";
+    fs.mkdirSync(etcDir, { recursive: true });
+    fs.writeFileSync(corefilePath, original);
+    // Simulate the failure window: rename cannot complete after the content was
+    // prepared, so the operator file must remain exactly as it was.
+    const renameSpy = vi.spyOn(fs, "renameSync").mockImplementation(() => {
+      throw Object.assign(new Error("simulated crash before publication"), {
+        code: "EIO",
+      });
+    });
+
+    await expect(runDnsSetupApply()).rejects.toThrow();
+    renameSpy.mockRestore();
+    expect(fs.readFileSync(corefilePath, "utf-8")).toBe(original);
+  });
+
+  it("keeps the existing Corefile and parent directory modes on rewrite (#184888)", async () => {
+    const etcDir = path.join(brewPrefix, "etc", "coredns");
+    const corefilePath = path.join(etcDir, "Corefile");
+    fs.mkdirSync(etcDir, { recursive: true });
+    fs.writeFileSync(corefilePath, ".:53 {\n  errors\n}\n");
+    fs.chmodSync(etcDir, 0o755);
+    fs.chmodSync(corefilePath, 0o644);
+
+    await runDnsSetupApply();
+
+    expect(fs.statSync(etcDir).mode & 0o7777).toBe(0o755);
+    expect(fs.statSync(corefilePath).mode & 0o7777).toBe(0o644);
+    expect(fs.readFileSync(corefilePath, "utf-8")).toContain("import ");
+  });
+
+  it("creates a new Corefile with umask-respecting permissions (#184888)", async () => {
+    const etcDir = path.join(brewPrefix, "etc", "coredns");
+    const corefilePath = path.join(etcDir, "Corefile");
+    expect(fs.existsSync(corefilePath)).toBe(false);
+
+    await runDnsSetupApply();
+
+    expect(fs.readFileSync(corefilePath, "utf-8")).toContain("import ");
+    expect(fs.statSync(corefilePath).mode & 0o7777).toBe(0o666 & ~process.umask());
+  });
+
+  it("publishes through a symlinked Corefile to its real target (#184888)", async () => {
+    const etcDir = path.join(brewPrefix, "etc", "coredns");
+    const realDir = path.join(brewPrefix, "real-config");
+    const realFile = path.join(realDir, "Corefile");
+    const linkPath = path.join(etcDir, "Corefile");
+    fs.mkdirSync(etcDir, { recursive: true });
+    fs.mkdirSync(realDir, { recursive: true });
+    fs.writeFileSync(realFile, ".:53 {\n  errors\n}\n");
+    fs.symlinkSync(realFile, linkPath);
+
+    await runDnsSetupApply();
+
+    expect(fs.lstatSync(linkPath).isSymbolicLink()).toBe(true);
+    expect(fs.readFileSync(realFile, "utf-8")).toContain("import ");
+  });
+
   it.each(["SIGKILL", "SIGTERM"])("reports %s subprocess failures", (signal) => {
     const timeout = signal === "SIGKILL";
     const error = timeout
