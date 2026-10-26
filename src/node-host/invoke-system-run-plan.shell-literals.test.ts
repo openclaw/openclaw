@@ -9,6 +9,7 @@ const DENIED_RUNTIME_APPROVAL = expect.objectContaining({
   ok: false,
   reason: "unsupported-command-shape",
 });
+const MUTABLE_SCRIPT = "python ./mutable.py 'x&y'";
 function prepareShell(command: string) {
   return buildSystemRunApprovalPlan({
     command: ["/bin/sh", "-lc", command],
@@ -95,21 +96,16 @@ it
     "npm --script-shell ./mutable-shell exec -- /usr/bin/printf 'x&y'",
     "pnpm exec npm --script-shell ./mutable-shell exec -- /usr/bin/printf 'x&y'",
     "env -u '' python ./mutable.py 'x&y'",
-    "(python ./mutable.py 'x&y')",
-    "X=x python ./mutable.py 'x&y'",
-    "! python ./mutable.py 'x&y'",
-    "coproc python ./mutable.py 'x&y'",
-    "command python ./mutable.py 'x&y'",
-    "exec python ./mutable.py 'x&y'",
+    `(${MUTABLE_SCRIPT})`,
+    ...["X=x", "!", "coproc", "command", "exec"].map((prefix) => `${prefix} ${MUTABLE_SCRIPT}`),
     "builtin eval \"python ./mutable.py 'x&y'\"",
     "trap 'python ./mutable.py \"x&y\"' EXIT",
     "enable -f ./mutable.so 'x&y'",
-    "printf -v 'a[$(python ./mutable.py \"x&y\")]' %s value",
-    "printf -[v] 'a[$(python ./mutable.py \"x&y\")]' %s value",
-    "test -v 'a[$(python ./mutable.py \"x&y\")]'",
-    "test -[v] 'a[$(python ./mutable.py \"x&y\")]'",
-    "let 'a[$(python ./mutable.py \"x&y\")]=1'",
-    "declare 'a[$(python ./mutable.py \"x&y\")]=1'",
+    ...["-v", "-[v]"].flatMap((flag) => [
+      `printf ${flag} 'a[$(python ./mutable.py "x&y")]' %s value`,
+      `test ${flag} 'a[$(python ./mutable.py "x&y")]'`,
+    ]),
+    ...["let", "declare"].map((builtin) => `${builtin} 'a[$(python ./mutable.py "x&y")]=1'`),
     "busybox sh -c 'python ./mutable.py \"x&y\"'",
   ])("rejects shell syntax and carriers that obscure mutable interpreters: %j", (command) => {
   expect(prepareShell(command)).toEqual(DENIED_RUNTIME_APPROVAL);

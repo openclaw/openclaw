@@ -41,21 +41,21 @@ export async function listen(
 
 export function useStreamFixture() {
   const cleanups: Array<() => Promise<void>> = [];
+  const onCleanup = (close: (done: () => void) => void) => {
+    cleanups.push(() => new Promise<void>(close));
+  };
   afterEach(async () => {
     await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
   });
   return {
     cleanups,
     closeServer: (server: net.Server, peers: Iterable<{ destroy(): void }> = []) => {
-      cleanups.push(
-        () =>
-          new Promise<void>((resolve) => {
-            for (const peer of peers) {
-              peer.destroy();
-            }
-            server.close(() => resolve());
-          }),
-      );
+      onCleanup((done) => {
+        for (const peer of peers) {
+          peer.destroy();
+        }
+        server.close(() => done());
+      });
     },
     gateway: async (kind: "desktop" | "portal", contextPath = "") => {
       const peer: {
@@ -91,15 +91,12 @@ export function useStreamFixture() {
           peer.closed = true;
         });
       });
-      cleanups.push(
-        () =>
-          new Promise<void>((resolve) => {
-            for (const client of wss.clients) {
-              client.terminate();
-            }
-            wss.close(() => server.close(() => resolve()));
-          }),
-      );
+      onCleanup((done) => {
+        for (const client of wss.clients) {
+          client.terminate();
+        }
+        wss.close(() => server.close(() => done()));
+      });
       return { peer, gatewayUrl: `ws://127.0.0.1:${portOf(server)}${contextPath}` };
     },
   };
