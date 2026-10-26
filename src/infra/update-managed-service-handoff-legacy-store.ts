@@ -52,3 +52,15 @@ export async function fenceLegacyGatewayCustody(
     },
   };
 }
+
+/** Refuse while an earlier Gateway's store holds the installation; otherwise release at once. */
+export async function assertLegacyGatewayCustodySettled(
+  key: string,
+  databasePath: string | undefined,
+): Promise<void> {
+  const fence = await fenceLegacyGatewayCustody(key, databasePath);
+  if ("refusal" in fence) {
+    throw new Error(fence.refusal);
+  }
+  fence.release();
+}
