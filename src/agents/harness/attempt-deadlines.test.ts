@@ -15,11 +15,15 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function createController(timeoutMs = 60_000, signal = new AbortController().signal) {
+function createController(
+  timeoutMs = 60_000,
+  signal = new AbortController().signal,
+  monotonic = true,
+) {
   const callbacks = { onTimeout: vi.fn(), onDeadlineChanged: vi.fn() };
   const controller = createAgentHarnessAttemptDeadlineController({
     startedAtMs: 0,
-    startedAtMonotonicMs: 0,
+    ...(monotonic ? { startedAtMonotonicMs: 0 } : {}),
     timeoutMs,
     settlementTimeoutMs: SETTLEMENT_TIMEOUT_MS,
     signal,
@@ -34,14 +38,19 @@ function expectTimeout(onTimeout: ReturnType<typeof vi.fn>, kind: "execution" | 
 }
 
 it.each([
-  ["timer", 0],
+  ["timer", 0, false],
+  ["timer", 0, true],
   ["clock", 0],
   ["timer", 90_000],
   ["timer", -90_000],
-] as const)("expires via %s across a %ims clock jump", (expiry, jumpMs) => {
+] as const)("expires via %s across a %ims clock jump (legacy: %s)", (expiry, jumpMs, legacy) => {
   vi.advanceTimersByTime(20_000);
   vi.setSystemTime(20_000 + jumpMs);
-  const { controller, onTimeout, onDeadlineChanged } = createController();
+  const { controller, onTimeout, onDeadlineChanged } = createController(
+    60_000,
+    new AbortController().signal,
+    !legacy,
+  );
   expect(controller.ownsExecutionWait()).toBe(true);
   expect(onDeadlineChanged).toHaveBeenCalledWith({ kind: "bounded", deadlineAtMs: 60_000 });
 
@@ -117,21 +126,3 @@ it.each(["abort", "dispose", "already aborted"] as const)(
     expect(onDeadlineChanged).toHaveBeenCalledTimes(closure === "already aborted" ? 0 : 2);
   },
 );
-
-it("keeps the admitted budget for callers that omit the monotonic start", () => {
-  vi.advanceTimersByTime(20_000);
-  const onTimeout = vi.fn();
-  // Codex runtime plugins before 2026.10.6 pass only the epoch admission time.
-  const controller = createAgentHarnessAttemptDeadlineController({
-    startedAtMs: 0,
-    timeoutMs: 60_000,
-    settlementTimeoutMs: SETTLEMENT_TIMEOUT_MS,
-    signal: new AbortController().signal,
-    onTimeout,
-  });
-  expect(controller.ownsExecutionWait()).toBe(true);
-  vi.advanceTimersByTime(39_999);
-  expect(onTimeout).not.toHaveBeenCalled();
-  vi.advanceTimersByTime(1);
-  expectTimeout(onTimeout, "execution");
-});

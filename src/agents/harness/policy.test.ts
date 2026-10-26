@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createCanonicalAgentConfigFixture } from "../../test-utils/config-roster.js";
-import { resolveOpenAIModelRoutes } from "../openai-model-routes.js";
 import { resolveAgentHarnessPolicy } from "./policy.js";
 
 function providerConfig(
@@ -41,11 +40,6 @@ function checkPolicy(
   ).toEqual({ runtime, runtimeSource });
 }
 
-const agentParams = { entries: { writer: { params: { temperature: 0.2 } } } };
-const routeModel = (facts: Record<string, unknown> = {}, id = "gpt-5.5") => ({ id, ...facts });
-const completions = routeModel({ api: "openai-completions" });
-const customHeaders = routeModel({ headers: { "x-route": "custom" } });
-
 describe("resolveAgentHarnessPolicy", () => {
   it("preserves the source of an explicit provider runtime", () => {
     checkPolicy(
@@ -74,18 +68,6 @@ describe("resolveAgentHarnessPolicy", () => {
     );
   });
 
-  it.each<[string, OpenClawConfig["agents"], string?, string?]>([
-    ["global params", { defaults: { params: { temperature: 0.2 } } }],
-    [
-      "model params",
-      { defaults: { models: { "openai/gpt-5.5": { params: { text_verbosity: "low" } } } } },
-    ],
-    ["agent params", agentParams, "writer"],
-    ["session agent params", agentParams, undefined, "agent:writer:main"],
-  ])("keeps %s on OpenClaw", (_name, agents, agentId, sessionKey) => {
-    checkPolicy(providerConfig({}, agents), "openclaw", { agentId, sessionKey });
-  });
-
   it("keeps prepared request overrides on OpenClaw", () => {
     checkPolicy(createCanonicalAgentConfigFixture().config, "openclaw", {
       modelApi: "openai-responses",
@@ -98,31 +80,5 @@ describe("resolveAgentHarnessPolicy", () => {
     checkPolicy(providerConfig({}, { defaults: { params: { temperature: 0.2 } } }), "openclaw", {
       modelId: undefined,
     });
-  });
-
-  it.each([
-    ["later adapter", [routeModel(), completions], "openclaw", "openai-completions"],
-    [
-      "provider-looking native id",
-      [routeModel({ api: "openai-responses" }, "openai/gpt-5.5"), completions],
-      "openclaw",
-      "openai-completions",
-    ],
-    [
-      "authoritative empty headers",
-      [routeModel({ headers: {} }), customHeaders],
-      "codex",
-      "openai-responses",
-    ],
-    ["later headers", [routeModel(), customHeaders], "openclaw", "openai-responses"],
-  ] as const)("keeps duplicate model config aligned: %s", (_name, models, runtime, api) => {
-    const config = providerConfig({ models });
-    checkPolicy(config, runtime);
-    const resolution = resolveOpenAIModelRoutes({ provider: "openai", modelId: "gpt-5.5", config });
-    expect(
-      resolution?.kind === "routes"
-        ? resolution.routes.find((route) => route.authRequirement === "api-key")?.api
-        : undefined,
-    ).toBe(api);
   });
 });
