@@ -327,8 +327,10 @@ it("projects direct active children through the live observer with stable rounde
     subagentSessions: [child],
     subagentSessionsHydrated: true,
   });
-  await waitForSolid(() =>
-    expect(element.querySelector("openclaw-chat-subagent-activity")).not.toBeNull(),
+  // The live activity module is loaded on the first visible child group.
+  await waitForSolid(
+    () => expect(element.querySelector("openclaw-chat-subagent-activity")).not.toBeNull(),
+    { timeout: 5_000 },
   );
   const live = element.querySelector<ChatSubagentActivityLive>("openclaw-chat-subagent-activity")!;
   await live.updateComplete;

@@ -37,10 +37,7 @@ export async function openBoardMenu(
 }
 
 export const boardWidget = (overrides: Partial<BoardWidget> = {}): BoardWidget =>
-  createBoardWidget({
-    title: "Alpha status",
-    ...overrides,
-  });
+  createBoardWidget({ title: "Alpha status", ...overrides });
 
 export const snapshot = (overrides: Partial<BoardSnapshot> = {}): BoardSnapshot => ({
   sessionKey: "agent:main:test",

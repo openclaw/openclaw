@@ -525,15 +525,14 @@ vi.mock("../../sessions/transcript-events.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../../agents/sandbox/context.js", async () => {
-  const original = await vi.importActual<typeof import("../../agents/sandbox/context.js")>(
-    "../../agents/sandbox/context.js",
-  );
-  return {
-    ...original,
-    ensureSandboxWorkspaceForSession: vi.fn(async () => mockState.sandboxWorkspace),
-  };
-});
+vi.mock("../../agents/sandbox/context.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/sandbox/context.js")>()),
+  prepareSandboxWorkspaceForSession: vi.fn(async () =>
+    mockState.sandboxWorkspace
+      ? { workspace: mockState.sandboxWorkspace, assertCurrent() {}, [Symbol.dispose]() {} }
+      : null,
+  ),
+}));
 
 vi.mock("../../auto-reply/reply/stage-sandbox-media.js", () => ({
   SANDBOX_MEDIA_MAX_BYTES: 50 * 1024 * 1024,

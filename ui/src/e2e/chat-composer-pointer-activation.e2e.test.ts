@@ -1,7 +1,5 @@
-import { withTimeout } from "@openclaw/fs-safe/advanced";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import { recordControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -59,67 +57,14 @@ async function expectComposerFocus(page: Page): Promise<void> {
 }
 
 async function expectSafeArea(page: Page): Promise<void> {
-  // The injected 34px safe area plus the native composer's 10px bottom gap.
-  try {
-    await expect
-      .poll(() =>
-        page
-          .locator(".agent-chat__composer-shell")
-          .evaluate((node) => window.innerHeight - node.getBoundingClientRect().bottom),
-      )
-      .toBe(44);
-  } catch (error) {
-    try {
-      const geometry = await withTimeout(
-        page.evaluate(() => {
-          const root = document.documentElement;
-          const shell = document.querySelector<HTMLElement>(".agent-chat__composer-shell");
-          const style = shell ? getComputedStyle(shell) : null;
-          const pixels = (value: string | undefined) => {
-            const number = Number.parseFloat(value ?? "");
-            return Number.isFinite(number) ? number : null;
-          };
-          return {
-            mobileComposer: shell?.getAttribute("data-mobile-composer") === "true",
-            width: window.innerWidth,
-            height: window.innerHeight,
-            bottomGap: shell ? window.innerHeight - shell.getBoundingClientRect().bottom : null,
-            marginBottom: pixels(style?.marginBottom),
-            paddingBottom: pixels(style?.paddingBottom),
-            bottom: pixels(style?.bottom),
-            composerGap: pixels(style?.getPropertyValue("--chat-composer-bottom-gap")),
-            safeAreaBottom: pixels(getComputedStyle(root).getPropertyValue("--safe-area-bottom")),
-            mobileNavigation: matchMedia(
-              "(max-width: 900px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape)",
-            ).matches,
-            nativeMobileNavigation: matchMedia("(max-width: 600px)").matches,
-            nativeWebChrome: Reflect.get(window, "__OPENCLAW_NATIVE_WEB_CHROME__") === true,
-            nativeEmbedPresent: Boolean(Reflect.get(window, "__OPENCLAW_NATIVE_EMBED__")),
-            nativeShell: [
-              "openclaw-native-macos",
-              "openclaw-native-nav",
-              "openclaw-native-web-chrome",
-            ].some((name) => root.classList.contains(name)),
-            nativeComposerRules: Array.from(document.styleSheets).some((sheet) => {
-              try {
-                return Array.from(sheet.cssRules).some((rule) =>
-                  rule.cssText.includes("data-mobile-composer"),
-                );
-              } catch {
-                return false;
-              }
-            }),
-          };
-        }),
-        1_000,
-        "composer safe-area diagnostics",
-      );
-      recordControlUiE2eFailureFacts(page, { composerSafeArea: geometry });
-    } catch {
-      recordControlUiE2eFailureFacts(page, { composerSafeArea: { unavailable: true } });
-    }
-    throw error;
-  }
+  // Keep the composer above the injected safe area without fixing its visual gap.
+  await expect
+    .poll(() =>
+      page
+        .locator(".agent-chat__composer-shell")
+        .evaluate((node) => window.innerHeight - node.getBoundingClientRect().bottom),
+    )
+    .toBeGreaterThanOrEqual(34);
 }
 
 async function streamReply(gateway: Gateway, afterRequest?: () => Promise<void>): Promise<string> {

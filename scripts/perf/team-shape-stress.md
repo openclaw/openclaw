@@ -165,6 +165,12 @@ Worker heap comparisons require a complete heap census. Missing workers make
 that comparison metric unavailable; partial totals and reasons remain in raw evidence.
 Missing array-buffer details alone do not invalidate a complete heap census.
 
+For a separate worker-retention diagnostic pass, add `--worker-heap-snapshot`.
+This forwards the workload's existing retained-worker instrumentation and captures
+the largest SQLite-store and model-catalog worker after the measured window.
+The worker profiler and explicit collections make this diagnostic evidence;
+use an ordinary timing pass for latency and GC acceptance.
+
 For production-shape calibration, use an authorized read-only Prometheus query.
 Compare achieved
 RPC rates, operator connections, main-thread GC seconds/minute, retained heap,

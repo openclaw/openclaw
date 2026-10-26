@@ -66,6 +66,9 @@ const repositoryScriptEntries = [
   "scripts/perf/repeat-cron-test.mjs!",
   // Its header documents the paired operator-role currency-check benchmark.
   "scripts/perf/operator-role-source-policy-measure.mjs!",
+  "scripts/perf/access-authority-callback-measure.mjs!",
+  // Its header documents the sandbox/workspace ownership assertion benchmark.
+  "scripts/perf/workspace-assertion-measure.mjs!",
   // Its header documents the full transcript-pairing repair benchmark.
   "scripts/perf/tool-result-pairing-measure.ts!",
   "scripts/perf/assistant-thinking-measure.ts!",
@@ -208,6 +211,7 @@ const repositoryScriptEntries = [
   "scripts/perf/sqlite-wal-scan-measure.mjs!",
   "scripts/perf/state-engine-schema-bench.ts!",
   "scripts/perf/state-read-boot-bench.ts!",
+  "scripts/perf/state-read-import-bench.mjs!",
   // Knip follows the private Gateway boot preload through this parent's literal URL edge.
   "scripts/perf/state-read-gateway-boot.ts!",
   "scripts/perf/worktree-snapshot-measure.ts!",
@@ -215,6 +219,7 @@ const repositoryScriptEntries = [
   "scripts/perf/codex-inference-terminal-measure.ts!",
   "scripts/perf/codex-inference-upload-measure.ts!",
   "scripts/perf/codex-tool-report-measure.ts!",
+  "scripts/perf/codex-config-parse-measure.ts!",
   "scripts/perf/failed-placement-recovery-bench.ts!",
   "scripts/perf/provider-prompt-state-worker-measure.mjs!",
   "scripts/perf/session-diff-metadata-measure.ts!",
@@ -315,6 +320,7 @@ const repositoryScriptEntries = [
   "scripts/perf/pty-session-scan-measure.mjs!",
   "scripts/perf/publication-spawn-measure.ts!",
   "scripts/perf/replay-history-measure.ts!",
+  "scripts/perf/run-tool-validation-retention.ts!",
   "scripts/perf/session-actor-listener-measure.ts!",
   "scripts/perf/session-authority-retention.ts!",
   "scripts/perf/session-fork-retention-measure.mjs!",
@@ -621,6 +627,7 @@ const repositoryScriptEntries = [
   // The transcript broadcast benchmark loads the stall recorder through --gateway-preload.
   "scripts/bench-filesystem-preconditions.mts!",
   "scripts/perf/github-tool-selection-measure.ts!",
+  "scripts/perf/github-conditional-json-measure.ts!",
   "scripts/perf/session-transcript-code-measure.mjs!",
   "scripts/perf/stall-recorder-cost-preload.mjs!",
   "scripts/perf/trajectory-preparation-retention.ts!",

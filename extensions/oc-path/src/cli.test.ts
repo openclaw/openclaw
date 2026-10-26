@@ -527,6 +527,20 @@ describe("openclaw path CLI", () => {
         value: "oops",
         expected: { ok: false, reason: "parse-error", detail: 'cannot coerce "oops" to number' },
       },
+      ...["jsonc", "jsonl"].flatMap((kind) =>
+        ["", " \t\r\n "].map((value) => ({
+          label: `blank ${kind} number ${JSON.stringify(value)}`,
+          file: `config.${kind}`,
+          before: '{"count":1}\n',
+          path: `oc://config.${kind}/${kind === "jsonl" ? "L1/" : ""}count`,
+          value,
+          expected: {
+            ok: false,
+            reason: "parse-error",
+            detail: `cannot coerce "${value}" to number`,
+          },
+        })),
+      ),
       {
         label: "keyed insertion into an array",
         file: "config.jsonc",
