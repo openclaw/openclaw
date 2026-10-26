@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { captureEnv } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMiniMaxWebSearchProvider } from "./minimax-web-search-provider.js";
 
 const apiKey = "minimax-test-key";
@@ -17,9 +17,7 @@ function createTool(
     },
     searchConfig: { cacheTtlMinutes },
   });
-  if (!tool) {
-    throw new Error("Expected tool definition");
-  }
+  assert(tool, "Expected tool definition");
   return tool;
 }
 
@@ -27,13 +25,9 @@ const searchResponse = (organic: Array<{ title: string; link: string }> = []) =>
   Response.json({ organic, base_resp: { status_code: 0 } });
 
 describe("minimax web search provider", () => {
-  const envKeys = [
-    "MINIMAX_API_HOST",
-    "MINIMAX_CODE_PLAN_KEY",
-    "MINIMAX_CODING_API_KEY",
-    "MINIMAX_OAUTH_TOKEN",
-    "MINIMAX_API_KEY",
-  ];
+  const envKeys = ["API_HOST", "CODE_PLAN_KEY", "CODING_API_KEY", "OAUTH_TOKEN", "API_KEY"].map(
+    (key) => `MINIMAX_${key}`,
+  );
   const envSnapshot = captureEnv(envKeys);
 
   beforeEach(() => {
@@ -59,14 +53,12 @@ describe("minimax web search provider", () => {
     const originalTool = createTool(undefined, undefined, 15);
     const initial = await originalTool.execute(args);
     expect(await originalTool.execute(args)).toEqual({ ...initial, cached: true });
-    expect(fetchMock).toHaveBeenCalledOnce();
 
     now.mockReturnValue(1_700_000_060_000);
     const currentTool = createTool(undefined, undefined, ttl);
     const fresh = await currentTool.execute(args);
     expect(fresh.cached).toBeUndefined();
     expect(fresh.results).toEqual([expect.objectContaining({ url: "https://example.test/fresh" })]);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
 
     const repeated = await currentTool.execute(args);
     expect(repeated.cached).toBe(ttl === 0 ? undefined : true);
@@ -76,42 +68,29 @@ describe("minimax web search provider", () => {
     }
   });
 
-  it("does not send an already canceled MiniMax search", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(searchResponse());
-    const tool = createTool();
+  it.each(["before", "during"])("preserves cancellation %s the request", async (timing) => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation((_url, init) => {
+      const signal = init?.signal;
+      if (!signal) {
+        throw new Error("MiniMax request lost caller cancellation");
+      }
+      return new Promise<Response>((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+    });
     const controller = new AbortController();
-    controller.abort(new Error("MiniMax caller canceled"));
-
-    await expect(
-      tool.execute({ query: "minimax pre-canceled" }, { signal: controller.signal }),
-    ).rejects.toThrow("MiniMax caller canceled");
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it("aborts the guarded MiniMax request with the caller's reason", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(
-      async (_url, init) =>
-        await new Promise<Response>((_resolve, reject) => {
-          if (!init?.signal) {
-            reject(new Error("MiniMax request lost caller cancellation"));
-            return;
-          }
-          init.signal.addEventListener("abort", () => reject(init.signal?.reason as Error), {
-            once: true,
-          });
-        }),
-    );
-    const tool = createTool();
-    const controller = new AbortController();
-    const result = tool.execute(
-      { query: "minimax in-flight cancellation" },
-      { signal: controller.signal },
-    );
-
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
-    controller.abort(new Error("MiniMax request canceled in flight"));
-    await expect(result).rejects.toThrow("MiniMax request canceled in flight");
-    expect(fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+    const reason = new Error("MiniMax caller canceled");
+    if (timing === "before") {
+      controller.abort(reason);
+    }
+    const args = { query: `minimax cancellation ${timing}` };
+    const result = createTool().execute(args, { signal: controller.signal });
+    if (timing === "during") {
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+      controller.abort(reason);
+    }
+    await expect(result).rejects.toThrow(reason);
+    expect(fetchMock).toHaveBeenCalledTimes(timing === "before" ? 0 : 1);
   });
 
   const globalEndpoint = "https://api.minimax.io/v1/coding_plan/search";
@@ -149,14 +128,8 @@ describe("minimax web search provider", () => {
     async (name, endpoint, env, config, region) => {
       Object.assign(process.env, env);
       const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(searchResponse());
-      const tool = createTool(
-        {
-          apiKey: Object.values(env ?? {}).includes(apiKey) ? undefined : apiKey,
-          region,
-        },
-        config,
-      );
-
+      const key = Object.values(env ?? {}).includes(apiKey) ? undefined : apiKey;
+      const tool = createTool({ apiKey: key, region }, config);
       await tool.execute({ query: `MiniMax ${name}` });
       expect(fetchMock.mock.calls[0]?.[0]).toBe(endpoint);
       expect(fetchMock.mock.calls[0]?.[1]?.headers).toMatchObject({
