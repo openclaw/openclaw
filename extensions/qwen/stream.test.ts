@@ -4,7 +4,6 @@ import { describe, expect, it } from "vitest";
 import { createQwenThinkingWrapper, wrapQwenProviderStream } from "./stream.js";
 
 type ThinkingLevel = Parameters<typeof wrapQwenProviderStream>[0]["thinkingLevel"];
-const enabledPayload = { messages: [], enable_thinking: true };
 
 function createModel(id = "qwen3.6-plus", overrides: Partial<Model> = {}): Model {
   return {
@@ -46,26 +45,46 @@ function overridePayload(patch: Record<string, unknown>): NonNullable<Parameters
   };
 }
 
-async function captureProviderPayload(
+function captureProviderPayload(
   model: Model,
   thinkingLevel: ThinkingLevel,
   payload: Record<string, unknown> = {},
   options: NonNullable<Parameters<StreamFn>[2]> & { reasoningEffort?: ThinkingLevel } = {},
-): Promise<Record<string, unknown>> {
+): Record<string, unknown> {
   let captured: Record<string, unknown> | undefined;
-  const streamFn: StreamFn = async (_model, _context, streamOptions) => {
-    const replacement = await streamOptions?.onPayload?.(payload, _model);
+  const streamFn: StreamFn = (_model, _context, streamOptions) => {
+    streamOptions?.onPayload?.(payload, _model);
+    captured = payload;
+    return {} as ReturnType<StreamFn>;
+  };
+  const wrapped = wrap(model, streamFn, thinkingLevel);
+  void wrapped?.(model, { messages: [] }, options);
+  if (!captured) {
+    throw new Error("Qwen wrapper did not invoke the underlying stream");
+  }
+  return captured;
+}
+
+function createAsyncPayloadCapture(
+  model: Model,
+  thinkingLevel: ThinkingLevel,
+  createPayload: () => Record<string, unknown>,
+) {
+  let captured: Record<string, unknown> = {};
+  const streamFn: StreamFn = async (_model, _context, options) => {
+    const payload = createPayload();
+    const replacement = await options?.onPayload?.(payload, _model);
     captured =
       replacement && typeof replacement === "object"
         ? (replacement as Record<string, unknown>)
         : payload;
     return {} as Awaited<ReturnType<StreamFn>>;
   };
-  await wrap(model, streamFn, thinkingLevel)?.(model, { messages: [] }, options);
-  if (!captured) {
-    throw new Error("Qwen wrapper did not invoke the underlying stream");
-  }
-  return captured;
+  const wrapped = wrap(model, streamFn, thinkingLevel);
+  return async (onPayload: NonNullable<Parameters<StreamFn>[2]>["onPayload"]) => {
+    await wrapped?.(model, { messages: [] }, { onPayload });
+    return captured;
+  };
 }
 
 function readToolMessage(id = "call_1", reasoningContent?: string) {
@@ -78,24 +97,41 @@ function readToolMessage(id = "call_1", reasoningContent?: string) {
 
 describe("Qwen streams", () => {
   it.each([
-    ["https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen3.8-flash", "medium"],
-    [
-      "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
-      "deepseek-v4-pro",
-      "high",
-    ],
-    [
-      "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
-      "deepseek-v4-pro",
-      "high",
-    ],
-  ])("translates thinking for a custom provider on %s", async (baseUrl, modelId, effort) => {
-    const captured = await captureProviderPayload(
-      createModel(modelId, { provider: "custom-dashscope", baseUrl }),
+    "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+    "https://coding.dashscope.aliyuncs.com/v1",
+    "https://coding-intl.dashscope.aliyuncs.com/v1",
+  ])("translates thinking for a custom provider on %s", (baseUrl) => {
+    const captured = captureProviderPayload(
+      createModel("qwen3.8-flash", { provider: "custom-dashscope", baseUrl }),
       "medium",
       { messages: [], thinking: { type: "enabled" } },
     );
-    expect(captured).toStrictEqual({ ...enabledPayload, reasoning_effort: effort });
+    expect(captured).toStrictEqual({
+      messages: [],
+      enable_thinking: true,
+      reasoning_effort: "medium",
+    });
+  });
+
+  it.each([
+    "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
+    "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+  ])("applies Token Plan constraints for a custom provider on %s", (baseUrl) => {
+    const captured = captureProviderPayload(
+      createModel("deepseek-v4-pro", { provider: "custom-dashscope", baseUrl }),
+      "medium",
+      { messages: [], thinking: { type: "enabled" } },
+    );
+    expect(captured).toStrictEqual({
+      messages: [],
+      enable_thinking: true,
+      reasoning_effort: "high",
+    });
+  });
+
+  it("does not apply Qwen payload policy to an unrelated custom endpoint", () => {
+    expect(wrap(createModel("qwen3.8-flash", { provider: "custom-provider" }))).toBeUndefined();
   });
 
   it("uses the runtime model qwen-chat-template format when the wrapper context omits it", () => {
@@ -112,58 +148,45 @@ describe("Qwen streams", () => {
       chat_template_kwargs: { enable_thinking: false, preserve_thinking: true },
     });
   });
-  it.each([
-    ["qwen3.8-flash", "medium", "medium", "original reasoning", "qwen-token-plan"],
-    ["deepseek-v4-pro", "off", undefined, undefined, "qwen-token-plan"],
-    ["glm-5.1", "max", "xhigh", "original reasoning", "bailian-token-plan"],
-    ["glm-5.2", "off", undefined, "original reasoning", "bailian-token-plan"],
-  ] as const)("maps %s replay at %s", async (id, level, effort, reasoning, provider) => {
-    const message = { role: "assistant", content: "done" };
-    const captured = await captureProviderPayload(tokenPlanModel(id, { provider }), level, {
-      messages: [{ ...message, reasoning_content: "original reasoning" }],
+  it("maps qwen-token-plan/qwen3.8-flash medium without changing reasoning replay", () => {
+    const messages = [
+      { role: "assistant", content: "done", reasoning_content: "original reasoning" },
+    ];
+    const captured = captureProviderPayload(tokenPlanModel("qwen3.8-flash"), "medium", {
+      messages,
       thinking: { type: "enabled" },
-      reasoning_effort: "stale",
     });
-    expect(captured).toStrictEqual({
-      messages: [
-        { ...message, ...(reasoning === undefined ? {} : { reasoning_content: reasoning }) },
-      ],
-      enable_thinking: level !== "off",
-      ...(effort ? { reasoning_effort: effort } : {}),
-    });
+    expect(captured).toEqual({ messages, enable_thinking: true, reasoning_effort: "medium" });
+    expect(messages[0]?.reasoning_content).toBe("original reasoning");
   });
 
   it.each(["in-place mutation", "sync replacement", "async replacement"] as const)(
     "honors caller budgets and reasoning overrides after %s",
     async (mode) => {
+      const capture = createAsyncPayloadCapture(createModel("qwen3.8-max"), "high", () => ({
+        messages: [],
+      }));
       for (const [replacement, expected] of [
         [{ thinking_budget: 512 }, { thinking_budget: 512, enable_thinking: true }],
         [{ reasoning_effort: "low" }, { reasoning_effort: "low", enable_thinking: true }],
         [{ reasoning_effort: "none" }, { enable_thinking: false }],
       ]) {
-        const captured = await captureProviderPayload(
-          createModel("qwen3.8-max"),
-          "high",
-          { messages: [] },
-          {
-            onPayload: (payload) => {
-              expect(payload).toEqual({
-                messages: [],
-                enable_thinking: true,
-                reasoning_effort: "xhigh",
-              });
-              if (mode === "in-place mutation") {
-                if (!payload || typeof payload !== "object") {
-                  throw new Error("Expected a Qwen request payload");
-                }
-                Object.assign(payload, replacement);
-                return undefined;
-              }
-              const next = { ...replacement };
-              return mode === "async replacement" ? Promise.resolve(next) : next;
-            },
-          },
-        );
+        const captured = await capture((payload) => {
+          expect(payload).toEqual({
+            messages: [],
+            enable_thinking: true,
+            reasoning_effort: "xhigh",
+          });
+          if (mode === "in-place mutation") {
+            if (!payload || typeof payload !== "object") {
+              throw new Error("Expected a Qwen request payload");
+            }
+            Object.assign(payload, replacement);
+            return undefined;
+          }
+          const next = { ...replacement };
+          return mode === "async replacement" ? Promise.resolve(next) : next;
+        });
         expect(captured).toEqual({
           ...(mode === "in-place mutation" ? { messages: [] } : {}),
           ...expected,
@@ -177,21 +200,36 @@ describe("Qwen streams", () => {
     expect(wrap(createModel("gpt-5.4", { provider: "openai" }))).toBeUndefined();
   });
 
-  it.each([false, true])("normalizes Kimi replay with pinned tool choice: %s", async (pinned) => {
+  it("strips DeepSeek V4 replay reasoning when Token Plan thinking is off", () => {
+    const captured = captureProviderPayload(tokenPlanModel("deepseek-v4-pro"), "off", {
+      messages: [
+        { role: "assistant", content: "earlier answer", reasoning_content: "earlier reasoning" },
+      ],
+      thinking: { type: "disabled" },
+      reasoning_effort: "max",
+    });
+
+    expect(captured).toStrictEqual({
+      messages: [{ role: "assistant", content: "earlier answer" }],
+      enable_thinking: false,
+    });
+  });
+
+  it("backfills Kimi thinking tool-call replay", () => {
     const user = { role: "user", content: "continue" };
     const done = { role: "assistant", content: "done" };
     const native = readToolMessage("call_2", "native reasoning");
-    const toolChoice = { type: "function", function: { name: "read" } };
-    const captured = await captureProviderPayload(tokenPlanModel("kimi-k2.6"), "high", {
+    const captured = captureProviderPayload(tokenPlanModel("kimi-k2.6"), "high", {
       thinking: { type: "enabled" },
       reasoning_effort: "high",
-      tool_choice: pinned ? toolChoice : "required",
+      tool_choice: "required",
       messages: structuredClone([user, readToolMessage(), native, done]),
     });
+
     expect(captured).toStrictEqual({
-      messages: [user, pinned ? readToolMessage() : readToolMessage("call_1", ""), native, done],
-      enable_thinking: !pinned,
-      tool_choice: pinned ? toolChoice : "auto",
+      messages: [user, readToolMessage("call_1", ""), native, done],
+      enable_thinking: true,
+      tool_choice: "auto",
     });
   });
 
@@ -201,21 +239,34 @@ describe("Qwen streams", () => {
     ["qwen3.7-plus", { tool_choice: { type: "none" } }, { tool_choice: "none" }],
   ] as const)(
     "reapplies Token Plan wire constraints after caller hooks for %s",
-    async (modelId, callerOverride, expected) => {
-      const captured = await captureProviderPayload(
+    (modelId, callerOverride, expected) => {
+      const captured = captureProviderPayload(
         tokenPlanModel(modelId),
         "high",
         { messages: [] },
         overridePayload({ enable_thinking: true, ...callerOverride }),
       );
 
-      expect(captured).toStrictEqual({ ...enabledPayload, ...expected });
+      expect(captured).toStrictEqual({ messages: [], enable_thinking: true, ...expected });
     },
   );
 
-  it("leaves non-reasoning legacy custom models untouched", async () => {
+  it("keeps pinned Kimi tool choice by disabling thinking before replay backfill", () => {
+    const captured = captureProviderPayload(tokenPlanModel("kimi-k2.6"), "high", {
+      messages: [readToolMessage()],
+      tool_choice: { type: "function", function: { name: "read" } },
+    });
+
+    expect(captured).toStrictEqual({
+      messages: [readToolMessage()],
+      enable_thinking: false,
+      tool_choice: { type: "function", function: { name: "read" } },
+    });
+  });
+
+  it("leaves non-reasoning legacy custom models untouched", () => {
     const payload = { messages: [], reasoning_effort: "custom", tool_choice: "required" };
-    const captured = await captureProviderPayload(
+    const captured = captureProviderPayload(
       tokenPlanModel("custom-model", { provider: "bailian-token-plan", reasoning: false }),
       "high",
       structuredClone(payload),
@@ -224,8 +275,8 @@ describe("Qwen streams", () => {
     expect(captured).toStrictEqual(payload);
   });
 
-  it("preserves explicit qwen-chat-template transport for bailian-token-plan/qwen3.7-plus", async () => {
-    const captured = await captureProviderPayload(
+  it("preserves explicit qwen-chat-template transport for bailian-token-plan/qwen3.7-plus", () => {
+    const captured = captureProviderPayload(
       tokenPlanModel("qwen3.7-plus", {
         provider: "bailian-token-plan",
         compat: { thinkingFormat: "qwen-chat-template" },
@@ -251,9 +302,9 @@ describe("Qwen streams", () => {
     );
   });
 
-  it("forces GLM tool streaming after caller hooks", async () => {
+  it("forces GLM tool streaming after caller hooks", () => {
     const tools = [{ type: "function", function: { name: "read", parameters: {} } }];
-    const captured = await captureProviderPayload(
+    const captured = captureProviderPayload(
       tokenPlanModel("glm-5.2"),
       "high",
       { messages: [], tools: structuredClone(tools) },
@@ -261,28 +312,29 @@ describe("Qwen streams", () => {
     );
 
     expect(captured).toStrictEqual({
-      ...enabledPayload,
+      messages: [],
       tools,
+      enable_thinking: true,
       reasoning_effort: "high",
       tool_stream: true,
     });
   });
 
   it("preserves requested thinking when caller hooks replace the glm-5.2 payload", async () => {
-    const captured = await captureProviderPayload(
-      tokenPlanModel("glm-5.2"),
-      "max",
-      {
-        messages: [{ role: "user", content: "hi" }],
-      },
-      { onPayload: async () => ({ messages: [] }) },
-    );
+    const capture = createAsyncPayloadCapture(tokenPlanModel("glm-5.2"), "max", () => ({
+      messages: [{ role: "user", content: "hi" }],
+    }));
+    const captured = await capture(async () => ({ messages: [] }));
 
-    expect(captured).toStrictEqual({ ...enabledPayload, reasoning_effort: "max" });
+    expect(captured).toStrictEqual({
+      messages: [],
+      enable_thinking: true,
+      reasoning_effort: "max",
+    });
   });
 
-  it("uses the runtime reasoning override for glm-5.2 (max)", async () => {
-    const captured = await captureProviderPayload(
+  it("uses the runtime reasoning override for glm-5.2 (max)", () => {
+    const captured = captureProviderPayload(
       tokenPlanModel("glm-5.2"),
       "max",
       {},
@@ -290,4 +342,31 @@ describe("Qwen streams", () => {
     );
     expect(captured).toStrictEqual({ enable_thinking: true, reasoning_effort: "medium" });
   });
+
+  it.each([
+    ["bailian-token-plan", "glm-5.1", "max", "xhigh"],
+    ["bailian-token-plan", "glm-5.2", "off", undefined],
+  ] as const)(
+    "maps Token Plan GLM reasoning for %s/%s at %s",
+    (providerId, modelId, thinkingLevel, expectedEffort) => {
+      const messages = [
+        { role: "assistant", content: "earlier answer", reasoning_content: "earlier reasoning" },
+      ];
+      const captured = captureProviderPayload(
+        tokenPlanModel(modelId, { provider: providerId }),
+        thinkingLevel,
+        {
+          messages: structuredClone(messages),
+          thinking: { type: "enabled" },
+          reasoning_effort: "stale",
+        },
+      );
+
+      expect(captured).toStrictEqual({
+        messages,
+        enable_thinking: thinkingLevel !== "off",
+        ...(expectedEffort ? { reasoning_effort: expectedEffort } : {}),
+      });
+    },
+  );
 });
