@@ -1058,7 +1058,7 @@ async function workerHeapCommand(worker: WorkerHeapEvidence, operation: string) 
   }
 }
 const targetWorkerScript = (script: string) =>
-  /^(sqlite-store|prepared-model-catalog)\.worker\.[cm]?[jt]s$/.test(script);
+  /^(sqlite-store|prepared-model-catalog|git-operation)\.worker\.[cm]?[jt]s$/.test(script);
 const project = Array.isArray(fixture.projectWorktrees) ? fixture.projectWorktrees[0] : undefined;
 const coldBaseRefs =
   isRecord(project) && Array.isArray(project.coldBaseRefs)
@@ -7264,7 +7264,11 @@ try {
       isRecord(worker.after?.memory) && typeof worker.after.memory.heapUsed === "number"
         ? worker.after.memory.heapUsed
         : -1;
-    for (const script of ["sqlite-store.worker.js", "prepared-model-catalog.worker.js"]) {
+    for (const script of [
+      "sqlite-store.worker.js",
+      "prepared-model-catalog.worker.js",
+      "git-operation.worker.js",
+    ]) {
       const largest = startedHeapWorkers
         .filter((worker) => worker.script === script && worker.after?.ok === true)
         .toSorted((a, b) => heapBytes(b) - heapBytes(a))[0];

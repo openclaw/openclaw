@@ -167,7 +167,7 @@ Missing array-buffer details alone do not invalidate a complete heap census.
 
 For a separate worker-retention diagnostic pass, add `--worker-heap-snapshot`.
 This forwards the workload's existing retained-worker instrumentation and captures
-the largest SQLite-store and model-catalog worker after the measured window.
+the largest SQLite-store, model-catalog, and Git-operation worker after the measured window.
 The worker profiler and explicit collections make this diagnostic evidence;
 use an ordinary timing pass for latency and GC acceptance.
 
