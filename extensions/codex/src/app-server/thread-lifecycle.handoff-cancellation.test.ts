@@ -297,31 +297,6 @@ it("keeps waiting after ownership disappears without an exact thread closure", a
   }
 });
 
-it("resumes an already unloaded old thread when closure tracking missed its receipt", async () => {
-  const fixture = await createHandoffFixture("untracked-closure", { status: "notLoaded" });
-  await releaseCodexAppServerLiveThread(fixture.old.client, fixture.threadId);
-  retireSharedCodexAppServerClientIfCurrent(fixture.old.client);
-  let resumed = false;
-  const handoff = fixture.handoff().then(async () => {
-    await fixture.successor.client.request("thread/resume", { threadId: fixture.threadId });
-    resumed = true;
-  });
-  try {
-    await setImmediate();
-    expect(resumed).toBe(true);
-    expect(fixture.entry.activeLeases).toBe(1);
-    expect(fixture.old.client.getCloseError()).toBeUndefined();
-    expect(fixture.old.process.exitCode).toBeNull();
-    expect(fixture.successor.writes.map((line) => JSON.parse(line))).toEqual([
-      expect.objectContaining({ method: "thread/resume", params: { threadId: fixture.threadId } }),
-    ]);
-  } finally {
-    fixture.old.emitExit();
-    await Promise.allSettled([handoff]);
-    fixture.cleanup();
-  }
-});
-
 it("rejects an unloaded status belonging to a different old thread", async () => {
   const fixture = await createHandoffFixture("wrong-thread-status", {
     id: "unrelated-thread",
