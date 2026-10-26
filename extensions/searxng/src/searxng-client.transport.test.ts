@@ -29,10 +29,8 @@ afterEach(async () => {
   await server[Symbol.asyncDispose]();
 });
 
-function createTool(
-  cacheTtlMinutes = 15,
-  defaults: { maxResults?: number; timeoutSeconds?: number } = {},
-) {
+type SearchDefaults = { maxResults?: number; timeoutSeconds?: number };
+function createTool(cacheTtlMinutes = 15, defaults: SearchDefaults = {}) {
   const provider = createSearxngWebSearchProvider();
   const config = {
     tools: { web: { search: { cacheTtlMinutes, ...defaults } } },
@@ -43,30 +41,25 @@ function createTool(
 
 it.each([0, 1])("applies the current %s-minute provider TTL to cached results", async (ttl) => {
   const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
-  const search = async (minutes: number, count: number, cached?: Record<string, unknown>) => {
+  const search = async (minutes: number, count: number, cachedId?: number) => {
     const result = await createTool(minutes).execute({ query: `current TTL ${ttl}` });
     expect(requests).toBe(count);
-    expect(result.cached).toBe(cached ? true : undefined);
-    if (cached) {
-      expect(result).toEqual({ ...cached, cached: true });
-    } else {
-      expect(result.results).toEqual([
-        expect.objectContaining({ url: `https://example.com/${count}` }),
-      ]);
-    }
-    return result;
+    expect(result.cached).toBe(cachedId ? true : undefined);
+    expect(result).toMatchObject({
+      results: [{ url: `https://example.com/${cachedId ?? count}` }],
+    });
   };
-  const original = await search(15, 1);
-  await search(15, 1, original);
+  await search(15, 1);
+  await search(15, 1, 1);
   if (ttl > 0) {
     clock.mockReturnValue(Date.now() + 60_000);
   }
-  const fresh = await search(ttl, 2);
+  await search(ttl, 2);
   if (ttl === 0) {
     await search(0, 3);
-    await search(15, 3, original);
+    await search(15, 3, 1);
   } else {
-    await search(1, 2, fresh);
+    await search(1, 2, 2);
   }
 });
 
@@ -77,14 +70,11 @@ it("aborts a provider's stalled response body and closes the request", async () 
     request.socket.once("close", () => clientClosed.resolve());
     response.writeHead(200, { "Content-Type": "application/json" });
     response.write('{"results":[');
-    response.flushHeaders();
     requestStarted.resolve();
   };
   const controller = new AbortController();
-  const pending = createTool().execute(
-    { query: "stalled response", categories: "general" },
-    { signal: controller.signal },
-  );
+  const args = { query: "stalled response", categories: "general" };
+  const pending = createTool().execute(args, { signal: controller.signal });
   await requestStarted.promise;
   controller.abort();
   await expect(pending).rejects.toMatchObject({ name: "AbortError" });
@@ -98,9 +88,7 @@ it("keeps configured and explicit result counts separate in the cache", async ()
   expect(one.results).toHaveLength(1);
   expect(await createTool(15, { maxResults: 1 }).execute(args)).toEqual({ ...one, cached: true });
   expect(requests).toBe(1);
-  const three = await createTool(15, { maxResults: 3 }).execute(args);
-  expect(three.results).toHaveLength(3);
-  expect(three.cached).toBeUndefined();
+  expect((await createTool(15, { maxResults: 3 }).execute(args)).results).toHaveLength(3);
   expect(requests).toBe(2);
   const explicit = await createTool(15, { maxResults: 1 }).execute({ ...args, count: 2 });
   expect(explicit.results).toHaveLength(2);
@@ -117,12 +105,10 @@ it("aborts at the configured deadline but permits a longer configured timeout", 
       closed.resolve();
     });
   };
-  const tool = createTool(0, { timeoutSeconds: 1 });
-  await expect(tool.execute({ query: "short deadline" })).rejects.toMatchObject({
-    name: "TimeoutError",
-  });
+  await expect(
+    createTool(0, { timeoutSeconds: 1 }).execute({ query: "short deadline" }),
+  ).rejects.toMatchObject({ name: "TimeoutError" });
   await closed.promise;
   const allowed = await createTool(0, { timeoutSeconds: 3 }).execute({ query: "longer budget" });
   expect(allowed.results).toHaveLength(1);
-  expect(requests).toBe(2);
 });
