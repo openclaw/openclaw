@@ -551,6 +551,7 @@ const repositoryScriptEntries = [
   "scripts/perf/gateway-object-copies-measure.mjs!",
   "scripts/perf/git-buffer-capture-measure.ts!",
   "scripts/perf/guarded-body-stream-measure.ts!",
+  "scripts/perf/first-stream-event-timeout-measure.ts!",
   "scripts/perf/msteams-json-clone-measure.ts!",
   "scripts/perf/plugin-object-copy-measure.ts!",
   "scripts/perf/plugin-recovery-transport-measure.ts!",
