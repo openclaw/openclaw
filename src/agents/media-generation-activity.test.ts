@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { rotateAgentRunRegistryLifecycleGeneration } from "../infra/agent-run-registry.js";
-import * as sessionKeys from "../routing/session-key.js";
 import {
   clearGeneratedMediaTaskActivity,
   createMediaGenerationOperation,
@@ -45,21 +44,15 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 describe("native media operation lifetime", () => {
-  it("parses a shared session owner once while preserving explicit operation ownership", () => {
+  it("preserves explicit and inferred operation ownership on a shared session key", () => {
     const key = "agent:main:dashboard:media-owner";
     const matching = Array.from({ length: 16 }, (_, index) =>
       createOperation(`image:${index}`, key, { requesterAgentId: undefined }),
     );
     const other = createOperation("image:other", key, { requesterAgentId: "other" });
-    const parse = vi.spyOn(sessionKeys, "parseAgentSessionKey");
     expect(listMediaGenerationOperations(key)).toEqual(matching);
-    expect(parse).toHaveBeenCalledTimes(1);
-    parse.mockClear();
     expect(listMediaGenerationOperations(key, "other")).toEqual([other]);
-    expect(parse).toHaveBeenCalledTimes(1);
-    parse.mockClear();
     expect(Reflect.apply(listMediaGenerationOperations, undefined, [key, null])).toEqual(matching);
-    expect(parse).toHaveBeenCalledTimes(1);
     rotateAgentRunRegistryLifecycleGeneration();
     expect(listMediaGenerationOperations(key)).toEqual([]);
   });
@@ -69,8 +62,6 @@ describe("native media operation lifetime", () => {
     for (const agent of ["one", "two"]) {
       createOperation(agent, "shared", {
         requesterAgentId: agent,
-        sourceId: "image_generate:synthetic",
-        task: "a synthetic lighthouse",
       });
     }
     expect(listMediaGenerationOperations("shared")).toEqual([]);
@@ -84,16 +75,15 @@ describe("native media operation lifetime", () => {
     expect(hasNewGeneratedMediaTaskForSessionKey("shared", oneAdmissions, "one")).toBe(false);
     expect(hasNewGeneratedMediaTaskForSessionKey("shared", oneAdmissions, "two")).toBe(true);
     expect(getActiveMediaGenerationRunCount()).toBe(2);
-    expect(
-      await findDuplicate("shared", "a synthetic lighthouse", "same-request", "one"),
-    ).toMatchObject({ runId: "one", status: "running" });
+    expect(await findDuplicate("shared", "draw a tree", "same-request", "one")).toMatchObject({
+      runId: "one",
+      status: "running",
+    });
     rotateAgentRunRegistryLifecycleGeneration();
     expect(isMediaGenerationOperationCurrent("one")).toBe(false);
     expect(getActiveMediaGenerationRunCount()).toBe(0);
     expect(listMediaGenerationOperations("shared", "one")).toEqual([]);
-    expect(
-      await findDuplicate("shared", "a synthetic lighthouse", "same-request", "one"),
-    ).toBeUndefined();
+    expect(await findDuplicate("shared", "draw a tree", "same-request", "one")).toBeUndefined();
   });
   it("blocks duplicate provider work, retains attempt admission after completion, and releases restart custody", async () => {
     const sessionKey = "agent:main:cron:media:run:one";

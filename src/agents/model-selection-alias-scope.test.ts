@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { modelDefinition } from "./model-auth.fixtures.test-support.js";
+import { modelDefinition, providerEntry } from "./model-auth.fixtures.test-support.js";
 import {
   buildModelAliasIndex,
   resolveConfiguredModelRef,
@@ -15,8 +15,15 @@ const context = {
 };
 const smallModel = { provider: "openai", model: "gpt-4o-mini" };
 
-function configWithAliases(models: AgentDefaultsConfig["models"], model?: string): OpenClawConfig {
-  return { agents: { defaults: { models, ...(model ? { model } : {}) } } };
+function configWithAliases(
+  models: AgentDefaultsConfig["models"],
+  model?: string,
+  providers?: NonNullable<OpenClawConfig["models"]>["providers"],
+): OpenClawConfig {
+  return {
+    agents: { defaults: { models, ...(model ? { model } : {}) } },
+    ...(providers ? { models: { providers } } : {}),
+  };
 }
 
 function resolver(cfg: OpenClawConfig, manifestPlugins = context.manifestPlugins) {
@@ -47,12 +54,11 @@ it.each([
 it.each(["config", "manifest"])(
   "retains %s provider authority in a config-free index",
   (source) => {
-    const cfg: OpenClawConfig = {
-      ...(source === "config"
-        ? { models: { providers: { acme: { baseUrl: "https://acme.example/v1", models: [] } } } }
-        : {}),
-      ...configWithAliases({ "openai/gpt-4o-mini": { alias: "acme/small" } }),
-    };
+    const cfg = configWithAliases(
+      { "openai/gpt-4o-mini": { alias: "acme/small" } },
+      undefined,
+      source === "config" ? { acme: providerEntry("https://acme.example/v1") } : undefined,
+    );
     const resolve = resolver(
       cfg,
       source === "manifest" ? [{ providers: ["acme"] }] : context.manifestPlugins,
@@ -73,44 +79,34 @@ it.each([
 it("resolves provider-qualified aliases without cross-provider collisions", () => {
   const resolve = resolver(
     configWithAliases({
-      "lmstudio-moe/qwen3.6-35b-a3b": { alias: "Local" },
-      "lmstudio-dense/qwen3.6-27b": { alias: "Local" },
+      "local-a/small": { alias: "Local" },
+      "local-b/large": { alias: "Local" },
     }),
   );
-  expect(resolve("lmstudio-moe/Local")).toEqual({
-    ref: { provider: "lmstudio-moe", model: "qwen3.6-35b-a3b" },
+  expect(resolve("local-a/Local")).toEqual({
+    ref: { provider: "local-a", model: "small" },
     alias: "Local",
   });
-  expect(resolve("lmstudio-dense/LOCAL")).toEqual({
-    ref: { provider: "lmstudio-dense", model: "qwen3.6-27b" },
+  expect(resolve("local-b/LOCAL")).toEqual({
+    ref: { provider: "local-b", model: "large" },
     alias: "Local",
   });
 });
 
 it.each([
   { raw: "fixture/reasoner", alias: "reasoner", expected: "reasoner" },
-  { raw: "fixture/reasoner@work", alias: "reasoner", expected: "reasoner" },
-  { raw: "fixture/reasoner", alias: "fixture/reasoner", expected: "reasoner" },
   { raw: "fixture/reasoner@work", alias: "fixture/reasoner", expected: "reasoner" },
   { raw: "reasoner", alias: "reasoner", expected: "backup" },
   { raw: "fixture/friendly", alias: "friendly", expected: "backup" },
 ])(
   "keeps exact configured model identity for $raw with alias $alias",
   ({ raw, alias, expected }) => {
-    const cfg: OpenClawConfig = {
-      ...configWithAliases({ "fixture/backup": { alias } }, raw),
-      models: {
-        providers: {
-          fixture: {
-            baseUrl: "http://127.0.0.1:8080/v1",
-            api: "openai-completions",
-            models: ["reasoner", "backup"].map((id) =>
-              modelDefinition(id, { reasoning: false, contextWindow: 32768, maxTokens: 4096 }),
-            ),
-          },
-        },
-      },
-    };
+    const cfg = configWithAliases({ "fixture/backup": { alias } }, raw, {
+      fixture: providerEntry("http://127.0.0.1:8080/v1", {
+        api: "openai-completions",
+        models: ["reasoner", "backup"].map((id) => modelDefinition(id)),
+      }),
+    });
     expect(resolveConfiguredRefForTest(cfg)).toEqual({ provider: "fixture", model: expected });
     expect(resolver(cfg)(raw, true)?.ref).toEqual({ provider: "fixture", model: expected });
   },

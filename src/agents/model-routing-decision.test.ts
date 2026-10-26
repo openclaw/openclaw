@@ -1,10 +1,7 @@
 import { expect, it, onTestFinished } from "vitest";
 import { configureExecutionDecisionWorkSink } from "../audit/execution-decision-work.js";
 import type { ExecutionDecisionWork } from "../audit/execution-decision-work.types.js";
-import {
-  createOperationalRunInstanceRef,
-  prepareAgentRunAdmission,
-} from "./admitted-run-context.js";
+import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
 import { recordAdmittedModelRoutingDecision } from "./model-routing-decision.js";
 
 const route = {
@@ -26,15 +23,12 @@ function captureWork() {
 }
 
 async function admitRoute(runId: string) {
-  const admission = prepareAgentRunAdmission({
-    cfg: { logging: { audit: { executionIdentity: true } } },
-    operationalRunInstance: createOperationalRunInstanceRef(runId),
-    facts: {
-      runId,
-      agentId: "main",
-      ingress: { kind: "system", boundary: "model-routing-test", state: "present" },
-    },
-  });
+  const admission = prepareSystemAgentRunAdmission(
+    { logging: { audit: { executionIdentity: true } } },
+    runId,
+    "main",
+    "model-routing-test",
+  );
   onTestFinished(() => admission.close());
   return { admission, admittedRunContext: await admission.admit("embedded") };
 }
@@ -56,23 +50,19 @@ it("keeps a selected credential raw only in the private work ref", async () => {
       occurredAt: 1_001,
     }),
   ).toBe(true);
-  expect(captured).toMatchObject([
-    {
-      token: admittedRunContext.executionIdentityToken,
-      receipt: {
-        action: { family: "model-routing", operation: "explicit-selection" },
-        decision: { reasonCode: "rate_limit" },
-        enforcement: { coverageState: "attribution-only" },
-      },
-      refs: {
-        resource: { namespace: "credential-profile", value: rawProfile },
-        target: { namespace: "model-route" },
-      },
-    },
-  ]);
-  expect(JSON.stringify(captured[0]?.receipt)).not.toContain(rawProfile);
-  expect(JSON.stringify(captured[0]?.receipt)).not.toContain("selected-model-secret");
-  expect(captured[0]?.refs?.target?.value).toContain(rawTargetSecret);
+  expect(captured).toHaveLength(1);
+  const { token, receipt, refs } = captured[0]!;
+  expect(token).toBe(admittedRunContext.executionIdentityToken);
+  expect(receipt).toMatchObject({
+    action: { family: "model-routing", operation: "explicit-selection" },
+    decision: { reasonCode: "rate_limit" },
+    enforcement: { coverageState: "attribution-only" },
+  });
+  expect(refs?.resource).toEqual({ namespace: "credential-profile", value: rawProfile });
+  expect(refs?.target).toMatchObject({ namespace: "model-route" });
+  expect(JSON.stringify(receipt)).not.toContain(rawProfile);
+  expect(JSON.stringify(receipt)).not.toContain("selected-model-secret");
+  expect(refs?.target?.value).toContain(rawTargetSecret);
 });
 
 it("does not fabricate work without admission and marks an unknown credential owner", async () => {
