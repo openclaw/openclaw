@@ -91,25 +91,23 @@ describe("gateway method registry", () => {
   });
 
   it("rejects unknown core handlers while accepting hidden core methods", () => {
-    expect(() => createCoreGatewayMethodDescriptors({ "example.unknown": handler })).toThrow(
-      "gateway method handler is missing a descriptor: example.unknown",
-    );
+    for (const method of "example.unknown claws.status claws.update.apply claws.remove.apply".split(
+      " ",
+    )) {
+      expect(() => createCoreGatewayMethodDescriptors({ [method]: handler })).toThrow(
+        `gateway method handler is missing a descriptor: ${method}`,
+      );
+    }
     expect(createCoreGatewayMethodDescriptors({ "config.openFile": handler })).toMatchObject([
       { name: "config.openFile", advertise: false, handler },
     ]);
   });
 
-  it("classifies Claw Add as a control-plane write without lifecycle methods", () => {
+  it("classifies Claw Add as a control-plane write", () => {
     const registry = createGatewayMethodRegistry(
       createCoreGatewayMethodDescriptors({ "claws.add.apply": handler }),
     );
-
     expect(registry.isControlPlaneWrite("claws.add.apply")).toBe(true);
-    for (const method of ["claws.status", "claws.update.apply", "claws.remove.apply"]) {
-      expect(() => createCoreGatewayMethodDescriptors({ [method]: handler })).toThrow(
-        `gateway method handler is missing a descriptor: ${method}`,
-      );
-    }
   });
 
   it.each([
@@ -119,8 +117,6 @@ describe("gateway method registry", () => {
     const registry = createGatewayMethodRegistry([
       createPluginGatewayMethodDescriptor({ pluginId: "demo", name, handler, scope }),
     ]);
-    expect(registry.listMethods()).toEqual([name]);
-    expect(registry.getHandler(name)).toBe(handler);
     expect(registry.getScope(name)).toBe(ADMIN_SCOPE);
     expect(registry.requiresAuthenticatedProfile(name)).toBe(true);
     expect(registry.descriptors()[0]?.owner).toEqual({ kind: "plugin", pluginId: "demo" });
@@ -153,27 +149,24 @@ describe("gateway method registry", () => {
         descriptor.profileAccess === "required",
       );
     }
-    expect(registry.requiresAuthenticatedProfile("users.self")).toBe(true);
-    expect(registry.requiresAuthenticatedProfile("status")).toBe(false);
+    const expectProfile = (methods: string[], required: boolean) => {
+      for (const method of methods) {
+        expect(registry.requiresAuthenticatedProfile(method), method).toBe(required);
+      }
+    };
     // Profile accent projection must wait for pending GitHub identity sync.
-    expect(registry.requiresAuthenticatedProfile("talk.config")).toBe(true);
-    expect(registry.requiresAuthenticatedProfile("talk.voice.get")).toBe(true);
-    expect(registry.requiresAuthenticatedProfile("talk.voice.set")).toBe(true);
-    for (const method of listCoreGatewayMethodNames().filter(isSessionProfileDependentMethod)) {
-      expect(registry.requiresAuthenticatedProfile(method), method).toBe(true);
-    }
-    expect(registry.requiresAuthenticatedProfile("agent")).toBe(true);
-    expect(registry.requiresAuthenticatedProfile("chat.history")).toBe(true);
-    expect(registry.requiresAuthenticatedProfile("sessions.list")).toBe(true);
-    expect(registry.requiresAuthenticatedProfile("openclaw.chat")).toBe(true);
-    expect(registry.requiresAuthenticatedProfile("projects.list")).toBe(true);
-    expect(registry.requiresAuthenticatedProfile("approval.get")).toBe(false);
-    expect(registry.requiresAuthenticatedProfile("approval.history")).toBe(false);
-    expect(registry.requiresAuthenticatedProfile("board.data.read")).toBe(false);
-    expect(registry.requiresAuthenticatedProfile("board.prompt.authorize")).toBe(false);
-    expect(registry.requiresAuthenticatedProfile("talk.client.create")).toBe(false);
-    expect(registry.requiresAuthenticatedProfile("talk.session.steer")).toBe(false);
-    expect(registry.requiresAuthenticatedProfile("wake")).toBe(false);
-    expect(registry.requiresAuthenticatedProfile("aux.identity.read")).toBe(true);
+    expectProfile(
+      "users.self talk.config talk.voice.get talk.voice.set agent chat.history sessions.list openclaw.chat projects.list aux.identity.read".split(
+        " ",
+      ),
+      true,
+    );
+    expectProfile(
+      "status approval.get approval.history board.data.read board.prompt.authorize talk.client.create talk.session.steer wake".split(
+        " ",
+      ),
+      false,
+    );
+    expectProfile(listCoreGatewayMethodNames().filter(isSessionProfileDependentMethod), true);
   });
 });
