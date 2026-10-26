@@ -141,6 +141,7 @@ describe("renderUsage", () => {
         data: {
           ...base.data,
           overview,
+          filterOptions: overview.filterOptions,
         },
         get filters() {
           return filters();
@@ -340,6 +341,7 @@ describe("renderUsage", () => {
       usageSession("second", "other", "second", { totalTokens: 100, totalCost: 2 }),
     ];
     props.data.overview = projectUsageData(props.data.sessions).overview;
+    props.data.filterOptions = props.data.overview?.filterOptions;
     props.filters.query = "provider:absent";
     props.filters.queryDraft = 'label:"Team  Planning" provider:second';
     props.callbacks.filters.onQueryDraftChange = vi.fn();

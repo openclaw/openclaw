@@ -142,7 +142,7 @@ function UsageView(props: UsageProps & { loading: boolean; read: UsageRead }) {
   const displayTotals = createMemo(() => (overview().hasOverviewData ? props.data.totals : null));
   const filterOptions = createMemo(
     () =>
-      props.data.overview?.filterOptions ?? {
+      props.data.filterOptions ?? {
         agent: [],
         channel: [],
         provider: [],
