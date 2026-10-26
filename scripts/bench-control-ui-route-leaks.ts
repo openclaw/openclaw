@@ -2195,12 +2195,20 @@ try {
                     ? await page.evaluate(() =>
                         [
                           ...document.querySelectorAll<HTMLLinkElement>(
-                            'link[rel="modulepreload"],link[rel="preload"][as="style"]',
+                            'link[rel="modulepreload"],link[rel="preload"][as="style"],link[rel="stylesheet"]',
                           ),
                         ].map((link) => link.href),
                       )
                     : [];
                 const nativeLinks = observedNativeLinks.filter((url) => urls.includes(url));
+                const appliedStyleUrls =
+                  route === "roster"
+                    ? await page.evaluate(() =>
+                        [...document.styleSheets]
+                          .filter((sheet) => !sheet.disabled)
+                          .flatMap((sheet) => (sheet.href ? [sheet.href] : [])),
+                      )
+                    : [];
                 result.interactionWarmup = {
                   files: warmFiles,
                   minimumThinkTimeMs: 2_000,
@@ -2230,6 +2238,7 @@ try {
                           : "post-ready-think-time",
                         nativeLinks,
                         observedNativeLinks,
+                        ...(route === "roster" ? { appliedStyleUrls } : {}),
                         alreadyEvaluatedAtCold: urls.filter((url) =>
                           evaluatedUrls(coverageAtReady ?? []).includes(url),
                         ),
@@ -2247,6 +2256,14 @@ try {
                       }
                     : {}),
                 };
+                if (route === "roster") {
+                  assert(
+                    urls
+                      .filter((url) => new URL(url).pathname.endsWith(".css"))
+                      .every((url) => appliedStyleUrls.includes(url)),
+                    "Roster warm CSS was not applied before interaction",
+                  );
+                }
                 if ((creationWarmup || preloadIdle) && urls.length) {
                   const coldUrls = new Set(requestsAtReady.map((request) => request.url));
                   assert(
@@ -2284,6 +2301,9 @@ try {
                 }
                 if (panelEvaluated && !creationWarmup && !preloadIdle) {
                   throw new Error(`Next panel evaluated before interaction: ${warmFiles[0]}`);
+                }
+                if (route === "roster" && mode === "coverage" && values.screenshots && pair === 0) {
+                  await page.screenshot({ path: path.join(output, `${prefix}-warm-idle.png`) });
                 }
               }
               result.interactions ??= activityImmediateCell

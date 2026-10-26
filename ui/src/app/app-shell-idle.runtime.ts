@@ -10,7 +10,6 @@ function canPreload(): boolean {
   return navigator.onLine && !connection?.saveData && document.visibilityState === "visible";
 }
 
-/** Fetch and compile code without evaluating modules or applying route styles. */
 /** Optional shell services share the existing deferred import and its lifetime. */
 export function connectShellIdle(
   host: ShellOwner,
@@ -152,7 +151,10 @@ export function connectShellIdle(
       const loads: Promise<void>[] = [];
       for (const file of manifest?.[key] ?? []) {
         const href = new URL(file, base).href;
-        if (seen.has(href)) {
+        const applyStyle = key === "roster-next" && file.endsWith(".css");
+        const styleApplied = () =>
+          [...document.styleSheets].some((stylesheet) => stylesheet.href === href);
+        if (seen.has(href) && (!applyStyle || styleApplied())) {
           continue;
         }
         seen.add(href);
@@ -171,7 +173,21 @@ export function connectShellIdle(
               stopError();
               resolve();
             };
-            const stopLoad = listen(link, "load", finish, { once: true });
+            const stopLoad = listen(
+              link,
+              "load",
+              () => {
+                if (applyStyle && !styleApplied()) {
+                  // Keep Chat's style matching out of Create Claw, but its JS lazy.
+                  // Vite adopts this loaded sheet; it must outlive the idle owner.
+                  link.rel = "stylesheet";
+                  link.removeAttribute("as");
+                  links.delete(link);
+                }
+                finish();
+              },
+              { once: true },
+            );
             const stopError = listen(link, "error", finish, { once: true });
             links.set(link, finish);
             document.head.append(link);

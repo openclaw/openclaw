@@ -308,8 +308,30 @@ it.each(["chip", "roster"] as const)(
     );
     expect(fixture.preloadRoute).not.toHaveBeenCalled();
     expect(document.querySelector("script")).toBeNull();
+    if (mode === "roster") {
+      const [code, stylesheet] = hints();
+      stylesheet.dispatchEvent(new Event("load"));
+      expect(stylesheet.rel).toBe("stylesheet");
+      expect(stylesheet.hasAttribute("as")).toBe(false);
+      expect(code.rel).toBe("modulepreload");
+      fixture.stop();
+      expect(hints()).toEqual([stylesheet]);
+      stylesheet.remove();
+    }
   },
 );
+
+it("does not apply failed roster stylesheet preloads", async () => {
+  const fixture = setup("new-session", "roster");
+  fixture.outlet.presentationSettled = true;
+  fixture.transcript.ready = true;
+  await idle();
+  const stylesheet = hints().find((link) => link.as === "style")!;
+  stylesheet.dispatchEvent(new Event("error"));
+  expect(stylesheet.rel).toBe("preload");
+  fixture.stop();
+  expect(hints()).toHaveLength(0);
+});
 
 it("reacts to roster preference changes and releases its subscription", async () => {
   const fixture = setup("new-session", "chip");
