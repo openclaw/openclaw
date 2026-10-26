@@ -111,7 +111,7 @@ it("prints bounded readiness receipts from the quota failure hook before Gateway
   }
 });
 
-it.each(["http", "websocket"] as const)(
+it.for(["http", "websocket"] as const)(
   "keeps the catalog held through auxiliary %s success until the primary reply",
   async (transport, context) => {
     const provider = await startQuotaProvider("codex_rate_limits", MARKER);

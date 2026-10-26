@@ -30,27 +30,17 @@ function captureReportedArgv(command: string): string[] {
   return argv;
 }
 
-function reportedCommand(scenario: QaSeedScenarioWithSource) {
-  const matches = findQaScenarioMatches([scenario], scenario.id);
+function reportedCommands(scenarios: QaSeedScenarioWithSource[]) {
+  const matches = scenarios.flatMap((scenario) => findQaScenarioMatches([scenario], scenario.id));
   const report = renderQaScenarioMatchesMarkdownReport({ query: "selected scenarios", matches });
-  return expectDefined(report.match(/(?<=`)pnpm openclaw qa suite[^`]+(?=`)/u)?.[0], "command");
+  const commands = report.match(/(?<=`)pnpm openclaw qa suite[^`]+(?=`)/gu) ?? [];
+  expect(commands.length).toBeGreaterThan(0);
+  return commands;
 }
 
-describe("QA coverage command selection", () => {
-  it.each([
-    ["telegram-assistant-transcript-role-boundary", "crabline"],
-    ["matrix-room-generated-image-delivery", "live"],
-    ["remember-across-conversations", "qa-channel"],
-    ["whatsapp-access-control-group-disabled", "live"],
-    ["agent-startup-instruction-first-action", "qa-channel"],
-    ["channel-canary", "qa-channel"],
-    [
-      makeQaSuiteTestScenario("driver-only", { config: { requiredChannelDriver: "crabline" } }),
-      "crabline",
-    ],
-  ] as const)("selects exactly %s from its generated command", (input, driver) => {
-    const scenario = typeof input === "string" ? readQaScenarioById(input) : input;
-    const argv = captureReportedArgv(reportedCommand(scenario));
+function selectReportedCommands(scenarios: QaSeedScenarioWithSource[]) {
+  return reportedCommands(scenarios).map((command) => {
+    const argv = captureReportedArgv(command);
     expect(argv.slice(0, suiteArgv.length)).toEqual(suiteArgv);
     let suite = new Command();
     registerQaLabCli(suite);
@@ -60,20 +50,40 @@ describe("QA coverage command selection", () => {
         name,
       );
     }
+    // Parse the real options without running the suite action or starting a provider.
     expect(suite.parseOptions(argv.slice(suiteArgv.length))).toEqual({ operands: [], unknown: [] });
     const opts = suite.opts<SuiteFilters & { scenario: string[] }>();
+    expect(opts.scenario.length).toBeGreaterThan(0);
     const providerMode = opts.providerMode ?? DEFAULT_QA_LIVE_PROVIDER_MODE;
-    expect(
-      selectQaFlowSuiteScenarios({
-        scenarios: [scenario],
-        ...opts,
-        scenarioIds: opts.scenario,
-        providerMode,
-        primaryModel: defaultQaModelForMode(providerMode),
-      }).map(({ id }) => id),
-    ).toEqual([scenario.id]);
-    expect(opts.scenario).toEqual([scenario.id]);
-    expect(opts.channelDriver ?? "qa-channel").toBe(driver);
+    const selected = selectQaFlowSuiteScenarios({
+      scenarios,
+      ...opts,
+      scenarioIds: opts.scenario,
+      providerMode,
+      primaryModel: defaultQaModelForMode(providerMode),
+    });
+    const ids = selected.map(({ id }) => id);
+    expect(ids, command).toEqual(opts.scenario);
+    return { driver: opts.channelDriver ?? "qa-channel", ids };
+  });
+}
+
+describe("QA coverage command selection", () => {
+  it.each([
+    ["telegram-assistant-transcript-role-boundary", "crabline"],
+    ["matrix-room-generated-image-delivery", "live"],
+    ["remember-across-conversations", "qa-channel"],
+    ["whatsapp-access-control-group-disabled", "live"],
+    ["instruction-followthrough-repo-contract", "qa-channel"],
+    ["agent-startup-instruction-first-action", "qa-channel"],
+    ["channel-canary", "qa-channel"],
+    [
+      makeQaSuiteTestScenario("driver-only", { config: { requiredChannelDriver: "crabline" } }),
+      "crabline",
+    ],
+  ] as const)("selects exactly %s from its generated command", (input, driver) => {
+    const scenario = typeof input === "string" ? readQaScenarioById(input) : input;
+    expect(selectReportedCommands([scenario])).toEqual([{ driver, ids: [scenario.id] }]);
   });
 
   it("separates conflicting drivers on the same channel and groups compatible scenarios", () => {
@@ -101,7 +111,9 @@ describe("QA coverage command selection", () => {
     const scenario = makeQaSuiteTestScenario("quoted-driver", {
       config: { requiredChannelDriver },
     });
-    expect(captureReportedArgv(reportedCommand(scenario))).toEqual([
+    const command = expectDefined(reportedCommands([scenario])[0], "command");
+
+    expect(captureReportedArgv(command)).toEqual([
       ...suiteArgv,
       "--channel-driver",
       requiredChannelDriver,

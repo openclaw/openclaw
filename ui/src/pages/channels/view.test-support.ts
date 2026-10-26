@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createSignal, flush, merge } from "solid-js";
+import { createSignal, flush } from "solid-js";
 import type { ChannelsPairingListResult, ChannelsStatusSnapshot } from "../../api/types.ts";
 import { createChannelCapability, type ChannelCapability } from "../../lib/channels/index.ts";
 import { createInitialConfigState } from "../../lib/config/config-state-model.ts";
@@ -131,8 +131,14 @@ export function renderChannelView<T extends object>(
   }
   current?.dispose();
   const [read, write] = createSignal<object>(props, { equals: false });
-  // The live view preserves the same generic props contract as the original proxy.
-  const { unmount: dispose } = mountSolid(() => component(merge(() => read() as T)), { container });
+  // SAFETY: The proxy forwards property reads to the current T input; its empty target is never exposed.
+  const reactiveProps = new Proxy({} as T, {
+    get: (_target, key) => Reflect.get(read(), key),
+    has: (_target, key) => Reflect.has(read(), key),
+    ownKeys: () => Reflect.ownKeys(read()),
+    getOwnPropertyDescriptor: () => ({ configurable: true, enumerable: true }),
+  });
+  const { unmount: dispose } = mountSolid(() => component(reactiveProps), { container });
   mountedViews.set(container, { component, update: (next) => write(() => next), dispose });
   flush();
 }
