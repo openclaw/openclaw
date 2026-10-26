@@ -106,7 +106,17 @@ const cells = [64, 200, 1_000].flatMap((size) => {
   const source = values["projected-history"]
     ? projectModelContextMessages(fixtureMessages)
     : fixtureMessages;
-  const messages = values["unowned-history"] ? structuredClone(source) : source;
+  const isFixtureMessage = (message: unknown): message is { content: unknown[] } =>
+    Boolean(
+      message &&
+      typeof message === "object" &&
+      "content" in message &&
+      Array.isArray(message.content),
+    );
+  const messages = (values["unowned-history"] ? structuredClone(source) : source).map((message) => {
+    assert.ok(isFixtureMessage(message));
+    return message;
+  });
   for (const message of messages) {
     if (!values["projected-history"]) {
       assert.equal(isOwnedTranscriptPayload(message), !values["unowned-history"]);
