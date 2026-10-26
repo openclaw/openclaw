@@ -11,21 +11,12 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { registerHooks } from "node:module";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { setImmediate, setTimeout } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import type { CodeModeExecutor } from "../../src/agents/code-mode-executor-types.js";
-import { prepareCodeModeNodeCatalog } from "../../src/agents/code-mode-node-input.js";
-import { GatewayScheduler } from "../../src/infra/gateway-scheduler.js";
-import { runtimeProcessEntrypoints } from "../../src/infra/runtime-process-entrypoints.js";
-import {
-  getTrackedWorkerLifecycleSnapshot,
-  sampleTrackedWorkerMemory,
-  setTrackedWorkerGcObserver,
-} from "../../src/infra/worker-cpu.js";
-import { LegacyPluginSdkResourceHost } from "../../src/plugins/legacy-sdk-resource-host.js";
-import { createDeferredCore } from "../../src/shared/deferred.js";
 
 const builtRoot = path.resolve(process.argv[2]!);
 const executorFile = path.resolve(process.argv[3] ?? "src/agents/code-mode-node.ts");
@@ -37,9 +28,35 @@ const workerFile = path.join(builtRoot, "dist/agents/code-mode-node.worker.js");
 const digest = (file: string) => createHash("sha256").update(readFileSync(file)).digest("hex");
 const workerHash = digest(workerFile);
 const executorHash = digest(executorFile);
-runtimeProcessEntrypoints.codeModeNode.currentModuleUrl = pathToFileURL(
+const sourceEntrypoints = new URL(
+  "../../src/infra/runtime-process-entrypoints.ts",
+  import.meta.url,
+);
+const builtEntrypoints = pathToFileURL(
   path.join(builtRoot, "dist/infra/runtime-process-entrypoints.js"),
-).href;
+);
+// Use the build's declaration module, just as the native-worker test harness does.
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    const resolved = nextResolve(specifier, context);
+    return resolved.url === sourceEntrypoints.href
+      ? { ...resolved, url: builtEntrypoints.href }
+      : resolved;
+  },
+});
+const { prepareCodeModeNodeCatalog } = await import("../../src/agents/code-mode-node-input.js");
+const { GatewayScheduler } = await import("../../src/infra/gateway-scheduler.js");
+const { getTrackedWorkerLifecycleSnapshot, sampleTrackedWorkerMemory, setTrackedWorkerGcObserver } =
+  await import("../../src/infra/worker-cpu.js");
+const { LegacyPluginSdkResourceHost } =
+  await import("../../src/plugins/legacy-sdk-resource-host.js");
+const { createDeferredCore } = await import("../../src/shared/deferred.js");
+const { resolveRuntimeProcessEntrypointUrl } =
+  await import("../../src/infra/runtime-process-url.js");
+assert.equal(
+  resolveRuntimeProcessEntrypointUrl("codeModeNode").href,
+  pathToFileURL(workerFile).href,
+);
 const { nodeCodeModeExecutor }: { nodeCodeModeExecutor: CodeModeExecutor } = await import(
   pathToFileURL(executorFile).href
 );
