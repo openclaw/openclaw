@@ -618,7 +618,7 @@ it.each([
 ] as const)(
   "binds $kind Access at admission (saved=$saved, provided=$provided)",
   async ({ kind, saved, expected, provided }) => {
-    const operation = createReplyOperation({
+    const replyOperation = createReplyOperation({
       sessionKey: "main",
       sessionId: "queued-session",
       turnKind: kind,
@@ -633,7 +633,7 @@ it.each([
     state.admitReply.mockImplementation(async ({ captureRunSelection }) => {
       // The preference committed before this source entered the queue, so no queue refresh saw it.
       captureRunSelection();
-      return { status: "owned", operation, sessionEntry: admittedEntry };
+      return { status: "owned", operation: replyOperation, sessionEntry: admittedEntry };
     });
 
     try {
@@ -650,13 +650,13 @@ it.each([
               },
             },
           },
-          { kind, ...(provided ? { providedReplyOperation: operation } : {}) },
+          { kind, ...(provided ? { providedReplyOperation: replyOperation } : {}) },
         ),
       );
 
       expect(turn.queued.run.cyberAccessProgram).toBe(expected);
     } finally {
-      operation.complete();
+      replyOperation.complete();
     }
   },
 );
