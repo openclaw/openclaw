@@ -140,6 +140,15 @@ function oldHistory() {
   return manager;
 }
 
+function recordRequests(respond: (model: Model, index: number) => ReturnType<typeof textStream>) {
+  const requests: Context[] = [];
+  streamMocks.streamSimple.mockImplementation((model: Model, context: Context) => {
+    requests.push(context);
+    return respond(model, requests.length);
+  });
+  return requests;
+}
+
 function compactions(manager: SessionManager) {
   return manager.getBranch().filter((entry) => entry.type === "compaction");
 }
@@ -220,12 +229,7 @@ describe("AgentSession compaction", () => {
             expect.soft(prompt).not.toContain("Additional focus:");
           }
         }
-        expect(
-          sessionManager
-            .getEntries()
-            .filter((entry) => entry.type === "compaction")
-            .map((entry) => entry.fromHook),
-        ).toEqual([false]);
+        expect(compactions(sessionManager).map((entry) => entry.fromHook)).toEqual([false]);
         expect(network).not.toHaveBeenCalled();
       } finally {
         network.mockRestore();
@@ -284,11 +288,7 @@ describe("AgentSession compaction", () => {
     };
     const currentUserId = sessionManager.appendMessage(currentUser);
     guardSessionManager(sessionManager, { preparedUserTurnMessage: currentUser });
-    const requests: Context[] = [];
-    streamMocks.streamSimple.mockImplementation((activeModel: Model, context: Context) => {
-      requests.push(context);
-      return textStream(activeModel, "complete answer");
-    });
+    const requests = recordRequests((model) => textStream(model, "complete answer"));
     const { session } = await createTestSession({
       sessionManager,
       settingsManager: createAutoCompactionSettings(),
@@ -613,15 +613,11 @@ describe("AgentSession compaction", () => {
       timestamp: Date.now() - 2,
     });
     const handlers = createResultHandlers("condensed history", retainedAssistantId);
-    const requests: Context[] = [];
-    streamMocks.streamSimple.mockImplementation((activeModel: Model, context: Context) => {
-      requests.push(context);
-      return createAssistantResultStream(
-        requests.length === 1
-          ? createOverflowAssistant(activeModel)
-          : createAssistant(activeModel, "complete retry"),
-      );
-    });
+    const requests = recordRequests((model, index) =>
+      createAssistantResultStream(
+        index === 1 ? createOverflowAssistant(model) : createAssistant(model, "complete retry"),
+      ),
+    );
     const { session } = await createTestSession({
       sessionManager,
       settingsManager: createAutoCompactionSettings(),
@@ -873,11 +869,7 @@ describe("degraded compaction reload", () => {
       expect(replay).toContain(LATEST_ASK);
       expect(replay).not.toContain(OVERSIZED_IDENTIFIER);
 
-      const requests: Context[] = [];
-      streamMocks.streamSimple.mockImplementation((activeModel: Model, context: Context) => {
-        requests.push(context);
-        return textStream(activeModel, "continued answer");
-      });
+      const requests = recordRequests((activeModel) => textStream(activeModel, "continued answer"));
       const continued = await createTestSession({
         model,
         sessionManager: reopened,

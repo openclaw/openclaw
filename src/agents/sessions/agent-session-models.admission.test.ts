@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
@@ -50,6 +51,15 @@ const lastModel = { ...startModel, id: "admission-last", reasoning: true };
 const models = [startModel, nextModel, lastModel];
 type ModelSelectEvent = Extract<ExtensionEvent, { type: "model_select" }>;
 type SelectionSession = Awaited<ReturnType<typeof createModelSelectionSession>>;
+
+function defaults(settings: SelectionSession["settingsManager"]) {
+  const global = settings.getGlobalSettings();
+  return {
+    provider: global.defaultProvider,
+    model: global.defaultModel,
+    thinking: settings.getDefaultThinkingLevel(),
+  };
+}
 
 function expectSelection(
   session: SelectionSession["session"],
@@ -187,6 +197,17 @@ describe("model transitions after SQLite write admission", () => {
     await gate.entered;
     // Callers resume in their own async context, not the reserved owner's reentrant context.
     return { release: gate.release, done };
+  }
+
+  function replacementTarget(
+    target: Awaited<ReturnType<typeof createModelSession>>["target"],
+    suffix: string,
+  ) {
+    return {
+      ...target,
+      sessionId: `${target.sessionId}-${suffix}`,
+      sessionKey: `${target.sessionKey}-${suffix}`,
+    };
   }
 
   it("keeps captured storage environment out of metadata command payloads", async () => {
@@ -379,22 +400,14 @@ describe("model transitions after SQLite write admission", () => {
         await session.setModel(nextModel);
       }
       const before = await loadTranscriptEvents(target);
-      const defaults = {
-        provider: settings.getGlobalSettings().defaultProvider,
-        model: settings.getGlobalSettings().defaultModel,
-        thinking: settings.getDefaultThinkingLevel(),
-      };
+      const defaultsBefore = defaults(settings);
       const replacement =
         kind === "storage-root"
           ? {
               ...target,
               env: { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("metadata-root-second-")) },
             }
-          : {
-              ...target,
-              sessionId: `${target.sessionId}-replacement`,
-              sessionKey: `${target.sessionKey}-replacement`,
-            };
+          : replacementTarget(target, "replacement");
       if (kind === "session") {
         await replaceSessionEntry(replacement, { sessionId: replacement.sessionId, updatedAt: 1 });
       }
@@ -428,11 +441,7 @@ describe("model transitions after SQLite write admission", () => {
             reason: new Error(`No API key for ${nextModel.provider}/${nextModel.id}`),
           },
         ]);
-        expect({
-          provider: settings.getGlobalSettings().defaultProvider,
-          model: settings.getGlobalSettings().defaultModel,
-          thinking: settings.getDefaultThinkingLevel(),
-        }).toEqual(defaults);
+        expect(defaults(settings)).toEqual(defaultsBefore);
       } else if (kind === "storage-root") {
         const outcome = outcomes[0];
         expect(outcome.status).toBe("rejected");
@@ -463,11 +472,7 @@ describe("model transitions after SQLite write admission", () => {
     async (selectedModel) => {
       const { session, manager, settings, target, readModelChanges } = await createModelSession();
       await session.setModel(nextModel);
-      const replacement = {
-        ...target,
-        sessionId: `${target.sessionId}-replacement-after-settlement`,
-        sessionKey: `${target.sessionKey}-replacement-after-settlement`,
-      };
+      const replacement = replacementTarget(target, "replacement-after-settlement");
       await replaceSessionEntry(replacement, { sessionId: replacement.sessionId, updatedAt: 2 });
       const replacementManager = SessionManager.open(replacement);
       await replacementManager.appendModelChange(nextModel.provider, nextModel.id);
@@ -542,11 +547,7 @@ describe("model transitions after SQLite write admission", () => {
       } else {
         await session.setModel(nextModel);
       }
-      const replacement = {
-        ...target,
-        sessionId: `${target.sessionId}-replacement-after-commit`,
-        sessionKey: `${target.sessionKey}-replacement-after-commit`,
-      };
+      const replacement = replacementTarget(target, "replacement-after-commit");
       if (!changesExtension) {
         await replaceSessionEntry(replacement, { sessionId: replacement.sessionId, updatedAt: 2 });
       }
@@ -612,31 +613,24 @@ describe("model transitions after SQLite write admission", () => {
     );
     await session.setModel(nextModel);
     const firstModel = manager.getEntries().find((entry) => entry.type === "model_change");
-    if (!firstModel) {
-      throw new Error("Fixture must contain its initial model");
-    }
+    assert(firstModel, "Fixture must contain its initial model");
     const external = SessionManager.open(target);
     external.appendMessage({ role: "user", content: "Newer durable turn", timestamp: 2 });
     const database = openOpenClawAgentDatabase(options).db;
+    const eventWhere =
+      "WHERE session_id = ? AND seq = (SELECT seq FROM transcript_event_identities WHERE session_id = ? AND event_id = ?)";
     const original = database
-      .prepare(
-        "SELECT event_json FROM transcript_events WHERE session_id = ? AND seq = (SELECT seq FROM transcript_event_identities WHERE session_id = ? AND event_id = ?)",
-      )
+      .prepare(`SELECT event_json FROM transcript_events ${eventWhere}`)
       .get(target.sessionId, target.sessionId, firstModel.id)?.event_json;
-    if (typeof original !== "string") {
-      throw new Error("Fixture must retain its original transcript bytes");
-    }
-    database
-      .prepare(
-        "UPDATE transcript_events SET event_json = '{invalid-prior-event' WHERE session_id = ? AND seq = (SELECT seq FROM transcript_event_identities WHERE session_id = ? AND event_id = ?)",
-      )
-      .run(target.sessionId, target.sessionId, firstModel.id);
+    assert(typeof original === "string", "Fixture must retain its original transcript bytes");
+    const replaceEvent = database.prepare(
+      `UPDATE transcript_events SET event_json = ? ${eventWhere}`,
+    );
+    replaceEvent.run("{invalid-prior-event", target.sessionId, target.sessionId, firstModel.id);
     const before = database
       .prepare("SELECT MAX(seq) AS seq FROM transcript_events WHERE session_id = ?")
       .get(target.sessionId)?.seq;
-    if (typeof before !== "number") {
-      throw new Error("Fixture must contain transcript rows");
-    }
+    assert(typeof before === "number", "Fixture must contain transcript rows");
 
     const failure: unknown = await session.setThinkingLevel("low").catch((error: unknown) => error);
     expect(failure).toBeInstanceOf(SessionMetadataCommittedError);
@@ -652,11 +646,7 @@ describe("model transitions after SQLite write admission", () => {
     expect(() => manager.getEntries()).toThrow(failure);
     expect(manager.getSessionTarget()).toMatchObject(target);
     expect(manager.getSessionId()).toBe(target.sessionId);
-    database
-      .prepare(
-        "UPDATE transcript_events SET event_json = ? WHERE session_id = ? AND seq = (SELECT seq FROM transcript_event_identities WHERE session_id = ? AND event_id = ?)",
-      )
-      .run(original, target.sessionId, target.sessionId, firstModel.id);
+    replaceEvent.run(original, target.sessionId, target.sessionId, firstModel.id);
     expect(() => manager.getEntries()).toThrow(failure);
     expect(SessionManager.open(target).getEntries().at(-1)).toMatchObject(expectedEntry);
   });

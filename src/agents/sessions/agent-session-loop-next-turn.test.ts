@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import {
   createAssistantMessageEventStream,
   type Context,
@@ -68,6 +69,18 @@ const toolStream = (model: Model, name: string, id = "call") =>
     createAssistant(model, [{ type: "toolCall", id, name, arguments: {} }], "toolUse"),
   );
 
+function queueSnapshot(session: AgentSession) {
+  return {
+    steering: [...session.getSteeringMessages()],
+    followUp: [...session.getFollowUpMessages()],
+  };
+}
+
+function expectQueues(session: AgentSession, steering: string[] = [], followUp: string[] = []) {
+  expect(queueSnapshot(session)).toEqual({ steering, followUp });
+  expect(session.pendingMessageCount).toBe(steering.length + followUp.length);
+}
+
 function recordRequests(
   respond: (model: Model, index: number) => ReturnType<typeof textStream> = (model) =>
     textStream(model),
@@ -91,9 +104,7 @@ type NextTurnContext = Parameters<
 
 function nextTurnPreparer(session: AgentSession) {
   const hook = session.agent.prepareNextTurnWithContext;
-  if (!hook) {
-    throw new Error("context-aware next-turn hook was not installed");
-  }
+  assert(hook, "context-aware next-turn hook was not installed");
   const message = createAssistant(testModel, "turn complete");
   const newMessages = [message];
   return (context: NextTurnContext) => hook({ message, toolResults: [], context, newMessages });
@@ -349,12 +360,7 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
         async () => await (admissionCount++ === 0 ? firstGate : secondGate).promise,
       );
     };
-    let finishResponse: (() => void) | undefined;
-    const requests = recordRequests((model) => {
-      const response = heldResponse(model);
-      finishResponse = () => response.finish("finished");
-      return response.stream;
-    });
+    const { requests, finish } = mockHeldRun("finished");
     const { session } = await createTestSession({ extension: handlers });
     const settled = vi.fn();
     session.subscribe((event) => {
@@ -373,7 +379,7 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
 
     await expect(secondPrompt).rejects.toThrow("Agent is already processing a prompt");
     expect(settled).not.toHaveBeenCalled();
-    finishResponse?.();
+    finish();
     await firstPrompt;
     expect(settled).toHaveBeenCalledOnce();
   });
@@ -437,11 +443,7 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
         followUp: readonly string[];
       }> = [];
       const recordQueue = (type: "queue_update" | "image_message_start") => {
-        queueEvents.push({
-          type,
-          steering: [...session.getSteeringMessages()],
-          followUp: [...session.getFollowUpMessages()],
-        });
+        queueEvents.push({ type, ...queueSnapshot(session) });
       };
       session.subscribe((event) => {
         if (event.type === "queue_update") {
@@ -472,9 +474,7 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
       expect(sessionManager.getEntries()).toContainEqual(
         expect.objectContaining({ type: "message", message: queuedImage }),
       );
-      expect(session.pendingMessageCount).toBe(0);
-      expect(session.getSteeringMessages()).toEqual([]);
-      expect(session.getFollowUpMessages()).toEqual([]);
+      expectQueues(session);
       expect(queueEvents).toEqual([
         { type: "queue_update", ...scenario.initialQueue },
         { type: "queue_update", steering: [], followUp: [] },
@@ -491,19 +491,13 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
     const { queues, start } = queuedState(session);
     const [firstSteer, secondSteer] = queues.steeringQueue.messages;
     const [followUp] = queues.followUpQueue.messages;
-    if (!firstSteer || !secondSteer || !followUp) {
-      throw new Error("expected duplicate queued messages");
-    }
+    assert(firstSteer && secondSteer && followUp, "expected duplicate queued messages");
     await start(secondSteer);
     await start(secondSteer);
-    expect(session.getSteeringMessages()).toEqual(["same queued text"]);
-    expect(session.getFollowUpMessages()).toEqual(["same queued text"]);
-    expect(session.pendingMessageCount).toBe(2);
+    expectQueues(session, ["same queued text"], ["same queued text"]);
 
     await start(followUp);
-    expect(session.getSteeringMessages()).toEqual(["same queued text"]);
-    expect(session.getFollowUpMessages()).toEqual([]);
-    expect(session.pendingMessageCount).toBe(1);
+    expectQueues(session, ["same queued text"]);
 
     await start(firstSteer);
     expect(session.pendingMessageCount).toBe(0);
@@ -525,9 +519,7 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
     );
     const { queues, start } = queuedState(session);
     const [message] = queues.steeringQueue.messages;
-    if (!message) {
-      throw new Error("expected decorated queued message");
-    }
+    assert(message, "expected decorated queued message");
     const serialized = JSON.stringify(message);
     const restored = JSON.parse(serialized) as QueuedMessage;
     await start(restored);
@@ -563,9 +555,7 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
         clock.mockRestore();
       }
       const message = queued.mock.calls[0]?.[0];
-      if (!message || message.role !== "user") {
-        throw new Error("expected queued user message");
-      }
+      assert(message?.role === "user", "expected queued user message");
       const accepted = JSON.stringify(message);
       const guard = guardSessionManager(sessionManager);
       const entryId = guard.appendMessage(message);
