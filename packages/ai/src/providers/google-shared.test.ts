@@ -65,6 +65,7 @@ const thoughtOutput = (thinking: string, thinkingSignature?: string) => ({
 });
 const signature1 = "c2lnXzE=";
 const signature2 = "c2lnXzI=";
+const imageData = { mimeType: "image/png", data: "AAAA" };
 
 it.each([
   ["minimal", "LOW", true],
@@ -198,8 +199,8 @@ it("projects text, thinking, tool calls, response id, and usage into one stream"
     {
       responseId: "response-1",
       ...candidate([
-        { text: "thinking", thought: true, thoughtSignature: "dGhpbms=" },
-        { text: "hello" },
+        thoughtPart("thinking", "dGhpbms="),
+        textPart("hello"),
         { functionCall: { name: "lookup", args: { query: "cats" } } },
       ]),
     },
@@ -229,8 +230,8 @@ it("projects text, thinking, tool calls, response id, and usage into one stream"
     usage: { input: 8, output: 7, cacheRead: 2, totalTokens: 17 },
   });
   expect(output.content).toEqual([
-    { type: "thinking", thinking: "thinking", thinkingSignature: "dGhpbms=" },
-    { type: "text", text: "hello" },
+    thoughtOutput("thinking", "dGhpbms="),
+    textOutput("hello"),
     toolCall({ query: "cats" }, undefined, "lookup_123_1"),
   ]);
   expect(output.usage.cost.total).toBeGreaterThan(0);
@@ -301,12 +302,7 @@ it.each([
   ],
   [
     "no media signature attachment",
-    [
-      [
-        lookupPart(),
-        { inlineData: { mimeType: "image/png", data: "aW1hZ2U=" }, thoughtSignature: signature1 },
-      ],
-    ],
+    [[lookupPart(), { inlineData: imageData, thoughtSignature: signature1 }]],
     [toolCall()],
   ],
   [
@@ -402,7 +398,7 @@ it("closes partial text before reporting a failed candidate", async () => {
 it("preserves cancellation precedence over an observed candidate failure", async () => {
   const controller = new AbortController();
   const abortReason = Object.assign(new Error("Google run restarted"), { code: "GATEWAY_RESTART" });
-  const { output, result } = await runFixture([], {
+  const { result } = await runFixture([], {
     options: { signal: controller.signal },
     generateContentStream: async () => ({
       async *[Symbol.asyncIterator]() {
@@ -416,7 +412,6 @@ it("preserves cancellation precedence over an observed candidate failure", async
     errorCode: "GATEWAY_RESTART",
     errorMessage: "Google run restarted",
   });
-  expect(output.errorCode).toBe("GATEWAY_RESTART");
 });
 
 it("surfaces blocked Google prompts without a reason as typed stream errors", async () => {
@@ -610,7 +605,7 @@ it.each([
   { id: "models/gemini-3.1-pro-preview", deferred: false },
 ])("keeps parallel image results in the supported location for $id", ({ id, deferred }) => {
   const target: ReturnType<typeof makeModel> = { ...makeModel(id), input: ["text", "image"] };
-  const image = { inlineData: { mimeType: "image/png", data: "AAAA" } };
+  const image = { inlineData: imageData };
   const contents = convert(
     [
       user("Screenshot the page and check the weather."),
