@@ -1,10 +1,9 @@
 import { beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { MISSING_REPLY_NOTICE_TEXT } from "../../agents/reply-completion.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import type { TemplateContext } from "../templating.js";
 import { createDispatcher, emptyConfig } from "./dispatch-from-config.shared.test-harness.js";
 import * as dispatch from "./dispatch-from-config.test-support.js";
-import { clearInlineDirectives } from "./get-reply-directives-utils.js";
+import { createHandleInlineActionsInput } from "./get-reply-inline-actions.input.test-support.js";
 import { handleInlineActions } from "./get-reply-inline-actions.js";
 import { buildTestCtx } from "./test-ctx.js";
 import { createMockTypingController } from "./test-helpers.js";
@@ -47,50 +46,31 @@ it.each([
     cfg: emptyConfig,
     dispatcher,
     replyResolver: async (inbound, opts) => {
-      const inline = await handleInlineActions({
-        ctx: inbound,
-        sessionCtx: inbound as TemplateContext,
-        cfg: emptyConfig,
-        agentId: "main",
-        sessionKey,
-        sessionEntry,
-        sessionStore: { [sessionKey]: sessionEntry },
-        workspaceDir: "/unused",
-        isGroup: false,
-        opts,
-        typing,
-        allowTextCommands: false,
-        inlineStatusRequested: false,
-        command: {
-          surface: "discord",
-          channel: "discord",
-          channelId: "discord",
-          ownerList: [],
-          senderIsOwner: false,
-          isAuthorizedSender: false,
-          abortKey: sessionKey,
-          rawBodyNormalized: "queued input",
-          commandBodyNormalized: "queued input",
-        },
-        directives: clearInlineDirectives("queued input"),
-        cleanedBody: "queued input",
-        elevatedEnabled: false,
-        elevatedAllowed: false,
-        elevatedFailures: [],
-        defaultActivation: () => "always",
-        resolveModelLevels: async () => ({
-          resolvedThinkLevel: undefined,
-          resolvedReasoningLevel: "off",
+      const inline = await handleInlineActions(
+        createHandleInlineActionsInput({
+          ctx: inbound,
+          typing,
+          cleanedBody: "queued input",
+          command: {
+            surface: "discord",
+            channel: "discord",
+            channelId: "discord",
+            abortKey: sessionKey,
+            from: undefined,
+            to: undefined,
+          },
+          overrides: {
+            cfg: emptyConfig,
+            sessionKey,
+            sessionEntry,
+            sessionStore: { [sessionKey]: sessionEntry },
+            workspaceDir: "/unused",
+            opts,
+            model: "test-model",
+            abortedLastRun: true,
+          },
         }),
-        resolvedVerboseLevel: undefined,
-        resolvedElevatedLevel: "off",
-        resolveDefaultThinkingLevel: async () => "off",
-        provider: "openai",
-        model: "test-model",
-        contextTokens: 0,
-        abortedLastRun: true,
-        sessionScope: "per-sender",
-      });
+      );
       return inline.kind === "reply" ? inline.reply : continueTurn();
     },
   });
