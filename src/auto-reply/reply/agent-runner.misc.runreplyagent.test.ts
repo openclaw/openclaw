@@ -76,8 +76,11 @@ function sessionState(sessionKey: string, sessionEntry: SessionEntry) {
   return { sessionKey, sessionEntry, sessionStore: { [sessionKey]: sessionEntry } };
 }
 
-async function storedSession(overrides: Partial<SessionEntry> = {}, sessionKey = "main") {
-  const tmp = tempDirs.make("openclaw-reply-");
+async function storedSession(
+  overrides: Partial<SessionEntry> = {},
+  sessionKey = "main",
+  tmp = tempDirs.make("openclaw-reply-"),
+) {
   const storePath = path.join(tmp, "sessions.json");
   const sessionEntry = sessionFixture(overrides);
   await replaceSessionEntry({ storePath, sessionKey }, sessionEntry);
@@ -106,14 +109,7 @@ function assistantMessage(input: number, output: number, text = "NO_REPLY") {
     content: [{ type: "text", text }],
     stopReason: "stop",
     errorMessage: undefined,
-    usage: {
-      input,
-      output,
-      totalTokens: input + output,
-      cacheRead: 0,
-      cacheWrite: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createUsageFixture(input, output, input + output),
   });
 }
 
@@ -498,15 +494,11 @@ describe("runReplyAgent auto-compaction token update", () => {
   });
 
   it.each([
-    { label: "its upstream signal", superseded: false, expectedCode: "aborted_by_user" as const },
-    {
-      label: "a visible-turn supersession",
-      superseded: true,
-      expectedCode: "aborted_for_supersession" as const,
-    },
-  ])(
-    "records a settled fallback cancelled by $label without losing committed compaction",
-    async ({ superseded, expectedCode }) => {
+    [false, "aborted_by_user"],
+    [true, "aborted_for_supersession"],
+  ] as const)(
+    "records a settled fallback cancellation (superseded=%s) without losing committed compaction",
+    async (superseded, expectedCode) => {
       const upstreamAbort = new AbortController();
       const { storePath, sessionKey, sessionEntry, reply } = await storedSession(
         {
@@ -689,13 +681,13 @@ it("delivers tool progress with inline on over stored full", async () => {
 
 describe("runReplyAgent Active Memory inline debug", () => {
   it.each([
-    ["off", "on", undefined, true, true],
-    ["on", "off", undefined, true, false],
-    ["off", "on", "off", true, false],
-    ["on", "off", "on", true, true],
+    ["off", "on", undefined, true],
+    ["on", "off", undefined, false],
+    ["off", "on", "off", false],
+    ["on", "off", "on", true],
   ] as const)(
-    "refreshes plugin trace %s → %s with override %s and authority %s",
-    async (stored, live, override, authorized, visible) => {
+    "refreshes authorized plugin trace %s → %s with override %s (visible=%s)",
+    async (stored, live, override, visible) => {
       const { storePath, sessionEntry, reply } = await storedSession({ traceLevel: stored });
       runEmbeddedAgentMock.mockImplementationOnce(async () => {
         await replaceSessionEntry(
@@ -711,7 +703,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
         return replyResult("Normal reply", {});
       });
       const result = await createBaseRun({
-        run: { traceAuthorized: authorized, traceLevelOverride: override },
+        run: { traceAuthorized: true, traceLevelOverride: override },
         reply,
       }).run();
       expect(replyText(result).includes("Active Memory Debug")).toBe(visible);
@@ -963,10 +955,6 @@ it("does not leak hook-blocked CLI input in raw trace payloads", async () => {
 });
 
 describe("runReplyAgent messaging tool dedupe", () => {
-  function createRun() {
-    return channelRun("slack", "channel:C1").run();
-  }
-
   it.each([
     { state: undefined, routed: true, delivered: true },
     { state: "missing", routed: true, delivered: false },
@@ -983,7 +971,7 @@ describe("runReplyAgent messaging tool dedupe", () => {
           : undefined,
         meta: {},
       });
-      const result = await createRun();
+      const result = await channelRun("slack", "channel:C1").run();
       if (delivered) {
         expect(result).toBeUndefined();
       } else {
@@ -1039,15 +1027,11 @@ it.each([false, true])("enforces fallback <final> tags (memory flush=%s)", async
   let options: BaseRunOptions = {};
   if (memoryFlush) {
     const root = await fs.realpath(tempDirs.make("openclaw-memory-flush-tags-"));
-    const storePath = path.join(root, "sessions.json");
-    const sessionKey = "agent:main:memory-flush-tags";
-    const sessionEntry = sessionFixture({
-      totalTokens: 1_000_000,
-      totalTokensFresh: true,
-      totalTokensVersion: 1,
-      compactionCount: 0,
-    });
-    await replaceSessionEntry({ storePath, sessionKey }, sessionEntry);
+    const { sessionKey, reply } = await storedSession(
+      { totalTokens: 1_000_000, totalTokensFresh: true, totalTokensVersion: 1, compactionCount: 0 },
+      "agent:main:memory-flush-tags",
+      root,
+    );
     registerMemoryFlushPlanResolverForTest(() =>
       flushPlan({
         softThresholdTokens: 1_000,
@@ -1068,7 +1052,7 @@ it.each([false, true])("enforces fallback <final> tags (memory flush=%s)", async
         sessionKey,
         workspaceDir: root,
       },
-      reply: { ...sessionState(sessionKey, sessionEntry), storePath },
+      reply,
     };
   } else {
     runEmbeddedAgentMock.mockResolvedValueOnce(replyResult("ok", {}));
