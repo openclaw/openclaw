@@ -524,9 +524,7 @@ describe("OpenAI Codex OAuth flow", () => {
     let idleSocket: Socket | undefined;
     let manualPromptAborted = false;
     let manualPrompt: Promise<string> | undefined;
-    const prompter = {
-      note: vi.fn(async () => undefined),
-      progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+    const prompter = createTestWizardPrompter({
       text: vi.fn(
         (params: { signal?: AbortSignal }) =>
           new Promise<string>((_resolve, reject) => {
@@ -540,7 +538,7 @@ describe("OpenAI Codex OAuth flow", () => {
             );
           }),
       ),
-    } as unknown as ProviderAuthContext["prompter"];
+    });
     const oauth: ProviderAuthContext["oauth"] = {
       createVpsAwareHandlers: (params) => ({
         onAuth: async ({ url }: { url: string }) => {

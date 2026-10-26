@@ -1,6 +1,6 @@
 import type { RealtimeVoiceGatewayControl } from "openclaw/plugin-sdk/realtime-voice";
 import { findSourceImportBackedges } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { OPENAI_QUICKSILVER_OFFER_PATH } from "./realtime-quicksilver-session.js";
 import {
   FakeSocket,
@@ -51,12 +51,9 @@ function makeBroker(params?: Parameters<typeof createBroker>[0]) {
         { type: "api-key", token: "platform-key" },
       ),
     redeem: async (token: string, body?: string) => {
-      const response = createResponseHarness();
-      await harness.realtime.handler(createRequest({ token, body }), response.res);
+      const response = await post(harness.realtime, { token, body });
       const socket = harness.sockets[0];
-      if (!socket) {
-        throw new Error("Expected sideband socket");
-      }
+      assert(socket, "Expected sideband socket");
       return { socket, response };
     },
   };
@@ -335,13 +332,9 @@ describe("GPT-Live offer broker", () => {
   );
 
   it("keeps nonfatal error frames alive but closes on fatal auth errors", async () => {
-    const { realtime, sockets, logger } = makeBroker();
+    const { realtime, redeem, logger } = makeBroker();
     const reservation = await reserveLiveSession(realtime);
-    await post(realtime, { token: reservation.clientSecret });
-    const socket = sockets[0];
-    if (!socket) {
-      throw new Error("Expected sideband socket");
-    }
+    const { socket } = await redeem(reservation.clientSecret);
 
     emitSideband(socket, { type: "error", message: "recoverable turn failure" });
     expect(socket.closed).toBe(false);
@@ -386,25 +379,23 @@ describe("GPT-Live offer broker", () => {
     });
     expect(first.res.statusCode).toBe(200);
     expect(first.readBody()).toBe("v=answer\r\n");
-    const replay = await post(realtime, { token: reservation.clientSecret });
-    expect(replay.res.statusCode).toBe(401);
+    expect((await post(realtime, { token: reservation.clientSecret })).res.statusCode).toBe(401);
   });
 
   it("rejects expired tokens, unsupported methods, and content types", async () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
     const { realtime } = makeBroker();
-    const method = await post(realtime, { method: "GET" });
-    expect(method.res.statusCode).toBe(405);
-
-    const contentType = await post(realtime, { contentType: "application/json" });
-    expect(contentType.res.statusCode).toBe(415);
-    const contentTypePrefix = await post(realtime, { contentType: "application/sdp+json" });
-    expect(contentTypePrefix.res.statusCode).toBe(415);
+    for (const [request, statusCode] of [
+      [{ method: "GET" }, 405],
+      [{ contentType: "application/json" }, 415],
+      [{ contentType: "application/sdp+json" }, 415],
+    ] as const) {
+      expect((await post(realtime, request)).res.statusCode).toBe(statusCode);
+    }
 
     const reservation = await reserveLiveSession(realtime, { model: "gpt-live-1" });
     now.mockReturnValue(61_001);
-    const expired = await post(realtime, { token: reservation.clientSecret });
-    expect(expired.res.statusCode).toBe(401);
+    expect((await post(realtime, { token: reservation.clientSecret })).res.statusCode).toBe(401);
   });
 
   it("expires an unused Gateway-control offer despite a throwing callback", async () => {
@@ -424,8 +415,7 @@ describe("GPT-Live offer broker", () => {
     );
     expect.soft(expiryError).toBeUndefined();
     expect(onClose).toHaveBeenCalledExactlyOnceWith("completed");
-    const expired = await post(realtime, { token: reservation.clientSecret });
-    expect(expired.res.statusCode).toBe(401);
+    expect((await post(realtime, { token: reservation.clientSecret })).res.statusCode).toBe(401);
   });
 
   it("releases a reservation after an empty SDP offer", async () => {
@@ -538,9 +528,7 @@ describe("GPT-Live browser session lifecycle", () => {
       const { response } = await redeem(reservation.clientSecret, AUDIO_ONLY_SDP);
       expect(response.res.statusCode).toBe(200);
       const body = fetchImpl.mock.calls[0]?.[1]?.body;
-      if (typeof body !== "string") {
-        throw new Error("Expected initial call JSON");
-      }
+      assert(typeof body === "string", "Expected initial call JSON");
       const { session } = JSON.parse(body);
       expect(session.delegation).toEqual(
         classified ? { type: "client", ack_filler: false } : { type: "client" },
@@ -599,14 +587,10 @@ describe("GPT-Live browser session lifecycle", () => {
         },
       }),
     );
-    const response = createResponseHarness();
-    await realtime.handler(
-      createRequest({
-        token: reservation.clientSecret,
-        body: `${AUDIO_ONLY_SDP}m=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n`,
-      }),
-      response.res,
-    );
+    const response = await post(realtime, {
+      token: reservation.clientSecret,
+      body: `${AUDIO_ONLY_SDP}m=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n`,
+    });
     expect(response.res.statusCode).toBe(400);
     expect(fetchImpl).not.toHaveBeenCalled();
     expect(notifications).toEqual(["error", "close:error"]);
@@ -656,9 +640,7 @@ describe("GPT-Live browser session lifecycle", () => {
     expect(onReady).toHaveBeenCalledOnce();
     expect(bindBridge).not.toHaveBeenCalled();
     const control = bindControl.mock.calls[0]?.[0];
-    if (!control?.sendUserMessage) {
-      throw new Error("Expected native session text control");
-    }
+    assert(control?.sendUserMessage, "Expected native session text control");
     control.sendUserMessage("Ready for the next task");
     expect(parseSent(socket)).toEqual([
       {
@@ -675,7 +657,7 @@ describe("GPT-Live browser session lifecycle", () => {
     await realtime.broker.cancelBrowserSession(reservation);
     const sentAtClose = socket.sent.length;
     const eventsAtClose = onEvent.mock.calls.length;
-    control?.sendUserMessage?.("Late speech");
+    control.sendUserMessage("Late speech");
     emitSideband(socket, { type: "turn.done", turn: { role: "user", transcript: "late" } });
     emitSideband(socket, { type: "session.started", session: {} });
     expect(socket.sent).toHaveLength(sentAtClose);
