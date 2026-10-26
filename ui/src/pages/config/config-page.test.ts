@@ -604,128 +604,84 @@ it("retains camera controls and confirmed selection through retry and reset", as
   expectStored(undefined);
 });
 
-it("leaves Appearance while a camera selection is unresolved", async () => {
-  const pending = deferred();
-  switchActiveRealtimeTalkCameras.mockReturnValueOnce(pending.promise);
-  stubCameraDevices();
-  const configPages = pages
-    .filter((page) => page.id !== "settings" && page.id !== "config")
-    .filter((page) => page.id === "appearance" || page.id === "notifications");
-  const routes = await Promise.all(
-    configPages.map(async ({ id, path, aliases, loader, loaderDeps, component }) => {
-      const module = await component();
-      return {
-        id,
-        path,
-        aliases,
-        loader,
-        loaderDeps,
-        component: () => ({
-          ...module,
-          renderSolid: (props: SolidRouteProps<ConfigPageRouteData>) =>
-            createComponent(provider.wrapper, {
-              get children() {
-                return createComponent(module.renderSolid, props);
-              },
-            }),
-        }),
-      };
-    }),
-  );
-  const router = createRouter<
-    ConfigPageId,
-    ApplicationContext,
-    ReturnType<(typeof routes)[number]["component"]>,
-    ConfigPageRouteData
-  >({ routes });
-  const context = completeConfigContext(configContext({ router }));
-  const provider = createSolidApplicationContextProvider(context);
-  const view = mountRouterOutlet({ router, retryContext: context });
-  try {
-    await router.navigate("appearance", context);
-    await selectCamera(view);
-
-    await router.navigate("notifications", context);
-    await waitForSolid(() => {
-      expect(view.querySelector("h1")?.textContent).toBe("Notifications");
-      expect(view.querySelector("[data-settings-camera]")).toBeNull();
-    });
-    expect(loadSettings().realtimeTalkVideoDeviceId).toBeUndefined();
-
-    pending.resolve();
-    await waitForSolid(() => expect(loadSettings().realtimeTalkVideoDeviceId).toBe("camera-1"));
-    expect(view.querySelector("h1")?.textContent).toBe("Notifications");
-    expect(view.querySelector("[data-settings-camera]")).toBeNull();
-  } finally {
-    pending.resolve();
-    view.dispose();
-    router.stop();
-  }
-});
-
-it("leaves the settings route before a camera switch settles and still records its outcome", async () => {
-  const pending = deferred();
-  switchActiveRealtimeTalkCameras.mockReturnValueOnce(pending.promise);
-  stubCameraDevices();
-  const appearance = pages.find((page) => page.id === "appearance");
-  if (!appearance || appearance.id !== "appearance") {
-    throw new Error("Missing Appearance route");
-  }
-  const production = await appearance.component();
-  const module = {
-    ...production,
-    renderSolid: (props: SolidRouteProps<ConfigPageRouteData>) =>
-      createComponent(provider.wrapper, {
-        get children() {
-          return createComponent(production.renderSolid, props);
-        },
+it.each(["notifications", "usage"] as const)(
+  "leaves Appearance for %s while a camera selection is unresolved and records its outcome",
+  async (destination) => {
+    const pending = deferred();
+    switchActiveRealtimeTalkCameras.mockReturnValueOnce(pending.promise);
+    stubCameraDevices();
+    const configPages = pages
+      .filter((page) => page.id !== "settings" && page.id !== "config")
+      .filter((page) => page.id === "appearance" || page.id === destination);
+    const routes = await Promise.all(
+      configPages.map(async ({ id, path, aliases, loader, loaderDeps, component }) => {
+        const module = await component();
+        return {
+          id,
+          path,
+          aliases,
+          loader,
+          loaderDeps,
+          component: () => ({
+            ...module,
+            renderSolid: (props: SolidRouteProps<ConfigPageRouteData>) =>
+              createComponent(provider.wrapper, {
+                get children() {
+                  return createComponent(module.renderSolid, props);
+                },
+              }),
+          }),
+        };
       }),
-  };
-  const usageModule = {
-    renderSolid: () => {
-      const destination = document.createElement("p");
-      destination.textContent = "Usage destination";
-      return destination;
-    },
-  };
-  const router = createRouter<
-    ConfigPageId | "usage",
-    ApplicationContext,
-    typeof module | typeof usageModule,
-    ConfigPageRouteData
-  >({
-    routes: [
-      { ...appearance, component: () => module },
-      definePage({
-        id: "usage",
-        path: "/usage",
-        component: () => usageModule,
-      }),
-    ],
-  });
-  const context = completeConfigContext(configContext({ router, theme: { refresh: vi.fn() } }));
-  const provider = createSolidApplicationContextProvider(context);
-  const outlet = mountRouterOutlet({ router, retryContext: context });
-  try {
-    await router.navigate("appearance", context);
-    await selectCamera(outlet);
-
-    await router.navigate("usage", context);
-    await waitForSolid(() => {
-      expect(outlet.textContent).toContain("Usage destination");
-      expect(outlet.querySelector("openclaw-config-page")).toBeNull();
+    );
+    const usageModule = {
+      renderSolid: () => {
+        const paragraph = document.createElement("p");
+        paragraph.textContent = "Usage destination";
+        return paragraph;
+      },
+    };
+    const router = createRouter<
+      ConfigPageId | "usage",
+      ApplicationContext,
+      ReturnType<(typeof routes)[number]["component"]> | typeof usageModule,
+      ConfigPageRouteData
+    >({
+      routes: [
+        ...routes,
+        definePage({ id: "usage", path: "/usage", component: () => usageModule }),
+      ],
     });
-    expect(loadSettings().realtimeTalkVideoDeviceId).toBeUndefined();
-    pending.resolve();
-    await waitForSolid(() => expect(loadSettings().realtimeTalkVideoDeviceId).toBe("camera-1"));
-    expect(outlet.textContent).toContain("Usage destination");
-    expect(outlet.querySelector("openclaw-config-page")).toBeNull();
-  } finally {
-    pending.resolve();
-    outlet.dispose();
-    router.stop();
-  }
-});
+    const context = completeConfigContext(configContext({ router, theme: { refresh: vi.fn() } }));
+    const provider = createSolidApplicationContextProvider(context);
+    const view = mountRouterOutlet({ router, retryContext: context });
+    const expectDestination = () => {
+      if (destination === "notifications") {
+        expect(view.querySelector("h1")?.textContent).toBe("Notifications");
+        expect(view.querySelector("[data-settings-camera]")).toBeNull();
+      } else {
+        expect(view.textContent).toContain("Usage destination");
+        expect(view.querySelector("openclaw-config-page")).toBeNull();
+      }
+    };
+    try {
+      await router.navigate("appearance", context);
+      await selectCamera(view);
+
+      await router.navigate(destination, context);
+      await waitForSolid(expectDestination);
+      expect(loadSettings().realtimeTalkVideoDeviceId).toBeUndefined();
+
+      pending.resolve();
+      await waitForSolid(() => expect(loadSettings().realtimeTalkVideoDeviceId).toBe("camera-1"));
+      expectDestination();
+    } finally {
+      pending.resolve();
+      view.dispose();
+      router.stop();
+    }
+  },
+);
 
 it("updates mobile pairing eligibility when connection and admin access are published", () => {
   const openDevicePairSetup = vi.fn();

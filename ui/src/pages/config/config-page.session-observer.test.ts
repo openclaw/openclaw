@@ -54,8 +54,16 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function element(root: ParentNode, selector: string): HTMLElement {
-  return expectDefined(root.querySelector<HTMLElement>(selector), selector);
+function element<T extends HTMLElement = HTMLElement>(root: ParentNode, selector: string): T {
+  return expectDefined(root.querySelector<T>(selector), selector);
+}
+
+function objectSchema(properties: Record<string, object>) {
+  return { type: "object", properties };
+}
+
+function booleanSection() {
+  return objectSchema({ enabled: { type: "boolean" } });
 }
 
 function sectionRoute(pageId: ConfigPageId, search = "", hash = "") {
@@ -127,12 +135,7 @@ describe("ConfigPage navigation", () => {
       const config = { [section]: { enabled: true } };
       Object.assign(base.runtimeConfig.state, {
         configForm: config,
-        configSchema: {
-          type: "object",
-          properties: {
-            [section]: { type: "object", properties: { enabled: { type: "boolean" } } },
-          },
-        },
+        configSchema: objectSchema({ [section]: booleanSection() }),
       });
       const view = mountRoute(base, pageId, `?section=${section}`);
       const editor = view.container.querySelector(`#config-section-${section}`)!;
@@ -341,13 +344,10 @@ describe("ConfigPage navigation", () => {
       (pageId, section, targetId) => {
         const frames = animationFrames();
         const context = routeContext();
-        context.runtimeConfig.state.configSchema = {
-          type: "object",
-          properties: {
-            session: { type: "object", properties: { enabled: { type: "boolean" } } },
-            transcripts: { type: "object", properties: { enabled: { type: "boolean" } } },
-          },
-        };
+        context.runtimeConfig.state.configSchema = objectSchema({
+          session: booleanSection(),
+          transcripts: booleanSection(),
+        });
         const view = mountRoute(context, pageId, `?section=${section}`, `#${targetId}`);
         const target = element(view.page, `#${targetId}`);
         const scroll = vi.fn();
@@ -374,9 +374,7 @@ describe("ConfigPage navigation", () => {
       async (transition) => {
         const view = mountRoute(routeContext(), "communications");
         const { page } = view;
-        const animation = animationFrames();
-        const { frames } = animation;
-        const run = () => animation.run();
+        const { frames, run } = animationFrames();
         const previousTarget = element(page, "#config-section-messages");
         const previousScroll = vi.fn();
         previousTarget.scrollIntoView = previousScroll;
@@ -416,23 +414,20 @@ describe("ConfigPage model catalog lifecycle", () => {
   });
 
   function observerModels(view: ReturnType<typeof mountConfigPage>) {
-    const picker = expectDefined(
-      view.page.querySelector<
-        HTMLElement & {
-          params: { options: Array<{ value: string; label: string }> };
-        }
-      >("#settings-appearance-sidebar openclaw-select-picker"),
-      "observer model picker",
-    );
+    const picker = element<
+      HTMLElement & {
+        params: { options: Array<{ value: string; label: string }> };
+      }
+    >(view.page, "#settings-appearance-sidebar openclaw-select-picker");
     return picker.params.options.slice(2).map(({ value, label }) => ({ value, label }));
   }
 
-  function expectedModels(models: ModelCatalogEntry[]) {
-    return models.map((model) => ({ value: `${model.provider}/${model.id}`, label: model.name }));
-  }
-
   function expectModels(view: ReturnType<typeof mountConfigPage>, models: ModelCatalogEntry[]) {
-    return waitForSolid(() => expect(observerModels(view)).toEqual(expectedModels(models)));
+    const options = models.map(({ provider, id, name }) => ({
+      value: `${provider}/${id}`,
+      label: name,
+    }));
+    return waitForSolid(() => expect(observerModels(view)).toEqual(options));
   }
 
   function catalogRequest(read: (params: unknown) => Promise<ModelCatalogResult>) {
@@ -667,14 +662,11 @@ it("keeps Messages default and opens capture with a collapsed schema editor insi
     }
     if (method === "config.schema") {
       return {
-        schema: {
-          type: "object",
-          properties: {
-            messages: { type: "object", properties: { ackReaction: { type: "string" } } },
-            tts: { type: "object", properties: { enabled: { type: "boolean" } } },
-            transcripts: { type: "object", properties: { enabled: { type: "boolean" } } },
-          },
-        },
+        schema: objectSchema({
+          messages: objectSchema({ ackReaction: { type: "string" } }),
+          tts: booleanSection(),
+          transcripts: booleanSection(),
+        }),
         uiHints: {},
       };
     }
@@ -693,9 +685,8 @@ it("keeps Messages default and opens capture with a collapsed schema editor insi
     const view = mountConfigPage(context, { pageId: "communications" });
     const container = view.container;
     expect(container.querySelector("openclaw-meeting-capture-settings")).toBeNull();
-    const captureTab = container.querySelector<HTMLElement>(
-      '.hub-tab[data-tab-value="transcripts"]',
-    )!;
+    const tab = (id: string) => element(container, `.hub-tab[data-tab-value="${id}"]`);
+    const captureTab = tab("transcripts");
     expect(captureTab.textContent?.trim()).toBe("Meeting capture");
     const tabs = captureTab.closest(".hub-tabs")!;
     expect(tabs.querySelector("[active]")?.getAttribute("data-tab-value")).toBe("messages");
@@ -706,19 +697,17 @@ it("keeps Messages default and opens capture with a collapsed schema editor insi
       return panel;
     });
     flush();
-    const advanced = capture.querySelector<HTMLDetailsElement>("details")!;
-    expect(advanced).not.toBeNull();
+    const advanced = element<HTMLDetailsElement>(capture, "details");
     expect(advanced.open).toBe(false);
     expect(advanced.querySelector("#config-section-transcripts")).not.toBeNull();
     const toggle = capture.querySelector<HTMLInputElement>(".settings-toggle__input")!;
     toggle.checked = false;
     toggle.dispatchEvent(new Event("change"));
     expect(runtimeConfig.state.configForm).toMatchObject({ transcripts: { enabled: false } });
-    expect(
-      [...capture.querySelectorAll("button")].some(
-        (button) => button.textContent?.trim() === "Save",
-      ),
-    ).toBe(false);
+    const buttons = [...capture.querySelectorAll("button")].map((button) =>
+      button.textContent?.trim(),
+    );
+    expect(buttons).not.toContain("Save");
     const advancedToggled = new Promise<void>((resolve) => {
       advanced.addEventListener("toggle", () => resolve(), { once: true });
     });
@@ -732,9 +721,7 @@ it("keeps Messages default and opens capture with a collapsed schema editor insi
     expect(container.querySelector("openclaw-meeting-capture-settings")).toBe(capture);
     expect(capture.querySelector("details")).toBe(advanced);
     await advancedToggled;
-    const messagesTab = container.querySelector<HTMLElement>(
-      '.hub-tab[data-tab-value="messages"]',
-    )!;
+    const messagesTab = tab("messages");
     messagesTab.focus();
     messagesTab.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     flush();
