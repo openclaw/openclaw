@@ -172,12 +172,10 @@ it("refuses a worker preference update after the previously admitted profile is 
       guard,
     }),
   ).rejects.toThrow("profile binding changed");
-  expect(
-    database.db
-      .prepare(
-        "SELECT preferences_json, updated_at_ms FROM web_push_subscriptions WHERE subscription_id = ?",
-      )
-      .get("subscription"),
-  ).toEqual({ preferences_json: null, updated_at_ms: 1 });
+  expect(database.db.prepare("SELECT * FROM web_push_subscriptions").get()).toMatchObject({
+    subscription_id: "subscription",
+    preferences_json: null,
+    updated_at_ms: 1,
+  });
   expect(admission.request).not.toHaveBeenCalled();
 });

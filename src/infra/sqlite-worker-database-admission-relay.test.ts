@@ -163,21 +163,17 @@ it.each([
        }`,
     budgetMs,
   );
-  const result = await new Promise((resolve, reject) => {
-    let reply: unknown;
-    worker.on("error", reject);
-    // Exit can drain the result message and fire before an await continuation.
-    worker.once("exit", () => resolve(reply));
-    worker.on("message", (message) => {
-      if ("waiting" in message) {
-        waitedPastThirtySeconds = true;
-        expect(message.waiting).toBeGreaterThan(480_000);
-        expect(message.waiting).toBeLessThanOrEqual(488_000);
-      } else {
-        reply = message;
-      }
-    });
+  let result: unknown;
+  worker.on("message", (message) => {
+    if ("waiting" in message) {
+      waitedPastThirtySeconds = true;
+      expect(message.waiting).toBeGreaterThan(480_000);
+      expect(message.waiting).toBeLessThanOrEqual(488_000);
+    } else {
+      result = message;
+    }
   });
+  await once(worker, "exit");
   expect(waitedPastThirtySeconds).toBe(budgetMs === undefined);
   expect(result).toEqual({
     message: "SQLite admission facts exchange timed out; the host did not reply",

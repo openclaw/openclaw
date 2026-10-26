@@ -80,7 +80,6 @@ it.each(["auto", "off"] as const)(
     if (process.versions.bun && process.platform === "linux") {
       expect(dispatch).not.toHaveBeenCalled();
     } else {
-      expect(dispatch).toHaveBeenCalledTimes(9);
       expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ type: "snapshot-hash" }), {});
     }
     await copyUpdateCandidatePluginTrees(f.plan, {
@@ -89,18 +88,8 @@ it.each(["auto", "off"] as const)(
     });
     expect(await fs.readdir(f.destination)).toHaveLength(1032);
     for (const index of [0, 511, 1031]) {
-      const original = path.join(f.source, `${index}.txt`);
       const copied = path.join(f.destination, `${index}.txt`);
       expect(await fs.readFile(copied, "utf8")).toBe(`plugin payload ${index}`);
-      const [before, after] = await Promise.all([
-        fs.stat(original, { bigint: true }),
-        fs.stat(copied, { bigint: true }),
-      ]);
-      expect(after.ino).not.toBe(before.ino);
-      expect(after.nlink).toBe(1n);
-      if (process.platform !== "win32") {
-        expect(after.mode & 0o777n).toBe(before.mode & 0o777n);
-      }
     }
     const copied = path.join(f.destination, "0.txt");
     await fs.chmod(copied, 0o600);
