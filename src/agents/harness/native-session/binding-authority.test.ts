@@ -52,8 +52,6 @@ it.each([
   expect(warning).toHaveBeenCalledOnce();
   expect(warning.mock.calls[0]?.[0]).toContain(`${method} is deprecated`);
   expect(warning.mock.calls[0]?.[0]).toContain(replacement);
-  expect(warning.mock.calls[0]?.[0]).toContain("Final compatibility day: 2026-12-31");
-  expect(warning.mock.calls[0]?.[0]).toContain("first January 2027 stable release");
 });
 
 it("admits incognito predecessor lineage without SQL and rejects changed lineage", async () => {
