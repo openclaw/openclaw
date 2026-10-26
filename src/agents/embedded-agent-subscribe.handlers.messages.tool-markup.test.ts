@@ -152,34 +152,31 @@ describe("native tool-call marker boundaries", () => {
     arguments: { path: "fixture.txt" },
   };
 
-  it("keeps a hidden marker out of later prose in an unfinished snapshot", () => {
-    const ctx = createMessageEndContext();
-    const message = makeAgentAssistantMessage({
-      api: "openai-completions",
+  it.each([
+    {
+      name: "keeps a hidden marker out of later prose in an unfinished snapshot",
+      createContext: createMessageEndContext,
       content: [textPart("<"), read, textPart("Done")],
-    });
-    const original = structuredClone(message);
-    expect(extractAssistantStreamSnapshot(ctx, message, { final: false })).toMatchObject({
-      rawText: "<Done",
-      text: "Done",
-      blockText: "Done",
-    });
-    expect(message).toEqual(original);
-  });
-
-  it("does not borrow a commentary fence to preserve a later unphased marker", () => {
-    const ctx = createMessageUpdateContext();
-    const message = makeAgentAssistantMessage({
-      api: "openai-completions",
+      options: { final: false },
+      expected: { rawText: "<Done", text: "Done", blockText: "Done" },
+    },
+    {
+      name: "does not borrow a commentary fence to preserve a later unphased marker",
+      createContext: createMessageUpdateContext,
       content: [
         phasedText("```", "commentary"),
         { ...read, id: "read-first" },
         textPart("<tool_"),
         read,
       ],
-    });
+      options: undefined,
+      expected: { text: "", blockText: "" },
+    },
+  ])("$name", ({ content, options, expected, createContext }) => {
+    const ctx = createContext();
+    const message = makeAgentAssistantMessage({ api: "openai-completions", content });
     const original = structuredClone(message);
-    expect(extractAssistantStreamSnapshot(ctx, message)).toMatchObject({ text: "", blockText: "" });
+    expect(extractAssistantStreamSnapshot(ctx, message, options)).toMatchObject(expected);
     expect(message).toEqual(original);
   });
 
@@ -225,28 +222,21 @@ describe("native tool-call marker boundaries", () => {
     },
   );
 
-  it.each([
-    { content: [textPart("<")], expected: "<" },
-    { content: [textPart("<tool_")], expected: "<tool_" },
-    { content: [textPart("a < b"), read], expected: "a < b" },
-    { content: [textPart("Use `<tool_` literally."), read], expected: "Use `<tool_` literally." },
-    {
-      content: [textPart("```xml\n"), textPart("<tool_"), textPart("\n```"), read],
-      expected: "```xml\n<tool_\n```",
-      blockText: "```xml\n\n<tool_\n\n```",
-    },
-    {
-      content: [phasedText("Working", "commentary"), phasedText("a < b", "final_answer"), read],
-      expected: "a < b",
-    },
-    { content: [textPart("<"), textPart("tool_"), read], expected: "" },
-    {
-      content: [textPart("Use "), textPart("<tool_"), read],
-      expected: "Use\n<tool_",
-      blockText: "Use \n<tool_",
-    },
-    { content: [textPart("    <tool_"), read], expected: "    <tool_" },
-  ])("projects native-boundary control %#", ({ content, expected, blockText }) => {
+  it.each<[AssistantMessage["content"], string, string?]>([
+    [[textPart("<")], "<"],
+    [[textPart("<tool_")], "<tool_"],
+    [[textPart("a < b"), read], "a < b"],
+    [[textPart("Use `<tool_` literally."), read], "Use `<tool_` literally."],
+    [
+      [textPart("```xml\n"), textPart("<tool_"), textPart("\n```"), read],
+      "```xml\n<tool_\n```",
+      "```xml\n\n<tool_\n\n```",
+    ],
+    [[phasedText("Working", "commentary"), phasedText("a < b", "final_answer"), read], "a < b"],
+    [[textPart("<"), textPart("tool_"), read], ""],
+    [[textPart("Use "), textPart("<tool_"), read], "Use\n<tool_", "Use \n<tool_"],
+    [[textPart("    <tool_"), read], "    <tool_"],
+  ])("projects native-boundary control %#", (content, expected, blockText) => {
     const ctx = createMessageUpdateContext();
     const message = makeAgentAssistantMessage({ api: "openai-completions", content });
     expect(extractAssistantVisibleText(message)).toBe(expected);

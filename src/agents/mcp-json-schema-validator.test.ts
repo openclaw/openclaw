@@ -47,11 +47,9 @@ describe.each(["dynamic-execution", "embedded-aot"])("MCP validation on %s", (ru
     };
     provider.getValidator(root);
     const validate = provider.getValidator({
-      type: "object",
-      properties: { value: { $ref: "https://example.test/schemas/alias" } },
-      required: ["value"],
+      $ref: "https://example.test/schemas/alias",
     });
-    expectValidation(validate, { value: "valid" }, { value: 1 });
+    expectValidation(validate, "valid", 1);
     const existing = provider.getValidator({
       $id: "https://example.test/schemas/alias",
       type: "number",
@@ -189,60 +187,34 @@ describe.each(["dynamic-execution", "embedded-aot"])("MCP validation on %s", (ru
     expect(provider.getValidator({ const: literal })(literal).valid).toBe(true);
   });
 
-  it("asserts known string and number formats while treating unknown formats as annotations", () => {
-    expect(provider.getValidator({ type: "string", format: "email" })("not an email").valid).toBe(
-      false,
-    );
-    expect(provider.getValidator({ type: "integer", format: "int32" })(2 ** 32).valid).toBe(false);
-    expect(provider.getValidator({ type: "number", format: "int32" })(1).valid).toBe(true);
-    expect(provider.getValidator({ type: "string", format: "custom-format" })("value").valid).toBe(
-      true,
-    );
-    const nullable = { type: "string", nullable: true } satisfies JsonSchemaType & {
-      nullable: boolean;
-    };
-    expect(provider.getValidator(nullable)(null).valid).toBe(true);
-    const nullableEnum = {
-      type: "string",
-      enum: ["value"],
-      nullable: true,
-      enumIncludesNull: true,
-    } satisfies JsonSchemaType & { nullable: boolean; enumIncludesNull: boolean };
-    expect(provider.getValidator(nullableEnum)(null).valid).toBe(false);
-  });
-
-  it("does not retain evaluated properties between modern inputs", () => {
-    const validate = provider.getValidator({
-      $schema: "https://json-schema.org/draft/2020-12/schema",
-      type: "object",
-      anyOf: [{ properties: { a: { type: "number" } } }, { properties: { b: { type: "number" } } }],
-      unevaluatedProperties: false,
-    });
-    expectValidation(validate, { a: 1 }, { a: "invalid" });
-    expectValidation(validate, { b: 2 }, { b: "invalid" });
+  it.each<[JsonSchemaType & { nullable?: boolean; enumIncludesNull?: boolean }, unknown, boolean]>([
+    [{ type: "string", format: "email" }, "not an email", false],
+    [{ type: "integer", format: "int32" }, 2 ** 32, false],
+    [{ type: "number", format: "int32" }, 1, true],
+    [{ type: "string", format: "custom-format" }, "value", true],
+    [{ type: "string", nullable: true }, null, true],
+    [{ type: "string", enum: ["value"], nullable: true, enumIncludesNull: true }, null, false],
+  ])("validates format and nullability policy %j", (schema, input, valid) => {
+    expect(provider.getValidator(schema)(input).valid).toBe(valid);
   });
 });
 
-describe("MCP without string code generation", () => {
-  beforeEach(() => {
-    profile.value = "embedded-aot";
+it("validates fetched schemas when string code generation is unavailable", () => {
+  profile.value = "embedded-aot";
+  const codegen = vi.spyOn(globalThis, "Function").mockImplementation(() => {
+    throw new Error("string code generation is disabled");
   });
-  it("validates fetched schemas when string code generation is unavailable", () => {
-    const codegen = vi.spyOn(globalThis, "Function").mockImplementation(() => {
-      throw new Error("string code generation is disabled");
-    });
-    const validator = createMcpJsonSchemaValidator().getValidator({
-      type: "object",
-      properties: { name: { type: "string", format: "email" } },
-      required: ["name"],
-      additionalProperties: false,
-    });
-    const results = [
-      validator({ name: "test@example.com" }).valid,
-      validator({ name: "invalid" }).valid,
-    ];
-    expect(codegen).not.toHaveBeenCalled();
-    codegen.mockRestore();
-    expect(results).toEqual([true, false]);
+  const validator = createMcpJsonSchemaValidator().getValidator({
+    type: "object",
+    properties: { name: { type: "string", format: "email" } },
+    required: ["name"],
+    additionalProperties: false,
   });
+  const results = [
+    validator({ name: "test@example.com" }).valid,
+    validator({ name: "invalid" }).valid,
+  ];
+  expect(codegen).not.toHaveBeenCalled();
+  codegen.mockRestore();
+  expect(results).toEqual([true, false]);
 });

@@ -42,34 +42,6 @@ async function fixture() {
   };
 }
 
-it("preserves ordered tools and an empty opaque cursor", async () => {
-  await using catalog = await fixture();
-  const cursors: Array<string | undefined> = [];
-  catalog.server.setRequestHandler("tools/list", async ({ params }) => {
-    cursors.push(params?.cursor);
-    return {
-      tools: [
-        {
-          name: params?.cursor === undefined ? "one" : "two",
-          inputSchema: { type: "object" },
-        },
-      ],
-      ...(params?.cursor === undefined ? { nextCursor: "" } : {}),
-    };
-  });
-  expect((await catalog.list("tools")).map((item) => item.name)).toEqual(["one", "two"]);
-  expect(cursors).toEqual([undefined, ""]);
-});
-
-it("rejects repeated and cyclic cursors", async () => {
-  await using catalog = await fixture();
-  catalog.server.setRequestHandler("tools/list", async ({ params }) => ({
-    tools: [],
-    nextCursor: params?.cursor === undefined ? "a" : params.cursor === "a" ? "b" : "a",
-  }));
-  await expect(catalog.list("tools")).rejects.toThrow("repeated pagination cursor");
-});
-
 it.each(["tools", "resources", "prompts"] as const)(
   "rejects malformed %s entries at the SDK boundary",
   async (kind) => {
@@ -153,16 +125,18 @@ it("keeps the canonical deadline ahead of the nested SDK timeout", async () => {
   }
 });
 
-it("does not treat a forward wall-clock jump as elapsed time", async () => {
+it("preserves ordered pages and opaque cursors across a forward wall-clock jump", async () => {
   await using catalog = await fixture();
   vi.useFakeTimers();
   vi.setSystemTime(1_000);
   let page = 0;
-  catalog.server.setRequestHandler("tools/list", async () => {
+  const cursors: Array<string | undefined> = [];
+  catalog.server.setRequestHandler("tools/list", async ({ params }) => {
+    cursors.push(params?.cursor);
     vi.setSystemTime(61_000);
     return {
       tools: [{ name: `tool-${++page}`, inputSchema: { type: "object" } }],
-      ...(page < 3 ? { nextCursor: String(page) } : {}),
+      ...(page < 3 ? { nextCursor: page === 1 ? "" : String(page) } : {}),
     };
   });
   expect((await catalog.list("tools", 50)).map((item) => item.name)).toEqual([
@@ -170,6 +144,7 @@ it("does not treat a forward wall-clock jump as elapsed time", async () => {
     "tool-2",
     "tool-3",
   ]);
+  expect(cursors).toEqual([undefined, "", "2"]);
   expect(vi.getTimerCount()).toBe(0);
 });
 

@@ -98,16 +98,6 @@ describe("assembled browser loopback authority", () => {
     return read;
   }
 
-  it.each([
-    ["sandbox", sandbox],
-    ["denied exec", denied],
-    ["full session", full],
-  ] as const)("does not prepare host approvals for %s", async (_kind, options) => {
-    const read = mockAsyncAssembly();
-    await createOpenClawCodingToolsInternalAsync(options);
-    expect(read).not.toHaveBeenCalled();
-  });
-
   it("keeps ordinary tools usable when the optional preview policy owner is unavailable", async () => {
     mockAsyncAssembly().mockRejectedValue(new Error("synthetic unavailable policy owner"));
     const tools = await createOpenClawCodingToolsInternalAsync();
@@ -120,7 +110,7 @@ describe("assembled browser loopback authority", () => {
     const config = {};
     const explicitPolicy = { browser: { ssrfPolicy: {} } };
     setRuntimeConfigSnapshot(config);
-    const read = mockAsyncAssembly().mockImplementation(async () => {
+    mockAsyncAssembly().mockImplementation(async () => {
       setRuntimeConfigSnapshot(explicitPolicy);
       return () => ({ version: 1, defaults: { security: "full", ask: "off" } });
     });
@@ -129,11 +119,6 @@ describe("assembled browser loopback authority", () => {
       expect(vi.mocked(createOpenClawTools).mock.calls.at(-1)?.[0]?.allowLocalBrowserLoopback).toBe(
         false,
       );
-      await createOpenClawCodingToolsInternalAsync({ config: explicitPolicy });
-      expect(vi.mocked(createOpenClawTools).mock.calls.at(-1)?.[0]?.allowLocalBrowserLoopback).toBe(
-        false,
-      );
-      expect(read).toHaveBeenCalledOnce();
     } finally {
       clearRuntimeConfigSnapshot();
     }

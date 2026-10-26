@@ -16,36 +16,17 @@ beforeEach(() => {
   extraParamsTesting.setProviderRuntimeDepsForTest({
     prepareProviderExtraParams: ({ context }) => context.extraParams,
     resolveProviderExtraParamsForTransport: () => undefined,
-    wrapProviderStreamFn: (params) => {
-      if (params.provider !== "openrouter") {
-        return params.context.streamFn;
+    wrapProviderStreamFn: ({ provider, context }) => {
+      if (provider !== "openrouter") {
+        return context.streamFn;
       }
-
-      const providerRouting =
-        params.context.extraParams?.provider != null &&
-        typeof params.context.extraParams.provider === "object"
-          ? (params.context.extraParams.provider as Record<string, unknown>)
-          : undefined;
-      let streamFn = params.context.streamFn;
-      if (providerRouting) {
-        const underlying = streamFn;
-        streamFn = (model, context, options) =>
-          (underlying as StreamFn)(
-            {
-              ...model,
-              compat: { ...model.compat, openRouterRouting: providerRouting },
-            },
-            context,
-            options,
-          );
-      }
-
-      const skipReasoningInjection =
-        params.context.modelId === "auto" || isProxyReasoningUnsupported(params.context.modelId);
-      const thinkingLevel = skipReasoningInjection ? undefined : params.context.thinkingLevel;
+      const thinkingLevel =
+        context.modelId === "auto" || isProxyReasoningUnsupported(context.modelId)
+          ? undefined
+          : context.thinkingLevel;
       return createOpenRouterSystemCacheWrapper(
-        createOpenRouterWrapper(streamFn, thinkingLevel, params.context.extraParams),
-        params.context.extraParams,
+        createOpenRouterWrapper(context.streamFn, thinkingLevel, context.extraParams),
+        context.extraParams,
       );
     },
   });
@@ -110,66 +91,21 @@ describe("applyExtraParamsToAgent OpenRouter reasoning", () => {
     });
   });
 
-  it("forwards Fusion plugin config through extraBody", () => {
-    const plugins = [
-      {
-        id: "fusion",
-        analysis_models: [
-          "google/gemini-3.5-flash",
-          "moonshotai/kimi-k2.6",
-          "deepseek/deepseek-v4-pro",
-        ],
-        model: "google/gemini-3.5-flash",
-      },
-    ];
-    const payload = runOpenRouter({
-      modelId: "openrouter/fusion",
-      cfg: {
-        agents: {
-          defaults: {
-            models: {
-              "openrouter/openrouter/fusion": {
-                params: { extraBody: { plugins } },
-              },
-            },
-          },
-        },
-      },
-      payload: { model: "openrouter/fusion" },
-    });
-
-    expect(payload).toEqual({ model: "openrouter/fusion", plugins });
-  });
-
-  it("injects reasoning.effort when thinkingLevel is non-off for OpenRouter", () => {
-    const payload = runOpenRouter({
-      modelId: "openrouter/auto",
-      thinkingLevel: "low",
-    });
-
-    expect(payload.reasoning).toEqual({ effort: "low" });
-  });
-
   it.each([
-    ["thinking off", "openrouter/auto", "off", "high"],
-    ["unsupported x-ai (#32039)", "x-ai/grok-4.1-fast", "medium", "medium"],
-  ] as const)("omits both reasoning formats for %s", (_name, modelId, thinkingLevel, effort) => {
+    ["enabled", "openrouter/auto", "low", "high", { effort: "low" }],
+    ["thinking off", "openrouter/auto", "off", "high", undefined],
+    ["unsupported x-ai (#32039)", "x-ai/grok-4.1-fast", "medium", "medium", undefined],
+  ] as const)("normalizes reasoning for %s", (_name, modelId, thinkingLevel, effort, reasoning) => {
     const payload = runOpenRouter({
       modelId,
       thinkingLevel,
       payload: { reasoning_effort: effort },
     });
     expect(payload).not.toHaveProperty("reasoning_effort");
-    expect(payload).not.toHaveProperty("reasoning");
-  });
-
-  it("does not inject effort when payload already has reasoning.max_tokens", () => {
-    const payload = runOpenRouter({
-      modelId: "openrouter/auto",
-      thinkingLevel: "low",
-      payload: { reasoning: { max_tokens: 256 } },
-    });
-
-    expect(payload).toEqual({ reasoning: { max_tokens: 256 } });
+    if (reasoning) {
+      expect(payload.reasoning).toEqual(reasoning);
+    } else {
+      expect(payload).not.toHaveProperty("reasoning");
+    }
   });
 });

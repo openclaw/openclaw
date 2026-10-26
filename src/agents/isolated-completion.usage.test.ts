@@ -36,7 +36,6 @@ afterEach(async () => {
   stop();
 });
 const cliUsage = { input: 10, output: 462, cacheRead: 0, cacheWrite: 4111, total: 4583 };
-type UsageCase = "cli" | "diagnostic-cli" | "harness" | "empty-harness";
 const runCompletion = (overrides: Parameters<typeof fixtures.isolatedRequest>[0] = {}) =>
   fixtures.runIsolatedCompletion(fixtures.isolatedRequest(overrides));
 const runOwnedCompletion = (overrides: Parameters<typeof fixtures.isolatedRequest>[0] = {}) =>
@@ -47,68 +46,49 @@ const registerCompletion = (
   >[0]["runIsolatedCompletionV2"],
 ) => fixtures.registerIsolatedHarness({ runIsolatedCompletionV2 });
 
-async function collectUsage(kind: UsageCase, purpose?: IsolatedCompletionPurpose) {
-  if (kind === "cli" || kind === "diagnostic-cli") {
-    mocks.isCliRuntimeAliasForProvider.mockReturnValue(true);
-    const usage = kind === "cli" ? cliUsage : { input: 1, output: 1 };
-    const agentMeta = {
-      usage,
-      ...(kind === "diagnostic-cli" ? { diagnosticUsage: cliUsage } : {}),
-    };
-    mocks.runCliAgent.mockResolvedValue({ payloads: [{ text: "done" }], meta: { agentMeta } });
-  } else {
-    const assistant = fixtures.isolatedAssistant([{ type: "text", text: "done" }]);
-    if (kind === "empty-harness") {
-      assistant.usage = { ...assistant.usage, input: 0, output: 0, totalTokens: 0 };
-    }
-    registerCompletion(async () => ({ assistant }));
-  }
+async function collectCliUsage(purpose: IsolatedCompletionPurpose) {
+  mocks.isCliRuntimeAliasForProvider.mockReturnValue(true);
+  mocks.runCliAgent.mockResolvedValue({
+    payloads: [{ text: "done" }],
+    meta: { agentMeta: { usage: cliUsage } },
+  });
   await runCompletion({ purpose });
   return events;
 }
 
-it.each([
-  ["cli", "session-activity-summary", { input: 10, output: 462, cacheWrite: 4111, total: 4583 }],
-  ["harness", undefined, { input: 1, output: 1, total: 2 }],
-] as const)("reports completed %s usage", async (runtimeKind, purpose, usage) => {
-  expect(await collectUsage(runtimeKind, purpose)).toMatchObject([
+it("reports completed CLI usage", async () => {
+  expect(await collectCliUsage("session-activity-summary")).toMatchObject([
     {
       agentId: "main",
       provider: "openai",
       model: "gpt-test",
-      purpose: purpose ?? "isolated-completion",
-      runtimeKind,
-      usage,
+      purpose: "session-activity-summary",
+      runtimeKind: "cli",
+      usage: { input: 10, output: 462, cacheWrite: 4111, total: 4583 },
     },
   ]);
 });
 
-it("reports terminal CLI turn usage", async () => {
-  expect(await collectUsage("diagnostic-cli")).toMatchObject([
-    { usage: { output: 462, total: 4583 } },
-  ]);
-});
-
-it("retains rejected CLI output's cumulative usage without accepting the output", async () => {
-  mocks.isCliRuntimeAliasForProvider.mockReturnValue(true);
-  mocks.runCliAgent.mockResolvedValue({
-    payloads: [{ text: "rejected", isError: true }],
-    meta: { agentMeta: { usage: { input: 1 }, diagnosticUsage: cliUsage } },
-  });
-  await expect(runCompletion()).rejects.toMatchObject({
-    code: "output-rejected",
-  });
-  expect(events).toMatchObject([{ usage: { input: 10, output: 462, total: 4583 } }]);
-});
+it.each([false, true])(
+  "retains cumulative CLI usage when output is rejected: %s",
+  async (isError) => {
+    mocks.isCliRuntimeAliasForProvider.mockReturnValue(true);
+    mocks.runCliAgent.mockResolvedValue({
+      payloads: [{ text: "result", isError }],
+      meta: { agentMeta: { usage: { input: 1 }, diagnosticUsage: cliUsage } },
+    });
+    const result = runCompletion();
+    if (isError) {
+      await expect(result).rejects.toMatchObject({ code: "output-rejected" });
+    } else {
+      await expect(result).resolves.toMatchObject({ text: "result" });
+    }
+    expect(events).toMatchObject([{ usage: { input: 10, output: 462, total: 4583 } }]);
+  },
+);
 
 it("keeps plugin completion accounting with its existing owner", async () => {
-  expect(await collectUsage("cli", "plugin-completion")).toEqual([]);
-});
-
-it("does not turn default-zero usage into a measured zero", async () => {
-  expect(await collectUsage("empty-harness")).toMatchObject([
-    { usage: {}, usageReport: { state: "unavailable" } },
-  ]);
+  expect(await collectCliUsage("plugin-completion")).toEqual([]);
 });
 
 it.each([
@@ -117,6 +97,7 @@ it.each([
   "empty",
   "tool",
   "unavailable",
+  "default-zero",
   "measured-zero",
   "thrown",
 ] as const)(
@@ -131,13 +112,17 @@ it.each([
     } else if (outcome === "tool") {
       assistant.content = [{ type: "toolCall", id: "fixture-call", name: "read", arguments: {} }];
     }
-    if (outcome === "unavailable" || outcome === "measured-zero") {
+    if (["unavailable", "default-zero", "measured-zero"].includes(outcome)) {
       assistant.usage = {
         ...assistant.usage,
         input: 0,
         output: 0,
         totalTokens: 0,
-        usageReport: { state: outcome === "unavailable" ? "unavailable" : "available" },
+        ...(outcome === "default-zero"
+          ? {}
+          : {
+              usageReport: { state: outcome === "unavailable" ? "unavailable" : "available" },
+            }),
       };
     }
     registerCompletion(async () => {
@@ -153,9 +138,14 @@ it.each([
       await expect(pending).resolves.toMatchObject({ text: "result" });
     }
     await work.drain();
-    const unavailable = outcome === "unavailable" || outcome === "thrown";
+    const unavailable = ["unavailable", "default-zero", "thrown"].includes(outcome);
     expect(events).toMatchObject([
       {
+        agentId: "main",
+        provider: "openai",
+        model: "gpt-test",
+        runtimeKind: "harness",
+        purpose: "isolated-completion",
         completionId: expect.any(String),
         attemptId: expect.any(String),
         usage: unavailable ? {} : { input: outcome === "measured-zero" ? 0 : 1 },

@@ -22,7 +22,7 @@ import type { AnyAgentTool } from "./tools/common.js";
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-wake-resolution-");
 
 it.each([false, true])(
-  "keeps the requester's plugin catalog on completion (subagent=%s)",
+  "keeps the requester's core and plugin catalogs on completion (subagent=%s)",
   async (subagent) => {
     const store = path.join(sessionDirs.make(), "sessions.json");
     const config: OpenClawConfig = {
@@ -106,33 +106,19 @@ it.each([false, true])(
       agentChannel: "webchat",
     };
     try {
-      const resolve = (operator: boolean) =>
-        withPluginRuntimeRegistryScope(builder.registry, () =>
-          resolveOpenClawPluginToolsForOptions({
-            options: {
-              ...options,
-              runId: operator ? "operator-run" : "wake-run",
-              senderIsOwner: operator ? true : undefined,
-              requesterSenderId: operator ? "operator" : undefined,
-              clientCaps: operator ? ["ui-commands", "inline-widgets"] : undefined,
-              assertInvocationCurrent: operator ? () => {} : undefined,
-              inputProvenance: operator
-                ? undefined
-                : {
-                    kind: "inter_session",
-                    sourceChannel: "internal",
-                    sourceTool: "subagent_announce",
-                  },
+      const wake = withPluginRuntimeRegistryScope(builder.registry, () =>
+        resolveOpenClawPluginToolsForOptions({
+          options: {
+            ...options,
+            runId: "wake-run",
+            inputProvenance: {
+              kind: "inter_session",
+              sourceChannel: "internal",
+              sourceTool: "subagent_announce",
             },
-          }),
-        );
-      const operator = resolve(true);
-      const wake = resolve(false);
-      expect(operator.map((entry) => entry.name)).toEqual([
-        "memory_search",
-        "memory_get",
-        "intent",
-      ]);
+          },
+        }),
+      );
       expect(wake.map((entry) => entry.name)).toEqual(["memory_search", "memory_get", "intent"]);
       await expect(wake[2]!.execute("wake-intent", {})).rejects.toThrow("outside an admitted run");
 
@@ -163,7 +149,14 @@ it.each([false, true])(
           subagentRole: "orchestrator",
           subagentControlScope: "children",
           inheritedToolPolicyVersion: 1,
-          inheritedToolAllow: [],
+          inheritedToolAllow: [
+            "read",
+            "message",
+            "sessions_spawn",
+            "memory_search",
+            "memory_get",
+            "intent",
+          ],
           inheritedToolDeny: resolveGatewayOwnerOnlyToolDenylist(),
         },
       );
@@ -210,7 +203,7 @@ it.each([false, true])(
             runId: completion ? "completion-run" : "operator-run",
             messageProvider: "webchat",
             senderIsOwner: !completion,
-            includeCoreTools: false,
+            sourceReplyDeliveryMode: completion ? "message_tool_only" : "automatic",
             assertInvocationCurrent: () => {},
             conversationCapabilityProfile,
             ...(completion ? { inputProvenance } : { senderId: "operator" }),
@@ -219,8 +212,12 @@ it.each([false, true])(
       const listed = assemble(operatorProfile, false);
       const completion = assemble(profile, true);
       const names = ["memory_search", "memory_get", ...(subagent ? [] : ["intent"])];
-      expect(listed.map((entry) => entry.name)).toEqual(names);
-      expect(completion.map((entry) => entry.name)).toEqual(names);
+      const pluginNames = (tools: AnyAgentTool[]) =>
+        tools
+          .filter((entry) => record.contracts?.tools?.includes(entry.name))
+          .map((entry) => entry.name);
+      expect(pluginNames(listed)).toEqual(names);
+      expect(pluginNames(completion)).toEqual(names);
       const catalog = (tools: AnyAgentTool[]) => {
         const catalogRef = createToolSearchCatalogRef();
         const ctx = { config, catalogRef };
@@ -236,6 +233,13 @@ it.each([false, true])(
         };
       };
       expect(catalog(completion)).toEqual(catalog(listed));
+      const refusedWrite = await completion
+        .find((entry) => entry.name === "write")!
+        .execute("write", {});
+      expect(refusedWrite.details).toMatchObject({ gated: true });
+      expect(JSON.stringify(refusedWrite.content)).toContain(
+        "write is not available during a child-completion turn",
+      );
       if (!subagent) {
         await listed.find((entry) => entry.name === "intent")!.execute("operator-intent", {});
         const refused = await completion
