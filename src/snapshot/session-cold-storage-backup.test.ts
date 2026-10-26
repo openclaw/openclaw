@@ -23,7 +23,9 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import { restoreGitBackupDirectory } from "./git-backup-codec.js";
 import { createGitBackup } from "./git-backup.js";
+import { expectDatabaseRows } from "./git-backup.test-support.js";
 import { createLocalSqliteSnapshotProvider } from "./local-repository.js";
+import { expectMissing } from "./local-repository.test-support.js";
 
 const states: OpenClawTestState[] = [];
 const sessionKey = "agent:main:backup-cold-history";
@@ -41,16 +43,14 @@ async function createColdFixture() {
   const { root, stateDir } = state;
   const sourcePath = path.join(state.agentDir(), "openclaw-agent.sqlite");
   const transcript = await createSessionColdStorageFixture(sourcePath, sessionKey);
-  const database = transcript.database();
-  expect(
-    database
-      .prepare("SELECT COUNT(*) AS count FROM transcript_events WHERE event_zstd IS NOT NULL")
-      .get(),
-  ).toEqual({ count: 1 });
+  expectDatabaseRows(sourcePath, {
+    "SELECT COUNT(*) AS count FROM transcript_events WHERE event_zstd IS NOT NULL": [{ count: 1 }],
+  });
   expect(await runSessionColdStorageMaintenance({ config: maintenanceConfig(sourcePath) })).toEqual(
     { archivedTranscripts: 1, externalizedTranscripts: 0 },
   );
-  const archive = database
+  const archive = transcript
+    .database()
     .prepare("SELECT archive_name FROM session_transcript_cold_archives WHERE session_id = ?")
     .get(sessionId);
   if (typeof archive?.archive_name !== "string") {
@@ -88,10 +88,7 @@ async function captureFixture(
     const provider = createLocalSqliteSnapshotProvider({
       repositoryPath: path.join(root, "snapshots"),
     });
-    const snapshot = await provider.create({
-      path: sourcePath,
-      identity,
-    });
+    const snapshot = await provider.create({ path: sourcePath, identity });
     await provider.restoreFresh(snapshot.ref, targetPath);
   } else {
     const repositoryPath = path.join(root, "git-backups");
@@ -117,26 +114,21 @@ async function captureFixture(
 it.each(backupKinds)("%s restores exact events without the source archive", async (kind) => {
   const fixture = await createColdFixture();
   const restoredPath = await captureFixture(kind, fixture);
-  const source = fixture.database();
-  expect(
-    source.prepare("SELECT storage, archive_blob FROM session_transcript_cold_archives").get(),
-  ).toEqual({
-    storage: "file",
-    archive_blob: null,
+  expectDatabaseRows(fixture.sourcePath, {
+    "SELECT storage, archive_blob FROM session_transcript_cold_archives": [
+      { storage: "file", archive_blob: null },
+    ],
   });
   await fs.unlink(fixture.archivePath);
   await restoreSessionColdTranscript({ ...fixture.scope, storePath: restoredPath });
   using restored = new DatabaseSync(restoredPath, { readOnly: true });
   expect(fixture.snapshot(restored).events).toEqual(fixture.original.events);
-  expect(
-    restored
-      .prepare(
-        "SELECT message_id FROM session_transcript_fts WHERE session_transcript_fts MATCH 'Preserved'",
-      )
-      .all(),
-  ).toEqual([{ message_id: "history-assistant" }]);
-  expect(restored.prepare("PRAGMA quick_check").get()).toEqual({ quick_check: "ok" });
-  expect(restored.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+  expectDatabaseRows(restoredPath, {
+    "SELECT message_id FROM session_transcript_fts WHERE session_transcript_fts MATCH 'Preserved'":
+      [{ message_id: "history-assistant" }],
+    "PRAGMA quick_check": [{ quick_check: "ok" }],
+    "PRAGMA foreign_key_check": [],
+  });
 });
 
 it.each(["full archive capture", "SQLite snapshot"] as const)(
@@ -145,8 +137,6 @@ it.each(["full archive capture", "SQLite snapshot"] as const)(
     const fixture = await createColdFixture();
     await fs.writeFile(fixture.archivePath, "corrupt archive");
     await expect(captureFixture(kind, fixture)).rejects.toThrow(/failed verification/);
-    await expect(fs.access(path.join(fixture.root, "restored.sqlite"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    await expectMissing(path.join(fixture.root, "restored.sqlite"));
   },
 );
