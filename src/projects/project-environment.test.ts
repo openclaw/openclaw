@@ -51,7 +51,9 @@ vi.mock("../agents/agent-scope.js", () => ({
   listAgentIds: () => [],
   resolveAgentWorkspaceDir: vi.fn(),
 }));
-vi.mock("../infra/node-sqlite.js", () => ({ openNodeSqliteDatabase: mocks.forbiddenSqlite }));
+vi.mock("../infra/node-sqlite.js", () => ({
+  openNodeSqliteDatabase: mocks.forbiddenSqlite,
+}));
 vi.mock("../infra/kysely-sync.js", () => ({
   executeSqliteQuerySync: mocks.forbiddenSqlite,
   executeSqliteQueryTakeFirstSync: mocks.forbiddenSqlite,
@@ -61,7 +63,9 @@ vi.mock("../state/openclaw-state-db.js", () => ({
   openOpenClawStateDatabase: mocks.forbiddenSqlite,
   runOpenClawStateWriteTransaction: mocks.forbiddenSqlite,
 }));
-vi.mock("../state/openclaw-state-lease.js", () => ({ withOpenClawStateLease: mocks.lease }));
+vi.mock("../state/openclaw-state-lease.js", () => ({
+  withOpenClawStateLease: mocks.lease,
+}));
 vi.mock("../state/openclaw-state-worker-store.js", () => ({
   executeOpenClawStateWorker: mocks.execute,
 }));
