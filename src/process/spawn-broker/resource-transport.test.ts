@@ -22,6 +22,11 @@ function resourceFixture() {
     ownerFailures,
     clientFailures,
     responses,
+    async close() {
+      await client?.close();
+      await lease?.close();
+      lease?.release();
+    },
     async attach(
       source: string,
       ownerPort = false,
@@ -74,12 +79,10 @@ it.skipIf(process.platform === "win32").each([
   "closes failed resource %s initialization without losing its original error",
   async (stage, source) => {
     await using fixture = resourceFixture();
-    const { client, lease } = await fixture.attach(source);
+    await fixture.attach(source);
     const message = `synthetic resource ${stage} failure`;
     expect((await fixture.failure).message).toContain(message);
-    await client.close();
-    await lease.close();
-    lease.release();
+    await fixture.close();
     expect(fixture.ownerFailures.some((error) => error.message.includes(message))).toBe(true);
   },
   20_000,
@@ -90,7 +93,7 @@ it.skipIf(process.platform === "win32")(
   async () => {
     await using fixture = resourceFixture();
     const created = createDeferred();
-    const { client, lease } = await fixture.attach(
+    const { client } = await fixture.attach(
       `
       export function createNativeWorkerResource(target, _input, owner) {
         let permit;
@@ -113,9 +116,7 @@ it.skipIf(process.platform === "win32")(
     await created.promise;
     fixture.send("fail-operation");
     expect((await fixture.failure).message).toContain("synthetic resource operation failure");
-    await client.close();
-    await lease.close();
-    lease.release();
+    await fixture.close();
   },
   20_000,
 );
@@ -124,7 +125,7 @@ it.skipIf(process.platform === "win32")(
   "retains both disposal failures through the running native resource server and client",
   async () => {
     await using fixture = resourceFixture();
-    const { client, lease } = await fixture.attach(`
+    const { client } = await fixture.attach(`
       export function createNativeWorkerResource() {
         let attempts = 0;
         return { async close() {
@@ -138,9 +139,7 @@ it.skipIf(process.platform === "win32")(
     `);
     const failure: unknown = await client.close().catch((error: unknown) => error);
     const diagnostic = formatErrorMessage(failure, { redact: (text) => text });
-    await client.close();
-    await lease.close();
-    lease.release();
+    await fixture.close();
     expect([fixture.ownerFailures, fixture.clientFailures]).toEqual([[], []]);
     expect(fixture.responses).toMatchObject([
       { type: "resource-ready", pid: fixture.host.pid },
