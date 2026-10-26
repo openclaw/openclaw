@@ -76,7 +76,7 @@ export class TranscriptLayoutOwner {
   private rowLayoutKey(index: number, width = this.rowWidth): string | undefined {
     const row = this.rows[index];
     return width > 0 && this.paneWidth > 0 && row?.revision
-      ? `row:v1:${width}:${this.paneWidth}:${this.rowGutter}:${this.rowPresentation}:${row.revision}:${JSON.stringify(row.key)}`
+      ? `row:v1:${width}:${this.paneWidth}:${window.innerHeight}:${this.rowGutter}:${this.rowPresentation}:${row.revision}:${JSON.stringify(row.key)}`
       : undefined;
   }
 

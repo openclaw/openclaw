@@ -126,6 +126,11 @@ it("reserves only the matching width and appearance, including text scale, width
   expect(reserve()).toBe(0);
   layout.paneWidth = 1100;
   expect(reserve()).toBe(300);
+  const viewportHeight = window.innerHeight;
+  vi.stubGlobal("innerHeight", viewportHeight - 200);
+  expect(reserve()).toBe(0);
+  vi.stubGlobal("innerHeight", viewportHeight);
+  expect(reserve()).toBe(300);
   // A repeated expansion counter cannot admit a footprint from another recovered message.
   cachedKey = undefined;
   expect(reserve(2)).toBe(0);
