@@ -1605,7 +1605,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/boards/sqlite-board-store.outcomes.test.ts",
   "src/canvas/widget-tool.test.ts",
   "src/channels/join-intro/report-channel-room-join.test.ts",
-  "src/channels/message-access/context-builder-callers.test.ts",
   "src/channels/message/ingress-drain.async-work.test.ts",
   "src/channels/message/ingress-monitor.restart-drain.test.ts",
   "src/channels/plugins/acp-stateful-target-driver.test.ts",
