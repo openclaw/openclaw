@@ -2257,11 +2257,22 @@ try {
                     : {}),
                 };
                 if (route === "roster") {
+                  const styleFiles = warmFiles.filter((file) => file.endsWith(".css"));
                   assert(
-                    urls
-                      .filter((url) => new URL(url).pathname.endsWith(".css"))
-                      .every((url) => appliedStyleUrls.includes(url)),
-                    "Roster warm CSS was not applied before interaction",
+                    styleFiles
+                      .filter((file) => !file.startsWith("assets/plugins/"))
+                      .every((file) =>
+                        appliedStyleUrls.includes(new URL(file, server.baseUrl).href),
+                      ),
+                    "Roster host CSS was not applied before interaction",
+                  );
+                  assert(
+                    styleFiles
+                      .filter((file) => file.startsWith("assets/plugins/"))
+                      .every(
+                        (file) => !appliedStyleUrls.includes(new URL(file, server.baseUrl).href),
+                      ),
+                    "Roster prefetch applied plugin CSS before activation",
                   );
                 }
                 if ((creationWarmup || preloadIdle) && urls.length) {

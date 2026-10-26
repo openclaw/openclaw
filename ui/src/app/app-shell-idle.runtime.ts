@@ -151,7 +151,9 @@ export function connectShellIdle(
       const loads: Promise<void>[] = [];
       for (const file of manifest?.[key] ?? []) {
         const href = new URL(file, base).href;
-        const applyStyle = key === "roster-next" && file.endsWith(".css");
+        // Plugin activation owns its styles; roster warming only applies host Chat CSS.
+        const applyStyle =
+          key === "roster-next" && file.endsWith(".css") && !file.startsWith("assets/plugins/");
         const styleApplied = () =>
           [...document.styleSheets].some((stylesheet) => stylesheet.href === href);
         if (seen.has(href) && (!applyStyle || styleApplied())) {

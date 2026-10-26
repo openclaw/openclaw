@@ -324,6 +324,42 @@ it.each(["chip", "roster"] as const)(
   },
 );
 
+it("keeps plugin styles preloaded while applying host roster styles", async () => {
+  const pluginFile = "assets/plugins/fixture/revision/plugin.css";
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        ...manifest,
+        "roster-next": [...manifest["roster-next"], pluginFile],
+      }),
+    })),
+  );
+  const fixture = setup("new-session", "roster");
+  fixture.outlet.presentationSettled = true;
+  fixture.transcript.ready = true;
+  await idle();
+  const stylesheet = hints().find((link) => link.href.endsWith("/assets/chat-1234abcd.css"));
+  const pluginStylesheet = hints().find((link) => link.href.endsWith(`/${pluginFile}`));
+  if (!stylesheet || !pluginStylesheet) {
+    throw new Error("Expected host and plugin stylesheet preload hints");
+  }
+  cleanups.push(() => {
+    stylesheet.remove();
+    pluginStylesheet.remove();
+  });
+  stylesheet.dispatchEvent(new Event("load"));
+  pluginStylesheet.dispatchEvent(new Event("load"));
+  expect(stylesheet.rel).toBe("stylesheet");
+  expect(stylesheet.hasAttribute("as")).toBe(false);
+  expect(pluginStylesheet.rel).toBe("preload");
+  expect(pluginStylesheet.as).toBe("style");
+  fixture.stop();
+  expect(hints()).toEqual([stylesheet]);
+  expect(pluginStylesheet.isConnected).toBe(false);
+});
+
 it("does not apply failed roster stylesheet preloads", async () => {
   const fixture = setup("new-session", "roster");
   fixture.outlet.presentationSettled = true;
