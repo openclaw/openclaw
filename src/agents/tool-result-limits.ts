@@ -1,5 +1,5 @@
 /** Automatic live tool-result caps derived from the effective model context. */
-import { AsyncLocalStorage } from "node:async_hooks";
+import { AsyncContext } from "../shared/async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { estimateToolResultTextChars } from "./embedded-agent-runner/tool-result-text-budget.js";
 
@@ -80,7 +80,7 @@ export function toolResultFitsBudget(text: string, budget?: ToolResultBudget): b
 // The catalog's value APIs retain the complete result before transcript projection.
 const fullToolResultDelivery = resolveGlobalSingleton(
   Symbol.for("openclaw.fullToolResultDelivery"),
-  () => new AsyncLocalStorage<boolean>(),
+  () => new AsyncContext<boolean>(Symbol("fullToolResultDelivery")),
 );
 
 export function runWithToolResultDelivery<T>(
