@@ -318,6 +318,7 @@ const repositoryScriptEntries = [
   "scripts/perf/gateway-snapshot-freeze-measure.mjs!",
   "scripts/perf/gateway-ui-rpc-measure.ts!",
   "scripts/perf/github-base-refresh-measure.ts!",
+  "scripts/perf/harness-tool-authority-measure.ts!",
   "scripts/perf/ingress-blocked-lanes.ts!",
   "scripts/perf/lease-main-thread-renewal.mjs!",
   "scripts/perf/media-selection-measure.ts!",

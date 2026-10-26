@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import * as replyAuthority from "../../auto-reply/reply/reply-tool-authority.js";
 import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { setActiveEmbeddedRun as publishHarnessActiveEmbeddedRun } from "../../plugin-sdk/agent-harness-runtime.js";
 import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
@@ -14,6 +15,7 @@ import {
 import { captureReplyMessageJoinObservation } from "../../sessions/session-controller.message-join-observation.js";
 import { testing as replyTesting } from "../../sessions/session-controller.test-support.js";
 import { createEmbeddedRunHandle, testing } from "../embedded-agent-runner/runs.test-support.js";
+import * as requesterOrigin from "../requester-origin.js";
 import {
   getGatewayToolCallerIdentity,
   withoutGatewayToolCallerIdentity,
@@ -31,6 +33,7 @@ import {
   sessionId,
   sessionKey,
 } from "./tool-authority.runtime.test-support.js";
+import type { AgentHarnessAttemptParamsV2 } from "./types.js";
 
 afterEach(() => {
   testing.resetActiveEmbeddedRuns();
@@ -59,7 +62,162 @@ const publish = (handle: Parameters<typeof publishHarnessActiveEmbeddedRun>[1]) 
 const joinObservation = () =>
   captureReplyMessageJoinObservation({ run: attempt, sessionEntry: undefined });
 
+type AuthorityRead = { key: PropertyKey; present: boolean; value: unknown };
+function observeReads<T extends object>(target: T, reads: AuthorityRead[]): T {
+  return new Proxy(target, {
+    get(object, key, receiver) {
+      const value: unknown = Reflect.get(object, key, receiver);
+      reads.push({ key, present: Object.hasOwn(object, key), value });
+      return value;
+    },
+  });
+}
+
 describe("host-prepared embedded tool authority", () => {
+  it.each([false, true])(
+    "preserves real authority-owner reads with inherited requester=%s",
+    async (inherited) => {
+      const optionalFacts = [
+        "agentDir",
+        "agentAccountId",
+        "operatorProfileId",
+        "messageChannel",
+        "chatType",
+        "conversationId",
+        "messageThreadId",
+        "conversationToolPolicy",
+        "groupId",
+        "groupChannel",
+        "groupSpace",
+        "memberRoleIds",
+        "spawnedBy",
+        "senderName",
+        "senderUsername",
+        "senderE164",
+        "gitContributorProfileId",
+        "cwd",
+        "inputProvenance",
+        "trustedInternalHandoff",
+        "scheduledToolPolicy",
+        "runtimePluginToolGrant",
+        "permissionMode",
+        "toolOverrides",
+        "execOverrides",
+        "bashElevated",
+        "approvalReviewerDeviceId",
+        "authProfileId",
+        "authProfileIdSource",
+        "clientCaps",
+        "gatewayUiCommandTarget",
+        "toolBindings",
+      ] as const satisfies readonly (keyof AgentHarnessAttemptParamsV2)[];
+      const params: Parameters<typeof withPreparedEmbeddedRunToolAuthority>[1] = {
+        ...Object.fromEntries(optionalFacts.map((key) => [key, undefined])),
+        ...attempt,
+        requesterOrigin: inherited
+          ? {
+              sessionKey: "agent:main:original",
+              operatorProfileId: "original-profile",
+              delegatedCreatorProfileId: "delegating-profile",
+              messageProvider: "telegram",
+              accountId: "original-account",
+              chatType: "group" as const,
+              senderId: "original-sender",
+            }
+          : undefined,
+        sandboxSessionKey: "",
+        senderName: "Current Sender",
+        senderE164: null,
+        conversationId: "current-conversation",
+      };
+      // This callee read is intentionally absent: delegation lives in requesterOrigin,
+      // never in the attempt's top-level contract. The type probe fails if that changes.
+      const absentRequesterKeys: Extract<
+        keyof AgentHarnessAttemptParamsV2,
+        "delegatedCreatorProfileId"
+      > extends never
+        ? readonly ["delegatedCreatorProfileId"]
+        : never = ["delegatedCreatorProfileId"];
+      const capture = requesterOrigin.captureRequesterOrigin;
+      const originSpy = vi
+        .spyOn(requesterOrigin, "captureRequesterOrigin")
+        .mockImplementationOnce((input) => {
+          const legacyReads: AuthorityRead[] = [];
+          const projectedReads: AuthorityRead[] = [];
+          const legacy = capture(
+            observeReads({ ...params, operatorProfileId: input.operatorProfileId }, legacyReads),
+          );
+          const projected = capture(observeReads(input, projectedReads));
+          expect(projectedReads).toEqual(legacyReads);
+          expect([
+            ...new Set(projectedReads.filter((read) => !read.present).map((read) => read.key)),
+          ]).toEqual(inherited ? [] : absentRequesterKeys);
+          expect(projected).toEqual(legacy);
+          return projected;
+        });
+      const prepare = replyAuthority.prepareReplyToolAuthority;
+      let legacySnapshot: ReturnType<typeof prepare> | undefined;
+      const authoritySpy = vi
+        .spyOn(replyAuthority, "prepareReplyToolAuthority")
+        .mockImplementationOnce((input, ...rest) => {
+          const legacyReads: AuthorityRead[] = [];
+          const projectedReads: AuthorityRead[] = [];
+          const legacyRun = {
+            ...params,
+            model: params.modelId,
+            elevatedLevel: params.bashElevated?.defaultLevel,
+            runtimePolicySessionKey: params.sandboxSessionKey,
+            traceAuthorized: false,
+            spawnedBy: params.spawnedBy ?? undefined,
+            senderId: params.senderId ?? undefined,
+            senderName: params.senderName ?? undefined,
+            senderUsername: params.senderUsername ?? undefined,
+            senderE164: params.senderE164 ?? undefined,
+            groupId: params.groupId ?? undefined,
+            groupChannel: params.groupChannel ?? undefined,
+            groupSpace: params.groupSpace ?? undefined,
+          };
+          legacySnapshot = prepare(
+            { ...input, run: observeReads(legacyRun, legacyReads) },
+            ...rest,
+          );
+          const projected = prepare(
+            { ...input, run: observeReads(input.run, projectedReads) },
+            ...rest,
+          );
+          expect(projectedReads).toEqual(legacyReads);
+          expect(projectedReads.filter((read) => !read.present)).toEqual([]);
+          expect(projected.personalToolOwner).toEqual(legacySnapshot.personalToolOwner);
+          expect(projected.requesterPrincipalKey).toBe(legacySnapshot.requesterPrincipalKey);
+          expect(projected.requestedRoute).toEqual(legacySnapshot.requestedRoute);
+          return projected;
+        });
+      try {
+        await admitted(async ({ admittedRunContext }) => {
+          await withPreparedEmbeddedRunToolAuthority(
+            { admittedRunContext, sessionPersistence: "detached" },
+            params,
+            undefined,
+            async (prepared) => {
+              expect(await legacySnapshot?.fingerprintAsync()).toBe(
+                prepared.toolAuthorityFingerprint,
+              );
+              const caller = getGatewayToolCallerIdentity();
+              expect(caller?.requesterOrigin?.senderId).toBe(
+                inherited ? "original-sender" : params.senderId,
+              );
+              caller?.receiptAuthority?.();
+            },
+          );
+        });
+        expect(originSpy).toHaveBeenCalled();
+        expect(authoritySpy).toHaveBeenCalledOnce();
+      } finally {
+        legacySnapshot?.close();
+      }
+    },
+  );
+
   it.each([
     ["current", "inherited"],
     ["current", "materialized"],
