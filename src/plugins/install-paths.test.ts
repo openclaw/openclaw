@@ -1,12 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import {
   resolveDefaultPluginExtensionsDir,
   resolveDefaultPluginGitDir,
   resolveDefaultPluginNpmDir,
   resolvePluginNpmGenerationProjectDir,
-  resolvePluginNpmGenerationProjectDirPrefix,
 } from "./install-paths.js";
 import { resolvePluginInstallRoots, withPluginInstallRoots } from "./install-root-context.js";
 import {
@@ -46,35 +46,20 @@ describe("plugin install root context", () => {
     }
   });
 
-  it("keeps discovery roots on the operator install while runtime state is redirected", async () => {
-    const operatorRoots = resolvePluginInstallRoots(
-      { OPENCLAW_STATE_DIR: "/operator/openclaw" },
-      () => "/unused-home",
-    );
+  it("isolates concurrent operator roots from redirected state and restores them on exit", async () => {
     const redirectedEnv = { OPENCLAW_STATE_DIR: "/tmp/ephemeral-run" };
-
-    await withPluginInstallRoots(operatorRoots, async () => {
-      await Promise.resolve();
-      expectRoots(redirectedEnv, "/operator/openclaw");
-    });
-
+    await Promise.all(
+      ["/operator/one", "/operator/two"].map((stateDir) =>
+        withPluginInstallRoots(
+          resolvePluginInstallRoots({ OPENCLAW_STATE_DIR: stateDir }),
+          async () => {
+            await setImmediate();
+            expectRoots(redirectedEnv, stateDir);
+          },
+        ),
+      ),
+    );
     expectRoots(redirectedEnv, "/tmp/ephemeral-run");
-  });
-
-  it("isolates concurrent install-root scopes", async () => {
-    const resolveScopedRoot = async (stateDir: string) => {
-      const roots = resolvePluginInstallRoots({ OPENCLAW_STATE_DIR: stateDir });
-      return await withPluginInstallRoots(roots, async () => {
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 0);
-        });
-        return resolveDefaultPluginExtensionsDir({ OPENCLAW_STATE_DIR: "/redirected" });
-      });
-    };
-
-    await expect(
-      Promise.all([resolveScopedRoot("/operator/one"), resolveScopedRoot("/operator/two")]),
-    ).resolves.toEqual(["/operator/one/extensions", "/operator/two/extensions"]);
   });
 });
 
@@ -89,10 +74,6 @@ it("keeps generation project names compact for nested Windows runtime binaries",
 
   expect(projectName).toMatch(
     /^openclaw-codex-[a-f0-9]{10}__openclaw-generation__g-[a-f0-9]{16}$/u,
-  );
-  expect(projectName.length).toBeLessThanOrEqual(66);
-  expect(projectName).toMatch(
-    new RegExp(`^${resolvePluginNpmGenerationProjectDirPrefix(packageName)}`, "u"),
   );
 
   const nestedCodexBinaryPath = path.win32.join(

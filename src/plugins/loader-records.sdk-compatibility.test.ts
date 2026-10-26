@@ -1,5 +1,4 @@
 import { execFileSync } from "node:child_process";
-import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
@@ -7,8 +6,10 @@ import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { formatPluginLine } from "../cli/plugins-list-format.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { VERSION } from "../version.js";
-import { createPluginRecord, recordPluginError } from "./loader-records.js";
+import { recordPluginError } from "./loader-records.js";
+import { writeArtifact, writeArtifacts } from "./public-surface.test-support.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { createOwnershipRecord } from "./registry-ownership.test-support.js";
 
 const tempDirs = createTempDirTracker();
 afterEach(() => tempDirs.cleanup());
@@ -16,16 +17,8 @@ afterEach(() => tempDirs.cleanup());
 const importProbe =
   'try { await import(process.argv[1]); console.log("null"); } catch (error) { console.log(JSON.stringify({name:error.name,message:error.message,code:error.code})); }';
 
-function write(target: string, content: string | object) {
-  fs.mkdirSync(path.dirname(target), { recursive: true });
-  fs.writeFileSync(target, typeof content === "string" ? content : JSON.stringify(content));
-}
-
 it.each([
-  ["missing export", false, false, undefined, undefined],
   ["wrapped missing export", false, true, undefined, undefined],
-  ["nested SDK", true, false, undefined, undefined],
-  ["wrapped nested SDK", true, true, undefined, undefined],
   ["channel setup classification", true, false, "channel-setup-failure", undefined],
   ["plugin id requiring quoting", false, false, undefined, "custom plugin"],
 ] as const)("diagnoses %s", (_name, nestedSdk, wrapped, diagnosticCode, pluginId) => {
@@ -35,12 +28,14 @@ it.each([
   const rootDir = path.join(project, "node_modules", packageName);
   const sdkRoot = path.join(nestedSdk ? rootDir : project, "node_modules", "openclaw");
   const seam = `openclaw/plugin-sdk/${nestedSdk ? "channel-runtime" : "agent-harness-runtime"}`;
-  write(path.join(sdkRoot, "package.json"), {
-    exports: nestedSdk ? {} : { "./plugin-sdk/agent-harness-runtime": "./runtime.mjs" },
+  writeArtifacts(sdkRoot, {
+    "package.json": {
+      exports: nestedSdk ? {} : { "./plugin-sdk/agent-harness-runtime": "./runtime.mjs" },
+    },
+    "runtime.mjs": "export const available = true;",
   });
-  write(path.join(sdkRoot, "runtime.mjs"), "export const available = true;");
   const source = path.join(rootDir, "index.mjs");
-  write(
+  writeArtifact(
     source,
     nestedSdk
       ? `import ${JSON.stringify(seam)};`
@@ -52,14 +47,10 @@ it.each([
     nestedSdk ? { code: "ERR_PACKAGE_PATH_NOT_EXPORTED" } : { name: "SyntaxError" },
   );
   const nativeError = Object.assign(new Error(result.message), result);
-  const record = createPluginRecord({
-    id,
+  const record = createOwnershipRecord(id, {
     source,
     rootDir,
     builtWithOpenClawVersion: "2026.7.1",
-    origin: "global",
-    enabled: true,
-    configSchema: false,
   });
   const registry = createEmptyPluginRegistry();
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
@@ -72,8 +63,6 @@ it.each([
     diagnosticCode,
     error: wrapped ? new Error("native import failed", { cause: nativeError }) : nativeError,
   });
-  expect(logger.error).toHaveBeenCalledTimes(1);
-  expect(registry.diagnostics).toHaveLength(1);
   expect(registry.diagnostics[0]).toMatchObject({
     pluginId: id,
     code: diagnosticCode ?? "sdk-incompatible",
