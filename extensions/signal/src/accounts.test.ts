@@ -18,7 +18,7 @@ const socketUrl = "unix:///tmp/signal%20private/a%23b.sock";
 const baseUrl = "http://127.0.0.1:8080";
 const native = (options: Native = {}): Transport => ({ kind: "managed-native", ...options });
 const account = (options: Native = {}) => ({ account: phone, transport: native(options) });
-const endpoint = (kind: "container" | "external-native", url: string) => ({
+const endpoint = <Kind extends "container" | "external-native">(kind: Kind, url: string) => ({
   transport: { kind, url },
 });
 const config = (signal: Signal): OpenClawConfig => ({ channels: { signal } });
