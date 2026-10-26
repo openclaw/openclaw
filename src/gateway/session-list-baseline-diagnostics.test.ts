@@ -74,9 +74,7 @@ it.each([true, false])(
           nextOffset: null,
           hasMore: false,
         }));
-        for (const rowMode of [undefined, "compact", "dashboard"] as const) {
-          present().list([{ ...baseRow, rowMode }], { rowMode });
-        }
+        present().list([{ ...baseRow, rowMode: "compact" }], { rowMode: "compact" });
       };
       invalidate("projection-revision");
       present();

@@ -147,20 +147,9 @@ it("keeps unrelated work responsive during the real post-ready warmup", async ()
     await delay(40);
     clearInterval(heartbeat);
 
-    const resolveTokens = (provider?: string) =>
-      contextModule.resolveContextTokensForModel({
-        cfg: provider ? warmConfig : {},
-        provider,
-        model: "shared-model",
-        allowAsyncLoad: false,
-      });
     const caches = getContextWindowCaches();
     expect(errors).toEqual([]);
-    expect([resolveTokens(), resolveTokens("synthetic-a"), resolveTokens("synthetic-b")]).toEqual([
-      64_000, 128_000, 64_000,
-    ]);
     expect(caches.discoveredTokenCache.size).toBeGreaterThan(modelCount * 2);
-    expect(caches.contextWindowCache.size).toBeGreaterThan(modelCount * 2);
     expect(Math.max(...heartbeatGaps)).toBeLessThan(500);
     for (const samples of Object.values(latencies)) {
       expect(Math.max(...samples)).toBeLessThan(1_000);

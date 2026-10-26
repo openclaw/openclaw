@@ -57,8 +57,8 @@ describe("gateway talk runtime", () => {
     synthesizeSpeechMock.mockResolvedValue(audioResult());
   });
 
-  it("uses the spoken fallback for code-heavy talk.speak replies", async () => {
-    await withAcmeSpeechProvider(async () => {
+  it("uses the spoken fallback for code-heavy talk.speak replies", () =>
+    withAcmeSpeechProvider(async () => {
       const res = await invokeTalkSpeakDirect({
         text: "```ts\nexport function answer() {\n  return 42;\n}\n```",
       });
@@ -66,8 +66,7 @@ describe("gateway talk runtime", () => {
       expect(synthesizeSpeechMock).toHaveBeenCalledWith(
         expect.objectContaining({ text: CODE_HEAVY_SPOKEN_FALLBACK }),
       );
-    });
-  });
+    }));
 
   it("resolves the prototype-named talk voice alias and forwards provider overrides", async () => {
     await setTalkConfig({
@@ -135,12 +134,12 @@ describe("gateway talk runtime", () => {
   it.each([
     { result: { success: false as const, error: "provider failed" }, reason: "synthesis_failed" },
     { result: audioResult(Buffer.alloc(0)), reason: "invalid_audio_result" },
-  ])("rejects synthesis with $reason", async ({ result, reason }) => {
-    await withAcmeSpeechProvider(async () => {
+  ])("rejects synthesis with $reason", ({ result, reason }) =>
+    withAcmeSpeechProvider(async () => {
       synthesizeSpeechMock.mockResolvedValue(result);
       const res = await invokeTalkSpeakDirect({ text });
       expect(res?.ok).toBe(false);
       expect(res?.error?.details).toEqual({ reason, fallbackEligible: false });
-    });
-  });
+    }),
+  );
 });

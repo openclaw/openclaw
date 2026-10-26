@@ -26,8 +26,8 @@ function sandboxRoleClient(role: "view" | "write"): GatewayClient {
 }
 
 describe("session sharing sandbox requirements", () => {
-  it("denies sandbox-required members host execution without changing session provenance", async () => {
-    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+  it("denies sandbox-required members host execution without changing session provenance", () =>
+    withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       const cfg = rolePolicyConfig();
       cfg.gateway!.roles!.definitions.view!.sandbox = "required";
       setRuntimeConfigSnapshot(cfg);
@@ -118,6 +118,5 @@ describe("session sharing sandbox requirements", () => {
         getRuntimeConfig: () => ({}),
       } as GatewayRequestContext);
       expect(unscoped.error).toBeNull();
-    });
-  });
+    }));
 });

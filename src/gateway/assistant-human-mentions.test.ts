@@ -56,8 +56,8 @@ async function assistantRows() {
   });
 }
 
-it("records one Inbox mention and involvement for a Gateway-authored assistant message", async () => {
-  await withMentionInbox(async (f) => {
+it("records one Inbox mention and involvement for a Gateway-authored assistant message", () =>
+  withMentionInbox(async (f) => {
     const text = `${TEXT} Please test [[audio_as_voice]] replies.`;
     const first = insert(f, { text });
     const inserted = await first.result;
@@ -100,11 +100,10 @@ it("records one Inbox mention and involvement for a Gateway-authored assistant m
     expect(await assistantRows()).toHaveLength(1);
     expect(await f.items()).toEqual(items);
     expect(f.push).toHaveBeenCalledOnce();
-  });
-});
+  }));
 
-it("rechecks caller authority at the transcript commit, after the append started", async () => {
-  await withMentionInbox(async (f) => {
+it("rechecks caller authority at the transcript commit, after the append started", () =>
+  withMentionInbox(async (f) => {
     transcriptAppend.entered = false;
     // Authority ends while the append waits for its target: no row and no Inbox entry.
     const guard = () => {
@@ -117,11 +116,10 @@ it("rechecks caller authority at the transcript commit, after the append started
     expect(result.ok).toBe(false);
     expect(await assistantRows()).toEqual([]);
     expect(await f.items()).toEqual([]);
-  });
-});
+  }));
 
-it("finishes an interrupted Inbox delivery on retry", async () => {
-  await withMentionInbox(async (f) => {
+it("finishes an interrupted Inbox delivery on retry", () =>
+  withMentionInbox(async (f) => {
     // The row committed, but the process stopped before Inbox delivery.
     const interrupted = await injectGatewayAssistantMessage(contextFor(f), {
       sessionKey: SESSION_KEY,
@@ -135,18 +133,16 @@ it("finishes an interrupted Inbox delivery on retry", async () => {
     expect(await insert(f).result).toMatchObject({ ok: true, value: { replayed: true } });
     expect(await assistantRows()).toHaveLength(1);
     expect(await f.items()).toMatchObject([{ senderProfileId: f.alice.id, excerpt: TEXT }]);
-  });
-});
+  }));
 
-it("keeps the message but skips the Inbox when the recipient cannot read the session", async () => {
-  await withMentionInbox(async (f) => {
+it("keeps the message but skips the Inbox when the recipient cannot read the session", () =>
+  withMentionInbox(async (f) => {
     await f.setSession({ visibility: "draft" });
     expect(await insert(f).result).toMatchObject({ ok: true });
     expect(await assistantRows()).toHaveLength(1);
     expect(await f.items()).toEqual([]);
     expect(loadSessionEntry(scope)).not.toHaveProperty("profileInvolvement");
-  });
-});
+  }));
 
 it.each([
   ["self-mention", (f: Fixture) => ({ onBehalfOfProfileId: f.bob.id })],
@@ -158,13 +154,13 @@ it.each([
   ["untrimmed text", () => ({ text: ` ${TEXT}` })],
   ["missing idempotency key", () => ({ idempotencyKey: " " })],
   ["incognito session", () => ({ sessionKey: "agent:main:dashboard:incognito-welcome" })],
-])("rejects %s before writing", async (_name, overrides) => {
-  await withMentionInbox(async (f) => {
+])("rejects %s before writing", (_name, overrides) =>
+  withMentionInbox(async (f) => {
     expect(await insert(f, overrides(f)).result).toMatchObject({
       ok: false,
       error: { code: "INVALID_REQUEST" },
     });
     expect(await assistantRows()).toEqual([]);
     expect(await f.items()).toEqual([]);
-  });
-});
+  }),
+);
