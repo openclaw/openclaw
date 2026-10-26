@@ -678,9 +678,9 @@ it("retains creator daily amounts and counts each multi-day session once", () =>
 });
 
 it("sorts private filter inventories without copying them again", () => {
-  const rows = [
-    { key: "z", agentId: "z", channel: "z", modelProvider: "z", model: "z" },
-    { key: "a", agentId: "a", channel: "a", modelProvider: "a", model: "a" },
+  const rows: SessionUsageEntry[] = [
+    { key: "z", agentId: "z", channel: "z", modelProvider: "z", model: "z", usage: null },
+    { key: "a", agentId: "a", channel: "a", modelProvider: "a", model: "a", usage: null },
   ];
   const before = structuredClone(rows);
   const copies = vi.spyOn(Array.prototype, "toSorted");
