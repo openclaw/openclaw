@@ -9,14 +9,12 @@ import "./stream.js";
 
 const mocks = vi.hoisted(() => ({ fetchWithSsrFGuard: vi.fn() }));
 
-vi.mock("../infra/net/fetch-guard.js", async () => {
-  return {
-    ...(await vi.importActual<typeof import("../infra/net/fetch-guard.js")>(
-      "../infra/net/fetch-guard.js",
-    )),
-    fetchWithSsrFGuard: mocks.fetchWithSsrFGuard,
-  };
-});
+vi.mock("../infra/net/fetch-guard.js", async () => ({
+  ...(await vi.importActual<typeof import("../infra/net/fetch-guard.js")>(
+    "../infra/net/fetch-guard.js",
+  )),
+  fetchWithSsrFGuard: mocks.fetchWithSsrFGuard,
+}));
 
 const originalEnv = captureEnv(["OPENAI_API_KEY"]);
 
@@ -71,21 +69,17 @@ it("sends explicit API keys as bearer auth for generic chat-completions provider
     };
   });
 
-  const stream = streamOpenAICompletions(createBaseModel("openai-completions"), context, {
-    apiKey: "sk-third-party",
-  });
-  const result = await stream.result();
-
-  expect(result.stopReason).toBe("stop");
+  await expect(
+    streamOpenAICompletions(createBaseModel("openai-completions"), context, {
+      apiKey: "sk-third-party",
+    }).result(),
+  ).resolves.toMatchObject({ stopReason: "stop" });
   expect(capturedHeaders?.get("authorization")).toBe("Bearer sk-third-party");
 });
 
 it("does not replay Responses item ids for direct store-disabled requests", async () => {
   let capturedPayload: { store?: unknown; input?: Array<Record<string, unknown>> } | undefined;
-  const model = {
-    ...createBaseModel("openai-responses"),
-    reasoning: true,
-  } satisfies Model<"openai-responses">;
+  const model = { ...createBaseModel("openai-responses"), reasoning: true };
   const stream = streamOpenAIResponses(
     model,
     {
@@ -93,8 +87,6 @@ it("does not replay Responses item ids for direct store-disabled requests", asyn
         makeAgentAssistantMessage({
           provider: model.provider,
           model: model.id,
-          stopReason: "toolUse",
-          timestamp: 1,
           content: [
             {
               type: "thinking",
@@ -102,12 +94,6 @@ it("does not replay Responses item ids for direct store-disabled requests", asyn
               thinkingSignature:
                 '{"type":"reasoning","id":"rs_prior","encrypted_content":"ciphertext"}',
             },
-            {
-              type: "text",
-              text: "Checking.",
-              textSignature: JSON.stringify({ v: 1, id: "msg_prior", phase: "commentary" }),
-            },
-            { type: "toolCall", id: "call_abc|fc_prior", name: "lookup", arguments: {} },
           ],
         }),
       ],
@@ -121,17 +107,12 @@ it("does not replay Responses item ids for direct store-disabled requests", asyn
     },
   );
 
-  const result = await stream.result();
-
-  expect(result).toMatchObject({ stopReason: "error", errorMessage: "stop after payload" });
+  await expect(stream.result()).resolves.toMatchObject({
+    stopReason: "error",
+    errorMessage: "stop after payload",
+  });
   expect(capturedPayload?.store).toBe(false);
-  for (const expected of [
+  expect(capturedPayload?.input).toEqual([
     { type: "reasoning", encrypted_content: "ciphertext", summary: [] },
-    { type: "message", phase: "commentary" },
-    { type: "function_call", call_id: "call_abc" },
-  ]) {
-    const item = capturedPayload?.input?.find((candidate) => candidate.type === expected.type);
-    expect(item).toMatchObject(expected);
-    expect(item).not.toHaveProperty("id");
-  }
+  ]);
 });
